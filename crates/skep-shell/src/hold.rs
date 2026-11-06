@@ -117,9 +117,11 @@
 //! `unwritable`, and the wait said in the shell's own window once as it
 //! begins and once as it ends ([`Holds::note_waiting`]); a close while a copy
 //! is owed loses it, and a relaunch reads each line as the file last held
-//! it. A join refused mid-way keeps the queue whose file owes the `done`s of
-//! the lines its undo dropped ([`BoardHold::unsettled`]) until they land,
-//! so no open in the run reads those lines standing.
+//! it. A join is one copy with one sync (`HeldQueue::join`), and a copy the
+//! device refuses enters nothing; where its cut-back is refused too, the
+//! queue of the file it wrote is kept ([`BoardHold::unsettled`]) until the
+//! probe's retry cuts the copy's bytes off, so no open in the run reads them
+//! as held lines.
 //! The queue is opened only under a session as its principal (P39) — at the
 //! session's open, or at the first touch after it — by the principal's door,
 //! [`Holds::principal_hold`],
@@ -130,9 +132,11 @@
 //! and [`Holds::show_halted`] shows it in the shell's own window as often as
 //! the page's `held.show` asks — and crosses the bridge never (§3c.3,
 //! §4b.3). The probe ([`Holds::probe`]) and the
-//! resend it lets run, which drain the queue once the board returns, are the
-//! child module `resend`'s: one read of the board's head per probe decides
-//! the directory and which documents are skipped ([`Holds::establish`]).
+//! resend it lets run, which drain the queue once the board returns in turns
+//! of at most [`TURN_STEPS`] steps, the feed thread serving the work queued
+//! behind each turn before the next ([`Turn`]), are the child module
+//! `resend`'s: one read of the board's head per probe decides the directory
+//! and which documents are skipped ([`Holds::establish`]).
 //!
 //! **Each board's hold its own lock**, the boards fixed at the open: a
 //! board's appends, each synced to disk, its file's read at a session's open
@@ -177,11 +181,40 @@ mod resend;
 /// to tuning. It is the retry's clock too (§3c.3), whatever the board's
 /// state, so space freed while no one types is enough: a copy the device
 /// refused — a line's, a re-mark's or a `done`'s — is written again at every
-/// probe while it is owed, a refused join's undo among them
-/// ([`Holds::retry_unsettled`]), and lines kept in memory alone are joined to
-/// the directory's file at every probe while the join is refused
-/// ([`Holds::rejoin`]).
+/// probe while it is owed, the bytes a refused join's copy left past a file's
+/// whole lines are cut ([`Holds::retry_unsettled`]), and lines kept in memory
+/// alone are joined to the directory's file at every probe while the join is
+/// refused ([`Holds::rejoin`]). A drain whose turn stops at its bound is no
+/// cadence's: the feed thread runs its next turn once the work queued behind
+/// it is served ([`Turn::Bounded`]).
 pub const PROBE_CADENCE: Duration = Duration::from_secs(2);
+
+/// The most steps one turn of a drain takes (§3c.5; skep #817).
+///
+/// A step is a document's read for its head's own landing, or a line's
+/// send: each a dial of the board, in the order the walk meets them
+/// (`resend`'s turns). The bound is what lets the board's feed thread serve
+/// the work queued behind a drain — a `search`, a listing, a session's swap
+/// — before the drain goes on: 64 sends at some 13 ms each, a line's mark
+/// and its `done` synced beside its dial (`held::MAX_HELD_LINES` states the
+/// figure), keep a turn under a second, so that work waits under a second,
+/// and a full queue drains in 256 turns, each one `/health` read and one read
+/// of the board's head more than one turn would make.
+pub(crate) const TURN_STEPS: usize = 64;
+
+/// What one probe's turn of the drain left (`Holds::probe`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Turn {
+    /// The turn stopped at its bound ([`TURN_STEPS`]) with a line still to
+    /// send: the drain's pass goes on at the next turn, which the feed thread
+    /// runs once the commands queued behind this one are served.
+    Bounded,
+    /// No turn stopped at its bound: the pass walked every line it could
+    /// send, or no drain ran — no line standing, the own node stopped, the
+    /// board away or its writes halted, or another drain of the board running
+    /// — and the next probe comes at the cadence.
+    Done,
+}
 
 /// A held line's wall-clock deadline: two minutes from its first failed send.
 ///
@@ -1165,9 +1198,10 @@ impl Custody {
 /// failed send and its last failure's token, kept across its probes
 /// ([`Reissues`]), the position each line's moved document was
 /// acknowledged through by the person's `send`
-/// ([`PrincipalHold::seen_through`]), and whether the wait for the copies
-/// its file owes was said ([`PrincipalHold::waiting_said`]). An ack touches no
-/// standing line's
+/// ([`PrincipalHold::seen_through`]), the documents the drain's pass has
+/// stopped at ([`PrincipalHold::stopped_in_pass`]), and whether the wait for
+/// the copies its file owes was said ([`PrincipalHold::waiting_said`]). An
+/// ack touches no standing line's
 /// base: a line held keeps the base it was held at, raised only behind a
 /// line kept on its document (`HeldQueue::done`) and by the person's `send`
 /// on a moved document (`HeldQueue::remark_raised`, [`Holds::resolve`]).
@@ -1215,6 +1249,21 @@ struct PrincipalHold {
     /// first face after one names the acknowledged hands again, while the
     /// raised `base` persists.
     seen_through: HashMap<u64, u64>,
+    /// The documents the drain's pass has stopped at, until the pass ends
+    /// (§3c.5; skep #817).
+    ///
+    /// A pass is one walk over the principal's lines in `k` order, cut into
+    /// turns of at most [`TURN_STEPS`] steps (`resend`'s turns). A document
+    /// whose head the walk does not send — awaiting the person's act, held
+    /// `head_unreadable` while the head will not read, read and left
+    /// undecided, handed to the person — or whose line's send stops it, is
+    /// entered here, and every later turn of the pass passes over it, so no
+    /// turn of one pass reads it or dials its head again. The set is cleared
+    /// as the pass ends: at a turn no bound stopped, or a probe that runs no
+    /// walk ([`BoardHold::end_pass`]). The person's `send` takes its document
+    /// out, so the lines it hands back go at the pass's next turn
+    /// ([`Holds::resolve`]). In memory.
+    stopped_in_pass: HashSet<String>,
     /// Whether the shell's own window was told the queue's file owes copies.
     ///
     /// It is set as the wait is said to begin, and cleared as its end is
@@ -1225,7 +1274,17 @@ struct PrincipalHold {
 impl PrincipalHold {
     /// Returns a hold not yet opened, its file's header to name `account`.
     fn new(account: &str) -> PrincipalHold {
-        PrincipalHold { custody: Custody::Unopened, account: account.to_string(), queue: HeldQueue::in_memory(), last_acked: HashMap::new(), last_arranged: HashMap::new(), reissues: HashMap::new(), seen_through: HashMap::new(), waiting_said: false }
+        PrincipalHold {
+            custody: Custody::Unopened,
+            account: account.to_string(),
+            queue: HeldQueue::in_memory(),
+            last_acked: HashMap::new(),
+            last_arranged: HashMap::new(),
+            reissues: HashMap::new(),
+            seen_through: HashMap::new(),
+            stopped_in_pass: HashSet::new(),
+            waiting_said: false,
+        }
     }
 
     /// Returns whether the hold's lines stand in memory alone: its custody
@@ -1352,19 +1411,20 @@ struct BoardHold {
     /// another process holding its lock, the lock or its listing refused —
     /// said once per change, and gone once a join lists the directory.
     pending_said: Option<String>,
-    /// The queues a refused join left owing copies to their files, each
-    /// beside its principal (§3c.3; skep #821).
+    /// The queues a refused join left whose files hold its copy's bytes past
+    /// their whole lines, each beside its principal (§3c.3; skep #817, #821).
     ///
-    /// A join refused mid-way undoes the lines it entered by `done … dropped`
-    /// lines (`HeldQueue::join`); where the device refuses those too, the
-    /// file it wrote holds standing copies of lines that stand elsewhere — in
-    /// memory, or in the pending file — until the `done`s land. The queue
-    /// that owes them is kept here, never dropped, and every later open of
-    /// its file in this run takes it in place of a read that would find the
-    /// copies standing ([`open_held`]): the join's next try, its read of an
-    /// earlier run's pending file, and the principal's door. The probe
-    /// retries each and lets go of one that owes nothing
-    /// ([`Holds::retry_unsettled`]).
+    /// A join is one copy (`HeldQueue::join`), and a copy the device refuses
+    /// is cut back off the file, entering nothing; where the cut-back is
+    /// refused too, the file holds the copy's lines — whole lines a read
+    /// takes for held ones — while the lines stand elsewhere, in memory or in
+    /// the pending file (`HeldQueue::tail_left`). The queue of that file is
+    /// kept here, never dropped, and every later open of the file in this run
+    /// takes it in place of a read that would find the copy's lines standing
+    /// ([`open_held`]): the join's next try, its read of an earlier run's
+    /// pending file, and the principal's door. The probe retries each, its
+    /// retry cutting the bytes off, and lets go of one whose file holds its
+    /// whole lines alone ([`Holds::retry_unsettled`]).
     unsettled: Vec<(u64, HeldQueue)>,
     principals: HashMap<u64, PrincipalHold>,
 }
@@ -1397,6 +1457,15 @@ impl BoardHold {
             Custody::Unopened | Custody::File | Custody::Unwritable(_) => None,
         }
     }
+
+    /// Ends the drain's pass at the board: every document a turn of it
+    /// stopped at is walked again by the next pass
+    /// ([`PrincipalHold::stopped_in_pass`]).
+    fn end_pass(&mut self) {
+        for ph in self.principals.values_mut() {
+            ph.stopped_in_pass.clear();
+        }
+    }
 }
 
 /// One board of the holds: the board dialed, and its hold under its own lock.
@@ -1408,12 +1477,14 @@ impl BoardHold {
 struct BoardSlot {
     board: Arc<Board>,
     hold: Mutex<BoardHold>,
-    /// Whether a resend drains this board now.
+    /// Whether a turn of a resend drains this board now.
     ///
     /// One drain per board runs at a time, whatever thread reaches
     /// [`Holds::probe`] — the board's feed thread every `PROBE_CADENCE`, at
-    /// its daemon-running tick, and at the hand-overs of `resolve(send)` and
-    /// `set_node_state(Running)` — so none double-sends.
+    /// its daemon-running tick, at the hand-overs of `resolve(send)` and
+    /// `set_node_state(Running)`, and at each turn after one its bound
+    /// stopped — so none double-sends; the mark is held for one turn, and
+    /// only the drain that holds it ends the pass ([`BoardHold::end_pass`]).
     draining: AtomicBool,
 }
 
@@ -1735,25 +1806,26 @@ impl Holds {
         }
     }
 
-    /// Writes the copies each queue a refused join left owes its file, at a
-    /// probe (§3c.3; skep #821), and lets go of each that owes none.
+    /// Cuts the copy each queue a refused join left in its file, at a probe
+    /// (§3c.3; skep #817), and lets go of each whose file holds its whole
+    /// lines alone.
     ///
     /// It runs under the board's lock at every probe whatever the board's
     /// state, as the join's retry does ([`Holds::rejoin`]), each queue's
-    /// retry writing the `done`s of the lines its join's undo dropped
-    /// (`HeldQueue::retry`). A queue that owes nothing more agrees with its
-    /// file, which the next open reads so: it goes from
-    /// [`BoardHold::unsettled`], and that the file holds those lines no more
-    /// is said once — the edge that ends what the refused join said of them
+    /// retry cutting the bytes the refused copy left past its file's whole
+    /// lines (`HeldQueue::retry`). A queue whose file holds no such bytes
+    /// agrees with its file, which the next open reads so: it goes from
+    /// [`BoardHold::unsettled`], and that the file holds the copy no more is
+    /// said once — the edge that ends what the refused join said of it
     /// (SP-11).
     fn retry_unsettled(&self, board_hold: &mut BoardHold) {
         for (principal, mut queue) in std::mem::take(&mut board_hold.unsettled) {
             queue.retry();
-            if queue.waiting().is_some() {
+            if queue.tail_left() {
                 board_hold.unsettled.push((principal, queue));
             } else {
                 let file = if queue.is_pending() { "pending held file" } else { "held file" };
-                self.say(format_args!("principal {principal}'s {file} holds the copies a refused join made no more: their `done`s are written"));
+                self.say(format_args!("principal {principal}'s {file} holds the copy a refused join made no more: its bytes are cut off"));
             }
         }
     }
@@ -1815,17 +1887,18 @@ impl Holds {
     /// principal's door opens it; the checks are made — the pending file's
     /// `board` the origin dialed, the board's file's its chain, else the
     /// pending file set aside and said, nothing joined; the standing lines are
-    /// entered in `k` order, an earlier run's before this run's, each written
-    /// and synced, and only then is the pending file removed; the ordinals are
-    /// kept where the board's queue holds no line and its next ordinal is at
-    /// or below theirs, else renumbered, and `held` re-said for every document
-    /// whose lines were renumbered, under each session of the principal's at
-    /// the board and past the once-per-change memory, so a page or an agent
-    /// reads the new ordinals before acting on one. One `Talk` line per
-    /// principal joined: the count, and whether renumbered. A join refused —
-    /// a copy the device refuses, a file's read or its halt — is undone by the
-    /// queue, the principal's lines standing where they were for the next
-    /// join, the file it wrote kept while it owes the undo's `done`s
+    /// entered in `k` order, an earlier run's before this run's, each
+    /// source's as one copy with one sync (`HeldQueue::join`), and only then
+    /// is the pending file removed; the ordinals are kept where the board's
+    /// queue holds no line and its next ordinal is at or below theirs, else
+    /// renumbered, and `held` re-said for every document whose lines were
+    /// renumbered, under each session of the principal's at the board and
+    /// past the once-per-change memory, so a page or an agent reads the new
+    /// ordinals before acting on one. One `Talk` line per principal joined:
+    /// the count, and whether renumbered. A join refused — a copy the device
+    /// refuses, a file's read or its halt — enters nothing, the principal's
+    /// lines standing where they were for the next join, the queue of the file
+    /// it wrote kept where the copy's cut-back was refused too
     /// ([`BoardHold::unsettled`]), and said once per change of its cause
     /// ([`Holds::refuse_join`]); a pending directory the join cannot take is
     /// said so too. The pending directory's lock is let go once no queue is
@@ -1865,8 +1938,8 @@ impl Holds {
             self.join_principal(board_reference, board_hold, &dir, pending.as_ref(), principal);
         }
         // The pending directory stays under its lock while a queue is its
-        // file's — a principal's, or one a refused join keeps owing copies to
-        // it — and no longer.
+        // file's — a principal's, or one a refused join keeps beside it — and
+        // no longer.
         let pending_stands = board_hold.principals.values().any(|ph| ph.queue.is_pending()) || board_hold.unsettled.iter().any(|(_, queue)| queue.is_pending());
         if let Directory::ThisWindow { pending, .. } = &mut board_hold.directory {
             if !pending_stands {
@@ -1896,9 +1969,10 @@ impl Holds {
     /// earlier run's pending file is opened where the live queue is not it.
     /// The directory's file is opened under the account the hold names, else
     /// the one the earlier run's header does. Each file is opened by
-    /// [`open_held`], so a queue a refused join left owing copies to it is
-    /// taken in place of its read, and a refused join keeps each queue it
-    /// opened that owes copies ([`BoardHold::unsettled`]).
+    /// [`open_held`], so a queue a refused join left beside it is taken in
+    /// place of its read, and a refused join keeps each queue it opened whose
+    /// file holds a copy's bytes past its whole lines
+    /// ([`BoardHold::unsettled`]).
     fn join_principal(&self, board_reference: &str, board_hold: &mut BoardHold, dir: &HeldDir, pending: Option<&HeldDir>, principal: u64) {
         let live = board_hold.principals.get_mut(&principal).filter(|ph| ph.joins()).map(|ph| std::mem::replace(&mut ph.queue, HeldQueue::in_memory()));
         // An earlier run's pending file, where this run's queue is not it.
@@ -1956,8 +2030,8 @@ impl Holds {
             return self.refuse_join(board_hold, principal, live, opened, StoppedAt::Target, cause, "the held file names another board than its directory".to_string());
         }
         // The join, an earlier run's lines first, each source's in `k`
-        // order; a refused copy undoes its source's and leaves the lines
-        // where they were.
+        // order as one copy; a refused copy enters none of its source's
+        // lines and leaves them where they were.
         let (mut count, mut renumbered) = (0usize, false);
         if let Some(mut earlier) = earlier {
             match chain.join(&earlier) {
@@ -2045,22 +2119,23 @@ impl Holds {
     /// custody's, what each answer for its lines carries as `unwritable`; a
     /// pending file's keeps its custody, its lines on disk. `opened` are the
     /// files the join opened — an earlier run's pending file, the file the
-    /// lines join — each kept where it owes copies, the `done`s of the lines
-    /// its undo dropped ([`BoardHold::unsettled`]), so no later open in this
-    /// run reads those lines standing; the rest agree with their files and go.
-    /// `cause` is said in the shell's own window with where the lines stand —
-    /// `stopped` the file the join stopped at ([`left_standing`]), and the
-    /// copies a kept file still holds standing — where it is not the cause
-    /// last said for the principal ([`Holds::say_kept_from_file`]), so the
-    /// retry at each probe says nothing until the cause changes.
+    /// lines join — each kept where it holds the refused copy's bytes past its
+    /// whole lines, their cut-back refused too ([`BoardHold::unsettled`]), so
+    /// no later open in this run reads them as held lines; the rest agree
+    /// with their files and go. `cause` is said in the shell's own window with
+    /// where the lines stand — `stopped` the file the join stopped at
+    /// ([`left_standing`]), and the copy a kept file still holds — where it is
+    /// not the cause last said for the principal
+    /// ([`Holds::say_kept_from_file`]), so the retry at each probe says
+    /// nothing until the cause changes.
     #[allow(clippy::too_many_arguments)]
     fn refuse_join(&self, board_hold: &mut BoardHold, principal: u64, live: Option<HeldQueue>, opened: Vec<HeldQueue>, stopped: StoppedAt, cause: String, why: String) {
         let mut left = left_standing(live.as_ref(), stopped);
-        let owing: Vec<HeldQueue> = opened.into_iter().filter(|queue| queue.waiting().is_some()).collect();
-        if !owing.is_empty() {
-            let copies = "the copies a join made before its refusal stand in the file until their `done`s are written, tried again at each probe, and a close before then leaves them read as held lines at the next launch";
-            left = Some(left.map_or_else(|| copies.to_string(), |left| format!("{left}; {copies}")));
-            board_hold.unsettled.extend(owing.into_iter().map(|queue| (principal, queue)));
+        let tailed: Vec<HeldQueue> = opened.into_iter().filter(HeldQueue::tail_left).collect();
+        if !tailed.is_empty() {
+            let copy = "the refused copy's lines stand in the file past its last whole line, their cut-back refused, until they are cut, tried again at each probe, and a close before then leaves them read as held lines at the next launch";
+            left = Some(left.map_or_else(|| copy.to_string(), |left| format!("{left}; {copy}")));
+            board_hold.unsettled.extend(tailed.into_iter().map(|queue| (principal, queue)));
         }
         if let (Some(ph), Some(queue)) = (board_hold.principals.get_mut(&principal), live) {
             if !queue.is_pending() {
@@ -2166,8 +2241,8 @@ impl Holds {
     /// takes: a session's open, a burst, a hold, `held` and `resolve`. A
     /// principal whose custody is not settled, and whose queue holds no line,
     /// is opened here under `session`'s account: its file where the board's
-    /// directory is this shell's — the queue a refused join left owing
-    /// copies to it taken in place of its read ([`open_held`]) — memory alone
+    /// directory is this shell's — the queue a refused join left beside it
+    /// taken in place of its read ([`open_held`]) — memory alone
     /// otherwise, no file opened where another shell holds the board's store,
     /// whose door lets no write through, the custody's why
     /// ([`ANOTHER_WINDOW_HOLDS`]) for a line a write brought past it before
@@ -2201,10 +2276,6 @@ impl Holds {
                         if kept_said.remove(&principal).is_some() {
                             self.say(format_args!("principal {principal}'s {} opens: the lines held for the principal go to it", file_word(&store.dir)));
                         }
-                        // A queue a refused join left owing copies brings
-                        // their wait, said as it began with the join's
-                        // refusal: its end is said as the copies land.
-                        ph.waiting_said = queue.waiting().is_some();
                         ph.queue = queue;
                         ph.custody = Custody::File;
                     }
@@ -2921,6 +2992,8 @@ impl Holds {
                         given.last = None;
                     }
                 }
+                // A pass under way walks the document again at its next turn.
+                ph.stopped_in_pass.remove(&doc);
                 Ok(Resolved::HandedBack)
             }
         }
@@ -3310,10 +3383,10 @@ fn the_file(dir: &HeldDir) -> &'static str {
 
 /// Opens `principal`'s file in `dir` as the join and the door open it.
 ///
-/// The queue a refused join left owing copies to that file is taken where
-/// one stands ([`BoardHold::unsettled`]): the file holds standing the lines
-/// its owed `done`s drop, and a read of it would take them for held lines.
-/// Else the file is read ([`HeldDir::open_file`]).
+/// The queue a refused join left beside that file is taken where one stands
+/// ([`BoardHold::unsettled`]): the file holds the refused copy's lines past
+/// its whole lines, and a read of it would take them for held lines — the
+/// queue's retry cuts them. Else the file is read ([`HeldDir::open_file`]).
 ///
 /// # Errors
 ///

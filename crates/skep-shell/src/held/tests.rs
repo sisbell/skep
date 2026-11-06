@@ -30,13 +30,18 @@
 //! written by the retry past a spent re-mark budget, a re-mark giving way to
 //! its line's `done`, the copies owed written first in `k` order, in one
 //! copy with the line held behind them, and a change riding its line's owed
-//! copy, an owed `done` keeping its line in the budgets until it lands, a
-//! queue owing a copy joining nothing, and a join the device refused mid-way
-//! owing its undo's `done`s and joining once they land; a line kept at a
-//! position is the base of the lines behind it on its document, in the queue
-//! and at a reopen; and a line re-marked with its base raised — the person's
-//! `send` on a moved document — reads back with the raised base, never
-//! lowered by a raise below it or a later `done` kept below it.
+//! copy, an owed `done` keeping its line in the budgets until it lands, and a
+//! queue owing a copy joining nothing; the join (skep #817) — a full queue
+//! joined in one copy with one sync, a join the device refused entering
+//! nothing, owing nothing and joining once the device takes copies, two
+//! equal lines of one queue both joining, a join a crash cut before its sync
+//! joining again over the lines the device kept and doubling none, and a join
+//! whose cut-back was refused leaving its copy past the file's whole lines
+//! until the retry cuts it; a line kept at a position is the base of the
+//! lines behind it on its document, in the queue and at a reopen; and a line
+//! re-marked with its base raised — the person's `send` on a moved document —
+//! reads back with the raised base, never lowered by a raise below it or a
+//! later `done` kept below it.
 //!
 //! The budgets' cells: the queue's frames and anchors held to its byte
 //! budget, four frames at the frame cap fitting it, each line's anchors
@@ -57,6 +62,7 @@
 use std::cell::{Cell, RefCell};
 use std::fs;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -75,7 +81,30 @@ type Seam = Box<dyn Fn(&Path)>;
 thread_local! {
     static FAIL_SYNC: Cell<bool> = const { Cell::new(false) };
     static TORN_WRITE: Cell<Option<usize>> = const { Cell::new(None) };
+    static REFUSE_CUT_BACK: Cell<bool> = const { Cell::new(false) };
     static AFTER_SYNC: RefCell<Option<Seam>> = const { RefCell::new(None) };
+}
+
+/// Refuses the cut-back of the next copy the device refuses, once.
+///
+/// It stands in for a device whose cut back to the whole lines fails after a
+/// copy it refused — for this suite and the hold's — the copy's bytes left
+/// standing past the whole lines, as a write that landed and a sync refused
+/// leave them.
+pub(crate) fn refuse_the_next_cut_back() {
+    REFUSE_CUT_BACK.with(|r| r.set(true));
+}
+
+/// Returns `failed` as a device that refused its cut-back leaves it, where
+/// [`refuse_the_next_cut_back`] armed one: `line` and its `\n` written back
+/// at the file's end, past its whole lines, and the cut-back's refusal named.
+pub(super) fn cut_back_refused(path: &Path, line: &[u8], mut failed: skep_util::file::AppendFailed) -> skep_util::file::AppendFailed {
+    if REFUSE_CUT_BACK.with(Cell::take) {
+        let mut file = fs::OpenOptions::new().append(true).open(path).expect("the file the copy was refused at");
+        file.write_all(line).and_then(|()| file.write_all(b"\n")).expect("the copy's bytes left standing");
+        failed.cut_back = Some(std::io::Error::new(std::io::ErrorKind::StorageFull, "the held store's cut-back was made to fail"));
+    }
+    failed
 }
 
 /// Whether the next `sync_data` is forced to fail (T5's `store_unwritable`,
@@ -114,6 +143,18 @@ pub(crate) fn refuse_copies_after(landed: usize) {
             None => {}
         }))
     });
+}
+
+/// Counts the copies of lines that land from here, each one append's sync,
+/// for this suite and the hold's, until [`take_copies`] clears the seam.
+///
+/// A file's header is its own copy, made by `file::write_once_by`, and no
+/// append: it is counted none.
+pub(crate) fn count_copies() -> Rc<Cell<usize>> {
+    let landed = Rc::new(Cell::new(0));
+    let count = Rc::clone(&landed);
+    AFTER_SYNC.with(|s| *s.borrow_mut() = Some(Box::new(move |_: &Path| count.set(count.get() + 1))));
+    landed
 }
 
 /// Makes the device take copies again: the refusal [`refuse_copies_after`]
@@ -1737,19 +1778,20 @@ fn a_queue_owing_a_copy_joins_nothing_until_it_lands() {
     assert_eq!(live(d.open_file(1, "1.0.1").unwrap()).lines(), chain.lines(), "the file holds the queue as it stands, the re-mark among it");
 }
 
-/// Checks that a join the device refused mid-way owes its undo's `done`s, and
-/// joins once they land.
+/// Checks that a join the device refuses enters nothing, owes nothing, and
+/// joins once the device takes copies.
 ///
-/// The board's queue holds a line; a join of two lines kept in memory copies
-/// the first and the device refuses every copy after it: the join is refused
-/// at the second, its undo dropping the first, whose `done` is owed — a
-/// reopen of the file meanwhile reads the copy standing — and a join under
-/// the refusal enters nothing. Once the device takes copies, the next join
-/// writes the `done`, then enters both lines, and a reopen reads three lines,
-/// the first joined once (the mutant that writes the undo's `done` once and
-/// never again reads the first line twice).
+/// The board's queue holds a line; a join of two lines kept in memory is
+/// refused at its one copy, at the first line the copy carried: nothing
+/// entered, no copy owed and no tail left, the file byte for byte as it
+/// stood, so a reopen meanwhile reads the one line; a join under the
+/// refusal enters nothing either. Once the device takes copies, the next
+/// join enters both lines, and a reopen reads three lines, each once (the
+/// mutant that enters the lines before their copy lands holds lines a
+/// reopen never reads; the one that leaves a refused copy's bytes in the
+/// file, or owes its lines' `done`s, reads a line twice or not at all).
 #[test]
-fn a_join_undone_on_a_refusing_device_owes_its_dones_and_joins_once_they_land() {
+fn a_join_the_device_refused_owes_nothing_and_joins_once_it_takes_copies() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut chain = live(d.open_file(1, "1.0.1").unwrap());
@@ -1757,19 +1799,110 @@ fn a_join_undone_on_a_refusing_device_owes_its_dones_and_joins_once_they_land() 
     let mut memory = HeldQueue::in_memory();
     memory.hold("1.0.1.0.1", None, 0, json!({"op": "insert", "v": 1}), None, Reason::of("unreachable", false)).unwrap();
     memory.hold("1.0.1.0.1", None, 0, json!({"op": "insert", "v": 2}), None, Reason::of("behind", false)).unwrap();
-    refuse_copies_after(1);
+    let before = fs::read(file_path(&tmp)).unwrap();
+    FAIL_SYNC.with(|f| f.set(true));
     let refused = chain.join(&memory).unwrap_err();
-    assert_eq!((refused.k, refused.error.kind()), (2, std::io::ErrorKind::StorageFull), "refused at the second line's copy");
-    assert_eq!(ks(&chain), [1], "undone: the queue as it stood");
-    assert_eq!(chain.waiting().map(|w| (w.first(), w.owed())), Some((2, Owed::Done)), "the undo's `done` of the first is owed");
-    assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1, 2], "a reopen meanwhile reads the first's copy standing");
-    assert!(chain.join(&memory).is_err() && ks(&chain) == [1], "a join under the refusal enters nothing");
-    take_copies();
+    let again = chain.join(&memory);
+    FAIL_SYNC.with(|f| f.set(false));
+    assert_eq!((refused.k, refused.error.kind()), (1, std::io::ErrorKind::StorageFull), "refused at the first line the copy carried");
+    assert!(again.is_err(), "a join under the refusal enters nothing");
+    assert_eq!(ks(&chain), [1], "nothing entered");
+    assert!(chain.waiting().is_none() && !chain.tail_left(), "no copy owed, no tail left");
+    assert_eq!(fs::read(file_path(&tmp)).unwrap(), before, "the file byte for byte as it stood");
+    assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1], "a reopen meanwhile reads the one line");
     let joined = chain.join(&memory).unwrap();
-    assert_eq!(joined.entered.len(), 2, "both enter once the `done` has landed: {joined:?}");
+    assert_eq!(joined.entered, [(1, 2), (2, 3)], "both enter once the device takes copies");
     let read: Vec<(String, u64)> = live(d.open_file(1, "1.0.1").unwrap()).lines().iter().map(|l| (l.doc.clone(), l.frame["v"].as_u64().unwrap_or(0))).collect();
     let want = [("1.0.1.0.9".to_string(), 0), ("1.0.1.0.1".to_string(), 1), ("1.0.1.0.1".to_string(), 2)];
-    assert_eq!(read, want, "three lines, the first joined once");
+    assert_eq!(read, want, "three lines, each once");
+}
+
+/// Checks that a join is one copy with one sync, however many lines enter.
+///
+/// A queue in memory holding `MAX_HELD_LINES` lines, each its own, joins a
+/// fresh board's file: the file's header is its own copy, and every line
+/// enters in ONE copy beside it, synced once, its lines in `k` order; a
+/// reopen reads them all (the mutant that copies the joined lines one by one
+/// syncs `MAX_HELD_LINES` times, the board's lock held across every one).
+#[test]
+fn a_join_of_a_full_queue_is_one_copy_with_one_sync() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut memory = HeldQueue::in_memory();
+    for n in 0..MAX_HELD_LINES {
+        memory.hold("1.0.1.0.1", None, 0, json!({"op": "insert", "v": n}), None, Reason::of("unreachable", false)).unwrap();
+    }
+    let mut chain = live(d.open_file(1, "1.0.1").unwrap());
+    let copied = record_copies(&file_path(&tmp));
+    let joined = chain.join(&memory).unwrap();
+    AFTER_SYNC.with(|s| *s.borrow_mut() = None);
+    assert_eq!((joined.entered.len(), joined.repeated, joined.renumbered), (MAX_HELD_LINES, 0, false), "every line enters, its ordinal kept");
+    let all: Vec<u64> = (1..=MAX_HELD_LINES as u64).collect();
+    assert_eq!(copied.lock().unwrap().as_slice(), std::slice::from_ref(&all), "one copy of every line, in `k` order");
+    assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), all, "a reopen reads them all");
+}
+
+/// Checks that two equal lines of one queue both join.
+///
+/// A queue in memory holds two lines of one document with no `id` and one
+/// frame — two equal bursts, as an agent sending the same call twice makes
+/// them — and a third: into a fresh file, every line enters, and into a
+/// file holding a line equal to the two, one of them is passed over as the
+/// copy that line is and the other enters; a reopen reads each (the mutant
+/// that counts a line entering against the lines after it drops the second
+/// equal burst, the person's text landing once where it was typed twice).
+#[test]
+fn two_equal_lines_of_one_queue_both_join() {
+    let equal = json!({"op": "delete", "doc": "1.0.1.0.1", "as_of": 4});
+    let mut memory = HeldQueue::in_memory();
+    for frame in [&equal, &equal, &json!({"op": "insert", "doc": "1.0.1.0.1"})] {
+        memory.hold("1.0.1.0.1", None, 0, frame.clone(), None, Reason::of("unreachable", false)).unwrap();
+    }
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut chain = live(d.open_file(1, "1.0.1").unwrap());
+    let joined = chain.join(&memory).unwrap();
+    assert_eq!((joined.entered.len(), joined.repeated), (3, 0), "into a fresh file every line enters");
+    assert_eq!(live(d.open_file(1, "1.0.1").unwrap()).lines().iter().filter(|l| l.frame == equal).count(), 2, "a reopen reads both equal lines");
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut chain = live(d.open_file(1, "1.0.1").unwrap());
+    chain.hold("1.0.1.0.1", None, 0, equal.clone(), None, Reason::of("unreachable", false)).unwrap();
+    let joined = chain.join(&memory).unwrap();
+    assert_eq!((joined.entered, joined.repeated), (vec![(2, 2), (3, 3)], 1), "the line standing answers for one equal line, the other entering");
+    assert_eq!(live(d.open_file(1, "1.0.1").unwrap()).lines().iter().filter(|l| l.frame == equal).count(), 2, "a reopen reads two equal lines");
+}
+
+/// Checks that a join whose cut-back the device refused leaves its copy's
+/// lines past the file's whole lines until the retry cuts them.
+///
+/// The board's queue holds a line, and a join of two lines kept in memory
+/// is refused at its one copy, its cut-back refused too: the queue enters
+/// nothing and keeps that its file holds the copy's bytes, which a fresh
+/// read takes for two more lines; the retry, owing nothing, cuts them, and a
+/// fresh read reads the one line (the mutant that forgets the refused
+/// cut-back leaves a fresh open in this run to resend lines it never held;
+/// the one whose retry writes nothing where nothing is owed leaves them
+/// standing for a close to relaunch).
+#[test]
+fn a_join_whose_cut_back_was_refused_leaves_its_copy_until_the_retry_cuts_it() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut chain = live(d.open_file(1, "1.0.1").unwrap());
+    chain.hold("1.0.1.0.9", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap();
+    let mut memory = HeldQueue::in_memory();
+    memory.hold("1.0.1.0.1", None, 0, json!({"op": "insert", "v": 1}), None, Reason::of("unreachable", false)).unwrap();
+    memory.hold("1.0.1.0.1", None, 0, json!({"op": "insert", "v": 2}), None, Reason::of("behind", false)).unwrap();
+    FAIL_SYNC.with(|f| f.set(true));
+    refuse_the_next_cut_back();
+    let refused = chain.join(&memory);
+    FAIL_SYNC.with(|f| f.set(false));
+    assert!(refused.is_err() && ks(&chain) == [1], "nothing entered");
+    assert!(chain.tail_left() && chain.waiting().is_none(), "the copy's bytes left, no copy owed");
+    assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1, 2, 3], "premise: a fresh read takes the copy's lines for held ones");
+    chain.retry();
+    assert!(!chain.tail_left(), "the retry cut them");
+    assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1], "a fresh read reads the one line");
 }
 
 // ── THE PENDING DIRECTORY (§3c.1; skep #725) ────────────────────────────────
@@ -1970,33 +2103,90 @@ fn a_join_cut_before_the_pending_files_removal_joins_again_without_doubling_a_li
     assert_eq!(ks(&live(chain_dir.open_file(1, "1.0.1").unwrap())), [1, 2]);
 }
 
-/// Checks that a join the device refuses is undone and leaves the pending
-/// file.
+/// Checks that a join the device refuses enters nothing and leaves the
+/// pending file.
 ///
-/// The second copy's sync fails: the join is refused naming the line, every
-/// line it entered is `done … dropped` — the board's file, holding nothing
-/// now, gone — the pending file stands with both lines, and a reopen of each
-/// reads what stood before (the mutant that keeps the half-joined lines on
-/// both sides sends a line twice at the next launch; the one that removes
-/// the pending file loses the line whose copy was refused).
+/// The device refuses the one copy into the board's file in three states:
+/// no file, so its header is refused and none is made; a file holding no
+/// line, its header alone, which the refused copy leaves holding none and
+/// which goes as the compaction removes one; and a file holding a line,
+/// byte for byte as it stood. Each time the join is refused at the first
+/// line the copy carried, nothing entered and no copy owed, the pending
+/// file stands with both lines, and a reopen of each reads what stood before
+/// (the mutant that keeps the refused copy's lines on both sides sends a
+/// line twice at the next launch; the one that removes the pending file
+/// loses the lines whose copy was refused; the one that leaves a file
+/// holding no line keeps a file the compaction removes).
 #[test]
-fn a_join_the_device_refuses_is_undone_and_leaves_the_pending_file() {
+fn a_join_the_device_refuses_enters_nothing_and_leaves_the_pending_file() {
+    let header = header_bytes(&Named::Chain(chain()), 1, "1.0.1");
+    for (state, holding) in [("no file", false), ("a file holding no line", false), ("a file holding a line", true)] {
+        let tmp = TempDir::new().unwrap();
+        let (pending, chain_dir) = (pending_dir(&tmp), dir(&tmp));
+        let mut from = live(pending.open_file(1, "1.0.1").unwrap());
+        from.hold("1.0.1.0.1", None, 0, json!({"op": "insert", "v": 1}), None, Reason::of("head_unreadable", false)).unwrap();
+        from.hold("1.0.1.0.2", None, 0, json!({"op": "insert", "v": 2}), None, Reason::of("behind", false)).unwrap();
+        if state == "a file holding no line" {
+            fs::write(file_path(&tmp), &header).unwrap();
+        }
+        let mut chain = live(chain_dir.open_file(1, "1.0.1").unwrap());
+        if holding {
+            chain.hold("1.0.1.0.9", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap();
+        }
+        let after = if holding { fs::read(file_path(&tmp)).ok() } else { None };
+        FAIL_SYNC.with(|f| f.set(true));
+        let refused = chain.join(&from).unwrap_err();
+        FAIL_SYNC.with(|f| f.set(false));
+        assert_eq!((refused.k, refused.error.kind()), (1, std::io::ErrorKind::StorageFull), "{state}: refused at the first line the copy carried");
+        assert!(chain.waiting().is_none() && !chain.tail_left(), "{state}: no copy owed, no tail left");
+        assert_eq!(ks(&chain), if holding { vec![1] } else { vec![] }, "{state}: nothing entered");
+        assert_eq!(fs::read(file_path(&tmp)).ok(), after, "{state}: the board's file as it stood, or none where it held no line");
+        assert_eq!(ks(&from), [1, 2], "{state}: the pending queue untouched");
+        assert_eq!(ks(&live(pending.open_file(1, "1.0.1").unwrap())), [1, 2], "{state}: the pending file stands with both lines");
+        assert_eq!(live(chain_dir.open_file(1, "1.0.1").unwrap()).lines().len(), usize::from(holding), "{state}: the board's file reads what stood");
+    }
+}
+
+/// Checks that a join cut before its sync joins again at the next launch
+/// and doubles no line.
+///
+/// A pending file holds four lines, the middle two equal — the same
+/// document, no `id`, one frame. The crash comes as their join's one copy is
+/// written: the board's file holds its header, the copy's first two lines
+/// whole and the third torn, and the pending file stands. The next launch
+/// reads both and joins again: the two lines the board's file holds are
+/// passed over, each answering for one pending line, and the other two
+/// enter, the torn tail cut first; a reopen reads the four lines in `k`
+/// order, the equal two among them, and halts on nothing (the mutant that
+/// counts a line entering against the lines after it drops the second equal
+/// line; the one that enters every pending line again doubles the first
+/// two).
+#[test]
+fn a_join_cut_before_its_sync_joins_again_and_doubles_no_line() {
     let tmp = TempDir::new().unwrap();
     let (pending, chain_dir) = (pending_dir(&tmp), dir(&tmp));
     let mut from = live(pending.open_file(1, "1.0.1").unwrap());
-    from.hold("1.0.1.0.1", None, 0, json!({"op": "insert", "v": 1}), None, Reason::of("head_unreadable", false)).unwrap();
-    from.hold("1.0.1.0.2", None, 0, json!({"op": "insert", "v": 2}), None, Reason::of("behind", false)).unwrap();
+    let equal = json!({"op": "delete", "doc": "1.0.1.0.1", "as_of": 4});
+    for frame in [json!({"op": "insert", "v": 1}), equal.clone(), equal.clone(), json!({"op": "insert", "v": 4})] {
+        from.hold("1.0.1.0.1", None, 0, frame, None, Reason::of("head_unreadable", false)).unwrap();
+    }
+    // The crash: the copy's first two lines whole, its third torn.
+    let lines = from.lines();
+    let third = held_line_bytes(&lines[2]);
+    let mut crashed = header_bytes(&Named::Chain(chain()), 1, "1.0.1");
+    crashed.extend(held_line_bytes(&lines[0]));
+    crashed.extend(held_line_bytes(&lines[1]));
+    crashed.extend_from_slice(&third[..third.len() / 2]);
+    fs::write(file_path(&tmp), &crashed).unwrap();
     let mut chain = live(chain_dir.open_file(1, "1.0.1").unwrap());
-    // The first copy lands; the seam run after its sync makes the next fail.
-    AFTER_SYNC.with(|s| *s.borrow_mut() = Some(Box::new(|_: &Path| FAIL_SYNC.with(|f| f.set(true)))));
-    let refused = chain.join(&from).unwrap_err();
-    AFTER_SYNC.with(|s| *s.borrow_mut() = None);
-    FAIL_SYNC.with(|f| f.set(false));
-    assert_eq!((refused.k, refused.error.kind()), (2, std::io::ErrorKind::StorageFull), "refused at the second line's copy");
-    assert!(chain.lines().is_empty() && !chain.on_disk(), "undone: nothing entered, the file gone");
-    assert_eq!(ks(&from), [1, 2], "the pending queue untouched");
-    assert_eq!(ks(&live(pending.open_file(1, "1.0.1").unwrap())), [1, 2], "the pending file stands with both lines");
-    assert!(live(chain_dir.open_file(1, "1.0.1").unwrap()).lines().is_empty(), "the board's file reads fresh");
+    let from = live(pending.open_file(1, "1.0.1").unwrap());
+    assert_eq!((ks(&chain), chain.torn().is_some()), (vec![1, 2], true), "premise: the board's file holds two lines and a torn third");
+    let joined = chain.join(&from).unwrap();
+    assert_eq!((joined.entered, joined.repeated), (vec![(3, 3), (4, 4)], 2), "the two lines on disk passed over, the other two entering");
+    let reopened = live(chain_dir.open_file(1, "1.0.1").unwrap());
+    let read: Vec<(u64, Value)> = reopened.lines().iter().map(|l| (l.k, l.frame.clone())).collect();
+    let want: Vec<(u64, Value)> = from.lines().iter().map(|l| (l.k, l.frame.clone())).collect();
+    assert_eq!((read, reopened.torn()), (want, None), "the four lines once each, in `k` order, the torn tail cut");
 }
 
 // ── THE BUDGETS, TIMED (§3c.3) ──────────────────────────────────────────────

@@ -14,7 +14,8 @@
 //!
 //! The ground is a fake board (`Fake`) — its `H.1`, or an answer armed in the
 //! record's place, and whether it names a claimant; its `/changes` rows and
-//! the reads of them counted, a draft's text, its content image and the
+//! the reads of them counted, each read slowed where a cell asks; its commit
+//! stream, none or endless; a draft's text, its content image and the
 //! reads of it counted, a look taken as each image read reaches the board,
 //! the death signal at either read where a cell arms it, the position its
 //! arrangement last changed at as a cell sets it — a burst typed below it
@@ -30,9 +31,12 @@
 //! The ground's session is a writer's — signed, under a key its store
 //! generates, since a bare session reads alone and no probe resends under it —
 //! save where a cell asks for a bare one (`bare_ground`) or for a key no store
-//! holds (`keyed_facts`). `write` holds the one path of a session's `op` — a
-//! burst's door and its hold, and a write the hold never holds; `resend` the
-//! probe and the resend walk.
+//! holds (`keyed_facts`), and its board one someone has claimed, save where a
+//! cell asks for one no one has (`unclaimed_ground`), whose lines stand in
+//! memory alone; a cell runs the board's feed thread over the ground's holds
+//! where it asks (`feed_threads`). `write` holds the one path of a session's
+//! `op` — a burst's door and its hold, and a write the hold never holds;
+//! `resend` the probe and the resend walk.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -316,8 +320,9 @@ impl<T: Clone> Armed<T> {
 /// answer lost on the way where one is armed lost, and the death signal, a
 /// scripted rejection or a non-200 answered where one is armed — to every
 /// send, or to the next few alone, the death first and the non-200 next;
-/// and the `/health` reads counted, one armed to panic once, and each held
-/// at a gate while it is shut.
+/// the `/health` reads counted, one armed to panic once, and each held at a
+/// gate while it is shut; and its `/events` stream, none, or a commit a
+/// millisecond without end where a cell arms one.
 struct Fake {
     chain: String,
     no_head: AtomicBool,
@@ -394,6 +399,12 @@ struct Fake {
     panic_next_health: AtomicBool,
     health_reads: AtomicUsize,
     health_gate: (Mutex<bool>, Condvar),
+    /// Whether `/events` serves a commit a millisecond, endlessly, as a
+    /// board another writer keeps busy does; it serves no stream otherwise.
+    commits: AtomicBool,
+    /// How long each `/changes` read takes, in milliseconds, as across a
+    /// network.
+    changes_delay_ms: AtomicU64,
 }
 
 impl Fake {
@@ -441,6 +452,8 @@ impl Fake {
             panic_next_health: AtomicBool::new(false),
             health_reads: AtomicUsize::new(0),
             health_gate: (Mutex::new(false), Condvar::new()),
+            commits: AtomicBool::new(false),
+            changes_delay_ms: AtomicU64::new(0),
         })
     }
 
@@ -559,6 +572,7 @@ impl Dialer for Fake {
         }
         if req.method == Method::Get && req.path.starts_with("/changes") {
             self.changes_reads.fetch_add(1, Ordering::SeqCst);
+            thread::sleep(Duration::from_millis(self.changes_delay_ms.load(Ordering::SeqCst)));
             if self.changes_closed.load(Ordering::SeqCst) {
                 return Ok(closed());
             }
@@ -676,8 +690,36 @@ impl Dialer for Fake {
     }
 
     fn stream(&self, _: &Origin, _: &RequestHead, _: &mut dyn Read, _: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
+        if self.commits.load(Ordering::SeqCst) {
+            return Ok(StreamedResponse { status: 200, headers: Headers::default(), body: Box::new(EndlessCommits { at: 10 }) });
+        }
         Err(DialError::Connect("no stream here".into()))
     }
+}
+
+/// A commit stream that never ends: one `commit` event a millisecond, each a
+/// position past the one before.
+struct EndlessCommits {
+    at: u64,
+}
+
+impl Read for EndlessCommits {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        thread::sleep(Duration::from_millis(1));
+        self.at += 1;
+        let event = format!("event: commit\ndata: {{\"log_position\": {}}}\n\n", self.at);
+        let n = event.len().min(buf.len());
+        buf[..n].copy_from_slice(&event.as_bytes()[..n]);
+        Ok(n)
+    }
+}
+
+/// The board's two threads over the ground's holds: the feed thread the
+/// shell runs for the ground's board, its `Talk` said nowhere.
+fn feed_threads(g: &Ground) -> crate::feed::FeedThreads {
+    let talk: Talk = Arc::new(|_: &str| {});
+    let shared = crate::feed::Shared { bus: Arc::clone(&g.bus), sessions: Arc::clone(&g.sessions), data_dir: g.store.path().to_path_buf(), talk, holds: Arc::clone(&g.holds) };
+    crate::feed::FeedThreads::spawn(Arc::clone(&g.entry), shared)
 }
 
 struct NoSupplements;
@@ -689,7 +731,8 @@ impl Supplements for NoSupplements {
 /// The holds over the fake board, a session registered and its open read as
 /// the shell reads it — the ground every resend cell stands on; every line
 /// the hold says on TALK, in order; the store directory kept for the ground's
-/// life.
+/// life; and the board's entry, the session table and the bus, which a cell
+/// hands the board's feed thread to run over the same holds.
 struct Ground {
     holds: Arc<Holds>,
     fake: Arc<Fake>,
@@ -697,6 +740,9 @@ struct Ground {
     rx: Receiver<Event>,
     said: Arc<Mutex<Vec<String>>>,
     store: TempDir,
+    entry: Arc<BoardEntry>,
+    sessions: Arc<Sessions>,
+    bus: Arc<EventBus>,
 }
 
 /// A `held` event held to its declaration (`shapes`' `HeldEvent`): every
@@ -850,11 +896,23 @@ fn ground_over(fake: Arc<Fake>, store: TempDir, facts: Facts, opened_at: u64) ->
     let said = Arc::new(Mutex::new(Vec::new()));
     let kept = Arc::clone(&said);
     let talk: Talk = Arc::new(move |line: &str| kept.lock().unwrap().push(line.to_string()));
-    let holds = Holds::new(Arc::clone(&sessions), bus, keys, store.path().to_path_buf(), talk, [Arc::clone(&entry)]);
+    let holds = Holds::new(Arc::clone(&sessions), Arc::clone(&bus), keys, store.path().to_path_buf(), talk, [Arc::clone(&entry)]);
     let open = Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at };
     let session = sessions.register(&entry, open, &mut NoSupplements);
     holds.open_session(&session);
-    Ground { holds, fake, session, rx, said, store }
+    Ground { holds, fake, session, rx, said, store, entry, sessions, bus }
+}
+
+/// The ground under a writer at a board no one has claimed, which serves no
+/// head record: its lines held in memory alone, and none owing an attest —
+/// the drain's walk at the speed of its own bookkeeping.
+fn unclaimed_ground() -> Ground {
+    let fake = Fake::new();
+    fake.no_head.store(true, Ordering::SeqCst);
+    fake.unclaimed.store(true, Ordering::SeqCst);
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    ground_over(fake, store, facts, 0)
 }
 
 /// An `insert` of `values` at the document's first position, typed against

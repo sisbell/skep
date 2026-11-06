@@ -6,16 +6,30 @@
 //! there too at its daemon-running tick and at the hand-overs of
 //! `resolve(send)` and `set_node_state(Running)`, because `Cmd::Tick` is
 //! driven by committed writes and a poisoned, halted, stopped or
-//! unreachable board commits nothing. Each probe first writes the `done`s a
-//! refused join's undo owes the file it wrote (skep #821), joins the lines
-//! kept out of the directory's file to it (§3c.1; skep #823) and writes the
-//! copies each held file owes its queue — a line's, a re-mark's or a
-//! `done`'s the device refused — whatever the board's state: the retry's
-//! clock (§3c.3; skep #813, #821). The resend it lets run is automatic
-//! at the hold's end and at reopen, under a standing session of the
-//! principal's that may write — never a bare one, the keyless session that
-//! reads alone (foundations §3.3 state 3), whose principal's lines stay held
-//! until a session that may write stands: one read per document (`GET
+//! unreachable board commits nothing. Each probe first cuts the bytes a
+//! refused join's copy left in the file it wrote, where their cut-back was
+//! refused too (skep #817), joins the lines kept out of the directory's file
+//! to it (§3c.1; skep #823) and writes the copies each held file owes its
+//! queue — a line's, a re-mark's or a `done`'s the device refused — whatever
+//! the board's state: the retry's clock (§3c.3; skep #813, #821). The resend
+//! it lets run is automatic at the hold's end and at reopen, under a standing
+//! session of the principal's that may write — never a bare one, the keyless
+//! session that reads alone (foundations §3.3 state 3), whose principal's
+//! lines stay held until a session that may write stands.
+//!
+//! **The drain runs in turns** (skep #817). One probe runs one turn of at
+//! most [`TURN_STEPS`] steps — a document's read, a line's send — and
+//! answers whether it stopped at that bound with a line still to send
+//! ([`Turn`]); the feed thread then serves the work queued behind the turn
+//! and runs the next at once, so a `search`, a listing or a session's swap
+//! at the board never waits a whole drain out. The turns of one PASS walk
+//! the principal's lines in `k` order, a document read as the walk reaches
+//! its first line, and a document a turn stopped at — its read undecided,
+//! its head awaiting the person's act or not taken — passed over by every
+//! later turn of the pass (`PrincipalHold::stopped_in_pass`), so no pass
+//! reads a document or dials its head twice however many turns it takes; the
+//! pass ends at a turn no bound stopped, and the next starts at the next
+//! probe. The walk's read: one per document (`GET
 //! /changes`) before its first resend, which answers one question of the
 //! document's head — did its own write land? — and nothing more: (i)
 //! nothing of it landed, send from the head, or, the head's first failed
@@ -54,11 +68,12 @@
 //! reclaimed — leaves the span's own units between its anchors in another
 //! order, so its resend, refused by the board, is held moved and never applied
 //! twice. The read judges no move, and no line is shifted before it: the shift
-//! lives in the send, which runs for a line the read let go alone. Every
-//! document is read first, and the lines of those its reads let go then go out
-//! in `k` order across the documents (§3c.5's order, "which keeps each
-//! document's order"), so a `copy` held between two bursts on its source
-//! transcludes the source as it stood when the person wrote it. Each line goes
+//! lives in the send, which runs for a line the read let go alone. The lines
+//! of the documents the reads let go go out in `k` order across the
+//! documents (§3c.5's order, "which keeps each document's order"), each
+//! document read as the walk reaches it, so a `copy` held between two bursts
+//! on its source transcludes the source as it stood when the person wrote it.
+//! Each line goes
 //! out through the hold's one reader of a write's answer, as a first dial does,
 //! every failed send of it noted on its clock and its "sent again" said once
 //! per change of the failure; one the board refuses under a code the table
@@ -72,7 +87,7 @@
 //! while it is owed relaunches the line as one never sent.
 
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -81,7 +96,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use skep_client::board::{acked_at, frames, Answer, ChangesAnswer, ChangesQuery, Rejection};
 
-use super::{awaits_act, cause, line_state, millis, AttestedWhereOwed, BoardSlot, Dialed, HandsRead, HeldState, Holds, HAND_OVER_DEADLINE};
+use super::{awaits_act, cause, line_state, millis, AttestedWhereOwed, BoardSlot, Dialed, HandsRead, HeldState, Holds, Turn, HAND_OVER_DEADLINE, TURN_STEPS};
 use crate::held::{i_address, Anchors, Done, HeldLine, Reason, SpanRun};
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{board_head, SessionEntry, SessionKind};
@@ -480,26 +495,34 @@ impl Drop for Draining<'_> {
 }
 
 impl Holds {
-    /// Runs the probe (§3c.4), and the resend it lets run (§3c.5).
+    /// Runs the probe (§3c.4), and one turn of the resend it lets run
+    /// (§3c.5).
     ///
     /// It runs on the board's feed thread alone — every
     /// [`PROBE_CADENCE`](super::PROBE_CADENCE), at its daemon-running tick,
-    /// and at the hand-overs of `resolve(send)` and `set_node_state(Running)`.
-    /// First, whatever the board's state — its node stopped, the board away
-    /// — the `done`s a refused join's undo owes the file it wrote are written
-    /// ([`Holds::retry_unsettled`]); the lines kept out of the directory's
-    /// file, in memory alone or on the pending file a refused join left, are
-    /// joined to it where the device and the file take them
-    /// ([`Holds::rejoin`], §3c.1, §3c.3; skep #823); and the copies each
-    /// principal's held file owes — a line's, a re-mark's or a `done`'s — are
-    /// written where the device takes them (`HeldQueue::retry`, §3c.3; skep
-    /// #813, #821), and a wait that ends is said ([`Holds::note_waiting`]):
-    /// none needs a dial. Then, while a line stands at a board whose own
-    /// node is not stopped, `/health` is read; where the board answers and
-    /// takes writes, each principal with lines resends them under a standing
-    /// session of its own that may write (`SessionEntry::may_write`) — under
-    /// no bare session.
-    pub fn probe(&self, board_reference: &str) {
+    /// at the hand-overs of `resolve(send)` and `set_node_state(Running)`, and
+    /// after a turn its bound stopped, once the work queued behind that turn
+    /// is served. First, whatever the board's state — its node stopped, the
+    /// board away — the bytes a refused join's copy left past a file's whole
+    /// lines, their cut-back refused too, are cut ([`Holds::retry_unsettled`]);
+    /// the lines kept out of the directory's file, in memory alone or on the
+    /// pending file a refused join left, are joined to it where the device and
+    /// the file take them ([`Holds::rejoin`], §3c.1, §3c.3; skep #823); and the
+    /// copies each principal's held file owes — a line's, a re-mark's or a
+    /// `done`'s — are written where the device takes them (`HeldQueue::retry`,
+    /// §3c.3; skep #813, #821), and a wait that ends is said
+    /// ([`Holds::note_waiting`]): none needs a dial. Then, while a line stands
+    /// at a board whose own node is not stopped, one turn of the drain runs
+    /// ([`Holds::drain`]), one drain per board at a time.
+    ///
+    /// It answers [`Turn::Bounded`] where the turn stopped at its bound with
+    /// a line still to send, the pass going on at the next turn, and
+    /// [`Turn::Done`] otherwise — the pass ended where this probe ran the
+    /// drain, its stopped documents walked again by the next
+    /// ([`BoardHold::end_pass`](super::BoardHold::end_pass)); a probe that
+    /// finds another drain of the board running leaves that drain's pass as it
+    /// stands.
+    pub fn probe(&self, board_reference: &str) -> Turn {
         // Gathered under the lock and dialed outside it, so `op` never waits
         // on a dead board's connect timeout.
         let slot = self.slot(board_reference);
@@ -513,15 +536,18 @@ impl Holds {
             }
             !board_hold.node_stopped && board_hold.principals.values().any(|ph| !ph.queue.lines().is_empty())
         };
-        if !due {
-            return;
+        // One drain per board at a time, its mark cleared however it ends;
+        // the drain that holds the mark alone ends the pass.
+        let Some(_draining) = Draining::begin(&slot.draining) else { return Turn::Done };
+        let turn = if due { self.drain(board_reference, slot) } else { Turn::Done };
+        if turn == Turn::Done {
+            slot.lock().end_pass();
         }
-        // One drain per board at a time, its mark cleared however it ends.
-        let Some(_draining) = Draining::begin(&slot.draining) else { return };
-        self.drain(board_reference, slot);
+        turn
     }
 
-    /// Runs the probe's dial and the resend: the body of [`Holds::probe`].
+    /// Runs the probe's dial and one turn of the resend: the body of
+    /// [`Holds::probe`].
     ///
     /// It runs once per board at a time. After `/health`, ONE read of the
     /// board's head (`sessions::board_head`) before any document (skep #727):
@@ -531,15 +557,21 @@ impl Holds {
     /// per change ([`Holds::note_head`]). While the head answers
     /// `head_unreadable`, every document whose head line is held so is
     /// skipped: no `/changes` read, no `sending`, no attest attempted; the
-    /// other documents resend as they do.
-    fn drain(&self, board_reference: &str, slot: &BoardSlot) {
+    /// other documents resend as they do. The principals with lines walk in
+    /// their order, each under a standing session of its own that may write
+    /// (`SessionEntry::may_write`) — under no bare session — sharing the
+    /// turn's [`TURN_STEPS`] steps ([`Holds::walk`]); it answers
+    /// [`Turn::Bounded`] where they ran out with a line still to send, and
+    /// [`Turn::Done`] where every principal's walk reached its end, or the
+    /// board did not answer or holds every line.
+    fn drain(&self, board_reference: &str, slot: &BoardSlot) -> Turn {
         let board = &slot.board;
         // The probe's one `/health` read (§3c.4): a board that does not answer
         // is read again at the next probe, and one whose writes are halted
         // holds every line.
-        let Ok(health) = board.health() else { return };
+        let Ok(health) = board.health() else { return Turn::Done };
         if self.note_health(board_reference, &health) {
-            return;
+            return Turn::Done;
         }
         // The board answers and takes writes: the hold ends. The head is read
         // once; a directory no session's open could establish is tried again
@@ -551,41 +583,102 @@ impl Holds {
         self.note_head(board_reference, &head);
         self.establish(board_reference, slot, &head);
         let head_unreadable = matches!(head, Err(Refusal::Halt { name: Name::HEAD_UNREADABLE, .. }));
-        let principals: Vec<u64> = slot.lock().principals.iter().filter(|(_, ph)| !ph.queue.lines().is_empty()).map(|(p, _)| *p).collect();
+        let principals: BTreeSet<u64> = slot.lock().principals.iter().filter(|(_, ph)| !ph.queue.lines().is_empty()).map(|(p, _)| *p).collect();
+        let mut steps = TURN_STEPS;
         for principal in principals {
             let Some(session) = self.sessions.on_board(board_reference).into_iter().find(|s| s.facts.principal == principal && s.may_write()) else { continue };
-            self.resume(&session, head_unreadable);
+            if self.walk(&session, head_unreadable, &mut steps) == Turn::Bounded {
+                return Turn::Bounded;
+            }
+        }
+        Turn::Done
+    }
+
+    /// Walks one session's principal's lines in `k` order: a turn's share
+    /// of the pass (resume-by-read, §3c.5; skep #817).
+    ///
+    /// It is wire.md's resume-by-read (PUB-8.32) at the board the session
+    /// stands at, every document the pass has stopped at passed over
+    /// (`PrincipalHold::stopped_in_pass`). A document the turn has not met
+    /// is decided at the first of its lines the walk reaches, its head, by
+    /// [`Holds::resume_doc`] — its read, where its head may have landed, one
+    /// of the turn's `steps`, made only where a step is left for the send it
+    /// may let go, so no turn of the pass reads the document again — and
+    /// where its lines do not go out now the pass stops at it. Each line of a
+    /// document that goes out is sent ([`Holds::send_line`]), a step — a
+    /// normal `op` under the session, as §3c.5 has "lines in `k` order across
+    /// the board's documents, which keeps each document's order" — its
+    /// document stopped where the line awaits the person's act or its send
+    /// stops it, the others going on. Each send settles its line, an ack
+    /// taking it out of the queue, or stops its document, and each decision
+    /// lets its document go or stops it, so the walk ends; each line is found
+    /// from the last one the walk handled on, so a turn reads the queue once
+    /// beside its steps. `head_unreadable` is whether the probe's one read of
+    /// the board's head answered so: the documents whose head line waits on
+    /// the head are then passed over ([`passed_over`]). It answers
+    /// [`Turn::Bounded`] where a step was owed and the turn had none left for
+    /// it, and [`Turn::Done`] where the walk reached the principal's last
+    /// line.
+    fn walk(&self, session: &SessionEntry, head_unreadable: bool, steps: &mut usize) -> Turn {
+        let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
+        // The documents this turn let go, and the ordinal the walk handled
+        // last: no line's ordinal is 0.
+        let mut sending: HashSet<String> = HashSet::new();
+        let mut after = 0u64;
+        loop {
+            let next = self.with_principal(board_reference, principal, |ph| {
+                let lines = ph.queue.lines();
+                lines[lines.partition_point(|l| l.k <= after)..].iter().find(|l| !ph.stopped_in_pass.contains(&l.doc)).cloned()
+            });
+            let Some(line) = next.flatten() else { return Turn::Done };
+            if !sending.contains(&line.doc) {
+                // A read is made only where the send it may let go can follow
+                // it in this turn, so no later turn of the pass reads the
+                // document again.
+                if read_owed(&line, head_unreadable) {
+                    if *steps < 2 {
+                        return Turn::Bounded;
+                    }
+                    *steps -= 1;
+                }
+                if self.resume_doc(session, &line, head_unreadable) {
+                    sending.insert(line.doc.clone());
+                } else {
+                    after = line.k;
+                    self.stop_in_pass(board_reference, principal, &line.doc);
+                }
+                continue;
+            }
+            if awaits_act(&line) {
+                after = line.k;
+                sending.remove(&line.doc);
+                self.stop_in_pass(board_reference, principal, &line.doc);
+                continue;
+            }
+            let Some(left) = steps.checked_sub(1) else { return Turn::Bounded };
+            *steps = left;
+            after = line.k;
+            if self.send_line(session, &line).is_break() {
+                sending.remove(&line.doc);
+                self.stop_in_pass(board_reference, principal, &line.doc);
+            }
         }
     }
 
-    /// Runs the resend for one session (§3c.5), resumed by read.
-    ///
-    /// It is wire.md's resume-by-read (PUB-8.32) at the board the session
-    /// stands at: each document with held lines read once, in the order its
-    /// first line was held, then the lines of every document its read lets
-    /// go sent in `k` order across the documents ([`Holds::send_in_order`]).
-    /// The documents are gathered by one pass over the queue, each found
-    /// among those already seen by a set's lookup, never a scan of them.
-    /// `head_unreadable` is whether the probe's one read of the board's head
-    /// answered so: the documents whose head line waits on the head are then
-    /// skipped ([`Holds::resume_doc`]).
-    fn resume(&self, session: &SessionEntry, head_unreadable: bool) {
-        let Some(docs) = self.with_principal(&session.board_reference, session.facts.principal, |ph| {
-            let mut seen = HashSet::new();
-            ph.queue.lines().iter().filter(|l| seen.insert(l.doc.as_str())).map(|l| l.doc.clone()).collect::<Vec<String>>()
-        }) else {
-            return;
-        };
-        let sending: HashSet<String> = docs.into_iter().filter(|doc| self.resume_doc(session, doc, head_unreadable)).collect();
-        self.send_in_order(session, sending);
+    /// Enters `doc` among the documents the pass has stopped at
+    /// (`PrincipalHold::stopped_in_pass`): no later turn of the pass reads it
+    /// or sends its lines.
+    fn stop_in_pass(&self, board_reference: &str, principal: u64, doc: &str) {
+        self.with_principal(board_reference, principal, |ph| ph.stopped_in_pass.insert(doc.to_string()));
     }
 
     /// Resumes one document by its read (resume-by-read, §3c.5).
     ///
-    /// It runs the read and its outcome — a landed head kept, its position
-    /// made the document's base (§3c.2) and the principal's latest
-    /// arrangement write on it, and entered in the board's acked positions
-    /// — and answers whether the document's lines go out now: a
+    /// `head` is the document's head, its first standing line, as the walk
+    /// reached it. It runs the read and its outcome — a landed head kept,
+    /// its position made the document's base (§3c.2) and the principal's
+    /// latest arrangement write on it, and entered in the board's acked
+    /// positions — and answers whether the document's lines go out now: a
     /// document the read sends from the head, or whose landed head leaves
     /// lines behind it; never one whose head awaits the person's act, which
     /// is read never, nor one the read left undecided, nor one whose head it
@@ -599,14 +692,14 @@ impl Holds {
     /// head answers so (`head_unreadable`) is skipped whole — no read, no
     /// `sending`, nothing said (skep #727): its send would fail the same way,
     /// and the `held` event and the `Talk` line were said once as the state
-    /// began; it is tried again the probe the head reads.
-    fn resume_doc(&self, session: &SessionEntry, doc: &str, head_unreadable: bool) -> bool {
-        let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
-        let Some(head) = self.head_of(board_reference, principal, doc) else { return false };
-        if awaits_act(&head) || (head_unreadable && head.reason.cause == cause::HEAD_UNREADABLE) {
+    /// began; it is tried again the probe the head reads. Whether a read is
+    /// made is [`read_owed`]'s, which the walk counts it by.
+    fn resume_doc(&self, session: &SessionEntry, head: &HeldLine, head_unreadable: bool) -> bool {
+        let (board_reference, principal, doc) = (session.board_reference.as_str(), session.facts.principal, head.doc.as_str());
+        if passed_over(head, head_unreadable) {
             return false;
         }
-        let outcome = if head.reason.sent { self.read_outcome(session, doc, &head) } else { ReadOutcome::SendFromHead };
+        let outcome = if read_owed(head, head_unreadable) { self.read_outcome(session, doc, head) } else { ReadOutcome::SendFromHead };
         match outcome {
             ReadOutcome::Unread => false,
             ReadOutcome::Landed { at } => {
@@ -647,7 +740,7 @@ impl Holds {
                 if let Some((first_failed, last)) = clock {
                     let elapsed = self.now().saturating_duration_since(first_failed);
                     if elapsed >= HAND_OVER_DEADLINE {
-                        self.hand_over(session, &head, &last, elapsed);
+                        self.hand_over(session, head, &last, elapsed);
                         return false;
                     }
                 }
@@ -777,26 +870,6 @@ impl Holds {
             }
             Ok(Answer::Document(_)) => Site::Differs,
             Ok(Answer::Closed) | Err(_) => Site::Unread,
-        }
-    }
-
-    /// Sends the standing lines of `docs` in `k` order: §3c.5's order.
-    ///
-    /// §3c.5 has "lines in `k` order across the board's documents, which
-    /// keeps each document's order": each line is a normal `op` under the
-    /// session — a document stopping at a line that awaits the person's act
-    /// or is not taken, the others going on. Every turn settles its line (an
-    /// ack, the one `Continue`, takes it out of the queue) or drops its
-    /// document, so the walk ends; a turn finds its line by one set lookup
-    /// per line it passes, so the walk's work is the queue's lines — a hold
-    /// adds none past `held::MAX_HELD_LINES` — times its turns.
-    fn send_in_order(&self, session: &SessionEntry, mut docs: HashSet<String>) {
-        let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
-        let next = |docs: &HashSet<String>| self.with_principal(board_reference, principal, |ph| ph.queue.lines().iter().find(|l| docs.contains(&l.doc)).cloned()).flatten();
-        while let Some(line) = next(&docs) {
-            if awaits_act(&line) || self.send_line(session, &line).is_break() {
-                docs.remove(&line.doc);
-            }
         }
     }
 
@@ -1104,15 +1177,31 @@ impl Holds {
         self.with_principal(board_reference, principal, |ph| self.done_line(principal, ph, k, done));
     }
 
-    /// Returns the document's head: its first standing line in `k` order.
-    fn head_of(&self, board_reference: &str, principal: u64, doc: &str) -> Option<HeldLine> {
-        self.with_principal(board_reference, principal, |ph| ph.queue.lines().iter().find(|l| l.doc == doc).cloned()).flatten()
-    }
-
     /// Returns how many lines stand on the document.
     fn count(&self, board_reference: &str, principal: u64, doc: &str) -> u64 {
         self.with_principal(board_reference, principal, |ph| ph.count(doc)).unwrap_or(0)
     }
+}
+
+/// Returns whether the walk passes a document over at `head`, its head,
+/// with no read and no send (§3c.5; skep #727).
+///
+/// It does where the head awaits the person's act, which no probe sends, or
+/// is held `head_unreadable` while the probe's one read of the board's head
+/// answers so (`head_unreadable`), its send bound to fail the same way.
+fn passed_over(head: &HeldLine, head_unreadable: bool) -> bool {
+    awaits_act(head) || (head_unreadable && head.reason.cause == cause::HEAD_UNREADABLE)
+}
+
+/// Returns whether deciding a document at `head` reads the board for the
+/// head's own landing (§3c.5).
+///
+/// It does where a dial of the head may have landed (`sent`) and the walk
+/// does not pass the document over ([`passed_over`]): the read is one step
+/// of the turn (`TURN_STEPS`), and a head no dial of which left goes from
+/// the head unread.
+fn read_owed(head: &HeldLine, head_unreadable: bool) -> bool {
+    head.reason.sent && !passed_over(head, head_unreadable)
 }
 
 /// Returns whether `delivery` delivers `want`, value for value and no more.

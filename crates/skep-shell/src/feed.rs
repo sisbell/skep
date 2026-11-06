@@ -40,7 +40,11 @@
 //! alone — every `PROBE_CADENCE`, measured from the last cadence's or
 //! hand-over's probe whatever woke the thread between, at the tick that
 //! ends an announced outage, and at a hand-over ([`Feed::probe`],
-//! `resolve(send)`'s and `set_node_state(Running)`'s). Both feeds are read
+//! `resolve(send)`'s and `set_node_state(Running)`'s). A probe runs one turn
+//! of the drain, bounded (`hold::TURN_STEPS`); while a turn stops at its
+//! bound, the next runs at once, the commands queued behind it served
+//! first ([`Feeder::drain`]; skep #817), so a call queued behind a drain
+//! waits one turn, never the drain. Both feeds are read
 //! to the board's head by one reader ([`read_to_head`]), the published feed
 //! and every drafts supplement alike: a page past the retention floor
 //! resumed at the floor, a page past the page budget re-asked at the limit
@@ -95,6 +99,7 @@
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap};
+use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
@@ -112,7 +117,7 @@ use skep_client::Board;
 use skep_search::{GrantKind, Hit, Kind, Mark, MarkKind, Rung, Standing};
 
 use crate::events::{EventBus, EventName};
-use crate::hold::{Holds, PROBE_CADENCE};
+use crate::hold::{Holds, Turn, PROBE_CADENCE};
 use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{Ended, SessionEntry, Sessions, Supplements};
@@ -189,7 +194,7 @@ enum Cmd {
 /// It holds the bus its events go out on, the session table, the data
 /// directory the index sits under, the `Talk` sink, and the held-burst
 /// holds the feed thread drives — each tick's `/health` read handed over,
-/// and the probe every `PROBE_CADENCE`.
+/// the probe every `PROBE_CADENCE`, and a drain's turns back to back.
 #[derive(Clone)]
 pub struct Shared {
     pub bus: Arc<EventBus>,
@@ -229,8 +234,10 @@ impl Feed {
 
     /// Hands the probe to the board's feed thread (`Holds::probe`).
     ///
-    /// It runs there at its next turn and the probe's cadence is counted
-    /// from it — the caller does not wait: `resolve(send)`'s hand-over, so
+    /// It runs there once the commands queued before it are served, and the
+    /// probe's cadence is counted from it — or, where a drain's turns are
+    /// running, it is the drain's next turn — and the caller does not wait:
+    /// `resolve(send)`'s hand-over, so
     /// the call answers once the lines are handed back, never after a
     /// resend's ack (§4b.1), and `set_node_state(Running)`'s, so the verb
     /// that owns the node is held by no resend. A thread that has stopped
@@ -417,6 +424,21 @@ impl FeedThreads {
     }
 }
 
+/// What serving one command leaves the feed thread's loop to do
+/// (`Feeder::serve`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Served {
+    /// Nothing: the loop waits for the next command, or the probe's deadline.
+    Idle,
+    /// The probe handed over (`Cmd::Probe`), the cadence counted from it.
+    Probe,
+    /// The probe the tick that ends an announced outage owes, the cadence
+    /// standing.
+    ProbeAtOutageEnd,
+    /// The stop: the consumer closed and the stop answered; the thread ends.
+    Stop,
+}
+
 /// The feeder: the feed thread's own state.
 ///
 /// It is the board index's one writer (`search.md` §5.6), holding the lock
@@ -513,52 +535,106 @@ impl<'b> Feeder<'b> {
         // passed, whatever woke it — a poisoned, halted, stopped
         // or unreachable board commits nothing, so `Cmd::Tick` alone never
         // ends such a hold, and a board that keeps committing must not starve
-        // the probe either.
+        // the probe either. The deadline is counted from the last cadence's
+        // or hand-over's probe; the tick that ends an announced outage probes
+        // and leaves it standing.
         let mut next_probe = Instant::now() + PROBE_CADENCE;
         loop {
-            match rx.recv_timeout(next_probe.saturating_duration_since(Instant::now())) {
-                Ok(Cmd::Tick) => feeder.tick(ticks.take()),
-                Ok(Cmd::Unreachable(text)) => feeder.unreachable(&text),
-                Ok(Cmd::Widen(session)) => feeder.widen(&session),
-                Ok(Cmd::Narrow(principal)) => feeder.narrow(principal),
-                Ok(Cmd::Closing(session, reply)) => {
-                    feeder.read_drafts(&session);
-                    let sessions = Arc::clone(&feeder.sessions);
-                    sessions.release(&session.board_reference, session.facts.principal, &mut feeder);
-                    let _ = reply.send(());
-                }
-                Ok(Cmd::Ended { ended, reply }) => {
-                    // The swap a call thread's end owes, run here between
-                    // the rows with the feeder as the supplements — the one
-                    // path the feed thread's own deaths take.
-                    let (sessions, bus) = (Arc::clone(&feeder.sessions), Arc::clone(&feeder.bus));
-                    feeder.ended(&sessions, ended, &bus);
-                    let _ = reply.send(());
-                }
-                Ok(Cmd::Probe) => {
-                    feeder.holds.probe(&feeder.entry.reference);
-                    next_probe = Instant::now() + PROBE_CADENCE;
-                }
-                Ok(Cmd::Search { who, query, opts, reply }) => {
-                    let _ = reply.send(feeder.search(who.as_who(), &query, opts));
-                }
-                Ok(Cmd::Places { who, under, reply }) => {
-                    let _ = reply.send(feeder.places(who.as_who(), under.as_ref()));
-                }
-                Ok(Cmd::Stop(reply)) => {
-                    feeder.close_consumer();
-                    let _ = reply.send(());
+            let served = match rx.recv_timeout(next_probe.saturating_duration_since(Instant::now())) {
+                Ok(cmd) => feeder.serve(cmd, ticks),
+                Err(RecvTimeoutError::Timeout) => Served::Idle,
+                Err(RecvTimeoutError::Disconnected) => break,
+            };
+            let due = Instant::now() >= next_probe;
+            let probe = match served {
+                Served::Stop => return,
+                Served::Idle => due,
+                Served::Probe | Served::ProbeAtOutageEnd => true,
+            };
+            if probe {
+                if feeder.drain(&rx, ticks).is_break() {
                     return;
                 }
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => break,
-            }
-            if Instant::now() >= next_probe {
-                feeder.holds.probe(&feeder.entry.reference);
-                next_probe = Instant::now() + PROBE_CADENCE;
+                if due || served == Served::Probe {
+                    next_probe = Instant::now() + PROBE_CADENCE;
+                }
             }
         }
         feeder.close_consumer();
+    }
+
+    /// Serves one command, and answers what it leaves the loop to do.
+    ///
+    /// Every command the thread takes is served here, whether the loop takes
+    /// it or a drain between two of its turns ([`Feeder::drain`]).
+    fn serve(&mut self, cmd: Cmd, ticks: &Ticks) -> Served {
+        match cmd {
+            Cmd::Tick => {
+                if self.tick(ticks.take()) {
+                    return Served::ProbeAtOutageEnd;
+                }
+            }
+            Cmd::Unreachable(text) => self.unreachable(&text),
+            Cmd::Widen(session) => self.widen(&session),
+            Cmd::Narrow(principal) => self.narrow(principal),
+            Cmd::Closing(session, reply) => {
+                self.read_drafts(&session);
+                let sessions = Arc::clone(&self.sessions);
+                sessions.release(&session.board_reference, session.facts.principal, self);
+                let _ = reply.send(());
+            }
+            Cmd::Ended { ended, reply } => {
+                // The swap a call thread's end owes, run here between the
+                // rows with the feeder as the supplements — the one path the
+                // feed thread's own deaths take.
+                let (sessions, bus) = (Arc::clone(&self.sessions), Arc::clone(&self.bus));
+                self.ended(&sessions, ended, &bus);
+                let _ = reply.send(());
+            }
+            Cmd::Probe => return Served::Probe,
+            Cmd::Search { who, query, opts, reply } => {
+                let _ = reply.send(self.search(who.as_who(), &query, opts));
+            }
+            Cmd::Places { who, under, reply } => {
+                let _ = reply.send(self.places(who.as_who(), under.as_ref()));
+            }
+            Cmd::Stop(reply) => {
+                self.close_consumer();
+                let _ = reply.send(());
+                return Served::Stop;
+            }
+        }
+        Served::Idle
+    }
+
+    /// Runs the probe, and the drain's turns while one stops at its bound
+    /// (`Holds::probe`; §3c.4, §3c.5; skep #817).
+    ///
+    /// Each probe runs one turn of at most `hold::TURN_STEPS` steps. Where it
+    /// stops at that bound with a line still to send, the commands queued
+    /// behind it are served first, in their order, until none waits or a
+    /// second tick has been served — the drain's own commits queue one tick
+    /// behind each turn, and a board that keeps committing would queue
+    /// another behind each read — and then the next turn runs: the turns go
+    /// back to back, never one a cadence, and a `search`, a listing or a
+    /// session's swap queued behind a drain waits one turn at most. A probe
+    /// handed over between two turns is the drain's own next turn, and the
+    /// tick that ends an announced outage owes none more.
+    ///
+    /// It answers `Break` where a stop was served between two turns: the
+    /// consumer closed and the stop answered, and the thread ends.
+    fn drain(&mut self, rx: &Receiver<Cmd>, ticks: &Ticks) -> ControlFlow<()> {
+        while self.holds.probe(&self.entry.reference) == Turn::Bounded {
+            let mut ticked = 0;
+            while ticked < 2 {
+                let Ok(cmd) = rx.try_recv() else { break };
+                ticked += usize::from(matches!(cmd, Cmd::Tick));
+                if self.serve(cmd, ticks) == Served::Stop {
+                    return ControlFlow::Break(());
+                }
+            }
+        }
+        ControlFlow::Continue(())
     }
 
     fn say(&self, line: impl std::fmt::Display) {
@@ -578,7 +654,13 @@ impl<'b> Feeder<'b> {
         }
     }
 
-    fn tick(&mut self, position: u64) {
+    /// Reads what the commits up to `position` changed, and answers whether
+    /// the tick ended an announced outage.
+    ///
+    /// The `running` emit that ends it ends an unreachable hold at this board
+    /// too (§3c.4), so the loop probes at once where it answers true: the
+    /// resend runs where the board is back and a session stands.
+    fn tick(&mut self, position: u64) -> bool {
         let announced = self.outage == Outage::Announced;
         self.outage = Outage::Up;
         if announced {
@@ -600,11 +682,7 @@ impl<'b> Feeder<'b> {
         }
         self.read_feed();
         self.emit_index();
-        // The `running` emit ends an unreachable hold at this board (§3c.4):
-        // the resend runs where the board is back and a session stands.
-        if announced {
-            self.holds.probe(&self.entry.reference);
-        }
+        announced
     }
 
     /// Takes the stream's failure: it could not connect, or dropped.

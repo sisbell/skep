@@ -95,9 +95,10 @@
 //!   one shell per data directory — a board whose store another shell holds
 //!   read alone, no file of it opened (`Holds::another_window`, the shell's
 //!   write door's question); its child `resend` holds the walk the
-//!   feed thread's probe drains: one read per document, with §3c.5's three
-//!   outcomes — a moved document's hands named — the lines then sent in `k`
-//!   order across the documents.
+//!   feed thread's probe drains in bounded turns: each document read once a
+//!   pass as the walk reaches it, with §3c.5's three outcomes — a moved
+//!   document's hands named — the lines sent in `k` order across the
+//!   documents.
 //! * `feed` — the feed thread per board, its state the feeder:
 //!   `search::Consumer` polled on the `/events` commits, coalesced into one
 //!   waiting read, the published feed read from the head the board first
@@ -107,8 +108,9 @@
 //!   the listing `places` — answered off it; it also hands each tick's
 //!   `/health` read to the hold, which reads its `writes.halted`, and runs
 //!   the probe on a deadline of its own, at the tick that ends an announced
-//!   outage and at a hand-over; and beside the thread, the one read behind
-//!   `changes` — the same feed from a position a client names, at its
+//!   outage and at a hand-over, a drain's turns back to back with the work
+//!   queued behind each served first; and beside the thread, the one read
+//!   behind `changes` — the same feed from a position a client names, at its
 //!   session's class.
 //! * `shell` — [`Shell`]: the boards, the sessions, the session mode (bare
 //!   as the run's principal, which reads alone — every write in it refused

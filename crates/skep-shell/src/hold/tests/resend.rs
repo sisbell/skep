@@ -37,9 +37,9 @@
 //! holding in memory and joining its file once it returns, and joining it —
 //! the board's own, or the pending one — at a later probe where the device
 //! refused the join, the refusal said once and every answer meanwhile
-//! carrying it (skep #823), and a copy a refused join's undo left standing
-//! in the file never read back once its burst is sent from memory (skep
-//! #821); every
+//! carrying it (skep #823), and the lines a refused join's copy left
+//! standing in the file, their cut-back refused, never read back once their
+//! bursts are sent from memory (skep #817, #821); every
 //! principal's lines resent by one probe, a bare session's line resent by
 //! none until a session
 //! of its principal's that may write stands, and a probe with no line
@@ -84,10 +84,16 @@
 //! head's first read the pending lines joining the board's file and sent in
 //! `k` order, and renumbered — `held` said again — where the file already
 //! holds lines; and a pending join the device refused joining at a later
-//! probe, the pending directory under this shell's lock until it has. And,
-//! timed (`#[ignore]`, the full gate's), the walk over a
-//! full queue drained within its ceiling, each line's send measured beside
-//! it.
+//! probe, the pending directory under this shell's lock until it has. And
+//! THE DRAIN'S TURNS (skep #817): a drain in bounded turns sending every
+//! line in `k` order, each document read as the walk reaches it and once in
+//! a pass, a document a turn stopped at dialed no more until the pass ends,
+//! and the person's `send` walking it again within the pass; a full pending
+//! file joined at the session's open in one copy with one sync; and, over
+//! the board's feed thread, a search answered between two turns, the turns
+//! running back to back. And, timed (`#[ignore]`, the full gate's), the walk
+//! over a full queue drained within its ceiling, each line's send measured
+//! beside it.
 
 use super::*;
 
@@ -2600,27 +2606,28 @@ fn a_pending_join_the_device_refused_is_joined_at_a_later_probe() {
     assert!(pending_store.try_lock().unwrap().is_some(), "the pending directory's lock is let go");
 }
 
-/// Checks that a line a refused join's undo left standing in the file is
-/// never read back once it is sent from memory (§3c.3; skep #821).
+/// Checks that the lines a refused join's copy left standing in the file are
+/// never read back once their bursts are sent from memory (§3c.3; skep #817,
+/// #821).
 ///
 /// The board's file holds a line an earlier run left, and the board is away
 /// at the session's open, so two bursts are held in memory. The board
-/// returns: the join into its file copies the first and the device refuses
-/// every copy after it, the undo's `done` among them, so the join is refused,
-/// said once naming the copy it left standing, and the two bursts are sent
-/// from memory and kept. The device takes copies again, and either the
-/// principal's door — `held(session)` — comes first, listing the earlier
-/// run's line alone, the queue the join wrote taken in place of a read of its
-/// file; or a probe comes first, writing the undo's `done` from the queue it
-/// keeps and saying so once, so the file reads the earlier run's line alone.
-/// Either way the next probe sends that line, so each burst is dialed once
-/// (the mutant that drops the join's queue reads the copy at the door as a
-/// held line and sends the person's text a second time; the one whose door
-/// reads the file in the queue's place reads it so too; the one whose probe
-/// never retries the kept queue leaves the copy standing in the file for a
-/// close to relaunch).
+/// returns: the join's one copy into its file is refused, and so is its
+/// cut-back, the copy's two lines left standing past the file's whole lines,
+/// so the join is refused, said once naming the copy left standing, and the
+/// two bursts are sent from memory and kept. The device takes copies again,
+/// and either the principal's door — `held(session)` — comes first, listing
+/// the earlier run's line alone, the queue the join wrote taken in place of
+/// a read of its file; or a probe comes first, its retry cutting the copy off
+/// the file from the queue it keeps and saying so once, so the file reads the
+/// earlier run's line alone. Either way the next probe sends that line, so
+/// each burst is dialed once (the mutant that drops the join's queue reads
+/// the copy at the door as held lines and sends the person's text a second
+/// time; the one whose door reads the file in the queue's place reads it so
+/// too; the one whose retry never cuts the kept queue's copy leaves it
+/// standing in the file for a close to relaunch).
 #[test]
-fn a_line_a_refused_joins_undo_left_standing_is_never_read_back_once_it_is_sent_from_memory() {
+fn a_refused_joins_copy_left_standing_is_never_read_back_once_it_is_sent_from_memory() {
     for door_first in [true, false] {
         let store = TempDir::new().unwrap();
         let ours = Chain::parse(&"ab".repeat(32)).unwrap();
@@ -2638,21 +2645,22 @@ fn a_line_a_refused_joins_undo_left_standing_is_never_read_back_once_it_is_sent_
             assert!(answer["unwritable"].as_str().is_some_and(|why| why.contains("could not be reached")), "door first {door_first}: held in memory, the board away: {answer}");
         }
         g.fake.head_unreachable.store(false, Ordering::SeqCst);
-        crate::held::tests::refuse_copies_after(1);
+        crate::held::tests::refuse_copies_after(0);
+        crate::held::tests::refuse_the_next_cut_back();
         g.holds.probe("b-1");
         crate::held::tests::take_copies();
         let standing = file_lines(&std::fs::read_to_string(held_file(&g)).unwrap());
         assert!(standing.iter().any(|line| line["frame"]["values"] == json!(["a"])), "door first {door_first}: premise: the join's copy of the first burst stands in the file: {standing:?}");
         let said = said_containing(&g, "could not join");
-        assert!(said.len() == 1 && said[0].contains("the copies a join made before its refusal stand in the file"), "door first {door_first}: said once, naming the copy left standing: {said:?}");
+        assert!(said.len() == 1 && said[0].contains("the refused copy's lines stand in the file"), "door first {door_first}: said once, naming the copy left standing: {said:?}");
         let sent = |g: &Ground| g.fake.sends.lock().unwrap().iter().map(|frame| frame["values"][0].as_str().unwrap_or("?").to_string()).collect::<Vec<_>>();
         assert_eq!(sent(&g), ["a", "b"], "door first {door_first}: both sent from memory and kept");
         if !door_first {
             g.holds.probe("b-1");
             let Opened::Live { queue, .. } = HeldDir::new(g.store.path(), ours).open_file(1, "1.0.1").unwrap() else { panic!("the file reads live") };
             let read: Vec<Value> = queue.lines().iter().map(|line| line.frame["values"].clone()).collect();
-            assert_eq!(read, [json!(["earlier"])], "the probe wrote the undo's `done`: the file reads the earlier run's line alone");
-            assert_eq!(said_containing(&g, "holds the copies a refused join made no more").len(), 1, "said once: {:?}", g.said.lock().unwrap());
+            assert_eq!(read, [json!(["earlier"])], "the probe cut the copy: the file reads the earlier run's line alone");
+            assert_eq!(said_containing(&g, "holds the copy a refused join made no more").len(), 1, "said once: {:?}", g.said.lock().unwrap());
         }
         let listed: Vec<Value> = g.lines().iter().map(|line| line["frame"]["values"].clone()).collect();
         assert_eq!(listed, [json!(["earlier"])], "door first {door_first}: the door lists the earlier run's line alone, never the copy the join undid");
@@ -2660,6 +2668,267 @@ fn a_line_a_refused_joins_undo_left_standing_is_never_read_back_once_it_is_sent_
         assert_eq!(sent(&g), ["a", "b", "earlier"], "door first {door_first}: each burst dialed once");
         assert!(g.lines().is_empty() && !held_file(&g).exists(), "door first {door_first}: every line kept, the file compacted");
     }
+}
+
+// ── THE DRAIN'S TURNS (§3c.5; skep #817) ────────────────────────────────────
+
+/// The values of the bursts the fake board was sent, in the order it was.
+fn sent_values(g: &Ground) -> Vec<String> {
+    g.fake.sends.lock().unwrap().iter().map(|frame| frame["values"][0].as_str().unwrap_or("?").to_string()).collect()
+}
+
+/// Checks that a drain runs in bounded turns and sends every line in `k`
+/// order.
+///
+/// `2 × TURN_STEPS + 1` lines no dial of which left, alternating between two
+/// documents, drain in three probes: the first two turns stop at their
+/// bound, `TURN_STEPS` sends each, answering `Bounded`, and the third sends
+/// the last line and answers `Done`; the board meets every burst once, in
+/// `k` order across the documents, and no line stands (the mutant that
+/// drains the queue in one probe holds the feed thread from the first line
+/// to the last; the one whose bound counts nothing stops nowhere; the one
+/// that sends a document's lines apart from the other's breaks §3c.5's
+/// order).
+#[test]
+fn a_drain_runs_in_bounded_turns_and_sends_every_line_in_k_order() {
+    let g = unclaimed_ground();
+    let lines = 2 * TURN_STEPS + 1;
+    for n in 0..lines {
+        let doc = if n % 2 == 0 { DOC } else { OTHER };
+        g.hold(&insert(doc, json!([n.to_string()]), g.fake.head()), "unreachable", false);
+    }
+    let turns: Vec<(Turn, usize)> = (0..3).map(|_| (g.holds.probe("b-1"), g.fake.sends())).collect();
+    assert_eq!(turns, [(Turn::Bounded, TURN_STEPS), (Turn::Bounded, 2 * TURN_STEPS), (Turn::Done, lines)], "two turns at the bound, then the last line");
+    let want: Vec<String> = (0..lines).map(|n| n.to_string()).collect();
+    assert_eq!(sent_values(&g), want, "every burst once, in `k` order across the documents");
+    assert!(g.lines().is_empty(), "every line kept");
+}
+
+/// Checks that a turn reads a document as the walk reaches it, and that the
+/// turns of one pass read each document once.
+///
+/// `2 × TURN_STEPS` documents each hold one line that may have landed and
+/// did not: each is read for its landing, found none, and sent — a read and
+/// a send, two steps — so the first turn reads and sends `TURN_STEPS / 2` of
+/// them and stops at its bound, and the turns together read every document
+/// once and send each line once (the mutant that reads every document before
+/// its turn's sends reads them all at the first turn and the unreached ones
+/// again at each turn after; the one whose bound counts no read lets a turn
+/// read without end).
+#[test]
+fn a_turn_reads_a_document_as_it_reaches_it_and_a_pass_reads_each_once() {
+    let g = unclaimed_ground();
+    let docs = 2 * TURN_STEPS;
+    for n in 0..docs {
+        let doc = format!("1.0.1.0.{}", 100 + n);
+        g.hold(&insert(&doc, json!(["x"]), g.fake.head()), "unreachable", true);
+    }
+    let reads = |g: &Ground| g.fake.changes_reads.load(Ordering::SeqCst);
+    let first = g.holds.probe("b-1");
+    assert_eq!((first, reads(&g), g.fake.sends()), (Turn::Bounded, TURN_STEPS / 2, TURN_STEPS / 2), "the first turn: a read and a send a document");
+    let mut turns = 1;
+    while g.holds.probe("b-1") == Turn::Bounded {
+        turns += 1;
+        assert!(turns <= 4, "a pass of {docs} documents ends within four turns");
+    }
+    assert_eq!((reads(&g), g.fake.sends(), g.lines().len()), (docs, docs, 0), "the turns together read each document once and send each line once");
+}
+
+/// Checks that a document's read waits for a turn with a step left for its
+/// send.
+///
+/// `TURN_STEPS - 1` lines no dial of which left stand on one document, and
+/// behind them one line that may have landed on another: the first turn
+/// sends the first document's lines and, one step left, stops short of the
+/// other's read; the next turn reads it, sends its line, and ends the pass,
+/// the document read once (the mutant that spends a turn's last step on a
+/// read leaves its send to the next turn, which reads the document again).
+#[test]
+fn a_documents_read_waits_for_a_turn_with_a_step_left_for_its_send() {
+    let g = unclaimed_ground();
+    for n in 0..TURN_STEPS - 1 {
+        g.hold(&insert(DOC, json!([n.to_string()]), g.fake.head()), "unreachable", false);
+    }
+    g.hold(&insert(OTHER, json!(["read"]), g.fake.head()), "unreachable", true);
+    let reads = |g: &Ground| g.fake.changes_reads.load(Ordering::SeqCst);
+    assert_eq!((g.holds.probe("b-1"), g.fake.sends(), reads(&g)), (Turn::Bounded, TURN_STEPS - 1, 0), "the read waits for the next turn");
+    assert_eq!((g.holds.probe("b-1"), g.fake.sends(), reads(&g)), (Turn::Done, TURN_STEPS, 1), "read once, and sent");
+}
+
+/// Checks that a document a turn stopped at is dialed no more until the
+/// pass ends.
+///
+/// One line stands on one document, and `2 × TURN_STEPS` behind it in `k`
+/// order on another. The first send of the pass — the first document's head
+/// — is answered `durability`, which the next probe reissues, and the turns
+/// go on with the other document: the second and third turns pass the first
+/// document over, its head dialed once in the pass, and the third, reaching
+/// the end, ends the pass. The next probe starts a pass of its own, and
+/// sends the head and keeps it (the mutant that keeps no pass across its
+/// turns reads and dials a failing head again at every turn, hammering the
+/// board at the turns' pace; the one that never ends the pass sends the head
+/// never again).
+#[test]
+fn a_document_a_turn_stopped_at_is_dialed_no_more_until_the_pass_ends() {
+    let g = unclaimed_ground();
+    g.hold(&insert(OTHER, json!(["first"]), g.fake.head()), "unreachable", false);
+    for n in 0..2 * TURN_STEPS {
+        g.hold(&insert(DOC, json!([n.to_string()]), g.fake.head()), "unreachable", false);
+    }
+    g.fake.op_rejected.next(1, retry("durability"));
+    let dialed = |g: &Ground| sent_values(g).iter().filter(|value| *value == "first").count();
+    let turns: Vec<(Turn, usize, usize)> = (0..3).map(|_| (g.holds.probe("b-1"), g.fake.sends(), dialed(&g))).collect();
+    let want = [(Turn::Bounded, TURN_STEPS, 1), (Turn::Bounded, 2 * TURN_STEPS, 1), (Turn::Done, 2 * TURN_STEPS + 1, 1)];
+    assert_eq!(turns, want, "the head dialed once in the pass, the other document's lines sent past it");
+    assert_eq!(g.lines().len(), 1, "the head stands at the pass's end");
+    assert_eq!((g.holds.probe("b-1"), dialed(&g), g.lines().len()), (Turn::Done, 2, 0), "the next pass sends it, and keeps it");
+}
+
+/// Checks that the person's `send` walks a document the pass stopped at
+/// again at the pass's next turn.
+///
+/// A refused run stands on one document, `2 × TURN_STEPS` lines on another
+/// behind it: the first turn passes the refused run over and sends
+/// `TURN_STEPS` lines; the person sends the run again, and the next turn,
+/// within the same pass, sends it first and keeps it (the mutant that leaves
+/// the document stopped in the pass holds the person's act until the pass
+/// ends and the cadence comes round).
+#[test]
+fn the_persons_send_walks_a_stopped_document_again_within_the_pass() {
+    let g = unclaimed_ground();
+    let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent", "op": "insert"});
+    let k = g.hold_for(&insert(OTHER, json!(["run"]), g.fake.head()), Reason::refused("out_of_bounds", verdict)).unwrap()["held"].as_u64().unwrap();
+    for n in 0..2 * TURN_STEPS {
+        g.hold(&insert(DOC, json!([n.to_string()]), g.fake.head()), "behind", false);
+    }
+    assert_eq!((g.holds.probe("b-1"), g.fake.sends()), (Turn::Bounded, TURN_STEPS), "the refused run passed over");
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap(), Resolved::HandedBack);
+    assert_eq!(g.holds.probe("b-1"), Turn::Bounded, "the pass goes on");
+    assert_eq!(sent_values(&g)[TURN_STEPS], "run", "the next turn sends the run first");
+    assert!(g.lines().iter().all(|line| line["doc"] == DOC), "the run kept");
+}
+
+/// Checks that a full pending file joins the board's file in one copy with
+/// one sync at the session's open.
+///
+/// An earlier run left `held::MAX_HELD_LINES` lines in the pending file of
+/// the board's origin; the session's open reads the board's head and joins
+/// them: the board's file holds every line, the pending file is gone, the
+/// join said once, and the lines took one copy beside the file's header (the
+/// mutant that copies the joined lines one by one syncs once a line, the
+/// board's lock held across every one and the page's open waiting on them).
+#[test]
+fn a_full_pending_file_joins_the_boards_file_in_one_copy_with_one_sync() {
+    use sha2::{Digest, Sha256};
+    let store = TempDir::new().unwrap();
+    // The origin the ground's board dials, as `Board::dialed` spells it.
+    let origin = Origin::parse("http://127.0.0.1:1").unwrap().as_str().to_string();
+    let hash = Chain::from_bytes(Sha256::digest(origin.as_bytes()).into());
+    let pending = store.path().join("held").join("pending").join(hash.to_string());
+    std::fs::create_dir_all(&pending).unwrap();
+    let mut body = format!("{{\"type\":\"skep-held-bursts\",\"v\":2,\"board\":\"{origin}\",\"principal\":1,\"account\":\"1.0.1\"}}\n");
+    for k in 1..=MAX_HELD_LINES {
+        body.push_str(&format!("{}\n", json!({"held": k, "doc": DOC, "base": 0, "frame": insert(DOC, json!([k.to_string()]), 0), "cause": "head_unreadable", "sent": false, "time": 1})));
+    }
+    std::fs::write(pending.join("principal-1.held"), body).unwrap();
+    let copies = crate::held::tests::count_copies();
+    let facts = writer_facts(&store);
+    let g = ground_over(Fake::new(), store, facts, 0);
+    crate::held::tests::take_copies();
+    assert_eq!(copies.get(), 1, "one copy, one sync");
+    assert!(!pending_file(&g).exists(), "the pending file is gone");
+    let Opened::Live { queue, .. } = HeldDir::new(g.store.path(), Chain::parse(&g.fake.chain).unwrap()).open_file(1, "1.0.1").unwrap() else { panic!("the board's file reads live") };
+    assert_eq!(queue.lines().len(), MAX_HELD_LINES, "the board's file holds every line");
+    let joined = said_containing(&g, "joined the board's held file");
+    assert!(joined.len() == 1 && joined[0].contains(&format!("{MAX_HELD_LINES} held lines joined")), "{joined:?}");
+}
+
+/// Checks that a search at the board answers between two turns of a drain,
+/// and that the turns run back to back.
+///
+/// `4 × TURN_STEPS` lines stand in memory at a board no one has claimed, and
+/// the board's feed thread runs over the ground's holds. A probe handed over
+/// starts the drain; its first send waits until a search is queued, and the
+/// first send of the second turn until the search has answered. The search
+/// answers between the two turns, `TURN_STEPS` lines kept and the rest
+/// standing; released, the turns run on at once, every line kept within one
+/// `PROBE_CADENCE`, in `k` order (the mutant that drains the queue in one
+/// probe answers the search only once every line is kept; the one whose next
+/// turn waits for the cadence keeps the last line three cadences later).
+#[test]
+fn a_search_answers_between_two_turns_of_a_drain_and_the_turns_run_back_to_back() {
+    use crate::feed::{BridgeSearchOpts, Searcher};
+    let g = unclaimed_ground();
+    let lines = 4 * TURN_STEPS;
+    for n in 0..lines {
+        g.hold(&insert(DOC, json!([n.to_string()]), g.fake.head()), "unreachable", false);
+    }
+    let (queued_tx, queued_rx) = std::sync::mpsc::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let sends = AtomicUsize::new(0);
+    *g.fake.at_send.lock().unwrap() = Some(Box::new(move || {
+        let wait = Duration::from_secs(10);
+        match sends.fetch_add(1, Ordering::SeqCst) + 1 {
+            // The search is queued a moment after it is said to be.
+            1 => {
+                let _ = queued_rx.recv_timeout(wait);
+                thread::sleep(Duration::from_millis(50));
+            }
+            n if n == TURN_STEPS + 1 => {
+                let _ = release_rx.recv_timeout(wait);
+            }
+            _ => {}
+        }
+    }));
+    let threads = feed_threads(&g);
+    threads.feed().probe();
+    queued_tx.send(()).unwrap();
+    assert!(threads.feed().search(Searcher::Guest, "x", BridgeSearchOpts::default()).is_ok(), "the search answers");
+    assert_eq!(g.lines().len(), lines - TURN_STEPS, "answered between the first two turns: one turn's lines kept, the rest standing");
+    release_tx.send(()).unwrap();
+    let released = Instant::now();
+    while !g.lines().is_empty() {
+        assert!(released.elapsed() < PROBE_CADENCE, "the turns ran back to back: {} lines stand after {:?}", g.lines().len(), released.elapsed());
+        thread::sleep(Duration::from_millis(5));
+    }
+    threads.stop();
+    let want: Vec<String> = (0..lines).map(|n| n.to_string()).collect();
+    assert_eq!(sent_values(&g), want, "every line once, in `k` order");
+}
+
+/// Checks that a board that keeps committing starves no turn of a drain.
+///
+/// The board's commit stream yields a commit a millisecond, and each tick's
+/// read of its feeds takes longer than that, so a tick waits behind every
+/// tick the feed thread serves. `2 × TURN_STEPS` lines stand in memory, and
+/// once the ticks flow a probe handed over starts the drain: between its two
+/// turns the feed thread serves the commands queued, ticks among them, up to
+/// the second tick, and runs the next turn, every line kept within one
+/// `PROBE_CADENCE` (the mutant that serves every queued command between two
+/// turns serves ticks for as long as the board commits, and the drain's next
+/// turn never comes).
+#[test]
+fn a_board_that_keeps_committing_starves_no_turn_of_a_drain() {
+    let g = unclaimed_ground();
+    for n in 0..2 * TURN_STEPS {
+        g.hold(&insert(DOC, json!([n.to_string()]), g.fake.head()), "unreachable", false);
+    }
+    g.fake.changes_delay_ms.store(3, Ordering::SeqCst);
+    g.fake.commits.store(true, Ordering::SeqCst);
+    let threads = feed_threads(&g);
+    let flowing = Instant::now() + Duration::from_secs(10);
+    while g.fake.changes_reads.load(Ordering::SeqCst) < 4 {
+        assert!(Instant::now() < flowing, "premise: the ticks flow");
+        thread::sleep(Duration::from_millis(5));
+    }
+    threads.feed().probe();
+    let handed = Instant::now();
+    while !g.lines().is_empty() {
+        assert!(handed.elapsed() < PROBE_CADENCE, "the drain's turns went on behind the ticks: {} lines stand after {:?}", g.lines().len(), handed.elapsed());
+        thread::sleep(Duration::from_millis(5));
+    }
+    threads.stop();
+    assert_eq!(g.fake.sends(), 2 * TURN_STEPS, "every line sent once");
 }
 
 // ── THE BUDGETS, TIMED (§3c.3) ──────────────────────────────────────────────
@@ -2671,12 +2940,13 @@ fn a_line_a_refused_joins_undo_left_standing_is_never_read_back_once_it_is_sent_
 /// board no one has claimed that serves no head record — no line owing an
 /// attest, no copy synced, the board answering at once — so the figure is
 /// the walk's bookkeeping, in its two worst shapes, every line on one
-/// document and each on its own; one probe sends every line and keeps it,
-/// within `held::TIMED_CEILING`. Beside it, what each line's send costs held
-/// or not: a queue of 256 lines on a claimed board under a writer's session,
-/// its file this shell's, drained by one probe — each line attested, its
-/// mark and its `done` synced — and its cost a line printed. The figures are
-/// printed with the build's profile, and `held::MAX_HELD_LINES` states them.
+/// document and each on its own; the probes, one a turn until a turn answers
+/// `Done`, send every line and keep it, within `held::TIMED_CEILING`. Beside
+/// it, what each line's send costs held or not: a queue of 256 lines on a
+/// claimed board under a writer's session, its file this shell's, drained
+/// turn by turn — each line attested, its mark and its `done` synced — and
+/// its cost a line printed. The figures are printed with the build's
+/// profile, and `held::MAX_HELD_LINES` states them.
 #[test]
 #[ignore = "timing test - gate-full only"]
 fn the_walk_over_a_full_queue_drains_within_the_ceiling() {
@@ -2702,7 +2972,7 @@ fn the_walk_over_a_full_queue_drains_within_the_ceiling() {
             })
             .unwrap();
         let started = Instant::now();
-        g.holds.probe("b-1");
+        while g.holds.probe("b-1") == Turn::Bounded {}
         let took = started.elapsed();
         eprintln!("the walk over a full held queue, {MAX_HELD_LINES} lines {shape}, drains in {took:?} ({profile})");
         assert_eq!((g.fake.sends(), g.lines().len()), (MAX_HELD_LINES, 0), "{shape}: every line sent and kept");
@@ -2721,7 +2991,7 @@ fn the_walk_over_a_full_queue_drains_within_the_ceiling() {
         })
         .unwrap();
     let started = Instant::now();
-    g.holds.probe("b-1");
+    while g.holds.probe("b-1") == Turn::Bounded {}
     let took = started.elapsed();
     assert_eq!((g.fake.sends(), g.lines().len()), (lines, 0), "every line sent and kept");
     assert!(g.fake.sends.lock().unwrap().iter().all(|sent| sent.get("attest").is_some()), "each line attested");

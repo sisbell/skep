@@ -50,7 +50,10 @@
 //! refusing every act at the principal's door, `resolve` among them, with
 //! its `why` alone, its path read and shown on the native side alone; a copy
 //! the store cannot make, a queue kept in memory for want of its file
-//! joining the board's file as soon as the directory is this shell's, and a
+//! joining the board's file as soon as the directory is this shell's, or the
+//! pending file as soon as the board's head turns out not to read, lines
+//! held while the door could not read the file joining it once it reads,
+//! the door's refusal said once (skep #823), and a
 //! burst the device refused waiting with the bursts after it until the
 //! probe's clock copies them in order, its node stopped, the wait said at
 //! its two edges; no
@@ -1561,6 +1564,85 @@ fn a_queue_kept_in_memory_joins_the_boards_file_as_soon_as_the_directory_is_this
     let next = g.hold(&insert(DOC, json!(["c"]), g.fake.head()), "unreachable", false);
     assert!(next.get("unwritable").is_none(), "{next}");
     assert!(std::fs::read_to_string(&file).unwrap().contains("\"values\":[\"c\"]"), "the next line recreates the board's file");
+}
+
+/// Checks that lines kept in memory join the pending file once the board's
+/// head turns out not to read (§3c.3 (i): such a line goes to the pending
+/// directory, never to memory alone; skep #823).
+///
+/// The board away at the session's open, a burst is held in memory. The
+/// board returns serving a head record that cannot be read: the probe's step
+/// to the pending directory joins the line into the pending file, said once,
+/// and the next burst, held `behind` it, is copied there too, with no
+/// `unwritable` — nothing sent unsigned. The record then reads: one probe
+/// joins both into the board's own file, removes the pending file and sends
+/// them attested, in `k` order, each kept (the mutant that joins memory at
+/// the board's own directory alone keeps both lines in memory while the
+/// record stands damaged, for a close to lose).
+#[test]
+fn a_queue_kept_in_memory_when_the_head_then_will_not_read_joins_the_pending_file() {
+    let fake = Fake::new();
+    fake.head_unreachable.store(true, Ordering::SeqCst);
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let first = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    assert!(first["unwritable"].as_str().is_some_and(|why| why.contains("could not be reached")), "held in memory, the board away: {first}");
+    g.fake.head_unreachable.store(false, Ordering::SeqCst);
+    *g.fake.head_answer.lock().unwrap() = Some((200, json!({"resp": "delivery", "items": [{"atom": "not a head record"}]})));
+    g.holds.probe("b-1");
+    let pending = pending_file(&g);
+    assert!(std::fs::read_to_string(&pending).unwrap().contains("\"values\":[\"a\"]"), "the line joined the pending file at {}", pending.display());
+    let joined = said_containing(&g, "joined the pending held file");
+    assert!(joined.len() == 1 && joined[0].contains("1 held line joined") && joined[0].contains("their ordinals kept"), "{joined:?}");
+    let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head()), None) else { panic!("held behind the first") };
+    assert_eq!(behind["cause"], "behind", "{behind}");
+    assert!(behind.get("unwritable").is_none(), "on disk, in the pending file: {behind}");
+    assert!(std::fs::read_to_string(&pending).unwrap().contains("\"values\":[\"b\"]"), "the next line is on the pending file too");
+    assert_eq!(g.fake.sends(), 0, "nothing is sent unsigned");
+    // The record reads: one probe joins both into the board's own file and
+    // sends them, signed.
+    *g.fake.head_answer.lock().unwrap() = None;
+    g.holds.probe("b-1");
+    let sent = g.fake.sends.lock().unwrap().clone();
+    let values: Vec<&str> = sent.iter().map(|frame| frame["values"][0].as_str().unwrap_or("?")).collect();
+    assert_eq!(values, ["a", "b"], "both sent, in `k` order");
+    assert!(sent.iter().all(|frame| frame.get("attest").is_some()), "each attested: {sent:?}");
+    assert!(g.lines().is_empty() && !pending.exists(), "both kept, the pending file gone");
+}
+
+/// Checks that lines held while the principal's file cannot be read join it
+/// once it reads (§3c.3; skep #823).
+///
+/// The held file's name taken by a directory before the session opens, the
+/// door's read is refused and said once on `Talk`, naming the loss a close
+/// makes; a burst is held in memory, its answer carrying the refusal. A
+/// probe while the name stands taken says nothing more. The name freed, the
+/// next probe — the line's resend refused `write_busy` — joins the line into
+/// the file, said once (the mutant that opens the file only at an empty
+/// queue keeps every line in memory while one stands; the one that leaves
+/// the door's refusal unsaid tells the page alone that a close loses the
+/// line).
+#[test]
+fn a_held_file_the_door_could_not_read_joins_once_it_reads() {
+    let store = TempDir::new().unwrap();
+    let file = store.path().join("held").join("ab".repeat(32)).join("principal-1.held");
+    std::fs::create_dir_all(&file).unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_in(store, facts, 0);
+    let said = said_containing(&g, "held file could not be read");
+    assert!(said.len() == 1 && said[0].contains("a close before then loses them"), "the door's refused read said once: {said:?}");
+    let answer = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    assert!(answer["unwritable"].as_str().is_some_and(|why| why.contains("could not be read")), "the refusal rides the answer: {answer}");
+    g.fake.op_refused.every((503, json!({"error": "write_busy"})));
+    g.holds.probe("b-1");
+    assert_eq!(said_containing(&g, "held file could not be read").len(), 1, "a retry the same cause refuses says nothing more: {:?}", g.said.lock().unwrap());
+    std::fs::remove_dir(&file).unwrap();
+    g.holds.probe("b-1");
+    assert!(std::fs::read_to_string(&file).unwrap().contains("\"values\":[\"a\"]"), "the line joined the file once it reads");
+    let joined = said_containing(&g, "joined the board's held file");
+    assert!(joined.len() == 1 && joined[0].contains("1 held line joined"), "{joined:?}");
+    assert_eq!(g.lines().len(), 1, "the line stands in the file, its resend refused");
 }
 
 /// Checks that the probe's clock copies the bursts the device refused.

@@ -109,9 +109,10 @@
 //! re-says `held` for their documents, so a page or an agent reads the new
 //! ordinals before it acts on one. A copy the device refuses mid-join undoes
 //! the join — every line it entered `done … dropped`, the pending file
-//! standing for the next launch's — so a line is never half on each side. A
-//! queue kept in memory alone joins by the same rule, so no line waits for
-//! an empty queue to reach disk.
+//! standing for the next join's, which the shell tries at every probe — so a
+//! line is never half on each side. A queue kept in memory alone joins by
+//! the same rule, into the board's file or, while `H.1` will not read, the
+//! pending one, so no line waits for an empty queue to reach disk.
 //!
 //! **The file is primary** (PATTERNS P38; §3c.3). A newer `v`, an unknown
 //! header member, or a middle line that is not a whole line of the two
@@ -876,6 +877,12 @@ impl HeldDir {
         self.named.board()
     }
 
+    /// Returns whether the directory is a pending one (the module doc),
+    /// named by the origin dialed while the board's `H.1` will not read.
+    pub fn is_pending(&self) -> bool {
+        matches!(self.named, Named::Pending { .. })
+    }
+
     /// Returns the principals whose files stand in the directory, in order.
     ///
     /// They are the `principal-<n>.held` files — an earlier run's, where the
@@ -1627,16 +1634,18 @@ impl HeldQueue {
     ///
     /// It is the module doc's join: `from` is the queue of a board's pending
     /// file, or one kept in memory alone, and this queue the board's own, its
-    /// file opened under the chain `H.1` names. A line of `from` that a
-    /// standing line here already carries — the same `doc`, `id` and frame,
-    /// never the same ordinal, since the ordinals may have been renumbered —
-    /// is not entered again, so a join cut between its writes and the pending
-    /// file's removal re-runs whole at the next launch and doubles nothing.
-    /// Where this queue holds no line and its next ordinal is at or below the
-    /// first of `from`'s, each line KEEPS its ordinal and the next ordinal
-    /// here is set past them, so a page holding the ordinals reads them
-    /// unchanged; otherwise the lines are RENUMBERED from this queue's next
-    /// ordinal in order, and the caller re-says `held` for their documents.
+    /// file opened under the chain `H.1` names — or the pending file's, for a
+    /// queue kept in memory alone while `H.1` will not read. A line of `from`
+    /// that a standing line here already carries — the same `doc`, `id` and
+    /// frame, never the same ordinal, since the ordinals may have been
+    /// renumbered — is not entered again, so a join cut between its writes
+    /// and the pending file's removal re-runs whole at the next launch and
+    /// doubles nothing. Where this queue holds no line and its next ordinal
+    /// is at or below the first of `from`'s, each line KEEPS its ordinal and
+    /// the next ordinal here is set past them, so a page holding the ordinals
+    /// reads them unchanged; otherwise the lines are RENUMBERED from this
+    /// queue's next ordinal in order, and the caller re-says `held` for their
+    /// documents.
     /// Each line is copied to this queue's file and synced as it enters
     /// (persist-first), its `base`, frame, anchors, reason and `time` as
     /// `from` held them; the queue's bytes count each line's frame and
@@ -1654,8 +1663,8 @@ impl HeldQueue {
     /// a copy was refused — by the device, or for a line whose ordinal here
     /// would pass [`MAX_ORDINAL`] — and the join is UNDONE: every line it
     /// entered here is `done … dropped`, this queue standing as it stood, and
-    /// `from` untouched, its file standing for the next launch's join.
-    /// Nothing is lost, and nothing enters twice.
+    /// `from` untouched, its file standing for the next join. Nothing is
+    /// lost, and nothing enters twice.
     pub fn join(&mut self, from: &HeldQueue) -> Result<Joined, JoinRefused> {
         self.retry();
         if let (Some(first), Some(waiting)) = (from.lines.first(), self.waiting()) {

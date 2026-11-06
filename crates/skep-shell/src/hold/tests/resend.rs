@@ -34,7 +34,10 @@
 //! listed, a line held before the state was found counted, resent from
 //! memory and kept, nothing written under the lock, the state left only as a
 //! later session's open takes the lock; a board away at the first touch
-//! holding in memory and joining its file once it returns; every
+//! holding in memory and joining its file once it returns, and joining it —
+//! the board's own, or the pending one — at a later probe where the device
+//! refused the join, the refusal said once and every answer meanwhile
+//! carrying it (skep #823); every
 //! principal's lines resent by one probe, a bare session's line resent by
 //! none until a session
 //! of its principal's that may write stands, and a probe with no line
@@ -76,7 +79,9 @@
 //! head's `Talk` line said once per change of state, not per probe; at the
 //! head's first read the pending lines joining the board's file and sent in
 //! `k` order, and renumbered — `held` said again — where the file already
-//! holds lines. And, timed (`#[ignore]`, the full gate's), the walk over a
+//! holds lines; and a pending join the device refused joining at a later
+//! probe, the pending directory under this shell's lock until it has. And,
+//! timed (`#[ignore]`, the full gate's), the walk over a
 //! full queue drained within its ceiling, each line's send measured beside
 //! it.
 
@@ -626,6 +631,131 @@ fn a_board_away_at_the_first_touch_holds_in_memory_and_joins_its_file_later() {
     g.fake.op_refused.clear();
     g.holds.probe("b-1");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "resent and kept");
+}
+
+/// Makes `dir`, at `path`, and its lock by hand, the lock let go, then seals
+/// the directory (`0500`): a step to it takes the lock, and every file's
+/// create there is refused. Returns the refusal a create there meets, in its
+/// words.
+#[cfg(unix)]
+fn seal(dir: &HeldDir, path: &Path) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    dir.ensure().unwrap();
+    drop(dir.try_lock().unwrap());
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o500)).unwrap();
+    File::create(path.join("probe")).expect_err("premise: a sealed directory refuses a create").to_string()
+}
+
+/// Seals the board's own held directory under `store` ([`seal`]): its path,
+/// and the refusal a create there meets.
+#[cfg(unix)]
+fn seal_the_boards_directory(store: &Path) -> (std::path::PathBuf, String) {
+    let sealed = store.join("held").join("ab".repeat(32));
+    let refused = seal(&HeldDir::new(store, Chain::parse(&"ab".repeat(32)).unwrap()), &sealed);
+    (sealed, refused)
+}
+
+/// Opens a directory [`seal`] sealed.
+#[cfg(unix)]
+fn unseal(sealed: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(sealed, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+/// Checks that a queue kept in memory whose join the device refuses joins
+/// the board's file at a later probe (§3c.1, §3c.3; skep #823).
+///
+/// The board away at the session's open, a burst is held in memory. The
+/// board's directory stands sealed, so when the board returns the probe's
+/// step takes its lock and the join is refused at the file's create: the
+/// line stands in memory, its resend refused `write_busy`, and the refusal
+/// is said once on `Talk` — naming the loss a close makes, and no launch
+/// memory does not survive. The next burst, held `behind` it, answers the
+/// device's own refusal as its `unwritable`, never the board away. A second
+/// probe, still sealed, says nothing more. The node stopped and the
+/// directory opened, the next probe — which dials nothing — joins both lines
+/// into the board's file in `k` order and says so once (the mutant that
+/// never retries the join keeps every line in memory for a close to lose;
+/// the one that gates the retry on the node keeps them while the person has
+/// stopped it; the one that leaves the custody's why as it stood tells the
+/// page the board is away; the one that says each refusal tells the window
+/// at every probe).
+#[cfg(unix)]
+#[test]
+fn a_queue_kept_in_memory_whose_join_the_device_refuses_joins_once_the_device_takes_it() {
+    let fake = Fake::new();
+    fake.head_unreachable.store(true, Ordering::SeqCst);
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let first = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    assert!(first["unwritable"].as_str().is_some_and(|why| why.contains("could not be reached")), "held in memory, the board away: {first}");
+    let (sealed, refused) = seal_the_boards_directory(g.store.path());
+    g.fake.head_unreachable.store(false, Ordering::SeqCst);
+    g.fake.op_refused.every((503, json!({"error": "write_busy"})));
+    g.holds.probe("b-1");
+    assert!(!g.holds.another_window("b-1") && !held_file(&g).exists(), "the store is this shell's, and the join refused at the file's create");
+    let said = said_containing(&g, "could not join");
+    assert_eq!(said.len(), 1, "the refusal said once: {said:?}");
+    assert!(said[0].contains(&refused) && said[0].contains("waits in memory") && said[0].contains("a close before then loses it"), "{said:?}");
+    let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head()), None) else { panic!("held behind the standing line") };
+    assert_eq!(behind["cause"], "behind", "{behind}");
+    assert_eq!(behind["unwritable"].as_str(), Some(refused.as_str()), "the device's refusal, never the board away: {behind}");
+    g.holds.probe("b-1");
+    assert_eq!(said_containing(&g, "could not join").len(), 1, "a second refused probe says nothing more: {:?}", g.said.lock().unwrap());
+    // The node stopped and the directory opened: the probe joins both.
+    g.holds.set_node_stopped("b-1", true);
+    unseal(&sealed);
+    let sends = g.fake.sends();
+    g.holds.probe("b-1");
+    let joined: Vec<u64> = file_lines(&std::fs::read_to_string(held_file(&g)).unwrap()).iter().map(|line| line["held"].as_u64().unwrap()).collect();
+    assert_eq!(joined, [1, 2], "both lines joined the board's file, in `k` order");
+    assert_eq!(g.fake.sends(), sends, "nothing dialed while the node is stopped");
+    let landed = said_containing(&g, "joined the board's held file");
+    assert!(landed.len() == 1 && landed[0].contains("2 held lines joined") && landed[0].contains("their ordinals kept"), "{landed:?}");
+    assert!(g.said.lock().unwrap().iter().all(|line| !line.contains("next launch")), "no line promises a launch memory does not survive: {:?}", g.said.lock().unwrap());
+    let next = g.hold(&insert(DOC, json!(["c"]), g.fake.head()), "unreachable", false);
+    assert!(next.get("unwritable").is_none(), "the next line is copied to the board's file: {next}");
+}
+
+/// Checks that a queue kept in memory whose join into the pending file the
+/// device refuses joins it at a later probe (§3c.3 (i); skep #823).
+///
+/// The board away at the session's open, a burst is held in memory. The
+/// pending directory stands sealed, so when the board returns serving a head
+/// record that cannot be read, the probe's step to the pending directory
+/// takes its lock and the join is refused at the file's create, said once,
+/// and a second probe says nothing more. The directory opened, the next
+/// probe joins the line into the pending file while the record still stands
+/// damaged (the mutant that retries at the board's own directory alone keeps
+/// the line in memory for as long as the record does not read).
+#[cfg(unix)]
+#[test]
+fn a_queue_kept_in_memory_whose_pending_join_the_device_refuses_joins_at_a_later_probe() {
+    let fake = Fake::new();
+    fake.head_unreachable.store(true, Ordering::SeqCst);
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let first = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    assert!(first["unwritable"].is_string(), "held in memory, the board away: {first}");
+    let pending = pending_file(&g);
+    let sealed = pending.parent().unwrap().to_path_buf();
+    let refused = seal(&HeldDir::pending(g.store.path(), g.session.board.dialed()), &sealed);
+    g.fake.head_unreachable.store(false, Ordering::SeqCst);
+    *g.fake.head_answer.lock().unwrap() = Some((200, json!({"resp": "delivery", "items": [{"atom": "not a head record"}]})));
+    g.holds.probe("b-1");
+    assert!(!pending.exists(), "the join into the pending file is refused at its create");
+    let said = said_containing(&g, "could not join the pending held file");
+    assert!(said.len() == 1 && said[0].contains(&refused) && said[0].contains("a close before then loses it"), "said once: {said:?}");
+    g.holds.probe("b-1");
+    assert_eq!(said_containing(&g, "could not join").len(), 1, "a second refused probe says nothing more: {:?}", g.said.lock().unwrap());
+    unseal(&sealed);
+    g.holds.probe("b-1");
+    assert!(std::fs::read_to_string(&pending).unwrap().contains("\"values\":[\"a\"]"), "the line joined the pending file");
+    let landed = said_containing(&g, "joined the pending held file");
+    assert!(landed.len() == 1 && landed[0].contains("1 held line joined"), "{landed:?}");
+    assert_eq!(g.fake.sends(), 0, "nothing sent unsigned");
 }
 
 /// Returns the hands a moved document's `held` event names, over `rows` —
@@ -2372,6 +2502,56 @@ fn pending_lines_joining_a_file_that_holds_lines_are_renumbered_and_held_is_said
     let on_disk = file_lines(&std::fs::read_to_string(held_file(&g)).unwrap());
     let disk_ks: Vec<u64> = on_disk.iter().map(|l| l["held"].as_u64().unwrap()).collect();
     assert!(disk_ks.contains(&2) && disk_ks.contains(&3), "the renumbered lines on the board's file: {disk_ks:?}");
+}
+
+/// Checks that pending lines whose join the device refused join the board's
+/// file at a later probe, the pending directory under this shell's lock
+/// until they have (§3c.1, §3c.3; skep #823).
+///
+/// A burst held while the board's head record stood damaged is on the
+/// pending file. The record reads while the board's directory stands
+/// sealed: the probe's step takes the directory, the join is refused at the
+/// file's create and said once — the line on disk, in the pending file — and
+/// the line stands there, its resend refused `write_busy`, the pending
+/// directory still under this shell's lock, so no other shell opens the file
+/// this one appends to. The directory opened, the next probe joins the line
+/// into the board's file, removes the pending file and lets the pending
+/// directory's lock go (the mutant that never retries the join leaves the
+/// line on a file no relaunch at the chain reads; the one that hands the
+/// retry no pending directory refuses it for good; the one that lets the
+/// lock go at the step leaves another shell free to open the file).
+#[cfg(unix)]
+#[test]
+fn a_pending_join_the_device_refused_is_joined_at_a_later_probe() {
+    let fake = Fake::new();
+    *fake.head_answer.lock().unwrap() = Some((200, json!({"resp": "delivery", "items": [{"atom": "not a head record"}]})));
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["a"]), g.fake.head()), None) else { panic!("held, not faced") };
+    assert_eq!(held["cause"], "head_unreadable", "{held}");
+    let pending = pending_file(&g);
+    assert!(std::fs::read_to_string(&pending).unwrap().contains("\"values\":[\"a\"]"), "the line is on the pending file");
+    let (sealed, refused) = seal_the_boards_directory(g.store.path());
+    *g.fake.head_answer.lock().unwrap() = None;
+    g.fake.op_refused.every((503, json!({"error": "write_busy"})));
+    g.holds.probe("b-1");
+    assert!(!held_file(&g).exists(), "the join is refused at the board's file's create");
+    let said = said_containing(&g, "could not join");
+    assert!(said.len() == 1 && said[0].contains(&refused) && said[0].contains("stands in the pending held file"), "said once, the line on disk: {said:?}");
+    assert_eq!(g.lines().len(), 1, "the line stands");
+    assert!(std::fs::read_to_string(&pending).unwrap().contains("\"values\":[\"a\"]"), "on the pending file");
+    let pending_store = HeldDir::pending(g.store.path(), g.session.board.dialed());
+    assert!(pending_store.try_lock().unwrap().is_none(), "the pending directory stays under this shell's lock");
+    g.holds.probe("b-1");
+    assert_eq!(said_containing(&g, "could not join").len(), 1, "a second refused probe says nothing more");
+    unseal(&sealed);
+    g.holds.probe("b-1");
+    assert!(std::fs::read_to_string(held_file(&g)).unwrap().contains("\"values\":[\"a\"]"), "the line joined the board's file");
+    assert!(!pending.exists(), "the pending file is removed once its line joined");
+    let landed = said_containing(&g, "joined the board's held file");
+    assert!(landed.len() == 1 && landed[0].contains("1 held line joined"), "{landed:?}");
+    assert!(pending_store.try_lock().unwrap().is_some(), "the pending directory's lock is let go");
 }
 
 // ── THE BUDGETS, TIMED (§3c.3) ──────────────────────────────────────────────

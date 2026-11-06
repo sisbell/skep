@@ -6,7 +6,8 @@
 //! there too at its daemon-running tick and at the hand-overs of
 //! `resolve(send)` and `set_node_state(Running)`, because `Cmd::Tick` is
 //! driven by committed writes and a poisoned, halted, stopped or
-//! unreachable board commits nothing. Each probe first copies the lines
+//! unreachable board commits nothing. Each probe first joins the lines kept
+//! out of the directory's file to it (§3c.1; skep #823) and copies the lines
 //! whose held file's copy the device refused, whatever the board's state —
 //! the retry's clock (§3c.3; skep #813). The resend it lets run is automatic
 //! at the hold's end and at reopen, under a standing session of the
@@ -481,10 +482,13 @@ impl Holds {
     /// [`PROBE_CADENCE`](super::PROBE_CADENCE), at its daemon-running tick,
     /// and at the hand-overs of `resolve(send)` and `set_node_state(Running)`.
     /// First, whatever the board's state — its node stopped, the board away
-    /// — each principal's lines waiting for their held file's copy are
-    /// copied where the device takes them (`HeldQueue::retry`, §3c.3; skep
-    /// #813), and a wait that ends is said ([`Holds::note_waiting`]): the
-    /// retry needs no dial. Then, while a line stands at a board whose own
+    /// — the lines kept out of the directory's file, in memory alone or on
+    /// the pending file a refused join left, are joined to it where the
+    /// device and the file take them ([`Holds::rejoin`], §3c.1, §3c.3; skep
+    /// #823); and each principal's lines waiting for their held file's copy
+    /// are copied where the device takes them (`HeldQueue::retry`, §3c.3;
+    /// skep #813), and a wait that ends is said ([`Holds::note_waiting`]):
+    /// neither needs a dial. Then, while a line stands at a board whose own
     /// node is not stopped, `/health` is read; where the board answers and
     /// takes writes, each principal with lines resends them under a standing
     /// session of its own that may write (`SessionEntry::may_write`) — under
@@ -495,6 +499,7 @@ impl Holds {
         let slot = self.slot(board_reference);
         let due = {
             let mut board_hold = slot.lock();
+            self.rejoin(board_reference, &mut board_hold, slot.board.dialed());
             for (principal, ph) in &mut board_hold.principals {
                 ph.queue.retry();
                 self.note_waiting(*principal, ph);
@@ -662,11 +667,12 @@ impl Holds {
     /// contradict it — or where the board lost its testimony
     /// ([`testimony_lost`]: the `poisoned` burst a restart replays, a burst
     /// whose write panicked past its commit) and the site confirms it — AND
-    /// it stands at no position this shell acked ([`BoardHold::acked`]): a
-    /// row of the same key and kind at an acked position is a sibling's
-    /// write through this shell, answered, never the lost landing; a row of
-    /// the same key not through this shell — the `skep` command's — the set
-    /// cannot tell apart, named as the residue. The site ([`Holds::site`])
+    /// it stands at no position this shell acked
+    /// ([`BoardHold::acked`](super::BoardHold::acked)): a row of the same key
+    /// and kind at an acked position is a sibling's write through this shell,
+    /// answered, never the lost landing; a row of the same key not through
+    /// this shell — the `skep` command's — the set cannot tell apart, named as
+    /// the residue. The site ([`Holds::site`])
     /// is the document's now, read once for the first row that asks for it:
     /// an `insert` whose values stand at its site landed; one whose values do
     /// not is no landing of any row, so the head goes from the head at once;

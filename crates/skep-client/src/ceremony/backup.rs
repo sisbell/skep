@@ -383,11 +383,11 @@ pub(crate) fn export_pair(person: &mut dyn Person, opts: &BackupOptions, labels:
     let mut dirs: Vec<PathBuf> = Vec::new();
     for (i, file) in files.iter().enumerate() {
         let dir = destination(person, opts, i)?;
-        std::fs::create_dir_all(&dir).map_err(|e| Halt::face(format!("the destination {} cannot be made", dir.display()), e.to_string(), "name a directory you control"))?;
+        std::fs::create_dir_all(&dir).map_err(|e| Halt::face_at(&dir, "the anchor's destination cannot be made", e.to_string(), "name a directory you control"))?;
         let path = dir.join(anchor_file_name(&labels[i], &file.fingerprint));
         say(person, "AUTH-5.40", ladder_words(&path, opts.paper));
         FileStore::write_once(&path, file.to_json().as_bytes()).map_err(|e| {
-            Halt::face(format!("the anchor file {} could not be written", path.display()), e.to_string(), "name a directory you control, writable and not a `--rm` container's own filesystem")
+            Halt::face_at(&path, "the anchor file could not be written", e.to_string(), "name a directory you control, writable and not a `--rm` container's own filesystem")
         })?;
         let canon = std::fs::canonicalize(&dir).unwrap_or(dir.clone());
         if i == 1 && dirs.iter().any(|d| *d == canon) {

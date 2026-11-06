@@ -121,14 +121,16 @@ fn abandoned() -> Halt {
 ///
 /// # Errors
 ///
-/// The keyless face where the store holds none, and the store's refusals.
+/// The keyless face where the store holds none, the store's directory
+/// beside its words, and the store's refusals.
 fn device_key_for(store: &FileStore) -> Result<Vec<KeyFacts>, Halt> {
     let devices = store.device_keys()?;
     if devices.is_empty() {
-        return Err(Halt::face(
-            format!("the key store {} holds no device key for this walk", store.root().display()),
+        return Err(Halt::face_at(
+            store.root(),
+            "the key store holds no device key for this walk",
             "`skep recover` enrolls the store's device key from the anchor's session, and generates none (the door is two commands, as `claim`'s is)",
-            format!("run `skep keygen --dir {}` here, then `skep recover` again", store.root().display()),
+            "run `skep keygen` here over this same store (this run's `--dir`), then `skep recover` again",
         ));
     }
     Ok(devices)

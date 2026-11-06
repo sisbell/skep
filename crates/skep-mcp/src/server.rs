@@ -559,8 +559,10 @@ mod tests {
     /// `body`, every member skep-shell declares for it beside it and no other
     /// — `isError` false; a halt, the block, the unreachable board and the
     /// shell's own refusals are `isError` true with the refusal's value as the
-    /// text (the mutant that marks every refusal `isError` loses "the board's
-    /// verdict is data"; the one that marks none loses `unreachable`).
+    /// text, a halt's face as its three words and never the path it names
+    /// (SP-15: no path in a tool result; the mutant that marks every refusal
+    /// `isError` loses "the board's verdict is data"; the one that marks none
+    /// loses `unreachable`).
     #[test]
     fn an_answer_and_the_boards_verdict_are_data_and_every_other_refusal_is_an_error() {
         let read = |v: &Value| -> (bool, Value) {
@@ -584,9 +586,10 @@ mod tests {
         let declared: BTreeSet<&str> = skep_shell::shapes::shape("RefusedByBoard").expect("skep-shell declares the board's refusal").fields.iter().map(|field| field.name).collect();
         let members: BTreeSet<&str> = value.as_object().expect("the refusal is an object").keys().map(String::as_str).collect();
         assert_eq!(members, declared, "every member skep-shell declares, and no other");
-        let face = Face { state: "s".into(), cause: "c".into(), act: "a".into() };
+        let face = Face { state: "s".into(), cause: "c".into(), act: "a".into(), path: None };
         for other in [
             Refusal::named(Name::NO_KEY, face.clone()),
+            Refusal::named(Name::STORE_UNREADABLE, Face { path: Some("/a/store/keys/x.key".into()), ..face.clone() }),
             Refusal::halt(face),
             Refusal::Blocked(skep_client::Blocked { record: "1.0.1.0.7.1".into(), named_by: "http://x".into(), ground: None }),
             Refusal::Unreachable(skep_client::DialError::Connect("refused".into())),
@@ -597,6 +600,7 @@ mod tests {
             let (is_error, value) = read(&tool_result(Err(other)));
             assert!(is_error, "{expected}");
             assert_eq!(value, expected, "the refusal's value is the text");
+            assert!(!value.to_string().contains("/a/store"), "a face's path reaches no tool result: {value}");
         }
     }
 

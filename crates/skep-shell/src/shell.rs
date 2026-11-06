@@ -939,7 +939,12 @@ impl Shell {
     /// Answers one call by name, the log kept.
     ///
     /// The row's method is dispatched on the bridge's spelling, one arm per
-    /// call.
+    /// call. A halt whose face is about a file — the key store, a key file,
+    /// an anchor file, the search index — crosses as its three words alone,
+    /// and its path, which never crosses the bridge (`client.md` §4b.3;
+    /// SP-15), is said on `Talk` with the call, the refusal's name and the
+    /// face, so the act that names the file can be done from the shell's
+    /// own window.
     ///
     /// # Errors
     ///
@@ -994,6 +999,11 @@ impl Shell {
         match call {
             Some(call) => self.log.call(call.as_str(), bytes_in, bytes_out, started.elapsed(), outcome),
             None => self.log.unknown_call(name.len(), bytes_in, bytes_out, started.elapsed()),
+        }
+        if let (Some(call), Err(refusal @ Refusal::Halt { face, .. })) = (call, &answer) {
+            if face.path.is_some() {
+                self.say(format!("{}: {refusal}", call.as_str()));
+            }
         }
         answer
     }

@@ -8,8 +8,16 @@
 //! state arms — is halt and surface. §2.3's exit codes are the binary's
 //! mapping over this family ([`Halt::exit_code`]); the usage code, 2, is
 //! the flag's shape alone and never a member here.
+//!
+//! A face about a file on this machine — the key store, a key file, an
+//! anchor file, the search index — names it in [`Face::path`], beside its
+//! words and never inside them ([`Halt::face_at`]): the terminal's block,
+//! the face's `Display`, prints the path on a line of its own (§2.4;
+//! AUTH-5.67's key-file cell), and a bridge renders the three words alone,
+//! the path being native (§4b.3).
 
 use std::fmt;
+use std::path::PathBuf;
 
 use serde_json::Value;
 
@@ -47,7 +55,8 @@ pub enum Halt {
 ///
 /// The block is the state, its cause and the one act that clears it —
 /// never a retry (AUTH-5.66), and where no act exists the face says so
-/// plainly (P10).
+/// plainly (P10). Its `Display` is the terminal's block: the state, the
+/// path on a line of its own where the face names one, the cause, the act.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Face {
     /// What stands.
@@ -56,6 +65,13 @@ pub struct Face {
     pub cause: String,
     /// The one act that clears it — or that none exists.
     pub act: String,
+    /// The file or directory the halt is about, where it names one.
+    ///
+    /// It is a path on this machine, so the three words never name it: a
+    /// terminal prints it beside them (AUTH-5.67: the halt names the key
+    /// file, its path and its state), and a bridge carries the words alone,
+    /// its native window saying the path (§4b.3).
+    pub path: Option<PathBuf>,
 }
 
 /// The board's own verdict, the token kept verbatim.
@@ -133,8 +149,23 @@ pub(crate) fn clipped(text: &str, max: usize) -> &str {
 
 impl Halt {
     /// Returns a halt-and-surface face from its three parts.
+    ///
+    /// The face names no path; one about a file is [`Halt::face_at`]'s.
     pub fn face(state: impl Into<String>, cause: impl Into<String>, act: impl Into<String>) -> Halt {
-        Halt::Halt(Face { state: state.into(), cause: cause.into(), act: act.into() })
+        Halt::Halt(Face { state: state.into(), cause: cause.into(), act: act.into(), path: None })
+    }
+
+    /// Returns a halt-and-surface face about the file or directory `path`.
+    ///
+    /// The three parts say what failed and what clears it without naming
+    /// where: `path` rides beside them (§4b.3; AUTH-5.67).
+    pub fn face_at(
+        path: impl Into<PathBuf>,
+        state: impl Into<String>,
+        cause: impl Into<String>,
+        act: impl Into<String>,
+    ) -> Halt {
+        Halt::Halt(Face { state: state.into(), cause: cause.into(), act: act.into(), path: Some(path.into()) })
     }
 
     /// Returns §2.3's exit code for this member of the family.
@@ -150,9 +181,14 @@ impl Halt {
     }
 }
 
+/// The terminal's block, the path on a line of its own after the state.
 impl fmt::Display for Face {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}\n  cause: {}\n  act: {}", self.state, self.cause, self.act)
+        f.write_str(&self.state)?;
+        if let Some(path) = &self.path {
+            write!(f, "\n  path: {}", path.display())?;
+        }
+        write!(f, "\n  cause: {}\n  act: {}", self.cause, self.act)
     }
 }
 
@@ -231,6 +267,24 @@ mod tests {
         let blocked = Blocked { record: "1.0.1.0.7.1".into(), named_by: "http://x".into(), ground: None };
         assert_eq!(Halt::Blocked(blocked).exit_code(), 3);
         assert_eq!(Halt::Dial(DialError::Connect("refused".into())).exit_code(), 4);
+    }
+
+    /// A face's path rides beside its three words, never inside them.
+    ///
+    /// The terminal's block prints it on a line of its own after the state
+    /// (AUTH-5.67), and a face built without one prints no such line.
+    #[test]
+    fn a_faces_path_is_its_own_line_of_the_block_and_none_of_its_words() {
+        let Halt::Halt(face) =
+            Halt::face_at("/a/store/keys/x.key", "the key file is refused", "its contents", "point `--key` elsewhere")
+        else {
+            panic!("a face")
+        };
+        assert_eq!(face.path.as_deref(), Some(std::path::Path::new("/a/store/keys/x.key")));
+        assert!([&face.state, &face.cause, &face.act].iter().all(|w| !w.contains("/a/store")), "{face:?}");
+        assert_eq!(face.to_string(), "the key file is refused\n  path: /a/store/keys/x.key\n  cause: its contents\n  act: point `--key` elsewhere");
+        let Halt::Halt(plain) = Halt::face("s", "c", "a") else { panic!("a face") };
+        assert_eq!((plain.path.as_deref(), plain.to_string().as_str()), (None, "s\n  cause: c\n  act: a"));
     }
 
     /// A board's text clipped for a face: whole where it fits.

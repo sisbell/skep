@@ -460,11 +460,14 @@ pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<
 /// a file missing, unreadable or mis-pathed; a file cut short — the front
 /// of a key file an export killed inside its write left at its final name
 /// (§4.2), faced as that state and never as a device key's; a file the
-/// parse refuses; a device key's file; and the facts' disagreement.
+/// parse refuses; a device key's file; and the facts' disagreement. Each
+/// face about the file names its path beside its words, never in them
+/// (§4b.3: the file's pick is native, its path with it).
 fn import_file(person: &mut dyn Person, cx: &ImportContext<'_>, path: &Path) -> Result<Handed, Halt> {
     if cx.store.contains_path(path) {
-        return Err(Halt::face(
-            format!("{} lies inside the key store", path.display()),
+        return Err(Halt::face_at(
+            path,
+            "the anchor file handed in lies inside the key store",
             "no path under the store ever holds an anchor's seed (§3.4; AUTH-5.54 step 3): the store is the device key's place",
             "move the anchor file out of the store, then re-run",
         ));
@@ -481,12 +484,13 @@ fn import_file(person: &mut dyn Person, cx: &ImportContext<'_>, path: &Path) -> 
         .kept_or_placed(Secret(HandedPath { path: path.to_path_buf(), text: "is this the KEPT artifact (retained), or a PLACED copy (destroyed when this ceremony ends)?".into() }))
         .map_err(|_| abandoned())?;
     let bytes = read_key_file(path).map_err(|e| {
-        Halt::face(format!("the anchor file {} is missing, unreadable or mis-pathed: {e}", path.display()), "AUTH-5.67: HALT AND SURFACE naming the path, never a fallback", "check the path")
+        Halt::face_at(path, format!("the anchor file is missing, unreadable or mis-pathed: {e}"), "AUTH-5.67: HALT AND SURFACE naming the path, never a fallback", "check the path")
     })?;
     let file = KeyFile::parse(&bytes).map_err(|e| {
         if matches!(e, KeyFileError::NotKeyFile) && cut_short(&bytes) {
-            return Halt::face(
-                format!("the anchor file {} is cut short: the export that wrote it did not finish", path.display()),
+            return Halt::face_at(
+                path,
+                "the anchor file is cut short: the export that wrote it did not finish",
                 "a run killed inside an anchor's write leaves the front of a key file at its final name (client.md §4.2); the \
                  export and its read-back come before any enroll, so the key this file would have held was enrolled nowhere and \
                  no account was ever bound to it",
@@ -494,11 +498,12 @@ fn import_file(person: &mut dyn Person, cx: &ImportContext<'_>, path: &Path) -> 
                  never completed, the ceremony that exports a pair is re-run from the start",
             );
         }
-        Halt::face(format!("the anchor file {} is refused: {e}", path.display()), "the file's own contents decide this (§3.2)", "hand in the anchor file the backup moment wrote")
+        Halt::face_at(path, format!("the anchor file is refused: {e}"), "the file's own contents decide this (§3.2)", "hand in the anchor file the backup moment wrote")
     })?;
     if !file.anchor {
-        return Err(Halt::face(
-            format!("{} is a device key's file, not an anchor's", path.display()),
+        return Err(Halt::face_at(
+            path,
+            "the file handed in is a device key's file, not an anchor's",
             "its `anchor` member is false; the walk needs a paper",
             "hand in an anchor file (`anchor-<label>-<fp>.skep-key`)",
         ));

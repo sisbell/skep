@@ -15,12 +15,13 @@
 //! its query held to the shell's bound at every target; a listing where no
 //! index stands its whole shape with no document; a `select` of two keys or
 //! none refused by its name, a label the box refuses `empty_label` naming
-//! its cause, and the signed mode's check naming a keyless store; a probe of
-//! an own node that does not answer `unreachable`; the shell's options
-//! printing no seed and the open's preconditions stopped loudly; every day
-//! dated as the calendar counts it; and the stop abandoning a walk that
-//! waits on the page, a walk begun after it asking the page nothing, and a
-//! search or a listing after it answered `feed_stopped`.
+//! its cause, a face about a file crossing as its three words, its path
+//! said on `Talk`, and the signed mode's check naming a keyless store; a
+//! probe of an own node that does not answer `unreachable`; the shell's
+//! options printing no seed and the open's preconditions stopped loudly;
+//! every day dated as the calendar counts it; and the stop abandoning a
+//! walk that waits on the page, a walk begun after it asking the page
+//! nothing, and a search or a listing after it answered `feed_stopped`.
 
 use std::io::{Read, Write};
 
@@ -790,6 +791,49 @@ fn a_label_refused_at_the_box_is_empty_label_naming_its_cause() {
     }
     assert!(shell.call("fingerprint", &json!({})).unwrap().as_array().unwrap().is_empty(), "no key is written for a label the box refuses");
     assert!(shell.call("keygen", &json!({"label": "x".repeat(128)})).is_ok(), "a label at the bound exactly is taken");
+}
+
+/// Checks that a face about a file crosses as its words, its path on `Talk`.
+///
+/// The key store's faces and a walk's that name a file or a directory —
+/// `recover` over a store with no device key (`halt`), `fingerprint` over a
+/// `keys/` file that is no key (`store_unreadable`), `keygen` into a
+/// `keys/` directory that takes no file (`store_unwritable`) — keep their
+/// names and cross as their three words, nothing of the store in the value,
+/// and each call says the path on `Talk` under its name (§4b.3; SP-15: the
+/// mutant that renders a face's path, or the library's that puts it back in
+/// the words, hands the page the store's location; the one that drops the
+/// line leaves the file the act names said nowhere).
+#[test]
+fn a_face_about_a_file_crosses_as_its_words_and_its_path_is_said_on_talk() {
+    let dir = TempDir::new().unwrap();
+    let store = dir.path().join("store");
+    let (shell, lines) = open_shell(&nowhere(), &store, SessionMode::Bare { principal: 1 });
+    let board = shell.board_references().remove(0);
+    let store_text = store.display().to_string();
+    let crossed = |call: &str, args: Value, name: &str, path: &Path| {
+        let refused = shell.call(call, &args).unwrap_err();
+        let v = refused.to_value();
+        assert_eq!((refused.name(), v["kind"].as_str()), (name, Some("halt")), "{call}: {v}");
+        assert!(!v.to_string().contains(&store_text), "{call}: the store's location crossed: {v}");
+        let said = lines.lock().unwrap().iter().any(|l| l.starts_with(&format!("{call}: {name}: ")) && l.contains(&format!("\n  path: {}", path.display())));
+        assert!(said, "{call}: the path said on Talk: {:?}", lines.lock().unwrap());
+    };
+    crossed("recover", json!({"board": board}), "halt", &store);
+    let keys = store.join("keys");
+    std::fs::create_dir_all(&keys).unwrap();
+    let stray = keys.join("stray.key");
+    std::fs::write(&stray, b"not a key file").unwrap();
+    crossed("fingerprint", json!({}), "store_unreadable", &stray);
+    std::fs::remove_file(&stray).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o500)).unwrap();
+        crossed("keygen", json!({"label": "k"}), "store_unwritable", &keys);
+        std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    shell.shutdown();
 }
 
 /// Checks that the signed mode's check before serving names a keyless store.

@@ -102,7 +102,7 @@ fn said_by(backend: &mut Backend) -> Arc<Mutex<Vec<String>>> {
 /// answers — and the shell's own by name with its detail.
 #[test]
 fn a_startup_stop_names_what_did_not_hold_then_the_refusal_once() {
-    let face = skep_client::halt::Face { state: "no key here".into(), cause: "the store is keyless".into(), act: "run keygen".into() };
+    let face = skep_client::halt::Face { state: "no key here".into(), cause: "the store is keyless".into(), act: "run keygen".into(), path: None };
     let unanswered =
         "unreachable: connect: refused — a start does not wait for a board that is not answering, though one met while serving is served through: start the adapter again once the board answers";
     for (refusal, said) in [
@@ -234,7 +234,7 @@ fn a_sessions_open_is_refused_with_no_answers_text_in_it() {
     }
     let quoting = Refusal::Unreachable(DialError::Response(format!("the answer was not JSON: {{\"session\":\"{TOKEN}\"")));
     assert_eq!(unquoted(quoting), Refusal::Unreachable(DialError::Response(UNQUOTED.to_string())), "a fault that may quote an answer is replaced");
-    let retired = Refusal::named(Name::RETIRED, Face { state: "s".into(), cause: "c".into(), act: "a".into() });
+    let retired = Refusal::named(Name::RETIRED, Face { state: "s".into(), cause: "c".into(), act: "a".into(), path: None });
     assert_eq!(unquoted(retired.clone()), retired, "a refusal of another kind is untouched");
 }
 

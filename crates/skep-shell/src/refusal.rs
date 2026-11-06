@@ -10,7 +10,9 @@
 //!   the one token `Rejection::key` dispatches on;
 //! * `halt` — a halt's face, the state, its cause and the one act, its
 //!   `name` the armed refusal the row spells where the shell diagnosed one
-//!   and `halt` where the row arms none;
+//!   and `halt` where the row arms none; the path a face about a file
+//!   names beside its words is never rendered (§4b.3: a key file's path,
+//!   the store's location, an anchor file's path are native);
 //! * `blocked` — the handshake's `403 prefix_blocked` with its record and
 //!   the ground read as a guest;
 //! * `unreachable` — the board is not answering;
@@ -449,7 +451,8 @@ impl Refusal {
     /// strings, `index`, `region`, `slot`, `as_of` and `current` as numbers
     /// — so the page reads a refusal's site off the value, typed as the
     /// shell declares it (`shapes`' `RefusedByBoard`), and never off the
-    /// body (skep #713).
+    /// body (skep #713). A halt is its face's three words, never the path
+    /// the face names beside them (§4b.3; SP-15).
     pub fn to_value(&self) -> Value {
         let name = self.name();
         match self {
@@ -547,7 +550,8 @@ mod tests {
     ///
     /// Every member names one token — the board's key, the armed name, the
     /// block, the unreachable board, the shell's code — and renders under its
-    /// kind with the member's own fields.
+    /// kind with the member's own fields, a halt's face as its three words
+    /// and never the path it names, which its `Display` alone prints.
     #[test]
     fn every_refusal_names_one_token_and_renders_under_its_kind() {
         let board = Refusal::Board(Refused { status: 200, code: "credential_refused".into(), detail: Some("signed_session_required".into()), op: Some("publish".into()), body: json!({"resp": "rejected"}) });
@@ -555,11 +559,16 @@ mod tests {
         assert_eq!(board.to_value()["kind"], "refused");
         let plain = Refusal::Board(Refused { status: 503, code: "write_busy".into(), detail: None, op: None, body: Value::Null });
         assert_eq!(plain.name(), "write_busy");
-        let face = Face { state: "s".into(), cause: "c".into(), act: "a".into() };
+        let face = Face { state: "s".into(), cause: "c".into(), act: "a".into(), path: None };
         let named = Refusal::named(Name::NO_KEY, face.clone());
         assert_eq!((named.name(), named.to_value()["state"].as_str()), ("no_key", Some("s")));
         assert_eq!(named.to_string(), format!("no_key: {face}"), "a halt renders as its name and its face");
         assert_eq!(Refusal::from(Halt::Halt(face)).name(), "halt");
+        // A face about a file: its value the three words, its path in the
+        // shell's own line alone.
+        let placed = Refusal::of_named(Name::NO_KEY, Halt::face_at("/a/store", "s", "c", "a"));
+        assert_eq!(placed.to_value(), json!({"kind": "halt", "name": "no_key", "state": "s", "cause": "c", "act": "a"}));
+        assert!(placed.to_string().contains("\n  path: /a/store\n"), "{placed}");
         let blocked = Refusal::Blocked(Blocked { record: "1.0.1.0.7.1".into(), named_by: "http://x".into(), ground: None });
         assert_eq!((blocked.name(), blocked.to_value()["record"].as_str()), ("blocked", Some("1.0.1.0.7.1")));
         let dial = Refusal::from(Halt::Dial(DialError::Connect("refused".into())));

@@ -17,7 +17,7 @@ use crate::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome};
 use crate::ceremony::first_session::{document_present, first_session, FirstSessionReads};
 use crate::ceremony::handshake::{handshake, handshake_prechecked, Site};
 use crate::derive::{precheck, principal_of, Mode};
-use crate::halt::Halt;
+use crate::halt::{Face, Halt};
 use crate::person::{Person, Public, Question};
 use crate::sheet::Facts;
 use crate::sign::Signer;
@@ -398,20 +398,22 @@ fn foreign_claimant(claimant: &str) -> Halt {
 
 /// Returns S3's abandonment exit: the two things the person now holds.
 ///
-/// The exit is §4.1 S3's.
+/// The exit is §4.1 S3's; the moment's face keeps its path, beside the
+/// words (§4b.3).
 fn abandonment_face(h: Halt, account: &str, principal: u64) -> Halt {
     match h {
-        Halt::Halt(face) => Halt::face(
-            format!("{} — the claim stops before its genesis", face.state),
-            format!(
+        Halt::Halt(face) => Halt::Halt(Face {
+            state: format!("{} — the claim stops before its genesis", face.state),
+            cause: format!(
                 "{}; account {account} (principal {principal}) is delegated and recoverable residue: a re-run resumes over it by \
                  reading. (i) Any anchor files written or sheets printed name a real delegated account and open nothing, ever — \
                  destroy them, or keep them plainly marked dead, and never file them beside a live pair (their per-run token tells \
                  them apart). (ii) The unclaimed window is now true indefinitely: the daemon is still running and still unclaimed.",
                 face.cause
             ),
-            "stop the daemon, or finish the walk now by re-running `skep claim`",
-        ),
+            act: "stop the daemon, or finish the walk now by re-running `skep claim`".to_string(),
+            path: face.path,
+        }),
         other => other,
     }
 }

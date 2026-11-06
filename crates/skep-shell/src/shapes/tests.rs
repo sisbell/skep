@@ -53,7 +53,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("AccountCount", json!({"account": "1.0.1", "documents": 2})),
         ("ChangesAnswer", json!({"entries": [{"position": 3, "at": 3, "op": "insert", "docs": ["1.0.1.0.1"], "class": "published", "key": "bare", "time": 1}], "next": 3, "head": 3})),
         ("RefusedByBoard", Refusal::Board(Refused { status: 200, code: "credential_refused".into(), detail: Some("signed_session_required".into()), op: Some("publish".into()), body: json!({}) }).to_value()),
-        ("HaltFace", Refusal::named(Name::NO_KEY, Face { state: "s".into(), cause: "c".into(), act: "a".into() }).to_value()),
+        ("HaltFace", Refusal::named(Name::NO_KEY, Face { state: "s".into(), cause: "c".into(), act: "a".into(), path: Some("/a/store".into()) }).to_value()),
         ("BlockedFace", Refusal::Blocked(Blocked { record: "1.0.1.0.7.1".into(), named_by: "http://x".into(), ground: None }).to_value()),
         ("Unreachable", Refusal::Unreachable(DialError::Connect("refused".into())).to_value()),
         ("ShellRefusal", Refusal::shell(Name::SESSION_ENDED, json!({})).to_value()),

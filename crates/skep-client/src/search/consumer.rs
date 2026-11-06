@@ -364,9 +364,14 @@ enum Drained {
     Closed,
 }
 
+/// Returns the face of an I/O fault the index directory met at `what`.
+///
+/// The file or directory it met it at rides beside the words, never in
+/// them (§4b.3).
 fn io_halt(what: &str, path: &std::path::Path, e: io::Error) -> Halt {
-    Halt::face(
-        format!("the search index's {what} failed at {}: {e}", path.display()),
+    Halt::face_at(
+        path,
+        format!("the search index's {what} failed: {e}"),
         "the index directory could not be read or written",
         "check the data directory's permissions and free space",
     )
@@ -509,8 +514,9 @@ impl<'b> Consumer<'b> {
                     lost = Some(Lost::Damaged { what: format!("an unknown header member `{member}`") })
                 }
                 Err(e) => {
-                    return Err(Halt::face(
-                        format!("the search index at {} could not be read: {e}", path.display()),
+                    return Err(Halt::face_at(
+                        &path,
+                        format!("the search index could not be read: {e}"),
                         "the file's reader failed before any byte was judged",
                         "check the data directory",
                     ))

@@ -44,7 +44,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use skep_client::halt::Halt;
+use skep_client::halt::{Face, Halt};
 use skep_client::sign::fresh_bytes;
 use skep_client::Origin;
 use skep_shell::{script, ArmConfig, NodeState, Refusal, SessionMode, Shell, ShellOptions};
@@ -202,9 +202,12 @@ impl Drop for Throwaway {
 }
 
 /// Returns a refusal met before serving as the halt it is (exit 3).
+///
+/// A face keeps the path it names, which the terminal's block prints
+/// (AUTH-5.67).
 fn halt_of(r: Refusal) -> Halt {
     match r {
-        Refusal::Halt { name, face } => Halt::face(format!("{name}: {}", face.state), face.cause, face.act),
+        Refusal::Halt { name, face } => Halt::Halt(Face { state: format!("{name}: {}", face.state), ..face }),
         other => Halt::face(other.name(), other.to_string(), "fix what the refusal names and run again"),
     }
 }

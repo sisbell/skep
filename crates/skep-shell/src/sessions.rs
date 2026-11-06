@@ -371,6 +371,7 @@ fn head_unreadable(why: String) -> Refusal {
             state: "this write was not sent: its signature names the board's head record (`H.1`), which could not be read".to_string(),
             cause: why,
             act: "nothing was sent unsigned: a held burst is resent once the record reads again, and another write may be made again then; the record is the board's own, its operator's to repair — never your keys".to_string(),
+            path: None,
         },
     )
 }

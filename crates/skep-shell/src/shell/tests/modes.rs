@@ -10,7 +10,9 @@
 //! walk, the stale and foreign references, the token's text, a seed the walk
 //! made and the store's location in no answer, no event and no log entry — a
 //! paper claim's among them — a scripted claim's anchors placed where its
-//! script says, a search's query recorded nowhere, a death signal at a
+//! script says, a claim halted at an anchor's destination and a refresh
+//! halted at the index's save each handing the page no path, the path said
+//! on `Talk`, a search's query recorded nowhere, a death signal at a
 //! call's own dial ending its session, and a bare session's death at a
 //! restart and at the flip to `ENFORCING`. The signed mode, which writes,
 //! over the same store: a publish-class write acked — the attest the shell
@@ -45,11 +47,11 @@ use super::*;
 /// state 3; the mutant that fences the guest form alone commits the bare
 /// session's writes unattested) — and the page handed nothing the shell
 /// builds: no token, no seed the walk made, no path under the store, in any
-/// answer, event or log entry or in the refusals it binds (the faces carried
-/// from `skep-client`, `no_key`'s among them, name the store as the library
-/// builds them), no seed on `Talk`, no search's query in the log, on `Talk`
-/// or in its refusal; and every event, and the claim's answer, held to its
-/// declaration.
+/// answer, event or log entry or in the refusals it binds — `no_key`'s
+/// among them, whose face names the store beside its words and never in
+/// them, the path said on `Talk` alone (§4b.3) — no seed on `Talk`, no
+/// search's query in the log, on `Talk` or in its refusal; and every event,
+/// and the claim's answer, held to its declaration.
 #[test]
 fn the_bare_mode_claims_opens_reads_and_hands_the_page_nothing() {
     let dir = TempDir::new().unwrap();
@@ -65,8 +67,12 @@ fn the_bare_mode_claims_opens_reads_and_hands_the_page_nothing() {
     assert!(board.starts_with("b-"));
     assert_eq!(boards[0]["origin"], origin);
     assert_eq!(shell.call("health", &json!({"board": "b-nowhere"})).unwrap_err().name(), "unknown_board");
-    // The claim needs a key: `no_key` before one is made.
-    assert_eq!(shell.call("claim", &json!({"board": board})).unwrap_err().name(), "no_key");
+    // The claim needs a key: `no_key` before one is made, the store named
+    // on `Talk` and never in the refusal.
+    let keyless = shell.call("claim", &json!({"board": board})).unwrap_err();
+    assert_eq!(keyless.name(), "no_key");
+    let named = lines.lock().unwrap().iter().any(|l| l.starts_with("claim: no_key: ") && l.contains(&format!("\n  path: {}\n", store.display())));
+    assert!(named, "the store said on Talk: {:?}", lines.lock().unwrap());
     let keygen = shell.call("keygen", &json!({"label": "notebook"})).unwrap();
     assert_eq!(keygen["fingerprint"].as_str().unwrap().len(), 64);
     let rows = shell.call("fingerprint", &json!({"payload": true})).unwrap();
@@ -197,7 +203,7 @@ fn the_bare_mode_claims_opens_reads_and_hands_the_page_nothing() {
     // answer, no refusal, no event and no log entry — the page holds
     // nothing — and no seed on `Talk`, the shell's own window.
     let answers = [&boards, &keygen, &rows, &claimed, &bound, &health, &again, &opened, &answer];
-    let refusals: Vec<Value> = refused.iter().chain([&guest, &write, &reinstate, &too_long]).map(Refusal::to_value).collect();
+    let refusals: Vec<Value> = refused.iter().chain([&keyless, &guest, &write, &reinstate, &too_long]).map(Refusal::to_value).collect();
     let all = format!("{answers:?}{refusals:?}{:?}{:?}{:?}", died.data, seen.lock().unwrap(), shell.log().entries());
     assert!(!all.contains(&token), "the token never crosses");
     let seeds = seeds_of(&store);
@@ -853,6 +859,91 @@ fn a_scripted_claim_places_its_anchors_where_its_script_says() {
         assert_eq!(files, 1, "anchor {which}'s one file under {}:\n{talked}", place.display());
         assert!(talked.contains(&format!("dev arm: anchor {which} is placed under {}", place.display())), "the dev arm placed anchor {which}:\n{talked}");
     }
+    shell.shutdown();
+    drop(shell);
+    answerer.join().unwrap();
+    sd.shutdown();
+}
+
+/// Checks that a claim halted at an anchor's destination hands the page no
+/// path.
+///
+/// A scripted claim whose `destination` names a directory under a regular
+/// file halts at the backup moment, the destination unmade, and its
+/// abandonment exit keeps the face's path beside its words
+/// (`skep-client`'s `abandonment_face`): the refusal crosses as the words
+/// alone, naming neither the destination nor the store, in no event either,
+/// and the destination is said on `Talk` (§4b.3: an anchor file's
+/// destination is native; the mutant exit that rebuilds the face without
+/// its path leaves the destination said nowhere, and the one that keeps it
+/// in the words hands it to the page).
+#[test]
+fn a_claim_halted_at_an_anchors_destination_hands_the_page_no_path() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let blocker = dir.path().join("a-file");
+    std::fs::write(&blocker, b"a regular file").unwrap();
+    let destination = blocker.join("anchor-a");
+    let store = dir.path().join("store");
+    let (talk, lines) = talk();
+    let mut opts = ShellOptions::new(vec![Origin::parse(&origin).unwrap()], store.clone(), SessionMode::Bare { principal: 1 }, talk);
+    opts.arm = ArmConfig::Script(vec![script::Answer::Destination(destination.clone())]);
+    let shell = Shell::open(opts);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    let board = shell.board_references().remove(0);
+    shell.call("keygen", &json!({"label": "notebook"})).unwrap();
+    let refused = shell.call("claim", &json!({"board": board})).unwrap_err();
+    let v = refused.to_value();
+    assert_eq!(refused.name(), "halt", "{v}");
+    assert!(v["state"].as_str().is_some_and(|s| s.contains("the claim stops before its genesis")), "the claim's abandonment exit: {v}");
+    let crossed = format!("{v}{:?}", seen.lock().unwrap());
+    for path in [&blocker, &store] {
+        assert!(!crossed.contains(&path.display().to_string()), "{} crossed: {crossed}", path.display());
+    }
+    let talked = lines.lock().unwrap().join("\n");
+    assert!(talked.contains("claim: halt: ") && talked.contains(&format!("\n  path: {}\n", destination.display())), "the destination said on Talk:\n{talked}");
+    shell.shutdown();
+    drop(shell);
+    answerer.join().unwrap();
+    sd.shutdown();
+}
+
+/// Checks that the index's I/O halt hands the page no path.
+///
+/// A guest `search` that asks the pair refreshed (`opts.reindex`) over a
+/// board directory that takes no file halts at the save — the index's own
+/// I/O face — and the refusal crosses as its words alone, nothing under the
+/// store named, the index lying beside the key store under the data
+/// directory; the file the fault was met at is said on `Talk` (§4b.3;
+/// SP-15: the mutant that renders a face's path hands the page the data
+/// directory's).
+#[cfg(unix)]
+#[test]
+fn the_indexs_io_halt_hands_the_page_no_path() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (shell, lines) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    let board = shell.board_references().remove(0);
+    wait_for(&seen, |e| e.name == EventName::Index && e.data["session"].is_null() && e.data["state"]["arm"] == "complete");
+    let index: Vec<PathBuf> = std::fs::read_dir(store.join("index")).unwrap().map(|e| e.unwrap().path()).filter(|p| p.is_dir()).collect();
+    assert_eq!(index.len(), 1, "the board's one index directory: {index:?}");
+    std::fs::set_permissions(&index[0], std::fs::Permissions::from_mode(0o500)).unwrap();
+    let refreshed = shell.call("search", &json!({"guest": true, "board": board, "query": "x", "opts": {"reindex": true}}));
+    std::fs::set_permissions(&index[0], std::fs::Permissions::from_mode(0o700)).unwrap();
+    let refused = refreshed.expect_err("a refresh whose save the directory refuses halts");
+    let v = refused.to_value();
+    assert!(refused.name() == "halt" && v["state"].as_str().is_some_and(|s| s.starts_with("the search index's save failed")), "{v}");
+    assert!(!v.to_string().contains(&store.display().to_string()), "the data directory crossed: {v}");
+    let talked = lines.lock().unwrap().join("\n");
+    assert!(talked.contains("search: halt: the search index's save failed") && talked.contains(&format!("\n  path: {}", index[0].display())), "the file said on Talk:\n{talked}");
     shell.shutdown();
     drop(shell);
     answerer.join().unwrap();

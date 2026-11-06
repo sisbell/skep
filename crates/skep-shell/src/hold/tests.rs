@@ -162,7 +162,7 @@ fn every_outcome_classifies_to_exactly_its_row() {
 fn a_failed_send_is_every_answer_but_an_ack_the_death_and_a_dial_that_never_left() {
     let held = |cause: &str, sent: bool| Dialed::Held { reason: Reason::of(cause, sent), refusal: Refusal::malformed("x") };
     let board = |v: Value| Refusal::from(skep_client::board::Rejection::of(&v).expect("a rejected document").refused(&v));
-    let face = skep_client::halt::Face { state: "s".into(), cause: "c".into(), act: "a".into() };
+    let face = skep_client::halt::Face { state: "s".into(), cause: "c".into(), act: "a".into(), path: None };
     let cells: Vec<(&str, Dialed, Option<&str>)> = vec![
         ("an ack", Dialed::Acked(json!({"resp": "ack", "at": 1})), None),
         ("the death signal", Dialed::Died, None),

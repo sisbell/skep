@@ -7,6 +7,7 @@
 use std::fs;
 
 use skep_client::ceremony::recover::{recover, RecoverOptions};
+use skep_client::halt::Halt;
 use skep_client::person::scripted::{Script, Scripted};
 use skep_client::person::KeptOrPlaced;
 use skep_client::store::FileStore;
@@ -14,11 +15,11 @@ use skep_client::store::FileStore;
 use crate::common::{anchor_file, board, claim, keygen, spawn};
 
 /// §4.2; AUTH-5.67 — A CUT-SHORT ANCHOR FILE at `--anchor` is faced as the
-/// export that did not finish, naming the path, the key enrolled nowhere and
-/// the other artifact to use — never as "not a skep key file" (the mutant
-/// that keeps one face for every unparseable file sends the person to hand
-/// in the file they just handed in); a file that is no JSON at all keeps
-/// the plain refusal.
+/// export that did not finish, naming the path beside its words (§4b.3), the
+/// key enrolled nowhere and the other artifact to use — never as "not a skep
+/// key file" (the mutant that keeps one face for every unparseable file sends
+/// the person to hand in the file they just handed in); a file that is no
+/// JSON at all keeps the plain refusal.
 #[test]
 fn a_cut_short_anchor_file_is_faced_as_the_export_that_did_not_finish() {
     let dir = tempfile::tempdir().unwrap();
@@ -49,8 +50,10 @@ fn a_cut_short_anchor_file_is_faced_as_the_export_that_did_not_finish() {
         fs::write(&partial, &whole[..cut]).unwrap();
         let mut person = Scripted::new(script());
         let err = recover(&board, &store, &mut person, &options(partial.clone())).expect_err("a cut-short anchor opens nothing");
+        let Halt::Halt(face) = &err else { panic!("cut {cut}: a face: {err}") };
+        assert_eq!(face.path.as_deref(), Some(partial.as_path()), "cut {cut}: the file, beside the words: {err}");
+        assert_eq!(face.state, "the anchor file is cut short: the export that wrote it did not finish", "cut {cut}: {err}");
         let text = err.to_string();
-        assert!(text.contains(&format!("the anchor file {} is cut short: the export that wrote it did not finish", partial.display())), "cut {cut}: {text}");
         assert!(text.contains("enrolled nowhere") && text.contains("use the other artifact"), "cut {cut}: {text}");
         assert!(!text.contains("not a skep key file") && !text.contains("point `--key`"), "cut {cut}: the plain refusal, or a device key's face: {text}");
     }
@@ -58,6 +61,8 @@ fn a_cut_short_anchor_file_is_faced_as_the_export_that_did_not_finish() {
     let garbage = dir.path().join("garbage.skep-key");
     fs::write(&garbage, b"not json\n").unwrap();
     let mut person = Scripted::new(script());
-    let text = recover(&board, &store, &mut person, &options(garbage.clone())).expect_err("no key file").to_string();
-    assert!(text.contains(&format!("the anchor file {} is refused", garbage.display())) && !text.contains("cut short"), "{text}");
+    let err = recover(&board, &store, &mut person, &options(garbage.clone())).expect_err("no key file");
+    let Halt::Halt(face) = &err else { panic!("a face: {err}") };
+    assert_eq!(face.path.as_deref(), Some(garbage.as_path()), "{err}");
+    assert!(face.state.starts_with("the anchor file is refused") && !err.to_string().contains("cut short"), "{err}");
 }

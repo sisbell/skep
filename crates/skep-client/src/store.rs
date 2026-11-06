@@ -21,11 +21,13 @@
 //! with its seed — so a later custody rung is a different signer behind
 //! that one method, never a rewrite of a walk (§1.4). The refusals are the
 //! store's own faces ([`StoreError`], [`KeyFileError`]), never wire tokens,
-//! each converted into AUTH-5.67's halt naming the state, and the path
-//! where there is one, by `From<StoreError> for Halt`, so a walk's `?`
-//! carries it; a lookup that selects no key is §3.5 arm 4's fork,
-//! [`arm4_face`]. A binding line that cannot be appended is no refusal at
-//! all: [`Unappended`], the warning carrying the line (§3.7).
+//! each converted into AUTH-5.67's halt naming the state and what failed —
+//! a key file, the `keys/` directory, the bindings file, the store — by
+//! `From<StoreError> for Halt`, so a walk's `?` carries it, and the path,
+//! where there is one, beside the face's words and never in them
+//! ([`Halt::face_at`]; §4b.3); a lookup that selects no key is §3.5 arm
+//! 4's fork, [`arm4_face`]. A binding line that cannot be appended is no
+//! refusal at all: [`Unappended`], the warning carrying the line (§3.7).
 
 use std::fmt;
 use std::fs::{self, OpenOptions};
@@ -192,19 +194,32 @@ pub enum StoreError {
     ///
     /// The file is the one a caller named or a lookup selected; one refused
     /// while the store was listed is [`StoreError::Unlistable`]. AUTH-5.67's
-    /// halt names the path and the state.
+    /// halt names the state, the path beside it.
     KeyFile { path: PathBuf, error: KeyFileError },
     /// A `keys/` file a listing of the store could not read as a key.
     ///
     /// Its own contents refuse it (§3.2). Every lookup that lists the store
     /// reads each `*.key` file under `keys/` — §3.5 arm 3, `--select`, the
     /// device keys — so one such file stops them all, and AUTH-5.67's halt
-    /// names the file and the act that clears it.
+    /// names the act that clears it, the file's path beside it.
     Unlistable { path: PathBuf, error: KeyFileError },
-    /// A path missing, unreadable or mis-pathed.
+    /// A key file missing, unreadable or mis-pathed.
     ///
-    /// It is halt and surface naming it, never a fallback (AUTH-5.67).
+    /// It is halt and surface naming the key file, never a fallback
+    /// (AUTH-5.67).
     Io { path: PathBuf, error: io::Error },
+    /// The store's `keys/` directory stands and cannot be read.
+    ///
+    /// Its listing failed, or a file under it could not be opened to judge
+    /// whether a live generation holds it (§3.7). Every lookup that lists
+    /// the store reads the directory, so none of them answers, and none
+    /// reads it as a store holding no key.
+    KeysUnreadable { path: PathBuf, error: io::Error },
+    /// The bindings file stands and cannot be read.
+    ///
+    /// The lookup refuses rather than read it as holding no binding, and
+    /// the halt names the bindings file, never a key file (§3.5, §3.7).
+    BindingsUnreadable { path: PathBuf, error: io::Error },
     /// A line of the bindings file that is not valid UTF-8.
     ///
     /// The file stands and reads; one of its whole lines — a hand edit
@@ -238,7 +253,10 @@ impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             StoreError::KeyFile { path, error } | StoreError::Unlistable { path, error } => write!(f, "{}: {error}", path.display()),
-            StoreError::Io { path, error } | StoreError::Unwritten { path, error } => write!(f, "{}: {error}", path.display()),
+            StoreError::Io { path, error }
+            | StoreError::KeysUnreadable { path, error }
+            | StoreError::BindingsUnreadable { path, error }
+            | StoreError::Unwritten { path, error } => write!(f, "{}: {error}", path.display()),
             StoreError::BindingsNotUtf8 { path, line } => write!(f, "{}: line {line} of the bindings file is not valid UTF-8", path.display()),
             StoreError::MissingKey { path, fingerprint } => {
                 write!(f, "{}: the bindings name key {fingerprint} and the store holds no file for it", path.display())
@@ -284,16 +302,19 @@ impl fmt::Display for Unappended {
 
 impl std::error::Error for Unappended {}
 
-/// A store refusal as AUTH-5.67's halt naming the state and its path.
+/// A store refusal as AUTH-5.67's halt naming the state and what failed.
 ///
-/// A refusal with no path — [`StoreError::NoSelection`],
-/// [`StoreError::Ambiguous`], [`StoreError::NotFound`] — names the state
-/// alone. It is the conversion a walk's `?` makes.
+/// A refusal about a file or a directory names its path beside the words,
+/// never in them ([`Halt::face_at`]); one with no path —
+/// [`StoreError::NoSelection`], [`StoreError::Ambiguous`],
+/// [`StoreError::NotFound`] — names the state alone. It is the conversion a
+/// walk's `?` makes.
 impl From<StoreError> for Halt {
     fn from(e: StoreError) -> Halt {
         match e {
-            StoreError::KeyFile { path, error } => Halt::face(
-                format!("the key file {} is refused: {error}", path.display()),
+            StoreError::KeyFile { path, error } => Halt::face_at(
+                path,
+                format!("the key file is refused: {error}"),
                 "the file's own contents decide this (client.md §3.2)",
                 match error {
                     KeyFileError::AnchorAtSigningCommand => "select a device key; the one walk that imports an anchor is `skep recover`",
@@ -301,61 +322,80 @@ impl From<StoreError> for Halt {
                     _ => "point `--key` at a key file `skep keygen` wrote, or run `skep keygen`",
                 },
             ),
-            StoreError::Unlistable { path, error } => {
-                let keys = path.parent().unwrap_or(path.as_path()).display().to_string();
-                Halt::face(
-                    format!("the key store holds a file it cannot read as a key: {}: {error}", path.display()),
-                    "every lookup that lists the store reads each `*.key` file under `keys/` — the lone device key's, `--select`, a walk's own \
-                     keys — and this file's own contents refuse it (client.md §3.2); a copy or a write that stopped part-way leaves such a \
-                     file, as does a hand edit",
-                    match error {
-                        KeyFileError::Newer { .. } => "upgrade skep: a newer skep wrote this key, and every listing of this store reads it".to_string(),
-                        _ => format!(
-                            "move {} out of {keys} — aside, not deleted, since it may be a key you hold nowhere else; once it is gone the store \
-                             lists again",
-                            path.display()
-                        ),
-                    },
-                )
-            }
-            StoreError::Io { path, error } => Halt::face(
-                format!("the key file {} is missing, unreadable or mis-pathed: {error}", path.display()),
+            StoreError::Unlistable { path, error } => Halt::face_at(
+                path,
+                format!("the key store holds a file it cannot read as a key: {error}"),
+                "every lookup that lists the store reads each `*.key` file under `keys/` — the lone device key's, `--select`, a walk's own \
+                 keys — and this file's own contents refuse it (client.md §3.2); a copy or a write that stopped part-way leaves such a \
+                 file, as does a hand edit",
+                match error {
+                    KeyFileError::Newer { .. } => "upgrade skep: a newer skep wrote this key, and every listing of this store reads it",
+                    _ => {
+                        "move that file out of the store's `keys/` directory — aside, not deleted, since it may be a key you hold nowhere \
+                         else; once it is gone the store lists again"
+                    }
+                },
+            ),
+            StoreError::Io { path, error } => Halt::face_at(
+                path,
+                format!("the key file is missing, unreadable or mis-pathed: {error}"),
                 "AUTH-5.67: a key file missing, unreadable or mis-pathed is HALT AND SURFACE, never a fallback to a bare bind",
                 "check the path (`--key`, `SKEP_KEY`, `--dir`)",
             ),
-            StoreError::BindingsNotUtf8 { path, line } => Halt::face(
-                format!("the bindings file {} is not valid UTF-8 at line {line}", path.display()),
+            StoreError::KeysUnreadable { path, error } => Halt::face_at(
+                path,
+                format!("the key store's `keys/` directory cannot be read: {error}"),
+                "every lookup that lists the store reads its `keys/` directory — the lone device key's, `--select`, a walk's own keys — \
+                 and the directory, or a file under it, stands and refuses the read, so no lookup can say which keys the store holds, \
+                 and none reads it as holding no key (client.md §3.5, §3.7)",
+                "restore the read of the store's `keys/` directory to the user that runs skep — mode 0700, owned by that user — then \
+                 run this again",
+            ),
+            StoreError::BindingsUnreadable { path, error } => Halt::face_at(
+                path,
+                format!("the key store's bindings file cannot be read: {error}"),
+                "the file stands and refuses the read, so no lookup can say which key is bound to which board and principal, and none \
+                 reads it as holding no binding (client.md §3.5, §3.7)",
+                "restore the read of the bindings file to the user that runs skep — mode 0600, owned by that user — then run this again",
+            ),
+            StoreError::BindingsNotUtf8 { path, line } => Halt::face_at(
+                path,
+                format!("the bindings file is not valid UTF-8 at line {line}"),
                 "the file stands and reads, and one of its lines holds bytes no UTF-8 reader decodes — a hand edit saved in another \
                  encoding; the lookup refuses rather than guess which bindings to use (client.md §3.5, §3.7)",
                 "re-save the bindings file as UTF-8 — every line it holds is ASCII: an origin, a principal number, an account and 64 \
                  hex — then run this again",
             ),
-            StoreError::Unwritten { path, error } => {
-                let volume = path.parent().unwrap_or(path.as_path()).display().to_string();
-                Halt::face(
-                    format!("the key store could not write {}: {error}", path.display()),
-                    "a generation the store cannot finish — at a full volume or quota, a file-size limit, a read-only or failing volume — \
-                     makes no key: a key file enters `keys/` only whole, and what the run wrote toward one is removed",
-                    format!("free room on the volume holding {volume}, or make it writable; then run this again"),
-                )
-            }
-            StoreError::MissingKey { path, fingerprint } => Halt::face(
-                format!("the bindings name key {fingerprint} and the store holds no file at {}", path.display()),
+            StoreError::Unwritten { path, error } => Halt::face_at(
+                path,
+                format!("the key store could not write a key: {error}"),
+                "a generation the store cannot finish — at a full volume or quota, a file-size limit, a read-only or failing volume — \
+                 makes no key: a key file enters `keys/` only whole, and what the run wrote toward one is removed",
+                "free room on the volume holding the key store, or make the store writable; then run this again",
+            ),
+            StoreError::MissingKey { path, fingerprint } => Halt::face_at(
+                path,
+                format!("the bindings name key {fingerprint} and the store holds no file for it"),
                 "the key file was removed from the store after the binding was written",
                 "restore the file, or re-run the hop that binds another key",
             ),
-            other => Halt::face("the key store refused", other.to_string(), "see the store's state above"),
+            e @ (StoreError::NoSelection { .. } | StoreError::Ambiguous { .. } | StoreError::NotFound { .. }) => {
+                Halt::face("the key store refused", e.to_string(), "see the store's state above")
+            }
         }
     }
 }
 
 /// Returns §3.5 arm 4's face, in its three forks on `mode` and `keys`.
 ///
-/// The keyless residue is keyed on the claimed board's mode (AUTH-5.86).
+/// The keyless residue is keyed on the claimed board's mode (AUTH-5.86);
+/// each keyless fork names the store's directory beside its words
+/// ([`Halt::face_at`]).
 pub fn arm4_face(store: &FileStore, keys: &[KeyFacts], mode: Mode) -> Halt {
     match (mode, keys.is_empty()) {
-        (Mode::Unclaimed, true) => Halt::face(
-            format!("the key store {} holds no key, and this board is unclaimed", store.root().display()),
+        (Mode::Unclaimed, true) => Halt::face_at(
+            store.root(),
+            "the key store holds no key, and this board is unclaimed",
             "`skep claim` generates no device key: the notebook door is two commands",
             "run `skep keygen` first, then `skep claim` again",
         ),
@@ -373,8 +413,9 @@ pub fn arm4_face(store: &FileStore, keys: &[KeyFacts], mode: Mode) -> Halt {
             } else {
                 "in ENFORCING it is READ-ONLY FOREVER"
             };
-            Halt::face(
-                format!("the key store {} is keyless for this claimed board", store.root().display()),
+            Halt::face_at(
+                store.root(),
+                "the key store is keyless for this claimed board",
                 "a wiped profile, a lost store, or a second machine (AUTH-5.32)",
                 format!(
                     "either: generate a key here and enroll it from a device you are still signed in on (`skep keygen --payload` here, \
@@ -430,8 +471,8 @@ pub trait KeyStore {
     ///
     /// # Errors
     ///
-    /// The file store's [`StoreError::Io`] where the bindings file stands and
-    /// cannot be read.
+    /// The file store's [`StoreError::BindingsUnreadable`] where the bindings
+    /// file stands and cannot be read.
     fn bindings(&self, origin: &Origin) -> Result<Vec<Binding>, StoreError>;
     /// Appends `b` as a line of its own, under the lock (§3.7).
     ///
@@ -578,11 +619,11 @@ impl FileStore {
     ///
     /// # Errors
     ///
-    /// [`StoreError::Io`] where the keys directory stands and cannot be
-    /// read, or a temp under it cannot be opened.
+    /// [`StoreError::KeysUnreadable`] where the keys directory stands and
+    /// cannot be read, or a temp under it cannot be opened.
     pub fn unfinished(&self) -> Result<Vec<PathBuf>, StoreError> {
         let keys = self.keys_dir();
-        file::stale(&keys, ".key.tmp").map_err(|error| StoreError::Io { path: keys, error })
+        file::stale(&keys, ".key.tmp").map_err(|error| StoreError::KeysUnreadable { path: keys, error })
     }
 
     /// Generates one device key, then sweeps the unfinished key files (§3.7).
@@ -618,7 +659,7 @@ impl FileStore {
     ///
     /// [`StoreError::Io`] where the file cannot be read or is no regular
     /// file, and [`StoreError::KeyFile`] where its own contents refuse it —
-    /// AUTH-5.67's halt names the path.
+    /// AUTH-5.67's halt names the path beside its words.
     pub fn load(&self, path: &Path) -> Result<KeyFile, StoreError> {
         let bytes = read_key_file(path).map_err(|error| StoreError::Io { path: path.to_path_buf(), error })?;
         KeyFile::parse(&bytes).map_err(|error| StoreError::KeyFile { path: path.to_path_buf(), error })
@@ -632,16 +673,17 @@ impl FileStore {
     ///
     /// # Errors
     ///
-    /// [`StoreError::Io`] where the keys directory stands and cannot be read,
-    /// or a key file under it cannot be read; [`StoreError::Unlistable`]
-    /// where a key file's own contents refuse it — one such file stops the
-    /// whole listing, and its face names the file and the act that clears it.
+    /// [`StoreError::KeysUnreadable`] where the keys directory stands and
+    /// cannot be read; [`StoreError::Io`] where a key file under it cannot be
+    /// read; [`StoreError::Unlistable`] where a key file's own contents refuse
+    /// it — one such file stops the whole listing, and its face names the act
+    /// that clears it, the file's path beside it.
     pub fn list(&self) -> Result<Vec<KeyFacts>, StoreError> {
         let dir = self.keys_dir();
         let entries = match fs::read_dir(&dir) {
             Ok(e) => e,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(StoreError::Io { path: dir, error }),
+            Err(error) => return Err(StoreError::KeysUnreadable { path: dir, error }),
         };
         let mut paths: Vec<PathBuf> = entries
             .filter_map(Result::ok)
@@ -688,13 +730,13 @@ impl FileStore {
     ///
     /// # Errors
     ///
-    /// [`StoreError::Io`] where the bindings file stands and cannot be read;
-    /// [`StoreError::BindingsNotUtf8`] where a whole line of it, one the
-    /// mark does not close, is not valid UTF-8, naming the line — the
-    /// lookup refuses rather than guess.
+    /// [`StoreError::BindingsUnreadable`] where the bindings file stands and
+    /// cannot be read; [`StoreError::BindingsNotUtf8`] where a whole line of
+    /// it, one the mark does not close, is not valid UTF-8, naming the line —
+    /// the lookup refuses rather than guess.
     pub fn all_bindings(&self) -> Result<Vec<Binding>, StoreError> {
         let path = self.bindings_path();
-        let Some(found) = file::read_lines(&path).map_err(|error| StoreError::Io { path: path.clone(), error })? else { return Ok(Vec::new()) };
+        let Some(found) = file::read_lines(&path).map_err(|error| StoreError::BindingsUnreadable { path: path.clone(), error })? else { return Ok(Vec::new()) };
         let mut bindings = Vec::new();
         for (i, line) in found.lines.iter().enumerate() {
             if line.ends_with(TORN_MARK.as_bytes()) {

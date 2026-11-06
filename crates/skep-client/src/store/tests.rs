@@ -419,10 +419,10 @@ fn a_key_file_not_yet_published_is_never_listed() {
 
 /// §3.2; AUTH-5.67 — a `keys/` file its own contents refuse stops every
 /// listing of the store — `list`, the device keys, §3.5 arm 3 — as
-/// `Unlistable`, and its face names the file and the act that clears it:
-/// move it aside, or, for a newer skep's key, upgrade — never a generation,
-/// which lists nothing and leaves the halt standing. Moved aside, the store
-/// lists again.
+/// `Unlistable`, and its face names the file, beside its words, and the act
+/// that clears it: move it aside, or, for a newer skep's key, upgrade —
+/// never a generation, which lists nothing and leaves the halt standing.
+/// Moved aside, the store lists again.
 #[test]
 fn a_file_cut_short_in_the_store_halts_its_listing_naming_the_file_to_move() {
     let (dir, store) = store();
@@ -435,9 +435,10 @@ fn a_file_cut_short_in_the_store_halts_its_listing_naming_the_file_to_move() {
     assert!(unlistable(store.list().map(drop)), "the listing");
     assert!(unlistable(store.device_keys().map(drop)), "the device keys");
     assert!(unlistable(store.select(&KeySelector::Board { origin: &origin, principal: Some(1) }, Purpose::Sign).map(drop)), "arm 3");
-    let face = Halt::from(store.list().unwrap_err()).to_string();
-    assert!(face.contains(&format!("move {} out of", cut.display())), "{face}");
-    assert!(!face.contains("run `skep keygen`"), "a generation lists nothing and leaves the halt standing: {face}");
+    let Halt::Halt(face) = Halt::from(store.list().unwrap_err()) else { panic!("the listing's face") };
+    assert_eq!(face.path.as_deref(), Some(cut.as_path()), "the file to move, beside the words: {face}");
+    assert!(face.act.starts_with("move that file out of the store's `keys/` directory"), "{face}");
+    assert!(!face.to_string().contains("run `skep keygen`"), "a generation lists nothing and leaves the halt standing: {face}");
     fs::rename(&cut, dir.path().join("aside.key")).unwrap();
     assert_eq!(store.list().unwrap().iter().map(|k| k.fingerprint).collect::<Vec<_>>(), [id.0], "moved aside, the store lists again");
     let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -465,9 +466,10 @@ fn a_generation_that_cannot_write_leaves_no_key_and_is_faced_as_a_write() {
     fs::set_permissions(&keys, fs::Permissions::from_mode(0o700)).unwrap();
     let error = refused.expect_err("a read-only keys directory takes no key");
     assert!(matches!(error, StoreError::Unwritten { .. }), "{error:?}");
-    let face = Halt::from(error).to_string();
-    assert!(face.contains("could not write") && face.contains(&format!("free room on the volume holding {}", keys.display())), "{face}");
-    assert!(!face.contains("mis-pathed"), "{face}");
+    let Halt::Halt(face) = Halt::from(error) else { panic!("the generation's face") };
+    assert!(face.path.as_deref().is_some_and(|p| p.starts_with(&keys)), "the write it could not make, beside the words: {face}");
+    assert!(face.state.contains("could not write") && face.act.contains("free room on the volume holding the key store"), "{face}");
+    assert!(!face.to_string().contains("mis-pathed"), "{face}");
     let names: Vec<String> = fs::read_dir(&keys).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
     assert_eq!(names, [format!("{}.key", first.0.to_hex())], "nothing of the refused key stands");
     assert_eq!(store.list().unwrap().len(), 1);
@@ -530,7 +532,9 @@ fn an_unfinished_key_file_is_named_by_the_listing_and_swept_by_the_next_generati
 /// file and the line, its face saying "not valid UTF-8" and the re-save,
 /// never a key file "missing, unreadable or mis-pathed"; every lookup over
 /// the file refuses rather than guess; a torn tail of such bytes is ignored
-/// like any torn tail; and a file that cannot be read keeps `Io`.
+/// like any torn tail; and a file that cannot be read is
+/// `BindingsUnreadable`, faced as the bindings file's own too (the mutant
+/// that reads it as `Io` faces it as a key file).
 #[test]
 fn a_bindings_file_in_another_encoding_is_faced_as_the_bindings_files_own() {
     let (_dir, store) = store();
@@ -543,9 +547,10 @@ fn a_bindings_file_in_another_encoding_is_faced_as_the_bindings_files_own() {
     let err = store.all_bindings().unwrap_err();
     assert!(matches!(&err, StoreError::BindingsNotUtf8 { path: p, line: 2 } if *p == path), "{err:?}");
     assert_eq!(err.to_string(), format!("{}: line 2 of the bindings file is not valid UTF-8", path.display()));
-    let face = Halt::from(err).to_string();
-    assert!(face.contains(&format!("the bindings file {} is not valid UTF-8 at line 2", path.display())) && face.contains("re-save the bindings file as UTF-8"), "{face}");
-    assert!(!face.contains("mis-pathed") && !face.contains("key file"), "{face}");
+    let Halt::Halt(face) = Halt::from(err) else { panic!("the bindings file's face") };
+    assert_eq!(face.path.as_deref(), Some(path.as_path()), "the file, beside the words: {face}");
+    assert!(face.state == "the bindings file is not valid UTF-8 at line 2" && face.act.starts_with("re-save the bindings file as UTF-8"), "{face}");
+    assert!(!face.to_string().contains("mis-pathed") && !face.to_string().contains("key file"), "{face}");
     assert!(matches!(store.bindings(&origin), Err(StoreError::BindingsNotUtf8 { .. })), "every lookup refuses rather than guess");
     assert!(matches!(store.enrollment_for(&origin, 1), Err(StoreError::BindingsNotUtf8 { .. })));
     // A torn tail of such bytes is no line: ignored, and the next append
@@ -560,6 +565,68 @@ fn a_bindings_file_in_another_encoding_is_faced_as_the_bindings_files_own() {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
         let unreadable = store.all_bindings();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-        assert!(matches!(unreadable, Err(StoreError::Io { .. })), "a file that cannot be read keeps `Io`: {unreadable:?}");
+        assert!(matches!(&unreadable, Err(StoreError::BindingsUnreadable { path: p, .. }) if *p == path), "the bindings file's own: {unreadable:?}");
+        let Halt::Halt(face) = Halt::from(unreadable.unwrap_err()) else { panic!("the bindings file's face") };
+        assert!(face.state.starts_with("the key store's bindings file cannot be read") && face.path.as_deref() == Some(path.as_path()), "{face}");
+        assert!(!face.to_string().contains("key file") && !face.to_string().contains("mis-pathed"), "{face}");
+    }
+}
+
+/// §3.5, §3.7 — A `keys/` DIRECTORY THAT CANNOT BE READ is faced as the
+/// directory's own, never as a key file "missing, unreadable or
+/// mis-pathed": the listing and the unfinished files' both answer
+/// `KeysUnreadable`, never a store holding no key, and the face names the
+/// directory beside its words.
+#[cfg(unix)]
+#[test]
+fn a_keys_directory_that_cannot_be_read_is_faced_as_the_directorys_own() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_dir, store) = store();
+    store.generate(None).unwrap();
+    let keys = store.root().join("keys");
+    fs::set_permissions(&keys, fs::Permissions::from_mode(0o000)).unwrap();
+    let (listed, unfinished) = (store.list(), store.unfinished());
+    fs::set_permissions(&keys, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(matches!(&unfinished, Err(StoreError::KeysUnreadable { path, .. }) if *path == keys), "{unfinished:?}");
+    assert!(matches!(&listed, Err(StoreError::KeysUnreadable { path, .. }) if *path == keys), "never a store holding no key: {listed:?}");
+    let Halt::Halt(face) = Halt::from(listed.unwrap_err()) else { panic!("the directory's face") };
+    assert!(face.state.starts_with("the key store's `keys/` directory cannot be read") && face.path.as_deref() == Some(keys.as_path()), "{face}");
+    assert!(!face.to_string().contains("key file") && !face.to_string().contains("mis-pathed"), "{face}");
+}
+
+/// §4b.3; AUTH-5.67 — EVERY FACE ABOUT A FILE names its path beside its
+/// words and never in them: each store refusal that names a file or a
+/// directory, and both keyless forks of arm 4, carry it as `Face::path`,
+/// which the terminal's block prints on a line of its own and none of the
+/// state, the cause or the act holds — so a bridge that renders the three
+/// words hands the page no path (the mutant that puts a path back in a
+/// face's words fails its cell).
+#[test]
+fn every_face_about_a_file_names_its_path_beside_its_words_and_never_in_them() {
+    let (_dir, store) = store();
+    let root = store.root().to_path_buf();
+    let fp = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
+    let key = store.key_path(&fp);
+    let denied = || io::Error::from(io::ErrorKind::PermissionDenied);
+    let cells: Vec<(&str, Halt, PathBuf)> = vec![
+        ("KeyFile", StoreError::KeyFile { path: key.clone(), error: KeyFileError::NotKeyFile }.into(), key.clone()),
+        ("Unlistable", StoreError::Unlistable { path: key.clone(), error: KeyFileError::NotKeyFile }.into(), key.clone()),
+        ("Io", StoreError::Io { path: key.clone(), error: denied() }.into(), key.clone()),
+        ("KeysUnreadable", StoreError::KeysUnreadable { path: root.join("keys"), error: denied() }.into(), root.join("keys")),
+        ("BindingsUnreadable", StoreError::BindingsUnreadable { path: root.join("bindings"), error: denied() }.into(), root.join("bindings")),
+        ("BindingsNotUtf8", StoreError::BindingsNotUtf8 { path: root.join("bindings"), line: 2 }.into(), root.join("bindings")),
+        ("Unwritten", StoreError::Unwritten { path: key.clone(), error: denied() }.into(), key.clone()),
+        ("MissingKey", StoreError::MissingKey { path: key.clone(), fingerprint: fp }.into(), key.clone()),
+        ("arm 4, unclaimed", arm4_face(&store, &[], Mode::Unclaimed), root.clone()),
+        ("arm 4, claimed", arm4_face(&store, &[], Mode::Enforcing), root.clone()),
+    ];
+    let root_text = root.display().to_string();
+    for (cell, halt, path) in cells {
+        let Halt::Halt(face) = halt else { panic!("{cell}: a face") };
+        assert_eq!(face.path.as_deref(), Some(path.as_path()), "{cell}: the path beside the words");
+        for word in [&face.state, &face.cause, &face.act] {
+            assert!(!word.contains(&root_text), "{cell}: a word names the path: {word}");
+        }
+        assert!(face.to_string().contains(&format!("\n  path: {}\n", path.display())), "{cell}: the block prints the path: {face}");
     }
 }

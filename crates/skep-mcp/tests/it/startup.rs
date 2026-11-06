@@ -838,6 +838,41 @@ fn a_search_index_another_process_holds_is_said_busy_naming_its_directory() {
     drop(lock);
 }
 
+/// A held store another shell holds is named by `session_info` before any
+/// write (client.md §3c.3; skep #827).
+///
+/// A dev provider over the adapter's store can hold the board's held store,
+/// its lock `held/<chain>/lock`, taking no `skep-mcp.lock`; the suite holds
+/// that lock in its place, once an adapter has made the directory and
+/// stopped. The next adapter's log says another shell holds the store, and
+/// `session_info` answers `writes` true — the session's own right — with
+/// `another_window: true` beside it, so the agent knows before it writes:
+/// a write is refused `another_window`, `isError`, naming its op, and nothing
+/// is held (the mutant that drops the member tells the agent it may write
+/// until its first write is refused).
+#[test]
+fn a_held_store_another_shell_holds_is_named_by_session_info_before_any_write() {
+    let fixture = Fixture::new("held-another-window");
+    let mut first = Launch::over(&fixture, 1).spawn();
+    first.initialize();
+    assert!(first.finish().success());
+    let chains: Vec<PathBuf> = std::fs::read_dir(fixture.store.join("held")).expect("the held store").filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
+    let [chain] = &chains[..] else { panic!("one board's held directory: {chains:?}") };
+    // The held store's lock, as skep-shell names it (client.md §3c.1).
+    let lock = std::fs::OpenOptions::new().read(true).write(true).open(chain.join("lock")).expect("the held store's lock file");
+    lock.try_lock().expect("the suite holds the held store's lock in a dev provider's place");
+    let mut second = Launch::over(&fixture, 1).logged().spawn();
+    second.initialize();
+    second.log_holding(&["held: another shell holds this board's held store"], Duration::from_secs(10));
+    let info = second.call_json("session_info", json!({}));
+    assert_eq!((info["writes"].as_bool(), info["another_window"].as_bool()), (Some(true), Some(true)), "the session's own right, and the board's state beside it: {info}");
+    let refused = second.call_error("create_new_document", json!({"account": CLAIMANT_ACCOUNT}));
+    assert_eq!((refused["name"].as_str(), refused["op"].as_str()), (Some("another_window"), Some("create_new_document")), "{refused}");
+    assert_eq!(second.call_json("held", json!({})), json!([]), "nothing is held");
+    assert!(second.finish().success());
+    drop(lock);
+}
+
 /// A key store this process cannot write is refused before any dial.
 ///
 /// The shell keeps its search index and its held bursts under the store, and

@@ -598,7 +598,10 @@ fn a_bare_sessions_death_names_the_restart_or_the_flip() {
 ///
 /// The declarations name the shell's own answers: every field a real
 /// `boards`, `session`, `health`, `probe`, `keygen` and `fingerprint` answer
-/// carries is declared.
+/// carries is declared, and every declared field is carried — save the
+/// `session` answer's `another_window`, carried only while another shell
+/// holds the board's held store: a state this cell does not stage, and the
+/// `held` suite's cell of a second shell told that state stages.
 #[test]
 fn the_real_answers_carry_the_declared_fields() {
     let dir = TempDir::new().unwrap();
@@ -611,7 +614,8 @@ fn the_real_answers_carry_the_declared_fields() {
     assert_eq!(keys(&boards[0]), fields("BoardRow"));
     let board = boards[0]["board"].as_str().unwrap().to_string();
     let opened = shell.call("session", &json!({"board": board, "principal": 0})).unwrap();
-    assert_eq!(keys(&opened), fields("SessionOpened"));
+    let unstaged: std::collections::BTreeSet<String> = ["another_window".to_string()].into();
+    assert_eq!(keys(&opened), &fields("SessionOpened") - &unstaged, "{opened}");
     assert_eq!(keys(&shell.call("health", &json!({"board": board})).unwrap()), fields("Health"));
     assert_eq!(keys(&shell.call("probe", &json!({})).unwrap()), fields("Probe"));
     assert_eq!(keys(&shell.call("keygen", &json!({"label": "k"})).unwrap()), fields("Keygen"));

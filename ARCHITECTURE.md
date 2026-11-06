@@ -286,7 +286,7 @@ foundation and on the stores above it.
   the desktop shell (the design's `client.md` §4b; the dev provider
   record): the bridge's calls — §4b.1's, the publication family's four
   and the merge family's four among them, the document index's listing
-  and the change feed's page — and eight events
+  and the change feed's page — and its events
   over
   `skep-client`, the board and session references the page is
   handed in a credential's place, the person seam that forwards PUBLIC
@@ -802,7 +802,7 @@ re-exports counted as the module it is brought from (held by
   the reference minted for it.
 - `log.rs` `Log`, the call and dial log the page's gate reads, and
   `ShellDialer`, the one `PlainHttp` every board dials through.
-- `events.rs` `EventBus`: the eight events as values, each named by an
+- `events.rs` `EventBus`: the events as values, each named by an
   `EventName`, fanned out to every subscriber in order, and the watchers
   run on the emitting thread after the fan-out.
 - `refusal.rs` `Refusal`, the one shape the page renders, each refusal

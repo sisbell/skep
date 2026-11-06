@@ -107,21 +107,22 @@
 //! alone at the board — no file of it opened, every write refused at the
 //! door, the lines held in memory before the state was found sent as the
 //! board takes them — and tries the lock again at each session's open, and
-//! at a probe while such lines stand. A copy the device refuses — a line's
-//! first, or a re-mark's, a raise's, a shift's or a `done`'s of a line on
-//! disk — is owed, and waits in memory with every copy owed after it, none
-//! written ahead of it, until the retry writes them in `k` order
-//! (`HeldQueue::retry`, §3c.3; skep #813, #821) — before the queue's next
-//! copy, and at every probe whatever the board's state — each answer for a
-//! line waiting for its first copy carrying the device's refusal as
-//! `unwritable`, and the wait said in the shell's own window once as it
-//! begins and once as it ends ([`Holds::note_waiting`]); a close while a copy
-//! is owed loses it, and a relaunch reads each line as the file last held
-//! it. A join is one copy with one sync (`HeldQueue::join`), and a copy the
-//! device refuses enters nothing; where its cut-back is refused too, the
-//! queue of the file it wrote is kept ([`BoardHold::unsettled`]) until the
-//! probe's retry cuts the copy's bytes off, so no open in the run reads them
-//! as held lines.
+//! at a probe while such lines stand, each edge of the state said once in
+//! the shell's own window and emitted once as `another-window` (skep #827).
+//! A copy the device refuses — a line's first, or a re-mark's, a raise's, a
+//! shift's or a `done`'s of a line on disk — is owed, and waits in memory
+//! with every copy owed after it, none written ahead of it, until the retry
+//! writes them in `k` order (`HeldQueue::retry`, §3c.3; skep #813, #821) —
+//! before the queue's next copy, and at every probe whatever the board's
+//! state — each answer for a line waiting for its first copy carrying the
+//! device's refusal as `unwritable`, and the wait said in the shell's own
+//! window once as it begins and once as it ends ([`Holds::note_waiting`]); a
+//! close while a copy is owed loses it, and a relaunch reads each line as the
+//! file last held it. A join is one copy with one sync (`HeldQueue::join`),
+//! and a copy the device refuses enters nothing; where its cut-back is
+//! refused too, the queue of the file it wrote is kept
+//! ([`BoardHold::unsettled`]) until the probe's retry cuts the copy's bytes
+//! off, so no open in the run reads them as held lines.
 //! The queue is opened only under a session as its principal (P39) — at the
 //! session's open, or at the first touch after it — by the principal's door,
 //! [`Holds::principal_hold`],
@@ -1145,7 +1146,8 @@ enum Directory {
     /// no principal's file there. The lines held in memory before the state
     /// was found stand, and are sent as the board takes them. Tried again at
     /// each session's open, and at a probe while such lines stand; left only
-    /// for a directory this shell locks.
+    /// for a directory this shell locks. Its start and its end are each said
+    /// on `Talk` and emitted as `another-window` once ([`Holds::establish`]).
     AnotherWindow,
     /// The PENDING directory, `held/pending/<hash of the origin dialed>/`,
     /// this shell's while the board's `H.1` will not read (§3c.1; skep #725).
@@ -1792,7 +1794,8 @@ impl Holds {
     /// `op` row's and the publication and merge families' — so no line is
     /// held and nothing sent ([`Directory::AnotherWindow`]). The state is
     /// found as a session's open or a probe establishes the directory, and
-    /// left once this shell locks one.
+    /// left once this shell locks one, each edge emitted as `another-window`
+    /// ([`Holds::establish`]; skep #827).
     pub fn another_window(&self, board_reference: &str) -> bool {
         matches!(self.lock(board_reference).directory, Directory::AnotherWindow)
     }
@@ -1864,7 +1867,11 @@ impl Holds {
     /// edge is said once on `Talk` (SP-11): as the state begins, what this
     /// shell does meanwhile and the lines held in memory before it, which a
     /// close before they are sent loses; as it ends, that the store is this
-    /// shell's.
+    /// shell's. And each is emitted once as `another-window`
+    /// ([`Holds::emit_another_window`]; skep #827), `true` as the state begins
+    /// and `false` as it ends, so a page that read the state in a session's
+    /// answer learns of every edge after it; a try that finds no change emits
+    /// nothing.
     ///
     /// The directory is made and locked under the board's lock, as the files
     /// are read under it. A hold never comes here: it never dials to learn
@@ -1881,9 +1888,18 @@ impl Holds {
             // shell's store stays another's, until this shell locks one;
             // tried again at the next probe or session's open.
             (Directory::Pending { .. } | Directory::AnotherWindow, Directory::NotYet(_) | Directory::AnotherWindow) => return,
-            (Directory::NotYet(_), Directory::AnotherWindow) => self.say_another_window(&board_hold),
-            (Directory::AnotherWindow, Directory::Pending { .. }) => self.say("this shell holds this board's pending held store now: writes at the board go out again"),
-            (Directory::AnotherWindow, Directory::ThisWindow { .. }) => self.say("this shell holds this board's held store now: writes at the board go out again"),
+            (Directory::NotYet(_), Directory::AnotherWindow) => {
+                self.say_another_window(&board_hold);
+                self.emit_another_window(board_reference, true);
+            }
+            (Directory::AnotherWindow, Directory::Pending { .. }) => {
+                self.say("this shell holds this board's pending held store now: writes at the board go out again");
+                self.emit_another_window(board_reference, false);
+            }
+            (Directory::AnotherWindow, Directory::ThisWindow { .. }) => {
+                self.say("this shell holds this board's held store now: writes at the board go out again");
+                self.emit_another_window(board_reference, false);
+            }
             (Directory::Pending { why, .. }, Directory::ThisWindow { .. }) => {
                 self.say(format_args!("the board's head record (`H.1`) reads: the lines held in the pending held store while it could not be read ({why}) join the board's held file"));
             }
@@ -1985,6 +2001,18 @@ impl Holds {
         self.say(format_args!(
             "another shell holds this board's held store — one shell per data directory: this shell reads alone at the board, every write refused `another_window` before any dial and nothing held, and tries the store again at each session's open{kept}"
         ));
+    }
+
+    /// Emits `another-window`: another shell's hold on the board's store.
+    ///
+    /// `another_window` is whether another shell holds the board's held store
+    /// at an edge of that state (§3c.3; skep #827): the edge
+    /// [`Holds::establish`] says, emitted beside its `Talk` line under the
+    /// board's lock, as a hold's `held` event is — the bus takes its own
+    /// locks alone, and the shell's watcher reacts to `session-died` alone,
+    /// so the emit waits on no board.
+    fn emit_another_window(&self, board_reference: &str, another_window: bool) {
+        self.bus.emit(EventName::AnotherWindow, json!({"board": board_reference, "another_window": another_window}));
     }
 
     /// Joins into the board's file every line held before its directory was

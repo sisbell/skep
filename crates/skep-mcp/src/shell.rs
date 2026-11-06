@@ -55,9 +55,12 @@
 //! shell's life: an undrained subscriber's channel grows without bound
 //! (`EventBus::emit` clones every event to every subscriber). The events this
 //! adapter acts on are `session-died`; `daemon`, whose outage's end is said
-//! with how long it lasted; `mode`, a move of the board's pair; and `index`,
+//! with how long it lasted; `mode`, a move of the board's pair; `index`,
 //! whose states that ask an act of whoever runs the adapter, and each face's
-//! build's end, are said in the log; every other is read and dropped.
+//! build's end, are said in the log; and `another-window`, another shell's
+//! hold on the board's held store at each edge (client.md §3c.3; skep #827),
+//! whose state `session_info` reports beside `writes`, the startup open's
+//! answer seeding it; every other is read and dropped.
 //!
 //! Each line of the session's life names the session by its reference — the
 //! one opened, the one that died, the one that replaced it — so the log joins
@@ -70,6 +73,7 @@ mod watch;
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
@@ -360,16 +364,28 @@ impl IndexSaid {
 /// A session the shell opened, as its `session` row answers it.
 ///
 /// The answer is skep-shell's `SessionOpened`: the fresh reference, the
-/// principal, its account where the board named one, and whether a write may
-/// go out under the session.
+/// principal, its account where the board named one, whether the session
+/// itself may write, and whether another shell held the board's held store
+/// as it opened.
 #[derive(Debug)]
 struct SessionOpened {
     /// The session's opaque reference, in the token's place.
     reference: String,
     /// The principal's account, where the board named one.
     account: Option<String>,
-    /// Whether a write may go out under the session.
+    /// Whether the session itself may write.
+    ///
+    /// It is the session's own right; the board's own state can refuse a
+    /// write beside it — another shell's hold on its held store among them
+    /// (`another_window`).
     writes: bool,
+    /// Whether another shell held the board's held store as the session
+    /// opened (`client.md` §3c.3; skep #827).
+    ///
+    /// While one does, every write at the board is refused `another_window`,
+    /// nothing held and nothing sent: the answer's `another_window: true`, a
+    /// member present only then.
+    another_window: bool,
 }
 
 /// Opens a session at the board `board` names: the shell's `session` row.
@@ -393,6 +409,7 @@ fn open_session(shell: &Shell, board: &str) -> Result<SessionOpened, Refusal> {
         reference: opened["session"].as_str().expect(promised).to_string(),
         account: opened["account"].as_str().map(str::to_string),
         writes: opened["writes"].as_bool().expect(promised),
+        another_window: opened["another_window"] == true,
     })
 }
 
@@ -444,10 +461,19 @@ pub struct Backend {
     principal: u64,
     /// The principal's account, as the startup session's open answered it.
     account: Option<String>,
-    /// Whether a write may go out under the session.
+    /// Whether the session itself may write.
     ///
-    /// It is as the startup session's open answered it.
+    /// It is as the startup session's open answered it: the session's own
+    /// right, which the board's own state can refuse a write beside.
     writes: bool,
+    /// Whether another shell over the store holds the board's held store.
+    ///
+    /// While one does, every write at the board is refused `another_window`
+    /// (`client.md` §3c.3; skep #827). It is seeded by the startup session's
+    /// open and moved by the drain at each `another-window` event after it,
+    /// the shell's one telling of each edge, so `session_info` answers the
+    /// state as the shell last told it.
+    another_window: Arc<AtomicBool>,
     /// The store's key the adapter signs with, as the start selected it.
     key: KeyFacts,
     /// The session the calls run under, watched.
@@ -470,6 +496,7 @@ impl fmt::Debug for Backend {
             .field("principal", &self.principal)
             .field("account", &self.account)
             .field("writes", &self.writes)
+            .field("another_window", &self.another_window)
             .field("key", &self.key)
             .field("session", &self.session)
             .field("on_stop", &self.on_stop)
@@ -547,7 +574,7 @@ impl Backend {
         ));
         let keys = shell.check_signed_key().map_err(|r| stopped_before_serving("no key to sign with", &r))?;
         let key = keys.into_iter().next().expect("the signed mode's check answers the store's key at every board, and the shell holds one");
-        let SessionOpened { reference, account, writes } = open_session(&shell, &board).map_err(|r| stopped_before_serving("the signed session did not open", &r))?;
+        let SessionOpened { reference, account, writes, another_window } = open_session(&shell, &board).map_err(|r| stopped_before_serving("the signed session did not open", &r))?;
         talk(&format!(
             "signed as principal {principal} (account {}) with the key {} ({}) from {} under session {reference}: enrolled in that account's set or the nearest set above it; the person who enrolled it stops this adapter by retiring it",
             account.as_deref().unwrap_or("none"),
@@ -575,7 +602,8 @@ impl Backend {
             Err(_) => {}
         }
         let session = Arc::new(SessionWatch::new(reference));
-        let backend = Backend { shell, board, origin, principal, account, writes, key, session, on_stop, talk };
+        let another_window = Arc::new(AtomicBool::new(another_window));
+        let backend = Backend { shell, board, origin, principal, account, writes, another_window, key, session, on_stop, talk };
         backend.drain(events, SearchDir::new(store_dir).root());
         Ok(backend)
     }
@@ -600,7 +628,9 @@ impl Backend {
     /// `index` event is said as `IndexSaid` hears it, naming `index_dir`: a
     /// state that asks an act of whoever runs the adapter — busy, a newer
     /// skep's file, past the ceiling (`index_line`) — and a face's build's end.
-    /// Every other event is read and dropped.
+    /// An `another-window` event moves the state `session_info` reports
+    /// (`Backend::another_window`) and says nothing, the shell's own `held:`
+    /// line saying each edge. Every other event is read and dropped.
     ///
     /// # Panics
     ///
@@ -608,6 +638,7 @@ impl Backend {
     /// panics.
     fn drain(&self, events: Receiver<Event>, index_dir: &Path) {
         let (watch, talk, on_stop) = (Arc::clone(&self.session), Arc::clone(&self.talk), self.on_stop.clone());
+        let another_window = Arc::clone(&self.another_window);
         let index_dir = index_dir.display().to_string();
         let drain = move || {
             let (mut index, mut outage) = (IndexSaid::default(), None::<Instant>);
@@ -655,6 +686,8 @@ impl Backend {
                             talk(&line);
                         }
                     }
+                    // The shell's own `held:` line says each edge in this log.
+                    EventName::AnotherWindow => another_window.store(event.data["another_window"] == true, Ordering::SeqCst),
                     _ => {}
                 }
             }
@@ -875,11 +908,15 @@ impl Backend {
     /// The answer is the principal, its account, the signing key's
     /// fingerprint and label, the board's origin, `writes`, and the board's
     /// `health` with its derived `mode` — the shell's `health` call, made now;
-    /// the rest is the session's open's, kept since startup. The key is the
-    /// store's as the start selected it: the shell selects the store's key
-    /// anew at each session it opens (`open_signed`), so a key bound into the
-    /// store since signs from the next session the shell opens, which this
-    /// answer does not name.
+    /// the rest is the session's open's, kept since startup, save
+    /// `another_window: true`, present only while another shell over the
+    /// store holds the board's held store — every write at the board refused
+    /// `another_window`, though `writes`, the session's own right, stays true
+    /// — the state as the shell last told it (`client.md` §3c.3; skep #827).
+    /// The key is the store's as the start selected it: the shell selects the
+    /// store's key anew at each session it opens (`open_signed`), so a key
+    /// bound into the store since signs from the next session the shell
+    /// opens, which this answer does not name.
     ///
     /// # Errors
     ///
@@ -887,7 +924,7 @@ impl Backend {
     /// the read — its verdict, which *a refusal as a result* renders as data.
     pub fn session_info(&self) -> Result<Value, Refusal> {
         let health = self.health()?;
-        Ok(json!({
+        let mut info = json!({
             "principal": self.principal,
             "account": self.account,
             "key": {"fingerprint": self.key.fingerprint.to_hex(), "label": self.key.label.as_deref().map(render_inert)},
@@ -895,7 +932,11 @@ impl Backend {
             "writes": self.writes,
             "mode": health["mode"],
             "health": health["health"],
-        }))
+        });
+        if self.another_window.load(Ordering::SeqCst) {
+            info["another_window"] = Value::Bool(true);
+        }
+        Ok(info)
     }
 
     /// Runs the clean stop, said first as the session's state has it.

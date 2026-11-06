@@ -33,7 +33,9 @@
 //! another's at the session's open and said once, no file opened and nothing
 //! listed, a line held before the state was found counted, resent from
 //! memory and kept, nothing written under the lock, the state left only as a
-//! later session's open takes the lock; a board away at the first touch
+//! later session's open takes the lock, and each edge emitted once as
+//! `another-window`, at the open or the probe that finds it, and never at a
+//! try that finds no change (skep #827); a board away at the first touch
 //! holding in memory and joining its file once it returns, and joining it —
 //! the board's own, or the pending one — at a later probe where the device
 //! refused the join, the refusal said once and every answer meanwhile
@@ -523,22 +525,24 @@ fn another_shell_holds(store: &Path) -> File {
 
 /// Checks that another shell's lock makes the board's store that shell's,
 /// and this one reads alone there (§3c.3: one shell per data directory;
-/// skep #789).
+/// skep #789, #827).
 ///
 /// With the board's `held/<chain>/lock` held by another shell as the session
 /// opens, the store is found another's ([`Holds::another_window`], the
-/// question the shell's write door asks before any dial) and said once on
-/// `Talk`; no file is opened, `held(session)` lists nothing, and a probe with
-/// no line standing dials nothing and says nothing more. A line a write
-/// brought past the door before the state was found stands in memory alone,
-/// its answer `unwritable` naming the other shell, nothing written under its
-/// lock, and is resent and kept once the board takes it. Once the other
-/// shell lets go, a probe with no line standing leaves the state as it was,
-/// and the next session's open takes the lock and says so once: the next
-/// line is copied to the board's file (the mutants that keep a second
-/// shell's bursts in memory as its own custody, that write under another
-/// shell's lock, that leave the state at a read that takes no lock, and that
-/// never try the lock again).
+/// question the shell's write door asks before any dial), said once on
+/// `Talk` and emitted once, `another-window` `true`; no file is opened,
+/// `held(session)` lists nothing, and a probe with no line standing dials
+/// nothing and says nothing more. A line a write brought past the door
+/// before the state was found stands in memory alone, its answer
+/// `unwritable` naming the other shell, nothing written under its lock, and
+/// is resent and kept once the board takes it, the probe's try of the store
+/// emitting nothing. Once the other shell lets go, a probe with no line
+/// standing leaves the state as it was, and the next session's open takes
+/// the lock, says so once and emits `false` once: the next line is copied to
+/// the board's file (the mutants that keep a second shell's bursts in memory
+/// as its own custody, that write under another shell's lock, that leave the
+/// state at a read that takes no lock, that never try the lock again, and
+/// that emit the state at every try).
 #[test]
 fn another_shells_lock_makes_the_store_its_own_and_this_shell_reads_alone() {
     let store = TempDir::new().unwrap();
@@ -548,6 +552,9 @@ fn another_shells_lock_makes_the_store_its_own_and_this_shell_reads_alone() {
     let g = ground_in(store, facts, 0);
     assert!(g.holds.another_window("b-1"), "the session's open finds the store another shell's");
     assert_eq!(said_containing(&g, "another shell holds this board's held store"), [ANOTHER_SHELLS_STORE], "said once as it begins");
+    assert_eq!(edges(&g.rx), [true], "and emitted once");
+    // Every later edge, read beside the receiver `states` reads.
+    let later = g.bus.subscribe();
     assert!(g.lines().is_empty() && !held_dir.join("principal-1.held").exists(), "no file is opened, nothing listed");
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 0, "a probe with no line standing dials nothing");
@@ -561,6 +568,7 @@ fn another_shells_lock_makes_the_store_its_own_and_this_shell_reads_alone() {
     assert_eq!(g.fake.sends(), 1, "the line is resent from memory");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
     assert!(g.holds.another_window("b-1") && !held_dir.join("principal-1.held").exists(), "the store stays the other shell's");
+    assert!(edges(&later).is_empty(), "the probe's try of the store finds no change, and emits nothing");
     // The other shell lets go: a probe with no line standing leaves the
     // state, and the next session's open takes the lock.
     drop(other_shell);
@@ -573,23 +581,27 @@ fn another_shells_lock_makes_the_store_its_own_and_this_shell_reads_alone() {
     assert!(!g.holds.another_window("b-1"), "the next session's open takes the lock");
     assert_eq!(said_containing(&g, "held store now"), [THIS_SHELLS_STORE], "said once as it ends");
     assert_eq!(said_containing(&g, "another shell holds this board's held store"), [ANOTHER_SHELLS_STORE], "the beginning said no second time");
+    assert_eq!(edges(&later), [false], "emitted once as it ends, the beginning no second time");
     let next = g.hold(&insert(DOC, json!(["c"]), g.fake.head()), "unreachable", false);
     assert!(next.get("unwritable").is_none(), "the store is this shell's now: {next}");
     assert!(std::fs::read_to_string(held_dir.join("principal-1.held")).unwrap().contains("\"values\":[\"c\"]"), "the line is copied to the board's file");
 }
 
 /// Checks that lines held in memory before another shell's store is found
-/// are counted as it is said, and resent from memory (§3c.3; skep #789).
+/// are counted as it is said, and resent from memory (§3c.3; skep #789,
+/// #827).
 ///
 /// The board away at the session's open — its head unread, the store not
-/// yet this shell's — a burst is held in memory alone, its answer naming the
-/// board away. Another shell then takes the store's lock and the board
-/// returns: the probe's one head read finds the store another's and says
-/// so once, naming the one line kept in memory and that a close before it
-/// is sent loses it; the line is resent and kept, nothing written under the
-/// other shell's lock (the mutant that gates the resend on the state loses
-/// the line at the close; the one that counts no line leaves the operator
-/// unwarned).
+/// yet this shell's, nothing emitted — a burst is held in memory alone, its
+/// answer naming the board away. Another shell then takes the store's lock
+/// and the board returns: the probe's one head read finds the store
+/// another's, says so once, naming the one line kept in memory and that a
+/// close before it is sent loses it, and emits `another-window` `true` once;
+/// the line is resent and kept, nothing written under the other shell's lock
+/// (the mutant that gates the resend on the state loses the line at the
+/// close; the one that counts no line leaves the operator unwarned; the one
+/// that emits at the open alone leaves the page unaware of a state a probe
+/// found).
 #[test]
 fn lines_held_before_another_shells_store_is_found_are_counted_and_resent_from_memory() {
     let fake = Fake::new();
@@ -598,14 +610,18 @@ fn lines_held_before_another_shells_store_is_found_are_counted_and_resent_from_m
     let facts = writer_facts(&store);
     let g = ground_over(fake, store, facts, 0);
     assert!(!g.holds.another_window("b-1"), "premise: the board away at the open, no lock tried");
+    assert!(edges(&g.rx).is_empty(), "the open finds no state, and emits nothing");
     let answer = g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false);
     assert!(answer["unwritable"].as_str().is_some_and(|why| why.contains("could not be reached")), "held in memory, the board away: {answer}");
     let other_shell = another_shell_holds(g.store.path());
     g.fake.head_unreachable.store(false, Ordering::SeqCst);
+    // The probe's edge, read beside the receiver `states` reads.
+    let probed = g.bus.subscribe();
     g.holds.probe("b-1");
     assert!(g.holds.another_window("b-1"), "the probe's head read finds the store another shell's");
     let counted = format!("{ANOTHER_SHELLS_STORE}; the 1 held line kept in memory before then is sent as the board takes it, and a close before then loses it");
     assert_eq!(said_containing(&g, "another shell holds this board's held store"), [counted], "said once, the line counted");
+    assert_eq!(edges(&probed), [true], "and emitted once");
     assert_eq!(g.fake.sends(), 1, "the line is resent from memory");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "and kept");
     assert!(!held_file(&g).exists(), "nothing is written under the other shell's lock");
@@ -621,8 +637,10 @@ fn lines_held_before_another_shells_store_is_found_are_counted_and_resent_from_m
 /// returns, refusing the resend `write_busy` so the line stands, and the
 /// probe's head read takes the directory — no other shell holds it — and
 /// joins the line to the board's file, said once, the store never another
-/// shell's (the mutant that reads any store not yet this shell's as another
-/// shell's refuses the person's writes at every outage).
+/// shell's, said or emitted (the mutant that reads any store not yet this
+/// shell's as another shell's refuses the person's writes at every outage;
+/// the one that emits `another-window` at every step to a directory this
+/// shell locks tells the page of a state that never stood).
 #[test]
 fn a_board_away_at_the_first_touch_holds_in_memory_and_joins_its_file_later() {
     let fake = Fake::new();
@@ -641,6 +659,7 @@ fn a_board_away_at_the_first_touch_holds_in_memory_and_joins_its_file_later() {
     let joined = said_containing(&g, "joined the board's held file");
     assert!(joined.len() == 1 && joined[0].contains("1 held line joined"), "{joined:?}");
     assert!(said_containing(&g, "another shell").is_empty(), "never said another shell's");
+    assert!(edges(&g.rx).is_empty(), "nor emitted, at the open or at the probe's step");
     g.fake.op_refused.clear();
     g.holds.probe("b-1");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "resent and kept");

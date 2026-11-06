@@ -29,7 +29,7 @@
 //!   the one dialer every board dials through, which dials nothing once the
 //!   shell's stop stands.
 //! * `events` — the event stream: every §4b.2 event as a value, named by an
-//!   [`EventName`] of the eight, fanned out to every subscriber, and the
+//!   [`EventName`] of the nine, fanned out to every subscriber, and the
 //!   watchers run after the fan-out on the emitting thread.
 //! * `refusal` — [`Refusal`], the one refusal shape the page renders: the
 //!   board's own verdict verbatim, a halt's face, the block, the
@@ -94,7 +94,8 @@
 //!   principal) queue over `held`'s file, each board's under its own lock,
 //!   one shell per data directory — a board whose store another shell holds
 //!   read alone, no file of it opened (`Holds::another_window`, the shell's
-//!   write door's question); its child `resend` holds the walk the
+//!   write door's question), each edge of that state emitted as
+//!   `another-window`; its child `resend` holds the walk the
 //!   feed thread's probe drains in bounded turns: each document read once a
 //!   pass as the walk reaches it, with §3c.5's three outcomes — a moved
 //!   document's hands named — the lines sent in `k` order across the
@@ -117,7 +118,9 @@
 //!   before any dial — or signed with a dev key; the `session` answer says
 //!   which, `writes`), every write at a board whose held store another shell
 //!   holds refused `another_window` before any dial (§3c.3) at the write
-//!   door the bare refusal shares, and one private method per §4b.1 row, per
+//!   door the bare refusal shares — the `session` answer saying so,
+//!   `another_window`, and each later edge of that state an `another-window`
+//!   event (skep #827) — and one private method per §4b.1 row, per
 //!   `places` and per `changes`, behind [`Shell::call`], whose dispatch the
 //!   compiler holds to one arm per call — the ten ceremonial rows in its child
 //!   `ceremony`, the four `publication` rows and the panels they stand on in

@@ -32,8 +32,9 @@ impl Drop for Scratch {
 
 /// Returns a backend over a real shell at `origin` in `mode`.
 ///
-/// Its store is `dir`, holding one fresh key; its one session is `s-1`, open;
-/// its stop and its talk say nothing.
+/// Its store is `dir`, holding one fresh key; its one session is `s-1`, open,
+/// at a board whose held store no other shell holds; its stop and its talk
+/// say nothing.
 fn backend_at(dir: &Path, origin: Origin, mode: SessionMode) -> Backend {
     let store = FileStore::open(dir);
     let id = store.generate(None).expect("keygen");
@@ -42,7 +43,8 @@ fn backend_at(dir: &Path, origin: Origin, mode: SessionMode) -> Backend {
     let shell = Shell::open(ShellOptions::new(vec![origin.clone()], dir.to_path_buf(), mode, Arc::clone(&talk)));
     let board = shell.board_references().into_iter().next().expect("the shell's one board");
     let on_stop = OnStop::new(std::sync::mpsc::channel::<String>().0, |line| line);
-    Backend { shell, board, origin, principal: mode.principal(), account: None, writes: true, key, session: Arc::new(SessionWatch::new("s-1".into())), on_stop, talk }
+    let another_window = Arc::new(AtomicBool::new(false));
+    Backend { shell, board, origin, principal: mode.principal(), account: None, writes: true, another_window, key, session: Arc::new(SessionWatch::new("s-1".into())), on_stop, talk }
 }
 
 /// Returns one request off a stand-in board's connection: its head, as text.
@@ -443,6 +445,43 @@ fn the_drain_says_an_outages_end_and_a_move_of_the_boards_pair() {
     for member in ["mode", "claimant", "local_trust"] {
         assert!(mode.contains(member), "`{member}` is a member skep-shell declares for the mode event: {mode:?}");
     }
+}
+
+/// The drain follows each edge of another shell's hold on the held store.
+///
+/// Fed by hand in the bus's place, at a stand-in board whose health
+/// `session_info` reads: each `another-window` event is followed by a `mode`
+/// event, whose line says the drain has read the edge before it. After
+/// `true`, `session_info` answers `another_window: true` beside `writes`,
+/// which stays the session's own; after `false`, no such member. The drain
+/// says the two mode lines alone, the shell's own `held:` line saying each
+/// edge (the mutant that drops the event leaves the agent told it may write
+/// until its first write is refused). The members read are ones skep-shell
+/// declares for the event (`AnotherWindowEvent`) and the session's answer
+/// (`SessionOpened`).
+#[test]
+fn the_drain_follows_each_edge_of_another_shells_hold_on_the_store() {
+    let scratch = Scratch::new("drain-another-window");
+    let mut backend = backend_at(&scratch.0, stand_in(|_| None), SessionMode::Bare { principal: 1 });
+    let lines = said_by(&mut backend);
+    let (bus, events) = std::sync::mpsc::channel::<Event>();
+    backend.drain(events, Path::new("/store/index"));
+    let info = backend.session_info().expect("the stand-in answers its health");
+    assert!(info.get("another_window").is_none(), "premise: no other shell holds the store: {info}");
+    let mode = Event { name: EventName::Mode, data: json!({"board": "b-1", "mode": "UNCLAIMED", "claimant": null, "local_trust": true}) };
+    for (k, another_window) in [(1, true), (2, false)] {
+        bus.send(Event { name: EventName::AnotherWindow, data: json!({"board": "b-1", "another_window": another_window}) }).expect("the drain listens");
+        bus.send(mode.clone()).expect("the drain listens");
+        said_within(&lines, k);
+        let info = backend.session_info().expect("the stand-in answers its health");
+        assert_eq!(info.get("another_window"), another_window.then_some(&Value::Bool(true)), "the edge followed: {info}");
+        assert_eq!(info["writes"], true, "writes stays the session's own right: {info}");
+    }
+    let fields = |shape: &str| -> BTreeSet<(&str, bool)> {
+        skep_shell::shapes::shape(shape).unwrap_or_else(|| panic!("skep-shell declares {shape}")).fields.iter().map(|field| (field.name, field.required)).collect()
+    };
+    assert!(fields("AnotherWindowEvent").contains(&("another_window", true)), "`another_window` is the event's state, as skep-shell declares it");
+    assert!(fields("SessionOpened").contains(&("another_window", false)), "and an optional member of the session's answer");
 }
 
 /// The end of each face's build of the index is said once, with its time.

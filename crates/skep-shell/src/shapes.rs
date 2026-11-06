@@ -87,8 +87,8 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "SessionOpened",
         open: false,
-        doc: "`session(board, principal)` — the session's opaque reference in the token's place; `writes` whether the session itself may write: the signed mode's session writes, the bare mode's keyless one reads alone and has every write refused `write_in_bare_session` — the board's own state can refuse a write beside it, which this answer does not report: the own node stopped, its writes halted or its write path poisoned (§3c.4), or another shell holding its held store (`another_window`, §3c.3); `opened_at` the board's position read before the session opened, where its drafts feed starts — the position a page keeps as its last drafts row's (`draftsAt`) until a row moves it, and reads `changes(session, since, class: 'drafts')` from after the session's end",
-        fields: &[req("session", "string"), req("principal", "number"), req("account", "string | null"), req("writes", "boolean"), opt("opened_at", "number")],
+        doc: "`session(board, principal)` — the session's opaque reference in the token's place; `writes` whether the session itself may write: the signed mode's session writes, the bare mode's keyless one reads alone and has every write refused `write_in_bare_session` — the board's own state can refuse a write beside it: the own node stopped, its writes halted or its write path poisoned (§3c.4), which this answer does not report, or another shell holding its held store (§3c.3), which it reports; `another_window` present, `true`, only while another shell over the data directory holds the board's held store as the session opens — every write at the board refused `another_window`, nothing held and nothing sent, whatever `writes` says — every later edge of that state an `another-window` event (skep #827); `opened_at` the board's position read before the session opened, where its drafts feed starts — the position a page keeps as its last drafts row's (`draftsAt`) until a row moves it, and reads `changes(session, since, class: 'drafts')` from after the session's end",
+        fields: &[req("session", "string"), req("principal", "number"), req("account", "string | null"), req("writes", "boolean"), opt("opened_at", "number"), opt("another_window", "true")],
     },
     Shape { name: "Keygen", open: false, doc: "`keygen({label?})` — the device key's fingerprint, its enrollment record, and the outstanding act", fields: &[req("fingerprint", "string"), req("payload", "string"), req("outstanding", "string")] },
     Shape { name: "FingerprintRow", open: false, doc: "`fingerprint({select?, payload?})` — one key of the store, its bindings, the pending state", fields: &[req("fingerprint", "string"), req("label", "string | null"), req("bindings", "string[]"), req("unbound", "boolean"), req("payload", "string | null")] },
@@ -211,6 +211,12 @@ const SHAPES: &[Shape] = &[
         fields: &[req("key", "HandKey"), opt("fingerprint", "string"), opt("label", "string")],
     },
     Shape { name: "Resolve", open: false, doc: "`resolve(session, {held, act})` — the person's act at a REFUSED run's face or a MOVED document's", fields: &[req("session", "string"), req("held", "number"), req("act", "'drop' | 'send'")] },
+    Shape {
+        name: "AnotherWindowEvent",
+        open: false,
+        doc: "`another-window(board, another_window)` (§3c.3; skep #827) — another shell's hold on the board's held store, at each edge of that state: `true` where a session's open or a probe finds the store's lock held by another shell over the data directory — every write at the board refused `another_window` from then, nothing held and nothing sent — and `false` where this shell takes a lock at the board, at a later session's open or at a probe while a line held before the state stands; emitted once at each edge, and never at an open or a probe that finds no change — the `session` answer's `another_window` gives the state as a session opens",
+        fields: &[req("board", "string"), req("another_window", "boolean")],
+    },
     Shape { name: "Run", open: false, doc: "one run of a selection, I-runs in V-order (P51): `width` positions of the document `origin`'s content I-space from the ordinal `i_start`", fields: &[req("origin", "string"), req("i_start", "number"), req("width", "number")] },
     Shape {
         name: "PublicationPanel",

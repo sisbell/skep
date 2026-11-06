@@ -24,8 +24,10 @@
 //! shell's own window as often as the page asks,
 //! a burst on a draft just minted kept across a restart, a relaunch with its
 //! board down listing its held line — the bare mode's resending none of it,
-//! the signed mode's keeping it — and the probe keeping its cadence while
-//! the board keeps committing.
+//! the signed mode's keeping it — the probe keeping its cadence while the
+//! board keeps committing, and a second shell over the data directory
+//! refusing every write and holding nothing, told so by its session's answer
+//! and by an event at each edge of the state (skep #789, #827).
 
 use super::*;
 use crate::held::Opened;
@@ -1381,6 +1383,67 @@ fn a_second_shell_over_the_data_directory_refuses_every_write_and_holds_nothing(
     let acked = second.call("op", &json!({"session": next, "frame": burst})).unwrap();
     assert!(acked["at"].as_u64().is_some() && acked["resp"] != "held", "the burst goes out and is acked: {acked}");
     assert_eq!(said("another shell holds this board's held store"), 1, "the beginning said no second time");
+    second.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a second shell is told another shell holds the board's held
+/// store, at its session's open and at each edge (§3c.3; skep #827).
+///
+/// The first shell's open takes the store: its answer carries no
+/// `another_window`, and nothing is emitted. A second shell over its data
+/// directory opens a session whose answer carries `writes`, the session's
+/// own right, and `another_window: true` beside it, and emits
+/// `another-window` once, `true`; a later open while the first stands
+/// carries the member and emits nothing. The first shell gone, the next open
+/// takes the store, carries no member and emits `another-window` once,
+/// `false`; an open after it, nothing. Every answer is held to
+/// `SessionOpened` and every event to its declaration (the mutant that reads
+/// the state before the open answers each open the state as it stood before
+/// it, the open that finds another shell's store among them; the one that
+/// emits at every try tells the page an edge at each open; the one that
+/// drops the member leaves the page to learn the state at its first refused
+/// write).
+#[test]
+fn a_second_shell_is_told_another_shells_store_at_the_open_and_at_each_edge() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let open = |shell: &Shell, board: &str| -> Value {
+        let opened = shell.call("session", &json!({"board": board})).unwrap();
+        crate::shapes::assert_declared("SessionOpened", &opened);
+        opened
+    };
+    // The events a call emitted, read off a subscriber taken before it: the
+    // emit is the call's own, made before it answers.
+    let edges = |rx: &std::sync::mpsc::Receiver<Event>| -> Vec<Value> {
+        let seen: Vec<Event> = rx.try_iter().collect();
+        assert_events_declared(&seen);
+        seen.into_iter().filter(|e| e.name == EventName::AnotherWindow).map(|e| e.data).collect()
+    };
+    let (first, _) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let first_rx = first.subscribe();
+    let opened = open(&first, &first.board_references().remove(0));
+    assert!(opened.get("another_window").is_none(), "the shell whose open takes the store is told nothing: {opened}");
+    assert!(edges(&first_rx).is_empty(), "and emits nothing");
+    let (second, _) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let rx = second.subscribe();
+    let board = second.board_references().remove(0);
+    let opened = open(&second, &board);
+    assert_eq!((opened["writes"].as_bool(), opened["another_window"].as_bool()), (Some(true), Some(true)), "the session's own right, and the board's state beside it: {opened}");
+    assert_eq!(edges(&rx), [json!({"board": board, "another_window": true})], "emitted once as it begins");
+    let again = open(&second, &board);
+    assert_eq!(again["another_window"], true, "a later open while the first stands: {again}");
+    assert!(edges(&rx).is_empty(), "a try that finds no change emits nothing");
+    first.shutdown();
+    drop(first);
+    let taken = open(&second, &board);
+    assert!(taken.get("another_window").is_none(), "the open that takes the store answers no member: {taken}");
+    assert_eq!(edges(&rx), [json!({"board": board, "another_window": false})], "emitted once as it ends");
+    let after = open(&second, &board);
+    assert!(after.get("another_window").is_none() && edges(&rx).is_empty(), "nothing once the store is this shell's: {after}");
     second.shutdown();
     sd.shutdown();
 }

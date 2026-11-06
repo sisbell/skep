@@ -1053,16 +1053,22 @@ impl Shell {
 
     /// Answers `session(board, principal)`: the mode's opening as `principal`.
     ///
-    /// It answers `{session, principal, account, writes, opened_at}`: the
-    /// reference issued in the token's place; `writes` — whether the session
-    /// itself may write ([`SessionEntry::may_write`]): the signed mode's
-    /// session writes, the bare mode's keyless one reads alone and has every
-    /// write refused `write_in_bare_session`, which the page learns here,
-    /// before it offers one; the board's own state can refuse a write beside
-    /// it, which this answer does not report — the own node stopped, its
-    /// writes halted or its write path poisoned (§3c.4), or another shell
-    /// holding its held store (`another_window`, §3c.3); and `opened_at`, the
-    /// board's position read before the session opened
+    /// It answers `{session, principal, account, writes, opened_at}`, with
+    /// `another_window` beside them while another shell holds the board's
+    /// held store: the reference issued in the token's place; `writes` —
+    /// whether the session itself may write ([`SessionEntry::may_write`]):
+    /// the signed mode's session writes, the bare mode's keyless one reads
+    /// alone and has every write refused `write_in_bare_session`, which the
+    /// page learns here, before it offers one; the board's own state can
+    /// refuse a write beside it — the own node stopped, its writes halted or
+    /// its write path poisoned (§3c.4), which this answer does not report, or
+    /// another shell holding its held store (§3c.3), every write at the board
+    /// refused `another_window`, which it reports: `another_window: true`,
+    /// present only while that state stands as the session opens, read after
+    /// the open, which tries the store again, so an open that takes the store
+    /// answers none, and every later edge of the state emitted as
+    /// `another-window` ([`Holds::another_window`]; skep #827); and
+    /// `opened_at`, the board's position read before the session opened
     /// ([`SessionEntry::opened_at`]), where the session's drafts feed starts
     /// — the position a page's drafts-only `changes` read starts from after
     /// the session's end (skep #740).
@@ -1088,7 +1094,12 @@ impl Shell {
         // and its daemon-running tick drive it once a session that may write
         // stands (§3c.5).
         self.holds.open_session(&session);
-        Ok(json!({"session": session.reference, "principal": principal, "account": session.facts.account, "writes": session.may_write(), "opened_at": session.opened_at}))
+        let mut opened = json!({"session": session.reference, "principal": principal, "account": session.facts.account, "writes": session.may_write(), "opened_at": session.opened_at});
+        // Read after the open, which tries another shell's store again.
+        if self.holds.another_window(&entry.reference) {
+            opened["another_window"] = Value::Bool(true);
+        }
+        Ok(opened)
     }
 
     /// Answers `close(session)` with `{}`: the session out of the table.

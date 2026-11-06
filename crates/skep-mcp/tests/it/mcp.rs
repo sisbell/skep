@@ -117,7 +117,9 @@ fn a_tools_call_sent_as_a_notification_runs_nothing() {
 ///
 /// The principal, its account, the key it signs with — the claimant's, by
 /// fingerprint and label — the board's origin, `writes`, the board's mode and
-/// its `/health` answer whole, `log_position` among its members.
+/// its `/health` answer whole, `log_position` among its members; and no
+/// `another_window`, the adapter's shell holding the board's held store
+/// itself.
 #[test]
 fn session_info_reports_who_the_adapter_acts_as() {
     let fixture = Fixture::new("sessinfo");
@@ -130,6 +132,7 @@ fn session_info_reports_who_the_adapter_acts_as() {
     assert_eq!(info["key"]["label"], "notebook", "{info}");
     assert_eq!(info["board"], fixture.origin(), "{info}");
     assert_eq!(info["writes"], true, "{info}");
+    assert!(info.get("another_window").is_none(), "no other shell holds the board's held store: {info}");
     assert_eq!(info["mode"], "CLAIMED-PERMISSIVE", "{info}");
     assert_eq!(info["health"]["ok"], json!(true));
     assert!(info["health"]["log_position"].is_u64(), "health rides along: {info}");

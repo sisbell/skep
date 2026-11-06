@@ -88,8 +88,8 @@ served to a page in a browser over loopback HTTP and server-sent events —
 the merge family's four, `history.restore` and `held.show` among them —
 `places`, the document index's listing, and `changes`, the change feed's
 page (`{result}` or `{refused}` back, HTTP 200 either way;
-a 4xx is the provider's own refusal), `GET /bridge/events` for the eight
-events of §4b.2 (`event:` and `data:` lines, a `:ka` comment every fifteen
+a 4xx is the provider's own refusal), `GET /bridge/events` for every
+event of §4b.2 (`event:` and `data:` lines, a `:ka` comment every fifteen
 seconds), `POST /bridge/answer` and `/bridge/cancel` for a moment's two
 answers, `GET /bridge/log` (every call the page made and every dial the
 provider made), `GET /bridge/shapes` (the TypeScript declarations), `POST

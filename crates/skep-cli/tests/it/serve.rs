@@ -1461,7 +1461,10 @@ fn f8_the_shapes_route_serves_the_declarations() {
     let boards = provider.result("boards", json!({}));
     assert_eq!(keys(&boards[0]), declared("BoardRow"));
     let board = boards[0]["board"].as_str().unwrap().to_string();
-    assert_eq!(keys(&provider.result("session", json!({"board": board, "principal": 1}))), declared("SessionOpened"));
+    // `another_window` is carried only while another shell holds the board's
+    // held store, which no shell beside this provider's does.
+    let unstaged: std::collections::BTreeSet<String> = ["another_window".to_string()].into();
+    assert_eq!(keys(&provider.result("session", json!({"board": board, "principal": 1}))), &declared("SessionOpened") - &unstaged);
     assert_eq!(keys(&provider.result("health", json!({"board": board}))), declared("Health"));
     assert_eq!(keys(&provider.result("probe", json!({}))), declared("Probe"));
     let refused = provider.refused("op", json!({"guest": true, "board": board, "frame": {"op": "insert", "doc": "1.0.1.0.1"}}));

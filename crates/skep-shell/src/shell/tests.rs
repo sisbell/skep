@@ -174,6 +174,7 @@ fn assert_events_declared(seen: &[Event]) {
             EventName::Moment => "MomentEvent",
             EventName::Held => "HeldEvent",
             EventName::Publication => "PublicationEvent",
+            EventName::AnotherWindow => "AnotherWindowEvent",
         };
         crate::shapes::assert_declared(shape, &event.data);
         match event.name {

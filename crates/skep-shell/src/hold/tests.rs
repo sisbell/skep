@@ -29,7 +29,8 @@
 //! (`Ground`), the clock a line's deadline reads moved forward by a cell
 //! where it waits past one (`Holds::advance`), a burst held through the
 //! hold's own door at the base a hold takes now, and each `held` event,
-//! `held` row and `held` answer held to its declaration.
+//! `held` row and `held` answer, and each `another-window` event, held to
+//! its declaration.
 //! The ground's session is a writer's — signed, under a key its store
 //! generates, since a bare session reads alone and no probe resends under it —
 //! save where a cell asks for a bare one (`bare_ground`) or for a key no store
@@ -1088,6 +1089,21 @@ fn pending_file(g: &Ground) -> std::path::PathBuf {
 /// The TALK lines the hold said that contain `text`, in order.
 fn said_containing(g: &Ground, text: &str) -> Vec<String> {
     g.said.lock().unwrap().iter().filter(|line| line.contains(text)).cloned().collect()
+}
+
+/// The states the `another-window` events `rx` holds carry, in order.
+///
+/// Each event is held to its declaration (`AnotherWindowEvent`) and names
+/// the ground's board; every other event `rx` holds is read and dropped.
+fn edges(rx: &Receiver<Event>) -> Vec<bool> {
+    rx.try_iter()
+        .filter(|e| e.name == EventName::AnotherWindow)
+        .map(|e| {
+            crate::shapes::assert_declared("AnotherWindowEvent", &e.data);
+            assert_eq!(e.data["board"], "b-1", "{}", e.data);
+            e.data["another_window"].as_bool().unwrap_or_else(|| panic!("the state, a boolean: {}", e.data))
+        })
+        .collect()
 }
 
 /// The `held` lines a held file's text holds, each parsed, in file order.

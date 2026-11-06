@@ -30,7 +30,7 @@ fn samples() -> Vec<(&'static str, Value)> {
     let facts = json!({"principal": 1, "account": "1.0.1", "origin": "http://127.0.0.1:8642"});
     vec![
         ("BoardRow", json!({"board": "b-0", "name": "http://127.0.0.1:8642", "origin": "http://127.0.0.1:8642"})),
-        ("SessionOpened", json!({"session": "s-0", "principal": 1, "account": "1.0.1", "writes": true, "opened_at": 5})),
+        ("SessionOpened", json!({"session": "s-0", "principal": 1, "account": "1.0.1", "writes": true, "opened_at": 5, "another_window": true})),
         ("Keygen", json!({"fingerprint": "ab", "payload": "{}", "outstanding": "x"})),
         ("FingerprintRow", json!({"fingerprint": "ab", "label": "phone", "bindings": [], "unbound": true, "payload": null})),
         ("Claimed", json!({"account": "1.0.1", "principal": 1, "fingerprint": "ab", "agent_space": "1.0.1.1", "display_name": null, "warnings": []})),
@@ -76,6 +76,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("HeldEvent", json!({"board": "b-0", "session": "s-0", "doc": "1.0.1.0.1", "held": 2, "state": "moved", "hands": [{"key": "bare"}]})),
         ("Hand", json!({"key": "other", "fingerprint": "ab", "label": "phone"})),
         ("Resolve", json!({"session": "s-0", "held": 1, "act": "drop"})),
+        ("AnotherWindowEvent", json!({"board": "b-0", "another_window": true})),
         ("Run", json!({"origin": "1.0.1.0.5", "i_start": 1, "width": 10})),
         (
             "PublicationPanel",
@@ -149,7 +150,7 @@ fn every_declared_type_round_trips_its_sample_against_the_table() {
 /// listing and the change feed's page — its rows the dispatch's calls, in
 /// the dispatch's order, each form of a row's argument object its members
 /// in their order, the forms joined as a union and a form of no member `{}`
-/// — both answers and the seven events; a field's optionality renders as
+/// — both answers and the nine events; a field's optionality renders as
 /// `?`, as the field spells itself.
 #[test]
 fn the_file_names_every_shape_call_and_event() {
@@ -201,6 +202,8 @@ fn the_file_names_every_shape_call_and_event() {
         "  span?: { start: string; width: string }[];\n",
         "  site: { addr?: string; index?: number; operand?: 'first' | 'second'; region?: number; slot?: number; fault?: string; as_of?: number; current?: number };\n",
         "  unwritable?: string;\n  unwritable_class?: 'full' | 'read_only' | 'other';\n",
+        "  opened_at?: number;\n  another_window?: true;\n",
+        "export interface AnotherWindowEvent {\n  board: string;\n  another_window: boolean;\n}\n",
     ] {
         assert!(text.contains(line), "the row renders as declared: {line}");
     }
@@ -209,8 +212,8 @@ fn the_file_names_every_shape_call_and_event() {
     }
     assert!(text.contains("  answer(args: Answer)") && text.contains("  cancel(args: Cancel)"));
     assert!(
-        text.contains("export type EventName = 'mode' | 'session-died' | 'daemon' | 'feed' | 'index' | 'moment' | 'held' | 'publication';\n\n"),
-        "the eight event names render from the enum, in the contract's order"
+        text.contains("export type EventName = 'mode' | 'session-died' | 'daemon' | 'feed' | 'index' | 'moment' | 'held' | 'publication' | 'another-window';\n\n"),
+        "the nine event names render from the enum, in its order"
     );
     assert!(text.contains("  warning?: string;"), "an optional field renders with `?`");
     assert!(text.contains("  position: number;"), "a required field renders bare");

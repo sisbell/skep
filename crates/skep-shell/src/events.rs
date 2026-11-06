@@ -1,12 +1,12 @@
 //! The event stream (`client.md` §4b.2): every event the shell pushes.
 //!
 //! Each event — `mode`, `session-died`, `daemon`, `feed`, `index`, `moment`,
-//! `held`, `publication` — is one value with the name the contract spells,
-//! an [`EventName`] of that closed list, fanned out to every subscriber in
-//! the order it was emitted: a developer's second tab is a second subscriber
-//! (the dev provider record §3.3), and the conformance proof reads the same
-//! sequence off a subscriber of its own. A subscriber that went away is
-//! dropped at the next emission; nothing is kept for one that has not
+//! `held`, `publication`, `another-window` — is one value with the name the
+//! contract spells, an [`EventName`] of that closed list, fanned out to every
+//! subscriber in the order it was emitted: a developer's second tab is a
+//! second subscriber (the dev provider record §3.3), and the conformance proof
+//! reads the same sequence off a subscriber of its own. A subscriber that went
+//! away is dropped at the next emission; nothing is kept for one that has not
 //! subscribed yet. Beside the subscribers a WATCHER ([`EventBus::watch`]) is
 //! a closure the bus runs on the emitting thread once every subscriber has
 //! the event — the shell's own reaction to an event whichever thread emitted
@@ -35,7 +35,7 @@ pub struct Event {
     pub data: Value,
 }
 
-/// An event's name: one of the eight the contract spells (`client.md` §4b.2).
+/// An event's name: one of the nine the contract spells (`client.md` §4b.2).
 ///
 /// [`EventName::as_str`] is its spelling on the stream and in the
 /// declarations, which `shapes` renders from [`EventName::ALL`].
@@ -86,13 +86,26 @@ pub enum EventName {
     /// send and at its outcome, at `publication.cancel`, and at the session's
     /// death with a panel standing (the family's one session rule, §4b.1).
     Publication,
+    /// Another shell's hold on a board's store as it moves: `another-window`.
+    ///
+    /// The state (`client.md` §3c.3; skep #827) is `another_window`, under the
+    /// board it is about: `true` where a session's open or a probe finds the
+    /// lock of the board's held store held by another shell over this data
+    /// directory — every write at the board refused `another_window` from
+    /// then, nothing held and nothing sent — and `false` where this shell
+    /// takes a lock at the board, at a later session's open or at a probe
+    /// while a line held before the state stands. Emitted once at each edge,
+    /// beside the `Talk` line that says it, and never at an open or a probe
+    /// that finds no change; the `session` answer's `another_window` gives
+    /// the state as a session opens.
+    AnotherWindow,
 }
 
 impl EventName {
     /// Every name, in the contract's order but with `moment` before `held`,
-    /// and `publication` last.
+    /// then `publication` and `another-window`.
     pub const ALL: &'static [EventName] =
-        &[EventName::Mode, EventName::SessionDied, EventName::Daemon, EventName::Feed, EventName::Index, EventName::Moment, EventName::Held, EventName::Publication];
+        &[EventName::Mode, EventName::SessionDied, EventName::Daemon, EventName::Feed, EventName::Index, EventName::Moment, EventName::Held, EventName::Publication, EventName::AnotherWindow];
 
     /// Returns the name as the contract spells it.
     pub const fn as_str(self) -> &'static str {
@@ -105,6 +118,7 @@ impl EventName {
             EventName::Moment => "moment",
             EventName::Held => "held",
             EventName::Publication => "publication",
+            EventName::AnotherWindow => "another-window",
         }
     }
 }
@@ -255,7 +269,7 @@ mod tests {
     #[test]
     fn every_name_parses_back_from_its_spelling() {
         let spelled: Vec<&str> = EventName::ALL.iter().map(|name| name.as_str()).collect();
-        assert_eq!(spelled, ["mode", "session-died", "daemon", "feed", "index", "moment", "held", "publication"]);
+        assert_eq!(spelled, ["mode", "session-died", "daemon", "feed", "index", "moment", "held", "publication", "another-window"]);
         for &name in EventName::ALL {
             assert_eq!(name.as_str().parse::<EventName>(), Ok(name));
             assert_eq!(name.to_string(), name.as_str());

@@ -4322,9 +4322,15 @@ lock: an append that arrives during the rewrite waits on that lock and
 lands in the new file; a compaction that fails past its rename STOPS its
 log — it takes no append until a compaction completes, the next pass's,
 which rewrites a stopped log whatever its count — and the pass's line
-names the stopped log. The pass never touches a partial whose upload
-stands and reads no directory's bytes as a scope (M-I6: the scopes stay
-record-derived).
+names the stopped log. EACH STEP GOES ON PAST AN ENTRY IT CANNOT REMOVE
+and leaves it for the next pass — an expired upload whose partial will not
+go, its record standing expired; a file whose rename aside fails, at its
+hex name; an aside whose unlink fails — and the pass's line names the
+step, its first failure in the store's words and how many of the step's
+acts failed (`— the first of {n} failures`); a listing that fails ends its
+step, there being nothing left to walk. The pass never touches a partial
+whose upload stands and reads no directory's bytes as a scope (M-I6: the
+scopes stay record-derived).
 
 **THE FETCH** (media lane D; the media record's Op inventory 3; the ruled
 v1 cut — whole-file serving, the hash checked before the first byte):

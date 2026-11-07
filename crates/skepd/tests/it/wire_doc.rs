@@ -1983,16 +1983,17 @@ fn doc_states_the_upload_setting_the_default_limit_the_creations_gate_and_the_to
     assert_eq!(past["names_kind"].as_bool(), Some(true), "a past-cap body opening as the kind names it");
 }
 
-/// THE CELL INDEX, THE READINESS REFUSAL AND THE PRUNER (the register
-/// M-I5 (b), (f), M-I6 (a), (b); the rulings ms5-R and ms5-T4): §Media
-/// states the index — what it holds, the entry at commit and the walk at
-/// open, the composition clause, the halt mark — the readiness token and
-/// its exactly three readers, the pruner's pass with its arm, its grain,
-/// its halts and its cadence, the deposit read's two figures, the own
-/// scope's two terms, the binding's index-first order, the replace's aside
-/// and its deferred unlink; and the status table carries the token. The
-/// daemon's answers are pinned in `media.rs`, `pruner.rs`, `blob_routes.rs`
-/// and `hazard.rs`; this pins that the contract says so.
+/// THE CELL INDEX, THE READINESS REFUSAL AND THE PRUNER (the register M-I5 (b),
+/// (f), M-I6 (a), (b); the rulings ms5-R and ms5-T4): §Media states the index —
+/// what it holds, the entry at commit and the walk at open, the composition
+/// clause, the halt mark — the readiness token and its exactly three readers,
+/// the pruner's pass with its arm, its grain, its halts, its cadence and its
+/// exit — each step going on past an entry it cannot remove, its failures
+/// counted — the deposit read's two figures, the own scope's two terms, the
+/// binding's index-first order, the replace's aside and its deferred unlink;
+/// and the status table carries the token. The daemon's answers are pinned in
+/// `media.rs`, `pruner.rs`, `blob_routes.rs` and `hazard.rs`; this pins that
+/// the contract says so.
 #[test]
 fn doc_states_the_cell_index_the_readiness_refusal_and_the_pruner() {
     let media = prose("\n### Media — the reference cell and its door", &["\n### Links (writes)"]);
@@ -2027,6 +2028,10 @@ fn doc_states_the_cell_index_the_readiness_refusal_and_the_pruner() {
         "the pruner's cadence, one hour between passes",
         "RENAMED ASIDE",
         "(d) THE COMPACTION",
+        "EACH STEP GOES ON PAST AN ENTRY IT CANNOT REMOVE and leaves it for the next pass",
+        "the pass's line names the step, its first failure in the store's words and how many of \
+         the step's acts failed (`— the first of {n} failures`)",
+        "a listing that fails ends its step",
     ] {
         assert!(media.contains(fact), "§Media says {fact:?}");
     }

@@ -128,7 +128,8 @@ apart.
      ends with a clause that names `blobs/uploads.log` or
      `blobs/leases.log`, what stopped it, how long ago and how many
      appends it has refused since — each one an upload's creation,
-     received bytes, end or finish answered `blob_io`:
+     received bytes, end or finish answered `blob_io`, or the
+     pruner's retirement of an expired upload, which costs no one:
 
      ```
      ; STOPPED: blobs/uploads.log takes no append until a compaction completes — {cause}; stopped {ms} ms, {n} appends refused
@@ -284,24 +285,32 @@ apart.
 
    Where a step of the pass failed, the line is a `failure:`. It
    names each failure, in step order, ahead of the same figures: the
-   step, then the store's words for the act that failed.
+   step, the store's words for the first act that failed in it, and
+   how many of that step's acts failed.
 
    ```
-   failure: pruner: the pass failed: {step}: {cause}; {n} expired partials removed, {n} files unlinked, {n} kept, {n} asides removed, {n} bytes freed; blobs/uploads.log {n} lines ({n} bytes); blobs/leases.log {n} lines ({n} bytes); the pass took {ms} ms
+   failure: pruner: the pass failed: {step}: {cause} — the first of {n} failures; {n} expired partials removed, {n} files unlinked, {n} kept, {n} asides removed, {n} bytes freed; blobs/uploads.log {n} lines ({n} bytes); blobs/leases.log {n} lines ({n} bytes); the pass took {ms} ms
    ```
 
    The rest of the pass runs past a failure, so the figures are what
-   it did. A failure at `step (a), the expired partials` or at `step
-   (c), the unreferenced files` leaves the other steps done. One at
-   `step (b), the halts' read` leaves no file judged, and the line
-   goes on `the unlink pass halted: the halts are unread, so no file
-   is judged`: the pass removes no file past halts it could not read,
-   and reads them again at the next pass. Every pass ends by
-   rewriting a log that stopped, whatever failed before it, so a
-   cause that names a stopped log is step 5's. Where step (a)'s
-   cause names a partial the OS will not remove — `a partial in
-   blobs/{designation}/: remove: {error}` — every pass meets it
-   again, and it goes at the first pass after its cause is cleared
+   it did. Each step goes on past an entry it could not remove, and
+   counts it: an expired partial, a file it could not rename aside
+   or an aside it could not unlink stays where it stands for the
+   next pass. Read the count beside the figures: every removal
+   failing, with nothing removed, is the directory or the device;
+   one failing is one file. A failure at `step (a), the expired
+   partials` or at `step (c), the unreferenced files` leaves the
+   other steps done. One at `step (b), the halts' read` leaves no
+   file judged, and the line goes on `the unlink pass halted: the
+   halts are unread, so no file is judged`: the pass removes no file
+   past halts it could not read, and reads them again at the next
+   pass. Every pass ends by rewriting a log that stopped, whatever
+   failed before it, so a cause that names a stopped log is step
+   5's; where step (a)'s cause names one, the expired partials the
+   line counts were removed all the same. Where step (a)'s cause
+   names a partial the OS will not remove — `a partial in
+   blobs/{designation}/: remove: {error}` — it is tried at every
+   pass, and it goes at the first pass after its cause is cleared
    (a flag such as immutable on the partial, its directory's
    permissions, the device, as the error names); a restart neither
    clears it nor is needed: the next open leaves it too, says so

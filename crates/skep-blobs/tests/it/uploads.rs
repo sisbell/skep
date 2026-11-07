@@ -9,7 +9,9 @@
 //! interval and saturating at the last instant; one handle per request,
 //! closed with its stream; the expiry, an expired upload's stream appending
 //! nothing, and a stream's append judged by its record and not its expiry;
-//! a settle judging its upload once, before it receives; the end; the
+//! an expiry's failure, a removal the OS refused told from a retirement a
+//! stopped log refused after its partial went; a settle judging its upload
+//! once, before it receives; the end; the
 //! listings in identifier order; and a stopped log answering its cause,
 //! every refusal naming it and a refused creation leaving no partial, until
 //! a compaction lifts it.
@@ -18,7 +20,9 @@ use std::fs;
 use std::thread;
 use std::time::Duration;
 
-use skep_blobs::{BlobError, HashFunction, LeaseState, NotAnUploadId, UploadId, UploadRecord, SYNC_GRAIN};
+use skep_blobs::{
+    BlobError, ExpiryFailed, HashFunction, LeaseState, NotAnUploadId, UploadId, UploadRecord, SYNC_GRAIN,
+};
 
 use crate::{every_deposit_unplaced, hex_of, open, standing, INTERVAL, INTERVAL_MS};
 
@@ -532,6 +536,87 @@ fn an_expired_uploads_stream_appends_and_finishes_nothing() {
     assert!(store.expire_upload(&rec.id, rec.expires).unwrap().is_some(), "removed");
     assert!(matches!(stream.append(b"ghi", rec.expires), Err(BlobError::NoUpload)), "it appends nothing");
     assert!(matches!(stream.finish(INTERVAL, rec.expires), Err(BlobError::NoUpload)), "and finishes nothing");
+}
+
+/// Checks that an expiry the OS's removal refuses keeps its record.
+///
+/// A directory holding a file stands at an expired upload's partial's name,
+/// which no unlink takes: [`Store::expire_upload`] answers
+/// [`ExpiryFailed::Removal`] in the store's words for the act, the partial
+/// named by its directory, its source the store's own error; and the record
+/// stands, listed among the expired uploads for the next pass, a read
+/// answering it as no upload.
+///
+/// [`Store::expire_upload`]: skep_blobs::Store::expire_upload
+/// [`ExpiryFailed::Removal`]: skep_blobs::ExpiryFailed::Removal
+#[test]
+fn an_expiry_the_os_will_not_remove_answers_removal_and_keeps_its_record() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let store = open(&root, 0);
+    let rec = standing(&store, "k", 100, b"stuck", 0);
+    let partial = root.join("blake3").join(format!(".upload-{}", rec.id.to_hex()));
+    fs::remove_file(&partial).unwrap();
+    fs::create_dir(&partial).unwrap();
+    fs::write(partial.join("held"), b"held").unwrap();
+    let now = rec.expires;
+    let refused = store.expire_upload(&rec.id, now).expect_err("no unlink takes a directory");
+    assert!(matches!(refused, ExpiryFailed::Removal(_)), "{refused:?}");
+    assert!(refused.to_string().starts_with("a partial in blobs/blake3/: remove: "), "{refused}");
+    assert!(std::error::Error::source(&refused).is_some(), "its source, the store's own error");
+    let expired: Vec<UploadId> = store.expired_uploads(now).into_iter().map(|r| r.id).collect();
+    assert_eq!(expired, vec![rec.id], "the record stands, expired, for the next pass");
+    assert!(store.upload("k", &rec.id, now).is_none(), "and answers as no upload");
+}
+
+/// Checks that an expiry a stopped log refuses answers the bytes it freed.
+///
+/// The records' log is stopped as
+/// `a_stopped_log_answers_its_cause_and_every_refusal_names_it` stops it —
+/// its rewrite failed past its rename, `blobs/` written and searched but not
+/// read — beside an expired upload holding bytes. [`Store::expire_upload`]
+/// answers [`ExpiryFailed::Retirement`]: the partial gone, its bytes the
+/// answer's `freed`, and the record out of this process, none listed; the
+/// stop counts the refused retirement; and the text is the stop's refusal,
+/// naming the log and its cause alone.
+///
+/// [`Store::expire_upload`]: skep_blobs::Store::expire_upload
+/// [`ExpiryFailed::Retirement`]: skep_blobs::ExpiryFailed::Retirement
+#[cfg(unix)]
+#[test]
+fn an_expiry_a_stopped_log_refuses_answers_the_bytes_its_removal_freed() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let store = open(&root, 0);
+    let rec = standing(&store, "k", 100, b"expiring", 0);
+    for _ in 0..8 {
+        let ended = store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 0).unwrap();
+        store.end_upload("k", &ended.id, 0).unwrap();
+    }
+    let mode = fs::metadata(&root).unwrap().permissions();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o300)).unwrap();
+    // A privileged process opens any directory: nothing to inject.
+    let privileged = fs::File::open(&root).is_ok();
+    let compacted = (!privileged).then(|| store.compact_logs_if_past(4, 8, 0));
+    fs::set_permissions(&root, mode).unwrap();
+    let Some(compacted) = compacted else { return };
+    assert!(compacted.is_err(), "the rewrite fails past its rename");
+    let stop = store.stopped_logs().0.expect("the records' log stopped");
+    let partial = root.join("blake3").join(format!(".upload-{}", rec.id.to_hex()));
+    let now = rec.expires;
+    let refused = store.expire_upload(&rec.id, now).expect_err("a stopped log refuses the retirement");
+    let ExpiryFailed::Retirement { freed, .. } = &refused else { panic!("the partial went: {refused:?}") };
+    assert_eq!(*freed, 8, "the partial's eight bytes freed");
+    assert!(!partial.exists(), "the partial gone");
+    assert!(store.expired_uploads(now).is_empty(), "no record listed: it left this process");
+    assert_eq!(
+        refused.to_string(),
+        format!("blobs/uploads.log takes no append until a compaction completes: {}", stop.cause),
+        "the stop's refusal, naming the log and its cause alone"
+    );
+    let counted = store.stopped_logs().0.expect("still stopped");
+    assert_eq!(counted.refused, stop.refused + 1, "the refused retirement counted");
 }
 
 /// A STREAM's APPEND IS JUDGED BY ITS RECORD, NOT ITS EXPIRY (`Stream::append`:

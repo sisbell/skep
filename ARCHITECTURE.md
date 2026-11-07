@@ -1528,9 +1528,9 @@ Rules that hold across its files:
   crate's own. `tests/it/tidy.rs` checks it.
 
 Its unit suites sit beside their code: `cell/tests.rs`, `door/tests.rs`
-(which opens a real engine), `gate/tests.rs`, and the inline suites of
-`cell/blind.rs`, `index.rs` (whose walk-catch test opens one too),
-`pools.rs`, `pruner.rs` and `serve.rs`. Its integration suites — the
+(which opens a real engine), `gate/tests.rs`, `pruner/tests.rs`, and the
+inline suites of `cell/blind.rs`, `index.rs` (whose walk-catch test opens
+one too), `pools.rs` and `serve.rs`. Its integration suites — the
 upload, the fetch, the door and the pruner over a served daemon — are
 `skepd`'s (`tests/it`: `blob_routes`, `blob_fetch`, `media`, `pruner`,
 `deposit_class`, and `hazard`'s media share), which spawn the daemon they

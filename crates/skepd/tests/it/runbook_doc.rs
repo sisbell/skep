@@ -820,13 +820,15 @@ fn runbook_says_a_deposits_file_unread_and_what_ends_it() {
 ///
 /// The line is the pass's one rendering — `skep-media`'s `pruner.rs` pins
 /// its words, and this crate's `pruner.rs` the line said — so step 3 quotes
-/// it under the class the binary writes it with, the figures and the logs'
-/// sizes those of line 34's quote beside it, without the resident set's
-/// reading. It names each step by the words the binary gives it
-/// (`PassStep`'s own `Display`), the halts unread, the stopped log sent to
-/// step 5, and a partial the OS will not remove, which goes at the first
-/// pass after its cause is cleared and which the next open leaves and says
-/// rather than stops on.
+/// it under the class the binary writes it with, each failure counted, the
+/// figures and the logs' sizes those of line 34's quote beside it, without
+/// the resident set's reading. It names each step by the words the binary
+/// gives it (`PassStep`'s own `Display`), the walk going on past an entry it
+/// could not remove and the count read beside the figures, the halts unread,
+/// the stopped log sent to step 5 with the partials step (a) counts removed
+/// all the same, and a partial the OS will not remove, which is tried at
+/// every pass, goes at the first pass after its cause is cleared and which
+/// the next open leaves and says rather than stops on.
 #[test]
 fn runbook_quotes_the_failed_pass_and_what_each_failure_leaves() {
     use skep_media::pruner::PassStep;
@@ -847,19 +849,26 @@ fn runbook_quotes_the_failed_pass_and_what_each_failure_leaves() {
     assert_eq!(
         failure.trim(),
         format!(
-            "{}: pruner: the pass failed: {{step}}: {{cause}}; {figures}; the pass took {{ms}} ms",
+            "{}: pruner: the pass failed: {{step}}: {{cause}} — the first of {{n}} failures; \
+             {figures}; the pass took {{ms}} ms",
             Class::Failure
         ),
-        "§1 step 3 quotes line 35 as line 34's figures, the failure ahead of them"
+        "§1 step 3 quotes line 35 as line 34's figures, the counted failure ahead of them"
     );
     let prose = collapsed(rest);
     for step in [PassStep::ExpiredPartials, PassStep::Halts, PassStep::UnreferencedFiles] {
         assert!(prose.contains(&format!("`{step}`")), "§1 step 3 names `{step}`: {prose}");
     }
     for fact in [
+        "Each step goes on past an entry it could not remove, and counts it",
+        "every removal failing, with nothing removed, is the directory or the device; one \
+         failing is one file",
         "`the unlink pass halted: the halts are unread, so no file is judged`",
         "a cause that names a stopped log is step 5's",
+        "where step (a)'s cause names one, the expired partials the line counts were removed \
+         all the same",
         "`a partial in blobs/{designation}/: remove: {error}`",
+        "it is tried at every pass",
         "it goes at the first pass after its cause is cleared",
         "a restart neither clears it nor is needed: the next open leaves it too, says so",
     ] {

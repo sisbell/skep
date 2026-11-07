@@ -80,7 +80,7 @@ use crate::blobs::{
     self, aside_name, designation_ok, dir_label, fsync_dir, hex_ok, is_aside_name, label, named, not_found_as_none,
     partial_label, PLANTED_NAMED,
 };
-use crate::error::BlobError;
+use crate::error::{BlobError, ExpiryFailed};
 use crate::jsonl::{LogRead, LogSize, LogStop};
 use crate::lease::{Lease, LeaseLog, LeaseState};
 use crate::partials::{self, Handle, HashFunction, SYNC_GRAIN};
@@ -325,16 +325,18 @@ pub struct Opened {
 /// The store compacts at its open, over the logs it has just read, and at
 /// its caller's runtime compaction ([`Store::compact_logs_if_past`] — the
 /// pruner's pass, which rewrites a stopped log whatever its count); between
-/// the two every act that writes a stopped log answers `Io`: on the
-/// records' log a creation, a byte received, and an end's or an expiry's
-/// retirement; and a finish, where either log has stopped, before its first
-/// act — so a stop strands no upload over a partial its rename took
-/// ([`Stream::finish`]). The stop keeps its cause in the operator's words —
-/// the act that failed and the OS's cause, a full volume told apart from a
-/// read-only mount or a failing device — which every refused append names;
-/// and it counts the appends it refuses, which [`Store::stopped_logs`]
-/// answers beside the cause and the stop's age, the uploads it cost the
-/// operator's figure and no caller's. The next open reads the log afresh,
+/// the two every act that writes a stopped log is refused: on the records'
+/// log a creation, a byte received and an end's retirement, each `Io`, and an
+/// expiry's retirement ([`ExpiryFailed::Retirement`]); and a finish, where
+/// either log has stopped, `Io` before its first act — so a stop strands no
+/// upload over a partial its rename took ([`Stream::finish`]). The stop keeps
+/// its cause in the operator's words — the act that failed and the OS's
+/// cause, a full volume told apart from a read-only mount or a failing device
+/// — which every refused append names; and it counts the appends it refuses,
+/// which [`Store::stopped_logs`] answers beside the cause and the stop's age,
+/// the operator's figure and no caller's: a refused creation, byte received,
+/// end or finish costs its client that act, and a refused retirement of an
+/// expired upload costs no one. The next open reads the log afresh,
 /// its tail check cutting the torn line the failed cut left
 /// ([`Store::open`]).
 ///
@@ -864,10 +866,13 @@ impl Store {
     /// failed and its cut-back failed too, or a compaction failed past its
     /// rename — each with the OS's cause, a full volume told apart from a
     /// read-only mount or a failing device, so the act that clears it can be
-    /// named; how long the stop has stood; and the appends it has refused,
-    /// the uploads it cost. The log takes no append until a compaction
-    /// completes; the pass's line names the stop with its figures, and a pass
-    /// that lifts it reads it here before its rewrite.
+    /// named; how long the stop has stood; and the appends it has refused —
+    /// a refused creation, byte received, end or finish costing its client
+    /// that act, and a refused retirement of an expired upload costing no
+    /// one, so one pass over many expired uploads can count many. The log
+    /// takes no append until a compaction completes; the pass's line names
+    /// the stop with its figures, and a pass that lifts it reads it here
+    /// before its rewrite.
     pub fn stopped_logs(&self) -> (Option<LogStop>, Option<LogStop>) {
         (self.uploads.lock().log_stopped(), self.leases.lock().log_stopped())
     }
@@ -1236,11 +1241,19 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// A failure removing the partial leaves the record standing, expired,
-    /// for the next pass to take again; one writing the retirement leaves it
-    /// retired in this process, its record's line on disk until the next
-    /// open's reconciliation retires it.
-    pub fn expire_upload(&self, id: &UploadId, now_ms: u64) -> io::Result<Option<u64>> {
+    /// [`ExpiryFailed`], by the act that failed:
+    ///
+    /// * [`ExpiryFailed::Removal`] — the partial's unlink failed, or the
+    ///   directory's fsync after it: the record stands, expired, for the next
+    ///   pass to take again. Where the unlink went and the fsync alone failed,
+    ///   that next pass finds no partial and answers `Ok(Some(0))`, so the
+    ///   bytes the unlink freed are counted in no answer.
+    /// * [`ExpiryFailed::Retirement`] — the partial went, freeing the bytes
+    ///   the variant carries, and the record left this process, but its
+    ///   retirement line was refused, `uploads.log` having stopped, or its
+    ///   append failed. Nothing is owed: the log's next rewrite — the one that
+    ///   lifts the stop, or the next open's — writes it without the record.
+    pub fn expire_upload(&self, id: &UploadId, now_ms: u64) -> Result<Option<u64>, ExpiryFailed> {
         let designation = {
             let uploads = self.uploads.lock();
             match uploads.of_any_principal(id) {
@@ -1248,8 +1261,8 @@ impl Store {
                 _ => return Ok(None),
             }
         };
-        let freed = partials::remove(&self.root, &designation, id)?;
-        self.uploads.lock().retire(id)?;
+        let freed = partials::remove(&self.root, &designation, id).map_err(ExpiryFailed::Removal)?;
+        self.uploads.lock().retire(id).map_err(|error| ExpiryFailed::Retirement { freed, error })?;
         Ok(Some(freed))
     }
 

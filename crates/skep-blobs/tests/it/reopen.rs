@@ -37,7 +37,7 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
 
-use skep_blobs::{BlobError, HashFunction, LeaseState, Step, Store, UploadId};
+use skep_blobs::{BlobError, ExpiryFailed, HashFunction, LeaseState, Step, Store, UploadId};
 
 use crate::{every_deposit_unplaced, hex_of, open, put_whole, standing, HORIZON, HORIZON_MS, INTERVAL, INTERVAL_MS};
 
@@ -687,6 +687,7 @@ fn the_open_leaves_an_expired_partial_it_cannot_remove_and_serves() {
     assert!(store.upload("k", &short.id, now).is_none(), "the expired upload answers as none");
     assert_eq!(expired(&store), vec![short.id], "its record stands, expired, for the pruner");
     let refused = store.expire_upload(&short.id, now).expect_err("the pruner's expiry meets the same refusal");
+    assert!(matches!(refused, ExpiryFailed::Removal(_)), "the partial's removal failed, the record kept: {refused:?}");
     assert!(refused.to_string().starts_with("a partial in blobs/blake3/: remove: "), "{refused}");
     assert_eq!(expired(&store), vec![short.id], "and keeps the record");
     drop(store);

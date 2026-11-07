@@ -72,10 +72,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   gate, whose `pass(&gate, exclusive)` answers a `PrunePass` — or nothing
   where the index is not ready: its figures and the bytes they freed, the
   halt, each log's size and compaction, and each step's failure beside
-  them in step order (`PassFailure`, naming its `PassStep` and the
-  cause), every other step having run past it — but the unlink, which a
-  failed read of the halts halts — and step (d), the compaction, on every
-  exit; its `Display` is the pass's one line, line 34 or line 35;
+  them in step order (`PassFailure`, naming its `PassStep`, its first
+  cause and how many of its acts failed), the step having gone on past
+  each act that failed, a listing's aside, every other step having run
+  past it — but the unlink, which a failed read of the halts halts — and
+  step (d), the compaction, on every exit; its `Display` is the pass's
+  one line, line 34 or line 35;
   `Cadence` (`new`, `wait`, `stop`) and `Wake`, the transport's thread's
   clock and stop.
 - **The pools**, `pools` — `FetchPool` (`new`), whose permit a fetch's

@@ -469,15 +469,18 @@ fn without_the_pass_duration(line: &str) -> String {
 /// interval and lapsed by the clock after it, it makes step (a)'s retirement
 /// an append the stopped log refuses.
 ///
-/// **The pass that lifts.** It fails at (a), the step named, and runs on:
-/// its (c) unlinks the lapsed deposit, the room a full volume needs most,
-/// and its (d) rewrites the stopped log whatever its count, so the stop
-/// lifts. The report's members agree (`failed` step (a)'s alone, `unlinked`
-/// and `freed` the deposit's, `compacted` the size the log was rewritten
-/// from, `stopped` clear, `lifted` the stop as it stood, its cause and the
-/// two appends it refused, the creation and the retirement), and its line
-/// 35 names the failure, what the pass did past it, the compaction and the
-/// stop it lifted, with its figures. A creation resumes without a restart,
+/// **The pass that lifts.** It fails at (a), the step named and its one
+/// failure counted — the expiry's retirement, which the stopped log refuses —
+/// and runs on: the expired upload is counted removed all the same, its
+/// partial gone and its five bytes freed; its (c) unlinks the lapsed deposit,
+/// the room a full volume needs most; and its (d) rewrites the stopped log
+/// whatever its count, so the stop lifts. The report's members agree
+/// (`failed` step (a)'s alone, `expired_partials` the upload, `unlinked` the
+/// deposit, `freed` the two's 4,005 bytes, `compacted` the size the log was
+/// rewritten from, `stopped` clear, `lifted` the stop as it stood, its cause
+/// and the two appends it refused, the creation and the retirement), and its
+/// line 35 names the failure, what the pass did past it, the compaction and
+/// the stop it lifted, with its figures. A creation resumes without a restart,
 /// and the pass after owes nothing, under line 34: the store's retirement
 /// had dropped the record in this process before the append the stopped
 /// log refused (its partial removed first), so the compaction wrote the log
@@ -540,7 +543,7 @@ fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
         return;
     };
     assert_eq!(stopping.failed, std::slice::from_ref(&failed), "one failure, step (b)'s: {stopping:?}");
-    assert_eq!(failed.step, PassStep::Halts, "{stopping:?}");
+    assert_eq!((failed.step, failed.count), (PassStep::Halts, 1), "(b) is one read: {stopping:?}");
     // (b) gates (c): halts unread halt the unlink pass as halts read do.
     assert_eq!(
         stopping.halted.as_deref(),
@@ -598,19 +601,23 @@ fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
         panic!("one failure, step (a)'s retirement the stopped log refused: {lifting:?}")
     };
     let failed = failed.clone();
-    assert_eq!(failed.step, PassStep::ExpiredPartials, "{lifting:?}");
+    assert_eq!((failed.step, failed.count), (PassStep::ExpiredPartials, 1), "{lifting:?}");
     assert!(failed.cause.contains("blobs/uploads.log takes no append until a compaction completes"), "{failed}");
     assert!(
         failed.cause.ends_with(&format!(": {cause}")),
         "the refused append names the stop's cause alone, no figure of the operator's: {failed}"
     );
-    assert_eq!(lifting.expired_partials, 0, "{lifting:?}");
-    // (a)'s failure leaves (c) to run: the lapsed deposit goes, its bytes the
-    // room the pass made.
+    assert_eq!(
+        lifting.expired_partials,
+        1,
+        "FINDING (#495): the refused retirement dropped the removal it follows from the count: {lifting:?}"
+    );
+    // (a)'s failure leaves (c) to run: the lapsed deposit goes, its bytes and
+    // the expired partial's five the room the pass made.
     assert_eq!(lifting.halted, None, "{lifting:?}");
     assert_eq!(
         (lifting.unlinked, lifting.kept, lifting.freed),
-        (1, 0, 4_000),
+        (1, 0, 4_005),
         "FINDING (#415): the failed expiry skipped the unreferenced files: {lifting:?}"
     );
     assert!(!deposit.exists(), "unlinked in the pass whose step (a) failed");
@@ -635,8 +642,8 @@ fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
     assert_eq!(
         said[1],
         format!(
-            "failure: pruner: the pass failed: {failed}; 0 expired partials removed, 1 files unlinked, 0 \
-             kept, 0 asides removed, 4000 bytes freed; blobs/uploads.log 0 lines (0 bytes) — compacted from \
+            "failure: pruner: the pass failed: {failed}; 1 expired partials removed, 1 files unlinked, 0 \
+             kept, 0 asides removed, 4005 bytes freed; blobs/uploads.log 0 lines (0 bytes) — compacted from \
              1 lines ({rewrite} bytes); blobs/leases.log 1 lines ({lease_log} bytes); blobs/uploads.log's stop \
              lifted, rewritten whole after {cause}; stopped {} ms, 2 appends refused",
             lifted.age.as_millis()
@@ -739,14 +746,13 @@ fn the_halt_is_said_in_one_line_on_the_stream() {
 /// Checks that the binary serves past an expired partial it cannot remove.
 ///
 /// An upload created on a one-second interval expires while the board is
-/// stopped, and a directory holding a file stands at its partial's name.
-/// The binary's open says the leftover once, as a failure naming the
-/// partial by its directory and counting it, and serves; its first pass
-/// fails at step (a) on the same partial, having removed none. In-process
-/// over the same board, the open leaves it again and the upload answers
-/// none; the directory removed while that daemon serves, the next pass
-/// removes the partial with no failure and says its landing, with no
-/// restart.
+/// stopped, and a directory holding a file stands at its partial's name. The
+/// binary's open says the leftover once, as a failure naming the partial by its
+/// directory and counting it, and serves; its first pass fails at step (a) on
+/// the same partial, its one failure counted, having removed none. In-process
+/// over the same board, the open leaves it again and the upload answers none;
+/// the directory removed while that daemon serves, the next pass removes the
+/// partial with no failure and says its landing, with no restart.
 #[test]
 fn the_board_serves_past_an_expired_partial_its_open_cannot_remove() {
     use crate::open::{after_the_head, serving_port, skepd, wait_for_the_lock, Spawned, Stderr, PATIENCE};
@@ -804,7 +810,7 @@ fn the_board_serves_past_an_expired_partial_its_open_cannot_remove() {
         pass.starts_with("pruner: the pass failed: step (a), the expired partials: a partial in blobs/blake3/: remove: "),
         "{pass}"
     );
-    assert!(pass.contains("; 0 expired partials removed, "), "{pass}");
+    assert!(pass.contains(" — the first of 1 failures; 0 expired partials removed, "), "{pass}");
     wait_for_the_lock(&data);
     let sd = spawn(&data);
     let port = sd.port();

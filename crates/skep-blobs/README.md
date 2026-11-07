@@ -24,7 +24,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **The pruner's acts**, one method each — the lease read per hash, the
   rename aside under the caller's arm and the aside's removal after it,
   so no arm is held across the freeing of a file's blocks, each removal
-  answering the bytes it freed.
+  answering the bytes it freed; an expired upload's removal that fails
+  says whether its partial went (`ExpiryFailed`), so a pass counts what it
+  freed and goes on to the next.
 - **The operator's two doors** — the read-only inspection of the four
   stores as they stand, which creates, cuts, renames and syncs nothing and
   answers what each log's reading found; and the pull's install of one

@@ -38,15 +38,16 @@
 //!   [`Store::blobs_of`], [`Store::asides_of`]), whether *any* principal
 //!   holds a live lease on a file ([`Store::any_live_lease`]), the expired
 //!   uploads and their removal ([`Store::expired_uploads`],
-//!   [`Store::expire_upload`]), and the rename aside of one file and the
-//!   removal of one aside ([`Store::rename_aside`], [`Store::remove_aside`])
-//!   — each one act, so the daemon's pass holds its own lock around exactly
-//!   one, and each removal the pass makes answering the bytes its unlink
-//!   freed, nothing where another name still holds the file, so the pass's
-//!   line says what it reclaimed. [`Store::rename_aside`] is the pruner's
-//!   act in the unlink's place: the file renamed to an aside name under the
-//!   caller's arm, the aside removed after it under none, so the arm is
-//!   never held across the freeing of a file's blocks.
+//!   [`Store::expire_upload`], whose failure says whether the partial went,
+//!   [`ExpiryFailed`]), and the rename aside of one file and the removal of
+//!   one aside ([`Store::rename_aside`], [`Store::remove_aside`]) — each one
+//!   act, so the daemon's pass holds its own lock around exactly one and goes
+//!   on past one that fails, and each removal the pass makes answering the
+//!   bytes its unlink freed, nothing where another name still holds the
+//!   file, so the pass's line says what it reclaimed. [`Store::rename_aside`]
+//!   is the pruner's act in the unlink's place: the file renamed to an aside
+//!   name under the caller's arm, the aside removed after it under none, so
+//!   the arm is never held across the freeing of a file's blocks.
 //! * **A byte is received once it is durable**: the partial is fsynced at
 //!   [`SYNC_GRAIN`] and at [`Stream::settle`], and the record's offset and
 //!   expiry are written after each sync, the expiry re-fixed from the
@@ -165,7 +166,7 @@
 
 #![forbid(unsafe_code)]
 
-// The store's refusals, `BlobError`.
+// The store's refusals, `BlobError`, and an expiry's failure, `ExpiryFailed`.
 mod error;
 // The files at `<designation>/<hex>`: where one lives, the spellings a
 // designation and a hex name must have, the aside name, the listings of the
@@ -204,7 +205,7 @@ mod partials;
 // seam (`store/hooks.rs`).
 mod store;
 
-pub use error::BlobError;
+pub use error::{BlobError, ExpiryFailed};
 pub use jsonl::{LogRead, LogSize, LogStop, TailCut};
 pub use lease::{Lease, LeaseState};
 pub use partials::{HashFunction, SYNC_GRAIN};
@@ -230,6 +231,7 @@ const _: fn() = || {
     // The refusals, as an error crossing threads in a `Box<dyn Error>`.
     fn crossing<T: std::error::Error + Send + Sync + 'static>() {}
     crossing::<BlobError>();
+    crossing::<ExpiryFailed>();
     crossing::<NotAnUploadId>();
     // The values a caller keeps.
     fn kept<T: Clone + Eq + std::hash::Hash + std::fmt::Debug + Send + Sync>() {}

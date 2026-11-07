@@ -731,9 +731,10 @@ impl Daemon {
     /// said as the cadence says it (`Daemon::say_the_pass`: row 34, or row 35
     /// where a step failed, each with the pass's duration); `None` where the
     /// index is not ready and the pass did not start. Each step's failure is
-    /// the *report's* (`PrunePass::failed`, the step and the cause beside the
-    /// figures and the compaction's state), never a panic here: a suite reads
-    /// it as the operator's line does.
+    /// the *report's* (`PrunePass::failed`, the step, its first cause and how
+    /// many of its acts failed, beside the figures and the compaction's
+    /// state), never a panic here: a suite reads it as the operator's line
+    /// does.
     #[doc(hidden)]
     pub fn prune_now(&self) -> Option<PrunePass> {
         let pass = self.prune_pass();

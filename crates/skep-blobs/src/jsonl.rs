@@ -31,7 +31,8 @@
 //! a line of its own (the store writes no stream): its size ([`LogSize`]) —
 //! the most room its next rewrite needs, and what a compaction rewrote it
 //! from — and its stop ([`LogStop`]): the cause, how long it has stood, and
-//! the appends refused while it stood, the uploads it cost.
+//! the appends refused while it stood, each a client's act it cost or an
+//! expired upload's retirement, which costs no one.
 //!
 //! **The log is read two ways.** [`Log::open`] cuts the torn tail off the
 //! file and opens it for appending — the store's open; [`Log::read_as_found`]
@@ -206,10 +207,14 @@ pub struct LogSize {
 /// [`Store::stopped_logs`](crate::Store::stopped_logs) answers it: the cause
 /// in the operator's words, how long the stop has stood, and the appends the
 /// log has refused while it stood — on the records' log a creation, a byte
-/// received, a retirement or a finish each, on the leases' a finish each:
-/// the uploads it cost, every one answered `Io`, a finish's before its first
-/// act. The refusal a caller meets names the cause alone; the age and the
-/// count are the operator's.
+/// received, a retirement or a finish each, on the leases' a finish each. A
+/// refused creation, byte received, end or finish costs its client that act,
+/// answered `Io`, a finish's before its first act; a refused retirement of
+/// an expired upload costs no one, its partial gone all the same
+/// ([`ExpiryFailed::Retirement`](crate::ExpiryFailed::Retirement)), and the
+/// pruner's pass can count one per expired upload it removes. The refusal a
+/// caller meets names the cause alone; the age and the count are the
+/// operator's.
 ///
 /// `#[non_exhaustive]`: emitted, never constructed by a caller — field
 /// reads are unaffected, and a further field is an addition rather than a

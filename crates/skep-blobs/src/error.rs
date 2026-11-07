@@ -1,4 +1,5 @@
-//! The store's refusals — what a caller is told beside an I/O failure.
+//! The store's refusals — what a caller is told beside an I/O failure — and
+//! an expiry's failure, which says whether its partial went.
 
 use std::fmt;
 use std::io;
@@ -89,5 +90,61 @@ impl std::error::Error for BlobError {
             BlobError::Io(e) => Some(e),
             _ => None,
         }
+    }
+}
+
+/// Why an expired upload's removal failed, and whether its partial went.
+///
+/// [`Store::expire_upload`](crate::Store::expire_upload) answers it, the
+/// pruner's act: the pass counts an expiry by whether its partial went, its
+/// bytes with it, and goes on to the next, so the two acts' failures are told
+/// apart here where one `io::Error` would fold them. Its text is the inner
+/// error's, the store's own `{file}: {act}: {cause}` or a stopped log's
+/// refusal, and its source that error.
+///
+/// Deliberately not `#[non_exhaustive]`, for [`BlobError`]'s reason: the
+/// pass's match over it is exhaustive, and a new variant breaks that match on
+/// purpose.
+#[derive(Debug)]
+pub enum ExpiryFailed {
+    /// The partial's unlink failed, or the directory's fsync after it.
+    ///
+    /// The record stands, expired, for the next pass to take again. Where the
+    /// unlink went and the fsync alone failed, the next pass finds no partial
+    /// and retires the record freeing nothing, so the bytes that unlink freed
+    /// are counted in no answer.
+    Removal(io::Error),
+    /// The partial went, and its record's retirement line did not land.
+    ///
+    /// The record has left this process, so nothing is owed: the log's next
+    /// rewrite — the one that lifts a stop, or the next open's — writes it
+    /// without the record.
+    Retirement {
+        /// The bytes the partial's unlink freed.
+        freed: u64,
+        /// The append's refusal — a stopped log's, naming its cause — or its
+        /// failure.
+        error: io::Error,
+    },
+}
+
+impl ExpiryFailed {
+    /// Returns the inner error: the act's own, as the store spelled it.
+    fn inner(&self) -> &io::Error {
+        match self {
+            ExpiryFailed::Removal(error) | ExpiryFailed::Retirement { error, .. } => error,
+        }
+    }
+}
+
+impl fmt::Display for ExpiryFailed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self.inner(), f)
+    }
+}
+
+impl std::error::Error for ExpiryFailed {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.inner())
     }
 }

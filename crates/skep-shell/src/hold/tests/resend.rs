@@ -98,8 +98,13 @@
 //! event re-said (skep #856; the owner's ruling); a memory queue joined
 //! behind an earlier run's line keeping its ordinals, so the person's
 //! `resolve` on an ordinal answered before the join acts on the same line
-//! after it; and a pending join the device refused joining at a later
-//! probe, the pending directory under this shell's lock until it has. And
+//! after it; an ordinal this run settled before the join or the door's later
+//! open naming no earlier run's line after it, the file renumbered past the
+//! counter whether a line of this run's stands, joins, or none is left, a
+//! renumbering the door could not write said once and landing at a later
+//! probe, and a file at or past the counter keeping its ordinals (skep
+//! #875); and a pending join the device refused joining at a later probe,
+//! the pending directory under this shell's lock until it has. And
 //! THE DRAIN'S TURNS (skep #817): a drain in bounded turns sending every
 //! line in `k` order, each document read as the walk reaches it and once in
 //! a pass, a document a turn stopped at dialed no more until the pass ends,
@@ -2800,7 +2805,7 @@ fn an_earlier_runs_file_first_read_at_the_join_takes_fresh_ordinals_past_this_ru
     assert_eq!(events.first(), Some(&(OTHER.to_string(), "sending".to_string(), 2)), "the first `held` event is the walk's, none re-said for the join: {events:?}");
     assert!(!pending_file(&g).exists(), "the pending file is gone");
     let joined = said_containing(&g, "joined the board's held file");
-    assert!(joined.len() == 1 && joined[0].contains("2 held lines joined") && joined[0].contains("the 1 line an earlier run left in it is renumbered past them"), "{joined:?}");
+    assert!(joined.len() == 1 && joined[0].contains("2 held lines joined") && joined[0].contains("the 1 line an earlier run left in it is renumbered past this run's ordinals"), "{joined:?}");
     let on_disk = file_lines(&std::fs::read_to_string(held_file(&g)).unwrap());
     let disk_ks: Vec<u64> = on_disk.iter().map(|l| l["held"].as_u64().unwrap()).collect();
     assert_eq!(&disk_ks[..4], [1, 3, 1, 2], "the earlier line, its copy under 3, then this run's two, the copy after every line the file held: {disk_ks:?}");
@@ -2855,7 +2860,7 @@ fn a_memory_queue_joined_behind_an_earlier_runs_line_keeps_its_ordinals_and_reso
     let listed = |g: &Ground| g.lines().iter().map(|l| (l["held"].as_u64().unwrap(), l["frame"]["values"][0].as_str().unwrap_or("?").to_string())).collect::<Vec<_>>();
     assert_eq!(listed(&g), [(1, "x".to_string()), (2, "y".to_string()), (3, "earlier".to_string())], "the memory lines keep their ordinals, the earlier run's line renumbered past them");
     let joined = said_containing(&g, "joined the board's held file");
-    assert!(joined.len() == 1 && joined[0].contains("2 held lines joined") && joined[0].contains("the 1 line an earlier run left in it is renumbered past them"), "{joined:?}");
+    assert!(joined.len() == 1 && joined[0].contains("2 held lines joined") && joined[0].contains("the 1 line an earlier run left in it is renumbered past this run's ordinals"), "{joined:?}");
     let about_doc: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held && e.data["doc"] == DOC).map(|e| e.data).collect();
     assert!(about_doc.is_empty(), "no `held` event is said for the join of the page's lines: {about_doc:?}");
     assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::Dropped);
@@ -2864,22 +2869,21 @@ fn a_memory_queue_joined_behind_an_earlier_runs_line_keeps_its_ordinals_and_reso
     assert_eq!(&on_disk[..4], [1, 3, 1, 2], "the file: the earlier run's line, its copy under 3, then this run's two: {on_disk:?}");
 }
 
-/// Checks that a renumbering the device refuses enters nothing, is said
-/// once, and lands at a later probe (skep #856; `HeldQueue::renumber`).
+/// Checks that a renumbering the device refuses lands at a later probe.
 ///
-/// The board unclaimed at the session's open, two bursts are held in memory
-/// under 1 and 2; an earlier run's held file stands under the board's
-/// chain, holding a line under 1. The board claimed, the device refuses
-/// every copy: the probe's join reads the file for the first time, finds its
-/// line under an ordinal this run's lines hold, and its renumbering — the
-/// one copy before any line enters — is refused, nothing entered: the
-/// memory lines stand as they were, each answer carrying the refusal, the
-/// file's line under 1 as it was, and the refusal said once. The device
-/// takes copies again: the next probe renumbers the earlier line past this
-/// run's and enters this run's lines under their own (the mutant that enters
-/// this run's lines past a refused renumbering re-marks the earlier line
-/// with this run's and loses it; the one that moves the counter at a refused
-/// renumbering skips ordinals).
+/// It enters nothing and is said once (skep #856; `HeldQueue::renumber`). The
+/// board unclaimed at the session's open, two bursts are held in memory under 1
+/// and 2; an earlier run's held file stands under the board's chain, holding a
+/// line under 1. The board claimed, the device refuses every copy: the probe's
+/// join reads the file for the first time, finds its line under an ordinal
+/// below the counter, one this run's lines hold, and its renumbering — the one
+/// copy before any line enters — is refused, nothing entered: the memory lines
+/// stand as they were, each answer carrying the refusal, the file's line under
+/// 1 as it was, and the refusal said once. The device takes copies again: the
+/// next probe renumbers the earlier line past this run's and enters this run's
+/// lines under their own (the mutant that enters this run's lines past a
+/// refused renumbering re-marks the earlier line with this run's and loses it;
+/// the one that moves the counter at a refused renumbering skips ordinals).
 #[test]
 fn a_renumbering_the_device_refuses_enters_nothing_and_lands_at_a_later_probe() {
     let store = TempDir::new().unwrap();
@@ -2903,20 +2907,270 @@ fn a_renumbering_the_device_refuses_enters_nothing_and_lands_at_a_later_probe() 
     g.holds.probe("b-1");
     let listed = |g: &Ground| g.lines().iter().map(|l| (l["held"].as_u64().unwrap(), l["frame"]["values"][0].as_str().unwrap_or("?").to_string())).collect::<Vec<_>>();
     assert_eq!(listed(&g), [(1, "a".to_string()), (2, "b".to_string())], "the memory lines stand as they were");
-    let said = said_containing(&g, "could not be renumbered past them");
+    let said = said_containing(&g, "could not be renumbered past this run's");
     assert_eq!(said.len(), 1, "the refusal said once: {said:?}");
     let on_disk = |g: &Ground| file_lines(&std::fs::read_to_string(held_file(g)).unwrap()).iter().map(|l| l["held"].as_u64().unwrap()).collect::<Vec<_>>();
     assert_eq!(on_disk(&g), [1], "the file's line as it was, nothing entered");
     let next = g.hold(&insert(DOC, json!(["c"]), g.fake.head()), "behind", false);
     assert!(next["unwritable"].as_str().is_some_and(|why| why.contains("sync was made to fail")), "each answer carries the refusal: {next}");
     g.holds.probe("b-1");
-    assert_eq!(said_containing(&g, "could not be renumbered past them").len(), 1, "a second refused probe says nothing more");
+    assert_eq!(said_containing(&g, "could not be renumbered past this run's").len(), 1, "a second refused probe says nothing more");
     crate::held::tests::take_copies();
     g.holds.probe("b-1");
     assert_eq!(listed(&g), [(1, "a".to_string()), (2, "b".to_string()), (3, "c".to_string()), (4, "earlier".to_string())], "the earlier line renumbered past this run's, this run's entered under their own");
     assert_eq!(&on_disk(&g)[..5], [1, 4, 1, 2, 3], "the file: the earlier line, its copy under 4, then this run's three");
     let joined = said_containing(&g, "joined the board's held file");
-    assert!(joined.len() == 1 && joined[0].contains("3 held lines joined") && joined[0].contains("the 1 line an earlier run left in it is renumbered past them"), "{joined:?}");
+    assert!(joined.len() == 1 && joined[0].contains("3 held lines joined") && joined[0].contains("the 1 line an earlier run left in it is renumbered past this run's ordinals"), "{joined:?}");
+}
+
+/// Leaves an earlier run's line in the board's own held file, unanswered.
+///
+/// It is `value`, on `OTHER`, under ordinal `k`, the file closed as a relaunch
+/// finds it.
+fn an_earlier_runs_line(store: &TempDir, k: u64, value: &str) {
+    let dir = HeldDir::new(store.path(), Chain::parse(&"ab".repeat(32)).unwrap());
+    dir.ensure().unwrap();
+    let Opened::Live { mut queue, .. } = dir.open_file(1, "1.0.1").unwrap() else { panic!("a fresh file") };
+    assert!(queue.hold(k, OTHER, None, 0, insert(OTHER, json!([value]), 0), None, Reason::of("unreachable", false)).unwrap().unwritten.is_none());
+}
+
+/// Returns `held(session)`'s lines, each as its ordinal and its first value.
+fn ordinals(g: &Ground) -> Vec<(u64, String)> {
+    g.lines().iter().map(|l| (l["held"].as_u64().unwrap(), l["frame"]["values"][0].as_str().unwrap_or("?").to_string())).collect()
+}
+
+/// Opens another session of the ground's principal, as a second tab does.
+fn open_another_session(g: &Ground) {
+    let open = Open { token: Token::parse(&"8e".repeat(16)).unwrap(), facts: g.session.facts.clone(), opened_at: 0 };
+    let another = g.sessions.register(&g.entry, open, &mut NoSupplements);
+    g.holds.open_session(&another);
+}
+
+/// Returns a refused run's verdict: the board's `out_of_bounds`.
+fn out_of_bounds() -> Value {
+    json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent", "op": "insert"})
+}
+
+/// Checks that an ordinal settled before the join names no earlier line.
+///
+/// An ordinal this run settled names no earlier run's line after the join, and
+/// the earlier line walks after this run's (skep #875). The board unclaimed at
+/// the session's open, a refused run's head is held in memory under ordinal 1
+/// and dropped by the person, and a burst is held under 2; an earlier run's
+/// held file stands under the board's chain, holding one line, on another
+/// document, under 1. The board is then claimed, away for the dial: the probe's
+/// join reads the board's file for the first time, finds its line under 1 —
+/// below the counter, though no line of this run's stands there — and renumbers
+/// it past this run's, to 3, the join said once naming the line renumbered;
+/// `resolve(1, drop)` finds no line, the one it was answered for settled. The
+/// board answers: the walk sends this run's line first and the earlier run's
+/// after it (the mutant that renumbers only where a standing line holds the
+/// ordinal keeps the earlier line under 1, so the page's act on the ordinal it
+/// dropped reaches it, and walks it ahead of this run's line).
+#[test]
+fn an_ordinal_settled_before_the_join_names_no_earlier_runs_line_and_the_earlier_line_walks_after() {
+    let store = TempDir::new().unwrap();
+    an_earlier_runs_line(&store, 1, "earlier");
+    let fake = Fake::new();
+    fake.no_head.store(true, Ordering::SeqCst);
+    fake.unclaimed.store(true, Ordering::SeqCst);
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let settled = g.hold_for(&insert(DOC, json!(["x"]), g.fake.head()), Reason::refused("out_of_bounds", out_of_bounds())).unwrap();
+    assert_eq!(settled["held"], 1, "{settled}");
+    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    let standing = g.hold(&insert(DOC, json!(["y"]), g.fake.head()), "unreachable", false);
+    assert_eq!(standing["held"], 2, "the ordinals run on past the settled one: {standing}");
+    g.fake.no_head.store(false, Ordering::SeqCst);
+    g.fake.unclaimed.store(false, Ordering::SeqCst);
+    g.fake.op_unreachable.store(true, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    assert_eq!(ordinals(&g), [(2, "y".to_string()), (3, "earlier".to_string())], "the earlier run's line renumbered past every ordinal this run gave out");
+    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap_err().name(), "no_such_held", "the settled ordinal names no line");
+    let joined = said_containing(&g, "joined the board's held file");
+    assert!(joined.len() == 1 && joined[0].contains("1 held line joined") && joined[0].contains("the 1 line an earlier run left in it is renumbered past this run's ordinals"), "{joined:?}");
+    g.fake.op_unreachable.store(false, Ordering::SeqCst);
+    while g.holds.probe("b-1") == Turn::Bounded {}
+    assert_eq!(sent_values(&g), ["y", "earlier"], "this run's line first, the earlier run's after it");
+    assert!(g.lines().is_empty(), "every line kept");
+}
+
+/// Checks that an emptied pending queue joins a file renumbered past it.
+///
+/// A pending queue emptied before the head reads joins a board's file
+/// renumbered past the ordinal it settled (skep #875). The head record damaged
+/// at the session's open, a signed burst is held `head_unreadable` on the
+/// pending file under ordinal 1, and the person drops it, so the pending file
+/// compacts away; an earlier run's held file stands under the board's chain,
+/// holding one line under 1. The head reads, and another session's open — no
+/// probe drains with no line standing — joins the emptied pending queue into
+/// the board's file, read for the first time: its line under 1, below the
+/// counter, is renumbered past it, to 2, and `resolve(1, drop)` finds no line
+/// (the mutant that renumbers only where a standing line holds the ordinal
+/// keeps the earlier line under the ordinal the page dropped).
+#[test]
+fn a_pending_queue_emptied_before_the_head_reads_joins_a_file_renumbered_past_the_ordinal_it_settled() {
+    let store = TempDir::new().unwrap();
+    an_earlier_runs_line(&store, 1, "earlier");
+    let fake = Fake::new();
+    fake.head_garbled.store(true, Ordering::SeqCst);
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["x"]), g.fake.head()), None) else { panic!("held") };
+    assert_eq!((held["held"].as_u64(), held["cause"].as_str()), (Some(1), Some("head_unreadable")), "{held}");
+    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert!(!pending_file(&g).exists(), "premise: the pending file compacted away");
+    g.fake.head_garbled.store(false, Ordering::SeqCst);
+    open_another_session(&g);
+    assert_eq!(ordinals(&g), [(2, "earlier".to_string())], "the earlier run's line renumbered past the ordinal this run settled");
+    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap_err().name(), "no_such_held", "the settled ordinal names no line");
+}
+
+/// Checks that a join with no line of this run's renumbers the file.
+///
+/// The board's file is renumbered past the ordinals this run gave out though no
+/// line of this run's is left to join it (skep #875). An earlier run left a
+/// line in the board's file under ordinal 2 and one in the pending file
+/// under 1. The board away at the session's open, the first touch reads the
+/// pending file, so a refused run's head is held in memory under 2, and the
+/// person drops it. The board returns, and another session's open joins the
+/// pending file — listed in its directory, no line of this run's standing to
+/// join — into the board's file, read for the first time: its line under 2 is
+/// renumbered past the counter, to 3, and the pending file's line takes the
+/// next, 4; `resolve(2, drop)` finds no line (the mutant that renumbers only
+/// where this run's queue joins keeps the earlier line under 2, the ordinal the
+/// page dropped).
+#[test]
+fn a_join_with_no_line_of_this_runs_left_renumbers_the_boards_file_past_the_ordinals_it_gave_out() {
+    let store = TempDir::new().unwrap();
+    an_earlier_runs_line(&store, 2, "earlier");
+    let pending = HeldDir::pending(store.path(), &Origin::parse("http://127.0.0.1:1").unwrap());
+    pending.ensure().unwrap();
+    let Opened::Live { mut queue, .. } = pending.open_file(1, "1.0.1").unwrap() else { panic!("a fresh file") };
+    assert!(queue.hold(1, DOC, None, 0, insert(DOC, json!(["pending"]), 0), None, Reason::of("head_unreadable", false)).unwrap().unwritten.is_none());
+    drop(queue);
+    let fake = Fake::new();
+    fake.head_unreachable.store(true, Ordering::SeqCst);
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let settled = g.hold_for(&insert(DOC, json!(["x"]), g.fake.head()), Reason::refused("out_of_bounds", out_of_bounds())).unwrap();
+    assert_eq!(settled["held"], 2, "premise: past the pending file's 1: {settled}");
+    assert_eq!(g.holds.resolve(&g.session, 2, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    g.fake.head_unreachable.store(false, Ordering::SeqCst);
+    open_another_session(&g);
+    assert_eq!(ordinals(&g), [(3, "earlier".to_string()), (4, "pending".to_string())], "the board's file renumbered past the counter, the pending line fresh after it");
+    assert_eq!(g.holds.resolve(&g.session, 2, ResolveAct::Drop).unwrap_err().name(), "no_such_held", "the settled ordinal names no line");
+    let joined = said_containing(&g, "joined the board's held file");
+    assert!(joined.len() == 1 && joined[0].contains("the 1 line an earlier run left in it is renumbered past this run's ordinals, and sent after this run's lines"), "{joined:?}");
+    assert!(!pending_file(&g).exists(), "the pending file is removed once its line joined");
+}
+
+/// Checks that the door's later open renumbers past a settled ordinal.
+///
+/// The board's file the door opens at a later touch is renumbered past the
+/// ordinal this run settled (skep #875). The board away at the session's open,
+/// a refused run's head is held in memory under ordinal 1 and dropped by the
+/// person; an earlier run's held file stands under the board's chain, holding
+/// one line under 1. The board returns: another session's open establishes the
+/// directory, and no join runs, no line standing anywhere, so the principal's
+/// door opens the board's file at this later touch, the queue empty: its line
+/// under 1, below the counter, is renumbered past it, to 2, before it is taken,
+/// and `resolve(1, drop)` finds no line; a burst held after it takes 3 (the
+/// mutant whose door takes the file as it reads keeps the earlier line under
+/// the ordinal the page dropped).
+#[test]
+fn the_doors_later_open_renumbers_the_boards_file_past_the_ordinal_this_run_settled() {
+    let store = TempDir::new().unwrap();
+    an_earlier_runs_line(&store, 1, "earlier");
+    let fake = Fake::new();
+    fake.head_unreachable.store(true, Ordering::SeqCst);
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let settled = g.hold_for(&insert(DOC, json!(["x"]), g.fake.head()), Reason::refused("out_of_bounds", out_of_bounds())).unwrap();
+    assert_eq!(settled["held"], 1, "{settled}");
+    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    g.fake.head_unreachable.store(false, Ordering::SeqCst);
+    open_another_session(&g);
+    assert!(said_containing(&g, "joined the board's held file").is_empty(), "premise: no join ran: {:?}", g.said.lock().unwrap());
+    assert_eq!(ordinals(&g), [(2, "earlier".to_string())], "the earlier run's line renumbered past the ordinal this run settled");
+    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap_err().name(), "no_such_held", "the settled ordinal names no line");
+    let next = g.hold(&insert(DOC, json!(["y"]), g.fake.head()), "unreachable", false);
+    assert_eq!(next["held"], 3, "the counter past the renumbered line: {next}");
+    let on_disk: Vec<u64> = file_lines(&std::fs::read_to_string(held_file(&g)).unwrap()).iter().map(|l| l["held"].as_u64().unwrap()).collect();
+    assert_eq!(on_disk, [1, 2, 3], "the file: the earlier line, its copy under 2, then the burst held after it");
+}
+
+/// Checks that a renumbering the door could not write lands later.
+///
+/// The renumbering the door's later open could not write keeps the file from
+/// the queue, is said once, and lands at a later probe (skep #875). As the cell
+/// above, the device refusing every copy as the board returns: the door's
+/// renumbering of the board's file is refused, nothing taken — no line listed,
+/// the refusal said once though every act retries the door — and a burst held
+/// meanwhile stands in memory, its answer carrying the refusal and its class.
+/// The device takes copies again: the next probe's join renumbers the earlier
+/// line past this run's, to 3, and enters the burst under its own, 2 (the
+/// mutant that takes the file past a refused renumbering lists the earlier line
+/// under the ordinal the page dropped).
+#[test]
+fn a_renumbering_the_doors_later_open_could_not_write_is_said_once_and_lands_at_a_later_probe() {
+    let store = TempDir::new().unwrap();
+    an_earlier_runs_line(&store, 1, "earlier");
+    let fake = Fake::new();
+    fake.head_unreachable.store(true, Ordering::SeqCst);
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let settled = g.hold_for(&insert(DOC, json!(["x"]), g.fake.head()), Reason::refused("out_of_bounds", out_of_bounds())).unwrap();
+    assert_eq!(settled["held"], 1, "{settled}");
+    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    g.fake.head_unreachable.store(false, Ordering::SeqCst);
+    crate::held::tests::refuse_copies_after(0);
+    open_another_session(&g);
+    assert!(ordinals(&g).is_empty(), "nothing taken past the refused renumbering");
+    let next = g.hold(&insert(DOC, json!(["y"]), g.fake.head()), "unreachable", false);
+    assert_eq!(next["held"], 2, "{next}");
+    assert!(next["unwritable"].as_str().is_some_and(|why| why.contains("sync was made to fail")) && next["unwritable_class"] == "full", "held in memory, carrying the refusal: {next}");
+    let said = said_containing(&g, "could not be renumbered past this run's");
+    assert_eq!(said.len(), 1, "the refusal said once, every act retrying the door: {said:?}");
+    let on_disk = |g: &Ground| file_lines(&std::fs::read_to_string(held_file(g)).unwrap()).iter().map(|l| l["held"].as_u64().unwrap()).collect::<Vec<_>>();
+    assert_eq!(on_disk(&g), [1], "the file's line as it was");
+    crate::held::tests::take_copies();
+    g.fake.op_unreachable.store(true, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    assert_eq!(ordinals(&g), [(2, "y".to_string()), (3, "earlier".to_string())], "the earlier line renumbered past this run's, the burst under its own");
+    assert_eq!(&on_disk(&g)[..3], [1, 3, 2], "the file: the earlier line, its copy under 3, then the burst");
+}
+
+/// Checks that a file at or past the counter keeps its ordinals.
+///
+/// A file whose lines all stand at or past the counter keeps them at the
+/// door's later open (skep #875; `PrincipalHold::renumbers`). The board away
+/// at the session's open, a refused run's head is held under ordinal 1 and
+/// dropped; an earlier run's line stands in the board's file under 2, the
+/// counter's next. The board returns, and the door's later open finds no
+/// ordinal this run gave out among the file's, its line walking after this
+/// run's already: it takes the file as it reads, no renumbering written, and
+/// the counter moves past it, a burst held after it taking 3 (the mutant
+/// that renumbers every file read at a later touch writes a copy no ordinal
+/// needs).
+#[test]
+fn a_file_whose_lines_stand_at_or_past_the_counter_keeps_its_ordinals() {
+    let store = TempDir::new().unwrap();
+    an_earlier_runs_line(&store, 2, "earlier");
+    let fake = Fake::new();
+    fake.head_unreachable.store(true, Ordering::SeqCst);
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let settled = g.hold_for(&insert(DOC, json!(["x"]), g.fake.head()), Reason::refused("out_of_bounds", out_of_bounds())).unwrap();
+    assert_eq!(settled["held"], 1, "{settled}");
+    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    g.fake.head_unreachable.store(false, Ordering::SeqCst);
+    open_another_session(&g);
+    assert_eq!(ordinals(&g), [(2, "earlier".to_string())], "the file's own ordinal kept");
+    let next = g.hold(&insert(DOC, json!(["y"]), g.fake.head()), "unreachable", false);
+    assert_eq!(next["held"], 3, "the counter past the file's line: {next}");
+    let on_disk: Vec<u64> = file_lines(&std::fs::read_to_string(held_file(&g)).unwrap()).iter().map(|l| l["held"].as_u64().unwrap()).collect();
+    assert_eq!(on_disk, [2, 3], "no renumbering written: {on_disk:?}");
 }
 
 /// Checks that pending lines whose join the device refused join the board's
@@ -3024,7 +3278,7 @@ fn a_refused_joins_copy_left_standing_is_never_read_back_once_it_is_sent_from_me
             let Opened::Live { queue, .. } = HeldDir::new(g.store.path(), ours).open_file(1, "1.0.1").unwrap() else { panic!("the file reads live") };
             let read: Vec<Value> = queue.lines().iter().map(|line| line.frame["values"].clone()).collect();
             assert_eq!(read, [json!(["earlier"])], "the probe cut the copy: the file reads the earlier run's line alone");
-            assert_eq!(said_containing(&g, "holds the copy a refused join made no more").len(), 1, "said once: {:?}", g.said.lock().unwrap());
+            assert_eq!(said_containing(&g, "holds the refused copy's lines no more").len(), 1, "said once: {:?}", g.said.lock().unwrap());
         }
         let listed: Vec<Value> = g.lines().iter().map(|line| line["frame"]["values"].clone()).collect();
         assert_eq!(listed, [json!(["earlier"])], "door first {door_first}: the door lists the earlier run's line alone, never the copy the join undid");

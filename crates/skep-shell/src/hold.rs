@@ -101,7 +101,10 @@
 //! disk refuses it. Wherever a principal's lines are, their ordinals are
 //! one space for the shell's life ([`PrincipalHold::next_k`]; skep #856):
 //! a join moves no ordinal a call or the page holds, and the one
-//! renumbering is of an earlier run's lines as this run first reads them.
+//! renumbering is of an earlier run's lines as this run reads them after
+//! the first touch — at the join or the door's later open — past every
+//! ordinal this run gave out, wherever their file holds a line below the
+//! counter ([`PrincipalHold::renumbers`]; skep #875).
 //! Each answer for a line the join left in memory carries
 //! the refusal as `unwritable`, and the refusal is said in the shell's own
 //! window once per change of its cause. Where another shell holds a lock of
@@ -187,7 +190,7 @@ use skep_search::Chain;
 
 use crate::attest::{attest_room, insert_terms, Unattested};
 use crate::events::{EventBus, EventName};
-use crate::held::{Anchors, Done, Entered, HaltWhy, HeldDir, HeldLine, HeldQueue, Joining, Opened, Owed, Reason, Torn, Unheld, MAX_HELD_BYTES, MAX_HELD_LINES};
+use crate::held::{Anchors, Done, Entered, HaltWhy, HeldDir, HeldLine, HeldQueue, JoinRefused, Joining, Opened, Owed, Reason, Torn, Unheld, MAX_HELD_BYTES, MAX_HELD_LINES};
 use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{board_head, SessionEntry, SessionKind, Sessions};
@@ -1039,6 +1042,13 @@ fn awaits_act(line: &HeldLine) -> bool {
 /// file this shell keeps there is on disk, and takes no such why.
 const ANOTHER_WINDOW_HOLDS: &str = "another shell holds this board's held store — one shell per data directory — so this line, sent before that was found, is kept in memory alone until the board takes it, and a close before then loses it";
 
+/// Where a refused copy's lines stand once its cut-back is refused too.
+///
+/// The shell's own window says it beside the refusal (§3c.3; SP-12). The
+/// copy is a join's or a renumbering's, and the queue of its file is kept
+/// ([`BoardHold::unsettled`]) until the probe's retry cuts the bytes.
+const COPY_LEFT_STANDING: &str = "the refused copy's lines stand in the file past its last whole line, their cut-back refused, until they are cut, tried again at each probe, and a close before then leaves them read as held lines at the next launch";
+
 /// Why a held line stands with no copy on disk, as the `held` answer says it
 /// (§3c.3; skep #820).
 ///
@@ -1341,17 +1351,18 @@ enum Custody {
     /// unclaimed or away at the first touch, or the directory or its lock
     /// refused), or another shell's, where a line held is one a write brought
     /// past the door before that was found ([`ANOTHER_WINDOW_HOLDS`]), or the
-    /// refusal that keeps the lines from the file: its read refused at the
-    /// door, or the join refused — the file's read or a copy, the file's
-    /// halt, or an earlier run's pending file the lines wait behind
-    /// ([`Holds::join`]). The lines join the directory's file the moment it
-    /// is this shell's, the board's own or the pending one
+    /// refusal that keeps the lines from the file: its read or its
+    /// renumbering refused at the door, or the join refused — the file's read
+    /// or a copy, the file's halt, or an earlier run's pending file the lines
+    /// wait behind ([`Holds::join`]). The lines join the directory's file the
+    /// moment it is this shell's, the board's own or the pending one
     /// ([`Holds::establish`]'s join), and at every probe after while the join
     /// is refused ([`Holds::rejoin`]), each keeping its ordinal — the
     /// principal's one ordinal space, [`PrincipalHold::next_k`] — so no line
     /// waits for an empty queue to reach disk and no ordinal the page holds
     /// moves. Where the directory stays out of reach, the file is opened at
-    /// the first touch that finds the queue empty.
+    /// the first touch that finds the queue empty, its lines below the
+    /// counter renumbered past it ([`PrincipalHold::renumbers`]).
     Unwritable(Unwritable),
     /// Nowhere: P38's halt (§3c.3).
     ///
@@ -1406,26 +1417,28 @@ struct PrincipalHold {
     /// directory was this shell's; `""` where the board answered none.
     account: String,
     queue: HeldQueue,
-    /// The next ordinal a line of the principal's takes: the one ordinal
-    /// space per (board, principal), kept for the shell's life (skep #856;
-    /// `held`'s THE ORDINALS).
+    /// The next ordinal a line of the principal's takes.
     ///
-    /// Every queue the principal's lines can be in — memory, the pending
-    /// file, the board's own file — draws from it ([`PrincipalHold::hold`]),
-    /// so an ordinal is assigned once and names one line until that line
-    /// leaves: the ordinal a call holds across its dial, its shift's read or
-    /// the hands' read, or the page holds off an `op` answer or
-    /// `held(session)`, names the line it held or none, whatever join runs
-    /// meanwhile (I13). It starts at the principal's first touch
-    /// ([`Holds::principal_hold`]) past the greatest ordinal in every file the
-    /// principal's lines can be in that the shell can name then — the
-    /// origin-named pending file, and the board's own file where its head has
-    /// named a chain — and moves past every file the hold takes after; it is
-    /// never wound back, not at the compaction, which removes the file and
-    /// lets the ordinals run on (`held::MAX_ORDINAL` states why the space is
-    /// not at risk). The one renumbering left is of lines no one was ever
-    /// answered — an earlier run's file's, as this run first reads them
-    /// ([`Holds::join_principal`]).
+    /// It is the one ordinal space per (board, principal), kept for the
+    /// shell's life (skep #856; `held`'s THE ORDINALS). Every queue the
+    /// principal's lines can be in — memory, the pending file, the board's
+    /// own file — draws from it ([`PrincipalHold::hold`]), so an ordinal is
+    /// assigned once and names one line until that line leaves: the ordinal
+    /// a call holds across its dial, its shift's read or the hands' read, or
+    /// the page holds off an `op` answer or `held(session)`, names the line
+    /// it held or none, whatever join runs meanwhile (I13). It starts at the
+    /// principal's first touch ([`Holds::principal_hold`]) past the greatest
+    /// ordinal in every file the principal's lines can be in that the shell
+    /// can name then — the origin-named pending file, and the board's own
+    /// file where its head has named a chain — and moves past every file the
+    /// hold takes after; it is never wound back, not at the compaction, which
+    /// removes the file and lets the ordinals run on (`held::MAX_ORDINAL`
+    /// states why the space is not at risk). Every ordinal this run gave out,
+    /// the settled lines' as well as the standing ones', is below it, so the
+    /// one renumbering left — of lines no one was ever answered, an earlier
+    /// run's file's, as this run reads them after the first touch — takes a
+    /// file holding a line below it past it ([`PrincipalHold::renumbers`];
+    /// [`Holds::join_principal`], [`Holds::principal_hold`]).
     next_k: u64,
     /// Whether the first touch has set `next_k` past every file the shell
     /// could name then ([`Holds::principal_hold`]).
@@ -1519,17 +1532,36 @@ impl PrincipalHold {
         Ok(entered)
     }
 
-    /// Takes a file's queue as the principal's, its ordinals the space's own
-    /// from here: the counter moves past every ordinal the file names.
+    /// Takes a file's queue as the principal's, its ordinals the space's own.
     ///
-    /// It is the door's open ([`Holds::principal_hold`]) and a join's commit
-    /// ([`Holds::join_principal`]), each of a queue no line of this run's
-    /// stands beside under an ordinal of the file's.
+    /// The counter moves past every ordinal the file names. It is the door's
+    /// open ([`Holds::principal_hold`]) and a join's commit
+    /// ([`Holds::join_principal`]), each of a queue whose every line stands
+    /// under an ordinal no other line of this run's was given: the file read
+    /// at the first touch, the counter fresh, or one whose lines below the
+    /// counter were renumbered past it first ([`PrincipalHold::renumbers`]).
     fn take(&mut self, queue: HeldQueue) {
         // The greatest is within `MAX_ORDINAL`, so its successor is a `u64`.
         self.next_k = self.next_k.max(queue.greatest_k() + 1);
         self.queue = queue;
         self.custody = Custody::File;
+    }
+
+    /// Returns whether `file` takes fresh ordinals before the hold takes it.
+    ///
+    /// `file` is read now and is not the hold's own queue: the door takes it,
+    /// or the join enters lines into it (`HeldQueue::renumber`; skep #875).
+    /// It takes them where it holds a line under an ordinal below the counter
+    /// ([`PrincipalHold::next_k`]), which is past every ordinal this run gave
+    /// out, the settled lines' as well as the standing ones': kept, such a
+    /// line would take an ordinal a call or the page may hold (I13), or walk
+    /// ahead of this run's lines, which a file read after the first touch
+    /// walks after (`held`'s THE ORDER). A file whose lines all stand at or
+    /// past the counter keeps its ordinals, none of them given out and every
+    /// line already walking after this run's; at the first touch the counter
+    /// is fresh, so the file the door reads then keeps its own.
+    fn renumbers(&self, file: &HeldQueue) -> bool {
+        file.lines().iter().any(|line| line.k < self.next_k)
     }
 
     /// Returns whether the hold's lines stand in memory alone: its custody
@@ -1663,20 +1695,23 @@ struct BoardHold {
     /// another process holding its lock, the lock or its listing refused —
     /// said once per change, and gone once a join lists the directory.
     pending_said: Option<String>,
-    /// The queues a refused join left whose files hold its copy's bytes past
-    /// their whole lines, each beside its principal (§3c.3; skep #817, #821).
+    /// The queues of files a refused copy's bytes stand in, by principal.
     ///
-    /// A join is one copy (`HeldQueue::join`), and a copy the device refuses
-    /// is cut back off the file, entering nothing; where the cut-back is
-    /// refused too, the file holds the copy's lines — whole lines a read
-    /// takes for held ones — while the lines stand elsewhere, in memory or in
-    /// the pending file (`HeldQueue::tail_left`). The queue of that file is
-    /// kept here, never dropped, and every later open of the file in this run
-    /// takes it in place of a read that would find the copy's lines standing
-    /// ([`open_held`]): the join's next try, its read of an earlier run's
-    /// pending file, and the principal's door. The probe retries each, its
-    /// retry cutting the bytes off, and lets go of one whose file holds its
-    /// whole lines alone ([`Holds::retry_unsettled`]).
+    /// Each is a queue a refused join or renumbering left, its file holding
+    /// the copy's bytes past its whole lines (§3c.3; skep #817, #821, #875).
+    /// A join is one copy (`HeldQueue::join`), and so is a renumbering
+    /// (`HeldQueue::renumber`, the join's or the door's); a copy the device
+    /// refuses is cut back off the file, entering nothing; where the cut-back
+    /// is refused too, the file holds the copy's lines — whole lines a read
+    /// takes for held ones — while the lines stand elsewhere, in memory, in
+    /// the pending file or under their old ordinals (`HeldQueue::tail_left`).
+    /// The queue of that file is kept here, never dropped, and every later
+    /// open of the file in this run takes it in place of a read that would
+    /// find the copy's lines standing ([`open_held`]): the join's next try,
+    /// its read of an earlier run's pending file, and the principal's door.
+    /// The probe retries each, its retry cutting the bytes off, and lets go
+    /// of one whose file holds its whole lines alone
+    /// ([`Holds::retry_unsettled`]).
     unsettled: Vec<(u64, HeldQueue)>,
     principals: HashMap<u64, PrincipalHold>,
 }
@@ -2104,18 +2139,17 @@ impl Holds {
         }
     }
 
-    /// Cuts the copy each queue a refused join left in its file, at a probe
-    /// (§3c.3; skep #817), and lets go of each whose file holds its whole
-    /// lines alone.
+    /// Cuts the copy each kept queue's file holds past its lines, at a probe.
     ///
-    /// It runs under the board's lock at every probe whatever the board's
+    /// Each is a queue a refused join or renumbering left (§3c.3; skep #817),
+    /// and each whose file then holds its whole lines alone is let go. It
+    /// runs under the board's lock at every probe whatever the board's
     /// state, as the join's retry does ([`Holds::rejoin`]), each queue's
     /// retry cutting the bytes the refused copy left past its file's whole
     /// lines (`HeldQueue::retry`). A queue whose file holds no such bytes
     /// agrees with its file, which the next open reads so: it goes from
     /// [`BoardHold::unsettled`], and that the file holds the copy no more is
-    /// said once — the edge that ends what the refused join said of it
-    /// (SP-11).
+    /// said once — the edge that ends what the refusal said of it (SP-11).
     fn retry_unsettled(&self, board_hold: &mut BoardHold) {
         for (principal, mut queue) in std::mem::take(&mut board_hold.unsettled) {
             queue.retry();
@@ -2123,7 +2157,7 @@ impl Holds {
                 board_hold.unsettled.push((principal, queue));
             } else {
                 let file = if queue.is_pending() { "pending held file" } else { "held file" };
-                self.say(format_args!("principal {principal}'s {file} holds the copy a refused join made no more: its bytes are cut off"));
+                self.say(format_args!("principal {principal}'s {file} holds the refused copy's lines no more: they are cut off"));
             }
         }
     }
@@ -2195,14 +2229,15 @@ impl Holds {
         self.bus.emit(EventName::AnotherWindow, json!({"board": board_reference, "another_window": another_window}));
     }
 
-    /// Joins into the board's file every line held before its directory was
-    /// this shell's (`held`'s join; skep #725, the record's F4).
+    /// Joins into the board's file every line held before it was this shell's.
     ///
-    /// It runs under the board's lock at the step to [`Directory::ThisWindow`],
-    /// and at every probe after while a principal's lines are kept out of the
-    /// board's file ([`Holds::rejoin`]), the board's own directory made and
-    /// locked. The lines come from three places: each live principal's queue
-    /// where it is the pending file's or in memory alone
+    /// It is `held`'s join (skep #725, the record's F4) of the lines held
+    /// before the board's directory was this shell's. It runs under the
+    /// board's lock at the step to [`Directory::ThisWindow`], and at every
+    /// probe after while a principal's lines are kept out of the board's file
+    /// ([`Holds::rejoin`]), the board's own directory made and locked. The
+    /// lines come from three places: each live principal's queue where it is
+    /// the pending file's or in memory alone
     /// ([`PrincipalHold::joins`]); and the pending directory on disk, named by
     /// `origin` ([`HeldDir::pending`]) — under this shell's lock past the
     /// step, carried from the directory the step left or taken by it
@@ -2216,21 +2251,23 @@ impl Holds {
     /// the pending file set aside and said, nothing joined; the standing
     /// lines are entered, an earlier run's before this run's, each source's
     /// as one copy with one sync (`HeldQueue::join`), and only then is the
-    /// pending file removed. THIS RUN's lines keep their ordinals — the ones
-    /// the page and a call hold, the principal's one space
+    /// pending file removed. *This run's* lines keep their ordinals — the
+    /// ones the page and a call hold, the principal's one space
     /// ([`PrincipalHold::next_k`]) — and an earlier run's file's take fresh
-    /// ones from that space in their file's order; a board's file read at
-    /// the join for the first time, which no one could name until `H.1`
-    /// read, that holds a line under an ordinal a line of this run's holds
-    /// has its standing lines renumbered past this run's first
-    /// (`HeldQueue::renumber`), so they walk after them — the one ruled
+    /// ones from that space in their file's order; a file opened at the
+    /// join — the board's, which no one could name until `H.1` read — that
+    /// holds a line under an ordinal below the principal's counter, past
+    /// every ordinal this run gave out, has its standing lines renumbered
+    /// past it first ([`PrincipalHold::renumbers`], `HeldQueue::renumber`;
+    /// skep #875), so no ordinal this run answered, standing or settled,
+    /// names one of them and they walk after this run's — the one ruled
     /// exception to the walk's order. No `held` event is said for a join: no
     /// ordinal the page holds moves. One `Talk` line per principal joined:
-    /// the count, and the lines renumbered where any were. A join refused — a copy the device
-    /// refuses, a file's read or its halt — enters nothing, the principal's
-    /// lines standing where they were for the next join, the queue of the file
-    /// it wrote kept where the copy's cut-back was refused too
-    /// ([`BoardHold::unsettled`]), and said once per change of its cause
+    /// the count, and the lines renumbered where any were. A join refused — a
+    /// copy the device refuses, a file's read or its halt — enters nothing,
+    /// the principal's lines standing where they were for the next join, the
+    /// queue of the file it wrote kept where the copy's cut-back was refused
+    /// too ([`BoardHold::unsettled`]), and said once per change of its cause
     /// ([`Holds::refuse_join`]); a pending directory the join cannot take is
     /// said so too, and this shell writes on: it holds the board's own lock,
     /// and a shell standing at the pending directory yields once its head
@@ -2292,36 +2329,41 @@ impl Holds {
         }
     }
 
-    /// Joins one principal's lines into the directory's file ([`Holds::join`],
-    /// [`Holds::join_in_memory`]).
+    /// Joins one principal's lines into the directory's file.
     ///
-    /// `dir` is the directory whose file the lines join — the board's own, or
-    /// the pending one for lines in memory alone — and `pending` the pending
-    /// directory where one stands beside the board's own. This run's lines —
-    /// the pending file's, or memory's — are taken out of the hold for the
-    /// join and put back where it is refused ([`Holds::refuse_join`]); an
-    /// earlier run's pending file is opened where the live queue is not it.
-    /// The directory's file is the principal's own queue where that queue is
-    /// the file's already — read before, its ordinals answered, and never
-    /// read twice — else opened under the account the hold names, or the one
-    /// the earlier run's header does, by [`open_held`], so a queue a refused
-    /// join left beside it is taken in place of its read, and a refused join
-    /// keeps each queue it opened whose file holds a copy's bytes past its
-    /// whole lines ([`BoardHold::unsettled`]).
+    /// It is the step of [`Holds::join`] and [`Holds::join_in_memory`] per
+    /// principal. `dir` is the directory whose file the lines join — the
+    /// board's own, or the pending one for lines in memory alone — and
+    /// `pending` the pending directory where one stands beside the board's
+    /// own. This run's lines — the pending file's, or memory's — are taken
+    /// out of the hold for the join and put back where it is refused
+    /// ([`Holds::refuse_join`]); an earlier run's pending file is opened where
+    /// the live queue is not it. The directory's file is the principal's own
+    /// queue where that queue is the file's already — read before, its
+    /// ordinals answered, and never read twice — else opened under the
+    /// account the hold names, or the one the earlier run's header does, by
+    /// [`open_held`], so a queue a refused join left beside it is taken in
+    /// place of its read, and a refused join keeps each queue it opened whose
+    /// file holds a copy's bytes past its whole lines
+    /// ([`BoardHold::unsettled`]).
     ///
-    /// **The ordinals** (skep #856; `held`'s THE ORDINALS). The lines enter
-    /// in this order, each step one copy with one sync, a refused copy
+    /// **The ordinals** (skep #856, #875; `held`'s THE ORDINALS). The lines
+    /// enter in this order, each step one copy with one sync, a refused copy
     /// entering none of its lines and leaving them where they were: (1) a
-    /// file opened here, read for the first time in this run, that holds a
-    /// line under an ordinal a line of this run's holds has its standing
-    /// lines renumbered past this run's (`HeldQueue::renumber`) — a line of
-    /// this run's keeps its ordinal whatever stands in the file, since a
-    /// call or the page may hold it; (2) an earlier run's pending file's
-    /// lines take fresh ordinals from the principal's counter in their file's
-    /// order ([`Joining::EarlierRun`]); (3) this run's lines enter under their
-    /// own ([`Joining::ThisRun`]). The counter moves past every ordinal a
-    /// copy that landed gave out, the join refused after or not, so no later
-    /// line of this run's takes one of them.
+    /// file opened here for a principal whose hold stands, holding a line
+    /// under an ordinal below the counter, has its standing lines renumbered
+    /// past it ([`PrincipalHold::renumbers`], `HeldQueue::renumber`), so no
+    /// ordinal this run gave out, standing or settled, names a line of the
+    /// file's and the file's lines walk after this run's — a line of this
+    /// run's keeps its ordinal whatever stands in the file, since a call or
+    /// the page may hold it, and an earlier run's principal with no hold here
+    /// was given no ordinal, its file keeping its own; (2) an earlier run's
+    /// pending file's lines take fresh ordinals from the principal's counter
+    /// in their file's order ([`Joining::EarlierRun`]); (3) this run's lines
+    /// enter under their own ([`Joining::ThisRun`]). The counter moves past
+    /// every ordinal a copy that landed gave out, and past the joined file's
+    /// own once (1) stands, the join refused after or not, so no later line
+    /// of this run's takes one of them.
     fn join_principal(&self, board_hold: &mut BoardHold, dir: &HeldDir, pending: Option<&HeldDir>, principal: u64) {
         let live = board_hold.principals.get_mut(&principal).filter(|ph| ph.joins()).map(|ph| std::mem::replace(&mut ph.queue, HeldQueue::in_memory()));
         // An earlier run's pending file, where this run's queue is not it.
@@ -2388,18 +2430,13 @@ impl Holds {
                 let cause = format!("principal {principal}'s {} names another board than its directory; nothing is joined", file_word(dir));
                 break 'join Err((StoppedAt::Target, cause, Unwritable::other("the held file names another board than its directory")));
             }
-            // (1) A file read now for the first time holding an ordinal a line
-            // of this run's holds: its lines renumbered past this run's.
-            if let Some(live) = live.as_ref().filter(|_| opened) {
-                let held: BTreeSet<u64> = live.lines().iter().map(|line| line.k).collect();
-                if chain.lines().iter().any(|line| held.contains(&line.k)) {
-                    match chain.renumber(&mut next_k) {
-                        Ok(moved) => renumbered = moved.len(),
-                        Err(refused) => {
-                            let cause = format!("principal {principal}'s {} holds a line under an ordinal this run's lines hold, and its lines could not be renumbered past them (line {}: {})", file_word(dir), refused.k, refused.error);
-                            break 'join Err((StoppedAt::Target, cause, Unwritable::from(&refused.error)));
-                        }
-                    }
+            // (1) A file opened here holding a line below the counter, which
+            // is past every ordinal this run gave out: its lines renumbered
+            // past it, so they walk after this run's.
+            if opened && board_hold.principals.get(&principal).is_some_and(|ph| ph.renumbers(&chain)) {
+                match chain.renumber(&mut next_k) {
+                    Ok(moved) => renumbered = moved.len(),
+                    Err(refused) => break 'join Err((StoppedAt::Target, unrenumbered_cause(principal, dir, &refused), Unwritable::from(&refused.error))),
                 }
             }
             // The greatest is within `MAX_ORDINAL`, so its successor is a
@@ -2434,7 +2471,8 @@ impl Holds {
             }
             Ok(())
         };
-        // The counter moves past every ordinal a copy that landed gave out.
+        // The counter moves past every ordinal a copy that landed gave out,
+        // and past the joined file's own once (1) stood.
         if let Some(ph) = board_hold.principals.get_mut(&principal) {
             ph.next_k = ph.next_k.max(next_k);
         }
@@ -2476,8 +2514,8 @@ impl Holds {
             let plural = if count == 1 { "" } else { "s" };
             let past = match renumbered {
                 0 => String::new(),
-                1 => "; the 1 line an earlier run left in it is renumbered past them, and sent after them".to_string(),
-                n => format!("; the {n} lines an earlier run left in it are renumbered past them, and sent after them"),
+                1 => "; the 1 line an earlier run left in it is renumbered past this run's ordinals, and sent after this run's lines".to_string(),
+                n => format!("; the {n} lines an earlier run left in it are renumbered past this run's ordinals, and sent after this run's lines"),
             };
             self.say(format_args!("principal {principal}: {count} held line{plural} joined {}{past}", the_file(dir)));
         } else if refusal_said {
@@ -2508,8 +2546,7 @@ impl Holds {
         let mut left = left_standing(live.as_ref(), stopped);
         let tailed: Vec<HeldQueue> = opened.into_iter().filter(HeldQueue::tail_left).collect();
         if !tailed.is_empty() {
-            let copy = "the refused copy's lines stand in the file past its last whole line, their cut-back refused, until they are cut, tried again at each probe, and a close before then leaves them read as held lines at the next launch";
-            left = Some(left.map_or_else(|| copy.to_string(), |left| format!("{left}; {copy}")));
+            left = Some(left.map_or_else(|| COPY_LEFT_STANDING.to_string(), |left| format!("{left}; {COPY_LEFT_STANDING}")));
             board_hold.unsettled.extend(tailed.into_iter().map(|queue| (principal, queue)));
         }
         if let (Some(ph), Some(queue)) = (board_hold.principals.get_mut(&principal), live) {
@@ -2539,15 +2576,6 @@ impl Holds {
         said.insert(principal, cause);
     }
 
-    /// Says what a principal's file's open found, in the shell's own window
-    /// (P39): a misplaced file set aside ([`Holds::note_aside`]), and a
-    /// crash's tail ([`Holds::note_torn`]), each once as the open's own
-    /// landing — the next line written cuts the tail.
-    fn note_opened(&self, principal: u64, queue: &HeldQueue, aside: Option<&Path>) {
-        self.note_aside(principal, aside);
-        self.note_torn(principal, queue);
-    }
-
     /// Says a misplaced file the open set aside, at `aside`, in the shell's
     /// own window (P39): said as the open moves it, so once.
     fn note_aside(&self, principal: u64, aside: Option<&Path>) {
@@ -2556,12 +2584,12 @@ impl Holds {
         }
     }
 
-    /// Says the crash's tail the open of `queue`'s file found, in the shell's
-    /// own window (P39).
+    /// Says the crash's tail the open of `queue`'s file found (P39).
     ///
-    /// The join says it once the file's queue is kept — a join refused at
-    /// each probe reopens the file each time, and says nothing of it until
-    /// then — and the door as it opens the file.
+    /// It is said in the shell's own window, by the join and the door each
+    /// once the file's queue is kept — a join refused at each probe reopens
+    /// the file each time, as the door does where the file's renumbering is
+    /// refused, and says nothing of it until then.
     fn note_torn(&self, principal: u64, queue: &HeldQueue) {
         match queue.torn() {
             Some(Torn::Header { bytes }) => self.say(format_args!(
@@ -2626,10 +2654,18 @@ impl Holds {
     /// own file, where its head has named a chain ([`BoardHold::chain`]) —
     /// each of the latter read for its greatest ordinal alone, nothing
     /// written or moved (`HeldDir::greatest_ordinal`); a read that fails
-    /// counts nothing, the join saying why where it meets the file. A file
-    /// the door opens at a later touch, the queue empty, is taken the same
-    /// way, its ordinals the space's own from then: no line of this run's
-    /// stands to collide with them.
+    /// counts nothing, the join saying why where it meets the file.
+    ///
+    /// **A later touch** (skep #875). A file the door opens at a later touch,
+    /// the queue empty, holding a line under an ordinal below the counter, is
+    /// renumbered past it before it is taken ([`PrincipalHold::renumbers`],
+    /// `HeldQueue::renumber`): a line of this run's may have settled under
+    /// such an ordinal, which a call or the page may hold still. A
+    /// renumbering refused leaves the custody memory's, the refusal its why,
+    /// said once per change of its cause as a refused read is, the file's
+    /// queue kept where it holds the copy's bytes past its whole lines
+    /// ([`BoardHold::unsettled`]), and the lines held meanwhile join the file
+    /// at the first probe it takes the renumbering ([`Holds::rejoin`]).
     ///
     /// # Errors
     ///
@@ -2648,12 +2684,32 @@ impl Holds {
                 // either way, and the pending file's lines joined into the
                 // board's own once the record reads (`Holds::establish`).
                 Directory::ThisWindow { store, .. } | Directory::Pending { store, .. } => match open_held(unsettled, &store.dir, principal, account) {
-                    Ok(Opened::Live { queue, aside }) => {
-                        self.note_opened(principal, &queue, aside.as_deref());
-                        if kept_said.remove(&principal).is_some() {
-                            self.say(format_args!("principal {principal}'s {} opens: the lines held for the principal go to it", file_word(&store.dir)));
+                    Ok(Opened::Live { mut queue, aside }) => {
+                        self.note_aside(principal, aside.as_deref());
+                        // A file read at a later touch, holding a line below
+                        // the counter: renumbered past it before it is taken.
+                        let renumbered = if ph.renumbers(&queue) { queue.renumber(&mut ph.next_k).map(drop) } else { Ok(()) };
+                        match renumbered {
+                            Ok(()) => {
+                                self.note_torn(principal, &queue);
+                                if kept_said.remove(&principal).is_some() {
+                                    self.say(format_args!("principal {principal}'s {} opens: the lines held for the principal go to it", file_word(&store.dir)));
+                                }
+                                ph.take(queue);
+                            }
+                            Err(refused) => {
+                                let mut left =
+                                    "the lines held for the principal wait in memory until the file takes the renumbering, tried again at each probe, and a close before then loses them".to_string();
+                                // A queue whose file holds the refused copy's
+                                // bytes is kept, so no later open reads them.
+                                if queue.tail_left() {
+                                    left = format!("{left}; {COPY_LEFT_STANDING}");
+                                    unsettled.push((principal, queue));
+                                }
+                                self.say_kept_from_file(kept_said, principal, unrenumbered_cause(principal, &store.dir, &refused), Some(&left));
+                                ph.custody = Custody::Unwritable(Unwritable::from(&refused.error));
+                            }
                         }
-                        ph.take(queue);
                     }
                     Ok(Opened::Halted { path, why }) => ph.custody = Custody::Halted { path, why },
                     Err(e) => {
@@ -3788,6 +3844,20 @@ fn open_held(unsettled: &mut Vec<(u64, HeldQueue)>, dir: &HeldDir, principal: u6
 /// said once whichever meets it first ([`Holds::say_kept_from_file`]).
 fn unread_cause(principal: u64, dir: &HeldDir, e: &io::Error) -> String {
     format!("principal {principal}'s {} could not be read ({e})", file_word(dir))
+}
+
+/// Returns the cause said of a file whose renumbering was refused.
+///
+/// The renumbering is [`PrincipalHold::renumbers`]'s (`HeldQueue::renumber`).
+/// It is one cause for the door's open and a join's alike, as
+/// [`unread_cause`] is, so the refusal is said once whichever meets it first.
+fn unrenumbered_cause(principal: u64, dir: &HeldDir, refused: &JoinRefused) -> String {
+    format!(
+        "principal {principal}'s {} holds lines an earlier run left under ordinals this run has reached, and they could not be renumbered past this run's (line {}: {})",
+        file_word(dir),
+        refused.k,
+        refused.error
+    )
 }
 
 /// Where a refused join stopped ([`Holds::refuse_join`]): what it says of the

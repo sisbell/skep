@@ -73,8 +73,8 @@
 //! line leaves, never re-targeted once answered: the ordinal a call holds
 //! across a dial, or the page holds off an `op` answer or `held(session)`,
 //! names the line it held or none (I13). The one renumbering left is of
-//! lines no one was ever answered: an earlier run's file's, as this run
-//! first reads them.
+//! lines no one was ever answered: an earlier run's file's, read after the
+//! first touch while it holds a line below the counter.
 //!
 //! | act | the line's `k` | the counter | `k` outside the queue |
 //! |---|---|---|---|
@@ -85,16 +85,18 @@
 //! | the file read at the first touch ([`HeldDir::open_file`]) | the file's | past them | — |
 //! | the join of this run's lines ([`Joining::ThisRun`]) | KEPT; an ordered insert | — | unchanged |
 //! | the join of an earlier run's file ([`Joining::EarlierRun`]) | fresh, in the file's order | past them | none was answered |
-//! | a file first read at the join holding an ordinal this run holds ([`HeldQueue::renumber`]) | its lines fresh, past this run's | past them | none was answered |
+//! | a file read after the first touch — at the join, or the door's later open — holding a line below the counter ([`HeldQueue::renumber`]; skep #875) | its lines fresh, past every ordinal this run gave out | past them | none was answered |
 //!
 //! **The order** (I1): lines go out in `k` order per (board, principal),
 //! each document's order within it, and nothing reaches the store ahead
-//! of a line composed before it — save the ONE ruled exception (the owner,
-//! 2026-11-06): an earlier run's file first read at the join, which could
-//! not be named until `H.1` read and holds a line under an ordinal a line of
-//! this run's holds, has its standing lines renumbered past this run's, so
-//! they walk after them in their file's order; each still lands where its
-//! anchors aim, or is held moved.
+//! of a line composed before it — save the *one* exception the owner
+//! ruled: an earlier run's file read after the first touch — the board's,
+//! which could not be named until `H.1` read, or the pending one the first
+//! touch counted — holding a line under an ordinal below the hold's
+//! counter, which is past every ordinal this run gave out, standing or
+//! settled, has its standing lines renumbered past it, so they walk after
+//! this run's in their file's order; each still lands where its anchors
+//! aim, or is held moved.
 //!
 //! **A refused copy waits, and every copy after it** (§3c.3; skep #813,
 //! #821, #822). The file owes the queue each line's first copy and, for a
@@ -1993,8 +1995,9 @@ impl HeldQueue {
     /// already is not entered again, so a join cut before its sync, or before
     /// the pending file's removal, re-runs at the next launch over the lines
     /// the device kept and doubles none of them. No ordinal a standing line
-    /// holds moves (the module doc's THE ORDINALS): a file read here for the
-    /// first time that holds a line under an ordinal a line of `from` holds
+    /// holds moves (the module doc's THE ORDINALS): a file read here after
+    /// the first touch that holds a line under an ordinal below the hold's
+    /// counter — past every ordinal this run gave out, `from`'s among them —
     /// is the hold's to renumber first ([`HeldQueue::renumber`]).
     ///
     /// The lines entering are copied to this queue's file as ONE copy —
@@ -2136,23 +2139,25 @@ impl HeldQueue {
         self.lines = merged;
     }
 
-    /// Gives every standing line a fresh ordinal from `next_k`, in `k`
-    /// order: the one renumbering (the module doc's THE ORDINALS).
+    /// Gives every standing line a fresh ordinal from `next_k`, in `k` order.
     ///
-    /// It is the hold's step for a file read at the join for the first time
-    /// in this run — the board's own file, which could not be named until
-    /// `H.1` read, or the pending file this run's memory lines join once the
-    /// head will not read — that holds a line under an ordinal a line of this
-    /// run's holds: this run's lines keep theirs, answered already, and the
-    /// file's take ordinals past them, so they walk after this run's in their
-    /// file's order (the owner's ruling, the module doc's THE ORDER). It is
-    /// harmless: the file was read now for the first time, so no ordinal of
-    /// it was ever answered to a call or a page. One copy, one sync: a
-    /// `done … dropped` of each line's old ordinal — the one form that raises
-    /// no base, and said of no act of the person's; a reader of the file
-    /// finds the line held again under its fresh ordinal right after — then
-    /// each line's `held` copy under its fresh ordinal, in `k` order, the
-    /// `done`s first so no fresh ordinal re-marks a line still standing
+    /// It is the one renumbering (the module doc's THE ORDINALS), the hold's
+    /// step for a file read after the first touch — at the join, the board's
+    /// own file, which could not be named until `H.1` read, or the pending
+    /// file this run's memory lines join once the head will not read; or at
+    /// the door's later open — that holds a line under an ordinal below the
+    /// hold's counter, which is past every ordinal this run gave out,
+    /// standing or settled (skep #875): this run's lines keep theirs,
+    /// answered already, and the file's take ordinals from the counter, so
+    /// none takes an ordinal a call or the page may hold and they walk after
+    /// this run's in their file's order (the owner's ruling, the module doc's
+    /// THE ORDER). It is harmless: no line of the file is in the hold's queue,
+    /// so no ordinal of it was ever answered to a call or a page. One copy,
+    /// one sync: a `done … dropped` of each line's old ordinal — the one form
+    /// that raises no base, and said of no act of the person's; a reader of
+    /// the file finds the line held again under its fresh ordinal right after
+    /// — then each line's `held` copy under its fresh ordinal, in `k` order,
+    /// the `done`s first so no fresh ordinal re-marks a line still standing
     /// under it. The queue takes the fresh ordinals once the copy lands, and
     /// `next_k` moves past them; a queue in memory alone takes them with no
     /// copy. Nothing spends the re-mark budget: each `held` copy is a first

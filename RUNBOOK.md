@@ -1668,15 +1668,16 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        answered `503 index_failed` until a restart:
 
        ```
-       failure: cell index: the walk failed ({cause}); the upload family and the door's index arm refuse for the uptime; the act: a restart, or the build's fix where it recurs
+       failure: cell index: the walk failed (a panic at {location}: {message}); the upload family and the door's index arm refuse for the uptime; the act: a restart, or the build's fix where it recurs
        ```
 
-       `{cause}` is the panic's message where the code wrote it as a
-       literal, else `a panic`. The line before it, `failure:
-       skepd-cell-index: a thread panicked at {location}` (`main` in
-       place of `skepd-cell-index` where the walk ran at the open),
-       names where the walk died. Where a restart meets the same
-       failure, the act is the build's fix: keep both lines for it.
+       `{location}` is where the walk died, as the line before it
+       names it — `failure: skepd-cell-index: a thread panicked at
+       {location}` (`main` in place of `skepd-cell-index` where the
+       walk ran at the open) — and `: {message}` follows it only where
+       the code wrote the panic's message as a literal. Where a restart
+       meets the same failure, the act is the build's fix: keep both
+       lines for it.
 
        The pruner's first pass follows (The full volume, step 3).
 
@@ -2099,16 +2100,18 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    bare positions the index lost unsorted, until a restart:
 
    ```
-   failure: the feed walk ended: {cause}; positions ({low}, {head}] stay uncovered — /changes refuses pages into them until a restart, which walks again; until that restart commits.log takes no line: every write since this open is held in memory alone, and the restart's walk re-covers each as a bare entry, its key and its time lost — restart soon
-   failure: the feed walk ended: {cause}; {n} bare positions the index lost stay unsorted — /changes refuses pages reaching them until a restart, which sorts them again; until that restart the change feed's index files take no line: every write since this open enters the feed's memory alone, which the restart's open re-derives from commits.log — restart soon
+   failure: the feed walk ended: a panic at {location}: {message}; positions ({low}, {head}] stay uncovered — /changes refuses pages into them until a restart, which walks again; until that restart commits.log takes no line: every write since this open is held in memory alone, and the restart's walk re-covers each as a bare entry, its key and its time lost — restart soon
+   failure: the feed walk ended: a panic at {location}: {message}; {n} bare positions the index lost stay unsorted — /changes refuses pages reaching them until a restart, which sorts them again; until that restart the change feed's index files take no line: every write since this open enters the feed's memory alone, which the restart's open re-derives from commits.log — restart soon
    ```
 
    Restart soon, as the first line says: every write meanwhile is held
    in memory alone, as after `commits.log`'s stop (The full volume,
    step 5); under the second alone nothing is lost, `commits.log`
    taking every line, and the restart sorts what is left. Where both
-   pended, the first line names the set after the region. `{cause}` is
-   the panic's words where the code wrote them, else `a panic`.
+   pended, the first line names the set after the region. `{location}`
+   is where the walk died, as the hook's line before it names it
+   (Stop, step 3), and `: {message}` follows it only where the code
+   wrote the panic's words as a literal.
 
 4. **Read the report as at a start.** A restart under a new
    `--node-prefix` moves the blocked-prefix list's off-board test,

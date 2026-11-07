@@ -20,12 +20,16 @@
 //! seeded start beside them is a test hook, compiled under that feature or
 //! this crate's own unit tests alone.
 //!
-//! **The binary keeps its own door.** `main.rs` runs the same three steps
-//! with its own acts between them — the panic hook installed first, a loose
-//! data directory refused before the open, each refusal said and exited on
-//! — and calls neither. The library's open takes the directory as it finds
-//! it; an embedding program that wants that refusal, or a panic posture,
-//! makes it its own.
+//! **The binary keeps its own door.** `main.rs` runs the same three steps with
+//! its own acts between them — the panic hook installed first, a loose data
+//! directory refused before the open, each refusal said and exited on — and
+//! calls neither. The library's open takes the directory as it finds it; an
+//! embedding program that wants that refusal, or a panic posture, makes it its
+//! own. A panic hook of its own calls [`note_site`](crate::note_site) with its
+//! info's location, as the binary's does, so the cell index's walk and the
+//! change feed's name the site of a panic their catches contain
+//! (`operations.md` §1.1 row 41; §4 row 26); without it, each says
+//! `an unknown location`.
 
 use std::error::Error;
 use std::fmt;

@@ -595,7 +595,8 @@ impl Daemon {
     /// Armed *before* a daemon opens, as [`Daemon::hold_the_index_walk`] is,
     /// since the walk starts inside the open — a process-wide seam, as the
     /// hold is; armed under the hold, it fires at the release. Arming again
-    /// re-arms.
+    /// re-arms. A child binary is armed by the variable
+    /// `SKEPD_TEST_WALK_FAULT`, which `main.rs` reads under `test-hooks`.
     #[doc(hidden)]
     pub fn fail_the_index_walk() {
         WALK_FAULT.arm();

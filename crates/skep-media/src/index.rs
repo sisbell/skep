@@ -65,11 +65,10 @@
 //! reference with the cells naming it and the size they name, every
 //! account's base, every halt mark — recording nothing (D9).
 
-use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -87,6 +86,7 @@ use skep_content::Piece;
 use skep_febe::FebeWorld;
 use skep_kernel::{Kernel, Snapshot};
 use skep_namespace::PrincipalId;
+use skep_util::caught::{self, Caught};
 use skep_util::json::hex_string;
 use skep_util::notice::{self, Class};
 
@@ -282,15 +282,16 @@ impl CellIndex {
     ///
     /// It is the walk's failure (`operations.md` §4 row 26; §1.1 row 41): the
     /// line goes out under `Class::Failure` in the operator's terms
-    /// ([`WalkFailedLine`]) — the literal a `panic!` wrote, else `a panic`;
-    /// what refuses from here; and the act. The walk's catch alone calls it
-    /// ([`walk_under_the_catch`]), whichever thread the walk ran on, once per
-    /// life of the process; a test fails an index it built by hand through
-    /// it. The binary's hook has already said the panic's location (row 41:
-    /// the hook's line is the binary's, this one the library's).
-    pub(crate) fn fail(&self, payload: &(dyn Any + Send)) {
+    /// ([`WalkFailedLine`]) — the panic `caught`, at the site the hook noted,
+    /// with its literal where a `panic!` wrote one; what refuses from here;
+    /// and the act. The walk's catch alone calls it ([`walk_under_the_catch`]),
+    /// whichever thread the walk ran on, once per life of the process; a test
+    /// fails an index it built by hand through it. The binary's hook has said
+    /// the panic on the line before (row 41: the hook's line is the binary's,
+    /// this one the library's).
+    pub(crate) fn fail(&self, caught: &Caught) {
         self.failed.store(true, Ordering::Release);
-        notice::emit(Class::Failure, WalkFailedLine { payload: payload_text(payload) });
+        notice::emit(Class::Failure, WalkFailedLine { caught });
     }
 
     /// Enters one cell at `at`, minted in a document `owner` is seated over.
@@ -571,37 +572,28 @@ impl fmt::Display for ThreadRefusedLine<'_> {
 /// The catch's line: the walk failed, what refuses for the uptime, the act.
 ///
 /// Its words (`operations.md` §4 row 26; §1.1 row 41): `cell index: the walk
-/// failed ({cause}); the upload family and the door's index arm refuse for
-/// the uptime; the act: a restart, or the build's fix where it recurs` — the
-/// cause the panic's literal, else `a panic` ([`payload_text`]). Row 41 puts
-/// the panic's location in the parenthesis, which no catch can read: the
-/// binary's hook says it on the line before, written at the panic on the same
-/// thread. A pure value pinned by `to_string()` in the unit suite; emitted
-/// under `Class::Failure` by [`CellIndex::fail`], once.
-struct WalkFailedLine {
-    payload: &'static str,
+/// failed (a panic at {location}: {literal}); the upload family and the
+/// door's index arm refuse for the uptime; the act: a restart, or the build's
+/// fix where it recurs` — the parenthesis the panic as [`Caught`] renders it:
+/// the location the binary's hook noted at the panic, on this thread, and
+/// says on the line before, or `an unknown location` under a hook that noted
+/// none; then the literal a `panic!` wrote, where it wrote one, and never a
+/// formatted message, whose text the walk's values may have made. A pure
+/// value pinned by `to_string()` in the unit suite; emitted under
+/// `Class::Failure` by [`CellIndex::fail`], once.
+struct WalkFailedLine<'a> {
+    caught: &'a Caught,
 }
 
-impl fmt::Display for WalkFailedLine {
+impl fmt::Display for WalkFailedLine<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "cell index: the walk failed ({}); the upload family and the door's index arm refuse \
              for the uptime; the act: a restart, or the build's fix where it recurs",
-            self.payload
+            self.caught
         )
     }
-}
-
-/// Returns a caught panic's payload as the catch's line may carry it.
-///
-/// It is the literal where the payload is one, the words a `panic!` wrote,
-/// which the binary's hook carries too (`operations.md` §1.1 row 41). Any
-/// other payload reads `a panic`: a formatted message among them, whose text
-/// the walk's values may have made and which may span lines, so nothing of
-/// `operations.md` §1's never list rides the line.
-fn payload_text(payload: &(dyn Any + Send)) -> &'static str {
-    payload.downcast_ref::<&'static str>().copied().unwrap_or("a panic")
 }
 
 /// Walks every value of the world `snapshot` holds into `index`.
@@ -661,16 +653,15 @@ pub fn walk<W: FebeWorld>(snapshot: &Snapshot<W>, index: &CellIndex) -> Rebuild 
 /// daemon then serves later rather than never readying (P22: a derived
 /// structure's loss is a slower answer, not an outage).
 ///
-/// **The catch** (`operations.md` §4 row 26; §1.1 row 41, the same
-/// per-thread catch the daemon's loops run under). Both arms run the walk
-/// and its completion under one catch, `walk_under_the_catch`, and an
-/// unwind out of either marks the index failed through `CellIndex::fail`,
-/// said once, in place of a walk that died unsaid and an index that never
-/// readied, where the three readers would have answered the retry-class
-/// token for the uptime. So a walk that dies leaves the board serving
-/// degraded on either arm, and this call never unwinds for it: a panic in
-/// the walk run here is contained here, and the open that called it goes
-/// on.
+/// **The catch** (`operations.md` §4 row 26; §1.1 row 41, a per-thread catch,
+/// as the daemon's loops run under). Both arms run the walk and its completion
+/// under one catch, `walk_under_the_catch`, and an unwind out of either marks
+/// the index failed through `CellIndex::fail`, said once, in place of a walk
+/// that died unsaid and an index that never readied, where the three readers
+/// would have answered the retry-class token for the uptime. So a walk that
+/// dies leaves the board serving degraded on either arm, and this call never
+/// unwinds for it: a panic in the walk run here is contained here, and the
+/// open that called it goes on.
 pub fn start_walk<W: FebeWorld>(kernel: &Kernel<W>, index: Arc<CellIndex>) {
     let snapshot = kernel.snapshot();
     let shared = Arc::clone(&index);
@@ -693,21 +684,22 @@ pub fn start_walk<W: FebeWorld>(kernel: &Kernel<W>, index: Arc<CellIndex>) {
 /// Runs the walk at open and its completion under the catch.
 ///
 /// The walk over `snapshot` adds into `index` and completes it; an unwind out
-/// of either is caught here and marks the index failed through
-/// [`CellIndex::fail`] (`operations.md` §4 row 26; §1.1 row 41). It is the
-/// one catch both of [`start_walk`]'s arms run the walk under — its own
-/// thread's, and the opening thread's where the OS refuses that one — so the
-/// two cannot differ on a walk that dies. Unwind-safe by the argument the
-/// transport makes for its handlers: the index's lock does not poison, an
-/// entry left half-made under the failed state is consulted by no reader the
-/// state does not refuse, and the snapshot is immutable.
+/// of either is caught here, by `caught::catch` with the site the hook noted,
+/// and marks the index failed through [`CellIndex::fail`] (`operations.md`
+/// §4 row 26; §1.1 row 41). It is the one catch both of [`start_walk`]'s arms
+/// run the walk under — its own thread's, and the opening thread's where the
+/// OS refuses that one — so the two cannot differ on a walk that dies.
+/// Unwind-safe by the argument the transport makes for its handlers: the
+/// index's lock does not poison, an entry left half-made under the failed
+/// state is consulted by no reader the state does not refuse, and the snapshot
+/// is immutable.
 fn walk_under_the_catch<W: FebeWorld>(snapshot: &Snapshot<W>, index: &CellIndex) {
-    let walked = catch_unwind(AssertUnwindSafe(|| {
+    let walked = caught::catch(AssertUnwindSafe(|| {
         let report = walk(snapshot, index);
         index.complete(report);
     }));
-    if let Err(payload) = walked {
-        index.fail(payload.as_ref());
+    if let Err(caught) = walked {
+        index.fail(&caught);
     }
 }
 
@@ -905,9 +897,8 @@ mod tests {
     /// one before `start_walk` returns, completing its index where it meets
     /// no fault, and where it meets one it is caught here as on its own
     /// thread — the index failed, and no unwind reaching the caller, whose
-    /// open goes on. Then the line's words, verbatim, at a literal payload;
-    /// and the payload's rendering — a literal as written, and a formatted
-    /// `String` and a payload of neither kind each as the words `a panic`.
+    /// open goes on. Then the line's words, verbatim, for a panic caught at
+    /// a site its hook noted, with a literal payload.
     #[test]
     fn a_walk_that_panics_marks_the_index_failed_and_never_ready() {
         let engine = skep_engine::Engine::open(KernelConfig {
@@ -946,22 +937,26 @@ mod tests {
         assert_eq!(caught.rebuild_report(), None, "no report: the walk never returned");
         assert!(!WALK_FAULT.armed.load(Ordering::Acquire), "the fault spent at the open");
         assert!(!REFUSE_THE_WALKS_THREAD.load(Ordering::Acquire), "the refusal spent with it");
+        // The hook's part, played by the body: this suite's process runs
+        // std's own hook, which notes no site.
+        let at = std::panic::Location::caller();
+        let died = caught::catch(|| {
+            caught::note_site(Some(at));
+            panic!("the test seam's walk fault");
+        });
+        let died = died.expect_err("the body panics");
         assert_eq!(
-            WalkFailedLine { payload: "the test seam's walk fault" }.to_string(),
-            "cell index: the walk failed (the test seam's walk fault); the upload family and \
-             the door's index arm refuse for the uptime; the act: a restart, or the build's fix \
-             where it recurs"
+            WalkFailedLine { caught: &died }.to_string(),
+            format!(
+                "cell index: the walk failed (a panic at {at}: the test seam's walk fault); the \
+                 upload family and the door's index arm refuse for the uptime; the act: a \
+                 restart, or the build's fix where it recurs"
+            )
         );
-        let literal: Box<dyn Any + Send> = Box::new("a literal the code wrote");
-        assert_eq!(payload_text(literal.as_ref()), "a literal the code wrote");
-        let formatted: Box<dyn Any + Send> = Box::new(format!("formatted at {}", 7));
-        assert_eq!(payload_text(formatted.as_ref()), "a panic", "a formatted payload never rides");
-        let other: Box<dyn Any + Send> = Box::new(7u8);
-        assert_eq!(payload_text(other.as_ref()), "a panic");
         // The door by hand, as the gate's suite takes it: failed set, ready
         // not, nothing entered.
         let by_hand = CellIndex::new();
-        by_hand.fail(other.as_ref());
+        by_hand.fail(&died);
         assert!(by_hand.is_failed() && !by_hand.is_ready());
     }
 

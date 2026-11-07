@@ -48,6 +48,7 @@ use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex};
 use skep_core::limits::STANDING_INTERVAL;
+use skep_util::caught::{note_site, site_of};
 use skep_util::notice::{self, Class};
 use skep_util::source::Source;
 // `DEFAULT_WORKERS` and `MIN_WORKERS` are the library's, not this binary's:
@@ -184,6 +185,18 @@ const SKEPD_TEST_WORKER_FAULT: &str = "SKEPD_TEST_WORKER_FAULT";
 #[cfg(feature = "test-hooks")]
 const SKEPD_TEST_FEED_WALK_HOLD: &str = "SKEPD_TEST_FEED_WALK_HOLD";
 
+/// The index walk fault's variable: a test seam.
+///
+/// It is read by `test-hooks` builds alone. Set to anything,
+/// `Daemon::fail_the_index_walk` is armed before the open, so the cell
+/// index's walk at open panics once, on its own thread, and a suite holds
+/// the hook's line and the walk catch's line to one site in the real binary
+/// while the board serves on (`operations.md` §1.1 row 41; §4 row 26). A
+/// shipped build reads no such variable: the read below it does not compile
+/// without the feature.
+#[cfg(feature = "test-hooks")]
+const SKEPD_TEST_WALK_FAULT: &str = "SKEPD_TEST_WALK_FAULT";
+
 /// The main fault's variable: a test seam, read by `test-hooks` builds alone.
 ///
 /// Set to anything, `main` panics once the open has returned — its lines
@@ -216,21 +229,14 @@ const WORKERS_ENDED: &str = "every worker thread has ended; the board serves not
 /// takes under load, and short beside a restart's backoff.
 const DRAIN_STALL: Duration = Duration::from_secs(10);
 
-/// Returns a panic's site as the hook's line names it.
-///
-/// It is the location as std spells it, `file:line:column`, or `an unknown
-/// location` where the hook's info carries none — the line's words and the
-/// key the hook's rate counts a site's panics under ([`HookMemory`]).
-fn site_of(location: Option<&Location<'_>>) -> String {
-    location.map_or_else(|| "an unknown location".to_string(), |at| at.to_string())
-}
-
 /// Returns the hook's line, the words alone (`operations.md` §1.1 row 41).
 ///
 /// A pure function the unit suite pins: the thread by its name
 /// (`an unnamed thread` where it has none), `a thread panicked at` the
-/// site ([`site_of`]), and the payload only where it is a `&'static str` — a
-/// literal the code wrote, which no request can have formatted — so a
+/// site as [`site_of`] spells it — the words a library's catch names the
+/// site in too, and the key the hook's rate counts a site's panics under
+/// ([`HookMemory`]) — and the payload only where it is a `&'static str`, a
+/// literal the code wrote, which no request can have formatted: so a
 /// formatted panic (`expect`, `assert_eq!`, an index) shows its location
 /// alone, which identifies the site, and nothing of §1's never list can ride
 /// the line. Where `repeats` is above zero — the panics at this site on this
@@ -329,24 +335,28 @@ static HOOK_MEMORY: LazyLock<Mutex<HookMemory>> = LazyLock::new(|| Mutex::new(Ho
 /// Installs the panic hook: the binary's, never the library's.
 ///
 /// It is a process-global an embedder must be free to set itself: one
-/// prefixed, timed line through the operator stream's classed door at a
-/// panic, before any catch — Rust's own unprefixed text never reaches the
-/// stream — at the rate [`HookMemory`] holds it to: a site's first panic on
-/// a thread, then one an hour while it recurs, the panics between counted on
-/// the next. Installed first, before the command line is read, so no thread
-/// of this process's panics outside it. The line is enqueued as every
-/// notice is and written by the stream's thread: a worker's panic lands
-/// while the daemon serves on; a panic on `main`'s own thread — the open's,
-/// a tool's — unwinds to exit 101, so the hook drains the stream before the
-/// unwind goes on, as every exit of the binary's does, and its line and the
-/// open's before it reach the stream (`operations.md` §0 fact 1). A panic on
-/// `main` that a catch contains — the cell index's walk, run at the open
-/// where the OS refused its thread — finds the drain only a wait for the
-/// lines already queued, and the open goes on. A reader that takes no line
-/// holds that drain [`DRAIN_STALL`] and no longer, as it holds every exit's,
-/// and the unwind goes on without the lines.
+/// prefixed, timed line through the operator stream's classed door at a panic,
+/// before any catch — Rust's own unprefixed text never reaches the stream — at
+/// the rate [`HookMemory`] holds it to: a site's first panic on a thread, then
+/// one an hour while it recurs, the panics between counted on the next. It
+/// notes the site first ([`note_site`]), whether or not the rate lets the line
+/// be said, so a library's catch on that thread — the cell index's walk, the
+/// change feed's — names in its own line the site this line names
+/// (`operations.md` §1.1 row 41; §4 row 26). Installed first, before the
+/// command line is read, so no thread of this process's panics outside it. The
+/// line is enqueued as every notice is and written by the stream's thread: a
+/// worker's panic lands while the daemon serves on; a panic on `main`'s own
+/// thread — the open's, a tool's — unwinds to exit 101, so the hook drains the
+/// stream before the unwind goes on, as every exit of the binary's does, and
+/// its line and the open's before it reach the stream (`operations.md`
+/// §0 fact 1). A panic on `main` that a catch contains — the cell index's
+/// walk, run at the open where the OS refused its thread — finds the drain
+/// only a wait for the lines already queued, and the open goes on. A reader
+/// that takes no line holds that drain [`DRAIN_STALL`] and no longer, as it
+/// holds every exit's, and the unwind goes on without the lines.
 fn install_the_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
+        note_site(info.location());
         let thread = std::thread::current();
         let key = (thread.id(), site_of(info.location()));
         let admitted = HOOK_MEMORY.lock().admit(key, Instant::now(), STANDING_INTERVAL);
@@ -573,9 +583,10 @@ const OTHER_PROGRAMS_VARIABLES: [&str; 1] = ["SKEPD_URL"];
 /// variable's twin. The daemon's parse and a tool's both call it first,
 /// and a tool counts the daemon's own
 /// variables as known, so an image's baked settings never stop `skepd
-/// inventory`. A test build passes the `SKEPD_TEST_` seams (the worker
-/// fault, the feed walk's hold, the unit suite's child markers); a shipped
-/// build reads none of them, and refuses them too.
+/// inventory`. A test build passes the `SKEPD_TEST_` seams (the worker and
+/// main faults, the feed walk's hold, the index walk's fault, the unit
+/// suite's child markers); a shipped build reads none of them, and refuses
+/// them too.
 ///
 /// # Errors
 ///
@@ -1435,6 +1446,12 @@ fn main() {
     #[cfg(feature = "test-hooks")]
     if std::env::var_os(SKEPD_TEST_FEED_WALK_HOLD).is_some() {
         Daemon::hold_the_feed_walk();
+    }
+    // The index walk's fault (test seam, `test-hooks` builds alone): armed
+    // before the open, where the walk starts.
+    #[cfg(feature = "test-hooks")]
+    if std::env::var_os(SKEPD_TEST_WALK_FAULT).is_some() {
+        Daemon::fail_the_index_walk();
     }
     // The loose directory, refused (unix): a data directory that stands and
     // that other users of this machine can read is refused here — before

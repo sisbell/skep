@@ -147,9 +147,10 @@
 //! with nothing further written, the crash-stop shape: the log as the open
 //! found it, the positions sorted so far kept, the next open walking and
 //! sorting the rest. Under the catch (row 41), a panic ends the thread with
-//! the consequence line and what it left pending for the uptime, which the
-//! standing line re-says; the OS refusing the thread runs the walk at the
-//! open instead, as the cell index's does, said.
+//! the consequence line, naming the site the hook noted, and what it left
+//! pending for the uptime, which the standing line re-says; the OS refusing
+//! the thread runs the walk at the open instead, as the cell index's does,
+//! said.
 //!
 //! **And the cell index's entry** (`media.md` Op inventory 1: "each entry is
 //! entered in skepd's memory at every commit that mints a cell, whichever op
@@ -183,6 +184,7 @@ use skep_kernel::{Attestation, Seq, Snapshot};
 use skep_links::{read_with_in, supersession_claim_in, HasLinks, NamedAddress};
 use skep_media::cell::names_kind_by_prefix;
 use skep_media::index::CellIndex;
+use skep_util::caught::{self, Caught};
 use skep_util::notice::{self, Class};
 
 // The change feed behind `GET /changes`: its authority file, and the one
@@ -1618,15 +1620,16 @@ impl FeedWalk {
     /// Spawns `skepd-feed-walk` over what `feed`'s open left pending.
     ///
     /// The walk and its landing ([`Feed::walk_and_land`]) run under the catch
-    /// (row 41) — a panic that escapes is the hook's prefixed line, then the
-    /// consequence in the operator's terms ([`FeedWalkEndedLine`]) and the
-    /// flag the standing line reads, what was left pending for the uptime.
-    /// Spawned fallibly, as the daemon's other threads are: where the OS
-    /// refuses the thread the walk runs here, at the open, as the cell
-    /// index's does — the board serves later rather than never covering —
-    /// said, and under the same catch: a panic on the opening thread marks
-    /// the walk ended and what it left pending, said, and the open goes on,
-    /// where an uncaught one would end the process with the open.
+    /// (row 41; `caught::catch`) — a panic that escapes is the hook's prefixed
+    /// line, then the consequence in the operator's terms, naming the site the
+    /// hook noted ([`FeedWalkEndedLine`]), and the flag the standing line
+    /// reads, what was left pending for the uptime. Spawned fallibly, as the
+    /// daemon's other threads are: where the OS refuses the thread the walk
+    /// runs here, at the open, as the cell index's does — the board serves
+    /// later rather than never covering — said, and under the same catch: a
+    /// panic on the opening thread marks the walk ended and what it left
+    /// pending, said, and the open goes on, where an uncaught one would end
+    /// the process with the open.
     fn spawn(
         feed: Arc<Feed>,
         stores: EngineStores,
@@ -1645,15 +1648,14 @@ impl FeedWalk {
             let stores = stores.clone();
             let lines = lines.clone();
             move || {
-                let walked = catch_unwind(AssertUnwindSafe(|| {
+                let walked = caught::catch(AssertUnwindSafe(|| {
                     feed.walk_and_land(stores.kernel(), &snapshot, &shared.control, &lines)
                 }));
-                if let Err(payload) = walked {
+                if let Err(caught) = walked {
                     shared.ended.store(true, Ordering::Release);
-                    let payload = payload_text(payload.as_ref());
                     lines.say(
                         Class::Failure,
-                        FeedWalkEndedLine { payload, pending: shared.pending },
+                        FeedWalkEndedLine { caught: &caught, pending: shared.pending },
                     );
                 }
             }
@@ -1676,13 +1678,12 @@ impl FeedWalk {
                 // at. Under the catch, as the thread's arm is: a panic here
                 // ends the walk and not the open.
                 let snapshot = stores.kernel().snapshot();
-                let walked = catch_unwind(AssertUnwindSafe(|| {
+                let walked = caught::catch(AssertUnwindSafe(|| {
                     feed.walk_and_land(stores.kernel(), &snapshot, &shared.control, &lines)
                 }));
-                if let Err(payload) = walked {
+                if let Err(caught) = walked {
                     shared.ended.store(true, Ordering::Release);
-                    let payload = payload_text(payload.as_ref());
-                    lines.say(Class::Failure, FeedWalkEndedLine { payload, pending });
+                    lines.say(Class::Failure, FeedWalkEndedLine { caught: &caught, pending });
                 }
                 None
             }
@@ -1691,21 +1692,11 @@ impl FeedWalk {
     }
 }
 
-/// Returns a caught panic's payload as the operator stream may carry it.
-///
-/// It is the literal where the payload is one, the words the code wrote,
-/// which the hook carries too; any other payload — a formatted message
-/// among them, whose text a record's values may have made — reads `a
-/// panic`, so nothing of a request can ride it.
-fn payload_text(payload: &(dyn std::any::Any + Send)) -> &'static str {
-    payload.downcast_ref::<&'static str>().copied().unwrap_or("a panic")
-}
-
 /// The walk thread's consequence line.
 ///
 /// It says `operations.md`'s words (§1.1 row 41; §3.3 step 2), then what the
 /// dead walk costs every write. The words, with a region pending: `the feed
-/// walk ended: {payload}; positions ({low}, {head}] stay uncovered — /changes
+/// walk ended: {caught}; positions ({low}, {head}] stay uncovered — /changes
 /// refuses pages into them until a restart, which walks again; until that
 /// restart commits.log takes no line: every write since this open is held in
 /// memory alone, and the restart's walk re-covers each as a bare entry, its
@@ -1713,23 +1704,28 @@ fn payload_text(payload: &(dyn std::any::Any + Send)) -> &'static str {
 /// lost stay unsorted` after the region where both pend; with the region
 /// pending for the uptime, `CommitsLog::admit` holds every write in memory,
 /// so the cost grows with each write until the restart. With the set alone
-/// pending: `the feed walk ended: {payload}; {n} bare positions the index
+/// pending: `the feed walk ended: {caught}; {n} bare positions the index
 /// lost stay unsorted — /changes refuses pages reaching them until a
 /// restart, which sorts them again; until that restart the change feed's
 /// index files take no line: every write since this open enters the feed's
 /// memory alone, which the restart's open re-derives from commits.log —
-/// restart soon` — nothing is lost there, the log taking every line. A pure
+/// restart soon` — nothing is lost there, the log taking every line.
+/// `{caught}` is the panic as [`Caught`] renders it, `a panic at
+/// {location}: {literal}`: the location the hook noted at the panic, on the
+/// walk's thread, or `an unknown location` under a hook that noted none,
+/// then the literal the code wrote, where it wrote one, and never a
+/// formatted message, whose text a record's values may have made. A pure
 /// value, pinned by `to_string()` in the unit suite; emitted under
 /// `Class::Failure` by the thread's catch, once, after the hook's line has
 /// said the panic itself.
-pub(crate) struct FeedWalkEndedLine {
-    pub(crate) payload: &'static str,
+pub(crate) struct FeedWalkEndedLine<'a> {
+    pub(crate) caught: &'a Caught,
     pub(crate) pending: FeedPending,
 }
 
-impl fmt::Display for FeedWalkEndedLine {
+impl fmt::Display for FeedWalkEndedLine<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "the feed walk ended: {}; ", self.payload)?;
+        write!(f, "the feed walk ended: {}; ", self.caught)?;
         match (self.pending.region, self.pending.unsorted) {
             (Some((low, head)), unsorted) => {
                 write!(f, "positions ({low}, {head}] stay uncovered")?;

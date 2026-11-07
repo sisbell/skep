@@ -109,12 +109,13 @@ skep-blobs = { path = "../skep-blobs" }
 # pass, the fetch's composed order, and the four limits this daemon reads
 # too. Generic over the world; this daemon instantiates it at `World`.
 skep-media = { path = "../skep-media" }
-# THE SUPPORT CRATE below this one and the media crate — the three utilities
+# THE SUPPORT CRATE below this one and the media crate — the four utilities
 # both take and neither owns: the counting permit pool the four bounded
 # pools are built on (one `Permit` type, the one the pool hooks return), the
-# operator's notice line, and the codec's determinism helpers — the
-# key-sorting `obj` every JSON object goes through, lowercase hex and its
-# exact inverse. It depends on nothing of skep.
+# operator's notice line, the codec's determinism helpers — the key-sorting
+# `obj` every JSON object goes through, lowercase hex and its exact inverse
+# — and the caught panic: the binary's hook notes each panic's site, which
+# the media crate's walk catch says. It depends on nothing of skep.
 skep-util = { path = "../skep-util" }
 # JSON frames and the daemon's own objects (`/health`, the replies), built
 # through `skep-util`'s key-sorting `obj` as the core's codec builds its,

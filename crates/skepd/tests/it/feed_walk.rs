@@ -766,14 +766,17 @@ fn a_page_is_refused_by_its_rows_not_its_since_alone() {
     sd.shutdown();
 }
 
-/// T9 — THE WALK's DEATH IS SAID AND THE BOARD SERVES (§1.1 row 41; L9's
-/// standing line): the walk held and its panic arm set, the release ends
-/// the thread at its first boundary — the catch's consequence line once,
-/// naming the region (the hook's prefixed line is the binary's, not
-/// asserted in-process) — `/health` 200, a page into the region still
-/// refused, its detail naming the restart and no retry, a write still
-/// admitted, the standing line's clause at the next
-/// tick; a reopen walks the region again and lands it.
+/// Checks that the walk's death is said once and the board serves (T9).
+///
+/// It holds §1.1 row 41 and L9's standing line: the walk held and its panic
+/// arm set, the release ends the thread at its first boundary — the catch's
+/// consequence line once, naming the region and the panic at `an unknown
+/// location`, since this suite's process installs no hook that notes a site
+/// (the hook's prefixed line and its site are the binary's, not asserted
+/// in-process) — `/health` 200, a page into the region still refused, its
+/// detail naming the restart and no retry, a write still admitted, the
+/// standing line's clause at the next tick; a reopen walks the region again
+/// and lands it.
 #[test]
 fn the_walks_death_is_said_once_and_the_board_serves_with_the_region_pending() {
     let _held = hold();
@@ -788,11 +791,11 @@ fn the_walks_death_is_said_once_and_the_board_serves_with_the_region_pending() {
     Daemon::panic_the_feed_walk();
     Daemon::release_the_feed_walk();
     let ended = format!(
-        "failure: the feed walk ended: the test seam's fault in the feed walk; positions ({low}, \
-         {head}] stay uncovered — /changes refuses pages into them until a restart, which walks \
-         again; until that restart commits.log takes no line: every write since this open is \
-         held in memory alone, and the restart's walk re-covers each as a bare entry, its key and \
-         its time lost — restart soon"
+        "failure: the feed walk ended: a panic at an unknown location: the test seam's fault in \
+         the feed walk; positions ({low}, {head}] stay uncovered — /changes refuses pages into \
+         them until a restart, which walks again; until that restart commits.log takes no line: \
+         every write since this open is held in memory alone, and the restart's walk re-covers \
+         each as a bare entry, its key and its time lost — restart soon"
     );
     wait_until("the catch's line", || !lines_with(&sd, "failure: the feed walk ended").is_empty());
     assert_eq!(lines_with(&sd, "failure: the feed walk ended"), std::slice::from_ref(&ended), "FINDING (row 41)");

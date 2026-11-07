@@ -600,8 +600,8 @@ fn a_failed_index_answers_the_lease_arm_as_final_where_the_window_answered_rebui
     gate.advance_clock_ms(10_000);
     assert_eq!(gate.binding(p, &cell), Binding::Rebuilding, "lapsed, the walk running: the state");
     // FAILED: the lease arm's verdict is final.
-    let payload: Box<dyn std::any::Any + Send> = Box::new("the walk died");
-    gate.index().fail(payload.as_ref());
+    let died = skep_util::caught::catch(|| panic!("the walk died")).expect_err("the body panics");
+    gate.index().fail(&died);
     assert!(gate.index_failed() && !gate.index_ready(), "the two reads never agree");
     assert_eq!(gate.binding(p, &cell), Binding::Lapsed, "lapsed, the walk dead: LAPSED, not the state");
     assert_eq!(gate.binding(PrincipalId(6), &cell), Binding::Unbound, "no lease, the walk dead: UNBOUND");

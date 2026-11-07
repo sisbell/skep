@@ -1,6 +1,6 @@
 //! # skep-util — the support crate below the daemon and the clients
 //!
-//! Five utilities two or more crates of the workspace take and none owns —
+//! Six utilities two or more crates of the workspace take and none owns —
 //! the daemon, the media crate, the blob store, the client library and the
 //! shell's core stand above it — in one home, so the media crate's move
 //! out of the daemon copies no helper, the daemon's six pools keep one
@@ -33,6 +33,12 @@
 //!   from: the default, a flag, a variable — carried beside the value on
 //!   the daemon's session-layer options and the media crate's upload
 //!   setting, so the open's report names each setting's source.
+//! * [`caught`] — a caught panic named by the site its hook noted: one slot
+//!   per thread, which the binary's panic hook fills ([`caught::note_site`])
+//!   and [`caught::catch`] takes at the unwind it contains, answering a
+//!   [`caught::Caught`] — so the cell index's walk and the change feed's
+//!   name the site in their own lines — and [`caught::site_of`], the one
+//!   spelling of a site the hook's line and theirs share.
 //! * [`file`](mod@file) — a file one process writes and reads back after
 //!   a crash, a kill or a refused write, under one tail rule: a read that
 //!   hands back a file's lines as bytes and classifies its tail, the torn
@@ -78,6 +84,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod caught;
 pub mod file;
 pub mod json;
 pub mod notice;

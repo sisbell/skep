@@ -40,7 +40,7 @@ above it.
   knows nothing of what a transaction means; the world it stores is a
   type parameter the engine supplies. Its modules and rules: §The kernel.
 - `skep-util` — the support crate below the daemon, the media crate, the
-  blob store, the client and the shell: the five utilities two or more
+  blob store, the client and the shell: the six utilities two or more
   crates take and none owns — the counting permit pool behind the daemon's
   six bounded pools and, beside it, the edge tracker each bound that
   refuses holds, so its saturation and its clearing are said once per
@@ -48,7 +48,9 @@ above it.
   support crate says why a library spells it); the JSON determinism
   helpers — `obj`, the key-sorting object builder every JSON object the
   daemon emits is built through, `hex_string` and its exact inverse
-  `parse_lower_hex` with `hex_nibble`; a setting's source; and the file
+  `parse_lower_hex` with `hex_nibble`; a setting's source; a caught panic
+  named by the site its hook noted — `caught`, the per-thread slot the
+  daemon's panic hook fills and the walks' catches read; and the file
   under one tail rule — `file`, the read that hands back a file's lines as
   bytes and classifies its tail, the append written where the last whole
   line ends with a crash's tail first cut off or closed by a mark, or cut
@@ -427,7 +429,7 @@ SP-14, SP-18, SP-19, SP-23, SP-28.
 
 ## The support crate, `skep-util`
 
-`skep-util` holds the five utilities two or more crates of the workspace
+`skep-util` holds the six utilities two or more crates of the workspace
 take and none owns — the daemon, the media crate, the blob store, the
 client library and the shell's core stand above it. Its modules are
 declared in `src/lib.rs`, each with a line saying what it holds, and the
@@ -441,7 +443,9 @@ bound that refuses, with the one rendering of a pool's two lines
 and `emit_lines`, the `drain` at the binary's exits and `set_sink`, the
 embedding program's door; `json` — the determinism helpers, `obj`,
 `hex_string`, `parse_lower_hex` and `hex_nibble`; `source` — `Source`,
-where a setting's value in force came from; `file` — a file one process
+where a setting's value in force came from; `caught` — a caught panic
+named by the site its hook noted (`note_site`, `catch`, `Caught`) and the
+one spelling of a site (`site_of`); `file` — a file one process
 writes and reads back after a crash, under the one tail rule: `read_lines`
 and the streaming `LineReader`, `Appender` with `cut` and `sync_handle`,
 `write_once`, `publish` and `publish_by`, `keep_beside`, `remove`, and
@@ -462,8 +466,9 @@ Rules that hold across its files:
   by decision: exactly one program writes the operator's stream, and the
   crate doc says why.
 
-Its unit suites sit beside their code: `json/tests.rs`, `notice/tests.rs`
-and `file/tests.rs`.
+Its unit suites sit beside their code: `json/tests.rs`, `notice/tests.rs`,
+`permits/tests.rs` and `file/tests.rs`, and the inline suites of
+`source.rs` and `caught.rs`.
 
 Its rules of mechanism: SP-1, SP-2, SP-3, SP-5, SP-7, SP-9, SP-10, SP-11,
 SP-12, SP-14, SP-17, SP-25, SP-26, SP-27.

@@ -1,10 +1,11 @@
 # skep-util
 
 The support crate below the daemon, the media crate, the blob store, the
-client and the shell: the five utilities two or more crates of the
+client and the shell: the six utilities two or more crates of the
 workspace take and none owns — a counting permit, the operator's notice
-line, the JSON determinism helpers, a setting's source, and the file one
-process writes and reads back after a crash under one tail rule.
+line, the JSON determinism helpers, a setting's source, a caught panic
+named by the site its hook noted, and the file one process writes and
+reads back after a crash under one tail rule.
 
 Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substrate in the Project Xanadu lineage.
 
@@ -31,6 +32,14 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **A setting's source**, `source` — `Source`, where a setting's value in
   force came from: the default, a flag, a variable — carried beside the
   value so an open's report names each setting's source.
+- **A caught panic's site**, `caught` — `note_site`, which a panic hook
+  calls with its info's location, and `catch`, which runs a body under
+  `catch_unwind` and answers its unwind as a `Caught`: the site the hook
+  noted on that thread and the payload where it is a literal, rendered
+  `a panic at {site}`, then `: {literal}` — the site `an unknown
+  location` where no hook noted one, never an earlier panic's — and
+  `site_of`, the one spelling of a site the hook's line and a catch's
+  share.
 - **The file under the tail rule**, `file` — a file one process writes and
   reads back after a crash, a kill or a refused write: `read_lines` and
   the streaming `LineReader`, which hand back a file's lines as bytes and

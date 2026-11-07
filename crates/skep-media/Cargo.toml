@@ -26,10 +26,11 @@ test-hooks = ["skep-blobs/test-hooks"]
 [dependencies]
 # THE SUPPORT CRATE below this one and the daemon: the counting permit pool
 # the fetch and upload pools are built on (one `Permit` type, the one the
-# daemon's pool hooks return), the operator's notice line, and the JSON
+# daemon's pool hooks return), the operator's notice line, the JSON
 # determinism helpers — the key-sorting `obj` of `/health`'s media object,
 # lowercase hex and its exact inverse, by which the cell's canonical rule
-# reads what the encoder wrote.
+# reads what the encoder wrote — and the caught panic the walk's catch says
+# at the site the daemon's hook noted.
 skep-util = { path = "../skep-util" }
 # THE BLOB STORE (media lane B): Store, Lease, UploadRecord, UploadId —
 # opened under `blobs/` by the gate, which is what reads principal, lock

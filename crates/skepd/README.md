@@ -123,10 +123,13 @@ an embedder or a test. Everything it serves is the operation surface
 of [skep-febe](../skep-febe) over the world of
 [skep-engine](../skep-engine); its core — the session layer, the commits
 and the codec — is [skep-core](../skep-core)'s, the crate below it; the
-counting permit its six pools are built on, the operator's notice line
-and the codec's key-sorting `obj` are [skep-util](../skep-util)'s, the
-support crate below both that the media crate shares; how its modules
-are layered is in [ARCHITECTURE.md](../../ARCHITECTURE.md).
+counting permit its six pools are built on, the operator's notice line,
+the codec's key-sorting `obj` and the caught panic — whose site the
+binary's panic hook notes for the walks' catches to say, and an
+embedder's own hook through the re-exported `note_site` — are
+[skep-util](../skep-util)'s, the support crate below both that the media
+crate shares; how its modules are layered is in
+[ARCHITECTURE.md](../../ARCHITECTURE.md).
 
 The daemon verifies signatures and makes none: its core calls
 [skep-signature](../skep-signature)'s verify with that crate's `sign`

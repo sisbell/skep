@@ -635,53 +635,56 @@ fn the_head_retry_doubles_to_its_cap_and_answers_once_past_its_deadline_behind_a
     signal.stop();
 }
 
-/// THE FULL VOLUME's LINE (`operations.md` §1.1 m1), in the ruled words,
-/// with the position the refused write would have taken — and the door it
-/// goes through keeps it in the record under its class word.
-/// THE WALK THREAD's TWO LINES at fixed inputs: the catch's consequence
-/// (row 41) with the payload and what the walk left — the region, the bare
-/// positions the index lost, or both — and the OS's refusal of the thread
-/// with the cause and what runs instead.
+/// Checks the walk thread's two lines at fixed inputs, in the ruled words.
+///
+/// The catch's consequence (row 41) carries the panic caught — the site its
+/// hook noted, and the literal — and what the walk left: the region, the
+/// bare positions the index lost, or both. The OS's refusal of the thread
+/// carries the cause and what runs instead.
 #[test]
 fn the_feed_walks_catch_and_refusal_lines_render_the_ruled_words() {
     let region = FeedPending { region: Some((24, 30)), unsorted: None };
     let set = Some(Unsorted { count: 5, first: 3, last: 19 });
-    let payload = "the test seam's fault in the feed walk";
+    // The hook's part, played by the body: this suite's process runs std's
+    // own hook, which notes no site.
+    let at = std::panic::Location::caller();
+    let died = caught::catch(|| {
+        caught::note_site(Some(at));
+        panic!("the test seam's fault in the feed walk");
+    });
+    let caught = &died.expect_err("the body panics");
+    let said =
+        format!("the feed walk ended: a panic at {at}: the test seam's fault in the feed walk;");
     assert_eq!(
-        FeedWalkEndedLine { payload, pending: region }.to_string(),
-        "the feed walk ended: the test seam's fault in the feed walk; positions (24, 30] stay \
-         uncovered — /changes refuses pages into them until a restart, which walks again; until \
-         that restart commits.log takes no line: every write since this open is held in memory \
-         alone, and the restart's walk re-covers each as a bare entry, its key and its time lost \
-         — restart soon"
+        FeedWalkEndedLine { caught, pending: region }.to_string(),
+        format!(
+            "{said} positions (24, 30] stay uncovered — /changes refuses pages into them until a \
+             restart, which walks again; until that restart commits.log takes no line: every write \
+             since this open is held in memory alone, and the restart's walk re-covers each as a \
+             bare entry, its key and its time lost — restart soon"
+        )
     );
     assert_eq!(
-        FeedWalkEndedLine {
-            payload,
-            pending: FeedPending { region: Some((24, 30)), unsorted: set }
-        }
-        .to_string(),
-        "the feed walk ended: the test seam's fault in the feed walk; positions (24, 30] stay \
-         uncovered and 5 bare positions the index lost stay unsorted — /changes refuses pages \
-         into them until a restart, which walks again; until that restart commits.log takes no \
-         line: every write since this open is held in memory alone, and the restart's walk \
-         re-covers each as a bare entry, its key and its time lost — restart soon"
-    );
-    assert_eq!(
-        FeedWalkEndedLine { payload, pending: FeedPending { region: None, unsorted: set } }
+        FeedWalkEndedLine { caught, pending: FeedPending { region: Some((24, 30)), unsorted: set } }
             .to_string(),
-        "the feed walk ended: the test seam's fault in the feed walk; 5 bare positions the index \
-         lost stay unsorted — /changes refuses pages reaching them until a restart, which sorts \
-         them again; until that restart the change feed's index files take no line: every write \
-         since this open enters the feed's memory alone, which the restart's open re-derives \
-         from commits.log — restart soon"
+        format!(
+            "{said} positions (24, 30] stay uncovered and 5 bare positions the index lost stay \
+             unsorted — /changes refuses pages into them until a restart, which walks again; until \
+             that restart commits.log takes no line: every write since this open is held in \
+             memory alone, and the restart's walk re-covers each as a bare entry, its key and its \
+             time lost — restart soon"
+        )
     );
-    // A formatted payload's text may have been made from a record's values,
-    // so only a literal rides the line.
-    let literal: Box<dyn std::any::Any + Send> = Box::new("a literal the code wrote");
-    let formatted: Box<dyn std::any::Any + Send> = Box::new(format!("made from {}", "a value"));
-    assert_eq!(payload_text(literal.as_ref()), "a literal the code wrote");
-    assert_eq!(payload_text(formatted.as_ref()), "a panic", "a formatted payload never rides");
+    assert_eq!(
+        FeedWalkEndedLine { caught, pending: FeedPending { region: None, unsorted: set } }
+            .to_string(),
+        format!(
+            "{said} 5 bare positions the index lost stay unsorted — /changes refuses pages \
+             reaching them until a restart, which sorts them again; until that restart the change \
+             feed's index files take no line: every write since this open enters the feed's \
+             memory alone, which the restart's open re-derives from commits.log — restart soon"
+        )
+    );
     let e = io::Error::other("Resource temporarily unavailable");
     assert_eq!(
         FeedWalkRefusedLine { error: &e, pending: region }.to_string(),
@@ -1554,7 +1557,10 @@ fn a_panic_in_the_walk_run_at_the_open_is_caught_and_the_open_goes_on() {
     assert_eq!(wp.feed_walk_gone(), Some(pending), "the flag the standing line reads");
     let said = wp.lines_said().lock().clone();
     let all = said.join("\n");
-    let ended = FeedWalkEndedLine { payload: "the test seam's fault in the feed walk", pending }
+    // No hook in this suite's process notes a site, so the walk's catch
+    // reads `an unknown location`, as a catch of the same panic here does.
+    let unnoted = caught::catch(|| panic!("the test seam's fault in the feed walk"));
+    let ended = FeedWalkEndedLine { caught: &unnoted.expect_err("the body panics"), pending }
         .to_string();
     assert_eq!(
         said.iter().filter(|l| **l == format!("failure: {ended}")).count(),

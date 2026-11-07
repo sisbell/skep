@@ -25,6 +25,11 @@
 //! * THE HOOK: a worker's panic inside its handler's catch is ONE prefixed,
 //!   timed `failure:` line naming `skepd-worker` and the site, nothing of
 //!   Rust's own hook's text, and the worker serves its next request.
+//! * The cell index walk's catch names the hook's site: the walk's fault
+//!   armed, the hook's `failure:` line names `skepd-cell-index` and the
+//!   site, and the catch's line after it, `cell index: the walk failed (a
+//!   panic at {site}: …)`, names the same site — once each, the board
+//!   serving on.
 //! * THE WORKERS' END: the floor's workers, a panic past the catch in each
 //!   after its one reply — the hook's line per death, then `failure: every
 //!   worker thread has ended; the board serves nothing`, and exit 1.
@@ -100,6 +105,13 @@ use crate::common::{
 /// handler's catch or `outside` it, once, or `every` — the outside arm's
 /// panic in every worker that reaches it.
 const WORKER_FAULT: &str = "SKEPD_TEST_WORKER_FAULT";
+
+/// The index walk fault's variable, the binary's test door too.
+///
+/// Set to anything, it arms `Daemon::fail_the_index_walk` before the open
+/// (`main.rs`, read under `test-hooks` alone), so the cell index's walk at
+/// open panics once, on its own thread.
+const INDEX_WALK_FAULT: &str = "SKEPD_TEST_WALK_FAULT";
 
 /// How long a claim waits for the binary to serve, to say a line or to
 /// exit: an open on a fresh directory is a fraction of a second and a
@@ -1444,6 +1456,57 @@ fn a_workers_panic_inside_its_catch_is_one_prefixed_line_of_the_hooks_and_the_wo
         "FINDING (row 41): Rust's own hook's text reached stderr:\n{}",
         whole.join("\n")
     );
+}
+
+/// Checks that the walk catch's line names the site the hook's line names.
+///
+/// The index walk's fault armed in the real binary, its walk panics on its
+/// own thread (`operations.md` §1.1 row 41; §4 row 26; #492): the hook's
+/// line, `skepd-cell-index: a thread panicked at {site}: the test seam's
+/// walk fault`, comes first, and the catch's line after it names the same
+/// site and the literal — the fault's own site, in `skep-media`'s
+/// `index.rs` — each said once; and the board serves on.
+#[test]
+fn the_walks_catch_line_names_the_site_the_hooks_line_names_and_the_board_serves_on() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("data");
+    let mut served = serve_and_read_the_open(&dir, &[(INDEX_WALK_FAULT, "1")]);
+    let caught = await_said(&mut served.stderr, "failure", "cell index: the walk failed (");
+    let hook = "skepd-cell-index: a thread panicked at ";
+    let literal = ": the test seam's walk fault";
+    let hooks_site = |line: &str| {
+        after_the_head(line, "failure")
+            .and_then(|said| said.strip_prefix(hook))
+            .and_then(|said| said.strip_suffix(literal))
+            .map(str::to_string)
+    };
+    let site = served.stderr.seen.iter().find_map(|l| hooks_site(l)).unwrap_or_else(|| {
+        let seen = served.stderr.seen.join("\n");
+        panic!("FINDING (row 41): no hook's line before the catch's:\n{seen}")
+    });
+    assert!(site.contains("skep-media/src/index.rs:"), "the site is the walk's own fault: {site}");
+    assert_eq!(
+        caught,
+        format!(
+            "cell index: the walk failed (a panic at {site}: the test seam's walk fault); the \
+             upload family and the door's index arm refuse for the uptime; the act: a restart, \
+             or the build's fix where it recurs"
+        ),
+        "FINDING (#492): the catch's line names the site the hook's line names"
+    );
+    let (st, body) = get(served.port, "/health");
+    assert_eq!(
+        (st, json(&body)["ok"].as_bool()),
+        (200, Some(true)),
+        "the board serves on: {}",
+        String::from_utf8_lossy(&body)
+    );
+    served.child.kill();
+    let whole = served.stderr.whole();
+    let hooks_lines = whole.iter().filter(|l| hooks_site(l).is_some()).count();
+    let catch_lines =
+        whole.iter().filter(|l| said(l, "failure", "cell index: the walk failed (")).count();
+    assert_eq!((hooks_lines, catch_lines), (1, 1), "each said once:\n{}", whole.join("\n"));
 }
 
 /// `GET /health` on a connection of its own, as the harness's `get` makes

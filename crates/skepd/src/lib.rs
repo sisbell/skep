@@ -188,6 +188,15 @@ pub use server::{
 /// sets one of those settings names the arm that set it on this crate's
 /// path, as it names the options themselves.
 pub use skep_util::source::Source;
+/// Notes a panic's site for the catch its unwind meets, `skep-util`'s.
+///
+/// An embedding program's own panic hook calls it with its info's
+/// `location()`, as the binary's hook does, so the lines the two walks'
+/// catches say — the cell index's and the change feed's — name the site of
+/// the panic each contained, and read `an unknown location` without it.
+/// Re-exported for the reason [`Source`] is: the embedder names it on this
+/// crate's path.
+pub use skep_util::caught::note_site;
 
 /// The seeded start: [`embed`] under the test seam's seeded salt source.
 ///

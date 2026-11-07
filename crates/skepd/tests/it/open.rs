@@ -35,10 +35,14 @@
 //!   reader costs a refusal's line and never its exit code — 2 stays 2, 1
 //!   stays 1, never 101.
 //! * NO EXIT WAITS ON A READER THAT HAS STOPPED: on a stderr whose pipe is
-//!   full and never read, a refused open exits 1 with its refusal unwritten,
-//!   the workers' end exits 1 and a panic on `main` exits 101, each once
-//!   the drain has given up at the binary's bound; no byte of the child's
-//!   reaches the reader (gate-full: each waits the bound out).
+//!   full and never read, a refusal before the stream's first line exits 1
+//!   once `refuse`'s wait gives up at the binary's bound, and a refused open
+//!   exits 1 with its refusal unwritten, the workers' end exits 1 and a
+//!   panic on `main` exits 101, each once the drain has given up at that
+//!   bound (gate-full: each waits the bound out); on a stdout whose pipe is
+//!   full and never read, the workers' end exits 1 with the serving line
+//!   unwritten, waiting out no bound. No byte of the child's reaches the
+//!   reader.
 //! * A COMMAND LINE THE BINARY CANNOT READ, on a stderr that is no
 //!   terminal, is one line naming the cause and `--help`, exit 2 — never the
 //!   usage text a unit restarting on failure would write at every attempt.
@@ -204,9 +208,9 @@ impl StalledPipe {
 
     /// Every byte the pipe holds that the filler did not write — the
     /// child's, which a reader that had stopped never took. Read once the
-    /// child is reaped and its command dropped ([`launch_onto`]), so the
-    /// filler's is the one write end left: its parked write lands as this
-    /// reads, and it stops.
+    /// child is reaped and its command dropped ([`launch_onto`],
+    /// [`launch_onto_stdout`]), so the filler's is the one write end left:
+    /// its parked write lands as this reads, and it stops.
     fn childs_bytes(self) -> Vec<u8> {
         self.stop.store(true, Ordering::SeqCst);
         let mut held = Vec::new();
@@ -222,6 +226,15 @@ impl StalledPipe {
 /// so the child holds that write end and this test holds none.
 fn launch_onto(mut cmd: Command, stderr: io::PipeWriter) -> Spawned {
     cmd.stderr(stderr);
+    Spawned::launch(&mut cmd)
+}
+
+/// Returns `cmd` spawned with `stdout` as its stdout.
+///
+/// The command is dropped at once, as [`launch_onto`] drops it, so the
+/// child holds that write end and this test holds none.
+fn launch_onto_stdout(mut cmd: Command, stdout: io::PipeWriter) -> Spawned {
+    cmd.stdout(stdout);
     Spawned::launch(&mut cmd)
 }
 
@@ -1666,16 +1679,18 @@ fn assert_the_reader_took_nothing(pipe: StalledPipe) {
     );
 }
 
-/// §0 FACT 1, A READER THAT HAS STOPPED — A REFUSED OPEN STILL EXITS 1: the
-/// child's stderr a [`StalledPipe`], a file where the data directory is
-/// named. The open's first two lines reach the stream's queue, whose thread
-/// parks writing the first; the drain gives up at the binary's bound, and
-/// the refusal — which would wait behind that thread on stderr's lock — is
-/// not written: exit 1, no byte of the child's taken. Necessarily slow: it
-/// waits the bound out.
+/// Checks that the board's refusal exits 1 on a stderr that takes nothing.
+///
+/// The child's stderr is a [`StalledPipe`], and a file stands where the
+/// data directory is named (`operations.md` §0 fact 1): the board's listing
+/// fails with an error other than its absence, so [`skepd()`] adds no
+/// `--create`, and `main` refuses at `judge_the_board`, before any line
+/// reaches the stream. The refusal's thread parks on the full pipe and
+/// `refuse`'s wait gives up at the binary's bound: exit 1, no byte of the
+/// child's taken. Necessarily slow: it waits the bound out.
 #[test]
 #[ignore = "timing test - gate-full only"]
-fn a_refused_open_exits_1_on_a_stderr_whose_reader_has_stopped() {
+fn a_refusal_before_the_streams_first_line_exits_1_on_a_stderr_whose_reader_has_stopped() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let not_a_dir = tmp.path().join("a-file");
     fs::write(&not_a_dir, b"not a board").expect("a file where a directory is named");
@@ -1683,6 +1698,33 @@ fn a_refused_open_exits_1_on_a_stderr_whose_reader_has_stopped() {
     let mut child = launch_onto(skepd(&not_a_dir, &["--port", "0"]), stderr);
     let status = child.wait_within(PATIENCE);
     assert_eq!(status.code(), Some(1), "FINDING (§0 fact 1): a refused open: {status:?}");
+    assert_the_reader_took_nothing(pipe);
+}
+
+/// Checks that a refused open exits 1 on a stderr that takes nothing.
+///
+/// The child's stderr is a [`StalledPipe`], over a fresh directory under
+/// `--create`, with `--blocked-prefixes` naming a file that holds no list
+/// (`operations.md` §0 fact 1; SP-8). The open queues its version and
+/// directory lines before it reads the list, so the stream's thread parks
+/// writing the first; the open refuses at the list, and its refusal waits
+/// on the drain, which gives up at the binary's bound. The binary exits 1
+/// with no byte of the child's taken, its refusal's among them, and the
+/// data directory never created, so the refusal is the list's. Necessarily
+/// slow: it waits the bound out.
+#[test]
+#[ignore = "timing test - gate-full only"]
+fn a_refused_open_exits_1_on_a_stderr_whose_reader_has_stopped() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("data");
+    let list = tmp.path().join("blocked.json");
+    fs::write(&list, b"not a list").expect("a list that is not one");
+    let list = list.to_str().expect("a UTF-8 path");
+    let (pipe, stderr) = StalledPipe::full();
+    let mut child = launch_onto(skepd(&dir, &["--port", "0", "--blocked-prefixes", list]), stderr);
+    let status = child.wait_within(PATIENCE);
+    assert_eq!(status.code(), Some(1), "FINDING (§0 fact 1): a refused open: {status:?}");
+    assert!(!dir.exists(), "the open refused at the list, before the directory was made");
     assert_the_reader_took_nothing(pipe);
 }
 
@@ -1716,6 +1758,67 @@ fn the_workers_end_exits_1_on_a_stderr_whose_reader_has_stopped() {
     let status = child.wait_within(PATIENCE);
     assert_eq!(status.code(), Some(1), "FINDING (m16): the workers' end: {status:?}");
     assert_the_reader_took_nothing(pipe);
+}
+
+/// Checks that the workers' end exits 1 on a stdout that takes nothing.
+///
+/// The child's stdout is a [`StalledPipe`] and its stderr is read, under the
+/// floor's workers and the worker fault's every arm (`operations.md` §0
+/// fact 1; m16). The serving line never lands, so the port is read off the
+/// open's `auth:` line, whose signed origins on an unclaimed board are the
+/// bound port's loopback defaults. Each worker answers one `/health` and
+/// dies past its catch, and the binary says the workers' end and exits 1,
+/// its serving line parked on the pipe and no byte of the child's taken.
+/// Stderr takes every line, so neither drain waits and no bound is waited
+/// out.
+#[test]
+fn the_workers_end_exits_1_on_a_stdout_whose_reader_has_stopped() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workers = skepd::MIN_WORKERS.to_string();
+    let mut cmd = skepd(&tmp.path().join("data"), &["--port", "0", "--workers", &workers]);
+    cmd.env(WORKER_FAULT, "every");
+    let (pipe, stdout) = StalledPipe::full();
+    let mut child = launch_onto_stdout(cmd, stdout);
+    let mut stderr = Stderr::of(&mut child.child);
+    let auth = stderr.wait_for("the auth line", PATIENCE, |l| said(l, "open", "auth: "));
+    let port = auth
+        .split_once("signed origins http://127.0.0.1:")
+        .and_then(|(_, rest)| rest.split(',').next())
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or_else(|| panic!("no port in the auth line {auth:?}"));
+    for n in 1..=skepd::MIN_WORKERS {
+        let (st, body) = get_health_retrying_the_connect(port, PATIENCE);
+        assert_eq!(
+            (st, json(&body)["ok"].as_bool()),
+            (200, Some(true)),
+            "request {n}: the board serves while its stdout takes nothing: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+    let last_reply = Instant::now();
+    let status = child.wait_within(PATIENCE);
+    let exit_after = last_reply.elapsed();
+    assert_eq!(
+        status.code(),
+        Some(1),
+        "FINDING (m16): the workers' end on a stdout that takes nothing: {status:?}"
+    );
+    let whole = stderr.whole();
+    assert!(
+        whole.iter().any(|l| {
+            after_the_head(l, "failure")
+                == Some("every worker thread has ended; the board serves nothing")
+        }),
+        "FINDING (m16): the workers' end is said:\n{}",
+        whole.join("\n")
+    );
+    assert_the_reader_took_nothing(pipe);
+    println!(
+        "{} workers ended on a stdout that takes nothing; the exit came {} ms after the last \
+         reply",
+        skepd::MIN_WORKERS,
+        exit_after.as_millis()
+    );
 }
 
 /// §0 FACT 1, A READER THAT HAS STOPPED — A PANIC ON `main` STILL EXITS

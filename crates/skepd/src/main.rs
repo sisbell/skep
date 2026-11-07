@@ -19,11 +19,20 @@
 //! line for `DRAIN_STALL`; a refusal before the stream's first line is
 //! waited for that long and no longer (`refuse`), and one after it is
 //! written only behind a stream that drained, so a reader that has stopped
-//! costs the lines and never the exit. And the operator's two tools
-//! over a board directory, run with no server — `skepd inventory` and
-//! `skepd pull` (`skepd::tools`) — a leading verb parsed before any flag;
-//! and `skepd --version`, read the same way, the one line a release's check
-//! holds the shipped binaries to.
+//! costs the lines and never the exit. The serving line is written by a
+//! thread `main` does not wait for (`say_serving`), so a stdout whose
+//! reader has stopped costs the line and never the workers' end or its
+//! exit 1. Where the OS refuses a refusal's thread or the serving line's,
+//! that line is written on `main`, and a reader that has stopped holds it
+//! there without bound, as it holds every line of the operator stream's
+//! where the OS refused the stream its own thread, each then written on the
+//! thread that says it. And the operator's two tools over a board
+//! directory, run with no server — `skepd inventory` and `skepd pull`
+//! (`skepd::tools`) — a leading verb parsed before any flag; and
+//! `skepd --version`, read the same way, the one line a release's check
+//! holds the shipped binaries to. The tools' outputs, the version line and
+//! the usage text wait for their reader, as any program's output does,
+//! since each is the whole of what was asked.
 
 use std::collections::hash_map::{Entry, HashMap};
 use std::fmt;
@@ -367,7 +376,8 @@ fn install_the_panic_hook() {
 /// a reader that has stopped, its pipe full, would hold a write on this
 /// thread for as long as it stands still, and the exit that follows at once
 /// must not wait on it; the exit ends the parked write with the process.
-/// Where the OS refuses the thread the line is written here, as before.
+/// Where the OS refuses the thread, the line is written on the calling
+/// thread, and a reader that has stopped holds that write without bound.
 /// Where a line of the open's could still be waiting,
 /// [`refuse_once_drained`] drains the stream first and writes the refusal
 /// only behind a stream that drained.
@@ -407,6 +417,37 @@ fn refuse(line: fmt::Arguments<'_>) {
 fn refuse_once_drained(line: fmt::Arguments<'_>) {
     if notice::drain(DRAIN_STALL).is_ok() {
         refuse(line);
+    }
+}
+
+/// Writes the serving line on stdout from a thread `main` does not wait for.
+///
+/// Between the serve and `wait`, `main` waits on no reader past the start
+/// drain's bound (`operations.md` §0 fact 1), so a stdout whose reader has
+/// stopped costs this line and never the workers' end or its exit 1. The
+/// thread, `skepd-serving`, writes `line` with one `write_all` and discards
+/// the result: a stdout with no reader fails the write at once, the runtime
+/// ignoring `SIGPIPE`. Nothing joins the thread, so on a stopped stdout it
+/// stays parked in the write, holding stdout's lock, until the exit ends it
+/// with the process. Nothing else on the serve path writes stdout, and
+/// `process::exit` only tries to take that lock as it cleans stdout up:
+/// that is std's implementation and no documented guarantee, so a
+/// toolchain that changes it fails
+/// `the_workers_end_exits_1_on_a_stdout_whose_reader_has_stopped`
+/// (`tests/it/open.rs`). On a pipe, a line under its atomic write size
+/// (`PIPE_BUF`: 512 bytes on macOS, 4096 on Linux) lands whole or not at
+/// all; a longer one, a long data directory's, can land in part where the
+/// process ends mid-write, as a kill can. Where the OS refuses the thread,
+/// the line is written on the calling thread, and a reader that has stopped
+/// holds that write without bound.
+fn say_serving(line: String) {
+    let line: Arc<str> = Arc::from(line);
+    let copy = Arc::clone(&line);
+    let spawned = std::thread::Builder::new().name("skepd-serving".into()).spawn(move || {
+        let _ = io::stdout().write_all(copy.as_bytes());
+    });
+    if spawned.is_err() {
+        let _ = io::stdout().write_all(line.as_bytes());
     }
 }
 
@@ -1492,21 +1533,24 @@ fn main() {
     // The serving line, on stdout — a line that names the port under
     // `--port 0`, as the `auth:` line's loopback origins do on an unclaimed
     // board, and the one echo of the bound address, outside the stream's
-    // grammar — written once the open's report has reached the stream, so
-    // an operator reads the board's standing before the line that says it
-    // serves, or once the stream has taken no line for `DRAIN_STALL`: a
-    // stderr whose reader has stopped costs the report and never the wait
-    // below, nor the exit it leads to. The write's result discarded: a
-    // stdout whose reader is gone costs this line and never the daemon,
-    // which serves on.
+    // grammar — handed to its writer once the open's report has reached the
+    // stream, so an operator reads the board's standing before the line
+    // that says it serves, or once the stream has taken no line for
+    // `DRAIN_STALL`: a stderr whose reader has stopped costs the report and
+    // never the wait below, nor the exit it leads to. The line is built
+    // whole here and written by a thread `main` does not wait for
+    // (`say_serving`), so between this drain and `wait` nothing waits on a
+    // reader save where the OS refuses that thread: a stdout whose reader
+    // has stopped costs the line and never the workers' end, and one whose
+    // reader is gone fails the write at once and costs the line and never
+    // the daemon, which serves on.
     let _ = notice::drain(DRAIN_STALL);
-    let _ = writeln!(
-        io::stdout(),
-        "skepd: serving http://{bound_addr}:{bound_port}/ data-dir {} log-position {} workers {}",
+    say_serving(format!(
+        "skepd: serving http://{bound_addr}:{bound_port}/ data-dir {} log-position {} workers {}\n",
         args.data_dir.display(),
         seq.0,
         args.workers
-    );
+    ));
     running.wait();
     // The workers' end: `wait` returns only when every worker thread has
     // ended — a failure in serve mode, said as one and exited 1 on, never

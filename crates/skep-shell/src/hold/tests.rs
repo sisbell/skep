@@ -35,13 +35,16 @@
 //! generates, since a bare session reads alone and no probe resends under it —
 //! save where a cell asks for a bare one (`bare_ground`) or for a key no store
 //! holds (`keyed_facts`), and its board one someone has claimed, save where a
-//! cell asks for one no one has (`unclaimed_ground`), whose lines stand in
-//! memory alone; a cell runs the board's feed thread over the ground's holds
+//! cell asks for one no one has over a store the device refuses
+//! (`unclaimed_ground`), whose lines stand in memory alone, owed, no copy
+//! synced; a cell runs the board's feed thread over the ground's holds
 //! where it asks (`feed_threads`). `write` holds the one path of a session's
 //! `op` — a burst's door and its hold, and a write the hold never holds;
-//! `resend` the probe and the resend walk; `classes` the held store's open
-//! defect classes pinned as expected failures, and the measure of the syncs
-//! each act makes.
+//! `resend` the probe and the resend walk; `classes` the held store's defect
+//! classes, each pinned as an expected failure until the brief that closes
+//! it lands, and the measure of the syncs each act makes. The store's two
+//! enums are held to their variants here: `Directory`'s three standings
+//! and `Custody`'s three, a state added later a red before it is a pen.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -271,11 +274,11 @@ fn the_unwritable_class_of_each_kind_is_its_row() {
 ///
 /// They are the `HeldAnswer.unwritable_class` union's words, each spelled as
 /// the answer carries it; the answer's two members are set from one cause
-/// (`Unwritable`): an I/O refusal's words — alone, or after what was refused
-/// — with its kind's class, and a cause no device gave with `other`, each
-/// answer held to its declaration (the mutant that misspells a class says one
-/// no page keys an act by; the one that sets the words alone leaves the page
-/// no class to read).
+/// (`Unwritable`): an I/O refusal's words — alone, or after what of the
+/// store was refused (`store_refused`) — with its kind's class, a kind
+/// outside the table `other`, each answer held to its declaration (the
+/// mutant that misspells a class says one no page keys an act by; the one
+/// that sets the words alone leaves the page no class to read).
 #[test]
 fn the_three_unwritable_classes_are_the_declared_words() {
     let classes = [UnwritableClass::Full, UnwritableClass::ReadOnly, UnwritableClass::Other];
@@ -287,12 +290,12 @@ fn the_three_unwritable_classes_are_the_declared_words() {
     let cells = [
         ("the refusal alone", Unwritable::from(&refused), "Read-only file system (os error 30)", "read_only"),
         (
-            "the refusal after what was refused",
-            Unwritable::of("the held store could not be made or locked", &refused),
+            "the refusal after what of the store was refused",
+            Unwritable::from(&store_refused("the held store could not be made or locked", &refused)),
             "the held store could not be made or locked: Read-only file system (os error 30)",
             "read_only",
         ),
-        ("a cause no device gave", Unwritable::other("the board serves no H.1"), "the board serves no H.1", "other"),
+        ("a kind outside the table", Unwritable::from(&std::io::Error::other("the held file is a directory")), "the held file is a directory", "other"),
     ];
     for (cell, why, words, class) in cells {
         let mut answer = json!({"resp": "held", "held": 1, "cause": "unreachable"});
@@ -300,6 +303,41 @@ fn the_three_unwritable_classes_are_the_declared_words() {
         crate::shapes::assert_declared("HeldAnswer", &answer);
         assert_eq!((answer["unwritable"].as_str(), answer["unwritable_class"].as_str()), (Some(words), Some(class)), "{cell}: {answer}");
     }
+}
+
+/// The store's states are three and three (the record
+/// `2026-11-06-held-store-investigation` §7: the state count, which the
+/// reviews read the classes closed by): every variant of `Directory` and of
+/// `Custody` is named here, and a match with no wildcard arm holds the
+/// count, so a state added later is a red here before it is a pen (the
+/// mutant that adds a memory custody, or a fourth standing of the store,
+/// fails to compile).
+#[test]
+fn the_directory_has_three_states_and_the_custody_three() {
+    let store = TempDir::new().unwrap();
+    let pending = HeldDir::pending(store.path(), &Origin::parse("http://127.0.0.1:1").unwrap());
+    pending.ensure().unwrap();
+    let lock = pending.try_lock().unwrap().expect("the pending lock is free");
+    let directories = [Directory::NotYet(std::io::Error::other("refused")), Directory::AnotherWindow { pending: None }, Directory::ThisWindow { pending: LockedDir { dir: pending, _lock: lock }, chain: None }];
+    let names: Vec<&str> = directories
+        .iter()
+        .map(|directory| match directory {
+            Directory::NotYet(_) => "NotYet",
+            Directory::AnotherWindow { .. } => "AnotherWindow",
+            Directory::ThisWindow { .. } => "ThisWindow",
+        })
+        .collect();
+    assert_eq!(names, ["NotYet", "AnotherWindow", "ThisWindow"], "the store's three standings: a device's refusal, another shell's, this shell's");
+    let custodies = [Custody::Unopened, Custody::File, Custody::Halted { path: PathBuf::new(), why: HaltWhy::Damaged }];
+    let names: Vec<&str> = custodies
+        .iter()
+        .map(|custody| match custody {
+            Custody::Unopened => "Unopened",
+            Custody::File => "File",
+            Custody::Halted { .. } => "Halted",
+        })
+        .collect();
+    assert_eq!(names, ["Unopened", "File", "Halted"], "a principal's three custodies: the file not yet read, the file, the halt");
 }
 
 /// The two acts are the declared `Resolve.act` union's words, each naming
@@ -974,13 +1012,23 @@ fn ground_over(fake: Arc<Fake>, store: TempDir, facts: Facts, opened_at: u64) ->
 }
 
 /// The ground under a writer at a board no one has claimed, which serves no
-/// head record: its lines held in memory alone, and none owing an attest —
-/// the drain's walk at the speed of its own bookkeeping.
+/// head record, over a store the device refuses — `held/` sealed, so no
+/// held directory can be made under it: its lines held in memory alone,
+/// every copy owed, the one memory case left (§3c.3), and none owing an
+/// attest — the drain's walk at the speed of its own bookkeeping, no copy
+/// synced.
 fn unclaimed_ground() -> Ground {
     let fake = Fake::new();
     fake.no_head.store(true, Ordering::SeqCst);
     fake.unclaimed.store(true, Ordering::SeqCst);
     let store = TempDir::new().unwrap();
+    let held = store.path().join("held");
+    std::fs::create_dir(&held).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o500)).unwrap();
+    }
     let facts = writer_facts(&store);
     ground_over(fake, store, facts, 0)
 }

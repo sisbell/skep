@@ -6,16 +6,20 @@
 //! there too at its daemon-running tick and at the hand-overs of
 //! `resolve(send)` and `set_node_state(Running)`, because `Cmd::Tick` is
 //! driven by committed writes and a poisoned, halted, stopped or
-//! unreachable board commits nothing. Each probe first cuts the bytes a
-//! refused join's copy left in the file it wrote, where their cut-back was
-//! refused too (skep #817), joins the lines kept out of the directory's file
-//! to it (§3c.1; skep #823) and writes the copies each held file owes its
-//! queue — a line's, a re-mark's or a `done`'s the device refused — whatever
-//! the board's state: the retry's clock (§3c.3; skep #813, #821). The resend
+//! unreachable board commits nothing. Each probe first runs the store's
+//! retry (`Holds::retry_store`, §3c.1, §3c.3; skep #813, #821, #857, #859,
+//! #873): the board's locks this shell does not hold are tried again, each
+//! principal's queue is brought to the store as it stands — its file read
+//! where the device refused it, the pending → chain change made where the
+//! board's own directory is this shell's now — and the copies each held file
+//! owes its queue — a line's, a re-mark's or a `done`'s the device refused —
+//! are written, whatever the board's state: the retry's clock. The resend
 //! it lets run is automatic at the hold's end and at reopen, under a standing
 //! session of the principal's that may write — never a bare one, the keyless
 //! session that reads alone (foundations §3.3 state 3), whose principal's
-//! lines stay held until a session that may write stands.
+//! lines stay held until a session that may write stands; a halted
+//! principal's lines, and a line parked on the pending file until its copy
+//! to the board's file lands (`HeldQueue::parked`), are walked by none.
 //!
 //! **The drain runs in turns** (skep #817). One probe runs one turn of at
 //! most [`TURN_STEPS`] steps — a document's read, a line's send — and
@@ -96,7 +100,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use skep_client::board::{acked_at, frames, Answer, ChangesAnswer, ChangesQuery, Rejection};
 
-use super::{awaits_act, cause, line_state, millis, AttestedWhereOwed, BoardSlot, Dialed, HandsRead, HeldState, Holds, Turn, HAND_OVER_DEADLINE, TURN_STEPS};
+use super::{awaits_act, cause, line_state, millis, AttestedWhereOwed, BoardSlot, Dialed, HandsRead, HeldState, Holds, PrincipalHold, Turn, HAND_OVER_DEADLINE, TURN_STEPS};
 use crate::held::{i_address, Anchors, Done, HeldLine, Reason, SpanRun};
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{board_head, SessionEntry, SessionKind};
@@ -503,17 +507,18 @@ impl Holds {
     /// at the hand-overs of `resolve(send)` and `set_node_state(Running)`, and
     /// after a turn its bound stopped, once the work queued behind that turn
     /// is served. First, whatever the board's state — its node stopped, the
-    /// board away — the bytes a refused join's copy left past a file's whole
-    /// lines, their cut-back refused too, are cut ([`Holds::retry_unsettled`]);
-    /// the lines kept out of the directory's file, in memory alone or on the
-    /// pending file a refused join left, are joined to it where the device and
-    /// the file take them ([`Holds::rejoin`], §3c.1, §3c.3; skep #823); and the
-    /// copies each principal's held file owes — a line's, a re-mark's or a
-    /// `done`'s — are written where the device takes them (`HeldQueue::retry`,
-    /// §3c.3; skep #813, #821), and a wait that ends is said
-    /// ([`Holds::note_waiting`]): none needs a dial. Then, while a line stands
-    /// at a board whose own node is not stopped, one turn of the drain runs
-    /// ([`Holds::drain`]), one drain per board at a time.
+    /// board away — the store's retry ([`Holds::retry_store`], §3c.1, §3c.3;
+    /// skep #813, #821, #857, #859, #873): the board's locks this shell does
+    /// not hold are tried again, each principal's queue is brought to the
+    /// store as it stands — its file read where the device refused it before,
+    /// the pending → chain change made where the board's own directory is
+    /// this shell's now — and the copies each held file owes — a line's, a
+    /// re-mark's or a `done`'s — are written where the device takes them
+    /// (`HeldQueue::retry`), a wait that ends said ([`Holds::note_waiting`]):
+    /// none needs a dial. Then, while a line stands at a board whose own node
+    /// is not stopped, one turn of the drain runs ([`Holds::drain`]), one
+    /// drain per board at a time — a halted principal's lines never among
+    /// them (P38; skep #858).
     ///
     /// It answers [`Turn::Bounded`] where the turn stopped at its bound with
     /// a line still to send, the pass going on at the next turn, and
@@ -528,13 +533,8 @@ impl Holds {
         let slot = self.slot(board_reference);
         let due = {
             let mut board_hold = slot.lock();
-            self.retry_unsettled(&mut board_hold);
-            self.rejoin(&mut board_hold, slot.board.dialed());
-            for (principal, ph) in &mut board_hold.principals {
-                ph.queue.retry();
-                self.note_waiting(*principal, ph);
-            }
-            !board_hold.node_stopped && board_hold.principals.values().any(|ph| !ph.queue.lines().is_empty())
+            self.retry_store(board_reference, &mut board_hold, slot.board.dialed());
+            !board_hold.node_stopped && board_hold.principals.values().any(PrincipalHold::drains)
         };
         // One drain per board at a time, its mark cleared however it ends;
         // the drain that holds the mark alone ends the pass.
@@ -583,7 +583,9 @@ impl Holds {
         self.note_head(board_reference, &head);
         self.establish(board_reference, slot, &head);
         let head_unreadable = matches!(head, Err(Refusal::Halt { name: Name::HEAD_UNREADABLE, .. }));
-        let principals: BTreeSet<u64> = slot.lock().principals.iter().filter(|(_, ph)| !ph.queue.lines().is_empty()).map(|(p, _)| *p).collect();
+        // A halted principal's lines are walked never (P38; skep #858): the
+        // halt may have been found as the store was established just now.
+        let principals: BTreeSet<u64> = slot.lock().principals.iter().filter(|(_, ph)| ph.drains()).map(|(p, _)| *p).collect();
         let mut steps = TURN_STEPS;
         for principal in principals {
             let Some(session) = self.sessions.on_board(board_reference).into_iter().find(|s| s.facts.principal == principal && s.may_write()) else { continue };
@@ -628,9 +630,17 @@ impl Holds {
         loop {
             let next = self.with_principal(board_reference, principal, |ph| {
                 let lines = ph.queue.lines();
-                lines[lines.partition_point(|l| l.k <= after)..].iter().find(|l| !ph.stopped_in_pass.contains(&l.doc)).cloned()
+                lines[lines.partition_point(|l| l.k <= after)..].iter().find(|l| !ph.stopped_in_pass.contains(&l.doc)).map(|l| (l.clone(), ph.queue.parked(l.k)))
             });
-            let Some(line) = next.flatten() else { return Turn::Done };
+            let Some((line, parked)) = next.flatten() else { return Turn::Done };
+            // A line parked on the pending file its queue's file took it from
+            // waits for its copy to land (I5): its document stops at it.
+            if parked {
+                after = line.k;
+                sending.remove(&line.doc);
+                self.stop_in_pass(board_reference, principal, &line.doc);
+                continue;
+            }
             if !sending.contains(&line.doc) {
                 // A read is made only where the send it may let go can follow
                 // it in this turn, so no later turn of the pass reads the

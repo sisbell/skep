@@ -9,7 +9,9 @@
 //! and fails the day a brief closes the class, which then removes the
 //! marker. `I6` (K3): a window whose head will not read takes no pending
 //! lock the board's own holder let go, and is refused `another_window`
-//! while that holder stands (skep #873; Brief B). `I9` (K5): a whole-draft
+//! while that holder stands — GREEN since Brief B (skep #873): both locks
+//! are taken at the first touch and kept for the shell's life, so the
+//! pending lock is never let go for a later window to take. `I9` (K5): a whole-draft
 //! write — the restore — never lands past the draft's standing held lines
 //! (skep #849, #854; Brief C). The merge rows' door (skep #850) is Brief C's
 //! too, and no cell of it is added here.
@@ -22,26 +24,24 @@ use super::*;
 use crate::held::HeldDir;
 
 /// K3 / `I6` — one writer per board (skep #873; the record §2 I6, §3 K3).
-/// EXPECTED TO FAIL until Brief B lands; that brief removes `should_panic`.
+/// GREEN since Brief B, which removed `should_panic`: the cell pins the
+/// invariant from here.
 ///
 /// Window A's first session opens with its read of the board's head served
 /// garbled (the seam `garble_the_next_head_read_on_this_thread`, armed on
-/// the calling thread just before the open): A stands at the pending
-/// directory, its lock A's. A's next session opens with the head reading: A
-/// takes the board's own lock, carries the pending one to the join, finds
-/// nothing to join and lets it go — the board's own lock A's for its life,
-/// the pending lock free (`hold.rs`: `Holds::join`'s release). Window B over
-/// the same store then opens a session with its head read served garbled
-/// too: the pending lock is free, so B takes it and stands `Pending` — its
-/// open answers no `another_window`, and its burst goes out and is acked,
-/// the head record B's handshake read standing in B's board — two windows
-/// each holding one of the board's locks, both writing. The invariant
-/// (skep #828's rule): B is refused `another_window` while A holds the
-/// board's own lock, never let write beside it. Today `Directory::of` tries
-/// the pending lock first only where a term reads, so B, whose head will
-/// not, never meets A's lock.
+/// the calling thread just before the open): A takes the pending lock, the
+/// board's chain unnamed. A's next session opens with the head reading: A
+/// takes the board's own lock too, and keeps both for its life. Window B
+/// over the same store then opens a session with its head read served
+/// garbled too: the pending lock is A's, so B takes none and stands another
+/// shell's — its open answers `another_window`, and its burst is refused.
+/// The invariant (skep #828's rule): B is refused `another_window` while A
+/// holds the board's own lock, never let write beside it (before Brief B,
+/// A's second open carried the pending lock to the join and let it go once
+/// no queue was its file's, so B, whose head would not read, took the free
+/// pending lock, stood `Pending`, and its burst went out and was acked —
+/// two windows each holding one of the board's locks, both writing).
 #[test]
-#[should_panic(expected = "I6: ")]
 fn i6_a_window_whose_head_will_not_read_is_refused_while_another_holds_the_boards_own_lock() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
@@ -59,14 +59,14 @@ fn i6_a_window_whose_head_will_not_read_is_refused_while_another_holds_the_board
         opened
     };
     // Window A: the pending lock at its first open, the board's own at its
-    // second, the pending one let go there.
+    // second, both kept.
     let (a, a_lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
     let a_board = a.board_references().remove(0);
     crate::sessions::garble_the_next_head_read_on_this_thread();
     let opened = open(&a, &a_board);
     assert!(opened.get("another_window").is_none() && !free(&pending), "premise: A's first open takes the pending store: {opened}\n{}", a_lines.lock().unwrap().join("\n"));
     let opened = open(&a, &a_board);
-    assert!(opened.get("another_window").is_none() && !free(&own) && free(&pending), "premise: A's second open takes the board's own lock and lets the pending one go: {opened}\n{}", a_lines.lock().unwrap().join("\n"));
+    assert!(opened.get("another_window").is_none() && !free(&own) && !free(&pending), "premise: A's second open takes the board's own lock and keeps the pending one: {opened}\n{}", a_lines.lock().unwrap().join("\n"));
     let a_session = opened["session"].as_str().unwrap().to_string();
     let minted = a.call("op", &json!({"session": a_session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
     let draft = minted["addr"].as_str().unwrap_or_else(|| panic!("the draft is minted: {minted}")).to_string();

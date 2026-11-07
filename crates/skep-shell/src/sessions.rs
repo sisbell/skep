@@ -300,8 +300,8 @@ impl SessionEntry {
 ///
 /// It is the one decision of what `H.1` says, shared by the attest a signed
 /// write owes ([`SessionEntry::signing_term`]) and by the held store's
-/// directory (`hold`'s `Directory::of`), so the two never disagree on what a
-/// board's head is. `Ok(Some)` is `H.1`'s pair, read by `Board::board_term`,
+/// directory (`hold`'s `Holds::establish`), so the two never disagree on
+/// what a board's head is. `Ok(Some)` is `H.1`'s pair, read by `Board::board_term`,
 /// which keeps a pair once read; `Ok(None)` a board that serves no head
 /// record and names no claimant through `/health` — a board no one has
 /// claimed, which takes a write unsigned and holds no held text (`client.md`
@@ -320,7 +320,7 @@ impl SessionEntry {
 /// away, `unreachable` (skep #758).
 ///
 /// A `#[cfg(test)]` seam stands in for a garbled answer on the calling
-/// thread, once ([`garble_the_next_head_read_on_this_thread`]).
+/// thread, once (`garble_the_next_head_read_on_this_thread`).
 ///
 /// # Errors
 ///

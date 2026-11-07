@@ -687,9 +687,7 @@ fn an_earlier_runs_held_bursts_and_a_halted_held_file_are_said_at_the_start() {
     again.initialize();
     again.log_holding(&["held: an earlier run left 1 burst held at this board (0 sent and so perhaps landed, 1 waiting on the agent's `resolve`"], Duration::from_secs(10));
     assert!(again.finish().success());
-    let chains: Vec<PathBuf> = std::fs::read_dir(fixture.store.join("held")).expect("the held store").filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
-    let [chain] = &chains[..] else { panic!("one board's held directory: {chains:?}") };
-    let file = chain.join("principal-1.held");
+    let file = the_boards_held_directory(&fixture.store).join("principal-1.held");
     std::fs::write(&file, "{\"type\":\"skep-held-bursts\",\"v\":2}\n").expect("a newer skep's held file");
     let mut halted = Launch::over(&fixture, 1).logged().spawn();
     halted.initialize();
@@ -709,6 +707,23 @@ fn an_earlier_runs_held_bursts_and_a_halted_held_file_are_said_at_the_start() {
     assert_eq!((refusal["name"].as_str(), refusal["why"].as_str()), (Some("store_halted"), Some("damaged")), "{refusal}");
     assert_no_path(&refusal, &fixture.store);
     assert!(damaged.finish().success());
+}
+
+/// Returns the board's own held directory under `store`, `held/<chain>`
+/// (client.md §3c.1).
+///
+/// It is the one directory under `held/` beside `held/pending`, which the
+/// shell makes and locks at every board's first touch, a term read or not,
+/// and keeps for its life.
+fn the_boards_held_directory(store: &Path) -> PathBuf {
+    let chains: Vec<PathBuf> = std::fs::read_dir(store.join("held"))
+        .expect("the held store")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir() && path.file_name().is_some_and(|name| name != "pending"))
+        .collect();
+    let [chain] = &chains[..] else { panic!("one board's held directory: {chains:?}") };
+    chain.clone()
 }
 
 /// Holds that a tool result's `store_halted` names no path.
@@ -744,12 +759,15 @@ fn a_signal_leaves_the_held_bursts_on_disk_for_the_next_start() {
 
 /// A burst kept in memory alone is said to go with the process.
 ///
-/// The board's held directory, standing from a first run, is made one this
-/// process cannot write, so a burst the board refuses is held in memory alone,
-/// answered `unwritable`: the clean stop says such a burst goes with the
-/// process, never that the next start counts it, and the next start, the
-/// directory writable again, finds none. A process every mode lets write — one
-/// run as root — proves nothing here, and the case passes.
+/// The board's own held directory, standing from a first run, is made one
+/// this process cannot write — its lock, made by that run, still opens, so
+/// the store is this shell's and the principal's file alone is refused, the
+/// device's refusal the one case that keeps a line in memory — so a burst the
+/// board refuses is held in memory alone, answered `unwritable`: the clean
+/// stop says such a burst goes with the process, never that the next start
+/// counts it, and the next start, the directory writable again, finds none.
+/// A process every mode lets write — one run as root — proves nothing here,
+/// and the case passes.
 #[cfg(unix)]
 #[test]
 fn a_burst_kept_in_memory_alone_is_said_to_go_with_the_process() {
@@ -758,9 +776,8 @@ fn a_burst_kept_in_memory_alone_is_said_to_go_with_the_process() {
     let mut first = Launch::over(&fixture, 1).spawn();
     first.initialize();
     assert!(first.finish().success());
-    let chains: Vec<PathBuf> = std::fs::read_dir(fixture.store.join("held")).expect("the held store").filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
-    let [chain] = &chains[..] else { panic!("one board's held directory: {chains:?}") };
-    std::fs::set_permissions(chain, std::fs::Permissions::from_mode(0o500)).expect("the held directory made read-only");
+    let chain = the_boards_held_directory(&fixture.store);
+    std::fs::set_permissions(&chain, std::fs::Permissions::from_mode(0o500)).expect("the held directory made read-only");
     let writes_anyway = std::fs::write(chain.join("probe"), b"").is_ok();
     let stopped = (!writes_anyway).then(|| {
         let mut mcp = Launch::over(&fixture, 1).logged().spawn();
@@ -770,7 +787,7 @@ fn a_burst_kept_in_memory_alone_is_said_to_go_with_the_process() {
         let held = mcp.call_json("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"]}));
         (held, mcp.finish_logged())
     });
-    std::fs::set_permissions(chain, std::fs::Permissions::from_mode(0o700)).expect("the held directory's mode restored");
+    std::fs::set_permissions(&chain, std::fs::Permissions::from_mode(0o700)).expect("the held directory's mode restored");
     let Some((held, (status, log))) = stopped else { return };
     assert!(held["resp"] == "held" && held["unwritable"].is_string(), "premise: the burst is held in memory alone: {held}");
     assert!(status.success(), "{status:?}\n{log}");
@@ -856,8 +873,7 @@ fn a_held_store_another_shell_holds_is_named_by_session_info_before_any_write() 
     let mut first = Launch::over(&fixture, 1).spawn();
     first.initialize();
     assert!(first.finish().success());
-    let chains: Vec<PathBuf> = std::fs::read_dir(fixture.store.join("held")).expect("the held store").filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
-    let [chain] = &chains[..] else { panic!("one board's held directory: {chains:?}") };
+    let chain = the_boards_held_directory(&fixture.store);
     // The held store's lock, as skep-shell names it (client.md §3c.1).
     let lock = std::fs::OpenOptions::new().read(true).write(true).open(chain.join("lock")).expect("the held store's lock file");
     lock.try_lock().expect("the suite holds the held store's lock in a dev provider's place");

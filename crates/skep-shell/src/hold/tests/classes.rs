@@ -15,8 +15,10 @@
 //! names the line it held, though a join runs meanwhile — GREEN since Brief
 //! A (skep #856): one ordinal space for the shell's life, the join an
 //! ordered insert that moves no ordinal this run answered. `I8` (K2): a
-//! halt found as the directory is established halts the lines held in
-//! memory before it (skep #858; Brief B). The
+//! halt found as the directory is established halts the lines held before
+//! it — GREEN since Brief B (skep #858): every line is on disk from the
+//! first touch, and a halt found at the pending → chain change halts the
+//! principal before any walk. The
 //! measure (`#[ignore]`, run by hand): the held file's syncs for a burst
 //! held at a stopped node, a burst's whole life to its `done`, a
 //! `resolve(drop)` and a `resolve(send)` of a run of sixteen, and a probe
@@ -92,23 +94,24 @@ fn i13_an_ordinal_held_across_the_shifts_read_names_the_line_it_held_when_a_join
 }
 
 /// K2 / `I8` — a halt halts the surface (skep #858; the record §2 I8, §3
-/// K2). EXPECTED TO FAIL until Brief B lands; that brief removes
-/// `should_panic`.
+/// K2). GREEN since Brief B, which removed `should_panic`: the cell pins
+/// the invariant from here.
 ///
-/// The board away at the session's open, a burst is held in memory alone,
-/// the directory not yet this shell's; an earlier run's held file stands
-/// under the board's chain, written by a newer skep, so P38 halts it. The
-/// board returns: the probe's one head read establishes the directory, and
-/// the join opens the file and finds it halted — the join refused, the line
-/// left in memory. The invariant: once the halt stands no memory line is
-/// sent, since a send could land behind text the newer file holds (§3c.3),
-/// and the halt is answered at the door. Today the walk that follows in the
-/// same probe sends the line and keeps it, and the door halts the principal
-/// only at the next touch, the queue empty (`hold.rs`: `join_principal`'s
-/// refusal of a halted target leaves the custody memory's, and
-/// `principal_hold` applies the halt at an empty queue alone).
+/// The board away at the session's open, the pending store is taken at the
+/// first touch and a burst is held on the pending file, nothing in memory;
+/// an earlier run's held file stands under the board's chain, written by a
+/// newer skep, so P38 halts it. The board returns: the probe's one head read
+/// takes the board's own directory, and the pending → chain change opens the
+/// board's file and finds it halted — the principal halts from that moment,
+/// the pending file left as it stands with its line on it, the halt said
+/// once. The invariant: once the halt stands no line is sent, wherever it is
+/// stored, since a send could land behind text the newer file holds
+/// (§3c.3), and the halt is answered at the door (before Brief B the line
+/// was held in memory alone, the directory not yet this shell's; the join
+/// that found the halt was refused and left it there, the walk that followed
+/// in the same probe sent it, and the door halted the principal only at the
+/// next touch, the queue empty).
 #[test]
-#[should_panic(expected = "I8: ")]
 fn i8_a_halt_found_as_the_directory_is_established_halts_the_lines_held_in_memory_before_it() {
     let fake = Fake::new();
     fake.head_unreachable.store(true, Ordering::SeqCst);
@@ -121,9 +124,12 @@ fn i8_a_halt_found_as_the_directory_is_established_halts_the_lines_held_in_memor
     let facts = writer_facts(&store);
     let g = ground_over(fake, store, facts, 0);
     match g.hold_for(&insert(DOC, json!(["a"]), g.fake.head()), Reason::of("unreachable", false)) {
-        Ok(held) => assert!(held["unwritable"].as_str().is_some_and(|why| why.contains("could not be reached")), "premise: held in memory, the board away: {held}"),
-        Err(refused) => assert_eq!(refused.name(), "store_halted", "premise: a hold at a halted principal is refused the halt, or held in memory: {refused}"),
+        Ok(held) => assert!(held.get("unwritable").is_none(), "premise: held on the pending file, the board away: {held}"),
+        Err(refused) => assert_eq!(refused.name(), "store_halted", "premise: a hold at a halted principal is refused the halt, or held on the pending file: {refused}"),
     }
+    let pending = pending_file(&g);
+    let on_pending = std::fs::read_to_string(&pending).unwrap();
+    assert!(on_pending.contains("\"values\":[\"a\"]"), "premise: the line is on the pending file");
     g.fake.head_unreachable.store(false, Ordering::SeqCst);
     g.holds.probe("b-1");
     let said = said_containing(&g, "is halted");
@@ -134,6 +140,8 @@ fn i8_a_halt_found_as_the_directory_is_established_halts_the_lines_held_in_memor
     );
     assert_eq!(g.holds.lines(&g.session).unwrap_err().name(), "store_halted", "the halt stands at the door");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), newer, "the halted file is never rebuilt over");
+    assert_eq!(std::fs::read_to_string(&pending).unwrap(), on_pending, "the pending file is left as it stands, its line on it");
+    assert_eq!(said.len(), 1, "the halt is said once: {said:?}");
 }
 
 /// Measures the syncs the held file makes for each act (the record's K4

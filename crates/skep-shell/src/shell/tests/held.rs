@@ -654,8 +654,9 @@ fn a_second_principals_file_is_untouched_and_unlisted() {
 /// by a newer skep before the shell opened, halts the principal at the
 /// board: `held(session)`, a burst's `op` and `resolve` each answer
 /// `store_halted` carrying its `why` alone (the mutant that puts the path
-/// back on the detail hands the page the data directory). `held.show` shows
-/// the file in the shell's own window, once each time it is asked, and
+/// back on the detail hands the page the data directory). The halt is said
+/// once in the shell's own window as the session's open finds it, and
+/// `held.show` shows the file there again, once each time it is asked, and
 /// answers `{shown: true}` and nothing more; the native side reads the same
 /// file by `Shell::halted_file`, `unknown_board` for a reference this shell
 /// never issued and nothing for a principal whose file is not halted; a
@@ -690,10 +691,10 @@ fn a_halted_files_path_crosses_the_bridge_never_and_the_page_asks_to_show_it() {
     }
     let showing = format!("principal 1's held file {} is halted (written by a newer skep)", file.display());
     let shown = || lines.lock().unwrap().iter().filter(|line| line.contains(&showing)).count();
-    assert_eq!(shown(), 0, "nothing shows the file before the page asks: {:?}", lines.lock().unwrap());
+    assert_eq!(shown(), 1, "the halt is said once as the session's open finds it, and not again before the page asks: {:?}", lines.lock().unwrap());
     let answers = [shell.call("held.show", &json!({"session": session})).unwrap(), shell.call("held.show", &json!({"session": session})).unwrap()];
     assert_eq!(answers, [json!({"shown": true}), json!({"shown": true})], "shown, and nothing more crosses");
-    assert_eq!(shown(), 2, "shown in the shell's own window each time it is asked: {:?}", lines.lock().unwrap());
+    assert_eq!(shown(), 3, "shown in the shell's own window each time it is asked: {:?}", lines.lock().unwrap());
     assert_eq!(shell.halted_file(&board, 1).unwrap(), Some(file.clone()), "the native side reads the halted file");
     assert_eq!(shell.halted_file("b-nowhere", 1).unwrap_err().name(), "unknown_board");
     // Principal 2, its file unhalted: nothing to show.

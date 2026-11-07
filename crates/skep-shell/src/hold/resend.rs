@@ -529,7 +529,7 @@ impl Holds {
         let due = {
             let mut board_hold = slot.lock();
             self.retry_unsettled(&mut board_hold);
-            self.rejoin(board_reference, &mut board_hold, slot.board.dialed());
+            self.rejoin(&mut board_hold, slot.board.dialed());
             for (principal, ph) in &mut board_hold.principals {
                 ph.queue.retry();
                 self.note_waiting(*principal, ph);

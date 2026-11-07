@@ -607,7 +607,7 @@ fn a_second_principals_file_is_untouched_and_unlisted() {
     held_dir.ensure().unwrap();
     let Opened::Live { mut queue, .. } = held_dir.open_file(2, "1.0.2").unwrap() else { panic!("a fresh file") };
     let two = json!({"op": "insert", "doc": "1.0.2.0.1", "at": {"subspace": "1", "ordinal": "1"}, "values": ["two"], "as_of": 0});
-    assert!(queue.hold("1.0.2.0.1", None, 0, two, None, Reason::of("unreachable", false)).unwrap().unwritten.is_none());
+    assert!(queue.hold_next("1.0.2.0.1", None, 0, two, None, Reason::of("unreachable", false)).unwrap().unwritten.is_none());
     drop(queue);
     // One shell (so one lock on `held/<chain>/`) holding a session for each of
     // two principals: principal 1's signed, owning the draft; principal 2's

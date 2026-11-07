@@ -71,12 +71,12 @@ pub enum EventName {
     /// moves a document through — the same state and count said again for
     /// the same board, session and document is not emitted again, so a
     /// document waiting on a board's head record that will not read is said
-    /// once, not at each probe; and again, whatever was last said, where the
-    /// lines' ordinals were renumbered as they joined the board's held file
-    /// or the pending one, so the page reads the new ordinals by
-    /// `held(session)` before it acts on one — never when a principal's file
-    /// is read at its session's open, whose lines `held(session)` lists, nor
-    /// for a line a call enters, shifts and settles within itself.
+    /// once, not at each probe — never when a principal's file is read at its
+    /// session's open, whose lines `held(session)` lists, never for a join of
+    /// lines held before the board's held file was this shell's, which moves
+    /// no ordinal the page holds (each line's is its own for the shell's
+    /// life; skep #856), nor for a line a call enters, shifts and settles
+    /// within itself.
     Held,
     /// The state of a publication's one request as it moves: `publication`.
     ///

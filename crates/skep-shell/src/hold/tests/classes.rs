@@ -1,18 +1,22 @@
-//! The held store's open defect classes over the holds, pinned as expected
-//! failures, and the measure of the syncs each act makes (skep #874; the
-//! record `2026-11-06-held-store-investigation` §7's Brief 0).
+//! The held store's defect classes over the holds, each pinned as an
+//! expected failure until the brief that closes it lands, and the measure
+//! of the syncs each act makes (skep #874; the record
+//! `2026-11-06-held-store-investigation` §7's Brief 0).
 //!
 //! Each cell asserts the invariant the store should keep (the record's §2),
 //! its assertion intact and its message opening with the invariant's id,
-//! and is marked `should_panic` on that id and its colon alone, so a panic
-//! in its setup satisfies nothing: the cell passes while the defect stands
-//! and fails the day a brief closes the class, which then removes the
-//! marker. The interleaving each cell needs is forced — by the fake's look
-//! as a read reaches it, on the thread that made the read — never waited
-//! for. `I13` (K1): an ordinal a call holds across the shift's read names
-//! the line it held, though a join renumbers the queue meanwhile (skep
-//! #856; Brief A). `I8` (K2): a halt found as the directory is established
-//! halts the lines held in memory before it (skep #858; Brief B). The
+//! and is marked `should_panic` on that id and its colon alone while its
+//! class stands open, so a panic in its setup satisfies nothing: the cell
+//! passes while the defect stands and fails the day a brief closes the
+//! class, which then removes the marker and the cell pins the invariant
+//! from there. The interleaving each cell needs is forced — by the fake's
+//! look as a read reaches it, on the thread that made the read — never
+//! waited for. `I13` (K1): an ordinal a call holds across the shift's read
+//! names the line it held, though a join runs meanwhile — GREEN since Brief
+//! A (skep #856): one ordinal space for the shell's life, the join an
+//! ordered insert that moves no ordinal this run answered. `I8` (K2): a
+//! halt found as the directory is established halts the lines held in
+//! memory before it (skep #858; Brief B). The
 //! measure (`#[ignore]`, run by hand): the held file's syncs for a burst
 //! held at a stopped node, a burst's whole life to its `done`, a
 //! `resolve(drop)` and a `resolve(send)` of a run of sixteen, and a probe
@@ -22,30 +26,30 @@
 use super::*;
 
 /// K1 / `I13` — the ordinal the page holds names the line it held (skep
-/// #856; the record §2 I13, §3 K1). EXPECTED TO FAIL until Brief A lands;
-/// that brief removes `should_panic`.
+/// #856; the record §2 I13, §3 K1). GREEN since Brief A, which removed
+/// `should_panic`: the cell pins the invariant from here.
 ///
 /// The board unclaimed at the session's open names no chain, so the
-/// principal's queue stands in memory alone, with ordinals of its own; an
-/// earlier run's held file stands under the board's chain, holding one line
-/// under ordinal 1. A stale burst carrying anchors is refused
-/// `arrangement_moved` at its first dial and shifted within the call: the
-/// line is entered under ordinal 1 of the memory queue, and the call holds
-/// that ordinal across the shift's one read, made outside every lock. As
-/// that read reaches the board, the fake's look runs ANOTHER SESSION's open
-/// on a thread of its own, the board claimed by then: the directory is
-/// established and the join enters the memory line behind the earlier run's,
-/// renumbered 2, so ordinal 1 names the earlier run's line now. The call
-/// goes on with the ordinal it took — the shifted frame written to it, the
-/// line marked `sent`, the shifted dial acked and the ordinal settled
-/// `kept`. The invariant: the ack settles the call's own burst, and the
-/// earlier run's line, never sent, stands. Today the earlier run's line is
-/// overwritten with the shifted frame and settled kept in the call's place,
-/// and the call's own burst stands `moved` (`hold.rs`:
-/// `shift_at_first_dial` acting on `k` after `shift_and_send`'s read;
-/// `held.rs`: `HeldQueue::join`'s renumbering).
+/// principal's queue stands in memory alone, its ordinals the principal's
+/// one space; an earlier run's held file stands under the board's chain,
+/// holding one line under ordinal 1. A stale burst carrying anchors is
+/// refused `arrangement_moved` at its first dial and shifted within the
+/// call: the line is entered under ordinal 1, and the call holds that
+/// ordinal across the shift's one read, made outside every lock. As that
+/// read reaches the board, the fake's look runs ANOTHER SESSION's open on a
+/// thread of its own, the board claimed by then: the directory is
+/// established and the join reads the board's file for the first time,
+/// whose line stands under an ordinal this run's line holds, so the earlier
+/// run's line is renumbered past it, 2, and the memory line enters under
+/// the ordinal the call holds, 1 (the join's `Talk` line names the line
+/// renumbered). The call goes on with the ordinal it took — the shifted
+/// frame written to it, the line marked `sent`, the shifted dial acked and
+/// the ordinal settled `kept`. The invariant: the ack settles the call's own
+/// burst, and the earlier run's line, never sent, stands (before Brief A
+/// the join renumbered the memory line behind the earlier run's instead, so
+/// the earlier run's line was overwritten with the shifted frame and
+/// settled kept in the call's place, the call's own burst left `moved`).
 #[test]
-#[should_panic(expected = "I13: ")]
 fn i13_an_ordinal_held_across_the_shifts_read_names_the_line_it_held_when_a_join_renumbers() {
     let fake = Fake::new();
     fake.no_head.store(true, Ordering::SeqCst);
@@ -57,7 +61,7 @@ fn i13_an_ordinal_held_across_the_shifts_read_names_the_line_it_held_when_a_join
     let dir = HeldDir::new(store.path(), Chain::parse(&"ab".repeat(32)).unwrap());
     dir.ensure().unwrap();
     let Opened::Live { mut queue, .. } = dir.open_file(1, "1.0.1").unwrap() else { panic!("a fresh file") };
-    assert!(queue.hold(DOC, None, 0, insert(DOC, json!(["earlier"]), 0), None, Reason::of("unreachable", false)).unwrap().unwritten.is_none());
+    assert!(queue.hold_next(DOC, None, 0, insert(DOC, json!(["earlier"]), 0), None, Reason::of("unreachable", false)).unwrap().unwritten.is_none());
     drop(queue);
     let facts = writer_facts(&store);
     let g = ground_over(fake, store, facts, 0);

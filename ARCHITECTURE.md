@@ -830,7 +830,9 @@ re-exports counted as the module it is brought from (held by
   session (`Holds::send`) — a burst's DOOR (`Burst::admit`) and its hold
   among it, and the six unholdable writes refused under a standing hold
   (`Holds::unholdable_refusal`) — and the per-(board, principal) queue over
-  `held.rs`'s file, one shell per data directory.
+  `held.rs`'s file with its ONE ORDINAL SPACE (`PrincipalHold::next_k`),
+  which every queue of the principal's lines draws from, one shell per data
+  directory.
 - `hold/resend.rs` THE PROBE (`Holds::probe`) and THE RESEND, a moved
   document's hands named.
 - `feed.rs` `FeedThreads` and `Feed`: per board, the `/events` reader and

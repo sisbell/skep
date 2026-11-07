@@ -41,7 +41,8 @@
 //!
 //! **The queue is the memory, the file its copy.** A principal's
 //! [`HeldQueue`] is its held lines in `k` order, and every line enters it
-//! under a fresh ordinal whatever the disk did. Where the file is on disk
+//! under the ordinal the hold hands it — the next of the principal's one
+//! ordinal space (THE ORDINALS, below) — whatever the disk did. Where the file is on disk
 //! each line is copied to it as it enters; where the store keeps the queue
 //! in memory alone ([`HeldQueue::in_memory`]: a directory out of reach,
 //! §3c.3) no copy is made, and a close loses the lines. A line whose copy is
@@ -63,6 +64,37 @@
 //! of its ordinal carrying the shifted frame, synced before the shifted
 //! frame is dialed where the device takes it, so a relaunch reads the
 //! positions the shell last sent, never the page's.
+//!
+//! **THE ORDINALS** (skep #856; the record `2026-11-06-held-store-investigation`
+//! §1.4, re-said). One ordinal space per (board, principal) for the shell's
+//! life: the hold's counter (`PrincipalHold::next_k`), which every queue the
+//! principal's lines can be in — memory, the pending file, the chain file —
+//! draws from, so an ordinal is assigned once and names one line until that
+//! line leaves, never re-targeted once answered: the ordinal a call holds
+//! across a dial, or the page holds off an `op` answer or `held(session)`,
+//! names the line it held or none (I13). The one renumbering left is of
+//! lines no one was ever answered: an earlier run's file's, as this run
+//! first reads them.
+//!
+//! | act | the line's `k` | the counter | `k` outside the queue |
+//! |---|---|---|---|
+//! | the first touch | — | past the greatest ordinal in every file the shell can name then ([`HeldDir::greatest_ordinal`]) | — |
+//! | hold ([`HeldQueue::hold`]) | the counter's | +1 | the `op` answer; the hold's clocks; a call's own local |
+//! | re-mark, raise, shift | kept; a `held` line of the same `k` appended | — | — |
+//! | `done`; the compaction | the line leaves; the file removed, the ordinals RUN ON | never wound back | the hold's memories dropped |
+//! | the file read at the first touch ([`HeldDir::open_file`]) | the file's | past them | — |
+//! | the join of this run's lines ([`Joining::ThisRun`]) | KEPT; an ordered insert | — | unchanged |
+//! | the join of an earlier run's file ([`Joining::EarlierRun`]) | fresh, in the file's order | past them | none was answered |
+//! | a file first read at the join holding an ordinal this run holds ([`HeldQueue::renumber`]) | its lines fresh, past this run's | past them | none was answered |
+//!
+//! **The order** (I1): lines go out in `k` order per (board, principal),
+//! each document's order within it, and nothing reaches the store ahead
+//! of a line composed before it — save the ONE ruled exception (the owner,
+//! 2026-11-06): an earlier run's file first read at the join, which could
+//! not be named until `H.1` read and holds a line under an ordinal a line of
+//! this run's holds, has its standing lines renumbered past this run's, so
+//! they walk after them in their file's order; each still lands where its
+//! anchors aim, or is held moved.
 //!
 //! **A refused copy waits, and every copy after it** (§3c.3; skep #813,
 //! #821, #822). The file owes the queue each line's first copy and, for a
@@ -120,22 +152,24 @@
 //! non-overwriting rename under the hash of the origin it names; the chain
 //! directory's reader is untouched, so a pending file misplaced into a chain
 //! directory halts `Newer`. Once `H.1` reads, the pending file's standing
-//! lines JOIN the board's own queue ([`HeldQueue::join`]) in `k` order as
-//! ONE copy — every line in one `write`, then one `sync_data` — and only
-//! then is the pending file removed ([`HeldQueue::remove_file`]): a crash
-//! before the sync leaves the pending file standing and the chain file
-//! holding as many of the copy's lines as the device kept, its last perhaps
-//! torn, and a crash after it leaves both whole; either way the next join
-//! re-runs, and a pending line a standing chain line already carries — by
-//! `doc`, `id` and frame, never by ordinal — is not entered again, each
-//! standing line answering for one pending line at most, so the lines a
+//! lines JOIN the board's own queue ([`HeldQueue::join`]) as ONE copy —
+//! every line in one `write`, then one `sync_data` — and only then is the
+//! pending file removed ([`HeldQueue::remove_file`]): a crash before the
+//! sync leaves the pending file standing and the chain file holding as many
+//! of the copy's lines as the device kept, its last perhaps torn, and a
+//! crash after it leaves both whole; either way the next join re-runs over
+//! what stands. The join is an ORDERED INSERT: each line enters under its
+//! ordinal and the queue is kept in `k` order whatever order the file holds
+//! the lines in. This run's lines keep their ordinals ([`Joining::ThisRun`])
+//! — one whose ordinal a standing line already holds is that line, this
+//! run's ordinals naming one line each, and is not entered again — and an
+//! earlier run's file's lines take fresh ordinals from the principal's
+//! counter in their file's order ([`Joining::EarlierRun`]), a line a
+//! standing chain line already carries — by `doc`, `id` and frame, never by
+//! ordinal, since that run's ordinals were its own — not entered again,
+//! each standing line answering for one such line at most, so the lines a
 //! crash left are passed over line for line and nothing is doubled, while
-//! two equal lines of the pending file both enter. Where the chain queue
-//! holds no line and its next ordinal is at or below the pending lines'
-//! first, each line keeps its ordinal and the chain queue's next is set past
-//! them; otherwise the lines are renumbered from the chain queue's next
-//! ordinal in order, and the hold re-says `held` for their documents, so a
-//! page or an agent reads the new ordinals before it acts on one. A copy the
+//! two equal lines of the file both enter. A copy the
 //! device refuses enters nothing: its bytes are cut back off the chain file,
 //! a chain file holding no line removed as the compaction removes one, and
 //! the pending file stands for the next join's, which the shell tries at
@@ -204,7 +238,7 @@
 //! and tries again at its next session's open (the hold's `Directory`; skep
 //! #828).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -352,8 +386,12 @@ const MAX_HELD_REMARK_BYTES: usize = MAX_HELD_LINE_BYTES;
 /// It is the top of the range a JSON number carries exactly (AUTH-6.36's
 /// clause) — the page names a line by its ordinal (`resolve`'s `held`), and
 /// a JavaScript-backed page reads every number as a double. A file naming a
-/// larger one is damaged, and a queue whose next ordinal would pass it holds
-/// no more lines.
+/// larger one is damaged, and a line whose ordinal would pass it is refused
+/// ([`Unheld::Full`]). The ordinals are one space per (board, principal) for
+/// the shell's life, never wound back — not at the compaction, which removes
+/// the file and lets them run on (the module doc's THE ORDINALS) — and the
+/// budget is not at risk: a shell holding a burst every 100 ms spends some
+/// 3·10⁸ ordinals a year, so the space lasts some thirty million years.
 const MAX_ORDINAL: u64 = (1 << 53) - 1;
 
 /// Returns the Unix milliseconds now: a line's `time`.
@@ -620,7 +658,10 @@ pub fn i_address(text: &str) -> Option<(&str, u64)> {
 /// One `held` line, parsed: the burst the board could not take.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HeldLine {
-    /// The file's monotone ordinal — the resend order, across the documents.
+    /// The line's ordinal — the resend order, across the documents — one of
+    /// the principal's one space for the shell's life, the hold's to hand
+    /// out (the module doc's THE ORDINALS): assigned once, and never
+    /// re-targeted once answered.
     pub k: u64,
     /// The frame's document.
     pub doc: String,
@@ -1037,7 +1078,16 @@ impl HeldDir {
     /// them — and the re-mark lines' bytes counted against
     /// [`MAX_HELD_REMARK_BYTES`] as the writer counts them, a line's mark of
     /// `sent` spending none, so a relaunch keeps the file's budget where its
-    /// writer left it. The whole lines' bytes are counted
+    /// writer left it. The lines are keyed by ORDINAL as the file is read in
+    /// its order, and the file may hold a lower ordinal's lines after a
+    /// higher one's (a join's ordered insert): a `held` line re-marks the
+    /// line standing under its ordinal when it is read, wherever that line
+    /// lies in the file, and is a new line where none stands; a `done` takes
+    /// out the line standing under its ordinal and raises the standing lines
+    /// of HIGHER ordinals on its document, never the lines written after it;
+    /// and the re-mark budget counts a `held` line of a standing ordinal
+    /// wherever it lies, so the queue read is the one the writer held, in
+    /// `k` order, whatever the file's order. The whole lines' bytes are counted
     /// too, so the next line is written where the last of them ends, a torn
     /// tail cut off first; the open itself writes nothing, a tail it meets
     /// left for that cut and answered ([`HeldQueue::torn`]) for the shell
@@ -1060,7 +1110,7 @@ impl HeldDir {
     pub fn open_file(&self, principal: u64, account: &str) -> io::Result<Opened> {
         let path = self.path.join(Self::file_name(principal));
         let disk = Disk { path: path.clone(), named: self.named.clone(), principal, account: account.to_string(), created: false, headless: false, torn: None, whole_bytes: 0, tail_left: false, remark_bytes: 0, owing: None };
-        let fresh = |disk: Disk, aside: Option<PathBuf>| Opened::Live { queue: HeldQueue { disk: Some(disk), lines: Vec::new(), next_k: 1, held_bytes: 0 }, aside };
+        let fresh = |disk: Disk, aside: Option<PathBuf>| Opened::Live { queue: HeldQueue { disk: Some(disk), lines: Vec::new(), greatest_k: 0, held_bytes: 0 }, aside };
         let Some(mut reader) = LineReader::open(&path, MAX_HELD_LINE_BYTES)? else { return Ok(fresh(disk, None)) };
         let halted = |why: HaltWhy| Ok(Opened::Halted { path: path.clone(), why });
         // The header: the first whole line. A file with no whole header line
@@ -1158,8 +1208,48 @@ impl HeldDir {
         // opens the board's file under for a principal with no session now.
         let account = header.get("account").and_then(Value::as_str).map_or_else(|| disk.account.clone(), str::to_string);
         let disk = Disk { created: true, whole_bytes: reader.whole(), remark_bytes, torn, account, ..disk };
-        // `max_k` is within MAX_ORDINAL, so its successor is a `u64`.
-        Ok(Opened::Live { queue: HeldQueue { disk: Some(disk), lines, next_k: max_k + 1, held_bytes }, aside: None })
+        Ok(Opened::Live { queue: HeldQueue { disk: Some(disk), lines, greatest_k: max_k, held_bytes }, aside: None })
+    }
+
+    /// Returns the greatest ordinal the principal's file names, the file
+    /// read and nothing written or moved.
+    ///
+    /// It is the hold's read, at a principal's first touch, of every file its
+    /// lines can be in that the shell can name then — the pending file, and
+    /// the chain file where `H.1` has read — so the principal's counter
+    /// starts past every ordinal any of them names (the module doc's THE
+    /// ORDINALS): the greatest `held` or `done` ordinal among the file's
+    /// whole lines; 0 where no file stands or it holds no line, and 0 too
+    /// where the file is not this directory's principal's own — no whole
+    /// header line, or one of another `v`, another `board` or another
+    /// `principal` — which the open alone halts or sets aside; a line that
+    /// does not read ends the count at the lines before it, the file's halt
+    /// the open's to find. A file under a lock another shell holds is read
+    /// as it stands, a line it is writing a torn tail the count stops at.
+    ///
+    /// # Errors
+    ///
+    /// Returns the open's I/O error other than a file not found, or the
+    /// read's.
+    pub fn greatest_ordinal(&self, principal: u64) -> io::Result<u64> {
+        let path = self.path.join(Self::file_name(principal));
+        let Some(mut reader) = LineReader::open(&path, MAX_HELD_LINE_BYTES)? else { return Ok(0) };
+        let Next::Line(bytes) = reader.next_line()? else { return Ok(0) };
+        let Some(header) = object(bytes) else { return Ok(0) };
+        let own = header.get("v").and_then(Value::as_u64) == Some(self.named.v())
+            && header.get("type").and_then(Value::as_str) == Some("skep-held-bursts")
+            && header.get("board").and_then(Value::as_str) == Some(self.named.board().as_str())
+            && header.get("principal").and_then(Value::as_u64) == Some(principal);
+        if !own {
+            return Ok(0);
+        }
+        let mut greatest = 0;
+        while let Next::Line(bytes) = reader.next_line()? {
+            let named = object(bytes).and_then(|m| m.get("held").or_else(|| m.get("done")).and_then(ordinal));
+            let Some(k) = named else { break };
+            greatest = greatest.max(k);
+        }
+        Ok(greatest)
     }
 
     /// Moves `name` aside by a rename that never overwrites.
@@ -1197,17 +1287,21 @@ impl HeldDir {
 /// One principal's queue, which the shell holds.
 ///
 /// It holds its un-done `held` lines in `k` order — a hold adding none past
-/// [`MAX_HELD_LINES`] — the next ordinal, the bytes its lines' frames and
-/// anchors hold ([`MAX_HELD_BYTES`]'s count, each line's its
-/// `HeldLine::held_bytes`, a line whose `done` the file still owes among
+/// [`MAX_HELD_LINES`] — the greatest ordinal it has named, the bytes its
+/// lines' frames and anchors hold ([`MAX_HELD_BYTES`]'s count, each line's
+/// its `HeldLine::held_bytes`, a line whose `done` the file still owes among
 /// them), and the file the lines are copied to — `None` where the store keeps
 /// them in memory alone (§3c.3) — beside the copies the file still owes them
-/// ([`HeldQueue::waiting`]).
+/// ([`HeldQueue::waiting`]). The ordinals are the hold's to hand out (the
+/// module doc's THE ORDINALS): the queue draws none of its own.
 #[derive(Debug)]
 pub struct HeldQueue {
     disk: Option<Disk>,
     lines: Vec<HeldLine>,
-    next_k: u64,
+    /// The greatest ordinal the queue has named: its file's, over every held
+    /// and done line read, grown by each line held or entered since; 0 where
+    /// it has named none.
+    greatest_k: u64,
     held_bytes: usize,
 }
 
@@ -1402,9 +1496,9 @@ pub enum Unheld {
     /// the line's, its frame's `frame_bytes` and its anchors' `anchor_bytes`,
     /// would pass [`MAX_HELD_BYTES`] — or the queue's lines, `held_lines`,
     /// stand at [`MAX_HELD_LINES`] already, or past it as a reopened file
-    /// can, or its next ordinal would pass [`MAX_ORDINAL`]. A line whose
-    /// `done` the file still owes is counted in both, the file holding it
-    /// standing.
+    /// can, or the ordinal the line would take passes [`MAX_ORDINAL`]. A
+    /// line whose `done` the file still owes is counted in both, the file
+    /// holding it standing.
     Full { held_bytes: usize, frame_bytes: usize, anchor_bytes: usize, held_lines: usize },
     /// A line no reader of the file reads.
     ///
@@ -1450,12 +1544,30 @@ impl HeldQueue {
     /// Its lines enter and leave as a file's do, and no copy is written — a
     /// close loses them.
     pub fn in_memory() -> HeldQueue {
-        HeldQueue { disk: None, lines: Vec::new(), next_k: 1, held_bytes: 0 }
+        HeldQueue { disk: None, lines: Vec::new(), greatest_k: 0, held_bytes: 0 }
     }
 
     /// Returns the un-done `held` lines, in `k` order.
     pub fn lines(&self) -> &[HeldLine] {
         &self.lines
+    }
+
+    /// Returns the greatest ordinal the queue has named: its file's, over
+    /// every held and done line, grown by each line held or entered since —
+    /// what the hold's counter starts past as it takes the queue (the module
+    /// doc's THE ORDINALS); 0 where it has named none.
+    pub fn greatest_k(&self) -> u64 {
+        self.greatest_k
+    }
+
+    /// Holds a line under the ordinal past every one the queue has named.
+    ///
+    /// It is the store's cells' stand-in for the hold's counter
+    /// (`PrincipalHold::next_k`), which the shell draws every ordinal from:
+    /// a lone queue's counter is one past its greatest.
+    #[cfg(test)]
+    pub(crate) fn hold_next(&mut self, doc: &str, id: Option<&str>, base: u64, frame: Value, anchors: Option<Anchors>, reason: Reason) -> Result<Entered, Unheld> {
+        self.hold(self.greatest_k + 1, doc, id, base, frame, anchors, reason)
     }
 
     /// Returns whether the queue's file is on disk, its header written.
@@ -1474,9 +1586,11 @@ impl HeldQueue {
         self.disk.as_ref().and_then(|d| d.torn)
     }
 
-    /// Holds a line: enters it in the queue under the next ordinal.
+    /// Holds a line: enters it in the queue under the ordinal `k`.
     ///
-    /// Where the queue has a file, the line is copied to it by the retry,
+    /// `k` is the principal's next ordinal, the hold's counter's (the module
+    /// doc's THE ORDINALS): the line's for the shell's life. Where the queue
+    /// has a file, the line is copied to it by the retry,
     /// behind every copy the file still owes, in `k` order — the copies and
     /// the line one `write` then one `sync_data` (persist-first), the header
     /// written once first where the file is new ([`HeldQueue::retry`]); a
@@ -1488,16 +1602,27 @@ impl HeldQueue {
     /// — of its own copy, or of the copy owed before it that it waits behind —
     /// for the caller's answer to say (§3c.3).
     ///
+    /// **Precondition.** `k` is past every ordinal a standing line holds: the
+    /// counter never hands out an ordinal twice, and starts past every one
+    /// the file names, so a line held is held after every line standing.
+    ///
     /// # Errors
     ///
     /// Returns [`Unheld`], checked in this order, the first that holds
     /// answering — its `doc` or `frame` one the reader refuses
-    /// ([`Unheld::Unreadable`]), else its ordinal past [`MAX_ORDINAL`], the
+    /// ([`Unheld::Unreadable`]), else `k` past [`MAX_ORDINAL`], the
     /// queue at [`MAX_HELD_LINES`] lines, or its frame and its anchors
     /// carrying the queue's past [`MAX_HELD_BYTES`] ([`Unheld::Full`]), a line
     /// whose `done` the file still owes counted in both — and the line kept
     /// nowhere: the writer holds no line the file's reader would halt on.
-    pub fn hold(&mut self, doc: &str, id: Option<&str>, base: u64, frame: Value, anchors: Option<Anchors>, reason: Reason) -> Result<Entered, Unheld> {
+    ///
+    /// # Panics
+    ///
+    /// Panics where `k` is not past every ordinal a standing line holds (the
+    /// precondition, the caller's).
+    #[allow(clippy::too_many_arguments)]
+    pub fn hold(&mut self, k: u64, doc: &str, id: Option<&str>, base: u64, frame: Value, anchors: Option<Anchors>, reason: Reason) -> Result<Entered, Unheld> {
+        assert!(self.lines.last().is_none_or(|last| last.k < k), "PRECONDITION of `HeldQueue::hold`: the ordinal {k} is past every one a standing line holds");
         if document_address(doc).is_none() || !frame.is_object() {
             return Err(Unheld::Unreadable);
         }
@@ -1505,12 +1630,11 @@ impl HeldQueue {
         let anchor_bytes = anchors.as_ref().map_or(0, Anchors::bytes);
         let line_bytes = frame_bytes + anchor_bytes;
         let held_lines = self.held_lines();
-        if self.next_k > MAX_ORDINAL || held_lines >= MAX_HELD_LINES || self.held_bytes.saturating_add(line_bytes) > MAX_HELD_BYTES {
+        if k > MAX_ORDINAL || held_lines >= MAX_HELD_LINES || self.held_bytes.saturating_add(line_bytes) > MAX_HELD_BYTES {
             return Err(Unheld::Full { held_bytes: self.held_bytes, frame_bytes, anchor_bytes, held_lines });
         }
-        let line = HeldLine { k: self.next_k, doc: doc.to_string(), id: id.map(str::to_string), base, frame, anchors, reason, time: now_ms() };
-        let k = line.k;
-        self.next_k += 1;
+        let line = HeldLine { k, doc: doc.to_string(), id: id.map(str::to_string), base, frame, anchors, reason, time: now_ms() };
+        self.greatest_k = self.greatest_k.max(k);
         self.held_bytes += line_bytes;
         self.lines.push(line);
         // The line's first copy is owed behind every copy owed before it.
@@ -1784,12 +1908,13 @@ impl HeldQueue {
     /// `done` line ([`HeldDir::open_file`]).
     ///
     /// **Compaction.** Once the queue holds no line, its file is removed
-    /// (§3c.3), every `done` it still owes going with it, and the ordinals
-    /// start again. A removal the volume refuses leaves the file standing,
+    /// (§3c.3), every `done` it still owes going with it; the ordinals run
+    /// on, the hold's counter never wound back (the module doc's THE
+    /// ORDINALS). A removal the volume refuses leaves the file standing,
     /// every line in it `done` or owed its `done`, and the store appends on to
-    /// it — the ordinals running on past the file's, so no line is written
-    /// under an ordinal the file names — answering the failure beside the
-    /// settle.
+    /// it — the ordinals running on past the file's either way, so no line is
+    /// written under an ordinal the file names standing — answering the
+    /// failure beside the settle.
     ///
     /// # Errors
     ///
@@ -1819,16 +1944,18 @@ impl HeldQueue {
 
     /// Removes the file of a queue that holds no line: the compaction.
     ///
-    /// Every `done` the file still owes goes with it, and the ordinals start
-    /// again. A removal the volume refuses leaves the file standing, every
-    /// line in it `done` or owed its `done`, the ordinals running on past the
-    /// file's, and is answered by the file's path and the refusal.
+    /// Every `done` the file still owes goes with it. The ordinals run on:
+    /// the queue keeps the greatest it has named, and the hold's counter,
+    /// which every line's ordinal comes from, is never wound back (the
+    /// module doc's THE ORDINALS; [`MAX_ORDINAL`] states why the space is not
+    /// at risk). A removal the volume refuses leaves the file standing, every
+    /// line in it `done` or owed its `done`, the store appending on to it,
+    /// and is answered by the file's path and the refusal.
     fn compact(&mut self) -> Option<(PathBuf, io::Error)> {
         match self.disk.as_mut().map(|d| d.remove().map_err(|e| (d.path.clone(), e))) {
             Some(Err(failed)) => Some(failed),
             _ => {
                 self.held_bytes = 0;
-                self.next_k = 1;
                 None
             }
         }
@@ -1852,24 +1979,23 @@ impl HeldQueue {
         self.disk.as_ref().is_some_and(|d| matches!(d.named, Named::Pending { .. }))
     }
 
-    /// Joins into this queue the standing lines of `from`, in `k` order.
+    /// Joins into this queue the standing lines of `from`: an ordered insert.
     ///
-    /// It is the module doc's join: `from` is the queue of a board's pending
-    /// file, or one kept in memory alone, and this queue the board's own, its
-    /// file opened under the chain `H.1` names — or the pending file's, for a
-    /// queue kept in memory alone while `H.1` will not read. A line of `from`
-    /// that a standing line here already carries — the same `doc`, `id` and
-    /// frame, never the same ordinal, since the ordinals may have been
-    /// renumbered — is not entered again, each standing line answering for
-    /// one line of `from` at most ([`carried`]): so a join cut before its
-    /// sync, or before the pending file's removal, re-runs at the next launch
-    /// over the lines the device kept and doubles none of them, and two equal
-    /// lines of `from` both enter. Where this queue holds no line and its
-    /// next ordinal is at or below the first of `from`'s, each line KEEPS its
-    /// ordinal and the next ordinal here is set past them, so a page holding
-    /// the ordinals reads them unchanged; otherwise the lines are RENUMBERED
-    /// from this queue's next ordinal in order, and the caller re-says `held`
-    /// for their documents.
+    /// It is the module doc's join: `from` is this run's queue — the board's
+    /// pending file's, or one kept in memory alone — joining the board's own
+    /// file once `H.1` reads, or the pending file's while it will not
+    /// ([`Joining::ThisRun`]); or an earlier run's pending file, read at the
+    /// join ([`Joining::EarlierRun`]). Each line enters under the ordinal
+    /// `how` gives it — its own, kept, or the next fresh one from the
+    /// principal's counter — and is inserted where that ordinal falls, the
+    /// queue kept in `k` order though the file holds the copy after every
+    /// line written before it; a line `how`'s repeat test finds standing here
+    /// already is not entered again, so a join cut before its sync, or before
+    /// the pending file's removal, re-runs at the next launch over the lines
+    /// the device kept and doubles none of them. No ordinal a standing line
+    /// holds moves (the module doc's THE ORDINALS): a file read here for the
+    /// first time that holds a line under an ordinal a line of `from` holds
+    /// is the hold's to renumber first ([`HeldQueue::renumber`]).
     ///
     /// The lines entering are copied to this queue's file as ONE copy —
     /// every line in one `write`, then one `sync_data`, the header its own
@@ -1880,7 +2006,8 @@ impl HeldQueue {
     /// stood, as a reopen reads a file whole, and the queue holds nothing
     /// more until it drains below its budgets. The copies this queue's file
     /// owes are written first ([`HeldQueue::retry`]), and no line of `from`
-    /// enters while one is still owed.
+    /// enters while one is still owed. The counter moves past the fresh
+    /// ordinals only once the copy lands.
     ///
     /// # Errors
     ///
@@ -1899,12 +2026,16 @@ impl HeldQueue {
     ///   holding no line removed, as the compaction removes one; where the
     ///   cut-back is refused too, the file holds the copy's bytes past its
     ///   whole lines ([`HeldQueue::tail_left`]) until the retry cuts them.
-    pub fn join(&mut self, from: &HeldQueue) -> Result<Joined, JoinRefused> {
+    pub fn join(&mut self, from: &HeldQueue, how: Joining<'_>) -> Result<Joined, JoinRefused> {
         self.retry();
         if let (Some(first), Some(waiting)) = (from.lines.first(), self.waiting()) {
             return Err(JoinRefused { k: first.k, error: waiting.refusal() });
         }
-        let Entering { lines, copy, joined } = self.entering(from)?;
+        let fresh = match &how {
+            Joining::ThisRun => None,
+            Joining::EarlierRun { next_k } => Some(**next_k),
+        };
+        let Entering { lines, copy, joined, next_k } = self.entering(from, fresh)?;
         let Some(&(first, _)) = joined.entered.first() else { return Ok(joined) };
         if let Some(d) = self.disk.as_mut() {
             if let Err(error) = d.ensure_header().and_then(|()| d.append(&copy)) {
@@ -1917,44 +2048,49 @@ impl HeldQueue {
                 return Err(JoinRefused { k: first, error });
             }
         }
-        // Each `k` is within MAX_ORDINAL, so its successor is a `u64`.
-        self.next_k = lines.last().map_or(self.next_k, |line| line.k + 1);
-        self.held_bytes = lines.iter().fold(self.held_bytes, |bytes, line| bytes.saturating_add(line.held_bytes()));
-        self.lines.extend(lines);
+        self.enter(lines);
+        if let (Joining::EarlierRun { next_k: counter }, Some(next_k)) = (how, next_k) {
+            *counter = next_k;
+        }
         Ok(joined)
     }
 
     /// Returns the lines of `from` a join enters, and the one copy of them.
     ///
-    /// Each takes its ordinal here, kept or renumbered as
-    /// [`HeldQueue::join`] has it, its other members as `from` holds them. A
-    /// line a standing line here carries ([`carried`]) is counted `repeated`
-    /// and passed over, the standing lines counted before the first line of
-    /// `from` is read and each answering for one line at most, so a line
-    /// entering is never matched against another that enters. The copy is
-    /// every entering line's bytes in `k` order, made where this queue has a
-    /// file.
+    /// Each takes its ordinal here — its own, or, where `fresh` names the
+    /// counter's next, the next fresh one in order ([`Joining`]) — its other
+    /// members as `from` holds them. A line the repeat test finds standing
+    /// here is counted `repeated` and passed over: this run's line by its
+    /// ordinal; an earlier run's by what it carries ([`carried`]), the
+    /// standing lines counted before the first line of `from` is read and
+    /// each answering for one line at most, so a line entering is never
+    /// matched against another that enters. The copy is every entering
+    /// line's bytes in `from`'s order, made where this queue has a file.
     ///
     /// # Errors
     ///
     /// Returns the writer's refusal of a line, at that line, nothing entered:
     /// its ordinal here past [`MAX_ORDINAL`], or its bytes past
     /// [`MAX_HELD_LINE_BYTES`].
-    fn entering(&self, from: &HeldQueue) -> Result<Entering, JoinRefused> {
-        let keep = self.lines.is_empty() && from.lines.first().is_some_and(|first| self.next_k <= first.k);
-        let mut standing: HashMap<Carried<'_>, usize> = HashMap::new();
-        for line in &self.lines {
-            *standing.entry(carried(line)).or_default() += 1;
+    fn entering(&self, from: &HeldQueue, fresh: Option<u64>) -> Result<Entering, JoinRefused> {
+        let by_ordinal: BTreeSet<u64> = if fresh.is_none() { self.lines.iter().map(|l| l.k).collect() } else { BTreeSet::new() };
+        let mut by_carried: HashMap<Carried<'_>, usize> = HashMap::new();
+        if fresh.is_some() {
+            for line in &self.lines {
+                *by_carried.entry(carried(line)).or_default() += 1;
+            }
         }
-        let mut entering = Entering::default();
-        let mut next_k = self.next_k;
+        let mut entering = Entering { next_k: fresh, ..Entering::default() };
         for line in &from.lines {
-            if let Some(count) = standing.get_mut(&carried(line)).filter(|count| **count > 0) {
-                *count -= 1;
+            let repeated = match fresh {
+                None => by_ordinal.contains(&line.k),
+                Some(_) => by_carried.get_mut(&carried(line)).filter(|count| **count > 0).map(|count| *count -= 1).is_some(),
+            };
+            if repeated {
                 entering.joined.repeated += 1;
                 continue;
             }
-            let k = if keep { line.k } else { next_k };
+            let k = entering.next_k.unwrap_or(line.k);
             let refused = |error: io::Error| JoinRefused { k: line.k, error };
             if k > MAX_ORDINAL {
                 return Err(refused(io::Error::new(io::ErrorKind::InvalidInput, format!("the ordinal {k} is past the held store's {MAX_ORDINAL}"))));
@@ -1968,12 +2104,109 @@ impl HeldQueue {
                 entering.copy.extend_from_slice(&bytes);
             }
             // `k` is within MAX_ORDINAL, so its successor is a `u64`.
-            next_k = k + 1;
-            entering.joined.renumbered |= k != line.k;
+            if let Some(next) = entering.next_k.as_mut() {
+                *next = k + 1;
+            }
             entering.joined.entered.push((line.k, k));
             entering.lines.push(entered);
         }
         Ok(entering)
+    }
+
+    /// Enters `lines`, each under its ordinal, the queue kept in `k` order:
+    /// the ordered insert.
+    ///
+    /// `lines` are in `k` order among themselves, none under an ordinal a
+    /// standing line holds; the queue's bytes count each, and the greatest
+    /// ordinal named moves past them.
+    fn enter(&mut self, lines: Vec<HeldLine>) {
+        self.greatest_k = lines.iter().fold(self.greatest_k, |greatest, line| greatest.max(line.k));
+        self.held_bytes = lines.iter().fold(self.held_bytes, |bytes, line| bytes.saturating_add(line.held_bytes()));
+        let standing = std::mem::take(&mut self.lines);
+        let mut merged = Vec::with_capacity(standing.len() + lines.len());
+        let (mut standing, mut entering) = (standing.into_iter().peekable(), lines.into_iter().peekable());
+        loop {
+            match (standing.peek(), entering.peek()) {
+                (Some(here), Some(new)) if here.k < new.k => merged.extend(standing.next()),
+                (Some(_), Some(_)) | (None, Some(_)) => merged.extend(entering.next()),
+                (Some(_), None) => merged.extend(standing.next()),
+                (None, None) => break,
+            }
+        }
+        self.lines = merged;
+    }
+
+    /// Gives every standing line a fresh ordinal from `next_k`, in `k`
+    /// order: the one renumbering (the module doc's THE ORDINALS).
+    ///
+    /// It is the hold's step for a file read at the join for the first time
+    /// in this run — the board's own file, which could not be named until
+    /// `H.1` read, or the pending file this run's memory lines join once the
+    /// head will not read — that holds a line under an ordinal a line of this
+    /// run's holds: this run's lines keep theirs, answered already, and the
+    /// file's take ordinals past them, so they walk after this run's in their
+    /// file's order (the owner's ruling, the module doc's THE ORDER). It is
+    /// harmless: the file was read now for the first time, so no ordinal of
+    /// it was ever answered to a call or a page. One copy, one sync: a
+    /// `done … dropped` of each line's old ordinal — the one form that raises
+    /// no base, and said of no act of the person's; a reader of the file
+    /// finds the line held again under its fresh ordinal right after — then
+    /// each line's `held` copy under its fresh ordinal, in `k` order, the
+    /// `done`s first so no fresh ordinal re-marks a line still standing
+    /// under it. The queue takes the fresh ordinals once the copy lands, and
+    /// `next_k` moves past them; a queue in memory alone takes them with no
+    /// copy. Nothing spends the re-mark budget: each `held` copy is a first
+    /// copy under its ordinal. It answers each line's old and fresh ordinal.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`JoinRefused`], nothing renumbered and `next_k` as it was:
+    /// this queue's file still owes a copy, at the first line under its
+    /// refusal; the writer refuses a fresh ordinal past [`MAX_ORDINAL`] or a
+    /// line past [`MAX_HELD_LINE_BYTES`], at that line; or the device refuses
+    /// the copy, at the first line, its bytes cut back off the file, or left
+    /// past its whole lines for the retry's cut ([`HeldQueue::tail_left`]).
+    pub fn renumber(&mut self, next_k: &mut u64) -> Result<Vec<(u64, u64)>, JoinRefused> {
+        self.retry();
+        let Some(first_k) = self.lines.first().map(|line| line.k) else { return Ok(Vec::new()) };
+        if let Some(waiting) = self.waiting() {
+            return Err(JoinRefused { k: first_k, error: waiting.refusal() });
+        }
+        let mut k = *next_k;
+        let mut moved = Vec::with_capacity(self.lines.len());
+        let mut copy = Vec::new();
+        if self.disk.is_some() {
+            for line in &self.lines {
+                copy.extend(done_line_bytes(line.k, Done::Dropped));
+            }
+        }
+        for line in &self.lines {
+            let refused = |error: io::Error| JoinRefused { k: line.k, error };
+            if k > MAX_ORDINAL {
+                return Err(refused(io::Error::new(io::ErrorKind::InvalidInput, format!("the ordinal {k} is past the held store's {MAX_ORDINAL}"))));
+            }
+            if self.disk.is_some() {
+                let bytes = held_line_bytes(&HeldLine { k, ..line.clone() });
+                if let Some(error) = past_the_line_bound(&bytes) {
+                    return Err(refused(error));
+                }
+                copy.extend_from_slice(&bytes);
+            }
+            moved.push((line.k, k));
+            // `k` is within MAX_ORDINAL, so its successor is a `u64`.
+            k += 1;
+        }
+        if let Some(d) = self.disk.as_mut() {
+            if let Err(error) = d.ensure_header().and_then(|()| d.append(&copy)) {
+                return Err(JoinRefused { k: first_k, error });
+            }
+        }
+        for (line, &(_, fresh)) in self.lines.iter_mut().zip(&moved) {
+            line.k = fresh;
+        }
+        self.greatest_k = self.greatest_k.max(k - 1);
+        *next_k = k;
+        Ok(moved)
     }
 
     /// Returns whether the queue's file holds bytes past its whole lines that
@@ -2007,18 +2240,32 @@ impl HeldQueue {
     }
 }
 
-/// What a join entered ([`HeldQueue::join`]), for the caller to re-key its
-/// memory by and say.
+/// Whose lines a join enters ([`HeldQueue::join`]): the rule each line's
+/// ordinal and the repeat test follow (the module doc's THE ORDINALS).
+#[derive(Debug)]
+pub enum Joining<'a> {
+    /// This run's queue, in memory or on the pending file: each line keeps
+    /// the ordinal the principal's counter gave it, and one whose ordinal a
+    /// standing line already holds is that line — this run's ordinals name
+    /// one line each — entered no second time.
+    ThisRun,
+    /// An earlier run's file, read at the join: each line takes the next
+    /// ordinal from `next_k`, the principal's counter, in the file's order —
+    /// that run's ordinals were its own, and none was answered in this one —
+    /// and one a standing line already carries by `doc`, `id` and frame is
+    /// passed over, each standing line answering for one such line at most.
+    EarlierRun { next_k: &'a mut u64 },
+}
+
+/// What a join entered ([`HeldQueue::join`]), for the caller to say.
 #[derive(Debug, Default)]
 pub struct Joined {
     /// Each line entered: the ordinal it had in the queue it came from, and
-    /// the one it took here.
+    /// the one it took here — the same for this run's lines.
     pub entered: Vec<(u64, u64)>,
-    /// The lines not entered again: a standing line here carries each, one
-    /// standing line answering for one of them at most.
+    /// The lines not entered again: a standing line here is each, or
+    /// carries it, one standing line answering for one of them at most.
     pub repeated: usize,
-    /// Whether a line entered took another ordinal than it had.
-    pub renumbered: bool,
 }
 
 /// Why a join was refused, nothing entered ([`HeldQueue::join`]).
@@ -2043,13 +2290,17 @@ struct Entering {
     /// Every line's bytes in order, where the queue joined into has a file.
     copy: Vec<u8>,
     joined: Joined,
+    /// The counter's next ordinal once the lines enter, where the lines are
+    /// an earlier run's and take fresh ones ([`Joining::EarlierRun`]).
+    next_k: Option<u64>,
 }
 
-/// What a held line carries for the join's repeat test: its document, its
-/// `id` and its frame's spelling, never its ordinal ([`HeldQueue::join`]).
+/// What a held line carries for the join's repeat test across runs: its
+/// document, its `id` and its frame's spelling, never its ordinal
+/// ([`Joining::EarlierRun`]).
 type Carried<'a> = (&'a str, Option<&'a str>, String);
 
-/// Returns what `line` carries for the join's repeat test.
+/// Returns what `line` carries for the join's repeat test across runs.
 ///
 /// The frame's spelling is its compact JSON, which the line's copy spells
 /// on disk and a frame read back from it spells again — an object's members

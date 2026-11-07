@@ -1554,7 +1554,7 @@ fn a_queue_kept_in_memory_joins_the_boards_file_as_soon_as_the_directory_is_this
     let file = held_file(&g);
     assert!(std::fs::read_to_string(&file).unwrap().contains("\"values\":[\"a\"]"), "the standing line is in the board's file, with no wait for an empty queue");
     let joined = said_containing(&g, "joined the board's held file");
-    assert!(joined.len() == 1 && joined[0].contains("1 held line joined") && joined[0].contains("their ordinals kept"), "{joined:?}");
+    assert!(joined.len() == 1 && joined[0].contains("1 held line joined") && !joined[0].contains("renumbered"), "{joined:?}");
     assert_eq!((g.fake.sends(), g.lines().len()), (2, 1), "resent and refused again, still standing");
     let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head()), None) else { panic!("held behind the standing line") };
     assert_eq!(behind["cause"], "behind", "{behind}");
@@ -1599,7 +1599,7 @@ fn a_queue_kept_in_memory_when_the_head_then_will_not_read_joins_the_pending_fil
     let pending = pending_file(&g);
     assert!(std::fs::read_to_string(&pending).unwrap().contains("\"values\":[\"a\"]"), "the line joined the pending file at {}", pending.display());
     let joined = said_containing(&g, "joined the pending held file");
-    assert!(joined.len() == 1 && joined[0].contains("1 held line joined") && joined[0].contains("their ordinals kept"), "{joined:?}");
+    assert!(joined.len() == 1 && joined[0].contains("1 held line joined") && !joined[0].contains("renumbered"), "{joined:?}");
     let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head()), None) else { panic!("held behind the first") };
     assert_eq!(behind["cause"], "behind", "{behind}");
     assert!(behind.get("unwritable").is_none(), "on disk, in the pending file: {behind}");
@@ -1759,7 +1759,7 @@ fn no_held_event_goes_out_when_a_sessions_open_reads_its_file() {
     let Opened::Live { mut queue, .. } = dir.open_file(1, "1.0.1").unwrap() else { panic!("a fresh file") };
     // A line written into the file by hand, at base 0, typed at genesis: no
     // board stands behind it yet.
-    assert!(queue.hold(DOC, None, 0, insert(DOC, json!(["a"]), 0), None, Reason::of("unreachable", false)).unwrap().unwritten.is_none());
+    assert!(queue.hold_next(DOC, None, 0, insert(DOC, json!(["a"]), 0), None, Reason::of("unreachable", false)).unwrap().unwritten.is_none());
     drop(queue);
     let g = ground_in(store, bare_facts(), 0);
     assert_eq!(g.lines().len(), 1, "the session's open lists the line");
@@ -2431,14 +2431,16 @@ fn a_held_file_the_compaction_cannot_remove_is_said_on_talk_and_appended_on() {
 /// it changes or is cleared (skep #727).
 ///
 /// The same state and count for one board, session and document is emitted
-/// once; a changed count, or a changed state, is emitted; the join's forced
-/// re-emit goes out whatever was last emitted; a document kept with no line
-/// left clears its key, so the same pair after it is news again; and the
-/// memory is per session — a second session of the principal sees its own
-/// first emit (the mutant that forgets the memory floods the page with the
-/// same state at every probe; the one that never clears a key keeps a map
-/// entry per document ever held; the one that keys by document alone
-/// starves a second tab of its first event).
+/// once; a changed count, or a changed state, is emitted; nothing bypasses
+/// the memory — the join's forced re-emit went with the renumbering it
+/// coped with (skep #856) — so the pair said again after the same pair is
+/// not emitted; a document kept with no line left clears its key, so the
+/// same pair after it is news again; and the memory is per session — a
+/// second session of the principal sees its own first emit (the mutant that
+/// forgets the memory floods the page with the same state at every probe;
+/// the one that never clears a key keeps a map entry per document ever
+/// held; the one that keys by document alone starves a second tab of its
+/// first event).
 #[test]
 fn the_held_events_memory_emits_a_pair_once_until_it_changes_or_is_cleared() {
     let g = ground();
@@ -2450,8 +2452,8 @@ fn the_held_events_memory_emits_a_pair_once_until_it_changes_or_is_cleared() {
     emit(HeldState::Sending, 2);
     emit(HeldState::Sending, 2);
     assert_eq!(g.states(), ["holding", "sending"], "a changed count, then a changed state, each once");
-    g.holds.emit_held_again(&g.session, DOC, 2, HeldState::Sending, None);
-    assert_eq!(g.states(), ["sending"], "the forced re-emit goes out whatever was last emitted");
+    emit(HeldState::Sending, 2);
+    assert_eq!(g.states(), Vec::<String>::new(), "nothing bypasses the memory: the same pair again is not news");
     emit(HeldState::Kept, 0);
     emit(HeldState::Holding, 1);
     assert_eq!(g.states(), ["kept", "holding"], "a document kept with no line clears its key: the pair after it is news");
@@ -2459,4 +2461,105 @@ fn the_held_events_memory_emits_a_pair_once_until_it_changes_or_is_cleared() {
     let second = g.holds.sessions.register(&BoardEntry { reference: "b-1".into(), board: Arc::clone(&g.session.board) }, Open { token: Token::parse(&"9e".repeat(16)).unwrap(), facts: writer_facts(&g.store), opened_at: 0 }, &mut NoSupplements);
     g.holds.emit_held(&second, DOC, 1, HeldState::Holding, Some("unreachable"), &[]);
     assert_eq!(g.states(), ["holding"], "a second session of the principal sees its own first emit");
+}
+
+/// Checks that the compaction keeps the principal's counter: the next
+/// line's ordinal is past the last answered (skep #856;
+/// `PrincipalHold::next_k`).
+///
+/// A burst held takes ordinal 1; the probe sends and keeps it, and the
+/// board's file compacts away. The next burst held takes 2, never 1 again —
+/// the ordinals one space for the shell's life — and the recreated file
+/// names it so (the mutant that starts the ordinals again at the compaction
+/// hands the page an ordinal it was told was kept).
+#[test]
+fn the_compaction_keeps_the_counter_and_the_next_ordinal_is_past_the_last_answered() {
+    let g = ground();
+    let first = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    assert_eq!(first["held"], 1, "{first}");
+    g.holds.probe("b-1");
+    assert!(g.lines().is_empty() && !held_file(&g).exists(), "the line kept and the file compacted away");
+    let next = g.hold(&insert(DOC, json!(["b"]), g.fake.head()), "unreachable", false);
+    assert_eq!(next["held"], 2, "the ordinals run on: {next}");
+    let ks: Vec<u64> = file_lines(&std::fs::read_to_string(held_file(&g)).unwrap()).iter().map(|l| l["held"].as_u64().unwrap()).collect();
+    assert_eq!(ks, [2], "the recreated file names it so");
+}
+
+/// Checks that the first touch reads the pending file and the board's own
+/// file, and the first ordinal answered is past the greatest in either
+/// (skep #856; `PrincipalHold::next_k`, `HeldDir::greatest_ordinal`).
+///
+/// An earlier run left the board's own file naming ordinals up to 2 and a
+/// pending file naming ordinals up to 9, one line standing in each. Three
+/// first touches: (a) the head reads and the store is this shell's, the
+/// pending file's join refused at the open by the device, so it stands —
+/// the door takes the board's file and the first touch reads the pending
+/// file, so the first burst held takes 10, past both; (b) another process
+/// holds the pending lock, so the store is another's and the queue in
+/// memory — the first touch reads both files all the same, and the first
+/// burst takes 10; (c) the board's directory cannot be locked, sealed, the
+/// head read and naming its chain — the queue in memory, both files read,
+/// and the first burst takes 21, past the board's file's 20 (the mutant
+/// that starts the counter at the queue's own file alone hands out ordinals
+/// the pending file names; the one that reads neither in memory hands out
+/// the board's file's own).
+#[cfg(unix)]
+#[test]
+fn the_first_touch_reads_the_pending_file_and_the_boards_file_and_the_first_ordinal_is_past_both() {
+    use std::os::unix::fs::PermissionsExt;
+    let chain = Chain::parse(&"ab".repeat(32)).unwrap();
+    // The files an earlier run left: the board's own naming ordinals up to
+    // `board`, the pending one up to `pending`, one line standing in each.
+    let seed = |store: &TempDir, board: u64, pending: u64| {
+        let dir = HeldDir::new(store.path(), chain);
+        dir.ensure().unwrap();
+        let Opened::Live { mut queue, .. } = dir.open_file(1, "1.0.1").unwrap() else { panic!("a fresh file") };
+        for n in 1..=board {
+            queue.hold_next(DOC, None, 0, insert(DOC, json!([format!("b{n}")]), 0), None, Reason::of("unreachable", false)).unwrap();
+        }
+        for k in 1..board {
+            queue.done(k, Done::Dropped).unwrap();
+        }
+        let dir = HeldDir::pending(store.path(), &Origin::parse("http://127.0.0.1:1").unwrap());
+        dir.ensure().unwrap();
+        let Opened::Live { mut queue, .. } = dir.open_file(1, "1.0.1").unwrap() else { panic!("a fresh file") };
+        for n in 1..=pending {
+            queue.hold_next(OTHER, None, 0, insert(OTHER, json!([format!("p{n}")]), 0), None, Reason::of("head_unreadable", false)).unwrap();
+        }
+        for k in 1..pending {
+            queue.done(k, Done::Dropped).unwrap();
+        }
+        dir
+    };
+    // (a) The store this shell's, the pending file's join refused at the open.
+    let store = TempDir::new().unwrap();
+    seed(&store, 2, 9);
+    let facts = writer_facts(&store);
+    crate::held::tests::refuse_copies_after(0);
+    let g = ground_over(Fake::new(), store, facts, 0);
+    crate::held::tests::take_copies();
+    assert!(!g.holds.another_window("b-1") && pending_file(&g).exists(), "(a) premise: the store is this shell's, and the pending file stands, its join refused at the open: {:?}", g.said.lock().unwrap());
+    let held = g.hold(&insert(DOC, json!(["x"]), g.fake.head()), "unreachable", false);
+    assert_eq!(held["held"], 10, "(a) past the board's file's 2 and the pending file's 9: {held}");
+    assert!(held.get("unwritable").is_none(), "(a) on the board's file: {held}");
+    // (b) Another process holds the pending lock: the store another's.
+    let store = TempDir::new().unwrap();
+    let pending_dir = seed(&store, 2, 9);
+    let _other = pending_dir.try_lock().unwrap().expect("the pending lock is free to take");
+    let facts = writer_facts(&store);
+    let g = ground_over(Fake::new(), store, facts, 0);
+    assert!(g.holds.another_window("b-1"), "(b) premise: the pending lock another process holds makes the store another's");
+    let held = g.hold(&insert(DOC, json!(["x"]), g.fake.head()), "unreachable", false);
+    assert_eq!(held["held"], 10, "(b) in memory, past both files all the same: {held}");
+    // (c) The board's directory sealed, the head read: the queue in memory.
+    let store = TempDir::new().unwrap();
+    seed(&store, 20, 9);
+    let board_dir = store.path().join("held").join(chain.to_string());
+    std::fs::set_permissions(&board_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(Fake::new(), store, facts, 0);
+    let held = g.hold(&insert(DOC, json!(["x"]), g.fake.head()), "unreachable", false);
+    std::fs::set_permissions(&board_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(!g.holds.another_window("b-1") && held["unwritable"].as_str().is_some_and(|why| why.contains("could not be made or locked")), "(c) premise: the directory refused, the queue in memory: {held}");
+    assert_eq!(held["held"], 21, "(c) past the board's file's 20 and the pending file's 9: {held}");
 }

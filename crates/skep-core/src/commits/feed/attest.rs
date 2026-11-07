@@ -231,10 +231,11 @@ impl AttestStore {
     /// journal is not asked. It is asked after a loss alone — a store line
     /// lost, torn or never written, a bare position, a region of
     /// `commits.log` its open did not cover — and then pays one
-    /// `Kernel::boundaries_above`: the base at or below the fence loaded and
-    /// seeded — a whole checkpoint file read and deserialized, dropped unfolded
-    /// — then one scan from that base to the journal's end, the retained window
-    /// at most, one entry kept per committed transaction above the base and a
+    /// `Kernel::boundaries_above`: the base at or below the fence — a root the
+    /// kernel holds, cloned, or a whole checkpoint file read, deserialized and
+    /// seeded — dropped unfolded, then one scan from that base to the
+    /// journal's end, the retained window at most, one entry kept per
+    /// committed transaction above the base and a
     /// signature per attested one; a second such read where the fence's base is
     /// gone (the floor arm). Where nothing is uncovered, the fence at the head,
     /// the journal is not asked either. What it never pays is a base and a

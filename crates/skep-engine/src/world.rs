@@ -79,9 +79,12 @@ use crate::publication::{self, Drafts};
 /// no link; and
 /// [`WorldState::rebuild_derived`] re-establishes it, which M2 runs over
 /// every base it loads, before replay — at open, and again for every world
-/// [`crate::Engine::world_at`] reconstructs, which is why that method states
-/// the invariant as its own postcondition and why a reconstruction is
-/// servable as it stands. [`WorldState::apply`] preserves it: each arm folds
+/// [`crate::Engine::world_at`] reconstructs from a base read from disk or
+/// genesis, while one standing on a root M2 holds starts from a world the
+/// invariant already holds of, a live root or one an open seeded — which is
+/// why that method states the invariant as its own postcondition and why a
+/// reconstruction is servable as it stands.
+/// [`WorldState::apply`] preserves it: each arm folds
 /// exactly the derived structures its records can move — a store's hints
 /// inside that store's fold, and each engine index on the arm its doc names —
 /// under the premise that doc states (no record publishes a document), so a
@@ -566,10 +569,12 @@ impl WorldState for World {
     /// logarithm of each lookup, and every factor is the store's size rather
     /// than a caller's. A walk of Π per draft or link would make it a product
     /// of two such sizes, each grown by one committed write, which whatever
-    /// serves historical reads would pay per reconstruction it admits. This
-    /// is what M2's `Kernel::world_at` means where its own cost names this
-    /// method and does not size it — so a caller reading that figure for a
-    /// historical reconstruction reads this one for the rest of it.
+    /// serves historical reads would pay per reconstruction it admits that
+    /// reads its base from disk or genesis — one that stands on a base M2
+    /// holds runs no rebuild. This is what M2's `Kernel::world_at` means
+    /// where its own cost names this method and does not size it — so a
+    /// caller reading that figure for a historical reconstruction reads this
+    /// one for the rest of it.
     ///
     /// # Errors
     ///
@@ -578,7 +583,8 @@ impl WorldState for World {
     /// holding any credential deposit, is refused — the one `Err` this method
     /// answers, M2's own `RebuildError`, which makes the base not a start
     /// point (AUTH-2.84) and hands M2's fallback chain its turn, at
-    /// `Kernel::open` and at every `Kernel::world_at` alike.
+    /// `Kernel::open` and at every `Kernel::world_at` that reads its base
+    /// from disk alike.
     ///
     /// # Panics
     ///

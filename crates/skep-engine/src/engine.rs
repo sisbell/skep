@@ -461,15 +461,16 @@ impl Engine {
     /// **Postcondition.** It is the assembler's rather than M2's, because the
     /// invariant it names is [`World`]'s: the returned world satisfies that
     /// invariant — its derived state agrees with its authoritative state. M2
-    /// seeds every base it selects through [`WorldState::rebuild_derived`],
-    /// which establishes it, and folds onto that base through
-    /// [`WorldState::apply`], which carries both derived indexes on their own
-    /// arms and so preserves it. A reconstruction therefore needs no rebuild
-    /// from its receiver: it may be dumped, checked, served at a reader's
-    /// class, or paired with a kernel at [`EngineStores::new`], whose
-    /// precondition it discharges. That is the one thing a caller must know
-    /// and M2 cannot say, being generic over every `WorldState` and knowing
-    /// nothing of this world's indexes.
+    /// stands on a root it holds — one its live fold made or its open seeded,
+    /// which holds it already — or seeds the base it reads from disk or
+    /// genesis through [`WorldState::rebuild_derived`], which establishes it,
+    /// and folds onto that base through [`WorldState::apply`], which carries
+    /// both derived indexes on their own arms and so preserves it. A
+    /// reconstruction therefore needs no rebuild from its receiver: it may be
+    /// dumped, checked, served at a reader's class, or paired with a kernel at
+    /// [`EngineStores::new`], whose precondition it discharges. That is the
+    /// one thing a caller must know and M2 cannot say, being generic over
+    /// every `WorldState` and knowing nothing of this world's indexes.
     ///
     /// # Errors
     ///
@@ -484,10 +485,10 @@ impl Engine {
     /// # Panics
     ///
     /// Panics on the shapes [`Engine::open`] names, since M2 seeds every base
-    /// it selects through the same rebuild and folds the same records over it,
-    /// with no unwind boundary. A caller that serves historical reads per
-    /// request holds its own panic boundary around this call; the daemon's
-    /// request handler does.
+    /// it reads from disk or genesis through the same rebuild and folds the
+    /// same records over every base it stands on, with no unwind boundary. A
+    /// caller that serves historical reads per request holds its own panic
+    /// boundary around this call; the daemon's request handler does.
     ///
     /// [`WorldState::apply`]: skep_kernel::WorldState::apply
     /// [`WorldState::rebuild_derived`]: skep_kernel::WorldState::rebuild_derived

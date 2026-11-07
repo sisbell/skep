@@ -1055,7 +1055,10 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
      the newest N checkpoints, each a whole copy of the board on the
      volume. Default 2; 0 is refused, exit 2. The oldest is where the
      open falls back to when a newer one refuses (step 3, item 5),
-     and the floor the journal is reclaimed below, where it is.
+     and the floor the journal is reclaimed below, where it is. The
+     state of each retained checkpoint the daemon wrote, or started
+     from, is also held in memory, sharing what has not changed since,
+     so a larger N costs resident memory too.
    - `--reclaim-journal <POLICY>` (`SKEPD_RECLAIM_JOURNAL`): what a
      checkpoint's landing does to the journal below the oldest kept
      checkpoint. `below-oldest-checkpoint`, the default, reclaims

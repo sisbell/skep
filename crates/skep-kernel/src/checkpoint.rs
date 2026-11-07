@@ -593,9 +593,13 @@ pub(crate) fn list(dir: &Path) -> io::Result<Vec<CheckpointMeta>> {
 ///
 /// The header is read through [`CheckpointMeta::header`] — or `None` where
 /// no file of that name stands, or its header refuses. Fail-quiet, as
-/// [`newest_header`] is, for the same kind of reader:
+/// [`newest_header`] is, for its two readers:
 /// [`crate::Kernel::checkpoint_header`], which a caller sizes by and must
-/// never fail over. The file is named directly from the seq
+/// never fail over, and the history reads' base selection
+/// (`Kernel::base_at_or_below`), which stands on a base the kernel holds only
+/// while its file answers the header it was held against — there a `None`
+/// sends the read to the directory, whose own read of the file answers the
+/// failure as itself (SP-14). The file is named directly from the seq
 /// ([`checkpoint_path`]), with no listing: the name and the header are then
 /// the two sources the header parse cross-checks, as they are for a listed
 /// entry.

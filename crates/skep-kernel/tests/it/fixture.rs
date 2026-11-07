@@ -10,7 +10,11 @@
 //! replay at that boundary held to it, all through the PUBLIC engine surface.
 //! A suite judges a damaged copy against those captures; an open that hangs
 //! is a finding, and the timed opens here panic on one with the context they
-//! were handed.
+//! were handed. Where the fixture landed checkpoints, every boundary at or
+//! above the oldest base the kernel holds is read twice before the engine
+//! drops — standing on the held root, and from the directory once the roots
+//! are released through the kernel's `test-hooks` door — each read held to
+//! the oracle and its hints to a rebuild's.
 //!
 //! Plumbing, not a suite: it declares no tests, and `hazard`, `golden` and
 //! `chain` each use a subset of it — which is what the `dead_code` allow on
@@ -422,6 +426,38 @@ impl Fixture {
                 .rearrange(OWNER, &doc, &[vp(1, 1), vp(1, 2), vp(1, 4), vp(1, 6)], AsOf::Typed(engine.kernel().current_seq()))
                 .expect("swap in doc");
             capture(&engine, &mut boundaries);
+        }
+
+        // The bases the kernel holds against the files they stand in for: at
+        // every boundary at or above the oldest held base, the read standing
+        // on a held root answers the acknowledged world, and so does the same
+        // read from the directory once the roots are released — each world's
+        // hints a rebuild's.
+        if let Some(&oldest) = engine.kernel().held_bases().first() {
+            let held_ones = || boundaries.iter().filter(|b| b.seq >= oldest.0);
+            let read_back = |route: &str| {
+                for boundary in held_ones() {
+                    let world =
+                        engine.world_at(Seq(boundary.seq)).expect("a held boundary answers");
+                    assert_eq!(
+                        engine.dump_of(&world),
+                        boundary.dump,
+                        "{route}: the world at {} is the acknowledged one",
+                        boundary.seq
+                    );
+                    engine.check_hints_of(&world).unwrap_or_else(|divergence| {
+                        panic!("{route}: the world at {}'s hints: {divergence:?}", boundary.seq)
+                    });
+                }
+            };
+            let stood_on = || engine.kernel().held_bases_stood_on();
+            let before = stood_on();
+            read_back("on the held roots");
+            let reads = held_ones().count() as u64;
+            assert_eq!(stood_on() - before, reads, "every read stood on a held root");
+            engine.kernel().release_held_bases();
+            read_back("from the directory");
+            assert_eq!(stood_on() - before, reads, "released, no read stood on one");
         }
 
         drop(engine); // journal lock released; the fixture is now files.

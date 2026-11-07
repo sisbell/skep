@@ -1498,28 +1498,40 @@ fn the_fold_re_seeds_across_a_restart_and_an_empty_map_grants_nothing() {
     );
 }
 
-/// `Engine::world_at`'s POSTCONDITION — the returned world has been through
-/// `rebuild_derived` — over the one base that gives it teeth: a CHECKPOINT,
-/// which M2 decodes with the exception set and both grant indexes empty.
-/// Every other reconstruction in this suite starts from genesis, whose derived
-/// state is empty whether or not a rebuild ran, so a base selection that
-/// skipped the rebuild on a checkpoint would pass all of them — and every
-/// historical read would take the checkpoint's drafts for published and its
-/// grants for ungiven.
+/// `Engine::world_at`'s postcondition over a checkpoint read from disk.
+///
+/// The returned world has been through `rebuild_derived`, and this is the one
+/// base that gives that teeth: a checkpoint, which M2 decodes with the
+/// exception set and both grant indexes empty. Every other reconstruction in
+/// this suite starts from genesis, whose derived state is empty whether or not
+/// a rebuild ran, or stands on a root the kernel holds, which runs no rebuild
+/// — so a base selection that skipped the rebuild on a checkpoint would pass
+/// all of them, and every historical read below the bases a kernel holds
+/// would take the checkpoint's drafts for published and its grants for
+/// ungiven. A reopen holds its newest base alone, so the read at `past`,
+/// below it, takes the older checkpoint from the directory.
 #[test]
 fn a_reconstruction_over_a_checkpoint_base_answers_its_drafts_and_grants() {
     let dir = tempdir().expect("tempdir");
-    let engine = Engine::open(fsync_cfg(dir.path())).expect("fsync open");
-    let board = two_accounts(&engine);
-    grant_record(&engine, &board.home_a, &board.draft_a, vec![board.acct_b.clone()]);
-    let base = engine.kernel().checkpoint().expect("the base the reconstruction starts from");
-    // A commit above the base, so the reconstruction FOLDS onto it…
-    let (later, past) =
-        engine.namespace().create_new_document(A, &board.acct_a, None).expect("A's later draft");
-    assert!(past > base, "the boundary sits above the checkpoint");
-    // …and one above `past`, so the answer is the past and not the head.
-    grant_record(&engine, &board.home_a, &later, vec![board.acct_b.clone()]);
+    let (board, later, past) = {
+        let engine = Engine::open(fsync_cfg_retaining(dir.path(), 2)).expect("fsync open");
+        let board = two_accounts(&engine);
+        grant_record(&engine, &board.home_a, &board.draft_a, vec![board.acct_b.clone()]);
+        let base = engine.kernel().checkpoint().expect("the base the reconstruction starts from");
+        // A commit above the base, so the reconstruction folds onto it…
+        let (later, past) = engine
+            .namespace()
+            .create_new_document(A, &board.acct_a, None)
+            .expect("A's later draft");
+        assert!(past > base, "the boundary sits above the checkpoint");
+        // …and one above `past`, so the answer is the past and not the head.
+        grant_record(&engine, &board.home_a, &later, vec![board.acct_b.clone()]);
+        // The newer base the reopen stands on, above `past`.
+        engine.kernel().checkpoint().expect("the newer base");
+        (board, later, past)
+    };
 
+    let engine = Engine::open(fsync_cfg_retaining(dir.path(), 2)).expect("reopen over both");
     let w = engine.world_at(past).expect("a committed boundary answers");
     assert!(
         !w.readable(None, &board.draft_a),

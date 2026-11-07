@@ -5746,8 +5746,10 @@ positions committed long before it started. `/op-at` at the current head
 is byte-identical to the same frame on `/op`.
 
 **Cost and retention.** Each historical read rebuilds the state at `at` by
-folding the journal forward from the nearest on-disk checkpoint at or
-below it — per request, uncached. This is an observation surface, not a
+folding the journal forward from the nearest retained checkpoint at or
+below it — held in memory where the daemon wrote or started from it, and
+otherwise read from disk — per request, with no answer kept. This is an
+observation surface, not a
 serving path: fine for history panes and diff tooling, wrong for a hot
 loop — and never the "as published" switch, whose retracted half is the
 live `find_links_v_history` read of the present board (§Link discovery

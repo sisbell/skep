@@ -92,7 +92,12 @@
 //! under either arm and reclaims the journal below the oldest of them under
 //! [`Reclaim::BelowOldestRetained`] alone; under [`Reclaim::Never`] every
 //! segment since genesis stands and a history read below the oldest base
-//! folds from genesis through it.
+//! folds from genesis through it. **The retained bases are held in memory
+//! too**: each landing keeps the root it wrote, and the open the base it
+//! loaded, beside the header the checkpoint's file carried, so a history read
+//! at or above the oldest stands on that root while the file still answers
+//! that header — no checkpoint read, decoded or seeded — and takes its base
+//! from the directory otherwise ([`Kernel::world_at`]).
 //!
 //! The `test-hooks` feature compiles in the test seam (`hooks.rs`). It holds
 //! the write-fault seam, under which a test makes the next checkpoint write —
@@ -101,8 +106,10 @@
 //! full volume), or the next checkpoint write or journal append panic, each
 //! arm firing once and disarming, armed through `Kernel`'s `#[doc(hidden)]`
 //! doors `fail_the_next` and `panic_at_the_next`, with `armed_steps` reading
-//! what stands; and the count of the bases this kernel's history reads have
-//! loaded, read through the door `bases_loaded`. The open's tail keep hooks
+//! what stands; and the counts of the bases this kernel's history reads have
+//! stood on and of those it held, read through the doors `bases_loaded` and
+//! `held_bases_stood_on`, beside `held_bases` and `release_held_bases`, which
+//! read and release the bases it holds. The open's tail keep hooks
 //! the seam at its copy's fsync, which fires only under the cut's own unit
 //! suite: an arm a door places there stands unfired. The seam is one
 //! kernel's, never the process's, and a build without the feature carries
@@ -271,11 +278,14 @@ use serde::{Deserialize, Serialize};
 /// repair's failure: the §3 unwind guard runs the repair again, and only a
 /// second failure halts the kernel, its frames possibly standing; out of
 /// whichever read or [`Kernel::checkpoint`] releases the last reference to a
-/// superseded root, a [`Snapshot`] most often; out of [`Kernel::open`],
+/// superseded root — a [`Snapshot`] most often, or a held base a landing
+/// releases, or a history read that took the last reference to a base a
+/// landing has since released; out of [`Kernel::open`],
 /// [`Kernel::world_at`], [`Kernel::chain_at`], [`Kernel::attestation_at`] and
 /// [`Kernel::boundaries_above`], whose base loads and folds drop worlds of
 /// their own; and out of the kernel's own drop, which releases its reference
-/// to the installed root and drops the genesis a journaled kernel keeps.
+/// to the installed root and drops the genesis and the held bases a
+/// journaled kernel keeps.
 ///
 /// **Hostile-input obligation.** `W` is decoded from a checkpoint body, which
 /// is bytes M2 does not trust: the header checksum proves they are the bytes
@@ -385,12 +395,15 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// Seeds derived hints from authoritative state, or refuses the base.
     ///
     /// Runs once per base a derivation loads — at every journaled
-    /// [`Kernel::open`] and at every history read that selects a base
-    /// ([`Kernel::world_at`], [`Kernel::chain_at`], [`Kernel::attestation_at`],
-    /// [`Kernel::boundaries_above`]; genesis's slot and the empty range select
-    /// none), on each base it loads, a retained checkpoint or genesis, until
-    /// one seeds — before replay, and never on a live commit, so it cannot
-    /// keep any hint current by itself. It exists solely to reconstruct hints
+    /// [`Kernel::open`] and at every history read that takes its base from
+    /// the directory or from genesis ([`Kernel::world_at`],
+    /// [`Kernel::chain_at`], [`Kernel::attestation_at`],
+    /// [`Kernel::boundaries_above`]; genesis's slot and the empty range take
+    /// none, and a read standing on a base the kernel holds seeds nothing, the
+    /// held root carrying the hints its live fold or its open's seed made), on
+    /// each base it loads, a retained checkpoint or genesis, until one seeds —
+    /// before replay, and never on a live commit, so it cannot keep any hint
+    /// current by itself. It exists solely to reconstruct hints
     /// a checkpoint skip-serialized (`#[serde(skip)]`), and to say when it
     /// cannot. Not run under [`Durability::InMemory`], which does not load:
     /// that mode installs the caller's `genesis` value as the root exactly as
@@ -404,7 +417,10 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// [`Kernel::world_at`] run `rebuild_derived` (seeding `Seq ≤ S`) then
     /// replay `Seq > S` through `apply`; if the seed disagrees with the
     /// `apply`-fold it stands in for, the recovered — or the historical —
-    /// hint diverges from the live-maintained one and reads go wrong. A
+    /// hint diverges from the live-maintained one and reads go wrong; and a
+    /// history read's answer then depends on whether its base was one the
+    /// kernel holds, which carries the live fold's hints, or one it read from
+    /// the directory and seeded. A
     /// refusal is what an override answers where no seed it could compute
     /// would agree — a slice the base was written without, over records whose
     /// fold depends on a commit order the base does not hold — and it is the
@@ -417,7 +433,8 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// survive the serde round trip: [`Kernel::world_at`] promises the same
     /// world at a boundary whichever base carries it, and a skipped
     /// authoritative field makes a checkpoint-based derivation differ from a
-    /// genesis-based one by exactly that field, silently. A world that skips
+    /// genesis-based one, or from one standing on a held root, by exactly that
+    /// field, silently. A world that skips
     /// nothing needs no override at all, which is why the default is
     /// `Ok(self)`. M2 cannot check this either.
     ///
@@ -443,7 +460,9 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// [`OpenError::BadCheckpoint`] or [`HistoryError::Reclaimed`] only when
     /// the chain is exhausted, carrying the newest candidate's refusal as its
     /// `cause`, which is this one where that candidate refused its seed.
-    /// Startup and the history reads run the same chain (AUTH-2.84), and a
+    /// Startup and the history reads that consult the directory run the same
+    /// chain (AUTH-2.84) — a held base was chosen by that chain at the open,
+    /// or written by a landing from a root the live fold made — and a
     /// journaled `open` reports what it did — the start point and every base
     /// it passed over — as [`Recovery`], so the caller can say so. Retention
     /// counts none of the bases the open passed over — a refused one among

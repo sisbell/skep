@@ -13,14 +13,16 @@
 //! on cue in the gate on every platform.
 //!
 //! **The base-load count** (§3.3 step 2 of the operations design): the bases
-//! this kernel's history reads have selected, loaded and seeded — a retained
-//! checkpoint's whole body read, hashed, deserialized and seeded, or genesis
-//! cloned and seeded — moved once at the reads' one base selection
-//! ([`Kernel::base_at_or_below`]), so a suite fences what a caller costs in
-//! bases where it cannot in seconds: a consumer that asks once over a window
-//! and one that asks once per boundary read the same slots and differ here
-//! alone. Recovery's base at the open is not among them, nor a candidate the
-//! fallback chain passed over.
+//! this kernel's history reads have stood on — a retained checkpoint's whole
+//! body read, hashed, deserialized and seeded, genesis cloned and seeded, or
+//! a base the kernel holds in memory, which reads no body — moved once at the
+//! reads' one base selection ([`Kernel::base_at_or_below`]), so a suite
+//! fences what a caller costs in bases where it cannot in seconds: a consumer
+//! that asks once over a window and one that asks once per boundary read the
+//! same slots and differ here alone. **The held count** beside it moves at
+//! the same site for a held base alone, so a suite tells a read that read no
+//! checkpoint from one that read a whole one. Recovery's base at the open is
+//! in neither, nor a candidate the fallback chain passed over.
 //!
 //! The state is one kernel's, never the process's — one test opens several
 //! kernels, and the suite runs many tests in one process: [`Kernel`] holds
@@ -30,12 +32,13 @@
 //! the `Seam` alias in `lib.rs` is the handle. The doors a test arms it
 //! through are [`Kernel`]'s `#[doc(hidden)]` [`fail_the_next`] and
 //! [`panic_at_the_next`], and [`armed_steps`] reads what stands; the three
-//! delegate here, and the count is read through [`bases_loaded`]. A build
-//! without the feature carries none of it, and the write sites' hook before a
-//! step is the no-op `NoHooks` of `lib.rs`. Like [`SaltSource::Seeded`], a
-//! test-time knob the shipped binary never turns: the kernel still has no
-//! logging seam — it answers facts, and this seam only makes a step fail or
-//! unwind and counts what the reads loaded.
+//! delegate here, and the counts are read through [`bases_loaded`] and
+//! [`held_bases_stood_on`]. A build without the feature carries none of it,
+//! and the write sites' hook before a step is the no-op `NoHooks` of
+//! `lib.rs`. Like [`SaltSource::Seeded`], a test-time knob the shipped binary
+//! never turns: the kernel still has no logging seam — it answers facts, and
+//! this seam only makes a step fail or unwind and counts the bases the reads
+//! stood on.
 //!
 //! [`Kernel`]: crate::Kernel
 //! [`Kernel::base_at_or_below`]: crate::Kernel::base_at_or_below
@@ -43,6 +46,7 @@
 //! [`panic_at_the_next`]: crate::Kernel::panic_at_the_next
 //! [`armed_steps`]: crate::Kernel::armed_steps
 //! [`bases_loaded`]: crate::Kernel::bases_loaded
+//! [`held_bases_stood_on`]: crate::Kernel::held_bases_stood_on
 //! [`SaltSource::Seeded`]: crate::SaltSource::Seeded
 
 use std::io;
@@ -66,33 +70,53 @@ enum Arm {
 /// Each arm is taken by the first hook that reaches its step. Behind an
 /// `Arc` (the `Seam` alias) so the kernel and its journal appender hold one
 /// state: the kernel's doors arm it, the appender's and the checkpoint
-/// write's hooks fire it. Beside the arms, the one count the seam keeps.
+/// write's hooks fire it. Beside the arms, the two counts the seam keeps.
 #[derive(Default)]
 pub(crate) struct Hooks {
     armed: Mutex<Vec<(Step, Arm)>>,
     /// The base-load count of this kernel's history reads.
     ///
-    /// It is the bases they have loaded since the open, moved by
+    /// It is the bases they have stood on since the open, moved by
     /// [`Hooks::base_loaded`] at the reads' base selection and read by
     /// [`Hooks::bases_loaded`]. Monotone.
     bases_loaded: AtomicU64,
+    /// The held count of this kernel's history reads.
+    ///
+    /// It is the reads that have stood on a base the kernel holds since the
+    /// open, moved by [`Hooks::held_base_stood_on`] beside the base-load count
+    /// and read by [`Hooks::held_bases_stood_on`]. Monotone.
+    held_bases_stood_on: AtomicU64,
 }
 
 impl Hooks {
-    /// Counts one more base loaded by a history read.
+    /// Counts one more base a history read stood on.
     ///
     /// The reads' base selection calls it once its base stands: a retained
-    /// checkpoint's whole body decoded and seeded, or genesis cloned and
-    /// seeded. A candidate the fallback chain passed over is not one, nor a
-    /// selection that refused: the count is of the bases a read's selection
-    /// stood on, whether the read then scans from the base or answers at it.
+    /// checkpoint's whole body decoded and seeded, genesis cloned and seeded,
+    /// or a base the kernel holds. A candidate the fallback chain passed over
+    /// is not one, nor a selection that refused: the count is of the bases a
+    /// read's selection stood on, whether the read then scans from the base
+    /// or answers at it.
     pub(crate) fn base_loaded(&self) {
         self.bases_loaded.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Returns the bases this kernel's history reads loaded since the open.
+    /// Returns the bases this kernel's history reads stood on since the open.
     pub(crate) fn bases_loaded(&self) -> u64 {
         self.bases_loaded.load(Ordering::Relaxed)
+    }
+
+    /// Counts one more read that stood on a base the kernel holds.
+    ///
+    /// The reads' base selection calls it beside [`Hooks::base_loaded`] where
+    /// the base it stands on is held, a read of no checkpoint body.
+    pub(crate) fn held_base_stood_on(&self) {
+        self.held_bases_stood_on.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Returns how many reads have stood on a held base since the open.
+    pub(crate) fn held_bases_stood_on(&self) -> u64 {
+        self.held_bases_stood_on.load(Ordering::Relaxed)
     }
 
     /// Runs the seam's hook before `step`, the call each write site makes.
@@ -249,13 +273,14 @@ mod tests {
         assert_eq!(hooks.armed_steps(), vec![Step::JournalRepair]);
     }
 
-    /// Checks the count starts at zero and moves by one per base loaded.
+    /// Checks the counts start at zero and each moves by one per call.
     ///
-    /// The arms beside it neither move it nor are moved by it.
+    /// The arms beside them neither move them nor are moved by them, and the
+    /// held count moves apart from the base-load count.
     #[test]
-    fn the_base_load_count_starts_at_zero_and_moves_once_per_load() {
+    fn the_base_load_counts_start_at_zero_and_move_once_per_call() {
         let hooks = Hooks::default();
-        assert_eq!(hooks.bases_loaded(), 0);
+        assert_eq!((hooks.bases_loaded(), hooks.held_bases_stood_on()), (0, 0));
         hooks.base_loaded();
         hooks.base_loaded();
         assert_eq!(hooks.bases_loaded(), 2);
@@ -264,6 +289,8 @@ mod tests {
         assert_eq!(hooks.bases_loaded(), 2, "an arm firing is no base loaded");
         hooks.base_loaded();
         assert_eq!(hooks.bases_loaded(), 3);
+        hooks.held_base_stood_on();
+        assert_eq!((hooks.bases_loaded(), hooks.held_bases_stood_on()), (3, 1), "apart");
         assert!(hooks.armed_steps().is_empty(), "and a load arms nothing");
     }
 

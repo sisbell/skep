@@ -757,6 +757,69 @@ fn each_historical_answer_loads_one_base_and_a_refusal_ahead_of_the_replay_none(
     sd.shutdown();
 }
 
+/// Each historical answer at or above a checkpoint stands on its held root.
+///
+/// The kernel holds the root a landing wrote, so a read at or above the
+/// checkpoint reads no checkpoint file: an `/op-at` read, an `/op-at`
+/// `key_set`, a `/chain?at` and (in `observe` builds) a `/dump?at`, at the
+/// checkpoint and one write above it, each move `Daemon::bases_loaded` and
+/// `Daemon::held_bases_stood_on` by one, and the same four below the
+/// checkpoint move the first by one and the second by none. The cadence is
+/// parked, so the one landing is the suite's own.
+#[test]
+fn each_historical_answer_at_or_above_a_checkpoint_stands_on_its_held_root() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    sd.daemon().park_the_cadence();
+    let port = sd.port();
+    let scenario = seed(port);
+    let owner = Some(scenario.token.as_str());
+    sd.daemon().checkpoint_now();
+    let base = sd.daemon().newest_checkpoint().expect("the landing").seq.0;
+    let v = op(
+        port,
+        owner,
+        &format!(
+            r#"{{"op":"insert","doc":"{}","at":{{"subspace":"1","ordinal":"1"}},"values":["z"]}}"#,
+            scenario.doc1
+        ),
+    );
+    let above = acked_at(&v);
+    assert!(scenario.at_i1 < base && base < above, "a read below, at and above the base");
+    let cost = |answer: &dyn Fn()| {
+        let before = (sd.daemon().bases_loaded(), sd.daemon().held_bases_stood_on());
+        answer();
+        (sd.daemon().bases_loaded() - before.0, sd.daemon().held_bases_stood_on() - before.1)
+    };
+    for (at, moved, which) in [
+        (base, (1, 1), "at the checkpoint"),
+        (above, (1, 1), "above it"),
+        (scenario.at_i1, (1, 0), "below it"),
+    ] {
+        let read = || {
+            op_at_ok(port, owner, at, &retrieve(&scenario.doc1, 3));
+        };
+        assert_eq!(cost(&read), moved, "an /op-at read {which}");
+        let key_set = || {
+            let frame = format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#);
+            let (st, v) = op_at(port, owner, at, &frame);
+            assert_eq!(st, 200, "{v}");
+        };
+        assert_eq!(cost(&key_set), moved, "an /op-at key_set {which}");
+        let chain = || {
+            let (st, body) = get(port, &format!("/chain?at={at}"));
+            assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
+        };
+        assert_eq!(cost(&chain), moved, "a /chain?at {which}");
+        #[cfg(feature = "observe")]
+        {
+            let dump = || assert_eq!(get(port, &format!("/dump?at={at}")).0, 200);
+            assert_eq!(cost(&dump), moved, "a /dump?at {which}");
+        }
+    }
+    sd.shutdown();
+}
+
 /// The reconstruction permit is taken AFTER the frame is classified and
 /// BEFORE the journal sees `at` — `Unavailable::Busy`, `History::reconstruct`
 /// and `refuse_unavailable` each say so, and the order decides what

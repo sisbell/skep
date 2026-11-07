@@ -184,8 +184,10 @@ pub struct Recovery {
 /// One installed committed state (§Core data model).
 ///
 /// The root's identity *is* the version coordinate. Reached only through
-/// [`Snapshot`], and private to this module, where the three sites that mint
-/// one each pair a coordinate with the world that embodies it — a world at a
+/// [`Snapshot`] and the bases the kernel holds (`HeldBase`), and private to
+/// this module, where the four sites that mint one — the in-memory open,
+/// recovery's root, the open's held start base, and the commit's install —
+/// each pair a coordinate with the world that embodies it — a world at a
 /// coordinate it does not embody folds records it already holds, and since
 /// [`WorldState::apply`] need not be idempotent, that is silent double
 /// application answered `Ok`.
@@ -575,13 +577,41 @@ struct ApplierState {
     cadence: Cadence,
 }
 
+/// One root the kernel holds, a base its history reads stand on (§6).
+///
+/// It is the root a retained checkpoint was written from, or the start base
+/// the open loaded from one and seeded, beside the header that checkpoint's
+/// file carried when the root was held. The root stands in for its file only
+/// while the file still answers that header: a file removed, unreadable,
+/// under another stamp, or with its seq, chain head, body hash or length
+/// edited sends the read to the directory, which reads the file as itself. A
+/// body that rots beneath an intact header is the one change the check does
+/// not see, and a read standing on the root answers the committed world that
+/// body was written from.
+#[derive(Clone)]
+struct HeldBase<W> {
+    root: Arc<Committed<W>>,
+    header: CheckpointHeader,
+}
+
+impl<W: WorldState> HeldBase<W> {
+    /// Returns the base this root stands in for, its three fields the root's.
+    ///
+    /// The world is cloned, which shares the root's structure (`WorldState`'s
+    /// cost of `Clone`), so a fold onto it copies only what the fold changes.
+    fn base(&self) -> replay::Base<W> {
+        replay::Base::held(self.root.seq.0, self.root.world.clone(), self.root.chain)
+    }
+}
+
 /// What a journaled kernel has and an in-memory one does not.
 ///
 /// Where its files live, how many checkpoint bases its `BadCheckpoint`
 /// fallback chain keeps and whether a landing reclaims the journal below the
 /// oldest of them, the Σ₀ its derivations fold onto when no checkpoint
-/// covers a boundary, and the `open()`-held exclusion lock it holds for its
-/// lifetime (Lifecycle, §6).
+/// covers a boundary, the roots it holds for the bases its history reads
+/// stand on, and the `open()`-held exclusion lock it holds for its lifetime
+/// (Lifecycle, §6).
 ///
 /// One value rather than several optional fields, so "is there a journal?" is
 /// one question with one answer: under [`Durability::InMemory`] there is no
@@ -642,10 +672,53 @@ struct Journaled<W> {
     /// this uptime and after a landing that removed none. Stored beside
     /// `last_reclaimed`, at the end of a landed call, read lock-free.
     last_removed: ArcSwap<Vec<(Seq, u64)>>,
+    /// The bases this kernel holds, ascending by seq (§6).
+    ///
+    /// At most `retain_checkpoints` of them: the start base the open loaded
+    /// from a checkpoint, and the root each landing wrote, each beside the
+    /// header its file carried then ([`HeldBase`]). A landing retires those
+    /// its retention removed or left below its floor before it reclaims a
+    /// segment, so no held base stands over a segment reclamation took; the
+    /// rest go at the kernel's drop. A history read at or above the oldest
+    /// stands on one in place of its file ([`Kernel::world_at`]). Changed only
+    /// under the checkpoint mutex, read lock-free.
+    held: ArcSwap<Vec<HeldBase<W>>>,
     /// The `open()`-held exclusive advisory lock, kept for its `Drop`.
     ///
     /// The flock releases when this file closes (Lifecycle).
     _lock: File,
+}
+
+impl<W: WorldState> Journaled<W> {
+    /// Holds `base` beside the bases already held, ascending by seq.
+    ///
+    /// A base held at its seq already is replaced, and past
+    /// `retain_checkpoints` the oldest held is dropped. The caller holds the
+    /// checkpoint mutex.
+    fn hold(&self, base: HeldBase<W>) {
+        let mut held = Vec::clone(&self.held.load());
+        held.retain(|standing| standing.root.seq != base.root.seq);
+        let at = held.partition_point(|standing| standing.root.seq < base.root.seq);
+        held.insert(at, base);
+        let excess = held.len().saturating_sub(self.retain_checkpoints);
+        held.drain(..excess);
+        self.held.store(Arc::new(held));
+    }
+
+    /// Retires every held base whose checkpoint `retained` did not keep.
+    ///
+    /// Those are the bases below its floor, every one where no checkpoint
+    /// remains, and every one whose seq it removed. Run after the retention
+    /// and before the reclamation, under the checkpoint mutex.
+    fn retire_held(&self, retained: &checkpoint::Retained) {
+        let mut held = Vec::clone(&self.held.load());
+        held.retain(|standing| {
+            let seq = standing.root.seq.0;
+            retained.floor.is_some_and(|floor| seq >= floor)
+                && !retained.removed.iter().any(|&(removed, _)| removed == seq)
+        });
+        self.held.store(Arc::new(held));
+    }
 }
 
 /// [`Journaled::last_reclaimed`]'s value before any landing.
@@ -657,9 +730,9 @@ const NO_LANDING: u64 = u64::MAX;
 /// What a journaled recovery hands [`Kernel::open`].
 ///
 /// The root it commits from, the live appender, the exclusion lock, the
-/// account of the open, and the stray `checkpoint.tmp` it removed — five
-/// values one call produces, named so the open reads each by what it is
-/// rather than by its place in a tuple.
+/// account of the open, the stray `checkpoint.tmp` it removed, the order's
+/// floor and the start base it holds — values one call produces, named so the
+/// open reads each by what it is rather than by its place in a tuple.
 struct Recovered<W> {
     root: Committed<W>,
     journal: Journal,
@@ -669,6 +742,11 @@ struct Recovered<W> {
     /// The order's floor ([`Kernel::order_floor`]): the root's seq, or the
     /// position an accepted cut's tail claimed where that lies above it.
     order_floor: u64,
+    /// The start base, held where it came from a checkpoint the open loaded.
+    ///
+    /// `None` where genesis stood in, and where the file's header could not
+    /// be read back.
+    held: Option<HeldBase<W>>,
 }
 
 /// One checkpoint [`Kernel::transact`] ran inline on a committing thread (§6).
@@ -710,8 +788,9 @@ pub struct Kernel<W: WorldState> {
     applier: ApplierLock,
     /// The lock that serializes `checkpoint()` against itself (§6).
     ///
-    /// Caller calls and the on-commit auto-trigger alike; distinct from the
-    /// applier lock so persisting and reclaiming never block writers.
+    /// Caller calls and the on-commit auto-trigger alike, and with them every
+    /// change to the bases the kernel holds; distinct from the applier lock
+    /// so persisting and reclaiming never block writers.
     ///
     /// **Lock order.** This is taken while the applier lock is held (from
     /// inside a [`Kernel::transact`] closure, which that precondition permits)
@@ -805,6 +884,19 @@ impl<W: WorldState> Kernel<W> {
     /// [`WorldState::rebuild_derived`] is not run, so `genesis` is installed
     /// exactly as given — which is why that value must already carry its own
     /// derived hints ([`WorldState::rebuild_derived`]'s genesis obligation).
+    ///
+    /// **The start base, held** (§6). Where the base a journaled open starts
+    /// from is a retained checkpoint it loaded, the open holds that base — its
+    /// seeded world, its seq and the chain there — beside the header its file
+    /// answers, for the history reads at or above it to stand on in place of
+    /// the file ([`Kernel::world_at`]). Genesis is not held, being kept as Σ₀
+    /// already, nor a base the open passed over, nor an older retained
+    /// checkpoint it did not load. Each landing holds the root it wrote and
+    /// retires the bases its retention removed ([`Kernel::checkpoint`]); the
+    /// rest are released at the kernel's drop. A held base costs the memory
+    /// of what the board has rewritten since it was held, where the world's
+    /// clone shares its structure ([`WorldState`]'s cost of `Clone`) — one
+    /// whole world at most, so `retain_checkpoints` worlds at most in all.
     ///
     /// **Caller contract.** `genesis` (= Σ₀) must be byte-identical on every
     /// `open()` of a given journal: recovery folds journaled deltas onto it
@@ -1012,6 +1104,7 @@ impl<W: WorldState> Kernel<W> {
                         skipped_bases: Mutex::new(skipped_bases),
                         last_reclaimed: AtomicU64::new(NO_LANDING),
                         last_removed: ArcSwap::from_pointee(Vec::new()),
+                        held: ArcSwap::from_pointee(recovered.held.into_iter().collect()),
                         _lock: recovered.lock,
                     }),
                     recovered.order_floor,
@@ -1030,8 +1123,9 @@ impl<W: WorldState> Kernel<W> {
     /// which the appender's append, barrier and repair hook before they run;
     /// the exclusion lock the kernel holds for its lifetime, the account of
     /// the base it stood on and the bases it passed over (§7), the stray
-    /// `checkpoint.tmp` it removed, if one stood, and the order's floor
-    /// ([`Recovered`]). `cut_damaged_tail` is the configuration's word on a
+    /// `checkpoint.tmp` it removed, if one stood, the order's floor, and that
+    /// base held where it came from a checkpoint ([`Recovered`]).
+    /// `cut_damaged_tail` is the configuration's word on a
     /// damaged tail ([`Durability::Fsync`]): without it such a tail halts
     /// the open; with it the tail is kept and cut. Recovery's own writes —
     /// the stray's removal, the tail cut and its keep, the first segment's
@@ -1163,6 +1257,24 @@ impl<W: WorldState> Kernel<W> {
         // value.
         let chain_head = scan.chain_head;
 
+        // The start base, held for the history reads above it where it came
+        // from a checkpoint the selection loaded — never genesis, kept as Σ₀
+        // already, nor a file the selection passed over, which a skipped
+        // `checkpoint.0` beside a genesis start would be — beside the header
+        // its file answers now. The world is the seeded base's, cloned before
+        // the fold consumes it, so the two share all the fold leaves alone.
+        let from_a_file = checkpoints.iter().any(|cp| cp.seq == base.s_load())
+            && !skipped.iter().any(|passed_over| passed_over.seq == start_point);
+        let header = from_a_file.then(|| checkpoint::header_at(dir, base.s_load())).flatten();
+        let held = header.map(|header| HeldBase {
+            root: Arc::new(Committed {
+                seq: start_point,
+                world: base.world().clone(),
+                chain: base.chain(),
+            }),
+            header,
+        });
+
         // Pass 2: fold exactly (S_load, W], in Seq order (§6/§7).
         let world = replay::fold_to(base, &scan, committed_head).map_err(|fail| {
             OpenError::Corruption {
@@ -1242,6 +1354,7 @@ impl<W: WorldState> Kernel<W> {
             recovery,
             stray_checkpoint_removed,
             order_floor,
+            held,
         })
     }
 
@@ -2032,6 +2145,16 @@ impl<W: WorldState> Kernel<W> {
     /// A base this call writes over a skipped name is a base again and is
     /// counted. With nothing skipped, the newest `retain_checkpoints` stand.
     ///
+    /// **The root it wrote is held** (§6). Once the rename has published the
+    /// base — on `Ok`, and on the [`CheckpointError::Landed`] of a failed
+    /// directory fsync — the root the checkpoint was written from is held
+    /// beside the header its file answers, for the history reads at or above
+    /// it to stand on in place of the file ([`Kernel::world_at`]): a base held
+    /// at its seq already is replaced, and past `retain_checkpoints` the
+    /// oldest held is released. A `Serialize` or `Io` failure holds nothing.
+    /// After retention, and before any segment is reclaimed, every held base
+    /// whose checkpoint retention removed or left below its floor is released.
+    ///
     /// The journal bytes a landing reclaimed — `0` at every landing under
     /// [`Reclaim::Never`] — and the checkpoints its retention removed, are
     /// read after `Ok` through [`Kernel::last_reclaimed_bytes`] and
@@ -2070,15 +2193,23 @@ impl<W: WorldState> Kernel<W> {
         let s = snap.seq;
         // The seq, the world and the chain head off one root: a checkpoint
         // names the chain at its own coordinate, never a later root's.
-        checkpoint::write(&journaled.dir, s.0, &snap.world, &snap.chain, &self.seam).map_err(
-            |fail| match fail {
-                checkpoint::WriteFail::Serialize(e) => CheckpointError::Serialize(e),
-                checkpoint::WriteFail::Io(e) => CheckpointError::Io(e),
-                checkpoint::WriteFail::Landed(cause) => {
-                    CheckpointError::Landed { step: LandedStep::DirectorySync, cause }
-                }
-            },
-        )?;
+        let written = checkpoint::write(&journaled.dir, s.0, &snap.world, &snap.chain, &self.seam);
+        // The rename has published the base on `Ok` and on `Landed` alike:
+        // the root it was written from is held, beside the header its file
+        // answers now, before either is answered. A header that cannot be
+        // read back holds nothing, and the answer is still the write's.
+        if matches!(written, Ok(()) | Err(checkpoint::WriteFail::Landed(_))) {
+            if let Some(header) = checkpoint::header_at(&journaled.dir, s.0) {
+                journaled.hold(HeldBase { root: Arc::clone(&snap), header });
+            }
+        }
+        written.map_err(|fail| match fail {
+            checkpoint::WriteFail::Serialize(e) => CheckpointError::Serialize(e),
+            checkpoint::WriteFail::Io(e) => CheckpointError::Io(e),
+            checkpoint::WriteFail::Landed(cause) => {
+                CheckpointError::Landed { step: LandedStep::DirectorySync, cause }
+            }
+        })?;
         // The name `checkpoint.<s>` now holds the base this call wrote: a
         // file of that name the open passed over is a base again, and
         // retention counts it. What the open skipped and still stands is
@@ -2101,6 +2232,12 @@ impl<W: WorldState> Kernel<W> {
         let landed = |step: LandedStep| move |cause| CheckpointError::Landed { step, cause };
         let retained = checkpoint::retain(&journaled.dir, journaled.retain_checkpoints, &skipped)
             .map_err(landed(LandedStep::Retention))?;
+        // The held bases retention did not keep are retired before any
+        // segment is reclaimed: a held base stands only where its checkpoint
+        // does, at or above the floor, and reclamation takes segments wholly
+        // below the floor, so every segment a held base's scan reads survives
+        // it.
+        journaled.retire_held(&retained);
         let s_old = retained.floor.ok_or_else(|| {
             landed(LandedStep::Retention)(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -2234,9 +2371,10 @@ fn panic_words(payload: &(dyn Any + Send)) -> String {
 /// The write-fault seam's doors, in `test-hooks` builds only.
 ///
 /// `hooks.rs` is the seam. They are how a test makes the next step of this
-/// kernel's write paths fail or unwind on cue — and reads the one count the
-/// seam keeps, the bases this kernel's history reads loaded. Each door arms
-/// or reads this kernel's seam alone.
+/// kernel's write paths fail or unwind on cue — and reads the two counts the
+/// seam keeps, the bases this kernel's history reads stood on and how many
+/// of those it held, and the bases it holds. Each door arms or reads this
+/// kernel alone.
 #[cfg(feature = "test-hooks")]
 impl<W: WorldState> Kernel<W> {
     /// TEST HOOK (`test-hooks`): arms the next `step` to fail, once.
@@ -2291,22 +2429,66 @@ impl<W: WorldState> Kernel<W> {
 
     /// TEST HOOK (`test-hooks`): returns how many bases history reads loaded.
     ///
-    /// The bases this kernel's history reads have loaded since the open — one
-    /// per base a read's selection stood on, a retained checkpoint's whole
-    /// body read, hashed, deserialized and seeded, or genesis cloned and
-    /// seeded: "the base loaded" every history read's cost paragraph counts
-    /// ([`Kernel::world_at`], [`Kernel::boundaries_above`]), counted at its
-    /// one site, the reads' base selection — so a suite fences what a caller
-    /// costs in bases, which no clock can on a loaded machine: a consumer
-    /// asking once over a window and one asking once per boundary read the
-    /// same slots and differ here alone (§3.3 step 2 of the operations
-    /// design). Not counted: recovery's base at the open, which runs the
-    /// selection directly; a candidate the fallback chain passed over; a
-    /// selection that refused `Reclaimed`. Monotone over the kernel's life and
-    /// read lock-free; a suite reads it twice and pins the difference.
+    /// The bases this kernel's history reads have stood on since the open —
+    /// one per base a read's selection stood on, a retained checkpoint's whole
+    /// body read, hashed, deserialized and seeded, genesis cloned and seeded,
+    /// or a base the kernel holds, cloned and read no further: "the base"
+    /// every history read's cost paragraph counts ([`Kernel::world_at`],
+    /// [`Kernel::boundaries_above`]), counted at its one site, the reads' base
+    /// selection — so a suite fences what a caller costs in bases, which no
+    /// clock can on a loaded machine: a consumer asking once over a window and
+    /// one asking once per boundary read the same slots and differ here alone
+    /// (§3.3 step 2 of the operations design). Which of them were held is
+    /// [`Kernel::held_bases_stood_on`]'s. Not counted: recovery's base at the
+    /// open, which runs the selection directly; a candidate the fallback chain
+    /// passed over; a selection that refused `Reclaimed`. Monotone over the
+    /// kernel's life and read lock-free; a suite reads it twice and pins the
+    /// difference.
     #[doc(hidden)]
     pub fn bases_loaded(&self) -> u64 {
         self.seam.bases_loaded()
+    }
+
+    /// TEST HOOK (`test-hooks`): returns how many reads stood on a held base.
+    ///
+    /// The history reads since the open whose base selection stood on a base
+    /// this kernel holds, which reads no checkpoint body — counted at the same
+    /// site and the same moment as [`Kernel::bases_loaded`], which counts each
+    /// of them too, so a suite tells a read that read a whole checkpoint from
+    /// one that read none. Monotone and read lock-free; a suite reads it twice
+    /// and pins the difference.
+    #[doc(hidden)]
+    pub fn held_bases_stood_on(&self) -> u64 {
+        self.seam.held_bases_stood_on()
+    }
+
+    /// TEST HOOK (`test-hooks`): returns the seqs of the held bases.
+    ///
+    /// Ascending, at most `retain_checkpoints` of them: the start base the
+    /// open loaded from a checkpoint and the root each landing wrote, less
+    /// what a landing retired. Empty under [`Durability::InMemory`], which
+    /// holds none.
+    #[doc(hidden)]
+    pub fn held_bases(&self) -> Vec<Seq> {
+        self.journaled.as_ref().map_or_else(Vec::new, |journaled| {
+            journaled.held.load().iter().map(|held| held.root.seq).collect()
+        })
+    }
+
+    /// TEST HOOK (`test-hooks`): releases every base this kernel holds.
+    ///
+    /// Taken under the checkpoint mutex, as every change to them is, so it
+    /// lands between two checkpoints and never inside one. Every history
+    /// read after it takes its base from the directory or from genesis until
+    /// the next landing holds its root — so a suite drives the directory's
+    /// path, its fallback chain and its verdicts over a board a landing has
+    /// written.
+    #[doc(hidden)]
+    pub fn release_held_bases(&self) {
+        if let Some(journaled) = &self.journaled {
+            let _serial = self.checkpoint_mutex.lock();
+            journaled.held.store(Arc::new(Vec::new()));
+        }
     }
 }
 

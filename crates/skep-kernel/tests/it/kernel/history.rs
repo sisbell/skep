@@ -1,14 +1,16 @@
 //! Bounded replay, `Kernel::world_at`: the base it selects, the refusals it
 //! makes and their order, and the answers it gives beside a live appender
-//! (§6/§7) — and the one-pass boundary list, `Kernel::boundaries_above`,
-//! held to the per-position read it stands in for (the operations design
-//! §3.3 step 2).
+//! (§6/§7) — the one-pass boundary list, `Kernel::boundaries_above`, held to
+//! the per-position read it stands in for (the operations design §3.3 step
+//! 2) — and the bases the kernel holds, which a read at or above the oldest
+//! stands on in place of a checkpoint's file (§6).
 
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::*;
 use crate::mutilate::{append_bytes, ckpt_file, flip_byte, seg_file, FRAME_MAGIC};
-use skep_kernel::HistoryError;
+use skep_kernel::{CheckpointError, HistoryError};
 use tempfile::tempdir;
 
 #[test]
@@ -28,6 +30,10 @@ fn world_at_falls_back_down_the_same_base_chain_recovery_uses() {
     commit(&k, 50);
     let whole = vec![10, 20, 30, 40, 50];
     assert_eq!(world_items(&k.world_at(Seq(5)).unwrap()), whole);
+    // The roots the two landings wrote are held, and a read standing on one
+    // reads no file: released, every read below takes its base from the
+    // directory, where the chain runs.
+    k.release_held_bases();
 
     // Newest base unusable → the older retained one carries the answer.
     let cp4 = ckpt_file(dir.path(), 4);
@@ -216,6 +222,12 @@ fn world_at_says_why_the_floor_it_names_refuses_when_that_base_is_damaged() {
     let cp = ckpt_file(dir.path(), 8);
     let len = fs::metadata(&cp).unwrap().len();
     flip_byte(&cp, len - 1);
+    // The root the landing wrote is held, and the file still answers the
+    // header it was held against, so a read at the floor stands on the root
+    // and answers the committed world: the rot beneath the header is unseen
+    // until the root is released, and the directory's read meets it.
+    assert_eq!(k.world_at(Seq(8)).unwrap().items.len(), 8, "the held root answers");
+    k.release_held_bases();
 
     // Below the window no candidate is tried, so the floor is the next thing
     // to ask…
@@ -590,4 +602,369 @@ fn boundaries_above_answers_a_prefix_bounded_at_the_head_under_a_live_appender()
         "the fixture must rotate, so the reads reach back past a rotation"
     );
     assert_eq!(k.boundaries_above(Seq(2)).unwrap().len(), 20);
+}
+
+// ---- the bases the kernel holds (§6) ----
+
+/// Runs `read` on `k`, answering it beside the two base counts it moved.
+///
+/// The counts are every base the read stood on (`Kernel::bases_loaded`) and
+/// the held ones among them (`Kernel::held_bases_stood_on`).
+fn bases_moved<T>(
+    k: &Kernel<TestWorld>,
+    read: impl FnOnce(&Kernel<TestWorld>) -> T,
+) -> (T, (u64, u64)) {
+    let before = (k.bases_loaded(), k.held_bases_stood_on());
+    let answer = read(k);
+    (answer, (k.bases_loaded() - before.0, k.held_bases_stood_on() - before.1))
+}
+
+/// Returns the seqs of the checkpoints standing in `dir`, ascending.
+fn checkpoints_on_disk(dir: &Path) -> Vec<Seq> {
+    let mut seqs: Vec<Seq> = fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| e.unwrap().file_name().into_string().ok())
+        .filter_map(|name| name.strip_prefix("checkpoint.")?.parse().ok().map(Seq))
+        .collect();
+    seqs.sort();
+    seqs
+}
+
+/// Returns a board of five commits and landings at 2 and 4, two bases kept.
+fn two_landings(dir: &Path) -> Kernel<TestWorld> {
+    let k = Kernel::open(cfg_fsync(dir), genesis()).unwrap();
+    commit(&k, 10);
+    commit(&k, 20);
+    assert_eq!(k.checkpoint().unwrap(), Seq(2));
+    commit(&k, 30);
+    commit(&k, 40);
+    assert_eq!(k.checkpoint().unwrap(), Seq(4));
+    commit(&k, 50);
+    k
+}
+
+/// A read at or above a held base stands on its root and reads no checkpoint.
+///
+/// Over two landings, the four reads at every coordinate whose base may sit
+/// at a held one each move both counts by one, and the two whose base sits
+/// below the oldest move the held count by none. Released, every answer
+/// repeats exactly, each from the directory.
+#[test]
+fn a_read_at_or_above_a_held_base_reads_no_checkpoint() {
+    let dir = tempdir().unwrap();
+    let k = two_landings(dir.path());
+    assert_eq!(k.held_bases(), vec![Seq(2), Seq(4)]);
+
+    // Every read whose base may sit at a held one, answered, with its cost:
+    // the worlds, the chains, the slots and the boundary lists.
+    type Slot = Option<Attestation>;
+    type Answers = (Vec<(Vec<u64>, u64)>, Vec<[u8; 32]>, Vec<Slot>, Vec<Vec<(Seq, Slot)>>);
+    let read_all = |k: &Kernel<TestWorld>, cost: (u64, u64), why: &str| -> Answers {
+        let worlds = (2..=5)
+            .map(|at| {
+                let (w, moved) = bases_moved(k, |k| k.world_at(Seq(at)).unwrap());
+                assert_eq!(moved, cost, "world_at({at}): {why}");
+                (world_items(&w), w.sum)
+            })
+            .collect();
+        let chains = (2..=5)
+            .map(|at| {
+                let (chain, moved) = bases_moved(k, |k| k.chain_at(Seq(at)).unwrap());
+                assert_eq!(moved, cost, "chain_at({at}): {why}");
+                chain
+            })
+            .collect();
+        let slots = (3..=5)
+            .map(|at| {
+                let (slot, moved) = bases_moved(k, |k| k.attestation_at(Seq(at)).unwrap());
+                assert_eq!(moved, cost, "attestation_at({at}): {why}");
+                slot
+            })
+            .collect();
+        let lists = (2..=4)
+            .map(|p| {
+                let (list, moved) = bases_moved(k, |k| k.boundaries_above(Seq(p)).unwrap());
+                assert_eq!(moved, cost, "boundaries_above({p}): {why}");
+                list
+            })
+            .collect();
+        (worlds, chains, slots, lists)
+    };
+    let held = read_all(&k, (1, 1), "a held base stood on, no file read");
+    assert_eq!(held.0[3], (vec![10, 20, 30, 40, 50], 150), "the whole world, its hint folded");
+    assert_eq!(held.1[3], k.chain_head(), "the chain at the head");
+
+    // Below the oldest held base: the directory.
+    let (w, moved) = bases_moved(&k, |k| k.world_at(Seq(1)).unwrap());
+    assert_eq!((world_items(&w), moved), (vec![10], (1, 0)), "world_at(1) from genesis");
+    let (slot, moved) = bases_moved(&k, |k| k.attestation_at(Seq(2)).unwrap());
+    assert_eq!((slot, moved), (None, (1, 0)), "attestation_at(2): its base below 2");
+
+    k.release_held_bases();
+    assert_eq!(k.held_bases(), vec![]);
+    let read = read_all(&k, (1, 0), "released, every base from the directory");
+    assert_eq!(read, held, "every answer repeats exactly");
+}
+
+/// A body rotted beneath its header is unseen by a read on its held base.
+///
+/// The read answers the committed world from the root; released, it takes
+/// the directory, where the rotted base refuses its checksum and the older
+/// retained one answers the same world.
+#[test]
+fn a_body_rotted_beneath_its_header_is_unseen_by_a_read_on_its_held_base() {
+    let dir = tempdir().unwrap();
+    let k = two_landings(dir.path());
+    let cp4 = ckpt_file(dir.path(), 4);
+    let len = fs::metadata(&cp4).unwrap().len();
+    flip_byte(&cp4, len - 1);
+    let whole = (vec![10, 20, 30, 40, 50], 150);
+
+    let (w, moved) = bases_moved(&k, |k| k.world_at(Seq(5)).unwrap());
+    assert_eq!(((world_items(&w), w.sum), moved), (whole.clone(), (1, 1)), "the held root");
+
+    k.release_held_bases();
+    let (w, moved) = bases_moved(&k, |k| k.world_at(Seq(5)).unwrap());
+    assert_eq!(((world_items(&w), w.sum), moved), (whole, (1, 0)), "from checkpoint.2");
+}
+
+/// A header that no longer matches sends the read to the directory.
+///
+/// Each variant on a board of its own, the held count moving by none in
+/// each: checkpoint.4's chain head edited refuses `Corruption` at the base's
+/// own coordinate, as the directory's read of that file does; its stamp
+/// flipped, and the file removed, each answer the world from checkpoint.2.
+#[test]
+fn a_changed_header_sends_the_read_to_the_directory() {
+    // `SKC4`'s chain head, bytes 24..56: no checksum or hash covers it.
+    const CHAIN_HEAD_AT: u64 = 24;
+
+    let dir = tempdir().unwrap();
+    let k = two_landings(dir.path());
+    flip_byte(&ckpt_file(dir.path(), 4), CHAIN_HEAD_AT + 3);
+    let (out, moved) = bases_moved(&k, |k| k.world_at(Seq(5)));
+    match out {
+        Err(HistoryError::Corruption { at, .. }) => assert_eq!(at, Seq(4), "at the base's own"),
+        other => panic!("the chain head edited: expected Corruption, got {other:?}"),
+    }
+    assert_eq!(moved, (1, 0), "the chain head edited: the directory's base");
+
+    let whole = (vec![10, 20, 30, 40, 50], 150);
+    let stamp_flipped = |cp4: &Path| flip_byte(cp4, 3);
+    let removed = |cp4: &Path| fs::remove_file(cp4).unwrap();
+    for (variant, change) in [("stamp", &stamp_flipped as &dyn Fn(&Path)), ("removed", &removed)] {
+        let dir = tempdir().unwrap();
+        let k = two_landings(dir.path());
+        change(&ckpt_file(dir.path(), 4));
+        let (w, moved) = bases_moved(&k, |k| k.world_at(Seq(5)).unwrap());
+        assert_eq!(((world_items(&w), w.sum), moved), (whole.clone(), (1, 0)), "{variant}");
+    }
+}
+
+/// A landing holds its root once the rename has published its base.
+///
+/// The directory's fsync refused past the rename answers `Landed`, the root
+/// held and stood on; the temp file's fsync refused before it answers `Io`,
+/// nothing published and nothing held.
+#[test]
+fn a_landing_holds_its_root_once_the_rename_has_published_its_base() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    let at = commit(&k, 10);
+    k.fail_the_next(Step::CheckpointSync, std::io::ErrorKind::StorageFull);
+    assert!(matches!(k.checkpoint(), Err(CheckpointError::Io(_))));
+    assert_eq!(k.held_bases(), vec![], "no base published, none held");
+    k.fail_the_next(Step::CheckpointDirSync, std::io::ErrorKind::StorageFull);
+    assert!(matches!(k.checkpoint(), Err(CheckpointError::Landed { .. })));
+    assert_eq!(k.held_bases(), vec![at], "the base on disk, its root held");
+    let (w, moved) = bases_moved(&k, |k| k.world_at(at).unwrap());
+    assert_eq!((world_items(&w), moved), (vec![10], (1, 1)), "and stood on");
+    assert_eq!(k.checkpoint().unwrap(), at, "a second landing at the same seq");
+    assert_eq!(k.held_bases(), vec![at], "replaces the base held there");
+}
+
+/// A landing retires the held bases its retention did not keep (§6).
+///
+/// Under one retained base and fat records, the landing at 8 holds 8 alone
+/// and reclaims the segment below it, and a read below 8 refuses `Reclaimed`
+/// with nothing tried — never a scan of a held 2 over the reclaimed segment.
+/// Under two, over six landings, the held seqs are the checkpoints on disk
+/// after each.
+#[test]
+fn a_landing_retires_the_held_bases_its_retention_did_not_keep() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_retain(dir.path(), 1), genesis()).unwrap();
+    commit_blob(&k);
+    commit_blob(&k);
+    assert_eq!(k.checkpoint().unwrap(), Seq(2));
+    for _ in 0..6 {
+        commit_blob(&k);
+    }
+    assert_eq!(k.checkpoint().unwrap(), Seq(8));
+    assert_eq!(k.held_bases(), vec![Seq(8)]);
+    assert!(!seg_file(dir.path(), 1).exists(), "the segment below 8 reclaimed");
+    for at in [Seq(2), Seq(3)] {
+        match k.world_at(at) {
+            Err(HistoryError::Reclaimed { floor: Some(Seq(8)), cause: None }) => {}
+            other => panic!("at {at}: expected Reclaimed, never Corruption, got {other:?}"),
+        }
+    }
+
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap(); // retain 2
+    for landing in 1..=6 {
+        commit_blob(&k);
+        k.checkpoint().unwrap();
+        assert_eq!(k.held_bases(), checkpoints_on_disk(dir.path()), "landing {landing}");
+    }
+}
+
+/// A landing retires a held base its retention removed though the cap keeps it.
+///
+/// A base landed past its directory's fsync by an unwind is on disk and not
+/// held, so at the next landing the cap leaves two bases held while
+/// retention keeps the unheld one beside the new: only the retirement leaves
+/// the new base alone held, one of the two on disk.
+#[test]
+fn a_landing_retires_a_held_base_its_retention_removed_though_the_cap_keeps_it() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap(); // retain 2
+    let a = commit(&k, 10);
+    k.checkpoint().unwrap();
+    let b = commit(&k, 20);
+    k.checkpoint().unwrap();
+    assert_eq!(k.held_bases(), vec![a, b]);
+    let c = commit(&k, 30);
+    k.panic_at_the_next(Step::CheckpointDirSync);
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| k.checkpoint()));
+    assert!(unwound.is_err(), "the armed step unwinds past the rename");
+    assert_eq!(checkpoints_on_disk(dir.path()), vec![a, b, c], "c landed on disk");
+    assert_eq!(k.held_bases(), vec![a, b], "…and is not held: the unwind ran past the hold");
+    let d = commit(&k, 40);
+    assert_eq!(k.checkpoint().unwrap(), d);
+    assert_eq!(checkpoints_on_disk(dir.path()), vec![c, d], "retention removed a and b");
+    assert_eq!(k.held_bases(), vec![d], "b, which the cap kept, retired with its file");
+}
+
+/// The open holds its start base, and no other.
+///
+/// Reopened over checkpoints 2 and 4, it holds 4 alone, so reads below 4
+/// take the directory, and the next landing holds its root beside 4. A
+/// fresh directory and an in-memory kernel hold nothing; and with the newest
+/// base rotted before a reopen the older one it loads is held, the skipped
+/// one never.
+#[test]
+fn the_open_holds_its_start_base_and_no_other() {
+    let dir = tempdir().unwrap();
+    {
+        let fresh = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+        assert_eq!(fresh.held_bases(), vec![], "a fresh directory: genesis, which is not held");
+    }
+    drop(two_landings(dir.path()));
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(k.held_bases(), vec![Seq(4)]);
+    for (at, items) in [(2, vec![10, 20]), (3, vec![10, 20, 30])] {
+        let (w, moved) = bases_moved(&k, |k| k.world_at(Seq(at)).unwrap());
+        assert_eq!((world_items(&w), moved), (items, (1, 0)), "{at}: below 4, the directory");
+    }
+    let (w, moved) = bases_moved(&k, |k| k.world_at(Seq(5)).unwrap());
+    let whole = (vec![10, 20, 30, 40, 50], 150);
+    assert_eq!(((world_items(&w), w.sum), moved), (whole, (1, 1)), "above it, the held base");
+    let s = commit(&k, 60);
+    assert_eq!(k.checkpoint().unwrap(), s);
+    assert_eq!(k.held_bases(), vec![Seq(4), s]);
+    drop(k);
+
+    let in_memory = Kernel::open(cfg_in_memory(), genesis()).unwrap();
+    commit(&in_memory, 10);
+    assert_eq!(in_memory.checkpoint().unwrap(), Seq(1));
+    assert_eq!(in_memory.held_bases(), vec![], "in memory, nothing is held");
+
+    let cp = ckpt_file(dir.path(), s.0);
+    let len = fs::metadata(&cp).unwrap().len();
+    flip_byte(&cp, len - 1);
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    let recovery = k.recovery().expect("journaled");
+    assert_eq!((recovery.start_point, recovery.skipped[0].seq), (Seq(4), s));
+    assert_eq!(k.held_bases(), vec![Seq(4)], "the base it loaded");
+    let next = commit(&k, 70);
+    k.checkpoint().unwrap();
+    assert_eq!(k.held_bases(), vec![Seq(4), next], "the skipped one never");
+}
+
+/// The open holds no base where genesis stood in, a checkpoint at 0 skipped.
+///
+/// A checkpoint taken before the first commit is a file at genesis's seq: one
+/// that loads is the open's start base, and held. Rotted beneath its intact
+/// header it is passed over and genesis stands in, and nothing is held,
+/// though a header still answers at 0.
+#[test]
+fn the_open_holds_no_base_where_genesis_stood_in_beside_a_checkpoint_at_zero() {
+    let dir = tempdir().unwrap();
+    {
+        let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+        assert_eq!(k.checkpoint().unwrap(), Seq(0));
+        assert_eq!(k.held_bases(), vec![Seq(0)], "a landing at genesis holds its root");
+    }
+    {
+        let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+        assert!(k.recovery().expect("journaled").skipped.is_empty());
+        assert_eq!(k.held_bases(), vec![Seq(0)], "the checkpoint at 0 loaded, and is held");
+    }
+    let cp0 = ckpt_file(dir.path(), 0);
+    let len = fs::metadata(&cp0).unwrap().len();
+    flip_byte(&cp0, len - 1);
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    let recovery = k.recovery().expect("journaled");
+    assert_eq!((recovery.start_point, recovery.skipped.len()), (Seq(0), 1), "genesis stood in");
+    assert!(k.checkpoint_header(Seq(0)).is_some(), "the rotted file still answers its header");
+    assert_eq!(k.held_bases(), vec![], "genesis is not held, nor the base passed over");
+}
+
+/// A read racing landings meets no damage that is not in the journal.
+///
+/// Under one retained base and fat records, one thread lands a checkpoint
+/// after every commit — each holding its root, retiring the last and
+/// reclaiming the segments below — while another reads the world and the
+/// chain at the head and the boundary below it, a bounded number of times:
+/// every refusal is a transient or a verdict on the position, never
+/// `Corruption`.
+#[test]
+fn a_read_racing_landings_meets_no_damage_that_is_not_in_the_journal() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_retain(dir.path(), 1), genesis()).unwrap();
+    commit_blob(&k);
+    commit_blob(&k);
+    let landing = AtomicBool::new(true);
+    std::thread::scope(|s| {
+        let k = &k;
+        let landing = &landing;
+        s.spawn(move || {
+            for _ in 0..24 {
+                commit_blob(k);
+                k.checkpoint().expect("a landing");
+            }
+            landing.store(false, Ordering::Release);
+        });
+        // A segment or a checkpoint a landing removed under the read, or a
+        // position a landing's reclamation took: what a retry re-derives.
+        let licensed = |refusal: &HistoryError| match refusal {
+            HistoryError::Io(e) => e.kind() == std::io::ErrorKind::NotFound,
+            HistoryError::Reclaimed { .. } | HistoryError::NotABoundary { .. } => true,
+            _ => false,
+        };
+        let mut reads = 0u32;
+        while landing.load(Ordering::Acquire) && reads < 5_000 {
+            let head = k.current_seq();
+            for at in [head, Seq(head.0 - 1)] {
+                for answer in [k.world_at(at).map(|_| ()), k.chain_at(at).map(|_| ())] {
+                    if let Err(refusal) = answer {
+                        assert!(licensed(&refusal), "a read at {at} beside a landing: {refusal:?}");
+                    }
+                }
+            }
+            reads += 1;
+        }
+    });
+    assert_eq!(segment_count(dir.path()), 1, "the landings reclaimed every closed segment");
 }

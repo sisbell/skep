@@ -1532,18 +1532,32 @@ impl Daemon {
     ///
     /// **Test hook** (the same standing). The count runs since the open —
     /// `Kernel::bases_loaded` on the daemon's own kernel, one per base a read
-    /// selected, a checkpoint's whole body decoded or genesis seeded — so a
-    /// suite pins what a reopen *costs* in bases rather than in seconds: the
-    /// attest store's rebuild (`feed-attest.log`) lists every boundary above
-    /// its fence in one scan from one base (the operations design §3.3 step
-    /// 2), where a read per position would load a base per position — one
-    /// whole checkpoint decoded per commit since the last open. The open's
-    /// own reads load bases too (the feed's floor probe among them), so a
-    /// suite reads this after two opens of one board and pins the
+    /// stood on, a checkpoint's whole body decoded, genesis seeded or a base
+    /// the kernel holds cloned — so a suite pins what a reopen *costs* in
+    /// bases rather than in seconds: the attest store's rebuild
+    /// (`feed-attest.log`) lists every boundary above its fence in one scan
+    /// from one base (the operations design §3.3 step 2), where a read per
+    /// position would take a base per position — one whole checkpoint decoded
+    /// per commit since the last open, below the bases the kernel holds. The
+    /// open's own reads load bases too (the feed's floor probe among them),
+    /// so a suite reads this after two opens of one board and pins the
     /// *difference*, never an absolute.
     #[doc(hidden)]
     pub fn bases_loaded(&self) -> u64 {
         self.engine.kernel().bases_loaded()
+    }
+
+    /// Returns how many history reads stood on a base the kernel holds.
+    ///
+    /// **Test hook** (the same standing). The count runs since the open —
+    /// `Kernel::held_bases_stood_on` on the daemon's own kernel, one per read
+    /// whose base was a retained checkpoint's root the kernel holds in
+    /// memory, so no checkpoint was read for it — and each such read moves
+    /// [`Daemon::bases_loaded`] too. A suite reads it twice and pins the
+    /// difference: which answers read a checkpoint, and which stood on a root.
+    #[doc(hidden)]
+    pub fn held_bases_stood_on(&self) -> u64 {
+        self.engine.kernel().held_bases_stood_on()
     }
 
     /// Returns the position the attest store's file was last synced through.

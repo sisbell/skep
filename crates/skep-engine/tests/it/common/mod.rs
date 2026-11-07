@@ -83,10 +83,18 @@ pub fn mem_cfg() -> KernelConfig {
 }
 
 pub fn fsync_cfg(path: &Path) -> KernelConfig {
+    fsync_cfg_retaining(path, 1)
+}
+
+/// Returns [`fsync_cfg`] keeping `retain` checkpoints.
+///
+/// For a fixture that reads a base below the newest from disk: a reopen
+/// holds its start base alone.
+pub fn fsync_cfg_retaining(path: &Path, retain: usize) -> KernelConfig {
     KernelConfig {
         durability: Durability::Fsync {
             journal_path: path.to_path_buf(),
-            retain_checkpoints: 1,
+            retain_checkpoints: retain,
             reclaim: skep_kernel::Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,

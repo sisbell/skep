@@ -5,7 +5,12 @@
 //! their slots — with no kernel lock taken and nothing written: the three
 //! boundary reads through one derivation, [`Kernel::history_read`], and the
 //! boundary list through the steps that derivation is built from, in the same
-//! order. The rest of `kernel` never sees any of it or its answers.
+//! order. Each stands on one base ([`Kernel::base_at_or_below`]): a root the
+//! kernel holds, where one stands at or below the read and its checkpoint's
+//! file still answers the header it was held against, else one read from
+//! the directory or genesis; the journal above the base is read from the
+//! directory either way. The rest of `kernel` never sees any of it or its
+//! answers.
 
 use crate::checkpoint;
 use crate::error::HistoryError;
@@ -47,36 +52,52 @@ impl<W: WorldState> Kernel<W> {
     ///
     /// The replay is bounded, over this kernel's own journal directory (the
     /// journal already holds every committed state; this makes a prefix of it
-    /// answerable). Base = the newest retained checkpoint at or below `at`
-    /// that loads and seeds — one that refuses either is passed over for the
-    /// next-older, as recovery passes it (§6) — else `genesis` while the
-    /// journal still reaches back to `Seq(1)`, seeded through
-    /// [`WorldState::rebuild_derived`], then folded over exactly `(base, at]`
-    /// — recovery's Pass 2 with `W := at`. Deterministic: the same `at` yields
-    /// a value-equal world on every call, across processes and regardless of
-    /// which base is selected (a checkpoint embodies the same fold it stands
-    /// in for — §6/§7).
+    /// answerable). Base = the newest base the kernel holds at or below `at`
+    /// whose checkpoint's file still answers the header it was held against —
+    /// the root that checkpoint was written from, or the start base the open
+    /// loaded from it (§6) — else the newest retained checkpoint at or below
+    /// `at` that loads and seeds — one that refuses either is passed over for
+    /// the next-older, as recovery passes it — else `genesis` while the
+    /// journal still reaches back to `Seq(1)`, a base from the directory or
+    /// genesis seeded through [`WorldState::rebuild_derived`]; then folded over
+    /// exactly `(base, at]` — recovery's Pass 2 with `W := at`.
+    /// Deterministic: the same `at` yields a value-equal world on every call,
+    /// across processes and regardless of which base is selected (a
+    /// checkpoint embodies the same fold it stands in for, and a held root is
+    /// the very world its checkpoint was written from or loaded as — §6/§7).
     ///
-    /// A boundary that is the base — a retained checkpoint's seq, or 0 — is
-    /// answered from that base without scanning the journal, and so never
-    /// halts.
+    /// A held base stands in for its file only while the file answers the
+    /// header it was held against: a file removed, refused or with its header
+    /// edited sends the read to the directory, which judges the file as
+    /// itself. A body that rots beneath an intact header is not seen by a read
+    /// standing on its root, which answers the committed world the body was
+    /// written from; the next open judges the file as it stands.
+    ///
+    /// A boundary that is the base — a held base's or a retained checkpoint's
+    /// seq, or 0 — is answered from that base without scanning the journal,
+    /// and so never halts.
     ///
     /// The Σ₀ the fold starts from is the one this kernel was opened under,
     /// so the bounded replay applies journaled deltas onto exactly the genesis
     /// recovery would.
     ///
-    /// **Cost**, per call, uncached: one whole checkpoint file read and
+    /// **Cost**, per call, by the base it stands on. On a held base: one
+    /// 88-byte header read and the held world cloned, which shares the root's
+    /// structure ([`WorldState`]'s cost of `Clone`) — no body read, hashed,
+    /// decoded or seeded — so the world the fold builds costs what the fold
+    /// changes. From the directory: one whole checkpoint file read and
     /// deserialized into a `W` — each newer candidate that refuses read as far
-    /// as its refusal, and genesis cloned instead where it stands in —
-    /// [`WorldState::rebuild_derived`] run over all of it, every journal
-    /// segment above that base read, and every committed record in
+    /// as its refusal, and genesis cloned instead where it stands in — and
+    /// [`WorldState::rebuild_derived`] run over all of it. Either way every
+    /// journal segment above that base is read, and every committed record in
     /// `(base, at]` materialized before the fold begins. Segments above `at`
     /// are read and not collected — the corrupt-run sweep is at any height, so
     /// they must be read, and nothing above `at` is folded — so a caller
     /// choosing `at` chooses the base, the fold length and the records held,
-    /// but not the bytes read. Nothing here is memoized, and peak memory is
-    /// that figure times the number of calls in flight. Admission and
-    /// concurrency are the caller's to gate; this method gates neither.
+    /// but not the bytes read. No answer is memoized — the held bases are the
+    /// one thing kept — and peak memory is that figure times the number of
+    /// calls in flight. Admission and concurrency are the caller's to gate;
+    /// this method gates neither.
     ///
     /// Safe concurrently with the live appender and with `checkpoint()`:
     /// takes no kernel lock and writes nothing. Every frame of a commit
@@ -84,7 +105,11 @@ impl<W: WorldState> Kernel<W> {
     /// (§1 durable-before-visible), so the bounded region is stable under
     /// the reader; a racing append can contribute at most a torn suffix,
     /// which classifies as an EOF run beyond the last committed marker and
-    /// is ignored here.
+    /// is ignored here. Beside a landing, a read lists the segments before it
+    /// checks a held base's header, and a landing's retention removes the
+    /// file of every base it retires before its reclamation removes a
+    /// segment, so a held base is never scanned over a listing reclamation
+    /// has cut (the base selection's card, `Kernel::base_at_or_below`).
     ///
     /// # Errors
     ///
@@ -156,19 +181,24 @@ impl<W: WorldState> Kernel<W> {
     /// to `at`, so a boundary below the newest checkpoint is a full
     /// verification of the surviving journal from the base it selects — and
     /// the same answer for a boundary that is the base: the base's own chain,
-    /// the `SKC4` header's `chain_head` or the chain's genesis value at
-    /// genesis, answered without scanning the journal and so never halting.
-    /// Deterministic in `at` across calls, processes and base choices, since a
-    /// checkpoint's header carries the very marker value it stands in for.
+    /// a held root's, the `SKC4` header's `chain_head` or the chain's genesis
+    /// value at genesis, answered without scanning the journal and so never
+    /// halting. Deterministic in `at` across calls, processes and base
+    /// choices, since a checkpoint's header carries the very marker value it
+    /// stands in for, and a held root the very value its header was written
+    /// with.
     ///
-    /// **Cost**, per call, uncached: `world_at`'s minus the fold and the
-    /// resident world — the base is still loaded and seeded through
-    /// [`WorldState::rebuild_derived`], since its body hash is the base's
-    /// door and the header is read through it, and every segment above the
-    /// base is still read and its committed records at or below `at` still
-    /// collected; the world is dropped unfolded. Admission and concurrency
-    /// are the caller's to gate, as they are there; safe beside the live
-    /// appender and `checkpoint()` for the same reasons.
+    /// **Cost**, per call: `world_at`'s, by the same base, minus the fold and
+    /// the resident world. On a held base the world is cloned and never
+    /// folded — the root never left memory, so no byte it stands for is
+    /// decoded. From the directory the base is still loaded and seeded
+    /// through [`WorldState::rebuild_derived`], since its body hash is the
+    /// door every byte a read decodes passes, and the header is read through
+    /// it. Either way every segment above the base is still read and its
+    /// committed records at or below `at` still collected; the world is
+    /// dropped unfolded. Admission and concurrency are the caller's to gate,
+    /// as they are there; safe beside the live appender and `checkpoint()`
+    /// for the same reasons.
     ///
     /// # Errors
     ///
@@ -184,9 +214,10 @@ impl<W: WorldState> Kernel<W> {
     /// transient refusals.
     pub fn chain_at(&self, at: Seq) -> Result<[u8; 32], HistoryError> {
         Ok(match self.history_read(at, at.0)? {
-            // The base's own chain — the `SKC4` header's `chain_head`, or the
-            // chain's genesis value at genesis — with the journal not scanned,
-            // as `world_at` does not scan it for the base's own world.
+            // The base's own chain — a held root's, the `SKC4` header's
+            // `chain_head`, or the chain's genesis value at genesis — with the
+            // journal not scanned, as `world_at` does not scan it for the
+            // base's own world.
             HistoryRead::AtBase(base) => base.chain(),
             // The chain the marker closing `at` carries, verified with every
             // chain link from the base to the journal's end.
@@ -209,10 +240,11 @@ impl<W: WorldState> Kernel<W> {
     /// is [`Kernel::boundaries_above`], which answers at each boundary what
     /// this answers there.
     ///
-    /// **Cost**, per call, uncached: [`Kernel::chain_at`]'s, from a base
-    /// strictly below `at` — never that read's base-only answer, so at a
-    /// checkpoint's own seq it loads an older base and reads the segments
-    /// above it. Safe beside the live appender and `checkpoint()`.
+    /// **Cost**, per call: [`Kernel::chain_at`]'s, from a base strictly below
+    /// `at` — a held one where one stands there, else one from the directory
+    /// — never that read's base-only answer, so at a checkpoint's own seq it
+    /// takes an older base and reads the segments above it. Safe beside the
+    /// live appender and `checkpoint()`.
     ///
     /// The kernel interprets nothing it answers: which pair a tag names and
     /// whether the blob verifies are the verifier's questions, beside the
@@ -225,9 +257,9 @@ impl<W: WorldState> Kernel<W> {
     /// `at`: a boundary that is a checkpoint's seq refuses
     /// [`HistoryError::Reclaimed`] where no base below it remains derivable,
     /// even though `chain_at` still answers there. At a checkpoint's own seq
-    /// it answers only while an older base remains derivable — an older
-    /// retained checkpoint that loads and seeds, or genesis while the journal
-    /// reaches back to it — so the `nearest` of its
+    /// it answers only while an older base remains derivable — an older held
+    /// base, an older retained checkpoint that loads and seeds, or genesis
+    /// while the journal reaches back to it — so the `nearest` of its
     /// [`HistoryError::NotABoundary`] and the `floor` of its
     /// [`HistoryError::Reclaimed`] can name a seq it refuses, as those variants
     /// say. Beside the live appender and `checkpoint()`, the same two
@@ -276,23 +308,24 @@ impl<W: WorldState> Kernel<W> {
     /// list holds boundaries alone: a composite contributes its `last_seq`
     /// and never an interior coordinate (§3).
     ///
-    /// **The base**, at or below `position` — the newest retained checkpoint
-    /// there that loads and seeds, else genesis while the journal reaches it
-    /// — through the base selection the three boundary reads run, capped at
-    /// `position`: a `position` that is a checkpoint's seq takes that
-    /// checkpoint and scans the markers above it; `Seq(0)`, where no
-    /// checkpoint stands at it, takes genesis while the journal reaches back
-    /// to `Seq(1)`, and refuses [`HistoryError::Reclaimed`] once it does not,
-    /// exactly as `attestation_at(Seq(1))` refuses; a `position` below the
-    /// oldest retained checkpoint takes genesis the same way while the
-    /// journal reaches it — every position, where nothing reclaims the
-    /// journal ([`crate::Reclaim::Never`]) — and refuses the same way once it
-    /// does not, naming that checkpoint as the `floor` — at which this read
+    /// **The base**, at or below `position` — the newest base the kernel holds
+    /// there whose file still answers its header, else the newest retained
+    /// checkpoint there that loads and seeds, else genesis while the journal
+    /// reaches it — through the base selection the three boundary reads run,
+    /// capped at `position`: a `position` that is a checkpoint's seq takes
+    /// that checkpoint, held or read, and scans the markers above it;
+    /// `Seq(0)`, where no checkpoint stands at it, takes genesis while the
+    /// journal reaches back to `Seq(1)`, and refuses
+    /// [`HistoryError::Reclaimed`] once it does not, exactly as
+    /// `attestation_at(Seq(1))` refuses; a `position` below the oldest
+    /// retained checkpoint takes genesis the same way while the journal
+    /// reaches it — every position, where nothing reclaims the journal
+    /// ([`crate::Reclaim::Never`]) — and refuses the same way once it does
+    /// not, naming that checkpoint as the `floor` — at which this read
     /// answers, its base sitting *at* the floor where `attestation_at`'s must
-    /// sit below it. Every marker above
-    /// the base is scanned and the chain verified from the base to the
-    /// journal's end, as `chain_at` verifies it; what is answered is the
-    /// boundaries above `position`.
+    /// sit below it. Every marker above the base is scanned and the chain
+    /// verified from the base to the journal's end, as `chain_at` verifies it;
+    /// what is answered is the boundaries above `position`.
     ///
     /// **The ends**: `position == head` names an empty range and answers the
     /// empty list without consulting the journal — no base is loaded and no
@@ -311,27 +344,30 @@ impl<W: WorldState> Kernel<W> {
     /// damage model) — is absent from the list, as `attestation_at` refuses it
     /// [`HistoryError::NotABoundary`].
     ///
-    /// **Cost**, per call, uncached: the base loaded and seeded through
-    /// [`WorldState::rebuild_derived`], as every history read loads its base
-    /// save the answers given without one (genesis's slot, the empty range) —
-    /// a whole checkpoint file read and deserialized, or genesis cloned, and
-    /// dropped unfolded, each newer candidate that refuses read as far as its
-    /// refusal — then one scan from that base to the journal's end: every
-    /// segment above the base read, the retained window at most, and one entry
-    /// kept per committed transaction above the base, an [`Attestation`] per
-    /// attested one — never the records, which the scan reads, checksums and
-    /// releases. So a caller asking over a long window pays the window's
-    /// commits in memory, and the bytes of every signature in it; what it does
-    /// not pay is a scan per boundary. Nothing here is memoized; peak memory is
-    /// that figure times the calls in flight; admission and concurrency are the
-    /// caller's to gate, as they are for `world_at`.
+    /// **Cost**, per call: the base taken and dropped unfolded, as every
+    /// history read takes its base save the answers given without one
+    /// (genesis's slot, the empty range) — on a held base, one 88-byte header
+    /// read and the held world cloned; from the directory, the base loaded
+    /// and seeded through [`WorldState::rebuild_derived`], a whole checkpoint
+    /// file read and deserialized, or genesis cloned, each newer candidate
+    /// that refuses read as far as its refusal — then one scan from that base
+    /// to the journal's end: every segment above the base read, the retained
+    /// window at most, and one entry kept per committed transaction above the
+    /// base, an [`Attestation`] per attested one — never the records, which
+    /// the scan reads, checksums and releases. So a caller asking over a long
+    /// window pays the window's commits in memory, and the bytes of every
+    /// signature in it; what it does not pay is a scan per boundary. No answer
+    /// is memoized — the held bases are the one thing kept; peak memory is
+    /// that figure times the calls in flight; admission and concurrency are
+    /// the caller's to gate, as they are for `world_at`.
     ///
     /// Safe concurrently with the live appender and with `checkpoint()`:
     /// takes no kernel lock and writes nothing, under the argument
     /// [`Kernel::world_at`] states — every frame of a commit at or below the
     /// head is durable before that head was installed, and a racing append
     /// can leave at most a torn suffix beyond the last committed marker,
-    /// which classifies as an EOF run and is ignored.
+    /// which classifies as an EOF run and is ignored; and a held base is
+    /// never scanned over a listing a landing's reclamation has cut.
     ///
     /// The kernel interprets nothing it answers, here as at
     /// [`Kernel::attestation_at`]: which pair a tag names and whether a blob
@@ -487,23 +523,45 @@ impl<W: WorldState> Kernel<W> {
     /// Selects the base a history read stands on, capped at `ceiling`.
     ///
     /// It is the base selection the history reads run, with the segment
-    /// listing taken beside it, which the scan above that base walks: the
-    /// checkpoints and the segments listed, then [`replay::select_base`] —
-    /// recovery's own fallback chain, the newest retained checkpoint at or
-    /// below `ceiling` that loads and seeds, else genesis while the journal
-    /// reaches it. One listing serves the selection and the scan, so the scan
-    /// walks the segments the base was chosen against.
+    /// listing taken beside it, which the scan above that base walks. Two
+    /// paths, in this order (§6):
+    ///
+    /// 1. **A held base.** The segments are listed, then the newest base the
+    ///    kernel holds at or below `ceiling` is taken, and where its
+    ///    checkpoint's file answers exactly the header it was held against
+    ///    ([`checkpoint::header_at`]) the read stands on that root — its
+    ///    world cloned, no body read, hashed, decoded or seeded — with that
+    ///    listing.
+    /// 2. **The directory**, wherever no held base stands at or below
+    ///    `ceiling` or its file no longer answers its header: the checkpoints
+    ///    and the segments listed, then [`replay::select_base`] — recovery's
+    ///    own fallback chain, the newest retained checkpoint at or below
+    ///    `ceiling` that loads and seeds, else genesis while the journal
+    ///    reaches it.
+    ///
+    /// Either way one listing serves the selection and the scan, so the scan
+    /// walks the segments the base was chosen against. **The order of the
+    /// held path is what keeps it sound beside a landing:** retention removes
+    /// a held base's file before reclamation removes any segment below it, so
+    /// a read that listed the segments before they went meets a segment that
+    /// then vanishes as [`HistoryError::Io`] (`NotFound`, transient, as on the
+    /// directory's path), and one that listed them after the file went fails
+    /// the header check and takes the directory — a held base is never
+    /// scanned over a listing reclamation has cut, and no chain break that
+    /// is not in the journal is ever reported.
     ///
     /// **The one site a history read loads a base**, so it is where the base
     /// is counted: under `test-hooks` the base that stands moves this kernel's
     /// seam's count by one — the `#[doc(hidden)]` door `Kernel::bases_loaded`
-    /// reads it — so a suite pins what a caller costs in bases, a consumer
-    /// asking once over a window against one asking once per boundary (§3.3
-    /// step 2 of the operations design). `journaled` is this kernel's own,
-    /// as [`Kernel::journaled_head`] answered it; the receiver is here for
-    /// the seam. Recovery's base at the open runs the selection directly and
-    /// is not counted, nor is a candidate the chain passed over, nor a
-    /// selection that refused.
+    /// reads it — and a held one moves the held count beside it
+    /// (`Kernel::held_bases_stood_on`), so a suite pins what a caller costs in
+    /// bases, a consumer asking once over a window against one asking once
+    /// per boundary (§3.3 step 2 of the operations design), and which of them
+    /// read a checkpoint. `journaled` is this kernel's own, as
+    /// [`Kernel::journaled_head`] answered it; the receiver is here for the
+    /// seam. Recovery's base at the open runs the selection directly and is
+    /// not counted, nor is a candidate the chain passed over, nor a selection
+    /// that refused.
     ///
     /// # Errors
     ///
@@ -514,6 +572,19 @@ impl<W: WorldState> Kernel<W> {
         journaled: &Journaled<W>,
         ceiling: u64,
     ) -> Result<(replay::Base<W>, Vec<SegmentMeta>), HistoryError> {
+        let segs = journal::list_segments(&journaled.dir)?;
+        let held =
+            journaled.held.load().iter().rev().find(|held| held.root.seq.0 <= ceiling).cloned();
+        if let Some(held) = held {
+            if checkpoint::header_at(&journaled.dir, held.root.seq.0) == Some(held.header) {
+                #[cfg(feature = "test-hooks")]
+                {
+                    self.seam.base_loaded();
+                    self.seam.held_base_stood_on();
+                }
+                return Ok((held.base(), segs));
+            }
+        }
         let checkpoints = checkpoint::list(&journaled.dir)?;
         let segs = journal::list_segments(&journaled.dir)?;
         let base = replay::select_base(&checkpoints, &segs, Some(ceiling), &journaled.genesis)

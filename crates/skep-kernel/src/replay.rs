@@ -72,13 +72,15 @@ fn skip_account(refused: &LoadRefused) -> String {
 /// open reports.
 ///
 /// The three that fold travel together and none is settable from outside
-/// this module, so [`select_base`] is the only site that can mint one. That
-/// is what makes the pairing an invariant rather than a habit: a world at a
-/// coordinate it does not embody folds records it already holds, and since
-/// [`WorldState::apply`] need not be idempotent, that is silent double
-/// application answered `Ok`; and a chain value other than the base's own —
-/// its header's, or the chain's genesis value at genesis — would judge the
-/// first link above the base against the wrong predecessor.
+/// this module, so two doors alone can mint one: [`select_base`], which takes
+/// the three from one file or from genesis, and [`Base::held`], which takes
+/// them from one root the kernel installed. That is what makes the pairing an
+/// invariant rather than a habit: a world at a coordinate it does not embody
+/// folds records it already holds, and since [`WorldState::apply`] need not
+/// be idempotent, that is silent double application answered `Ok`; and a
+/// chain value other than the base's own — its header's, its root's, or the
+/// chain's genesis value at genesis — would judge the first link above the
+/// base against the wrong predecessor.
 pub(crate) struct Base<W> {
     s_load: u64,
     world: W,
@@ -87,6 +89,22 @@ pub(crate) struct Base<W> {
 }
 
 impl<W> Base<W> {
+    /// Returns the base a root the kernel holds stands in for.
+    ///
+    /// The three are one installed root's coordinate, world and chain value
+    /// — the one caller, the history reads' base selection, passes a held
+    /// root's own fields — so the world embodies `s_load` and the chain is
+    /// the value there, as a checkpoint written from that root carries them.
+    /// Nothing was passed over to reach it, so it carries no skipped base.
+    pub(crate) fn held(s_load: u64, world: W, chain: [u8; 32]) -> Base<W> {
+        Base { s_load, world, chain, skipped: Vec::new() }
+    }
+
+    /// Returns the base's world, for the open to hold a copy of.
+    pub(crate) fn world(&self) -> &W {
+        &self.world
+    }
+
     /// Returns the coordinate this base embodies, §7's `S_load`.
     pub(crate) fn s_load(&self) -> u64 {
         self.s_load
@@ -212,7 +230,9 @@ pub(crate) struct Unreachable {
 /// delta, AUTH-2.85) — is skipped and the next-older retained one tried,
 /// which is what makes the fallback chain real rather than nominal
 /// (AUTH-2.84: a checkpoint that is not a start point is handled by this
-/// chain, at startup and for every history read alike). What the chain
+/// chain, at startup and for every history read that consults the directory
+/// alike — a read standing on a base the kernel holds consults none, and
+/// that base was chosen by this chain or written by a landing). What the chain
 /// passed over on the way to the base it did choose rides on the base
 /// ([`Base::skipped`]), for the open to report.
 ///

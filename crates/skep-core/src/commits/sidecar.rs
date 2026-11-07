@@ -951,7 +951,8 @@ impl CommitsLog {
     /// entries held and no more, and the floor probe. The walk is not the
     /// open's (`operations.md` §3.3 step 2; §4 row 16): reconstruction
     /// spends one whole-world `Kernel::world_at` per uncovered boundary — a
-    /// checkpoint deserialize plus a journal fold each — plus one world diff
+    /// journal fold each, from a root the kernel holds or, below the bases it
+    /// holds, from a checkpoint deserialized and seeded — plus one world diff
     /// per boundary for its classification and its terms (`derived_docs` and
     /// `derived_terms_over` state that cost), so a dir with no coverage (a
     /// sidecar deleted, arrived corrupt, or written before this feature)

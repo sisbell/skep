@@ -32,7 +32,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   one a crash left. Retention keeps the bases that load: a base the
   open skipped is passed over by the count of bases kept and removed
   as excess, so the first landing after a skip keeps the base the open
-  loaded from. Reclamation is a policy of its own beside retention
+  loaded from. The retained bases are held in memory too — the root
+  each landing wrote and the base the open loaded, sharing what has not
+  changed since — so a history read at or above the oldest reads no
+  checkpoint while its file still carries the header it was held
+  against. Reclamation is a policy of its own beside retention
   (`Durability::Fsync`'s `reclaim`): `Reclaim::BelowOldestRetained`
   reclaims the closed journal segments below the oldest base kept at
   every landing, and `Reclaim::Never` keeps every segment since

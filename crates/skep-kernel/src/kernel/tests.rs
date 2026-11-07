@@ -1741,7 +1741,11 @@ fn a_base_whose_seed_refuses_is_passed_over_for_the_next_older_and_reported() {
     assert!(!recovery.skipped[0].why.contains("restore"), "{}", recovery.skipped[0].why);
     assert!(!recovery.began, "a journal stood, so this open recovered it");
     // The history read runs the same chain: at the poisoned boundary the
-    // newer base is passed over and the older one folded forward.
+    // newer base is passed over and the older one folded forward. The open
+    // holds the older base it loaded, so it is released first, for the read
+    // to take its base from the directory, where the chain runs.
+    assert_eq!(k.held_bases(), vec![older]);
+    k.release_held_bases();
     assert_eq!(
         k.world_at(poisoned_at).unwrap().0,
         vec![b"a".to_vec(), b"b".to_vec(), POISON.to_vec()]

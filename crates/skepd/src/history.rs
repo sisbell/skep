@@ -6,16 +6,19 @@
 //! *of*, and the commit chain's value there (`/chain?at`), which spends the
 //! same budget and loads the same base, folding none.
 //!
-//! The mechanism is the engine's bounded replay (`Engine::world_at`):
-//! checkpoint-or-genesis base plus journal fold, per call, uncached. That
-//! is core-bound work and a whole second copy of the world, so [`History`]
-//! admits at most [`MAX_CONCURRENT_RECONSTRUCTIONS`] at once and refuses
-//! the surplus outright ([`Unavailable::Busy`]) rather than queueing — a
-//! worker parked behind a replay is a worker lost to live traffic, and a
+//! The mechanism is the engine's bounded replay (`Engine::world_at`): a base
+//! plus the journal's fold above it, per call, with no answer kept. The base
+//! is a retained checkpoint's root the kernel holds in memory, where one
+//! stands at or below the position, and the replay then costs its fold's
+//! delta; or one read from disk or genesis, a whole second copy of the world.
+//! Either is core-bound work, and the worst case a whole second world, so
+//! [`History`] admits at most [`MAX_CONCURRENT_RECONSTRUCTIONS`] at once and
+//! refuses the surplus outright ([`Unavailable::Busy`]) rather than queueing
+//! — a worker parked behind a replay is a worker lost to live traffic, and a
 //! reconstructed world left resident is memory nothing else accounts for.
 //! The permit therefore spans the whole answer, not the engine call alone:
-//! a detached `World` competes with the live one for no CPU and for a full
-//! copy of its memory, so the budget bounds live reconstructions rather
+//! a detached `World` competes with the live one for no CPU and for up to a
+//! full copy of its memory, so the budget bounds live reconstructions rather
 //! than concurrent replays.
 //!
 //! [`Unavailable`] says why an answer cannot be given without knowing what
@@ -48,20 +51,25 @@ use skep_core::limits::EDGE_HOLD_DOWN;
 ///
 /// A reconstruction is `Engine::world_at` behind `/op-at` and `/dump?at`,
 /// and the chain read behind `/chain?at` spends a permit of this pool for
-/// the span of its call. Each is per call and uncached, and each LOADS A
-/// WHOLE BASE — the newest retained checkpoint at or below the position,
-/// read whole, deserialized and seeded, or genesis, which stands in below
-/// the oldest retained checkpoint while the journal reaches it — reads every
-/// journal segment above it to the journal's end, and holds the records
-/// between the base and the position before the fold begins
+/// the span of its call. Each is per call, with no answer kept, and each
+/// stands on a base: a retained checkpoint's root the kernel holds in
+/// memory, where one stands at or below the position and its file still
+/// carries the header it was held against — cloned, sharing the root's
+/// structure, so the fold costs its delta — or one it reads from disk, the
+/// newest retained checkpoint at or below the position read whole,
+/// deserialized and seeded, or genesis, which stands in below the oldest
+/// retained checkpoint while the journal reaches it. Either way it reads
+/// every journal segment above the base to the journal's end, and holds the
+/// records between the base and the position before the fold begins
 /// (`Kernel::world_at`'s cost card). A reconstruction folds them and leaves
-/// that second world resident
-/// for as long as its answer is being built; the chain read drops it
-/// unfolded (`Kernel::chain_at`'s card). So a permit's peak is one whole
-/// world and a window's records whichever route holds it, and the pool's is
-/// two of each beside the live world. Two keeps history panes serviceable
-/// without letting core-bound replay occupy the worker pool or letting
-/// reconstructed worlds accumulate one per worker.
+/// that second world resident for as long as its answer is being built; the
+/// chain read drops it unfolded (`Kernel::chain_at`'s card). So a permit's
+/// peak is at most one whole world — a base from disk or genesis — and a
+/// window's records whichever route holds it, and the pool's is two of each
+/// beside the live world: the two permits bound that worst case, and the CPU
+/// of the scan and the fold. Two keeps history panes serviceable without
+/// letting core-bound replay occupy the worker pool or letting reconstructed
+/// worlds accumulate one per worker.
 pub(crate) const MAX_CONCURRENT_RECONSTRUCTIONS: usize = 2;
 
 /// Why a historical answer is unavailable.
@@ -185,9 +193,11 @@ impl History {
     ///
     /// The guard is handed back rather than dropped here, so the budget
     /// bounds *live* reconstructed worlds and not merely concurrent replays:
-    /// a detached world competes with the live one for no CPU and for a full
-    /// copy of its memory, so a permit released at the engine call would
-    /// leave one world resident per worker against a budget of
+    /// a detached world competes with the live one for no CPU and for up to
+    /// a full copy of its memory — a whole one where its base came from disk
+    /// or genesis, its fold's delta where it stood on a base the kernel
+    /// holds — so a permit released at the engine call would leave up to one
+    /// world resident per worker against a budget of
     /// [`MAX_CONCURRENT_RECONSTRUCTIONS`]. The permit therefore spans the
     /// read (or the dump) the world was reconstructed for, which is the
     /// same trade [`MAX_CONCURRENT_RECONSTRUCTIONS`] already makes for the
@@ -296,13 +306,14 @@ impl History {
     ///
     /// It is the kernel's own recomputation off its journal
     /// (`Kernel::chain_at`), under this pool's permit: the kernel selects the
-    /// base and LOADS it — read whole, deserialized and seeded, its body hash
-    /// being the base's door — collects the records above it to `at` and
-    /// reads every segment to the journal's end (the corrupt-run sweep and
-    /// the chain's verification), exactly as a reconstruction does, and drops
-    /// the world unfolded. So its cost and its peak are a reconstruction's
-    /// minus the fold — one whole world and a window's records for the span
-    /// of the call — and the permit spans the call alone and returns with
+    /// base — a root it holds, cloned, or one it loads, read whole,
+    /// deserialized and seeded, its body hash being the door every byte it
+    /// decodes passes — collects the records above it to `at` and reads every
+    /// segment to the journal's end (the corrupt-run sweep and the chain's
+    /// verification), exactly as a reconstruction does, and drops the world
+    /// unfolded. So its cost and its peak are a reconstruction's minus the
+    /// fold — at most one whole world and a window's records for the span of
+    /// the call — and the permit spans the call alone and returns with
     /// it. A pool of its own would be lighter by the fold alone and would add
     /// its permits' worlds to this pool's peak, so sharing this one keeps the
     /// bound the wire promises for historical work, and the memory it costs,
@@ -369,8 +380,10 @@ impl History {
 ///
 /// **Precondition.** `world` is one `Engine::world_at` produced — the
 /// precondition [`detached_kernel`] states, which the bounded replay
-/// discharges: it seeds its base through `rebuild_derived` and maintains the
-/// derived hints across the fold.
+/// discharges: it stands on a root the kernel holds, whose hints the live
+/// fold or the open's seed made, or seeds a base it reads from disk or
+/// genesis through `rebuild_derived`, and maintains the derived hints across
+/// the fold.
 ///
 /// The two worlds differ *by type* in the signature below — the content is
 /// moved in, the mask is borrowed — so the transposition that would answer
@@ -425,10 +438,11 @@ fn execute_read_on(
 /// `Durability::InMemory`'s genesis obligation: this mode does not load, so
 /// `WorldState::rebuild_derived` never runs on the root, and the world is
 /// read through whatever hints it arrives with. The live kernel maintains
-/// them across every commit, and the bounded replay seeds its base through
-/// `rebuild_derived` and maintains them across the fold. A world assembled
-/// any other way would be read through stale hints, and nothing about the
-/// answer would look wrong.
+/// them across every commit, and the bounded replay stands on a root the
+/// live kernel maintained, or seeds a base it reads from disk or genesis
+/// through `rebuild_derived`, and maintains them across the fold. A world
+/// assembled any other way would be read through stale hints, and nothing
+/// about the answer would look wrong.
 ///
 /// # Panics
 ///

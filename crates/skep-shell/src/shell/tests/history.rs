@@ -4,6 +4,8 @@
 //! it — the row's members read before the session, a bare session refused
 //! naming the call, and a hold standing at the board refusing the write
 //! before any read — and, against the real daemon, the row end to end: a
+//! restore over the draft's held line refused `held_lines` and landing once
+//! the line is kept; a
 //! draft put back to a past state by one `set_arrangement` naming no base
 //! and no merge, and back again through the answer's `as_of`, a position at
 //! the head refused `not_past` with nothing written; the write typed against
@@ -93,6 +95,62 @@ fn a_hold_standing_at_the_board_refuses_the_restore_before_any_read() {
     assert_eq!(refused.name(), "unreachable", "the node running, the reads dial: {refused}");
     let dialed = frames.lock().unwrap()[own..].to_vec();
     assert!(dialed.contains(&doc_metadata("1.0.2.0.4")), "the draft's read reached the board: {dialed:?}");
+}
+
+/// Checks that a restore over the draft's held line is refused
+/// `held_lines` and lands once the line is kept, against the daemon (§3c.4,
+/// THE HELD-LINES GATE; skep #854).
+///
+/// A draft minted — the mint acknowledged on the running board (skep #868)
+/// — and typed in two bursts; the board stopped, a third burst is held
+/// `unreachable`, unsent. `history.restore` to the state after the first
+/// burst, typed at the page's state, is refused `held_lines` naming the
+/// draft and the one line, the line standing untouched (a restore landing
+/// first would have the held burst replay over the restored state). The
+/// board back at its port, the session re-opened and the line resent and
+/// kept, the same restore — typed at the page's state past the kept line —
+/// lands, the text the first burst's (the mutant that asks the standing
+/// cause alone lets the restore through under a running node; the one that
+/// counts another draft's lines refuses a draft holding none).
+#[test]
+fn a_restore_over_the_drafts_held_line_is_refused_held_lines_and_lands_once_the_line_is_kept() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let port = sd.port();
+    let g = ground(&dir, &sd);
+    let minted = g.op(json!({"op": "create_new_document", "account": "1.0.1"}));
+    assert_eq!(minted["resp"], "ack_addr", "the mint on a running board is acknowledged as before: {minted}");
+    let d = minted["addr"].as_str().expect("an ack_addr").to_string();
+    let p1 = g.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "1"}, "values": ["the cat"], "as_of": minted["at"]}))["at"].clone();
+    let typed = g.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "8"}, "values": [" sat"], "as_of": p1}))["at"].as_u64().expect("the page's state");
+    // The board stopped: the next burst is held, unsent.
+    sd.shutdown();
+    let held = g.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "12"}, "values": ["!"], "as_of": typed}));
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str(), g.call("held", json!({"session": g.session})).unwrap().as_array().unwrap().len()), (Some("held"), Some("unreachable"), 1), "premise: one line stands held on the draft: {held}");
+    let refused = g.call("history.restore", json!({"session": g.session, "draft": d, "at": p1, "as_of": typed})).unwrap_err();
+    let v = refused.to_value();
+    assert_eq!((refused.name(), v["kind"].as_str(), v["doc"].as_str(), v["held"].as_u64()), ("held_lines", Some("shell"), Some(d.as_str()), Some(1)), "{v}");
+    let standing = g.call("held", json!({"session": g.session})).unwrap();
+    assert_eq!((standing.as_array().unwrap().len(), standing[0]["cause"].as_str(), standing[0]["sent"].as_bool()), (1, Some("unreachable"), Some(false)), "the line stands as it stood, nothing moved: {standing}");
+    // The board back: the session dies and is re-opened, the line resent and
+    // kept under the fresh session.
+    let sd = spawn_at(&dir.path().join("board"), true, port);
+    wait_for(&g.seen, |e| e.name == EventName::SessionDied && e.data["session"] == g.session);
+    let session2 = g.call("session", json!({"board": g.board})).unwrap()["session"].as_str().unwrap().to_string();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !g.seen.lock().unwrap().iter().any(|e| e.name == EventName::Held && e.data["doc"] == d && e.data["state"] == "kept") {
+        assert!(Instant::now() < deadline, "the held line was not kept: {:?}", g.call("held", json!({"session": session2})));
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(g.call("held", json!({"session": session2})).unwrap().as_array().unwrap().is_empty(), "the line kept, the file compacted away");
+    // The same restore, typed at the page's state past the kept line, lands.
+    let read = g.position();
+    let restored = g.call("history.restore", json!({"session": session2, "draft": d, "at": p1, "as_of": read})).unwrap_or_else(|r| panic!("the line kept, the restore lands: {r}"));
+    crate::shapes::assert_declared("Restored", &restored);
+    let text = g.shell.call("op", &json!({"session": session2, "frame": skep_client::board::frames::retrieve_v(&d, 1, 14)})).unwrap();
+    assert_eq!(text["items"].as_array().into_iter().flatten().map(|i| i["content"].as_str().unwrap_or("")).collect::<String>(), "the cat", "{restored}");
+    g.shell.shutdown();
+    sd.shutdown();
 }
 
 /// Checks a draft put back to a past state and back again, against the

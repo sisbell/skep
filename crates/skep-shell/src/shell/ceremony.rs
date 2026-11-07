@@ -12,6 +12,21 @@
 //! dev arm answering in the place of the shell's own save dialog (§4b.3);
 //! and a walk's options carry the date it runs on (`today`), the anchor
 //! boxes' default derived per run.
+//!
+//! **The door.** Every walk that writes to the board — `claim`, `enroll`,
+//! `bind`, `recover`, `rotate`, `retire`, `handoff`, `accept` — meets the
+//! shell's one write door before any dial (`Shell::write_door`), as its
+//! board, since a ceremony runs under no session of this shell's
+//! (`Writer::Board`): the door's one question of it is whether another
+//! shell holds the board's held store, refusing the ceremony
+//! `another_window` naming the call, nothing dialed (§3c.3; skep #829, with
+//! the held store's shape (vi): a second window runs no recovery, no
+//! rotation and no claim while the first stands — the first shell's held
+//! lines were made under the board's standing, which a ceremony from the
+//! second would change under them). The bare session's refusal is not
+//! asked, a walk's session rules being its own; the standing hold and the
+//! held-lines gate judge none of them. `keygen` and `fingerprint`, which
+//! dial nothing, meet no door.
 
 use std::sync::Arc;
 
@@ -29,7 +44,7 @@ use skep_client::sheet::{render_inert, Label};
 use skep_client::store::{Binding, KeyFacts, KeySelector, KeyStore, Purpose, StoreError, Unappended};
 use skep_identity::{encode_enroll, Enrollment};
 
-use super::{optional, principal_arg, today, Shell};
+use super::{optional, principal_arg, today, Shell, Write, Writer};
 use crate::person::BridgePerson;
 use crate::refusal::{Name, Refusal};
 use crate::sessions;
@@ -212,7 +227,9 @@ impl Shell {
     ///
     /// In this order: `malformed_args` naming `board`, then `unknown_board`;
     /// `malformed_args` naming `principal`, `name` or `paper` where one is
-    /// present in another form; `no_key` where the store holds no key at all
+    /// present in another form; `another_window` naming the call where
+    /// another shell holds the board's held store, nothing dialed
+    /// (`Shell::write_door`); `no_key` where the store holds no key at all
     /// — the notebook door is two calls, `keygen` then `claim` — or the
     /// `/health` read's refusal where the read its face needs fails;
     /// `already_claimed` where another store's claim stands; and the walk's
@@ -222,6 +239,7 @@ impl Shell {
         let principal = optional(args, "principal", principal_arg)?;
         let display_name = optional(args, "name", Value::as_str)?.map(str::to_string);
         let paper = optional(args, "paper", Value::as_bool)?.unwrap_or(false);
+        self.write_door(Writer::Board(&entry), &Write::unjudged("claim"))?;
         if self.store.list().is_ok_and(|keys| keys.is_empty()) {
             let mode = Mode::of(&entry.board.health()?);
             return Err(Refusal::of_named(Name::NO_KEY, skep_client::store::arm4_face(&self.store, &[], mode)));
@@ -259,12 +277,15 @@ impl Shell {
     ///
     /// In this order: `malformed_args` naming `board`, then `unknown_board`;
     /// `malformed_args` naming `payload` where it is absent or no string, then
-    /// `principal` where it is present in another form; and the walk's halt
-    /// as the row's refusal.
+    /// `principal` where it is present in another form; `another_window`
+    /// naming the call where another shell holds the board's held store,
+    /// nothing dialed (`Shell::write_door`); and the walk's halt as the
+    /// row's refusal.
     pub(super) fn enroll(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let payload = args["payload"].as_str().ok_or_else(|| Refusal::malformed("payload"))?;
         let opts = enroll::EnrollOptions { principal: self.principal_for(args)?, payload: format!("{payload}\n").into_bytes() };
+        self.write_door(Writer::Board(&entry), &Write::unjudged("enroll"))?;
         let mut person = self.person("enroll", Some(&entry.reference));
         match enroll::enroll(&entry.board, &self.store, &mut person, &opts) {
             Ok(e) => Ok(json!({
@@ -294,6 +315,8 @@ impl Shell {
     /// In this order: `malformed_args` naming `board`, then `unknown_board`;
     /// `malformed_args` naming `principal`, `account` or `origin` where one is
     /// absent or of another form, the account in another spelling among them;
+    /// `another_window` naming the call where another shell holds the
+    /// board's held store, nothing dialed (`Shell::write_door`);
     /// `origin_disagrees` where the pasted origin is not the board's;
     /// `origin_state`; `account_disagrees` where the board seats no such pair;
     /// `no_key`, `store_unreadable`, `retired` or `not_enrolled` for the
@@ -307,6 +330,7 @@ impl Shell {
         if !is_address_text(&account) {
             return Err(Refusal::malformed("account"));
         }
+        self.write_door(Writer::Board(&entry), &Write::unjudged("bind"))?;
         let board = &entry.board;
         if origin != board.dialed().as_str() {
             return Err(Refusal::shell(Name::ORIGIN_DISAGREES, json!({"pasted": origin, "dialed": board.dialed().as_str()})));
@@ -356,8 +380,9 @@ impl Shell {
     ///
     /// In this order: `malformed_args` naming `board`, then `unknown_board`;
     /// `malformed_args` naming `lost`, `stolen`, `anchorLost` or `principal`
-    /// where one is present in another form; and the walk's halt as the
-    /// row's refusal.
+    /// where one is present in another form; `another_window` naming the
+    /// call where another shell holds the board's held store, nothing dialed
+    /// (`Shell::write_door`); and the walk's halt as the row's refusal.
     pub(super) fn recover(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let lost = optional(args, "lost", |v| v.as_array()?.iter().map(|f| f.as_str().map(str::to_string)).collect::<Option<Vec<String>>>())?.unwrap_or_default();
@@ -374,6 +399,7 @@ impl Shell {
             host_name: self.host_name.clone(),
             date: today(),
         };
+        self.write_door(Writer::Board(&entry), &Write::unjudged("recover"))?;
         let mut person = self.person("recover", Some(&entry.reference));
         match recover::recover(&entry.board, &self.store, &mut person, &opts) {
             Ok(r) => Ok(json!({
@@ -397,7 +423,9 @@ impl Shell {
     ///
     /// In this order: `malformed_args` naming `board`, then `unknown_board`;
     /// `malformed_args` naming `principal`, `label` or `payload` where one is
-    /// present in another form; and the walk's halt as the row's refusal.
+    /// present in another form; `another_window` naming the call where
+    /// another shell holds the board's held store, nothing dialed
+    /// (`Shell::write_door`); and the walk's halt as the row's refusal.
     pub(super) fn rotate(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let opts = rotate::RotateOptions {
@@ -405,6 +433,7 @@ impl Shell {
             label: optional(args, "label", Value::as_str)?.map(str::to_string),
             payload: optional(args, "payload", Value::as_str)?.map(|p| format!("{p}\n").into_bytes()),
         };
+        self.write_door(Writer::Board(&entry), &Write::unjudged("rotate"))?;
         let mut person = self.person("rotate", Some(&entry.reference));
         match rotate::rotate(&entry.board, &self.store, &mut person, &opts) {
             Ok(r) => Ok(json!({
@@ -427,12 +456,15 @@ impl Shell {
     ///
     /// In this order: `malformed_args` naming `board`, then `unknown_board`;
     /// `malformed_args` naming `fingerprint` where it is absent or no string,
-    /// then `principal` where it is present in another form; and the walk's
-    /// halt as the row's refusal.
+    /// then `principal` where it is present in another form;
+    /// `another_window` naming the call where another shell holds the
+    /// board's held store, nothing dialed (`Shell::write_door`); and the
+    /// walk's halt as the row's refusal.
     pub(super) fn retire(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let fingerprint = args["fingerprint"].as_str().ok_or_else(|| Refusal::malformed("fingerprint"))?;
         let opts = retire::RetireOptions { principal: self.principal_for(args)?, fingerprint_prefix: fingerprint.to_string() };
+        self.write_door(Writer::Board(&entry), &Write::unjudged("retire"))?;
         let mut person = self.person("retire", Some(&entry.reference));
         match retire::retire(&entry.board, &self.store, &mut person, &opts) {
             Ok(_) => Ok(json!({})),
@@ -449,7 +481,9 @@ impl Shell {
     ///
     /// In this order: `malformed_args` naming `board`, then `unknown_board`;
     /// `malformed_args` naming `account` where it is absent or no string, then
-    /// `principal` or `payload` where one is present in another form; and the
+    /// `principal` or `payload` where one is present in another form;
+    /// `another_window` naming the call where another shell holds the
+    /// board's held store, nothing dialed (`Shell::write_door`); and the
     /// walk's halt as the row's refusal.
     pub(super) fn handoff(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
@@ -460,6 +494,7 @@ impl Shell {
             payload: optional(args, "payload", Value::as_str)?.map(|p| format!("{p}\n").into_bytes()),
             anchor: None,
         };
+        self.write_door(Writer::Board(&entry), &Write::unjudged("handoff"))?;
         let mut person = self.person("handoff", Some(&entry.reference));
         match handoff::handoff(&entry.board, &self.store, &mut person, &opts) {
             Ok(handoff::HandoffOutcome::Delegated { account, principal, already }) => Ok(json!({"address": account, "principal": principal, "already": already})),
@@ -480,8 +515,10 @@ impl Shell {
     /// `malformed_args` naming `address` where it is present in another form,
     /// and `no_address` where none, or a blank one, is given; `malformed_args`
     /// naming `label`, `paper` or `noAnchors` where one is present in another
-    /// form; and the walk's halt as the row's refusal, `already_seeded`,
-    /// `not_delegated` and `empty_label` named off its text ([`accept_arm`]).
+    /// form; `another_window` naming the call where another shell holds the
+    /// board's held store, nothing dialed (`Shell::write_door`); and the
+    /// walk's halt as the row's refusal, `already_seeded`, `not_delegated`
+    /// and `empty_label` named off its text ([`accept_arm`]).
     pub(super) fn accept(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let Some(address) = optional(args, "address", Value::as_str)?.filter(|a| !a.trim().is_empty()) else {
@@ -500,6 +537,7 @@ impl Shell {
             host_name: self.host_name.clone(),
             date: today(),
         };
+        self.write_door(Writer::Board(&entry), &Write::unjudged("accept"))?;
         let mut person = self.person("accept", Some(&entry.reference));
         match accept::accept(&entry.board, &self.store, &mut person, &opts) {
             Ok(a) => Ok(json!({"payload": a.record})),

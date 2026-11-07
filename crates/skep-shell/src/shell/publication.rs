@@ -39,15 +39,23 @@
 //! for each, whichever thread met the death (§4b.1's one session rule;
 //! §4b.2).
 //!
-//! **Before any frame.** A bare session is refused `write_in_bare_session`
-//! at `open` and at `confirm`, since a publication is a write and the
-//! keyless session reads alone, and a session at a board whose held store
-//! another shell holds `another_window` at both, the second window reading
-//! alone there (§3c.3) — the write door's two refusals, met through
-//! `Shell::signed`; a hold standing at the board — the own node
-//! stopped, the write path poisoned, the writes halted — refuses `confirm`
-//! at once with the hold's cause, never composing (§3c.4;
-//! `Holds::unholdable_refusal`); the price's verdict refuses `over_cap`,
+//! **Before any frame.** `open` and `confirm` meet the shell's one write
+//! door through `Shell::signed` (`Shell::write_door`): a bare session is
+//! refused `write_in_bare_session` at both, since a publication is a write
+//! and the keyless session reads alone, and a session at a board whose held
+//! store another shell holds `another_window` at both, the second window
+//! reading alone there (§3c.3); `confirm`, which writes, meets the door's
+//! other two questions as well — a hold standing at the board — the own
+//! node stopped, the write path poisoned, the writes halted — refuses it at
+//! once with the hold's cause, `publish` the op named, never composing
+//! (§3c.4; `Holds::unholdable_refusal`), and a line of the principal's the
+//! board has not kept standing on the rendering draft or on a draft `also`
+//! names, in any state, refuses it `held_lines` naming that draft and the
+//! count, nothing sent (§3c.4, THE HELD-LINES GATE; `Holds::held_lines`):
+//! the shot would otherwise re-window the draft under words the person
+//! typed and the board has not kept, and no path of the library's waits for
+//! held lines before a shot. `open`, which writes nothing, meets neither.
+//! The price's verdict refuses `over_cap`,
 //! and a request changing nothing, a window unanswered or an origin to
 //! publish first is `inert`. Every member of every call is read as
 //! UNTRUSTED input: an address by §1.6's grammar within the component
@@ -160,7 +168,7 @@ use skep_client::sheet::render_inert;
 use skep_client::sign::Signer;
 
 use super::merge::{is_daughter, is_trunk_member, next_trunk_member};
-use super::{optional, Shell};
+use super::{optional, Shell, Write, Writer};
 use crate::events::EventBus;
 use crate::feed::Searcher;
 use crate::refusal::{Name, Refusal};
@@ -375,19 +383,27 @@ fn extent_of(v: &Value) -> Option<u64> {
 impl Shell {
     /// Returns the hand a session publishes with, at the family's door.
     ///
-    /// Every row of the publication and merge families takes it before any
-    /// read or frame, so each meets the write door (`Shell::write_door`).
+    /// Every row of the publication and merge families and the restore
+    /// takes it before any read or frame, so each meets the shell's one
+    /// write door (`Shell::write_door`) with `write`, the row's write as the
+    /// door reads it — the call its refusal names, the wire op the standing
+    /// hold judges it by, the drafts it sets whole.
     ///
     /// # Errors
     ///
-    /// In this order: the write door's, naming `call` —
+    /// In this order: the write door's, naming the call —
     /// `write_in_bare_session` where the session holds no key, the keyless
-    /// session reading alone and a publication being a write, then
+    /// session reading alone and a publication being a write; then
     /// `another_window` where another shell holds the held store of the
-    /// session's board (§3c.3); then [`Shell::signed_within_call`]'s.
-    pub(super) fn signed(&self, session: &SessionEntry, call: &str) -> Result<Signed, Refusal> {
-        self.write_door(session, json!({"call": call}))?;
-        self.signed_within_call(session, call)
+    /// session's board (§3c.3); then `stopped`, `poisoned` or `halted` where
+    /// a hold stands at the board and the row's write is of a kind the hold
+    /// never holds, naming that op; then `held_lines` naming the draft and
+    /// the count where a draft the row writes whole holds lines of the
+    /// principal's the board has not kept (§3c.4) — then
+    /// [`Shell::signed_within_call`]'s.
+    pub(super) fn signed(&self, session: &SessionEntry, write: Write<'_>) -> Result<Signed, Refusal> {
+        self.write_door(Writer::Session(session), &write)?;
+        self.signed_within_call(session, write.call_name())
     }
 
     /// Returns the hand of a session a call stands under past its door.
@@ -700,7 +716,7 @@ impl Shell {
             _ => {}
         }
         let session = self.session(&args["session"])?;
-        let signed = self.signed(&session, "publication.open")?;
+        let signed = self.signed(&session, Write::unjudged("publication.open"))?;
         let key = Self::family_key(&session);
         let (state, hold) = self.open_panel(&session, &signed, OpenArgs { draft, also, doc, mint, claim, selection, notes, readable_drafts, published })?;
         let answer = panel_json(&state, hold);
@@ -929,9 +945,13 @@ impl Shell {
     /// In this order: the arguments' form (`confirmed_form`);
     /// `malformed_args` naming `session`, then `session_ended`; `no_panel`;
     /// the arguments against the panel (`confirmed_args`);
-    /// `write_in_bare_session`, then `another_window`; `store_unreadable`,
-    /// `no_account`; `stopped`, `poisoned` or `halted` where a hold stands at
-    /// the board; at the document form the base's re-read and the standing's,
+    /// the write door's, in its order — `write_in_bare_session`, then
+    /// `another_window`, then `stopped`, `poisoned` or `halted` naming
+    /// `publish` where a hold stands at the board, then `held_lines` naming
+    /// the draft and the count where the rendering draft or a draft `also`
+    /// names holds lines of the principal's the board has not kept — then
+    /// `store_unreadable`, `no_account`; at the document form the base's
+    /// re-read and the standing's,
     /// refused as `publication.open`'s step 4 — `base_unrecorded` with the
     /// `publication` event's `refused` naming it (a standing moved since the
     /// panel, `first` → `superseded_first` among them, is the re-statement,
@@ -976,12 +996,22 @@ impl Shell {
             });
         }
         let draft = state.draft().clone();
-        let signed = self.signed(session, call)?;
-        if let Some(refusal) = self.holds.unholdable_refusal(&session.board_reference, "publish") {
-            self.publication_event(session, &draft, "refused", json!({"arm": refusal.name()}));
-            return Err(refusal);
-        }
         let inputs = &state.inputs;
+        // The one write door, over the shot: the rendering draft and every
+        // draft `also` names are the drafts it sets whole. A refusal of the
+        // board's or the drafts' state — a standing hold, held lines — is
+        // the panel's `refused` event too, as the hold's was; the door's
+        // first two name no state of the request's and say none.
+        let write = Write::call(call, "publish").over(std::iter::once(&draft).chain(&inputs.also).map(ToString::to_string));
+        let signed = match self.signed(session, write) {
+            Ok(signed) => signed,
+            Err(refusal) => {
+                if matches!(&refusal, Refusal::Shell { name, .. } if [Name::STOPPED, Name::POISONED, Name::HALTED, Name::HELD_LINES].contains(name)) {
+                    self.publication_event(session, &draft, "refused", json!({"arm": refusal.name()}));
+                }
+                return Err(refusal);
+            }
+        };
         let p = signed.publisher(session);
         let fault = |f: Fault| self.fault(session, call, f);
         // The base read again and its standing typed again (D4 (b′)): a base

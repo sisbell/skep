@@ -105,6 +105,28 @@
 //! answers alone, and the contract names no event for the family. `land`
 //! and `undo` with nothing standing answer `no_merge`.
 //!
+//! **The door.** Every row meets the shell's one write door before any
+//! read it makes (`Shell::write_door`, through `Shell::signed`), with the
+//! write it is about to make: `compose` with the landing's first write —
+//! `stage` where no `into` is named and a fresh draft may be staged,
+//! `set_arrangement` into the draft named — and over that draft whole;
+//! `land` with `publish`, over the draft the composition landed in and the
+//! draft side the shot names `also`; `undo` and `withdraw` with
+//! `set_arrangement`, each over the draft it sets whole. So under a stopped
+//! node, a poisoned write path or halted writes each row is refused
+//! `stopped`, `poisoned` or `halted` naming that op, nothing read and
+//! nothing dialed (skep #850), and over a draft holding lines of the
+//! principal's the board has not kept — in any state — each whole-draft
+//! write is refused `held_lines` naming the draft and the count, nothing
+//! dialed (§3c.4, THE HELD-LINES GATE; skep #849): the held lines would
+//! otherwise land on an arrangement the landing, the undo or the withdrawal
+//! rewrote under them, and come back as a move the person never made. A
+//! composition that lands into a prior record's draft in a fresh one's
+//! place (skep #790) asks the door for that draft before the landing's
+//! write, since the named draft was asked and that one was not. The two
+//! re-opens past the door — the shot's restart re-open, the record after
+//! the acknowledgment — are not refused at it again.
+//!
 //! **The refusals** cross as typed data: the library's own by name where
 //! the contract names one — `unreadable {doc}`, `no_such_document {doc}`,
 //! `base_unknown {side, reason}`, `two_drafts`, `over_cap {n, cap}`,
@@ -127,7 +149,7 @@ use skep_client::merge::{self as lib, Family, Gap, GapKind, NoUndo, Placement, R
 use skep_client::publication::{OriginAnswer, Run as SelectionRun};
 
 use super::publication::{address_arg, clipped, via_name, Confirmation, OpenArgs, Signed};
-use super::{optional, Shell};
+use super::{optional, Shell, Write, Writer};
 use crate::refusal::{Name, Refusal};
 use crate::sessions::SessionEntry;
 use crate::wire::bounded_address;
@@ -465,9 +487,14 @@ impl Shell {
     ///    `doc`'s chain, `into` where it is the draft side itself,
     ///    `alternative or draft` where neither is given and `draft` where
     ///    both are;
-    /// 2. `malformed_args` naming `session`, then `session_ended`;
-    ///    `write_in_bare_session`, then `another_window`, naming the call;
-    ///    `store_unreadable`, `no_account`;
+    /// 2. `malformed_args` naming `session`, then `session_ended`; the
+    ///    write door's, in its order — `write_in_bare_session`, then
+    ///    `another_window`, naming the call; `stopped`, `poisoned` or
+    ///    `halted` where a hold stands at the board, naming `stage` where no
+    ///    `into` is named, else `set_arrangement`; `held_lines` naming `into`
+    ///    and the lines of the principal's standing on it the board has not
+    ///    kept — nothing read at any of the four; `store_unreadable`,
+    ///    `no_account`;
     /// 3. at a daughter, the `in_claims` read's: `unreadable`,
     ///    `no_such_document`, the board's verdicts, `unreachable`,
     ///    `session_died`; then the merged arm's composition and record, as
@@ -480,7 +507,10 @@ impl Shell {
     ///    with its reason, `two_drafts`, `unreadable`, `no_such_document`,
     ///    `merge_refused` with its arm, the board's verdicts verbatim; then
     ///    `over_cap` where M passes the cap, nothing landed;
-    /// 6. the landing's (`skep_client::merge::land`): the board's
+    /// 6. where the landing goes into a prior record's draft in a fresh
+    ///    one's place, the write door's again for that draft, `held_lines`
+    ///    among them, nothing landed; then the landing's
+    ///    (`skep_client::merge::land`): the board's
     ///    `arrangement_moved` verbatim, nothing landed; `merge_refused`
     ///    with `fork_base_moved`, `base_not_in_chain`, `window_withheld` or
     ///    `needs_signed_session`; `not_owner`; a halt's face — the board's
@@ -516,7 +546,11 @@ impl Shell {
             (Some(_), Some(_)) => return Err(Refusal::malformed("draft")),
         };
         let session = self.session(&args["session"])?;
-        let signed = self.signed(&session, "merge.compose")?;
+        // The one write door, over the landing's first write: `stage` where a
+        // fresh draft may be staged, `set_arrangement` into the draft named,
+        // which is asked for its held lines.
+        let first_write = if into.is_some() { "set_arrangement" } else { "stage" };
+        let signed = self.signed(&session, Write::call("merge.compose", first_write).over(into.iter().map(ToString::to_string)))?;
         let key = Self::family_key(&session);
         let kind = merge_kind(&signed.account).ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
         // THE MERGED ARM: a daughter a claim of the person's own already
@@ -588,6 +622,12 @@ impl Shell {
                     }
                 }
             }
+        }
+        // A prior record's draft landed into in a fresh one's place (skep
+        // #790) is a draft the door has not asked for its held lines: asked
+        // now, before the landing's write, as the named draft was.
+        if let Some(prior) = landing_into.as_ref().filter(|prior| into.as_ref() != Some(*prior)) {
+            self.write_door(Writer::Session(&session), &Write::call("merge.compose", "set_arrangement").over([prior.to_string()]))?;
         }
         let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
         let landed = lib::land(&session.board, &merged, lib::Landing::Draft { merger, into: landing_into.clone(), journal: None }).map_err(|r| self.merge_refusal(&session, r))?;
@@ -667,11 +707,15 @@ impl Shell {
     /// `session_ended`; `no_merge` naming the session where no composition
     /// stands under its board and principal; `malformed_args` naming
     /// `resolutions` where a gap id names no gap of the composition or a
-    /// choice is none the gap admits; `write_in_bare_session`,
-    /// `another_window`, `store_unreadable`, `no_account`; the panel's open's
-    /// where the shell opens one (`publication.open`'s steps 4 to 6); then
-    /// `publication.confirm`'s from `write_in_bare_session` on — a hold
-    /// standing at the board among them, `stopped`, `poisoned`, `halted`,
+    /// choice is none the gap admits; the write door's, in its order —
+    /// `write_in_bare_session`, `another_window`, `stopped`, `poisoned` or
+    /// `halted` naming `publish`, `held_lines` naming the draft the
+    /// composition landed in or the draft side and the lines of the
+    /// principal's standing on it — nothing read at any; `store_unreadable`,
+    /// `no_account`; the panel's open's where the shell opens one
+    /// (`publication.open`'s steps 4 to 6); then `publication.confirm`'s
+    /// from `write_in_bare_session` on — the door asked again over the
+    /// panel's drafts, a draft the page's panel names `also` among them,
     /// nothing composed. The record's refusal after an acknowledgment is no
     /// error: the member stands, and the answer carries it as `unrecorded`.
     pub(super) fn merge_land(&self, args: &Value) -> Result<Value, Refusal> {
@@ -685,8 +729,16 @@ impl Shell {
             apply_resolutions(&mut composition.merged, resolutions)?;
             self.merges.stand(key.clone(), composition.clone());
         }
-        let signed = self.signed(&session, "merge.land")?;
         let into = composition.into.clone();
+        // The one write door, over the shot's drafts: the draft the
+        // composition landed in and, at the draft side, the side the shot
+        // names `also`; the panel's own `also` drafts are asked again as the
+        // shot is confirmed (`Shell::confirm_standing`).
+        let side = match &composition.form {
+            Form::Draft(d) => Some(d.clone()),
+            Form::Daughter(_) => None,
+        };
+        let signed = self.signed(&session, Write::call("merge.land", "publish").over(std::iter::once(&into).chain(side.as_ref()).map(ToString::to_string)))?;
         // The panel: the page's over the draft, or one opened here over the
         // whole draft, the draft side named `also`.
         let (state, opened_here) = match self.publications.stood_for(&key, &into, &session.reference) {
@@ -761,8 +813,11 @@ impl Shell {
     ///
     /// In this order: `malformed_args` naming `session`, then
     /// `session_ended`; `no_merge` naming the session where no composition
-    /// stands; `write_in_bare_session`, `another_window`,
-    /// `store_unreadable`, `no_account`; the library's
+    /// stands; the write door's, in its order — `write_in_bare_session`,
+    /// `another_window`, `stopped`, `poisoned` or `halted` naming
+    /// `set_arrangement`, `held_lines` naming the draft the composition
+    /// landed in and the lines of the principal's standing on it — nothing
+    /// read at any; `store_unreadable`, `no_account`; the library's
     /// (`skep_client::merge::undo`): `unreadable`,
     /// `no_such_document`, `not_owner`, `nothing_to_undo` with its reason,
     /// `no_merge` naming the draft, `merge_refused` with `history_reclaimed`,
@@ -775,7 +830,8 @@ impl Shell {
         let Some(composition) = self.merges.standing(&key) else {
             return Err(Refusal::shell(Name::NO_MERGE, json!({"session": session.reference})));
         };
-        let signed = self.signed(&session, "merge.undo")?;
+        // The one write door, over the draft the undo sets whole.
+        let signed = self.signed(&session, Write::call("merge.undo", "set_arrangement").over([composition.into.to_string()]))?;
         let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
         let kind = merge_kind(&signed.account).ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
         // THE EDITOR's OWN LAST ACK on the draft (P3).
@@ -796,8 +852,11 @@ impl Shell {
     /// # Errors
     ///
     /// In this order: `malformed_args` naming `draft`; `malformed_args`
-    /// naming `session`, then `session_ended`; `write_in_bare_session`,
-    /// `another_window`, `store_unreadable`, `no_account`; the library's
+    /// naming `session`, then `session_ended`; the write door's, in its
+    /// order — `write_in_bare_session`, `another_window`, `stopped`,
+    /// `poisoned` or `halted` naming `set_arrangement`, `held_lines` naming
+    /// `draft` and the lines of the principal's standing on it — nothing
+    /// read at any; `store_unreadable`, `no_account`; the library's
     /// (`skep_client::merge::withdraw`): `unreadable`, `no_such_document`,
     /// `not_owner`, `no_merge` naming the draft, the board's
     /// `arrangement_moved` verbatim, a halt's face, and `session_died`.
@@ -805,7 +864,8 @@ impl Shell {
         let draft = address_arg(&args["draft"]).ok_or_else(|| Refusal::malformed("draft"))?;
         let session = self.session(&args["session"])?;
         let key = Self::family_key(&session);
-        let signed = self.signed(&session, "merge.withdraw")?;
+        // The one write door, over the draft the withdrawal sets whole.
+        let signed = self.signed(&session, Write::call("merge.withdraw", "set_arrangement").over([draft.to_string()]))?;
         let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
         let kind = merge_kind(&signed.account).ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
         let withdrawn = lib::withdraw(&session.board, merger, &draft, &kind, None).map_err(|r| self.merge_refusal(&session, r))?;

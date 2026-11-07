@@ -43,20 +43,31 @@
 //! the line takes the death's reason once the end derives it
 //! ([`Holds::note_death`]). A write the
 //! hold never holds is faced where a burst's would be held (§3c.4: "a
-//! non-burst write that fails … is faced at its act") — and the eight of
-//! them §3c.4 names ([`UNHOLDABLE_WRITES`], `publication.confirm`'s send
-//! and `history.restore`'s write beside them) meeting a hold that stands at
-//! the board before any dial — the own node stopped, the write path
-//! poisoned, the writes halted — are REFUSED at once with the hold's cause
-//! as the refusal's name ([`Holds::unholdable_refusal`]), never held and
-//! never dialed, the page answering before it composes; a board that is
-//! unreachable is no such hold, its dial failing as it fails.
-//! A write takes that path under a session that may write alone, at a board
-//! whose held store no other shell holds: the `op` row refuses a bare
-//! session's write before any dial (`SessionEntry::may_write`), and refuses
-//! every write `another_window` where another shell holds the board's store
-//! ([`Holds::another_window`], §3c.3), nothing held there and nothing sent;
-//! and the resend sends under no bare session. A write the session's key
+//! non-burst write that fails … is faced at its act") — and the nine of
+//! them §3c.4 names ([`UNHOLDABLE_WRITES`]; `publication.confirm`'s send,
+//! `history.restore`'s write and the merge rows' writes take the list's
+//! door under their own ops) meeting a hold that stands at the board before
+//! any dial — the own node stopped, the write path poisoned, the writes
+//! halted — are REFUSED at once with the hold's cause as the refusal's name
+//! ([`Holds::unholdable_refusal`]), never held and never dialed, the page
+//! answering before it composes; a board that is unreachable is no such
+//! hold, its dial failing as it fails.
+//! A write takes that path through THE SHELL's ONE WRITE DOOR
+//! (`Shell::write_door`), which asks four questions in one order before any
+//! dial and before any read the write makes: a bare session's write is
+//! refused (`SessionEntry::may_write`); every write is refused
+//! `another_window` where another shell holds the board's store
+//! ([`Holds::another_window`], §3c.3); an unholdable kind is refused under
+//! the standing hold ([`Holds::unholdable_refusal`]); and a whole-draft
+//! write — the restore's, the merge rows' and the shot — is refused
+//! `held_lines` while a line of the principal's stands held on a draft it
+//! writes, in any state ([`Holds::held_lines`]; THE HELD-LINES GATE, the
+//! held store's shape (vi) item 4) — nothing held there and nothing sent.
+//! The hold asks the standing hold's cause once more as a frame reaches
+//! [`Holds::send`]: the door's own check behind the shell's, for a follower
+//! write sent at its burst's ack and for a hold that came to stand between
+//! the door and the dial. And the resend sends under no bare session. A
+//! write the session's key
 //! owes a signature is never sent without one: where the board's head
 //! record, which the signature names, stands and cannot be read, or a
 //! claimed board serves none, a burst is held `head_unreadable`, its line
@@ -287,21 +298,27 @@ const WRITE_BUSY_WAIT: Duration = Duration::from_millis(50);
 /// The burst machine's five kinds (§3c.4) — the ops the held store holds.
 const BURST_KINDS: [&str; 5] = ["insert", "delete", "copy", "reinstate", "rearrange"];
 
-/// The eight non-burst writes §3c.4 names, which a standing hold refuses.
+/// The nine non-burst writes §3c.4 names, which a standing hold refuses.
 ///
 /// Each arriving while the board is stopped, poisoned or its writes halted
 /// is refused at once with the hold's cause as its token, never held and
-/// never dialed ([`Holds::unholdable_refusal`]); `publication.confirm`'s
-/// send, the shot's one carrier, takes the same door with `publish` as its
-/// op; `stage`, the staging act's mint (B3-S10), takes it as `fork` does;
-/// `set_arrangement`, a draft's whole arrangement set in one write (the
-/// landing lane, skep #764), takes it too — no burst, since it is the
+/// never dialed ([`Holds::unholdable_refusal`], the shell's one write
+/// door's third question); `publication.confirm`'s send, the shot's one
+/// carrier, and `merge.land`'s, which rides it, take the door with `publish`
+/// as their op; `stage`, the staging act's mint (B3-S10), takes it as `fork`
+/// does, and a `merge.compose` that stages a fresh draft takes it under
+/// that op; `set_arrangement`, a draft's whole arrangement set in one write
+/// (the landing lane, skep #764), takes it too — no burst, since it is the
 /// landing of a merge and no act of the page's hand, and a landing held
 /// would land over whatever the hand wrote meanwhile — and the restore's
-/// write, `history.restore`'s, takes it as `set_arrangement`. Every other
-/// write outside the five bursts dials as it dials.
-pub const UNHOLDABLE_WRITES: [&str; 8] =
-    ["fork", "version", "stage", "set_arrangement", "make_link", "nullify", "edit_link", "publish"];
+/// write, `history.restore`'s, the undo's and the withdrawal's take it as
+/// `set_arrangement`; `create_new_document`, the mint, takes it since it
+/// cannot be held either — the page needs the new document's address before
+/// it can type into it — and dialed under a stopped node it failed
+/// `unreachable`, a network fault's face for a notebook its owner stopped
+/// (skep #868). Every other write outside the five bursts dials as it dials.
+pub const UNHOLDABLE_WRITES: [&str; 9] =
+    ["create_new_document", "fork", "version", "stage", "set_arrangement", "make_link", "nullify", "edit_link", "publish"];
 
 /// Returns whether `frame` is a burst: one of the five kinds.
 ///
@@ -1571,7 +1588,7 @@ impl PrincipalHold {
 /// One board's hold.
 ///
 /// It holds its directory, the three states that hold every burst before
-/// any dial — and refuse the six unholdable writes at once — the positions
+/// any dial — and refuse the unholdable writes at once — the positions
 /// this shell acked at the board, the causes last said of lines kept from
 /// their files, and each principal's queue.
 #[derive(Debug)]
@@ -1617,7 +1634,7 @@ struct BoardHold {
     ///
     /// The board's write path halted inside a commit (wire.md §Rejection
     /// codes): every write after it is refused `poisoned` until the board
-    /// restarts, so the six unholdable writes are refused here without a
+    /// restarts, so the unholdable writes are refused here without a
     /// dial, `poisoned` their cause, from the first such answer until a
     /// `/health` read answers `writes.halted` false (§3c.4).
     poisoned: bool,
@@ -1858,6 +1875,27 @@ impl Holds {
         self.with_principal(board_reference, principal, |ph| ph.count(doc)).unwrap_or(0)
     }
 
+    /// Returns how many lines of the session's principal stand held on `doc`
+    /// at its board, in any state (§3c.4, THE HELD-LINES GATE).
+    ///
+    /// It is the shell's one write door's fourth question
+    /// (`Shell::write_door`), asked of a whole-draft write — the restore's,
+    /// the merge rows' and the shot's — for each draft it writes: a count
+    /// above zero refuses the write `held_lines`, since landing it would put
+    /// the draft under words the person typed and the board has not kept.
+    /// Every standing line counts, whatever its state — holding, sending,
+    /// refused, moved, `head_unreadable`, `session_died` — read under the
+    /// board's lock from the principal's queue, whose file its session's
+    /// open read whole (§3c.7); nothing is opened, dialed or moved here.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the session's board is none the holds were opened over
+    /// (the type's precondition).
+    pub fn held_lines(&self, session: &SessionEntry, doc: &str) -> u64 {
+        self.count_of(&session.board_reference, session.facts.principal, doc)
+    }
+
     /// Sets the own node's stopped state as its owner reports it (§3c.4).
     ///
     /// While it stands, every burst holds `stopped`, and the probe waits for
@@ -1879,10 +1917,12 @@ impl Holds {
 
     /// Returns whether another shell holds the board's held store (§3c.3).
     ///
-    /// While it does, this shell reads alone at the board: the shell's write
-    /// door refuses every write there `another_window` before any dial — the
-    /// `op` row's and the publication and merge families' — so no line is
-    /// held and nothing sent ([`Directory::AnotherWindow`]). The state is
+    /// While it does, this shell reads alone at the board: the shell's one
+    /// write door (`Shell::write_door`) refuses every write there
+    /// `another_window` before any dial — the `op` row's, the publication
+    /// and merge families', the restore's and the ceremonies' (skep #829) —
+    /// so no line is held and nothing sent ([`Directory::AnotherWindow`]).
+    /// The state is
     /// found as a session's open or a probe establishes the directory —
     /// another shell holding the board's own directory's lock, or the
     /// pending one's: one writer per board (skep #828) — and left once this
@@ -2413,20 +2453,24 @@ impl Holds {
     /// stands at. A burst ([`is_burst`]) enters by the burst's door and may be
     /// held (`send_burst`), `anchors` — the page's, read at the row's door —
     /// riding its line for the shift (skep #442) and read by no other frame;
-    /// one of the seven unholdable writes
+    /// one of the unholdable writes
     /// ([`UNHOLDABLE_WRITES`]) meeting a hold that stands at the board is
     /// refused at once with the hold's cause, never dialed
-    /// ([`Holds::unholdable_refusal`]); any other frame — a write the hold
+    /// ([`Holds::unholdable_refusal`]) — the shell's write door asked it
+    /// before any read, and this is the door's own check behind the shell's,
+    /// for a follower write sent at its burst's ack and for a hold that came
+    /// to stand since; any other frame — a write the hold
     /// never holds, or a read — is attested where an attest is owed, dialed
     /// and reissued within the call, its ack noted for the base, and every
     /// other answer faced as the refusal it is: a refused run, a lost
     /// answer, a second `write_busy` and a third `durability` among them
     /// (§3c.4: "a non-burst write that fails … is faced at its act"), save
     /// the death signal, answered [`AtDeath::NotABurst`] for the caller to
-    /// end the session. A write comes here under a session
-    /// that may write alone (`SessionEntry::may_write`), at a board whose held
-    /// store no other shell holds as it meets the door
-    /// ([`Holds::another_window`]): the `op` row refuses the others before it.
+    /// end the session. A write comes here through the shell's one write
+    /// door (`Shell::write_door`): under a session that may write alone
+    /// (`SessionEntry::may_write`), at a board whose held store no other
+    /// shell holds as it meets the door ([`Holds::another_window`]) — the
+    /// `op` row refuses the others before it.
     pub fn send(&self, session: &SessionEntry, frame: Value, anchors: Option<Anchors>) -> OpAnswer {
         if is_burst(&frame) {
             return self.send_burst(session, frame, anchors);
@@ -2446,17 +2490,22 @@ impl Holds {
 
     /// Returns the refusal an unholdable write meets at a standing hold (§3c.4).
     ///
-    /// `op` is the write's kind. Where it is one of the seven
+    /// `op` is the write's kind. Where it is one of the nine
     /// ([`UNHOLDABLE_WRITES`]) and a hold stands at the board — the own node
     /// stopped, the write path poisoned, the writes halted, in that order —
     /// the write is refused at once under the cause's own name
     /// (`Name::STOPPED`, `Name::POISONED`, `Name::HALTED`), its detail the
     /// `op`, never held and never dialed; `None` where no hold stands or the
-    /// kind is not of the seven, the write then dialing as it dials — a board
-    /// that is unreachable is no hold of this kind. The `op` row's session
-    /// form asks it through [`Holds::send`]; `publication.confirm` asks it
-    /// with `publish` before it composes, and `history.restore` with
-    /// `set_arrangement` before its reads.
+    /// kind is not of the nine, the write then dialing as it dials — a board
+    /// that is unreachable is no hold of this kind. It is the third question
+    /// of the shell's one write door (`Shell::write_door`), asked for every
+    /// write the shell sends before any dial and any read the write makes —
+    /// a frame through `op` by its op, `publication.confirm` and
+    /// `merge.land` with `publish`, `history.restore`, `merge.undo` and
+    /// `merge.withdraw` with `set_arrangement`, `merge.compose` with `stage`
+    /// where it may stage a fresh draft, else `set_arrangement` — and asked
+    /// once more as a frame reaches [`Holds::send`], the door's check behind
+    /// the shell's.
     ///
     /// # Panics
     ///
@@ -3175,7 +3224,7 @@ impl Holds {
     /// The dial goes to the board the session stands at, its answer read
     /// once through [`classify`], `given` the reissues this write has been
     /// given. A non-200 is read by its code, so `write_busy`'s 503 meets its
-    /// row. A `poisoned` answer is noted at the board's hold: the six
+    /// row. A `poisoned` answer is noted at the board's hold: the
     /// unholdable writes are refused `poisoned` from it until a `/health`
     /// read says writes go ([`BoardHold::poisoned`]).
     fn dial(&self, session: &SessionEntry, frame: &AttestedWhereOwed<'_>, given: &Reissues) -> Dialed {

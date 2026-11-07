@@ -95,10 +95,14 @@ impl Name {
     /// ONE SHELL PER DATA DIRECTORY: until a second launch hands its address
     /// to the running client and exits, a shell finding the lock of a board's
     /// held store held by another shell over its data directory reads alone
-    /// at that board — every write frame through `op`, `/op-at`'s too, and
-    /// every row of the publication and merge families and `history.restore`
-    /// refused without a dial, nothing held and nothing sent, the writes the
-    /// other window's to make. The detail names the `op`, or the `call`.
+    /// at that board — every write frame through `op`, `/op-at`'s too, every
+    /// row of the publication and merge families and `history.restore`, and
+    /// every ceremony that writes to the board — `claim`, `enroll`, `bind`,
+    /// `recover`, `rotate`, `retire`, `handoff`, `accept` (skep #829: a
+    /// second window runs no recovery while the first stands) — refused
+    /// without a dial at the shell's one write door (`Shell::write_door`),
+    /// nothing held and nothing sent, the writes the other window's to make.
+    /// The detail names the `op`, or the `call`.
     pub const ANOTHER_WINDOW: Name = Name("another_window");
     /// A `publish` frame through `op` under a session, refused without a dial.
     ///
@@ -109,11 +113,15 @@ impl Name {
     pub const PUBLISH_IS_A_CALL: Name = Name("publish_is_a_call");
     /// A non-burst write while the own node stands stopped (§3c.4).
     ///
-    /// One of the eight §3c.4 names through `op` (`hold`'s
-    /// `UNHOLDABLE_WRITES`), `publication.confirm`'s send and
-    /// `history.restore`'s write, refused at once with the hold's cause as
+    /// One of the unholdable writes (`hold`'s `UNHOLDABLE_WRITES`) through
+    /// `op`, `publication.confirm`'s send, `history.restore`'s write and the
+    /// merge rows' — the landing's `stage` and `set_arrangement`, the shot,
+    /// the undo's and the withdrawal's one write — refused at once at the
+    /// shell's one write door (`Shell::write_door`) with the hold's cause as
     /// its token, never held and never dialed; the detail names the `op` —
-    /// `publish` for the confirm, `set_arrangement` for the restore.
+    /// `publish` for the confirm and the landing's shot, `set_arrangement`
+    /// for the restore, the undo and the withdrawal, `stage` for a
+    /// composition that stages a fresh draft.
     pub const STOPPED: Name = Name("stopped");
     /// A non-burst write while the board's write path stands poisoned (§3c.4).
     ///
@@ -126,6 +134,28 @@ impl Name {
     /// The feed's last `/health` read answered `writes.halted` true; the same
     /// writes and the detail as [`Name::STOPPED`]'s.
     pub const HALTED: Name = Name("halted");
+    /// A whole-draft write over a draft holding lines of the acting
+    /// principal's the board has not kept (§3c.4, THE HELD-LINES GATE; the
+    /// held store's shape (vi) item 4; skep #849, #854).
+    ///
+    /// `history.restore`, `merge.land`, `merge.undo`, `merge.withdraw` and
+    /// `publication.confirm` each set a whole draft's arrangement — the
+    /// draft the row writes, and for the shot every draft its `also` names
+    /// — and such a write landing past the principal's held lines on that
+    /// draft would land under words the person typed and the board has not
+    /// kept, the lines then meeting a document that moved. So the write is
+    /// refused at the shell's one write door (`Shell::write_door`) before
+    /// any dial, nothing sent, while a line of the principal's stands held
+    /// on the draft in ANY state — holding, sending, refused, moved,
+    /// `head_unreadable`, `session_died`; the burst writes are not gated,
+    /// a burst on such a draft held `behind` the standing lines as before.
+    /// The detail names `doc`, the draft holding the lines, and `held`, how
+    /// many stand on it. The page draws the slot inert ahead of the act with
+    /// B3-S13's row rule — "⟨label⟩ holds words the board has not kept —
+    /// resolve them where they are marked, then take this" — and this
+    /// refusal is that rule's answer for a write that arrives anyway: an
+    /// agent's, or a page that missed the state.
+    pub const HELD_LINES: Name = Name("held_lines");
     /// A `publication.count` or `publication.confirm` with no panel standing.
     ///
     /// None was opened under the session's board and principal, or it was

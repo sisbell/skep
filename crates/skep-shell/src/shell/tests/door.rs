@@ -11,7 +11,10 @@
 //! reference or its origin names, the reference first and the target before
 //! the frame; a bare session refusing every write kind undialed, its
 //! `/op-at` form and its `resolve(send)` too, while its read is dialed and a
-//! signed session's write goes out; a search's `opts` read as one value, and
+//! signed session's write goes out; the shell's one write door asking its
+//! four questions in one order — the bare session, another window, the
+//! standing hold, the draft's held lines — over two shells on one store; a
+//! search's `opts` read as one value, and
 //! its query held to the shell's bound at every target; a listing where no
 //! index stands its whole shape with no document; a `select` of two keys or
 //! none refused by its name, a label the box refuses `empty_label` naming
@@ -24,6 +27,8 @@
 //! nothing, and a search or a listing after it answered `feed_stopped`.
 
 use std::io::{Read, Write};
+
+use skep_client::store::{FileStore, KeyId, KeyStore};
 
 use super::*;
 use crate::held::{anchors_spelled, MAX_ANCHOR_BYTES};
@@ -667,6 +672,95 @@ fn a_bare_sessions_write_is_refused_before_any_dial() {
     let writes: Vec<&Value> = recorded.iter().filter(|f| f["op"].as_str().is_some_and(|op| WRITE_KINDS.contains(&op))).collect();
     assert_eq!(writes, [&delete], "the signed session's write alone reached the board: {recorded:?}");
     assert!(recorded.contains(&read), "the bare session's read reached it: {recorded:?}");
+}
+
+/// Checks the order of the shell's one write door's four questions, with no
+/// daemon behind the shell (`Shell::write_door`; the held store's shape
+/// (vi) item 4).
+///
+/// Shell A's session opens at a board that answers nothing: its head unread,
+/// A takes the board's pending store. Shell B over the same data directory
+/// finds the pending lock A's and stands another shell's. Then, each pair in
+/// the door's order: a BARE session of B's meeting another window is refused
+/// `write_in_bare_session`, a frame's and the restore's alike; B's SIGNED
+/// session, with B's own node stopped, meeting another window is refused
+/// `another_window`, never `stopped`; A's node stopped, a burst of A's held
+/// `stopped` on a draft, the restore over that draft is refused `stopped`
+/// naming `set_arrangement`, never `held_lines`, and nothing of it reaches
+/// the listener; A's node running — the line standing still, the board
+/// taking no write — the same restore is refused `held_lines` naming the
+/// draft and the one line, no read of the draft reaching the listener, and
+/// a further burst on the draft is held `behind` the line, not refused (the
+/// mutants that ask the questions in another order answer a stopped second
+/// window `stopped`, or a stopped node's standing line `held_lines`; the one
+/// that gates the bursts refuses the person's next key).
+#[test]
+fn the_write_door_asks_its_four_questions_in_one_order() {
+    let dir = TempDir::new().unwrap();
+    let (origin, frames) = recording_listener();
+    let store = dir.path().join("store");
+    let KeyId(fingerprint) = FileStore::open(&store).generate(None).unwrap();
+    let signed_facts = || Facts { principal: 2, account: Some("1.0.2".into()), kind: SessionKind::Signed { fingerprint, set_account: "1.0.2".into() } };
+    let bare_facts = || Facts { principal: 1, account: Some("1.0.1".into()), kind: SessionKind::Bare };
+    let open_at = || {
+        let (talk, _) = talk();
+        let mut opts = ShellOptions::new(vec![Origin::parse(&origin).unwrap()], store.clone(), SessionMode::Bare { principal: 1 }, talk);
+        opts.own_node = Some(Origin::parse(&origin).unwrap());
+        Shell::open(opts)
+    };
+    // A session registered and opened at the hold, as the `session` row
+    // opens one: the board's locks tried from one read of its head.
+    let session_at = |shell: &Shell, token: &str, facts: Facts| -> String {
+        let board = shell.board_references().remove(0);
+        let open = Open { token: Token::parse(&token.repeat(16)).unwrap(), facts, opened_at: 0 };
+        let entry = shell.sessions.register(&shell.boards[0], open, &mut shell.feed(&board));
+        shell.holds.open_session(&entry);
+        entry.reference.clone()
+    };
+    let draft = "1.0.2.0.4";
+    let delete = |p: &str| json!({"op": "delete", "doc": draft, "p": {"subspace": "1", "ordinal": p}, "width": "1", "as_of": 0});
+    let restore = |session: &str| json!({"session": session, "draft": draft, "at": 3, "as_of": 5});
+    let a = open_at();
+    let a_board = a.board_references().remove(0);
+    let a_session = session_at(&a, "8e", signed_facts());
+    assert!(!a.holds.another_window(&a_board), "premise: A's open takes the pending store");
+    let b = open_at();
+    let b_board = b.board_references().remove(0);
+    let b_signed = session_at(&b, "7d", signed_facts());
+    let b_bare = session_at(&b, "9f", bare_facts());
+    assert!(b.holds.another_window(&b_board), "premise: B finds the pending lock A's");
+    // (1) before (2): the bare session meeting another window.
+    let refused = b.call("op", &json!({"session": b_bare, "frame": delete("1")})).unwrap_err().to_value();
+    assert_eq!((refused["name"].as_str(), refused["op"].as_str()), (Some("write_in_bare_session"), Some("delete")), "{refused}");
+    let refused = b.call("history.restore", &restore(&b_bare)).unwrap_err().to_value();
+    assert_eq!((refused["name"].as_str(), refused["call"].as_str()), (Some("write_in_bare_session"), Some("history.restore")), "{refused}");
+    // (2) before (3): another window meeting a stopped node.
+    b.set_node_state(NodeState::Stopped);
+    let refused = b.call("history.restore", &restore(&b_signed)).unwrap_err().to_value();
+    assert_eq!((refused["name"].as_str(), refused["call"].as_str()), (Some("another_window"), Some("history.restore")), "{refused}");
+    let refused = b.call("op", &json!({"session": b_signed, "frame": delete("1")})).unwrap_err().to_value();
+    assert_eq!((refused["name"].as_str(), refused["op"].as_str()), (Some("another_window"), Some("delete")), "{refused}");
+    b.set_node_state(NodeState::Running);
+    // (3) before (4): a stopped node meeting a standing line.
+    a.set_node_state(NodeState::Stopped);
+    let held = a.call("op", &json!({"session": a_session, "frame": delete("1")})).unwrap();
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("stopped")), "premise: a line stands held on the draft: {held}");
+    let own = frames.lock().unwrap().len();
+    let refused = a.call("history.restore", &restore(&a_session)).unwrap_err().to_value();
+    assert_eq!((refused["name"].as_str(), refused["op"].as_str()), (Some("stopped"), Some("set_arrangement")), "{refused}");
+    let under_the_stop = frames.lock().unwrap()[own..].to_vec();
+    assert!(under_the_stop.is_empty(), "nothing read or sent under the stop: {under_the_stop:?}");
+    // (4): the node running, the line standing — the board takes no write —
+    // the restore meets the gate, and nothing of the draft is read.
+    a.set_node_state(NodeState::Running);
+    let refused = a.call("history.restore", &restore(&a_session)).unwrap_err().to_value();
+    assert_eq!((refused["name"].as_str(), refused["kind"].as_str(), refused["doc"].as_str(), refused["held"].as_u64()), (Some("held_lines"), Some("shell"), Some(draft), Some(1)), "{refused}");
+    let read_of_the_draft: Vec<Value> = frames.lock().unwrap()[own..].iter().filter(|f| f["op"] == "doc_metadata" || f["op"] == "set_arrangement").cloned().collect();
+    assert!(read_of_the_draft.is_empty(), "the gate answers before any read of the draft: {read_of_the_draft:?}");
+    let behind = a.call("op", &json!({"session": a_session, "frame": delete("2")})).unwrap();
+    assert_eq!((behind["resp"].as_str(), behind["cause"].as_str()), (Some("held"), Some("behind")), "a burst on the draft is held behind the line, never refused: {behind}");
+    a.shutdown();
+    b.shutdown();
 }
 
 /// Checks that the guest form refuses every write kind without a dial.

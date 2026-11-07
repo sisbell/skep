@@ -856,8 +856,14 @@ impl Backend {
     /// run around it (`under_session`): the board's verdict, the unreachable
     /// board, a halt, or the shell's own by name — `session_died` with the
     /// reason where no session stands after the death, `session_ended` where
-    /// the adapter has stopped, and either where a reissue met a second end —
-    /// or the shell's refusal of a session the adapter opened itself.
+    /// the adapter has stopped, and either where a reissue met a second end;
+    /// `held_lines {doc, held}` where a `publication.confirm` names a draft
+    /// — the rendering draft, or one its panel named `also` — holding lines
+    /// of the agent's the board has not kept (client.md §3c.4's held-lines
+    /// gate): nothing was sent, and the act is the agent's, `held` then
+    /// `resolve` on each line of that draft, then the confirm again, as the
+    /// catalog's card and its REJECTIONS ARE DATA paragraph say (`tools.json`)
+    /// — or the shell's refusal of a session the adapter opened itself.
     pub fn session_call(&self, name: &str, args: Map<String, Value>) -> Result<Value, Refusal> {
         // An object by construction, so setting a member of it cannot panic.
         let mut args = Value::Object(args);

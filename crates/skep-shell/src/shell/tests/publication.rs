@@ -2,15 +2,18 @@
 //!
 //! The suite checks the rules the shell alone keeps, with no daemon behind
 //! it — a `publish` frame through `op` refused as a call before any dial,
-//! the seven unholdable writes refused under a stopped node and `unreachable`
-//! not of the set, `count` and `confirm` with no panel `no_panel`, `cancel`
-//! idempotent, a bare session refused at `open`, and the row's own members
-//! read before the session, a `base` among them read by nothing — and,
-//! against the real daemon, the family end to end: the panel over a draft
-//! with a notes link and a read-with set, the count as a row flips, the
-//! confirm acknowledged with its two events and the feed row naming the
-//! member and the homes, the second open inert, the stopped node refusing
-//! the confirm before it composes, the mint form with its claim, and
+//! the unholdable writes — the mint among them — refused under a stopped
+//! node and under halted writes and `unreachable` not of the set, the merge
+//! rows refused under the same holds before any read, `count` and `confirm`
+//! with no panel `no_panel`, `cancel` idempotent, a bare session refused at
+//! `open`, and the row's own members read before the session, a `base`
+//! among them read by nothing — and, against the real daemon, the family
+//! end to end: the panel over a draft with a notes link and a read-with set,
+//! the count as a row flips, the confirm acknowledged with its two events
+//! and the feed row naming the member and the homes, the second open inert,
+//! the stopped node refusing the confirm before it composes, a held line of
+//! the rendering draft or of a draft `also` names refusing it `held_lines`
+//! until the line clears, the mint form with its claim, and
 //! `claim_refused` crossing as answered with the board unmoved; the family's
 //! other drafts re-minted as the document's own; and the draft's base, the
 //! board's record read on any device (B3-S10) — a draft staged through
@@ -27,6 +30,9 @@
 //! stands re-stated `superseded_first`, the daughter landing next. Every
 //! draft a cell publishes into a document is staged through `stage`, the
 //! one frame that copies its source and records its base.
+
+use skep_client::board::Health;
+use skep_client::store::{FileStore, KeyId, KeyStore};
 
 use super::*;
 use crate::sessions::{Facts, Open};
@@ -74,21 +80,27 @@ fn a_publish_frame_through_op_is_refused_as_a_call_before_any_dial() {
     assert!(recorded.iter().all(|f| f["op"] != "publish") && recorded.contains(&read), "no publish reached the board: {recorded:?}");
 }
 
-/// Checks that the eight unholdable writes are refused under a stopped node.
+/// Checks that the unholdable writes are refused under a standing hold at
+/// the shell's one write door, the mint among them (skep #868).
 ///
-/// With the own node stopped, each of `fork`, `version`, `stage`,
-/// `set_arrangement`, `make_link`, `nullify` and `edit_link` through `op`
-/// is refused `stopped` naming its op and dialed never (`publish` is
-/// refused as a call ahead of it); a write outside the eight — a draft's
-/// mint — is dialed as it dials; and with the node running, the same writes
+/// With the own node stopped, each of `create_new_document`, `fork`,
+/// `version`, `stage`, `set_arrangement`, `make_link`, `nullify` and
+/// `edit_link` through `op` is refused `stopped` naming its op and dialed
+/// never (`publish` is refused as a call ahead of it); with the writes
+/// halted — the feed's last `/health` read noted `writes.halted` true — the
+/// same writes are refused `halted`, the mint among them, dialed never; a
+/// write outside the set — an `emit` — is dialed as it dials under either
+/// hold; and with the node running and the writes going, the same writes
 /// at a board that does not answer meet the dial's own `unreachable`, never
 /// a hold's cause (§3c.4: "`unreachable` not of this set"). The listener
 /// keeps the shell's own frames too — the feed thread's `H.1` read at its
 /// consumer's open, at the thread's start and at the session's widen — so
-/// both counts are measured from the frames standing once a call the feed
+/// each count is measured from the frames standing once a call the feed
 /// thread answers behind the widen has returned (skep #752). A count, never
-/// a filter by op: a mutant that dials one of the seven under the stop puts
-/// the attest's `H.1` read on the listener, never the write's own op.
+/// a filter by op: a mutant that dials one of the set under the stop puts
+/// the attest's `H.1` read on the listener, never the write's own op; the
+/// mutant that leaves the mint out of the set dials it under the stop and
+/// answers `unreachable`, a network fault's face for a stopped notebook.
 #[test]
 fn the_unholdable_writes_are_refused_under_a_stopped_node_and_unreachable_is_not_of_the_set() {
     let dir = TempDir::new().unwrap();
@@ -107,6 +119,7 @@ fn the_unholdable_writes_are_refused_under_a_stopped_node_and_unreachable_is_not
     shell.call("places", &json!({"guest": true, "board": board})).unwrap();
     let own = frames.lock().unwrap().len();
     let writes = [
+        json!({"op": "create_new_document", "account": "1.0.2"}),
         json!({"op": "fork", "published": true}),
         json!({"op": "version", "d_src": "1.0.2.0.1"}),
         json!({"op": "stage", "from": "1.0.2.0.1"}),
@@ -115,17 +128,24 @@ fn the_unholdable_writes_are_refused_under_a_stopped_node_and_unreachable_is_not
         json!({"op": "nullify", "home": "1.0.2.0.1", "target": "1.0.2.0.1.0.2.1"}),
         json!({"op": "edit_link", "original": "1.0.2.0.1.0.2.1", "d_s": "1.0.2.0.1", "d_a": "1.0.2.0.1", "successor": {"from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}}}),
     ];
-    shell.set_node_state(NodeState::Stopped);
-    for frame in &writes {
-        let refused = shell.call("op", &json!({"session": session, "frame": frame})).unwrap_err();
-        let v = refused.to_value();
-        assert_eq!((refused.name(), v["kind"].as_str(), v["op"].as_str()), ("stopped", Some("shell"), frame["op"].as_str()), "{v}");
+    let outside = json!({"op": "emit", "home": "1.0.2.0.1", "from": {"addrs": ["1.0.2.0.1"]}, "to": {"addrs": []}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}});
+    let halted = |halted: bool| Health { body: json!({"writes": {"halted": halted}}), raw: Vec::new() };
+    for (cause, stand) in [("stopped", NodeState::Stopped), ("halted", NodeState::Running)] {
+        shell.set_node_state(stand);
+        if cause == "halted" {
+            shell.holds.note_health(&board, &halted(true));
+        }
+        let standing = frames.lock().unwrap().len();
+        for frame in &writes {
+            let refused = shell.call("op", &json!({"session": session, "frame": frame})).unwrap_err();
+            let v = refused.to_value();
+            assert_eq!((refused.name(), v["kind"].as_str(), v["op"].as_str()), (cause, Some("shell"), frame["op"].as_str()), "{cause}: {v}");
+        }
+        let under_the_hold = frames.lock().unwrap()[standing..].to_vec();
+        assert!(under_the_hold.is_empty(), "{cause}: nothing of the set is dialed under the hold: {under_the_hold:?}");
+        assert_eq!(shell.call("op", &json!({"session": session, "frame": outside})).unwrap_err().name(), "unreachable", "{cause}: a write outside the set dials as it dials");
     }
-    let under_the_stop = frames.lock().unwrap()[own..].to_vec();
-    assert!(under_the_stop.is_empty(), "nothing of the eight is dialed under the stop: {under_the_stop:?}");
-    let mint = json!({"op": "create_new_document", "account": "1.0.2"});
-    assert_eq!(shell.call("op", &json!({"session": session, "frame": mint})).unwrap_err().name(), "unreachable", "a write outside the eight dials as it dials");
-    shell.set_node_state(NodeState::Running);
+    shell.holds.note_health(&board, &halted(false));
     for frame in &writes {
         let refused = shell.call("op", &json!({"session": session, "frame": frame})).unwrap_err();
         assert_eq!(refused.name(), "unreachable", "{}: the dial fails as it fails, no hold's cause: {refused}", frame["op"]);
@@ -134,7 +154,130 @@ fn the_unholdable_writes_are_refused_under_a_stopped_node_and_unreachable_is_not
     // reads the board's `H.1` for its attest, which is what the listener
     // records of a write it never answers.
     let dialed = frames.lock().unwrap()[own..].to_vec();
-    assert!(dialed.len() >= 8, "the mint and the seven writes under the running node reached the listener: {dialed:?}");
+    assert!(dialed.len() >= 10, "the two emits and the eight writes under the running node reached the listener: {dialed:?}");
+}
+
+/// Checks that the merge rows are refused under a standing hold before any
+/// read, with no daemon behind the shell (skep #850).
+///
+/// `merge.compose` and `merge.withdraw` — the two rows that stand with no
+/// composition — under the own node stopped are refused `stopped` naming the
+/// op their first write dials: `stage` for a composition naming no `into`,
+/// which may stage a fresh draft, `set_arrangement` for one naming it and
+/// for the withdrawal; with the writes halted — the feed's last `/health`
+/// read noted `writes.halted` true — `halted` naming the same; and nothing
+/// reaches the board: the listener keeps no frame past the shell's own,
+/// measured as the cell above measures them. The node running and the
+/// writes going, the same calls read first and meet the board's silence,
+/// `unreachable`, the composition's `in_claims` read and the withdrawal's
+/// `doc_metadata` on the listener (the mutant that asks no hold at a merge
+/// row reads under the stop and answers `unreachable`, the board's verdict
+/// in the hold's place; the one that asks it under the wrong op misnames
+/// the write). `merge.land` and `merge.undo` with nothing composed answer
+/// `no_merge` before the door, pinned beside the rows' members; their door
+/// is pinned against the daemon
+/// (`merge::the_merge_rows_are_refused_under_a_stopped_node_and_a_poisoned_path_with_nothing_dialed`).
+#[test]
+fn the_merge_rows_are_refused_under_a_standing_hold_before_any_read() {
+    let dir = TempDir::new().unwrap();
+    let (origin, frames) = super::door::recording_listener();
+    let (talk, _) = talk();
+    let store = dir.path().join("store");
+    let mut opts = ShellOptions::new(vec![Origin::parse(&origin).unwrap()], store.clone(), SessionMode::Bare { principal: 1 }, talk);
+    opts.own_node = Some(Origin::parse(&origin).unwrap());
+    let shell = Shell::open(opts);
+    let board = shell.board_references().remove(0);
+    // A key in the store, so the hand is admitted and the running case reads.
+    let KeyId(fingerprint) = FileStore::open(&store).generate(None).unwrap();
+    let session = register(&shell, "8e", Facts { principal: 2, account: Some("1.0.2".into()), kind: SessionKind::Signed { fingerprint, set_account: "1.0.2".into() } });
+    shell.call("places", &json!({"guest": true, "board": board})).unwrap();
+    let own = frames.lock().unwrap().len();
+    let rows = [
+        ("merge.compose", json!({"session": session, "doc": "1.0.2.0.1", "alternative": "1.0.2.0.1.1.1"}), "stage"),
+        ("merge.compose", json!({"session": session, "doc": "1.0.2.0.1", "alternative": "1.0.2.0.1.1.1", "into": "1.0.2.0.4"}), "set_arrangement"),
+        ("merge.withdraw", json!({"session": session, "draft": "1.0.2.0.4"}), "set_arrangement"),
+    ];
+    let halted = |halted: bool| Health { body: json!({"writes": {"halted": halted}}), raw: Vec::new() };
+    for (cause, stand) in [("stopped", NodeState::Stopped), ("halted", NodeState::Running)] {
+        shell.set_node_state(stand);
+        if cause == "halted" {
+            shell.holds.note_health(&board, &halted(true));
+        }
+        let standing = frames.lock().unwrap().len();
+        for (call, args, op) in &rows {
+            let refused = shell.call(call, args).unwrap_err();
+            let v = refused.to_value();
+            assert_eq!((refused.name(), v["kind"].as_str(), v["op"].as_str()), (cause, Some("shell"), Some(*op)), "{cause}: {call} {args}: {v}");
+        }
+        let under_the_hold = frames.lock().unwrap()[standing..].to_vec();
+        assert!(under_the_hold.is_empty(), "{cause}: nothing read or sent under the hold: {under_the_hold:?}");
+    }
+    shell.holds.note_health(&board, &halted(false));
+    for (call, args, _) in &rows {
+        let refused = shell.call(call, args).unwrap_err();
+        assert_eq!(refused.name(), "unreachable", "{call}: the hold lifted, the reads dial: {refused}");
+    }
+    let dialed = frames.lock().unwrap()[own..].to_vec();
+    assert!(dialed.iter().any(|f| f["op"] == "in_claims") && dialed.iter().any(|f| f["op"] == "doc_metadata"), "the composition's and the withdrawal's reads reached the board: {dialed:?}");
+}
+
+/// Checks that a confirm over a held line of the rendering draft, or of a
+/// draft `also` names, is refused `held_lines` and goes out once the line
+/// clears, against the daemon (§3c.4, THE HELD-LINES GATE; skep #849).
+///
+/// D publishes E.1; A, staged from D, opens its panel naming D among
+/// `also`. A burst on A at a far ordinal is refused `out_of_bounds` and
+/// held, a refused run awaiting the person's act: `publication.confirm` is
+/// refused `held_lines` naming A and the one line, the board's position
+/// unmoved and the panel's `refused` event naming the arm; the run dropped,
+/// a refused run on D — the draft `also` names, whose words the shot
+/// re-mints — refuses the confirm `held_lines` naming D; that run dropped,
+/// the confirm goes out, E.2 acknowledged (the mutant that gates the
+/// rendering draft alone sends the shot over D's held line, re-windowing D
+/// under words the board never kept; the one that counts the lines of every
+/// document names a count the draft does not hold).
+#[test]
+fn a_confirm_over_a_held_line_of_the_rendering_draft_or_of_a_draft_also_names_is_refused_held_lines_until_it_clears() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let d = g.staged(&edition, "the quick brown fox");
+    g.call("publication.open", json!({"session": g.session, "draft": d, "doc": edition, "readable_drafts": [d], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let first = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(first["member"].as_str(), Some(format!("{edition}.1").as_str()), "{first}");
+    g.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "20"}, "values": [" again"], "as_of": g.position()}));
+    let staged = g.op(skep_client::board::frames::stage(&d, None));
+    let a = staged["addr"].as_str().expect("an ack_addr").to_string();
+    g.op(json!({"op": "insert", "doc": a, "at": {"subspace": "1", "ordinal": "26"}, "values": [" more"], "as_of": staged["at"]}));
+    g.call("publication.open", json!({"session": g.session, "draft": a, "doc": edition, "also": [d], "readable_drafts": [a, d], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let states_before = g.states().len();
+    // A refused run on a draft: a burst past its head, `out_of_bounds`.
+    let refused_run = |doc: &str| -> u64 {
+        let held = g.op(json!({"op": "insert", "doc": doc, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"], "as_of": g.position()}));
+        assert!(held["resp"] == "held" && held["cause"].as_str().is_some_and(|c| c.starts_with("out_of_bounds")), "premise: a refused run stands on {doc}: {held}");
+        held["held"].as_u64().unwrap()
+    };
+    let drop = |k: u64| g.call("resolve", json!({"session": g.session, "held": k, "act": "drop"})).unwrap_or_else(|r| panic!("{r}"));
+    for (which, doc) in [("the rendering draft", &a), ("the draft `also` names", &d)] {
+        let k = refused_run(doc);
+        let before = g.position();
+        let refused = g.call("publication.confirm", json!({"session": g.session})).unwrap_err();
+        let v = refused.to_value();
+        assert_eq!((refused.name(), v["kind"].as_str(), v["doc"].as_str(), v["held"].as_u64()), ("held_lines", Some("shell"), Some(doc.as_str()), Some(1)), "{which}: {v}");
+        assert_eq!(g.position(), before, "{which}: nothing sent");
+        drop(k);
+        assert!(g.call("held", json!({"session": g.session})).unwrap().as_array().unwrap().is_empty(), "{which}: the run dropped");
+    }
+    let refused_events: Vec<Value> = g.seen.lock().unwrap().iter().filter(|e| e.name == EventName::Publication && e.data["state"] == "refused").map(|e| e.data.clone()).collect();
+    assert_eq!(refused_events.len(), 2, "each refusal said once on the panel: {refused_events:?}");
+    assert!(refused_events.iter().all(|e| e["arm"] == "held_lines" && e["draft"] == a), "the event names the arm and the panel's draft: {refused_events:?}");
+    assert_eq!(g.states().len(), states_before + 2, "no other publication event between: {:?}", g.states());
+    // The lines gone, the shot goes out.
+    let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("the lines gone, the confirm goes out: {r}"));
+    assert_eq!((acked["outcome"].as_str(), acked["member"].as_str()), (Some("acknowledged"), Some(format!("{edition}.2").as_str())), "{acked}");
+    g.shell.shutdown();
+    sd.shutdown();
 }
 
 /// Checks the family's answers where no panel stands, and the row's members.

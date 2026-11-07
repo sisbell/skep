@@ -536,6 +536,17 @@ fn the_publication_cards_state_the_shells_shapes() {
     assert!(confirm.contains("superseded_first where version 1 was"), "the confirm card re-states a first draft's standing moved: {confirm}");
     assert!(confirm.contains("kept_place_moved {index, draft, race}"), "the confirm card names kept_place_moved's members, the draft that moved among them: {confirm}");
     assert!(confirm.contains("each of also — is re-windowed") && confirm.contains("stray_place {index, draft}"), "the confirm card says every named draft is re-windowed in the one write, and names the own fault's draft: {confirm}");
+    // The held-lines gate (client.md §3c.4; skep #849): the confirm card
+    // names the refusal with its members and the agent's act, and the
+    // REJECTIONS ARE DATA paragraph lists it among the shell's own.
+    let held_lines = skep_shell::Name::HELD_LINES.as_str();
+    assert!(
+        confirm.contains(&format!("holds a line of yours the board has not kept (HELD BURSTS) it is refused {held_lines} {{doc, held}} (isError), nothing sent"))
+            && confirm.contains("call held(), resolve each line on that doc, then confirm again"),
+        "the confirm card names the held-lines gate's refusal, its members and the act: {confirm}"
+    );
+    let rejections = catalog.instructions().split("\n\n").find(|paragraph| paragraph.starts_with("REJECTIONS ARE DATA. ")).expect("the REJECTIONS ARE DATA paragraph");
+    assert!(rejections.contains(&format!("{held_lines} {{doc, held}} — a publication_confirm over a draft holding lines of yours the board has not kept")), "REJECTIONS ARE DATA names the gate's refusal: {rejections}");
     let selection = &entry("publication_open")["inputSchema"]["properties"]["selection"]["items"];
     assert_eq!(schema_fields(selection), fields("Run"), "the selection's runs are the shell's Run");
     let answers: BTreeSet<String> = alias("OriginAnswer").iter().map(|arm| arm.trim_matches('\'').to_string()).collect();

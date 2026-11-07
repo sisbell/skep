@@ -833,11 +833,13 @@ re-exports counted as the module it is brought from (held by
   the release of its drafts supplement (`Sessions::release`).
 - `hold.rs` `Holds`: the one path of every `/op` the shell sends under a
   session (`Holds::send`) — a burst's DOOR (`Burst::admit`) and its hold
-  among it, and the six unholdable writes refused under a standing hold
-  (`Holds::unholdable_refusal`) — and the per-(board, principal) queue over
-  `held.rs`'s file with its ONE ORDINAL SPACE (`PrincipalHold::next_k`),
-  which every queue of the principal's lines draws from, one shell per data
-  directory.
+  among it — the parts of the shell's one write door it answers (another
+  shell's hold on the store, `Holds::another_window`; the standing hold's
+  cause for the unholdable writes, `Holds::unholdable_refusal`; the lines
+  standing held on a draft, `Holds::held_lines`) — and the per-(board,
+  principal) queue over `held.rs`'s file with its ONE ORDINAL SPACE
+  (`PrincipalHold::next_k`), which every queue of the principal's lines
+  draws from, one shell per data directory.
 - `hold/resend.rs` THE PROBE (`Holds::probe`) and THE RESEND, a moved
   document's hands named.
 - `feed.rs` `FeedThreads` and `Feed`: per board, the `/events` reader and
@@ -845,7 +847,12 @@ re-exports counted as the module it is brought from (held by
   behind the `changes` call, on the caller's thread.
 - `shell.rs` `Shell`: the boards, the sessions, `SessionMode`, `ArmConfig`,
   the private row methods behind `call`, which logs each; `fetch`,
-  `answer`, `cancel`, `shutdown`; `ShellOptions` and `set_node_state`.
+  `answer`, `cancel`, `shutdown`; `ShellOptions` and `set_node_state`; and
+  `Shell::write_door`, the ONE WRITE DOOR every write the shell sends
+  meets before any dial — the `op` row's frames, and through
+  `Shell::signed` every row of `shell/publication.rs`, `shell/merge.rs` and
+  `shell/history.rs`, and every ceremony of `shell/ceremony.rs` that writes
+  to the board.
 - `shell/ceremony.rs` the ten ceremonial rows — `keygen`, `fingerprint` and
   the eight walks over `skep_client::ceremony` — `pub(super)` to `call`.
 - `shell/follow.rs` `Followers`: the bursts each session sent with an `id`

@@ -3,7 +3,8 @@
 //! equal to the table's — every required field present, no field outside
 //! the table — so a field renamed in the declaration alone, or in the code
 //! alone, fails here; and the file names every shape, every call and every
-//! event.
+//! event, the refusal union naming the held-lines refusal whole beside the
+//! shell's open one.
 
 use std::collections::BTreeSet;
 
@@ -57,6 +58,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("HaltFace", Refusal::named(Name::NO_KEY, Face { state: "s".into(), cause: "c".into(), act: "a".into(), path: Some("/a/store".into()) }).to_value()),
         ("BlockedFace", Refusal::Blocked(Blocked { record: "1.0.1.0.7.1".into(), named_by: "http://x".into(), ground: None }).to_value()),
         ("Unreachable", Refusal::Unreachable(DialError::Connect("refused".into())).to_value()),
+        ("HeldLinesRefusal", Refusal::shell(Name::HELD_LINES, json!({"doc": "1.0.1.0.5", "held": 2})).to_value()),
         ("ShellRefusal", Refusal::shell(Name::SESSION_ENDED, json!({})).to_value()),
         ("ModeEvent", json!({"board": "b-0", "mode": "ENFORCING", "claimant": "1.0.1", "local_trust": false})),
         ("SessionDiedEvent", json!({"session": "s-0", "reason": sessions::closed()})),
@@ -204,6 +206,8 @@ fn the_file_names_every_shape_call_and_event() {
         "  unwritable?: string;\n  unwritable_class?: 'full' | 'read_only' | 'other';\n",
         "  opened_at?: number;\n  another_window?: true;\n",
         "export interface AnotherWindowEvent {\n  board: string;\n  another_window: boolean;\n}\n",
+        "export type Refusal = RefusedByBoard | HaltFace | BlockedFace | Unreachable | HeldLinesRefusal | ShellRefusal;\n",
+        "export interface HeldLinesRefusal {\n  kind: 'shell';\n  name: 'held_lines';\n  doc: string;\n  held: number;\n}\n",
     ] {
         assert!(text.contains(line), "the row renders as declared: {line}");
     }

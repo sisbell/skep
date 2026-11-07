@@ -30,11 +30,17 @@
 //!
 //! **The order.** The members are read before the session — `draft` an
 //! address in its one spelling, `at` and `as_of` non-negative integers —
-//! then the session; then the write door and the session's hand, as the
-//! publication and merge families take them (`Shell::signed`); then the
-//! hold standing at the board, which refuses the `set_arrangement` at once
-//! under its cause, before any read (§3c.4; `Holds::unholdable_refusal`);
-//! then the reads; then the write.
+//! then the session; then the shell's one write door and the session's
+//! hand, as the publication and merge families take them (`Shell::signed`,
+//! `Shell::write_door`): the bare session, another window, the hold
+//! standing at the board, which refuses the `set_arrangement` at once under
+//! its cause (§3c.4; `Holds::unholdable_refusal`), and THE HELD-LINES GATE —
+//! a line of the principal's the board has not kept standing on the draft,
+//! in any state, refuses the restore `held_lines` naming the draft and the
+//! count (§3c.4; `Holds::held_lines`; skep #854): the restore would
+//! otherwise land first and the held lines replay over the restored state,
+//! a draft matching neither the state picked nor the one last seen — all
+//! before any read; then the reads; then the write.
 //!
 //! **The answer** is `{draft, at, position, as_of, marker}`: `position` the
 //! write's commit; `as_of` the position the draft stood at as the shell's
@@ -63,7 +69,7 @@ use skep_client::board::MergeMarker;
 use skep_client::history;
 
 use super::publication::address_arg;
-use super::Shell;
+use super::{Shell, Write};
 use crate::refusal::Refusal;
 
 impl Shell {
@@ -82,11 +88,15 @@ impl Shell {
     ///    non-negative integer;
     /// 2. `malformed_args` naming `session`, then `session_died` or
     ///    `session_ended` ([`Shell::session`]);
-    /// 3. `write_in_bare_session`, then `another_window`, naming the call;
-    ///    `store_unreadable`, `no_account` (`Shell::signed`);
-    /// 4. `stopped`, `poisoned` or `halted` naming the op, `set_arrangement`,
-    ///    where a hold stands at the board, nothing read and nothing sent;
-    /// 5. the reads' (`skep_client::history::past`): `unreadable` and
+    /// 3. the write door's, in its order (`Shell::write_door`):
+    ///    `write_in_bare_session`, then `another_window`, naming the call;
+    ///    `stopped`, `poisoned` or `halted` naming the op, `set_arrangement`,
+    ///    where a hold stands at the board; `held_lines` naming the `draft`
+    ///    and `held`, the lines of the principal's standing on it, where the
+    ///    board has not kept them all — nothing read and nothing sent at any
+    ///    of the four; then `store_unreadable`, `no_account`
+    ///    (`Shell::signed`);
+    /// 4. the reads' (`skep_client::history::past`): `unreadable` and
     ///    `no_such_document` at the draft's read, then `not_owner` with
     ///    `published` for a published document; `merge_refused` with
     ///    `not_past`, before any read at a position; at the state's reads,
@@ -94,23 +104,21 @@ impl Shell {
     ///    `history_busy` or `too_fragmented`, and `no_such_document` for a
     ///    draft that did not exist then; the records' reads' refusals; then
     ///    `over_cap`;
-    /// 6. the write's (`skep_client::history::restore`): the board's
+    /// 5. the write's (`skep_client::history::restore`): the board's
     ///    `arrangement_moved` verbatim where the draft's arrangement changed
     ///    past `as_of`, nothing changed; `not_owner`; `no_such_document`;
     ///    `merge_refused` with `window_withheld` or `needs_signed_session`;
     ///    the board's other verdicts verbatim; a halt's face where the
     ///    acknowledgment was lost;
-    /// 7. `session_died` where a read or the write met the death signal,
+    /// 6. `session_died` where a read or the write met the death signal,
     ///    and `unreachable` where a dial failed, at either step.
     pub(super) fn history_restore(&self, args: &Value) -> Result<Value, Refusal> {
         let draft = address_arg(&args["draft"]).ok_or_else(|| Refusal::malformed("draft"))?;
         let at = args["at"].as_u64().ok_or_else(|| Refusal::malformed("at"))?;
         let as_of = args["as_of"].as_u64().ok_or_else(|| Refusal::malformed("as_of"))?;
         let session = self.session(&args["session"])?;
-        let account = self.signed(&session, "history.restore")?.account;
-        if let Some(refusal) = self.holds.unholdable_refusal(&session.board_reference, "set_arrangement") {
-            return Err(refusal);
-        }
+        // The one write door, over the draft the restore sets whole.
+        let account = self.signed(&session, Write::call("history.restore", "set_arrangement").over([draft.to_string()]))?.account;
         let mut past = history::past(&session.board, &session.token, &account, &draft, at).map_err(|r| self.merge_refusal(&session, r))?;
         // The write typed against the page's state; the read's position
         // kept for the answer, the way back.

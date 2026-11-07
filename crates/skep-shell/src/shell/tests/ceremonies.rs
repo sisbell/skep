@@ -1,7 +1,10 @@
 //! The ceremonial rows end to end, against the real daemon in-process.
 //!
 //! The suite checks `bind` confirming the three facts against the board
-//! before it appends the line; a second device's key enrolled from the
+//! before it appends the line; a ceremony from a shell finding another's
+//! lock on the board's held store refused `another_window` at the shell's
+//! one write door, and going out from the shell that holds the store; a
+//! second device's key enrolled from the
 //! first device, bound there and retiring the first's key, whose session
 //! dies on the arm that names the hand; a rotation ending its old key's
 //! session on the own hand's arm; and, beside a key store that cannot be
@@ -51,6 +54,80 @@ fn bind_confirms_the_three_facts_against_the_board() {
     assert_eq!(bound, json!({}));
     assert_eq!(bindings(), before + 1, "the line is appended once more");
     shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a ceremony from a shell finding another's lock is refused
+/// `another_window`, and goes out from the shell that holds the store (§3c.3;
+/// skep #829, ruled with the held store's shape (vi): a second window runs
+/// no ceremony while the first stands).
+///
+/// Shell A's session takes the board's held store; shell B over the same
+/// data directory opens a session that finds it A's. B's `keygen` dials
+/// nothing and goes; each of B's `claim`, `enroll`, `bind`, `recover`,
+/// `rotate`, `retire`, `handoff` and `accept` is refused `another_window`
+/// naming the call, the board's position unmoved. From A, which holds the
+/// store, `enroll` of B's key, `retire` of it, `handoff`'s first beat, and
+/// `bind` go out and are answered, and `rotate` goes out last — it retires
+/// A's own key (the mutant that leaves the ceremonies off the door runs a
+/// rotation or a hand-off from the second window under the first's held
+/// lines, which then fail against a board whose keys or claimant moved
+/// under them).
+#[test]
+fn a_ceremony_from_a_shell_finding_anothers_lock_is_refused_and_goes_out_from_the_shell_that_holds_the_store() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (a, a_said) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let a_answerer = answer_moments(a.subscribe(), Arc::clone(&a.pending), Arc::clone(&seen));
+    let a_board = a.board_references().remove(0);
+    let opened = a.call("session", &json!({"board": a_board})).unwrap();
+    assert!(opened.get("another_window").is_none(), "premise: A's open takes the store: {opened}");
+    let (b, b_said) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let b_answerer = answer_moments(b.subscribe(), Arc::clone(&b.pending), Arc::new(Mutex::new(Vec::new())));
+    let b_board = b.board_references().remove(0);
+    let opened = b.call("session", &json!({"board": b_board})).unwrap();
+    assert_eq!(opened["another_window"], true, "premise: B finds the store A's: {opened}\n{}", b_said.lock().unwrap().join("\n"));
+    let talked = || format!("{}\n{}", a_said.lock().unwrap().join("\n"), b_said.lock().unwrap().join("\n"));
+    let position = || a.call("health", &json!({"board": a_board})).unwrap()["health"]["log_position"].as_u64().unwrap();
+    let kb = b.call("keygen", &json!({"label": "second"})).unwrap_or_else(|r| panic!("keygen dials nothing and meets no door: {r}"));
+    let before = position();
+    for (call, args) in [
+        ("claim", json!({"board": b_board})),
+        ("enroll", json!({"board": b_board, "payload": kb["payload"]})),
+        ("bind", json!({"board": b_board, "principal": 1, "account": "1.0.1", "origin": origin})),
+        ("recover", json!({"board": b_board})),
+        ("rotate", json!({"board": b_board})),
+        ("retire", json!({"board": b_board, "fingerprint": kb["fingerprint"]})),
+        ("handoff", json!({"board": b_board, "account": "1.0.1.2"})),
+        ("accept", json!({"board": b_board, "address": "1.0.1.2"})),
+    ] {
+        let refused = b.call(call, &args).unwrap_err();
+        let v = refused.to_value();
+        assert_eq!((refused.name(), v["kind"].as_str(), v["call"].as_str()), ("another_window", Some("shell"), Some(call)), "{call}: {v}");
+    }
+    assert_eq!(position(), before, "nothing of the eight is sent from the second window");
+    // From the shell that holds the store, the same ceremonies go out.
+    let enrolled = a.call("enroll", &json!({"board": a_board, "payload": kb["payload"]})).unwrap_or_else(|r| panic!("enroll from A: {r}\n{}", talked()));
+    crate::shapes::assert_declared("Enrolled", &enrolled);
+    assert_eq!(enrolled["fingerprints"], json!([kb["fingerprint"]]), "{enrolled}");
+    let retired = a.call("retire", &json!({"board": a_board, "fingerprint": kb["fingerprint"]})).unwrap_or_else(|r| panic!("retire from A: {r}\n{}", talked()));
+    assert_eq!(retired, json!({}));
+    let handed = a.call("handoff", &json!({"board": a_board, "account": "1.0.1.2"})).unwrap_or_else(|r| panic!("handoff from A: {r}\n{}", talked()));
+    crate::shapes::assert_declared("HandoffDelegated", &handed);
+    let bound = a.call("bind", &json!({"board": a_board, "principal": 1, "account": "1.0.1", "origin": origin})).unwrap_or_else(|r| panic!("bind from A: {r}\n{}", talked()));
+    crate::shapes::assert_declared("Bound", &bound);
+    let rotated = a.call("rotate", &json!({"board": a_board})).unwrap_or_else(|r| panic!("rotate from A: {r}\n{}", talked()));
+    crate::shapes::assert_declared("Rotated", &rotated);
+    assert!(position() > before, "the ceremonies from the shell that holds the store went out");
+    a.shutdown();
+    b.shutdown();
+    drop((a, b));
+    a_answerer.join().unwrap();
+    b_answerer.join().unwrap();
     sd.shutdown();
 }
 

@@ -10,6 +10,10 @@
 //! the editor's own last arrangement write on the draft — landing once the
 //! person's later edits are taken back, refused `arrangement_moved` past
 //! another hand's write and never typed at a link's ack, nothing wiped; the
+//! landing, the undo and the withdrawal refused `held_lines` over the
+//! draft's held lines, a burst held behind them, and the undo going out once
+//! the run is dropped; the rows refused `stopped` and `poisoned` under those
+//! holds with nothing dialed; the
 //! re-open landing nothing, reading the side at the marker's position and
 //! settling a gap the draft no longer arranges; `resolutions` refused where
 //! they name no gap or no choice the gap admits, nothing landed; the
@@ -260,6 +264,115 @@ fn the_family_lands_a_daughter_into_a_fresh_draft_and_into_a_named_one_and_takes
     assert_eq!(arrangement_rows(&g, &l, since), [(true, false)], "one arrangement row");
     assert_eq!(g.call("merge.land", json!({"session": g.session})).unwrap_err().name(), "no_merge", "the composition went with the withdrawal");
     assert_eq!(g.call("merge.withdraw", json!({"session": g.session, "draft": l})).unwrap_err().name(), "no_merge", "no merge to take out");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that the landing, the undo and the withdrawal are refused over
+/// the draft's held lines, a burst held behind them, against the daemon
+/// (§3c.4, THE HELD-LINES GATE; skep #849).
+///
+/// L takes the merge of E.2 with E.1.1; a burst on L at a far ordinal is
+/// refused `out_of_bounds` and held, a refused run awaiting the person's
+/// act, and a second burst on L is held `behind` it — not refused, the
+/// burst writes being ungated: `merge.undo`, `merge.withdraw` and
+/// `merge.land` are each refused `held_lines` naming L and the two lines,
+/// the board's position unmoved, L's text and marker standing, the
+/// composition standing (the landing answers the gate, never `no_merge`);
+/// the run dropped — the one way such a line clears — `merge.undo` goes
+/// out: L's text E.2's again, its marker gone (the mutants that let the undo
+/// or the withdrawal dial past the held lines, which then land on the
+/// rewritten arrangement as a move the person never made; the one that
+/// gates the landing's shot by the panel's drafts alone and lands into L
+/// first; the one that refuses a burst on L instead of holding it).
+#[test]
+fn the_landing_the_undo_and_the_withdrawal_are_refused_over_the_drafts_held_lines_and_a_burst_is_held_behind() {
+    use skep_client::board::frames::doc_metadata;
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let l = g.addr(skep_client::board::frames::stage(&f.e2, None));
+    let landed = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    let landed_at = landed["position"].as_u64().expect("the landing's position");
+    let text = g.text(&l, 20);
+    assert_eq!(text.len(), 19, "the premise: L holds M");
+    // The refused run, and a burst held behind it.
+    let refused = g.op(json!({"op": "insert", "doc": l, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"], "as_of": g.position()}));
+    assert!(refused["resp"] == "held" && refused["cause"].as_str().is_some_and(|c| c.starts_with("out_of_bounds")), "premise: a refused run stands on L: {refused}");
+    let k = refused["held"].as_u64().unwrap();
+    let behind = g.op(json!({"op": "insert", "doc": l, "at": {"subspace": "1", "ordinal": "900001"}, "values": ["s"], "as_of": g.position()}));
+    assert_eq!((behind["resp"].as_str(), behind["cause"].as_str()), (Some("held"), Some("behind")), "a burst on L is held behind the run, never refused: {behind}");
+    let before = g.position();
+    for (call, args) in [("merge.undo", json!({"session": g.session})), ("merge.withdraw", json!({"session": g.session, "draft": l})), ("merge.land", json!({"session": g.session}))] {
+        let refused = g.call(call, args).unwrap_err();
+        let v = refused.to_value();
+        assert_eq!((refused.name(), v["kind"].as_str(), v["doc"].as_str(), v["held"].as_u64()), ("held_lines", Some("shell"), Some(l.as_str()), Some(2)), "{call}: {v}");
+    }
+    assert_eq!(g.position(), before, "nothing sent");
+    assert_eq!((g.text(&l, 20), g.op(doc_metadata(&l))["merge"]["at"].as_u64()), (text, Some(landed_at)), "L and its marker stand");
+    // The run dropped, the undo goes out.
+    g.call("resolve", json!({"session": g.session, "held": k, "act": "drop"})).unwrap_or_else(|r| panic!("{r}"));
+    assert!(g.call("held", json!({"session": g.session})).unwrap().as_array().unwrap().is_empty(), "the run and the line behind it are dropped");
+    let undone = g.call("merge.undo", json!({"session": g.session})).unwrap_or_else(|r| panic!("the lines gone, the undo goes out: {r}"));
+    crate::shapes::assert_declared("Undone", &undone);
+    assert_eq!(g.text(&l, 20), "the fox jumps", "{undone}");
+    assert!(g.op(doc_metadata(&l))["merge"].is_null(), "the marker gone");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that the merge rows are refused under a stopped node and under a
+/// poisoned write path with nothing dialed, against the daemon (skep #850).
+///
+/// L takes the merge of E.2 with E.1.1; the own node stopped, `merge.land`,
+/// `merge.undo`, `merge.withdraw` and `merge.compose` — into L, and naming
+/// no `into` — are refused `stopped` naming the op each would first dial
+/// (`publish`, `set_arrangement`, `set_arrangement`, `set_arrangement`,
+/// `stage`), the board's position unmoved and the composition standing; the
+/// node running, the kernel poisoned as the held suite poisons it, a burst
+/// on another draft is refused `poisoned` and held, and each row is refused
+/// `poisoned` naming the same op, nothing landed (the mutant that asks no
+/// hold at a merge row dials a stopped or poisoned board and hands the page
+/// the board's verdict or `unreachable` for a reason the shell knew; the
+/// one that asks it under the wrong op misnames the write).
+#[test]
+fn the_merge_rows_are_refused_under_a_stopped_node_and_a_poisoned_path_with_nothing_dialed() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let l = g.addr(skep_client::board::frames::stage(&f.e2, None));
+    g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    let other = g.draft("elsewhere");
+    let rows = || {
+        [
+            ("merge.land", json!({"session": g.session}), "publish"),
+            ("merge.undo", json!({"session": g.session}), "set_arrangement"),
+            ("merge.withdraw", json!({"session": g.session, "draft": l}), "set_arrangement"),
+            ("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11, "into": l}), "set_arrangement"),
+            ("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11}), "stage"),
+        ]
+    };
+    let refused_each = |cause: &str| {
+        let before = g.position();
+        for (call, args, op) in rows() {
+            let refused = g.call(call, args).unwrap_err();
+            let v = refused.to_value();
+            assert_eq!((refused.name(), v["kind"].as_str(), v["op"].as_str()), (cause, Some("shell"), Some(op)), "{cause}: {call}: {v}");
+        }
+        assert_eq!(g.position(), before, "{cause}: nothing sent");
+    };
+    g.shell.set_node_state(NodeState::Stopped);
+    refused_each("stopped");
+    g.shell.set_node_state(NodeState::Running);
+    // The poisoned write path: the kernel's next checkpoint fails and its
+    // repair with it, so the next write is refused `poisoned` and held.
+    sd.daemon().fail_the_next_checkpoint_step(Step::JournalBarrier, std::io::ErrorKind::Other);
+    sd.daemon().fail_the_next_checkpoint_step(Step::JournalRepair, std::io::ErrorKind::Other);
+    let held = g.op(json!({"op": "insert", "doc": other, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"], "as_of": g.position()}));
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("poisoned")), "premise: the write path is poisoned: {held}");
+    refused_each("poisoned");
     g.shell.shutdown();
     sd.shutdown();
 }

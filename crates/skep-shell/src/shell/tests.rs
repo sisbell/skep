@@ -22,9 +22,10 @@
 //! the follower write — a mark landing on its insert's words, refused where
 //! its burst is held, following a delete, overtaking its insert, and
 //! finished by the stop before its session closes — against the daemon;
-//! `classes` the held store's open defect classes over a `Shell` — one
-//! writer per board, a whole-draft write past a draft's held lines — pinned
-//! as expected failures against the daemon.
+//! `classes` the held store's defect classes over a `Shell` — one writer
+//! per board, a whole-draft write past a draft's held lines — each pinned
+//! against the daemon as an expected failure until the brief that closed it
+//! landed, and as the invariant from then.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

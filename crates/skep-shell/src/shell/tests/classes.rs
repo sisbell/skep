@@ -13,8 +13,10 @@
 //! are taken at the first touch and kept for the shell's life, so the
 //! pending lock is never let go for a later window to take. `I9` (K5): a whole-draft
 //! write — the restore — never lands past the draft's standing held lines
-//! (skep #849, #854; Brief C). The merge rows' door (skep #850) is Brief C's
-//! too, and no cell of it is added here.
+//! — GREEN since Brief C (skep #849, #854): the shell's one write door asks
+//! the draft's held lines of every whole-draft write and refuses it
+//! `held_lines`, nothing dialed. The merge rows' door (skep #850) is Brief
+//! C's too, pinned in `shell/tests/merge.rs` and `shell/tests/publication.rs`.
 
 use skep_search::Chain;
 
@@ -90,8 +92,8 @@ fn i6_a_window_whose_head_will_not_read_is_refused_while_another_holds_the_board
 }
 
 /// K5 / `I9` — a whole-draft write never lands past the draft's standing
-/// held lines (skep #849, #854; the record §2 I9, §3 K5). EXPECTED TO FAIL
-/// until Brief C lands; that brief removes `should_panic`.
+/// held lines (skep #849, #854; the record §2 I9, §3 K5). GREEN since Brief
+/// C, which removed `should_panic`: the cell pins the invariant from here.
 ///
 /// A draft typed in two bursts; a burst at a far ordinal the draft has no
 /// room for is refused `out_of_bounds`, a permanent refusal, and held as a
@@ -99,15 +101,15 @@ fn i6_a_window_whose_head_will_not_read_is_refused_while_another_holds_the_board
 /// the node, running, never drains. `history.restore` on the draft, typed at
 /// the page's state, the second burst's ack. The invariant (B3-S13's row
 /// rule; D6 BM-62, BM-67): the restore is refused while the line stands, its
-/// `set_arrangement` never dialed. Today `unholdable_refusal` asks the
-/// standing cause alone — the node stopped, the write path poisoned, the
-/// writes halted — and a running node has none, so the restore's one write
-/// lands past the held line (`shell/history.rs`: the hold asked before the
-/// reads; `hold.rs`: `BoardHold::standing_cause`). A stopped node is the
-/// wrong ground: `unholdable_refusal` refuses the restore there already, and
-/// once the node runs the probe drains a line that awaits no act.
+/// `set_arrangement` never dialed — the shell's one write door asks the
+/// draft's held lines of every whole-draft write (`Shell::write_door`,
+/// `Holds::held_lines`) and refuses it `held_lines` before any read (before
+/// Brief C the door asked the standing cause alone — the node stopped, the
+/// write path poisoned, the writes halted — and a running node has none, so
+/// the restore's one write landed past the held line). A stopped node is
+/// the wrong ground: the standing hold refuses the restore there already,
+/// and once the node runs the probe drains a line that awaits no act.
 #[test]
-#[should_panic(expected = "I9: ")]
 fn i9_a_restore_is_refused_while_a_line_of_the_draft_stands_held() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);

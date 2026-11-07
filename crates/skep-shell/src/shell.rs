@@ -55,17 +55,30 @@
 //!
 //! **What the shell refuses without asking.** A write frame in the guest
 //! form ([`WRITE_KINDS`]; the board would answer `unauthenticated`, so no
-//! dial is made); a write frame under a bare session, and its
-//! `resolve(send)` — the keyless session reads alone (foundations §3.3
-//! state 3), so no `bare` write of this shell's is ever committed
-//! (`write_in_bare_session`, `SessionEntry::may_write`); a write frame at a
-//! board whose held store another shell holds, and every row of the
-//! publication and merge families and the restore there — ONE SHELL PER
-//! DATA DIRECTORY (§3c.3): until a second launch hands its address to the
-//! running client and exits, the second window reads alone at the board,
-//! nothing held and nothing sent (`another_window`, `Holds::another_window`),
-//! each write met at the one door the two refusals share
-//! ([`Shell::write_door`]); a
+//! dial is made); and, at ONE WRITE DOOR every write the shell sends meets
+//! before any dial and any read the write makes ([`Shell::write_door`]; the
+//! held store's shape (vi) item 4), in one order: a write under a bare
+//! session, and its `resolve(send)` — the keyless session reads alone
+//! (foundations §3.3 state 3), so no `bare` write of this shell's is ever
+//! committed (`write_in_bare_session`, `SessionEntry::may_write`); a write
+//! at a board whose held store another shell holds — a frame, a row of the
+//! publication or merge family, the restore, and every ceremony that writes
+//! to the board — ONE SHELL PER DATA DIRECTORY (§3c.3): until a second
+//! launch hands its address to the running client and exits, the second
+//! window reads alone at the board and runs no ceremony there (skep #829),
+//! nothing held and nothing sent (`another_window`,
+//! `Holds::another_window`); a write of a kind the hold never holds
+//! (`hold::UNHOLDABLE_WRITES` — the mint among them, skep #868 — the shot,
+//! the restore's and the merge rows' writes) while a hold stands at the
+//! board, refused at once with its cause (`stopped`, `poisoned`, `halted`),
+//! never held and never dialed (`Holds::unholdable_refusal`; skep #850);
+//! and a whole-draft write — `history.restore`, `merge.land`, `merge.undo`,
+//! `merge.withdraw`, `publication.confirm` over the rendering draft and
+//! every draft `also` names — while a line of the acting principal's stands
+//! held on a draft it writes, in any state, refused `held_lines` naming the
+//! draft and the count (`Holds::held_lines`; §3c.4, THE HELD-LINES GATE;
+//! skep #849, #854) — the burst writes not gated, a burst on such a draft
+//! held `behind` the standing lines as before; a
 //! `publish` frame under a session (`publish_is_a_call`: a publication
 //! crosses as `publication.confirm`, the shell composing the one request
 //! from the panel it holds, since the page composes no write — §4b.1's `op`
@@ -83,10 +96,9 @@
 //! `content_session` beneath the shell. Every other `/op` under a session,
 //! `/op-at`'s aside, goes by the hold's one path (`Holds::send`): what a
 //! burst is refused at the act for (`Burst::admit`), what is held and what
-//! is reissued within the call are the hold's to say — and the seven
-//! non-burst writes §3c.4 names, meeting a hold that stands at the board,
-//! are refused at once with its cause (`stopped`, `poisoned`, `halted`),
-//! never held and never dialed — and what a signed
+//! is reissued within the call are the hold's to say — the standing hold's
+//! cause asked once more there as the door's check behind the shell's, for
+//! a follower write sent at its burst's ack — and what a signed
 //! session's attest signs is `SessionEntry::attest`'s. Where the library
 //! does not reach a row at this pin — `upload` and `restore`, the media rows,
 //! whose walk is not in `skep-client` (the past state's `history.restore` is
@@ -292,6 +304,91 @@ pub const WRITE_KINDS: [&str; 18] = [
     "assert_sup",
     "edit_link",
 ];
+
+/// Who sends a write through the shell's one write door
+/// ([`Shell::write_door`]).
+#[derive(Clone, Copy)]
+pub(super) enum Writer<'a> {
+    /// A row under a session: a frame through `op`, a row of the publication
+    /// or merge family, the restore.
+    Session(&'a SessionEntry),
+    /// A ceremony, which runs the library's walk under no session of this
+    /// shell's: the board it writes to.
+    Board(&'a BoardEntry),
+}
+
+/// One write as the shell's one write door reads it ([`Shell::write_door`]):
+/// what its refusal names, the wire op the standing hold judges it by, and
+/// the drafts it sets whole.
+pub(super) struct Write<'a> {
+    named: Named<'a>,
+    /// The op the standing hold judges (`hold::UNHOLDABLE_WRITES`): a frame's
+    /// own, or the first write a row dials; `None` for a write judged by no
+    /// standing hold — a ceremony's, `publication.open`'s, which writes
+    /// nothing, and a follower's, whose burst's hold answers for it.
+    kind: Option<&'a str>,
+    /// The drafts the write sets whole, each asked for its held lines.
+    drafts: Vec<String>,
+}
+
+/// What a write's refusal names: the frame's `op`, or the row's `call`.
+#[derive(Clone, Copy)]
+enum Named<'a> {
+    Op(&'a str),
+    Call(&'a str),
+}
+
+impl<'a> Write<'a> {
+    /// A write frame through `op`: named and judged by its op.
+    pub(super) fn frame(op: &'a str) -> Write<'a> {
+        Write { named: Named::Op(op), kind: Some(op), drafts: Vec::new() }
+    }
+
+    /// A follower write through `op` (§3c.6): named by its op and judged by
+    /// its burst's hold — its burst held, the follower is refused
+    /// `not_followed` with the hold's cause, and sent at the burst's ack it
+    /// meets the hold's own check (`Holds::send`) — so the standing hold is
+    /// not asked of it ahead of its burst.
+    pub(super) fn follower(op: &'a str) -> Write<'a> {
+        Write { named: Named::Op(op), kind: None, drafts: Vec::new() }
+    }
+
+    /// A row named `call` whose first write dials the wire op `kind`.
+    pub(super) fn call(call: &'a str, kind: &'a str) -> Write<'a> {
+        Write { named: Named::Call(call), kind: Some(kind), drafts: Vec::new() }
+    }
+
+    /// A row named `call` that writes nothing a standing hold judges: a
+    /// ceremony, whose walk's writes are the library's, or
+    /// `publication.open`, which reads.
+    pub(super) fn unjudged(call: &'a str) -> Write<'a> {
+        Write { named: Named::Call(call), kind: None, drafts: Vec::new() }
+    }
+
+    /// The write over `drafts` whole: the held-lines gate asks each, in
+    /// this order.
+    pub(super) fn over(mut self, drafts: impl IntoIterator<Item = String>) -> Write<'a> {
+        self.drafts.extend(drafts);
+        self
+    }
+
+    /// The refusal's detail: `{"op": …}` for a frame, `{"call": …}` for a
+    /// row.
+    fn named(&self) -> Value {
+        match self.named {
+            Named::Op(op) => json!({"op": op}),
+            Named::Call(call) => json!({"call": call}),
+        }
+    }
+
+    /// The call the write names, for the refusals past the door that name
+    /// it; a frame's op where it names no call.
+    pub(super) fn call_name(&self) -> &'a str {
+        match self.named {
+            Named::Op(op) | Named::Call(op) => op,
+        }
+    }
+}
 
 /// One call of the bridge, as [`Shell::call`] dispatches it.
 ///
@@ -1276,9 +1373,13 @@ impl Shell {
     /// compact JSON (`held::MAX_ANCHOR_BYTES`) — never read as absent; then
     /// naming `after` or a slot of the frame where the follower is not of its
     /// form (`Follower::of`); then naming `session`, then `session_ended`; a
-    /// write refused at the write door ([`Shell::write_door`]) —
+    /// write refused at the shell's one write door ([`Shell::write_door`]) —
     /// `write_in_bare_session` under a bare session, then `another_window` at
-    /// a board whose held store another shell holds; a `publish`
+    /// a board whose held store another shell holds, then `stopped`,
+    /// `poisoned` or `halted` for a write of a kind the hold never holds
+    /// while a hold stands at the board — a follower excepted, whose burst's
+    /// hold answers for it (`not_followed`), the standing hold asked of it
+    /// where it dials; a `publish`
     /// frame refused `publish_is_a_call` without a dial — a publication crosses
     /// as `publication.confirm`, composed by the shell from the panel it holds,
     /// never as a frame the page composed (§4b.1's `op` row, decision 1 (b));
@@ -1323,7 +1424,11 @@ impl Shell {
         let follower = Follower::of(args, &frame, at)?;
         let session = self.session(&args["session"])?;
         if WRITE_KINDS.contains(&op) {
-            self.write_door(&session, json!({"op": op}))?;
+            // A follower waits on its burst, whose hold answers for it
+            // (`not_followed`): the standing hold is asked of it where it
+            // dials, never ahead of its burst.
+            let write = if follower.is_some() { Write::follower(op) } else { Write::frame(op) };
+            self.write_door(Writer::Session(&session), &write)?;
         }
         if op == "publish" {
             return Err(Refusal::shell(Name::PUBLISH_IS_A_CALL, json!({"op": op})));
@@ -1362,29 +1467,64 @@ impl Shell {
         }
     }
 
-    /// Admits a write under `session` at the write door, before any dial.
+    /// Admits a write at the shell's ONE WRITE DOOR, before any dial and any
+    /// read the write makes (the held store's shape (vi) item 4).
     ///
-    /// It is the one door every write the shell sends under a session meets
-    /// first: a write frame through `op` — `/op-at`'s too — and every row of
-    /// the publication and merge families and `history.restore`, through
-    /// `Shell::signed`. `named` is the refusal's detail, the `op` or the
-    /// `call`. A write that met the door is followed to its end, never
-    /// refused at it again mid-way.
+    /// Every write the shell sends asks it: a write frame through `op` —
+    /// `/op-at`'s too; every row of the publication and merge families and
+    /// `history.restore`, through [`Shell::signed`]; and every ceremony that
+    /// writes to the board, which runs under no session of this shell's and
+    /// asks as its board ([`Writer::Board`]). `write` is the write as the
+    /// door reads it ([`Write`]): what its refusal names — the `op`, or the
+    /// `call` — the wire op the standing hold judges it by, and the drafts
+    /// it sets whole. Nothing is dialed here. A write that met the door is
+    /// followed to its end, never refused at it again mid-way — the restart
+    /// re-open among them ([`Shell::signed_within_call`]).
     ///
     /// # Errors
     ///
-    /// In this order: `write_in_bare_session` where the session holds no key,
-    /// the keyless session reading alone (foundations §3.3 state 3); then
-    /// `another_window` where another shell holds the held store of the
-    /// session's board ([`Holds::another_window`]) — ONE SHELL PER DATA
-    /// DIRECTORY (§3c.3), the second window reading alone there, nothing held
-    /// and nothing sent.
-    fn write_door(&self, session: &SessionEntry, named: Value) -> Result<(), Refusal> {
-        if !session.may_write() {
-            return Err(Refusal::shell(Name::WRITE_IN_BARE_SESSION, named));
+    /// The first of four that holds, in this order:
+    ///
+    /// 1. `write_in_bare_session` — the session holds no key, the keyless
+    ///    session reading alone (foundations §3.3 state 3; not asked of a
+    ///    ceremony, whose session rules are its walk's);
+    /// 2. `another_window` — another shell holds the held store of the board
+    ///    ([`Holds::another_window`]): ONE SHELL PER DATA DIRECTORY (§3c.3),
+    ///    the second window reading alone there, nothing held and nothing
+    ///    sent, and no ceremony run from it (skep #829);
+    /// 3. `stopped`, `poisoned` or `halted` — a hold stands at the board and
+    ///    the write is of a kind the hold never holds
+    ///    (`hold::UNHOLDABLE_WRITES`; [`Holds::unholdable_refusal`]), the
+    ///    detail naming the `op` judged (skep #850, #868);
+    /// 4. `held_lines {doc, held}` — a whole-draft write, and a draft it
+    ///    writes holds lines of the acting principal's the board has not
+    ///    kept, in any state ([`Holds::held_lines`]; §3c.4, THE HELD-LINES
+    ///    GATE; skep #849, #854): the first such draft in the write's order,
+    ///    the rendering draft before the drafts `also` names, `held` the
+    ///    lines standing on it.
+    fn write_door(&self, writer: Writer<'_>, write: &Write<'_>) -> Result<(), Refusal> {
+        let board_reference = match writer {
+            Writer::Session(session) => {
+                if !session.may_write() {
+                    return Err(Refusal::shell(Name::WRITE_IN_BARE_SESSION, write.named()));
+                }
+                session.board_reference.as_str()
+            }
+            Writer::Board(entry) => entry.reference.as_str(),
+        };
+        if self.holds.another_window(board_reference) {
+            return Err(Refusal::shell(Name::ANOTHER_WINDOW, write.named()));
         }
-        if self.holds.another_window(&session.board_reference) {
-            return Err(Refusal::shell(Name::ANOTHER_WINDOW, named));
+        if let Some(refusal) = write.kind.and_then(|kind| self.holds.unholdable_refusal(board_reference, kind)) {
+            return Err(refusal);
+        }
+        if let Writer::Session(session) = writer {
+            for doc in &write.drafts {
+                let held = self.holds.held_lines(session, doc);
+                if held > 0 {
+                    return Err(Refusal::shell(Name::HELD_LINES, json!({"doc": doc, "held": held})));
+                }
+            }
         }
         Ok(())
     }

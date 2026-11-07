@@ -1415,23 +1415,22 @@ impl Daemon {
 
     /// Returns every line this daemon has said through its own classed door.
     ///
-    /// **Test hook** (the same standing). The lines are this uptime's,
-    /// oldest first, each as `{class}: {text}` — a notice of several lines
-    /// kept whole, the head then each line of the rest on a line of its own
-    /// — the configuration warnings at both their moments, the open's-report
-    /// `auth:` line, the node prefix, the blocked list at its three moments,
-    /// the claim's flip line, the head written at open where a claimed
-    /// board's journal held none, the pruner's pass and a reissue's refusal
-    /// among them; and the standing line (`standing:`), the kernel's halt
-    /// line, the full volume's line, the feed files' lines — a cut, the
-    /// unreadable slots and the malformed names at their open, a stop past a
-    /// rename while serving — and the three thread catches' consequence lines
-    /// (`failure:`) — the checkpoint thread's, the pruner's and the feed
-    /// walk's — so a suite pins the words and the class of what went to the
-    /// operator stream, which no suite captures in-process. The open's own
-    /// lines (said before the write path exists) and the checkpoint thread's
-    /// own landing, failure and backstop lines ([`Daemon::checkpoint_lines`])
-    /// are not among them.
+    /// **Test hook** (the same standing). The lines are this uptime's, oldest
+    /// first, each as `{class}: {text}` — a notice of several lines kept whole,
+    /// the head then each line of the rest on a line of its own — the
+    /// configuration warnings at both their moments, the open's-report `auth:`
+    /// line, the node prefix, the blocked list at its three moments, the
+    /// claim's flip line, the head written at open where a claimed board's
+    /// journal held none, the pruner's pass and a reissue's refusal among them;
+    /// and the standing line (`standing:`), the kernel's halt line, the full
+    /// volume's line, the feed files' lines — a cut, the unreadable slots and
+    /// the malformed names at their open, a stop past a rename while serving —
+    /// and the four thread catches' consequence lines (`failure:`) — the
+    /// checkpoint thread's, the pruner's, the feed walk's and a worker's — so a
+    /// suite pins the words and the class of what went to the operator stream,
+    /// which no suite captures in-process. The open's own lines (said before
+    /// the write path exists) and the checkpoint thread's own landing, failure
+    /// and backstop lines ([`Daemon::checkpoint_lines`]) are not among them.
     #[doc(hidden)]
     pub fn lines_said(&self) -> Vec<String> {
         self.said.lock().clone()

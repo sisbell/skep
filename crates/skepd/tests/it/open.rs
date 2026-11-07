@@ -23,16 +23,19 @@
 //!   the data directory: this open began a new board at genesis — …`; a
 //!   reopen says none.
 //! * THE HOOK: a worker's panic inside its handler's catch is ONE prefixed,
-//!   timed `failure:` line naming `skepd-worker` and the site, nothing of
-//!   Rust's own hook's text, and the worker serves its next request.
+//!   timed `failure:` line naming `skepd-worker`, the site and the route the
+//!   worker was serving, nothing of Rust's own hook's text, and the worker
+//!   serves its next request.
 //! * The cell index walk's catch names the hook's site: the walk's fault
 //!   armed, the hook's `failure:` line names `skepd-cell-index` and the
 //!   site, and the catch's line after it, `cell index: the walk failed (a
 //!   panic at {site}: …)`, names the same site — once each, the board
 //!   serving on.
 //! * THE WORKERS' END: the floor's workers, a panic past the catch in each
-//!   after its one reply — the hook's line per death, then `failure: every
-//!   worker thread has ended; the board serves nothing`, and exit 1.
+//!   after its one reply — the hook's line once for the one condition, a
+//!   death line per worker with the workers left, the count of the panics
+//!   the hook did not say, then `failure: every worker thread has ended; the
+//!   board serves nothing`, and exit 1.
 //! * A panic on `main`, the open's lines queued, reaches the stream with
 //!   them before exit 101: the hook drains the stream on `main`.
 //! * THE SIX LINES SURVIVE A LOST READER: a stdout with no reader costs the
@@ -1410,8 +1413,10 @@ fn the_upload_setting_and_the_node_prefix_name_the_arm_that_set_each() {
 /// ROW 41 — THE HOOK's LINE: the child with the door's INSIDE arm armed
 /// answers one request `500 internal_panic`, its one worker serves the
 /// next, and stderr carries ONE prefixed, timed `failure:` line naming
-/// `skepd-worker`, the site in `listen.rs` and the literal payload — and
-/// NOTHING of Rust's own hook's text, which the installed hook replaces.
+/// `skepd-worker`, the site in `listen.rs`, the route the worker was serving
+/// in the router's words (`while serving GET /health`) and the literal
+/// payload — and NOTHING of Rust's own hook's text, which the installed hook
+/// replaces.
 #[test]
 fn a_workers_panic_inside_its_catch_is_one_prefixed_line_of_the_hooks_and_the_worker_serves_on() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -1439,6 +1444,10 @@ fn a_workers_panic_inside_its_catch_is_one_prefixed_line_of_the_hooks_and_the_wo
         "the thread by name: {said:?}"
     );
     assert!(said.contains("listen.rs:"), "the location names the site: {said:?}");
+    assert!(
+        said.contains(" while serving GET /health: "),
+        "FINDING (#717): the route the worker was serving rides the line: {said:?}"
+    );
     assert!(
         said.ends_with(": the test seam's worker fault, inside the handler's catch"),
         "the literal payload rides the line: {said:?}"
@@ -1541,20 +1550,26 @@ fn get_health_retrying_the_connect(port: u16, within: Duration) -> (u16, Vec<u8>
     (status, body)
 }
 
-/// m16 — EVERY WORKER GONE → THE LINE AND EXIT 1, under the real worker
-/// floor: the child spawned with `skepd::MIN_WORKERS` workers and the door's
-/// EVERY arm armed answers `MIN_WORKERS` requests to `/health`, each on a
-/// connection of its own (`Connection: close`) and each 200 — a worker dies
-/// only AFTER its reply, past the catch, and the rest serve the next; an
-/// idle worker never reaches the outside site, so one request per worker is
-/// what ends them all — and after the last reply exits 1 within
-/// [`PATIENCE`], its stderr carrying the hook's line ONCE PER WORKER and,
-/// after the last of them, `failure: every worker thread has ended; the
+/// m16 — EVERY WORKER GONE → THE DEATHS, THE COUNT, THE LINE AND EXIT 1,
+/// under the real worker floor: the child spawned with `skepd::MIN_WORKERS`
+/// workers and the door's EVERY arm armed answers `MIN_WORKERS` requests to
+/// `/health`, each on a connection of its own (`Connection: close`) and each
+/// 200 — a worker dies only AFTER its reply, past the handler's catch, and
+/// the rest serve the next; an idle worker never reaches the outside site,
+/// so one request per worker is what ends them all — and after the last
+/// reply exits 1 within [`PATIENCE`]. Its stderr carries the hook's line
+/// ONCE, the deaths being one condition — one site and no route, the fault
+/// firing past the connection whose guard named one (#717) — and the
+/// worker's catch's death line ONCE PER WORKER, each naming that site and the
+/// literal, their workers left together `0..MIN_WORKERS` in whatever order
+/// the deaths came; then, after every one of them, the panics the hook
+/// counted and no tick said, `{MIN_WORKERS − 1} more panics at {site} since
+/// its last line`, and last `failure: every worker thread has ended; the
 /// board serves nothing`. No worker takes two requests: the accept loop
 /// hands each connection to one worker blocked in `accept`, and a worker
 /// that has served is dead before it could accept again — which the count
-/// of the hook's lines pins. A connect the OS refuses while workers remain
-/// — none is expected, the listener standing until the server drops — is
+/// of the death lines pins. A connect the OS refuses while workers remain —
+/// none is expected, the listener standing until the server drops — is
 /// retried within [`PATIENCE`] ([`get_health_retrying_the_connect`]).
 #[test]
 fn every_worker_gone_is_said_after_the_hooks_line_and_the_binary_exits_1() {
@@ -1577,36 +1592,63 @@ fn every_worker_gone_is_said_after_the_hooks_line_and_the_binary_exits_1() {
     let exit_after = last_reply.elapsed();
     assert_eq!(status.code(), Some(1), "FINDING (m16): the exit is {status:?}, not 1");
     let whole = stderr.whole();
-    let hooks_line = |l: &String| {
-        after_the_head(l, "failure").is_some_and(|said| {
-            said.starts_with("skepd-worker: a thread panicked at ")
-                && said.ends_with(": the test seam's worker fault, outside the handler's catch")
-        })
-    };
-    let hook_at = whole
+    let all = whole.join("\n");
+    let literal = "the test seam's worker fault, outside the handler's catch";
+    let said = |l: &String| after_the_head(l, "failure").map(str::to_string);
+    let hooks: Vec<(usize, String)> = whole
         .iter()
-        .position(hooks_line)
-        .unwrap_or_else(|| panic!("FINDING (row 41): no hook's line:\n{}", whole.join("\n")));
-    let last_hook_at = whole.iter().rposition(hooks_line).expect("the first hook's line is one");
-    let hook_lines = whole.iter().filter(|l| hooks_line(l)).count();
+        .enumerate()
+        .filter_map(|(at, l)| {
+            let site = said(l)?
+                .strip_prefix("skepd-worker: a thread panicked at ")?
+                .strip_suffix(&format!(": {literal}"))?
+                .to_string();
+            Some((at, site))
+        })
+        .collect();
+    let [(hook_at, site)] = &hooks[..] else {
+        panic!("FINDING (#717): one hook's line for the deaths at one site, not one per worker:\n{all}")
+    };
+    assert!(!site.contains(" while serving "), "past the connection, no route: {site}");
+    let death = format!("a worker thread ended on a panic at {site}: {literal}; ");
+    let serve = format!(" of {workers} workers serve, and none is replaced before a restart");
+    let deaths: Vec<(usize, usize)> = whole
+        .iter()
+        .enumerate()
+        .filter_map(|(at, l)| {
+            let left = said(l)?.strip_prefix(&death)?.strip_suffix(&serve)?.parse().ok()?;
+            Some((at, left))
+        })
+        .collect();
+    let mut left: Vec<usize> = deaths.iter().map(|&(_, left)| left).collect();
+    left.sort_unstable();
     assert_eq!(
-        hook_lines,
-        workers,
-        "one hook's line per worker, {workers} workers:\n{}",
-        whole.join("\n")
+        left,
+        (0..workers).collect::<Vec<_>>(),
+        "FINDING (#717): a death line per worker, each with the workers left:\n{all}"
     );
+    let count = format!("{} more panics at {site} since its last line", workers - 1);
+    let count_at = whole
+        .iter()
+        .position(|l| said(l).as_deref() == Some(count.as_str()))
+        .unwrap_or_else(|| panic!("FINDING (#717): no count line {count:?}:\n{all}"));
     let exit_at = whole
         .iter()
         .position(|l| {
             after_the_head(l, "failure")
                 == Some("every worker thread has ended; the board serves nothing")
         })
-        .unwrap_or_else(|| panic!("FINDING (m16): no exit line:\n{}", whole.join("\n")));
-    assert!(hook_at < exit_at, "the hook's line comes first:\n{}", whole.join("\n"));
-    assert!(last_hook_at < exit_at, "every hook's line comes first:\n{}", whole.join("\n"));
+        .unwrap_or_else(|| panic!("FINDING (m16): no exit line:\n{all}"));
+    assert!(
+        *hook_at < count_at && deaths.iter().all(|&(at, _)| at < count_at),
+        "the count comes after every hook and death line:\n{all}"
+    );
+    assert!(count_at < exit_at, "the exit's line comes last:\n{all}");
     println!(
-        "{workers} workers ended on {workers} requests, {hook_lines} hook lines; the exit came \
-         {} ms after the last reply",
+        "{workers} workers ended on {workers} requests: one hook line, {} death lines, the count \
+         of {}; the exit came {} ms after the last reply",
+        deaths.len(),
+        workers - 1,
         exit_after.as_millis()
     );
 }

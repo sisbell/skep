@@ -514,7 +514,10 @@ apart.
    a history read found the journal unreadable at position {position}
    {file} stopped since position {position}
    the pruner's thread is gone
+   {n} of {workers} worker threads are gone
    the feed walk's thread is gone; positions ({low}, {head}] stay uncovered
+   {n} more panics at {location} while serving {route} since its last line
+   {n} panics at sites past the hook's memory of 1024
    the cell index failed to build
    deposits refused at the floor (free space {free} below the floor in force {floor})
    a deposit's file is unread ({cause}), {n} reads failed over {ms} ms
@@ -529,7 +532,13 @@ apart.
    floor's clause names the cause in place of the figures: `deposits
    refused at the floor (free space unread: {cause})` (step 1). The
    kept files are listed afresh at each tick, by name within the
-   data directory (Start, step 3, item 8). What ends each:
+   data directory (Start, step 3, item 8). A panic's clause names
+   the site its first line named and the route its thread was
+   serving, in the daemon's own words; the route part is absent
+   where no request was being served — the read itself, a thread of
+   the daemon's own, `main` — and the bound's clause names no site:
+   it counts the panics at sites the hook's memory had no room for
+   that hour. What ends each:
 
    - the write path's halt and the kernel's: a restart, once the
      volume has room and the device answers (step 5);
@@ -548,9 +557,19 @@ apart.
      file's stop loses nothing by the wait;
    - the pruner's thread: a restart; the blob logs' stops stand until
      it;
+   - the worker threads: a restart; the board serves on the workers
+     left, and the binary exits 1 once none is left (Stop, step 3);
    - the feed walk's thread: a restart soon, for the same reason as
      `commits.log`'s stop, `/changes` refusing pages into the region
      meanwhile (Restart, step 3);
+   - a panic's clause: it is said once with its count, and again only
+     where more came. A clause at tick after tick is a recurring
+     defect: keep its first line (`failure: {thread}: a thread
+     panicked at {location} …`; Stop, step 3) and report it with the
+     route. Where the line's message is `OS entropy unavailable: …`,
+     mend the host's entropy source; until then `GET /challenge` and
+     `POST /session` answer `500 internal_panic`, and each `POST
+     /session` counted leaves a session that nothing can close;
    - the cell index: a restart; uploads and the listing of one's
      deposits are answered `503 index_failed` until it (Start, step 3,
      item 18);
@@ -572,7 +591,9 @@ apart.
    refused it …`, no standing line comes until a restart, and its
    absence says nothing of the board's health; restart soon, since
    each second crossing's checkpoint then runs on a writer and holds
-   every write for its length.
+   every write for its length. A panic's count then comes on its
+   site's next line past the hour (`; {n} more at this site since its
+   last line`), or at the exit.
 
 ## 2. Restore
 
@@ -1991,14 +2012,22 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
 3. **Know how it ends on its own.** The library's orderly stop is
    for programs that embed the daemon; the `skepd` binary never
    runs it. The binary ends by itself only once every worker thread
-   has ended. A thread's panic is said on one line, once an hour per
-   site on its thread while it recurs, the panics between counted on
-   the next (`; {n} more at this site on this thread since its last
-   line`); when the last worker is gone, the daemon says the second
-   line below and exits 1:
+   has ended. A panic is said on one line the first time it comes at
+   its site — on whichever thread, and once for each route a worker
+   was serving there (`while serving {route}`) — and the panics after
+   it there, on any thread, are counted and said within the hour: on
+   the hourly `standing:` line (`{n} more panics at {location} since
+   its last line`; The full volume, step 8), or on the site's next
+   line where no standing line has come for an hour (`; {n} more at
+   this site since its last line`). A worker thread's death is said
+   on a line of its own, with the panic's site and the workers left.
+   When the last worker is gone, the daemon says the counts not yet
+   said, then the last line below, and exits 1:
 
    ```
    failure: {thread}: a thread panicked at {location}
+   failure: a worker thread ended on a panic at {location}; {left} of {workers} workers serve, and none is replaced before a restart
+   failure: {n} more panics at {location} since its last line
    failure: every worker thread has ended; the board serves nothing
    ```
 

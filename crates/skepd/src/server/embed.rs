@@ -25,11 +25,14 @@
 //! directory refused before the open, each refusal said and exited on — and
 //! calls neither. The library's open takes the directory as it finds it; an
 //! embedding program that wants that refusal, or a panic posture, makes it its
-//! own. A panic hook of its own calls [`note_site`](crate::note_site) with its
-//! info's location, as the binary's does, so the cell index's walk and the
-//! change feed's name the site of a panic their catches contain
-//! (`operations.md` §1.1 row 41; §4 row 26); without it, each says
-//! `an unknown location`.
+//! own. A panic hook of its own calls [`note_site`](crate::note_site) and then
+//! [`admit_panic`](crate::admit_panic) with its info's location, as the
+//! binary's does: the first so the cell index's walk, the change feed's and a
+//! worker's death name the site of a panic their catches contain
+//! (`operations.md` §1.1 row 41; §4 rows 26 and 32), each saying `an unknown
+//! location` without it; the second so the hook says a panic once per
+//! condition and the standing line counts the rest (§1, the rates), the
+//! standing line counting none of its panics without it.
 
 use std::error::Error;
 use std::fmt;

@@ -969,7 +969,7 @@ fn runbook_names_the_cadences_the_cores_constants_set() {
     for figure in [
         "And once an hour, while any bad state stands, the daemon writes one `standing:` line"
             .to_string(),
-        "A thread's panic is said on one line, once an hour per site on its thread while it recurs"
+        "the panics after it there, on any thread, are counted and said within the hour"
             .to_string(),
         format!("a line every {every} positions or ten seconds, whichever comes first"),
         format!("`progress:` line every {every} boundaries or ten seconds, whichever comes first"),

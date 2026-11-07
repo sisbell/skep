@@ -26,8 +26,8 @@
 //! a catch's line; the site is the code's own, and identifies the panic.
 //!
 //! Here by the rule of membership: `skepd`'s binary notes the site in its
-//! hook, and the cell index's walk (`skep-media`) and the change feed's
-//! walk (`skep-core`) each catch the panic and say it.
+//! hook, and the cell index's walk (`skep-media`), the change feed's walk
+//! (`skep-core`) and `skepd`'s worker loop each catch the panic and say it.
 
 use std::cell::Cell;
 use std::fmt;

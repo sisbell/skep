@@ -55,13 +55,14 @@ const LAYERS: &[(&str, u8)] = &[
     ("server::reply", 3),
     ("server::request", 3),
     ("server::scan", 3),
-    // 4 — the leaves: the history service and the daemon's seven bounds.
-    // The session layer, the write path (now the commits), the codec, the
-    // serialization lock and the six bounds the core reads, once rows here,
-    // are `skep-core`'s; `permits` and `notice` are `skep-util`'s; the media
-    // resource and the two cells `skep-media`'s.
+    // 4 — the leaves: the history service, the daemon's seven bounds and
+    // the panic hook's tally. The session layer, the write path (now the
+    // commits), the codec, the serialization lock and the six bounds the core
+    // reads, once rows here, are `skep-core`'s; `permits` and `notice` are
+    // `skep-util`'s; the media resource and the two cells `skep-media`'s.
     ("history", 4),
     ("limits", 4),
+    ("panics", 4),
 ];
 
 #[test]

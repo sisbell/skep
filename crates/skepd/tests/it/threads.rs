@@ -26,6 +26,11 @@
 //! * ROW 32: the unlink's seam armed, a blob-family request answers
 //!   normally and the SAME worker — the daemon serves with one — serves the
 //!   next request; the catch adds no line (the hook's is the binary's).
+//! * ROW 32, A WORKER's DEATH: the worker fault's outside arm armed, a
+//!   request is answered and its worker then dies past the handler's catch
+//!   — the worker's catch says ONE consequence line with the workers left;
+//!   a worker left serves the next request; the next tick says `1 of {n}
+//!   worker threads are gone`; the stop still joins.
 //!
 //! The words are the unit suite's (`server/tests.rs`); the class word
 //! `failure:` is read here off the record. The seams are the daemon's own
@@ -380,6 +385,53 @@ fn a_panic_in_the_deferred_unlink_is_contained_and_the_one_worker_serves_on() {
         "the catch adds no line of its own: {:?}",
         failures(&sd)
     );
+    sd.shutdown();
+}
+
+/// ROW 32 — A WORKER's DEATH (#717): on an unclaimed board with the worker
+/// fault's OUTSIDE arm armed, `/health` is answered and its worker then dies
+/// past the handler's catch; the worker's catch says ONE consequence line —
+/// the panic at `an unknown location`, since this suite's process runs std's
+/// own hook, which notes no site, the literal, and `{n − 1} of {n} workers
+/// serve` — a worker left answers the next request, the next tick says `1 of
+/// {n} worker threads are gone`, and the stop still joins. The arm is the
+/// process's, so the claim relies on nextest's one process per test.
+#[test]
+fn a_workers_death_is_said_once_with_the_workers_left_and_the_standing_line_names_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_unclaimed(dir.path());
+    let port = sd.port();
+    let n = skepd::DEFAULT_WORKERS;
+    let death = format!(
+        "failure: a worker thread ended on a panic at an unknown location: the test seam's worker \
+         fault, outside the handler's catch; {} of {n} workers serve, and none is replaced before \
+         a restart",
+        n - 1
+    );
+    skepd::Daemon::panic_the_next_worker("outside");
+    let (st, body) = get(port, "/health");
+    assert_eq!(
+        (st, json(&body)["ok"].as_bool()),
+        (200, Some(true)),
+        "the reply is written before the fault fires: {}",
+        String::from_utf8_lossy(&body)
+    );
+    wait_until("the worker's death line", || said(&sd, &death) == 1);
+    let (st, body) = get(port, "/health");
+    assert_eq!(
+        st,
+        200,
+        "a worker left serves the next request: {}",
+        String::from_utf8_lossy(&body)
+    );
+    sd.daemon().set_standing_interval_millis(50);
+    wait_until("the standing line", || !standing_lines(&sd).is_empty());
+    assert_eq!(
+        standing_lines(&sd)[0],
+        format!("standing: 1 of {n} worker threads are gone"),
+        "FINDING (#717): the death stands on the standing line"
+    );
+    assert_eq!(said(&sd, &death), 1, "said once");
     sd.shutdown();
 }
 

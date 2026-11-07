@@ -64,15 +64,18 @@ pub const MAX_REQUEST_BODY: usize = 8 * 1024 * 1024;
 /// it has two readers, so moving it moves both. The checkpoint thread's
 /// timed wait on the write path's signal (`commits::CheckpointSignal::wait`)
 /// ticks at it, and at each tick the thread says one `standing:` line
-/// re-saying every standing bad state that stands — the ten, in the line's
-/// order: the write path's halt, the kernel's poison, the journal damage a
-/// history read met, a stopped feed file, the pruner's thread gone, the feed
-/// walk's thread gone, the cell index failed, the floor binding, a
-/// deposit's file the store cannot read, `CLAIMED-PERMISSIVE` — and nothing
-/// on a healthy board (`operations.md` §1 the rates; §1.1 m11). And
-/// `skepd`'s panic hook rates a recurring panic by it: one line per site on
-/// its thread per interval while its memory holds the site, the panics
-/// between counted on the next.
+/// re-saying every standing bad state that stands — the fourteen, in the
+/// line's order: the write path's halt, the kernel's poison, a system
+/// producer's standing refusal, the journal damage a history read met, a
+/// stopped feed file, the pruner's thread gone, the worker threads gone, the
+/// feed walk's thread gone, the panics `skepd`'s hook counted and has not
+/// said, the cell index failed, the floor binding, a deposit's file the
+/// store cannot read, `CLAIMED-PERMISSIVE`, the kept files beside the
+/// journal and the logs — and nothing on a healthy board (`operations.md`
+/// §1 the rates; §1.1 m11). And `skepd`'s panic hook rates a recurring panic
+/// by it: one line at a site's first panic for each route it was serving,
+/// the panics after it counted and said at the next tick, or on the site's
+/// next line where no tick has come for an interval.
 ///
 /// What the interval bounds is how long a standing state goes unsaid past
 /// its transition: each is said once at its transition, so a stream rotated
@@ -81,9 +84,10 @@ pub const MAX_REQUEST_BODY: usize = 8 * 1024 * 1024;
 /// state that still stands. The tick is answered at the first wait past its
 /// deadline that finds no raise pending, so the turn the thread is in when
 /// the tick falls due, and each turn a raise pending at a wait calls for,
-/// comes first. A tick on a healthy board costs the ten reads — an atomic
-/// load or one lock each, save the floor's fresh read of the volume's free
-/// space — and writes nothing.
+/// comes first. A tick on a healthy board costs the fourteen reads — an
+/// atomic load or one lock each, the hook's tally's lock among them, save
+/// the floor's fresh read of the volume's free space and the kept files'
+/// listing of the data directory — and writes nothing.
 pub const STANDING_INTERVAL: Duration = Duration::from_secs(3600);
 
 /// The feed walk's progress cadence, the boundary half: 1,000, interim (D1).

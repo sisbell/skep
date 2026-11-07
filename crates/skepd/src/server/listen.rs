@@ -18,6 +18,7 @@ use skep_media::pruner::{Cadence, Wake};
 use skep_media::serve::Progress;
 #[cfg(feature = "test-hooks")]
 use skep_media::serve::STREAM_HOLD;
+use skep_util::caught::catch;
 use skep_util::notice::{self, Class, Moment};
 use skep_util::permits::{edge_clock_now, Edge, EdgeTracker, PoolEdgeLine};
 
@@ -33,8 +34,8 @@ use super::scan::{
     MAX_CONCURRENT_CLASS_SCANS, MAX_CONCURRENT_REGION_READS, MAX_REGION_READ_WAITERS,
 };
 use super::{
-    AcceptFailedLine, AcceptRecoveredLine, BudgetEdgeLine, CheckpointThreadRefusedLine, Daemon,
-    StreamThreadLine, WORKER_POOL,
+    route_of, AcceptFailedLine, AcceptRecoveredLine, BudgetEdgeLine, CheckpointThreadRefusedLine,
+    Daemon, StreamThreadLine, WORKER_POOL,
 };
 use skep_core::auth::session::Peer;
 use crate::limits::{BLOB_CHUNK, BLOB_IDLE_BOUND, BLOB_TRANSFER_BOUND, PRUNE_INTERVAL};
@@ -486,6 +487,10 @@ pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Re
     // whole start below, so no count is judged on a pool short of `workers`.
     let free = Arc::new(AtomicUsize::new(workers));
     let worker_edges = Arc::new(EdgeTracker::new(EDGE_HOLD_DOWN));
+    // The count a worker's death line names the workers left out of, stored
+    // before the first spawn, so a worker that dies on its first connection
+    // reads it.
+    daemon.threads.workers.store(workers, Ordering::Release);
     // Spawned fallibly, and named: `thread::spawn` panics when the OS
     // refuses a thread, and a panic here would unwind out of a half-built
     // handle vector — detaching the workers that did start, with the
@@ -508,58 +513,78 @@ pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Re
         let accepts = Arc::clone(&accepts);
         let free = Arc::clone(&free);
         let worker_edges = Arc::clone(&worker_edges);
-        let spawned = thread::Builder::new().name("skepd-worker".into()).spawn(move || loop {
-            if stop.load(Ordering::Acquire) {
-                break;
-            }
-            let accepted = listener.accept();
-            // The accept seam (test seam, `server/hooks.rs`): the next `k`
-            // accepts a suite armed answer the chosen error in place of the
-            // connection they took, which is dropped — so the pair below is
-            // driven without exhausting the process's descriptors.
-            #[cfg(any(test, feature = "test-hooks"))]
-            let accepted = super::hooks::fail_the_accept_if_armed(accepted);
-            let stream = match accepted {
-                Ok((s, _)) => {
-                    // The accept pair's second edge (m12): a success a whole
-                    // hold-down after the episode's last failure says the
-                    // recovery, once, with every worker's failures counted.
-                    say_accept_recovered_if_due(&daemon, &accepts);
-                    s
+        let spawned = thread::Builder::new().name("skepd-worker".into()).spawn(move || {
+            // The worker's catch (`operations.md` §1.1 row 41; §4 row 32): a
+            // panic past the handler's catch ends the worker here, its death
+            // said with the workers left (`Daemon::a_worker_thread_ended`);
+            // the thread ends and nothing replaces it, so `wait` returns once
+            // every worker has ended, and a stop's `break` says nothing.
+            // Unwind safety is argued as the other loop catches argue it: the
+            // thread ends at the catch, and nothing it held is used after. The
+            // site the catch names is the hook's for the unwind it caught:
+            // every unwind that escapes a connection is a panic, which runs
+            // the hook and notes its site afresh — the two that
+            // `resume_unwind` re-raises on a worker, the kernel's commit and
+            // the write path's record step, rise inside the handler's own
+            // catch, which contains them.
+            let served = catch(AssertUnwindSafe(|| loop {
+                if stop.load(Ordering::Acquire) {
+                    break;
                 }
-                Err(e) => {
-                    // Transient accept failure (EMFILE and kin): said once
-                    // across the workers at the first of an episode — the
-                    // OS's text names the cause; the act is the operator's,
-                    // the descriptor limit — then a brief pause instead of a
-                    // spin, and re-check stop.
-                    say_accept_failed_once(&daemon, &accepts, &e);
-                    thread::sleep(ACCEPT_RETRY_PAUSE);
-                    continue;
+                let accepted = listener.accept();
+                // The accept seam (test seam, `server/hooks.rs`): the next `k`
+                // accepts a suite armed answer the chosen error in place of the
+                // connection they took, which is dropped — so the pair below is
+                // driven without exhausting the process's descriptors.
+                #[cfg(any(test, feature = "test-hooks"))]
+                let accepted = super::hooks::fail_the_accept_if_armed(accepted);
+                let stream = match accepted {
+                    Ok((s, _)) => {
+                        // The accept pair's second edge (m12): a success a
+                        // whole hold-down after the episode's last failure says
+                        // the recovery, once, with every worker's failures
+                        // counted.
+                        say_accept_recovered_if_due(&daemon, &accepts);
+                        s
+                    }
+                    Err(e) => {
+                        // Transient accept failure (EMFILE and kin): said once
+                        // across the workers at the first of an episode — the
+                        // OS's text names the cause; the act is the operator's,
+                        // the descriptor limit — then a brief pause instead of
+                        // a spin, and re-check stop.
+                        say_accept_failed_once(&daemon, &accepts, &e);
+                        thread::sleep(ACCEPT_RETRY_PAUSE);
+                        continue;
+                    }
+                };
+                // Shutdown's wake connect lands here: the flag, not the
+                // connection, is the signal.
+                if stop.load(Ordering::Acquire) {
+                    break;
                 }
-            };
-            // Shutdown's wake connect lands here: the flag, not the
-            // connection, is the signal.
-            if stop.load(Ordering::Acquire) {
-                break;
+                // The worker pool's edges (m12's form), told after the stop's
+                // check, so the stop's wake connects say nothing: this worker
+                // serves a connection from here, and where it was the last free
+                // one every worker is busy. It counts among the free until it
+                // takes itself out, so the count it takes from is never zero.
+                let free_after = free.fetch_sub(1, Ordering::AcqRel) - 1;
+                say_the_worker_pools_edge(&daemon, &worker_edges, free_after);
+                serve_connection(&daemon, &subscribers, stream);
+                // The fault door's outside arm (test seam): a panic here, after
+                // the reply is written and outside the handler's catch, is the
+                // shape a worker's death has — the worker's catch says it and
+                // the thread ends, the rest serve, and when the last is gone
+                // `wait` returns to the binary.
+                #[cfg(any(test, feature = "test-hooks"))]
+                super::hooks::fire_the_worker_fault_outside_the_catch();
+                // Free again — after the fault door, so a worker that dies
+                // there is never counted free.
+                free.fetch_add(1, Ordering::AcqRel);
+            }));
+            if let Err(caught) = served {
+                daemon.a_worker_thread_ended(&caught);
             }
-            // The worker pool's edges (m12's form), told after the stop's
-            // check, so the stop's wake connects say nothing: this worker
-            // serves a connection from here, and where it was the last free
-            // one every worker is busy. It counts among the free until it
-            // takes itself out, so the count it takes from is never zero.
-            let free_after = free.fetch_sub(1, Ordering::AcqRel) - 1;
-            say_the_worker_pools_edge(&daemon, &worker_edges, free_after);
-            serve_connection(&daemon, &subscribers, stream);
-            // The fault door's outside arm (test seam): a panic here, after
-            // the reply is written and outside the handler's catch, is the
-            // shape a worker's death has — the thread ends, the rest serve,
-            // and when the last is gone `wait` returns to the binary.
-            #[cfg(any(test, feature = "test-hooks"))]
-            super::hooks::fire_the_worker_fault_outside_the_catch();
-            // Free again — after the fault door, so a worker that dies there
-            // is never counted free.
-            free.fetch_add(1, Ordering::AcqRel);
         });
         match spawned {
             Ok(h) => handles.push(h),
@@ -667,15 +692,16 @@ impl Skepd {
 
     /// Blocks until the workers exit: the binary's foreground call.
     ///
-    /// In practice that is until the process ends: `wait` consumes the
-    /// server, so nothing is left to set the stop flag, and crash-stop is the
-    /// shutdown story (M2's WAL makes recovery the clean path, so there is
-    /// no signal machinery). A return is every worker having ended — a
-    /// panic past the handler's catch, one worker at a time, until none is
-    /// left to accept — which the binary says as the failure it is and exits
-    /// 1 on. An embedder that wants to stop a running server keeps the
-    /// [`Skepd`] and calls [`Skepd::shutdown`] instead. Returning ends every
-    /// event stream too, since the server is dropped here.
+    /// In practice that is until the process ends: `wait` consumes the server,
+    /// so nothing is left to set the stop flag, and crash-stop is the shutdown
+    /// story (M2's WAL makes recovery the clean path, so there is no signal
+    /// machinery). A return is every worker having ended — a panic past the
+    /// handler's catch, one worker at a time, until none is left to accept,
+    /// each death said by its worker's catch as it comes, with the workers left
+    /// — which the binary says as the failure it is and exits 1 on. An embedder
+    /// that wants to stop a running server keeps the [`Skepd`] and calls
+    /// [`Skepd::shutdown`] instead. Returning ends every event stream too,
+    /// since the server is dropped here.
     pub fn wait(mut self) {
         for h in self.workers.drain(..) {
             let _ = h.join();
@@ -812,9 +838,9 @@ pub(super) fn wake_addr(bound: Ipv4Addr) -> Ipv4Addr {
 /// **The catch** (row 41). The whole loop runs under `catch_unwind`, and a
 /// panic that escapes a turn ends the thread through its catch
 /// (`Daemon::the_checkpoint_thread_ended`): the liveness flag and the
-/// consequence line, after the hook's line has said the panic itself. No
-/// cure — nothing re-spawns the thread but a restart — and the standing line
-/// ends with its carrier.
+/// consequence line, after the hook's line, where the rate says one, has said
+/// the panic itself. No cure — nothing re-spawns the thread but a restart — and
+/// the standing line ends with its carrier.
 fn checkpoint_on_due(daemon: &Daemon, signal: &CheckpointSignal) {
     let turns = catch_unwind(AssertUnwindSafe(|| loop {
         // The hold (test seam): a suite parks the thread here, before it
@@ -871,8 +897,8 @@ const PRUNER_NO_PASS_INDEX_FAILED: &str = "pruner: no pass runs — the cell ind
 /// **The catch** (row 41). The whole loop runs under `catch_unwind`, and a
 /// panic that escapes a turn ends the thread through its catch
 /// (`Daemon::the_pruner_thread_ended`): the liveness flag the standing line
-/// reads hourly, and the consequence line, after the hook's line has said
-/// the panic itself. No cure but a restart.
+/// reads hourly, and the consequence line, after the hook's line, where the
+/// rate says one, has said the panic itself. No cure but a restart.
 fn prune_on_cadence(daemon: &Daemon, cadence: &Cadence) {
     let turns = catch_unwind(AssertUnwindSafe(|| loop {
         // The fault (test seam): a panic at the top of a turn, the shape the
@@ -921,7 +947,8 @@ impl Drop for Skepd {
 /// file on this worker ([`stream_fetch`]), the fetch pool's permit held by
 /// the answer bounding how many workers do so at once. A handler panic is
 /// contained to a 500 so one bad request cannot take a worker down; the
-/// panic still prints to stderr for the operator.
+/// binary's hook says it on the operator stream at its rate, naming the
+/// route this connection serves (`crate::panics`).
 fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream: TcpStream) {
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT));
@@ -951,6 +978,13 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
             return;
         }
     };
+    // The route this worker serves, named for the panic hook (`crate::panics`;
+    // SP-15) in the router's own words for the request's method and path, held
+    // to this function's end: a panic anywhere in the connection past the read
+    // — the routing, the reply's write, the event stream's resolve and
+    // admission, the fetch's stream, the asides' unlink — names its route, and
+    // the guard puts the slot back on a return or an unwind alike.
+    let _serving = crate::panics::serving(route_of(&req.method, &req.path));
     // The unwind-safety assertion is sound rather than convenient:
     // `parking_lot`'s locks do not poison, so a panic under one releases it
     // with the data as it stands, and no structure this daemon guards is
@@ -1035,15 +1069,15 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
             // once, at open.
             //
             // Contained like the handler above, and for the reason
-            // `Subscribers::admit`'s spawn is fallible: this call sits in
-            // the worker's accept loop rather than inside `route`, so a
-            // panic here retires the worker for the life of the process —
-            // listener still bound, nothing replacing it, no line but the
-            // panic hook's. Not hypothetical in a debug build: a live bare
-            // binding presented with an `Origin` header that parses
-            // reaches `Origin::from_parts`'s debug assert through
-            // `bare_origins`. A refusal costs one stream, and dropping the
-            // socket is the clean close a budgeted refusal already gives.
+            // `Subscribers::admit`'s spawn is fallible: this call sits in the
+            // worker's accept loop rather than inside `route`, so a panic here
+            // would retire the worker for the life of the process — listener
+            // still bound, nothing replacing it, the worker's death line the
+            // one word of it. Not hypothetical in a debug build: a live bare
+            // binding presented with an `Origin` header that parses reaches
+            // `Origin::from_parts`'s debug assert through `bare_origins`. A
+            // refusal costs one stream, and dropping the socket is the clean
+            // close a budgeted refusal already gives.
             let Ok(closed) = catch_unwind(AssertUnwindSafe(|| daemon.resolve_at_head(&req).closed))
             else {
                 return;
@@ -1258,14 +1292,14 @@ impl Subscribers {
         if let Some(edge) = self.edge.admitted(edge_clock_now()) {
             daemon.say(edge.class(), BudgetEdgeLine(edge));
         }
-        // Spawn fallibly. `thread::spawn` panics when the OS refuses a
-        // thread, and this call sits outside the handler's `catch_unwind` —
-        // a panic here would unwind the worker's accept loop and retire the
-        // worker for the life of the process, so a transient resource
-        // condition would become a permanent loss of capacity, with the
-        // listener still bound and no line but the panic hook's. A refusal
-        // must cost one stream, never a worker; the failed spawn drops the
-        // closure and with it the socket, which is the clean close above.
+        // Spawn fallibly. `thread::spawn` panics when the OS refuses a thread,
+        // and this call sits outside the handler's `catch_unwind` — a panic
+        // here would unwind the worker's accept loop and retire the worker for
+        // the life of the process, so a transient resource condition would
+        // become a permanent loss of capacity, with the listener still bound
+        // and the worker's death line the one word of it. A refusal must cost
+        // one stream, never a worker; the failed spawn drops the closure and
+        // with it the socket, which is the clean close above.
         // The spawn's refusal (test seam): the next streams a suite armed
         // meet the seam's error in place of the OS's spawn, no thread made.
         #[cfg(any(test, feature = "test-hooks"))]

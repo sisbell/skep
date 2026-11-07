@@ -50,7 +50,8 @@ above it.
   daemon emits is built through, `hex_string` and its exact inverse
   `parse_lower_hex` with `hex_nibble`; a setting's source; a caught panic
   named by the site its hook noted — `caught`, the per-thread slot the
-  daemon's panic hook fills and the walks' catches read; and the file
+  daemon's panic hook fills and the walks' catches and the daemon's worker
+  loop read; and the file
   under one tail rule — `file`, the read that hands back a file's lines as
   bytes and classifies its tail, the append written where the last whole
   line ends with a crash's tail first cut off or closed by a mark, or cut
@@ -1728,6 +1729,7 @@ down through them in this order:
 │                    bound                                │
 ├─────────────────────────────────────────────────────────┤
 │ 4 LEAVES           history · limits (the daemon's seven)│
+│                    · panics (the panic hook's tally)    │
 │   SKEP-CORE        the daemon's core, a crate of its    │
 │                    own below: the session layer · the   │
 │                    commits (the door, the feed, the     │
@@ -1740,8 +1742,9 @@ down through them in this order:
 │                    the fetch's composed order · the     │
 │                    upload setting and the upload pool   │
 │                    (§The media resource)                │
-│   SKEP-UTIL        permits · notice · json — the support│
-│                    crate below, shared with both        │
+│   SKEP-UTIL        permits · notice · json · caught —   │
+│                    the support crate below, shared with │
+│                    both                                 │
 └─────────────────────────────────────────────────────────┘
        │
        ▼
@@ -1751,7 +1754,8 @@ down through them in this order:
   skep-media   →  the door, the gate, the index, the pruner, the fetch
                   →  skep-blobs, and the stores through the world it is handed
   skep-blobs   →  blobs/ (the files, partials, records, leases)
-  skep-util    →  the permit pool, the notice line, the JSON helpers
+  skep-util    →  the permit pool, the notice line, the JSON helpers,
+                  the caught panic
 
   Imports point DOWN or sideways within a layer. Never up.
 ```
@@ -1779,10 +1783,11 @@ through the store's install — nothing above their own layer.
 1. **The transport** — `server/listen.rs` (sockets — the listener bound
    BEFORE the open, `bind` then `serve_bound`, `serve` the two in
    sequence; the worker threads, their default count and the minimum, one
-   more than the six permit pools' slots together; the event streams'
-   loop and budget; the pruner's cadence thread; THE CHECKPOINT THREAD,
-   the kernel's deferred trigger serviced off the write path's guard; and,
-   after a blob reply is written, the replaced file's deferred unlink) and
+   more than the six permit pools' slots together, each worker's death
+   said by its own catch; the event streams' loop and budget; the pruner's
+   cadence thread; THE CHECKPOINT THREAD, the kernel's deferred trigger
+   serviced off the write path's guard; and, after a blob reply is
+   written, the replaced file's deferred unlink) and
    `server/http.rs` (the HTTP bytes: the request reader, the reply writer,
    the event framing — and the streaming arm, a `BodySource` over the
    connection's socket the router's private door takes by value). It
@@ -1831,15 +1836,18 @@ through the store's install — nothing above their own layer.
    class pool and the per-document pool): what the routes and the
    transport both speak.
 4. **The leaves** — `history.rs` (reading the world at an earlier
-   position) and `limits.rs` (the daemon's own bounds; the ones the core
+   position), `limits.rs` (the daemon's own bounds; the ones the core
    reads are `skep_core::limits`'s, and the media resource's own numbers
    `skep-media`'s `limits`, the daemon taking the ones it reads from
-   there, each `pub` for it). Neither knows anything about the daemon; a
-   leaf imports only leaves — and a leaf in another crate is a leaf: the
-   counting permit the six bounded pools use and the operator's log line
-   are `skep-util`'s `permits` and `notice`, the support crate below this
-   one (§The support crate); the codec and the serialization lock are
-   `skep-core`'s, and the two cells `skep-media`'s.
+   there, each `pub` for it) and `panics.rs` (the panic hook's tally: the
+   route a worker serves, named by the router, and the counts the
+   standing line and the binary's exit say). None knows anything about
+   the daemon; a leaf imports only leaves — and a leaf in another crate is
+   a leaf: the counting permit the six bounded pools use, the operator's
+   log line and the caught panic are `skep-util`'s `permits`, `notice` and
+   `caught`, the support crate below this one (§The support crate); the
+   codec and the serialization lock are `skep-core`'s, and the two cells
+   `skep-media`'s.
 
 Below the daemon's four layers, its core and its media resource, two
 crates the daemon composes with:

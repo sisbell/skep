@@ -227,7 +227,7 @@ use std::fmt;
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
 #[cfg(any(test, feature = "test-hooks"))]
@@ -252,6 +252,7 @@ use skep_media::pruner::Pruner;
 use skep_media::MediaOptions;
 #[cfg(feature = "observe")]
 use skep_namespace::PrincipalId;
+use skep_util::caught::Caught;
 use skep_util::notice::{self, Class, Moment};
 use skep_util::permits::{Edge, EdgeTracker, Permits, PoolEdgeLine};
 use skep_util::source::Source;
@@ -265,6 +266,7 @@ use skep_core::auth::{
 use skep_core::codec::JsonCodec;
 use crate::history::History;
 use crate::limits::MAX_SMALL_BODY;
+use crate::panics::{self, RouteName, UnsaidPanics};
 use crate::tools;
 use skep_core::limits::{EDGE_HOLD_DOWN, MAX_REQUEST_BODY};
 #[cfg(any(test, feature = "test-hooks"))]
@@ -722,31 +724,69 @@ impl std::error::Error for DaemonError {
     }
 }
 
-/// Returns whether `path` is one of the paths this daemon serves.
+/// Returns the router's own spelling of `path`, where it is a path served.
 ///
 /// This is the one place the route set is stated, so preflight, method
-/// refusal and dispatch cannot disagree about what exists. A known path
-/// answers `OPTIONS` with a preflight and a wrong method with `405`;
-/// everything else is the ordinary `404`. The blob upload's path family is
-/// known as a family: `/blob/upload` and `/blob/upload/<id>`, the latter
-/// known for any `<id>` and refused by name where it is no identifier; the
-/// blob fetch's path `/blob` is known beside it.
+/// refusal, dispatch and the route a panic names cannot disagree about what
+/// exists. A known path answers `OPTIONS` with a preflight and a wrong
+/// method with `405`; everything else is the ordinary `404`. The blob
+/// upload's path family is known as a family: `/blob/upload`, and
+/// `/blob/upload/{id}` for any path beneath it, refused by name where its
+/// tail is no identifier; the blob fetch's path `/blob` is known beside it.
+/// The answer is the router's own words and never the request's bytes, so
+/// no upload's identifier, query or address rides it.
+fn known_path(path: &str) -> Option<&'static str> {
+    let known = match path {
+        "/session" => "/session",
+        "/session/close" => "/session/close",
+        "/challenge" => "/challenge",
+        "/op" => "/op",
+        "/op-at" => "/op-at",
+        "/health" => "/health",
+        "/events" => "/events",
+        "/changes" => "/changes",
+        "/chain" => "/chain",
+        "/dump" if cfg!(feature = "observe") => "/dump",
+        "/" if cfg!(feature = "client") => "/",
+        p if blob_routes::is_fetch_path(p) => "/blob",
+        p => match blob_routes::blob_path(p)? {
+            blob_routes::BlobPath::Family => "/blob/upload",
+            blob_routes::BlobPath::Upload(_) | blob_routes::BlobPath::Malformed => {
+                "/blob/upload/{id}"
+            }
+        },
+    };
+    Some(known)
+}
+
+/// Returns whether `path` is one of the paths this daemon serves.
+///
+/// It is [`known_path`]'s answer, so the route set stays one table.
 fn path_is_known(path: &str) -> bool {
-    matches!(
-        path,
-        "/session"
-            | "/session/close"
-            | "/challenge"
-            | "/op"
-            | "/op-at"
-            | "/health"
-            | "/events"
-            | "/changes"
-            | "/chain"
-    ) || (cfg!(feature = "observe") && path == "/dump")
-        || (cfg!(feature = "client") && path == "/")
-        || blob_routes::is_blob_path(path)
-        || blob_routes::is_fetch_path(path)
+    known_path(path).is_some()
+}
+
+/// Returns the route a request names, in the router's own words.
+///
+/// The method is matched against the six the router dispatches — `GET`,
+/// `HEAD`, `POST`, `PATCH`, `DELETE` and `OPTIONS` — and answered as that
+/// literal, the path by [`known_path`]; where both are known the route is
+/// `{method} {path}`, and anything else — another method, `PUT` among them,
+/// or an unknown path — is `an unknown route`. The reader admits any
+/// upper-case method token and any path bytes, so neither is ever copied:
+/// the route a worker names while it serves the request ([`crate::panics`];
+/// SP-15) holds no byte a client chose.
+fn route_of(method: &str, path: &str) -> RouteName {
+    let method = match method {
+        "GET" => "GET",
+        "HEAD" => "HEAD",
+        "POST" => "POST",
+        "PATCH" => "PATCH",
+        "DELETE" => "DELETE",
+        "OPTIONS" => "OPTIONS",
+        _ => return RouteName::unknown(),
+    };
+    known_path(path).map_or_else(RouteName::unknown, |path| RouteName::known(method, path))
 }
 
 // The token ↔ session binding, the handshake, and per-request resolution
@@ -923,10 +963,11 @@ pub struct Daemon {
     /// pass that lands. Each line that carries the figure carries that
     /// reading beside the largest of the uptime's readings.
     resident: ResidentHighWater,
-    /// The liveness flags of the daemon's two loop threads.
+    /// The liveness of the daemon's two loop threads and its workers.
     ///
-    /// Each ([`ThreadLiveness`]) is set by its loop's catch as the thread
-    /// ends on a caught panic, the pruner's read by the standing line.
+    /// Each flag and the workers' count of deaths ([`ThreadLiveness`]) is
+    /// moved by its loop's catch as the thread ends on a caught panic; the
+    /// pruner's flag and the workers' count are read by the standing line.
     threads: ThreadLiveness,
     /// The aside fault's once-flag (`operations.md` §1.1 row 37).
     ///
@@ -994,7 +1035,7 @@ pub struct Daemon {
     /// each line kept as `{class}: {text}` — the configuration lines after
     /// the bind, the warnings at both their moments, the blocked list, the
     /// flip's landing line, the reissue's refusal, the standing line, the
-    /// kernel's halt line and the two thread catches' lines among them —
+    /// kernel's halt line and the three thread catches' lines among them —
     /// for `Daemon::lines_said`, since no suite captures stderr in-process.
     /// The record is the write path's ([`LinesSaid`]), shared: the kernel's
     /// halt line has a site below the daemon. The open's own lines are said
@@ -1004,13 +1045,15 @@ pub struct Daemon {
     said: LinesSaid,
 }
 
-/// The liveness flags (`operations.md` §1.1 row 41; §4 rows 24 and 25).
+/// The liveness flags (`operations.md` §1.1 row 41; §4 rows 24, 25 and 32).
 ///
 /// There is one per daemon-owned loop thread, set by the thread's own catch
-/// as it ends on a caught panic — never cleared, since nothing re-spawns a
-/// thread but a restart. The pruner's is a read of the standing line (`the
-/// pruner's thread is gone`); the checkpoint thread's is the standing
-/// line's own carrier, so no clause reads it — the hook reads both.
+/// as it ends on a caught panic, and the workers' count of deaths beside
+/// the count served — none ever cleared, since nothing re-spawns a thread
+/// but a restart. The pruner's flag and the workers' count are reads of the
+/// standing line (`the pruner's thread is gone`, `{k} of {n} worker threads
+/// are gone`); the checkpoint thread's is the standing line's own carrier,
+/// so no clause reads it — the test hooks read both flags.
 struct ThreadLiveness {
     /// The pruner's thread ended on a caught panic.
     ///
@@ -1021,6 +1064,14 @@ struct ThreadLiveness {
     /// Every checkpoint from here is the backstop's, and no standing line
     /// comes.
     checkpointer_ended: AtomicBool,
+    /// The worker threads `serve_bound` spawns, stored before the first.
+    ///
+    /// Zero for a daemon no server serves.
+    workers: AtomicUsize,
+    /// The worker threads that ended on a caught panic.
+    ///
+    /// The board serves on the rest; none is replaced before a restart.
+    workers_ended: AtomicUsize,
 }
 
 /// The three panic seams, each an arm fired once at its site.
@@ -1608,6 +1659,8 @@ impl Daemon {
             threads: ThreadLiveness {
                 pruner_ended: AtomicBool::new(false),
                 checkpointer_ended: AtomicBool::new(false),
+                workers: AtomicUsize::new(0),
+                workers_ended: AtomicUsize::new(0),
             },
             aside_fault_said: AtomicBool::new(false),
             history_damage: OnceLock::new(),
@@ -2158,32 +2211,39 @@ impl Daemon {
     /// Says the standing line (`operations.md` §1, the rates; §1.1 m11).
     ///
     /// It is what the checkpoint thread runs at each tick of its timed wait
-    /// ([`Woken::Tick`](skep_core::commits::Woken::Tick)): the eleven reads —
-    /// each atomic loads or one lock, save the floor's fresh read of the
-    /// volume and the unread deposit's fresh read of its file, and none under
-    /// the serialization guard — in the order the line says them: (1) the
-    /// write path's halt with its position, (2) the kernel's poison with the
-    /// head it halted at — no commit lands past a poisoned kernel, so the
-    /// head at the tick is the position the halt line (m10) named — (2b)
-    /// the system producers' standing refusals, each producer's memo under
-    /// its own lock, (3) the
-    /// journal damage a history read met this uptime, by the site its line
-    /// named (`Daemon::history_damage`; RUNBOOK §2), (4) the feed's stopped
-    /// files with theirs, (5) the pruner's liveness flag, (6) the feed walk's
-    /// liveness flag with the region its death left uncovered, (7) the cell
-    /// index's failed state, the media gate's (`operations.md` §4 row 26),
-    /// (8) the media gate's floor binding — its free space below its floor in
-    /// force, or a read of it the host refused, the creation's own test
-    /// (`MediaGate::floor_binding`, read fresh, so the floor's clause stops by
-    /// itself once the read answers room) — (9) the media gate's unread
-    /// deposit, a deposit's file the store could not read
-    /// (`MediaGate::unread_deposit`, its file read fresh, so the clause stops
-    /// by itself, and the episode's end is said, once the store reads it; one
-    /// atomic load where none stands) — and (10) the `CLAIMED-PERMISSIVE` bit
-    /// as `log_config_warnings` reads the claim; and one line,
-    /// [`StandingLine`], under `Class::Standing`, where at least one clause
-    /// stands; nothing otherwise. No clause for the checkpoint thread's own
-    /// death — it is the carrier.
+    /// ([`Woken::Tick`](skep_core::commits::Woken::Tick)): the fourteen reads
+    /// — each atomic loads or one lock, save the floor's fresh read of the
+    /// volume, the unread deposit's fresh read of its file and the kept
+    /// files' listing of the data directory, and none under the
+    /// serialization guard — in the order the line says them: (1) the write
+    /// path's halt with its position, (2) the kernel's poison with the head
+    /// it halted at — no commit lands past a poisoned kernel, so the head at
+    /// the tick is the position the halt line (m10) named — (3) the system
+    /// producers' standing refusals, each producer's memo under its own
+    /// lock, (4) the journal damage a history read met this uptime, by the
+    /// site its line named (`Daemon::history_damage`; RUNBOOK §2), (5) the
+    /// feed's stopped files with theirs, (6) the pruner's liveness flag, (7)
+    /// the workers' count of deaths beside the count served, (8) the feed
+    /// walk's liveness flag with the region its death left uncovered, (9)
+    /// the panics the hook counted and has not said
+    /// ([`panics::take_unsaid_panics`], the tally's lock over at most its
+    /// bound of conditions), (10) the cell index's failed state, the media
+    /// gate's (`operations.md` §4 row 26), (11) the media gate's floor
+    /// binding — its free space below its floor in force, or a read of it the
+    /// host refused, the creation's own test (`MediaGate::floor_binding`,
+    /// read fresh, so the floor's clause stops by itself once the read
+    /// answers room) — (12) the media gate's unread deposit, a deposit's file
+    /// the store could not read (`MediaGate::unread_deposit`, its file read
+    /// fresh, so the clause stops by itself, and the episode's end is said,
+    /// once the store reads it; one atomic load where none stands), (13) the
+    /// `CLAIMED-PERMISSIVE` bit as `log_config_warnings` reads the claim, and
+    /// (14) the kept files beside the journal and the logs, listed afresh;
+    /// and one line, [`StandingLine`], under `Class::Standing`, where at
+    /// least one clause stands; nothing otherwise. The panics' take is the
+    /// one read made out of the line's order, last: it is destructive, each
+    /// count answered once, and the line stands whenever it found one, so
+    /// nothing read after it can lose a count. No clause for the checkpoint
+    /// thread's own death — it is the carrier.
     pub(crate) fn say_the_standing_line(&self) {
         let kernel = self.engine.kernel();
         let line = StandingLine {
@@ -2195,6 +2255,7 @@ impl Daemon {
             history_damaged: self.history_damage.get().cloned(),
             stopped_files: self.commits.stopped_feed_files(),
             pruner_gone: self.threads.pruner_ended.load(Ordering::Acquire),
+            workers_gone: self.workers_gone(),
             feed_walk_gone: self.commits.feed_walk_gone(),
             index_failed: self.media.index_failed(),
             floor: self
@@ -2203,13 +2264,27 @@ impl Daemon {
                 .map(|(free_space, floor)| FloorBinding { free_space, floor }),
             unread_deposit: self.media.unread_deposit(),
             claimed_permissive: self.auth.cfg.claimed_permissive(self.board_is_claimed()),
-            // (11) the kept files beside the journal and the logs, listed
+            // (14) the kept files beside the journal and the logs, listed
             // afresh: a listing the host refuses lists none this tick.
             kept_files: tools::kept_files(&self.data_dir).unwrap_or_default(),
+            // (9) the panics' take, written last though the line says it
+            // ninth: the fields are read in the order written, and the take
+            // answers each count once, so no read stands between the take and
+            // the line that says it.
+            panics: panics::take_unsaid_panics(),
         };
         if line.stands() {
             self.say(Class::Standing, line);
         }
+    }
+
+    /// Returns the workers that ended on a caught panic and the count served.
+    ///
+    /// It is the standing line's read of the workers' liveness
+    /// ([`ThreadLiveness`]), `None` while every worker serves.
+    fn workers_gone(&self) -> Option<(usize, usize)> {
+        let ended = self.threads.workers_ended.load(Ordering::Acquire);
+        (ended > 0).then(|| (ended, self.threads.workers.load(Ordering::Acquire)))
     }
 
     /// Reads the kernel's halt at the catch (m10's second site).
@@ -2234,10 +2309,10 @@ impl Daemon {
     /// It is what the loop's `catch_unwind` runs on a caught panic
     /// (`operations.md` §1.1 row 41; §4 row 25) — the liveness flag, then
     /// the consequence line ([`CheckpointThreadEndedLine`]) under
-    /// `Class::Failure`. The hook's line has said the panic and its site;
-    /// this says what the board lost — the standing line among it, which
-    /// ends with its carrier — and that a restart is the cure, which nothing
-    /// here runs.
+    /// `Class::Failure`. The hook's line, where the rate says one, has said
+    /// the panic and its site; this says what the board lost — the standing
+    /// line among it, which ends with its carrier — and that a restart is the
+    /// cure, which nothing here runs.
     pub(crate) fn the_checkpoint_thread_ended(&self) {
         self.threads.checkpointer_ended.store(true, Ordering::Release);
         self.say(Class::Failure, CheckpointThreadEndedLine);
@@ -2251,6 +2326,23 @@ impl Daemon {
     pub(crate) fn the_pruner_thread_ended(&self) {
         self.threads.pruner_ended.store(true, Ordering::Release);
         self.say(Class::Failure, PrunerThreadEndedLine);
+    }
+
+    /// Runs a worker's catch, as the worker ends (row 41; §4 row 32).
+    ///
+    /// It is what the worker loop's catch runs on a caught panic: the
+    /// workers' count of deaths moved, then the consequence line
+    /// ([`WorkerThreadEndedLine`]) under `Class::Failure`, naming the panic
+    /// by the site its hook noted — the site the hook's line names, so every
+    /// death joins its condition's line by site, a death the hook only
+    /// counted among them — and the workers left. The standing line names
+    /// the deaths until a restart, the only cure; concurrent deaths may say
+    /// their lines in any order, each with its own count left.
+    pub(crate) fn a_worker_thread_ended(&self, caught: &Caught) {
+        let workers = self.threads.workers.load(Ordering::Acquire);
+        let ended = self.threads.workers_ended.fetch_add(1, Ordering::AcqRel).saturating_add(1);
+        let left = workers.saturating_sub(ended);
+        self.say(Class::Failure, WorkerThreadEndedLine { caught, left, workers });
     }
 
     /// Says one classed line of this daemon's own on the operator stream.
@@ -4115,38 +4207,41 @@ impl fmt::Display for JournalDamageSite<'_> {
 /// The standing line (`operations.md` §1, the rates; §1.1 m11).
 ///
 /// It is in the operator stream's words: one clause per standing bad state,
-/// each by name with its position or file, joined by `; ` in the rates'
-/// order — ending, where any stand, with the kept files beside the journal
-/// and the logs, `kept files beside the journal and the logs: {n}
-/// ({names})` — `the write path is halted since position {p} (feed-attest.log)`;
-/// `the kernel is poisoned since position {p}`, the position the kernel's
-/// halt line named; `the {producer} producer's last shot was refused at
-/// its {act} ({cause}) at position {p}, {n} attempts refused since its last
-/// landing` once per system producer standing refused — the head writer,
-/// the time writer, the registry seed — in the words of the producer's own
-/// refusal line and `/health`'s `conditions` member (the link-sets design
-/// §5.7, W8 (5)); `a history read found the journal unreadable at
-/// position {p}` or `… ({error})` (the damage [`HistoryDamageLine`] said,
-/// which the next open reads, by its site — [`JournalDamageSite`]; RUNBOOK
-/// §2); `{file} stopped since position {p}` once per stopped file;
-/// `the pruner's thread is gone`; `the feed walk's thread is gone;
-/// positions ({low}, {head}] stay uncovered` and, or instead, `; {n} bare
-/// positions the index lost stay unsorted` (the walk behind the listener
-/// dead on a caught panic, what it left pending for the uptime —
-/// `operations.md` §3.3 step 2; row 41); `the cell index failed to
-/// build`; `deposits refused at the floor (free space {f} below the floor
-/// in force {F})`, or `… (free space unread: {cause})` where the host
-/// refused the read, the cause in the store's words; `a deposit's file is
-/// unread ({cause}), {n} reads failed over {ms} ms`, the cause of the tick's
-/// own read in the store's words, the file by its hash;
-/// `CLAIMED-PERMISSIVE`. A pure value over the reads
-/// ([`Daemon::say_the_standing_line`] makes them), pinned by `to_string()`
-/// in the unit suite; emitted under `Class::Standing` at a tick where
-/// [`StandingLine::stands`], and never otherwise. States, positions, files
-/// and the figures of the floor and the unread deposit or their reads'
-/// causes alone — no principal, token, path, query or reader rides it. The
-/// index's clause reads the media gate's failed state (`operations.md` §4
-/// row 26).
+/// each by name with its position or file, joined by `; ` in the rates' order —
+/// ending, where any stand, with the kept files beside the journal and the
+/// logs, `kept files beside the journal and the logs: {n} ({names})` — `the
+/// write path is halted since position {p} (feed-attest.log)`; `the kernel is
+/// poisoned since position {p}`, the position the kernel's halt line named;
+/// `the {producer} producer's last shot was refused at its {act} ({cause}) at
+/// position {p}, {n} attempts refused since its last landing` once per system
+/// producer standing refused — the head writer, the time writer, the registry
+/// seed — in the words of the producer's own refusal line and `/health`'s
+/// `conditions` member (the link-sets design §5.7, W8 (5)); `a history read
+/// found the journal unreadable at position {p}` or `… ({error})` (the damage
+/// [`HistoryDamageLine`] said, which the next open reads, by its site —
+/// [`JournalDamageSite`]; RUNBOOK §2); `{file} stopped since position {p}` once
+/// per stopped file; `the pruner's thread is gone`; `{k} of {n} worker threads
+/// are gone`, `{k}` the workers that ended on a caught panic and `{n}` the
+/// count served; `the feed walk's thread is gone; positions ({low}, {head}]
+/// stay uncovered` and, or instead, `; {n} bare positions the index lost stay
+/// unsorted` (the walk behind the listener dead on a caught panic, what it left
+/// pending for the uptime — `operations.md` §3.3 step 2; row 41); the panics
+/// the hook counted and has not said, one clause per condition, `{n} more
+/// panics at {site} since its last line` or `… at {site} while serving {route}
+/// since its last line`, and `{n} panics at sites past the hook's memory of
+/// {bound}` where the tally was full ([`UnsaidPanics`]); `the cell index failed
+/// to build`; `deposits refused at the floor (free space {f} below the floor in
+/// force {F})`, or `… (free space unread: {cause})` where the host refused the
+/// read, the cause in the store's words; `a deposit's file is unread ({cause}),
+/// {n} reads failed over {ms} ms`, the cause of the tick's own read in the
+/// store's words, the file by its hash; `CLAIMED-PERMISSIVE`. A pure value over
+/// the reads ([`Daemon::say_the_standing_line`] makes them), pinned by
+/// `to_string()` in the unit suite; emitted under `Class::Standing` at a tick
+/// where [`StandingLine::stands`], and never otherwise. States, positions,
+/// files, the figures of the floor and the unread deposit or their reads'
+/// causes, and a panic's site and route in the router's own words alone — no
+/// principal, token, request path, query or reader rides it. The index's clause
+/// reads the media gate's failed state (`operations.md` §4 row 26).
 pub(super) struct StandingLine {
     /// The write path's halt and the position it was set at.
     pub(super) halted_at: Option<Seq>,
@@ -4172,11 +4267,20 @@ pub(super) struct StandingLine {
     pub(super) stopped_files: Vec<StoppedFile>,
     /// The pruner's liveness flag.
     pub(super) pruner_gone: bool,
+    /// The workers that ended on a caught panic, and the count served.
+    ///
+    /// It is `None` while every worker serves.
+    pub(super) workers_gone: Option<(usize, usize)>,
     /// The feed walk's liveness flag, with what it left unlanded.
     ///
     /// It is `Commits::feed_walk_gone`'s read: the region it left uncovered,
     /// the bare positions the index lost it left unsorted, or both.
     pub(super) feed_walk_gone: Option<FeedPending>,
+    /// The panics the hook counted and has not said, as the tick took them.
+    ///
+    /// It is `panics::take_unsaid_panics`'s answer, empty where the hook
+    /// counted nothing since the last take.
+    pub(super) panics: UnsaidPanics,
     /// The cell index's failed state, the media gate's read.
     ///
     /// It is `MediaGate::index_failed`'s.
@@ -4219,7 +4323,9 @@ impl StandingLine {
             || self.history_damaged.is_some()
             || !self.stopped_files.is_empty()
             || self.pruner_gone
+            || self.workers_gone.is_some()
             || self.feed_walk_gone.is_some()
+            || !self.panics.is_empty()
             || self.index_failed
             || self.floor.is_some()
             || self.unread_deposit.is_some()
@@ -4253,6 +4359,9 @@ impl fmt::Display for StandingLine {
         if self.pruner_gone {
             clauses.push("the pruner's thread is gone".to_string());
         }
+        if let Some((gone, workers)) = self.workers_gone {
+            clauses.push(format!("{gone} of {workers} worker threads are gone"));
+        }
         if let Some(pending) = self.feed_walk_gone {
             let mut clause = "the feed walk's thread is gone".to_string();
             if let Some((low, head)) = pending.region {
@@ -4265,6 +4374,9 @@ impl fmt::Display for StandingLine {
                 ));
             }
             clauses.push(clause);
+        }
+        if !self.panics.is_empty() {
+            clauses.push(self.panics.to_string());
         }
         if self.index_failed {
             clauses.push("the cell index failed to build".to_string());
@@ -4315,8 +4427,8 @@ impl fmt::Display for StandingLine {
 /// state is said at its transition and never again, and a stream with no
 /// `standing:` line says nothing of the board's health. A pure value pinned
 /// by `to_string()`; emitted under `Class::Failure` by
-/// [`Daemon::the_checkpoint_thread_ended`], once, after the hook's line has
-/// said the panic itself.
+/// [`Daemon::the_checkpoint_thread_ended`], once, after the hook's line,
+/// where the rate says one, has said the panic itself.
 pub(super) struct CheckpointThreadEndedLine;
 
 impl fmt::Display for CheckpointThreadEndedLine {
@@ -4334,7 +4446,8 @@ impl fmt::Display for CheckpointThreadEndedLine {
 /// Its words, verbatim, say that no pass runs until a restart, so the blob
 /// logs are never compacted and the lapsed tail is never reclaimed. A pure
 /// value pinned by `to_string()`; emitted under `Class::Failure` by
-/// [`Daemon::the_pruner_thread_ended`], once, after the hook's line.
+/// [`Daemon::the_pruner_thread_ended`], once, after the hook's line, where
+/// the rate says one.
 pub(super) struct PrunerThreadEndedLine;
 
 impl fmt::Display for PrunerThreadEndedLine {
@@ -4342,6 +4455,34 @@ impl fmt::Display for PrunerThreadEndedLine {
         f.write_str(
             "pruner thread ended: no pass runs until a restart; the blob logs' compaction and \
              the lapsed tail's reclaim stop",
+        )
+    }
+}
+
+/// A worker's consequence line (`operations.md` §1.1 row 41; §4 row 32).
+///
+/// It reads `a worker thread ended on {caught}; {left} of {workers} workers
+/// serve, and none is replaced before a restart`, `{caught}` the panic as
+/// its catch names it — `a panic at {site}`, then `: {literal}` where the
+/// payload was one — the site the hook's line names, so a death joins its
+/// condition's line by site even where the hook only counted it. A pure
+/// value pinned by `to_string()`; emitted under `Class::Failure` by
+/// [`Daemon::a_worker_thread_ended`], once per death.
+pub(super) struct WorkerThreadEndedLine<'a> {
+    pub(super) caught: &'a Caught,
+    /// The workers that still serve.
+    pub(super) left: usize,
+    /// The workers `serve_bound` spawned.
+    pub(super) workers: usize,
+}
+
+impl fmt::Display for WorkerThreadEndedLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "a worker thread ended on {}; {} of {} workers serve, and none is replaced before a \
+             restart",
+            self.caught, self.left, self.workers
         )
     }
 }

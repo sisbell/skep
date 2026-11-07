@@ -58,23 +58,7 @@ const PROBE_METHODS: &[&str] = &["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"
 fn the_route_set_agrees_across_preflight_dispatch_and_refusal() {
     let dir = tempfile::tempdir().expect("tempdir");
     let daemon = Daemon::open(dir.path()).expect("genesis open");
-    let bare = |method: &str, path: &str| HttpRequest {
-        method: method.to_string(),
-        path: path.to_string(),
-        query: None,
-        session_token: None,
-        origin: None,
-        peer: Peer::Loopback,
-        body: Vec::new(),
-    };
-    let status = |method: &str, path: &str| match daemon.route(&bare(method, path)) {
-        Routed::Reply(r) => r.status,
-        // The non-reply routes: GET /events, which this test never asks
-        // for, and an ADMITTED blob fetch, which a bare `/blob` with no
-        // query never is — its refusal is a reply like any other.
-        Routed::EventStream => 200,
-        Routed::Fetch(fetch) => fetch.status(),
-    };
+    let status = |method: &str, path: &str| status_of(&daemon, method, path);
     // Each path's OWN preflight: the fetch names its two methods, every
     // other known path the common three — read off the route rather than
     // restated, so a preflight that drifts from its dispatch is caught here.
@@ -122,6 +106,76 @@ fn the_route_set_agrees_across_preflight_dispatch_and_refusal() {
         assert!(!path_is_known(unknown), "{unknown} must not be known");
         assert_eq!(status("GET", unknown), 404, "{unknown}");
         assert_eq!(status("OPTIONS", unknown), 404, "an unknown path preflights nothing");
+    }
+}
+
+/// Returns the status `daemon` answers a bare request of `method` at `path`.
+///
+/// The request carries no query, token, origin or body, from a loopback
+/// peer — the probe the route-set tests discover dispatch with.
+fn status_of(daemon: &Daemon, method: &str, path: &str) -> u16 {
+    let bare = HttpRequest {
+        method: method.to_string(),
+        path: path.to_string(),
+        query: None,
+        session_token: None,
+        origin: None,
+        peer: Peer::Loopback,
+        body: Vec::new(),
+    };
+    match daemon.route(&bare) {
+        Routed::Reply(r) => r.status,
+        // The non-reply routes: GET /events, which no probe asks for, and an
+        // ADMITTED blob fetch, which a bare `/blob` with no query never is —
+        // its refusal is a reply like any other.
+        Routed::EventStream => 200,
+        Routed::Fetch(fetch) => fetch.status(),
+    }
+}
+
+/// Checks that a request's route is named in the router's words alone.
+///
+/// Every method some path dispatches — found by routing, as the route-set
+/// test finds it — names `{method} {path}` at every path the router serves;
+/// the upload family's own path reads as itself under each of the router's
+/// six methods, the two its family alone dispatches among them, and every
+/// path beneath it as `/blob/upload/{id}`, an identifier's tail or a
+/// malformed one alike; and a method no path dispatches, a method the reader
+/// admits and the router does not know, an unknown path and a path carrying
+/// an address each read `an unknown route`, so no byte a client chose rides a
+/// route name (SP-15).
+#[test]
+fn route_of_names_a_request_in_the_routers_words_and_nothing_of_its_bytes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let daemon = Daemon::open(dir.path()).expect("genesis open");
+    let dispatched: Vec<&str> = PROBE_METHODS
+        .iter()
+        .copied()
+        .filter(|method| ROUTES.iter().any(|path| status_of(&daemon, method, path) != 405))
+        .collect();
+    assert!(!dispatched.is_empty() && !dispatched.contains(&"PUT"), "{dispatched:?}");
+    for method in &dispatched {
+        for path in ROUTES {
+            assert_eq!(route_of(method, path).to_string(), format!("{method} {path}"));
+        }
+    }
+    for method in ["GET", "HEAD", "POST", "PATCH", "DELETE", "OPTIONS"] {
+        assert_eq!(route_of(method, "/blob/upload").to_string(), format!("{method} /blob/upload"));
+        for tail in ["0123456789abcdef0123456789abcdef", "not-an-identifier", ""] {
+            let path = format!("/blob/upload/{tail}");
+            let named = format!("{method} /blob/upload/{{id}}");
+            assert_eq!(route_of(method, &path).to_string(), named, "{path}");
+        }
+    }
+    for (method, path) in [
+        ("PUT", "/op"),
+        ("BREW", "/health"),
+        ("GET", "/nope"),
+        ("GET", "/op/"),
+        ("GET", "/1.0.1.0.2"),
+        ("GET", "/blob/1.0.1.0.2.0.1.1"),
+    ] {
+        assert_eq!(route_of(method, path).to_string(), "an unknown route", "{method} {path}");
     }
 }
 
@@ -1210,6 +1264,7 @@ fn the_configuration_lines_go_through_the_classed_door_with_their_class_words() 
         "self.say(Class::Standing, line)",
         "self.say(Class::Failure, CheckpointThreadEndedLine)",
         "self.say(Class::Failure, PrunerThreadEndedLine)",
+        "self.say(Class::Failure, WorkerThreadEndedLine {",
         "notice::emit(class, what)",
         "notice::emit_lines(class, head, rest)",
     ] {
@@ -2010,12 +2065,15 @@ fn the_checkpoint_threads_lines_go_through_the_classed_door() {
 /// standing, each in the rates' words with its position or file, in the
 /// rates' order, joined by `; ` — the cell index's with its place held, the
 /// kernel's poison with the position its halt line named, and the journal
-/// damage a history read met by its site, after the poison (RUNBOOK §2);
-/// each of the two flag clauses alone, and the damage alone at each of its
-/// sites; no clause, which is no line at all (`stands` false); the floor's
-/// clause alone where the host refused the free space's read, its cause in
-/// the store's words and no figure; and the unread deposit's clause alone,
-/// the tick's own read's cause in the store's words, the count and the age.
+/// damage a history read met by its site, after the poison (RUNBOOK §2), the
+/// workers gone after the pruner, and the panics the hook counted after the
+/// feed walk, a route riding its clause; each of the two flag clauses alone,
+/// the damage alone at each of its sites, and the workers gone and the
+/// panics counted each alone; no clause, which is no line at all (`stands`
+/// false); the floor's clause alone where the host refused the free space's
+/// read, its cause in the store's words and no figure; and the unread
+/// deposit's clause alone, the tick's own read's cause in the store's words,
+/// the count and the age.
 #[test]
 fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
     use skep_core::commits::StoppedFile;
@@ -2048,7 +2106,19 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
             StoppedFile { name: "feed-index.log", since: 12 },
         ],
         pruner_gone: true,
+        workers_gone: Some((2, 24)),
         feed_walk_gone: Some(FeedPending { region: Some((20, 48)), unsorted: None }),
+        panics: UnsaidPanics::at_figures(
+            &[
+                (
+                    "crates/skep-core/src/auth/entropy.rs:46:9",
+                    Some(route_of("POST", "/session")),
+                    59,
+                ),
+                ("crates/skepd/src/server/listen.rs:578:17", None, 23),
+            ],
+            0,
+        ),
         index_failed: true,
         floor: Some(FloorBinding { free_space: Ok(1000), floor: 268_435_456 }),
         unread_deposit: Some(UnreadDeposit {
@@ -2070,10 +2140,13 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
              (poisoned) at position 16, 1 attempts refused since its last landing; a history read \
              found the journal unreadable at position 9; \
              commits.log stopped since position 9; feed-index.log stopped since position 12; the \
-             pruner's thread is gone; the feed walk's thread is gone; positions (20, 48] stay \
-             uncovered; the cell index failed to build; deposits refused at the floor (free space \
-             1000 below the floor in force 268435456); a deposit's file is unread ({unread_file}), \
-             12 reads failed over 7200 ms; CLAIMED-PERMISSIVE"
+             pruner's thread is gone; 2 of 24 worker threads are gone; the feed walk's thread is \
+             gone; positions (20, 48] stay uncovered; 59 more panics at \
+             crates/skep-core/src/auth/entropy.rs:46:9 while serving POST /session since its last \
+             line; 23 more panics at crates/skepd/src/server/listen.rs:578:17 since its last \
+             line; the cell index failed to build; deposits refused at the floor (free space 1000 \
+             below the floor in force 268435456); a deposit's file is unread ({unread_file}), 12 \
+             reads failed over 7200 ms; CLAIMED-PERMISSIVE"
         )
     );
     let one = StandingLine {
@@ -2083,7 +2156,9 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
         history_damaged: None,
         stopped_files: Vec::new(),
         pruner_gone: true,
+        workers_gone: None,
         feed_walk_gone: None,
+        panics: UnsaidPanics::default(),
         index_failed: false,
         floor: None,
         unread_deposit: None,
@@ -2124,7 +2199,9 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
         history_damaged: None,
         stopped_files: Vec::new(),
         pruner_gone: false,
+        workers_gone: None,
         feed_walk_gone: None,
+        panics: UnsaidPanics::default(),
         index_failed: false,
         floor: None,
         unread_deposit: None,
@@ -2142,7 +2219,9 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
         history_damaged: None,
         stopped_files: Vec::new(),
         pruner_gone: false,
+        workers_gone: None,
         feed_walk_gone: None,
+        panics: UnsaidPanics::default(),
         index_failed: false,
         floor: None,
         unread_deposit: None,
@@ -2191,6 +2270,14 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
         ),
         "the tick's read's cause in the store's words, the count with its fixed label, the age"
     );
+    let workers =
+        StandingLine { unread_deposit: None, workers_gone: Some((1, 24)), ..unread_deposit };
+    assert!(workers.stands(), "a worker gone stands alone");
+    assert_eq!(workers.to_string(), "1 of 24 worker threads are gone");
+    let counted =
+        StandingLine { workers_gone: None, panics: UnsaidPanics::at_figures(&[], 4), ..workers };
+    assert!(counted.stands(), "panics counted past the bound stand alone");
+    assert_eq!(counted.to_string(), "4 panics at sites past the hook's memory of 1024");
 }
 
 /// Checks that RUNBOOK §1 step 8 lists the standing line as it is written.
@@ -2231,7 +2318,12 @@ fn runbook_lists_the_standing_line_as_the_binary_writes_it() {
         history_damaged: Some("at position 9001".to_string()),
         stopped_files: vec![StoppedFile { name: "{file}", since: 9001 }],
         pruner_gone: true,
+        workers_gone: Some((9006, 9008)),
         feed_walk_gone: Some(FeedPending { region: Some((9002, 9003)), unsorted: None }),
+        panics: UnsaidPanics::at_figures(
+            &[("{location}", Some(route_of("POST", "/op")), 9006)],
+            9006,
+        ),
         index_failed: true,
         floor: Some(FloorBinding { free_space: Ok(9004), floor: 9005 }),
         unread_deposit: Some(UnreadDeposit {
@@ -2250,6 +2342,10 @@ fn runbook_lists_the_standing_line_as_the_binary_writes_it() {
         ("9005", "{floor}"),
         ("9006", "{n}"),
         ("9007", "{ms}"),
+        ("9008", "{workers}"),
+        // The route a panic's thread was serving, one route standing in for
+        // any the router names.
+        ("POST /op", "{route}"),
         // The kept files' count, one name standing in for the list.
         ("logs: 1 ({names})", "logs: {n} ({names})"),
     ]
@@ -2258,15 +2354,16 @@ fn runbook_lists_the_standing_line_as_the_binary_writes_it() {
     assert_eq!(listed.join("; "), written, "RUNBOOK §1 step 8's fence:\n{fence}");
 }
 
-/// m10's WORDS and ROW 41's TWO CONSEQUENCE LINES at fixed inputs: the
+/// m10's WORDS and ROW 41's THREE CONSEQUENCE LINES at fixed inputs: the
 /// kernel's halt with its position, the kernel's own cause — or the class
 /// of its three causes where it kept none — and the act; the pruner's
-/// verbatim; and the checkpoint thread's opening on row
-/// 41's words, verbatim, then what the board lost beside them and the act —
-/// the feed's compaction, the standing line, a restart — as row 22's line
-/// says them for the thread refused at start.
+/// verbatim; the checkpoint thread's opening on row 41's words, verbatim,
+/// then what the board lost beside them and the act — the feed's
+/// compaction, the standing line, a restart — as row 22's line says them for
+/// the thread refused at start; and a worker's, naming its panic by the site
+/// its hook noted and the literal where one rode, then the workers left.
 #[test]
-fn the_halt_line_and_the_two_catches_lines_carry_their_ruled_words() {
+fn the_halt_line_and_the_three_catches_lines_carry_their_ruled_words() {
     use skep_core::commits::KernelHaltLine;
 
     let cause = "the commit of position 1204 failed (seg-3.wal: barrier: Input/output error), \
@@ -2306,6 +2403,35 @@ fn the_halt_line_and_the_two_catches_lines_carry_their_ruled_words() {
         PrunerThreadEndedLine.to_string(),
         "pruner thread ended: no pass runs until a restart; the blob logs' compaction and the \
          lapsed tail's reclaim stop"
+    );
+    // A worker's death names the panic as its catch caught it, the hook's
+    // part played here: this suite's process runs std's own hook.
+    let at = std::panic::Location::caller();
+    let literal = skep_util::caught::catch(|| {
+        skep_util::caught::note_site(Some(at));
+        panic!("the test seam's worker fault, outside the handler's catch");
+    })
+    .expect_err("the body panics");
+    assert_eq!(
+        WorkerThreadEndedLine { caught: &literal, left: 23, workers: 24 }.to_string(),
+        format!(
+            "a worker thread ended on a panic at {at}: the test seam's worker fault, outside the \
+             handler's catch; 23 of 24 workers serve, and none is replaced before a restart"
+        )
+    );
+    let n = std::hint::black_box(7);
+    let formatted = skep_util::caught::catch(|| {
+        skep_util::caught::note_site(Some(at));
+        panic!("formatted at {n}");
+    })
+    .expect_err("the body panics");
+    assert_eq!(
+        WorkerThreadEndedLine { caught: &formatted, left: 0, workers: 24 }.to_string(),
+        format!(
+            "a worker thread ended on a panic at {at}; 0 of 24 workers serve, and none is \
+             replaced before a restart"
+        ),
+        "a formatted payload rides no death line"
     );
 }
 

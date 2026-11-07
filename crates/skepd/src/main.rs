@@ -34,21 +34,17 @@
 //! the usage text wait for their reader, as any program's output does,
 //! since each is the whole of what was asked.
 
-use std::collections::hash_map::{Entry, HashMap};
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
 use std::net::Ipv4Addr;
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::panic::Location;
 use std::path::{Path, PathBuf};
 use std::process::exit;
-use std::sync::{Arc, LazyLock};
-use std::thread::ThreadId;
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
 use parking_lot::{Condvar, Mutex};
-use skep_core::limits::STANDING_INTERVAL;
-use skep_util::caught::{note_site, site_of};
+use skep_util::caught::note_site;
 use skep_util::notice::{self, Class};
 use skep_util::source::Source;
 // `DEFAULT_WORKERS` and `MIN_WORKERS` are the library's, not this binary's:
@@ -232,117 +228,52 @@ const DRAIN_STALL: Duration = Duration::from_secs(10);
 /// Returns the hook's line, the words alone (`operations.md` §1.1 row 41).
 ///
 /// A pure function the unit suite pins: the thread by its name
-/// (`an unnamed thread` where it has none), `a thread panicked at` the
-/// site as [`site_of`] spells it — the words a library's catch names the
-/// site in too, and the key the hook's rate counts a site's panics under
-/// ([`HookMemory`]) — and the payload only where it is a `&'static str`, a
-/// literal the code wrote, which no request can have formatted: so a
-/// formatted panic (`expect`, `assert_eq!`, an index) shows its location
-/// alone, which identifies the site, and nothing of §1's never list can ride
-/// the line. Where `repeats` is above zero — the panics at this site on this
-/// thread the hook counted and did not say since its last line there
-/// ([`HookMemory::admit`]) — the line ends `; {repeats} more at this site on
-/// this thread since its last line`. The class word is the emitter's
-/// (`Class::Failure`).
+/// (`an unnamed thread` where it has none), `a thread panicked at` the site
+/// in the words a library's catch names it in too, then `while serving
+/// {route}` where the thread was serving a route, named in the router's
+/// own words (`skepd::RouteName`), and the payload only where it is a
+/// `&'static str`, a literal the code wrote, which no request can have
+/// formatted: so a formatted panic (`expect`, `assert_eq!`, an index) shows
+/// its site alone, which identifies it, and nothing of §1's never list can
+/// ride the line. Where `repeats` is above zero — the panics of this
+/// condition, its site and its route, the hook counted and no tick said
+/// since its last line (`skepd::admit_panic`) — the line ends `; {repeats}
+/// more at this site since its last line`, or `… at this site on this route
+/// since its last line` where a route rides. The class word is the
+/// emitter's (`Class::Failure`).
 fn panic_line(
     thread: Option<&str>,
-    location: Option<&Location<'_>>,
+    site: &str,
+    route: Option<&str>,
     payload: Option<&str>,
     repeats: u64,
 ) -> String {
     let thread = thread.unwrap_or("an unnamed thread");
-    let at = site_of(location);
-    let repeated = match repeats {
-        0 => String::new(),
-        n => format!("; {n} more at this site on this thread since its last line"),
+    let serving = route.map_or_else(String::new, |route| format!(" while serving {route}"));
+    let literal = payload.map_or_else(String::new, |payload| format!(": {payload}"));
+    let repeated = match (repeats, route) {
+        (0, _) => String::new(),
+        (n, None) => format!("; {n} more at this site since its last line"),
+        (n, Some(_)) => format!("; {n} more at this site on this route since its last line"),
     };
-    match payload {
-        Some(payload) => format!("{thread}: a thread panicked at {at}: {payload}{repeated}"),
-        None => format!("{thread}: a thread panicked at {at}{repeated}"),
-    }
+    format!("{thread}: a thread panicked at {site}{serving}{literal}{repeated}")
 }
-
-/// The hook's rate: a site's panics on a thread, said once an hour.
-///
-/// It holds THE RATES (`operations.md` §1: once per condition, never per
-/// request). A site's first panic on a thread is said; each later one there
-/// within the standing interval (`skep_core::limits::STANDING_INTERVAL`, the
-/// hour the standing line re-says a standing state at) is counted and says
-/// nothing; the first after it is said with the count. Keyed by the THREAD
-/// as well as the site, so each worker that dies at one site is a line of
-/// its own (m16), and a panic that recurs per request — the OS refusing
-/// entropy at every `POST /session` and `GET /challenge`, the one panic the
-/// router raises by design (`Daemon::route`'s card) — is a line an hour per
-/// worker, never a line per request written at the rate of whoever can
-/// reach the board, which would crowd the stream's queue and drop the lines
-/// behind it.
-struct HookMemory {
-    /// Each `(thread, site)` the hook has said a panic at.
-    seen: HashMap<(ThreadId, String), Seen>,
-}
-
-/// One key's memory: when its last line was said, and the panics since.
-struct Seen {
-    /// When the hook last said a panic at this key.
-    said_at: Instant,
-    /// The panics at this key counted, and not said, since then.
-    since: u64,
-}
-
-/// The keys [`HookMemory`] holds before it forgets them all.
-///
-/// A bound, since a thread that ends leaves its key behind: past it the
-/// memory starts afresh, and each key's next panic is said as a first.
-const HOOK_MEMORY_KEYS: usize = 1024;
-
-impl HookMemory {
-    /// Returns the memory before any panic.
-    fn new() -> HookMemory {
-        HookMemory { seen: HashMap::new() }
-    }
-
-    /// Answers whether the panic at `key` is said, at `now`.
-    ///
-    /// It answers `Some(n)` where it is — a key's first panic, or its first
-    /// `interval` or more past the key's last line — `n` the panics at the
-    /// key counted since that line; `None` where it is counted.
-    fn admit(&mut self, key: (ThreadId, String), now: Instant, interval: Duration) -> Option<u64> {
-        if self.seen.len() >= HOOK_MEMORY_KEYS && !self.seen.contains_key(&key) {
-            self.seen.clear();
-        }
-        match self.seen.entry(key) {
-            Entry::Vacant(vacant) => {
-                vacant.insert(Seen { said_at: now, since: 0 });
-                Some(0)
-            }
-            Entry::Occupied(mut occupied) => {
-                let seen = occupied.get_mut();
-                if now.saturating_duration_since(seen.said_at) < interval {
-                    seen.since = seen.since.saturating_add(1);
-                    return None;
-                }
-                let repeats = seen.since;
-                *seen = Seen { said_at: now, since: 0 };
-                Some(repeats)
-            }
-        }
-    }
-}
-
-/// The hook's one memory, for the process.
-static HOOK_MEMORY: LazyLock<Mutex<HookMemory>> = LazyLock::new(|| Mutex::new(HookMemory::new()));
 
 /// Installs the panic hook: the binary's, never the library's.
 ///
 /// It is a process-global an embedder must be free to set itself: one
 /// prefixed, timed line through the operator stream's classed door at a panic,
 /// before any catch — Rust's own unprefixed text never reaches the stream — at
-/// the rate [`HookMemory`] holds it to: a site's first panic on a thread, then
-/// one an hour while it recurs, the panics between counted on the next. It
-/// notes the site first ([`note_site`]), whether or not the rate lets the line
-/// be said, so a library's catch on that thread — the cell index's walk, the
-/// change feed's — names in its own line the site this line names
-/// (`operations.md` §1.1 row 41; §4 row 26). Installed first, before the
+/// the rate the library's tally holds it to (`skepd::admit_panic`;
+/// `operations.md` §1, the rates; SP-11, SP-19): once per condition, a site
+/// and the route its thread was serving, whatever the thread, the panics after
+/// it there counted and said within the hour — by the standing line, by the
+/// condition's own next line where no standing line has come for an hour, and
+/// by the workers' end below. It notes the site first ([`note_site`]), whether
+/// or not the rate lets the line be said, so a catch on that thread — the cell
+/// index's walk, the change feed's, a worker's — names in its own line the
+/// site this line names (`operations.md` §1.1 row 41; §4 rows 26 and 32). The
+/// tally's lock is never held across the emit. Installed first, before the
 /// command line is read, so no thread of this process's panics outside it. The
 /// line is enqueued as every notice is and written by the stream's thread: a
 /// worker's panic lands while the daemon serves on; a panic on `main`'s own
@@ -358,11 +289,16 @@ fn install_the_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         note_site(info.location());
         let thread = std::thread::current();
-        let key = (thread.id(), site_of(info.location()));
-        let admitted = HOOK_MEMORY.lock().admit(key, Instant::now(), STANDING_INTERVAL);
-        if let Some(repeats) = admitted {
+        if let Some(admitted) = skepd::admit_panic(info.location()) {
             let payload = info.payload().downcast_ref::<&'static str>().copied();
-            let line = panic_line(thread.name(), info.location(), payload, repeats);
+            let route = admitted.route().map(|route| route.to_string());
+            let line = panic_line(
+                thread.name(),
+                admitted.site(),
+                route.as_deref(),
+                payload,
+                admitted.repeats(),
+            );
             notice::emit(Class::Failure, line);
         }
         // A panic on `main` ends the process at exit 101 with the stream's
@@ -1569,6 +1505,14 @@ fn main() {
         args.workers
     ));
     running.wait();
+    // The counts not yet said (`skepd::take_unsaid_panics`): every panic the
+    // hook counted since the last tick — the deaths that ended the workers
+    // among them — said as one line before the exit's. `wait` has dropped the
+    // server, whose stop joined every other thread, so no tick races the take.
+    let unsaid = skepd::take_unsaid_panics();
+    if !unsaid.is_empty() {
+        notice::emit(Class::Failure, unsaid);
+    }
     // The workers' end: `wait` returns only when every worker thread has
     // ended — a failure in serve mode, said as one and exited 1 on, never
     // the fall-off's 0 a supervisor reads as a clean end. The queue is

@@ -125,11 +125,22 @@ of [skep-febe](../skep-febe) over the world of
 and the codec — is [skep-core](../skep-core)'s, the crate below it; the
 counting permit its six pools are built on, the operator's notice line,
 the codec's key-sorting `obj` and the caught panic — whose site the
-binary's panic hook notes for the walks' catches to say, and an
-embedder's own hook through the re-exported `note_site` — are
+binary's panic hook notes for the walks' catches and a worker's death to
+say, and an embedder's own hook through the re-exported `note_site` — are
 [skep-util](../skep-util)'s, the support crate below both that the media
 crate shares; how its modules are layered is in
 [ARCHITECTURE.md](../../ARCHITECTURE.md).
+
+The hook says a panic once per condition — its site and the route its
+thread was serving, named in the router's own words and never copied from
+the request — and counts the panics after it, on any thread: the hourly
+`standing:` line says the counts, so does the condition's own next line
+where no standing line has come for an hour, and so does the binary's exit
+(`admit_panic`, `take_unsaid_panics`, `RouteName`, `AdmittedPanic`,
+`UnsaidPanics`). An embedder's own hook calls `admit_panic` after
+`note_site`, or the standing line counts none of its panics. A worker
+thread's death is said by the worker's own catch, with the workers left,
+and stands on the standing line until a restart.
 
 The daemon verifies signatures and makes none: its core calls
 [skep-signature](../skep-signature)'s verify with that crate's `sign`

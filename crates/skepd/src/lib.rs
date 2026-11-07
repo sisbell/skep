@@ -133,7 +133,9 @@ mod server;
 // themselves.
 pub mod tools;
 
-// The leaves: none knows anything of the daemon. Below them, crates: the
+// The leaves: none knows anything of the daemon — the history service, the
+// daemon's own bounds and the panic hook's tally, the one memory the binary's
+// hook and the standing line share. Below them, crates: the
 // daemon's core is `skep-core`'s — the session layer, the commits (every
 // commit, one at a time, and the published head), the wire codec, the six
 // bounds the core reads and the serialization lock; beside the commits the
@@ -146,6 +148,7 @@ pub mod tools;
 // determinism helpers are `skep-util`'s, the support crate below all three.
 mod history;
 mod limits;
+mod panics;
 
 /// The shared fuzzing harness: the oracle and mutation logic both tiers drive.
 ///
@@ -191,12 +194,18 @@ pub use skep_util::source::Source;
 /// Notes a panic's site for the catch its unwind meets, `skep-util`'s.
 ///
 /// An embedding program's own panic hook calls it with its info's
-/// `location()`, as the binary's hook does, so the lines the two walks'
-/// catches say — the cell index's and the change feed's — name the site of
-/// the panic each contained, and read `an unknown location` without it.
-/// Re-exported for the reason [`Source`] is: the embedder names it on this
-/// crate's path.
+/// `location()`, as the binary's hook does, so the lines the three catches
+/// say — the cell index's walk's, the change feed's walk's and a worker's —
+/// name the site of the panic each contained, and read `an unknown location`
+/// without it; and the hook calls [`admit_panic`] after it. Re-exported for
+/// the reason [`Source`] is: the embedder names it on this crate's path.
 pub use skep_util::caught::note_site;
+// The panic hook's rate (`operations.md` §1, the rates; SP-11): whether a
+// panic is said or counted, the counts not yet said, which the standing line
+// takes at each tick and the binary at its exit, and the three names the two
+// doors carry — each documented in its home, inlined here from the private
+// module as the server's names are.
+pub use panics::{admit_panic, take_unsaid_panics, AdmittedPanic, RouteName, UnsaidPanics};
 
 /// The seeded start: [`embed`] under the test seam's seeded salt source.
 ///
@@ -364,6 +373,7 @@ const _: fn() = || {
     assert_send_sync::<AuthOptions>();
     assert_send_sync::<MediaOptions>();
     assert_send_sync::<StartOptions>();
+    assert_send_sync::<JournalReclamation>();
     assert_send_sync::<Origin>();
     assert_send_sync::<NotCanonical>();
     assert_send_sync::<NodePrefix>();
@@ -375,4 +385,10 @@ const _: fn() = || {
     assert_send_sync::<tools::HoleCheck>();
     assert_send_sync::<tools::Pulled>();
     assert_send_sync::<tools::ToolError>();
+    // The panic hook's rate: the route a thread was serving, the panic to
+    // say and a take of the counts, which a hook and a tick hand across
+    // threads.
+    assert_send_sync::<RouteName>();
+    assert_send_sync::<AdmittedPanic>();
+    assert_send_sync::<UnsaidPanics>();
 };

@@ -28,11 +28,16 @@
 //!   under the seam's fault — `the cell index failed to build` at every
 //!   tick, the pruner's `no pass runs` line once, no pass ever, and no
 //!   `the pruner's thread is gone`: the pruner's loop ended by choice.
+//! * A PANIC THE HOOK COUNTED: three panics of one condition — the first
+//!   said by the hook, two counted — and the next tick says `2 more panics
+//!   at {site} since its last line` once; one more counted is said at a
+//!   later tick.
 //!
 //! The words are the unit suite's (`server/tests.rs`); the class word and
 //! the figures are read here. Every daemon is shut down before the claim
 //! returns, so no checkpoint thread outlives its test.
 
+use std::panic::Location;
 use std::time::{Duration, Instant};
 
 use skepd::Skepd;
@@ -394,5 +399,44 @@ fn the_failed_index_is_re_said_at_every_tick_and_the_pruner_says_no_pass_runs_on
             "FINDING (m11): the index's clause at every tick, the pruner's on none"
         );
     }
+    sd.shutdown();
+}
+
+/// THE RATES — A PANIC THE HOOK COUNTED, SAID ON THE NEXT TICK (#717): three
+/// panics at one site on a thread serving no route — through the library's
+/// door the binary's hook calls, called here as the hook would call it,
+/// since this suite's process runs std's own hook — answer the first line
+/// and then two counts; the next tick says exactly `standing: 2 more panics
+/// at {site} since its last line`, and later ticks nothing more; one panic
+/// more inside the interval is said at a later tick as `1 more panics at
+/// …`. The tally is the process's, so the claim relies on nextest's one
+/// process per test, and its three panics come before the tick is
+/// shortened.
+#[test]
+fn a_panic_the_hook_counted_is_said_once_on_the_next_tick_with_its_count() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_unclaimed(dir.path());
+    let at = Location::caller();
+    let site = at.to_string();
+    let first = skepd::admit_panic(Some(at)).expect("the condition's first panic is said");
+    assert_eq!((first.site(), first.route(), first.repeats()), (site.as_str(), None, 0));
+    for _ in 0..2 {
+        assert_eq!(skepd::admit_panic(Some(at)), None, "counted, unsaid");
+    }
+    sd.daemon().set_standing_interval_millis(50);
+    wait_until("the count's tick", || !standing_lines(&sd).is_empty());
+    assert_eq!(
+        standing_lines(&sd),
+        [format!("standing: 2 more panics at {site} since its last line")],
+        "FINDING (#717): the count is said at the next tick"
+    );
+    no_line_comes(&sd, "the count said");
+    assert_eq!(skepd::admit_panic(Some(at)), None, "one more inside the interval: counted");
+    wait_until("the second count's tick", || standing_lines(&sd).len() == 2);
+    assert_eq!(
+        standing_lines(&sd)[1],
+        format!("standing: 1 more panics at {site} since its last line"),
+        "a count is said once, and the next one at a later tick"
+    );
     sd.shutdown();
 }

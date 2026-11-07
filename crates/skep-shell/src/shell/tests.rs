@@ -1,4 +1,4 @@
-//! THE SHELL's SUITE, its cells in ten children over the ground shared
+//! THE SHELL's SUITE, its cells in eleven children over the ground shared
 //! here: a real daemon spawned in-process over a temp data dir and started
 //! again at its port (`spawn`, `spawn_at`), a shell opened over it as a
 //! transport opens one (`open_shell`), the board claimed through the
@@ -21,7 +21,10 @@
 //! hold against the daemon, and the rules the shell alone keeps; `follow`
 //! the follower write — a mark landing on its insert's words, refused where
 //! its burst is held, following a delete, overtaking its insert, and
-//! finished by the stop before its session closes — against the daemon.
+//! finished by the stop before its session closes — against the daemon;
+//! `classes` the held store's open defect classes over a `Shell` — one
+//! writer per board, a whole-draft write past a draft's held lines — pinned
+//! as expected failures against the daemon.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -44,6 +47,7 @@ use crate::sessions::SessionKind;
 mod boards;
 mod ceremonies;
 mod changes;
+mod classes;
 mod door;
 mod follow;
 mod held;

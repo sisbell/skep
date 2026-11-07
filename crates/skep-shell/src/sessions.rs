@@ -319,6 +319,9 @@ impl SessionEntry {
 /// before its answer's head was whole, an answer cut short — is the board
 /// away, `unreachable` (skep #758).
 ///
+/// A `#[cfg(test)]` seam stands in for a garbled answer on the calling
+/// thread, once ([`garble_the_next_head_read_on_this_thread`]).
+///
 /// # Errors
 ///
 /// Returns `unreachable` where a read it makes — the head record's, then
@@ -327,6 +330,10 @@ impl SessionEntry {
 /// garbled, the board refuses its read, or the board serves none and names
 /// a claimant or cannot say through `/health` whether it does.
 pub(crate) fn board_head(board: &Board) -> Result<Option<BoardTerm>, Refusal> {
+    #[cfg(test)]
+    if GARBLE_THE_NEXT_HEAD_READ.with(std::cell::Cell::take) {
+        return Err(head_unreadable("the board's head record (`H.1`) served garbled: the suites' seam".to_string()));
+    }
     match board.board_term() {
         Ok(Some(board_term)) => Ok(Some(board_term)),
         Ok(None) => match board.health() {
@@ -341,6 +348,26 @@ pub(crate) fn board_head(board: &Board) -> Result<Option<BoardTerm>, Refusal> {
         Err(Halt::Halt(face)) => Err(head_unreadable(format!("{}: {}", face.state, face.cause))),
         Err(h) => Err(head_unreadable(format!("the board refused the read of its head record (`H.1`): {h}"))),
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Whether the next [`board_head`] read on this thread answers
+    /// `head_unreadable`, as a head record served garbled does.
+    ///
+    /// The suites' seam: a window whose head will not read while the board's
+    /// record stands and another window's read of it succeeded (skep #873),
+    /// which no fake at a real daemon can stand up. Per thread, so the call
+    /// that arms it on its own thread meets it and no feed thread's probe
+    /// does; consumed by the one read.
+    static GARBLE_THE_NEXT_HEAD_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Makes the next [`board_head`] read on this thread answer `head_unreadable`
+/// once, as a head record served garbled does (skep #728's face).
+#[cfg(test)]
+pub(crate) fn garble_the_next_head_read_on_this_thread() {
+    GARBLE_THE_NEXT_HEAD_READ.with(|garbled| garbled.set(true));
 }
 
 /// Splits a read's dial error: a garbled answer is the board's, the rest is

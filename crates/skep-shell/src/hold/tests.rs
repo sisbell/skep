@@ -39,7 +39,9 @@
 //! memory alone; a cell runs the board's feed thread over the ground's holds
 //! where it asks (`feed_threads`). `write` holds the one path of a session's
 //! `op` — a burst's door and its hold, and a write the hold never holds;
-//! `resend` the probe and the resend walk.
+//! `resend` the probe and the resend walk; `classes` the held store's open
+//! defect classes pinned as expected failures, and the measure of the syncs
+//! each act makes.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -60,6 +62,7 @@ use super::*;
 use crate::events::Event;
 use crate::sessions::{Facts, Open, SessionKind, Supplements};
 
+mod classes;
 mod resend;
 mod write;
 

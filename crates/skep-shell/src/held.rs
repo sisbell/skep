@@ -2250,7 +2250,10 @@ impl Disk {
         if !self.tail_left {
             return;
         }
-        match Appender::open_at(&self.path, self.whole_bytes).and_then(|mut file| file.cut(Fsync::Data)) {
+        let cut = Appender::open_at(&self.path, self.whole_bytes).and_then(|mut file| file.cut(Fsync::Data));
+        #[cfg(test)]
+        note_cut_sync(&cut);
+        match cut {
             Ok(_) => self.tail_left = false,
             Err(e) if e.kind() == io::ErrorKind::NotFound => self.tail_left = false,
             Err(_) => {}
@@ -2312,7 +2315,44 @@ fn write_synced(file: &mut File, bytes: &[u8]) -> io::Result<()> {
     if tests::fail_sync() {
         return Err(io::Error::new(tests::refused_as(), "the held store's sync was made to fail"));
     }
+    #[cfg(test)]
+    note_sync();
     file.sync_data()
+}
+
+/// The syncs the held file has made since the count was last taken: the
+/// suites' measure of what each act costs under the board lock.
+///
+/// It counts every `sync_data` a copy's body makes ([`write_synced`]: a
+/// header's, a line's, a re-mark's, a `done`'s, the retry's one copy and a
+/// join's) and the cut's sync where the retry cuts a refused copy's tail
+/// ([`Disk::cut_tail`]) — the two syncs the file makes. Process-wide: a
+/// suite reads it under nextest, one process per test, and resets it at a
+/// cell's start ([`take_syncs`]); `cargo test`'s shared process would mix
+/// the counts of the cells it runs beside one another.
+#[cfg(test)]
+static SYNCS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Counts one sync the held file made ([`SYNCS`]).
+#[cfg(test)]
+fn note_sync() {
+    SYNCS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Counts the cut's sync, where a tail was cut ([`SYNCS`]): a cut of a file
+/// that went, or none to make, syncs nothing.
+#[cfg(test)]
+fn note_cut_sync<T>(cut: &io::Result<Option<T>>) {
+    if matches!(cut, Ok(Some(_))) {
+        note_sync();
+    }
+}
+
+/// Returns the syncs the held file has made since the last call, and resets
+/// the count ([`SYNCS`]).
+#[cfg(test)]
+pub(crate) fn take_syncs() -> u64 {
+    SYNCS.swap(0, std::sync::atomic::Ordering::SeqCst)
 }
 
 /// Returns the writer's refusal of `bytes`, where they spell a line past

@@ -745,6 +745,63 @@ fn the_blob_logs_the_kept_files_and_the_damaged_tails_refusal_say_their_words() 
     assert!(!other.to_string().contains("--cut-damaged-tail"), "another cause names no flag");
 }
 
+/// Checks the leftover files' line in its words and off a real store.
+///
+/// The line names the store's first failure, how many of the leftovers the
+/// open met stand and of which kind, that the board serves, and what clears
+/// them: a file of every kind left; a directory's fsync alone failed, where
+/// no file stands; and the figures a real open answers where it removed one
+/// orphan partial and could not remove another, a directory at its name.
+/// A clean open says nothing.
+#[test]
+fn the_leftover_files_line_names_the_cause_what_stands_and_what_clears_it() {
+    use skep_blobs::Store;
+
+    let line = |cause, removed, expired_left, orphans_left, asides_left| {
+        LeftoversLine { cause, removed, expired_left, orphans_left, asides_left }.to_string()
+    };
+    let clears = "and the board serves; once that cause is cleared, the pruner's next pass removes \
+                  the expired partials and the next open the rest";
+    let removal = "a partial in blobs/blake3/: remove: Operation not permitted (os error 1)";
+    assert_eq!(
+        line(removal, 3, 1, 1, 1),
+        format!(
+            "blob store: the open could not remove every leftover file: {removal}; 3 of the 6 it \
+             found stand (1 expired partials, 1 orphan partials, 1 asides), {clears}"
+        )
+    );
+    let fsync = "blobs/blake3/: fsync: Input/output error (os error 5)";
+    assert_eq!(
+        line(fsync, 2, 0, 0, 0),
+        format!(
+            "blob store: the open could not remove every leftover file: {fsync}; 0 of the 2 it \
+             found stand (0 expired partials, 0 orphan partials, 0 asides), {clears}"
+        ),
+        "a directory's fsync alone failed: every removal went, and no file stands"
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let designation = root.join(DESIGNATION);
+    std::fs::create_dir_all(&designation).expect("the designation directory");
+    std::fs::write(designation.join(".upload-00000000000000000000000000000001"), b"gone")
+        .expect("an orphan the open removes");
+    let stuck = designation.join(".upload-00000000000000000000000000000002");
+    std::fs::create_dir(&stuck).expect("a directory at an orphan's name");
+    std::fs::write(stuck.join("held"), b"held").expect("a file inside it");
+    let store = Store::open(&root, Duration::from_secs(1), 0).expect("the open serves");
+    let opened = store.opened();
+    let cause = opened.removal_failed.as_deref().expect("the orphan the open could not remove");
+    assert!(cause.starts_with("a partial in blobs/blake3/: remove: "), "{cause}");
+    assert_eq!(
+        LeftoversLine::of(opened).map(|leftovers| leftovers.to_string()),
+        Some(line(cause, 1, 0, 1, 0)),
+        "one orphan removed and one left: {opened:?}"
+    );
+    let clean = tempfile::tempdir().expect("tempdir");
+    let store = Store::open(clean.path().join("blobs"), Duration::from_secs(1), 0).expect("open");
+    assert!(LeftoversLine::of(store.opened()).is_none(), "a clean open says nothing");
+}
+
 /// THE VERSION LINE's WORDS (`operations.md` §3.4 step 6's gap, closed),
 /// pinned whole: the build's version — the workspace's one,
 /// `CARGO_PKG_VERSION` — and its commit, `SKEP_GIT_SHA`'s at build time and
@@ -807,11 +864,12 @@ fn the_version_line_names_the_build_and_the_three_formats_it_reads() {
 /// off the source, since no suite captures the stream in-process; the class
 /// word on the stream itself is pinned by the child-process suite
 /// (`tests/it/open.rs`), which reads `open:` on the binary's stderr. The
-/// tail cut's failure arm, said under its own class, is the one line of the
-/// report beside the door; the registry seed's `open:` line is the other,
-/// said through the write path's classed door so it stands in the record the
-/// suites read beside the seed's own failure line (its own test, below). And
-/// the version line is said FIRST, before the directory's.
+/// report's failures — the tail cut's failure arm, the blob logs' and the
+/// leftover files' — said under their own class, stand beside the door; the
+/// registry seed's `open:` line does too, said through the write path's
+/// classed door so it stands in the record the suites read beside the
+/// seed's own failure line (its own test, below). And the version line is
+/// said FIRST, before the directory's.
 #[test]
 fn the_opens_own_lines_go_through_the_classed_door() {
     let source = include_str!("../server.rs");

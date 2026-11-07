@@ -667,7 +667,9 @@ impl MediaGate {
     /// or a special file under its root, or an upload log of a hash function
     /// this build does not compute, as `InvalidData`; a volume that makes no
     /// second name for a file; or any other I/O failure, each naming its file
-    /// and its act.
+    /// and its act. A file the store's open cannot remove fails nothing: the
+    /// store answers it ([`skep_blobs::Opened::removal_failed`]), and the
+    /// daemon says it.
     pub fn open_with(data_dir: &Path, options: MediaOptions) -> io::Result<MediaGate> {
         let now = wall_clock_ms();
         let root = data_dir.join(STORE_DIR);

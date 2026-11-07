@@ -1263,7 +1263,8 @@ fn doc_states_the_registry_rows_the_bodies_and_the_refusals() {
 /// THE UPLOAD (media lane B; the record's clauses, the H1 rows; the upload
 /// permit pool, M-I5 (f); the FAILED index, `operations.md` §4 row 26):
 /// §Media states the PUT's path family and its five method/path pairs, the
-/// identifier's two carriers, the seven clauses each by number, the eleven
+/// identifier's two carriers, the seven clauses each by number — clause (4)
+/// with the partial neither the pass nor the open can remove — the eleven
 /// refusals of the family with their statuses — the permit's `upload_busy`
 /// and the failed index's `index_failed` among them — THE PERMIT in the
 /// creation's and the resume's rows, the deposit read's members, the
@@ -1292,6 +1293,8 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
         "(2) THE PENDING QUOTA",
         "(3) ONE EXPIRY",
         "(4) REMOVED ON EXPIRY",
+        "A partial that neither the pass nor the open can remove stays until one can, and its \
+         upload answers `no_upload` all the same.",
         "(5) A STREAM CLAIMS ITS UPLOAD FIRST",
         "(6) REFUSED IS ENDED",
         "(7) FINISHED, THE LEASE TAKES OVER",

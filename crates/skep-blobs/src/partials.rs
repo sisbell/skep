@@ -33,6 +33,23 @@
 //! the order the end and the daemon's pruner take while the store serves
 //! ([`Store::expire_upload`](crate::Store::expire_upload) is the pass's
 //! act).
+//!
+//! **A file the volume will not remove stops nothing.** Where an expired
+//! upload's partial or an orphan cannot be removed, it is left where it
+//! stands and the walk goes on to the next. An expired upload's record
+//! stands beside its partial, expired, for the pruner's next pass — as it
+//! does where the partial's unlink went and the fsync after it failed — and
+//! is counted among the named, so the orphan sweep neither removes that
+//! partial nor fails on it again. An orphan left is the next open's; a
+//! directory's fsync after the orphans' removals that fails leaves no file,
+//! each having gone. The walk counts what it left and keeps the first
+//! failure's words ([`Reconciled`]), which the store answers in its open's
+//! account. Never broken off: the sweep reads every partial missing from
+//! the named as an orphan, so a walk of the records stopped short would
+//! remove the partials of every standing upload it had not reached. What
+//! leaves the store unable to judge what it holds still fails the open — a
+//! directory's listing, a standing partial's stat — and so do the open's
+//! own writes: a cut-back, a set-back and every retirement.
 
 // The handle a request opens on a partial: its open file, the hash of
 // every byte written, and the tear a failed write or sync leaves; and
@@ -138,10 +155,15 @@ pub(crate) fn remove(root: &Path, designation: &str, id: &UploadId) -> io::Resul
 /// What the reconciliation did, by act.
 ///
 /// The figures are the open's account's ([`Opened`](crate::Opened)).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Reconciled {
     /// Expired uploads removed, the partial and then the record.
     pub expired: usize,
+    /// Expired uploads left, their partials' removal failed.
+    ///
+    /// Each record stands beside its partial, expired, for the pruner's next
+    /// pass.
+    pub expired_left: usize,
     /// Records retired, their partials gone.
     pub without_partial: usize,
     /// Partials cut back to their records' offsets.
@@ -150,37 +172,57 @@ pub(crate) struct Reconciled {
     pub set_back: usize,
     /// Orphan partials removed — partials no record names.
     pub orphans: usize,
+    /// Orphan partials left, their removal failed, for the next open.
+    pub orphans_left: usize,
     /// The bytes those acts freed.
     ///
     /// They are the expired uploads' and the orphans' partials removed, and
     /// the bytes cut off the partials cut back.
     pub bytes_freed: u64,
+    /// The first removal that failed, in the store's words, where one did.
+    ///
+    /// It is the expired partials' first, then the orphans', a directory's
+    /// fsync after a removal among them.
+    pub failed: Option<String>,
 }
 
 /// Reconciles the records and the partials at open, both ways.
 ///
 /// Every standing record is held to its partial, and every orphan removed
 /// under the designations this build pins alone ([`HashFunction::ALL`]).
-/// Answers what it did ([`Reconciled`]).
+/// A removal that fails is left, counted and its first failure kept, and
+/// the walk goes on (see the module doc). Answers what it did
+/// ([`Reconciled`]).
 ///
 /// # Errors
 ///
-/// An expired upload's removal or retirement failing; a partial's stat
-/// failing other than for its absence; a partial's cut-back, a set-back's
-/// write or a retirement failing; or a designation directory's listing, an
-/// orphan's removal or the directory's fsync failing.
+/// A partial's stat failing other than for its absence; a partial's
+/// cut-back, a set-back's write or a retirement failing; or a designation
+/// directory's listing failing.
 pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -> io::Result<Reconciled> {
     let mut did = Reconciled::default();
-    // The identifiers the standing records name, by designation directory.
+    // The identifiers the standing records name, by designation directory,
+    // and the expired ones whose partials stay.
     let mut named_ids: HashMap<String, HashSet<UploadId>> = HashMap::new();
     // Records first: expired ones removed as the end and the pruner remove
     // one, the partial before the record; the rest held to their partials.
     let all: Vec<_> = records.all().cloned().collect();
     for r in &all {
         if !r.stands(now_ms) {
-            did.bytes_freed += remove(root, &r.designation, &r.id)?;
-            records.retire(&r.id)?;
-            did.expired += 1;
+            match remove(root, &r.designation, &r.id) {
+                Ok(freed) => {
+                    did.bytes_freed += freed;
+                    records.retire(&r.id)?;
+                    did.expired += 1;
+                }
+                // Left as it stands, its record with it: named, so the
+                // sweep below passes its partial.
+                Err(e) => {
+                    did.failed.get_or_insert_with(|| e.to_string());
+                    did.expired_left += 1;
+                    named_ids.entry(r.designation.clone()).or_default().insert(r.id);
+                }
+            }
             continue;
         }
         let path = partial_path(root, &r.designation, &r.id);
@@ -219,13 +261,27 @@ pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -
             id_of_partial_name(name).is_some_and(|id| !named_here.is_some_and(|ids| ids.contains(&id)))
         })?;
         let dir = root.join(designation);
+        let mut removed = 0;
         for name in &orphans {
-            did.bytes_freed += remove_standing(&dir.join(name)).map_err(|e| named(e, partial_label(&dir), "remove"))?;
+            match remove_standing(&dir.join(name)) {
+                Ok(freed) => {
+                    did.bytes_freed += freed;
+                    removed += 1;
+                }
+                Err(e) => {
+                    did.failed.get_or_insert_with(|| named(e, partial_label(&dir), "remove").to_string());
+                    did.orphans_left += 1;
+                }
+            }
         }
-        if !orphans.is_empty() {
-            fsync_dir(&dir).map_err(|e| named(e, dir_label(&dir, 2), "fsync"))?;
+        // The fsync makes the removals durable, so it runs where one went;
+        // its failure counts no file, each removal having gone.
+        if removed > 0 {
+            if let Err(e) = fsync_dir(&dir) {
+                did.failed.get_or_insert_with(|| named(e, dir_label(&dir, 2), "fsync").to_string());
+            }
         }
-        did.orphans += orphans.len();
+        did.orphans += removed;
     }
     Ok(did)
 }

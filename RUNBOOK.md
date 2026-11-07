@@ -301,11 +301,11 @@ apart.
    cause that names a stopped log is step 5's. Where step (a)'s
    cause names a partial the OS will not remove — `a partial in
    blobs/{designation}/: remove: {error}` — every pass meets it
-   again, and so does the next open, before it serves: the open
-   stops on it with step 4's `skepd: blob store:` line, and a board
-   that was serving reads is down. Clear that cause — a flag such as
-   immutable on the partial, its directory's permissions, the device,
-   as the error names — before any restart.
+   again, and it goes at the first pass after its cause is cleared
+   (a flag such as immutable on the partial, its directory's
+   permissions, the device, as the error names); a restart neither
+   clears it nor is needed: the next open leaves it too, says so
+   (Start, step 3, item 9), and serves.
 
 4. **When the volume is full, never restart before there is
    room.** The open writes before it serves. It compacts the blob
@@ -337,7 +337,9 @@ apart.
    asides a replace or a crash left, the partial uploads that
    expired or that no record names — but no more: a deposited file
    waits for the pruner's pass, which runs only once the open is
-   done. Each rewrite needs room for a second copy of the file it
+   done. What of these it cannot remove, the open leaves where it
+   stands, says so (Start, step 3, item 9), and serves: no such file
+   stops it. Each rewrite needs room for a second copy of the file it
    rewrites. The pruner's last line gives the blob store's two
    logs' sizes (`blobs/uploads.log {n} lines ({n} bytes)`); each
    checkpoint's landing line gives `commits.log`'s size and
@@ -691,7 +693,8 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    reconciles the blob store whether or not it then serves: it
    retires every upload record whose partial file has not arrived,
    and removes every partial file whose record has not. It says
-   nothing of this.
+   nothing of this, save a file it could not remove, which it leaves
+   where it stands and says (Start, step 3, item 9).
 
 5. **Read the open's report** (Start, step 3), and look for a cut
    line for `feed-attest.log`. It ends one of four ways. Two owe
@@ -893,12 +896,13 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
 
    Then start. The open makes both logs empty, removes every
    partial upload under `blobs/blake3/` and every aside, and says
-   nothing of it. The cost: every upload in progress is gone, its
-   client's resume answered `404 no_upload`; every deposit not yet
-   placed in a cell is no deposit, and the pruner's first pass
-   unlinks its file, which its depositor re-PUTs. A placed picture
-   keeps its file, since its cell names it. Put back each hole the
-   inventory listed with the pull (step 6).
+   nothing of it, save a file it could not remove, which it leaves
+   where it stands and says (Start, step 3, item 9). The cost: every
+   upload in progress is gone, its client's resume answered `404
+   no_upload`; every deposit not yet placed in a cell is no deposit,
+   and the pruner's first pass unlinks its file, which its depositor
+   re-PUTs. A placed picture keeps its file, since its cell names it.
+   Put back each hole the inventory listed with the pull (step 6).
 
 ## 3. Start
 
@@ -1382,6 +1386,36 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
       ```
       failure: pruner: the unlink pass is halted for this uptime — {reason}: a lease the open lost holds no file in memory, so the pass would unlink files their depositors hold; expired partials are still removed and the logs compacted at each pass; the next start, its open reading the log whole, lifts it
       ```
+
+      Before it asks the volume for room, the open removes the
+      leftovers nothing will read again: an expired upload's partial,
+      a partial no record names (an orphan a crash or a copy left),
+      and an aside, the second name a replace or the pruner left on a
+      file. One the volume refuses to remove it leaves where it
+      stands — an expired upload's record beside its partial — and
+      says so once, after the logs' lines, and the board serves:
+
+      ```
+      failure: blob store: the open could not remove every leftover file: {cause}; {k} of the {m} it found stand ({e} expired partials, {o} orphan partials, {a} asides), and the board serves; once that cause is cleared, the pruner's next pass removes the expired partials and the next open the rest
+      ```
+
+      `{cause}` is the store's words for the first removal that
+      failed, `{file}: {act}: {error}`, a partial named by its
+      directory alone (`a partial in blobs/blake3/: remove: {error}`).
+      Where `{k}` is `0`, every file went and only a directory's fsync
+      after the removals failed: the cause names the directory, and
+      the device is what to check. The board serves beside what
+      stands: an expired upload answers `404 no_upload`, counts in no
+      scope and among no account's standing uploads, whether or not
+      its file is gone, and only the floor's free-space read sees the
+      room a left file holds. Find the one
+      bad entry among `blobs/blake3/.upload-*`, or among the asides
+      `blobs/blake3/.retired-*`, by what the cause names: a flag such
+      as immutable (`lsattr` on Linux, `ls -lO` on macOS), a mode, or
+      a directory standing at the name. Clear that cause, and nothing
+      else is owed. Delete no other partial by hand: the line cannot
+      say which file is the left one, and a partial whose upload still
+      stands holds a client's bytes.
 
       Then the media limits and the floor in force, and the
       volume's free space beside it:

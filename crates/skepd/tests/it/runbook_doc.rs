@@ -83,12 +83,15 @@ fn service(heading: &str) -> String {
 /// holding intact frames, under `failure:` — after it; the beginning's line,
 /// after the recovery's landing it qualifies; the open's two warnings, the
 /// skipped base's and the runs passed over below the start point after it,
-/// under `warning (at open):`; and each line the binary classes that the
-/// list once quoted bare — the stray `checkpoint.tmp`'s and the media
-/// limits' under `open:`, the first head's and the cell index's landing
-/// under `landing:`, the pruner's refused thread under `failure:` — opens
-/// with the class word the door spells, read off the door's own type, so a
-/// word spelled another way here fails.
+/// under `warning (at open):`; the blob store's line for the leftover files
+/// its open could not remove, in the words `server.rs`'s `LeftoversLine`
+/// writes, under `failure:`, after the blob logs' lines and before the media
+/// limits'; and each line the binary classes that the list once quoted bare
+/// — the stray `checkpoint.tmp`'s and the media limits' under `open:`, the
+/// first head's and the cell index's landing under `landing:`, the pruner's
+/// refused thread under `failure:` — opens with the class word the door
+/// spells, read off the door's own type, so a word spelled another way here
+/// fails.
 #[test]
 fn runbook_lists_the_tail_cut_and_classes_the_opens_lines() {
     let list = passage(
@@ -165,6 +168,23 @@ fn runbook_lists_the_tail_cut_and_classes_the_opens_lines() {
     assert!(
         at("open: recovered from ") < at("no journal stood in the data directory:"),
         "the beginning follows the landing it qualifies"
+    );
+    // What the blob store's open could not remove: after the logs' lines,
+    // before the media limits', in the binary's words.
+    let leftovers = "blob store: the open could not remove every leftover file:";
+    classed(leftovers, Class::Failure);
+    assert!(
+        at("was absent beside a standing store") < at(leftovers) && at(leftovers) < at("media limits:"),
+        "the leftovers' line follows the blob logs' lines and precedes the media limits'"
+    );
+    assert!(
+        list.contains(
+            "failure: blob store: the open could not remove every leftover file: {cause}; {k} of \
+             the {m} it found stand ({e} expired partials, {o} orphan partials, {a} asides), and \
+             the board serves; once that cause is cleared, the pruner's next pass removes the \
+             expired partials and the next open the rest"
+        ),
+        "step 3 quotes the leftovers' line as the binary writes it:\n{list}"
     );
     classed("media limits:", Class::Open);
     // The volume's free space, after the media limits' line that names the
@@ -804,8 +824,9 @@ fn runbook_says_a_deposits_file_unread_and_what_ends_it() {
 /// sizes those of line 34's quote beside it, without the resident set's
 /// reading. It names each step by the words the binary gives it
 /// (`PassStep`'s own `Display`), the halts unread, the stopped log sent to
-/// step 5, and the partial the next open stops on, cleared before any
-/// restart.
+/// step 5, and a partial the OS will not remove, which goes at the first
+/// pass after its cause is cleared and which the next open leaves and says
+/// rather than stops on.
 #[test]
 fn runbook_quotes_the_failed_pass_and_what_each_failure_leaves() {
     use skep_media::pruner::PassStep;
@@ -839,11 +860,12 @@ fn runbook_quotes_the_failed_pass_and_what_each_failure_leaves() {
         "`the unlink pass halted: the halts are unread, so no file is judged`",
         "a cause that names a stopped log is step 5's",
         "`a partial in blobs/{designation}/: remove: {error}`",
-        "the open stops on it with step 4's `skepd: blob store:` line",
-        "before any restart",
+        "it goes at the first pass after its cause is cleared",
+        "a restart neither clears it nor is needed: the next open leaves it too, says so",
     ] {
         assert!(prose.contains(fact), "§1 step 3 says {fact:?}: {prose}");
     }
+    assert!(!prose.contains("the open stops on it"), "the open serves past the partial: {prose}");
 }
 
 /// §9.3 WINDOWS — A QUESTION, NO COMMAND (the runbook states only what this

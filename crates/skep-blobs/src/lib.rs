@@ -128,8 +128,12 @@
 //!   records held to each other both ways, an orphan partial removed under
 //!   the designations this build computes alone — another build's
 //!   designation directory left to it — and a partial that cannot be read
-//!   failing the open rather than reading as absent (`partials.rs`); and
-//!   only then the lease log tail-checked and rewritten to its current
+//!   failing the open rather than reading as absent (`partials.rs`); a file
+//!   of these the volume will not remove left where it stands, an expired
+//!   upload's record standing beside its partial, expired, and counted, the
+//!   first failure answered in the store's words and the open going on
+//!   ([`Opened::removal_failed`]), so one stuck file never stops the board;
+//!   and only then the lease log tail-checked and rewritten to its current
 //!   leases, a lease past the horizon dropped; the volume probed for a
 //!   second name for a file, which a re-PUT of a file the board holds takes,
 //!   a volume that makes none failing the open with the act that clears it

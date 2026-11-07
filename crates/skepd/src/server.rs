@@ -237,7 +237,7 @@ use skep_address::Address;
 use skep_engine::{Engine, EngineError, HistoryError, Recovery, World, WORLD_FORMAT};
 use skep_febe::OperationSurface;
 use skep_identity::HasIdentity;
-use skep_blobs::{LogRead, Store};
+use skep_blobs::{LogRead, Opened, Store};
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointError, CheckpointHeader, CheckpointPolicy, DamagedTail,
     Durability, InlineCheckpoint, KernelConfig, LandedStep, Reclaim, SaltSource, Seq,
@@ -1480,7 +1480,9 @@ impl Daemon {
         // record and a log absent beside a standing store as the failures
         // they are, each lost lease or record reading as none. Lease damage
         // halts the pruner's unlink pass for this uptime, below, once the
-        // daemon stands.
+        // daemon stands. After them, what the open could not remove of the
+        // files it frees room by, left where they stand (`LeftoversLine`):
+        // a failure said once, the board serving beside them.
         let opened = media.store().opened();
         let logs = [
             BlobLogLines { read: &opened.uploads_log, store_stood, each: "upload" },
@@ -1493,6 +1495,9 @@ impl Daemon {
                     class => notice::emit(class, line),
                 }
             }
+        }
+        if let Some(leftovers) = LeftoversLine::of(opened) {
+            notice::emit(Class::Failure, leftovers);
         }
         let lease_damage = logs[1].damage();
         say_open_line(media.startup_line());
@@ -3632,6 +3637,76 @@ impl BlobLogLines<'_> {
     }
 }
 
+/// What the blob store's open could not remove, said after its logs' lines.
+///
+/// The leftovers are the files the open frees room by and nothing will
+/// read again — an expired upload's partial, a partial no record names, an
+/// aside — which it removes before it asks the volume for room
+/// (`Store::open`). One the volume refused to remove is left where it
+/// stands, an expired upload's record beside it, and the open serves; the
+/// store answers what it left and its first failure
+/// (`Opened::removal_failed`), and this line says it once, as the failure
+/// it is: `blob store: the open could not remove every leftover file:
+/// {cause}; {k} of the {m} it found stand ({e} expired partials, {o} orphan
+/// partials, {a} asides), and the board serves; once that cause is cleared,
+/// the pruner's next pass removes the expired partials and the next open
+/// the rest`. `{cause}` is the store's `{file}: {act}: {cause}`, a partial
+/// named by its directory alone; `{m}` counts every leftover the open met,
+/// removed or left, and `{k}` the ones left — an expired upload whose
+/// partial's own fsync failed among them, its record standing — zero where
+/// a directory's fsync after the orphans' or the asides' removals was all
+/// that failed. It is the one report an orphan left ever gets — the
+/// pruner's pass lists no partial — and the one at all where no pass runs.
+/// A pure value the unit suite pins by `to_string()`; emitted under
+/// `Class::Failure`.
+struct LeftoversLine<'a> {
+    /// The first failure, in the store's words.
+    cause: &'a str,
+    /// The leftovers removed, of every kind.
+    removed: usize,
+    /// The expired uploads left, each record beside its partial.
+    expired_left: usize,
+    /// The orphan partials left.
+    orphans_left: usize,
+    /// The asides left.
+    asides_left: usize,
+}
+
+impl<'a> LeftoversLine<'a> {
+    /// Returns the line from the store's account of its open.
+    ///
+    /// `None` where every removal went, which is every open but one the
+    /// volume refused.
+    fn of(opened: &'a Opened) -> Option<LeftoversLine<'a>> {
+        let cause = opened.removal_failed.as_deref()?;
+        Some(LeftoversLine {
+            cause,
+            removed: opened.expired_uploads + opened.orphan_partials + opened.asides,
+            expired_left: opened.expired_uploads_left,
+            orphans_left: opened.orphan_partials_left,
+            asides_left: opened.asides_left,
+        })
+    }
+}
+
+impl fmt::Display for LeftoversLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let left = self.expired_left + self.orphans_left + self.asides_left;
+        write!(
+            f,
+            "blob store: the open could not remove every leftover file: {}; {left} of the {} it \
+             found stand ({} expired partials, {} orphan partials, {} asides), and the board \
+             serves; once that cause is cleared, the pruner's next pass removes the expired \
+             partials and the next open the rest",
+            self.cause,
+            self.removed + left,
+            self.expired_left,
+            self.orphans_left,
+            self.asides_left
+        )
+    }
+}
+
 /// The tail cut (`operations.md` §1.1 m3; §4 row 8).
 ///
 /// It is rendered in the operator stream's words from the engine's account
@@ -3805,9 +3880,10 @@ impl fmt::Display for TailCutLine {
 /// pins as this door's callers —
 /// each rendered here under `Class::Open`, the fixed-form lines as pure
 /// values and the conditional or borrowed ones built as they are said, so
-/// no site in the open spells the class. The tail cut's failure arm is said
-/// under its own class, `Class::Failure`, beside the door. Through the
-/// queue, as every notice is.
+/// no site in the open spells the class. The report's failures — the tail
+/// cut's failure arm, the blob logs' and the blob store's leftover files'
+/// ([`LeftoversLine`]) — are said under their own class, `Class::Failure`,
+/// beside the door. Through the queue, as every notice is.
 fn say_open_line(line: impl fmt::Display) {
     notice::emit(Class::Open, line);
 }

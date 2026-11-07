@@ -329,7 +329,8 @@ impl UploadRecords {
     /// Returns every record, every principal's.
     ///
     /// It is the walk open's reconciliation makes over them all, and open's
-    /// count of them, and nothing else.
+    /// count of those standing, and nothing else: an expired record whose
+    /// partial the open could not remove is among them.
     pub fn all(&self) -> impl Iterator<Item = &UploadRecord> {
         self.records.values()
     }

@@ -46,8 +46,9 @@
 //! words — `the volume is full (No space left on device (os error 28))`
 //! ([`Cause`]; `operations.md` §1) — so one search finds every act that
 //! failed for room. The operator reads it whole on the daemon's refused
-//! start (`skepd: blob store: {e}`), in the pruner's line and from the pull;
-//! a client reads it in `blob_io`'s detail.
+//! start (`skepd: blob store: {e}`), in the open's line for a file it could
+//! not remove (`Opened::removal_failed`), in the pruner's line and from the
+//! pull; a client reads it in `blob_io`'s detail.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -236,6 +237,26 @@ pub(crate) fn names_in(
     Ok(out)
 }
 
+/// What open's sweep of the asides did ([`sweep_asides`]).
+///
+/// The figures are the open's account's ([`Opened`](crate::Opened)).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Swept {
+    /// Asides removed.
+    pub removed: usize,
+    /// Asides left, their removal failed, for the next open.
+    ///
+    /// The pruner's pass also removes one under a designation this build
+    /// pins, where it judges files.
+    pub left: usize,
+    /// The bytes the removals freed.
+    pub freed: u64,
+    /// The first removal that failed, in the store's words, where one did.
+    ///
+    /// A directory's fsync after a removal is among them.
+    pub failed: Option<String>,
+}
+
 /// Removes, at open, every aside in every designation directory under `root`.
 ///
 /// Each directory is fsynced where one went. The asides are the second
@@ -246,27 +267,48 @@ pub(crate) fn names_in(
 /// lost. Answers the count removed and the bytes their unlinks freed — an
 /// aside that shares its inode with its hash's name, a crash's between a
 /// replace's link and its rename, frees none — for the open's account
-/// ([`Opened`](crate::Opened)).
+/// ([`Swept`]).
+///
+/// **An aside the volume will not remove stops nothing.** Where its
+/// removal fails, the aside is left where it stands — for the next open,
+/// and for the pruner's pass under a designation this build pins — and the
+/// sweep goes on, as it does past a directory's fsync after its removals
+/// that fails. It counts each failed removal as an aside left, a name gone
+/// before its removal among them, and keeps the first failure's words, each
+/// named (`remove`, `fsync`); an fsync's failure counts no aside, each
+/// having gone.
 ///
 /// # Errors
 ///
-/// A listing, an aside's removal — a name gone before it among them — or a
-/// directory's fsync failing, each named (`list`, `remove`, `fsync`).
-pub(crate) fn sweep_asides(root: &Path) -> io::Result<(usize, u64)> {
-    let (mut removed, mut freed) = (0, 0);
+/// A listing failing, named (`list`): with nothing to walk, nothing is
+/// judged.
+pub(crate) fn sweep_asides(root: &Path) -> io::Result<Swept> {
+    let mut swept = Swept::default();
     for dir_name in dirs_under(root)? {
         let asides = names_in(root, &dir_name, |name, _| is_aside_name(name))?;
         let dir = root.join(&dir_name);
+        let mut removed = 0;
         for name in &asides {
             let aside = dir.join(name);
-            freed += remove_standing(&aside).map_err(|e| named(e, label(&aside, 3), "remove"))?;
+            match remove_standing(&aside) {
+                Ok(freed) => {
+                    swept.freed += freed;
+                    removed += 1;
+                }
+                Err(e) => {
+                    swept.failed.get_or_insert_with(|| named(e, label(&aside, 3), "remove").to_string());
+                    swept.left += 1;
+                }
+            }
         }
-        if !asides.is_empty() {
-            fsync_dir(&dir).map_err(|e| named(e, dir_label(&dir, 2), "fsync"))?;
+        if removed > 0 {
+            if let Err(e) = fsync_dir(&dir) {
+                swept.failed.get_or_insert_with(|| named(e, dir_label(&dir, 2), "fsync").to_string());
+            }
         }
-        removed += asides.len();
+        swept.removed += removed;
     }
-    Ok((removed, freed))
+    Ok(swept)
 }
 
 /// Checks that nothing open acts on is followed or shared.

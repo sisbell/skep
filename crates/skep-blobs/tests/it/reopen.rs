@@ -3,7 +3,10 @@
 //! reconciliation both ways at open, an orphan removed under this build's
 //! designations alone, an offset set back keeping its expiry, and the sweep
 //! of the asides beside it; a partial that cannot be read failing the open
-//! and retiring nothing; a record line read as no record
+//! and retiring nothing; a file the open cannot remove — an expired
+//! upload's partial, an orphan, an aside — left where it stands, counted
+//! and answered, the open serving and its walk never broken off; a record
+//! line read as no record
 //! where it lacks any member, its interval among them, where its offset
 //! passes its length, and where its designation climbs out of the root,
 //! nothing beside the root touched; an upload log naming a function this
@@ -627,6 +630,135 @@ fn a_partial_that_cannot_be_read_fails_the_open_and_retires_nothing() {
     let store = open(&root, 3);
     assert_eq!(store.upload("k", &rec.id, 3).map(|r| r.offset), Some(3), "the upload stands where its record left it");
     assert_eq!(fs::read(designation_dir.join(format!(".upload-{}", rec.id.to_hex()))).unwrap(), b"abc", "its partial whole");
+}
+
+/// Checks that the open leaves an expired partial it cannot remove.
+///
+/// A directory holding a file stands at the partial's name of one expired
+/// upload, beside eight standing uploads with bytes received. The open
+/// serves: the expired upload is counted left, its record standing and
+/// expired — answered as no upload, counted among no standing one, listed
+/// for the pruner's expiry — and the failure is answered in the store's
+/// words, the partial named by its directory alone. The walk never broke
+/// off: every standing partial is whole, and no orphan was removed. A
+/// reopen leaves it again, its record kept through the compaction; the
+/// pruner's expiry fails on it until the directory goes, then retires the
+/// record, and the next open finds nothing left.
+#[test]
+fn the_open_leaves_an_expired_partial_it_cannot_remove_and_serves() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let partial = |id: &UploadId| root.join("blake3").join(format!(".upload-{}", id.to_hex()));
+    let (short, standing_ones) = {
+        let store = open(&root, 0);
+        // Its bytes received at 0 on a ten-second interval: expired at 10 s.
+        let rec = store.create_upload("k", HashFunction::Blake3, 100, Duration::from_secs(10), 0).expect("create");
+        let mut stream = store.resume("k", &rec.id, 0, 0).expect("resume");
+        stream.append(b"expiring", 0).expect("append");
+        let short = stream.settle(0).expect("settle");
+        let standing_ones: Vec<_> = (0..8u8)
+            .map(|n| {
+                let bytes = vec![b'a' + n; 10 + usize::from(n)];
+                (standing(&store, "k", 100, &bytes, 1), bytes)
+            })
+            .collect();
+        (short, standing_ones)
+    };
+    // A directory holding a file at the expired partial's name: no unlink
+    // takes it.
+    fs::remove_file(partial(&short.id)).unwrap();
+    fs::create_dir(partial(&short.id)).unwrap();
+    fs::write(partial(&short.id).join("held"), b"held").unwrap();
+    let now = short.expires;
+    let reopen = || Store::open(&root, HORIZON, now).expect("the open serves beside the partial it left");
+    let expired = |store: &Store| store.expired_uploads(now).into_iter().map(|r| r.id).collect::<Vec<_>>();
+    let store = reopen();
+    let opened = store.opened();
+    assert_eq!((opened.expired_uploads, opened.expired_uploads_left), (0, 1), "left, and counted: {opened:?}");
+    let failed = opened.removal_failed.clone().expect("the failure, answered");
+    assert!(failed.starts_with("a partial in blobs/blake3/: remove: "), "named by its directory and its act: {failed}");
+    assert!(!failed.contains(&short.id.to_hex()), "never by its identifier: {failed}");
+    assert_eq!((opened.orphan_partials, opened.orphan_partials_left), (0, 0), "no partial read as an orphan: {opened:?}");
+    for (rec, bytes) in &standing_ones {
+        assert_eq!(fs::read(partial(&rec.id)).unwrap(), *bytes, "a standing partial whole");
+        assert_eq!(store.upload("k", &rec.id, now).map(|r| r.offset), Some(bytes.len() as u64), "and its upload standing");
+    }
+    assert_eq!(opened.uploads, 8, "the standing uploads alone: {opened:?}");
+    assert!(store.upload("k", &short.id, now).is_none(), "the expired upload answers as none");
+    assert_eq!(expired(&store), vec![short.id], "its record stands, expired, for the pruner");
+    let refused = store.expire_upload(&short.id, now).expect_err("the pruner's expiry meets the same refusal");
+    assert!(refused.to_string().starts_with("a partial in blobs/blake3/: remove: "), "{refused}");
+    assert_eq!(expired(&store), vec![short.id], "and keeps the record");
+    drop(store);
+    let store = reopen();
+    assert_eq!(store.opened().expired_uploads_left, 1, "a reopen leaves it again, the record kept by the compaction");
+    fs::remove_dir_all(partial(&short.id)).unwrap();
+    assert_eq!(store.expire_upload(&short.id, now).unwrap(), Some(0), "the cause cleared: retired, nothing to free");
+    assert!(expired(&store).is_empty(), "the record retired");
+    drop(store);
+    let store = reopen();
+    let opened = store.opened();
+    assert_eq!(
+        (opened.expired_uploads, opened.expired_uploads_left, opened.removal_failed.as_deref(), opened.uploads),
+        (0, 0, None, 8),
+        "nothing left: {opened:?}"
+    );
+}
+
+/// Checks that the open leaves an orphan and an aside it cannot remove.
+///
+/// Beside an orphan partial and an aside the open removes, a directory
+/// holding a file stands at another orphan's name and at another aside's.
+/// The open serves, each kind counted removed and left, the bytes freed the
+/// removed files' alone; the failure it answers is the aside's, the asides
+/// being swept first and an aside named by its file. Each directory
+/// replaced by a plain file, the next open removes both.
+#[test]
+fn the_open_leaves_an_orphan_and_an_aside_it_cannot_remove_and_serves() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    drop(open(&root, 0));
+    let designation = root.join("blake3");
+    fs::create_dir_all(&designation).unwrap();
+    let orphan = designation.join(".upload-ffffffffffffffffffffffffffffffff");
+    let stuck_orphan = designation.join(".upload-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+    let aside = designation.join(format!(".retired-{}-0", hex_of(b"old")));
+    let stuck_aside = designation.join(format!(".retired-{}-0", hex_of(b"older")));
+    fs::write(&orphan, b"orphan").unwrap();
+    fs::write(&aside, b"aside").unwrap();
+    for stuck in [&stuck_orphan, &stuck_aside] {
+        fs::create_dir(stuck).unwrap();
+        fs::write(stuck.join("held"), b"held").unwrap();
+    }
+    let store = open(&root, 0);
+    let opened = store.opened();
+    assert_eq!(
+        (opened.orphan_partials, opened.orphan_partials_left, opened.asides, opened.asides_left),
+        (1, 1, 1, 1),
+        "each kind removed and left: {opened:?}"
+    );
+    assert_eq!(opened.bytes_freed, 6 + 5, "the removed files' bytes alone: {opened:?}");
+    let failed = opened.removal_failed.as_deref().expect("the failure, answered");
+    assert!(
+        failed.starts_with(&format!("blobs/blake3/.retired-{}-0: remove: ", hex_of(b"older"))),
+        "the aside's, the asides swept first: {failed}"
+    );
+    assert!(!orphan.exists() && !aside.exists(), "the two the open could remove went");
+    assert!(stuck_orphan.is_dir() && stuck_aside.is_dir(), "the two it could not stand where they stood");
+    drop(store);
+    for stuck in [&stuck_orphan, &stuck_aside] {
+        fs::remove_dir_all(stuck).unwrap();
+        fs::write(stuck, b"plain").unwrap();
+    }
+    let store = open(&root, 0);
+    let opened = store.opened();
+    assert_eq!(
+        (opened.orphan_partials, opened.orphan_partials_left, opened.asides, opened.asides_left),
+        (1, 0, 1, 0),
+        "the next open removes both: {opened:?}"
+    );
+    assert_eq!(opened.removal_failed, None, "{opened:?}");
+    assert!(!stuck_orphan.exists() && !stuck_aside.exists(), "both gone");
 }
 
 /// NOTHING OPEN ACTS ON IS FOLLOWED OR SHARED

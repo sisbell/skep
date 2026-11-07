@@ -4,8 +4,9 @@
 //! unlink, release"; the rulings ms5-R and ms5-T4): THE PASS and what it
 //! takes, keeps and halts on, driven through the daemon's hook rather than
 //! its cadence; THE DRAIN under the credential lock's exclusive arm, a
-//! retirement committing while a pass runs; and the drain's timing,
-//! reported.
+//! retirement committing while a pass runs; a board serving past an
+//! expired partial its open could not remove, a pass taking it once the
+//! cause is cleared; and the drain's timing, reported.
 //!
 //! Every test names the register's clause it holds: M-I5 (b) NO
 //! HOUSEKEEPING ACT CREATES AN R59 HOLE; M-I5 (f) PICTURES NEVER STARVE OR
@@ -733,6 +734,99 @@ fn the_halt_is_said_in_one_line_on_the_stream() {
         "FINDING (row 36): the standalone line is retired:\n{}",
         lines.join("\n")
     );
+}
+
+/// Checks that the binary serves past an expired partial it cannot remove.
+///
+/// An upload created on a one-second interval expires while the board is
+/// stopped, and a directory holding a file stands at its partial's name.
+/// The binary's open says the leftover once, as a failure naming the
+/// partial by its directory and counting it, and serves; its first pass
+/// fails at step (a) on the same partial, having removed none. In-process
+/// over the same board, the open leaves it again and the upload answers
+/// none; the directory removed while that daemon serves, the next pass
+/// removes the partial with no failure and says its landing, with no
+/// restart.
+#[test]
+fn the_board_serves_past_an_expired_partial_its_open_cannot_remove() {
+    use crate::open::{after_the_head, serving_port, skepd, wait_for_the_lock, Spawned, Stderr, PATIENCE};
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("data");
+    let id = {
+        let sd = spawn(&data);
+        let port = sd.port();
+        let token = open_session(port, CLAIMANT_PRINCIPAL);
+        sd.daemon().install_media_limits(None, None, Some(1_000), None, None).expect("installs");
+        let (st, _, resp) = blob_create(port, Some(&token), 10, b"hello");
+        assert_eq!(st, 200, "{}", String::from_utf8_lossy(&resp));
+        let id = json(&resp)["upload"].as_str().expect("upload").to_string();
+        sd.shutdown();
+        id
+    };
+    wait_for_the_lock(&data);
+    let partial = blobs_dir(&data).join(format!(".upload-{id}"));
+    fs::remove_file(&partial).expect("the partial stood");
+    fs::create_dir(&partial).expect("a directory at its name");
+    fs::write(partial.join("held"), b"held").expect("a file inside it");
+    // Past the one-second interval by the wall clock, the binary's.
+    thread::sleep(Duration::from_millis(1_500));
+    let workers = skepd::MIN_WORKERS.to_string();
+    let mut cmd = skepd(&data, &["--port", "0", "--workers", workers.as_str()]);
+    let mut child = Spawned::launch(&mut cmd);
+    let mut stderr = Stderr::of(&mut child.child);
+    let port = serving_port(&mut child.child, PATIENCE);
+    let (st, body) = get(port, "/health");
+    assert_eq!(st, 200, "the board serves: {}", String::from_utf8_lossy(&body));
+    let first = stderr.wait_for("the first pass's line", PATIENCE, |l| l.contains("pruner: "));
+    child.kill();
+    let said = stderr.whole();
+    let leftovers: Vec<&str> = said
+        .iter()
+        .filter_map(|l| after_the_head(l, "failure"))
+        .filter(|t| t.starts_with("blob store: the open could not remove every leftover file: "))
+        .collect();
+    let [leftover] = leftovers.as_slice() else {
+        panic!("FINDING (#494): the open says what it left, once:\n{}", said.join("\n"))
+    };
+    assert!(
+        leftover.starts_with("blob store: the open could not remove every leftover file: a partial in blobs/blake3/: remove: "),
+        "the store's words, the partial named by its directory: {leftover}"
+    );
+    assert!(
+        leftover.contains(
+            "; 1 of the 1 it found stand (1 expired partials, 0 orphan partials, 0 asides), and the board serves; "
+        ),
+        "{leftover}"
+    );
+    assert!(!leftover.contains(&id), "FINDING (D9): an upload's identifier rides the line: {leftover}");
+    let pass = after_the_head(&first, "failure").unwrap_or_else(|| panic!("the first pass failed: {first}"));
+    assert!(
+        pass.starts_with("pruner: the pass failed: step (a), the expired partials: a partial in blobs/blake3/: remove: "),
+        "{pass}"
+    );
+    assert!(pass.contains("; 0 expired partials removed, "), "{pass}");
+    wait_for_the_lock(&data);
+    let sd = spawn(&data);
+    let port = sd.port();
+    let token = open_session(port, CLAIMANT_PRINCIPAL);
+    // The cadence's first pass, run as the index readied, has met the
+    // partial: the directory goes only after it, so the pass below takes it.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while sd.daemon().prune_passes_completed() == 0 {
+        assert!(Instant::now() < deadline, "the cadence's first pass did not complete");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let (st, _, resp) = blob_progress(port, Some(&token), &id);
+    assert_eq!((st, json(&resp)["error"].as_str()), (404, Some("no_upload")), "expired, its partial standing");
+    fs::remove_dir_all(&partial).expect("the cause cleared");
+    let pass = sd.daemon().prune_now().expect("the index is ready");
+    assert_eq!(pass.expired_partials, 1, "{pass:?}");
+    assert!(pass.failed.is_empty(), "{pass:?}");
+    let last = sd.daemon().lines_said().into_iter().rfind(|l| l.contains("pruner: "));
+    let last = last.expect("the pass says its line");
+    assert!(last.starts_with("landing: pruner: 1 expired partials removed, "), "{last}");
+    assert!(!partial.exists(), "the partial gone");
+    sd.shutdown();
 }
 
 /// §3.2 — THE DRAIN's TIMING (M-I5 (f); `#[ignore]`, the gate's timing

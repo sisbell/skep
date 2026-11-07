@@ -174,9 +174,14 @@ pub struct Finished {
 /// leases or uploads a client was answered over — a damaged log, a copy
 /// that stopped short or that another build wrote — which the open has
 /// already acted on and nothing else will say: a damaged cut's bytes it
-/// kept beside the log first ([`LogRead::kept`](crate::LogRead::kept)). The
-/// rest are the open's ordinary repairs after a crash or a stop, a torn
-/// last line's cut among them.
+/// kept beside the log first ([`LogRead::kept`](crate::LogRead::kept)). A
+/// removal that failed ([`Opened::removal_failed`]) is neither: nothing is
+/// lost, but a file the open frees room by stands because the volume
+/// refused to remove it — a flag, a mode, a directory at its name, a
+/// failing device — and an orphan partial so left is said by nothing but
+/// the embedder, no pass listing a partial. The rest are the open's
+/// ordinary repairs after a crash or a stop, a torn last line's cut among
+/// them.
 ///
 /// `#[non_exhaustive]`: emitted, never constructed by a caller — field
 /// reads are unaffected, and a further field is an addition rather than a
@@ -202,6 +207,16 @@ pub struct Opened {
     pub leases_past_horizon: usize,
     /// Expired uploads removed — the partial, then the record.
     pub expired_uploads: usize,
+    /// Expired uploads left, their partials' removal failed.
+    ///
+    /// Each record stands beside its partial, expired: the upload answers
+    /// as none, its bytes count in no scope and in no standing upload, and
+    /// the pruner's pass removes its partial and retires it once the removal
+    /// succeeds. An upload whose partial's unlink went through and whose
+    /// directory's fsync after it failed is among them: its record stands
+    /// as the rest do, the bytes the unlink freed are not in `bytes_freed`,
+    /// and the next pass, finding no partial, retires the record.
+    pub expired_uploads_left: usize,
     /// Upload records retired, their partials gone.
     ///
     /// A crash past a finish's rename leaves one, or a copy that took the
@@ -218,18 +233,40 @@ pub struct Opened {
     pub records_set_back: usize,
     /// Partials no record names, removed under this build's designations.
     pub orphan_partials: usize,
+    /// Orphan partials left, their removal failed.
+    ///
+    /// Each stands under no record and in no scope until an open removes
+    /// it: the pruner's pass lists no partial, since a creation makes its
+    /// partial before its record.
+    pub orphan_partials_left: usize,
     /// Asides removed.
     ///
     /// They are a replace's second names its deferred unlink never took, and
     /// the pruner's own.
     pub asides: usize,
+    /// Asides left, their removal failed.
+    ///
+    /// Each stands until the next open removes it, or the pruner's pass does
+    /// under a designation this build pins, where it judges files.
+    pub asides_left: usize,
     /// The bytes those repairs freed.
     ///
     /// They are the expired uploads', the orphans' and the asides' files
     /// removed — each its length where its unlink took the file's last name,
     /// nothing where another name still holds it — and the bytes cut off the
-    /// partials cut back.
+    /// partials cut back. A file left counts none.
     pub bytes_freed: u64,
+    /// The first removal that failed, in the store's words, where one did.
+    ///
+    /// It reads `{file}: {act}: {cause}`, a partial named by its directory
+    /// alone (`a partial in blobs/blake3/: remove: …`), and comes in the
+    /// open's order: the asides first, then the expired uploads' partials,
+    /// then the orphans. A directory's fsync after the asides' or the
+    /// orphans' removals is among the failures and counts no file, each
+    /// removal having gone, so where such fsyncs alone failed every figure
+    /// left is zero; an expired upload's own fsync counts its upload left
+    /// (`expired_uploads_left`). `None` where every removal went.
+    pub removal_failed: Option<String>,
 }
 
 /// The store: one root and the four stores under it.
@@ -397,11 +434,18 @@ impl Store {
     /// directory and a file of its own; and the records compacted. So an open
     /// on a full volume has made the room its own repairs make before it asks
     /// for any beyond those lines, and fails, where it fails, with that room
-    /// made. Last, the root fsynced and then the board's own directory, the
-    /// root's parent, whose fsync alone makes the root's own entry durable
-    /// (the register M-I5 (a)) — at every open, so a `blobs/` a first start
-    /// made outlives a power loss with every deposit in it, and an open that
-    /// failed at that fsync has it made again by the next.
+    /// made. A removal of those the volume refuses — the unlink, or the
+    /// directory's fsync after it — stops nothing: a file whose unlink failed
+    /// is left where it stands, an expired upload's record standing beside
+    /// its partial, expired, whichever of the two failed, and the open goes
+    /// on to the next file and on to serve, counting what it left and
+    /// answering the first failure in the store's words
+    /// ([`Opened::removal_failed`]), so one file the volume refuses costs the
+    /// board no start. Last, the root fsynced and then the board's own
+    /// directory, the root's parent, whose fsync alone makes the root's own
+    /// entry durable (the register M-I5 (a)) — at every open, so a `blobs/` a
+    /// first start made outlives a power loss with every deposit in it, and an
+    /// open that failed at that fsync has it made again by the next.
     ///
     /// Everything here completes before the store answers anything. An open
     /// that fails partway serves nothing and leaves on disk what its acts
@@ -442,8 +486,12 @@ impl Store {
     /// most eight — and the build to start instead. A volume that makes no
     /// second name for a file fails it at the probe, naming its lack and the
     /// act that clears it. A partial that cannot be read fails it, its record
-    /// not retired (`partials.rs`): an I/O failure is no absence. Every other
-    /// failure names its file and its act.
+    /// not retired (`partials.rs`): an I/O failure is no absence. So does a
+    /// directory's listing that fails, with nothing left to walk. A removal
+    /// that fails — an aside's, an expired upload's partial's or an orphan's
+    /// — fails nothing: the file is left, and the open answers it
+    /// ([`Opened::removal_failed`]). Every other failure names its file and
+    /// its act.
     pub fn open(root: impl AsRef<Path>, horizon: Duration, now_ms: u64) -> io::Result<Store> {
         let root = root.as_ref();
         let at_root = |act: &'static str| move |e: io::Error| named(e, dir_label(root, 1), act);
@@ -459,7 +507,7 @@ impl Store {
         // What frees room, before what takes it: on a full volume the open
         // has made the room its own repairs make before it asks for any
         // beyond the reconciliation's lines.
-        let (asides, asides_freed) = blobs::sweep_asides(root)?;
+        let swept = blobs::sweep_asides(root)?;
         let (mut uploads, uploads_log) = UploadRecords::open(root)?;
         let reconciled = partials::reconcile(root, &mut uploads, now_ms)?;
         let (leases, leases_log, leases_past_horizon) = LeaseLog::open(root, horizon, now_ms)?;
@@ -475,16 +523,23 @@ impl Store {
             root_made,
             uploads_log,
             leases_log,
-            uploads: uploads.all().count(),
+            // The standing ones: an expired record whose partial the open
+            // left stands in the log, and is no upload.
+            uploads: uploads.all().filter(|r| r.stands(now_ms)).count(),
             leases: leases.count(),
             leases_past_horizon,
             expired_uploads: reconciled.expired,
+            expired_uploads_left: reconciled.expired_left,
             records_without_partial: reconciled.without_partial,
             partials_cut_back: reconciled.cut_back,
             records_set_back: reconciled.set_back,
             orphan_partials: reconciled.orphans,
-            asides,
-            bytes_freed: reconciled.bytes_freed + asides_freed,
+            orphan_partials_left: reconciled.orphans_left,
+            asides: swept.removed,
+            asides_left: swept.left,
+            bytes_freed: reconciled.bytes_freed + swept.freed,
+            // In the open's order: the sweep's, then the reconciliation's.
+            removal_failed: swept.failed.or(reconciled.failed),
         };
         Ok(Store {
             root: root.to_path_buf(),

@@ -4114,7 +4114,9 @@ below, the record's offset written after it, so the offset a resume
 continues from, the `offset` the read answers and the byte the expiry is
 fixed from are one figure. (4) REMOVED ON EXPIRY — past its expiry the
 identifier answers `no_upload` and the bytes count nothing; the partial is
-removed by the pruner's pass (below) and at the next open.
+removed by the pruner's pass (below) and at the next open. A partial that
+neither the pass nor the open can remove stays until one can, and its
+upload answers `no_upload` all the same.
 (5) A STREAM CLAIMS ITS UPLOAD FIRST — a request naming an upload another
 stream holds is `409 upload_held` while it is held; a resume stating an
 offset other than the record's is `409 upload_offset` carrying the

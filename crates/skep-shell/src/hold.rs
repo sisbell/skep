@@ -245,17 +245,19 @@ mod resend;
 /// it is served ([`Turn::Bounded`]).
 pub const PROBE_CADENCE: Duration = Duration::from_secs(2);
 
-/// The most steps one turn of a drain takes (§3c.5; skep #817).
+/// The most steps one turn of a drain takes (§3c.5; skep #817, #862).
 ///
-/// A step is a document's read for its head's own landing, or a line's
-/// send: each a dial of the board, in the order the walk meets them
-/// (`resend`'s turns). The bound is what lets the board's feed thread serve
-/// the work queued behind a drain — a `search`, a listing, a session's swap
-/// — before the drain goes on: 64 sends at some 13 ms each, a line's mark
-/// and its `done` synced beside its dial (`held::MAX_HELD_LINES` states the
-/// figure), keep a turn under a second, so that work waits under a second,
-/// and a full queue drains in 256 turns, each one `/health` read and one read
-/// of the board's head more than one turn would make.
+/// A step is a document's read for its head's own landing, a line's send,
+/// or a shift of a line the board refused as typed against an older state,
+/// its image read and its shifted dial: each a dial of the board, the
+/// shift's two, in the order the walk meets them (`resend`'s turns). The
+/// bound is what lets the board's feed thread serve the work queued behind a
+/// drain — a `search`, a listing, a session's swap — before the drain goes
+/// on: 64 sends at some 13 ms each, a line's mark and its `done` synced
+/// beside its dial (`held::MAX_HELD_LINES` states the figure), keep a turn
+/// under a second, so that work waits under a second, and a full queue
+/// drains in 256 turns, each one `/health` read and one read of the board's
+/// head more than one turn would make.
 pub(crate) const TURN_STEPS: usize = 64;
 
 /// What one probe's turn of the drain left (`Holds::probe`).
@@ -291,10 +293,13 @@ pub enum Turn {
 /// with it (§3c.5); a read that finds its landing keeps it, so the
 /// hand-over never sends it twice. A code the table holds nowhere is handed
 /// over at once, since it cannot resolve; a shift is refused past the
-/// deadline, so a document another writer keeps moving is bounded by the
-/// clock alone; and the resend's "sent again" is said once per change of the
-/// failure. The clock is in memory, per line, so a relaunch starts it
-/// afresh, as the person's `send` does.
+/// deadline, so the clock bounds the shifts a document another writer keeps
+/// moving asks of a line, a turn of the resend making at most its steps of
+/// them ([`TURN_STEPS`]) and leaving the line for the drain's next pass,
+/// whose read hands it over once the deadline has passed; and the resend's
+/// "sent again" is said once per change of the failure. The clock is in
+/// memory, per line, so a relaunch starts it afresh, as the person's `send`
+/// does.
 pub(crate) const HAND_OVER_DEADLINE: Duration = Duration::from_secs(120);
 
 /// The short wait before a `write_busy` is reissued.
@@ -1438,20 +1443,20 @@ struct PrincipalHold {
     /// first face after one names the acknowledged hands again, while the
     /// raised `base` persists.
     seen_through: HashMap<u64, u64>,
-    /// The documents the drain's pass has stopped at, until the pass ends
-    /// (§3c.5; skep #817).
+    /// The documents the drain's pass has stopped at (§3c.5; skep #817).
     ///
     /// A pass is one walk over the principal's lines in `k` order, cut into
     /// turns of at most [`TURN_STEPS`] steps (`resend`'s turns). A document
     /// whose head the walk does not send — awaiting the person's act, held
     /// `head_unreadable` while the head will not read, read and left
-    /// undecided, handed to the person — or whose line's send stops it, is
+    /// undecided, handed to the person — or whose line's send stops it is
     /// entered here, and every later turn of the pass passes over it, so no
-    /// turn of one pass reads it or dials its head again. The set is cleared
-    /// as the pass ends: at a turn no bound stopped, or a probe that runs no
-    /// walk ([`BoardHold::end_pass`]). The person's `send` takes its document
-    /// out, so the lines it hands back go at the pass's next turn
-    /// ([`Holds::resolve`]). In memory.
+    /// later turn of one pass reads it or dials its head again; a send stops
+    /// its document where the turn has no step left for its next shift too
+    /// (skep #862). The set is cleared as the pass ends: at a turn no bound
+    /// stopped, or a probe that runs no walk ([`BoardHold::end_pass`]). The
+    /// person's `send` takes its document out, so the lines it hands back go
+    /// at the pass's next turn ([`Holds::resolve`]). In memory.
     stopped_in_pass: HashSet<String>,
     /// Whether the shell's own window was told the queue's file owes copies.
     ///
@@ -2663,17 +2668,18 @@ impl Holds {
     /// a line awaiting the person's act is one no probe sends, so no second
     /// thread dials it while this one shifts it, and the page meets the ack
     /// or the next refusal within the call, never a `held` event for a line
-    /// this call settles. Then the shift and the shifted dial, the step the
-    /// resend takes too ([`Holds::shift_and_send`], the one function):
-    /// the shifted frame written to the line before it is dialed, the dial
-    /// reissued within the call as a first dial's is. Its answer settles the
-    /// line as the resend's answers settle one: an ack keeps it, its `at`
-    /// noted, and is the call's answer — no `held` event, the line entered
-    /// and settled within one call; the verdict again shifts it again, as
-    /// far as the line's deadline lets it — the line born here with its
-    /// clock started by `failed`, the first dial's failed send, the board's
-    /// first refusal, and every failed send of a shifted dial noted on it
-    /// ([`HAND_OVER_DEADLINE`]); a hold-class answer or a refused run — a
+    /// this call settles. Then the shift and the shifted dial, made as the
+    /// resend makes them ([`Holds::shift_and_send`], the one function) save
+    /// that no turn bounds the call's shifts, which spend no step
+    /// (`resend::no_step`): the shifted frame written to the line before it
+    /// is dialed, the dial reissued within the call as a first dial's is.
+    /// Its answer settles the line as the resend's answers settle one: an ack
+    /// keeps it, its `at` noted, and is the call's answer — no `held` event,
+    /// the line entered and settled within one call; the verdict again shifts
+    /// it again, as far as the line's deadline lets it — the line born here
+    /// with its clock started by `failed`, the first dial's failed send, the
+    /// board's first refusal, and every failed send of a shifted dial noted
+    /// on it ([`HAND_OVER_DEADLINE`]); a hold-class answer or a refused run — a
     /// second `write_busy` among them — re-marks it, `sent` kept, and answers
     /// `held` under that cause; an answer a first dial faces drops the line,
     /// entered for the shift alone, and faces it; the death signal — at the
@@ -2715,7 +2721,7 @@ impl Holds {
             OpAnswer::Died(AtDeath::Held(DeathHeld { k, answer }))
         };
         loop {
-            let shifted = match self.shift_and_send(session, k, &verdict, |frame| self.dial_reissuing(session, frame)) {
+            let shifted = match self.shift_and_send(session, k, &verdict, resend::no_step, |frame| self.dial_reissuing(session, frame)) {
                 Ok(shifted) => shifted,
                 Err(why) => {
                     // The hands are read before anything is marked, so the

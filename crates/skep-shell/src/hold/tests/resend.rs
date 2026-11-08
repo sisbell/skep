@@ -111,15 +111,19 @@
 //! touch keeping its ordinals, a renumbering the change could not write said
 //! once and landing at a later probe, and a file at or past the counter
 //! keeping its ordinals (skep #875). And
-//! THE DRAIN'S TURNS (skep #817): a drain in bounded turns sending every
-//! line in `k` order, each document read as the walk reaches it and once in
-//! a pass, a document a turn stopped at dialed no more until the pass ends,
-//! and the person's `send` walking it again within the pass; a full pending
-//! file joined at the session's open in one copy with one sync; and, over
-//! the board's feed thread, a search answered between two turns, the turns
-//! running back to back. And, timed (`#[ignore]`, the full gate's), the walk
-//! over a full queue drained within its ceiling, each line's send measured
-//! beside it.
+//! THE DRAIN'S TURNS (skep #817, #862): a drain in bounded turns sending
+//! every line in `k` order, each document read as the walk reaches it and
+//! once in a pass, a document a turn stopped at dialed no more until the
+//! pass ends, and the person's `send` walking it again within the pass; a
+//! document another writer keeps moving taking one turn's steps in shifts,
+//! the lines after it sent at the next turn, its line left as its last dial
+//! left it, said once per change of its failure, and kept at a later pass,
+//! or handed to the person at the first read past its deadline; a full
+//! pending file joined at the session's open in one copy with one sync; and,
+//! over the board's feed thread, a search answered between two turns, the
+//! turns running back to back. And, timed (`#[ignore]`, the full gate's), the
+//! walk over a full queue drained within its ceiling, each line's send
+//! measured beside it.
 
 use super::*;
 
@@ -3665,6 +3669,119 @@ fn the_persons_send_walks_a_stopped_document_again_within_the_pass() {
     assert_eq!(g.holds.probe("b-1"), Turn::Bounded, "the pass goes on");
     assert_eq!(sent_values(&g)[TURN_STEPS], "run", "the next turn sends the run first");
     assert!(g.lines().iter().all(|line| line["doc"] == DOC), "the run kept");
+}
+
+/// The ground for a document another writer keeps moving (skep #862).
+///
+/// An anchored line on `DOC` is held before any dial and a line on `OTHER`
+/// behind it, the image the shift reads `DOC`'s three units, and another
+/// writer's change lands on `DOC` as each dial reaches the board while the
+/// flag answered stands, `per_dial` passing at each: the ground, the
+/// anchored line's ordinal, the state it was typed against and the flag.
+fn kept_moving(per_dial: Duration) -> (Ground, u64, u64, Arc<AtomicBool>) {
+    let g = unclaimed_ground();
+    let typed = g.fake.head();
+    let k = g.hold_anchored(&insert_at(DOC, 2, json!(["x"]), typed), anchors(Some(&i(1)), Some(&i(2))), "unreachable", false)["held"].as_u64().unwrap();
+    g.hold(&insert(OTHER, json!(["other"]), g.fake.head()), "unreachable", false);
+    *g.fake.image.lock().unwrap() = vec![run(&i(1), 3)];
+    let writing = Arc::new(AtomicBool::new(true));
+    let (fake, still, holds) = (Arc::clone(&g.fake), Arc::clone(&writing), Arc::downgrade(&g.holds));
+    *g.fake.at_send.lock().unwrap() = Some(Box::new(move || {
+        if still.load(Ordering::SeqCst) {
+            let at = fake.next_at.fetch_add(1, Ordering::SeqCst);
+            fake.move_arrangement(DOC, at);
+            if let Some(holds) = holds.upgrade() {
+                holds.advance(per_dial);
+            }
+        }
+    }));
+    let _ = g.states();
+    (g, k, typed, writing)
+}
+
+/// The frames the fake board was sent on `doc`.
+fn dials_on(g: &Ground, doc: &str) -> usize {
+    g.fake.sends.lock().unwrap().iter().filter(|frame| frame["doc"] == doc).count()
+}
+
+/// Checks that a document another writer keeps moving takes a turn's steps.
+///
+/// The lines after it go at the next turn (skep #862). An anchored line held
+/// before any dial stands on one document, a line on another behind it, and
+/// another writer's change lands on the first as each dial reaches the
+/// board, half a second passing at each. The first turn sends the line and
+/// shifts it as each refusal asks, a step a shift — its image read and its
+/// shifted dial — until no step is left for the next: the turn answers
+/// `Bounded`, `TURN_STEPS` dials made on the first document and
+/// one image read fewer, none on the other, the line standing as its last
+/// dial left it — its cause kept, `sent`, the frame its last shift wrote,
+/// typed at the last read's state — both documents `sending`, never `moved`,
+/// and the refusal said once. The next turn passes the document over, keeps
+/// the other line and ends the pass; the next pass reads the line once and
+/// runs out of steps again, said no more, the failure being the same; and
+/// once the other writer stops, the pass after it reads the line once, meets
+/// the refusal its last dial left, shifts it once and keeps it (the mutant
+/// whose shifts take no step holds the feed thread from the first refusal to
+/// the line's deadline and faces the document moved; the one that leaves the
+/// document unstopped at the bound spends the next turn on it, the other line
+/// unsent; the one that faces it moved at the bound hands the person a line
+/// the shell can still place; the one that takes the step after the read
+/// reads once more than it dials; the one that says it at every pass says it
+/// twice).
+#[test]
+fn a_document_another_writer_keeps_moving_takes_one_turns_steps_and_the_lines_after_it_go_at_the_next() {
+    let (g, k, typed, writing) = kept_moving(Duration::from_millis(500));
+    let images = |g: &Ground| g.fake.image_reads.load(Ordering::SeqCst);
+    let reads = |g: &Ground| g.fake.changes_reads.load(Ordering::SeqCst);
+    let bounded = format!(
+        "held: line {k} on {DOC} was not taken (the board refused: arrangement_moved (op insert)) and the turn has no step left to shift it; it is shifted and sent again at the drain's next pass"
+    );
+    let said = |g: &Ground| g.said.lock().unwrap().iter().filter(|line| **line == bounded).count();
+    assert_eq!(g.holds.probe("b-1"), Turn::Bounded, "the turn stops at its bound");
+    assert_eq!((dials_on(&g, DOC), images(&g), dials_on(&g, OTHER)), (TURN_STEPS, TURN_STEPS - 1, 0), "the send, then a step a shift until none is left for the next");
+    let lines = g.lines();
+    let last = g.fake.sends.lock().unwrap().last().cloned().unwrap();
+    assert_eq!((lines[0]["cause"].as_str(), lines[0]["sent"].as_bool()), (Some("unreachable"), Some(true)), "the line as its last dial left it: {lines:?}");
+    assert!(lines[0]["frame"] == last && last["as_of"].as_u64() > Some(typed), "the frame its last shift wrote, typed at the last read's state: {}", lines[0]);
+    assert_eq!(g.states(), ["sending", "sending"], "both documents sending, never moved");
+    assert_eq!(said(&g), 1, "said once: {:?}", g.said.lock().unwrap());
+    assert_eq!((g.holds.probe("b-1"), dials_on(&g, DOC), dials_on(&g, OTHER), g.lines().len()), (Turn::Done, TURN_STEPS, 1, 1), "the next turn passes the document over and keeps the other line");
+    let read = reads(&g);
+    assert_eq!((g.holds.probe("b-1"), reads(&g), dials_on(&g, DOC)), (Turn::Done, read + 1, 2 * TURN_STEPS - 1), "the next pass reads the line once, sends it and shifts it until no step is left");
+    assert_eq!(said(&g), 1, "said no more: the failure is the same");
+    writing.store(false, Ordering::SeqCst);
+    assert_eq!(
+        (g.holds.probe("b-1"), reads(&g), dials_on(&g, DOC), images(&g)),
+        (Turn::Done, read + 2, 2 * TURN_STEPS + 1, 2 * TURN_STEPS - 2),
+        "read once, refused as its last dial left it, shifted once and sent"
+    );
+    assert!(g.lines().is_empty(), "kept");
+    assert_eq!((g.states().contains(&"moved".to_string()), said(&g)), (false, 1), "never faced moved");
+}
+
+/// Checks that a line kept moving meets its deadline at a later pass's read.
+///
+/// It is the deadline across the turn's bound (§3c.4; skep #862). The first
+/// turn runs out of steps for the line's shifts and the next ends the pass,
+/// as above; two minutes then pass, the other writer going on, and the next
+/// pass reads the line once, finds no landing and hands it to the person
+/// undialed: a refused run under `answers_lost` naming `moved`, the
+/// last failure, its `sent` kept, said once, never faced moved (the mutant
+/// that starts the line's clock afresh at each pass sends it again for as
+/// long as the other writer writes).
+#[test]
+fn a_line_another_writer_keeps_moving_meets_its_deadline_at_a_later_passs_read() {
+    let (g, k, _, _) = kept_moving(Duration::from_millis(500));
+    assert_eq!((g.holds.probe("b-1"), g.holds.probe("b-1")), (Turn::Bounded, Turn::Done), "a turn at its bound, then the pass's end");
+    g.holds.advance(HAND_OVER_DEADLINE);
+    let (reads, dials) = (g.fake.changes_reads.load(Ordering::SeqCst), dials_on(&g, DOC));
+    assert_eq!(g.holds.probe("b-1"), Turn::Done);
+    assert_eq!((g.fake.changes_reads.load(Ordering::SeqCst), dials_on(&g, DOC)), (reads + 1, dials), "read once, and dialed no more");
+    let lines = g.lines();
+    assert_eq!((lines.len(), lines[0]["cause"].as_str(), lines[0]["sent"].as_bool(), lines[0]["refusal"]["last"].as_str()), (1, Some("answers_lost"), Some(true), Some("moved")), "{lines:?}");
+    assert_eq!(g.states(), ["sending", "sending", "kept", "refused"], "never faced moved");
+    let handed = said_containing(&g, &format!("held: line {k} on {DOC}: no landing "));
+    assert!(handed.len() == 1 && handed[0].contains("(last: moved)"), "said once: {handed:?}");
 }
 
 /// Checks that a full pending file joins the board's file in one copy with

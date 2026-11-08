@@ -370,7 +370,9 @@ pub(crate) const TIMED_CEILING: std::time::Duration = std::time::Duration::from_
 /// many times over — a head of kilobytes re-marked thousands of times, the
 /// largest line the writer copies re-marked once. A shift of the line's
 /// frame ([`HeldQueue::rewrite`]) spends the budget a whole frame too, as a
-/// re-mark does, and the hold bounds the shifts a line takes; a raise of its
+/// re-mark does, and the hold bounds the shifts a line takes: the line's
+/// deadline ends them (`hold::HAND_OVER_DEADLINE`), and a turn of the resend
+/// makes at most its steps of them (`hold::TURN_STEPS`); a raise of its
 /// base at the person's `send` ([`HeldQueue::remark_all`]) is a re-mark,
 /// and spends it as one. Past it a re-mark is taken in the queue alone, its
 /// copy refused by the writer and owed never ([`HeldQueue::remark`]): a

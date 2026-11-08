@@ -21,17 +21,20 @@
 //! principal's lines, and a line parked on the pending file until its copy
 //! to the board's file lands (`HeldQueue::parked`), are walked by none.
 //!
-//! **The drain runs in turns** (skep #817). One probe runs one turn of at
-//! most [`TURN_STEPS`] steps — a document's read, a line's send — and
+//! **The drain runs in turns** (skep #817, #862). One probe runs one turn of
+//! at most [`TURN_STEPS`] steps — a document's read, a line's send, a shift
+//! of a line the board refused as typed against an older state — and
 //! answers whether it stopped at that bound with a line still to send
 //! ([`Turn`]); the feed thread then serves the work queued behind the turn
 //! and runs the next at once, so a `search`, a listing or a session's swap
-//! at the board never waits a whole drain out. The turns of one PASS walk
-//! the principal's lines in `k` order, a document read as the walk reaches
-//! its first line, and a document a turn stopped at — its read undecided,
-//! its head awaiting the person's act or not taken — passed over by every
-//! later turn of the pass (`PrincipalHold::stopped_in_pass`), so no pass
-//! reads a document or dials its head twice however many turns it takes; the
+//! at the board never waits a whole drain out, nor a document another
+//! writer keeps moving. The turns of one *pass* walk the principal's lines
+//! in `k` order, a document read as the walk reaches its first line, and a
+//! document a turn stopped at — its read undecided, its head awaiting the
+//! person's act, not taken, or refused again past the turn's last step —
+//! passed over by every later turn of the pass
+//! (`PrincipalHold::stopped_in_pass`), so no later turn of a pass reads a
+//! document or dials its head again however many turns the pass takes; the
 //! pass ends at a turn no bound stopped, and the next starts at the next
 //! probe. The walk's read: one per document (`GET
 //! /changes`) before its first resend, which answers one question of the
@@ -58,10 +61,14 @@
 //! with the span's own units between them, every position the burst names moves
 //! by their one displacement, the shifted frame is written to the line before
 //! it is dialed, and the line is sent again, each refusal that shifts it a
-//! failed send of the line, so the shifts stop at its deadline; where the
-//! shift is not exact — no anchors, a delete or a rearrange without its span,
-//! an anchor lost or standing at two places, the span cut or refilled, the
-//! read refused, the deadline passed — the document is
+//! failed send of the line and each shift at a resend a step of the turn: a
+//! turn with no step left for the next shift leaves the line as its last dial
+//! left it — the cause it was held with, its `sent`, the frame its last shift
+//! wrote — for the drain's next pass, whose read decides it afresh, so the
+//! shifts stop at the line's deadline, met at a shift or at that read; where
+//! the shift is not exact — no anchors, a delete or a rearrange without its
+//! span, an anchor lost or standing at two places, the span cut or refilled,
+//! the read refused, the deadline passed — the document is
 //! faced `moved`, never rebased inexactly, the verdict kept on the line and the
 //! hands read once since the line's typed state, or since the person's last
 //! `send` on the document where that is later. The death signal met at the
@@ -171,6 +178,34 @@ impl fmt::Display for Unshiftable {
             Unshiftable::Malformed(why) => write!(f, "{why}"),
         }
     }
+}
+
+/// Why a resend's shift was not made ([`Holds::send_line`]).
+#[derive(Debug)]
+enum NotShifted {
+    /// The shift cannot move the line exactly: the document is held as moved.
+    Unshiftable(Unshiftable),
+    /// The turn has no step left for the shift ([`TURN_STEPS`]).
+    ///
+    /// Nothing is read, written or dialed: the line stands as its last dial
+    /// left it, and its document waits for the drain's next pass.
+    NoStep,
+}
+
+impl From<Unshiftable> for NotShifted {
+    fn from(why: Unshiftable) -> NotShifted {
+        NotShifted::Unshiftable(why)
+    }
+}
+
+/// Takes no step: a first dial's shift spends none.
+///
+/// A first dial's shifts run within the page's `op` call, which no turn
+/// bounds (`Holds::shift_at_first_dial`): the line's deadline alone ends
+/// them ([`HAND_OVER_DEADLINE`]). A resend's shift spends one of its turn's
+/// [`TURN_STEPS`] ([`Holds::send_line`]).
+pub(super) fn no_step() -> Result<(), Unshiftable> {
+    Ok(())
 }
 
 /// A shift's send ([`Holds::shift_and_send`]): the line shifted and dialed,
@@ -596,31 +631,34 @@ impl Holds {
         Turn::Done
     }
 
-    /// Walks one session's principal's lines in `k` order: a turn's share
-    /// of the pass (resume-by-read, §3c.5; skep #817).
+    /// Walks one session's principal's lines in `k` order (§3c.5; skep #817).
     ///
-    /// It is wire.md's resume-by-read (PUB-8.32) at the board the session
-    /// stands at, every document the pass has stopped at passed over
-    /// (`PrincipalHold::stopped_in_pass`). A document the turn has not met
-    /// is decided at the first of its lines the walk reaches, its head, by
-    /// [`Holds::resume_doc`] — its read, where its head may have landed, one
-    /// of the turn's `steps`, made only where a step is left for the send it
-    /// may let go, so no turn of the pass reads the document again — and
-    /// where its lines do not go out now the pass stops at it. Each line of a
+    /// It is a turn's share of the pass: wire.md's resume-by-read (PUB-8.32)
+    /// at the board the session stands at, every document the pass has
+    /// stopped at passed over (`PrincipalHold::stopped_in_pass`). A document
+    /// the turn has not met is decided at the first of its lines the walk
+    /// reaches, its head, by [`Holds::resume_doc`] — its read, where its head
+    /// may have landed, one of the turn's `steps`, made only where a step is
+    /// left for the send it may let go, so no turn of the pass reads the
+    /// document again — and where its lines do not go out now the pass stops
+    /// at it. Each line of a
     /// document that goes out is sent ([`Holds::send_line`]), a step — a
     /// normal `op` under the session, as §3c.5 has "lines in `k` order across
-    /// the board's documents, which keeps each document's order" — its
-    /// document stopped where the line awaits the person's act or its send
-    /// stops it, the others going on. Each send settles its line, an ack
-    /// taking it out of the queue, or stops its document, and each decision
-    /// lets its document go or stops it, so the walk ends; each line is found
-    /// from the last one the walk handled on, so a turn reads the queue once
-    /// beside its steps. `head_unreadable` is whether the probe's one read of
-    /// the board's head answered so: the documents whose head line waits on
-    /// the head are then passed over ([`passed_over`]). It answers
-    /// [`Turn::Bounded`] where a step was owed and the turn had none left for
-    /// it, and [`Turn::Done`] where the walk reached the principal's last
-    /// line.
+    /// the board's documents, which keeps each document's order" — and each
+    /// shift its send makes through a move of the document a step more, the
+    /// turn's `steps` handed to the send; its document is stopped where the
+    /// line awaits the person's act or its send stops it — a send that finds
+    /// no step left for its next shift among them — the others going on.
+    /// Each send settles its line, an ack taking it out of the queue, or
+    /// stops its document, and each decision lets its document go or stops
+    /// it, so the walk ends; each line is found from the last one the walk
+    /// handled on, so a turn reads the queue once beside its steps.
+    /// `head_unreadable` is whether the probe's one read of the board's head
+    /// answered so: the documents whose head line waits on the head are then
+    /// passed over ([`passed_over`]). It answers [`Turn::Bounded`] where a
+    /// document's read or a line's send was owed a step and the turn had none
+    /// left for it, and [`Turn::Done`] where the walk reached the principal's
+    /// last line.
     fn walk(&self, session: &SessionEntry, head_unreadable: bool, steps: &mut usize) -> Turn {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         // The documents this turn let go, and the ordinal the walk handled
@@ -668,7 +706,7 @@ impl Holds {
             let Some(left) = steps.checked_sub(1) else { return Turn::Bounded };
             *steps = left;
             after = line.k;
-            if self.send_line(session, &line).is_break() {
+            if self.send_line(session, &line, steps).is_break() {
                 sending.remove(&line.doc);
                 self.stop_in_pass(board_reference, principal, &line.doc);
             }
@@ -889,9 +927,13 @@ impl Holds {
     /// have landed before the dial leaves, and the line settled by what the
     /// dial answered: an ack `done kept`; the line refused as typed against
     /// an older state of its document shifted through the change and dialed
-    /// again ([`Holds::shift_and_send`]) — its answer settled here as any
-    /// dial's is, the verdict again shifting it again as far as the line's
-    /// deadline lets it — or, where the shift is not exact, the document
+    /// again ([`Holds::shift_and_send`]), each shift one of the turn's
+    /// `steps` — its answer settled here as any dial's is, the verdict again
+    /// shifting it again as far as the turn's steps and the line's deadline
+    /// let it, and a turn with no step left for the next shift leaving the
+    /// line as its last dial left it, the cause it was held with, its `sent`
+    /// and the frame its last shift wrote, for the drain's next pass, no
+    /// `held` event emitted — or, where the shift is not exact, the document
     /// faced `moved` ([`Holds::mark_moved`]) — the one route to that face —
     /// the board's verdict kept on the line and the hands whose rows moved it
     /// named; a hold-class answer or a refused run re-marked and faced, the
@@ -911,16 +953,17 @@ impl Holds {
     /// ends the session, the line standing as its dial left it: the session
     /// that stands resends it after its read. Every failed send of the line
     /// ([`Dialed::failure`]) is noted on its clock ([`HAND_OVER_DEADLINE`]),
-    /// and a line standing for the next probe says "sent again" where its
-    /// failure's token differs from the last failure's, so once per change.
-    /// `Continue` where the line is settled and sending goes on, `Break`
-    /// where the line's document stops at it.
+    /// and a line left standing — for the next probe, or for the drain's
+    /// next pass — says so where a failure this send met changed the last
+    /// failure's token, so once per change (SP-11). `Continue` where the line
+    /// is settled and sending goes on, `Break` where the line's document
+    /// stops at it.
     ///
-    /// THE LANDED TEST COMES FIRST: this runs for a line
+    /// **The landed test comes first.** This runs for a line
     /// [`Holds::resume_doc`] let go alone — a `sent` head read for its own
     /// landing and found unlanded — so no line is shifted before its read,
     /// and a landing the read keeps is shifted never.
-    fn send_line(&self, session: &SessionEntry, line: &HeldLine) -> ControlFlow<()> {
+    fn send_line(&self, session: &SessionEntry, line: &HeldLine, steps: &mut usize) -> ControlFlow<()> {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let given = || self.with_principal(board_reference, principal, |ph| ph.reissues.get(&line.k).cloned()).flatten().unwrap_or_default();
         // The line is marked as one that may have landed before its dial
@@ -943,6 +986,10 @@ impl Holds {
         // The frame the dial sent, for its ack's noting: the line's, or the
         // shifted one.
         let mut frame = Cow::Borrowed(&line.frame);
+        // Whether a failure this send met changed the line's last failure's
+        // token: a line its turn's steps leave for the next pass says so
+        // once per change (SP-11), whichever refusal of its shifts made it.
+        let mut changed = false;
         loop {
             // A failed send of the line notes its token on the line's clock:
             // `Some(true)` where the token differs from the last failure's as
@@ -950,6 +997,7 @@ impl Holds {
             // it repeats it, said already; none where no send failed — an
             // ack, the death signal, or a dial that never left.
             let failed = if left { dialed.failure().map(|token| self.note_failure(board_reference, principal, line.k, token)) } else { None };
+            changed |= failed == Some(true);
             match dialed {
                 Dialed::Acked(ack) => {
                     self.note_ack(session, &frame, &ack);
@@ -958,25 +1006,43 @@ impl Holds {
                     self.emit_held(session, &line.doc, rest, if rest == 0 { HeldState::Kept } else { HeldState::Sending }, None, &[]);
                     return ControlFlow::Continue(());
                 }
-                Dialed::Held { reason, .. } if reason.cause == cause::MOVED => {
+                Dialed::Held { reason, refusal } if reason.cause == cause::MOVED => {
                     // The board refused the line as typed against an older
                     // state of its document: shifted through the change where
-                    // the shift is exact, and dialed again; else the document
-                    // is faced moved — the board's verdict the one judge of a
-                    // move — each line keeping its own `sent`, the line
-                    // refused keeping the verdict, and named by the hands
-                    // whose rows moved it since the line's typed state, or
-                    // since the person's last `send` on it where that is
-                    // later (§3c.5).
+                    // the shift is exact, and dialed again, each shift a step
+                    // of the turn; else the document is faced moved — the
+                    // board's verdict the one judge of a move — each line
+                    // keeping its own `sent`, the line refused keeping the
+                    // verdict, and named by the hands whose rows moved it
+                    // since the line's typed state, or since the person's last
+                    // `send` on it where that is later (§3c.5).
                     let verdict = reason.refusal.clone().unwrap_or(Value::Null);
-                    match self.shift_and_send(session, line.k, &verdict, |shifted| self.dial(session, shifted, &given())) {
+                    let step = || -> Result<(), NotShifted> {
+                        *steps = steps.checked_sub(1).ok_or(NotShifted::NoStep)?;
+                        Ok(())
+                    };
+                    match self.shift_and_send(session, line.k, &verdict, step, |shifted| self.dial(session, shifted, &given())) {
                         Ok(shifted) => {
                             sent |= shifted.left;
                             left = shifted.left;
                             frame = Cow::Owned(shifted.frame);
                             dialed = shifted.dialed;
                         }
-                        Err(why) => {
+                        // The turn has no step left for the shift: the line
+                        // stands as its last dial left it — the cause it was
+                        // held with, its `sent`, the frame its last shift
+                        // wrote — and its document waits for the drain's next
+                        // pass, faced `sending` still, as its read let it go.
+                        Err(NotShifted::NoStep) => {
+                            if changed {
+                                self.say(format_args!(
+                                    "line {} on {} was not taken ({refusal}) and the turn has no step left to shift it; it is shifted and sent again at the drain's next pass",
+                                    line.k, line.doc
+                                ));
+                            }
+                            return ControlFlow::Break(());
+                        }
+                        Err(NotShifted::Unshiftable(why)) => {
                             // The hands are read before anything is marked:
                             // the death at the read leaves the line standing,
                             // as the death at its dial does.
@@ -1051,34 +1117,59 @@ impl Holds {
     /// It is the one function the first dial ([`Holds::shift_at_first_dial`])
     /// and the resend ([`Holds::send_line`]) call for a line the board refused
     /// as typed against an older state of its document (skep #442, #751), each
-    /// dialing as it dials. `verdict` is the board's `arrangement_moved`, its
-    /// `site.current` the floor the shifted frame is typed against. In this
-    /// order, the first that holds answering why the shift was not made
-    /// ([`Unshiftable`]): a line of ordinal `k` stands; it carries anchors; its
-    /// first failed send stands less than [`HAND_OVER_DEADLINE`] past — each
-    /// refusal that brings a line here is a failed send of it, noted by the
-    /// caller before it calls, so a document another writer keeps moving stops
-    /// the shell at the line's deadline, the clock alone bounding the shifts —
-    /// and one live read is made, `image` over the whole content window
-    /// ([`IMAGE_WINDOW`]) under the session, the one read of the shift (no
-    /// `/changes`, no history: the anchors are found at any age); the anchors
-    /// found in it at one place each and the span between them whole — the
-    /// units it held when the burst was typed, in their order — every position
-    /// the frame names moved by the one displacement ([`shifted_frame`]), the
-    /// frame typed against the read's own `as_of`, the state its positions are
-    /// true of, never below the verdict's `site.current`. The death signal the
-    /// read meets is no reason the shift was not made: it is answered as a
-    /// dial that never left and met the death ([`Dialed::Died`], `left` false,
-    /// the line as it was), so each caller meets it as the death at its dial
-    /// (§3c.4), never as a moved document. Then the frame is attested (an
-    /// attest that cannot be composed dials nothing and writes nothing: the
-    /// dial that never left, `left` false, the line as it was), written to the
-    /// line before it is dialed — `HeldQueue::rewrite`, synced, a copy the
-    /// device refuses owed and one the writer refuses said on `Talk` — and the
-    /// line marked as one that may have landed where it is not so marked yet,
-    /// so a relaunch after the shifted answer is lost reads the landed test at
-    /// the shifted positions; then dialed by `dial`.
-    pub(super) fn shift_and_send(&self, session: &SessionEntry, k: u64, verdict: &Value, dial: impl FnOnce(&AttestedWhereOwed<'_>) -> Dialed) -> Result<Shifted, Unshiftable> {
+    /// spending its `step` and dialing as it does — a resend's shift one of
+    /// its turn's [`TURN_STEPS`], refused where none is left
+    /// ([`NotShifted::NoStep`]), a first dial's none ([`no_step`]) — and each
+    /// answered in a refusal type of its own (`E`), which carries
+    /// [`Unshiftable`]'s reasons. `verdict` is the board's `arrangement_moved`,
+    /// its `site.current` the floor the shifted frame is typed against. The
+    /// line stands, with its anchors, its first failed send less than
+    /// [`HAND_OVER_DEADLINE`] past — each refusal that brings a line here is
+    /// a failed send of it, noted by the caller before it calls, so a document
+    /// another writer keeps moving stops the shell at the line's deadline —
+    /// and the step is taken, all before anything is read: a line with no
+    /// anchors, or past its deadline, is held moved at once, whatever the
+    /// turn has left. Then one live read is made, `image` over the whole
+    /// content window ([`IMAGE_WINDOW`]) under the session, the one read of
+    /// the shift (no `/changes`, no history: the anchors are found at any
+    /// age); the anchors found in it at one place each and the span between
+    /// them whole — the units it held when the burst was typed, in their
+    /// order — every position the frame names moved
+    /// by the one displacement ([`shifted_frame`]), the frame typed against
+    /// the read's own `as_of`, the state its positions are true of, never
+    /// below the verdict's `site.current`. The death signal the read meets is
+    /// no reason the shift was not made: it is answered as a dial that never
+    /// left and met the death ([`Dialed::Died`], `left` false, the line as it
+    /// was), so each caller meets it as the death at its dial (§3c.4), never
+    /// as a moved document. Then the frame is attested (an attest that cannot
+    /// be composed dials nothing and writes nothing: the dial that never left,
+    /// `left` false, the line as it was), written to the line before it is
+    /// dialed — `HeldQueue::rewrite`, synced, a copy the device refuses owed
+    /// and one the writer refuses said on `Talk` — and the line marked as one
+    /// that may have landed where it is not so marked yet, so a relaunch after
+    /// the shifted answer is lost reads the landed test at the shifted
+    /// positions; then dialed by `dial`.
+    ///
+    /// # Errors
+    ///
+    /// Returns why the shift was not made, nothing written and nothing
+    /// dialed — the first that holds, in this order:
+    ///
+    /// 1. no line of ordinal `k` stands ([`Unshiftable::NoLine`]);
+    /// 2. the line carries no anchors ([`Unshiftable::NoAnchors`]);
+    /// 3. its first failed send stands [`HAND_OVER_DEADLINE`] past or more
+    ///    ([`Unshiftable::PastTheDeadline`]);
+    /// 4. `step` refuses, nothing read: its refusal is answered;
+    /// 5. the image read is refused or unanswered ([`Unshiftable::Unread`]);
+    /// 6. the shift is not exact ([`shifted_frame`]'s refusal).
+    pub(super) fn shift_and_send<E: From<Unshiftable>>(
+        &self,
+        session: &SessionEntry,
+        k: u64,
+        verdict: &Value,
+        step: impl FnOnce() -> Result<(), E>,
+        dial: impl FnOnce(&AttestedWhereOwed<'_>) -> Dialed,
+    ) -> Result<Shifted, E> {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let line = self.line_of(board_reference, principal, k).ok_or(Unshiftable::NoLine)?;
         let anchors = line.anchors.as_ref().ok_or(Unshiftable::NoAnchors)?;
@@ -1086,18 +1177,21 @@ impl Holds {
         // read: past it the line falls to the moved hold, the person's act.
         let first_failed = self.with_principal(board_reference, principal, |ph| ph.reissues.get(&k).and_then(|given| given.first_failed)).flatten();
         if let Some(elapsed) = first_failed.map(|first| self.now().saturating_duration_since(first)).filter(|elapsed| *elapsed >= HAND_OVER_DEADLINE) {
-            return Err(Unshiftable::PastTheDeadline { elapsed_ms: millis(elapsed) });
+            return Err(Unshiftable::PastTheDeadline { elapsed_ms: millis(elapsed) }.into());
         }
+        // The step the read and the shifted dial cost (TURN_STEPS), taken
+        // past every check that reads nothing.
+        step()?;
         // The one live read, outside every lock as every dial is.
         let image = match session.board.op(Some(&session.token), &frames::image(&line.doc, 1, IMAGE_WINDOW)) {
             Ok(Answer::Document(v)) => match Rejection::of(&v) {
                 None => v,
-                Some(r) => return Err(Unshiftable::Unread(format!("the image read was refused {}", r.token()))),
+                Some(r) => return Err(Unshiftable::Unread(format!("the image read was refused {}", r.token())).into()),
             },
             // The session's death, and no verdict on the document: no dial
             // leaves, and the caller meets the death as at its dial.
             Ok(Answer::Closed) => return Ok(Shifted { dialed: Dialed::Died, frame: line.frame, left: false }),
-            Err(h) => return Err(Unshiftable::Unread(h.to_string())),
+            Err(h) => return Err(Unshiftable::Unread(h.to_string()).into()),
         };
         let as_of = image["as_of"].as_u64().unwrap_or(0).max(verdict["site"]["current"].as_u64().unwrap_or(0));
         let shifted = shifted_frame(&line.frame, anchors, &image, as_of)?;

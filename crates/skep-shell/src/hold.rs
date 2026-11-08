@@ -223,7 +223,7 @@ use skep_search::Chain;
 
 use crate::attest::{attest_room, insert_terms, Unattested};
 use crate::events::{EventBus, EventName};
-use crate::held::{Anchors, Done, Entered, HaltWhy, HeldDir, HeldLine, HeldQueue, Joined, Joining, Opened, Owed, Reason, RenumberRefused, Torn, Unheld, MAX_HELD_BYTES, MAX_HELD_LINES};
+use crate::held::{Anchors, Done, Entered, HaltWhy, HeldDir, HeldLine, HeldQueue, Joined, Joining, Opened, Owed, Reason, RenumberRefused, Settled, Torn, Unheld, MAX_HELD_BYTES, MAX_HELD_LINES};
 use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{board_head, SessionEntry, SessionKind, Sessions};
@@ -1367,7 +1367,7 @@ enum Custody {
 /// ack touches no standing line's
 /// base: a line held keeps the base it was held at, raised only behind a
 /// line kept on its document (`HeldQueue::done`) and by the person's `send`
-/// on a moved document (`HeldQueue::remark_raised`, [`Holds::resolve`]).
+/// on a moved document (`HeldQueue::remark_all`, [`Holds::resolve`]).
 #[derive(Debug)]
 struct PrincipalHold {
     custody: Custody,
@@ -3097,14 +3097,17 @@ impl Holds {
     /// started afresh at its next failed send ([`HAND_OVER_DEADLINE`]),
     /// handing them back to the automatic machine, and answers at once
     /// ([`Resolved::HandedBack`]): the probe that resends them is the
-    /// caller's to hand the board's feed thread.
+    /// caller's to hand the board's feed thread. Either act's lines are one
+    /// run, written to the held file as one copy with one sync however many
+    /// it settles or re-marks ([`Holds::drop_run`], [`Holds::remark_lines`];
+    /// skep #861).
     ///
     /// **The raise** (§3c.4; skep #757). On a moved document the send first
     /// raises each waiting line's `base` to the position the board's verdict
     /// read through — the `site.current` of its `arrangement_moved`, kept on
     /// the line it refused — a base already past it standing, the raise
     /// written to the held file with the line's re-mark
-    /// (`HeldQueue::remark_raised`), a copy the device refuses owed as every
+    /// (`HeldQueue::remark_all`), a copy the device refuses owed as every
     /// re-mark's is. The act is the person's acknowledgment of the rows that
     /// moved the document: each line's read for its own landing starts past
     /// them, and a document held moved again names only the hands since
@@ -3182,18 +3185,15 @@ impl Holds {
                 // the read starts past them, none of them a landing the read
                 // before the verdict's dial could keep, and their hands are
                 // named no more. A document whose lines carry no such verdict
-                // is re-marked as it stands.
+                // is re-marked as it stands. The re-marks are one run, one
+                // copy (skep #861).
                 let waiting: Vec<(u64, bool)> = ph.queue.lines().iter().filter(|l| l.doc == doc && awaits_act(l)).map(|l| (l.k, l.reason.sent)).collect();
                 let through = ph.queue.lines().iter().filter(|l| l.doc == doc && l.reason.cause == cause::MOVED).find_map(|l| l.reason.refusal.as_ref()?["site"]["current"].as_u64());
-                for (k, sent) in waiting {
-                    let behind = Reason::of(cause::BEHIND, sent);
-                    match through {
-                        Some(at) => {
-                            self.remark_raised_line(session.facts.principal, ph, k, behind, at);
-                            let seen = ph.seen_through.entry(k).or_insert(at);
-                            *seen = (*seen).max(at);
-                        }
-                        None => self.remark_line(session.facts.principal, ph, k, behind),
+                self.remark_lines(session.facts.principal, ph, waiting.iter().map(|&(k, sent)| (k, Reason::of(cause::BEHIND, sent))), through);
+                for &(k, _) in &waiting {
+                    if let Some(at) = through {
+                        let seen = ph.seen_through.entry(k).or_insert(at);
+                        *seen = (*seen).max(at);
                     }
                     if let Some(given) = ph.reissues.get_mut(&k) {
                         given.first_failed = None;
@@ -3210,17 +3210,16 @@ impl Holds {
     /// Drops the line `from` and every line after it on that document.
     ///
     /// The `"drop"` marks them — a refused run's `behind` lines, a moved
-    /// document's later lines — `done … dropped`, the file compacting where
-    /// the queue empties, and answers for the `held` event its caller emits
-    /// under the session that acted: the lines that stand on the document,
-    /// and the state of the one that stands first now — a moved line held
-    /// before the dropped one keeps the document `moved` — `kept` only where
-    /// no line stands.
+    /// document's later lines — `done … dropped`, as one run, its `done`s one
+    /// copy with one sync however many lines it drops ([`Holds::done_lines`];
+    /// skep #861), the file compacting where the queue empties, and answers
+    /// for the `held` event its caller emits under the session that acted:
+    /// the lines that stand on the document, and the state of the one that
+    /// stands first now — a moved line held before the dropped one keeps the
+    /// document `moved` — `kept` only where no line stands.
     fn drop_run(&self, principal: u64, ph: &mut PrincipalHold, from: u64, doc: &str) -> (u64, HeldState) {
         let ks: Vec<u64> = ph.queue.lines().iter().filter(|l| l.doc == doc && l.k >= from).map(|l| l.k).collect();
-        for k in ks {
-            self.done_line(principal, ph, k, Done::Dropped);
-        }
+        self.done_lines(principal, ph, &ks, Done::Dropped);
         let head = ph.queue.lines().iter().find(|l| l.doc == doc);
         (ph.count(doc), head.map_or(HeldState::Kept, |l| line_state(&l.reason)))
     }
@@ -3300,44 +3299,87 @@ impl Holds {
     /// whatever the disk did. A copy the device refuses is owed, and the wait
     /// it begins is said at its edges ([`Holds::note_waiting`]); a copy the
     /// writer refuses, past the file's re-mark budget or its line bound, is
-    /// owed never, and said on `Talk` as it is refused.
+    /// owed never, and said on `Talk` as it is refused
+    /// ([`Holds::say_remarks_refused`]).
     fn remark_line(&self, principal: u64, ph: &mut PrincipalHold, k: u64, reason: Reason) {
         if let Err(e) = ph.queue.remark(k, reason) {
-            self.say(format_args!("line {k}'s re-mark could not be written ({e}); a reopen reads its earlier one"));
+            self.say_remarks_refused(&[(k, e)]);
         }
         self.note_waiting(principal, ph);
     }
 
-    /// Re-marks one line of `principal`'s in place and raises its `base` to
-    /// `at`, its ordinal kept.
+    /// Re-marks a run of `principal`'s lines in place, as one copy.
     ///
-    /// It serves the person's `send` on a moved document
-    /// ([`Holds::resolve`]); the queue takes the reason and the raised base
-    /// whatever the disk did, and a refused copy is owed or said as
-    /// [`Holds::remark_line`] has it.
-    fn remark_raised_line(&self, principal: u64, ph: &mut PrincipalHold, k: u64, reason: Reason, at: u64) {
-        if let Err(e) = ph.queue.remark_raised(k, reason, at) {
-            self.say(format_args!("line {k}'s re-mark could not be written ({e}); a reopen reads its earlier one"));
-        }
+    /// It serves a moved document's marks (`resend`'s `mark_moved`) and the
+    /// person's `send` on a document ([`Holds::resolve`]), each `base` raised
+    /// to `raise` where it names one (skep #861): each line of `marks` takes
+    /// its reason in the queue whatever the disk did, and the run's copies go
+    /// to the held file as one copy with one sync (`HeldQueue::remark_all`).
+    /// A copy the device refuses is owed, and the wait it begins is said at
+    /// its edges, once for the run ([`Holds::note_waiting`]); the copies the
+    /// writer refuses are owed never, and said on `Talk` in one line however
+    /// many they are ([`Holds::say_remarks_refused`]).
+    fn remark_lines(&self, principal: u64, ph: &mut PrincipalHold, marks: impl IntoIterator<Item = (u64, Reason)>, raise: Option<u64>) {
+        let refused = ph.queue.remark_all(marks, raise);
+        self.say_remarks_refused(&refused);
         self.note_waiting(principal, ph);
+    }
+
+    /// Says the re-marks the writer refused, in one line (SP-11).
+    ///
+    /// Each was refused before any I/O — past the file's re-mark budget, or
+    /// its line past the line bound — and is owed never, so a reopen reads
+    /// its line's earlier copy. One is said by its line; several by their
+    /// count, the first's line and its refusal, so a run past a spent budget
+    /// says one line however many of its re-marks the writer refuses.
+    fn say_remarks_refused(&self, refused: &[(u64, io::Error)]) {
+        match refused {
+            [] => {}
+            [(k, e)] => self.say(format_args!("line {k}'s re-mark could not be written ({e}); a reopen reads its earlier one")),
+            [(k, e), ..] => self.say(format_args!("{} lines' re-marks could not be written, line {k}'s the first ({e}); a reopen reads each line's earlier one", refused.len())),
+        }
     }
 
     /// Takes one line of `principal`'s out of the queue, whatever the disk
     /// did.
     ///
     /// A `done` the device refuses is owed, and the wait it begins is said at
-    /// its edges ([`Holds::note_waiting`]); a held file the volume would not
-    /// remove once every line in it was settled is said on `Talk` — the store
-    /// appends on to it. The line's reissues and the position its moved
-    /// document was acknowledged through go with it.
+    /// its edges; a held file the volume would not remove once every line in
+    /// it was settled is said on `Talk` — the store appends on to it — and
+    /// the line's reissues and the position its moved document was
+    /// acknowledged through go with it ([`Holds::forget_settled`]).
     fn done_line(&self, principal: u64, ph: &mut PrincipalHold, k: u64, done: Done) {
-        if let Ok(settled) = ph.queue.done(k, done) {
-            if let Some((path, e)) = settled.unremoved {
-                self.say(format_args!("every held line is done, and the held file {} could not be removed ({e}); it stands, and the next line is appended to it", path.display()));
-            }
+        let settled = ph.queue.done(k, done).unwrap_or_default();
+        self.forget_settled(principal, ph, &[k], settled);
+    }
+
+    /// Takes a run of `principal`'s lines out of the queue, as one copy.
+    ///
+    /// It serves the drop ([`Holds::drop_run`]; skep #861): every line of
+    /// `ks` leaves the queue whatever the disk did, the run's `done`s go to
+    /// the held file as one copy with one sync (`HeldQueue::done_all`), and
+    /// what the settle did is said once for the run, as one line's is
+    /// ([`Holds::forget_settled`]).
+    fn done_lines(&self, principal: u64, ph: &mut PrincipalHold, ks: &[u64], done: Done) {
+        let settled = ph.queue.done_all(ks, done);
+        self.forget_settled(principal, ph, ks, settled);
+    }
+
+    /// Forgets the lines `ks` once settled, and says what the settle did.
+    ///
+    /// Each line's reissues and the position its moved document was
+    /// acknowledged through go; a held file the volume would not remove once
+    /// every line in it was settled is said on `Talk` — the store appends on
+    /// to it — and a wait for the file's copies that begins or ends is said
+    /// at its edges ([`Holds::note_waiting`]).
+    fn forget_settled(&self, principal: u64, ph: &mut PrincipalHold, ks: &[u64], settled: Settled) {
+        if let Some((path, e)) = settled.unremoved {
+            self.say(format_args!("every held line is done, and the held file {} could not be removed ({e}); it stands, and the next line is appended to it", path.display()));
         }
-        ph.reissues.remove(&k);
-        ph.seen_through.remove(&k);
+        for k in ks {
+            ph.reissues.remove(k);
+            ph.seen_through.remove(k);
+        }
         self.note_waiting(principal, ph);
     }
 

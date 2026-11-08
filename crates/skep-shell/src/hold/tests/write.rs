@@ -17,7 +17,11 @@
 //! document's acts; the person's `send` on a moved document raising each
 //! waiting line's base to the verdict's `site.current`, in the queue and on
 //! disk, a base past it standing, and raising none where no line carries a
-//! verdict naming a position (skep #757); THE SHIFT at a first dial (skep
+//! verdict naming a position (skep #757); a drop's `done`s, a moved
+//! document's marks and the person's `send` on it each one copy with one
+//! sync, the marks the device refused waiting as one run for the probe's one
+//! copy, and the re-marks of a run the writer refuses said in one line (skep
+//! #861); THE SHIFT at a first dial (skep
 //! #442): a stale burst whose anchors stand with the span between them
 //! whole shifted and landing within the call, one cell per op in what the
 //! displacement moves; the
@@ -518,6 +522,132 @@ fn the_persons_send_on_a_moved_document_with_no_verdict_raises_no_base() {
         let lines = g.lines();
         assert_eq!((lines[0]["cause"].as_str(), lines[0]["base"].as_u64()), (Some("behind"), Some(0)), "{cell}: {lines:?}");
     }
+}
+
+/// The principal's lines as a reopen of the board's held file reads them.
+fn reopened(g: &Ground) -> Vec<HeldLine> {
+    let Opened::Live { queue, .. } = HeldDir::new(g.store.path(), Chain::parse(&g.fake.chain).unwrap()).open_file(1, "1.0.1").unwrap() else { panic!("the board's file reads live") };
+    queue.lines().to_vec()
+}
+
+/// Checks that a drop writes its run's `done`s as one copy with one sync.
+///
+/// A refused run of sixteen lines on one document — its head refused, the
+/// fifteen after it `behind` — and a line on another document stand on the
+/// board's file: the person's drop of the head settles the run's sixteen
+/// `done`s as one copy, one sync under the board's lock (skep #861), and the
+/// queue and a reopen hold the other document's line alone (the mutant that
+/// settles the run a line at a time pays sixteen syncs while every write at
+/// the board waits; the one that leaves the run's `done`s unwritten
+/// relaunches the lines the person dropped).
+#[test]
+fn a_drop_writes_its_runs_dones_as_one_copy_with_one_sync() {
+    let g = ground();
+    let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent", "op": "insert"});
+    let k = g.hold_for(&insert(DOC, json!(["0"]), g.fake.head()), Reason::refused("out_of_bounds", verdict)).unwrap()["held"].as_u64().unwrap();
+    for n in 1..16 {
+        g.hold(&insert(DOC, json!([n.to_string()]), g.fake.head()), "behind", false);
+    }
+    g.hold(&insert(OTHER, json!(["c"]), g.fake.head()), "behind", false);
+    let copies = crate::held::tests::count_copies();
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    crate::held::tests::take_copies();
+    assert_eq!(copies.get(), 1, "the run's sixteen `done`s, one copy with one sync");
+    let standing: Vec<String> = g.lines().iter().map(|l| l["doc"].as_str().unwrap_or("?").to_string()).collect();
+    let on_disk: Vec<String> = reopened(&g).into_iter().map(|l| l.doc).collect();
+    assert_eq!((standing, on_disk), (vec![OTHER.to_string()], vec![OTHER.to_string()]), "the run dropped, in the queue and on disk, the other document's line standing");
+}
+
+/// Checks that a moved document's marks, and the person's `send` on it, are
+/// each one copy.
+///
+/// Sixteen lines on one document stand on the board's file, every other one
+/// `sent`. The board's verdict faces the document moved, and the sixteen
+/// marks land as one copy, one sync under the board's lock; the person's
+/// `send` re-marks the sixteen `behind`, each raised to the verdict's
+/// `site.current`, as one copy more (skep #861). A reopen reads the sixteen
+/// `behind` at the raised base, each keeping its `sent` (the mutant that
+/// marks a line at a time pays a sync a line at each act; the one that drops
+/// the run's raise reads the rows the person acknowledged again).
+#[test]
+fn a_moved_documents_marks_and_the_persons_send_each_land_as_one_copy() {
+    let g = ground();
+    for n in 0..16 {
+        g.hold(&insert(DOC, json!([n.to_string()]), g.fake.head()), "unreachable", n % 2 == 0);
+    }
+    let copies = crate::held::tests::count_copies();
+    g.holds.mark_moved("b-1", 1, DOC, Some((1, arrangement_moved(40, 45))));
+    crate::held::tests::take_copies();
+    assert_eq!(copies.get(), 1, "the sixteen marks, one copy with one sync");
+    assert!(reopened(&g).iter().all(|l| l.reason.cause == "moved"), "the sixteen moved on disk");
+    let copies = crate::held::tests::count_copies();
+    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Send).unwrap(), Resolved::HandedBack);
+    crate::held::tests::take_copies();
+    assert_eq!(copies.get(), 1, "the sixteen re-marks raised, one copy with one sync");
+    let marks: Vec<(u64, String, u64, bool)> = reopened(&g).into_iter().map(|l| (l.k, l.reason.cause, l.base, l.reason.sent)).collect();
+    let expected: Vec<(u64, String, u64, bool)> = (1..=16).map(|k| (k, "behind".to_string(), 45, k % 2 == 1)).collect();
+    assert_eq!(marks, expected, "a reopen reads each `behind` at the raised base, its `sent` kept");
+}
+
+/// Checks that a moved document's marks the device refused wait as one run
+/// for the probe's one copy.
+///
+/// Sixteen lines on one document stand on the board's file; with every copy
+/// refused, the board's verdict faces the document moved — the queue taking
+/// every mark, the sixteen copies owed, and the wait said once in the shell's
+/// own window, naming the first line's re-mark (skep #861). The device taking
+/// copies again, the next probe writes the sixteen as one copy, says the
+/// wait's end once and dials nothing, every line awaiting the person's act,
+/// and a reopen reads the sixteen moved (the mutant that loses the marks a
+/// run's refused retry left owed relaunches the document as it stood before
+/// the verdict).
+#[test]
+fn a_moved_documents_marks_the_device_refused_wait_as_one_run_for_the_probes_one_copy() {
+    let g = ground();
+    for n in 0..16 {
+        g.hold(&insert(DOC, json!([n.to_string()]), g.fake.head()), "unreachable", false);
+    }
+    crate::held::tests::refuse_copies_after(0);
+    g.holds.mark_moved("b-1", 1, DOC, Some((1, arrangement_moved(40, 45))));
+    crate::held::tests::take_copies();
+    assert!(g.lines().iter().all(|l| l["cause"] == "moved"), "the queue takes every mark");
+    let begun = said_containing(&g, "could not be copied to its held file");
+    assert!(begun.len() == 1 && begun[0].contains("held line 1's re-mark"), "the wait said once, naming the first mark: {begun:?}");
+    let copies = crate::held::tests::count_copies();
+    g.holds.probe("b-1");
+    crate::held::tests::take_copies();
+    assert_eq!(copies.get(), 1, "the probe writes the sixteen marks as one copy");
+    assert_eq!(said_containing(&g, "wait in memory no more").len(), 1, "the wait's end said once: {:?}", g.said.lock().unwrap());
+    assert_eq!(g.fake.sends(), 0, "nothing dialed: every line awaits the person's act");
+    let on_disk = reopened(&g);
+    assert!(on_disk.len() == 16 && on_disk.iter().all(|l| l.reason.cause == "moved"), "a reopen reads the sixteen moved: {on_disk:?}");
+}
+
+/// Checks that the re-marks of a run the writer refuses are said in one line.
+///
+/// Three lines of a large frame stand on one document, and the file's
+/// re-mark budget is spent on the first, re-marked under causes shorter than
+/// the run's until the writer refuses it. The board's verdict then faces the
+/// document moved: the queue takes every line's mark, and the writer refuses
+/// each copy past the budget, owed never — said in the shell's own window in
+/// one line naming their count and the first, nothing waiting (SP-11; skep
+/// #861; the mutant that says a line per refusal says as many lines as the
+/// document holds at every such act).
+#[test]
+fn the_remarks_of_a_run_the_writer_refuses_are_said_in_one_line() {
+    let g = bare_ground();
+    for _ in 0..3 {
+        g.hold(&sized_frame(MAX_FRAME_BYTES / 8), "unreachable", false);
+    }
+    let flaps = [Reason::of("aa", false), Reason::of("bb", false)];
+    let remark = |n: usize| g.holds.with_principal("b-1", 1, |ph| ph.queue.remark(1, flaps[n % 2].clone())).expect("the principal's hold");
+    assert!((0..64).any(|n| remark(n).is_err()), "premise: the re-mark budget is spent");
+    let before = g.said.lock().unwrap().len();
+    g.holds.mark_moved("b-1", 1, DOC, None);
+    let said = g.said.lock().unwrap()[before..].to_vec();
+    let moved = g.holds.with_principal("b-1", 1, |ph| ph.queue.lines().iter().all(|l| l.reason.cause == "moved"));
+    assert_eq!(moved, Some(true), "the queue takes every mark");
+    assert!(said.len() == 1 && said[0].contains("3 lines' re-marks could not be written, line 1's the first"), "one line for the run's refusals, and no wait: {said:?}");
 }
 
 /// Checks that a stale burst whose span stands whole is shifted and lands.

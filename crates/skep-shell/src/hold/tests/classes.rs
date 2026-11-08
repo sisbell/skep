@@ -156,12 +156,12 @@ fn i8_a_halt_found_as_the_directory_is_established_halts_the_lines_held_in_memor
 /// held at a stopped node — the header's sync and the line's; (b) a burst's
 /// whole life — held at a stopped node, then the node running and the
 /// probe's resend acking it, the mark of `sent` and the `done` each synced;
-/// (c) `resolve(drop)` of a refused run of sixteen lines on one document — a
-/// `done` per line; (d) `resolve(send)` of that run — the refused head alone
-/// awaits the person's act, so it alone is re-marked — and, beside it, of a
-/// document whose sixteen lines stand `moved`, each re-marked and raised;
-/// (e) a probe draining sixteen lines held at a stopped node — a mark and a
-/// `done` per line.
+/// (c) `resolve(drop)` of a refused run of sixteen lines on one document —
+/// its sixteen `done`s one copy (skep #861); (d) `resolve(send)` of that run
+/// — the refused head alone awaits the person's act, so it alone is
+/// re-marked — and, beside it, of a document whose sixteen lines stand
+/// `moved`, each re-marked and raised in one copy; (e) a probe draining
+/// sixteen lines held at a stopped node — a mark and a `done` per line.
 #[test]
 #[ignore = "measurement - run by hand"]
 fn the_syncs_each_act_makes_under_the_board_lock() {

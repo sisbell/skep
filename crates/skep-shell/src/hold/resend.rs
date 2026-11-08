@@ -1160,23 +1160,31 @@ impl Holds {
     /// units between them, and a burst it cannot carry so is held here, since a
     /// silent inexact rebase could put words where the person did not. No line
     /// is sent. Each keeps its own `sent`, so a line that may have landed reads
-    /// before it is sent again (§3c.2). `judged` is the line the board refused,
-    /// with the board's verdict, kept as its refusal — the state the line was
-    /// typed against and the document's current one; a moved reason carries one
-    /// (`Dialed::refused`). The hands whose rows moved it ride the `held`
-    /// event's `moved` state (§3c.5; §4b.2), the data of the face's three
-    /// forms. The page's half — what the burst machine does at a `held` answer,
-    /// how it re-projects the held frames at a launch, the moved document's
-    /// face — is the frontend's and in neither repository at this pin
-    /// (unverified here, the record §7 item 4; stated from assisted-frontend
-    /// §7b).
+    /// before it is sent again (§3c.2). The marks are one run, written to the
+    /// held file as one copy with one sync however many lines the document
+    /// holds ([`Holds::remark_lines`]; skep #861). `judged` is the line the
+    /// board refused, with the board's verdict, kept as its refusal — the state
+    /// the line was typed against and the document's current one; a moved
+    /// reason carries one (`Dialed::refused`). The hands whose rows moved it
+    /// ride the `held` event's `moved` state (§3c.5; §4b.2), the data of the
+    /// face's three forms. The page's half — what the burst machine does at a
+    /// `held` answer, how it re-projects the held frames at a launch, the moved
+    /// document's face — is the frontend's and in neither repository at this
+    /// pin (unverified here, the record §7 item 4; stated from
+    /// assisted-frontend §7b).
     pub(super) fn mark_moved(&self, board_reference: &str, principal: u64, doc: &str, judged: Option<(u64, Value)>) {
         self.with_principal(board_reference, principal, |ph| {
-            let marks: Vec<(u64, bool)> = ph.queue.lines().iter().filter(|l| l.doc == doc).map(|l| (l.k, l.reason.sent)).collect();
-            for (k, sent) in marks {
-                let refusal = judged.as_ref().filter(|(judged, _)| *judged == k).map(|(_, verdict)| verdict.clone());
-                self.remark_line(principal, ph, k, Reason { refusal, ..Reason::of(cause::MOVED, sent) });
-            }
+            let marks: Vec<(u64, Reason)> = ph
+                .queue
+                .lines()
+                .iter()
+                .filter(|l| l.doc == doc)
+                .map(|l| {
+                    let refusal = judged.as_ref().filter(|(judged, _)| *judged == l.k).map(|(_, verdict)| verdict.clone());
+                    (l.k, Reason { refusal, ..Reason::of(cause::MOVED, l.reason.sent) })
+                })
+                .collect();
+            self.remark_lines(principal, ph, marks, None);
         });
     }
 

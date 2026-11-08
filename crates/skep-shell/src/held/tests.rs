@@ -38,10 +38,12 @@
 //! joining again over the lines the device kept and doubling none, and a join
 //! whose cut-back was refused leaving its copy past the file's whole lines
 //! until the retry cuts it; a line kept at a position is the base of the
-//! lines behind it on its document, in the queue and at a reopen; and a line
+//! lines behind it on its document, in the queue and at a reopen; a line
 //! re-marked with its base raised — the person's `send` on a moved document —
 //! reads back with the raised base, never lowered by a raise below it or a
-//! later `done` kept below it.
+//! later `done` kept below it; and a run of re-marks or `done`s (skep #861)
+//! is one copy with one sync, leaving the queue and the file as a call a line
+//! leaves them, a run that changes nothing writing nothing.
 //!
 //! The budgets' cells: the queue's frames and anchors held to its byte
 //! budget, four frames at the frame cap fitting it, each line's anchors
@@ -822,14 +824,15 @@ fn a_raised_remark_reads_back_with_its_base_and_no_later_done_lowers_it() {
     let k2 = queue.hold_next("1.0.1.0.1", None, 4, json!({"op": "delete"}), None, Reason::of("moved", false)).unwrap().k;
     let k3 = queue.hold_next("1.0.1.0.1", None, 99, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap().k;
     let spent = |queue: &HeldQueue| queue.disk.remark_bytes;
+    let raise = |queue: &mut HeldQueue, k: u64, reason: Reason, at: u64| assert!(queue.remark_all([(k, reason)], Some(at)).is_empty(), "line {k}: no copy refused");
     let (written, budget) = (file_len(&tmp), spent(&queue));
-    queue.remark_raised(k2, Reason::of("behind", false), 40).unwrap();
+    raise(&mut queue, k2, Reason::of("behind", false), 40);
     assert!(file_len(&tmp) > written && spent(&queue) > budget, "the raise is on disk, and spends the re-mark budget");
-    queue.remark_raised(k1, Reason::of("behind", true), 2).unwrap();
+    raise(&mut queue, k1, Reason::of("behind", true), 2);
     let (written, budget) = (file_len(&tmp), spent(&queue));
-    queue.remark_raised(k2, Reason::of("behind", false), 40).unwrap();
-    queue.remark_raised(k3, Reason::of("behind", false), 40).unwrap();
-    queue.remark_raised(99, Reason::of("behind", false), 40).unwrap();
+    raise(&mut queue, k2, Reason::of("behind", false), 40);
+    raise(&mut queue, k3, Reason::of("behind", false), 40);
+    raise(&mut queue, 99, Reason::of("behind", false), 40);
     assert_eq!((file_len(&tmp), spent(&queue)), (written, budget), "a reason and base the line carries, a raise below a standing base, and a line not standing write nothing");
     let marks = |queue: &HeldQueue| queue.lines().iter().map(|l| (l.k, l.base, l.reason.clone())).collect::<Vec<_>>();
     let raised = vec![(k1, 4, Reason::of("behind", true)), (k2, 40, Reason::of("behind", false)), (k3, 99, Reason::of("behind", false))];
@@ -1977,6 +1980,93 @@ fn a_copys_bytes_left_by_a_refused_cut_back_are_cut_by_the_retry_before_it_write
     let text = fs::read_to_string(file_path(&tmp)).unwrap();
     assert_eq!(text.lines().skip(1).count(), 2, "each line once in the file, the refused copy's bytes gone: {text}");
     assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1, 2], "a fresh read reads the two lines");
+}
+
+// ── THE RUNS (§3c.3; skep #861) ─────────────────────────────────────────────
+
+/// Returns the copies of lines `act` lands, each one append's sync.
+fn copies_of(act: impl FnOnce()) -> usize {
+    let landed = count_copies();
+    act();
+    take_copies();
+    landed.get()
+}
+
+/// Checks that a run of re-marks or `done`s is one copy, and leaves the file
+/// as a call a line leaves it.
+///
+/// Two queues over two stores hold the same five lines — three on one
+/// document, the fourth on another, and a fifth on the first held with its
+/// copy refused, so it waits for its first copy — and take the same acts,
+/// one a line at a time and the other as runs (skep #861): a re-mark of three
+/// lines raised to 45, the waiting one among them, its change carried in its
+/// first copy; a re-mark of two more; a `done` of the first two kept at 60,
+/// raising the bases behind them on their document; a run naming no standing
+/// line, and one changing nothing; and a `done` of the rest. Each run is one
+/// copy with one sync — none for the two that settle and change nothing, and
+/// the last written before the compaction removes the file — and after each
+/// act both queues, and both files reopened, hold the lines expected, by
+/// ordinal, document, base and reason (the mutant that runs the retry a line
+/// at a time inside a run pays a sync a line; the one that drops the run's
+/// raise holds its lines below the rows the person acknowledged; the one
+/// that raises no base behind a run's kept line reads the rows below it
+/// again until a relaunch; the one that ends a run of `done`s without its
+/// retry relaunches the lines it settled).
+#[test]
+fn a_run_of_remarks_or_dones_is_one_copy_and_leaves_the_file_as_a_call_a_line_does() {
+    let (d1, d2) = ("1.0.1.0.1", "1.0.1.0.2");
+    let held = |tmp: &TempDir| -> HeldQueue {
+        let mut queue = live(dir(tmp).open_file(1, "1.0.1").unwrap());
+        for doc in [d1, d1, d1, d2] {
+            assert!(queue.hold_next(doc, None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap().unwritten.is_none());
+        }
+        FAIL_SYNC.with(|f| f.set(true));
+        let waits = queue.hold_next(d1, None, 0, json!({"op": "delete"}), None, Reason::of("behind", false)).unwrap();
+        FAIL_SYNC.with(|f| f.set(false));
+        assert!(waits.unwritten.is_some(), "premise: the fifth waits for its first copy");
+        queue
+    };
+    let (by_line, by_run) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let (mut one, mut run) = (held(&by_line), held(&by_run));
+    let standing = |lines: &[HeldLine]| -> Vec<(u64, String, u64, Reason)> { lines.iter().map(|l| (l.k, l.doc.clone(), l.base, l.reason.clone())).collect() };
+    let expect = |act: &str, queues: [&HeldQueue; 2], lines: &[(u64, &str, u64, &Reason)]| {
+        let lines: Vec<(u64, String, u64, Reason)> = lines.iter().map(|&(k, doc, base, reason)| (k, doc.to_string(), base, reason.clone())).collect();
+        let files = [&by_line, &by_run].map(|tmp| standing(live(dir(tmp).open_file(1, "1.0.1").unwrap()).lines()));
+        assert_eq!(
+            (queues.map(|queue| standing(queue.lines())), files),
+            ([lines.clone(), lines.clone()], [lines.clone(), lines]),
+            "{act}: each queue, and each file reopened, holds the lines expected"
+        );
+    };
+    let (unreachable, behind, moved) = (Reason::of("unreachable", false), Reason::of("behind", false), Reason::of("moved", false));
+    // A re-mark of three lines raised to 45, the waiting one among them.
+    for k in [2, 3, 5] {
+        assert!(one.remark_all([(k, behind.clone())], Some(45)).is_empty());
+    }
+    assert_eq!(copies_of(|| assert!(run.remark_all([2, 3, 5].map(|k| (k, behind.clone())), Some(45)).is_empty())), 1, "the raised re-marks, one copy");
+    expect("raised", [&one, &run], &[(1, d1, 0, &unreachable), (2, d1, 45, &behind), (3, d1, 45, &behind), (4, d2, 0, &unreachable), (5, d1, 45, &behind)]);
+    // A re-mark of two more, one on each document.
+    for k in [1, 4] {
+        one.remark(k, moved.clone()).unwrap();
+    }
+    assert_eq!(copies_of(|| assert!(run.remark_all([1, 4].map(|k| (k, moved.clone())), None).is_empty())), 1, "the re-marks, one copy");
+    expect("re-marked", [&one, &run], &[(1, d1, 0, &moved), (2, d1, 45, &behind), (3, d1, 45, &behind), (4, d2, 0, &moved), (5, d1, 45, &behind)]);
+    // A `done` of the first two kept at 60, raising the bases behind them.
+    for k in [1, 2] {
+        one.done(k, Done::Kept { at: Some(60) }).unwrap();
+    }
+    assert_eq!(copies_of(|| assert!(run.done_all(&[1, 2], Done::Kept { at: Some(60) }).unremoved.is_none())), 1, "the `done`s, one copy");
+    expect("kept", [&one, &run], &[(3, d1, 60, &behind), (4, d2, 0, &moved), (5, d1, 60, &behind)]);
+    // A run naming no standing line, and one changing nothing.
+    assert_eq!(copies_of(|| assert!(run.done_all(&[99], Done::Dropped).unremoved.is_none())), 0, "a run settling no line writes nothing");
+    assert_eq!(copies_of(|| assert!(run.remark_all([(3, behind.clone())], Some(45)).is_empty())), 0, "a run changing nothing writes nothing");
+    expect("unchanged", [&one, &run], &[(3, d1, 60, &behind), (4, d2, 0, &moved), (5, d1, 60, &behind)]);
+    // A `done` of the rest: written, then the file removed.
+    for k in [3, 4, 5] {
+        one.done(k, Done::Dropped).unwrap();
+    }
+    assert_eq!(copies_of(|| assert!(run.done_all(&[3, 4, 5], Done::Dropped).unremoved.is_none())), 1, "the last `done`s, one copy before the compaction");
+    assert!(!one.on_disk() && !run.on_disk() && run.lines().is_empty(), "both files compacted away");
 }
 
 // ── THE PENDING DIRECTORY (§3c.1; skep #725) ────────────────────────────────

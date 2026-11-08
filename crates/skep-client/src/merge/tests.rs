@@ -6071,16 +6071,17 @@ mod scripted {
         assert_eq!(dialer.world().rows.len(), rows);
     }
 
-    /// NO BASE RECORD (N4's baseless case): the landing's position is the
-    /// draft's own latest `set_arrangement` row on the supplement that
+    /// An undo of a baseless landing goes by its feed row, with no base sent.
+    ///
+    /// With no base record (N4's baseless case), the landing's position is
+    /// the draft's own latest `set_arrangement` row on the supplement that
     /// carries a `merge` term — the request's merge beside a null base, the
     /// row being the one place the board keeps a baseless landing's
     /// position (wire.md §The change feed; skep #784) — and the undo sends C
     /// read before it with no `base`, no `head` and no `merge`, `as_of` the
-    /// row's `at`. A re-run finds the landing's row again: in the same
-    /// session the board answers the ids again, the same undo with nothing
-    /// written twice; in a fresh session it is refused `arrangement_moved`
-    /// by the board, nothing committed.
+    /// row's `at`. A re-run, in the same session or a fresh one, finds the
+    /// undo's own row past the landing's, the draft there as C: the merge
+    /// already taken back, nothing sent (skep #889; the next test).
     #[test]
     fn undo_of_a_baseless_landing_goes_by_its_feed_row_with_no_base_sent() {
         let plain = "1.0.1.0.5";
@@ -6120,21 +6121,266 @@ mod scripted {
         let atom = appended_record(&dialer);
         assert!(atom["landed"].is_null());
         assert_eq!(atom["replaces"].as_str(), Some(link.to_string().as_str()));
-        // A re-run finds the landing's row again. In the same session the
-        // board answers the ids again — the same undo, nothing written
-        // twice; in a fresh session the write is refused by the board, the
-        // arrangement having moved at the undo, nothing committed.
+        // A re-run, in this session and in a fresh one, the memo cleared:
+        // the merge already taken back, nothing sent.
+        let rows = dialer.world().rows.len();
+        for fresh in [false, true] {
+            if fresh {
+                dialer.world().memo.clear();
+            }
+            dialer.clear();
+            assert_eq!(undo(&board, merger(&session, &signer), &a(plain), &a(K), None, None), Err(Refusal::NothingToUndo { draft: a(plain), why: NoUndo::TakenBack }), "fresh: {fresh}");
+            assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty(), "fresh: {fresh}: nothing sent: {:?}", dialer.ops());
+            assert_eq!(dialer.world().rows.len(), rows, "fresh: {fresh}: nothing committed");
+        }
+    }
+
+    /// A baseless undo run again after it landed is nothing to undo.
+    ///
+    /// The draft carries no base record, so its feed rows are the only
+    /// account of its landing and of the undo after it, whose row names no
+    /// merge (wire.md §The change feed). A re-run reads the draft at its
+    /// latest re-arrangement past the landing's row and finds it as C
+    /// mapped: the merge already taken back, nothing sent (P4; skep #889).
+    /// (a) In a fresh session, the memo cleared: the refusal's words, the
+    /// reads at the position before the landing and at the undo's, no
+    /// write, the undo's record current. (b) The undo's record unwritten,
+    /// its link refused for a head owed: taken back, the landing's record
+    /// current. (c) The landing's record unwritten: the undo writes none,
+    /// and its re-run finds the merge taken back. (d) The person's edit
+    /// since the undo, the re-run typed at their own last ack: nothing sent,
+    /// the edit standing. (e) A restore of M after the undo, the latest
+    /// re-arrangement M: the undo is the board's to judge — typed at the
+    /// landing in a fresh session it is refused `arrangement_moved`, typed
+    /// at the restore it lands C. (f) A record minted over C's own words
+    /// between the two runs: the state at the undo's row, mapped through
+    /// it, is C mapped. (g) The undo's acknowledgment lost: its re-run in
+    /// the same session finds the merge taken back, the landing's record
+    /// current.
+    #[test]
+    fn a_baseless_undo_run_again_after_it_landed_is_nothing_to_undo() {
+        let plain = "1.0.1.0.5";
+        let baseless = |c: Vec<Run>| {
+            let mut w = draft_landing_world();
+            w.text(plain, 1, "?!");
+            w.doc(plain, false, ACCOUNT, c);
+            w
+        };
+        let c = vec![run(D, 1, 11)];
+        let taken_back = || -> Result<Undone, Refusal> {
+            Err(Refusal::NothingToUndo { draft: a(plain), why: NoUndo::TakenBack })
+        };
+        let writes = ["set_arrangement", "insert", "make_link", "create_new_document"];
+        let wrote = |dialer: &Scripted| {
+            dialer.ops().into_iter().filter(|o| writes.contains(&o.as_str())).collect::<Vec<_>>()
+        };
+        let owed_link = || json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_invalid:board_unavailable", "disposition": "reorder", "op": "make_link"});
+
+        // (a) A fresh session.
+        let (dialer, board, signer) = open(baseless(c.clone()));
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        let before = dialer.world().position;
+        let (at, link) = landing_of(
+            &land(&board, &merged, draft_landing(&session, &signer, Some(a(plain))))
+                .expect("landed"),
+        );
+        let undone = undo(&board, m, &a(plain), &a(K), None, None).expect("undone");
+        dialer.world().memo.clear();
         let rows = dialer.world().rows.len();
         dialer.clear();
-        assert_eq!(undo(&board, merger(&session, &signer), &a(plain), &a(K), None, None), Ok(undone.clone()), "the memo's answer");
-        assert_eq!(dialer.world().rows.len(), rows, "nothing written twice");
+        let err = undo(&board, m, &a(plain), &a(K), None, None);
+        assert_eq!(err, taken_back(), "(a)");
+        assert_eq!(
+            err.unwrap_err().to_string(),
+            format!("nothing to undo: the merge in {plain} was already taken back")
+        );
+        assert_eq!(
+            dialer.positions("doc_metadata"),
+            [at - 1, before],
+            "(a): the pre-landing read at nearest: {:?}",
+            dialer.ops()
+        );
+        assert_eq!(
+            dialer.positions("image"),
+            [before, undone.position],
+            "(a): C before the landing, then the draft at the undo's row"
+        );
+        assert!(wrote(&dialer).is_empty(), "(a): nothing sent: {:?}", dialer.ops());
+        let w = dialer.world();
+        assert_eq!(w.rows.len(), rows, "(a): nothing committed");
+        assert_eq!(w.docs.get(plain).unwrap().runs, c, "(a): C stands");
+        drop(w);
+        let found = current(&board, Some(session.token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("a record");
+        assert_eq!(
+            (found.link, found.landed, found.replaces),
+            (undone.record.clone(), None, Some(link)),
+            "(a): the undo's record current"
+        );
+
+        // (b) The undo's record unwritten, its link refused for a head owed.
+        let (dialer, board, signer) = open(baseless(c.clone()));
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        let (at, link) = landing_of(
+            &land(&board, &merged, draft_landing(&session, &signer, Some(a(plain))))
+                .expect("landed"),
+        );
+        let link_id = format!("undo:{plain}:{at}.link");
+        dialer.world().memo.insert(link_id.clone(), owed_link());
+        let err =
+            undo(&board, m, &a(plain), &a(K), None, None).expect_err("the undo's link refused");
+        let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("(b): {err:?}") };
+        assert!(
+            face.state.contains("the record of the undo is not written"),
+            "(b): the premise: {face}"
+        );
+        assert_eq!(dialer.world().docs.get(plain).unwrap().runs, c, "(b): the premise, C");
         dialer.world().memo.clear();
         dialer.clear();
-        let err = undo(&board, merger(&session, &signer), &a(plain), &a(K), None, None).expect_err("the undo moved the arrangement");
-        let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
-        assert_eq!(refused.code, "arrangement_moved");
-        assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
-        assert!(dialer.frames("insert").is_empty());
+        assert_eq!(undo(&board, m, &a(plain), &a(K), None, None), taken_back(), "(b)");
+        assert!(wrote(&dialer).is_empty(), "(b): nothing sent: {:?}", dialer.ops());
+        let found = current(&board, Some(session.token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("a record");
+        assert_eq!(found.link, Some(link), "(b): the landing's record current");
+
+        // (c) The landing's record unwritten, its link refused for a head
+        // owed.
+        let (dialer, board, signer) = open(baseless(c.clone()));
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        let link_id =
+            landing_id(&format!("{}:{plain}@{}", merged.key.text(), merged.as_of), "link");
+        dialer.world().memo.insert(link_id, owed_link());
+        land(&board, &merged, draft_landing(&session, &signer, Some(a(plain))))
+            .expect_err("(c): the premise, the landing's link refused");
+        dialer.world().memo.clear();
+        let undone = undo(&board, m, &a(plain), &a(K), None, None).expect("undone");
+        assert_eq!(undone.record, None, "(c): no record stood to replace");
+        dialer.world().memo.clear();
+        dialer.clear();
+        assert_eq!(undo(&board, m, &a(plain), &a(K), None, None), taken_back(), "(c)");
+        assert!(wrote(&dialer).is_empty(), "(c): nothing sent: {:?}", dialer.ops());
+
+        // (d) The person's edit since the undo, the re-run typed at it.
+        let (dialer, board, signer) = open(baseless(c.clone()));
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        land(&board, &merged, draft_landing(&session, &signer, Some(a(plain)))).expect("landed");
+        undo(&board, m, &a(plain), &a(K), None, None).expect("undone");
+        // "cat " deleted.
+        let edited = vec![run(D, 1, 4), run(D, 9, 3)];
+        let e = dialer.world().change(plain, edited.clone());
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        assert_eq!(undo(&board, m, &a(plain), &a(K), Some(e), None), taken_back(), "(d)");
+        assert!(wrote(&dialer).is_empty(), "(d): nothing sent: {:?}", dialer.ops());
+        let w = dialer.world();
+        assert_eq!(w.docs.get(plain).unwrap().runs, edited, "(d): the edit stands");
+        assert_eq!(w.rows.len(), rows, "(d): nothing committed");
+        drop(w);
+
+        // (e) A restore of M after the undo, by hand: a `set_arrangement`
+        // naming no merge.
+        let (dialer, board, signer) = open(baseless(c.clone()));
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        let (at, _) = landing_of(
+            &land(&board, &merged, draft_landing(&session, &signer, Some(a(plain))))
+                .expect("landed"),
+        );
+        undo(&board, m, &a(plain), &a(K), None, None).expect("undone");
+        let restored = m_runs(&merged);
+        let typed = dialer.world().position;
+        let frame =
+            frames::set_arrangement(plain, &shot_runs(&restored), typed, None, None, None, None);
+        let r = dialer.world().apply(&frame)["at"].as_u64().expect("(e): the restore's ack");
+        assert_eq!(dialer.world().docs.get(plain).unwrap().runs, restored, "(e): the premise, M");
+        // A fresh session, as the command's run is: no memo of the undo's
+        // write under its id.
+        dialer.world().memo.clear();
+        dialer.clear();
+        let err = undo(&board, m, &a(plain), &a(K), None, None).expect_err("typed at the landing");
+        let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("(e): {err:?}") };
+        assert_eq!(refused.code, "arrangement_moved", "(e)");
+        let detail = refused.detail.as_deref().expect("the person's words");
+        assert!(
+            detail.contains("changed since the merge landed")
+                && detail.contains(&format!("position {at}"))
+                && detail.contains(&format!("changed at {r}")),
+            "(e): {detail}"
+        );
+        assert_eq!(dialer.world().docs.get(plain).unwrap().runs, restored, "(e): M stands");
+        dialer.clear();
+        undo(&board, m, &a(plain), &a(K), Some(r), None).expect("(e): typed at the restore");
+        let frames = dialer.frames("set_arrangement");
+        assert_eq!(frames.len(), 1, "(e): one write: {:?}", dialer.ops());
+        assert_eq!(frames[0]["as_of"].as_u64(), Some(r), "(e): typed at the restore");
+        assert_eq!(dialer.world().docs.get(plain).unwrap().runs, c, "(e): C again");
+
+        // (f) A record minted over C's own words between the two runs.
+        let mine = vec![run(D, 1, 11), run(plain, 1, 2)];
+        let (dialer, board, signer) = open(baseless(mine.clone()));
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        land(&board, &merged, draft_landing(&session, &signer, Some(a(plain)))).expect("landed");
+        undo(&board, m, &a(plain), &a(K), None, None).expect("undone");
+        assert_eq!(dialer.world().docs.get(plain).unwrap().runs, mine, "(f): the premise, C");
+        // The record: `from` the draft's "?!", `to` the trunk's `D·19–20`.
+        let record = {
+            let mut w = dialer.world();
+            w.text(D, 19, "?!");
+            let addr = format!("{plain}.0.2.{}", 90 + w.links.len());
+            w.links.push(LinkRow {
+                addr: addr.clone(),
+                home: plain.into(),
+                from: vec![i_addr(&a(plain), 1)],
+                to: vec![i_addr(&a(D), 19)],
+                ty: frames::T_CORRESPONDENCE.into(),
+                width: 2,
+            });
+            w.memo.clear();
+            addr
+        };
+        dialer.clear();
+        assert_eq!(undo(&board, m, &a(plain), &a(K), None, None), taken_back(), "(f)");
+        assert!(
+            dialer.frames("read_link").iter().any(|f| f["a"] == record),
+            "(f): the record read: {:?}",
+            dialer.ops()
+        );
+        assert!(wrote(&dialer).is_empty(), "(f): nothing sent: {:?}", dialer.ops());
+
+        // (g) The undo's acknowledgment lost, the re-run in the same
+        // session.
+        let (dialer, board, signer) = open(baseless(c.clone()));
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        let (_, link) = landing_of(
+            &land(&board, &merged, draft_landing(&session, &signer, Some(a(plain))))
+                .expect("landed"),
+        );
+        dialer.world().drop_acks = 1;
+        let lost = undo(&board, m, &a(plain), &a(K), None, None);
+        assert!(matches!(lost, Err(Refusal::Halt(Halt::Dial(_)))), "(g): the ack lost: {lost:?}");
+        assert_eq!(dialer.world().docs.get(plain).unwrap().runs, c, "(g): the premise, C");
+        dialer.clear();
+        assert_eq!(undo(&board, m, &a(plain), &a(K), None, None), taken_back(), "(g)");
+        assert!(wrote(&dialer).is_empty(), "(g): nothing sent: {:?}", dialer.ops());
+        let found = current(&board, Some(session.token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("a record");
+        assert_eq!(found.link, Some(link), "(g): the landing's record current");
     }
 
     /// THE PRE-LANDING POSITION RECLAIMED: the journal's floor stands at the

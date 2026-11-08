@@ -1464,20 +1464,21 @@ fn an_undo_brings_back_words_published_since_the_landing_as_the_published_words_
     session.close().expect("close");
 }
 
-/// A FREE-STANDING DRAFT (skep #775's note; N4; skep #784): a plain mint
-/// holding "hello", merged into — the head `D.2` against the daughter
-/// `D.1.1` — is admitted: the draft holds M, `doc_metadata`'s `base` and
-/// `merge` are null, and the landing is one commit of two records, `at − 1`
-/// inside it. Its feed row carries the request's merge beside a null base —
-/// the one place the board keeps the landing's position — so the undo finds
-/// the landing by it: one write typed against the row's `at`, C read before
-/// the landing sent back with no base, no head and no merge. The draft reads
-/// C again, nothing is recorded, the undo's row names neither term, and the
-/// replacing record is current for the key. A re-run finds the landing's
-/// row again: in the same session the board answers its ids again, the same
-/// undo with nothing written twice; in a fresh session the board refuses it
-/// `arrangement_moved`, the undo having moved the arrangement, nothing
-/// written. Composed again in that fresh session and landed, the merge
+/// A landing into a free-standing draft is admitted and undone by its row.
+///
+/// The draft (skep #775's note; N4; skep #784) is a plain mint holding
+/// "hello", merged into — the head `D.2` against the daughter `D.1.1` — and
+/// admitted: the draft holds M, `doc_metadata`'s `base` and `merge` are
+/// null, and the landing is one commit of two records, `at − 1` inside it.
+/// Its feed row carries the request's merge beside a null base — the one
+/// place the board keeps the landing's position — so the undo finds the
+/// landing by it: one write typed against the row's `at`, C read before the
+/// landing sent back with no base, no head and no merge. The draft reads C
+/// again, nothing is recorded, the undo's row names neither term, and the
+/// replacing record is current for the key. A re-run, in the same session
+/// and in a fresh one, finds the undo's own row past the landing's, the
+/// draft there as C: the merge already taken back, nothing written
+/// (skep #889). Composed again in that fresh session and landed, the merge
 /// writes a record of its own, replacing the undo's.
 #[test]
 fn a_landing_into_a_free_standing_draft_is_admitted_with_nothing_recorded_and_undone_by_its_row() {
@@ -1530,17 +1531,17 @@ fn a_landing_into_a_free_standing_draft_is_admitted_with_nothing_recorded_and_un
     assert_eq!((row["at"].as_u64(), row["base"].is_null(), row["merge"].is_null()), (Some(undone.position), true, true), "the undo's row names neither term: {row}");
     let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
     assert_eq!((record.landed.clone(), record.replaces.clone(), record.link.clone()), (None, Some(link.clone()), Some(replacing.clone())));
-    // A re-run: the same undo in this session, nothing written twice.
+    // A re-run in this session: the merge already taken back, nothing
+    // written.
     let standing = rig.position();
-    assert_eq!(undo(&rig.board, merger, &plain, &kind, None, None), Ok(undone.clone()), "the board answers the undo's ids again");
-    assert_eq!(rig.position(), standing, "nothing written twice");
+    let taken_back = Err(Refusal::NothingToUndo { draft: plain.clone(), why: NoUndo::TakenBack });
+    assert_eq!(undo(&rig.board, merger, &plain, &kind, None, None), taken_back, "the undo's own row, the draft there as C");
+    assert_eq!(rig.position(), standing, "nothing written");
     session.close().expect("close");
-    // In a fresh session: refused, the arrangement moved at the undo.
+    // In a fresh session, which holds no memo of the undo's write: the same.
     let fresh = rig.session();
     let again = Merger { token: fresh.token(), account: fresh.account(), signer: &rig.device };
-    let err = undo(&rig.board, again, &plain, &kind, None, None).expect_err("the undo moved the arrangement");
-    let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
-    assert_eq!(refused.code, "arrangement_moved", "{refused:?}");
+    assert_eq!(undo(&rig.board, again, &plain, &kind, None, None), taken_back, "the undo's own row, in a fresh session");
     assert_eq!(rig.position(), standing, "nothing written");
     assert_eq!(image(&rig.board, fresh.token(), &plain, 5), c, "C stands");
     // Composed again in the fresh session and landed in the draft: a landing

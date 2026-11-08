@@ -573,9 +573,10 @@ pub enum Refusal {
         /// The journal named.
         journal: Address,
     },
-    /// Nothing to undo on the draft named: the merge its base record is
-    /// about is not one an undo can take back, for the reason carried
-    /// (the landing lane's precisions P2 and P4), and nothing was sent.
+    /// Nothing to undo on the draft named, and nothing was sent.
+    ///
+    /// The merge landed in it is not one an undo can take back, for the
+    /// reason carried (the landing lane's precisions P2 and P4).
     NothingToUndo {
         /// The draft named.
         draft: Address,
@@ -649,8 +650,9 @@ pub enum Refusal {
 ///
 /// Each is read off the draft's `doc_metadata` and, for a draft whose base
 /// is recorded with no marker beside it, off the draft's own latest feed row
-/// of the kinds that end a marker — read, never acted on (the undo module's
-/// doc).
+/// of the kinds that end a marker — read, never acted on; for a draft with
+/// no base record, off its latest re-arrangement past its landing's row and
+/// the state it left (the undo module's doc).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NoUndo {
     /// The marker was inherited when the draft was staged (P2): its `at` is
@@ -665,9 +667,13 @@ pub enum NoUndo {
         /// The version the merge is — the draft's recorded base.
         version: Address,
     },
-    /// The merge was already taken back: the draft's latest marker-ending
-    /// row is a `set_arrangement` naming a base and no merge — an undo's or
-    /// a withdrawal's.
+    /// The merge was already taken back.
+    ///
+    /// The draft's latest marker-ending row is a `set_arrangement` naming a
+    /// base and no merge — an undo's or a withdrawal's; or, on a draft with
+    /// no base record, the latest `set_arrangement` past the landing's row
+    /// names no merge and left the draft as the undo's write would, mapped
+    /// as it is (P4).
     TakenBack,
 }
 

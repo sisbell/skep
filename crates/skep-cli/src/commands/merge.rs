@@ -20,10 +20,12 @@
 //! position, the report's `as_of` — and prints the `Merged` report as one
 //! JSON document on stdout, exit 0. With `--publish` it lands the merge as
 //! the document's next version with its record; with `--into` it lands the
-//! merged list in a draft as ONE `set_arrangement` typed against that
+//! merged list in a draft as one `set_arrangement` typed against that
 //! position — refused whole where the draft changed since, the draft's base
 //! re-recorded on the head and the merge marked beside it; with `--new` it
-//! stages a fresh draft from the head and lands there; and the report then
+//! stages a fresh draft from the head and lands there — or, where the
+//! merger's own landing of the key already stands in a draft, reports that
+//! landing and stages nothing, its `fresh` false; and the report then
 //! carries the landing, naming a newer version published since where the
 //! board tells one. A `--resolve ⟨gap⟩=⟨choice⟩` settles a gap the rules
 //! left open; `--journal` names the merge journal (decision 7), `--kind`
@@ -97,8 +99,9 @@
 //! `--resolve`'s own spelling, so a merger copies it and varies it. A draft
 //! landing's `landed` carries the draft, the write's `position`, the
 //! `record`, `head_moved` (the newer head told, else null) and `fresh`
-//! (whether this run staged the draft). `--json` is every command's flag
-//! and changes nothing here: the report is JSON always.
+//! (whether this run staged the draft, as the library's landing answers it:
+//! false for `--into` and for a landing found standing). `--json` is every
+//! command's flag and changes nothing here: the report is JSON always.
 
 use serde_json::{json, Value};
 use skep_address::Address;
@@ -109,8 +112,8 @@ use skep_client::dial::plaintext_non_loopback_warning;
 use skep_client::halt::{Halt, Refused};
 use skep_client::merge::{
     compose, head_of, journal, land, undo, withdraw, Choice, Family, Gap, GapId, GapKind, Inputs,
-    Landed, Landing, Merged, Merger, Options, Placement, Record, RecordLanding, Refusal,
-    Resolution, ResolvedBy, Side, SideIx, Undone, Withdrawn,
+    Landed, Landing, Merged, Merger, Options, Placement, Record, Refusal, Resolution, ResolvedBy,
+    Side, SideIx, Undone, Withdrawn,
 };
 use skep_client::sign::Signer;
 use skep_client::store::{KeySelector, KeyStore, Purpose};
@@ -129,6 +132,9 @@ enum Land {
     /// arrangement in one write, typed against the composition's position.
     Into(Address),
     /// `--new`: a fresh draft staged from the head, then the same write.
+    ///
+    /// Where the merger's own landing of the key stands in a draft, the
+    /// library reports it and stages nothing.
     New,
 }
 
@@ -291,28 +297,11 @@ fn run(
             Land::New => Landing::Draft { merger, into: None, journal },
         };
         let landed = land(board, &merged, landing).map_err(|r| refused(r, step))?;
-        let fresh = matches!(asked.act, Act::Merge { landing: Some(Land::New), .. })
-            && staged_here(&merged, &landed);
-        say_landed(&merged, &landed, fresh);
-        report["landed"] = landed_value(&merged, &landed, fresh);
+        say_landed(&merged, &landed);
+        report["landed"] = landed_value(&merged, &landed);
     }
     data_verbatim(report.to_string().as_bytes())?;
     Ok(())
-}
-
-/// Returns whether a `--new` landing staged its draft in this run.
-///
-/// The library stages nothing where the standing record for the key already
-/// names a draft landing, and reports that landing instead (its `Landing`
-/// doc); the standing record is the composition's `prior`, so a landing
-/// into the draft it names was found, not staged.
-fn staged_here(merged: &Merged, landed: &Landed) -> bool {
-    let Landed::Draft { into, .. } = landed else { return false };
-    let standing = merged.prior.as_ref().and_then(|p| match &p.landed {
-        Some(RecordLanding::Draft { draft, .. }) => Some(draft),
-        _ => None,
-    });
-    standing != Some(into)
 }
 
 impl Asked {
@@ -602,12 +591,14 @@ fn say_composed(merged: &Merged) {
     }
 }
 
-/// Says the talk after a landing: what landed, or the daughter and the
-/// re-run; at a draft landing the draft — the fresh one staged where `fresh`
-/// — and, where the board told a newer head, that a newer version was
+/// Says the talk after a landing.
+///
+/// It says what landed, or the daughter and the re-run; at a draft landing,
+/// the draft — the fresh one staged where the library answers it `staged` —
+/// and, where the board told a newer head, that a newer version was
 /// published since the merge was composed and the merge landed against the
 /// head it composed on, so a merge composed again includes it.
-fn say_landed(merged: &Merged, landed: &Landed, fresh: bool) {
+fn say_landed(merged: &Merged, landed: &Landed) {
     match landed {
         Landed::Member { address, position, claims, record, .. } => {
             talk(format!(
@@ -624,10 +615,10 @@ fn say_landed(merged: &Merged, landed: &Landed, fresh: bool) {
                 merged.inputs.options.retries + 1
             ));
         }
-        Landed::Draft { into, position, record, head_moved } => {
+        Landed::Draft { into, position, record, head_moved, staged } => {
             talk(format!(
                 "landed in the draft {into} at position {position}{}; the record's link is {record}",
-                if fresh {
+                if *staged {
                     format!(", a fresh draft staged from {}", merged.inputs.head)
                 } else {
                     String::new()
@@ -699,8 +690,12 @@ fn report_of(merged: &Merged) -> Value {
 
 /// Returns the standing record for the key, as the report carries it.
 ///
-/// It carries its link, homed in the merger's journal, its key and where it
-/// landed.
+/// It is the composition's current record, the trunk owner's records
+/// current over another account's — so the owner's where the merger is not
+/// the owner and both stand — and it carries its link, homed in the journal
+/// holding it, its key and where it landed. It is what the composition saw,
+/// never what a landing answers: a landing reads the merger's own newest
+/// record for the key as it lands.
 fn prior_of(prior: &Record) -> Value {
     let key = prior.key();
     json!({
@@ -718,8 +713,8 @@ fn prior_of(prior: &Record) -> Value {
 ///
 /// A draft landing carries the draft, the write's position, the record,
 /// `head_moved` — the newer head the board told, else null — and `fresh`,
-/// whether this run staged the draft.
-fn landed_value(merged: &Merged, landed: &Landed, fresh: bool) -> Value {
+/// whether this run staged the draft: the library's `staged`.
+fn landed_value(merged: &Merged, landed: &Landed) -> Value {
     match landed {
         Landed::Member { address, position, claims, record, retries } => json!({
             "member": address.to_string(),
@@ -733,12 +728,12 @@ fn landed_value(merged: &Merged, landed: &Landed, fresh: bool) -> Value {
             "position": position,
             "retries": merged.inputs.options.retries,
         }),
-        Landed::Draft { into, position, record, head_moved } => json!({
+        Landed::Draft { into, position, record, head_moved, staged } => json!({
             "draft": into.to_string(),
             "position": position,
             "record": record.to_string(),
             "head_moved": head_moved.as_ref().map(ToString::to_string),
-            "fresh": fresh,
+            "fresh": staged,
         }),
     }
 }

@@ -40,7 +40,10 @@
 //! PRIVATE — each record's link homed in the journal beside its atom, none
 //! in doc 1, none a guest or a stranger finds; and THE NEWEST RECORD by
 //! when its link was minted — an undo recorded in an older journal leaving
-//! the key open, so `--new` stages a draft of its own.
+//! the key open, so `--new` stages a draft of its own; and a landing found
+//! standing — a sub-account keyed with a file of its own, the claimant's
+//! record its `prior`, its second `--new` reporting its own landing with
+//! `fresh` false, nothing staged or written.
 
 use std::path::{Path, PathBuf};
 
@@ -52,6 +55,7 @@ use skep_client::board::{
     SessionBody, Token,
 };
 use skep_client::ceremony::claim::{self, ClaimOutcome, NotebookOptions};
+use skep_client::ceremony::deposit::{deposit, Deposit, DepositKind};
 use skep_client::ceremony::handshake::{handshake, Session, Site};
 use skep_client::dial::PlainHttp;
 use skep_client::person::scripted::{Script, Scripted};
@@ -60,8 +64,8 @@ use skep_client::sign::{sig_hex, Signer};
 use skep_client::store::{FileStore, KeyStore};
 use skep_client::Origin;
 use skep_identity::{
-    entry_body_empty, entry_body_publish, entry_frame, ContentFreeOp, DocTerm, EntryBody,
-    Fingerprint, ShotBase, ShotSegmentPiece,
+    entry_body_empty, entry_body_publish, entry_frame, ContentFreeOp, DocTerm, Enrollment,
+    EntryBody, Fingerprint, ShotBase, ShotSegmentPiece,
 };
 use skep_signature::HybridSigner;
 use skepd::Skepd;
@@ -129,6 +133,8 @@ pub(crate) struct Rig {
     _daemon: Skepd,
     pub(crate) origin: String,
     pub(crate) store: PathBuf,
+    /// Where the claim wrote its two anchor files, one directory each.
+    anchors: PathBuf,
     pub(crate) board: Board,
     pub(crate) device: HybridSigner,
     pub(crate) bare: Token,
@@ -139,7 +145,8 @@ impl Rig {
         let daemon = spawn(&dir.join("board"), true);
         let origin = origin(daemon.port());
         let store = dir.join("store");
-        let fp = claim_board(&origin, &store, &dir.join("anchors"));
+        let anchors = dir.join("anchors");
+        let fp = claim_board(&origin, &store, &anchors);
         let board = Board::new(Origin::parse(&origin).unwrap(), PlainHttp::new());
         let file_store = FileStore::open(&store);
         let device = file_store.load(&file_store.key_path(&fp)).expect("the device key").signer();
@@ -147,7 +154,7 @@ impl Rig {
             Opened::Token(t) => t,
             other => panic!("the bare bind answered {other:?}"),
         };
-        Rig { _daemon: daemon, origin, store, board, device, bare }
+        Rig { _daemon: daemon, origin, store, anchors, board, device, bare }
     }
 
     /// A content session under the device key, the seeding shots' hand.
@@ -227,6 +234,38 @@ impl Rig {
         let v = Rig::acked(self.board.op(Some(&token), &json!({"op": "create_new_document", "account": FORKER_ACCOUNT})));
         assert_eq!(acked_addr(&v), Some(format!("{FORKER_ACCOUNT}.0.1").as_str()), "the forker's home: {v}");
         token
+    }
+
+    /// Returns the path of the forker's key file, its account keyed.
+    ///
+    /// The account is [`Rig::forker`]'s; its first key is generated into a
+    /// store of its own at `store` and enrolled by the claimant's anchor, a
+    /// handoff's genesis homed in the claimant's doc 1 (AUTH-5.90), so the
+    /// file signs for the forker under `--key`.
+    fn keyed_forker(&self, store: &Path) -> PathBuf {
+        self.forker();
+        let store = FileStore::open(store);
+        let key = store.key_path(&store.generate(Some(Label::new("forker").unwrap())).unwrap().0);
+        let forker = store.load(&key).expect("the forker's key").signer();
+        let anchor_file = std::fs::read_dir(self.anchors.join("a")).unwrap().next().expect("the anchor's file").unwrap().path();
+        let anchor = store.load(&anchor_file).expect("the anchor").signer();
+        let as_anchor = handshake(&self.board, Scope::Full, &anchor, PRINCIPAL, Site::Session).expect("the anchor's full session");
+        let entry = Enrollment::new(Signer::public_key(&forker).clone(), false, Some("forker".into())).expect("a label");
+        let home = format!("{ACCOUNT}.0.1");
+        let genesis = Deposit { home: &home, subject: FORKER_ACCOUNT, kind: DepositKind::Enroll(vec![entry]), hand: Some(&anchor), id: "merge.the-forkers-genesis" };
+        deposit(&self.board, as_anchor.token(), &genesis).expect("the forker's genesis");
+        as_anchor.close().expect("closed");
+        key
+    }
+
+    /// Runs `skep merge` as the forker, with `extra`.
+    ///
+    /// It names the forker's own store and key file, and its principal.
+    fn merge_as_forker(&self, store: &Path, key: &Path, extra: &[&str]) -> Run {
+        let principal = FORKER.to_string();
+        let mut args = vec!["merge", "--board", &self.origin, "--dir", s(store), "--principal", &principal, "--key", s(key)];
+        args.extend_from_slice(extra);
+        skep(&args, &[], None)
     }
 
     /// A STRANGER: a second top-level account delegated as the dev seed
@@ -964,6 +1003,54 @@ fn a_take_back_recorded_in_an_older_journal_leaves_the_key_open() {
     assert_ne!(landed_in, f, "a draft of its own: {}", v["landed"]);
     assert_eq!(rig.image(&token, &addr(landed_in), 11), runs_of(&v), "the fresh draft holds M");
     assert_eq!(rig.image(&token, &addr(&f), 15), f_words, "F as the undo put it");
+    session.close().expect("close");
+}
+
+/// A landing found standing is reported as found, never as a fresh draft.
+///
+/// The claimant's `--new` lands in `F_A`. The forker, a sub-account keyed
+/// with a file of its own, runs the same `--new`: the claimant's record is
+/// the report's `prior`, the trunk owner's records being current over
+/// another account's, and the forker's landing is staged in `F_B`, its
+/// own, `fresh` true. Run again, the forker's own record is read as the
+/// merge lands and its landing answered: `F_B` at the same position,
+/// `fresh` false, no fresh draft said and nothing written, while `prior`
+/// still names `F_A` (skep #794).
+#[test]
+fn a_landing_found_standing_for_another_accounts_prior_is_reported_with_nothing_staged() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let kind = rig.draft().to_string();
+    let (d, _, head, daughter) = rig.race(&session);
+    let (d_s, daughter_s) = (d.to_string(), daughter.to_string());
+    let new = ["--doc", d_s.as_str(), "--alternative", daughter_s.as_str(), "--kind", kind.as_str(), "--new"];
+    let position = || rig.board.health().unwrap().log_position();
+    let v = report(&rig.merge(&new));
+    assert_eq!(v["landed"]["fresh"], json!(true), "the premise: the claimant staged F_A: {}", v["landed"]);
+    let owners = v["landed"]["draft"].as_str().expect("F_A").to_string();
+    // The forker's first run: the claimant's record the prior, its own
+    // landing staged.
+    let forker_store = dir.path().join("forker-store");
+    let key = rig.keyed_forker(&forker_store);
+    let r = rig.merge_as_forker(&forker_store, &key, &new);
+    let v = report(&r);
+    assert!(r.err.contains(&format!("merging as principal {FORKER} at account {FORKER_ACCOUNT} with key")), "{}", r.err);
+    assert_eq!(v["prior"]["landed"]["draft"].as_str(), Some(owners.as_str()), "the premise: the claimant's record is the prior: {}", v["prior"]);
+    assert_eq!(v["landed"]["fresh"], json!(true), "{}", v["landed"]);
+    let theirs = v["landed"]["draft"].as_str().expect("F_B").to_string();
+    assert_eq!(skep_client::address::account_of(&theirs).as_deref(), Some(FORKER_ACCOUNT), "a draft of the forker's own: {theirs}");
+    let at = v["landed"]["position"].as_u64().expect("the landing's position");
+    assert!(r.err.contains(&format!("landed in the draft {theirs} at position {at}, a fresh draft staged from {head}")), "{}", r.err);
+    // Run again: the forker's own landing, found standing.
+    let before = position();
+    let r = rig.merge_as_forker(&forker_store, &key, &new);
+    let v = report(&r);
+    assert_eq!(v["prior"]["landed"]["draft"].as_str(), Some(owners.as_str()), "the prior still the claimant's: {}", v["prior"]);
+    assert_eq!((v["landed"]["draft"].as_str(), v["landed"]["position"].as_u64(), v["landed"]["fresh"].clone()), (Some(theirs.as_str()), Some(at), json!(false)), "{}", v["landed"]);
+    assert_eq!(position(), before, "nothing staged, nothing written");
+    assert!(r.err.contains(&format!("landed in the draft {theirs} at position {at};")), "{}", r.err);
+    assert!(!r.err.contains("fresh draft"), "{}", r.err);
     session.close().expect("close");
 }
 

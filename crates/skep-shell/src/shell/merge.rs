@@ -56,8 +56,12 @@
 //! is read as `into` is, refused `not_owner` where it is published or
 //! another account's; its marker naming this merge is the re-open; else
 //! the landing goes into that draft, the library's same-landing rule
-//! (skep #790), and the library is never handed `into` none while such a
-//! record stands (the survey §5 item 2). So another account's record of
+//! (skep #790), and the library is handed `into` none only where no such
+//! record stood at that read (the survey §5 item 2). A landing of the
+//! person's own made between that read and the landing — on another
+//! device, or by `skep merge --new` naming the same kind — is the library's
+//! answer, found standing with nothing staged: `fresh` is the library's
+//! `staged`, never whether `into` was named. So another account's record of
 //! the kind never decides where a merge lands.
 //!
 //! **`merge.land`** — `{resolutions?}` — publishes the merge from the draft
@@ -622,7 +626,8 @@ impl Shell {
         // draft is read as `into` is, untrusted; its marker naming this
         // merge is the re-open; else it is landed into, the same landing
         // (skep #790); and the library is handed `into` none only where no
-        // such record stands.
+        // such record stood at this read — one landed since is the library's
+        // answer, nothing staged, which its `staged` says.
         let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
         let mut landing_into = into.clone();
         if landing_into.is_none() {
@@ -648,12 +653,12 @@ impl Shell {
         if let Some(prior) = landing_into.as_ref().filter(|prior| into.as_ref() != Some(*prior)) {
             self.write_door(Writer::Session(&session), &Write::call("merge.compose", "set_arrangement").over([prior.to_string()]))?;
         }
-        let landed = lib::land(&session.board, &merged, lib::Landing::Draft { merger, into: landing_into.clone(), journal: None }).map_err(|r| self.merge_refusal(&session, r))?;
-        let lib::Landed::Draft { into: landed_in, position, record, head_moved } = landed else {
+        let landed = lib::land(&session.board, &merged, lib::Landing::Draft { merger, into: landing_into, journal: None }).map_err(|r| self.merge_refusal(&session, r))?;
+        let lib::Landed::Draft { into: landed_in, position, record, head_moved, staged } = landed else {
             return Err(Refusal::from(Halt::face("the draft landing answered no draft", "`skep_client::merge::land` with a draft landing answers `Landed::Draft` on every path", "report it: the shell's merge row is behind the library")));
         };
         let composition = Composition { session: session.reference.clone(), form, merged, into: landed_in.clone() };
-        let answer = report_json(&composition.merged, &composition.form, "landed", json!({"into": landed_in.to_string(), "position": position, "fresh": landing_into.is_none(), "head_moved": head_moved.map(|h| h.to_string()), "record_link": record.to_string()}));
+        let answer = report_json(&composition.merged, &composition.form, "landed", json!({"into": landed_in.to_string(), "position": position, "fresh": staged, "head_moved": head_moved.map(|h| h.to_string()), "record_link": record.to_string()}));
         self.merges.stand(key, composition);
         Ok(answer)
     }

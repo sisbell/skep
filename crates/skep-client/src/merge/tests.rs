@@ -3973,6 +3973,18 @@ mod scripted {
         Landing::Draft { merger: merger(session, signer), into, journal: None }
     }
 
+    /// Returns `landed` as a call that finds it standing answers it.
+    ///
+    /// A draft landing found standing is the one staged with nothing staged
+    /// now, `staged` false; every other landing is answered as it is.
+    fn as_found(landed: &Landed) -> Landed {
+        let mut found = landed.clone();
+        if let Landed::Draft { staged, .. } = &mut found {
+            *staged = false;
+        }
+        found
+    }
+
     /// M's runs as a `set_arrangement` frame spells them.
     fn frame_runs(m: &[Run]) -> Value {
         Value::Array(m.iter().map(|r| json!({"origin": r.origin.to_string(), "i_start": i_addr(&r.origin, r.i_start), "width": r.width.to_string()})).collect())
@@ -4003,8 +4015,8 @@ mod scripted {
         assert_eq!(p, dialer.world().position, "the one position: the head when the composition began");
         dialer.clear();
         let landed = land(&board, &merged, draft_landing(&session, &signer, Some(a(S)))).expect("landed");
-        let Landed::Draft { into, position, record, head_moved } = &landed else { panic!("{landed:?}") };
-        assert_eq!((into.to_string(), head_moved.clone()), (S.to_string(), None));
+        let Landed::Draft { into, position, record, head_moved, staged } = &landed else { panic!("{landed:?}") };
+        assert_eq!((into.to_string(), head_moved.clone(), *staged), (S.to_string(), None, false), "a draft named is never staged");
         let frames = dialer.frames("set_arrangement");
         assert_eq!(frames.len(), 1, "one write: {:?}", dialer.ops());
         let frame = &frames[0];
@@ -4048,7 +4060,7 @@ mod scripted {
         let rows = dialer.world().rows.len();
         assert_eq!(
             land(&board, &merged, draft_landing(&session, &signer, Some(a(S)))).expect("landed again"),
-            Landed::Draft { into: a(S), position: *position, record: record.clone(), head_moved: None }
+            Landed::Draft { into: a(S), position: *position, record: record.clone(), head_moved: None, staged: false }
         );
         assert_eq!(dialer.world().rows.len(), rows, "nothing written twice");
         assert!(dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty());
@@ -4058,7 +4070,7 @@ mod scripted {
         dialer.clear();
         assert_eq!(
             resume(&board, &merged, draft_landing(&session, &signer, Some(a(S)))).expect("resumed"),
-            Some(Landed::Draft { into: a(S), position: *position, record: record.clone(), head_moved: None })
+            Some(Landed::Draft { into: a(S), position: *position, record: record.clone(), head_moved: None, staged: false })
         );
         assert!(dialer.frames("set_arrangement").is_empty(), "a resume sends nothing: {:?}", dialer.ops());
         dialer.world().change(S, vec![run(D, 1, 11)]);
@@ -4503,8 +4515,8 @@ mod scripted {
         let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
         dialer.clear();
         let landed = land(&board, &merged, draft_landing(&session, &signer, Some(a(plain)))).expect("landed");
-        let Landed::Draft { into, position, record, head_moved } = &landed else { panic!("{landed:?}") };
-        assert_eq!((into.to_string(), head_moved.clone()), (plain.to_string(), None));
+        let Landed::Draft { into, position, record, head_moved, staged } = &landed else { panic!("{landed:?}") };
+        assert_eq!((into.to_string(), head_moved.clone(), *staged), (plain.to_string(), None, false));
         let frame = &dialer.frames("set_arrangement")[0];
         assert_eq!(frame["doc"], plain);
         assert!(frame.get("base").is_none(), "no base the board must refuse `no_base_to_record`: {frame}");
@@ -4518,7 +4530,7 @@ mod scripted {
         assert!(moved > *position, "the premise: the board moved past the landing");
         dialer.clear();
         let resumed = resume(&board, &merged, draft_landing(&session, &signer, Some(a(plain)))).expect("resumed");
-        assert_eq!(resumed, Some(Landed::Draft { into: a(plain), position: *position, record: record.clone(), head_moved: None }), "the landing's row's position and its own record");
+        assert_eq!(resumed, Some(Landed::Draft { into: a(plain), position: *position, record: record.clone(), head_moved: None, staged: false }), "the landing's row's position and its own record");
         assert!(dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(), "{:?}", dialer.ops());
     }
 
@@ -4651,16 +4663,19 @@ mod scripted {
         }
     }
 
-    /// A FRESH DRAFT (R3 (i)): with no draft named, `stage {from: the head}`
-    /// under the id `<stem>.stage`, its stem over `<key>@<P>`, then the one
-    /// write into the staged draft typed against the stage's position, the
-    /// base sent — the stage recorded one — and the merge's side; two
-    /// commits, the state between a plain staged draft. Over the same
-    /// `merged` the memo answers both ids:
-    /// nothing twice. Composed again, the merger's newest record for the
-    /// key, read at the landing, names the landing: it is reported, and
-    /// NOTHING is staged or written; and the same record answers a `resume`
-    /// over the composition that landed it, whose `prior` predates it.
+    /// A fresh draft is staged and landed in, and a re-run stages nothing.
+    ///
+    /// With no draft named (R3 (i)), `stage {from: the head}` goes under the
+    /// id `<stem>.stage`, its stem over `<key>@<P>`, then the one write into
+    /// the staged draft typed against the stage's position, the base sent —
+    /// the stage recorded one — and the merge's side; two commits, the state
+    /// between a plain staged draft, the landing `staged`. Over the same
+    /// `merged` the landing's own record, read at the landing before any
+    /// stage, answers it: nothing twice, nothing staged, `staged` false.
+    /// Composed again, the merger's newest record for the key, read at the
+    /// landing, names the landing: it is reported, and nothing is staged or
+    /// written; and the same record answers a `resume` over the composition
+    /// that landed it, whose `prior` predates it.
     #[test]
     fn a_fresh_draft_is_staged_from_the_head_then_landed_in_and_a_re_run_stages_nothing() {
         let (dialer, board, signer) = open(draft_landing_world());
@@ -4668,8 +4683,8 @@ mod scripted {
         let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
         dialer.clear();
         let landed = land(&board, &merged, draft_landing(&session, &signer, None)).expect("landed");
-        let Landed::Draft { into: fresh, position, record, head_moved } = &landed else { panic!("{landed:?}") };
-        assert_eq!((fresh.to_string(), head_moved.clone()), ("1.0.1.0.10".to_string(), None), "the fresh draft minted");
+        let Landed::Draft { into: fresh, position, record, head_moved, staged } = &landed else { panic!("{landed:?}") };
+        assert_eq!((fresh.to_string(), head_moved.clone(), *staged), ("1.0.1.0.10".to_string(), None, true), "the fresh draft minted");
         let ops = dialer.ops();
         let writes: Vec<&str> = ops.iter().map(String::as_str).filter(|o| ["stage", "set_arrangement", "insert", "make_link", "create_new_document"].contains(o)).collect();
         assert_eq!(writes, ["stage", "set_arrangement", "create_new_document", "insert", "make_link"], "{ops:?}");
@@ -4692,9 +4707,11 @@ mod scripted {
         assert_eq!(*position, w.rows.iter().find(|r| r.op == "set_arrangement").unwrap().at);
         let rows = w.rows.len();
         drop(w);
-        // The same `merged` again: the memo answers both ids, nothing twice.
+        // The same `merged` again: the landing's own record answers it before
+        // any stage, nothing twice and nothing staged.
         dialer.clear();
-        assert_eq!(land(&board, &merged, draft_landing(&session, &signer, None)).expect("landed again"), landed);
+        assert_eq!(land(&board, &merged, draft_landing(&session, &signer, None)).expect("landed again"), as_found(&landed));
+        assert!(dialer.frames("stage").is_empty(), "nothing staged: {:?}", dialer.ops());
         assert_eq!(dialer.world().rows.len(), rows, "nothing written twice");
         // Composed again: the merger's newest record, read at the landing,
         // names the landing — reported, nothing staged, nothing written.
@@ -4703,17 +4720,17 @@ mod scripted {
         dialer.clear();
         assert_eq!(
             land(&board, &again, draft_landing(&session, &signer, None)).expect("landed"),
-            Landed::Draft { into: fresh.clone(), position: *position, record: record.clone(), head_moved: None }
+            Landed::Draft { into: fresh.clone(), position: *position, record: record.clone(), head_moved: None, staged: false }
         );
         let ops = dialer.ops();
         assert!(ops.iter().all(|o| !["stage", "set_arrangement", "create_new_document", "insert", "make_link"].contains(&o.as_str())), "nothing staged, nothing written: {ops:?}");
         assert!(ops.contains(&"find_links_ftt".to_string()), "the record read at the landing: {ops:?}");
         assert_eq!(dialer.world().rows.len(), rows);
-        assert_eq!(resume(&board, &again, draft_landing(&session, &signer, None)).expect("resumed"), Some(landed.clone()));
+        assert_eq!(resume(&board, &again, draft_landing(&session, &signer, None)).expect("resumed"), Some(as_found(&landed)));
         // The composition that landed it: its `prior` predates the landing,
         // and the record read at the landing answers it.
         assert_eq!(merged.prior, None, "the premise: composed before its landing");
-        assert_eq!(resume(&board, &merged, draft_landing(&session, &signer, None)).expect("resumed"), Some(landed.clone()));
+        assert_eq!(resume(&board, &merged, draft_landing(&session, &signer, None)).expect("resumed"), Some(as_found(&landed)));
     }
 
     /// Every refusal the shot can answer, each mapped: `withheld` naming the
@@ -5689,15 +5706,15 @@ mod scripted {
             let landed = land(&board, &merged, landing()).unwrap_or_else(|e| panic!("{cell}: {e}"));
             match (&landed, cell) {
                 (Landed::Member { address, .. }, "the shot") => assert_eq!(address.to_string(), format!("{D}.3")),
-                (Landed::Draft { into, .. }, "into T") => assert_eq!(into.to_string(), t),
-                (Landed::Draft { .. }, "a fresh draft") => assert_eq!(dialer.frames("stage").len(), 1),
+                (Landed::Draft { into, staged, .. }, "into T") => assert_eq!((into.to_string(), *staged), (t.to_string(), false)),
+                (Landed::Draft { staged, .. }, "a fresh draft") => assert_eq!((dialer.frames("stage").len(), *staged), (1, true)),
                 other => panic!("{cell}: {other:?}"),
             }
             assert_eq!((dialer.frames("insert").len(), dialer.frames("make_link").len()), (1, 1), "{cell}: the record and its link");
             fixed_width(&dialer, cell);
             let rows = dialer.world().rows.len();
             dialer.clear();
-            assert_eq!(land(&board, &merged, landing()).expect("landed again"), landed, "{cell}");
+            assert_eq!(land(&board, &merged, landing()).expect("landed again"), as_found(&landed), "{cell}");
             assert_eq!(dialer.world().rows.len(), rows, "{cell}: nothing written twice");
             if let (Landed::Draft { into: f, .. }, "a fresh draft") = (&landed, cell) {
                 let undone = undo(&board, merger(&session, &signer), f, &a(K), None, None).expect("undone").record.expect("the undo's record");
@@ -7074,7 +7091,7 @@ mod scripted {
         dialer.clear();
         assert_eq!(
             resume(&board, &again, into_t()),
-            Ok(Some(Landed::Draft { into: a(t), position: at, record: link, head_moved: None })),
+            Ok(Some(Landed::Draft { into: a(t), position: at, record: link, head_moved: None, staged: false })),
             "(e): the landing, at the marker's position"
         );
         assert!(wrote(&dialer).is_empty(), "(e): nothing written: {:?}", dialer.ops());
@@ -7415,7 +7432,7 @@ mod scripted {
         dialer.clear();
         assert_eq!(
             resume(&board, &merged, draft_landing(&session, &signer, Some(a(S)))).expect("resumed"),
-            Some(Landed::Draft { into: a(S), position: at, record: link, head_moved: None })
+            Some(Landed::Draft { into: a(S), position: at, record: link, head_moved: None, staged: false })
         );
         assert!(dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(), "{:?}", dialer.ops());
 
@@ -7493,7 +7510,7 @@ mod scripted {
         assert!(at > edit_at, "the write lands after the edit: {relanded:?}");
         assert_eq!(
             relanded,
-            Landed::Draft { into: a(t), position: at, record: first.clone(), head_moved: None },
+            Landed::Draft { into: a(t), position: at, record: first.clone(), head_moved: None, staged: false },
             "the write's position, the first landing's record"
         );
         assert_eq!(wrote(&dialer), ["set_arrangement"], "one write, nothing of a record: {:?}", dialer.ops());
@@ -7560,21 +7577,24 @@ mod scripted {
         assert_eq!(appended_record(&dialer)["replaces"].as_str(), Some(first.to_string().as_str()), "the first landing's record replaced");
     }
 
-    /// A FRESH LANDING READS THE STANDING RECORD WHEN IT LANDS (the merge
-    /// record's §1.5 (ii) and §4's currency), never the composition's
-    /// `prior`. (a) A composition kept from after a fresh landing in `F`,
-    /// its `prior` naming that landing, landed once `F` is undone: the
-    /// undo's record is the merger's newest for the key, so a `resume`
-    /// answers none and the landing stages a draft of its own holding M,
-    /// its record replacing the undo's and current for the key; a re-run and
-    /// a `resume` answer that landing and write nothing. (a′) The same after
-    /// a withdrawal. (b) Another account's record of the key, naming that
+    /// A fresh landing reads the standing record as it lands, never `prior`.
+    ///
+    /// The merge record's §1.5 (ii) and §4's currency read it so. (a) A
+    /// composition kept from after a fresh landing in `F`, its `prior` naming
+    /// that landing, landed once `F` is undone: the undo's record is the
+    /// merger's newest for the key, so a `resume` answers none and the landing
+    /// stages a draft of its own holding M, its record replacing the undo's and
+    /// current for the key, `staged`; a re-run and a `resume` answer that
+    /// landing found standing, `staged` false, and write nothing. (a′) The same
+    /// after a withdrawal. (b) Another account's record of the key, naming that
     /// account's draft, is the composition's `prior` where the merger's home
-    /// holds none: it is never the merger's landing — a `resume` answers
-    /// none, and the landing stages its own, its record replacing nothing
-    /// (P20). (c) The composition that landed fresh, its `prior` none, in a
-    /// fresh session: the landing's own record answers it, nothing staged or
-    /// written.
+    /// holds none: it is never the merger's landing — a `resume` answers none,
+    /// and the landing stages its own, `staged`, its record replacing nothing
+    /// (P20); landed again, that composition — its `prior` still the other
+    /// account's — is answered the merger's own landing, `staged` false,
+    /// nothing staged or written. (c) The composition that landed fresh, its
+    /// `prior` none, in a fresh session: the landing's own record answers it,
+    /// `staged` false, nothing staged or written.
     #[test]
     fn a_fresh_landing_reads_the_standing_record_when_it_lands_never_the_compositions() {
         let writes = ["stage", "set_arrangement", "create_new_document", "insert", "make_link"];
@@ -7600,9 +7620,9 @@ mod scripted {
             assert!(wrote(&dialer).is_empty(), "{act}: a resume writes nothing: {:?}", dialer.ops());
             dialer.clear();
             let relanded = land(&board, &kept, fresh_landing()).expect("landed again");
-            let Landed::Draft { into: f2, position: at, record: link, head_moved } = relanded.clone() else { panic!("{relanded:?}") };
+            let Landed::Draft { into: f2, position: at, record: link, head_moved, staged } = relanded.clone() else { panic!("{relanded:?}") };
             assert!(f2 != f && link != first && link != taken_back, "{act}: a draft and a record of its own: {relanded:?}");
-            assert_eq!(head_moved, None);
+            assert_eq!((head_moved, staged), (None, true), "{act}: staged by this call");
             assert_eq!(dialer.frames("stage").len(), 1, "{act}: one stage: {:?}", dialer.ops());
             assert_eq!(dialer.world().docs.get(&f2.to_string()).unwrap().runs, draft_m(), "{act}: the fresh draft holds M");
             let atom = appended_record(&dialer);
@@ -7612,8 +7632,8 @@ mod scripted {
             assert_eq!(found.link, Some(link.clone()), "{act}: the landing's record is current for the key");
             let rows = dialer.world().rows.len();
             dialer.clear();
-            assert_eq!(land(&board, &kept, fresh_landing()).expect("landed a third time"), relanded);
-            assert_eq!(resume(&board, &kept, fresh_landing()).expect("resumed"), Some(relanded.clone()));
+            assert_eq!(land(&board, &kept, fresh_landing()).expect("landed a third time"), as_found(&relanded));
+            assert_eq!(resume(&board, &kept, fresh_landing()).expect("resumed"), Some(as_found(&relanded)));
             assert!(wrote(&dialer).is_empty(), "{act}: nothing staged, nothing written: {:?}", dialer.ops());
             assert_eq!(dialer.world().rows.len(), rows, "{act}: nothing written twice");
         }
@@ -7635,10 +7655,18 @@ mod scripted {
         assert_eq!(resume(&board, &merged, fresh_landing()).expect("resumed"), None, "another account's landing is never the merger's");
         dialer.clear();
         let landed = land(&board, &merged, fresh_landing()).expect("landed");
-        let Landed::Draft { into: f, .. } = &landed else { panic!("{landed:?}") };
+        let Landed::Draft { into: f, staged, .. } = &landed else { panic!("{landed:?}") };
         assert_ne!(f.to_string(), theirs, "a draft of its own: {landed:?}");
+        assert!(*staged, "staged by this call: {landed:?}");
         assert_eq!(dialer.frames("stage").len(), 1, "{:?}", dialer.ops());
         assert!(appended_record(&dialer)["replaces"].is_null(), "no record stood in the merger's home");
+        // Landed again, its `prior` still the other account's: the merger's
+        // own landing, read at the landing, found standing.
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        assert_eq!(land(&board, &merged, fresh_landing()).expect("landed again"), as_found(&landed));
+        assert!(wrote(&dialer).is_empty(), "nothing staged, nothing written: {:?}", dialer.ops());
+        assert_eq!(dialer.world().rows.len(), rows);
 
         // (c) The composition that landed fresh, in a fresh session.
         let (dialer, board, signer) = open(draft_landing_world());
@@ -7646,12 +7674,13 @@ mod scripted {
         let fresh_landing = || draft_landing(&session, &signer, None);
         let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
         let landed = land(&board, &merged, fresh_landing()).expect("landed fresh");
+        assert!(matches!(landed, Landed::Draft { staged: true, .. }), "staged by this call: {landed:?}");
         assert_eq!(merged.prior, None, "the premise: composed before its landing");
         dialer.world().memo.clear();
         let rows = dialer.world().rows.len();
         dialer.clear();
-        assert_eq!(resume(&board, &merged, fresh_landing()).expect("resumed"), Some(landed.clone()));
-        assert_eq!(land(&board, &merged, fresh_landing()).expect("landed again"), landed);
+        assert_eq!(resume(&board, &merged, fresh_landing()).expect("resumed"), Some(as_found(&landed)));
+        assert_eq!(land(&board, &merged, fresh_landing()).expect("landed again"), as_found(&landed));
         assert!(wrote(&dialer).is_empty(), "nothing staged, nothing written: {:?}", dialer.ops());
         assert_eq!(dialer.world().rows.len(), rows);
     }
@@ -7681,7 +7710,8 @@ mod scripted {
         let rows = dialer.world().rows.len();
         dialer.clear();
         let relanded = land(&board, &merged, fresh_landing()).expect("landed again");
-        let Landed::Draft { into: f2, position: at, record: link, .. } = relanded.clone() else { panic!("{relanded:?}") };
+        let Landed::Draft { into: f2, position: at, record: link, staged, .. } = relanded.clone() else { panic!("{relanded:?}") };
+        assert!(staged, "staged by this call: {relanded:?}");
         assert_eq!(
             dialer.frames("stage")[0]["id"].as_str(),
             Some(landing_id(&format!("{}@{}~{undone}", merged.key.text(), merged.as_of), "stage").as_str()),
@@ -7704,7 +7734,7 @@ mod scripted {
         // Again: the new landing's record answers it, nothing written twice.
         let rows = dialer.world().rows.len();
         dialer.clear();
-        assert_eq!(land(&board, &merged, fresh_landing()).expect("landed a third time"), relanded);
+        assert_eq!(land(&board, &merged, fresh_landing()).expect("landed a third time"), as_found(&relanded));
         assert!(dialer.frames("stage").is_empty(), "nothing staged: {:?}", dialer.ops());
         assert_eq!(dialer.world().rows.len(), rows, "nothing written twice");
     }

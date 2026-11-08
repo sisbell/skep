@@ -847,25 +847,39 @@ pub(crate) fn as_image(runs: &[Run]) -> Vec<(String, u64)> {
     runs.iter().map(|r| (format!("{}.0.1.{}", r.origin, r.i_start), r.width)).collect()
 }
 
-/// THE DRAFT LANDING ON THE REAL DAEMON (the landing lane's brief B; skep
-/// #762, #764): the staged draft `S` off `D.1` with "!!!" typed, merged with
-/// the head `D.2` — every read at ONE position, the record's draft side
-/// naming it. An edit to `S` after the composition makes the landing refuse
-/// `arrangement_moved` whole, nothing written and nothing wiped. Composed
-/// again, the landing is ONE write: `S` holds M, its base is re-recorded on
-/// `D.2` at the fifteen positions read, `doc_metadata`'s `merge` names the
-/// head, no side (the draft was the side) and the write's position, the
-/// record names that position and verifies Equal; landed again in a second
-/// session, the write is refused naming that landing, which `resume` there
-/// answers. LAND AND TELL: version 3
-/// published, a second draft `T` staged off `D.2` and merged with `D.2`
-/// named as the head lands and carries `head_moved` = `D.3`, its base
-/// recorded on `D.2`. A FRESH DRAFT: `into` none stages from the head and
-/// lands there, the base and the marker recorded; composed again, the
-/// standing record names the landing and nothing is staged. Undone, the
+/// Returns `landed` as a call that finds it standing answers it.
+///
+/// A draft landing found standing is the one staged with nothing staged
+/// now, `staged` false; every other landing is answered as it is.
+fn as_found(landed: &Landed) -> Landed {
+    let mut found = landed.clone();
+    if let Landed::Draft { staged, .. } = &mut found {
+        *staged = false;
+    }
+    found
+}
+
+/// The draft landing on the real daemon is one write, refused whole once moved.
+///
+/// It is the landing lane's brief B (skep #762, #764): the staged draft `S`
+/// off `D.1` with "!!!" typed, merged with the head `D.2` — every read at
+/// one position, the record's draft side naming it. An edit to `S` after
+/// the composition makes the landing refuse `arrangement_moved` whole,
+/// nothing written and nothing wiped. Composed again, the landing is one
+/// write: `S` holds M, its base is re-recorded on `D.2` at the fifteen
+/// positions read, `doc_metadata`'s `merge` names the head, no side (the
+/// draft was the side) and the write's position, the record names that
+/// position and verifies Equal; landed again in a second session, the
+/// write is refused naming that landing, which `resume` there answers.
+/// Land and tell (R5): version 3 published, a second draft `T` staged off
+/// `D.2` and merged with `D.2` named as the head lands and carries
+/// `head_moved` = `D.3`, its base recorded on `D.2`. A fresh draft: `into`
+/// none stages from the head and lands there, the base and the marker
+/// recorded, the landing `staged`; composed again, the standing record
+/// names the landing and nothing is staged, `staged` false. Undone, the
 /// composition that landed it lands fresh again in the same session — a
-/// draft, a write and a record of its own, replacing the undo's — and the
-/// later composition answers that landing.
+/// draft, a write and a record of its own, replacing the undo's, `staged`
+/// — and the later composition answers that landing found standing.
 #[test]
 fn a_draft_landing_is_one_write_refused_whole_where_the_draft_changed_and_tells_a_newer_head() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -935,8 +949,8 @@ fn a_draft_landing_is_one_write_refused_whole_where_the_draft_changed_and_tells_
     let m = merged.composed.runs.iter().map(|p| p.run.clone()).collect::<Vec<_>>();
     assert_eq!(m.len(), 5, "?the big cat sat!!!: {m:?}");
     let landed = land(&board, &merged, into(&draft)).expect("landed");
-    let Landed::Draft { into: landed_in, position: at, record: link, head_moved } = landed.clone() else { panic!("{landed:?}") };
-    assert_eq!((landed_in, head_moved), (draft.clone(), None));
+    let Landed::Draft { into: landed_in, position: at, record: link, head_moved, staged } = landed.clone() else { panic!("{landed:?}") };
+    assert_eq!((landed_in, head_moved, staged), (draft.clone(), None, false), "a draft named, never staged");
     let extent: u64 = m.iter().map(|r| r.width).sum();
     assert_eq!(extent, 19, "?the big cat sat!!!");
     assert_eq!(image(&board, &token, &draft, extent), as_image(&m), "the draft holds M, whole");
@@ -1013,9 +1027,9 @@ fn a_draft_landing_is_one_write_refused_whole_where_the_draft_changed_and_tells_
     let merged_fresh = compose(&board, Some(&token), &inputs_fresh).expect("composed on version 3");
     let fresh_landing = || Landing::Draft { merger, into: None, journal: None };
     let landed_fresh = land(&board, &merged_fresh, fresh_landing()).expect("landed in a fresh draft");
-    let Landed::Draft { into: fresh, position: at_fresh, head_moved, .. } = landed_fresh.clone() else { panic!("{landed_fresh:?}") };
+    let Landed::Draft { into: fresh, position: at_fresh, head_moved, staged, .. } = landed_fresh.clone() else { panic!("{landed_fresh:?}") };
     assert!(fresh != t && fresh != draft, "a fresh draft: {fresh}");
-    assert_eq!(head_moved, None);
+    assert_eq!((head_moved, staged), (None, true), "staged by this call");
     let m = merged_fresh.composed.runs.iter().map(|p| p.run.clone()).collect::<Vec<_>>();
     let extent: u64 = m.iter().map(|r| r.width).sum();
     assert_eq!(image(&board, &token, &fresh, extent), as_image(&m), "the fresh draft holds M");
@@ -1025,7 +1039,7 @@ fn a_draft_landing_is_one_write_refused_whole_where_the_draft_changed_and_tells_
     let standing = position();
     let again = compose(&board, Some(&token), &inputs_fresh).expect("composed again");
     assert!(matches!(again.prior.as_ref().and_then(|p| p.landed.as_ref()), Some(RecordLanding::Draft { draft, .. }) if *draft == fresh), "the standing record names the landing: {:?}", again.prior);
-    assert_eq!(land(&board, &again, fresh_landing()).expect("the standing landing"), landed_fresh);
+    assert_eq!(land(&board, &again, fresh_landing()).expect("the standing landing"), as_found(&landed_fresh));
     assert_eq!(position(), standing, "nothing staged, nothing written");
 
     // UNDONE, then the composition that landed it landed fresh again in
@@ -1038,8 +1052,8 @@ fn a_draft_landing_is_one_write_refused_whole_where_the_draft_changed_and_tells_
     let replacing = undone.record.clone().expect("the landing's record stood, so one replaces it");
     assert_eq!(resume(&board, &again, fresh_landing()).expect("resumed"), None, "nothing stands for the key");
     let relanded = land(&board, &merged_fresh, fresh_landing()).expect("landed fresh again");
-    let Landed::Draft { into: fresh_again, position: at_again, record: link_again, head_moved } = relanded.clone() else { panic!("{relanded:?}") };
-    assert!(fresh_again != fresh && at_again > undone.position && head_moved.is_none(), "a draft and a write of its own: {relanded:?}");
+    let Landed::Draft { into: fresh_again, position: at_again, record: link_again, head_moved, staged } = relanded.clone() else { panic!("{relanded:?}") };
+    assert!(fresh_again != fresh && at_again > undone.position && head_moved.is_none() && staged, "a draft and a write of its own: {relanded:?}");
     assert_eq!(image(&board, &token, &fresh_again, extent), as_image(&m), "the new draft holds M");
     let record = current(&board, Some(&token), &kind, &merged_fresh.key).expect("the lookup").expect("a current record");
     assert_eq!(
@@ -1047,7 +1061,7 @@ fn a_draft_landing_is_one_write_refused_whole_where_the_draft_changed_and_tells_
         (Some(RecordLanding::Draft { draft: fresh_again.clone(), position: at_again }), Some(replacing), Some(link_again))
     );
     let standing = position();
-    assert_eq!(land(&board, &again, fresh_landing()).expect("the standing landing"), relanded);
+    assert_eq!(land(&board, &again, fresh_landing()).expect("the standing landing"), as_found(&relanded));
     assert_eq!(position(), standing, "nothing staged, nothing written");
     session.close().expect("close");
 }

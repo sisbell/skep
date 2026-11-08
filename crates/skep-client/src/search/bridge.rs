@@ -199,8 +199,8 @@ impl Consumer<'_> {
     /// Makes the search call (the module doc).
     ///
     /// A board the consumer holds no index for answers `State::None` and no
-    /// hit; a held lock, or a resume left pending, `State::Busy` and no hit;
-    /// a faced file `State::NewerSkep` and no hit.
+    /// hit; a held lock, or a slot pending its open, `State::Busy` and no
+    /// hit; a faced file `State::NewerSkep` and no hit.
     ///
     /// # Errors
     ///
@@ -267,9 +267,9 @@ impl Consumer<'_> {
     ///
     /// `under`, where given, keeps the documents under that prefix alone — an
     /// account's, or a document's own. A board the consumer holds no index
-    /// for answers `State::None` and no document; a held lock, or a resume
-    /// left pending, `State::Busy` and none; a faced file `State::NewerSkep`
-    /// and none.
+    /// for answers `State::None` and no document; a held lock, or a slot
+    /// pending its open, `State::Busy` and none; a faced file
+    /// `State::NewerSkep` and none.
     ///
     /// # Panics
     ///

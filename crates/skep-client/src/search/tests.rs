@@ -25,7 +25,7 @@ use crate::board::{Board, Token, HEAD_DOCUMENT, HEAD_MEMBER_1};
 use crate::dial::{DialError, Dialer, Headers, Request, RequestHead, Response, StreamedResponse};
 use crate::origin::Origin;
 
-use super::consumer::{EVENT_LINE_BOUND, MAX_DELIVERY_ITEMS};
+use super::consumer::{EVENT_LINE_BOUND, MAX_DELIVERY_ITEMS, RESUME_RETRIES};
 use super::directory::{BoardDir, SearchDir};
 use super::jump::{land, landing_of, Correspondence, Landing};
 use super::places::{PlaceRecord, Places};
@@ -103,6 +103,10 @@ struct World {
     /// `retrieve_v` answers each part of a document as ONE withheld run of
     /// the width asked, its origin this text.
     withheld_by: BTreeMap<String, String>,
+    /// The session died: every request presenting a token answers closed.
+    ///
+    /// It is the death signal, `Skepd-Session: closed` (wire.md §Sessions).
+    closed: bool,
 }
 
 /// The chain at `position` as the world computes it: distinct per position.
@@ -398,6 +402,9 @@ impl Dialer for Scripted {
         let token = req.headers.iter().any(|(k, _)| k == "Skepd-Session");
         self.served.lock().unwrap().push(Served { line, token, body: req.body.clone() });
         let mut world = self.world.lock().unwrap();
+        if token && world.closed {
+            return Ok(crate::board::fake::closed());
+        }
         match req.path.as_str() {
             "/health" => Ok(reply(200, world.health())),
             "/op" => world.op(&frame),
@@ -963,6 +970,64 @@ fn history_busy_retries_and_then_resumes() {
     assert!(matches!(consumer.state(Who::Guest), State::Complete { .. }));
 }
 
+/// A resume busy past its retries is resumed at the next poll.
+///
+/// `search.md` §5.4's `history_busy` past the open's bounded wait leaves the
+/// published slot pending, answering busy, and the next poll's resume opens
+/// it.
+#[test]
+fn a_resume_busy_past_its_retries_is_left_pending_and_resumed_at_the_next_poll() {
+    let mut w = World::claimed();
+    w.publish("1.0.1.0.2", "kept");
+    let world = shared(w);
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = SearchDir::new(tmp.path());
+    built_and_closed(&world, &dir);
+    world.lock().unwrap().busy = RESUME_RETRIES + 1;
+    let (b, _) = board(&world);
+    let consumer = Consumer::open(&b, dir).unwrap();
+    assert_eq!(consumer.state(Who::Guest), State::Busy);
+    assert!(hits(&consumer, Who::Guest, "kept").is_empty());
+    consumer.poll().unwrap();
+    assert_eq!(hits(&consumer, Who::Guest, "kept"), ["1.0.1.0.2"]);
+    assert!(matches!(consumer.state(Who::Guest), State::Complete { .. }), "{:?}", consumer.state(Who::Guest));
+}
+
+/// A supplement's resume busy past its retries is widened at the next poll.
+///
+/// The widening whose resume stays busy leaves the session's face busy, and
+/// the next poll opens the supplement and makes its widening, reading what
+/// was written since.
+#[test]
+fn a_supplements_resume_busy_past_its_retries_is_widened_at_the_next_poll() {
+    let mut w = World::claimed();
+    w.draft("1.0.1.2.0.1", b"a saved draft");
+    let world = shared(w);
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = SearchDir::new(tmp.path());
+    let tok = token();
+    {
+        let (b, _) = board(&world);
+        let consumer = Consumer::open(&b, dir.clone()).unwrap();
+        consumer.poll().unwrap();
+        consumer.widen(session(&tok)).unwrap();
+        consumer.close().unwrap();
+    }
+    let (b, _) = board(&world);
+    let consumer = Consumer::open(&b, dir).unwrap();
+    world.lock().unwrap().busy = RESUME_RETRIES + 1;
+    consumer.widen(session(&tok)).unwrap();
+    let who = Who::Session(session(&tok));
+    assert!(consumer.mounted(7));
+    assert_eq!(consumer.state(who), State::Busy, "the supplement is pending its open");
+    assert!(hits(&consumer, who, "saved").is_empty());
+    world.lock().unwrap().draft("1.0.1.2.0.2", b"a later draft");
+    consumer.poll().unwrap();
+    assert!(matches!(consumer.state(who), State::Complete { .. }), "{:?}", consumer.state(who));
+    assert_eq!(hits(&consumer, who, "saved"), ["1.0.1.2.0.1"], "the saved file resumed");
+    assert_eq!(hits(&consumer, who, "later"), ["1.0.1.2.0.2"], "and the widening read on from it");
+}
+
 // ── THE ASIDE AND THE FILE's FACES ───────────────────────────────────────
 
 /// `search.md` §5.4, ITEM 1b (c): a CRC-valid index naming another board is
@@ -1093,10 +1158,14 @@ fn a_damaged_file_is_rebuilt_with_its_loss_stated() {
 
 // ── ONE WRITER ───────────────────────────────────────────────────────────
 
-/// `search.md` §5.6, RULED refuse for v1: "A SECOND PROCESS on the same data
-/// directory … finding the lock held is REFUSED ITS SEARCH … no second
-/// mount"; the lock "dies with the process" — here with the first
-/// consumer's value.
+/// A second consumer on the directory answers busy until the first is gone.
+///
+/// `search.md` §5.6, ruled refuse for v1: a second process on the same data
+/// directory finding the lock held is refused its search, with no second
+/// mount, while the lock is held. The lock dies with the process — here with
+/// the first consumer's value — and the second's next poll takes it and
+/// mounts, the busy poll before it reading nothing; a third finds the lock
+/// the second's.
 #[test]
 fn a_second_consumer_on_the_directory_answers_busy_and_mounts_nothing_until_the_first_is_gone() {
     let mut w = World::claimed();
@@ -1114,12 +1183,151 @@ fn a_second_consumer_on_the_directory_answers_busy_and_mounts_nothing_until_the_
     assert!(answer.hits.is_empty() && answer.state == State::Busy);
     dialer2.clear();
     second.poll().unwrap();
-    assert!(dialer2.lines().is_empty(), "a busy consumer polls nothing: {:?}", dialer2.lines());
+    assert!(dialer2.lines().is_empty(), "a busy consumer polls nothing, its lock tried again by no read: {:?}", dialer2.lines());
     assert!(second.board_dir().is_none(), "mounted nothing");
     first.close().unwrap();
+    second.poll().unwrap();
+    assert!(second.board_dir().is_some(), "the lock died with the first, and the second's poll took it");
+    assert_eq!(hits(&second, Who::Guest, "text"), ["1.0.1.0.2"]);
     let (b3, _) = board(&world);
     let third = Consumer::open(&b3, dir).unwrap();
-    assert_eq!(hits(&third, Who::Guest, "text"), ["1.0.1.0.2"], "the lock died with the first");
+    assert_eq!(third.state(Who::Guest), State::Busy, "the second holds the lock now");
+}
+
+/// Returns a world with a published document and principal 7's draft.
+fn with_a_draft() -> Arc<Mutex<World>> {
+    let mut w = World::claimed();
+    w.publish("1.0.1.0.2", "the first's text");
+    w.draft("1.0.1.2.0.1", b"a kept draft");
+    shared(w)
+}
+
+/// A widening after the lock is let go mounts the index and its supplement.
+///
+/// `search.md` §5.6 with `client.md` §4e.3: a widening tries the mount as a
+/// poll does, so no poll comes between.
+#[test]
+fn a_widening_after_the_lock_is_let_go_mounts_the_index_and_its_supplement() {
+    let world = with_a_draft();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = SearchDir::new(tmp.path());
+    let (b1, _) = board(&world);
+    let first = Consumer::open(&b1, dir.clone()).unwrap();
+    first.poll().unwrap();
+    let (b2, _) = board(&world);
+    let second = Consumer::open(&b2, dir).unwrap();
+    assert_eq!(second.state(Who::Guest), State::Busy, "premise: the first holds the lock");
+    first.close().unwrap();
+    let tok = token();
+    second.widen(session(&tok)).unwrap();
+    assert!(second.board_dir().is_some() && second.mounted(7), "the widening took the lock and mounted the supplement");
+    assert_eq!(hits(&second, Who::Session(session(&tok)), "kept"), ["1.0.1.2.0.1"]);
+}
+
+/// A session widened while busy is widened by the poll that mounts.
+///
+/// `client.md` §4e.3's widening at a busy mount keeps the session — no read,
+/// no supplement, its face busy — so once the lock is let go its search
+/// finds its drafts, and never composes `complete` over the published index
+/// alone.
+#[test]
+fn a_session_widened_while_busy_is_widened_by_the_poll_that_mounts() {
+    let world = with_a_draft();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = SearchDir::new(tmp.path());
+    let (b1, _) = board(&world);
+    let first = Consumer::open(&b1, dir.clone()).unwrap();
+    first.poll().unwrap();
+    let (b2, dialer2) = board(&world);
+    let second = Consumer::open(&b2, dir).unwrap();
+    dialer2.clear();
+    let tok = token();
+    let who = Who::Session(session(&tok));
+    second.widen(session(&tok)).unwrap();
+    assert!(dialer2.lines().is_empty(), "a widening at a busy mount reads nothing: {:?}", dialer2.lines());
+    assert!(!second.mounted(7), "no supplement without the directory");
+    assert_eq!(second.state(who), State::Busy);
+    first.close().unwrap();
+    let outcome = second.poll().unwrap();
+    assert!(outcome.died.is_empty(), "{outcome:?}");
+    assert!(second.mounted(7), "the poll that mounts widened the kept session");
+    assert_eq!(hits(&second, who, "kept"), ["1.0.1.2.0.1"]);
+    assert!(matches!(second.state(who), State::Complete { .. }), "{:?}", second.state(who));
+}
+
+/// A session narrowed while busy is never widened.
+///
+/// `client.md` §4e.3's narrowing drops the session a busy mount kept, so the
+/// poll that mounts widens nothing for it.
+#[test]
+fn a_session_narrowed_while_busy_is_never_widened() {
+    let world = with_a_draft();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = SearchDir::new(tmp.path());
+    let (b1, _) = board(&world);
+    let first = Consumer::open(&b1, dir.clone()).unwrap();
+    first.poll().unwrap();
+    let (b2, dialer2) = board(&world);
+    let second = Consumer::open(&b2, dir).unwrap();
+    let tok = token();
+    second.widen(session(&tok)).unwrap();
+    second.narrow(7).unwrap();
+    first.close().unwrap();
+    dialer2.clear();
+    second.poll().unwrap();
+    assert!(second.board_dir().is_some(), "premise: the poll mounted");
+    assert!(!second.mounted(7), "the narrowed session mounts nothing");
+    assert!(!dialer2.lines().iter().any(|l| l.contains("drafts=true")), "no drafts read for it: {:?}", dialer2.lines());
+}
+
+/// A kept session that died lands in the mounting poll's `died`.
+///
+/// wire.md §Sessions: its token meets the death signal at the widening the
+/// mounting poll makes, and the session is unmounted — the shell's
+/// `session-died` arm to face.
+#[test]
+fn a_kept_session_that_died_lands_in_the_mounting_polls_died() {
+    let world = with_a_draft();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = SearchDir::new(tmp.path());
+    let (b1, _) = board(&world);
+    let first = Consumer::open(&b1, dir.clone()).unwrap();
+    first.poll().unwrap();
+    let (b2, _) = board(&world);
+    let second = Consumer::open(&b2, dir).unwrap();
+    let tok = token();
+    second.widen(session(&tok)).unwrap();
+    first.close().unwrap();
+    world.lock().unwrap().closed = true;
+    let outcome = second.poll().unwrap();
+    assert_eq!(outcome.died, [7]);
+    assert!(!second.mounted(7));
+    assert_eq!(hits(&second, Who::Guest, "text"), ["1.0.1.0.2"], "the published index mounted all the same");
+}
+
+/// A session widened before the claim lands is kept, and a forget drops one.
+///
+/// `search.md` §5.2's unclaimed board keeps a widening's session as a busy
+/// mount does, and the poll that finds the claim makes its widening; a
+/// forget drops a kept session as a narrowing does.
+#[test]
+fn a_session_widened_before_the_claim_is_kept_for_the_mounting_poll_and_a_forget_drops_one() {
+    let world = shared(World::default());
+    let (b, _) = board(&world);
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
+    let tok = token();
+    let other = Token::parse("0123456789abcdef0123456789abcdef").unwrap();
+    consumer.widen(session(&tok)).unwrap();
+    consumer.widen(SessionRef { token: &other, principal: 8, account: "1.0.1.3" }).unwrap();
+    consumer.forget(8).unwrap();
+    assert!(!consumer.mounted(7) && !consumer.mounted(8), "no supplement before the claim");
+    *world.lock().unwrap() = World::claimed();
+    world.lock().unwrap().draft("1.0.1.2.0.1", b"written before the claim was read");
+    consumer.poll().unwrap();
+    assert!(consumer.mounted(7), "the poll that mounts widened the kept session");
+    assert!(!consumer.mounted(8), "the forgotten session was dropped");
+    assert_eq!(hits(&consumer, Who::Session(session(&tok)), "written"), ["1.0.1.2.0.1"]);
 }
 
 // ── THE SAVE ─────────────────────────────────────────────────────────────

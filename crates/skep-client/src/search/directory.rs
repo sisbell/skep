@@ -30,7 +30,8 @@
 //! never chmod'd after a world-readable moment (Windows has no modes; §6).
 //! The lock is the key store's idiom (§3.7): an advisory `flock` on `lock`,
 //! held for the consumer's life, "dies with the process"; a second process
-//! finding it held mounts nothing (`search.md` §5.6).
+//! finding it held mounts nothing while it is held (`search.md` §5.6), and
+//! takes it at the first poll or widening that finds it free.
 
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, Write};

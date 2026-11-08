@@ -28,9 +28,10 @@
 //! 8. a part whose file states a floor above 0 is `AtTheFloor`;
 //! 9. else `Complete`, `as_of` the lowest `held` over the pair's ranges.
 //!
-//! `Busy` is composed by no part: the consumer answers it where a second
+//! `Busy` is composed by no part: the consumer answers it while a second
 //! process holds the feeder's lock (`search.md` §5.6, which refuses it in
-//! v1), and where a resume is left pending. Nothing in any arm names a
+//! v1), and where a slot is pending its open — a resume left pending, or a
+//! session's supplement the next poll opens. Nothing in any arm names a
 //! file, a path or a principal's directory.
 
 use std::collections::BTreeSet;
@@ -211,10 +212,12 @@ pub enum State {
     },
     /// A second shell on the same data directory finds the feeder's lock held.
     ///
-    /// Its search is refused, the state saying search is busy in another
-    /// window (`search.md` §5.6, which refuses it in v1) — and the resume's
-    /// `history_busy` left pending past its retries, retried at the next
-    /// poll.
+    /// Its search is refused while the lock is held, the state saying search
+    /// is busy in another window (`search.md` §5.6, which refuses it in v1),
+    /// and the index mounts at the first poll or widening after the lock is
+    /// let go — and a slot pending its open, retried at the next poll: the
+    /// resume's `history_busy` left pending past its retries, or a session's
+    /// supplement not opened yet.
     Busy,
 }
 

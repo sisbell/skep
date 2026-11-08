@@ -48,24 +48,32 @@
 //!
 //! **At open** ([`Consumer::open`]): an unclaimed board has no `H.1` and no
 //! index (`State::None`); the feeder's lock held by another process mounts
-//! nothing (`State::Busy`, §5.6); then the aside check — a CRC-valid file
-//! naming another board, or a file naming another principal's class, is
-//! moved aside under its own chain — and the resume: `GET /chain?at=<held>`
-//! per saved pair, the saved `H.k` re-read byte-equal where the answer is
-//! `history_reclaimed`, `Resume::judge` the verdict — `Equal` resumes,
-//! `FromTheFloor` keeps the file and re-fixes each range at the floor, the
-//! three divergences move the file aside with its pair and build fresh,
-//! `history_busy` retries a bounded wait and is left pending for the next
-//! poll past it — and the newer-skep dispositions as `LoadError` answers
-//! them, a migrated index, which `Index::migrated_from` names, marked dirty
-//! for its save (§5.4).
+//! nothing while it is held (`State::Busy`, §5.6), and every poll and every
+//! widening tries the mount again — where the lock is held still, one
+//! local `flock` and no read, the board term read once — so the index
+//! mounts at the first call after the other process lets it go; then the
+//! aside check — a CRC-valid file naming another board, or a file naming
+//! another principal's class, is moved aside under its own chain — and the
+//! resume: `GET /chain?at=<held>` per saved pair, the saved `H.k` re-read
+//! byte-equal where the answer is `history_reclaimed`, `Resume::judge` the
+//! verdict — `Equal` resumes, `FromTheFloor` keeps the file and re-fixes
+//! each range at the floor, the three divergences move the file aside with
+//! its pair and build fresh, `history_busy` retries a bounded wait and is
+//! left pending for the next poll past it, a supplement's as the published
+//! index's — and the newer-skep dispositions as `LoadError` answers them, a
+//! migrated index, which `Index::migrated_from` names, marked dirty for its
+//! save (§5.4).
 //!
 //! **The triggers** (§4e.3): [`Consumer::widen`] at a session open and a
 //! principal switch, and the poll's discovery reads at a discovered grant —
 //! the ranges the principal's prefix, its ancestors' and each grant's, each
 //! from its own `held` or from the floor where new; [`Consumer::narrow`] at
 //! close, death and switch-away — the supplement unmounted, its file kept;
-//! revocation no operation (R90).
+//! revocation no operation (R90). A widening the mount cannot take yet — an
+//! unclaimed board, a lock another process holds — keeps the session, its
+//! supplement pending its open, and the live mount takes it over: the poll
+//! makes each pending supplement's widening, a death there landing in
+//! [`Poll::died`], and a narrowing drops the session first.
 //!
 //! **The person's acts** (§5.5): [`Consumer::reindex`], the refresh — every
 //! unit the pair holds re-read at its own class by `keys_by_range`, nothing
@@ -132,7 +140,7 @@ pub use crate::board::frames::T_GRANT;
 ///
 /// Each comes after [`RESUME_RETRY_WAIT`], before the resume is left
 /// pending.
-const RESUME_RETRIES: usize = 10;
+pub(super) const RESUME_RETRIES: usize = 10;
 
 /// The wait between the resume's retries.
 const RESUME_RETRY_WAIT: Duration = Duration::from_millis(100);
@@ -190,13 +198,35 @@ pub struct Consumer<'b> {
 }
 
 /// What the consumer has mounted.
+///
+/// A mount that is not live keeps the sessions widened while it was not,
+/// each a supplement pending its open, and passes them to the live mount
+/// that follows it.
 pub(super) enum Mount {
     /// The board has no `H.1`: no directory, no index.
-    Unclaimed,
+    Unclaimed(BTreeMap<u64, Supplement>),
     /// Another process holds the feeder's lock.
-    Busy,
+    Busy(BTreeMap<u64, Supplement>),
     /// The board's directory, locked, with its engines.
     Live(Live),
+}
+
+impl Mount {
+    /// Returns whether the board's directory is mounted.
+    fn is_live(&self) -> bool {
+        matches!(self, Mount::Live(_))
+    }
+
+    /// Returns the supplements the mount holds, by principal.
+    ///
+    /// They are a live mount's, or the sessions a mount that is not live
+    /// keeps.
+    fn supplements_mut(&mut self) -> &mut BTreeMap<u64, Supplement> {
+        match self {
+            Mount::Unclaimed(kept) | Mount::Busy(kept) => kept,
+            Mount::Live(live) => &mut live.supplements,
+        }
+    }
 }
 
 /// The live mount: the directory, the lock, the engines.
@@ -215,7 +245,8 @@ pub(super) struct Live {
 
 /// One index's slot.
 ///
-/// It is faced as a newer skep's, pending a busy resume, or live.
+/// It is faced as a newer skep's, pending its open — a resume
+/// `history_busy` left pending, or a supplement not opened yet — or live.
 pub(super) enum Slot {
     Faced(Newer),
     Pending,
@@ -280,6 +311,16 @@ pub(super) struct Supplement {
     /// They are the ones the discovery read has read — a link is immutable,
     /// so one read each.
     links: BTreeMap<String, GrantLink>,
+}
+
+impl Supplement {
+    /// Returns a session's supplement pending its open.
+    ///
+    /// The widening that follows opens it: at once on a live mount, at the
+    /// poll that mounts on one that is not.
+    fn pending(token: Token, account: Address) -> Supplement {
+        Supplement { slot: Slot::Pending, token, account, honored: Vec::new(), links: BTreeMap::new() }
+    }
 }
 
 /// One honored prefix and the grant that opens it.
@@ -387,7 +428,8 @@ impl<'b> Consumer<'b> {
     /// The board term is read for the directory's key, the lock taken, and
     /// the aside check and the resume run over the published index. An
     /// unclaimed board mounts nothing and answers `State::None`; a held lock
-    /// mounts nothing and answers `State::Busy`.
+    /// mounts nothing and answers `State::Busy` until a poll or a widening
+    /// finds it free (`search.md` §5.6).
     ///
     /// # Errors
     ///
@@ -401,7 +443,7 @@ impl<'b> Consumer<'b> {
     /// Panics if the head document's pinned address does not parse or lies
     /// under no node; it does, so neither `expect` fires.
     pub fn open(board: &'b Board, dir: SearchDir) -> Result<Consumer<'b>, Halt> {
-        let consumer = Consumer { board, dir, feed: Mutex::new(()), mount: RwLock::new(Mount::Unclaimed) };
+        let consumer = Consumer { board, dir, feed: Mutex::new(()), mount: RwLock::new(Mount::Unclaimed(BTreeMap::new())) };
         consumer.mount()?;
         Ok(consumer)
     }
@@ -440,20 +482,41 @@ impl<'b> Consumer<'b> {
         }
     }
 
+    /// Mounts the board's directory where the mount is not live yet.
+    ///
+    /// An unclaimed board stays `Unclaimed`; a lock another process holds
+    /// leaves the mount `Busy`, to be tried again at the next call; a lock
+    /// taken mounts the directory with its published index open (the module
+    /// doc's open). The sessions the mount kept pass to the live one, each
+    /// supplement still pending its open.
+    ///
+    /// # Errors
+    ///
+    /// As [`Consumer::open`]'s.
+    ///
+    /// # Panics
+    ///
+    /// As [`Consumer::open`]'s, and where the engines' lock is poisoned.
     fn mount(&self) -> Result<(), Halt> {
+        if self.read().is_live() {
+            return Ok(());
+        }
         let Some(term) = self.board.board_term()? else { return Ok(()) };
         let chain = Chain::from_bytes(term.chain);
         let dir = self.dir.board(&chain);
         dir.ensure().map_err(|e| io_halt("directory", dir.path(), e))?;
         let Some(lock) = dir.try_lock().map_err(|e| io_halt("lock", dir.path(), e))? else {
-            *self.mount.write().expect("the engines' lock") = Mount::Busy;
+            let mut mount = self.write();
+            let kept = std::mem::take(mount.supplements_mut());
+            *mount = Mount::Busy(kept);
             return Ok(());
         };
         let head = parse_address(HEAD_DOCUMENT).expect("the head document's address");
         let node = Prefix::new(node_of(&head).expect("the head document lies under a node"));
         let published = self.open_slot(&dir, &chain, Class::Guest, &BoardDir::published_name(), &BoardDir::published_places_name())?;
-        *self.mount.write().expect("the engines' lock") =
-            Mount::Live(Live { dir, chain, _lock: lock, node, published, supplements: BTreeMap::new() });
+        let mut mount = self.write();
+        let supplements = std::mem::take(mount.supplements_mut());
+        *mount = Mount::Live(Live { dir, chain, _lock: lock, node, published, supplements });
         Ok(())
     }
 
@@ -697,15 +760,18 @@ impl<'b> Consumer<'b> {
 
     /// Polls the feed once (the module doc).
     ///
-    /// The poll reads the `/health` pair, drains the published range as a
-    /// guest, makes each mounted supplement's discovery reads and drains its
-    /// ranges with its token, and saves at its cadence.
+    /// The poll mounts where the mount is not live — a poll that still finds
+    /// it so answers at once, having read nothing where the lock is held —
+    /// then opens the published slot where it is pending, reads the
+    /// `/health` pair, drains the published range as a guest, widens each
+    /// supplement pending its open and, for every other, makes its discovery
+    /// reads and drains its ranges with its token, and saves at its cadence.
     ///
     /// # Errors
     ///
-    /// A read's halt — the board term at a first mount, the `/health` pair,
-    /// the feed, a document, a head record, the discovery reads, `/chain` at
-    /// a floor or a save; an I/O fault in the index directory, faced. A
+    /// A read's halt — the board term at a mount, the `/health` pair, the
+    /// feed, a document, a head record, the discovery reads, `/chain` at a
+    /// floor or a save; an I/O fault in the index directory, faced. A
     /// session that met the death signal is no error: it lands in
     /// [`Poll::died`].
     ///
@@ -715,13 +781,11 @@ impl<'b> Consumer<'b> {
     pub fn poll(&self) -> Result<Poll, Halt> {
         let _feed = self.feed.lock().expect("the feed mutex");
         let mut outcome = Poll::default();
-        if matches!(&*self.read(), Mount::Unclaimed) {
-            self.mount()?;
-        }
-        if !matches!(&*self.read(), Mount::Live(_)) {
+        self.mount()?;
+        if !self.read().is_live() {
             return Ok(outcome);
         }
-        self.retry_pending_resume()?;
+        self.open_pending(Face::Published)?;
         let pair = self.health_pair()?;
         self.drain(Face::Published, &pair, &mut outcome, false)?;
         let principals: Vec<u64> = match &*self.read() {
@@ -729,16 +793,20 @@ impl<'b> Consumer<'b> {
             _ => Vec::new(),
         };
         for principal in principals {
-            match self.discover(principal)? {
-                Some(honored) => self.adopt_honored(principal, honored),
-                None => {
-                    self.unmount(principal)?;
-                    outcome.died.push(principal);
-                    continue;
+            let face = Face::Supplement(principal);
+            let drained = if self.is_pending(face) {
+                self.widen_supplement(principal, &pair, &mut outcome)?
+            } else {
+                match self.discover(principal)? {
+                    Some(honored) => {
+                        self.adopt_honored(principal, honored);
+                        self.drain(face, &pair, &mut outcome, false)?
+                    }
+                    None => Drained::Closed,
                 }
-            }
-            if let Drained::Closed = self.drain(Face::Supplement(principal), &pair, &mut outcome, false)? {
-                self.unmount(principal)?;
+            };
+            if let Drained::Closed = drained {
+                self.unmount(principal);
                 outcome.died.push(principal);
             }
         }
@@ -746,21 +814,49 @@ impl<'b> Consumer<'b> {
         Ok(outcome)
     }
 
-    /// Retries a published slot left pending by `history_busy` at the open.
+    /// Returns whether a face's slot is pending its open.
     ///
-    /// The file is re-opened and the resume retried.
+    /// # Panics
+    ///
+    /// Panics where the engines' lock is poisoned.
+    fn is_pending(&self, face: Face) -> bool {
+        match &*self.read() {
+            Mount::Live(live) => matches!(Self::slot_of(live, face), Some(Slot::Pending)),
+            _ => false,
+        }
+    }
+
+    /// Opens a face's slot where it is pending (`search.md` §5.4).
+    ///
+    /// The slot is a resume `history_busy` left pending past its retries, or
+    /// a supplement not opened yet; its file is opened afresh, the aside
+    /// check and the resume made, and a resume busy again leaves it pending.
     ///
     /// # Errors
     ///
     /// As `open_slot`'s.
-    fn retry_pending_resume(&self) -> Result<(), Halt> {
+    ///
+    /// # Panics
+    ///
+    /// Panics where the engines' lock is poisoned.
+    fn open_pending(&self, face: Face) -> Result<(), Halt> {
         let (dir, chain) = match &*self.read() {
-            Mount::Live(live) if matches!(live.published, Slot::Pending) => (live.dir.clone(), live.chain),
+            Mount::Live(live) if matches!(Self::slot_of(live, face), Some(Slot::Pending)) => (live.dir.clone(), live.chain),
             _ => return Ok(()),
         };
-        let slot = self.open_slot(&dir, &chain, Class::Guest, &BoardDir::published_name(), &BoardDir::published_places_name())?;
+        let slot = match face {
+            Face::Published => self.open_slot(&dir, &chain, Class::Guest, &BoardDir::published_name(), &BoardDir::published_places_name())?,
+            Face::Supplement(n) => self.open_slot(&dir, &chain, Class::Principal(n), &BoardDir::supplement_name(n), &BoardDir::supplement_places_name(n))?,
+        };
         if let Mount::Live(live) = &mut *self.write() {
-            live.published = slot;
+            match face {
+                Face::Published => live.published = slot,
+                Face::Supplement(n) => {
+                    if let Some(s) = live.supplements.get_mut(&n) {
+                        s.slot = slot;
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -771,6 +867,14 @@ impl<'b> Consumer<'b> {
 
     fn write(&self) -> std::sync::RwLockWriteGuard<'_, Mount> {
         self.mount.write().expect("the engines' lock")
+    }
+
+    /// Returns the slot of a face under a guard, where the face is mounted.
+    fn slot_of(live: &Live, face: Face) -> Option<&Slot> {
+        match face {
+            Face::Published => Some(&live.published),
+            Face::Supplement(n) => live.supplements.get(&n).map(|s| &s.slot),
+        }
     }
 
     /// Returns the engine of a face under a guard, where it is live.
@@ -1399,21 +1503,26 @@ impl<'b> Consumer<'b> {
 
     /// Widens to `session`'s principal (`client.md` §4e.3).
     ///
-    /// It runs at a session open, a principal switch, a re-mount: the
-    /// principal's supplement opened — the aside check and the resume as at
-    /// the published index — its ranges the principal's own account prefix,
-    /// its ancestors' and each honored grant's, each fetched from its own
-    /// `held` or from the floor where new, the state `Widening` while each
-    /// fetches and, after, the one the pair composes.
+    /// It runs at a session open, a principal switch, a re-mount. The mount
+    /// is made where it is not live and the session's token given to its
+    /// supplement, a new one pending its open; then the `/health` pair is
+    /// read and the widening made: the principal's supplement opened where
+    /// it is pending — the aside check and the resume as at the published
+    /// index — its ranges the principal's own account prefix, its ancestors'
+    /// and each honored grant's, each fetched from its own `held` or from
+    /// the floor where new, the state `Widening` while each fetches and,
+    /// after, the one the pair composes. A mount still not live — an
+    /// unclaimed board, a lock another process holds — keeps the session and
+    /// reads nothing more; the poll that mounts makes its widening.
     ///
     /// # Errors
     ///
     /// In this order: an account deeper than the namespace delegates,
     /// refused before any read; the board term's read and the directory's
-    /// faults at a first mount; an account the address grammar refuses,
-    /// faced; the supplement's open; the discovery reads' halts; the
-    /// `/health` pair's; the drain reads' halts; a save's faults. A session
-    /// that met the death signal is unmounted, no error.
+    /// faults at a mount; an account the address grammar refuses, faced; the
+    /// `/health` pair's; the supplement's open; the discovery reads' halts;
+    /// the drain reads' halts; a save's faults. A session that met the death
+    /// signal is unmounted, no error.
     ///
     /// # Panics
     ///
@@ -1426,9 +1535,7 @@ impl<'b> Consumer<'b> {
         if !within_principal_depth(session.account) {
             return Err(too_deep(session.account));
         }
-        if matches!(&*self.read(), Mount::Unclaimed) {
-            self.mount()?;
-        }
+        self.mount()?;
         let principal = session.principal;
         let account = parse_address(session.account).ok_or_else(|| {
             Halt::face(
@@ -1437,21 +1544,52 @@ impl<'b> Consumer<'b> {
                 "check the board",
             )
         })?;
-        let (dir, chain, mounted) = match &*self.read() {
-            Mount::Live(live) => (live.dir.clone(), live.chain, live.supplements.contains_key(&principal)),
-            _ => return Ok(()),
+        let live = {
+            let mut mount = self.write();
+            let supplements = mount.supplements_mut();
+            match supplements.get_mut(&principal) {
+                Some(s) => s.token = session.token.clone(),
+                None => {
+                    supplements.insert(principal, Supplement::pending(session.token.clone(), account));
+                }
+            }
+            mount.is_live()
         };
-        if !mounted {
-            let slot = self.open_slot(&dir, &chain, Class::Principal(principal), &BoardDir::supplement_name(principal), &BoardDir::supplement_places_name(principal))?;
-            if let Mount::Live(live) = &mut *self.write() {
-                live.supplements.insert(principal, Supplement { slot, token: session.token.clone(), account: account.clone(), honored: Vec::new(), links: BTreeMap::new() });
-            }
-        } else if let Mount::Live(live) = &mut *self.write() {
-            if let Some(s) = live.supplements.get_mut(&principal) {
-                s.token = session.token.clone();
-            }
+        if !live {
+            return Ok(());
         }
-        // The subtree's ranges: the account and its ancestors.
+        let pair = self.health_pair()?;
+        let mut outcome = Poll::default();
+        if let Drained::Closed = self.widen_supplement(principal, &pair, &mut outcome)? {
+            self.unmount(principal);
+        }
+        self.maybe_save(false)
+    }
+
+    /// Makes a mounted supplement's widening (`client.md` §4e.3).
+    ///
+    /// Its slot is opened where it is pending; then, with the account its
+    /// supplement holds, the ranges of its subtree — the account and its
+    /// ancestors — are added where new, the discovery reads made and each
+    /// range drained against `pair`, the state `Widening` while it fetches.
+    /// Answers `Closed` where the session met the death signal, for the
+    /// caller to unmount.
+    ///
+    /// # Errors
+    ///
+    /// The slot's open; the discovery reads' halts; the drain reads' halts.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the engines' lock is poisoned.
+    fn widen_supplement(&self, principal: u64, pair: &ChainAt, outcome: &mut Poll) -> Result<Drained, Halt> {
+        let face = Face::Supplement(principal);
+        self.open_pending(face)?;
+        let account = match &*self.read() {
+            Mount::Live(live) => live.supplements.get(&principal).map(|s| s.account.clone()),
+            _ => None,
+        };
+        let Some(account) = account else { return Ok(Drained::Done) };
         let mut prefixes = vec![account.clone()];
         let mut at = account.to_string();
         while let Some(parent) = parent_account(&at) {
@@ -1460,7 +1598,7 @@ impl<'b> Consumer<'b> {
             }
             at = parent;
         }
-        self.with_engine(Face::Supplement(principal), |e| {
+        self.with_engine(face, |e| {
             for prefix in &prefixes {
                 if !e.header.ranges.iter().any(|r| r.under.as_ref() == Some(prefix)) {
                     e.add_range(Some(prefix.clone()), None);
@@ -1469,14 +1607,9 @@ impl<'b> Consumer<'b> {
         });
         match self.discover(principal)? {
             Some(honored) => self.adopt_honored(principal, honored),
-            None => return self.unmount(principal),
+            None => return Ok(Drained::Closed),
         }
-        let pair = self.health_pair()?;
-        let mut outcome = Poll::default();
-        if let Drained::Closed = self.drain(Face::Supplement(principal), &pair, &mut outcome, true)? {
-            self.unmount(principal)?;
-        }
-        self.maybe_save(false)
+        self.drain(face, pair, outcome, true)
     }
 
     /// Narrows away from `principal` (`client.md` §4e.3).
@@ -1484,7 +1617,8 @@ impl<'b> Consumer<'b> {
     /// It runs at `close(session)`, at `session-died` in every arm but the
     /// shell's own restart, and at a switch-away: the supplement saved and
     /// unmounted, its file kept (`search.md` §5.5), the document index's
-    /// principal part retired from `places` with it.
+    /// principal part retired from `places` with it. A session a mount that
+    /// is not live kept is dropped, so no later poll widens it.
     ///
     /// # Errors
     ///
@@ -1497,14 +1631,17 @@ impl<'b> Consumer<'b> {
     pub fn narrow(&self, principal: u64) -> Result<(), Halt> {
         let _feed = self.feed.lock().expect("the feed mutex");
         self.save_face(Face::Supplement(principal), true)?;
-        self.unmount(principal)
+        self.unmount(principal);
+        Ok(())
     }
 
-    fn unmount(&self, principal: u64) -> Result<(), Halt> {
-        if let Mount::Live(live) = &mut *self.write() {
-            live.supplements.remove(&principal);
-        }
-        Ok(())
+    /// Unmounts `principal`'s supplement, or drops the session a mount kept.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the engines' lock is poisoned.
+    fn unmount(&self, principal: u64) {
+        self.write().supplements_mut().remove(&principal);
     }
 
     /// Refreshes every unit the pair holds (`search.md` §5.5).
@@ -1666,9 +1803,9 @@ impl<'b> Consumer<'b> {
 
     /// Forgets `principal`'s supplement (`search.md` §5.5).
     ///
-    /// The supplement is unmounted where mounted and its two files deleted —
-    /// the person's act alone, offered by the shell off
-    /// [`Consumer::orphans`].
+    /// The supplement is unmounted where mounted — a session a mount that is
+    /// not live kept is dropped — and its two files deleted: the person's act
+    /// alone, offered by the shell off [`Consumer::orphans`].
     ///
     /// # Errors
     ///
@@ -1680,6 +1817,7 @@ impl<'b> Consumer<'b> {
     /// Panics where the feed mutex or the engines' lock is poisoned.
     pub fn forget(&self, principal: u64) -> Result<(), Halt> {
         let _feed = self.feed.lock().expect("the feed mutex");
+        self.unmount(principal);
         let dir = match &*self.read() {
             Mount::Live(live) => live.dir.clone(),
             _ => match self.board.board_term()? {
@@ -1687,7 +1825,6 @@ impl<'b> Consumer<'b> {
                 None => return Ok(()),
             },
         };
-        self.unmount(principal)?;
         for name in [BoardDir::supplement_name(principal), BoardDir::supplement_places_name(principal)] {
             match fs::remove_file(dir.file(&name)) {
                 Ok(()) => {}
@@ -1819,8 +1956,8 @@ impl<'b> Consumer<'b> {
     pub fn state(&self, who: Who<'_>) -> State {
         let guard = self.read();
         match &*guard {
-            Mount::Unclaimed => State::None,
-            Mount::Busy => State::Busy,
+            Mount::Unclaimed(_) => State::None,
+            Mount::Busy(_) => State::Busy,
             Mount::Live(live) => {
                 let mut parts = Vec::new();
                 match part_of(&live.published) {

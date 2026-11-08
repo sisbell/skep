@@ -27,6 +27,8 @@
 //! ONE `set_arrangement` — the draft holding M, its base re-recorded on the
 //! head at the extent read and `doc_metadata`'s `merge` read back with the
 //! write's position, the record naming that position and verifying Equal;
+//! landed again in a second session, which holds no memo of the write,
+//! refused naming that landing, which `resume` there answers (skep #852);
 //! land and tell against a real newer member, `head_moved`; and a fresh
 //! draft staged from the head and landed in, a re-run staging nothing, and
 //! once it is undone the same composition landed fresh again in the same
@@ -837,7 +839,9 @@ pub(crate) fn as_image(runs: &[Run]) -> Vec<(String, u64)> {
 /// again, the landing is ONE write: `S` holds M, its base is re-recorded on
 /// `D.2` at the fifteen positions read, `doc_metadata`'s `merge` names the
 /// head, no side (the draft was the side) and the write's position, the
-/// record names that position and verifies Equal. LAND AND TELL: version 3
+/// record names that position and verifies Equal; landed again in a second
+/// session, the write is refused naming that landing, which `resume` there
+/// answers. LAND AND TELL: version 3
 /// published, a second draft `T` staged off `D.2` and merged with `D.2`
 /// named as the head lands and carries `head_moved` = `D.3`, its base
 /// recorded on `D.2`. A FRESH DRAFT: `into` none stages from the head and
@@ -929,13 +933,39 @@ fn a_draft_landing_is_one_write_refused_whole_where_the_draft_changed_and_tells_
     assert_eq!(meta["merge"], json!({"at": at, "head": head.to_string(), "head_copied": "15", "sides": []}), "the marker, at the write's position: {meta}");
     let record = current(&board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
     assert_eq!(record.landed, Some(RecordLanding::Draft { draft: draft.clone(), position: at }), "the write's position");
-    assert_eq!(record.link, Some(link));
+    assert_eq!(record.link.as_ref(), Some(&link));
     assert_eq!(verify(&board, Some(&token), &record), Ok(Verdict::Equal));
     // The same landing again in this session: the board answers the id
     // again, and nothing is written twice.
     let standing = position();
     assert_eq!(land(&board, &merged, into(&draft)).expect("landed again"), landed);
     assert_eq!(position(), standing, "nothing written twice");
+    // And in another session (skep #852), whose memo holds no answer for the
+    // id: the write, typed against the composition's position that the
+    // landing moved the draft past, is refused, naming that landing, its
+    // record and `resume` — which answers the landing, nothing written.
+    let other = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session)
+        .expect("a second content session");
+    let other_merger = Merger { token: other.token(), account: other.account(), signer: &device };
+    let into_other =
+        || Landing::Draft { merger: other_merger, into: Some(draft.clone()), journal: None };
+    let standing = position();
+    let err = land(&board, &merged, into_other()).expect_err("its own landing moved the draft");
+    let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
+    assert_eq!(refused.code, "arrangement_moved", "{refused:?}");
+    let detail = refused.detail.as_deref().expect("the person's words");
+    assert!(
+        detail.contains(&format!(
+            "{draft} already holds this merge: it landed there at position {at}"
+        )) && detail.contains(&link.to_string())
+            && detail.contains("resume answers that landing"),
+        "{detail}"
+    );
+    assert!(!detail.contains("nothing was merged"), "{detail}");
+    assert_eq!(position(), standing, "nothing written");
+    assert_eq!(resume(&board, &merged, into_other()).expect("resumed"), Some(landed.clone()));
+    assert_eq!(position(), standing, "a resume writes nothing");
+    other.close().expect("close the second session");
 
     // LAND AND TELL: version 3 published since; a draft off version 2 merged
     // with version 2 named lands and is told the newer head.

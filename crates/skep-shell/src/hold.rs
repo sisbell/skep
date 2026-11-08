@@ -757,13 +757,16 @@ pub struct DeathHeld {
 ///
 /// They are §4b.1's `resolve` row's, as the row's `act` spells them — read
 /// off the call's arguments by [`ResolveAct::named`] alone, so no act
-/// reaches the hold that the row does not spell.
+/// reaches the hold that the row does not spell. The drop reaches further
+/// ([`Holds::resolve`]): a line held `head_unreadable`, and, under the
+/// keyless session, every line, the session's discard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolveAct {
     /// `"drop"`: the line dropped, with the lines after it on its document.
     ///
-    /// The lines after it are a refused run's `behind` lines, or a moved
-    /// document's later lines.
+    /// The lines after it are a refused run's `behind` lines, a moved
+    /// document's later lines, or every later line of its document at a
+    /// line held `head_unreadable` or under the keyless session.
     Drop,
     /// `"send"`: the document's waiting lines handed back.
     ///
@@ -1054,8 +1057,9 @@ impl HeldState {
 /// `head_unreadable` among them, whose refusal says why it waits and which
 /// awaits no act of the person's (P10) save the drop ([`Holds::resolve`];
 /// skep #726), and a line held `session_died`, whose refusal is the death's
-/// and which awaits a session, never the person's act; `sending` is the
-/// resend's, never a line's at rest.
+/// and which awaits a session that may write, no act of the person's moving
+/// it but the keyless session's discard ([`Holds::resolve`]); `sending` is
+/// the resend's, never a line's at rest.
 fn line_state(reason: &Reason) -> HeldState {
     if reason.cause == cause::HEAD_UNREADABLE || reason.cause == cause::SESSION_DIED {
         HeldState::Holding
@@ -3154,20 +3158,38 @@ impl Holds {
     /// any drop. In `resolve` alone: [`awaits_act`] and [`line_state`] are
     /// unchanged, so the probe keeps trying such a line until the head reads.
     ///
+    /// **The discard under the keyless session** (§4b.1's `resolve` row;
+    /// foundations §3.3 state 3; skep #896). Under a session that may not
+    /// write ([`SessionEntry::may_write`]) — the keyless session, which reads
+    /// the held file and sends nothing — the drop is admitted on every line
+    /// of its principal's, in any state: no resend follows under it, so a
+    /// line held for a key the device no longer holds, one another hand
+    /// retired among them, waits for good unless the person discards it. It
+    /// drops the line and every later line of its document, as every drop
+    /// does, and writes the held file alone, nothing dialed. No resend
+    /// overtakes it, though the hold asks the acting session's kind alone: a
+    /// shell's sessions all open in its run's one mode, and the restart arm
+    /// re-opens a signed session alone, so where a bare session acts no
+    /// session of its principal that may write stands and no drain walks the
+    /// line. The shell's row refuses `send` under it before it reaches here
+    /// (`write_in_bare_session`).
+    ///
     /// # Errors
     ///
     /// Its refusals come in this order, the first that holds answering:
     /// `store_halted` where P38 halted the principal's file; `no_such_held`
     /// where no line of ordinal `k` stands; `not_resolvable` where the line
     /// awaits no act of the person's (P10) — save the drop of a line held
-    /// `head_unreadable`.
+    /// `head_unreadable`, and every drop under a session that may not write.
     pub fn resolve(&self, session: &SessionEntry, k: u64, act: ResolveAct) -> Result<Resolved, Refusal> {
         let mut board_hold = self.lock(&session.board_reference);
         let ph = self.principal_hold(&mut board_hold, session)?;
         let Some(line) = ph.queue.line(k) else { return Err(Refusal::shell(Name::NO_SUCH_HELD, json!({"held": k}))) };
         // A line awaiting the person's act alone takes one (P10), save the
-        // drop of a line held for want of its signature (skep #726).
-        let droppable = act == ResolveAct::Drop && line.reason.cause == cause::HEAD_UNREADABLE;
+        // drop of a line held for want of its signature (skep #726) and every
+        // drop under a session that may not write: the keyless session's
+        // discard, which no resend overtakes (skep #896).
+        let droppable = act == ResolveAct::Drop && (line.reason.cause == cause::HEAD_UNREADABLE || !session.may_write());
         if !awaits_act(&line.reason) && !droppable {
             return Err(Refusal::shell(Name::NOT_RESOLVABLE, json!({"held": k})));
         }

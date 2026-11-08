@@ -1798,11 +1798,13 @@ impl Shell {
     /// handed to the machine, never after its ack": the probe that resends
     /// it is handed to the board's feed thread (`Feed::probe`). Under a bare
     /// session, which reads alone ([`SessionEntry::may_write`]), `"drop"`
-    /// stands, since it commits nothing to the board, and `"send"` does not,
-    /// since no resend sends under it. At a board whose held store another
-    /// shell holds (§3c.3) both stand: the write door refuses every new write
-    /// there, and the lines `"send"` hands back were held before that state
-    /// was found, sent from memory as the board takes them.
+    /// stands on every line, a holding one among them — the keyless
+    /// session's discard, a local act that commits nothing to the board
+    /// (`Holds::resolve`) — and `"send"` does not, since no resend sends
+    /// under it. At a board whose held store another shell holds (§3c.3)
+    /// both stand: the write door refuses every new write there, and the
+    /// lines `"send"` hands back were held before that state was found, sent
+    /// from memory as the board takes them.
     ///
     /// # Errors
     ///

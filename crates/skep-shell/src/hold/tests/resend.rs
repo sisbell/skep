@@ -56,11 +56,11 @@
 //! file found halted at the change halting the principal, a relaunch
 //! listing every line once the file is moved aside (skep #858); and a crash
 //! between the change's copy and the pending file's removal doubling no
-//! line; every
-//! principal's lines resent by one probe, a bare session's line resent by
-//! none until a session
-//! of its principal's that may write stands, and a probe with no line
-//! standing dialing nothing; one drain per board at a time, and a drain that
+//! line; every principal's lines resent by one probe, a bare session's line
+//! resent by none until a session of its principal's that may write stands,
+//! the keyless session's discard dropping a line in any state and that
+//! session resending the rest (skep #896), and a probe with no line standing
+//! dialing nothing; one drain per board at a time, and a drain that
 //! unwinds leaving the board free to drain again; the board's refusal of a
 //! resend as typed against an older state — the one route to the moved face
 //! — facing its own document alone, moved, the verdict on the line it
@@ -365,6 +365,59 @@ fn a_bare_session_resends_no_held_line() {
     assert_eq!(sent.len(), 1, "the writer sends the line: {sent:?}");
     assert!(sent[0].get("attest").is_some(), "attested by the writer's key: {sent:?}");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "and keeps it");
+}
+
+/// Checks that the keyless session's discard drops a line in any state.
+///
+/// It is the bare session's one act on its principal's held lines (§4b.1's
+/// `resolve` row; foundations §3.3 state 3; skep #896): a line the death
+/// held `session_died` and one held `behind` it stand `holding` through a
+/// probe that sends nothing, and the drop of either drops it and every
+/// later line of its document — the `held` event saying the line that
+/// stands first, then `kept` with none, both `done`s on the held file and
+/// nothing dialed — while `send` on a holding line stays refused; the line
+/// on another document stands, and a session of the principal's that may
+/// write resends it (the mutant that keeps the drop to refused and moved
+/// lines leaves the keyless reader no way to give up words no key will
+/// send; the one keyed on `session_died` alone refuses the `behind` line;
+/// the one that admits it under any session lets a writer drop a holding
+/// line its own resend may be dialing, which the write suite's death cell
+/// pins).
+#[test]
+fn the_keyless_sessions_discard_drops_a_line_in_any_state_and_a_writer_resends_the_rest() {
+    let g = bare_ground();
+    let died = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "session_died", false)["held"].as_u64().unwrap();
+    let behind = g.hold(&insert_at(DOC, 2, json!(["b"]), g.fake.head()), "behind", false)["held"].as_u64().unwrap();
+    g.hold(&insert(OTHER, json!(["c"]), g.fake.head()), "unreachable", false);
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.sends(), 0, "nothing is sent under the bare session");
+    assert_eq!(g.states(), ["holding", "holding", "holding"], "and nothing past each line's hold is said");
+    assert_eq!(g.holds.resolve(&g.session, behind, ResolveAct::Send).map_err(|r| r.name().to_string()), Err("not_resolvable".to_string()), "the send stays refused");
+    let dropped = |k: u64| -> Value {
+        assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).map_err(|r| r.name().to_string()), Ok(Resolved::Dropped), "line {k}: the discard");
+        let said: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).collect();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert_held_event_declared(&said[0]);
+        said[0].clone()
+    };
+    let said = dropped(behind);
+    assert_eq!((said["doc"].as_str(), said["held"].as_u64(), said["state"].as_str()), (Some(DOC), Some(1), Some("holding")), "the line held at the death stands first: {said}");
+    let said = dropped(died);
+    assert_eq!((said["doc"].as_str(), said["held"].as_u64(), said["state"].as_str()), (Some(DOC), Some(0), Some("kept")), "no line stands on the document: {said}");
+    let left = g.lines();
+    assert_eq!((left.len(), left[0]["doc"].as_str()), (1, Some(OTHER)), "the other document's line stands: {left:?}");
+    let text = std::fs::read_to_string(held_file(&g)).unwrap();
+    assert_eq!(text.matches("\"as\":\"dropped\"").count(), 2, "both drops on the held file: {text}");
+    assert_eq!(g.fake.sends(), 0, "nothing is dialed on a drop");
+    let open = Open { token: Token::parse(&"8e".repeat(16)).unwrap(), facts: writer_facts(&g.store), opened_at: 0 };
+    let board = BoardEntry { reference: g.session.board_reference.clone(), board: Arc::clone(&g.session.board) };
+    let writer = g.holds.sessions.register(&board, open, &mut NoSupplements);
+    g.holds.open_session(&writer);
+    g.holds.probe("b-1");
+    let sent = g.fake.sends.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1, "the writer sends the line left: {sent:?}");
+    assert_eq!((sent[0]["doc"].as_str(), sent[0].get("attest").is_some()), (Some(OTHER), true), "attested by the writer's key: {sent:?}");
+    assert!(g.lines().is_empty(), "and keeps it");
 }
 
 /// Checks that a signed row is own, and a bare row no verdict.

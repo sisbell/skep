@@ -261,6 +261,8 @@ impl Name {
     /// It is not refused or moved — no act exists until the board answers,
     /// its head record reads again where the line holds `head_unreadable`, or
     /// the shell hands the line to the person under `answers_lost` (P10).
+    /// Two drops are admitted all the same: of a line held `head_unreadable`,
+    /// and of every line under a bare session, the keyless session's discard.
     pub const NOT_RESOLVABLE: Name = Name("not_resolvable");
     /// A burst whose frame passes the board's frame cap, refused at the act.
     ///

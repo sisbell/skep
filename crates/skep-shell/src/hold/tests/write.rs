@@ -326,8 +326,8 @@ fn a_restore_is_noted_as_an_acknowledged_set_arrangement_on_its_draft() {
 /// the face") and the lines `behind` it carry none; `drop` on the refused
 /// head drops it and every line held `behind` it on that document (the
 /// mutant that leaves them standing), the `held` event naming the session
-/// that acted; `resolve` on a holding line answers `not_resolvable`; an
-/// unknown ordinal answers `no_such_held`.
+/// that acted; `resolve` on a holding line answers `not_resolvable` under
+/// the writer; an unknown ordinal answers `no_such_held`.
 #[test]
 fn a_refused_run_drops_its_behind_lines() {
     let g = ground();
@@ -1218,11 +1218,12 @@ fn died(g: &Ground) -> Refusal {
 /// `OpAnswer::Died` with nothing held. Once the end derives the death, the
 /// line takes its reason (`Holds::note_death`) — the `session_died` refusal,
 /// its arm — and the call's answer is the `held` answer; the line still
-/// holds: no act of the person's moves it (`not_resolvable`), no clock runs
-/// on it, and the probe sends it from the head with no read once the board
-/// takes the session's writes, two minutes on, and keeps it (the mutants
-/// that face the burst, hold it `unreachable`, start its clock and hand it
-/// over, read its refusal as a refused run's, or hold a non-burst write).
+/// holds: under the writer no act of the person's moves it
+/// (`not_resolvable`), no clock runs on it, and the probe sends it from the
+/// head with no read once the board takes the session's writes, two minutes
+/// on, and keeps it (the mutants that face the burst, hold it `unreachable`,
+/// start its clock and hand it over, read its refusal as a refused run's,
+/// admit the drop under any session, or hold a non-burst write).
 #[test]
 fn a_death_at_a_bursts_dial_holds_it_and_at_another_writes_dial_holds_nothing() {
     let g = ground();

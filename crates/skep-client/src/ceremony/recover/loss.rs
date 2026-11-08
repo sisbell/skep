@@ -6,15 +6,15 @@
 //! its session opened, a fresh pair exported under AUTH-5.54 steps 1–3 and
 //! enrolled as one anchor-flagged record, each fresh anchor re-imported from
 //! its artifact and probed (step 3's failure arm retiring a pair whose
-//! private half exists nowhere, destroying its files — each removal said,
-//! one the volume refuses said standing by its path (AUTH-5.40) — and
-//! re-running under a fresh one), the supersession trail from the lost
-//! anchor's enroll link to the new pair's, the lost anchor retired — on the
-//! race arm every key enrolled since L0 too — and the end face. The
-//! surviving anchor is disposed of with the person ahead of every halt the
-//! arm takes after its import, so a placed copy's removal is never left to
-//! the drop, which can say nothing. The device arm's helpers it shares are
-//! its parent's.
+//! private half exists nowhere, destroying its files — each removal said by
+//! its path under AUTH-5.40, a rule an embedder keeps native (§4b.3), one
+//! the volume refuses said standing — and re-running under a fresh one), the
+//! supersession trail from the lost anchor's enroll link to the new pair's,
+//! the lost anchor retired — on the race arm every key enrolled since L0
+//! too — and the end face. The surviving anchor is disposed of with the
+//! person ahead of every halt the arm takes after its import, so a placed
+//! copy's removal is never left to the drop, which can say nothing. The
+//! device arm's helpers it shares are its parent's.
 
 use skep_identity::{Enrollment, Fingerprint, PublicKey};
 use skep_util::file;
@@ -243,10 +243,13 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
                 }
                 // The dead pair's files destroyed, each removal read and
                 // said: a file the volume keeps is a findable paper of a
-                // retired key, said standing by its path (AUTH-5.40).
+                // retired key, said standing by its path. Both answers are
+                // said under AUTH-5.40, a rule an embedder keeps native
+                // (§4b.3), since each names an anchor file's path; step 3's
+                // other lines are the page's.
                 for p in backup.anchors.iter().filter_map(|a| a.file.as_ref()) {
                     match file::remove(p) {
-                        Ok(_) => say(person, "AUTH-5.59 step 3", format!("the dead pair's file {} is destroyed: its key is retired and opens nothing", p.display())),
+                        Ok(_) => say(person, "AUTH-5.40", format!("the dead pair's file {} is destroyed: its key is retired and opens nothing", p.display())),
                         Err(e) => say(
                             person,
                             "AUTH-5.40",

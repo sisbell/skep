@@ -183,7 +183,8 @@ fn a_dead_pairs_file_the_unlink_refuses_is_said_standing() {
         .unwrap_or_else(|| panic!("no line says the dead pair's file could not be destroyed:\n{t}"));
     assert!(files.iter().any(|f| line.contains(&f.display().to_string())), "the standing file named: {line}\n{files:?}");
     assert!(line.contains("STILL STANDS") && line.contains("its key is retired"), "{line}");
-    assert!(person.inner.transcript.iter().any(|l| l.contains("the dead pair's file") && l.contains("is destroyed") && l.contains("fresh-b")), "b's file destroyed, said:\n{t}");
+    let said = person.inner.transcript.iter().any(|l| l.starts_with("PUBLIC say [AUTH-5.40]: the dead pair's file ") && l.contains("is destroyed") && l.contains("fresh-b"));
+    assert!(said, "b's file destroyed, said natively:\n{t}");
     assert_eq!(files_in(&dir.path().join("fresh-b")).len(), 1, "the re-run's b alone");
     assert_eq!(done.retired.len(), 3, "the dead pair and the lost paper");
 }

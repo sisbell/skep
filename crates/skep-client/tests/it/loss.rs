@@ -1,9 +1,11 @@
-//! THE LOSS ARM (`client.md` §4a.6 L0–L7; AUTH-5.59's LOSS arm; AUTH-5.47):
-//! two fresh anchors enrolled as ONE record under the surviving paper, the
+//! The loss arm (`client.md` §4a.6 L0–L7; AUTH-5.59's loss arm; AUTH-5.47).
+//!
+//! Two fresh anchors enrolled as one record under the surviving paper, the
 //! trail from the lost anchor's link to the new one, the lost anchor
 //! retired, the surviving one still enrolled, L1's boxes prefilled from the
-//! lost paper's label, L5's failure arm, the end face — and the imported
-//! paper's PLACED copy and the `closed` face, each at a halt.
+//! lost paper's label, L5's failure arm with the dead pair's files said by
+//! their paths natively (AUTH-5.40; §4b.3), the end face — and the imported
+//! paper's placed copy and the `closed` face, each at a halt.
 
 use skep_client::board::{frames, Answer, KeySetAnswer, T_SUPERSEDES};
 use skep_client::ceremony::recover::{recover, RecoverOptions};
@@ -98,10 +100,14 @@ fn the_loss_arm_enrolls_a_fresh_pair_as_one_record_writes_the_trail_and_retires_
     assert!(err.to_string().contains("no enrolled anchor starts with"), "{err}");
 }
 
-/// L5's FAILURE ARM: a fresh anchor's file removed before its read-back ⇒
-/// its fingerprint (and its twin's) retired from the surviving session and
-/// the walk re-runs from step 1 under a fresh pair, the dead pair's labels
-/// distinct; the end face names the three anchors.
+/// L5's failure arm retires the dead pair, says its files natively, re-runs.
+///
+/// A fresh anchor's file removed before its read-back ⇒ its fingerprint
+/// (and its twin's) retired from the surviving session and the walk re-runs
+/// from step 1 under a fresh pair, the dead pair's labels distinct. Each of
+/// the dead pair's files is said destroyed by its path under AUTH-5.40, a
+/// rule the shell keeps off the page (§4b.3; SP-15), and no line the page
+/// can be handed names a path; the end face names the three anchors.
 #[test]
 fn a_fresh_anchor_that_does_not_read_back_is_retired_and_the_pair_re_run() {
     let dir = tempfile::tempdir().unwrap();
@@ -140,6 +146,22 @@ fn a_fresh_anchor_that_does_not_read_back_is_retired_and_the_pair_re_run() {
     let done = recover(&board, &store, &mut person, &options(surviving_path, &lost.fingerprint.to_hex()[..8], dir.path())).unwrap_or_else(|h| panic!("{h}\n{}", person.inner.transcript.join("\n")));
     let t = person.inner.transcript.join("\n");
     assert!(person.inner.said("did not re-import from its artifact") && person.inner.said("re-runs from step 1 under a fresh pair"), "{t}");
+    // Each dead file is said destroyed by its path under a native rule, and
+    // no line the page can be handed — a public moment, a statement under
+    // any other rule, a consent's text — names a path under the run's
+    // directory. The rules are skep-shell's `NATIVE_RULES`, spelled as its
+    // own suite spells them.
+    let lines = &person.inner.transcript;
+    for fresh in ["fresh-a", "fresh-b"] {
+        let at = dir.path().join(fresh).display().to_string();
+        let said = lines.iter().any(|l| l.starts_with("PUBLIC say [AUTH-5.40]: the dead pair's file ") && l.contains(&at) && l.ends_with(" is destroyed: its key is retired and opens nothing"));
+        assert!(said, "{fresh}'s dead file said natively:\n{t}");
+    }
+    let native = ["AUTH-5.40", "AUTH-5.41", "§4.1 S3", "AUTH-5.54 step 3", "§3a", "§9 item 36"];
+    let root = dir.path().display().to_string();
+    for l in lines.iter().filter(|l| (l.starts_with("PUBLIC") || l.starts_with("CONSENT")) && l.contains(&root)) {
+        assert!(native.iter().any(|r| l.starts_with(&format!("PUBLIC say [{r}]: "))), "a line the page can be handed names a path: {l}");
+    }
     assert_eq!(done.enrolled.len(), 2);
     assert_eq!(done.retired.len(), 3, "the dead pair and the lost paper: {:?}", done.retired);
     assert!(done.retired.contains(&lost.fingerprint));

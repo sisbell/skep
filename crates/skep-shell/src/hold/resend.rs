@@ -574,11 +574,11 @@ impl Holds {
             return Turn::Done;
         }
         // The board answers and takes writes: the hold ends. The head is read
-        // once; a directory no session's open could establish is tried again
-        // with it, and each principal with lines resends them under a session
-        // of its own that may write; a bare one, which reads alone, sends none
-        // (foundations §3.3 state 3), so a principal with no other session
-        // keeps its lines held.
+        // once; a directory no touch of the store could establish is tried
+        // again with it, and each principal with lines resends them under a
+        // session of its own that may write; a bare one, which reads alone,
+        // sends none (foundations §3.3 state 3), so a principal with no other
+        // session keeps its lines held.
         let head = board_head(board);
         self.note_head(board_reference, &head);
         self.establish(board_reference, slot, &head);

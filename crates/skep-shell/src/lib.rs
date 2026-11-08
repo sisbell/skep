@@ -89,7 +89,7 @@
 //!   answer read through the classification table, the one owner of every
 //!   reissue's bound, and each ack noted for the base — and among it a
 //!   burst's door, admitted where some send of it the board can take and
-//!   held where the board cannot take it, and the six non-burst writes a
+//!   held where the board cannot take it, and the nine non-burst writes a
 //!   standing hold refuses at once with its cause; the per-(board,
 //!   principal) queue over `held`'s file, each board's under its own lock,
 //!   one shell per data directory and one writer per board — a board whose

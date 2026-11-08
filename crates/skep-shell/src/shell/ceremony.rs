@@ -15,18 +15,23 @@
 //!
 //! **The door.** Every walk that writes to the board — `claim`, `enroll`,
 //! `bind`, `recover`, `rotate`, `retire`, `handoff`, `accept` — meets the
-//! shell's one write door before any dial (`Shell::write_door`), as its
-//! board, since a ceremony runs under no session of this shell's
+//! shell's one write door before any dial of its walk (`Shell::write_door`),
+//! as its board, since a ceremony runs under no session of this shell's
 //! (`Writer::Board`): the door's one question of it is whether another
 //! shell holds the board's held store, refusing the ceremony
-//! `another_window` naming the call, nothing dialed (§3c.3; skep #829, with
-//! the held store's shape (vi): a second window runs no recovery, no
-//! rotation and no claim while the first stands — the first shell's held
-//! lines were made under the board's standing, which a ceremony from the
-//! second would change under them). The bare session's refusal is not
-//! asked, a walk's session rules being its own; the standing hold and the
-//! held-lines gate judge none of them. `keygen` and `fingerprint`, which
-//! dial nothing, meet no door.
+//! `another_window` naming the call, nothing of the walk dialed (§3c.3;
+//! skep #829, with the held store's shape (vi): a second window runs no
+//! recovery, no rotation and no claim while the first stands — the first
+//! shell's held lines were made under the board's standing, which a
+//! ceremony from the second would change under them). No session's open
+//! has touched the board's store for a ceremony, so the door touches it
+//! first where it is not yet whole (`Holds::touch_store`; skep #880): the
+//! board's head read once, the pending lock tried, then the board's own
+//! where a term reads, every lock taken kept for the shell's life — a
+//! shell that has opened no session at the board is refused as one that
+//! has. The bare session's refusal is not asked, a walk's session rules
+//! being its own; the standing hold and the held-lines gate judge none of
+//! them. `keygen` and `fingerprint`, which dial nothing, meet no door.
 
 use std::sync::Arc;
 
@@ -228,10 +233,10 @@ impl Shell {
     /// In this order: `malformed_args` naming `board`, then `unknown_board`;
     /// `malformed_args` naming `principal`, `name` or `paper` where one is
     /// present in another form; `another_window` naming the call where
-    /// another shell holds the board's held store, nothing dialed
-    /// (`Shell::write_door`); `no_key` where the store holds no key at all
-    /// — the notebook door is two calls, `keygen` then `claim` — or the
-    /// `/health` read's refusal where the read its face needs fails;
+    /// another shell holds the board's held store, nothing of the walk
+    /// dialed (`Shell::write_door`); `no_key` where the store holds no key
+    /// at all — the notebook door is two calls, `keygen` then `claim` — or
+    /// the `/health` read's refusal where the read its face needs fails;
     /// `already_claimed` where another store's claim stands; and the walk's
     /// halt as the row's refusal.
     pub(super) fn claim(&self, args: &Value) -> Result<Value, Refusal> {
@@ -279,8 +284,8 @@ impl Shell {
     /// `malformed_args` naming `payload` where it is absent or no string, then
     /// `principal` where it is present in another form; `another_window`
     /// naming the call where another shell holds the board's held store,
-    /// nothing dialed (`Shell::write_door`); and the walk's halt as the
-    /// row's refusal.
+    /// nothing of the walk dialed (`Shell::write_door`); and the walk's halt
+    /// as the row's refusal.
     pub(super) fn enroll(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let payload = args["payload"].as_str().ok_or_else(|| Refusal::malformed("payload"))?;
@@ -316,7 +321,7 @@ impl Shell {
     /// `malformed_args` naming `principal`, `account` or `origin` where one is
     /// absent or of another form, the account in another spelling among them;
     /// `another_window` naming the call where another shell holds the
-    /// board's held store, nothing dialed (`Shell::write_door`);
+    /// board's held store, nothing of the walk dialed (`Shell::write_door`);
     /// `origin_disagrees` where the pasted origin is not the board's;
     /// `origin_state`; `account_disagrees` where the board seats no such pair;
     /// `no_key`, `store_unreadable`, `retired` or `not_enrolled` for the
@@ -381,8 +386,9 @@ impl Shell {
     /// In this order: `malformed_args` naming `board`, then `unknown_board`;
     /// `malformed_args` naming `lost`, `stolen`, `anchorLost` or `principal`
     /// where one is present in another form; `another_window` naming the
-    /// call where another shell holds the board's held store, nothing dialed
-    /// (`Shell::write_door`); and the walk's halt as the row's refusal.
+    /// call where another shell holds the board's held store, nothing of the
+    /// walk dialed (`Shell::write_door`); and the walk's halt as the row's
+    /// refusal.
     pub(super) fn recover(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let lost = optional(args, "lost", |v| v.as_array()?.iter().map(|f| f.as_str().map(str::to_string)).collect::<Option<Vec<String>>>())?.unwrap_or_default();
@@ -424,8 +430,9 @@ impl Shell {
     /// In this order: `malformed_args` naming `board`, then `unknown_board`;
     /// `malformed_args` naming `principal`, `label` or `payload` where one is
     /// present in another form; `another_window` naming the call where
-    /// another shell holds the board's held store, nothing dialed
-    /// (`Shell::write_door`); and the walk's halt as the row's refusal.
+    /// another shell holds the board's held store, nothing of the walk
+    /// dialed (`Shell::write_door`); and the walk's halt as the row's
+    /// refusal.
     pub(super) fn rotate(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let opts = rotate::RotateOptions {
@@ -458,8 +465,8 @@ impl Shell {
     /// `malformed_args` naming `fingerprint` where it is absent or no string,
     /// then `principal` where it is present in another form;
     /// `another_window` naming the call where another shell holds the
-    /// board's held store, nothing dialed (`Shell::write_door`); and the
-    /// walk's halt as the row's refusal.
+    /// board's held store, nothing of the walk dialed (`Shell::write_door`);
+    /// and the walk's halt as the row's refusal.
     pub(super) fn retire(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let fingerprint = args["fingerprint"].as_str().ok_or_else(|| Refusal::malformed("fingerprint"))?;
@@ -483,8 +490,8 @@ impl Shell {
     /// `malformed_args` naming `account` where it is absent or no string, then
     /// `principal` or `payload` where one is present in another form;
     /// `another_window` naming the call where another shell holds the
-    /// board's held store, nothing dialed (`Shell::write_door`); and the
-    /// walk's halt as the row's refusal.
+    /// board's held store, nothing of the walk dialed (`Shell::write_door`);
+    /// and the walk's halt as the row's refusal.
     pub(super) fn handoff(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let account = args["account"].as_str().ok_or_else(|| Refusal::malformed("account"))?;
@@ -516,9 +523,9 @@ impl Shell {
     /// and `no_address` where none, or a blank one, is given; `malformed_args`
     /// naming `label`, `paper` or `noAnchors` where one is present in another
     /// form; `another_window` naming the call where another shell holds the
-    /// board's held store, nothing dialed (`Shell::write_door`); and the
-    /// walk's halt as the row's refusal, `already_seeded`, `not_delegated`
-    /// and `empty_label` named off its text ([`accept_arm`]).
+    /// board's held store, nothing of the walk dialed (`Shell::write_door`);
+    /// and the walk's halt as the row's refusal, `already_seeded`,
+    /// `not_delegated` and `empty_label` named off its text ([`accept_arm`]).
     pub(super) fn accept(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let Some(address) = optional(args, "address", Value::as_str)?.filter(|a| !a.trim().is_empty()) else {

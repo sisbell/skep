@@ -291,6 +291,16 @@ says "from" it at its end.
   **Holds it:** `crates/skep-arrangement/src/ops/publish.rs` (`stage_publish`/`publish`), `ops/reinstate.rs` (`stage_reinstate_at`/`reinstate`), `ops/delete.rs` (`stage_delete_at`/`delete`), `src/seat.rs` (`stage_seat_link`/`seat_link`); `crates/skep-content` (`stage_write`/`write`); `crates/skep-links/src/writes/publication.rs` (`stage_publication`/`LinkWriter::publication`, the composite over the union of the shot's keys and the draft's link key; `stage_correspondence`, the record's deposit and seat, staged by the publication alone).
   **Checked by:** `crates/skep-arrangement/tests/it/rewindow.rs` (the three compose under one `transact`); the per-op-bound cells in `crates/skep-arrangement/src/ops/tests.rs` and `src/ops/reinstate/tests.rs`; no test yet holds a new store op to the form — one would list the staging functions and assert each public op's body is the `transact` wrapper alone.
   **Closed:** #680.
+- **SP-31 One door for every write.** Every write the shell sends asks
+  one door before any dial and before any read the write makes, in one
+  order: a session that may not write, then another shell holding the
+  board's held store, then a stopped, poisoned or halted board for a
+  write that cannot be held, then the draft's standing held lines for a
+  write over a whole draft. No row that sends a write asks any part of it
+  on its own.
+  **Holds it:** `skep_shell::shell` (`Shell::write_door`, `Shell::signed`), with `skep_shell::hold`'s reads as its parts.
+  **Checked by:** `crates/skep-shell/src/shell/tests/door.rs` (`the_write_door_asks_its_four_questions_in_one_order`) and the rows' cells.
+  **Closed:** #829, #849, #850, #854, #868, #880.
 
 ## The builds and the checks
 
@@ -311,6 +321,16 @@ says "from" it at its end.
   **Holds it:** every `tidy` check that reads source: `skep_conformance`, `skep_discovery`, `skep_links`, `skep_febe`, `skep_retrieval`, `skep_coordination`, `skep_identity`, `skep_arrangement`, `skep_cli`.
   **Checked by:** the checks' own control inputs — `crates/skep-identity/tests/it/tidy.rs` (`the_module_map_readers_see_the_forms_src_does_not_spell`, `the_purity_readers_see_the_world_in_every_form`); `crates/skep-coordination/tests/it/tidy.rs` (`the_order_readers_see_the_forms_src_does_not_spell`).
   **Closed:** #22, #117, #130, #282.
+- **SP-32 An open defect is pinned as an expected failure on its
+  invariant.** A defect class found open and not yet fixed gets one
+  normal test that asserts the invariant as the code should keep it, its
+  assertion message opening with the invariant's id. The test is marked
+  `#[should_panic(expected = "<id>: ")]` until the change that closes the
+  class removes the marker. It is never `#[ignore]`d, since the full gate
+  runs ignored tests, and never weakened.
+  **Holds it:** the held store's class cells in `crates/skep-shell/src/hold/tests/classes.rs` and `crates/skep-shell/src/shell/tests/classes.rs`.
+  **Checked by:** the full gate, `scripts/gate-full.sh` (a marked cell that stops failing fails the gate).
+  **Closed:** #874, #856, #857, #858, #873, #849, #854.
 
 ## Classes with no rule
 

@@ -835,7 +835,8 @@ re-exports counted as the module it is brought from (held by
 - `hold.rs` `Holds`: the one path of every `/op` the shell sends under a
   session (`Holds::send`) — a burst's DOOR (`Burst::admit`) and its hold
   among it — the parts of the shell's one write door it answers (another
-  shell's hold on the store, `Holds::another_window`; the standing hold's
+  shell's hold on the store, `Holds::another_window`, after the store's
+  touch a ceremony's door takes, `Holds::touch_store`; the standing hold's
   cause for the unholdable writes, `Holds::unholdable_refusal`; the lines
   standing held on a draft, `Holds::held_lines`) — and the per-(board,
   principal) queue over `held.rs`'s file with its ONE ORDINAL SPACE
@@ -912,7 +913,7 @@ the two public modules, and `Shell`'s public methods. Each suite's module
 doc says what it holds.
 
 Its rules of mechanism: SP-1, SP-2, SP-3, SP-10, SP-11, SP-15, SP-17,
-SP-18, SP-19, SP-20, SP-23, SP-24.
+SP-18, SP-19, SP-20, SP-23, SP-24, SP-31, SP-32.
 
 ## The command, `skep-cli`
 

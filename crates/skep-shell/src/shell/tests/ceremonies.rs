@@ -3,8 +3,10 @@
 //! The suite checks `bind` confirming the three facts against the board
 //! before it appends the line; a ceremony from a shell finding another's
 //! lock on the board's held store refused `another_window` at the shell's
-//! one write door, and going out from the shell that holds the store; a
-//! second device's key enrolled from the
+//! one write door, and going out from the shell that holds the store — from
+//! a shell that has opened no session at the board too, its door touching
+//! the store first, whether another shell holds the pending lock or the
+//! board's own alone; a second device's key enrolled from the
 //! first device, bound there and retiring the first's key, whose session
 //! dies on the arm that names the hand; a rotation ending its old key's
 //! session on the own hand's arm; and, beside a key store that cannot be
@@ -12,7 +14,50 @@
 //! answered neither, the failure said once on `Talk` — each death read for
 //! its hand, each walk's answer held to its declaration.
 
+use std::sync::mpsc::Receiver;
+
+use skep_search::Chain;
+
 use super::*;
+
+/// Returns the states the `another-window` events `rx` holds carry, in
+/// order, each held to its declaration.
+fn edges(rx: &Receiver<Event>) -> Vec<bool> {
+    rx.try_iter()
+        .filter(|e| e.name == EventName::AnotherWindow)
+        .map(|e| {
+            crate::shapes::assert_declared("AnotherWindowEvent", &e.data);
+            e.data["another_window"].as_bool().unwrap_or_else(|| panic!("the state, a boolean: {}", e.data))
+        })
+        .collect()
+}
+
+/// Returns whether a holder keeps `dir`'s lock: its lock file opened and
+/// found locked.
+fn taken(dir: &HeldDir) -> bool {
+    matches!(dir.try_lock(), Ok(None))
+}
+
+/// Returns the chain the board at `origin` names in its head record.
+fn chain_of(origin: &str) -> Chain {
+    let term = Board::new(Origin::parse(origin).unwrap(), skep_client::PlainHttp::new()).board_term().unwrap().expect("the claim's head stands");
+    Chain::from_bytes(term.chain)
+}
+
+/// Returns the eight writing ceremonies' calls at `board`, each refused at
+/// the door before its walk where another shell holds the board's store.
+fn eight_ceremonies(board: &str, origin: &str, key: &Value) -> [(&'static str, Value); 8] {
+    [
+        ("claim", json!({"board": board})),
+        ("enroll", json!({"board": board, "payload": key["payload"]})),
+        ("bind", json!({"board": board, "principal": 1, "account": "1.0.1", "origin": origin})),
+        ("recover", json!({"board": board})),
+        ("rotate", json!({"board": board})),
+        ("retire", json!({"board": board, "fingerprint": key["fingerprint"]})),
+        ("handoff", json!({"board": board, "account": "1.0.1.2"})),
+        ("accept", json!({"board": board, "address": "1.0.1.2"})),
+    ]
+}
 
 /// Checks that `bind` confirms the three facts against the board.
 ///
@@ -95,16 +140,7 @@ fn a_ceremony_from_a_shell_finding_anothers_lock_is_refused_and_goes_out_from_th
     let position = || a.call("health", &json!({"board": a_board})).unwrap()["health"]["log_position"].as_u64().unwrap();
     let kb = b.call("keygen", &json!({"label": "second"})).unwrap_or_else(|r| panic!("keygen dials nothing and meets no door: {r}"));
     let before = position();
-    for (call, args) in [
-        ("claim", json!({"board": b_board})),
-        ("enroll", json!({"board": b_board, "payload": kb["payload"]})),
-        ("bind", json!({"board": b_board, "principal": 1, "account": "1.0.1", "origin": origin})),
-        ("recover", json!({"board": b_board})),
-        ("rotate", json!({"board": b_board})),
-        ("retire", json!({"board": b_board, "fingerprint": kb["fingerprint"]})),
-        ("handoff", json!({"board": b_board, "account": "1.0.1.2"})),
-        ("accept", json!({"board": b_board, "address": "1.0.1.2"})),
-    ] {
+    for (call, args) in eight_ceremonies(&b_board, &origin, &kb) {
         let refused = b.call(call, &args).unwrap_err();
         let v = refused.to_value();
         assert_eq!((refused.name(), v["kind"].as_str(), v["call"].as_str()), ("another_window", Some("shell"), Some(call)), "{call}: {v}");
@@ -127,6 +163,123 @@ fn a_ceremony_from_a_shell_finding_anothers_lock_is_refused_and_goes_out_from_th
     b.shutdown();
     drop((a, b));
     a_answerer.join().unwrap();
+    b_answerer.join().unwrap();
+    sd.shutdown();
+}
+
+/// Checks that a ceremony from a shell with no session is refused
+/// `another_window` while another shell holds the store (§3c.3; skep #880).
+///
+/// Shell A opens no session: its `bind` of the claim's own facts touches the
+/// board's held store at the door, taking the pending lock and the board's
+/// own, and goes out. Shell B over the same data directory opens no session
+/// either, and its first acts are the eight writing ceremonies, made at
+/// once, inside its first probe: each is refused `another_window` naming the
+/// call, the board's position unmoved, the state said once in B's own window
+/// and emitted once as `another-window`. From A, which holds the store,
+/// `enroll` of a new key, `retire` of it, `handoff`'s first beat and
+/// `rotate` go out (the mutant whose door reads the state as last set,
+/// touching nothing, leaves A holding no lock of the board's and lets B's
+/// claim through).
+#[test]
+fn a_ceremony_from_a_shell_with_no_session_is_refused_while_another_holds_the_store() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (pending, own) = (HeldDir::pending(&store, &Origin::parse(&origin).unwrap()), HeldDir::new(&store, chain_of(&origin)));
+    let (a, a_said) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let a_answerer = answer_moments(a.subscribe(), Arc::clone(&a.pending), Arc::new(Mutex::new(Vec::new())));
+    let a_board = a.board_references().remove(0);
+    let bound = a.call("bind", &json!({"board": a_board, "principal": 1, "account": "1.0.1", "origin": origin})).unwrap_or_else(|r| panic!("bind from A: {r}\n{}", a_said.lock().unwrap().join("\n")));
+    crate::shapes::assert_declared("Bound", &bound);
+    assert!(taken(&pending) && taken(&own), "premise: A's door took both of the board's locks:\n{}", a_said.lock().unwrap().join("\n"));
+    let kb = a.call("keygen", &json!({"label": "second"})).unwrap();
+    let position = || a.call("health", &json!({"board": a_board})).unwrap()["health"]["log_position"].as_u64().unwrap();
+    let before = position();
+    let (b, b_said) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let b_events = b.subscribe();
+    let b_answerer = answer_moments(b.subscribe(), Arc::clone(&b.pending), Arc::new(Mutex::new(Vec::new())));
+    let b_board = b.board_references().remove(0);
+    let talked = || format!("{}\n{}", a_said.lock().unwrap().join("\n"), b_said.lock().unwrap().join("\n"));
+    for (call, args) in eight_ceremonies(&b_board, &origin, &kb) {
+        let refused = match b.call(call, &args) {
+            Ok(answered) => panic!("{call} from a shell with no session went out beside the shell that holds the store: {answered}\n{}", talked()),
+            Err(refused) => refused,
+        };
+        let v = refused.to_value();
+        assert_eq!((refused.name(), v["kind"].as_str(), v["call"].as_str()), ("another_window", Some("shell"), Some(call)), "{call}: {v}");
+    }
+    assert_eq!(position(), before, "nothing of the eight is sent from the second window");
+    let said: Vec<String> = b_said.lock().unwrap().iter().filter(|l| l.contains("another shell holds this board's held store")).cloned().collect();
+    assert_eq!(said.len(), 1, "the state is said once in B's own window: {said:?}");
+    assert_eq!(edges(&b_events), [true], "the state is emitted once, as it begins");
+    // From the shell that holds the store, the ceremonies go out.
+    let enrolled = a.call("enroll", &json!({"board": a_board, "payload": kb["payload"]})).unwrap_or_else(|r| panic!("enroll from A: {r}\n{}", talked()));
+    crate::shapes::assert_declared("Enrolled", &enrolled);
+    assert_eq!(enrolled["fingerprints"], json!([kb["fingerprint"]]), "{enrolled}");
+    let retired = a.call("retire", &json!({"board": a_board, "fingerprint": kb["fingerprint"]})).unwrap_or_else(|r| panic!("retire from A: {r}\n{}", talked()));
+    assert_eq!(retired, json!({}));
+    let handed = a.call("handoff", &json!({"board": a_board, "account": "1.0.1.2"})).unwrap_or_else(|r| panic!("handoff from A: {r}\n{}", talked()));
+    crate::shapes::assert_declared("HandoffDelegated", &handed);
+    let rotated = a.call("rotate", &json!({"board": a_board})).unwrap_or_else(|r| panic!("rotate from A: {r}\n{}", talked()));
+    crate::shapes::assert_declared("Rotated", &rotated);
+    assert!(position() > before, "the ceremonies from the shell that holds the store went out");
+    a.shutdown();
+    b.shutdown();
+    drop((a, b));
+    a_answerer.join().unwrap();
+    b_answerer.join().unwrap();
+    sd.shutdown();
+}
+
+/// Checks that a ceremony from a shell with no session is refused where
+/// another holds the board's own lock alone (§3c.3; skep #828, #880).
+///
+/// The board's own held directory, named by its chain, is locked by another
+/// holder and its pending one is free. Shell B opens no session, and its
+/// `claim` is refused `another_window` naming the call, the board's position
+/// unmoved: its door's touch read the board's head and found the board's own
+/// lock held, so B stands another shell's — said once in its own window and
+/// emitted `true`. Once the other holder lets go, B's `bind` of the claim's
+/// own facts touches the store again, takes both locks and goes out, the
+/// state's end said once and emitted `false` (the mutant whose touch tries
+/// the pending lock alone, reading no head, lets the claim through for the
+/// shell's life; the one that touches a store once and never again refuses
+/// the bind).
+#[test]
+fn a_ceremony_from_a_shell_with_no_session_is_refused_where_another_holds_the_boards_own_lock_alone() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (pending, own) = (HeldDir::pending(&store, &Origin::parse(&origin).unwrap()), HeldDir::new(&store, chain_of(&origin)));
+    own.ensure().unwrap();
+    let held = own.try_lock().unwrap().expect("premise: the board's own lock is free once the claim's shell stopped");
+    let (b, b_said) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let b_events = b.subscribe();
+    let b_answerer = answer_moments(b.subscribe(), Arc::clone(&b.pending), Arc::new(Mutex::new(Vec::new())));
+    let b_board = b.board_references().remove(0);
+    let talked = || b_said.lock().unwrap().join("\n");
+    let position = || b.call("health", &json!({"board": b_board})).unwrap()["health"]["log_position"].as_u64().unwrap();
+    let before = position();
+    let refused = match b.call("claim", &json!({"board": b_board})) {
+        Ok(answered) => panic!("the claim from a shell with no session went out beside the board's own lock: {answered}\n{}", talked()),
+        Err(refused) => refused.to_value(),
+    };
+    assert_eq!((refused["name"].as_str(), refused["call"].as_str()), (Some("another_window"), Some("claim")), "{refused}\n{}", talked());
+    assert_eq!(position(), before, "nothing of the claim is sent");
+    drop(held);
+    let bound = b.call("bind", &json!({"board": b_board, "principal": 1, "account": "1.0.1", "origin": origin})).unwrap_or_else(|r| panic!("bind from B once the lock is let go: {r}\n{}", talked()));
+    crate::shapes::assert_declared("Bound", &bound);
+    assert!(taken(&pending) && taken(&own), "B's touch took both of the board's locks:\n{}", talked());
+    assert_eq!(edges(&b_events), [true, false], "the state is emitted at its two edges");
+    let said = |text: &str| b_said.lock().unwrap().iter().filter(|l| l.contains(text)).count();
+    assert_eq!((said("another shell holds this board's held store"), said("this shell holds this board's held store now")), (1, 1), "each edge is said once:\n{}", talked());
+    b.shutdown();
+    drop(b);
     b_answerer.join().unwrap();
     sd.shutdown();
 }

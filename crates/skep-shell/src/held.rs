@@ -243,7 +243,8 @@
 //! hand-off has not yet closed — a shell finding either held takes none,
 //! opens no file under them and reads alone at the board, every write
 //! refused at its door (`another_window`), and tries both again at every
-//! probe and at every session's open (the hold's `Directory`).
+//! probe and at every touch of the store — a session's open, a ceremony's
+//! door (the hold's `Directory`).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;

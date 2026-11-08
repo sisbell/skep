@@ -57,7 +57,9 @@
 //! dial and before any read the write makes: a bare session's write is
 //! refused (`SessionEntry::may_write`); every write is refused
 //! `another_window` where another shell holds the board's store
-//! ([`Holds::another_window`], §3c.3); an unholdable kind is refused under
+//! ([`Holds::another_window`], §3c.3), the store touched first for a
+//! ceremony, which runs under no session of this shell's
+//! ([`Holds::touch_store`]); an unholdable kind is refused under
 //! the standing hold ([`Holds::unholdable_refusal`]); and a whole-draft
 //! write — the restore's, the merge rows' and the shot — is refused
 //! `held_lines` while a line of the principal's stands held on a draft it
@@ -96,12 +98,15 @@
 //! as the attest is stripped at the hold and composed at every send.
 //!
 //! **The store, from the first touch** (§3c.1, §3c.3; skep #857, #858,
-//! #859, #873). A board's held store is taken at its first `establish` — a
-//! session's open, or a probe — whatever its one head read answers: the
-//! PENDING directory, `held/pending/<hash of the origin dialed>/`, is made
-//! and locked always, and where the head names a term the board's own
-//! directory, `held/<chain>/`, is made and locked after it, the pending
-//! lock first (skep #828). Both locks are kept for the shell's life
+//! #859, #873, #880). A board's held store is taken at its first touch: a
+//! session's open or a ceremony's door, each the store's touch
+//! ([`Holds::touch_store`]), which reads the board's head once and
+//! establishes the store from whatever it answers, or a probe, whose retry
+//! tries the locks without a read. The PENDING directory,
+//! `held/pending/<hash of the origin dialed>/`, is made and locked always,
+//! and where the head names a term the board's own directory,
+//! `held/<chain>/`, is made and locked after it, the pending lock first
+//! (skep #828). Both locks are kept for the shell's life
 //! ([`Directory::ThisWindow`]); a shell that finds either held takes none —
 //! it lets go any it took in that try, opens no file, and stands another
 //! shell's ([`Directory::AnotherWindow`]): ONE SHELL PER DATA DIRECTORY
@@ -111,11 +116,14 @@
 //! the door before any dial ([`Holds::another_window`]), nothing held and
 //! nothing sent, the lines held before the state was found sent as the
 //! board takes them — and tries both locks again at every probe and at
-//! every session's open, taking both once both are free, each edge of the
-//! state said once in the shell's own window and emitted once as
-//! `another-window` (skep #827). The one other standing is a device's
-//! refusal of the pending directory or its lock ([`Directory::NotYet`]),
-//! tried again at every copy, every probe and every session's open.
+//! every touch, taking both once both are free, each edge of the state said
+//! once in the shell's own window and emitted once as `another-window`
+//! (skep #827). A ceremony runs under no session of this shell's, so its
+//! door takes the touch itself before it answers (`Shell::write_door`): a
+//! shell that has opened no session at the board meets the board's locks
+//! as they stand. The one other standing is a device's refusal of the
+//! pending directory or its lock ([`Directory::NotYet`]), tried again at
+//! every copy, every probe and every touch.
 //!
 //! **The queue** is each principal's [`HeldQueue`], in `k` order across the
 //! board's documents, and every line of it goes to disk from the
@@ -1167,10 +1175,10 @@ enum Directory {
     /// held, no file is read, and each principal's lines wait in memory in
     /// their queue, which names its file all the same
     /// (`HeldQueue::unopened`). Tried again at every copy, every probe and
-    /// every session's open ([`Holds::retry_store`]): the one retry makes
-    /// the directory, takes its lock, reads each file and writes the lines,
-    /// in that order. It is the store's standing before the first touch
-    /// too, under no refusal yet.
+    /// every touch of the store ([`Holds::retry_store`],
+    /// [`Holds::touch_store`]): the one retry makes the directory, takes its
+    /// lock, reads each file and writes the lines, in that order. It is the
+    /// store's standing before the first touch too, under no refusal yet.
     NotYet(io::Error),
     /// Another shell's: a lock of the board's held store — the pending
     /// directory's, or the board's own — was found held by another shell
@@ -1190,8 +1198,9 @@ enum Directory {
     /// life as every lock taken is, so each line's marks and its `done` are
     /// written there and no other shell opens the file — and those in
     /// memory, held while the device refused the store (skep #789). Both
-    /// locks are tried again at every probe and at every session's open, and
-    /// the state is left once both are this shell's. Its start and its end
+    /// locks are tried again at every probe and at every touch of the store
+    /// ([`Holds::touch_store`]: a session's open, a ceremony's door), and the
+    /// state is left once both are this shell's. Its start and its end
     /// are each said on `Talk` and emitted as `another-window` once
     /// ([`Holds::step`]).
     AnotherWindow { pending: Option<LockedDir> },
@@ -1204,14 +1213,14 @@ enum Directory {
     /// goes to disk before any head reads; it stands, empty but for its lock
     /// file, for every board the shell touches, and its lock is never let
     /// go. `chain` is `held/<chain>/`, made and locked after it where a term
-    /// has read — at the first touch, or at a later probe or open, the
+    /// has read — at the first touch, or at a later probe or touch, the
     /// pending lock taken first (skep #828) — and never let go either: the
     /// queues' files move from the pending one to it once
     /// ([`Holds::settle_queue`]), the pending FILE removed once no copy is
     /// owed, the directory and its lock standing. `None` while no term has
     /// read, or while the device refuses the board's own directory or its
-    /// lock — said once, tried again at every probe and every session's
-    /// open, the lines on the pending file meanwhile.
+    /// lock — said once, tried again at every probe and every touch, the
+    /// lines on the pending file meanwhile.
     ThisWindow { pending: LockedDir, chain: Option<LockedDir> },
 }
 
@@ -1735,14 +1744,15 @@ impl BoardSlot {
 /// The holds: every board's hold, shared by the shell and the feed threads.
 ///
 /// The shell shares it for the `op` row's one path, `held` and `resolve`, a
-/// session's open and `set_node_state`; the boards' feed threads for the
-/// probe, the `/health` read and the daemon-running end. The boards are the
-/// shell's, fixed at its open, each under its own lock. A method about a
-/// session reaches its board through the session — its `board_reference`
-/// the hold's key, its `board` the board dialed — and the board-wide ones
-/// (`probe`, `set_node_stopped`, `node_stopped`, `another_window`,
-/// `note_health`) take the board's reference, as `halted_file`, the native
-/// side's read of a principal's halted file, takes it beside the principal.
+/// session's open, a ceremony's door and `set_node_state`; the boards' feed
+/// threads for the probe, the `/health` read and the daemon-running end. The
+/// boards are the shell's, fixed at its open, each under its own lock. A
+/// method about a session reaches its board through the session — its
+/// `board_reference` the hold's key, its `board` the board dialed — and the
+/// board-wide ones (`probe`, `touch_store`, `set_node_stopped`,
+/// `node_stopped`, `another_window`, `note_health`) take the board's
+/// reference, as `halted_file`, the native side's read of a principal's
+/// halted file, takes it beside the principal.
 ///
 /// # Panics
 ///
@@ -1783,13 +1793,14 @@ impl Holds {
     ///
     /// Each board's entry gives its reference beside the board dialed, the
     /// shell's for its life: nothing is dialed and nothing on disk touched
-    /// until a session opens at one.
+    /// here — a board's store is first touched by a session's open, a
+    /// ceremony's door ([`Holds::touch_store`]) or the board's first probe.
     pub fn new(sessions: Arc<Sessions>, bus: Arc<EventBus>, key_store: Arc<FileStore>, data_dir: PathBuf, talk: Talk, boards: impl IntoIterator<Item = Arc<BoardEntry>>) -> Arc<Holds> {
         let boards = boards
             .into_iter()
             .map(|entry| {
                 let hold = BoardHold {
-                    directory: Directory::NotYet(io::Error::other("no session has opened at this board yet")),
+                    directory: Directory::NotYet(io::Error::other("the board's held store is not touched yet")),
                     chain: None,
                     acked: HashSet::new(),
                     writes_halted: false,
@@ -1922,13 +1933,14 @@ impl Holds {
     /// `another_window` before any dial — the `op` row's, the publication
     /// and merge families', the restore's and the ceremonies' (skep #829) —
     /// so no line is held and nothing sent ([`Directory::AnotherWindow`]).
-    /// The state is
-    /// found as a session's open or a probe establishes the directory —
-    /// another shell holding the board's own directory's lock, or the
-    /// pending one's: one writer per board (skep #828) — and left once this
-    /// shell locks the board's own directory, or, while the head will not
-    /// read, the pending one, each edge emitted as `another-window`
-    /// ([`Holds::establish`]; skep #827).
+    /// The state is found as the store's touch ([`Holds::touch_store`]: a
+    /// session's open, a ceremony's door; skep #880) or a probe tries the
+    /// board's locks — another shell holding the board's own directory's
+    /// lock, or the pending one's: one writer per board (skep #828) — and
+    /// left once this shell locks the board's own directory, or, while the
+    /// head will not read, the pending one, each edge emitted as
+    /// `another-window` ([`Holds::step`]; skep #827). It reads the state as
+    /// it stands, and tries nothing.
     pub fn another_window(&self, board_reference: &str) -> bool {
         matches!(self.lock(board_reference).directory, Directory::AnotherWindow { .. })
     }
@@ -1945,39 +1957,63 @@ impl Holds {
         self.lock(board_reference).halted(principal).map(|(path, _)| path.to_path_buf())
     }
 
-    /// Takes a session opened at the board (§3c.7 items 1 and 4).
+    /// Touches the board's held store where it is not yet whole (§3c.1,
+    /// §3c.3; skep #828, #880).
     ///
-    /// The board's locks are tried where the store is not yet whole — the
-    /// board's own directory not this shell's, by a device's refusal or
-    /// another shell's lock, or no term read yet — from one read of the
-    /// board's head ([`Holds::establish`]); and the session's principal's
-    /// file is read under its account by the principal's door — P38's faces
-    /// kept, a misplaced file set aside and said in the shell's own window —
-    /// so `held(session)` lists its lines at once, a bare session's among
-    /// them, and the next probe resends them where a session of the
-    /// principal's may write. No other principal's file is opened (P39), and
-    /// none at all where another shell holds the board's store.
-    pub fn open_session(&self, session: &SessionEntry) {
-        let slot = self.slot(&session.board_reference);
-        // The board's head is read outside the lock, once, where the store is
-        // not yet whole (the board keeps a term once read).
+    /// The store is not yet whole while the board's own directory is not
+    /// this shell's — by a device's refusal, another shell's lock, or no term
+    /// read yet. There, the board's head is read once, outside the lock, and
+    /// the store established from it ([`Holds::establish`]): the pending lock
+    /// tried first, then the board's own where a term reads, every lock taken
+    /// kept for the shell's life, and a lock found held making the store
+    /// another shell's ([`Directory::AnotherWindow`]). At a store already
+    /// whole nothing is read and nothing tried. It is the board's half of a
+    /// session's open ([`Holds::open_session`]) and the touch the shell's one
+    /// write door takes before it answers a ceremony, which runs under no
+    /// session of this shell's (`Shell::write_door`), so a shell that has
+    /// opened no session at the board answers [`Holds::another_window`] from
+    /// the board's locks as they stand.
+    ///
+    /// # Panics
+    ///
+    /// Panics where `board_reference` names no board the holds were opened
+    /// over (the type's precondition).
+    pub fn touch_store(&self, board_reference: &str) {
+        let slot = self.slot(board_reference);
+        // The head is read outside the lock, once, where the store is not yet
+        // whole (the board keeps a term once read).
         if slot.lock().directory.tries() {
             let head = board_head(&slot.board);
-            self.note_head(&session.board_reference, &head);
-            self.establish(&session.board_reference, slot, &head);
+            self.note_head(board_reference, &head);
+            self.establish(board_reference, slot, &head);
         }
+    }
+
+    /// Takes a session opened at the board (§3c.7 items 1 and 4).
+    ///
+    /// The board's store is touched where it is not yet whole
+    /// ([`Holds::touch_store`]); and the session's principal's file is read
+    /// under its account by the principal's door — P38's faces kept, a
+    /// misplaced file set aside and said in the shell's own window — so
+    /// `held(session)` lists its lines at once, a bare session's among them,
+    /// and the next probe resends them where a session of the principal's
+    /// may write. No other principal's file is opened (P39), and none at all
+    /// where another shell holds the board's store.
+    pub fn open_session(&self, session: &SessionEntry) {
+        self.touch_store(&session.board_reference);
         // A halted file is answered at the principal's next act.
-        let _ = self.principal_hold(&mut slot.lock(), session);
+        let _ = self.principal_hold(&mut self.lock(&session.board_reference), session);
     }
 
     /// Establishes the board's store where it is not yet whole, from one
     /// read of the board's head.
     ///
     /// `head` is the board's head as the caller read it (`sessions::board_head`)
-    /// — the session's open reads it once where the store is not yet whole,
-    /// and the probe once per probe (`resend`'s `drain`), the one answer
-    /// deciding the store here and the documents the resend skips, so no
-    /// probe reads the head twice for the hold's sake. A term names the
+    /// — the store's touch reads it once where the store is not yet whole
+    /// ([`Holds::touch_store`]: a session's open, a ceremony's door), and the
+    /// probe once per probe (`resend`'s `drain`), the one answer deciding the
+    /// store here and the documents the resend skips, so no probe reads the
+    /// head twice for the hold's sake. A term names the
     /// board's chain, remembered for every later try ([`BoardHold::chain`]):
     /// the board's own directory is made and locked from here on, at this
     /// try or a later one. Then the locks this shell does not hold are tried
@@ -1997,22 +2033,22 @@ impl Holds {
     /// Tries the board's locks this shell does not hold, and says each edge
     /// of the store's standing once (§3c.1, §3c.3; skep #828, #873).
     ///
-    /// It is the store's one step ([`Directory::step`]), taken at a session's
-    /// open and at a probe — from the head read each makes
-    /// ([`Holds::establish`]) — at every probe while the store is not yet
-    /// whole ([`Holds::retry_store`]), and at every copy while the device
-    /// refuses it ([`Holds::principal_hold`]); nothing is tried once both
-    /// locks are this shell's. The edges (SP-11): as the store becomes
-    /// another shell's, what this shell does meanwhile and the lines held
-    /// before it — those on the pending file, and those in memory, which a
-    /// close before they are sent loses — said once on `Talk` and emitted
-    /// once as `another-window`, `true` ([`Holds::emit_another_window`];
-    /// skep #827); as this shell takes the store from that state, the
-    /// pending one or the board's own, said once and emitted once, `false`;
-    /// a try that finds no change says and emits nothing. The device's
-    /// refusal of the store — the pending directory or its lock, or the
-    /// board's own — is said once per change of its cause, and the store
-    /// taken after one said once ([`Holds::say_store`]).
+    /// It is the store's one step ([`Directory::step`]), taken at the store's
+    /// touch — a session's open, a ceremony's door — and at a probe, from the
+    /// head read each makes ([`Holds::establish`]); at every probe while the
+    /// store is not yet whole ([`Holds::retry_store`]); and at every copy
+    /// while the device refuses it ([`Holds::principal_hold`]). Nothing is
+    /// tried once both locks are this shell's. The edges (SP-11): as the
+    /// store becomes another shell's, what this shell does meanwhile and the
+    /// lines held before it — those on the pending file, and those in
+    /// memory, which a close before they are sent loses — said once on
+    /// `Talk` and emitted once as `another-window`, `true`
+    /// ([`Holds::emit_another_window`]; skep #827); as this shell takes the
+    /// store from that state, the pending one or the board's own, said once
+    /// and emitted once, `false`; a try that finds no change says and emits
+    /// nothing. The device's refusal of the store — the pending directory or
+    /// its lock, or the board's own — is said once per change of its cause,
+    /// and the store taken after one said once ([`Holds::say_store`]).
     fn step(&self, board_reference: &str, board_hold: &mut BoardHold, origin: &Origin) {
         if !board_hold.directory.tries() {
             return;
@@ -2413,7 +2449,7 @@ impl Holds {
         let account = session.facts.account.as_deref().unwrap_or("");
         let origin = session.board.dialed();
         // The store's retry before every copy: a store the device refused is
-        // tried again; another shell's is tried at the probes and the opens.
+        // tried again; another shell's is tried at the probes and the touches.
         if matches!(board_hold.directory, Directory::NotYet(_)) {
             self.step(&session.board_reference, board_hold, origin);
         }

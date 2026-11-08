@@ -58,16 +58,18 @@
 //! dial is made); and, at ONE WRITE DOOR every write the shell sends meets
 //! before any dial and any read the write makes ([`Shell::write_door`]; the
 //! held store's shape (vi) item 4), in one order: a write under a bare
-//! session, and its `resolve(send)` — the keyless session reads alone
-//! (foundations §3.3 state 3), so no `bare` write of this shell's is ever
-//! committed (`write_in_bare_session`, `SessionEntry::may_write`); a write
-//! at a board whose held store another shell holds — a frame, a row of the
-//! publication or merge family, the restore, and every ceremony that writes
-//! to the board — ONE SHELL PER DATA DIRECTORY (§3c.3): until a second
-//! launch hands its address to the running client and exits, the second
-//! window reads alone at the board and runs no ceremony there (skep #829),
-//! nothing held and nothing sent (`another_window`,
-//! `Holds::another_window`); a write of a kind the hold never holds
+//! session — the keyless session reads alone (foundations §3.3 state 3), so
+//! no `bare` write of this shell's is ever committed
+//! (`write_in_bare_session`, `SessionEntry::may_write`); a write at a board
+//! whose held store another shell holds — a frame, a row of the publication
+//! or merge family, the restore, and every ceremony that writes to the
+//! board — ONE SHELL PER DATA DIRECTORY (§3c.3): until a second launch
+//! hands its address to the running client and exits, the second window
+//! reads alone at the board and runs no ceremony there (skep #829), nothing
+//! held and nothing sent (`another_window`, `Holds::another_window`), a
+//! ceremony's door touching the board's store first, so a window that has
+//! opened no session there meets the board's locks as they stand
+//! (`Holds::touch_store`; skep #880); a write of a kind the hold never holds
 //! (`hold::UNHOLDABLE_WRITES` — the mint among them, skep #868 — the shot,
 //! the restore's and the merge rows' writes) while a hold stands at the
 //! board, refused at once with its cause (`stopped`, `poisoned`, `halted`),
@@ -78,7 +80,11 @@
 //! held on a draft it writes, in any state, refused `held_lines` naming the
 //! draft and the count (`Holds::held_lines`; §3c.4, THE HELD-LINES GATE;
 //! skep #849, #854) — the burst writes not gated, a burst on such a draft
-//! held `behind` the standing lines as before; a
+//! held `behind` the standing lines as before; `resolve(send)` under a bare
+//! session, refused by its own row (`write_in_bare_session`): it sends no
+//! write itself — the lines it hands back go out by a resend, which sends
+//! under no bare session — so it asks no door, and it stands at another
+//! window (§3c.3); a
 //! `publish` frame under a session (`publish_is_a_call`: a publication
 //! crosses as `publication.confirm`, the shell composing the one request
 //! from the panel it holds, since the page composes no write — §4b.1's `op`
@@ -313,7 +319,8 @@ pub(super) enum Writer<'a> {
     /// or merge family, the restore.
     Session(&'a SessionEntry),
     /// A ceremony, which runs the library's walk under no session of this
-    /// shell's: the board it writes to.
+    /// shell's: the board it writes to, whose held store the door touches
+    /// before it answers ([`Holds::touch_store`]).
     Board(&'a BoardEntry),
 }
 
@@ -1477,9 +1484,14 @@ impl Shell {
     /// asks as its board ([`Writer::Board`]). `write` is the write as the
     /// door reads it ([`Write`]): what its refusal names — the `op`, or the
     /// `call` — the wire op the standing hold judges it by, and the drafts
-    /// it sets whole. Nothing is dialed here. A write that met the door is
-    /// followed to its end, never refused at it again mid-way — the restart
-    /// re-open among them ([`Shell::signed_within_call`]).
+    /// it sets whole. Nothing of the write is dialed here. A ceremony's door
+    /// first touches the board's held store where it is not yet whole
+    /// ([`Holds::touch_store`]): the board's head read once and the store's
+    /// locks tried, as a session's open tries them, since no session of this
+    /// shell's has touched the store for the ceremony (skep #880). A write
+    /// that met the door is followed to its end, never refused at it again
+    /// mid-way — the restart re-open among them
+    /// ([`Shell::signed_within_call`]).
     ///
     /// # Errors
     ///
@@ -1491,7 +1503,9 @@ impl Shell {
     /// 2. `another_window` — another shell holds the held store of the board
     ///    ([`Holds::another_window`]): ONE SHELL PER DATA DIRECTORY (§3c.3),
     ///    the second window reading alone there, nothing held and nothing
-    ///    sent, and no ceremony run from it (skep #829);
+    ///    sent, and no ceremony run from it (skep #829) — from a shell that
+    ///    has opened no session at the board too, its door reading the
+    ///    board's locks as its touch found them (skep #880);
     /// 3. `stopped`, `poisoned` or `halted` — a hold stands at the board and
     ///    the write is of a kind the hold never holds
     ///    (`hold::UNHOLDABLE_WRITES`; [`Holds::unholdable_refusal`]), the
@@ -1510,7 +1524,12 @@ impl Shell {
                 }
                 session.board_reference.as_str()
             }
-            Writer::Board(entry) => entry.reference.as_str(),
+            Writer::Board(entry) => {
+                // A ceremony runs under no session of this shell's, whose open
+                // would have touched the store: the door touches it.
+                self.holds.touch_store(&entry.reference);
+                entry.reference.as_str()
+            }
         };
         if self.holds.another_window(board_reference) {
             return Err(Refusal::shell(Name::ANOTHER_WINDOW, write.named()));

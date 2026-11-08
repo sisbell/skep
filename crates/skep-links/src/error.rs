@@ -332,8 +332,13 @@ pub enum OldCause {
     /// through no content span: the corner's link, which no panel offers
     /// (the link-sets design §5.1's stored-endset test).
     WholeWork,
-    /// `old` — or, where `old` is a successor, its own original — is
-    /// superseded by an active claim of the caller's naming a public copy.
+    /// `old` is superseded by a claim of the caller's naming a public copy.
+    ///
+    /// The claim is active and its copy covers the entry's published spans,
+    /// and the entry holds none of the shot's own new words, which no copy
+    /// covers (the link-sets design §5.1's key (iii), PUB-3.9); or `old` is
+    /// a successor whose own original is superseded by such a claim,
+    /// whatever new words the entry holds.
     Superseded,
 }
 

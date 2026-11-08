@@ -426,10 +426,12 @@ impl DepositPlan {
 ///    panel's, and is refused); not superseded by an active claim of the
 ///    caller's naming a public successor homed in a published document of
 ///    the caller's whose ends cover every published content span of this
-///    entry (a span on the shot's own new words is covered by nothing, so
-///    such an entry is never superseded), nor, where `old` is itself a
-///    successor, its original so superseded; a second entry naming one
-///    `old` refused at the second;
+///    entry, an entry with a member-position end on the shot's own new
+///    words never so superseded, as nothing standing covers fresh words
+///    (§5.1's key (iii), PUB-3.9); nor, where `old` is itself a successor,
+///    its original superseded by such a claim over the entry's published
+///    content spans, whatever new words the entry holds; a second entry
+///    naming one `old` refused at the second;
 /// 4. each `retract` entry: the target resident, the caller's own, homed in
 ///    a published document of the caller's; already retracted → SKIPPED;
 /// 5. each `read_with` entry: `S` a registered trunk document, the
@@ -523,7 +525,8 @@ pub fn plan_deposits<W: LinkWorld + HasM5>(
                     return Err(PlanFault::DuplicateOriginal { index });
                 }
                 let spans = published_spans(&from, &to, &image, shot);
-                let home = check_old(world, caller, old, &image, &spans)
+                let new_words = holds_new_words(&from, &to, &image, shot);
+                let home = check_old(world, caller, old, &image, &spans, new_words)
                     .map_err(|cause| PlanFault::Old { index, cause })?;
                 Some(PlannedClaim { old: old.clone(), home })
             }
@@ -763,33 +766,27 @@ fn planned_end(end: &EndArg, image: &[Run], index: usize, slot: usize) -> Result
 /// Returns the content spans of an entry's two ends that lie on published
 /// identity — the spans a standing successor could cover.
 ///
-/// An I-span end's spans as given, any NAMED draft's own left out — the
-/// rendering draft's or an `also` draft's alike (`Shot::is_draft_native`),
-/// the shot re-minting every one of them, its member-position form the
-/// entry's spelling; a member-position end's spans at positions the shot
-/// places by reference, resolved through the request's image, where a span
-/// at a draft-native position — the shot's own new words, fresh at the
-/// commit — is left out, nothing standing before the commit could cover it
-/// (the request's image maps such a position to the draft's own address,
-/// which names a named draft). An address-form end names no content span.
+/// An I-span end's spans as given, any named draft's own left out
+/// ([`on_named_draft`]), the shot re-minting every one of them, its
+/// member-position form the entry's spelling; a member-position end's spans
+/// at positions the shot places by reference, resolved through the request's
+/// image, where a span at a draft-native position — the shot's own new
+/// words, fresh at the commit — is left out, nothing standing before the
+/// commit could cover it (the request's image maps such a position to the
+/// draft's own address, which names a named draft). An address-form end
+/// names no content span. Whether an end lies on new words at all is
+/// [`holds_new_words`]'s answer, which (3) reads beside these spans.
 fn published_spans(from: &PlannedEnd, to: &PlannedEnd, image: &[Run], shot: &Shot) -> Vec<Span> {
-    let of_draft = |s: &Span| -> bool {
-        validate(s.start().clone())
-            .ok()
-            .and_then(|a| document_of(&a))
-            .map(|d| trunk_of(&d))
-            .is_some_and(|d| shot.is_draft_native(&d))
-    };
     let mut out = Vec::new();
     for end in [from, to] {
         match end {
             PlannedEnd::Stored(endset) => {
-                out.extend(endset.spans().filter(|s| !is_unit_depth(s) && !of_draft(s)).cloned());
+                out.extend(endset.spans().filter(|s| !is_unit_depth(s) && !on_named_draft(s, shot)).cloned());
             }
             PlannedEnd::Named(_) => {}
             PlannedEnd::Member(spans) => {
                 if let Some(end) = member_end(image, spans) {
-                    out.extend(end.stored.spans().filter(|s| !of_draft(s)).cloned());
+                    out.extend(end.stored.spans().filter(|s| !on_named_draft(s, shot)).cloned());
                 }
             }
         }
@@ -797,24 +794,59 @@ fn published_spans(from: &PlannedEnd, to: &PlannedEnd, image: &[Run], shot: &Sho
     out
 }
 
+/// Returns whether a member-position end lies on the shot's own new words.
+///
+/// Some piece the end resolves to through the request's image lies on a
+/// named draft ([`on_named_draft`]): a draft-native position, which the
+/// commit mints fresh and no successor standing before it covers (§5.1's key
+/// (iii)). The member-position form alone, the form an end on the shot's new
+/// words takes (§5.7): an I-span end on a named draft's words is stored as
+/// the draft's own identity, the far end of an original on words the shot
+/// leaves out.
+fn holds_new_words(from: &PlannedEnd, to: &PlannedEnd, image: &[Run], shot: &Shot) -> bool {
+    [from, to].into_iter().any(|end| match end {
+        PlannedEnd::Member(spans) => {
+            member_end(image, spans).is_some_and(|end| end.stored.spans().any(|s| on_named_draft(s, shot)))
+        }
+        PlannedEnd::Stored(_) | PlannedEnd::Named(_) => false,
+    })
+}
+
+/// Returns whether `s` starts on a named draft's own words.
+///
+/// The rendering draft's or an `also` draft's alike (`Shot::is_draft_native`):
+/// the words the shot re-mints wherever it places them.
+fn on_named_draft(s: &Span, shot: &Shot) -> bool {
+    validate(s.start().clone())
+        .ok()
+        .and_then(|a| document_of(&a))
+        .map(|d| trunk_of(&d))
+        .is_some_and(|d| shot.is_draft_native(&d))
+}
+
 /// Returns whether `s` is a unit-depth span: an address's own subtree span.
 fn is_unit_depth(s: &Span) -> bool {
     *s == subtree_of(s.start())
 }
 
-/// Checks a `links` entry's `old` (THE VALIDATION's (3)): the panel filter's
-/// rule, read at the commit's position.
+/// Checks a `links` entry's `old` by the panel filter's rule (PUB-3.9).
 ///
-/// Answers `old`'s home, the claim's. `image` is the shot's runs as the
-/// request states them ([`request_image`]), the words the publication
-/// publishes; `spans` are the entry's published content spans
-/// ([`published_spans`]).
+/// THE VALIDATION's (3), read at the commit's position. Answers `old`'s
+/// home, the claim's. `image` is the shot's runs as the request states them
+/// ([`request_image`]), the words the publication publishes; `spans` are
+/// the entry's published content spans ([`published_spans`]); `new_words`
+/// is whether a member-position end lies on the shot's own new words
+/// ([`holds_new_words`]). A claim naming `old` supersedes it only where
+/// `new_words` is false, no successor covering fresh words (§5.1's key
+/// (iii)); where `old` is a revision, a claim naming its original
+/// supersedes it over `spans` whatever new words the entry holds.
 fn check_old<W: LinkWorld + HasM5>(
     world: &W,
     caller: Caller,
     old: &Address,
     image: &[Run],
     spans: &[Span],
+    new_words: bool,
 ) -> Result<Address, OldCause> {
     let (m3, links) = (world.m3(), world.links());
     let Some(link) = links.readlink(old) else {
@@ -834,11 +866,12 @@ fn check_old<W: LinkWorld + HasM5>(
         return Err(OldCause::WholeWork);
     }
     let own_homes = own_homes(m3, links, caller);
-    if superseded_by_own_claim(m3, links, caller, &own_homes, old, spans) {
+    if !new_words && superseded_by_own_claim(m3, links, caller, &own_homes, old, spans) {
         return Err(OldCause::Superseded);
     }
     // Where `old` is itself a successor — a revision of an original — its
-    // own original not superseded by an accept's claim of the caller's.
+    // own original not superseded by an accept's claim of the caller's,
+    // whatever new words the entry holds.
     for original in originals_of(links, &own_homes, old) {
         if superseded_by_own_claim(m3, links, caller, &own_homes, &original, spans) {
             return Err(OldCause::Superseded);
@@ -900,9 +933,10 @@ fn own_homes(m3: &M3State, links: &LinkState, caller: Caller) -> Vec<Address> {
 /// supersession class at `FROM` over `y`'s unit span, each claim kept where
 /// its `from` denotes `y` itself; its `new` a resident link homed in a
 /// published document of the caller's; and `new`'s content ends covering
-/// every span of `spans` — none where `spans` is empty, an entry on the
-/// shot's own words being covered by nothing. No liveness of `new` is asked
-/// (§5.1's keys (i) and (iii)).
+/// every span of `spans` — none where `spans` is empty, the entry publishing
+/// no span a successor could cover. No liveness of `new` is asked (§5.1's
+/// keys (i) and (iii)); the entry's new words, which key (iii) never
+/// covers, are [`check_old`]'s to weigh.
 fn superseded_by_own_claim(
     m3: &M3State,
     links: &LinkState,

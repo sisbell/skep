@@ -1429,6 +1429,76 @@ fn each_refused_entry_names_its_index_and_commits_nothing() {
     publish(&k, &the_shot, &links_only(vec![on_new_words])).expect("an entry on fresh words is covered by nothing");
 }
 
+/// A cut run's rest lands beside its cut copy, its original offered again.
+///
+/// `B` runs over the draft's `a b c d`, and its copy in `E.2` is cut at a
+/// selection leaving `d` out. A later shot holds `a b c` by reference and
+/// publishes `d` as new; its copy of `B` over the whole run is covered by
+/// no standing copy, `d` being fresh (§5.1's key (iii), PUB-3.9), so it
+/// lands, stored as one I-span over the kept words and the fresh word, its
+/// claim beside the cut copy's and both active. On a shot leaving `d` out
+/// again, an entry whose far end names `d` by the draft's own I-span holds
+/// no new word, and is refused `superseded`, the cut copy covering its kept
+/// words.
+#[test]
+fn the_rest_of_a_cut_run_lands_beside_its_cut_copy() {
+    let k = kernel_over(deposits_world());
+    board(&k);
+    Vstream::new(&k).insert(P1, &doc1(), vp(1, 4), vec![Val::new([b'd'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("d at ca(4)");
+    let b = writer(&k)
+        .makelink(P1, &doc2(), SlotArg::Spans(vec![run(&ca(1), 4).iextent()]), SlotArg::Addrs(vec![doc2()]), SlotArg::Addrs(vec![citation()]))
+        .expect("the original over the whole run")
+        .0;
+    assert_eq!(b, link_of(&doc2(), 2));
+    let copy = |from: EndArg, to: EndArg| entry(NamedAddress::Member, from, to, addrs(&[&citation()]), Some(b.clone()));
+    let links_only = |links: Vec<LinkEntry>| PublishDeposits { links, ..PublishDeposits::default() };
+    let (cut, _) = publish(&k, &shot_off_head(&k, vec![]), &links_only(vec![copy(member_spans(1, 3), addrs(&[&doc2()]))])).expect("the copy cut at the selection");
+    assert_eq!(cut, pmember(2));
+    assert_eq!(
+        refused_plan(&k, &shot_off_head(&k, vec![]), links_only(vec![copy(member_spans(1, 3), ispans(&ca(4), 1))])),
+        PlanFault::Old { index: 0, cause: OldCause::Superseded },
+        "an I-span on the draft's words is no new word: the kept words decide"
+    );
+    let (member, _) = publish(&k, &shot_off_head(&k, vec![shot_run(&doc1(), &ca(4), 1)]), &links_only(vec![copy(member_spans(1, 4), addrs(&[&doc2()]))]))
+        .expect("the whole run, `d` new: no standing copy covers it");
+    assert_eq!(member, pmember(3));
+    assert_eq!(bytes_of(&k, &member), "abcd");
+    let s = k.snapshot();
+    let links = s.world().links();
+    let remade = link_of(&member, 1);
+    assert_eq!(
+        links.readlink(&remade),
+        Some(&Link::triple(Endset::from_spans([run(&pca(1), 4).iextent()]), enc([&doc2()]), enc([&citation()]))),
+        "the copy re-made over the whole run, the kept words and the fresh word"
+    );
+    let (first, second) = (link_of(&doc2(), 3), link_of(&doc2(), 4));
+    assert_eq!(links.readlink(&first), Some(&supersession_claim(&b, &link_of(&cut, 1))), "the cut copy's claim");
+    assert_eq!(links.readlink(&second), Some(&supersession_claim(&b, &remade)), "the re-made copy's claim beside it");
+    assert!(links.is_active(&first) && links.is_active(&second), "both claims active");
+    assert!(links.is_active(&link_of(&cut, 1)), "the cut copy stands");
+}
+
+/// A revision whose original's public copy covers its kept words is refused.
+///
+/// `R` revises `L` after `L`'s accept, its `from` run on over the new word
+/// `d`. An entry for `R` over the kept words and `d` is refused
+/// `superseded`: the rule reads `L`'s claims over the entry's kept words
+/// whatever new words it holds, the new-word exemption of §5.1's key (iii)
+/// being for `R`'s own claims alone (PUB-3.9).
+#[test]
+fn a_revision_of_an_accepted_original_is_refused_beside_new_words() {
+    let k = kernel_over(deposits_world());
+    let (l, _) = board(&k);
+    let copy = |from: EndArg, old: &Address| entry(NamedAddress::Member, from, addrs(&[&doc2()]), addrs(&[&citation()]), Some(old.clone()));
+    let links_only = |links: Vec<LinkEntry>| PublishDeposits { links, ..PublishDeposits::default() };
+    publish(&k, &shot_off_head(&k, vec![]), &links_only(vec![copy(member_spans(1, 3), &l)])).expect("L accepted");
+    Vstream::new(&k).insert(P1, &doc1(), vp(1, 4), vec![Val::new([b'd'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("d at ca(4)");
+    let revised = Link::triple(Endset::from_spans([run(&ca(1), 4).iextent()]), enc([&doc2()]), enc([&citation()]));
+    let r = writer(&k).editlink(P1, &l, revised, &doc2(), &doc2()).expect("R revises L").0.successor;
+    let rest = shot_off_head(&k, vec![shot_run(&doc1(), &ca(4), 1)]);
+    assert_eq!(refused_plan(&k, &rest, links_only(vec![copy(member_spans(1, 4), &r)])), PlanFault::Old { index: 0, cause: OldCause::Superseded });
+}
+
 /// THE WHOLE-WORK ORIGINAL (the link-sets design §5.1's stored-endset test at
 /// the door; the owner's ruling, 2026-10-29): a `links` entry whose `old`
 /// reaches the words the shot publishes through a whole-work end alone — `W`

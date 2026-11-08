@@ -20,11 +20,18 @@
 //! landing on the trunk through the publication family's shot with the
 //! claim, then the record; the draft side composed and landed with no
 //! claim, its re-open reading the side as merged; the merged arm naming the
-//! member and writing a missing record once; the `head_moved` race typed,
-//! nothing re-sent; and the composition dying with its session.
+//! member and writing a missing record once; another account's record of
+//! the kind, read as the composition's `prior`, never deciding where the
+//! merge lands — its own draft carrying the merge never re-opened, a draft
+//! of the person's it names never landed into — and the merged arm writing
+//! the person's own record where only another account's names the member;
+//! the `head_moved` race typed, nothing re-sent; and the composition dying
+//! with its session.
 
+use skep_client::address::{document_of, parse_address};
+use skep_client::board::{frames, Opened, SessionBody};
 use skep_client::halt::Halt;
-use skep_client::merge::Refusal as Library;
+use skep_client::merge::{Inputs, Merged, RecordLanding, Refusal as Library, Side};
 
 use super::publication::{ground, register, second_device, signed_facts, Ground};
 use super::*;
@@ -88,6 +95,104 @@ fn assert_report_declared(report: &Value) {
 pub(super) fn arrangement_rows(g: &Ground, doc: &str, since: u64) -> Vec<(bool, bool)> {
     let entry = g.shell.sessions.get(&g.session).unwrap();
     changes_under(&entry.board, &entry.token, doc, since).iter().filter(|r| r["op"] == "set_arrangement").map(|r| (r["base"].is_string(), r["merge"].is_object())).collect()
+}
+
+/// The kind this shell names for the claimant's merge records: its doc 1.
+const KIND: &str = "1.0.1.0.1";
+
+/// Another account: a sub-account of the claimant's, its home minted.
+///
+/// Each of the two reads the other's drafts, the subtree running both ways
+/// (wire.md §The read predicate; PUB-1.32), and owns none of them; its bare
+/// session writes into no published document.
+struct Other {
+    account: String,
+    token: Token,
+}
+
+/// Returns a bare session of `principal`'s at the ground's permissive board.
+fn bare(g: &Ground, principal: u64) -> Token {
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    match entry.board.session_open(SessionBody::Bare { principal }).unwrap() {
+        Opened::Token(token) => token,
+        other => panic!("a bare session as principal {principal}: {other:?}"),
+    }
+}
+
+/// Returns the answer to `frame` sent under `token`, acknowledged.
+fn written(g: &Ground, token: &Token, frame: &Value) -> Value {
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let Answer::Document(v) = entry.board.op(Some(token), frame).unwrap() else { panic!("the session stands") };
+    assert!(v["resp"].as_str().is_some_and(|r| r.starts_with("ack")), "{frame}: {v}");
+    v
+}
+
+/// Returns another account, delegated under the claimant's.
+///
+/// Its prefix is the next under `1.0.1`, delegated to a free principal from
+/// the claimant's bare session, and its home is minted from its own.
+fn other_account(g: &Ground) -> Other {
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let account = entry.board.next_account_prefix("1.0.1").unwrap().expect("a prefix under the claimant's");
+    let mut principal = 2;
+    while entry.board.principal_prefix(principal).unwrap().is_some() {
+        principal += 1;
+    }
+    written(g, &bare(g, 1), &frames::delegate(&account, principal, None));
+    let token = bare(g, principal);
+    written(g, &token, &frames::create_home(&account, None));
+    Other { account, token }
+}
+
+/// Returns the merge of E.2 with E.1.1 as the library composes it.
+///
+/// It is composed under [`KIND`], read under the ground's session.
+fn composed(g: &Ground, f: &Family) -> Merged {
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let a = |s: &str| parse_address(s).unwrap();
+    let inputs = Inputs { doc: a(&f.edition), head: a(&f.e2), base: None, sides: vec![Side::Member(a(&f.e11))], options: skep_client::merge::Options::default(), kind: a(KIND) };
+    skep_client::merge::compose(&entry.board, Some(&entry.token), &inputs).unwrap_or_else(|r| panic!("{r:?}"))
+}
+
+/// Lands `merged` in `draft` under `token` by hand, writing no record.
+///
+/// It is the draft landing's one write as the library sends it: M as the
+/// draft's whole arrangement, the head's pair as its base and the merge of
+/// `side` marked beside it. Answers the write's position.
+fn mark(g: &Ground, token: &Token, draft: &str, merged: &Merged, side: &str) -> u64 {
+    let runs: Vec<Value> = merged.composed.runs.iter().map(|p| frames::shot_run(&p.run.origin.to_string(), &p.run.address_at(0).unwrap().to_string(), p.run.width)).collect();
+    let head = merged.inputs.head.to_string();
+    let pair = (head.as_str(), merged.head_extent);
+    written(g, token, &frames::set_arrangement(draft, &runs, g.position(), Some(pair), Some(pair), Some(&[side]), None))["at"].as_u64().unwrap()
+}
+
+/// Writes `other`'s record of [`KIND`], answering its link's address.
+///
+/// It is the record `merged` describes, landed as `landed`. Its atom is
+/// appended to a private journal of theirs and its link homed there, from
+/// the atom to the landed address and `side` — the record writer's link
+/// from doc 1, homed where a bare session may write.
+fn record_of_the_kind(g: &Ground, other: &Other, merged: &Merged, landed: RecordLanding, side: &str) -> String {
+    let minted = written(g, &other.token, &frames::create_document(&other.account, false, None));
+    let journal = minted["addr"].as_str().unwrap().to_string();
+    let target = match &landed {
+        RecordLanding::Member { member, .. } => member.to_string(),
+        RecordLanding::Draft { draft, .. } => draft.to_string(),
+    };
+    let mut record = merged.record.clone();
+    record.landed = Some(landed);
+    let appended = written(g, &other.token, &frames::insert_plain_atom(&journal, 1, &record.to_value().to_string(), minted["at"].as_u64().unwrap(), None));
+    let atom = appended["addr"].as_str().unwrap().to_string();
+    written(g, &other.token, &frames::make_link(&journal, &[&atom], &[&target, side], KIND, None))["addr"].as_str().unwrap().to_string()
+}
+
+/// Asserts that the merge of E.2 with E.1.1 reads `link` as its `prior`.
+///
+/// The library's currency takes another account's record where the
+/// claimant's doc 1 holds none.
+fn assert_prior_is(g: &Ground, f: &Family, link: &str) {
+    let prior = composed(g, f).prior.and_then(|p| p.link).map(|l| l.to_string());
+    assert_eq!(prior.as_deref(), Some(link), "the premise: the other account's record is the composition's prior");
 }
 
 /// Checks the rows' own members and the family's answers with nothing
@@ -606,6 +711,116 @@ fn merged_names_the_member_and_writes_a_missing_record_once() {
     let again = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!((again["outcome"].as_str(), again["record_link"].as_str()), (Some("merged"), Some(record.as_str())), "{again}");
     assert_eq!((again["record"]["landed"]["member"].as_str(), g.position()), (Some(e3.as_str()), after), "the standing record, nothing written again: {again}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that another account's record of its own draft is never re-opened.
+///
+/// Against the daemon: another account stages a draft of its own from E.2,
+/// lands the merge of E.2 with E.1.1 in it by hand — its marker naming E.1.1
+/// under E.2 — and writes a record of the claimant's kind naming that draft as
+/// landed in, which the composition reads as its `prior`. `merge.compose` with
+/// no `into` lands in a fresh draft of the claimant's staged from the head,
+/// `fresh` true, and their draft stands as they left it (the mutant that takes
+/// the `prior` for the person's own record answers the re-open into the other
+/// account's draft).
+#[test]
+fn another_accounts_record_naming_its_own_draft_is_never_re_opened() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let other = other_account(&g);
+    let merged = composed(&g, &f);
+    let theirs = written(&g, &other.token, &frames::stage(&f.e2, None))["addr"].as_str().unwrap().to_string();
+    let at = mark(&g, &other.token, &theirs, &merged, &f.e11);
+    let link = record_of_the_kind(&g, &other, &merged, RecordLanding::Draft { draft: parse_address(&theirs).unwrap(), position: at }, &f.e11);
+    assert_prior_is(&g, &f, &link);
+    let marker = g.op(frames::doc_metadata(&theirs))["merge"].clone();
+    assert_eq!((marker["sides"].clone(), marker["head"].as_str()), (json!([f.e11]), Some(f.e2.as_str())), "the premise: their draft carries the merge: {marker}");
+    let report = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11})).unwrap_or_else(|r| panic!("{r}"));
+    assert_report_declared(&report);
+    assert_eq!((report["outcome"].as_str(), report["fresh"].as_bool()), (Some("landed"), Some(true)), "{report}");
+    let fresh = report["into"].as_str().expect("the fresh draft").to_string();
+    assert_ne!(fresh, theirs, "{report}");
+    let meta = g.op(frames::doc_metadata(&fresh));
+    assert_eq!((meta["owner"].as_str(), meta["merge"]["sides"].clone()), (Some("1.0.1"), json!([f.e11])), "the person's own draft, marked: {meta}");
+    assert_eq!(g.op(frames::doc_metadata(&theirs))["merge"], marker, "their draft as they left it");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that another account's record never steers the person's landing.
+///
+/// Against the daemon: the claimant stages L from E.2, which carries no merge;
+/// another account writes a record of the claimant's kind naming L as landed
+/// in, the composition's `prior`. `merge.compose` with no `into` lands in a
+/// fresh draft staged from the head, `fresh` true, and L stands as it was:
+/// E.2's words, no marker, no arrangement row since (the mutant that lands in
+/// the draft the `prior` names wherever the person owns it writes M over L).
+#[test]
+fn another_accounts_record_naming_the_persons_draft_never_steers_the_landing_into_it() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let other = other_account(&g);
+    let merged = composed(&g, &f);
+    let l = g.addr(frames::stage(&f.e2, None));
+    let link = record_of_the_kind(&g, &other, &merged, RecordLanding::Draft { draft: parse_address(&l).unwrap(), position: g.position() }, &f.e11);
+    assert_prior_is(&g, &f, &link);
+    let since = g.position();
+    let report = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((report["outcome"].as_str(), report["fresh"].as_bool()), (Some("landed"), Some(true)), "{report}");
+    assert_ne!(report["into"].as_str(), Some(l.as_str()), "{report}");
+    assert_eq!(g.text(&l, 13), "the fox jumps", "L's words E.2's");
+    assert!(g.op(frames::doc_metadata(&l))["merge"].is_null(), "no marker on L");
+    assert!(arrangement_rows(&g, &l, since).is_empty(), "nothing written into L");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that the merged arm writes the person's own record of the member.
+///
+/// Against the daemon: the claimant lands the merge of E.2 with E.1.1 in L by
+/// hand, writing no record, and publishes L as E.3 through the panel, the claim
+/// riding; another account writes a record of the claimant's kind naming E.3 as
+/// landed in, the composition's `prior`. `merge.compose` of the daughter
+/// answers merged, naming E.3, and writes the person's own record — its link
+/// homed in the claimant's doc 1, the board's position moved; a second
+/// `merge.compose` names that record, nothing written (the mutant that takes
+/// the `prior` naming the member for the person's own answers the other
+/// account's record and writes none).
+#[test]
+fn merged_writes_the_persons_own_record_where_only_another_accounts_names_the_member() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let other = other_account(&g);
+    let merged = composed(&g, &f);
+    let l = g.addr(frames::stage(&f.e2, None));
+    mark(&g, &bare(&g, 1), &l, &merged, &f.e11);
+    let panel = g.call("publication.open", json!({"session": g.session, "draft": l, "doc": f.edition, "readable_drafts": [l], "published": [f.edition]})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(panel["count"]["supersede"], json!([f.e11]), "{panel}");
+    let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let e3 = format!("{}.3", f.edition);
+    assert_eq!((acked["member"].as_str(), acked["supersede"].clone()), (Some(e3.as_str()), json!([f.e11])), "{acked}");
+    let landed = RecordLanding::Member { member: parse_address(&e3).unwrap(), position: acked["at"].as_u64().unwrap() };
+    let theirs = record_of_the_kind(&g, &other, &merged, landed, &f.e11);
+    assert_prior_is(&g, &f, &theirs);
+    let before = g.position();
+    let answer = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11})).unwrap_or_else(|r| panic!("{r}"));
+    assert_report_declared(&answer);
+    assert_eq!((answer["outcome"].as_str(), answer["member"].as_str()), (Some("merged"), Some(e3.as_str())), "{answer}");
+    let record = answer["record_link"].as_str().expect("the record written").to_string();
+    assert_ne!(record, theirs, "{answer}");
+    assert_eq!(document_of(&record).as_deref(), Some(KIND), "homed in the claimant's doc 1: {answer}");
+    assert!(g.position() > before, "the record's writes");
+    let after = g.position();
+    let again = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((again["outcome"].as_str(), again["record_link"].as_str(), g.position()), (Some("merged"), Some(record.as_str()), after), "the person's own record standing, nothing written: {again}");
     g.shell.shutdown();
     sd.shutdown();
 }

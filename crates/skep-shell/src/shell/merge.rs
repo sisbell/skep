@@ -46,14 +46,19 @@
 //! a daughter an active supersession claim of the person's own already
 //! names, read by one `in_claims` at the daughter, is answered `merged`,
 //! naming the member the claim's `new` names, NOTHING LANDED, and where no
-//! record of the person's names that merge, the record is written then
-//! through the library's `record_published` — the resume of a stop between
-//! the shot and its record (P14). A standing record of the key naming a
-//! draft landing is read before a fresh draft is asked for: the draft's
-//! marker naming this merge is the re-open; else the landing goes into
-//! that draft, the library's same-landing rule (skep #790), and the library
-//! is never handed `into` none while such a record stands (the survey §5
-//! item 2).
+//! record of the person's names that merge — another account's record of
+//! the kind naming it stands for none — the record is written then through
+//! the library's `record_published`, the resume of a stop between the shot
+//! and its record (P14). A standing record of the person's own naming a
+//! draft landing of the key is read before a fresh draft is asked for, as
+//! the library's landing reads it — the newest record in their doc 1, never
+//! the composition's `prior`, which can be another account's: that draft
+//! is read as `into` is, refused `not_owner` where it is published or
+//! another account's; its marker naming this merge is the re-open; else
+//! the landing goes into that draft, the library's same-landing rule
+//! (skep #790), and the library is never handed `into` none while such a
+//! record stands (the survey §5 item 2). So another account's record of
+//! the kind never decides where a merge lands.
 //!
 //! **`merge.land`** — `{resolutions?}` — publishes the merge from the draft
 //! the standing composition landed in, THE SHOT CARRYING THE SUPERSESSION
@@ -121,11 +126,11 @@
 //! dialed (§3c.4, THE HELD-LINES GATE; skep #849): the held lines would
 //! otherwise land on an arrangement the landing, the undo or the withdrawal
 //! rewrote under them, and come back as a move the person never made. A
-//! composition that lands into a prior record's draft in a fresh one's
-//! place (skep #790) asks the door for that draft before the landing's
-//! write, since the named draft was asked and that one was not. The two
-//! re-opens past the door — the shot's restart re-open, the record after
-//! the acknowledgment — are not refused at it again.
+//! composition that lands into the draft a record of the person's own names
+//! in a fresh one's place (skep #790) asks the door for that draft before
+//! the landing's write, since the named draft was asked and that one was
+//! not. The two re-opens past the door — the shot's restart re-open, the
+//! record after the acknowledgment — are not refused at it again.
 //!
 //! **The refusals** cross as typed data: the library's own by name where
 //! the contract names one — `unreadable {doc}`, `no_such_document {doc}`,
@@ -508,9 +513,12 @@ impl Shell {
     ///    with its reason, `two_drafts`, `unreadable`, `no_such_document`,
     ///    `merge_refused` with its arm, the board's verdicts verbatim; then
     ///    `over_cap` where M passes the cap, nothing landed;
-    /// 6. where the landing goes into a prior record's draft in a fresh
-    ///    one's place, the write door's again for that draft, `held_lines`
-    ///    among them, nothing landed; then the landing's
+    /// 6. where no `into` is named, the read of the person's own standing
+    ///    record of the key (`skep_client::merge::resume`): a halt's face,
+    ///    `session_died`; where it names a draft landing, that draft's read,
+    ///    as `into`'s in step 4, `not_owner` among them; where the landing
+    ///    goes into that draft in a fresh one's place, the write door's again
+    ///    for it, `held_lines` among them, nothing landed; then the landing's
     ///    (`skep_client::merge::land`): the board's
     ///    `arrangement_moved` verbatim, nothing landed; `merge_refused`
     ///    with `fork_base_moved`, `base_not_in_chain`, `window_withheld` or
@@ -604,33 +612,41 @@ impl Shell {
         if merged.composed.counts.m > merged.cap {
             return Err(Refusal::shell(Name::OVER_CAP, json!({"n": merged.composed.counts.m, "cap": merged.cap})));
         }
-        // A fresh draft asked for while a record of the key names a draft
-        // landing (the survey §5 item 2): the draft's marker naming this
-        // merge is the re-open; else that draft is landed into, the same
-        // landing (skep #790), and the library is handed `into` none only
-        // where no such record stands.
+        // A fresh draft asked for while a record of the person's own names a
+        // draft landing of the key (the survey §5 item 2), read as the
+        // library's landing reads it: the newest record in their doc 1, by
+        // `lib::resume` with no draft named, which writes nothing — never
+        // the composition's `prior`, which is read under the reader's
+        // currency and can be another account's record of the kind. That
+        // draft is read as `into` is, untrusted; its marker naming this
+        // merge is the re-open; else it is landed into, the same landing
+        // (skep #790); and the library is handed `into` none only where no
+        // such record stands.
+        let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
         let mut landing_into = into.clone();
         if landing_into.is_none() {
-            if let Some(lib::RecordLanding::Draft { draft: prior, .. }) = merged.prior.as_ref().and_then(|p| p.landed.clone()) {
-                if let Ok(facts) = self.draft_facts(&session, &prior) {
-                    let carries = facts.marker.as_ref().is_some_and(|m| m.sides.iter().any(|s| *s == side_text) && m.head == merged.inputs.head.to_string());
-                    if carries {
-                        let at = facts.marker.as_ref().and_then(|m| m.at);
-                        return self.reopened(&session, key, form, merged, &prior, at);
-                    }
-                    if !facts.published && facts.owner == signed.account {
-                        landing_into = Some(prior);
-                    }
+            if let Some(standing) = lib::resume(&session.board, &merged, lib::Landing::Draft { merger, into: None, journal: None }).map_err(|r| self.merge_refusal(&session, r))? {
+                let lib::Landed::Draft { into: prior, .. } = standing else {
+                    return Err(Refusal::from(Halt::face(
+                        "the draft landing answered no draft",
+                        "`skep_client::merge::resume` with a draft landing answers `Landed::Draft` or none on every path",
+                        "report it: the shell's merge row is behind the library",
+                    )));
+                };
+                let facts = self.landing_target(&session, &signed.account, &prior)?;
+                if facts.marker.as_ref().is_some_and(|m| m.sides.contains(&side_text) && m.head == merged.inputs.head.to_string()) {
+                    let at = facts.marker.as_ref().and_then(|m| m.at);
+                    return self.reopened(&session, key, form, merged, &prior, at);
                 }
+                landing_into = Some(prior);
             }
         }
-        // A prior record's draft landed into in a fresh one's place (skep
-        // #790) is a draft the door has not asked for its held lines: asked
-        // now, before the landing's write, as the named draft was.
+        // The person's own record's draft landed into in a fresh one's place
+        // (skep #790) is a draft the door has not asked for its held lines:
+        // asked now, before the landing's write, as the named draft was.
         if let Some(prior) = landing_into.as_ref().filter(|prior| into.as_ref() != Some(*prior)) {
             self.write_door(Writer::Session(&session), &Write::call("merge.compose", "set_arrangement").over([prior.to_string()]))?;
         }
-        let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
         let landed = lib::land(&session.board, &merged, lib::Landing::Draft { merger, into: landing_into.clone(), journal: None }).map_err(|r| self.merge_refusal(&session, r))?;
         let lib::Landed::Draft { into: landed_in, position, record, head_moved } = landed else {
             return Err(Refusal::from(Halt::face("the draft landing answered no draft", "`skep_client::merge::land` with a draft landing answers `Landed::Draft` on every path", "report it: the shell's merge row is behind the library")));
@@ -659,8 +675,8 @@ impl Shell {
 
     /// Answers THE MERGED ARM: the member a claim of the person's own names
     /// the daughter superseded by, and the record of that merge — the
-    /// standing one, or written now through the library's
-    /// `record_published` where none names it (the module doc).
+    /// person's own standing one, or written now through the library's
+    /// `record_published` where none of theirs names it (the module doc).
     ///
     /// # Errors
     ///
@@ -675,7 +691,14 @@ impl Shell {
         };
         let inputs = lib::Inputs { doc: doc.clone(), head, base: None, sides: vec![lib::Side::Member(daughter.clone())], options: lib::Options::default(), kind: kind.clone() };
         let merged = lib::compose(&session.board, Some(&session.token), &inputs).map_err(|r| self.merge_refusal(session, r))?;
-        let standing = merged.prior.as_ref().filter(|p| matches!(&p.landed, Some(lib::RecordLanding::Member { member: m, .. }) if m == member));
+        // The person's own standing record naming the member: the
+        // composition's `prior` only where its link is homed in their doc 1.
+        // The claim's home is the trunk, theirs, and the currency puts the
+        // trunk owner's home first, so a `prior` homed elsewhere is another
+        // account's record of the kind, standing where the person holds none.
+        let home = doc_1_of(&signed.account);
+        let own = |p: &&lib::Record| p.link.as_ref().and_then(|l| document_of(&l.to_string())).is_some_and(|d| d == home);
+        let standing = merged.prior.as_ref().filter(own).filter(|p| matches!(&p.landed, Some(lib::RecordLanding::Member { member: m, .. }) if m == member));
         // The record: the standing one, its body the report's, else written
         // now — the resume of a stop between the shot and its record.
         let (record_link, claims, body) = match standing {

@@ -41,7 +41,8 @@
 //! same session refused `arrangement_moved`, and the merge composed again
 //! and landed after it, in the same session and in a fresh one, a write and
 //! a record of its own; a landing withdrawn
-//! — the words kept, the marker cleared; an undo after an edit refused with
+//! — the words kept, the marker cleared, and a `resume` naming the draft
+//! finding no landing (skep #888); an undo after an edit refused with
 //! the edit kept; an undo typed at the editor's own last ack landing once
 //! its later edits are taken back, and refused past another hand's change
 //! (skep #811); and words published since the landing brought back by the
@@ -1281,7 +1282,9 @@ fn a_landed_merge_is_undone_in_one_write_restoring_the_text_and_the_base_and_cle
 /// `T` is taken out by one write — `T` still holds M, its base stays `D.2`
 /// at fifteen, the marker is gone, the withdrawal's feed row names the base
 /// re-sent and no merge — and the replacing record is current; a second
-/// withdrawal finds no merge, an undo nothing to undo, and neither writes.
+/// withdrawal finds no merge, an undo nothing to undo, and a `resume`
+/// naming `T`, which holds M with no marker, no landing (skep #888), none
+/// of them writing, the replacing record still current.
 #[test]
 fn a_landed_merge_is_withdrawn_keeping_the_words_and_clearing_the_marker() {
     let rig = Rig::new();
@@ -1309,11 +1312,18 @@ fn a_landed_merge_is_withdrawn_keeping_the_words_and_clearing_the_marker() {
     let row = rows.iter().rev().find(|r| r["op"] == "set_arrangement").expect("the withdrawal's row");
     assert_eq!((row["at"].as_u64(), row["base"].as_str(), row["merge"].is_null()), (Some(withdrawn.position), Some(head.to_string().as_str()), true), "{row}");
     let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
-    assert_eq!((record.landed.clone(), record.replaces.clone(), record.link.clone()), (None, Some(link), Some(replacing)));
+    assert_eq!((record.landed.clone(), record.replaces.clone(), record.link.clone()), (None, Some(link), Some(replacing.clone())));
     let standing = rig.position();
     assert_eq!(withdraw(&rig.board, merger, &draft, &kind, None), Err(Refusal::NoMerge { draft: draft.clone() }));
     assert_eq!(undo(&rig.board, merger, &draft, &kind, None, None), Err(Refusal::NothingToUndo { draft: draft.clone(), why: NoUndo::TakenBack }));
     assert_eq!(rig.position(), standing, "nothing written");
+    // A resume naming the draft: it holds M, and the withdrawal cleared the
+    // marker that marks a landing, so there is none to resume.
+    let into = Landing::Draft { merger, into: Some(draft.clone()), journal: None };
+    assert_eq!(resume(&rig.board, &merged, into), Ok(None), "the landing withdrawn");
+    assert_eq!(rig.position(), standing, "nothing written");
+    let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
+    assert_eq!(record.link, Some(replacing), "the withdrawal's record current");
     session.close().expect("close");
 }
 

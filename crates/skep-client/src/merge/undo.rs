@@ -103,10 +103,14 @@
 //! marker and writes nothing — so where the record is not written after the
 //! act's write, for a lost acknowledgment at its writes, a head owed there,
 //! or a journal the record's step finds unable to take it, the landing's
-//! record stands alone, which the halt says. A landing of the key made
-//! after either act writes a record of its own, which replaces this one:
-//! the landing's read-first takes the merger's newest record of the key,
-//! and this one names no landing (the `land` module's doc).
+//! record stands alone, which the halt says. A `resume` of the landing after
+//! either act finds nothing to resume, whether or not either record was
+//! written: it goes by the marker, which the act cleared, or for a baseless
+//! draft by the latest `set_arrangement` row, the act's own, naming no merge
+//! (the `land` module's doc). A landing of the key made after either act
+//! writes a record of its own, which replaces this one: the landing's
+//! read-first takes the merger's newest record of the key, and this one
+//! names no landing (the `land` module's doc).
 //!
 //! **The journal, before the write.** A journal named is checked before the
 //! one write, as a landing's is (the `land` module's doc): one

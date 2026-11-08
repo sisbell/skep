@@ -4463,10 +4463,10 @@ mod scripted {
     /// A BASELESS DRAFT (N4): landing into a plain draft the board records
     /// no base for — never staged — sends `head` and `merge` and NO `base`,
     /// so the board admits it with nothing moved: the draft holds M, no
-    /// base, no marker. A `resume` after another write has moved the board,
-    /// the draft carrying no marker for it to read the landing's position
-    /// off, finds the landing's record standing all the same: a record's
-    /// position is never compared, so nothing is written.
+    /// base, no marker. A `resume` after another write has moved the board
+    /// finds the landing by its `set_arrangement` row on the supplement, the
+    /// draft carrying no marker, and answers that row's position, never the
+    /// board's, with the landing's record standing: nothing is written.
     #[test]
     fn a_landing_into_a_baseless_draft_sends_no_base() {
         let plain = "1.0.1.0.5";
@@ -4492,10 +4492,7 @@ mod scripted {
         assert!(moved > *position, "the premise: the board moved past the landing");
         dialer.clear();
         let resumed = resume(&board, &merged, draft_landing(&session, &signer, Some(a(plain)))).expect("resumed");
-        assert!(
-            matches!(&resumed, Some(Landed::Draft { into: i, record: r, .. }) if i.to_string() == plain && r == record),
-            "the landing's own record: {resumed:?}"
-        );
+        assert_eq!(resumed, Some(Landed::Draft { into: a(plain), position: *position, record: record.clone(), head_moved: None }), "the landing's row's position and its own record");
         assert!(dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(), "{:?}", dialer.ops());
     }
 
@@ -6621,6 +6618,178 @@ mod scripted {
         );
     }
 
+    /// A resume finds a draft landing by its mark, never by the draft's words.
+    ///
+    /// The mark is the marker naming the merge, or on a draft with no
+    /// recorded base its latest `set_arrangement` row naming it; a take-back
+    /// clears it, and a draft holding M without it holds no landing to resume
+    /// (skep #888). (a) The landing withdrawn, the withdrawal recorded:
+    /// `resume` naming the draft, which still holds M, answers none and
+    /// writes nothing, the withdrawal's record current. (b) The landing's
+    /// record unwritten, its link refused for a head owed, then the landing
+    /// withdrawn: none, nothing written, no record of the key. (c) The
+    /// withdrawal's record unwritten: none, nothing written, the landing's
+    /// record current. (d) A draft with no recorded base, holding M's list
+    /// before the landing, the landing undone: the undo's row names no merge,
+    /// so none, nothing written. (e) A composition made after its landing,
+    /// the marker standing: the landing at the marker's position, nothing
+    /// written.
+    #[test]
+    fn a_resume_finds_a_draft_landing_by_its_mark_never_by_the_drafts_words() {
+        let writes = ["stage", "set_arrangement", "create_new_document", "insert", "make_link"];
+        let wrote = |dialer: &Scripted| {
+            dialer.ops().into_iter().filter(|o| writes.contains(&o.as_str())).collect::<Vec<_>>()
+        };
+        let owed_link = || json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_invalid:board_unavailable", "disposition": "reorder", "op": "make_link"});
+
+        // (a) The landing withdrawn, the withdrawal recorded.
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let into_s = || draft_landing(&session, &signer, Some(a(S)));
+        let (merged, _) = landed_in_s(&board, &session, &signer);
+        let withdrawn = withdraw(&board, merger(&session, &signer), &a(S), &a(K), None)
+            .expect("withdrawn")
+            .record
+            .expect("(a): the premise, the withdrawal's record");
+        {
+            let w = dialer.world();
+            assert_eq!(w.docs.get(S).unwrap().runs, draft_m(), "(a): the premise, S holds M");
+            assert_eq!(w.standing(S).1, None, "(a): the premise, no marker");
+        }
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        assert_eq!(resume(&board, &merged, into_s()), Ok(None), "(a): the landing withdrawn");
+        assert!(wrote(&dialer).is_empty(), "(a): nothing written: {:?}", dialer.ops());
+        assert_eq!(dialer.world().rows.len(), rows, "(a): nothing committed");
+        let found = current(&board, Some(session.token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("a record");
+        assert_eq!(
+            (found.link, found.landed),
+            (Some(withdrawn), None),
+            "(a): the withdrawal's record current"
+        );
+
+        // (b) The landing's record unwritten, its link refused for a head
+        // owed, then the landing withdrawn with no record to replace.
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let into_s = || draft_landing(&session, &signer, Some(a(S)));
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        let link_id = landing_id(&format!("{}:{S}@{}", merged.key.text(), merged.as_of), "link");
+        dialer.world().memo.insert(link_id.clone(), owed_link());
+        let err = land(&board, &merged, into_s()).expect_err("the link refused");
+        let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("(b): {err:?}") };
+        assert!(
+            face.state.contains(&format!("the merge stands at {S}")),
+            "(b): the premise: {face}"
+        );
+        dialer.world().memo.remove(&link_id);
+        let withdrawn =
+            withdraw(&board, merger(&session, &signer), &a(S), &a(K), None).expect("withdrawn");
+        assert_eq!(withdrawn.record, None, "(b): the premise, no record stood to replace");
+        assert_eq!(dialer.world().docs.get(S).unwrap().runs, draft_m(), "(b): the premise");
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        assert_eq!(resume(&board, &merged, into_s()), Ok(None), "(b): the landing withdrawn");
+        assert!(wrote(&dialer).is_empty(), "(b): nothing written: {:?}", dialer.ops());
+        assert_eq!(dialer.world().rows.len(), rows, "(b): nothing committed");
+        assert!(
+            current(&board, Some(session.token()), &a(K), &merged.key)
+                .expect("the lookup")
+                .is_none(),
+            "(b): no record of the key"
+        );
+
+        // (c) The withdrawal's record unwritten, its link refused for a head
+        // owed past the withdrawal's read.
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let into_s = || draft_landing(&session, &signer, Some(a(S)));
+        let (merged, landed) = landed_in_s(&board, &session, &signer);
+        let (_, link) = landing_of(&landed);
+        let link_id = format!("withdraw:{S}:{}.link", dialer.world().position);
+        dialer.world().memo.insert(link_id.clone(), owed_link());
+        let err = withdraw(&board, merger(&session, &signer), &a(S), &a(K), None)
+            .expect_err("the withdrawal's link refused");
+        let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("(c): {err:?}") };
+        assert!(
+            face.state.contains("the record of the withdrawal is not written"),
+            "(c): the premise: {face}"
+        );
+        dialer.world().memo.remove(&link_id);
+        {
+            let w = dialer.world();
+            assert_eq!(w.docs.get(S).unwrap().runs, draft_m(), "(c): the premise, S holds M");
+            assert_eq!(w.standing(S).1, None, "(c): the premise, the marker cleared");
+        }
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        assert_eq!(resume(&board, &merged, into_s()), Ok(None), "(c): the landing withdrawn");
+        assert!(wrote(&dialer).is_empty(), "(c): nothing written: {:?}", dialer.ops());
+        assert_eq!(dialer.world().rows.len(), rows, "(c): nothing committed");
+        let found = current(&board, Some(session.token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("a record");
+        assert_eq!(found.link, Some(link), "(c): the landing's record current");
+
+        // (d) A draft with no recorded base that held M's list before the
+        // landing, the landing undone and the undo recorded.
+        let plain = "1.0.1.0.5";
+        let mut w = draft_landing_world();
+        w.doc(plain, false, ACCOUNT, draft_m());
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let into_plain = || draft_landing(&session, &signer, Some(a(plain)));
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        land(&board, &merged, into_plain()).expect("landed");
+        let undone = undo(&board, merger(&session, &signer), &a(plain), &a(K), None, None)
+            .expect("undone")
+            .record
+            .expect("(d): the premise, the undo's record");
+        {
+            let w = dialer.world();
+            assert_eq!(w.docs.get(plain).unwrap().runs, draft_m(), "(d): the premise, M's list");
+            assert_eq!(w.standing(plain), (None, None), "(d): the premise, no base, no marker");
+        }
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        assert_eq!(resume(&board, &merged, into_plain()), Ok(None), "(d): the landing undone");
+        let ops = dialer.ops();
+        assert!(
+            ops.iter().any(|o| o.starts_with("GET /changes?")
+                && o.contains(&format!("under={plain}"))
+                && o.contains("drafts=true")),
+            "(d): the draft's own rows read on the supplement: {ops:?}"
+        );
+        assert!(wrote(&dialer).is_empty(), "(d): nothing written: {ops:?}");
+        assert_eq!(dialer.world().rows.len(), rows, "(d): nothing committed");
+        let found = current(&board, Some(session.token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("a record");
+        assert_eq!(found.link, Some(undone), "(d): the undo's record current");
+
+        // (e) A composition made after its landing, the marker standing.
+        let t = "1.0.1.0.5";
+        let mut w = World::race();
+        w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
+        w.staged(t, &format!("{D}.1"), 11);
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let into_t = || draft_landing(&session, &signer, Some(a(t)));
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        let (at, link) = landing_of(&land(&board, &merged, into_t()).expect("landed"));
+        let again = compose(&board, Some(session.token()), &race_inputs()).expect("composed again");
+        assert!(again.as_of > at, "(e): the premise, composed after the landing");
+        dialer.clear();
+        assert_eq!(
+            resume(&board, &again, into_t()),
+            Ok(Some(Landed::Draft { into: a(t), position: at, record: link, head_moved: None })),
+            "(e): the landing, at the marker's position"
+        );
+        assert!(wrote(&dialer).is_empty(), "(e): nothing written: {:?}", dialer.ops());
+    }
+
     /// A composition landed again in a fresh session names its own landing.
     ///
     /// The fresh session holds no memo of the first call's write (skep #852):
@@ -6639,8 +6808,8 @@ mod scripted {
     /// the composition: its marker names other sides, so the words are the
     /// race's. (f) A draft with no recorded base, its record unwritten: the
     /// landing's row on the supplement names it, and `resume` writes the
-    /// record. (g) The same draft once the landing is undone: the undo's row
-    /// names no merge, so the words are the race's.
+    /// record at that row's position. (g) The same draft once the landing is
+    /// undone: the undo's row names no merge, so the words are the race's.
     #[test]
     fn a_composition_landed_again_in_a_fresh_session_names_its_own_landing() {
         let writes = ["stage", "set_arrangement", "create_new_document", "insert", "make_link"];
@@ -6893,14 +7062,20 @@ mod scripted {
         dialer.clear();
         let resumed = resume(&board, &merged, into_plain()).expect("resumed");
         assert!(
-            matches!(&resumed, Some(Landed::Draft { into, .. }) if into.to_string() == plain),
-            "(f): {resumed:?}"
+            matches!(&resumed, Some(Landed::Draft { into, position, .. })
+                if into.to_string() == plain && *position == at),
+            "(f): the landing, at its row's position: {resumed:?}"
         );
         assert_eq!(
             dialer.frames("make_link").len(),
             1,
             "(f): the record written: {:?}",
             dialer.ops()
+        );
+        assert_eq!(
+            appended_record(&dialer)["landed"],
+            json!({"draft": plain, "position": at}),
+            "(f): the record names the row's position"
         );
 
         // (g) The same draft, its landing undone, the undo recorded.

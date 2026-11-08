@@ -466,16 +466,20 @@ fn one_whole_merge_lands_on_the_trunk_with_its_record() {
     session.close().expect("close");
 }
 
-/// CASE (j) ON THE REAL DAEMON — a cross-account fork of a PUBLISHED version
-/// merged back (the merge record's §1.2 shape (4); the fork-source design
-/// record's arm A). The forker's account `1.0.1.1` is delegated under the
-/// claimant's, so the claimant, its ancestor, may read the fork; the forker
-/// forks the base version `D.1` privately — a fresh document of its own
-/// account, born sharing `D.1`, which the board serves as its `source` — and
-/// removes " sat", while the head has added "big ". The library reads that
-/// source off the fork's `doc_metadata`, takes it as the base, never named
-/// (a base named beside the fork is refused), composes "the big cat", lands
-/// it as the trunk's next member with its record found from the fork, and
+/// A cross-account fork of a published version merges back on the daemon.
+///
+/// It is case (j), the merge record's §1.2 shape (4), and the fork-source
+/// design record's arm A. The forker's account `1.0.1.2` is delegated under
+/// the claimant's, so the claimant, its ancestor, may read the fork; the
+/// forker forks the base version `D.1` privately — a fresh document of its
+/// own account, born sharing `D.1`, which the board serves as its `source`
+/// — and removes " sat", while the head has added "big ". The library reads
+/// that source off the fork's `doc_metadata`, takes it as the base, never
+/// named (a base named beside the fork is refused), and composes "the big
+/// cat". A journal named that cannot take the record — the forker's home,
+/// readable to its ancestor and not its own, or the trunk, published — is
+/// refused before the shot with nothing written (P13); the merge then lands
+/// as the trunk's next member with its record found from the fork, and
 /// `verify` recomputes the record against the served source.
 #[test]
 fn a_cross_account_fork_of_a_published_version_merges_from_its_served_source() {
@@ -575,9 +579,23 @@ fn a_cross_account_fork_of_a_published_version_merges_from_its_served_source() {
         Err(Refusal::ForkBaseNamed { fork: fork.clone(), base: base.clone() })
     );
 
+    // A journal named that cannot take the record is refused before the
+    // shot, nothing written: the forker's home, which the claimant reads as
+    // its ancestor and does not own, and the trunk, published.
+    let merger = Merger { token: session.token(), account: session.account(), signer: &device };
+    let forker_home = addr(&format!("{FORKER_ACCOUNT}.0.1"));
+    for (journal, why) in [(&forker_home, "is another account's"), (&d, "is published")] {
+        let before = board.health().unwrap().log_position();
+        let named = Landing::Shot { merger, draft: None, journal: Some(journal.clone()) };
+        let err = land(&board, &merged, named).expect_err("the journal refused");
+        let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{journal}: {err:?}") };
+        assert_eq!(face.state, format!("the journal {journal} {why}, so the merge cannot land"));
+        assert!(face.act.contains("nothing was written"), "{face}");
+        assert_eq!(board.health().unwrap().log_position(), before, "{journal}: nothing written");
+    }
+
     // LAND as the shot: the trunk's next member holds M, the record is found
     // FROM the fork by the kind, and verifies against the served source.
-    let merger = Merger { token: session.token(), account: session.account(), signer: &device };
     let landed = land(&board, &merged, Landing::Shot { merger, draft: None, journal: None })
         .expect("landed");
     let Landed::Member { address: member, record: link, .. } = landed else { panic!("{landed:?}") };

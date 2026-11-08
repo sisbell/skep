@@ -32,8 +32,8 @@
 //! derive refused by name, exit 1, nothing on stdout; and A STRANGER's
 //! documents — a second top-level account's private draft and fork — each
 //! `withheld` refusal saying beside the document what the run did, and the
-//! draft named as the journal met at the record after the shot, the merge
-//! standing with its record unwritten, exit 3.
+//! draft named as the journal refused before the shot, exit 3, nothing
+//! published.
 
 use std::path::{Path, PathBuf};
 
@@ -855,19 +855,20 @@ fn the_two_take_backs_walk_on_the_real_daemon() {
     session.close().expect("close");
 }
 
-/// A STRANGER's DOCUMENTS, which the claimant may not read: a second
-/// top-level account's private draft `X` and its private fork `F` of `D.1`.
-/// Each `withheld` refusal names the document, and the talk says beside it
-/// what the run did, exit 1, nothing on stdout, nothing written: `--fork F`
-/// composed nothing; `--into X` composed the merge and merged nothing;
-/// `--undo X` took nothing back; `--withdraw X` took nothing out. And `X`
-/// named as the JOURNAL, met at the record after the shot: `--publish`
-/// lands the next version and halts, exit 3, saying the merge stands there
-/// with its record unwritten; the same `--publish` against the head it
-/// composed on, naming no journal, writes the record and lands nothing
-/// twice.
+/// A stranger's documents are refused, saying what the run did.
+///
+/// They are a second top-level account's private draft `X` and its private
+/// fork `F` of `D.1`, which the claimant may not read. Each `withheld`
+/// refusal names the document, and the talk says beside it what the run
+/// did, exit 1, nothing on stdout, nothing written: `--fork F` composed
+/// nothing; `--into X` composed the merge and merged nothing; `--undo X`
+/// took nothing back; `--withdraw X` took nothing out. `X` named as the
+/// journal is checked before the shot: `--publish` halts, exit 3, naming
+/// the journal and the check it fails, nothing published; the same
+/// `--publish` naming no journal lands the next version with its record,
+/// and naming `X` again answers that landing, nothing written.
 #[test]
-fn a_strangers_document_is_refused_with_what_the_run_did_and_as_the_journal_leaves_the_merge_standing() {
+fn a_strangers_document_is_refused_with_what_the_run_did_and_as_the_journal_before_any_write() {
     let dir = tempfile::tempdir().unwrap();
     let rig = Rig::new(dir.path());
     let session = rig.session();
@@ -893,22 +894,32 @@ fn a_strangers_document_is_refused_with_what_the_run_did_and_as_the_journal_leav
     refused(&["--undo", &x_s, "--kind", &kind], &format!("{x} is not readable to this reader (withheld); nothing was taken back"));
     refused(&["--withdraw", &x_s, "--kind", &kind], &format!("{x} is not readable to this reader (withheld); nothing was taken out"));
 
-    // THE JOURNAL, read at the record after the shot: the next version
-    // stands, its record unwritten.
+    // The journal, checked before the shot: the stranger's draft refused,
+    // nothing published.
     let member = format!("{d}.3");
+    let publishes = rig.publishes_under(&token, &d);
+    let before = position();
     let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--publish", "--journal", &x_s, "--kind", &kind]);
     assert_eq!(r.code, 3, "{r:?}");
     assert!(r.out.is_empty(), "no report: {}", r.out);
-    assert!(r.err.contains(&format!("the merge stands at {member}, and its record is not written: the journal {x} is not readable to this merger (withheld)")), "{}", r.err);
-    assert!(r.err.contains("act: resume with a journal this account can write"), "{}", r.err);
+    assert!(r.err.contains(&format!("the journal {x} is not readable to this merger (withheld), so the merge cannot land")), "{}", r.err);
+    assert!(r.err.contains("act: name as the journal a draft this account owns, or none for the account's own; nothing was written"), "{}", r.err);
     assert!(!r.err.contains("nothing was composed") && !r.err.contains("fault in this library"), "{}", r.err);
-    assert_eq!(rig.read(&token, &frames::find_links_ftt(&kind, &daughter_s))["addrs"], json!([]), "no record found from the daughter");
-    let publishes = rig.publishes_under(&token, &d);
+    assert_eq!(position(), before, "nothing written");
+    assert_eq!(rig.publishes_under(&token, &d), publishes, "nothing published");
+    // Naming no journal, the next version lands with its record; naming the
+    // stranger's draft again, the standing landing is answered, nothing
+    // written and the journal never read.
     let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--head", &head_s, "--publish", "--kind", &kind]);
     let v = report(&r);
-    assert_eq!(v["landed"]["member"].as_str(), Some(member.as_str()), "the member found standing: {}", v["landed"]);
+    assert_eq!(v["landed"]["member"].as_str(), Some(member.as_str()), "the next version: {}", v["landed"]);
     let link = v["landed"]["record"].as_str().expect("the record's link").to_string();
     assert_eq!(rig.read(&token, &frames::find_links_ftt(&kind, &daughter_s))["addrs"], json!([link]), "the record found from the daughter");
-    assert_eq!(rig.publishes_under(&token, &d), publishes, "nothing landed twice");
+    assert_eq!(rig.publishes_under(&token, &d), publishes + 1, "one version published");
+    let before = position();
+    let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--head", &head_s, "--publish", "--journal", &x_s, "--kind", &kind]);
+    let v = report(&r);
+    assert_eq!((v["landed"]["member"].as_str(), v["landed"]["record"].as_str()), (Some(member.as_str()), Some(link.as_str())), "the standing landing: {}", v["landed"]);
+    assert_eq!(position(), before, "nothing written twice");
     session.close().expect("close");
 }

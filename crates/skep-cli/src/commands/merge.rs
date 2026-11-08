@@ -32,10 +32,14 @@
 //! exit 3. A `withheld` refusal — a document the merger may not read, or an
 //! origin a write's run windows — names the document, and the command says
 //! beside it what the run did: nothing composed; the merge composed, and
-//! nothing published or merged; nothing taken back or out. A journal the
-//! merger may not read, or one the board does not register, is met at the
-//! record, after the landing or the take-back: the library's halt says the
-//! act stands with its record unwritten, exit 3.
+//! nothing published or merged; nothing taken back or out. A `--journal`
+//! that cannot take the record — one the merger may not read, one the board
+//! does not register, another account's or a published one — is refused
+//! before the landing's or the take-back's first write: the library's halt
+//! names the journal and the check it fails, exit 3, nothing written. A
+//! run whose landing already stands writes its record first and checks no
+//! journal before it; a journal met failing there leaves the merge standing
+//! with its record unwritten, exit 3.
 //!
 //! **The two take-backs** (skep #783), each with `--kind` and nothing of
 //! the composition's: `--undo ⟨S⟩` puts the draft back as it stood before

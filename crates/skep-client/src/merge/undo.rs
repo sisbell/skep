@@ -102,19 +102,27 @@
 //! and the act stands all the same. A re-run after either act finds no
 //! marker and writes nothing — so where the record is not written after the
 //! act's write, for a lost acknowledgment at its writes, a head owed there,
-//! or a journal this merger may not read or this board does not register,
-//! the landing's record stands alone, which the halt says. A landing of the
-//! key made after either act writes a record of its own, which replaces
-//! this one: the landing's read-first takes the merger's newest record of
-//! the key, and this one names no landing (the `land` module's doc).
+//! or a journal the record's step finds unable to take it, the landing's
+//! record stands alone, which the halt says. A landing of the key made
+//! after either act writes a record of its own, which replaces this one:
+//! the landing's read-first takes the merger's newest record of the key,
+//! and this one names no landing (the `land` module's doc).
+//!
+//! **The journal, before the write.** A journal named is checked before the
+//! one write, as a landing's is (the `land` module's doc): one
+//! `doc_metadata` at the head, after the reads and the cap, and one this
+//! merger may not read, one this board does not register, another
+//! account's or a published one is refused there, naming the journal and
+//! the check it fails, with nothing sent (P13) — whether or not a record of
+//! the landing stands to be replaced.
 //!
 //! **The head, before the write.** The board's head (`Board::board_head`;
-//! SP-14) is read before the one write, as the landing reads it: a claimed
-//! board serving no head record halts with nothing sent, since the record's
-//! link could not be signed. A lost acknowledgment of the one write is the
-//! dialer's halt, with no re-ask: each act reads first on a re-run. The
-//! record's link is the landing's, sent once more, signed, under its own id
-//! where it went unsigned and a claim landed past the head's read
+//! SP-14) is read before the one write, after the journal's check, as the
+//! landing reads it: a claimed board serving no head record halts with nothing
+//! sent, since the record's link could not be signed. A lost acknowledgment of
+//! the one write is the dialer's halt, with no re-ask: each act reads first on
+//! a re-run. The record's link is the landing's, sent once more, signed, under
+//! its own id where it went unsigned and a claim landed past the head's read
 //! (`Writer::write_record`).
 //!
 //! **The session's end.** The death signal under the merger's token is
@@ -203,6 +211,11 @@ pub struct Withdrawn {
 ///   library's own fault;
 /// - the records' reads' refusals at the head, and [`Refusal::OverCap`]
 ///   where C mapped is in more runs than one write may name, nothing sent;
+/// - a journal named that cannot take the record — one this merger may not
+///   read, one this board does not register, another account's or a
+///   published one — as [`Refusal::Halt`] naming the journal and the check
+///   it fails, nothing sent (P13); the journal's `doc_metadata` read's other
+///   refusals and halts;
 /// - a claimed board serving no head record, as [`Refusal::Halt`] naming
 ///   `H.1`, before the one write, with nothing sent (SP-14);
 /// - the one write's: `arrangement_moved` as the board's verdict,
@@ -217,11 +230,11 @@ pub struct Withdrawn {
 ///   faults, since it sends only the base it read and the runs it read,
 ///   mapped through the records the board served; a lost acknowledgment as
 ///   the dialer's halt, with no re-ask;
-/// - the record's reads' refusals; a journal this merger may not read or
-///   this board does not register, as [`Refusal::Halt`] saying the merge is
-///   out of the draft and the record is not written, nothing of the record
-///   sent; then the record's writes' as `Writer::write_record` answers
-///   them, the act standing.
+/// - the record's reads' refusals; a journal the record's step finds unable
+///   to take it, as [`Refusal::Halt`] saying the merge is out of the draft
+///   and the record is not written, nothing of the record written; then the
+///   record's writes' as `Writer::write_record` answers them, the act
+///   standing.
 ///
 /// The death signal under the merger's token, met at any step, is
 /// [`Refusal::SessionEnded`]: up to and at the one write its face says to
@@ -334,6 +347,7 @@ pub fn undo(
         None,
         Some(&format!("{stem}.arrangement")),
     );
+    writer.check_journal(journal, &format!("the merge cannot be taken out of {draft}"))?;
     let act = Act::Undo { landing };
     let position = send(&writer, &frame, draft, as_of, act)?;
     let record = replace_record(board, merger, kind, draft, &stem, journal, act)?;
@@ -358,6 +372,8 @@ pub fn undo(
 ///   published document;
 /// - [`Refusal::NoMerge`] where the draft carries no marker, nothing sent;
 /// - the image read's refusals at the read's position;
+/// - a journal named that cannot take the record, as [`undo`]'s, nothing
+///   sent (P13);
 /// - a claimed board serving no head record, as [`Refusal::Halt`] naming
 ///   `H.1`, before the one write, with nothing sent (SP-14);
 /// - the one write's, as [`undo`]'s, `arrangement_moved` saying the draft
@@ -405,6 +421,7 @@ pub fn withdraw(
         None,
         Some(&format!("{stem}.arrangement")),
     );
+    writer.check_journal(journal, &format!("the merge cannot be taken out of {draft}"))?;
     let position = send(&writer, &frame, draft, as_of, Act::Withdraw)?;
     let record = replace_record(board, merger, kind, draft, &stem, journal, Act::Withdraw)?;
     Ok(Withdrawn { draft: draft.clone(), position, record })

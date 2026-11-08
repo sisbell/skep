@@ -11,7 +11,8 @@
 //! publication made, written once and never a second shot.
 //!
 //! **The order, and what each step reads first.** The cap: `counts.m`
-//! against the shot's run cap before any frame (decision 13; P13). The shot:
+//! against the shot's run cap before any frame (decision 13; P13). A journal
+//! named: checked after the read-first steps, before the first write. The shot:
 //! the trunk's next member, then the head's daughters, read for a member
 //! whose first `placed` positions already hold M — else one `publish` from
 //! the head, its body every copied run's bytes re-read through the side that
@@ -56,26 +57,38 @@
 //! write before it is begun — before the shot or the stage the merge has
 //! not landed, and before the record the landing stands and the residue
 //! walk writes the record once the head is written. The head is read after
-//! the read-first steps, so a [`resume`] that finds nothing landed answers
-//! with no head read. The board's own `attestation_invalid:board_unavailable`
-//! at the shot or the record's link — a head owed past that read — is faced
-//! the same, never as this library's fault. A shot or a record's link sent
-//! unsigned to a board read as no one's and refused `attestation_required`
-//! met a claim that landed past that read, its head written, and was
-//! refused before its transaction (wire.md §Credential refusals, a
-//! reorder): the head is read again and the frame sent ONCE more, signed
-//! over that pair, under its own id, its answer a signed frame's. A second
-//! read that finds no head to sign over is faced as the head the board
-//! owes, nothing sent; a signed frame refused `attestation_required` is
-//! this library's own fault.
+//! the read-first steps and the check of a journal named, so a [`resume`]
+//! that finds nothing landed answers with no head read. The board's own
+//! `attestation_invalid:board_unavailable` at the shot or the record's link — a
+//! head owed past that read — is faced the same, never as this library's fault.
+//! A shot or a record's link sent unsigned to a board read as no one's and
+//! refused `attestation_required` met a claim that landed past that read, its
+//! head written, and was refused before its transaction (wire.md §Credential
+//! refusals, a reorder): the head is read again and the frame sent ONCE more,
+//! signed over that pair, under its own id, its answer a signed frame's. A
+//! second read that finds no head to sign over is faced as the head the board
+//! owes, nothing sent; a signed frame refused `attestation_required` is this
+//! library's own fault.
 //!
-//! **The journal, at the record.** The journal is first read at the record,
-//! after the shot or the draft's one write: its extent, the end the atom is
-//! appended at. A journal this merger may not read (`withheld`), or one this
-//! board does not register, halts the record before its first write, faced
-//! as the landing standing with its record unwritten — never as a refusal of
-//! the landing — for [`resume`] to record into a journal the merger can
-//! write, or into the account's own.
+//! **The journal, before the first write and at the record.** A record's
+//! atom is appended to its journal as a plain insert, so a journal takes a
+//! record only as a draft the merger's account owns, readable and
+//! registered at this board (the merge record's decision 7). A journal the
+//! caller names is checked before the landing's first write — one
+//! `doc_metadata` at the head, after the read-first steps and before the
+//! head's read — and one this merger may not read (`withheld`), one this
+//! board does not register, another account's or a published one is refused
+//! there, naming the journal and the check it fails, with nothing sent
+//! (P13). A landing found standing makes no write before its record, and no
+//! journal is checked there. At the record the journal's extent is read,
+//! the end the atom is appended at: a journal that read answers `withheld`
+//! or `doc_not_registered`, or a journal named whose atom the board refuses
+//! `published_target` or `not_owner`, halts the record with nothing of it
+//! written, faced as the landing standing with its record unwritten — never
+//! as a refusal of the landing — for [`resume`] to record into a journal the
+//! merger can write, or into the account's own. The account's own journal,
+//! found or minted at the record, is this library's choice, so the board's
+//! refusal of its atom is this library's own fault.
 //!
 //! **The draft landing is one write.** M is sent whole as one
 //! `set_arrangement` of the draft (wire.md §Arrangement), TYPED against the
@@ -229,7 +242,9 @@ pub enum Landing<'a> {
         /// The merge journal the record goes to.
         ///
         /// The account's default where `None` — the journal its first
-        /// record went to, or a private one minted (decision 7).
+        /// record went to, or a private one minted (decision 7). One named
+        /// is checked before the shot: a draft this account owns, readable
+        /// and registered (P13; the module's doc).
         journal: Option<Address>,
     },
     /// M set as the whole arrangement of a draft in one `set_arrangement`.
@@ -250,6 +265,9 @@ pub enum Landing<'a> {
         /// reported with nothing staged.
         into: Option<Address>,
         /// The merge journal, or the account's default.
+        ///
+        /// One named is checked before the stage or the one write, as the
+        /// shot's is.
         journal: Option<Address>,
     },
 }
@@ -378,9 +396,15 @@ impl<'a> Landing<'a> {
 /// In this order:
 ///
 /// - [`Refusal::OverCap`], before any frame;
-/// - the reads' refusals, for a member already holding M, for the merger's
-///   newest record for the key at a draft landing, or for the draft's
-///   `doc_metadata` at the position the write is typed against;
+/// - the reads' refusals, for a member already holding M or for the
+///   merger's newest record for the key at a draft landing;
+/// - a journal named that cannot take the record — one this merger may not
+///   read, one this board does not register, another account's or a
+///   published one — as [`Refusal::Halt`] naming the journal and the check
+///   it fails, before the landing's first write, with nothing sent (P13);
+///   the journal's `doc_metadata` read's other refusals and halts;
+/// - the reads' refusals for the draft's `doc_metadata` at the position the
+///   write is typed against;
 /// - a claimed board serving no head record, as [`Refusal::Halt`] naming
 ///   `H.1`, before the first write the landing would make — the shot, the
 ///   stage, the draft's one write or the record's first — with nothing
@@ -413,10 +437,12 @@ impl<'a> Landing<'a> {
 ///   the head and the extent the merge read, and a base only where the
 ///   draft records one at the position the write is typed against — and a
 ///   lost acknowledgment as the dialer's halt, with no re-ask;
-/// - the claim's and the record's reads' refusals; a journal this merger
-///   may not read or this board does not register, faced as the landing
-///   standing with its record unwritten, nothing of the record sent, for
-///   [`resume`] to record into another; then the record's writes':
+/// - the claim's and the record's reads' refusals; a journal whose extent
+///   read answers `withheld` or `doc_not_registered`, or a journal named
+///   whose atom the board refuses as another account's or a published one,
+///   faced as the landing standing with its record unwritten, nothing of
+///   the record written, for [`resume`] to record into another; then the
+///   record's writes':
 ///   [`Refusal::NeedsSignedSession`], and at its link
 ///   `attestation_invalid:board_unavailable` faced as the head the board
 ///   owes, the landing standing for [`resume`] to record, and
@@ -457,8 +483,9 @@ pub fn land(board: &Board, merged: &Merged, landing: Landing<'_>) -> Result<Land
 ///
 /// # Errors
 ///
-/// As [`land`]'s but the shot's, the stage's and the draft's write's, which
-/// it never sends.
+/// As [`land`]'s but the check of a journal named and the shot's, the
+/// stage's and the draft's write's: it sends no write before the record, so
+/// a journal it is given is met at the record alone.
 pub fn resume(
     board: &Board,
     merged: &Merged,
@@ -490,9 +517,11 @@ pub fn resume(
 ///
 /// A member outside `merged`'s document's chain, as the library's own fault
 /// ([`Refusal::Halt`]), nothing read; then as [`land`]'s from the claims'
-/// reads on: the claims' and the record's reads' refusals, a journal this
-/// merger may not read or this board does not register faced as the
-/// landing standing with its record unwritten, and the record's writes'.
+/// reads on — the record is this call's first write, so a journal named is
+/// met at the record alone: the claims' and the record's reads' refusals, a
+/// journal this merger may not read or this board does not register, or
+/// one named that is another account's or published, faced as the landing
+/// standing with its record unwritten, and the record's writes'.
 /// The death signal under the merger's token is [`Refusal::SessionEnded`],
 /// its way on this call made again: it reads the record first and writes
 /// it once, where [`resume`] would read no landing in a member the person
@@ -535,6 +564,9 @@ pub fn record_published(
 ///
 /// They are the shot, the claim's read and the record, or the draft landing
 /// and the record. `shoot` is whether a landing not found standing is made.
+/// A journal named is checked once, after the read-first steps and before
+/// the landing's first write ([`Writer::check_journal`]); a landing found
+/// standing writes nothing before its record and checks none.
 ///
 /// # Errors
 ///
@@ -551,6 +583,7 @@ fn walk(
     }
     let merger = landing.merger();
     let writer = Writer::new(board, merger, OnEnd::Resume);
+    let check_journal = || writer.check_journal(landing.journal(), "the merge cannot land");
     match &landing {
         Landing::Shot { draft, .. } => {
             let (member, position) = match writer.standing_member(merged)? {
@@ -562,6 +595,7 @@ fn walk(
                     if !shoot {
                         return Ok(None);
                     }
+                    check_journal()?;
                     let (address, position) = writer.publish(merged, draft.as_ref())?;
                     if !is_trunk_member(&merged.inputs.doc, &address) {
                         return Ok(Some(Landed::AsDaughter { address, position }));
@@ -604,6 +638,9 @@ fn walk(
             // draft, the stage's own draft and position.
             let (into, as_of, text) = match into {
                 Some(into) => {
+                    if shoot {
+                        check_journal()?;
+                    }
                     let text = format!("{}:{into}@{}", merged.key.text(), merged.as_of);
                     let text = match newest.follows(into) {
                         Some(link) => format!("{text}~{link}"),
@@ -618,6 +655,7 @@ fn walk(
                     if !shoot {
                         return Ok(None);
                     }
+                    check_journal()?;
                     let (fresh, at) = writer.stage(merged, &newest)?;
                     let text = format!("{}:{fresh}@{at}", merged.key.text());
                     (fresh, at, text)
@@ -1243,8 +1281,10 @@ impl Writer<'_> {
     /// The two writes carry the per-session ids `<stem>.record` and
     /// `<stem>.link`; `owed` faces the act standing with its record
     /// unwritten, for the [`Unwritten`] reason it is given: the head owed
-    /// before the first write or at the link, or a journal whose extent read
-    /// answers `withheld` or `doc_not_registered`.
+    /// before the first write or at the link, a journal whose extent read
+    /// answers `withheld` or `doc_not_registered`, or a journal named whose
+    /// atom the board refuses `published_target` or `not_owner` — the
+    /// caller's journal, where the account's own is this library's choice.
     ///
     /// # Errors
     ///
@@ -1252,8 +1292,10 @@ impl Writer<'_> {
     /// standing and nothing of the record sent; the journal's refusals
     /// ([`journal::of`]); a journal this merger may not read or this board
     /// does not register, faced by `owed` with nothing of the record sent;
-    /// the extent read's other refusals; a journal that is published, full
-    /// or another account's, a doc 1 this session does not own, a doc 1 or
+    /// the extent read's other refusals; a journal named whose atom the board
+    /// refuses as published or another account's, faced by `owed` with
+    /// nothing of the record written; the account's own journal refused so,
+    /// a journal that is full, a doc 1 this session does not own, a doc 1 or
     /// an account this client cannot spell, and an attest the board refuses,
     /// as the library's own faults, but
     /// `attestation_invalid:board_unavailable` at the link, faced as the head
@@ -1274,18 +1316,20 @@ impl Writer<'_> {
     ) -> Result<Address, Refusal> {
         let owed_head = |cause: String| owed(Unwritten::HeadOwed, cause);
         let term = self.signing_term(&owed_head)?;
+        let named = journal.is_some();
         let journal =
             journal::found(self.board, &self.merger, kind, journal.cloned(), self.reader.on_end())?;
         let text = record.to_value().to_string();
-        // The journal's first read, after the act it records: a journal the
-        // act cannot write its record into leaves the act standing.
+        // The journal's read at the record, after the act it records: a
+        // journal the act cannot write its record into leaves the act
+        // standing.
         let extent = self.reader.extent(&journal, None).map_err(|e| {
-            let why = match e {
-                Refusal::Unreadable(_) => Unwritten::JournalWithheld(journal.clone()),
-                Refusal::NoSuchDocument(_) => Unwritten::JournalUnregistered(journal.clone()),
+            let unfit = match e {
+                Refusal::Unreadable(_) => Unfit::Withheld,
+                Refusal::NoSuchDocument(_) => Unfit::Unregistered,
                 e => return e,
             };
-            Refusal::from(owed(why, format!("the board refused the read of {journal}'s extent, the end the record's atom is appended at, so no write of the record was sent")))
+            Refusal::from(owed(Unwritten::Journal(journal.clone(), unfit), format!("the board refused the read of {journal}'s extent, the end the record's atom is appended at, so no write of the record was sent")))
         })?;
         let ordinal = extent.checked_add(1).ok_or_else(|| {
             own_fault_face(
@@ -1311,7 +1355,15 @@ impl Writer<'_> {
                 let Some(r) = Rejection::of(&v) else {
                     return Err(shape_face("insert", &v).into());
                 };
+                // A journal the caller named is the caller's: the act stands
+                // with its record unwritten. The account's own is this
+                // library's choice, so its refusal is the library's fault.
+                let refused = |unfit: Unfit| -> Refusal {
+                    owed(Unwritten::Journal(journal.clone(), unfit), format!("{}: the board refused the record's atom into {journal}, so nothing of the record was written", r.token())).into()
+                };
                 return Err(match r.key() {
+                    "published_target" if named => refused(Unfit::Published),
+                    "not_owner" if named => refused(Unfit::Foreign),
                     "published_target" => own_fault_face("the journal is not a draft", format!("{}: the merge journal {journal} is published, and a record is appended as a plain insert into a draft", r.token())),
                     "not_owner" => own_fault_face("the journal is not this account's", format!("{}: {journal} is owned by another account", r.token())),
                     _ => Refusal::Halt(r.refused(&v)),
@@ -1665,6 +1717,62 @@ impl Writer<'_> {
         }
     }
 
+    /// Checks a journal the caller named before the act's first write (P13).
+    ///
+    /// The record goes into the journal after the act's write, so a journal
+    /// that cannot take it is refused before that write, never met after
+    /// it: one `doc_metadata` of `journal` at the head, judged in the board's
+    /// own order for the atom's insert ([`Unfit`]) — the read answered, then
+    /// the owner, then the published bit. `None`, the account's own journal
+    /// found or minted at the record, is not read. `blocked` names what the
+    /// refusal stops, after the journal's reason in the face's state.
+    ///
+    /// # Errors
+    ///
+    /// A journal that fails a check, as [`Refusal::Halt`] with a face naming
+    /// the journal and the check, nothing sent; a merger's account this
+    /// client cannot spell, as the library's own fault; the read's other
+    /// refusals and halts; the death signal, [`Refusal::SessionEnded`].
+    pub(super) fn check_journal(
+        &self,
+        journal: Option<&Address>,
+        blocked: &str,
+    ) -> Result<(), Refusal> {
+        let Some(journal) = journal else {
+            return Ok(());
+        };
+        let (unfit, found) = match self.reader.metadata(journal, None) {
+            Err(Refusal::Unreadable(_)) => {
+                (Unfit::Withheld, "its `doc_metadata` answered withheld".to_string())
+            }
+            Err(Refusal::NoSuchDocument(_)) => {
+                (Unfit::Unregistered, "its `doc_metadata` answered doc_not_registered".to_string())
+            }
+            Err(e) => return Err(e),
+            Ok(meta) => {
+                let account = parse_address(self.merger.account).ok_or_else(|| {
+                    own_fault_face(
+                        "the merger's account cannot be spelled",
+                        self.merger.account.to_string(),
+                    )
+                })?;
+                if parse_address(&meta.owner).as_ref() != Some(&account) {
+                    (Unfit::Foreign, format!("its `doc_metadata` names the owner {}, and only a document's owner writes into it (not_owner)", meta.owner))
+                } else if meta.published {
+                    (Unfit::Published, "its `doc_metadata` names it published, and the atom goes in as a plain insert, which a published document refuses (published_target)".to_string())
+                } else {
+                    return Ok(());
+                }
+            }
+        };
+        Err(Halt::face(
+            format!("{}, so {blocked}", unfit.reason(journal)),
+            format!("the merge's record goes into the journal named after the act's write, so the journal is read before any write: {found}"),
+            "name as the journal a draft this account owns, or none for the account's own; nothing was written",
+        )
+        .into())
+    }
+
     /// Returns the term the act's signed writes sign over (SP-14).
     ///
     /// It is `H.1`'s pair, or `None` on a board no one has claimed, which
@@ -1746,10 +1854,8 @@ pub(super) enum Unwritten {
     /// The board serves no head record (`H.1`), and the record's link signs
     /// over its pair (SP-14).
     HeadOwed,
-    /// The journal answers `withheld`: this merger may not read it.
-    JournalWithheld(Address),
-    /// The journal answers `doc_not_registered`.
-    JournalUnregistered(Address),
+    /// The journal cannot take the record, for the check it fails.
+    Journal(Address, Unfit),
 }
 
 impl Unwritten {
@@ -1757,12 +1863,7 @@ impl Unwritten {
     pub(super) fn reason(&self) -> String {
         match self {
             Unwritten::HeadOwed => "this board has no H.1 yet".to_string(),
-            Unwritten::JournalWithheld(journal) => {
-                format!("the journal {journal} is not readable to this merger (withheld)")
-            }
-            Unwritten::JournalUnregistered(journal) => {
-                format!("the journal {journal} is not registered at this board (doc_not_registered)")
-            }
+            Unwritten::Journal(journal, unfit) => unfit.reason(journal),
         }
     }
 
@@ -1770,9 +1871,48 @@ impl Unwritten {
     fn remedy(&self) -> &'static str {
         match self {
             Unwritten::HeadOwed => "once the board has written its head",
-            Unwritten::JournalWithheld(_) | Unwritten::JournalUnregistered(_) => {
+            Unwritten::Journal(..) => {
                 "with a journal this account can write, or with none for its own"
             }
+        }
+    }
+}
+
+/// Why a journal cannot take a merge record: the check it fails.
+///
+/// A record's atom goes into its journal as a plain insert, so the journal
+/// is a draft the merger's account owns, readable and registered at this
+/// board (the merge record's decision 7). A journal named is checked before
+/// an act's first write (`Writer::check_journal`; P13); one the record's
+/// step finds failing a check leaves the act standing with its record
+/// unwritten ([`Unwritten::Journal`]). The checks run in the board's order
+/// for the atom: the read's answer, then the owner, then the published bit.
+#[derive(Clone, Copy)]
+pub(super) enum Unfit {
+    /// It answers `withheld`: this merger may not read it.
+    Withheld,
+    /// It answers `doc_not_registered`.
+    Unregistered,
+    /// It is another account's, so the atom is refused `not_owner`
+    /// (wire.md §Identity, ownership).
+    Foreign,
+    /// It is published, so the atom is refused `published_target` (wire.md
+    /// §The version-chain refusals).
+    Published,
+}
+
+impl Unfit {
+    /// Returns what the check found of `journal`, as a face's state says it.
+    fn reason(self, journal: &Address) -> String {
+        match self {
+            Unfit::Withheld => {
+                format!("the journal {journal} is not readable to this merger (withheld)")
+            }
+            Unfit::Unregistered => {
+                format!("the journal {journal} is not registered at this board (doc_not_registered)")
+            }
+            Unfit::Foreign => format!("the journal {journal} is another account's"),
+            Unfit::Published => format!("the journal {journal} is published"),
         }
     }
 }
@@ -1780,11 +1920,11 @@ impl Unwritten {
 /// Faces a landing that stands with its record unwritten.
 ///
 /// The member or the draft holds the merge and the record is not written,
-/// for `why` — the board's head owed (SP-14), or a journal this merger may
-/// not read or this board does not register: `resume` writes it once the
-/// board has written its head, or into a journal the merger can write, told
-/// the draft for a draft landing, since a fresh draft's landing is
-/// otherwise found by its record alone.
+/// for `why` — the board's head owed (SP-14), or a journal that cannot take
+/// the record ([`Unfit`]): `resume` writes it once the board has written
+/// its head, or into a journal the merger can write, told the draft for a
+/// draft landing, since a fresh draft's landing is otherwise found by its
+/// record alone.
 fn record_owed(landed: &RecordLanding, why: &Unwritten, cause: String) -> Halt {
     let (at, act) = match landed {
         RecordLanding::Member { member, .. } => (member, format!("resume {}: it finds the member holding the merge and writes the record", why.remedy())),
@@ -1792,7 +1932,7 @@ fn record_owed(landed: &RecordLanding, why: &Unwritten, cause: String) -> Halt {
     };
     let unwritten = match why {
         Unwritten::HeadOwed => "its record's link",
-        Unwritten::JournalWithheld(_) | Unwritten::JournalUnregistered(_) => "its record",
+        Unwritten::Journal(..) => "its record",
     };
     Halt::face(
         format!("the merge stands at {at}, and {unwritten} is not written: {}", why.reason()),

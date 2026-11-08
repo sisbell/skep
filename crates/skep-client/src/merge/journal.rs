@@ -5,8 +5,10 @@
 //! journal the account's first record went to, found by the account's own
 //! links of the kind from its doc 1 and named by the first record's link, or
 //! a private draft minted on first use with
-//! `create_new_document{published: false}`. Public or private is the journal
-//! document's own flag; the library never changes it.
+//! `create_new_document{published: false}`. The atom goes in as a plain
+//! insert, so a journal takes it only as a draft the account owns; the
+//! library never changes a journal's flag, and checks a journal named
+//! before an act's first write (the `land` module's doc; P13).
 
 use serde_json::Value;
 use skep_address::Address;

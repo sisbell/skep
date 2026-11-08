@@ -2,11 +2,15 @@
 //!
 //! The table (T6) takes every `DialError`, every disposition, `poisoned`,
 //! `internal_panic`, `write_busy` once and twice, `durability` once, twice and
-//! three times, `arrangement_moved`, and an ack, each to exactly its row, the
-//! table the one owner of every reissue's bound; the failed send, which starts
-//! and runs a line's clock (`HAND_OVER_DEADLINE`), is every answer but an ack,
-//! the death signal and a dial that never left, each with its token — a
-//! second `write_busy` among them, held as a connection never made is; the
+//! three times, `arrangement_moved`, and an ack, each to exactly its row — a
+//! request the board never answered to its own, apart from an answer it gave
+//! that this client cannot read, and a `/health` refused before any
+//! connection no verdict on the board (skep #863) — the table the one owner of
+//! every reissue's bound; the failed send, which starts and runs a line's
+//! clock (`HAND_OVER_DEADLINE`), is every answer but an ack, the death signal,
+//! a request the board gave no answer to and a dial that never left, each
+//! with its token — a second `write_busy` among them, held as a connection
+//! never made is; every hand's key a declared `HandKey` word; the
 //! five kinds are bursts and the eleven other
 //! `WRITE_KINDS` are not; the five held states are the declared ones, a
 //! line's its cause's whatever refusal stands beside it, and the two acts of
@@ -15,11 +19,13 @@
 //! `other`, the three classes the declared words, set with the words.
 //!
 //! The ground is a fake board (`Fake`) — its `H.1`, or an answer armed in the
-//! record's place, and whether it names a claimant; its `/changes` rows and
+//! record's place, whether it names a claimant, and its `/health` unanswered
+//! where a cell arms it; its `/changes` rows, or no answer to them, and
 //! the reads of them counted, each read slowed where a cell asks; its commit
 //! stream, none or endless; a draft's text, its content image and the
 //! reads of it counted, a look taken as each image read reaches the board,
-//! the death signal at either read where a cell arms it, the position its
+//! the death signal, no answer or a refusal at either read where a cell arms
+//! it, the position its
 //! arrangement last changed at as a cell sets it — a burst typed below it
 //! refused `arrangement_moved`, the fake's own acks moving nothing, so every
 //! frame typed at the fake's head meets no refusal — the frames POSTed to
@@ -99,22 +105,34 @@ fn retry(code: &str) -> Value {
     json!({"resp": "rejected", "code": code, "disposition": "retry", "op": "insert"})
 }
 
-/// THE CLASSIFICATION TABLE (§3c.4): each outcome to exactly its row. The own
-/// node stopped, an ack and the death signal sit outside `classify`
+/// Checks the classification table (§3c.4): each outcome to exactly its row.
+///
+/// The own node stopped, an ack and the death signal sit outside `classify`
 /// (`DialOutcome`'s doc); a write the hold never holds is read through it as
-/// a burst is, and faced where a burst is held (`write`'s suite). The mutant
-/// that leaves `arrangement_moved` to the disposition's row holds a stale
-/// burst as a refused run, whose resend meets the same refusal; the one that
-/// faces the reissue's own `write_busy` hands the page a burst the board was
-/// briefly too full to take (skep #786).
+/// a burst is, and faced where a burst is held (`write`'s suite). A request
+/// the board never answered — no connection, no answer within its bound, a
+/// connection closed before any answer — has its own row apart from an
+/// answer it gave that this client cannot read (skep #863). The mutant that
+/// leaves `arrangement_moved` to the disposition's row holds a stale burst as
+/// a refused run, whose resend meets the same refusal; the one that faces the
+/// reissue's own `write_busy` hands the page a burst the board was briefly
+/// too full to take (skep #786); the one that reads a timeout as an answer
+/// lost walks the resend on into a board that is not there.
 #[test]
 fn every_outcome_classifies_to_exactly_its_row() {
-    // No connection made — the burst did not leave (`sent: false`).
+    // No connection made — the board gave the burst no answer, and it did
+    // not leave (`sent: false`).
     for e in [DialError::Connect("x".into()), DialError::Resolve("x".into()), DialError::Tls("x".into())] {
-        assert_eq!(classify(DialOutcome::Dial(&e), &Reissues::default()), Decision::Hold { cause: "unreachable", sent: false }, "{e}");
+        assert_eq!(classify(DialOutcome::Dial(&e), &Reissues::default()), Decision::Unanswered { sent: false }, "{e}");
     }
-    // The request left, its answer lost — it MAY have landed (`sent: true`).
-    for e in [DialError::Timeout("x".into()), DialError::Io("x".into()), DialError::Truncated { declared: 9, got: 1 }, DialError::Response("x".into()), DialError::TooLarge { cap: 1 }] {
+    // The request left and the board gave it no answer — it MAY have landed
+    // (`sent: true`).
+    for e in [DialError::Timeout("x".into()), DialError::Io("x".into()), DialError::Truncated { declared: 9, got: 1 }] {
+        assert_eq!(classify(DialOutcome::Dial(&e), &Reissues::default()), Decision::Unanswered { sent: true }, "{e}");
+    }
+    // The board answered with bytes this client cannot read — an answer lost
+    // on the way, which MAY have landed (`sent: true`).
+    for e in [DialError::Response("x".into()), DialError::TooLarge { cap: 1 }] {
         assert_eq!(classify(DialOutcome::Dial(&e), &Reissues::default()), Decision::Hold { cause: "unreachable", sent: true }, "{e}");
     }
     // The scheme this build does not hold, or a request refused before any
@@ -165,7 +183,9 @@ fn every_outcome_classifies_to_exactly_its_row() {
 /// board's faced — and never where it landed, where the session died, or
 /// where no dial left: a connection never made, a request refused before any
 /// connection, an attest that could not be composed, a signature not made, a
-/// hold before any dial; nor does a line held at the death. Its token is the
+/// hold before any dial; nor does a line held at the death, nor at once a
+/// request the board gave no answer to, which the next probe's verdict
+/// settles (skep #863). Its token is the
 /// held cause, or the board's in the `code:detail` convention (the mutant
 /// that reads a connection never made as a failure hands an outage's line to
 /// the person; the one that reads the shell's own refusal as the board's
@@ -180,6 +200,7 @@ fn a_failed_send_is_every_answer_but_an_ack_the_death_and_a_dial_that_never_left
     let cells: Vec<(&str, Dialed, Option<&str>)> = vec![
         ("an ack", Dialed::Acked(json!({"resp": "ack", "at": 1})), None),
         ("the death signal", Dialed::Died, None),
+        ("a request the board gave no answer to, settled by the next probe's verdict", Dialed::unanswered(true, Refusal::Unreachable(DialError::Timeout("x".into()))), None),
         ("a connection never made", Dialed::Held { reason: Reason::of("unreachable", false), refusal: Refusal::Unreachable(DialError::Connect("x".into())) }, None),
         ("an answer lost", held("unreachable", true), Some("unreachable")),
         ("poisoned", held("poisoned", true), Some("poisoned")),
@@ -201,6 +222,31 @@ fn a_failed_send_is_every_answer_but_an_ack_the_death_and_a_dial_that_never_left
         assert_eq!(failed_send(&Reason::of(cause, false)), None, "{cause}: a hold before any dial");
     }
     assert_eq!(failed_send(&Reason::of("session_died", false)), None, "a line held at the death: the death is neither");
+}
+
+/// Checks that a `/health` refused before any connection is no verdict.
+///
+/// It reached no board (`DialError::NotHeld`, `DialError::Request`): neither
+/// the board's silence nor its answer. The read answers `Verdict::Undialed`
+/// and the hold stands as it stood — a board answering stays so, a burst
+/// there dialed, and a silence already found stands — while a read the board
+/// gave no answer to is its silence (the mutant that reads the refusal as the
+/// board's silence holds every later burst `unreachable` where no probe could
+/// send it; the one that reads it as an answer ends a silence on a read that
+/// reached no board).
+#[test]
+fn a_health_read_refused_before_any_connection_is_no_verdict() {
+    let g = ground();
+    let verdict_of = |e: DialError| g.holds.note_health_read("b-1", &Err(Halt::Dial(e)));
+    for e in [DialError::NotHeld("https".into()), DialError::Request("x".into())] {
+        assert_eq!(verdict_of(e.clone()), Verdict::Undialed, "{e:?}");
+        assert!(!g.holds.silent("b-1"), "{e:?}: the board answering stays so");
+    }
+    let OpAnswer::Answered(Ok(ack)) = g.holds.send(&g.session, insert(DOC, json!(["a"]), g.fake.head()), None) else { panic!("dialed") };
+    assert_eq!((ack["resp"].as_str(), g.fake.sends()), (Some("ack"), 1), "a burst there is dialed: {ack}");
+    assert_eq!(verdict_of(DialError::Timeout("x".into())), Verdict::Silent, "a read the board gave no answer to is its silence");
+    assert_eq!(verdict_of(DialError::NotHeld("https".into())), Verdict::Undialed);
+    assert!(g.holds.silent("b-1"), "the silence found stands");
 }
 
 /// Checks that a line's state is its cause's, whatever refusal stands beside.
@@ -340,6 +386,26 @@ fn the_directory_has_three_states_and_the_custody_three() {
     assert_eq!(names, ["Unopened", "File", "Halted"], "a principal's three custodies: the file not yet read, the file, the halt");
 }
 
+/// Checks that every hand's key is a declared `HandKey` word (§4b.2).
+///
+/// The keys a moved face's hands carry — this store's own, another key's, an
+/// unsigned hand, a testimony lost, and the hands not read — are exactly the
+/// declared union's words (the mutant that spells the unread hands `lost`
+/// tells the page the board lost what it never answered; one that spells a
+/// word the union lacks hands the page a hand it cannot draw).
+#[test]
+fn every_hand_key_is_a_declared_word() {
+    let g = ground();
+    let row = |at: u64, key: &str| json!({"at": at, "op": "insert", "key": key, "docs": [DOC]});
+    let rows = [row(1, &g.own_key()), row(2, &"ff".repeat(32)), row(3, "bare"), lost_row()];
+    let mut spelled: std::collections::BTreeSet<&str> = g.holds.hands_of(&g.session, &rows).iter().map(|hand| hand.key).collect();
+    spelled.insert(Hand::UNREAD.key);
+    let declarations = crate::shapes::declarations();
+    let line = declarations.lines().find(|l| l.starts_with("export type HandKey")).expect("`HandKey` is declared");
+    let declared: std::collections::BTreeSet<&str> = line.split('\'').skip(1).step_by(2).collect();
+    assert_eq!(spelled, declared, "{line}");
+}
+
 /// The two acts are the declared `Resolve.act` union's words, each naming
 /// its act, and no other spelling names one (the mutant that reads a near
 /// spelling as an act drops a run the page never asked to drop).
@@ -407,30 +473,31 @@ impl<T: Clone> Armed<T> {
 ///
 /// It holds the chain `board_term` reads — or no `H.1` at all, where one is
 /// armed missing; the death signal, where its read is armed closed; an answer
-/// lost on the way, where it is armed unanswered; a garbled answer, no JSON
-/// or past the cap, where it is armed so; or the answer armed in its place,
-/// a record that cannot be read among them — the reads of it counted — and
-/// whether `/health` names a claimant, as it does unless armed unclaimed. It holds the
-/// `/changes` rows the read sees, each served only past the query's `since`
-/// and at or under its `under`, or a refusal armed in the page's place — the
-/// page budget's for the next few reads among them — or the death signal
-/// where every read is armed closed, and the reads of them counted; the
-/// draft's text, of which a `retrieve_v` answers the positions it names — or
-/// no answer, the death signal, or one position more than it names, where the
-/// site is armed so; the draft's content image, of which an `image` answers
-/// the runs its region covers, clipped as the board clips them — or no
-/// answer, or the death signal, where the read is armed so — the reads of it
-/// counted, a look the cell takes as each reaches the board, and each
-/// answered at the board's position; the position each document's
-/// arrangement last changed at, as a cell sets it, a burst typed below it
-/// refused `arrangement_moved` naming both; the frames POSTed to `/op`
-/// recorded, a look the cell takes as each is recorded, the n-th one's
-/// answer lost on the way where one is armed lost, and the death signal, a
-/// scripted rejection or a non-200 answered where one is armed — to every
-/// send, or to the next few alone, the death first and the non-200 next;
-/// the `/health` reads counted, one armed to panic once, and each held at a
-/// gate while it is shut; and its `/events` stream, none, or a commit a
-/// millisecond without end where a cell arms one.
+/// lost on the way, where it is armed unanswered; a garbled answer, no JSON or
+/// past the cap, where it is armed so; or the answer armed in its place, a
+/// record that cannot be read among them — the reads of it counted — and
+/// whether `/health` names a claimant, as it does unless armed unclaimed, and
+/// answers at all, as it does unless armed unanswered. It holds the `/changes`
+/// rows the read sees, each served only past the query's `since` and at or
+/// under its `under`, or a refusal armed in the page's place — the page
+/// budget's for the next few reads among them — or the death signal where every
+/// read is armed closed, or no answer where every read is armed unanswered, and
+/// the reads of them counted; the draft's text, of which a `retrieve_v` answers
+/// the positions it names — or no answer, the death signal, or one position
+/// more than it names, where the site is armed so; the draft's content image,
+/// of which an `image` answers the runs its region covers, clipped as the board
+/// clips them — or no answer, the death signal, or a refusal, where the read is
+/// armed so — the reads of it counted, a look the cell takes as each reaches
+/// the board, and each answered at the board's position; the position each
+/// document's arrangement last changed at, as a cell sets it, a burst typed
+/// below it refused `arrangement_moved` naming both; the frames POSTed to `/op`
+/// recorded, a look the cell takes as each is recorded, the n-th one's answer
+/// lost on the way where one is armed lost, and the death signal, a scripted
+/// rejection or a non-200 answered where one is armed — to every send, or to
+/// the next few alone, the death first and the non-200 next; the `/health`
+/// reads counted, one armed to panic once, and each held at a gate while it is
+/// shut; and its `/events` stream, none, or a commit a millisecond without end
+/// where a cell arms one.
 struct Fake {
     chain: String,
     no_head: AtomicBool,
@@ -451,6 +518,10 @@ struct Fake {
     head_answer: Mutex<Option<(u16, Value)>>,
     /// Whether `/health` names no claimant: a board no one has claimed.
     unclaimed: AtomicBool,
+    /// Every `/health` read goes unanswered: the board's silence.
+    ///
+    /// Each read answers `DialError::Timeout`.
+    health_unanswered: AtomicBool,
     rows: Mutex<Vec<Value>>,
     changes_refused: Mutex<Option<(u16, Value)>>,
     /// The page budget's refusal armed for the next `/changes` reads: `400
@@ -459,6 +530,8 @@ struct Fake {
     changes_too_large: Armed<u64>,
     /// Every `/changes` read answers the death signal.
     changes_closed: AtomicBool,
+    /// Every `/changes` read goes unanswered (`DialError::Timeout`).
+    changes_unanswered: AtomicBool,
     /// The `/changes` reads made, a page or a refusal answered alike.
     changes_reads: AtomicUsize,
     text: Mutex<String>,
@@ -472,6 +545,10 @@ struct Fake {
     image_unread: AtomicBool,
     /// Every `image` read answers the death signal.
     image_closed: AtomicBool,
+    /// Every `image` read is refused `image_too_large`.
+    ///
+    /// It is an answer that carries no image.
+    image_refused: AtomicBool,
     /// A look the cell takes as an `image` read reaches the board, before it
     /// answers: a burst sent while the shift reads.
     at_image: Mutex<Option<Box<dyn Fn() + Send>>>,
@@ -532,10 +609,12 @@ impl Fake {
             head_reads: AtomicUsize::new(0),
             head_answer: Mutex::new(None),
             unclaimed: AtomicBool::new(false),
+            health_unanswered: AtomicBool::new(false),
             rows: Mutex::new(Vec::new()),
             changes_refused: Mutex::new(None),
             changes_too_large: Armed::none(),
             changes_closed: AtomicBool::new(false),
+            changes_unanswered: AtomicBool::new(false),
             changes_reads: AtomicUsize::new(0),
             text: Mutex::new(String::new()),
             site_unread: AtomicBool::new(false),
@@ -544,6 +623,7 @@ impl Fake {
             image: Mutex::new(Vec::new()),
             image_unread: AtomicBool::new(false),
             image_closed: AtomicBool::new(false),
+            image_refused: AtomicBool::new(false),
             at_image: Mutex::new(None),
             image_reads: AtomicUsize::new(0),
             arrangement: Mutex::new(HashMap::new()),
@@ -672,6 +752,9 @@ impl Dialer for Fake {
             let (gate, opened) = &self.health_gate;
             drop(opened.wait_while(gate.lock().unwrap(), |shut| *shut).unwrap());
             assert!(!self.panic_next_health.swap(false, Ordering::SeqCst), "the health read is made to panic");
+            if self.health_unanswered.load(Ordering::SeqCst) {
+                return Err(DialError::Timeout("the board takes the read and sends nothing".into()));
+            }
             let halted = self.writes_halted.load(Ordering::SeqCst);
             let claimant = if self.unclaimed.load(Ordering::SeqCst) { Value::Null } else { Value::from("1.0.1") };
             return Ok(ok(
@@ -683,6 +766,9 @@ impl Dialer for Fake {
             thread::sleep(Duration::from_millis(self.changes_delay_ms.load(Ordering::SeqCst)));
             if self.changes_closed.load(Ordering::SeqCst) {
                 return Ok(closed());
+            }
+            if self.changes_unanswered.load(Ordering::SeqCst) {
+                return Err(DialError::Timeout("the board takes the read and sends nothing".into()));
             }
             if let Some((status, body)) = self.changes_refused.lock().unwrap().clone() {
                 return Ok(respond(status, body));
@@ -710,6 +796,9 @@ impl Dialer for Fake {
                 }
                 if self.image_closed.load(Ordering::SeqCst) {
                     return Ok(closed());
+                }
+                if self.image_refused.load(Ordering::SeqCst) {
+                    return Ok(ok(json!({"resp": "rejected", "code": "image_too_large", "disposition": "permanent", "op": "image"})));
                 }
                 let region = &body["region"][0];
                 let from = region["start"].as_str().and_then(|s| s.strip_prefix("1.")).and_then(|s| s.parse().ok()).unwrap_or(1);

@@ -28,8 +28,10 @@
 //! shifted frame on the line, marked sent, before the shifted dial, and a
 //! relaunch after that dial's answer is lost reading the landed test at the
 //! shifted positions and keeping the line; a cut span, a lost anchor,
-//! anchors at the wrong edge, no anchors and a read the board does not
-//! answer each falling to the moved hold with its verdict and hands; and a
+//! anchors at the wrong edge, no anchors and a read the board refuses each
+//! falling to the moved hold with its verdict and hands, and a read the
+//! board gives no answer to leaving the shift untried, the burst held
+//! `unreachable` and shifted when the board answers (skep #863); and a
 //! document that keeps moving stopping the shifts at the line's deadline,
 //! held moved, the person's send starting its clock afresh; a held line
 //! under the board's own directory;
@@ -48,7 +50,10 @@
 //! burst held behind it left as it stood, and the line's clock run from its
 //! refused first dial (skep #826); over the real dialer, a refused
 //! connection held `unreachable` unsent and a request the dialer cannot make
-//! faced; `resolve(send)` answering once the lines are handed
+//! faced; a first dial the board gives no answer to holding every burst at
+//! the board at once until the probe's verdict, `behind` a standing line
+//! while it pends and `unreachable` once it finds the board silent
+//! (skep #863); `resolve(send)` answering once the lines are handed
 //! back, before any dial; a board the holds were not opened over stopped as
 //! the caller's bug; the stored frame without its attest; P38's halted file
 //! refusing every act at the principal's door, `resolve` among them, with
@@ -796,8 +801,8 @@ fn the_shifted_frame_is_on_the_line_before_the_shifted_dial_and_a_relaunch_reads
 /// Checks that each burst the shift cannot carry falls to the moved hold.
 ///
 /// A cut span, a refilled span, a lost anchor, an anchor at two places, anchors
-/// at the wrong edge, no anchors, no span and a read the board does not answer
-/// each fall to it (skep #442, #751). The draft as the page read it ran `abc`
+/// at the wrong edge, no anchors, no span and a read the board refuses each
+/// fall to it (skep #442, #751). The draft as the page read it ran `abc`
 /// (I-positions 1 to 3). Another writer's row moved the document to 77; the
 /// burst, typed against the older state, is refused at its first dial, and the
 /// shift is not made: the span between the anchors holds a position it did not
@@ -810,8 +815,9 @@ fn the_shifted_frame_is_on_the_line_before_the_shifted_dial_and_a_relaunch_reads
 /// none though the span began past the document's start; the burst carries no
 /// anchors — an agent's — and no read is made; a delete or a rearrange carries
 /// anchors and no span of the units it edits; an insert's anchors name a span,
-/// or a delete's a span of other than its width; the image read is not
-/// answered. Each is the first brief's moved hold, unchanged: answered `held`
+/// or a delete's a span of other than its width; the image read is refused, an
+/// answer that carries no image. Each is the first brief's moved hold,
+/// unchanged: answered `held`
 /// under `moved`, one dial, the verdict on the line beside the page's frame and
 /// its anchors, the `held` event `moved` naming the hand of the row since the
 /// typed state, why said once in the shell's own window save for a burst
@@ -822,16 +828,18 @@ fn the_shifted_frame_is_on_the_line_before_the_shifted_dial_and_a_relaunch_reads
 /// delete by its count alone deletes what it cannot name; the one that holds
 /// nothing after a failed read loses the burst).
 #[test]
-fn a_cut_span_a_lost_anchor_no_anchors_and_an_unanswered_read_each_fall_to_the_moved_hold() {
+fn a_cut_span_a_lost_anchor_no_anchors_and_a_refused_read_each_fall_to_the_moved_hold() {
     let whole = || vec![run(&i(10), 2), run(&i(1), 3)];
     let insert = || -> Box<dyn Fn(u64) -> Value> { Box::new(|typed| insert_at(DOC, 2, json!(["x"]), typed)) };
     let delete = || -> Box<dyn Fn(u64) -> Value> { Box::new(|typed| delete_at(DOC, 2, 2, typed)) };
     let rearrange = || -> Box<dyn Fn(u64) -> Value> { Box::new(|typed| rearrange_at(DOC, &[2, 3, 4], typed)) };
     let between = || Some(anchors(Some(&i(1)), Some(&i(2))));
     let b_and_c = || Some(spanned(Some(&i(1)), None, &[(&i(2), 2)]));
-    /// A cell: its name, the image now, the burst typed at a state, its
-    /// anchors, whether the image read is unanswered, the image reads made,
-    /// and the why said.
+    /// A cell of the table.
+    ///
+    /// It is its name, the image now, the burst typed at a state, its
+    /// anchors, whether the image read is refused, the image reads made, and
+    /// the why said.
     type Cell = (&'static str, Vec<Value>, Box<dyn Fn(u64) -> Value>, Option<Anchors>, bool, usize, Option<&'static str>);
     let refilled = "no longer holds the units the burst names";
     let cells: Vec<Cell> = vec![
@@ -847,14 +855,14 @@ fn a_cut_span_a_lost_anchor_no_anchors_and_an_unanswered_read_each_fall_to_the_m
         ("a rearrange with no span", whole(), rearrange(), Some(anchors(Some(&i(1)), None)), false, 1, Some("its anchors name no span of the units it edits")),
         ("an insert whose anchors name a span", whole(), insert(), Some(spanned(Some(&i(1)), Some(&i(2)), &[(&i(2), 1)])), false, 1, Some("the anchors name a span of units, and the frame places at a point")),
         ("a delete's span of other than its width", whole(), delete(), Some(spanned(Some(&i(1)), None, &[(&i(2), 1)])), false, 1, Some("the anchors' span names other than the 2 units")),
-        ("a read the board does not answer", whole(), insert(), between(), true, 1, Some("the document's image could not be read")),
+        ("a read the board refuses", whole(), insert(), between(), true, 1, Some("the document's image could not be read: the image read was refused image_too_large")),
     ];
-    for (cell, image, frame, anchors, unread, reads, why) in cells {
+    for (cell, image, frame, anchors, refused, reads, why) in cells {
         let g = ground();
         let typed = g.fake.head();
         *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
         *g.fake.image.lock().unwrap() = image;
-        g.fake.image_unread.store(unread, Ordering::SeqCst);
+        g.fake.image_refused.store(refused, Ordering::SeqCst);
         g.fake.move_arrangement(DOC, 77);
         let page = frame(typed);
         let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, page.clone(), anchors.clone()) else { panic!("{cell}: held") };
@@ -1288,10 +1296,11 @@ fn the_deaths_reason_leaves_a_line_the_resend_re_marked_since() {
 /// Checks the transport class over the real dialer (§3c.4; skep #786).
 ///
 /// A connection the host refuses — a port released — is the dialer's
-/// `Connect`, which the table holds `unreachable`, `sent: false`: a burst
-/// sent there through the hold's one path is answered `held`, its line
-/// saying no dial of it may have landed. A request the dialer cannot make —
-/// a target outside visible ASCII — is its `Request`, refused before any
+/// `Connect`, a request the board gave no answer to, which the table holds
+/// `unreachable`, `sent: false`: a burst sent there through the hold's one
+/// path is answered `held`, its line saying no dial of it may have landed. A
+/// request the dialer cannot make — a target outside visible ASCII — is its
+/// `Request`, refused before any
 /// connection opens, which the table faces (the mutant that reads a refused
 /// connection as the dialer's own refusal hands the page an outage's burst;
 /// the one that holds the dialer's own refusal holds a burst no send can
@@ -1303,7 +1312,7 @@ fn a_refused_connection_is_held_unsent_and_a_request_the_dialer_cannot_make_is_f
     let dialer = skep_client::PlainHttp::new();
     let refused = dialer.exchange(&origin, &Request::post("/op", b"{}".to_vec())).unwrap_err();
     assert!(matches!(refused, DialError::Connect(_)), "a refused connection: {refused:?}");
-    assert_eq!(classify(DialOutcome::Dial(&refused), &Reissues::default()), Decision::Hold { cause: "unreachable", sent: false });
+    assert_eq!(classify(DialOutcome::Dial(&refused), &Reissues::default()), Decision::Unanswered { sent: false });
     let unmade = dialer.exchange(&origin, &Request::post("/op x", Vec::new())).unwrap_err();
     assert!(matches!(unmade, DialError::Request(_)), "a target the dialer will not write: {unmade:?}");
     assert_eq!(classify(DialOutcome::Dial(&unmade), &Reissues::default()), Decision::Neither);
@@ -1319,6 +1328,76 @@ fn a_refused_connection_is_held_unsent_and_a_request_the_dialer_cannot_make_is_f
     let OpAnswer::Answered(Ok(held)) = holds.send(&session, insert(DOC, json!(["a"]), 0), None) else { panic!("held at the refused connection") };
     let lines = holds.lines(&session).unwrap();
     assert_eq!((held["cause"].as_str(), lines[0]["sent"].as_bool()), (Some("unreachable"), Some(false)), "{held} {lines}");
+}
+
+/// Checks that an unanswered first dial holds the next bursts until a verdict.
+///
+/// The verdict is the next probe's (§3c.4).
+///
+/// A burst's first dial times out: it is held `unreachable`, `sent`, and the
+/// board marked unanswered. Until the next probe's verdict, a burst of the
+/// same principal's is held `behind` undialed — the board may answer still —
+/// and another principal's `unreachable` undialed. A probe finding the board
+/// silent, a burst of the principal's is held `unreachable` at once, its
+/// lines standing or none; the board answering again, every line is sent
+/// and kept (the mutant that dials the next burst into the silence waits out
+/// its bound; the one that holds it `unreachable` while the verdict is
+/// pending says the board away on one request's failure).
+#[test]
+fn a_first_dial_the_board_gives_no_answer_to_holds_the_next_bursts_at_once_until_the_probes_verdict() {
+    let g = ground();
+    g.fake.op_lost.next(1, Lost::Timeout);
+    let OpAnswer::Answered(Ok(first)) = g.holds.send_burst(&g.session, insert(DOC, json!(["a"]), g.fake.head()), None) else { panic!("held at the timeout") };
+    let lines = g.lines();
+    assert_eq!((first["cause"].as_str(), lines[0]["sent"].as_bool(), g.fake.sends()), (Some("unreachable"), Some(true), 1), "{first} {lines:?}");
+    let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(OTHER, json!(["b"]), g.fake.head()), None) else { panic!("held behind") };
+    assert_eq!((behind["cause"].as_str(), g.fake.sends()), (Some("behind"), 1), "the verdict pending, held behind undialed: {behind}");
+    let open = Open { token: Token::parse(&"8e".repeat(16)).unwrap(), facts: writer_facts_as(&g.store, 2, "1.0.2"), opened_at: 0 };
+    let second = g.sessions.register(&g.entry, open, &mut NoSupplements);
+    g.holds.open_session(&second);
+    let OpAnswer::Answered(Ok(other)) = g.holds.send(&second, insert("1.0.2.0.1", json!(["c"]), g.fake.head()), None) else { panic!("held at once") };
+    assert_eq!((other["cause"].as_str(), g.fake.sends()), (Some("unreachable"), 1), "another principal's burst held at once, undialed: {other}");
+    g.fake.health_unanswered.store(true, Ordering::SeqCst);
+    assert_eq!(g.holds.probe("b-1"), Turn::Unanswered, "the probe's `/health` unanswered");
+    let OpAnswer::Answered(Ok(silent)) = g.holds.send_burst(&g.session, insert("1.0.1.0.3", json!(["d"]), g.fake.head()), None) else { panic!("held at once") };
+    assert_eq!((silent["cause"].as_str(), g.fake.sends()), (Some("unreachable"), 1), "the board silent: held `unreachable` at once, undialed: {silent}");
+    g.fake.health_unanswered.store(false, Ordering::SeqCst);
+    while g.holds.probe("b-1") == Turn::Bounded {}
+    assert!(g.lines().is_empty() && g.holds.lines(&second).unwrap().as_array().unwrap().is_empty(), "the board answering, every line kept: {:?}", g.lines());
+}
+
+/// Checks that a first dial's shift is untried until its read is answered.
+///
+/// It is §3c.5's THE SHIFT (2).
+///
+/// An anchored burst refused at its first dial as typed against an older
+/// state meets no answer to the shift's live read: the call answers `held`
+/// under `unreachable`, its line `holding` with no refusal beside it, said
+/// once, never `moved`, and nothing said of a shift. The board answering, the
+/// next probe runs the shift from the verdict kept, no stale frame dialed
+/// first: one image read more, the shifted dial, the line kept (the mutant
+/// that faces the unanswered read `moved` asks the person to place words a
+/// read never saw).
+#[test]
+fn a_first_dials_shift_whose_image_read_goes_unanswered_is_not_tried_and_runs_when_the_board_answers() {
+    let g = ground();
+    let typed = g.fake.head();
+    *g.fake.image.lock().unwrap() = vec![run(&i(10), 2), run(&i(1), 3)];
+    g.fake.move_arrangement(DOC, 77);
+    g.fake.image_unread.store(true, Ordering::SeqCst);
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert_at(DOC, 2, json!(["x"]), typed), Some(anchors(Some(&i(1)), Some(&i(2))))) else { panic!("held") };
+    crate::shapes::assert_declared("HeldAnswer", &held);
+    assert_eq!((held["cause"].as_str(), g.fake.sends(), g.fake.image_reads.load(Ordering::SeqCst)), (Some("unreachable"), 1, 1), "{held}");
+    let lines = g.lines();
+    assert_eq!((lines[0]["cause"].as_str(), lines[0].get("refusal")), (Some("unreachable"), None), "{lines:?}");
+    assert_eq!(g.states(), ["holding"], "said once, never moved");
+    assert!(said_containing(&g, "not shifted").is_empty(), "nothing said of a shift: {:?}", g.said.lock().unwrap());
+    g.fake.image_unread.store(false, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    let sent = g.fake.sends.lock().unwrap().clone();
+    assert_eq!((sent.len(), g.fake.image_reads.load(Ordering::SeqCst)), (2, 2), "the kept verdict's shift, no stale frame dialed first: {sent:?}");
+    assert_eq!((sent[1]["at"]["ordinal"].as_str(), sent[1]["as_of"].as_u64()), (Some("4"), Some(77)), "{sent:?}");
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
 /// Checks that the death at a shifted dial holds the line, and says it.

@@ -8,7 +8,9 @@
 //! aside, whose answer is the board's own — goes out by one path,
 //! [`Holds::send`]: attested where the session's key attests its kind,
 //! dialed, and each answer read once through the classification table
-//! ([`classify`]: §3c.4's hold(cause) / reissue / neither) — an ack carried
+//! ([`classify`]: §3c.4's hold(cause) / unanswered / reissue / neither) — a
+//! request the board gave no answer to apart from every answer it gave
+//! (`DialError::unanswered`; the board's silence, below) — an ack carried
 //! and its `at` noted for the `base` of the next hold on every document it
 //! names (§3c.2), and an arrangement write's as the principal's latest one
 //! on its document, the editor's own last ack a merge's undo is typed
@@ -85,7 +87,10 @@
 //! a signed session cannot attest — since a held line of it could be sent
 //! and resolved never, and would hold every later burst of its principal
 //! `behind` it; and it is held without a dial where a hold stands — the own
-//! node stopped, the board halted, a line of the principal's already held.
+//! node stopped, the board silent, the board halted, a line of the
+//! principal's already held, a request of the hold's at the board unanswered
+//! — and, where its own first dial is a request the board gives no answer
+//! to, held `unreachable`, no clock started.
 //! The resend sends each held line through the same reader of an answer, a
 //! reissue-class answer there reissued at the next probe; a line no landing
 //! of which is found [`HAND_OVER_DEADLINE`] after its first failed send,
@@ -96,6 +101,24 @@
 //! The anchors a burst carries over the bridge (`held::Anchors`) ride with
 //! its line and never with its frame: the frame dialed is the wire's frame,
 //! as the attest is stripped at the hold and composed at every send.
+//!
+//! **The board's silence** (§3c.4's THE END, §3c.5; skep #863). The probe is
+//! the one judge of whether a board answers: a `/health` it gives no answer to
+//! — the probe's, the feed thread's, the page's `probe()` and `health(board)` —
+//! is its silence, and any answer to one, a refusal among them, is the board
+//! answering ([`Holds::note_health_read`]). A request of the hold's the board
+//! gives no answer to — a burst's first dial, a resend's read, send, shift read
+//! or read of the hands, the probe's read of the board's head — marks the board
+//! unanswered until that verdict: nothing more of the hold's is dialed there, a
+//! burst is held at once, and a send the request cut is owed to the verdict, a
+//! failed send of its line where the verdict finds the board answering — the
+//! line's own failure — and none where it finds it silent (`Answering`). A
+//! line's two minutes ([`HAND_OVER_DEADLINE`]) run on the board's answering
+//! clock: paused across a silence, from the first request it gave no answer to
+//! until a `/health` answers, kept and never reset. A read whose answer would
+//! set a face sets none where it goes unanswered: a shift's read leaves the
+//! shift untried, its verdict kept, and a moved face whose hands' read goes
+//! unanswered names them not read (`Hand`), read again at the board's answer.
 //!
 //! **The store, from the first touch** (§3c.1, §3c.3; skep #857, #858,
 //! #859, #873, #880). A board's held store is taken at its first touch: a
@@ -234,8 +257,10 @@ mod resend;
 
 /// The interim probe cadence (§3c.4): `GET /health` at this interval.
 ///
-/// The probe reads it while a burst is held at a board; the value is open
-/// to tuning. It is the retry's clock too (§3c.3), whatever the board's
+/// The probe reads it while a burst is held at a board, or while the board
+/// is silent or a request of the hold's there unanswered, so the verdict
+/// that ends the silence comes with no line standing; the value is open to
+/// tuning. It is the retry's clock too (§3c.3), whatever the board's
 /// state, so space freed while no one types is enough: a store the device
 /// refused is made and locked again, a file it refused read, and a copy it
 /// refused — a line's, a re-mark's or a `done`'s — written again at every
@@ -267,39 +292,80 @@ pub enum Turn {
     /// send: the drain's pass goes on at the next turn, which the feed thread
     /// runs once the commands queued behind this one are served.
     Bounded,
-    /// No turn stopped at its bound: the pass walked every line it could
-    /// send, or no drain ran — no line standing, the own node stopped, the
-    /// board away or its writes halted, or another drain of the board running
-    /// — and the next probe comes at the cadence.
+    /// The board gave a request of the turn's no answer (§3c.5; skep #863).
+    ///
+    /// The request is its `/health`, the read of its head, or one the walk
+    /// made.
+    ///
+    /// The pass ends there and waits for the next probe at the cadence, which
+    /// goes on with the documents the pass did not reach, the one the silence
+    /// cut last.
+    Unanswered,
+    /// No turn stopped at its bound, and the next probe comes at the cadence.
+    ///
+    /// The pass walked every line it could send, or no drain ran — no line
+    /// standing, the own node stopped, the board's `/health` refused, refused
+    /// before any connection or read with its writes halted, or another drain
+    /// of the board running.
     Done,
 }
 
-/// A held line's wall-clock deadline: two minutes from its first failed send.
+/// What one `/health` read told the hold of its board (§3c.4's THE END).
+///
+/// It is [`Holds::note_health_read`]'s answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// The board gave the read no answer: its silence.
+    Silent,
+    /// The read was refused before any connection opened: it reached no board.
+    ///
+    /// It is a board whose scheme this build does not hold
+    /// (`DialError::NotHeld`). It tells nothing of the board: neither its
+    /// silence nor its answer, and the hold stands as it stood, so a burst
+    /// there is dialed and faced as built, never held where no probe could
+    /// send it.
+    Undialed,
+    /// The board answered and takes no write now.
+    ///
+    /// Its `/health` was refused, or read with its writes halted.
+    Holds,
+    /// The board answered its `/health`, and its writes go.
+    Writes,
+}
+
+/// A held line's deadline: two minutes of the board answering.
 ///
 /// It is one per line, run from the line's first failed send, whatever the
 /// failure (§3c.4; skep #716, #720, #722): a send fails where its dial left,
-/// or was answered, and did not land — a lost answer (a timeout, a garbled
-/// answer, the board's handler panicking), a `poisoned` answer, a
-/// reissue-class answer at its count, a `durability` hold, a refusal the
-/// table holds nowhere, the board's refusal of a burst typed against an
-/// older state, shifted or not — the person's own first dial among them; a
-/// connection never made starts nothing, the board being away, and nor does
-/// a request refused before any connection, an attest that could not be
-/// composed, or the death signal, which is neither — the line it holds waits
-/// for a session, not for the board ([`failed_send`], [`Dialed::failure`]).
-/// At the deadline the next read that finds no landing of the line hands it
-/// to the person as a refused run, `answers_lost`, naming the last failure
-/// and the time elapsed, its `sent` kept and the lines behind it waiting
-/// with it (§3c.5); a read that finds its landing keeps it, so the
-/// hand-over never sends it twice. A code the table holds nowhere is handed
-/// over at once, since it cannot resolve; a shift is refused past the
-/// deadline, so the clock bounds the shifts a document another writer keeps
-/// moving asks of a line, a turn of the resend making at most its steps of
-/// them ([`TURN_STEPS`]) and leaving the line for the drain's next pass,
-/// whose read hands it over once the deadline has passed; and the resend's
-/// "sent again" is said once per change of the failure. The clock is in
-/// memory, per line, so a relaunch starts it afresh, as the person's `send`
-/// does.
+/// or was answered, and did not land — a lost answer (a garbled answer, the
+/// board's handler panicking), a `poisoned` answer, a reissue-class answer
+/// at its count, a `durability` hold, a refusal the table holds nowhere, the
+/// board's refusal of a burst typed against an older state, shifted or not —
+/// the person's own first dial among them; a connection never made starts
+/// nothing, the board being away, and nor does a request refused before any
+/// connection, an attest that could not be composed, or the death signal,
+/// which is neither — the line it holds waits for a session, not for the
+/// board ([`failed_send`], [`Dialed::failure`]). A send the board gave no
+/// answer to once connected — a timeout, a connection closed before any
+/// answer — is a failed send where the next `/health` finds the board
+/// answering, at the send's own instant, and none where it finds the board
+/// silent (`Answering`). The two minutes run on the board's answering clock
+/// alone (skep #863): across a silence, from the first request the board
+/// gave no answer to until a `/health` answers, no line's count runs, a
+/// count already running paused and kept, never reset
+/// (`BoardHold::answering_at`). At the deadline the next read that finds no
+/// landing of the line hands it to the person as a refused run,
+/// `answers_lost`, naming the last failure and the wall time since its first
+/// failed send, its `sent` kept and the lines behind it waiting with it
+/// (§3c.5); a read that finds its landing keeps it, so the hand-over never
+/// sends it twice. A code the table holds nowhere is handed over at once,
+/// since it cannot resolve; a shift is refused past the deadline, so the
+/// clock bounds the shifts a document another writer keeps moving asks of a
+/// line, a turn of the resend making at most its steps of them
+/// ([`TURN_STEPS`]) and leaving the line for the drain's next pass, whose
+/// read hands it over once the deadline has passed; and the resend's "sent
+/// again" is said once per change of the failure. The clock is in memory,
+/// per line, so a relaunch starts it afresh, as the person's `send` does.
 pub(crate) const HAND_OVER_DEADLINE: Duration = Duration::from_secs(120);
 
 /// The short wait before a `write_busy` is reissued.
@@ -397,10 +463,13 @@ mod cause {
 /// read judges no move: this store's own key, another key with the label
 /// this shell's key store holds for it, an unsigned hand under local trust,
 /// or a row whose testimony the board lost — the data of the three forms the
-/// moved face draws, the strings the copy's.
+/// moved face draws, the strings the copy's. Where the board gave the read of
+/// the rows no answer, the one hand is `unread`: the hands not read yet,
+/// apart from a hand lost, read again at the board's answer (§3c.5's THE
+/// SHIFT (6); skep #863).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hand {
-    /// `own`, `other`, `bare` or `lost`.
+    /// `own`, `other`, `bare`, `lost` or `unread`.
     pub key: &'static str,
     /// The key's fingerprint, for `own` and `other`.
     pub fingerprint: Option<String>,
@@ -410,6 +479,9 @@ pub struct Hand {
 }
 
 impl Hand {
+    /// The hands of a moved document whose read the board gave no answer to.
+    const UNREAD: Hand = Hand { key: "unread", fingerprint: None, label: None };
+
     /// Returns the hand as the `held` event carries it.
     fn json(&self) -> Value {
         let mut v = json!({"key": self.key});
@@ -425,9 +497,9 @@ impl Hand {
 
 /// What the moved hold's read of the hands answered (§3c.5).
 ///
-/// It is the hands, or the death signal on the session's token, whose end is
-/// the caller's to run (§3c.4) — no verdict on the document, so the burst is
-/// held at the death and never faced moved
+/// It is the hands, the board's silence, or the death signal on the
+/// session's token, whose end is the caller's to run (§3c.4) — no verdict on
+/// the document, so the burst is held at the death and never faced moved
 /// ([`Holds::hands_since_typed_state`]).
 #[derive(Debug)]
 enum HandsRead {
@@ -435,6 +507,11 @@ enum HandsRead {
     ///
     /// They are none where the read answered no page, or no read was owed.
     Named(Vec<Hand>),
+    /// The board gave the read no answer (skep #863).
+    ///
+    /// The moved face stands on the board's verdict, its hands named not
+    /// read ([`Hand::UNREAD`]) and read again at the board's answer.
+    Unanswered,
     /// The death signal on the session's token.
     Died,
 }
@@ -467,6 +544,15 @@ enum Decision {
     /// `500 internal_panic` among them, or a `poisoned` answer, whose frames
     /// the board's journal keeps for its restart.
     Hold { cause: &'static str, sent: bool },
+    /// The board gave the write no answer (§3c.5's five cases; skep #863).
+    ///
+    /// Its name unresolved, a connection never made, a handshake not
+    /// completed (`sent` false: no byte of it left), no answer within the
+    /// bound once connected, or the connection closed before any answer
+    /// (`sent` true: it may have landed) — `DialError::unanswered`. A
+    /// burst is held `unreachable`, the board marked unanswered until the
+    /// next probe's verdict; a write the hold never holds faces it.
+    Unanswered { sent: bool },
     /// A refused run: a `permanent` or `reorder` refusal.
     ///
     /// Where the write is a burst, it is held with the board's token for its
@@ -537,7 +623,7 @@ struct Reissues {
     /// each failed send after it; read by no [`classify`]. The person's
     /// `send` clears it, so the clock starts afresh at the line's next failed
     /// send.
-    first_failed: Option<Instant>,
+    first_failed: Option<Moment>,
     /// The last failed send's token: its held cause, or the board's.
     ///
     /// It is what the hand-over names (`answers_lost`'s `last`) and what the
@@ -555,18 +641,41 @@ impl Reissues {
         }
     }
 
-    /// Notes a failed send of the line at `now`, `token` its failure's.
+    /// Notes a failed send of the line at `at`, `token` its failure's.
     ///
     /// The clock starts at the line's first and is never moved later, and
     /// `token` is the last from here. It answers whether `token` differs from
     /// the last failure's token as it stood — a line's first failure among
     /// them — so the resend says "sent again" once per change.
-    fn failed(&mut self, token: String, now: Instant) -> bool {
-        self.first_failed.get_or_insert(now);
+    fn failed(&mut self, token: String, at: Moment) -> bool {
+        self.first_failed.get_or_insert(at);
         let changed = self.last.as_deref() != Some(token.as_str());
         self.last = Some(token);
         changed
     }
+}
+
+/// One instant on a line's two clocks (`Reissues::first_failed`).
+///
+/// It is the wall's instant, from which the hand-over's time is named, and
+/// the board's answering clock then (`BoardHold::answering_at`), from which
+/// [`HAND_OVER_DEADLINE`] runs (§3c.4; skep #863).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Moment {
+    at: Instant,
+    answering: Duration,
+}
+
+/// How long a line's clocks have run since its first failed send.
+///
+/// It is read by [`Holds::since_first_failure`] for the deadline's two
+/// readers, the resend's read and the shift.
+#[derive(Debug, Clone, Copy)]
+struct Elapsed {
+    /// The board's answering time: what [`HAND_OVER_DEADLINE`] is held to.
+    answering: Duration,
+    /// The wall time: what the hand-over names.
+    wall: Duration,
 }
 
 /// Returns the token of the failed send a line's `reason` says, if any.
@@ -609,6 +718,18 @@ fn held_failure(reason: &Reason, refusal: &Refusal) -> Option<String> {
     })
 }
 
+/// Returns whether a read's halt is a request the board gave no answer to.
+///
+/// It is `DialError::unanswered`: §3c.5's five cases.
+///
+/// It is the one test the hold's reads take it by — the resend's read and
+/// its site's, a shift's read, the hands' read, a `/health` — so a refusal,
+/// an answer no read takes, or a request refused before any connection
+/// opened, which reached no board, is never the board's silence.
+fn unanswered(h: &Halt) -> bool {
+    matches!(h, Halt::Dial(e) if e.unanswered())
+}
+
 /// Returns a duration in whole milliseconds, saturating at `u64::MAX`.
 fn millis(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
@@ -621,18 +742,20 @@ fn millis(d: Duration) -> u64 {
 fn classify(outcome: DialOutcome<'_>, given: &Reissues) -> Decision {
     match outcome {
         DialOutcome::Dial(e) => match e {
-            // No connection was made — the write did not leave.
-            DialError::Connect(_) | DialError::Resolve(_) | DialError::Tls(_) => Decision::Hold { cause: cause::UNREACHABLE, sent: false },
-            // The request left and its answer was no answer — it may have
-            // landed.
-            DialError::Timeout(_) | DialError::Io(_) | DialError::Truncated { .. } | DialError::Response(_) | DialError::TooLarge { .. } => {
-                Decision::Hold { cause: cause::UNREACHABLE, sent: true }
-            }
             // The scheme this build does not hold, or a request refused before
             // any connection opened — faced as built, no probe ends either.
             DialError::NotHeld(_) | DialError::Request(_) => Decision::Neither,
-            // A later transport error (the enum is non-exhaustive): the request
-            // may have left, so hold `sent: true` — the resend reads first.
+            // No connection was made — the write did not leave, and the board
+            // gave it no answer.
+            DialError::Connect(_) | DialError::Resolve(_) | DialError::Tls(_) => Decision::Unanswered { sent: false },
+            // The request left and the board gave it no answer — a read past
+            // its bound, a connection closed before any answer, and a later
+            // transport error the library reads so (the enum is
+            // non-exhaustive): it may have landed.
+            e if e.unanswered() => Decision::Unanswered { sent: true },
+            // The board answered with bytes this client cannot read — an
+            // answer lost on the way: it may have landed, the resend reading
+            // first.
             _ => Decision::Hold { cause: cause::UNREACHABLE, sent: true },
         },
         DialOutcome::Rejected { code, disposition } => match code {
@@ -906,6 +1029,15 @@ enum Dialed {
     /// It carries the line's reason for a burst, and the refusal the answer
     /// is, which a write the hold never holds faces.
     Held { reason: Reason, refusal: Refusal },
+    /// A request the board gave no answer to (skep #863).
+    ///
+    /// The dial itself, a read the attest's composer made, or the read a
+    /// shift makes before its dial ([`Decision::Unanswered`]). It carries the
+    /// line's reason — `unreachable`, its `sent` the dial's — and the
+    /// refusal, which a write the hold never holds faces. No failed send is
+    /// noted for it at once ([`Dialed::failure`]): the next probe's verdict
+    /// settles whether the dial was the line's own failure (`Answering`).
+    Unanswered { reason: Reason, refusal: Refusal },
     /// A reissue-class answer, with its kind.
     ///
     /// It carries the refusal it is, faced where no reissue follows.
@@ -932,6 +1064,7 @@ impl Dialed {
     fn refused(decision: Decision, token: &str, verdict: Value, refusal: Refusal) -> Dialed {
         match decision {
             Decision::Hold { cause, sent } => Dialed::Held { reason: Reason::of(cause, sent), refusal },
+            Decision::Unanswered { sent } => Dialed::unanswered(sent, refusal),
             Decision::Refused => Dialed::Held { reason: Reason::refused(token, verdict), refusal },
             // The verdict rides the moved line — the state the burst was typed
             // against and the document's current one — so the line keeps both
@@ -943,6 +1076,14 @@ impl Dialed {
         }
     }
 
+    /// Returns a request the board gave no answer to, held `unreachable`.
+    ///
+    /// `sent` is whether a byte of the request may have left
+    /// ([`Decision::Unanswered`]), and `refusal` what the write faces.
+    fn unanswered(sent: bool, refusal: Refusal) -> Dialed {
+        Dialed::Unanswered { reason: Reason::of(cause::UNREACHABLE, sent), refusal }
+    }
+
     /// Returns the token of the failed send this dial was, if it was one.
     ///
     /// A send fails where its dial left, or was answered, and did not land
@@ -951,7 +1092,9 @@ impl Dialed {
     /// ([`failed_send`]: a connection never made, a signature not made) and
     /// a refusal of the shell's own, a request refused before any connection
     /// or an attest's composer halted — and a hold the board answered is one
-    /// whatever its reason reads as ([`held_failure`]).
+    /// whatever its reason reads as ([`held_failure`]). A request the board
+    /// gave no answer to is none here: the next probe's verdict settles it
+    /// (`Answering::Unanswered`).
     /// The token is the held cause, or the board's in the `code:detail`
     /// convention, the token a refused run's line carries.
     ///
@@ -962,7 +1105,7 @@ impl Dialed {
         match self {
             Dialed::Held { reason, refusal } => held_failure(reason, refusal),
             Dialed::Reissue { refusal: Refusal::Board(r), .. } | Dialed::Faced(Refusal::Board(r)) => Some(r.token()),
-            Dialed::Acked(_) | Dialed::Reissue { .. } | Dialed::Faced(_) | Dialed::Died => None,
+            Dialed::Acked(_) | Dialed::Unanswered { .. } | Dialed::Reissue { .. } | Dialed::Faced(_) | Dialed::Died => None,
         }
     }
 }
@@ -970,11 +1113,12 @@ impl Dialed {
 /// What a send answers where its attest could not be composed.
 ///
 /// Nothing is dialed ([`Holds::attest_where_owed`]): the death signal met
-/// at one of the composer's reads; a read that did not reach the board held
-/// like the dial's own failure, `sent: false`, since the write never left; a
-/// signature the board's head record could not be read for held
-/// `head_unreadable`, `sent: false`, its line carrying the refusal that says
-/// why — a burst so held, any other write so refused (SP-14); the
+/// at one of the composer's reads; a read the board gave no answer to a
+/// request unanswered (skep #863), and one whose answer could not be read
+/// held like the dial's own failure, each `sent: false`, since the write
+/// never left; a signature the board's head record could not be read for
+/// held `head_unreadable`, `sent: false`, its line carrying the refusal that
+/// says why — a burst so held, any other write so refused (SP-14); the
 /// composer's own refusal faced.
 impl From<Unattested> for Dialed {
     fn from(why: Unattested) -> Dialed {
@@ -982,6 +1126,7 @@ impl From<Unattested> for Dialed {
             Unattested::Died => Dialed::Died,
             // The table's transport rows read no reissue count.
             Unattested::Refused(Refusal::Unreachable(e)) => match classify(DialOutcome::Dial(&e), &Reissues::default()) {
+                Decision::Unanswered { .. } => Dialed::unanswered(false, Refusal::Unreachable(e)),
                 Decision::Hold { cause, .. } => Dialed::Held { reason: Reason::of(cause, false), refusal: Refusal::Unreachable(e) },
                 _ => Dialed::Faced(Refusal::Unreachable(e)),
             },
@@ -1371,9 +1516,13 @@ enum Custody {
 /// ([`Reissues`]), the position each line's moved document was
 /// acknowledged through by the person's `send`
 /// ([`PrincipalHold::seen_through`]), the documents the drain's pass has
-/// stopped at ([`PrincipalHold::stopped_in_pass`]), and whether the wait for
-/// the copies its file owes was said ([`PrincipalHold::waiting_said`]). An
-/// ack touches no standing line's
+/// stopped at ([`PrincipalHold::stopped_in_pass`]) and the one the board's
+/// silence cut it at ([`PrincipalHold::cut_in_pass`]), the shifts the
+/// board's silence left untried ([`PrincipalHold::shift_owed`]) and the
+/// moved documents whose hands it left unread
+/// ([`PrincipalHold::hands_owed`]), and whether the wait for the copies its
+/// file owes was said ([`PrincipalHold::waiting_said`]). An ack touches no
+/// standing line's
 /// base: a line held keeps the base it was held at, raised only behind a
 /// line kept on its document (`HeldQueue::done`) and by the person's `send`
 /// on a moved document (`HeldQueue::remark_all`, [`Holds::resolve`]).
@@ -1462,6 +1611,43 @@ struct PrincipalHold {
     /// person's `send` takes its document out, so the lines it hands back go
     /// at the pass's next turn ([`Holds::resolve`]). In memory.
     stopped_in_pass: HashSet<String>,
+    /// The documents the board's silence cut the drain's pass at (§3c.5).
+    ///
+    /// A request the walk made at a document — its read, a line's send, its
+    /// shift's read or its read of the hands — that the board gave no answer
+    /// to ends the pass there ([`Turn::Unanswered`]), and the document is
+    /// entered here. The turn after it walks every document of every
+    /// principal the pass did not reach first, the documents here passed
+    /// over, and these last, taken out of the set as that last walk begins
+    /// (`resend`'s rounds), so a document whose line keeps going unanswered
+    /// while the board answers its probe never holds back another's words.
+    /// Cleared with [`PrincipalHold::stopped_in_pass`] as the pass ends, and
+    /// the person's `send` takes its document out. In memory.
+    cut_in_pass: HashSet<String>,
+    /// The shifts the board's silence left untried, by the line's ordinal.
+    ///
+    /// They are §3c.5's THE SHIFT (2)'s.
+    ///
+    /// The board refused the line as typed against an older state, and the
+    /// shift's live read went unanswered — or a read its attest's composer
+    /// made did: the shift was not tried, the line held `unreachable` and
+    /// its verdict kept here, so its next send runs the shift from it, no
+    /// stale frame dialed first (`resend`'s `send_line`). Taken out as the
+    /// shift runs, and where the line leaves the queue
+    /// ([`Holds::forget_settled`]). In memory, as the clock is: a relaunch
+    /// forgets it, and the line's send meets the board's refusal again.
+    shift_owed: HashMap<u64, KeptShift>,
+    /// The moved documents whose hands' read went unanswered (§3c.5).
+    ///
+    /// Each names the line the board's verdict rides.
+    ///
+    /// The moved face stands on the verdict, its hands said not read
+    /// ([`Hand::UNREAD`]); the walk reads them again as it meets the
+    /// document, and says the moved face once more with the hands it reads
+    /// (`resend`'s `reread_hands`). Taken out as they are read, where the
+    /// document is moved no more, and where its line leaves the queue. In
+    /// memory.
+    hands_owed: HashMap<String, u64>,
     /// Whether the shell's own window was told the queue's file owes copies.
     ///
     /// It is set as the wait is said to begin, and cleared as its end is
@@ -1496,6 +1682,9 @@ impl PrincipalHold {
             reissues: HashMap::new(),
             seen_through: HashMap::new(),
             stopped_in_pass: HashSet::new(),
+            cut_in_pass: HashSet::new(),
+            shift_owed: HashMap::new(),
+            hands_owed: HashMap::new(),
             waiting_said: false,
             superseded_said: false,
         }
@@ -1606,12 +1795,72 @@ impl PrincipalHold {
     }
 }
 
+/// Whether a board answers, as the hold judges it (§3c.4's THE END, §3c.5).
+///
+/// A `/health` read is the one judge: one the board gave no answer to is its
+/// silence, any answer the board answering ([`Holds::note_health_read`]). A
+/// request of the hold's the board gave no answer to holds the board's
+/// writes until that verdict ([`Holds::note_unanswered`]).
+#[derive(Debug)]
+enum Answering {
+    /// The board answers.
+    ///
+    /// No request of the hold's has gone unanswered since a `/health`
+    /// answered.
+    Answers,
+    /// A request of the hold's went unanswered at `since`; a verdict pends.
+    ///
+    /// The verdict is the next `/health`'s.
+    ///
+    /// Nothing more of the hold's is dialed at the board meanwhile: a burst
+    /// is held at once, and the drain walks no line. `cut` holds the sends
+    /// the board gave no answer to whose request may have left, each a
+    /// failed send of its line at its own instant where the verdict finds the
+    /// board answering — the line's own failure — and none where it finds the
+    /// board silent.
+    Unanswered { since: Instant, cut: Vec<CutSend> },
+    /// A `/health` went unanswered: the board's silence, from `since`.
+    ///
+    /// The silence runs from the first request the board gave no answer to,
+    /// where one came before the verdict.
+    ///
+    /// Every burst is held `unreachable` at once, and the board's answering
+    /// clock stands still ([`BoardHold::answering_at`]).
+    Silent { since: Instant },
+}
+
+/// A send of a held line the board gave no answer to.
+///
+/// Its failure is owed to the next `/health` verdict
+/// (`Answering::Unanswered`).
+#[derive(Debug)]
+struct CutSend {
+    principal: u64,
+    k: u64,
+    doc: String,
+    /// The instant the send was cut, its failure's where it is one.
+    at: Instant,
+    /// The dial's refusal as the shell's own window says it.
+    refusal: String,
+}
+
+/// A shift the board's silence left untried (`PrincipalHold::shift_owed`).
+///
+/// It is the board's refusal of the line as typed against an older state, as
+/// its dial read it: the moved reason, the verdict on it, and the refusal.
+#[derive(Debug, Clone)]
+struct KeptShift {
+    reason: Reason,
+    refusal: Refusal,
+}
+
 /// One board's hold.
 ///
 /// It holds its directory, the three states that hold every burst before
-/// any dial — and refuse the unholdable writes at once — the positions
-/// this shell acked at the board, the causes last said of lines kept from
-/// their files, and each principal's queue.
+/// any dial — and refuse the unholdable writes at once — whether the board
+/// answers and its answering clock, the positions this shell acked at the
+/// board, the causes last said of lines kept from their files, and each
+/// principal's queue.
 #[derive(Debug)]
 struct BoardHold {
     directory: Directory,
@@ -1667,6 +1916,16 @@ struct BoardHold {
     node_stopped: bool,
     /// The board's head as the hold last read it ([`Holds::note_head`]).
     head: HeadState,
+    /// Whether the board answers ([`Answering`]).
+    ///
+    /// It is the last `/health` verdict and the requests of the hold's since.
+    answering: Answering,
+    /// The answering clock's zero: the instant the hold was made.
+    ///
+    /// The clock is [`BoardHold::answering_at`].
+    clock_zero: Instant,
+    /// The board's silences closed so far, summed.
+    silences: Duration,
     /// The cause last said in the shell's own window of each principal's
     /// lines kept from its file, by principal (SP-11, SP-12).
     ///
@@ -1712,12 +1971,62 @@ impl BoardHold {
         }
     }
 
-    /// Ends the drain's pass at the board: every document a turn of it
-    /// stopped at is walked again by the next pass
-    /// ([`PrincipalHold::stopped_in_pass`]).
+    /// Returns the board's answering clock at `at` (§3c.4's bound; skep #863).
+    ///
+    /// It is the time since the hold was made less every silence of the
+    /// board's, one still open counted from its start to `at` — a request
+    /// pending its verdict counting as answering until the verdict is silence,
+    /// which counts the silence from that request then. A line's two minutes
+    /// are read off it ([`HAND_OVER_DEADLINE`]), so they run only while the
+    /// board answers, paused across a silence and never reset.
+    fn answering_at(&self, at: Instant) -> Duration {
+        let open = match self.answering {
+            Answering::Silent { since } => at.saturating_duration_since(since),
+            Answering::Answers | Answering::Unanswered { .. } => Duration::ZERO,
+        };
+        at.saturating_duration_since(self.clock_zero).saturating_sub(self.silences.saturating_add(open))
+    }
+
+    /// Returns whether the board answers.
+    ///
+    /// No request of the hold's went unanswered since a `/health` answered.
+    fn answers(&self) -> bool {
+        matches!(self.answering, Answering::Answers)
+    }
+
+    /// Returns whether the last `/health` read found the board silent.
+    fn silent(&self) -> bool {
+        matches!(self.answering, Answering::Silent { .. })
+    }
+
+    /// Returns whether a request of the hold's went unanswered.
+    ///
+    /// The next `/health` verdict is pending.
+    fn pending(&self) -> bool {
+        matches!(self.answering, Answering::Unanswered { .. })
+    }
+
+    /// Notes a failed send of line `k` of `principal`'s at `at`.
+    ///
+    /// `token` is its failure's ([`Reissues::failed`]).
+    ///
+    /// The line's clock reads the instant and the board's answering clock
+    /// then. It answers whether `token` differs from the last failure's as it
+    /// stood, and true where the principal holds nothing at the board.
+    fn note_failure(&mut self, principal: u64, k: u64, token: String, at: Instant) -> bool {
+        let moment = Moment { at, answering: self.answering_at(at) };
+        self.principals.get_mut(&principal).map(|ph| ph.reissues.entry(k).or_default().failed(token, moment)).unwrap_or(true)
+    }
+
+    /// Ends the drain's pass at the board.
+    ///
+    /// Every document a turn of it stopped at, or the board's silence cut it
+    /// at, is walked again by the next pass
+    /// ([`PrincipalHold::stopped_in_pass`], [`PrincipalHold::cut_in_pass`]).
     fn end_pass(&mut self) {
         for ph in self.principals.values_mut() {
             ph.stopped_in_pass.clear();
+            ph.cut_in_pass.clear();
         }
     }
 }
@@ -1762,7 +2071,8 @@ impl BoardSlot {
 /// method about a session reaches its board through the session — its
 /// `board_reference` the hold's key, its `board` the board dialed — and the
 /// board-wide ones (`probe`, `touch_store`, `set_node_stopped`,
-/// `node_stopped`, `another_window`, `note_health`) take the board's
+/// `node_stopped`, `another_window`, `note_health`, `note_health_read`,
+/// `silent`) take the board's
 /// reference, as `halted_file`, the native side's read of a principal's
 /// halted file, takes it beside the principal.
 ///
@@ -1784,16 +2094,19 @@ pub struct Holds {
     data_dir: PathBuf,
     talk: Talk,
     boards: HashMap<String, BoardSlot>,
-    /// The `held` event last emitted per (board, session, document): its
-    /// state and count ([`Holds::emit_held`]).
+    /// The `held` event last emitted per (board, session, document).
+    ///
+    /// It is its state, its count, and whether it named the hands not read
+    /// ([`Holds::emit_held`]).
     ///
     /// The event goes out once per change of a document's state (skep #727):
-    /// an emit of the pair last emitted for its key is none. A leaf lock,
-    /// taken inside `emit_held` alone and never held while another lock is
-    /// taken — the emit is made under the board's lock from `resolve` and a
-    /// hold among others, so the memory lives beside the boards' locks, not
-    /// under one. A document kept with no line left clears its key.
-    last_emitted: Mutex<HashMap<HeldKey, (HeldState, u64)>>,
+    /// an emit of what was last emitted for its key is none, so a moved face
+    /// whose hands are read at last is said again with them (skep #863). A
+    /// leaf lock, taken inside `emit_held` alone and never held while another
+    /// lock is taken — the emit is made under the board's lock from `resolve`
+    /// and a hold among others, so the memory lives beside the boards' locks,
+    /// not under one. A document kept with no line left clears its key.
+    last_emitted: Mutex<HashMap<HeldKey, (HeldState, u64, bool)>>,
     /// The milliseconds a suite moved the clock forward ([`Holds::now`]).
     ///
     /// It is zero in every shipped build, where nothing moves it.
@@ -1819,6 +2132,9 @@ impl Holds {
                     poisoned: false,
                     node_stopped: false,
                     head: HeadState::Unknown,
+                    answering: Answering::Answers,
+                    clock_zero: Instant::now(),
+                    silences: Duration::ZERO,
                     kept_said: HashMap::new(),
                     store_said: None,
                     principals: HashMap::new(),
@@ -1854,12 +2170,84 @@ impl Holds {
 
     /// Notes a failed send of line `k` of `principal`'s ([`Reissues::failed`]).
     ///
-    /// Its clock starts where it stands unstarted, at [`Holds::now`], and
-    /// `token` is the last failure's from here. It answers whether `token`
-    /// differs from the last failure's as it stood.
+    /// Its clock starts where it stands unstarted, at [`Holds::now`] and the
+    /// board's answering clock then, and `token` is the last failure's from
+    /// here. It answers whether `token` differs from the last failure's as it
+    /// stood.
     fn note_failure(&self, board_reference: &str, principal: u64, k: u64, token: String) -> bool {
         let now = self.now();
-        self.with_principal(board_reference, principal, |ph| ph.reissues.entry(k).or_default().failed(token, now)).unwrap_or(true)
+        self.lock(board_reference).note_failure(principal, k, token, now)
+    }
+
+    /// Returns how long line `k`'s clocks have run since its first failure.
+    ///
+    /// The last failure's token rides beside, and none is answered where the
+    /// line has not failed ([`HAND_OVER_DEADLINE`]).
+    fn since_first_failure(&self, board_reference: &str, principal: u64, k: u64) -> Option<(Elapsed, String)> {
+        let now = self.now();
+        let board_hold = self.lock(board_reference);
+        let given = board_hold.principals.get(&principal)?.reissues.get(&k)?;
+        let (first, last) = (given.first_failed?, given.last.clone()?);
+        let elapsed = Elapsed { answering: board_hold.answering_at(now).saturating_sub(first.answering), wall: now.saturating_duration_since(first.at) };
+        Some((elapsed, last))
+    }
+
+    /// Notes a request of the hold's the board gave no answer to (§3c.5).
+    ///
+    /// `board_hold` is the board's. The board answering, it is marked
+    /// unanswered from now until the next `/health` verdict
+    /// ([`Answering::Unanswered`]) — nothing more of the hold's is dialed
+    /// there meanwhile — and `cut`, a send the request was whose dial may
+    /// have left, is owed to that verdict; a request already pending a
+    /// verdict adds its `cut` to it, and a silent board's owes none, the
+    /// silence standing.
+    fn note_unanswered(&self, board_hold: &mut BoardHold, cut: Option<CutSend>) {
+        match &mut board_hold.answering {
+            Answering::Answers => board_hold.answering = Answering::Unanswered { since: self.now(), cut: cut.into_iter().collect() },
+            Answering::Unanswered { cut: owed, .. } => owed.extend(cut),
+            Answering::Silent { .. } => {}
+        }
+    }
+
+    /// Notes a `/health` read the board gave no answer to: its silence.
+    ///
+    /// It is §3c.4's THE END.
+    ///
+    /// The silence runs from the first request the board gave no answer to
+    /// where one pends its verdict, and from now otherwise; a silent board's
+    /// stands. The sends a pending request cut owe no failure: the silence
+    /// was the board's, never the line's.
+    fn note_silence(&self, board_hold: &mut BoardHold) {
+        match &board_hold.answering {
+            Answering::Answers => board_hold.answering = Answering::Silent { since: self.now() },
+            Answering::Unanswered { since, .. } => board_hold.answering = Answering::Silent { since: *since },
+            Answering::Silent { .. } => {}
+        }
+    }
+
+    /// Notes a `/health` read the board answered: the board answers.
+    ///
+    /// A refusal is an answer (§3c.4's THE END).
+    ///
+    /// A silence closes, its length taken off the board's answering clock
+    /// ([`BoardHold::answering_at`]). A request pending its verdict was its
+    /// line's own: each send it cut whose line stands is a failed send of the
+    /// line at the send's own instant ([`BoardHold::note_failure`]), said in
+    /// the shell's own window where its failure changed, as a resend's
+    /// refusal is (SP-11).
+    fn note_answering(&self, board_hold: &mut BoardHold) {
+        match std::mem::replace(&mut board_hold.answering, Answering::Answers) {
+            Answering::Answers => {}
+            Answering::Silent { since } => board_hold.silences = board_hold.silences.saturating_add(self.now().saturating_duration_since(since)),
+            Answering::Unanswered { cut, .. } => {
+                for CutSend { principal, k, doc, at, refusal } in cut {
+                    let stands = board_hold.principals.get(&principal).is_some_and(|ph| ph.queue.line(k).is_some());
+                    if stands && board_hold.note_failure(principal, k, cause::UNREACHABLE.to_string(), at) {
+                        self.say(format_args!("line {k} on {doc} was not taken ({refusal}); it is sent again as the board answers"));
+                    }
+                }
+            }
+        }
     }
 
     /// Returns the board `board_reference` names.
@@ -1931,10 +2319,10 @@ impl Holds {
     /// Returns whether the board's node stands stopped by its owner's act.
     ///
     /// The act is [`Holds::set_node_stopped`]'s. It is what `probe` answers
-    /// for the own node, and what the feed reads when the board's stream
-    /// fails, so a deliberate stop is announced `stopped` once and never
-    /// `unreachable` beside it. A board that is not the own node answers
-    /// false.
+    /// for the own node, and what the feed reads before it announces the
+    /// board's `/health` verdict, so a deliberate stop is announced `stopped`
+    /// once and never `unreachable` beside it. A board that is not the own
+    /// node answers false.
     pub fn node_stopped(&self, board_reference: &str) -> bool {
         self.lock(board_reference).node_stopped
     }
@@ -2532,7 +2920,7 @@ impl Holds {
                 self.note_ack(session, &frame, &ack);
                 OpAnswer::Answered(Ok(ack))
             }
-            Dialed::Held { refusal, .. } | Dialed::Reissue { refusal, .. } | Dialed::Faced(refusal) => OpAnswer::Answered(Err(refusal)),
+            Dialed::Held { refusal, .. } | Dialed::Unanswered { refusal, .. } | Dialed::Reissue { refusal, .. } | Dialed::Faced(refusal) => OpAnswer::Answered(Err(refusal)),
             Dialed::Died => OpAnswer::Died(AtDeath::NotABurst),
         }
     }
@@ -2574,30 +2962,37 @@ impl Holds {
 
     /// Sends a burst by the burst's write path (§3c.4).
     ///
-    /// Its checks run in this order, the first that holds answering:
-    /// admitted by the burst's door ([`Burst::admit`]), its refusal faced at
-    /// the act; refused `store_halted` where P38 halted the principal's file
-    /// (the principal's door, [`Holds::principal_hold`]); held without a dial
-    /// where a hold stands at the board — the own node stopped, else the
-    /// board halted, else a line of the principal's already held (`behind`);
-    /// else dialed within the call ([`Holds::dial_within_call`]): an ack
-    /// carried and its `at` noted; a hold-class answer or a refused run held
-    /// and answered `held` — a second `write_busy` and a third `durability`
-    /// among them (§3c.4's riders), the line's clock started where the dial
-    /// was a failed send ([`held_failure`]); a burst the board refuses as
-    /// typed against an older state of its document shifted through the
-    /// change and sent again within the call where it carries anchors
-    /// ([`Holds::shift_at_first_dial`]), so the page meets the ack or the
-    /// next refusal — else, or where the shift is not exact, held as a moved
-    /// document and answered `held`, its line carrying the board's verdict
-    /// and the `held` event naming the hands whose rows moved the document —
-    /// one more read the call waits on ([`Holds::hands_since_typed_state`]);
-    /// the death signal — at the dial, or at that read of the hands — held
+    /// Its checks run in this order, the first that holds answering: admitted
+    /// by the burst's door ([`Burst::admit`]), its refusal faced at the act;
+    /// refused `store_halted` where P38 halted the principal's file (the
+    /// principal's door, [`Holds::principal_hold`]); held without a dial where
+    /// a hold stands at the board — the own node stopped, else the board silent
+    /// (`unreachable`), else the board halted, else a line of the principal's
+    /// already held (`behind`), else a request of the hold's at the board
+    /// unanswered, its verdict pending (`unreachable`: nothing more is dialed
+    /// there until a `/health` answers, §3c.5) — `behind` before the pending
+    /// verdict, since until it comes the board may answer still (§4b.2's
+    /// `held`: never `unreachable` while the board answers); else dialed within
+    /// the call ([`Holds::dial_within_call`]): an ack carried and its `at`
+    /// noted; a hold-class answer or a refused run held and answered `held` — a
+    /// second `write_busy` and a third `durability` among them (§3c.4's
+    /// riders), the line's clock started where the dial was a failed send
+    /// ([`held_failure`]); a dial the board gave no answer to held
+    /// `unreachable`, its `sent` the dial's, no clock started and the board
+    /// marked unanswered ([`Holds::hold_unanswered`]); a burst the board
+    /// refuses as typed against an older state of its document shifted through
+    /// the change and sent again within the call where it carries anchors
+    /// ([`Holds::shift_at_first_dial`]), so the page meets the ack or the next
+    /// refusal — else, or where the shift is not exact, held as a moved
+    /// document and answered `held`, its line carrying the board's verdict and
+    /// the `held` event naming the hands whose rows moved the document — one
+    /// more read the call waits on ([`Holds::hands_since_typed_state`]); the
+    /// death signal — at the dial, or at that read of the hands — held
     /// `session_died`, `sent: false`, before the caller ends the session
-    /// ([`Holds::hold_at_death`]; [`AtDeath`]), so the line stands through
-    /// the end's reads with every later burst of the principal's behind it,
-    /// its clock started where the dial was a failed send; anything else
-    /// faced at the act.
+    /// ([`Holds::hold_at_death`]; [`AtDeath`]), so the line stands through the
+    /// end's reads with every later burst of the principal's behind it, its
+    /// clock started where the dial was a failed send; anything else faced at
+    /// the act.
     ///
     /// The `base` a held line takes — the position the resend's read of it
     /// starts from (§3c.2) — is read under the board's lock BEFORE the dial,
@@ -2616,16 +3011,20 @@ impl Holds {
         let base = {
             let mut board_hold = self.lock(&session.board_reference);
             // A burst's hold before any dial is the own node stopped, else the
-            // writes halted (§3c.4's two for a burst; a `poisoned` answer is
-            // the dial's own, its line held `sent: true`), else a line of the
-            // principal's already held.
+            // board silent, else the writes halted (§3c.4's for a burst; a
+            // `poisoned` answer is the dial's own, its line held `sent:
+            // true`), else a line of the principal's already held, else a
+            // request of the hold's unanswered (skep #863).
             let standing = if board_hold.node_stopped {
                 Some(cause::STOPPED)
+            } else if board_hold.silent() {
+                Some(cause::UNREACHABLE)
             } else if board_hold.writes_halted {
                 Some(cause::HALTED)
             } else {
                 None
             };
+            let pending = board_hold.pending();
             let (line_stands, base) = match self.principal_hold(&mut board_hold, session) {
                 Ok(ph) => (!ph.queue.is_empty(), ph.base_of(&burst.doc, session.opened_at)),
                 Err(refusal) => return OpAnswer::Answered(Err(refusal)),
@@ -2636,7 +3035,7 @@ impl Holds {
             if let Some(refusal) = another_window(&board_hold, &burst) {
                 return OpAnswer::Answered(Err(refusal));
             }
-            let hold_cause = standing.or(line_stands.then_some(cause::BEHIND));
+            let hold_cause = standing.or(line_stands.then_some(cause::BEHIND)).or(pending.then_some(cause::UNREACHABLE));
             if let Some(cause) = hold_cause {
                 return OpAnswer::Answered(self.hold_line(&mut board_hold, session, burst, Reason::of(cause, false), base).map(|entered| entered.answer));
             }
@@ -2651,12 +3050,13 @@ impl Holds {
             // its anchors: the shift, within the call.
             Dialed::Held { reason, refusal } if reason.cause == cause::MOVED && burst.anchors.is_some() => {
                 let failed = held_failure(&reason, &refusal);
-                self.shift_at_first_dial(session, burst, reason, failed, base)
+                self.shift_at_first_dial(session, burst, reason, refusal, failed, base)
             }
             Dialed::Held { reason, refusal } => {
                 let failed = held_failure(&reason, &refusal);
                 self.hold(session, burst, reason, failed, base)
             }
+            Dialed::Unanswered { reason, refusal } => self.hold_unanswered(session, burst, reason, &refusal, base),
             Dialed::Reissue { refusal, .. } | Dialed::Faced(refusal) => OpAnswer::Answered(Err(refusal)),
             // The death is neither (§3c.4): the burst is held before the
             // caller ends the session, a dead token's write having committed
@@ -2694,7 +3094,15 @@ impl Holds {
     /// shifted dial, or at the shift's read, which dials nothing — re-marks
     /// it `session_died`, `sent` kept, and says it `holding`, the line
     /// standing for the session that stands next and the caller ending this
-    /// one ([`AtDeath::Held`]). Where the shift is not exact — a delete or a
+    /// one ([`AtDeath::Held`]); a request the board gives no answer to — the
+    /// shift's read or its attest's, nothing dialed, or the shifted dial —
+    /// re-marks it `unreachable`, `sent` kept, says it `holding` and answers
+    /// `held` under that cause, the board marked unanswered and the send owed
+    /// to the verdict where its dial left (skep #863): a shift whose read
+    /// went unanswered is untried, never a reason it is not exact, and its
+    /// verdict is kept (`PrincipalHold::shift_owed`) for the resend to run
+    /// it when the board answers. `refusal` is the board's refusal the
+    /// verdict rides. Where the shift is not exact — a delete or a
     /// rearrange without its span, an anchor lost or at two places, the span
     /// between them cut or refilled, the read refused, the deadline passed —
     /// the line is the moved hold as a burst without anchors meets it: the
@@ -2702,11 +3110,14 @@ impl Holds {
     /// marked, then the newest verdict on the line, the `held` event `moved`,
     /// the call answered `held`; a death at that read re-marks the line as
     /// the death at a shifted dial does, and leaves a burst held behind it
-    /// unmarked.
-    fn shift_at_first_dial(&self, session: &SessionEntry, burst: Burst, reason: Reason, failed: Option<String>, base: u64) -> OpAnswer {
+    /// unmarked; the board's silence at it names the hands not read
+    /// ([`Hand::UNREAD`]), read again at its answer.
+    fn shift_at_first_dial(&self, session: &SessionEntry, burst: Burst, reason: Reason, refusal: Refusal, failed: Option<String>, base: u64) -> OpAnswer {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let doc = burst.doc.clone();
-        let mut verdict = reason.refusal.clone().unwrap_or(Value::Null);
+        // The board's newest refusal of the line as typed stale, its verdict
+        // the floor the shift is typed against.
+        let mut moved = KeptShift { reason: reason.clone(), refusal };
         let entered = {
             let mut board_hold = self.lock(board_reference);
             match self.enter_line(&mut board_hold, session, burst, reason, failed, base) {
@@ -2729,14 +3140,23 @@ impl Holds {
             OpAnswer::Died(AtDeath::Held(DeathHeld { k, answer }))
         };
         loop {
+            let verdict = moved.reason.refusal.clone().unwrap_or(Value::Null);
             let shifted = match self.shift_and_send(session, k, &verdict, resend::no_step, |frame| self.dial_reissuing(session, frame)) {
                 Ok(shifted) => shifted,
                 Err(why) => {
                     // The hands are read before anything is marked, so the
                     // death at the read leaves a burst held behind the line
                     // as it stood.
-                    let moved = Reason { cause: cause::MOVED.to_string(), refusal: Some(verdict.clone()), sent };
-                    let HandsRead::Named(hands) = self.hands_since_typed_state(session, &doc, Some(k), &moved) else { return at_death(sent, answer) };
+                    let held_moved = Reason { cause: cause::MOVED.to_string(), refusal: Some(verdict.clone()), sent };
+                    let hands = match self.hands_since_typed_state(session, &doc, Some(k), &held_moved) {
+                        HandsRead::Named(hands) => hands,
+                        HandsRead::Unanswered => {
+                            self.with_principal(board_reference, principal, |ph| ph.hands_owed.insert(doc.clone(), k));
+                            self.note_unanswered(&mut self.lock(board_reference), None);
+                            vec![Hand::UNREAD]
+                        }
+                        HandsRead::Died => return at_death(sent, answer),
+                    };
                     self.say(format_args!("line {k} on {doc} was not shifted ({why}); the document is held as moved"));
                     self.mark_moved(board_reference, principal, &doc, Some((k, verdict)));
                     self.emit_held(session, &doc, self.count_of(board_reference, principal, &doc), HeldState::Moved, None, &hands);
@@ -2755,8 +3175,24 @@ impl Holds {
                     self.with_principal(board_reference, principal, |ph| self.done_line(principal, ph, k, Done::Kept { at: acked_at(&ack) }));
                     return OpAnswer::Answered(Ok(ack));
                 }
-                Dialed::Held { reason, .. } if reason.cause == cause::MOVED => {
-                    verdict = reason.refusal.unwrap_or(Value::Null);
+                Dialed::Held { reason, refusal } if reason.cause == cause::MOVED => {
+                    moved = KeptShift { reason, refusal };
+                }
+                Dialed::Unanswered { reason, refusal } => {
+                    // The line holds `unreachable`, said now since it was said
+                    // to no one while it was the shift's; a shift whose read
+                    // went unanswered keeps its verdict for the resend.
+                    let cut = (shifted.left && reason.sent).then(|| CutSend { principal, k, doc: doc.clone(), at: self.now(), refusal: refusal.to_string() });
+                    self.with_principal(board_reference, principal, |ph| {
+                        if !shifted.left {
+                            ph.shift_owed.insert(k, moved.clone());
+                        }
+                        self.remark_line(principal, ph, k, Reason::of(cause::UNREACHABLE, sent));
+                    });
+                    self.note_unanswered(&mut self.lock(board_reference), cut);
+                    answer["cause"] = Value::from(cause::UNREACHABLE);
+                    self.emit_held(session, &doc, self.count_of(board_reference, principal, &doc), HeldState::Holding, Some(cause::UNREACHABLE), &[]);
+                    return OpAnswer::Answered(Ok(answer));
                 }
                 Dialed::Held { reason, .. } => {
                     let state = line_state(&reason);
@@ -2829,14 +3265,52 @@ impl Holds {
     /// that read meets the death signal, the burst is held at the death
     /// instead, its clock started by `failed` ([`Holds::hold_at_death`]), and
     /// the answer is [`OpAnswer::Died`] for the caller to end the session
-    /// (§3c.4).
+    /// (§3c.4); where the board gives it no answer, the moved face stands on
+    /// the verdict, its hands named not read ([`Hand::UNREAD`]), read again at
+    /// the board's answer, and the board marked unanswered (skep #863).
     pub fn hold(&self, session: &SessionEntry, burst: Burst, reason: Reason, failed: Option<String>, base: u64) -> OpAnswer {
-        let HandsRead::Named(hands) = self.hands_since_typed_state(session, &burst.doc, None, &reason) else {
-            return self.hold_at_death(session, burst, failed, base);
+        let (hands, unread) = match self.hands_since_typed_state(session, &burst.doc, None, &reason) {
+            HandsRead::Named(hands) => (hands, false),
+            HandsRead::Unanswered => (vec![Hand::UNREAD], true),
+            HandsRead::Died => return self.hold_at_death(session, burst, failed, base),
         };
         let mut board_hold = self.lock(&session.board_reference);
+        if unread {
+            self.note_unanswered(&mut board_hold, None);
+        }
         OpAnswer::Answered(self.enter_line(&mut board_hold, session, burst, reason, failed, base).map(|entered| {
+            if unread {
+                if let Some(ph) = board_hold.principals.get_mut(&session.facts.principal) {
+                    ph.hands_owed.insert(entered.doc.clone(), entered.k);
+                }
+            }
             self.say_entered(session, &entered, &hands);
+            entered.answer
+        }))
+    }
+
+    /// Holds an admitted burst whose first dial the board gave no answer to.
+    ///
+    /// It is §3c.4's hold at §3c.5's silence.
+    ///
+    /// `reason` is the dial's — `unreachable`, its `sent` whether the request
+    /// may have left — and `refusal` its refusal. The line is entered so, no
+    /// clock started: whether the dial was the line's own failure is the next
+    /// `/health` verdict's (`Answering::Unanswered`), the send owed to it
+    /// where its request may have left. The board is marked unanswered
+    /// whatever the hold answers, so every burst after it is held at once
+    /// until that verdict, and the `held` event says the line `holding`
+    /// ([`Holds::say_entered`]). The answer is the `held` answer, or the
+    /// hold's refusal, nothing held ([`Holds::enter_line`]).
+    fn hold_unanswered(&self, session: &SessionEntry, burst: Burst, reason: Reason, refusal: &Refusal, base: u64) -> OpAnswer {
+        let principal = session.facts.principal;
+        let sent = reason.sent;
+        let mut board_hold = self.lock(&session.board_reference);
+        let entered = self.enter_line(&mut board_hold, session, burst, reason, None, base);
+        let cut = entered.as_ref().ok().filter(|_| sent).map(|entered| CutSend { principal, k: entered.k, doc: entered.doc.clone(), at: self.now(), refusal: refusal.to_string() });
+        self.note_unanswered(&mut board_hold, cut);
+        OpAnswer::Answered(entered.map(|entered| {
+            self.say_entered(session, &entered, &[]);
             entered.answer
         }))
     }
@@ -2933,6 +3407,8 @@ impl Holds {
         if let Some(refusal) = another_window(board_hold, &burst) {
             return Err(refusal);
         }
+        let now = self.now();
+        let moment = Moment { at: now, answering: board_hold.answering_at(now) };
         let ph = board_hold.principals.get_mut(&session.facts.principal).expect("the principal's hold, entered by its door");
         let (doc, frame, anchors) = burst.into_stored();
         let id = frame["id"].as_str().map(str::to_owned);
@@ -2940,7 +3416,7 @@ impl Holds {
         let cause = reason.cause.clone();
         let entered = ph.hold(&doc, id.as_deref(), base, frame, anchors, reason).map_err(queue_refused)?;
         if let Some(token) = failed {
-            ph.reissues.entry(entered.k).or_default().failed(token, self.now());
+            ph.reissues.entry(entered.k).or_default().failed(token, moment);
         }
         self.note_waiting(session.facts.principal, ph);
         let mut answer = json!({"resp": "held", "held": entered.k, "cause": cause});
@@ -3232,8 +3708,11 @@ impl Holds {
                         given.last = None;
                     }
                 }
-                // A pass under way walks the document again at its next turn.
+                // A pass under way walks the document again at its next turn,
+                // and its moved face, gone, owes no hands.
                 ph.stopped_in_pass.remove(&doc);
+                ph.cut_in_pass.remove(&doc);
+                ph.hands_owed.remove(&doc);
                 Ok(Resolved::HandedBack)
             }
         }
@@ -3263,15 +3742,65 @@ impl Holds {
     /// holds `halted` from the first `true` to the next `false` (§3c.4) —
     /// and answered. A read that says writes go ends a `poisoned` state too:
     /// a poisoned board answers `writes.halted` true until its restart, so
-    /// the first `false` after a `poisoned` answer is the restart's.
+    /// the first `false` after a `poisoned` answer is the restart's. The
+    /// board answered, so its silence ends, and a request pending the verdict
+    /// was its line's own ([`Holds::note_answering`]).
     pub fn note_health(&self, board_reference: &str, health: &Health) -> bool {
         let writes_halted = health.body["writes"]["halted"].as_bool().unwrap_or(false);
         let mut board_hold = self.lock(board_reference);
+        self.note_answering(&mut board_hold);
         board_hold.writes_halted = writes_halted;
         if !writes_halted {
             board_hold.poisoned = false;
         }
         writes_halted
+    }
+
+    /// Notes one `/health` read of the board, and answers its verdict.
+    ///
+    /// It is §3c.4's THE END.
+    ///
+    /// The read is the probe's, the feed thread's — at its start, its tick,
+    /// the commit stream's failure — or the page's, `probe()`'s or
+    /// `health(board)`'s. One the board gave no answer to
+    /// (`DialError::unanswered`) is its silence ([`Holds::note_silence`]);
+    /// one refused before any connection opened notes nothing
+    /// ([`Verdict::Undialed`]); any answer is the board answering — a
+    /// document read for its `writes.halted` ([`Holds::note_health`]), a
+    /// refusal or bytes no `/health` reads ([`Holds::note_answering`]).
+    ///
+    /// # Panics
+    ///
+    /// Panics where `board_reference` names no board the holds were opened
+    /// over (the type's precondition).
+    pub fn note_health_read(&self, board_reference: &str, read: &Result<Health, Halt>) -> Verdict {
+        match read {
+            Ok(health) if self.note_health(board_reference, health) => Verdict::Holds,
+            Ok(_) => Verdict::Writes,
+            Err(h) if unanswered(h) => {
+                self.note_silence(&mut self.lock(board_reference));
+                Verdict::Silent
+            }
+            Err(Halt::Dial(e)) if !e.answered() => Verdict::Undialed,
+            Err(_) => {
+                self.note_answering(&mut self.lock(board_reference));
+                Verdict::Holds
+            }
+        }
+    }
+
+    /// Returns whether the board's last `/health` verdict was silence (§3c.4).
+    ///
+    /// It is the one source of the board's `unreachable` on the `daemon`
+    /// event (§4b.2; P37): a request of the hold's the board gave no answer
+    /// to, its verdict pending, is no silence yet.
+    ///
+    /// # Panics
+    ///
+    /// Panics where `board_reference` names no board the holds were opened
+    /// over (the type's precondition).
+    pub fn silent(&self, board_reference: &str) -> bool {
+        self.lock(board_reference).silent()
     }
 
     /// Returns the frame a send under `session` dials ([`AttestedWhereOwed`]).
@@ -3306,6 +3835,7 @@ impl Holds {
                 }
             },
             Err(Halt::Dial(e)) => match classify(DialOutcome::Dial(&e), given) {
+                Decision::Unanswered { sent } => Dialed::unanswered(sent, Refusal::Unreachable(e)),
                 Decision::Hold { cause, sent } => Dialed::Held { reason: Reason::of(cause, sent), refusal: Refusal::Unreachable(e) },
                 _ => Dialed::Faced(Refusal::Unreachable(e)),
             },
@@ -3399,11 +3929,12 @@ impl Holds {
 
     /// Forgets the lines `ks` once settled, and says what the settle did.
     ///
-    /// Each line's reissues and the position its moved document was
-    /// acknowledged through go; a held file the volume would not remove once
-    /// every line in it was settled is said on `Talk` — the store appends on
-    /// to it — and a wait for the file's copies that begins or ends is said
-    /// at its edges ([`Holds::note_waiting`]).
+    /// Each line's reissues, the position its moved document was
+    /// acknowledged through, its untried shift and its unread hands go; a
+    /// held file the volume would not remove once every line in it was
+    /// settled is said on `Talk` — the store appends on to it — and a wait
+    /// for the file's copies that begins or ends is said at its edges
+    /// ([`Holds::note_waiting`]).
     fn forget_settled(&self, principal: u64, ph: &mut PrincipalHold, ks: &[u64], settled: Settled) {
         if let Some((path, e)) = settled.unremoved {
             self.say(format_args!("every held line is done, and the held file {} could not be removed ({e}); it stands, and the next line is appended to it", path.display()));
@@ -3411,7 +3942,9 @@ impl Holds {
         for k in ks {
             ph.reissues.remove(k);
             ph.seen_through.remove(k);
+            ph.shift_owed.remove(k);
         }
+        ph.hands_owed.retain(|_, judged| !ks.contains(judged));
         self.note_waiting(principal, ph);
     }
 
@@ -3465,30 +3998,33 @@ impl Holds {
         }
     }
 
-    /// Emits the `held` event (§4b.2) at the session's board, once per change
-    /// of the document's state.
+    /// Emits the `held` event (§4b.2) at the session's board.
+    ///
+    /// It goes out once per change of the document's state.
     ///
     /// It is `{board, session, doc, held, state, cause?, hands?}`, under the
     /// session the change was made for — `hands` with the `moved` state
-    /// alone, the hands whose rows moved the document (§3c.5), each once. An
-    /// emit of the state and count last emitted for the same board, session
-    /// and document is none (skep #727): a document's state is said as it
-    /// changes, never again per probe; the first emit for a key is always
-    /// made, and a document kept with no line left clears its key
+    /// alone, the hands whose rows moved the document (§3c.5), each once, or
+    /// the one hand `unread` where the board gave their read no answer. An
+    /// emit of the state, count and unread hands last emitted for the same
+    /// board, session and document is none (skep #727): a document's state is
+    /// said as it changes, never again per probe; the first emit for a key is
+    /// always made, and a document kept with no line left clears its key
     /// ([`Holds::last_emitted`]). The memory's lock is a leaf, taken here
     /// alone and released before the bus is reached, so the emit is safe
     /// under the board's lock as it is without one.
     fn emit_held(&self, session: &SessionEntry, doc: &str, held: u64, state: HeldState, cause: Option<&str>, hands: &[Hand]) {
         let key = (session.board_reference.clone(), session.reference.clone(), doc.to_string());
+        let said = (state, held, hands.contains(&Hand::UNREAD));
         {
             let mut last = self.last_emitted.lock().expect("the held events' memory");
-            if last.get(&key) == Some(&(state, held)) {
+            if last.get(&key) == Some(&said) {
                 return;
             }
             if state == HeldState::Kept && held == 0 {
                 last.remove(&key);
             } else {
-                last.insert(key, (state, held));
+                last.insert(key, said);
             }
         }
         let mut data = json!({"board": session.board_reference, "session": session.reference, "doc": doc, "held": held, "state": state.as_str()});
@@ -3501,8 +4037,9 @@ impl Holds {
         self.bus.emit(EventName::Held, data);
     }
 
-    /// Returns the hands whose rows moved a document past a burst's typed
-    /// state (§3c.5; §4b.2's `held` event).
+    /// Returns the hands whose rows moved a document past a burst's state.
+    ///
+    /// The state is the burst's typed state (§3c.5; §4b.2's `held` event).
     ///
     /// `reason` is the line's as a dial held it, and `k` the line's ordinal
     /// where it has one — none for a first dial's hold, whose line is
@@ -3523,13 +4060,15 @@ impl Holds {
     /// forgets it, and the first face after one names the acknowledged hands
     /// again, the line's raised `base` persisting. A page whose `more` stands
     /// names the hands of the page it holds, the rows past it unread; a read
-    /// the board answers with no page — a refusal, no answer — names none,
-    /// the document faced moved all the same. The death signal on the
-    /// session's token is no such answer: it is [`HandsRead::Died`], the
-    /// session's death and no verdict on the document, which each caller
-    /// meets as the death at its dial — the burst held for the session that
-    /// stands next, and nothing faced moved (§3c.4). Any other reason reads
-    /// nothing and names none.
+    /// the board answers with no page — a refusal, an answer no read takes —
+    /// names none, the document faced moved all the same. A read the board
+    /// gives no answer to is [`HandsRead::Unanswered`] (skep #863): the moved
+    /// face stands on the verdict, its hands named not read, apart from hands
+    /// lost. The death signal on the session's token is no such answer: it is
+    /// [`HandsRead::Died`], the session's death and no verdict on the
+    /// document, which each caller meets as the death at its dial — the burst
+    /// held for the session that stands next, and nothing faced moved
+    /// (§3c.4). Any other reason reads nothing and names none.
     fn hands_since_typed_state(&self, session: &SessionEntry, doc: &str, k: Option<u64>, reason: &Reason) -> HandsRead {
         let typed = match &reason.refusal {
             Some(verdict) if reason.cause == cause::MOVED => verdict["site"]["as_of"].as_u64(),
@@ -3542,6 +4081,7 @@ impl Holds {
         match session.board.changes(Some(&session.token), &ChangesQuery { since, under: Some(doc), drafts: true, limit: None }) {
             Ok(ChangesAnswer::Page(page)) => HandsRead::Named(self.hands_of(session, &page.changes)),
             Ok(ChangesAnswer::Closed) => HandsRead::Died,
+            Err(h) if unanswered(&h) => HandsRead::Unanswered,
             _ => HandsRead::Named(Vec::new()),
         }
     }

@@ -44,6 +44,17 @@
 //! `sent: false` (`client.md` §3c.2, §3c.4). [`DialError::Timeout`] is a
 //! read or a write past its bound once the connection stands.
 //!
+//! **Answered apart from unanswered** (`client.md` §7). A request the board
+//! never answered ([`DialError::unanswered`]) is reported apart from any
+//! answer it gave ([`DialError::answered`]), and never as one: the name not
+//! resolved, the connection refused or not made within its bound, the secure
+//! handshake not completed, no answer within the bound once connected, or the
+//! connection closed before its answer was whole — a head cut short and a
+//! body short of its `Content-Length` among them. An answer the board gave is
+//! one whatever it says, bytes that are no HTTP response and an answer past
+//! the cap among them. A request refused before any connection opened is
+//! neither: it reached no board.
+//!
 //! The request target and the headers are written as given, so each is
 //! checked first for what would end the request line or a header early —
 //! refused as [`DialError::Request`] before any connection opens.
@@ -239,52 +250,106 @@ impl fmt::Debug for StreamedResponse {
 pub enum DialError {
     /// The origin's scheme is one this build does not hold.
     ///
-    /// It is `https` without the `tls` feature.
+    /// It is `https` without the `tls` feature, refused before any
+    /// connection opened: it reached no board.
     NotHeld(String),
     /// The host did not resolve to an address.
+    ///
+    /// It is a request the board never answered.
     Resolve(String),
     /// No connection was made, and no byte of the request was written.
     ///
     /// Each address the host yields refused the connection, was unreachable
     /// or did not take it within [`CONNECT_TIMEOUT`]; or the TLS handshake
-    /// over it broke off or ran past its bound.
+    /// over it broke off or ran past its bound. It is a request the board
+    /// never answered.
     Connect(String),
     /// A read or a write ran past its bound once the connection was made.
     ///
-    /// It is the exchange run past its deadline too. A connection attempt
-    /// past its bound is [`DialError::Connect`].
+    /// It is the exchange run past its deadline too, and a request the board
+    /// never answered. A connection attempt past its bound is
+    /// [`DialError::Connect`].
     Timeout(String),
     /// The request could not be written or the response read.
     ///
     /// It covers a connection closed before its answer's head was whole —
     /// nothing sent, or a head that opened as a status line and was cut off
     /// — the TLS record layer's refusals once the handshake is done, and a
-    /// socket whose timeout cannot be set. Its text quotes no byte of the
-    /// answer (SP-15).
+    /// socket whose timeout cannot be set: a request the board never
+    /// answered. Its text quotes no byte of the answer (SP-15).
     Io(String),
     /// The bytes read were no HTTP response, or no answer the wire gives.
     ///
-    /// An answer closed before its head was whole is this only where its
-    /// bytes open as no status line; one that sent nothing, or cut off a
-    /// head that opened as a status line, is [`DialError::Io`].
+    /// It is an answer the board gave. An answer closed before its head was
+    /// whole is this only where its bytes open as no status line; one that
+    /// sent nothing, or cut off a head that opened as a status line, is
+    /// [`DialError::Io`].
     Response(String),
     /// The body ended before its declared `Content-Length`.
     ///
-    /// It is a broken connection, never an answer.
+    /// It is a broken connection, never an answer: a request the board never
+    /// answered.
     Truncated { declared: usize, got: usize },
     /// The answer ran past the cap and was read no further.
+    ///
+    /// It is an answer the board gave.
     TooLarge { cap: usize },
     /// The TLS layer refused the server name, its configuration or the peer.
     ///
     /// The peer is refused in the handshake — an untrusted certificate, an
     /// alert, bytes that are no TLS — which ends before a byte of the request
-    /// is written.
+    /// is written: a request the board never answered.
     Tls(String),
     /// The request was refused before any connection opened.
     ///
     /// Its target or a header holds what would end the request line or a
-    /// header early.
+    /// header early. It reached no board.
     Request(String),
+}
+
+impl DialError {
+    /// Returns whether the board gave an answer, one this dial could not read.
+    ///
+    /// It is true for bytes that are no HTTP response or no answer the wire
+    /// gives ([`DialError::Response`]) and for an answer past the cap
+    /// ([`DialError::TooLarge`]), and false for every other variant: a
+    /// request the board never answered ([`DialError::unanswered`]) and a
+    /// request refused before any connection opened (`client.md` §7).
+    pub fn answered(&self) -> bool {
+        match self {
+            DialError::Response(_) | DialError::TooLarge { .. } => true,
+            DialError::NotHeld(_)
+            | DialError::Resolve(_)
+            | DialError::Connect(_)
+            | DialError::Timeout(_)
+            | DialError::Io(_)
+            | DialError::Truncated { .. }
+            | DialError::Tls(_)
+            | DialError::Request(_) => false,
+        }
+    }
+
+    /// Returns whether the board gave the request no answer (`client.md` §7).
+    ///
+    /// It is true for the name unresolved ([`DialError::Resolve`]), a
+    /// connection never made or a handshake not completed
+    /// ([`DialError::Connect`], [`DialError::Tls`]), a read past its bound
+    /// ([`DialError::Timeout`]) and a connection closed before its answer was
+    /// whole ([`DialError::Io`], [`DialError::Truncated`]). It is false for an
+    /// answer the board gave ([`DialError::answered`]) and for a request
+    /// refused before any connection opened ([`DialError::NotHeld`],
+    /// [`DialError::Request`]), which reached no board.
+    pub fn unanswered(&self) -> bool {
+        match self {
+            DialError::Resolve(_)
+            | DialError::Connect(_)
+            | DialError::Timeout(_)
+            | DialError::Io(_)
+            | DialError::Truncated { .. }
+            | DialError::Tls(_) => true,
+            DialError::NotHeld(_) | DialError::Response(_) | DialError::TooLarge { .. } | DialError::Request(_) => false,
+        }
+    }
 }
 
 impl fmt::Display for DialError {

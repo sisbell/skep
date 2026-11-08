@@ -5,7 +5,9 @@
 //! the search answer and the listing's built as their declarations say; the
 //! feed thread's start, one `/health` read, and a search or a listing where
 //! no index stands dialing nothing; the outage's three states, said once and
-//! announced where no deliberate stop stands; and the commit stream
+//! announced where no deliberate stop stands; the `daemon` event the board's
+//! `/health` verdict alone, never one request's failure, its edges each said
+//! once and the owner's start the one `running`; and the commit stream
 //! coalesced — the waiting tick's mark, and a board committing far faster
 //! than the feed thread reads costing it a read per turn, never a read per
 //! commit, with a search queued behind them answered after one read at most.
@@ -234,24 +236,48 @@ fn the_ticks_owe_one_read_while_one_waits() {
     assert!(ticks.note(6), "a commit after the take owes one more");
 }
 
-/// A board's `/events` stream yielding `commits` commits, served once — none
-/// at all where it holds no body: the `/changes` reads it is asked counted,
-/// each made `delay` long, as a board across a network makes them, and the
-/// `/health` reads counted; `/health` and `/op` answered as a board with no
-/// `H.1` answers them.
+/// A board whose `/events` stream yields commits, served once.
+///
+/// The stream serves its `commits` once — none at all where it holds no
+/// body, or a live stream that says nothing where it is `hushed`: the
+/// `/changes` reads it is asked counted, each made `delay` long, as a board
+/// across a network makes them, and the `/health` reads counted, as many
+/// answered as `health_left` holds and every one after them given no answer;
+/// `/health` and `/op` answered as a board with no `H.1` answers them.
 struct Committing {
     events: Mutex<Option<Vec<u8>>>,
     drained: Arc<AtomicBool>,
     changes_reads: AtomicUsize,
     health_reads: AtomicUsize,
+    /// The `/health` reads still to answer: `usize::MAX` for every one.
+    health_left: Mutex<usize>,
+    /// Whether `/events` serves a live stream that says nothing ([`Hush`])
+    /// once its commits are served, never failing to connect.
+    hushed: AtomicBool,
     delay: Duration,
 }
 
 impl Committing {
-    /// A board whose stream serves `events` once, each `/changes` read
-    /// `delay` long.
+    /// Returns a board whose stream serves `events` once.
+    ///
+    /// Each `/changes` read is `delay` long, every `/health` read answered.
     fn new(events: Option<Vec<u8>>, drained: &Arc<AtomicBool>, delay: Duration) -> Arc<Committing> {
-        Arc::new(Committing { events: Mutex::new(events), drained: Arc::clone(drained), changes_reads: AtomicUsize::new(0), health_reads: AtomicUsize::new(0), delay })
+        Arc::new(Committing {
+            events: Mutex::new(events),
+            drained: Arc::clone(drained),
+            changes_reads: AtomicUsize::new(0),
+            health_reads: AtomicUsize::new(0),
+            health_left: Mutex::new(usize::MAX),
+            hushed: AtomicBool::new(false),
+            delay,
+        })
+    }
+
+    /// Answers every `/health` read from now, or none.
+    ///
+    /// It answers every one where `answers`, and none where not.
+    fn answers_health(&self, answers: bool) {
+        *self.health_left.lock().unwrap() = if answers { usize::MAX } else { 0 };
     }
 }
 
@@ -280,6 +306,20 @@ impl Read for Marked {
     }
 }
 
+/// A live stream's body that says nothing.
+///
+/// Each read waits a moment and times out, as a live stream with no commit
+/// does, so its reader neither ticks nor fails until the stream's silence
+/// bound, and stops at its next read once asked.
+struct Hush;
+
+impl Read for Hush {
+    fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+        std::thread::sleep(Duration::from_millis(20));
+        Err(io::Error::from(io::ErrorKind::TimedOut))
+    }
+}
+
 fn ok(v: Value) -> Response {
     Response { status: 200, headers: Headers::default(), body: v.to_string().into_bytes() }
 }
@@ -288,6 +328,12 @@ impl Dialer for Committing {
     fn exchange(&self, _: &Origin, req: &Request) -> Result<Response, DialError> {
         if req.method == Method::Get && req.path.starts_with("/health") {
             self.health_reads.fetch_add(1, Ordering::SeqCst);
+            let mut left = self.health_left.lock().unwrap();
+            match *left {
+                0 => return Err(DialError::Timeout("the board takes the read and sends nothing".into())),
+                usize::MAX => {}
+                n => *left = n - 1,
+            }
             return Ok(ok(json!({"ok": true, "log_position": 10, "auth": {"claimant": null, "local_trust": true, "origins": [], "signed_origins": []}, "writes": {"halted": false}})));
         }
         if req.method == Method::Get && req.path.starts_with("/changes") {
@@ -301,6 +347,7 @@ impl Dialer for Committing {
     fn stream(&self, _: &Origin, _: &RequestHead, _: &mut dyn Read, _: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
         match self.events.lock().unwrap().take() {
             Some(body) => Ok(StreamedResponse { status: 200, headers: Headers::default(), body: Box::new(Marked { body: io::Cursor::new(body), drained: Arc::clone(&self.drained) }) }),
+            None if self.hushed.load(Ordering::SeqCst) => Ok(StreamedResponse { status: 200, headers: Headers::default(), body: Box::new(Hush) }),
             None => Err(DialError::Connect("the stream is served once".into())),
         }
     }
@@ -335,44 +382,43 @@ fn a_board_committing_faster_than_the_feed_thread_reads_costs_a_read_per_turn() 
     assert!(waited < Duration::from_secs(1), "the search waited {waited:?} behind the reads queued");
 }
 
-/// THE FEED THREAD's START reads `/health` ONCE: the published feed's start,
-/// the mode and `writes.halted` all from the one read, made before the feed
-/// thread takes its first command — a stream that never connects is announced
-/// `unreachable` after it, and no second read was made (the mutant that
-/// reads the head apart from the start's `/health` read reads it twice).
+/// Checks that the feed thread's start reads `/health` once.
+///
+/// The published feed's start, the mode, `writes.halted` and the board's
+/// verdict all come from the one read, made before the feed thread takes its
+/// first command: over a live stream that says nothing, a listing answered
+/// once the start has run finds one read made (the mutant that reads the head
+/// apart from the start's `/health` read reads it twice).
 #[test]
 fn the_feed_thread_reads_health_once_at_its_start() {
     let fake = Committing::new(None, &Arc::new(AtomicBool::new(false)), Duration::ZERO);
+    fake.hushed.store(true, Ordering::SeqCst);
     let entry = entry_over(Arc::clone(&fake));
     let store = TempDir::new().unwrap();
-    let bus = Arc::new(EventBus::new());
-    let rx = bus.subscribe();
-    let threads = FeedThreads::spawn(Arc::clone(&entry), shared_over(&entry, &Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), &bus, &store));
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let announced = loop {
-        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            Ok(event) if event.name == EventName::Daemon && event.data["state"] == "unreachable" => break true,
-            Ok(_) => {}
-            Err(_) => break false,
-        }
-    };
+    let threads = FeedThreads::spawn(Arc::clone(&entry), shared_over(&entry, &Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), &Arc::new(EventBus::new()), &store));
+    // The start runs before the feed thread's first command.
+    let listing = threads.feed().places(Searcher::Guest, None);
     let reads = fake.health_reads.load(Ordering::SeqCst);
     threads.stop();
-    assert!(announced, "the stream that never connects is announced");
+    assert!(listing.is_ok(), "{listing:?}");
     assert_eq!(reads, 1, "the feed thread's start reads `/health` once");
 }
 
-/// THE OUTAGE's THREE STATES, as one feeder says them: a stream that fails
-/// twice is said on TALK once and announced `unreachable` once, the next
-/// tick saying `running`; under the own node's deliberate stop a failure is
-/// said and announced never, and the next tick says no `running` of its
-/// own; and a stop lifted while the stream is still down lets the next
-/// failure be announced, said no second time (the mutants that announce
-/// under the stop, owe `running` for an outage never announced, or say an
-/// outage twice before the stream answers).
+/// Checks the outage's three states, as one feeder says them.
+///
+/// Its board's `/health` unanswered, a stream that fails twice is said on
+/// `Talk` once and announced `unreachable` once, from the `/health` verdict
+/// its failure takes, the next tick's answered read saying `running`; under
+/// the own node's deliberate stop a failure is said and a silence announced
+/// never, and the next tick says no `running` of its own; and a stop lifted
+/// while the board is still silent lets the next failure announce it, the
+/// outage said no second time (the mutants that announce under the stop, owe
+/// `running` for a silence never announced, or say an outage twice before the
+/// stream answers).
 #[test]
 fn an_outage_is_said_once_and_announced_where_no_stop_stands() {
     let fake = Committing::new(None, &Arc::new(AtomicBool::new(false)), Duration::ZERO);
+    fake.answers_health(false);
     let entry = entry_over(Arc::clone(&fake));
     let store = TempDir::new().unwrap();
     let bus = Arc::new(EventBus::new());
@@ -388,18 +434,72 @@ fn an_outage_is_said_once_and_announced_where_no_stop_stands() {
     feeder.unreachable("refused");
     feeder.unreachable("refused");
     assert_eq!((daemon(), said()), (vec!["unreachable".to_string()], 1), "announced once, said once");
+    fake.answers_health(true);
     feeder.tick(10);
-    assert_eq!(daemon(), ["running"], "the announced outage owes the next tick's `running`");
+    assert_eq!(daemon(), ["running"], "the announced silence owes the next tick's `running`");
+    fake.answers_health(false);
     holds.set_node_stopped("b-1", true);
     feeder.unreachable("refused");
     feeder.unreachable("refused");
     assert_eq!((daemon(), said()), (Vec::<String>::new(), 2), "under the stop, said once and announced never");
     feeder.tick(10);
-    assert!(daemon().is_empty(), "an outage never announced owes no `running`");
+    assert!(daemon().is_empty(), "a silence never announced owes no `running`");
     feeder.unreachable("refused");
     holds.set_node_stopped("b-1", false);
     feeder.unreachable("refused");
-    assert_eq!((daemon(), said()), (vec!["unreachable".to_string()], 3), "the lifted stop's next failure is announced, the outage said once");
+    assert_eq!((daemon(), said()), (vec!["unreachable".to_string()], 3), "the lifted stop's next failure announces the silence, the outage said once");
+}
+
+/// Checks that the `daemon` event follows the board's `/health` verdict.
+///
+/// It never follows one request's failure (§4b.2; P37).
+///
+/// A commit stream that fails while `/health` answers is said once and
+/// announced nothing; a `/health` left unanswered announces `unreachable`
+/// once however many reads find it so, and the first that answers after it
+/// `running` once, each edge said once in the shell's own window; and a
+/// silence announced before the owner stops the node owes no `running` of
+/// this thread's after the start, the shell's own the one (the mutant that
+/// announces the stream's failure flickers "unreachable" over a board that
+/// answers; the one that announces every unanswered read says it at each
+/// probe; the one that keeps the announced silence across the stop says
+/// `running` twice).
+#[test]
+fn the_daemon_event_follows_the_boards_verdict_and_never_one_requests_failure() {
+    let fake = Committing::new(None, &Arc::new(AtomicBool::new(false)), Duration::ZERO);
+    let entry = entry_over(Arc::clone(&fake));
+    let store = TempDir::new().unwrap();
+    let bus = Arc::new(EventBus::new());
+    let rx = bus.subscribe();
+    let shared = shared_over(&entry, &Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), &bus, &store);
+    let holds = Arc::clone(&shared.holds);
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let kept = Arc::clone(&lines);
+    let talk: Talk = Arc::new(move |l: &str| kept.lock().unwrap().push(l.to_string()));
+    let mut feeder = Feeder::new(&entry, Shared { talk, ..shared });
+    let daemon = || -> Vec<String> { rx.try_iter().filter(|e| e.name == EventName::Daemon).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect() };
+    let edges = || lines.lock().unwrap().iter().filter(|l| l.contains("board unreachable") || l.contains("board running")).cloned().collect::<Vec<_>>();
+    feeder.unreachable("refused");
+    assert!(daemon().is_empty(), "the stream's failure while `/health` answers is announced nothing");
+    fake.answers_health(false);
+    feeder.read_health();
+    feeder.read_health();
+    assert_eq!(daemon(), ["unreachable"], "a `/health` unanswered, announced once");
+    fake.answers_health(true);
+    feeder.read_health();
+    feeder.read_health();
+    assert_eq!(daemon(), ["running"], "answered again, `running` once");
+    let said = edges();
+    assert!(said.len() == 2 && said[0].contains("board unreachable") && said[1].contains("board running"), "each edge said once: {said:?}");
+    fake.answers_health(false);
+    feeder.read_health();
+    assert_eq!(daemon(), ["unreachable"]);
+    holds.set_node_stopped("b-1", true);
+    feeder.read_health();
+    holds.set_node_stopped("b-1", false);
+    fake.answers_health(true);
+    feeder.tick(10);
+    assert!(daemon().is_empty(), "the start's `running` is the shell's: the feed says none");
 }
 
 /// A board whose index cannot open: every `/op` dial — the consumer's read
@@ -431,34 +531,26 @@ impl Dialer for Unopenable {
 ///
 /// The `search` row says "PURE LOCAL: no board read on the call's path".
 /// The feed thread's start tries the index once and the board does not
-/// answer; a guest search after it answers `state: none`, and a listing the
-/// whole shape with no document, each with no dial of its own. The mutant
-/// that opens the index on the call's path reads the board's head again, a
-/// connect timeout on every keystroke while the board is down.
+/// answer; a listing after it, served once the start has run, answers the
+/// whole shape with no document, and a guest search `state: none`, each with
+/// no dial of its own. The mutant that opens the index on the call's path
+/// reads the board's head again, a connect timeout on every keystroke while
+/// the board is down.
 #[test]
 fn a_search_or_a_listing_dials_nothing_where_no_index_stands() {
     let fake = Arc::new(Unopenable { op_dials: AtomicUsize::new(0) });
     let entry = entry_over(Arc::clone(&fake));
     let store = TempDir::new().unwrap();
     let bus = Arc::new(EventBus::new());
-    let rx = bus.subscribe();
     let threads = FeedThreads::spawn(Arc::clone(&entry), shared_over(&entry, &Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), &bus, &store));
     // The feed thread's start runs before its first command: once the
-    // stream's failure is announced, the start's one try at the index is made.
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let started = loop {
-        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            Ok(event) if event.name == EventName::Daemon && event.data["state"] == "unreachable" => break true,
-            Ok(_) => {}
-            Err(_) => break false,
-        }
-    };
+    // listing is answered, the start's one try at the index is made.
+    let listing = threads.feed().places(Searcher::Guest, None);
     let tried = fake.op_dials.load(Ordering::SeqCst);
     let answer = threads.feed().search(Searcher::Guest, "x", BridgeSearchOpts::default());
-    let listing = threads.feed().places(Searcher::Guest, None);
     let dials = fake.op_dials.load(Ordering::SeqCst);
     threads.stop();
-    assert!(started && tried == 1, "the start tried the index once: {tried}");
+    assert_eq!(tried, 1, "the start tried the index once");
     assert_eq!(answer.map(|v| v["state"]["arm"].clone()), Ok(json!("none")), "the search answers with no index");
     assert_eq!(listing, Ok(json!({"docs": [], "counts": [], "state": {"arm": "none"}})), "the listing answers with no index");
     assert_eq!(dials, tried, "the search or the listing dialed the board");

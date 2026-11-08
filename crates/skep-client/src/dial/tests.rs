@@ -302,12 +302,15 @@ fn hanging_up(answer: &'static [u8]) -> (Origin, thread::JoinHandle<()>) {
 fn a_board_that_hangs_up_is_a_broken_connection_and_bytes_that_are_no_http_are_garbled() {
     let cut: &'static [u8] = b"HTTP/1.1 200 OK\r\nContent-Le";
     let ssh: &'static [u8] = b"SSH-2.0-OpenSSH_9.6\r\n";
-    let judged = |form: &str, answer: &[u8], hung_up: bool, err: DialError| match (err, hung_up) {
-        (DialError::Io(text), true) => {
-            assert!(!text.contains("200 OK") && !text.contains("Content-Le"), "{form} {answer:?}: the text quotes what arrived: {text}");
+    let judged = |form: &str, answer: &[u8], hung_up: bool, err: DialError| {
+        assert_eq!((err.answered(), err.unanswered()), (!hung_up, hung_up), "{form} {answer:?}: a hang-up is no answer, and bytes that are no HTTP are one: {err:?}");
+        match (err, hung_up) {
+            (DialError::Io(text), true) => {
+                assert!(!text.contains("200 OK") && !text.contains("Content-Le"), "{form} {answer:?}: the text quotes what arrived: {text}");
+            }
+            (DialError::Response(_), false) => {}
+            (err, _) => panic!("{form} {:?}: a hang-up {hung_up}, answered {err:?}", String::from_utf8_lossy(answer)),
         }
-        (DialError::Response(_), false) => {}
-        (err, _) => panic!("{form} {:?}: a hang-up {hung_up}, answered {err:?}", String::from_utf8_lossy(answer)),
     };
     for (answer, hung_up) in [(&b""[..], true), (&b"HTTP/1"[..], true), (cut, true), (ssh, false)] {
         let (origin, server) = hanging_up(answer);
@@ -344,6 +347,62 @@ fn a_streamed_head_that_waits_past_its_bound_is_a_timeout() {
     let err = dialer.stream(&origin, &head, &mut io::empty(), &mut |_: &Headers| {}).unwrap_err();
     assert!(matches!(err, DialError::Timeout(_)), "{err}");
     server.join().unwrap();
+}
+
+/// Checks that a silent board's frame exchange ends at its per-call bound.
+///
+/// The board takes the request and sends nothing, the per-call bound 300 ms
+/// and the exchange's deadline the pinned one: the dial is `Timeout`, a
+/// request the board never answered, inside five seconds (the mutant that
+/// arms the read with the exchange's whole deadline waits 42.25 s on every
+/// board that stopped answering).
+#[test]
+fn a_frame_exchange_whose_board_says_nothing_is_a_timeout_at_its_per_call_bound() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let origin = Origin::parse(&format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port())).unwrap();
+    let server = thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        read_request(&mut s);
+        // Silent until the client gives up and closes.
+        s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        let _ = s.read(&mut [0u8; 1]);
+    });
+    let dialer = PlainHttp { io_timeout: Duration::from_millis(300), ..PlainHttp::new() };
+    let began = std::time::Instant::now();
+    let err = dialer.exchange(&origin, &Request::post("/op", b"{}".to_vec())).unwrap_err();
+    let waited = began.elapsed();
+    assert!(matches!(err, DialError::Timeout(_)) && err.unanswered(), "{err:?}");
+    assert!(waited < Duration::from_secs(5), "answered after {waited:?}");
+    server.join().unwrap();
+}
+
+/// Checks that each dial error is an answer, a request unanswered, or neither.
+///
+/// One cell per variant: an answer the dial could not read — bytes that are
+/// no HTTP, an answer past the cap — is an answer; a request the board never
+/// answered is unanswered; and a request refused before any connection
+/// opened is neither, having reached no board (`client.md` §7; the mutant
+/// that reads a timeout or a hang-up as an answer walks the shell's resend on
+/// into a board that is not there, the one that reads a garbled answer as
+/// none ends it on a board that answered, and the one that reads a request
+/// it never made as unanswered holds for ever a burst no probe can send).
+#[test]
+fn every_dial_error_is_an_answer_a_request_unanswered_or_neither() {
+    let cells = [
+        (DialError::NotHeld("https".into()), false, false),
+        (DialError::Resolve("x".into()), false, true),
+        (DialError::Connect("x".into()), false, true),
+        (DialError::Timeout("x".into()), false, true),
+        (DialError::Io("x".into()), false, true),
+        (DialError::Response("x".into()), true, false),
+        (DialError::Truncated { declared: 5, got: 2 }, false, true),
+        (DialError::TooLarge { cap: 1 }, true, false),
+        (DialError::Tls("x".into()), false, true),
+        (DialError::Request("x".into()), false, false),
+    ];
+    for (err, answered, unanswered) in cells {
+        assert_eq!((err.answered(), err.unanswered()), (answered, unanswered), "{err:?}");
+    }
 }
 
 /// A connection attempt past its bound is a connection never made,

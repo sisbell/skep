@@ -47,6 +47,9 @@ pub enum EventName {
     /// A session ended, and the arm its end carried: `session-died`.
     SessionDied,
     /// A board's node started, stopped, or stopped answering: `daemon`.
+    ///
+    /// Its `unreachable` and the `running` after it are the board's `/health`
+    /// verdict alone, never one request's failure (§4b.2; P37; skep #863).
     Daemon,
     /// A row of a board's change feed: `feed`.
     Feed,
@@ -62,10 +65,14 @@ pub enum EventName {
     /// older state of its document (`arrangement_moved`), at its first dial
     /// or at a resend, that the shell could not shift through the change
     /// exactly by the page's anchors (skep #442) — a burst it shifts is sent
-    /// again and lands, no `moved` said — carrying the hands whose rows
-    /// moved the document, read off the rows since the burst's typed state
-    /// or the person's last `send` on the document, whichever is later; the
-    /// resend's read judges only whether a line's own write landed (§3c.5).
+    /// again and lands, no `moved` said, and a shift whose live read the
+    /// board gave no answer to is not tried, no `moved` said either —
+    /// carrying the hands whose rows moved the document, read off the rows
+    /// since the burst's typed state or the person's last `send` on the
+    /// document, whichever is later, or the one hand `unread` where the
+    /// board gave that read no answer, read again at its answer (skep #863);
+    /// the resend's read judges only whether a line's own write landed
+    /// (§3c.5).
     /// Emitted ONCE PER CHANGE of a document's state (skep #727): at a hold's
     /// start, at each line's resolution or drop, and at each state the resend
     /// moves a document through — the same state and count said again for

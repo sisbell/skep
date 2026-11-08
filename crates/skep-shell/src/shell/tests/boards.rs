@@ -1,13 +1,14 @@
 //! Each board's own: its node's state, its feed and the shell's stop.
 //!
-//! The suite checks the own node's state announced at its board — a
-//! deliberate stop said once, its feed adding no `unreachable` while it
-//! stands, while another board's stream failure is still announced, and its
-//! `Running` handing the probe to the board's feed thread; a search held at
-//! one board holding back no call at another; a shell dropped unstopped
-//! closing its sessions and freeing its board's held lock; a board paging
-//! without end holding no stop; and a board down at the open fed from its
-//! first answer, never replaying the history before it.
+//! The suite checks the own node's state announced at its board — a deliberate
+//! stop said once, its feed adding no `unreachable` while it stands, while
+//! another board's stream failure is still announced, and its `Running` handing
+//! the probe to the board's feed thread; the page's `health(board)` read the
+//! board's verdict, ending its silence; a search held at one board holding back
+//! no call at another; a shell dropped unstopped closing its sessions and
+//! freeing its board's held lock; a board paging without end holding no stop;
+//! and a board down at the open fed from its first answer, never replaying the
+//! history before it.
 
 use std::io::{Read, Write};
 
@@ -84,7 +85,8 @@ fn a_deliberate_stop_of_the_own_node_is_said_once() {
     let stopped_at = Instant::now();
     own_sd.shutdown();
     other_sd.shutdown();
-    // The other board's stream fails: `unreachable`, as every board's does.
+    // The other board goes silent: its stream fails, and its `/health` verdict
+    // is `unreachable`, as every board's is.
     wait_for(&seen, |e| e.name == EventName::Daemon && e.data["board"] == other && e.data["state"] == "unreachable");
     thread::sleep((stopped_at + PROBE_CADENCE * 3).saturating_duration_since(Instant::now()));
     assert_eq!(daemon_states(&own), ["stopped"], "a deliberate stop is said once, no unreachable beside it:\n{}", lines.lock().unwrap().join("\n"));
@@ -99,7 +101,7 @@ fn a_deliberate_stop_of_the_own_node_is_said_once() {
     shell.call("op", &json!({"session": session2, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
     wait_for(&seen, |e| e.name == EventName::Feed && e.data["board"] == own && e.data["update"]["class"] == "drafts");
     assert_eq!(daemon_states(&own), ["stopped", "running"], "the restart's running is said once");
-    assert_eq!(daemon_states(&other), ["unreachable"], "the other board's stream failure is announced, and nothing more");
+    assert_eq!(daemon_states(&other), ["unreachable"], "the other board's silence is announced, and nothing more");
     shell.shutdown();
     own_sd.shutdown();
 }
@@ -245,6 +247,83 @@ fn a_search_waiting_on_one_board_holds_back_no_call_at_another() {
     });
     shell.shutdown();
     sd.shutdown();
+}
+
+/// Returns the origin of a board that answers every read and says nothing.
+///
+/// Its `/health` answers a board at position 10 that takes writes, its
+/// `/events` stream stands open and says nothing — no commit, no close —
+/// its `/changes` an empty page at its `since`, and every `/op` an empty
+/// delivery (no `H.1`, so no index opens).
+fn quiet_board() -> String {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let origin = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            thread::spawn(move || {
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    match stream.read(&mut byte) {
+                        Ok(1) => head.push(byte[0]),
+                        _ => return,
+                    }
+                }
+                let head = String::from_utf8_lossy(&head).into_owned();
+                let declared = head.lines().filter_map(|line| line.split_once(':')).find(|(name, _)| name.eq_ignore_ascii_case("content-length")).and_then(|(_, n)| n.trim().parse().ok()).unwrap_or(0);
+                if stream.read_exact(&mut vec![0u8; declared]).is_err() {
+                    return;
+                }
+                let path = head.split_whitespace().nth(1).unwrap_or("").to_string();
+                if path.starts_with("/events") {
+                    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n");
+                    thread::sleep(Duration::from_secs(60));
+                    return;
+                }
+                let answer = if path.starts_with("/changes") {
+                    let since = path.split_once("since=").and_then(|(_, rest)| rest.split('&').next()).and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
+                    json!({"changes": [], "last": since, "more": false})
+                } else if path.starts_with("/health") {
+                    json!({"ok": true, "log_position": 10, "auth": {"claimant": null, "local_trust": true, "origins": [], "signed_origins": []}, "writes": {"halted": false}})
+                } else {
+                    json!({"resp": "delivery", "items": []})
+                };
+                let body = answer.to_string();
+                let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            });
+        }
+    });
+    origin
+}
+
+/// Checks that the page's `health(board)` read is the board's verdict too.
+///
+/// It is §3c.4's THE END: the hold ends at the first answer to a `/health`
+/// (skep #863). The own node stopped, so no probe reads, and the board's
+/// stream open and silent, so no tick does: the hold told the board silent,
+/// the page's `health(board)`, answered, ends that silence by itself (the
+/// mutant that reads the page's `/health` for the page alone keeps the board
+/// silent until the next probe, every burst there held `unreachable`
+/// meanwhile at a board that has just answered).
+#[test]
+fn the_pages_health_read_ends_the_boards_silence() {
+    let dir = TempDir::new().unwrap();
+    let origin = quiet_board();
+    let (talk, _) = talk();
+    let mut opts = ShellOptions::new(vec![Origin::parse(&origin).unwrap()], dir.path().join("store"), SessionMode::Bare { principal: 1 }, talk);
+    opts.own_node = Some(Origin::parse(&origin).unwrap());
+    let shell = Shell::open(opts);
+    let board = shell.board_references().remove(0);
+    // The feed thread's start, its own `/health` read among it, runs before
+    // the search it serves.
+    shell.call("search", &json!({"guest": true, "board": board, "query": "x"})).unwrap();
+    shell.set_node_state(NodeState::Stopped);
+    shell.holds.note_health_read(&board, &Err(Halt::Dial(skep_client::DialError::Timeout("the board takes the read and sends nothing".into()))));
+    assert!(shell.holds.silent(&board), "premise: the board found silent");
+    let health = shell.call("health", &json!({"board": board})).unwrap();
+    assert_eq!(health["health"]["log_position"], 10, "{health}");
+    assert!(!shell.holds.silent(&board), "the page's answered `/health` ends the board's silence");
+    shell.shutdown();
 }
 
 /// Checks that the node's `Running` hands its probe over (§3c.4).

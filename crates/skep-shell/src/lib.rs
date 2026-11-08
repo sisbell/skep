@@ -96,22 +96,28 @@
 //!   store another shell holds, by either of its two locks, read alone, no
 //!   file opened under the other shell's lock (`Holds::another_window`, the
 //!   shell's write door's question), each edge of that state emitted as
-//!   `another-window`; its child `resend` holds the walk the
-//!   feed thread's probe drains in bounded turns: each document read once a
-//!   pass as the walk reaches it, with §3c.5's three outcomes — a moved
-//!   document's hands named — the lines sent in `k` order across the
-//!   documents.
+//!   `another-window`; whether each board answers, by its `/health` verdict
+//!   — a request the board gives no answer to holding every burst there at
+//!   once until that verdict, and a line's two minutes counted across the
+//!   board's answering time alone (skep #863); its child `resend` holds the
+//!   walk the feed thread's probe drains in bounded turns: each document read
+//!   once a pass as the walk reaches it, with §3c.5's three outcomes — a
+//!   moved document's hands named — the lines sent in `k` order across the
+//!   documents, the pass ending at the first request the board gives no
+//!   answer to.
 //! * `feed` — the feed thread per board, its state the feeder:
 //!   `search::Consumer` polled on the `/events` commits, coalesced into one
 //!   waiting read, the published feed read from the head the board first
 //!   answers with, the `/changes` pages re-read to the head by one reader
-//!   for the `feed` events, the `index`, `mode` and `daemon` events as the
-//!   state moves, and the bridge's two calls over the index — `search` and
-//!   the listing `places` — answered off it; it also hands each tick's
-//!   `/health` read to the hold, which reads its `writes.halted`, and runs
-//!   the probe on a deadline of its own, at the tick that ends an announced
-//!   outage and at a hand-over, a drain's turns back to back with the work
-//!   queued behind each served first; and beside the thread, the one read
+//!   for the `feed` events, the `index` and `mode` events as the state
+//!   moves, the `daemon` event as the board's `/health` verdict moves, and
+//!   the bridge's two calls over the index — `search` and the listing
+//!   `places` — answered off it; it also hands every `/health` it reads to
+//!   the hold, which judges by it whether the board answers and reads its
+//!   `writes.halted`, and runs the probe on a deadline of its own, at the
+//!   tick that ends an announced silence and at a hand-over, a drain's turns
+//!   back to back with the work queued behind each served first; and beside
+//!   the thread, the one read
 //!   behind `changes` — the same feed from a position a client names, at its
 //!   session's class.
 //! * `shell` — [`Shell`]: the boards, the sessions, the session mode (bare

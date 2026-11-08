@@ -86,7 +86,20 @@
 //! first failure and never the last, a connection never made starting none,
 //! the deadline the two minutes it is pinned to; its landing kept where the
 //! read finds one, before the hand-over or at the person's `send`; and
-//! "sent again" said once per change of the failure. And THE PERSON's `send`
+//! "sent again" said once per change of the failure. And *the board's
+//! silence* (skep #863): a pass ending at the first request the board gives
+//! no answer to — a send timing out, a hang-up, a connection never made, a
+//! read, a site's read, the head's read — nothing more dialed, read or said
+//! at the documents it did not reach, a burst of another principal's held at
+//! once, and the next turn walking those documents first and the cut one
+//! last; a send so cut its line's own failure only where the next probe
+//! finds the board answering; a line's two minutes paused across the board's
+//! silence, kept, and the hand-over naming the wall time; a resend's shift
+//! whose read goes unanswered untried, its verdict kept and run when the
+//! board answers; a moved face whose hands' read goes unanswered naming them
+//! `unread`, read again at the board's answer; and, over the board's feed
+//! thread, a cut announcing nothing while the board's `/health` answers. And
+//! THE PERSON's `send`
 //! ON A MOVED DOCUMENT (skep #757): a document moved again after it naming
 //! only the hands since, the rows the person acknowledged named no more, and
 //! a line leaving the queue taking the acknowledgment with it, so a later
@@ -2056,6 +2069,269 @@ fn a_connection_never_made_starts_no_clock() {
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
+/// Checks that a pass ends at the first request the board leaves unanswered.
+///
+/// It is §3c.5's end of a pass.
+///
+/// Two documents hold a line each, `DOC`'s first. The board gives no answer to
+/// the walk's first request — `DOC`'s send timing out, the board hanging up on
+/// it, its connection never made, `DOC`'s read, its site's read, or the
+/// probe's read of the board's head — and the pass ends there: nothing reaches
+/// `OTHER`, no dial, no read and no `held` event; a line whose send was cut
+/// goes back to `holding`, `unreachable` with its `sent`, and one whose read
+/// was cut stands as it was; nothing is said of either in the shell's own
+/// window. A burst of another principal's at the board is held `unreachable`
+/// at once, undialed. The board answering again, the next probe walks first
+/// the documents the pass did not reach — `OTHER`, then the other
+/// principal's — and the document it cut last, and keeps every line (the
+/// mutant that walks on past the silence waits out every document's bound;
+/// the one that dials a burst into it waits out the burst's; the one that
+/// starts the next turn at the cut document holds every other document's
+/// words behind a line the board keeps leaving unanswered).
+#[test]
+fn a_pass_ends_at_the_first_request_the_board_gives_no_answer_to() {
+    let cells = ["the send times out", "the board hangs up", "no connection is made", "the read goes unanswered", "the site's read goes unanswered", "the head's read goes unanswered"];
+    for cell in cells {
+        let fake = Fake::new();
+        // The head's read unanswered from the open, so no head is held.
+        let head = cell == "the head's read goes unanswered";
+        fake.head_unreachable.store(head, Ordering::SeqCst);
+        let store = TempDir::new().unwrap();
+        let facts = writer_facts(&store);
+        let g = ground_over(fake, store, facts, 0);
+        let read = matches!(cell, "the read goes unanswered" | "the site's read goes unanswered");
+        g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", read);
+        g.hold(&insert(OTHER, json!(["b"]), g.fake.head()), "behind", false);
+        match cell {
+            "the send times out" => g.fake.op_lost.next(1, Lost::Timeout),
+            "the board hangs up" => g.fake.op_lost_at.store(1, Ordering::SeqCst),
+            "no connection is made" => g.fake.op_unreachable.store(true, Ordering::SeqCst),
+            "the read goes unanswered" => g.fake.changes_unanswered.store(true, Ordering::SeqCst),
+            "the site's read goes unanswered" => {
+                *g.fake.rows.lock().unwrap() = vec![json!({"at": 60, "op": "insert", "key": g.own_key(), "docs": [DOC]})];
+                g.fake.site_unread.store(true, Ordering::SeqCst);
+            }
+            _ => {}
+        }
+        let before = g.lines();
+        let _ = g.states();
+        g.holds.probe("b-1");
+        let dialed = |doc: &str| g.fake.sends.lock().unwrap().iter().filter(|frame| frame["doc"] == doc).count();
+        assert_eq!((dialed(OTHER), g.fake.changes_reads.load(Ordering::SeqCst)), (0, usize::from(read)), "{cell}: nothing dialed or read at `OTHER`");
+        let said: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).collect();
+        said.iter().for_each(assert_held_event_declared);
+        assert!(said.iter().all(|e| e["doc"] == DOC), "{cell}: no `held` event at `OTHER`: {said:?}");
+        let lines = g.lines();
+        if matches!(cell, "the send times out" | "the board hangs up" | "no connection is made") {
+            assert_eq!((lines[0]["cause"].as_str(), lines[0]["sent"].as_bool()), (Some("unreachable"), Some(true)), "{cell}: back to holding with its `sent`: {lines:?}");
+            let states: Vec<&str> = said.iter().filter_map(|e| e["state"].as_str()).collect();
+            assert_eq!(states, ["sending", "holding"], "{cell}");
+        } else {
+            assert_eq!(lines, before, "{cell}: the line as it was");
+            assert!(said.is_empty(), "{cell}: nothing said of the document: {said:?}");
+        }
+        assert!(said_containing(&g, "was not taken").is_empty(), "{cell}: nothing said of the line: {:?}", g.said.lock().unwrap());
+        // Another principal's burst is held at once, the verdict pending.
+        let open = Open { token: Token::parse(&"8e".repeat(16)).unwrap(), facts: writer_facts_as(&g.store, 2, "1.0.2"), opened_at: 0 };
+        let second = g.sessions.register(&g.entry, open, &mut NoSupplements);
+        g.holds.open_session(&second);
+        let sends = g.fake.sends();
+        let OpAnswer::Answered(Ok(held)) = g.holds.send(&second, insert("1.0.2.0.1", json!(["c"]), g.fake.head()), None) else { panic!("{cell}: held") };
+        assert_eq!((held["cause"].as_str(), g.fake.sends()), (Some("unreachable"), sends), "{cell}: held at once, undialed: {held}");
+        // The board answers again.
+        g.fake.op_lost_at.store(0, Ordering::SeqCst);
+        for arm in [&g.fake.op_unreachable, &g.fake.changes_unanswered, &g.fake.site_unread, &g.fake.head_unreachable] {
+            arm.store(false, Ordering::SeqCst);
+        }
+        g.fake.sends.lock().unwrap().clear();
+        g.holds.probe("b-1");
+        let order: Vec<String> = g.fake.sends.lock().unwrap().iter().map(|frame| frame["doc"].as_str().unwrap_or("?").to_string()).collect();
+        let want = if head { [DOC, OTHER, "1.0.2.0.1"] } else { [OTHER, "1.0.2.0.1", DOC] };
+        assert_eq!(order, want, "{cell}: the documents the pass did not reach first, the cut one last");
+        assert!(g.lines().is_empty() && g.holds.lines(&second).unwrap().as_array().unwrap().is_empty(), "{cell}: every line kept");
+    }
+}
+
+/// Checks that an unanswered send fails its line only if the board answers.
+///
+/// The board answering is the next probe's verdict (§3c.4).
+///
+/// A line's resend times out. Where the probe after it finds the board
+/// answering, the send was the line's own failure: its clock runs from that
+/// send, its "not taken" said once at that probe and never at the cut, and
+/// two minutes after the send that probe's read hands the line to the person,
+/// undialed. Where the probe after it finds the board silent, the send was
+/// the board's silence: no clock starts and nothing is said, and ten minutes
+/// on, the board answering, the line is read, sent and kept, never handed
+/// over (the mutant that notes the cut's failure at once hands a stalled
+/// board's line to the person; the one that never notes it resends a frame
+/// the board chokes on for ever).
+#[test]
+fn an_unanswered_sends_failure_counts_only_where_the_next_probe_finds_the_board_answering() {
+    for silent in [false, true] {
+        let g = ground();
+        g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+        g.fake.op_lost.next(1, Lost::Timeout);
+        g.holds.probe("b-1");
+        assert!(said_containing(&g, "was not taken").is_empty(), "silent {silent}: nothing said at the cut");
+        if silent {
+            g.fake.health_unanswered.store(true, Ordering::SeqCst);
+            g.holds.probe("b-1");
+            g.holds.advance(Duration::from_secs(600));
+            g.fake.health_unanswered.store(false, Ordering::SeqCst);
+            g.holds.probe("b-1");
+            assert!(g.lines().is_empty() && g.fake.sends() == 2, "the board answering, read, sent and kept, never handed over: {:?}", g.lines());
+            assert!(said_containing(&g, "was not taken").is_empty(), "the board's silence says nothing of the line: {:?}", g.said.lock().unwrap());
+        } else {
+            g.holds.advance(HAND_OVER_DEADLINE + Duration::from_secs(1));
+            g.holds.probe("b-1");
+            let lines = g.lines();
+            assert_eq!((g.fake.sends(), lines[0]["cause"].as_str()), (1, Some("answers_lost")), "the line's own failure, two minutes past: handed over undialed: {lines:?}");
+            assert_eq!(said_containing(&g, "was not taken").len(), 1, "said once, at the verdict: {:?}", g.said.lock().unwrap());
+        }
+    }
+}
+
+/// Checks that a line's two minutes run only while the board answers (§3c.4).
+///
+/// A line's resend answered garbled starts its clock; the next resend times
+/// out, and the probe after it finds the board silent, ten minutes passing
+/// while it stays so. The board answering again, the line's read finds no
+/// landing and the line is resent, never handed over: its count paused across
+/// the silence and kept. Two minutes more of the board answering, the next
+/// read hands it to the person, naming the wall time since its first failed
+/// send, past the ten minutes (the mutant that runs the clock through the
+/// silence hands it over at the first read after it; the one that resets it
+/// at the silence lets a board that flaps postpone the hand-over for ever).
+#[test]
+fn a_lines_two_minutes_run_only_while_the_board_answers() {
+    let g = ground();
+    g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    g.fake.op_lost.next(1, Lost::Garbled);
+    g.holds.probe("b-1");
+    g.fake.op_lost.next(1, Lost::Timeout);
+    g.holds.probe("b-1");
+    g.fake.health_unanswered.store(true, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    g.holds.advance(Duration::from_secs(600));
+    g.holds.probe("b-1");
+    g.fake.health_unanswered.store(false, Ordering::SeqCst);
+    g.fake.op_lost.every(Lost::Garbled);
+    g.holds.probe("b-1");
+    let lines = g.lines();
+    assert_eq!((g.fake.sends(), lines[0]["cause"].as_str()), (3, Some("unreachable")), "the silence paused its count: resent, never handed over: {lines:?}");
+    g.holds.advance(HAND_OVER_DEADLINE);
+    g.holds.probe("b-1");
+    let lines = g.lines();
+    assert_eq!((g.fake.sends(), lines[0]["cause"].as_str()), (3, Some("answers_lost")), "two minutes of the board answering: handed over: {lines:?}");
+    let elapsed = lines[0]["refusal"]["elapsed_ms"].as_u64().unwrap();
+    assert!(elapsed >= 720_000, "the wall time since its first failed send: {}", lines[0]["refusal"]);
+}
+
+/// Checks that a resend's shift is untried until its image read is answered.
+///
+/// It is §3c.5's THE SHIFT (2).
+///
+/// An anchored line the board refuses as typed against an older state meets
+/// no answer to the shift's live read: the shift is not tried and the
+/// document never faced moved — nothing said of a shift, the line back to
+/// `holding`, `unreachable` with its `sent`, no refusal beside it — and the
+/// pass ends there. The board answering, the next probe runs the shift from
+/// the verdict it kept, no stale frame dialed first: one image read more, the
+/// shifted dial, the line kept (the mutant that faces the unanswered read
+/// `moved` asks the person to place words a read never saw; the one that
+/// drops the verdict dials the stale frame again first).
+#[test]
+fn a_resends_shift_whose_image_read_goes_unanswered_holds_the_line_and_shifts_it_when_the_board_answers() {
+    let g = ground();
+    let typed = g.fake.head();
+    *g.fake.image.lock().unwrap() = vec![run(&i(10), 2), run(&i(1), 3)];
+    g.hold_anchored(&insert_at(DOC, 2, json!(["x"]), typed), anchors(Some(&i(1)), Some(&i(2))), "unreachable", false);
+    g.fake.move_arrangement(DOC, 77);
+    g.fake.image_unread.store(true, Ordering::SeqCst);
+    let _ = g.states();
+    g.holds.probe("b-1");
+    let lines = g.lines();
+    assert_eq!((g.fake.sends(), g.fake.image_reads.load(Ordering::SeqCst)), (1, 1), "refused stale, its shift's read unanswered");
+    assert_eq!((lines[0]["cause"].as_str(), lines[0]["sent"].as_bool(), lines[0].get("refusal")), (Some("unreachable"), Some(true), None), "back to holding with its `sent`: {lines:?}");
+    assert_eq!(g.states(), ["sending", "holding"], "never faced moved");
+    assert!(said_containing(&g, "not shifted").is_empty(), "nothing said of a shift: {:?}", g.said.lock().unwrap());
+    g.fake.image_unread.store(false, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    let sent = g.fake.sends.lock().unwrap().clone();
+    assert_eq!((sent.len(), g.fake.image_reads.load(Ordering::SeqCst)), (2, 2), "the kept verdict's shift, no stale frame dialed first: {sent:?}");
+    assert_eq!((sent[1]["at"]["ordinal"].as_str(), sent[1]["as_of"].as_u64()), (Some("4"), Some(77)), "shifted by the one displacement, typed at the read's state: {sent:?}");
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
+}
+
+/// Checks that a moved face's unanswered hands are said unread, then named.
+///
+/// It is §3c.5's THE SHIFT (6).
+///
+/// A line without anchors the board refuses as typed against an older state
+/// is held moved on that verdict; its read of the hands that moved the
+/// document goes unanswered, and the moved face stands with its hands not
+/// read — the one hand `unread`, never `lost` — and the pass ends there. The
+/// board answering, the walk reads the hands again as it meets the document
+/// and says the face once more, naming the other writer's hand; the line
+/// awaits the person's act, sent no more (the mutant that reads the
+/// unanswered hands as none names nobody where the board lost nothing; the
+/// one that never reads them again leaves the face without its hand).
+#[test]
+fn a_moved_face_whose_hands_read_goes_unanswered_says_hands_not_read_and_names_them_when_the_board_answers() {
+    let ff = "ff".repeat(32);
+    let g = ground();
+    let typed = g.fake.head();
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": ff, "docs": [DOC]})];
+    g.hold(&insert_at(DOC, 2, json!(["x"]), typed), "unreachable", false);
+    g.fake.move_arrangement(DOC, 77);
+    g.fake.changes_unanswered.store(true, Ordering::SeqCst);
+    let _ = g.states();
+    let held = |g: &Ground| -> Vec<Value> {
+        let said: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).collect();
+        said.iter().for_each(assert_held_event_declared);
+        said
+    };
+    g.holds.probe("b-1");
+    let said = held(&g);
+    let moved = said.iter().find(|e| e["state"] == "moved").unwrap_or_else(|| panic!("faced moved on the board's verdict: {said:?}"));
+    assert_eq!(moved["hands"], json!([{"key": "unread"}]), "its hands not read: {moved}");
+    let lines = g.lines();
+    assert_eq!((lines[0]["cause"].as_str(), &lines[0]["refusal"]), (Some("moved"), &arrangement_moved_on("insert", typed, 77)), "{lines:?}");
+    g.fake.changes_unanswered.store(false, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    let said = held(&g);
+    assert_eq!(said.len(), 1, "the face said once more: {said:?}");
+    assert_eq!((&said[0]["state"], &said[0]["hands"]), (&json!("moved"), &json!([{"key": "other", "fingerprint": ff}])), "the hand named: {said:?}");
+    assert_eq!(g.fake.sends(), 1, "the line awaits the person's act");
+}
+
+/// Checks that a cut pass announces nothing while the `/health` answers.
+///
+/// It is §4b.2's `daemon` event (P37).
+///
+/// Over the board's feed thread, every send of a held line times out while
+/// the board answers its `/health`: each probe's pass ends at the send, and
+/// the verdict after it finds the board answering — the line's own failure —
+/// so no `daemon` event goes out, the commit stream's failure beside them
+/// announcing nothing either (the mutant that announces a request's failure
+/// flickers "unreachable" over a board that answers).
+#[test]
+fn a_pass_the_boards_silence_cut_announces_nothing_while_its_health_answers() {
+    let g = ground();
+    g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    g.fake.op_lost.every(Lost::Timeout);
+    let threads = feed_threads(&g);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while g.fake.sends() < 2 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+    threads.stop();
+    assert!(g.fake.sends() >= 2, "two probes sent the line");
+    let daemon: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Daemon).map(|e| e.data).collect();
+    assert!(daemon.is_empty(), "no `daemon` event: {daemon:?}");
+}
+
 /// Checks that a line that may have landed stays so through resends that
 /// never left.
 ///
@@ -2283,11 +2559,12 @@ fn the_first_dials_connection_never_made_starts_no_clock() {
 /// dial is resent at seven probes: three answers lost — a timeout, a garbled
 /// answer, the board's handler panicking, one failure — then three
 /// `write_busy`, the first reissued and the two past its reissue held
-/// `unreachable`, then a `durability` reissued. The shell's window says "it is sent again at the next
-/// probe" three times: at the first lost answer, at the first `write_busy` and
-/// at the `durability`, each a change of the failure; the probes failing alike
-/// say nothing more (the mutant that says it at every probe fills the log with
-/// seven).
+/// `unreachable`, then a `durability` reissued. The shell's window says "it is
+/// sent again" three times: at the first lost answer — the timeout, said as the
+/// next probe finds the board answering (skep #863) — at the first
+/// `write_busy` and at the `durability`, each a change of the failure; the
+/// probes failing alike say nothing more (the mutant that says it at every
+/// probe fills the log with seven).
 #[test]
 fn sent_again_is_said_once_per_change_of_the_failure() {
     let g = ground();
@@ -2306,7 +2583,7 @@ fn sent_again_is_said_once_per_change_of_the_failure() {
     assert_eq!((g.fake.sends(), g.lines().len()), (7, 1), "seven probes, the line standing");
     let said = g.said.lock().unwrap().clone();
     let line = format!("held: line {k} on {DOC} was not taken (");
-    let again: Vec<&String> = said.iter().filter(|l| l.starts_with(&line) && l.ends_with("it is sent again at the next probe")).collect();
+    let again: Vec<&String> = said.iter().filter(|l| l.starts_with(&line) && (l.ends_with("it is sent again at the next probe") || l.ends_with("it is sent again as the board answers"))).collect();
     assert_eq!(again.len(), 3, "once per change: {said:?}");
     assert!(again[0].contains("unreachable") && again[1].contains("write_busy") && again[2].contains("durability"), "{again:?}");
 }
@@ -2693,8 +2970,9 @@ fn a_line_leaving_the_queue_takes_the_persons_acknowledgment_with_it() {
     assert_eq!((g.lines()[0]["cause"].as_str(), face()), (Some("moved"), Some(both)), "the later line's first face names every hand since its typed state");
 }
 
-/// Checks that an anchored resend after the person's `send` is shifted and
-/// kept (§3c.4; skep #757).
+/// Checks that an anchored resend after the person's `send` is shifted, kept.
+///
+/// It is §3c.4's raise (skep #757).
 ///
 /// A held delete of `b` and `c` — `Wabc` as the page read it, its `before`
 /// anchor `a`, no `after`, its span the I-run of `b` and `c` — its first
@@ -2702,7 +2980,7 @@ fn a_line_leaving_the_queue_takes_the_persons_acknowledgment_with_it() {
 /// and as the resend reaches the board the person's own other delete, of
 /// `W` — made not through this shell, the `skep` command's — lands and moves
 /// the document: the resend is refused as typed against an older state, the
-/// shift's image read goes unanswered, and the document is held moved, the
+/// shift's image read is refused, and the document is held moved, the
 /// person's own hand named. The person's `send` acknowledges the rows the
 /// verdict read through, the base raised to that delete's position; the
 /// next probe's read starts past it — a row of the head's own hand and kind,
@@ -2730,7 +3008,7 @@ fn after_the_persons_send_an_anchored_resend_whose_span_is_whole_is_shifted_and_
             fake.move_arrangement(DOC, at);
         }
     }));
-    g.fake.image_unread.store(true, Ordering::SeqCst);
+    g.fake.image_refused.store(true, Ordering::SeqCst);
     g.holds.probe("b-1");
     let lines = g.lines();
     let current = lines[0]["refusal"]["site"]["current"].as_u64().expect("the verdict's position");
@@ -2738,12 +3016,12 @@ fn after_the_persons_send_an_anchored_resend_whose_span_is_whole_is_shifted_and_
     assert_eq!(
         (g.fake.sends(), lines[0]["cause"].as_str(), lines[0]["sent"].as_bool(), lines[0]["base"].as_u64()),
         (1, Some("moved"), Some(true), Some(0)),
-        "refused stale, its image unread: held moved: {lines:?}"
+        "refused stale, its image read refused: held moved: {lines:?}"
     );
     let moved = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).find(|d| d["state"] == "moved").expect("the document faced moved");
     assert_eq!(moved["hands"], json!([{"key": "own", "fingerprint": g.own_key()}]), "the person's own other delete: {moved}");
     *g.fake.at_send.lock().unwrap() = None;
-    g.fake.image_unread.store(false, Ordering::SeqCst);
+    g.fake.image_refused.store(false, Ordering::SeqCst);
     assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap(), Resolved::HandedBack);
     assert_eq!(g.lines()[0]["base"].as_u64(), Some(current), "the base raised past the person's own other delete");
     let _ = g.states();
@@ -2860,25 +3138,27 @@ fn at_the_heads_first_read_the_pending_lines_join_and_are_sent_in_order() {
     assert!(joined.len() == 1 && joined[0].contains("3 held lines joined") && !joined[0].contains("renumbered"), "{joined:?}");
 }
 
-/// Checks that an earlier run's held file first read at the join, holding
-/// an ordinal this run has answered, takes fresh ordinals past this run's
-/// and walks after them (skep #856; the owner's ruling of 2026-11-06).
+/// Checks that an earlier run's line read at the join walks after this run's.
+///
+/// The earlier run's held file, first read at the join, holds an ordinal this
+/// run has answered: it takes fresh ordinals past this run's and walks after
+/// them (skep #856; the owner's ruling of 2026-11-06).
 ///
 /// An earlier run left a line in the board's own file under ordinal 1; this
-/// run, the head unreadable at its first touch — the board's file not
-/// nameable then — holds two lines on the pending file under ordinals 1 and
-/// 2, which the page holds. At the head's first read the board's file is
-/// read for the first time: its line stands under an ordinal this run's
-/// lines hold, so it is renumbered past them, 3, by one copy — its `done`
-/// and its `held` under the fresh ordinal — and this run's lines enter
-/// under 1 and 2 as answered; the join is said once, naming the line
-/// renumbered past them; no `held` event is re-said for the join; the
-/// pending file is gone. The walk then sends this run's lines first and the
-/// earlier run's after them, in `k` order (the mutant that renumbers this
-/// run's lines behind the earlier one re-targets the ordinals the page
-/// holds; the one that keeps the earlier line's ordinal re-marks it with
-/// this run's line and loses it; the one that re-says `held` tells the page
-/// to re-read ordinals that never moved).
+/// run, the head unreadable at its first touch — the board's file not nameable
+/// then — holds two lines on the pending file under ordinals 1 and 2, which the
+/// page holds. At the head's first read the board's file is read for the first
+/// time: its line stands under an ordinal this run's lines hold, so it is
+/// renumbered past them, 3, by one copy — its `done` and its `held` under the
+/// fresh ordinal — and this run's lines enter under 1 and 2 as answered; the
+/// join is said once, naming the line renumbered past them; no `held` event is
+/// re-said for the join; the pending file is gone — the board too busy for the
+/// dial meanwhile, an answer, so the pass walks every line. The walk then sends
+/// this run's lines first and the earlier run's after them, in `k` order (the
+/// mutant that renumbers this run's lines behind the earlier one re-targets the
+/// ordinals the page holds; the one that keeps the earlier line's ordinal
+/// re-marks it with this run's line and loses it; the one that re-says `held`
+/// tells the page to re-read ordinals that never moved).
 #[test]
 fn an_earlier_runs_file_first_read_at_the_join_takes_fresh_ordinals_past_this_runs_and_walks_after_them() {
     let store = TempDir::new().unwrap();
@@ -2898,9 +3178,10 @@ fn an_earlier_runs_file_first_read_at_the_join_takes_fresh_ordinals_past_this_ru
     let ks = |g: &Ground| g.lines().iter().map(|l| (l["held"].as_u64().unwrap(), l["doc"].as_str().unwrap().to_string())).collect::<Vec<_>>();
     assert_eq!(ks(&g), [(1, OTHER.to_string()), (2, OTHER.to_string())], "the pending file's ordinals, the page's");
     let _ = g.states();
-    // The head reads, the board away for the dial: the lines stand to be read.
+    // The head reads, the board too busy for the dial — an answer, so the
+    // pass walks every line, and the lines stand to be read.
     g.fake.head_garbled.store(false, Ordering::SeqCst);
-    g.fake.op_unreachable.store(true, Ordering::SeqCst);
+    g.fake.op_refused.every((503, json!({"error": "write_busy"})));
     g.holds.probe("b-1");
     assert_eq!(ks(&g), [(1, OTHER.to_string()), (2, OTHER.to_string()), (3, DOC.to_string())], "this run's ordinals kept, the earlier run's line renumbered past them");
     let events: Vec<(String, String, u64)> = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| (e.data["doc"].as_str().unwrap().to_string(), e.data["state"].as_str().unwrap().to_string(), e.data["held"].as_u64().unwrap())).collect();
@@ -2911,8 +3192,10 @@ fn an_earlier_runs_file_first_read_at_the_join_takes_fresh_ordinals_past_this_ru
     let on_disk = file_lines(&std::fs::read_to_string(held_file(&g)).unwrap());
     let disk_ks: Vec<u64> = on_disk.iter().map(|l| l["held"].as_u64().unwrap()).collect();
     assert_eq!(&disk_ks[..4], [1, 3, 1, 2], "the earlier line, its copy under 3, then this run's two, the copy after every line the file held: {disk_ks:?}");
-    // The board answers: this run's lines go first, the earlier run's after.
-    g.fake.op_unreachable.store(false, Ordering::SeqCst);
+    // The board takes writes: this run's lines go first, the earlier run's
+    // after.
+    g.fake.op_refused.clear();
+    g.fake.sends.lock().unwrap().clear();
     while g.holds.probe("b-1") == Turn::Bounded {}
     let sent: Vec<String> = g.fake.sends.lock().unwrap().iter().map(|f| f["values"][0].as_str().unwrap_or("?").to_string()).collect();
     assert_eq!(sent, ["x", "y", "earlier"], "this run's lines first, the earlier run's after them");
@@ -3060,7 +3343,8 @@ fn out_of_bounds() -> Value {
 /// the session's open, a refused run's head is held in memory under ordinal 1
 /// and dropped by the person, and a burst is held under 2; an earlier run's
 /// held file stands under the board's chain, holding one line, on another
-/// document, under 1. The board is then claimed, away for the dial: the probe's
+/// document, under 1. The board is then claimed, too busy for the dial — an
+/// answer, so the pass walks every line: the probe's
 /// join reads the board's file for the first time, finds its line under 1 —
 /// below the counter, though no line of this run's stands there — and renumbers
 /// it past this run's, to 3, the join said once naming the line renumbered;
@@ -3085,13 +3369,14 @@ fn an_ordinal_settled_before_the_join_names_no_earlier_runs_line_and_the_earlier
     assert_eq!(standing["held"], 2, "the ordinals run on past the settled one: {standing}");
     g.fake.no_head.store(false, Ordering::SeqCst);
     g.fake.unclaimed.store(false, Ordering::SeqCst);
-    g.fake.op_unreachable.store(true, Ordering::SeqCst);
+    g.fake.op_refused.every((503, json!({"error": "write_busy"})));
     g.holds.probe("b-1");
     assert_eq!(ordinals(&g), [(2, "y".to_string()), (3, "earlier".to_string())], "the earlier run's line renumbered past every ordinal this run gave out");
     assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap_err().name(), "no_such_held", "the settled ordinal names no line");
     let joined = said_containing(&g, "joined the board's held file");
     assert!(joined.len() == 1 && joined[0].contains("1 held line joined") && joined[0].contains("the 1 line an earlier run left in it is renumbered past this run's ordinals"), "{joined:?}");
-    g.fake.op_unreachable.store(false, Ordering::SeqCst);
+    g.fake.op_refused.clear();
+    g.fake.sends.lock().unwrap().clear();
     while g.holds.probe("b-1") == Turn::Bounded {}
     assert_eq!(sent_values(&g), ["y", "earlier"], "this run's line first, the earlier run's after it");
     assert!(g.lines().is_empty(), "every line kept");

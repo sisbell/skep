@@ -134,7 +134,7 @@ use crate::dev_arm::DevArm;
 use crate::events::{Event, EventBus, EventName};
 use crate::feed::{answer_without_index, changes_since, places_without_index, query_too_long, BridgeSearchOpts, ChangesRead, Feed, FeedThreads, Searcher, Shared};
 use crate::held::Anchors;
-use crate::hold::{AtDeath, Holds, OpAnswer, ResolveAct, Resolved};
+use crate::hold::{AtDeath, Holds, OpAnswer, ResolveAct, Resolved, Verdict};
 use crate::log::{CallOutcome, Log, ShellDialer};
 use crate::person::{Answerer, Pending};
 use crate::refs::{session_run, BoardEntry};
@@ -934,7 +934,7 @@ impl Shell {
     /// process"); a shell that runs no node has none to report. A deliberate
     /// stop is said here once: while it stands the board's feed announces no
     /// `unreachable` of its own, and `Running` here is the one `running`
-    /// (`feed.rs`'s `unreachable`). `Running` ends the hold at the node's
+    /// (`feed.rs`'s `announce`). `Running` ends the hold at the node's
     /// board and hands the board's feed thread its probe, as `resolve(send)`
     /// hands it: the caller waits on no dial.
     pub fn set_node_state(&self, state: NodeState) {
@@ -1235,7 +1235,11 @@ impl Shell {
 
     /// Answers `health(board)` with `{health, mode}`.
     ///
-    /// They are the `/health` document verbatim and the derived mode.
+    /// They are the `/health` document verbatim and the derived mode. The
+    /// read is the board's verdict too, handed to the hold as the probe's is
+    /// (`Holds::note_health_read`; skep #863): a board found answering here
+    /// ends its silence at once, so a burst after it is dialed, and one this
+    /// read finds silent holds every burst there until a `/health` answers.
     ///
     /// # Errors
     ///
@@ -1243,15 +1247,22 @@ impl Shell {
     /// `/health` read's refusal: the board's, or `unreachable`.
     fn health(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
-        let health = entry.board.health()?;
+        let read = entry.board.health();
+        self.holds.note_health_read(&entry.reference, &read);
+        let health = read?;
         Ok(json!({"health": health.body, "mode": Mode::of(&health).name()}))
     }
 
     /// Answers `probe()` with `{daemon, dialed, signed}`.
     ///
     /// It is the own node's state where the shell runs one — `stopped` where
-    /// its owner stopped it, `unreachable` where it does not answer, `running`
-    /// else — and the first board's reachability where it runs none.
+    /// its owner stopped it, `unreachable` where its `/health` goes
+    /// unanswered or reaches no board, its scheme one this build does not
+    /// hold, `running` where the board answers it, a refusal among the
+    /// answers — and the first board's reachability where it runs none. The
+    /// read is the board's verdict, handed to the hold as the probe's is
+    /// (`Holds::note_health_read`; skep #863), so this answer and the `daemon`
+    /// event agree.
     fn probe(&self) -> Value {
         let entry = match &self.own_node_reference {
             Some(board_reference) => self.boards.iter().find(|entry| &entry.reference == board_reference),
@@ -1260,10 +1271,10 @@ impl Shell {
         let Some(entry) = entry else { return json!({"daemon": "unreachable", "dialed": null, "signed": null}) };
         let state = if self.holds.node_stopped(&entry.reference) {
             "stopped"
-        } else if entry.board.health().is_ok() {
-            "running"
-        } else {
+        } else if matches!(self.holds.note_health_read(&entry.reference, &entry.board.health()), Verdict::Silent | Verdict::Undialed) {
             "unreachable"
+        } else {
+            "running"
         };
         json!({"daemon": state, "dialed": entry.board.dialed().as_str(), "signed": entry.board.signed().as_str()})
     }

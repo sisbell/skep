@@ -370,18 +370,21 @@ pub(crate) fn garble_the_next_head_read_on_this_thread() {
     GARBLE_THE_NEXT_HEAD_READ.with(|garbled| garbled.set(true));
 }
 
-/// Splits a read's dial error: a garbled answer is the board's, the rest is
-/// the board away (skep #728).
+/// Splits a read's dial error: a garbled answer is the board's (skep #728).
+///
+/// The rest is the board away.
 ///
 /// `read` names what was read, for the garbled face's cause: the board
-/// answered, and its answer was no HTTP, no JSON or past the cap, so the
-/// fault is `head_unreadable`'s; a connection never made, a timeout, a
-/// connection closed before the answer's head was whole or an answer cut
-/// short says nothing of the head, and is `unreachable`.
+/// answered (`DialError::answered`), and its answer was no HTTP, no JSON or
+/// past the cap, so the fault is `head_unreadable`'s; a request the board
+/// never answered — a connection never made, a timeout, a connection closed
+/// before the answer's head was whole or an answer cut short — says nothing
+/// of the head, and is `unreachable`.
 fn garbled_or_away(e: DialError, read: &str) -> Refusal {
-    match e {
-        DialError::Response(_) | DialError::TooLarge { .. } => head_unreadable(format!("{read} served garbled: {e}")),
-        other => Refusal::Unreachable(other),
+    if e.answered() {
+        head_unreadable(format!("{read} served garbled: {e}"))
+    } else {
+        Refusal::Unreachable(e)
     }
 }
 

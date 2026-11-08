@@ -637,9 +637,11 @@ pub(super) fn recording_listener() -> (String, Arc<Mutex<Vec<Value>>>) {
 /// while a listener at its board records no write frame; its read is
 /// dialed, and `resolve`'s `drop`, which commits nothing to the board, is
 /// answered as the line's absence; a signed session's write at the same
-/// board is dialed (the mutant that refuses in the guest form alone sends
-/// the bare session's write unattested, for the board to commit as `bare`;
-/// the one that fences the `op` form alone sends its `/op-at` form).
+/// board is dialed — a write the hold never holds, dialed whatever the
+/// board's `/health` verdict, which this listener leaves unanswered
+/// (skep #863) — (the mutant that refuses in the guest form alone sends the
+/// bare session's write unattested, for the board to commit as `bare`; the
+/// one that fences the `op` form alone sends its `/op-at` form).
 #[test]
 fn a_bare_sessions_write_is_refused_before_any_dial() {
     let dir = TempDir::new().unwrap();
@@ -665,18 +667,19 @@ fn a_bare_sessions_write_is_refused_before_any_dial() {
     assert_eq!(shell.call("resolve", &json!({"session": bare, "held": 1, "act": "drop"})).unwrap_err().name(), "no_such_held", "a drop commits nothing to the board, and stands");
     let read = json!({"op": "doc_metadata", "doc": "1.0.1.0.1"});
     assert_eq!(shell.call("op", &json!({"session": bare, "frame": read})).unwrap_err().name(), "unreachable", "a read is dialed");
-    let delete = json!({"op": "delete", "doc": "1.0.2.0.1", "p": {"subspace": "1", "ordinal": "1"}, "width": "1"});
-    let held = shell.call("op", &json!({"session": signed, "frame": delete})).unwrap();
-    assert_eq!(held["resp"], "held", "the signed session's write is dialed, its answer lost: {held}");
+    let set = json!({"op": "set_arrangement", "doc": "1.0.2.0.1", "runs": [], "as_of": 0});
+    let unanswered = shell.call("op", &json!({"session": signed, "frame": set})).unwrap_err();
+    assert_eq!(unanswered.name(), "unreachable", "the signed session's write is dialed, its answer lost: {unanswered}");
     let recorded = frames.lock().unwrap().clone();
     let writes: Vec<&Value> = recorded.iter().filter(|f| f["op"].as_str().is_some_and(|op| WRITE_KINDS.contains(&op))).collect();
-    assert_eq!(writes, [&delete], "the signed session's write alone reached the board: {recorded:?}");
+    assert_eq!(writes, [&set], "the signed session's write alone reached the board: {recorded:?}");
     assert!(recorded.contains(&read), "the bare session's read reached it: {recorded:?}");
 }
 
-/// Checks the order of the shell's one write door's four questions, with no
-/// daemon behind the shell (`Shell::write_door`; the held store's shape
-/// (vi) item 4).
+/// Checks the order of the shell's one write door's four questions.
+///
+/// No daemon stands behind the shell (`Shell::write_door`; the held store's
+/// shape (vi) item 4).
 ///
 /// Shell A's session opens at a board that answers nothing: its head unread,
 /// A takes the board's pending store. Shell B over the same data directory
@@ -690,10 +693,12 @@ fn a_bare_sessions_write_is_refused_before_any_dial() {
 /// the listener; A's node running — the line standing still, the board
 /// taking no write — the same restore is refused `held_lines` naming the
 /// draft and the one line, no read of the draft reaching the listener, and
-/// a further burst on the draft is held `behind` the line, not refused (the
-/// mutants that ask the questions in another order answer a stopped second
-/// window `stopped`, or a stopped node's standing line `held_lines`; the one
-/// that gates the bursts refuses the person's next key).
+/// a further burst on the draft is held, not refused — `unreachable`, the
+/// listener leaving every `/health` unanswered, so the board silent
+/// (skep #863) — (the mutants that ask the questions in another order answer
+/// a stopped second window `stopped`, or a stopped node's standing line
+/// `held_lines`; the one that gates the bursts refuses the person's next
+/// key).
 #[test]
 fn the_write_door_asks_its_four_questions_in_one_order() {
     let dir = TempDir::new().unwrap();
@@ -757,8 +762,13 @@ fn the_write_door_asks_its_four_questions_in_one_order() {
     assert_eq!((refused["name"].as_str(), refused["kind"].as_str(), refused["doc"].as_str(), refused["held"].as_u64()), (Some("held_lines"), Some("shell"), Some(draft), Some(1)), "{refused}");
     let read_of_the_draft: Vec<Value> = frames.lock().unwrap()[own..].iter().filter(|f| f["op"] == "doc_metadata" || f["op"] == "set_arrangement").cloned().collect();
     assert!(read_of_the_draft.is_empty(), "the gate answers before any read of the draft: {read_of_the_draft:?}");
-    let behind = a.call("op", &json!({"session": a_session, "frame": delete("2")})).unwrap();
-    assert_eq!((behind["resp"].as_str(), behind["cause"].as_str()), (Some("held"), Some("behind")), "a burst on the draft is held behind the line, never refused: {behind}");
+    // The listener answers no `/health`: the board's verdict is its silence.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !a.holds.silent(&a_board) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    let held = a.call("op", &json!({"session": a_session, "frame": delete("2")})).unwrap();
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("unreachable")), "a burst on the draft is held, never refused: {held}");
     a.shutdown();
     b.shutdown();
 }

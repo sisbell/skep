@@ -587,7 +587,7 @@ fn dir_signature(root: &Path) -> Vec<(String, u64)> {
 /// Checks that a second principal's file is untouched and unlisted.
 ///
 /// It is untouched and unlisted under the first's session — the first's own
-/// acts, a burst held behind its line and a `resolve` among them, leave its
+/// acts, a burst held beside its line and a `resolve` among them, leave its
 /// bytes as they were — and no answer and no event names a path, a
 /// directory or the other principal (the mutant that opens the first
 /// principal's acts on the second's file writes the person's text into
@@ -638,9 +638,15 @@ fn a_second_principals_file_is_untouched_and_unlisted() {
     assert_eq!(rows2.as_array().unwrap().len(), 1, "principal 2's own line, read under principal 2 alone");
     let text = format!("{rows1}{h1}");
     assert!(!text.contains("principal-2") && !text.contains("principal-1") && !text.contains("/held/") && !text.contains(&store.display().to_string()), "no path, directory or principal file name crosses: {text}");
-    // Principal 1's own acts touch principal 1's file alone.
-    let behind = shell.call("op", &json!({"session": s1, "frame": {"op": "insert", "doc": d1, "at": {"subspace": "1", "ordinal": "4"}, "values": ["three"], "as_of": typed}})).unwrap();
-    assert_eq!(behind["cause"], "behind", "{behind}");
+    // Principal 1's own acts touch principal 1's file alone: a later burst,
+    // once the board's `/health` verdict finds it silent, held `unreachable`
+    // at once (skep #863).
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !shell.holds.silent(&board) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    let later = shell.call("op", &json!({"session": s1, "frame": {"op": "insert", "doc": d1, "at": {"subspace": "1", "ordinal": "4"}, "values": ["three"], "as_of": typed}})).unwrap();
+    assert_eq!(later["cause"], "unreachable", "{later}");
     assert_eq!(shell.call("resolve", &json!({"session": s1, "held": 1, "act": "drop"})).unwrap_err().name(), "not_resolvable");
     assert_eq!(std::fs::read(&p2).unwrap(), p2_bytes, "principal 2's file is untouched by principal 1's acts");
     let said: Vec<String> = rx.try_iter().map(|e| e.data.to_string()).collect();

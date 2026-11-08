@@ -8,10 +8,10 @@
 //! stream yields, and beside it this crate's own read of the `/changes`
 //! pages for the `feed` events — the published feed as a guest, and each
 //! open session's drafts supplement under its token — the `/health` pair
-//! read per tick for the `mode` event, the stream's state for the `daemon`
-//! event (every board the shell dials, each event naming its board; silent
-//! under the own node's deliberate stop, which the shell announces
-//! `stopped` once — [`Feeder::unreachable`]), and the consumer's state for
+//! read per tick for the `mode` event, the board's `/health` verdict for the
+//! `daemon` event (every board the shell dials, each event naming its board;
+//! silent under the own node's deliberate stop, which the shell announces
+//! `stopped` once — [`Feeder::announce`]), and the consumer's state for
 //! the `index` event, each emitted where it moved. The thread's state is
 //! the feeder ([`Feeder`]), the board index's one writer. The bridge's two
 //! calls over the index, `search` and the listing `places`, are answered on
@@ -34,13 +34,26 @@
 //! under its still-standing token, before its close answers
 //! ([`Feed::closing`]): every `feed` row of a session precedes its
 //! `session-died`, however far this thread trails the commits.
-//! The board's held bursts are watched here too: each tick's `/health` read
-//! handed to the hold, which reads its `writes.halted`
-//! (`Holds::note_health`), and the probe (`Holds::probe`) on this thread
-//! alone — every `PROBE_CADENCE`, measured from the last cadence's or
-//! hand-over's probe whatever woke the thread between, at the tick that
-//! ends an announced outage, and at a hand-over ([`Feed::probe`],
-//! `resolve(send)`'s and `set_node_state(Running)`'s). A probe runs one turn
+//! The board's held bursts are watched here too: every `/health` this thread
+//! reads handed to the hold, which judges by it whether the board answers
+//! and reads its `writes.halted` (`Holds::note_health_read`), and the probe
+//! (`Holds::probe`) on this thread alone — every `PROBE_CADENCE`, measured
+//! from the last cadence's or hand-over's probe whatever woke the thread
+//! between, at the tick that ends an announced silence, and at a hand-over
+//! ([`Feed::probe`], `resolve(send)`'s and `set_node_state(Running)`'s).
+//!
+//! **The `daemon` event is the probe's verdict** (§4b.2; P37; skep #863).
+//! The board is announced `unreachable` once where a `/health` read goes
+//! unanswered — the probe's, or this thread's own at its start, its tick or
+//! the commit stream's failure — and `running` once where one answers again
+//! after it, each edge said once in the shell's own window; never from one
+//! request's failure, the commit stream's among them, which is said on
+//! `Talk` once per outage and takes a `/health` verdict of its own, at most
+//! one a `PROBE_CADENCE` while it keeps failing ([`Feeder::unreachable`]);
+//! and never while the own node stands stopped by its owner, whose stop and
+//! start the shell announces ([`Feeder::announce`]).
+//!
+//! A probe runs one turn
 //! of the drain, bounded (`hold::TURN_STEPS`); while a turn stops at its
 //! bound, the next runs at once, the commands queued behind it served
 //! first ([`Feeder::drain`]; skep #817), so a call queued behind a drain
@@ -432,8 +445,9 @@ enum Served {
     Idle,
     /// The probe handed over (`Cmd::Probe`), the cadence counted from it.
     Probe,
-    /// The probe the tick that ends an announced outage owes, the cadence
-    /// standing.
+    /// The probe owed by the tick that ends an announced silence.
+    ///
+    /// The cadence stands.
     ProbeAtOutageEnd,
     /// The stop: the consumer closed and the stop answered; the thread ends.
     Stop,
@@ -478,26 +492,19 @@ struct Feeder<'b> {
     /// It is the session widened last, the one ended where the consumer's
     /// read meets the death signal ([`Feeder::died`]).
     session_references: HashMap<u64, String>,
-    /// The `/events` stream's outage as this thread has said it.
+    /// Whether the `/events` stream's failure was said since the last tick.
     ///
-    /// It is said by [`Feeder::unreachable`] and ended by the next tick.
-    outage: Outage,
-}
-
-/// The `/events` stream's outage as a feed thread has said it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Outage {
-    /// The stream has not failed since the last tick.
-    Up,
-    /// Down and said on `Talk` once.
+    /// It is said on `Talk` once per outage ([`Feeder::unreachable`]).
+    stream_said: bool,
+    /// When the stream's failure last took a `/health` verdict of its own.
     ///
-    /// It is the state under the own node's deliberate stop, which the shell
-    /// announces, so announced on no event of this thread's.
-    Said,
-    /// Down, said, and announced `unreachable` on the `daemon` event.
+    /// It takes one a `PROBE_CADENCE` at most ([`Feeder::unreachable`]).
+    verdict_at: Option<Instant>,
+    /// Whether this thread announced the board `unreachable`.
     ///
-    /// The next tick owes `running`.
-    Announced,
+    /// The `daemon` event said it, and the next `/health` that answers owes
+    /// `running` ([`Feeder::announce`]).
+    announced: bool,
 }
 
 impl<'b> Feeder<'b> {
@@ -519,14 +526,17 @@ impl<'b> Feeder<'b> {
             last_mode: None,
             last_index_state: BTreeMap::new(),
             session_references: HashMap::new(),
-            outage: Outage::Up,
+            stream_said: false,
+            verdict_at: None,
+            announced: false,
         }
     }
 
     fn run(entry: Arc<BoardEntry>, shared: Shared, rx: Receiver<Cmd>, ticks: &Ticks) {
         let mut feeder = Feeder::new(&entry, shared);
         // One `/health` read at the thread's start: the published feed's
-        // start where the board answers, the mode, and `writes.halted`.
+        // start where the board answers, the mode, `writes.halted`, and the
+        // board's verdict.
         feeder.read_health();
         feeder.open_consumer();
         feeder.emit_index();
@@ -536,7 +546,7 @@ impl<'b> Feeder<'b> {
         // or unreachable board commits nothing, so `Cmd::Tick` alone never
         // ends such a hold, and a board that keeps committing must not starve
         // the probe either. The deadline is counted from the last cadence's
-        // or hand-over's probe; the tick that ends an announced outage probes
+        // or hand-over's probe; the tick that ends an announced silence probes
         // and leaves it standing.
         let mut next_probe = Instant::now() + PROBE_CADENCE;
         loop {
@@ -607,8 +617,9 @@ impl<'b> Feeder<'b> {
         Served::Idle
     }
 
-    /// Runs the probe, and the drain's turns while one stops at its bound
-    /// (`Holds::probe`; §3c.4, §3c.5; skep #817).
+    /// Runs the probe, and the drain's turns while one stops at its bound.
+    ///
+    /// The probe is `Holds::probe` (§3c.4, §3c.5; skep #817).
     ///
     /// Each probe runs one turn of at most `hold::TURN_STEPS` steps. Where it
     /// stops at that bound with a line still to send, the commands queued
@@ -619,12 +630,18 @@ impl<'b> Feeder<'b> {
     /// back to back, never one a cadence, and a `search`, a listing or a
     /// session's swap queued behind a drain waits one turn at most. A probe
     /// handed over between two turns is the drain's own next turn, and the
-    /// tick that ends an announced outage owes none more.
+    /// tick that ends an announced silence owes none more. Each probe's
+    /// `/health` verdict is announced as it is read ([`Feeder::announce`]).
     ///
     /// It answers `Break` where a stop was served between two turns: the
     /// consumer closed and the stop answered, and the thread ends.
     fn drain(&mut self, rx: &Receiver<Cmd>, ticks: &Ticks) -> ControlFlow<()> {
-        while self.holds.probe(&self.entry.reference) == Turn::Bounded {
+        loop {
+            let turn = self.holds.probe(&self.entry.reference);
+            self.announce();
+            if turn != Turn::Bounded {
+                return ControlFlow::Continue(());
+            }
             let mut ticked = 0;
             while ticked < 2 {
                 let Ok(cmd) = rx.try_recv() else { break };
@@ -634,7 +651,6 @@ impl<'b> Feeder<'b> {
                 }
             }
         }
-        ControlFlow::Continue(())
     }
 
     fn say(&self, line: impl std::fmt::Display) {
@@ -654,18 +670,19 @@ impl<'b> Feeder<'b> {
         }
     }
 
-    /// Reads what the commits up to `position` changed, and answers whether
-    /// the tick ended an announced outage.
+    /// Reads what the commits up to `position` changed.
     ///
-    /// The `running` emit that ends it ends an unreachable hold at this board
-    /// too (§3c.4), so the loop probes at once where it answers true: the
-    /// resend runs where the board is back and a session stands.
+    /// It answers whether the tick ended an announced silence.
+    ///
+    /// The commit stream answers, so its outage ends. The tick's `/health`
+    /// read is a verdict of the board's: where it answers after an announced
+    /// silence, the `running` it owes ([`Feeder::announce`]) ends an
+    /// unreachable hold at this board too (§3c.4), so the loop probes at once
+    /// where it answers true: the resend runs where the board is back and a
+    /// session stands.
     fn tick(&mut self, position: u64) -> bool {
-        let announced = self.outage == Outage::Announced;
-        self.outage = Outage::Up;
-        if announced {
-            self.bus.emit(EventName::Daemon, json!({"board": self.entry.reference, "state": "running"}));
-        }
+        self.stream_said = false;
+        let announced = self.announced;
         // The `/health` read first: where the board did not answer before,
         // its head is where the published feed starts.
         self.read_health();
@@ -682,37 +699,66 @@ impl<'b> Feeder<'b> {
         }
         self.read_feed();
         self.emit_index();
-        announced
+        announced && !self.announced
     }
 
     /// Takes the stream's failure: it could not connect, or dropped.
     ///
-    /// It is said on `Talk` once per outage (the shell's own window), and
-    /// announced `unreachable` on the `daemon` event once — for every board
-    /// the shell dials, each event naming its board — except under the own
-    /// node's deliberate stop (`Holds::node_stopped`, set by
-    /// `Shell::set_node_state`): a stop the person made is announced
-    /// `stopped` once by the shell, this thread adds no `unreachable` while
-    /// the stop stands, and the outage stays `Said`, so the next tick says no
-    /// `running` of its own either — `set_node_state(Running)` is the one
-    /// `running`. Where the stop is lifted while the stream is still down,
-    /// the next failure here is announced as built.
+    /// It is said on `Talk` once per outage (the shell's own window), the
+    /// next tick ending it, and is no verdict on the board (P37; skep #863):
+    /// one `/health` read takes the board's, at most one a `PROBE_CADENCE`
+    /// while the stream keeps failing, and the `daemon` event follows that
+    /// verdict alone ([`Feeder::announce`]) — a board whose stream fails while
+    /// its `/health` answers is announced nothing. Every session at this
+    /// board is dead where the board restarted; the arm is read when the
+    /// board answers again.
     fn unreachable(&mut self, text: &str) {
-        match self.outage {
-            Outage::Announced => return,
-            Outage::Up => {
-                self.outage = Outage::Said;
-                self.say(format_args!("the commit stream is not answering: {text}"));
-            }
-            Outage::Said => {}
+        if !self.stream_said {
+            self.stream_said = true;
+            self.say(format_args!("the commit stream is not answering: {text}"));
         }
-        if self.holds.node_stopped(&self.entry.reference) {
+        if self.verdict_at.is_none_or(|at| at.elapsed() >= PROBE_CADENCE) {
+            self.verdict_at = Some(Instant::now());
+            self.read_health();
+        } else {
+            self.announce();
+        }
+    }
+
+    /// Announces the board's state on the `daemon` event (§4b.2; P37).
+    ///
+    /// The state is its `/health` verdict as it stands.
+    ///
+    /// The verdict is the hold's (`Holds::silent`): a board found silent is
+    /// announced `unreachable` once, and one found answering after it
+    /// `running` once, each edge said once in the shell's own window in the
+    /// daemon segment's words — for every board the shell dials, each event
+    /// naming its board. Under the own node's deliberate stop
+    /// (`Holds::node_stopped`, set by `Shell::set_node_state`) nothing is
+    /// announced: a stop the person made is announced `stopped` once by the
+    /// shell, and `set_node_state(Running)` is the one `running`, so an
+    /// `unreachable` announced before the stop owes no `running` of this
+    /// thread's after it. Where the board is silent still once the stop is
+    /// lifted, it is announced as the verdict stands.
+    fn announce(&mut self) {
+        let board = &self.entry.reference;
+        if self.holds.node_stopped(board) {
+            self.announced = false;
             return;
         }
-        self.outage = Outage::Announced;
-        self.bus.emit(EventName::Daemon, json!({"board": self.entry.reference, "state": "unreachable"}));
-        // Every session at this board is dead where the board restarted;
-        // the arm is read when the board answers again.
+        match (self.announced, self.holds.silent(board)) {
+            (false, true) => {
+                self.announced = true;
+                self.say("its `/health` goes unanswered: board unreachable — anything not yet kept is held on this device and sent when it can be reached");
+                self.bus.emit(EventName::Daemon, json!({"board": board, "state": "unreachable"}));
+            }
+            (true, false) => {
+                self.announced = false;
+                self.say("its `/health` answers again: board running");
+                self.bus.emit(EventName::Daemon, json!({"board": board, "state": "running"}));
+            }
+            (true, true) | (false, false) => {}
+        }
     }
 
     /// Ends the session of a principal whose supplement met the death signal.
@@ -810,18 +856,25 @@ impl<'b> Feeder<'b> {
         self.bus.emit(EventName::Feed, json!({"board": self.entry.reference, "update": update_of(row, class)}));
     }
 
-    /// Reads `/health` at the thread's start and at each tick.
+    /// Reads `/health` once, the board's verdict.
     ///
-    /// It emits the `mode` event where the pair moved (the claim's landing, a
-    /// restart with the flag changed), hands the read to the hold for its
-    /// `writes.halted`, and — the first time the board answers — takes its
-    /// head as the published feed's start, which no other read sets.
+    /// It reads at the thread's start, at each tick, and at the commit
+    /// stream's failure.
+    ///
+    /// It hands the read to the hold, whatever it answered — the board's
+    /// verdict, and its `writes.halted` where it reads — and announces the
+    /// verdict ([`Feeder::announce`]); where the board answers, it emits the
+    /// `mode` event where the pair moved (the claim's landing, a restart with
+    /// the flag changed), and — the first time — takes its head as the
+    /// published feed's start, which no other read sets.
     fn read_health(&mut self) {
-        let Ok(health) = self.entry.board.health() else { return };
+        let read = self.entry.board.health();
+        // The hold reads its verdict and its `writes.halted` off the same
+        // read (§3c.4), a hold `halted` beginning at the first `true`.
+        self.holds.note_health_read(&self.entry.reference, &read);
+        self.announce();
+        let Ok(health) = read else { return };
         self.published_since.get_or_insert(health.log_position());
-        // The hold reads its `writes.halted` off the same read (§3c.4), a hold
-        // `halted` beginning at the first `true`.
-        self.holds.note_health(&self.entry.reference, &health);
         let mode = Mode::of(&health);
         if self.last_mode != Some(mode) {
             let first = self.last_mode.is_none();

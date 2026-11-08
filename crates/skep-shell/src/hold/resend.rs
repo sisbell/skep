@@ -2,7 +2,8 @@
 //!
 //! They are the hold's walk that drains a board's queue once the board
 //! returns. The probe ([`Holds::probe`]) runs on the board's feed thread
-//! every [`PROBE_CADENCE`](super::PROBE_CADENCE) while a line stands, and
+//! every [`PROBE_CADENCE`](super::PROBE_CADENCE) while a line stands or the
+//! board's silence awaits a verdict, and
 //! there too at its daemon-running tick and at the hand-overs of
 //! `resolve(send)` and `set_node_state(Running)`, because `Cmd::Tick` is
 //! driven by committed writes and a poisoned, halted, stopped or
@@ -36,19 +37,51 @@
 //! (`PrincipalHold::stopped_in_pass`), so no later turn of a pass reads a
 //! document or dials its head again however many turns the pass takes; the
 //! pass ends at a turn no bound stopped, and the next starts at the next
-//! probe. The walk's read: one per document (`GET
+//! probe.
+//!
+//! **The pass ends at the board's silence** (§3c.5; skep #863). It ends at
+//! the first request the board gives no answer to (`DialError::unanswered`:
+//! the name unresolved, the connection refused or not made within its bound,
+//! the handshake not completed, no answer within the bound once connected,
+//! the connection closed before any answer) — the probe's
+//! `/health`, its read of the board's head, a document's read or its site's,
+//! a line's send, a shift's live read or the hands' read ([`Turn::Unanswered`];
+//! [`Step::Unanswered`]). A request the board answers, with any refusal or
+//! status, ends nothing. From that request the turn dials none of its other
+//! documents and changes nothing of them — no state, no line in the shell's
+//! window, no count; the line a send was cut at goes back to holding
+//! `unreachable` with its `sent`, its document's `held` event saying it so,
+//! a read's line stands as it was, and the board is marked unanswered until
+//! the next probe's verdict (`Holds::note_unanswered`), a send owed to it as
+//! its line's failure where its request may have left. The document the
+//! silence cut is entered in `PrincipalHold::cut_in_pass`, and the next turn
+//! walks every principal's documents the pass did not reach first and the
+//! cut ones last (`Round`), so a document whose line keeps going unanswered
+//! while the board answers its probe never holds back another document's
+//! words. The probe runs while the board is silent or a request pends its
+//! verdict, a line standing or none. A shift whose live read the board gives
+//! no answer to is not tried: its verdict is kept
+//! (`PrincipalHold::shift_owed`), and the line's next send runs the shift
+//! from it, no stale frame dialed first; a moved face whose hands' read goes
+//! unanswered is said with them not read (`Hand::UNREAD`), and the walk reads
+//! them again, a step, as it meets the document (`Holds::reread_hands`).
+//!
+//! The walk's read: one per document (`GET
 //! /changes`) before its first resend, which answers one question of the
 //! document's head — did its own write land? — and nothing more: (i)
 //! nothing of it landed, send from the head, or, the head's first failed
-//! send standing [`HAND_OVER_DEADLINE`] past, whatever the failure, hand it
-//! to the person as a refused run (`answers_lost`), naming the last failure
-//! and the time elapsed, dialed never again until the person sends it; (ii)
+//! send standing [`HAND_OVER_DEADLINE`] of the board's answering past,
+//! whatever the failure, hand it to the person as a refused run
+//! (`answers_lost`), naming the last failure and the wall time since it,
+//! dialed never again until the person sends it; (ii)
 //! the in-flight burst landed, the head `done kept` and its
 //! position the document's base, as an ack's is (§3c.2). A head no dial of
 //! which left is not read at all: it goes from the head. A row that is not
 //! the head's own landing is no verdict — the person's own later write, a
 //! sibling's, another hand's — and the head goes from the head; and a read
-//! the board did not answer decides nothing: the next probe reads again.
+//! the board answered with no page decides nothing: the next probe reads
+//! again, as it does after a read the board gave no answer to, which ends the
+//! pass.
 //! Whether the *document moved* is the board's to say, (iii), by one route: a
 //! line it refuses as typed against an older state of its document
 //! (`arrangement_moved`, the frame's `as_of` below the arrangement's last
@@ -100,14 +133,16 @@
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashSet};
 use std::fmt;
-use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::{json, Value};
 use skep_client::board::{acked_at, frames, Answer, ChangesAnswer, ChangesQuery, Rejection};
 
-use super::{awaits_act, cause, line_state, millis, AttestedWhereOwed, BoardSlot, Dialed, HandsRead, HeldState, Holds, PrincipalHold, Turn, HAND_OVER_DEADLINE, TURN_STEPS};
+use super::{
+    awaits_act, cause, line_state, millis, unanswered, AttestedWhereOwed, BoardSlot, CutSend, Dialed, Hand, HandsRead, HeldState, Holds, KeptShift, PrincipalHold, Turn, Verdict, HAND_OVER_DEADLINE,
+    TURN_STEPS,
+};
 use crate::held::{i_address, Anchors, Done, HeldLine, Reason, SpanRun};
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{board_head, SessionEntry, SessionKind};
@@ -137,8 +172,13 @@ pub(super) enum Unshiftable {
     ///
     /// `elapsed_ms` is the time since it ([`HAND_OVER_DEADLINE`]).
     PastTheDeadline { elapsed_ms: u64 },
-    /// The image read answered no image: refused, no answer, or runs that
-    /// are no I-extents.
+    /// The image read answered no image.
+    ///
+    /// It was refused, an answer no read takes, or runs that are no
+    /// I-extents.
+    ///
+    /// A read the board gave no answer to is none of these: the shift is not
+    /// tried, its verdict kept ([`Holds::shift_and_send`]; skep #863).
     Unread(String),
     /// The burst is a delete or a rearrange whose anchors name no span.
     ///
@@ -487,10 +527,48 @@ enum ReadOutcome {
     Landed { at: Option<u64> },
     /// The board answered no page: nothing is decided.
     ///
-    /// It answered a refusal (`feed_rebuilding`), the death signal, or no
-    /// answer — or the site read the landing needed went unanswered — and
+    /// It answered a refusal (`feed_rebuilding`), the death signal, or an
+    /// answer no read takes — or the site read the landing needed did — and
     /// the next probe reads again.
     Unread,
+    /// The board gave the read no answer: nothing is decided.
+    ///
+    /// The read is the document's, or the site read the landing needed; the
+    /// pass ends there.
+    Unanswered,
+}
+
+/// What a step of the walk at a document leaves the walk to do (§3c.5).
+///
+/// The step is a document's read ([`Holds::resume_doc`]) or a line's send
+/// ([`Holds::send_line`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    /// The document's lines go on.
+    Goes,
+    /// The document stops for the pass (`PrincipalHold::stopped_in_pass`).
+    Stops,
+    /// The board gave the step's request no answer: the pass ends there.
+    ///
+    /// The document is entered among those the silence cut
+    /// (`PrincipalHold::cut_in_pass`).
+    Unanswered,
+}
+
+/// Which documents a walk of the drain's turn takes (§3c.5; skep #863).
+///
+/// A turn walks every principal's documents in [`Round::Unreached`] first,
+/// then in [`Round::Cut`], so the documents a pass the board's silence ended
+/// did not reach go before the ones it cut, whoever's they are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Round {
+    /// Every document but those the board's silence cut the pass at.
+    Unreached,
+    /// The documents the board's silence cut the pass at.
+    ///
+    /// They are taken out of the set as the walk begins
+    /// (`PrincipalHold::cut_in_pass`).
+    Cut,
 }
 
 /// What one `retrieve_v` at a held burst's site says of its values.
@@ -507,8 +585,12 @@ enum Site {
     /// It is a burst of another kind than `insert`, or a frame that names no
     /// site.
     Unconfirmable,
-    /// The board did not answer the read.
+    /// The board answered the read with no delivery.
+    ///
+    /// It answered the death signal, or an answer no read takes.
     Unread,
+    /// The board gave the read no answer (skep #863).
+    Unanswered,
 }
 
 /// A board's drain mark (`BoardSlot`'s `draining`), held for one drain.
@@ -534,8 +616,7 @@ impl Drop for Draining<'_> {
 }
 
 impl Holds {
-    /// Runs the probe (§3c.4), and one turn of the resend it lets run
-    /// (§3c.5).
+    /// Runs the probe (§3c.4) and one turn of the resend (§3c.5) it lets run.
     ///
     /// It runs on the board's feed thread alone — every
     /// [`PROBE_CADENCE`](super::PROBE_CADENCE), at its daemon-running tick,
@@ -551,12 +632,15 @@ impl Holds {
     /// re-mark's or a `done`'s — are written where the device takes them
     /// (`HeldQueue::retry`), a wait that ends said ([`Holds::note_waiting`]):
     /// none needs a dial. Then, while a line stands at a board whose own node
-    /// is not stopped, one turn of the drain runs ([`Holds::drain`]), one
-    /// drain per board at a time — a halted principal's lines never among
-    /// them (P38; skep #858).
+    /// is not stopped — or the board is silent, or a request of the hold's
+    /// there pends its verdict, a line standing or none (skep #863) — one turn
+    /// of the drain runs ([`Holds::drain`]), one drain per board at a time — a
+    /// halted principal's lines never among them (P38; skep #858).
     ///
     /// It answers [`Turn::Bounded`] where the turn stopped at its bound with
-    /// a line still to send, the pass going on at the next turn, and
+    /// a line still to send, the pass going on at the next turn;
+    /// [`Turn::Unanswered`] where the board gave a request of the turn's no
+    /// answer, the pass going on at the next probe it answers; and
     /// [`Turn::Done`] otherwise — the pass ended where this probe ran the
     /// drain, its stopped documents walked again by the next
     /// ([`BoardHold::end_pass`](super::BoardHold::end_pass)); a probe that
@@ -569,7 +653,7 @@ impl Holds {
         let due = {
             let mut board_hold = slot.lock();
             self.retry_store(board_reference, &mut board_hold, slot.board.dialed());
-            !board_hold.node_stopped && board_hold.principals.values().any(PrincipalHold::drains)
+            !board_hold.node_stopped && (!board_hold.answers() || board_hold.principals.values().any(PrincipalHold::drains))
         };
         // One drain per board at a time, its mark cleared however it ends;
         // the drain that holds the mark alone ends the pass.
@@ -581,32 +665,44 @@ impl Holds {
         turn
     }
 
-    /// Runs the probe's dial and one turn of the resend: the body of
-    /// [`Holds::probe`].
+    /// Runs the probe's dial and one turn of the resend.
     ///
-    /// It runs once per board at a time. After `/health`, ONE read of the
-    /// board's head (`sessions::board_head`) before any document (skep #727):
-    /// the same answer establishes the directory ([`Holds::establish`]) and
-    /// decides which documents the resend skips — never two reads in one
-    /// probe for the hold's sake — and the board's head state is said once
-    /// per change ([`Holds::note_head`]). While the head answers
+    /// It is the body of [`Holds::probe`].
+    ///
+    /// It runs once per board at a time. First the probe's `/health`, the
+    /// board's verdict ([`Holds::note_health_read`]; skep #863): one the board
+    /// gives no answer to is its silence, the turn answering
+    /// [`Turn::Unanswered`] with nothing walked, and one that answers with
+    /// the board's writes halted, or refused — or one refused before any
+    /// connection opened, which reached no board — holds every line. Then
+    /// ONE read of the board's head (`sessions::board_head`) before any
+    /// document (skep #727): the same answer establishes the directory
+    /// ([`Holds::establish`]) and decides which documents the resend skips —
+    /// never two reads in one probe for the hold's sake — and the board's
+    /// head state is said once per change ([`Holds::note_head`]). A head read
+    /// the board gives no answer to is its silence, never `head_unreadable`:
+    /// the board marked unanswered, nothing walked. While the head answers
     /// `head_unreadable`, every document whose head line is held so is
     /// skipped: no `/changes` read, no `sending`, no attest attempted; the
     /// other documents resend as they do. The principals with lines walk in
     /// their order, each under a standing session of its own that may write
     /// (`SessionEntry::may_write`) — under no bare session — sharing the
-    /// turn's [`TURN_STEPS`] steps ([`Holds::walk`]); it answers
-    /// [`Turn::Bounded`] where they ran out with a line still to send, and
+    /// turn's [`TURN_STEPS`] steps ([`Holds::walk`]), every principal's
+    /// documents the pass has not reached before any the board's silence cut
+    /// it at ([`Round`]); it answers [`Turn::Bounded`] where they ran out
+    /// with a line still to send, [`Turn::Unanswered`] where the board gave a
+    /// request of a walk's no answer, no later walk made, and
     /// [`Turn::Done`] where every principal's walk reached its end, or the
-    /// board did not answer or holds every line.
+    /// board holds every line.
     fn drain(&self, board_reference: &str, slot: &BoardSlot) -> Turn {
         let board = &slot.board;
         // The probe's one `/health` read (§3c.4): a board that does not answer
-        // is read again at the next probe, and one whose writes are halted
-        // holds every line.
-        let Ok(health) = board.health() else { return Turn::Done };
-        if self.note_health(board_reference, &health) {
-            return Turn::Done;
+        // is silent, read again at the next probe, and one whose writes are
+        // halted, or that this build cannot dial, holds every line.
+        match self.note_health_read(board_reference, &board.health()) {
+            Verdict::Silent => return Turn::Unanswered,
+            Verdict::Undialed | Verdict::Holds => return Turn::Done,
+            Verdict::Writes => {}
         }
         // The board answers and takes writes: the hold ends. The head is read
         // once; a directory no touch of the store could establish is tried
@@ -617,15 +713,22 @@ impl Holds {
         let head = board_head(board);
         self.note_head(board_reference, &head);
         self.establish(board_reference, slot, &head);
+        if matches!(head, Err(Refusal::Unreachable(_))) {
+            self.note_unanswered(&mut slot.lock(), None);
+            return Turn::Unanswered;
+        }
         let head_unreadable = matches!(head, Err(Refusal::Halt { name: Name::HEAD_UNREADABLE, .. }));
         // A halted principal's lines are walked never (P38; skep #858): the
         // halt may have been found as the store was established just now.
         let principals: BTreeSet<u64> = slot.lock().principals.iter().filter(|(_, ph)| ph.drains()).map(|(p, _)| *p).collect();
         let mut steps = TURN_STEPS;
-        for principal in principals {
-            let Some(session) = self.sessions.on_board(board_reference).into_iter().find(|s| s.facts.principal == principal && s.may_write()) else { continue };
-            if self.walk(&session, head_unreadable, &mut steps) == Turn::Bounded {
-                return Turn::Bounded;
+        for round in [Round::Unreached, Round::Cut] {
+            for &principal in &principals {
+                let Some(session) = self.sessions.on_board(board_reference).into_iter().find(|s| s.facts.principal == principal && s.may_write()) else { continue };
+                match self.walk(&session, head_unreadable, &mut steps, round) {
+                    Turn::Done => {}
+                    stopped => return stopped,
+                }
             }
         }
         Turn::Done
@@ -657,23 +760,45 @@ impl Holds {
     /// document's entry alone (skep #816).
     /// `head_unreadable` is whether the probe's one read of the board's head
     /// answered so: the documents whose head line waits on the head are then
-    /// passed over ([`passed_over`]). It answers [`Turn::Bounded`] where a
-    /// document's read or a line's send was owed a step and the turn had none
-    /// left for it, and [`Turn::Done`] where the walk reached the principal's
-    /// last line.
-    fn walk(&self, session: &SessionEntry, head_unreadable: bool, steps: &mut usize) -> Turn {
+    /// passed over ([`passed_over`]). `round` is which documents the walk
+    /// takes ([`Round`]; skep #863): in [`Round::Unreached`] every document
+    /// the board's silence cut the pass at is passed over beside the stopped
+    /// ones, and in [`Round::Cut`] those alone are walked, the set taken out
+    /// as the walk begins, the walk none where it holds none. A moved
+    /// document whose hands went unread is read for them as the walk meets
+    /// it, a step ([`Holds::reread_hands`]). It answers [`Turn::Bounded`]
+    /// where a document's read or a line's send was owed a step and the turn
+    /// had none left for it; [`Turn::Unanswered`] where the board gave a
+    /// request of the walk's no answer, its document entered among those the
+    /// silence cut the pass at (`PrincipalHold::cut_in_pass`) and nothing
+    /// more walked, or where a request of the hold's elsewhere — a burst's
+    /// first dial — went unanswered since the probe's verdict; and
+    /// [`Turn::Done`] where the walk reached the principal's last line.
+    fn walk(&self, session: &SessionEntry, head_unreadable: bool, steps: &mut usize, round: Round) -> Turn {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
+        // The second round walks the documents the board's silence cut the
+        // pass at, and none where it cut none.
+        if round == Round::Cut && !self.with_principal(board_reference, principal, |ph| !std::mem::take(&mut ph.cut_in_pass).is_empty()).unwrap_or(false) {
+            return Turn::Done;
+        }
         // The documents this turn let go, and the ordinal the walk handled
         // last: no line's ordinal is 0.
         let mut sending: HashSet<String> = HashSet::new();
         let mut after = 0u64;
         loop {
+            // A request of the hold's the board gave no answer to since the
+            // probe's verdict — a burst's first dial on another thread among
+            // them — holds the walk too, until the next verdict.
+            if !self.lock(board_reference).answers() {
+                return Turn::Unanswered;
+            }
             let next = self.with_principal(board_reference, principal, |ph| {
-                let line = ph.queue.next_after(after, |doc| ph.stopped_in_pass.contains(doc))?;
+                let line = ph.queue.next_after(after, |doc| ph.stopped_in_pass.contains(doc) || ph.cut_in_pass.contains(doc))?;
                 let parked = ph.queue.parked(line.k);
-                Some((line, parked))
+                let hands_owed = ph.hands_owed.contains_key(&line.doc);
+                Some((line, parked, hands_owed))
             });
-            let Some((line, parked)) = next.flatten() else { return Turn::Done };
+            let Some((line, parked, hands_owed)) = next.flatten() else { return Turn::Done };
             // A line parked on the pending file its queue's file took it from
             // waits for its copy to land (I5): its document stops at it.
             if parked {
@@ -682,7 +807,17 @@ impl Holds {
                 self.stop_in_pass(board_reference, principal, &line.doc);
                 continue;
             }
-            if !sending.contains(&line.doc) {
+            let step = if !sending.contains(&line.doc) {
+                // A moved document whose hands went unread is read for them
+                // as the walk meets it, a step (skep #863).
+                if hands_owed {
+                    let Some(left) = steps.checked_sub(1) else { return Turn::Bounded };
+                    *steps = left;
+                    if self.reread_hands(session, &line.doc) == Step::Unanswered {
+                        self.cut_in_pass(board_reference, principal, &line.doc);
+                        return Turn::Unanswered;
+                    }
+                }
                 // A read is made only where the send it may let go can follow
                 // it in this turn, so no later turn of the pass reads the
                 // document again.
@@ -692,26 +827,32 @@ impl Holds {
                     }
                     *steps -= 1;
                 }
-                if self.resume_doc(session, &line, head_unreadable) {
+                let step = self.resume_doc(session, &line, head_unreadable);
+                if step == Step::Goes {
                     sending.insert(line.doc.clone());
                 } else {
                     after = line.k;
+                }
+                step
+            } else if awaits_act(&line.reason) {
+                after = line.k;
+                Step::Stops
+            } else {
+                let Some(left) = steps.checked_sub(1) else { return Turn::Bounded };
+                *steps = left;
+                after = line.k;
+                self.send_line(session, &line, steps)
+            };
+            match step {
+                Step::Goes => {}
+                Step::Stops => {
+                    sending.remove(&line.doc);
                     self.stop_in_pass(board_reference, principal, &line.doc);
                 }
-                continue;
-            }
-            if awaits_act(&line.reason) {
-                after = line.k;
-                sending.remove(&line.doc);
-                self.stop_in_pass(board_reference, principal, &line.doc);
-                continue;
-            }
-            let Some(left) = steps.checked_sub(1) else { return Turn::Bounded };
-            *steps = left;
-            after = line.k;
-            if self.send_line(session, &line, steps).is_break() {
-                sending.remove(&line.doc);
-                self.stop_in_pass(board_reference, principal, &line.doc);
+                Step::Unanswered => {
+                    self.cut_in_pass(board_reference, principal, &line.doc);
+                    return Turn::Unanswered;
+                }
             }
         }
     }
@@ -723,36 +864,90 @@ impl Holds {
         self.with_principal(board_reference, principal, |ph| ph.stopped_in_pass.insert(doc.to_string()));
     }
 
+    /// Enters `doc` among the documents the board's silence cut the pass at.
+    ///
+    /// The next turn walks it after every document the pass did not reach
+    /// (`PrincipalHold::cut_in_pass`).
+    fn cut_in_pass(&self, board_reference: &str, principal: u64, doc: &str) {
+        self.with_principal(board_reference, principal, |ph| ph.cut_in_pass.insert(doc.to_string()));
+    }
+
+    /// Reads the unread hands of a moved document, and says them (§3c.5).
+    ///
+    /// The board gave their read no answer before.
+    ///
+    /// `doc` is owed its hands (`PrincipalHold::hands_owed`), the line the
+    /// board's verdict rides named beside it. Where that line stands moved
+    /// still, the hands are read as the moved hold reads them
+    /// ([`Holds::hands_since_typed_state`]) and, read, the `held` event says
+    /// the document `moved` again with them, the debt paid; a read the board
+    /// gives no answer to marks the board unanswered and answers
+    /// [`Step::Unanswered`], the debt standing; the death signal leaves it
+    /// standing for the session that stands next. A line moved no more owes
+    /// no hands. It answers [`Step::Goes`] otherwise, the walk going on to
+    /// the document's head.
+    fn reread_hands(&self, session: &SessionEntry, doc: &str) -> Step {
+        let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
+        let owed = self.with_principal(board_reference, principal, |ph| {
+            let judged = ph.hands_owed.get(doc).and_then(|&k| ph.queue.line(k)).filter(|line| line.reason.cause == cause::MOVED);
+            if judged.is_none() {
+                ph.hands_owed.remove(doc);
+            }
+            judged
+        });
+        let Some(judged) = owed.flatten() else { return Step::Goes };
+        match self.hands_since_typed_state(session, doc, Some(judged.k), &judged.reason) {
+            HandsRead::Named(hands) => {
+                self.with_principal(board_reference, principal, |ph| ph.hands_owed.remove(doc));
+                self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Moved, None, &hands);
+                Step::Goes
+            }
+            HandsRead::Unanswered => {
+                self.note_unanswered(&mut self.lock(board_reference), None);
+                Step::Unanswered
+            }
+            HandsRead::Died => Step::Goes,
+        }
+    }
+
     /// Resumes one document by its read (resume-by-read, §3c.5).
     ///
     /// `head` is the document's head, its first standing line, as the walk
     /// reached it. It runs the read and its outcome — a landed head kept,
     /// its position made the document's base (§3c.2) and the principal's
     /// latest arrangement write on it, and entered in the board's acked
-    /// positions — and answers whether the document's lines go out now: a
-    /// document the read sends from the head, or whose landed head leaves
-    /// lines behind it; never one whose head awaits the person's act, which
-    /// is read never, nor one the read left undecided, nor one whose head it
-    /// hands to the person: a head no landing of which the read found, its
-    /// first failed send [`HAND_OVER_DEADLINE`] past or more
-    /// ([`Holds::hand_over`]). The read runs first, so a landing it finds is
-    /// kept and never handed over. A head no dial of which left (`sent`
-    /// false) is not read at all: nothing of it can stand on the board, so it
-    /// goes from the head — or is handed over, where its deadline has passed.
-    /// A head held `head_unreadable` while the probe's read of the board's
-    /// head answers so (`head_unreadable`) is skipped whole — no read, no
-    /// `sending`, nothing said (skep #727): its send would fail the same way,
-    /// and the `held` event and the `Talk` line were said once as the state
-    /// began; it is tried again the probe the head reads. Whether a read is
-    /// made is [`read_owed`]'s, which the walk counts it by.
-    fn resume_doc(&self, session: &SessionEntry, head: &HeldLine, head_unreadable: bool) -> bool {
+    /// positions — and answers whether the document's lines go out now
+    /// ([`Step::Goes`]): a document the read sends from the head, or whose
+    /// landed head leaves lines behind it; never one whose head awaits the
+    /// person's act, which is read never, nor one the read left undecided,
+    /// nor one whose head it hands to the person: a head no landing of which
+    /// the read found, its first failed send [`HAND_OVER_DEADLINE`] of the
+    /// board's answering past or more ([`Holds::hand_over`]) — each
+    /// [`Step::Stops`]. A read the board gives no answer to decides nothing
+    /// and ends the pass ([`Step::Unanswered`]; skep #863): the board marked
+    /// unanswered, the line as it was, nothing said. The read runs first, so
+    /// a landing it finds is kept and never handed over. A head no dial of
+    /// which left (`sent` false) is not read at all: nothing of it can stand
+    /// on the board, so it goes from the head — or is handed over, where its
+    /// deadline has passed. A head held `head_unreadable` while the probe's
+    /// read of the board's head answers so (`head_unreadable`) is skipped
+    /// whole — no read, no `sending`, nothing said (skep #727): its send
+    /// would fail the same way, and the `held` event and the `Talk` line were
+    /// said once as the state began; it is tried again the probe the head
+    /// reads. Whether a read is made is [`read_owed`]'s, which the walk counts
+    /// it by.
+    fn resume_doc(&self, session: &SessionEntry, head: &HeldLine, head_unreadable: bool) -> Step {
         let (board_reference, principal, doc) = (session.board_reference.as_str(), session.facts.principal, head.doc.as_str());
         if passed_over(head, head_unreadable) {
-            return false;
+            return Step::Stops;
         }
         let outcome = if read_owed(head, head_unreadable) { self.read_outcome(session, doc, head) } else { ReadOutcome::SendFromHead };
         match outcome {
-            ReadOutcome::Unread => false,
+            ReadOutcome::Unread => Step::Stops,
+            ReadOutcome::Unanswered => {
+                self.note_unanswered(&mut self.lock(board_reference), None);
+                Step::Unanswered
+            }
             ReadOutcome::Landed { at } => {
                 // The landing is noted as the session's ack is (§3c.2, §3c.5):
                 // a line held on the document from here reads past it, and no
@@ -775,28 +970,27 @@ impl Holds {
                 match self.count(board_reference, principal, doc) {
                     0 => {
                         self.emit_held(session, doc, 0, HeldState::Kept, None, &[]);
-                        false
+                        Step::Stops
                     }
                     rest => {
                         self.emit_held(session, doc, rest, HeldState::Sending, None, &[]);
-                        true
+                        Step::Goes
                     }
                 }
             }
             ReadOutcome::SendFromHead => {
-                // Nothing of the head has landed: its first failed send at
-                // the deadline or past it, it is the person's, dialed never
-                // again (§3c.4; skep #716).
-                let clock = self.with_principal(board_reference, principal, |ph| ph.reissues.get(&head.k).and_then(|given| given.first_failed.zip(given.last.clone()))).flatten();
-                if let Some((first_failed, last)) = clock {
-                    let elapsed = self.now().saturating_duration_since(first_failed);
-                    if elapsed >= HAND_OVER_DEADLINE {
-                        self.hand_over(session, head, &last, elapsed);
-                        return false;
+                // Nothing of the head has landed: its first failed send two
+                // minutes of the board's answering past or more, it is the
+                // person's, dialed never again, the hand-over naming the wall
+                // time since (§3c.4; skep #716, #863).
+                if let Some((elapsed, last)) = self.since_first_failure(board_reference, principal, head.k) {
+                    if elapsed.answering >= HAND_OVER_DEADLINE {
+                        self.hand_over(session, head, &last, elapsed.wall);
+                        return Step::Stops;
                     }
                 }
                 self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Sending, None, &[]);
-                true
+                Step::Goes
             }
         }
     }
@@ -831,7 +1025,10 @@ impl Holds {
     /// trusts a row whose hand is lost not at all. Every other row — the
     /// person's own later write of another kind, a sibling's, another hand's
     /// — is no verdict: whether the document moved is the board's
-    /// (`arrangement_moved`, [`Holds::send_line`]), not this read's.
+    /// (`arrangement_moved`, [`Holds::send_line`]), not this read's. A page,
+    /// or the site read, the board gives no answer to is
+    /// [`ReadOutcome::Unanswered`] (skep #863), and every other answer that is
+    /// no page [`ReadOutcome::Unread`].
     fn read_outcome(&self, session: &SessionEntry, doc: &str, head: &HeldLine) -> ReadOutcome {
         let board_reference = session.board_reference.as_str();
         let mut query = ChangesQuery { since: head.base, under: Some(doc), drafts: true, limit: None };
@@ -851,6 +1048,7 @@ impl Holds {
                     query.limit = Some(fits);
                     continue;
                 }
+                Err(h) if unanswered(&h) => return ReadOutcome::Unanswered,
                 Ok(_) | Err(_) => return ReadOutcome::Unread,
             };
             for row in &page.changes {
@@ -872,6 +1070,7 @@ impl Holds {
                     // landing, and the board judges the send's typed state.
                     Site::Differs => return ReadOutcome::SendFromHead,
                     Site::Unread => return ReadOutcome::Unread,
+                    Site::Unanswered => return ReadOutcome::Unanswered,
                 };
                 if landed {
                     return ReadOutcome::Landed { at };
@@ -892,12 +1091,15 @@ impl Holds {
     /// kept with no position to name; any difference, or a kind no read
     /// confirms, is no landing found, and the head goes from the head — the
     /// board judging its typed state (`arrangement_moved`), as it judges
-    /// every send; a site read the board does not answer decides nothing.
+    /// every send; a site read the board answers with no delivery decides
+    /// nothing, and one it gives no answer to decides nothing and ends the
+    /// pass.
     fn reclaimed_outcome(&self, session: &SessionEntry, doc: &str, head: &HeldLine) -> ReadOutcome {
         match self.site(session, doc, head) {
             Site::Equal => ReadOutcome::Landed { at: None },
             Site::Differs | Site::Unconfirmable => ReadOutcome::SendFromHead,
             Site::Unread => ReadOutcome::Unread,
+            Site::Unanswered => ReadOutcome::Unanswered,
         }
     }
 
@@ -920,6 +1122,7 @@ impl Holds {
                 }
             }
             Ok(Answer::Document(_)) => Site::Differs,
+            Err(h) if unanswered(&h) => Site::Unanswered,
             Ok(Answer::Closed) | Err(_) => Site::Unread,
         }
     }
@@ -954,21 +1157,35 @@ impl Holds {
     /// `done`; the death signal — at the dial, at the shift's read, or at the
     /// read of the hands, before anything is marked — left to the caller that
     /// ends the session, the line standing as its dial left it: the session
-    /// that stands resends it after its read. Every failed send of the line
-    /// ([`Dialed::failure`]) is noted on its clock ([`HAND_OVER_DEADLINE`]),
-    /// and a line left standing — for the next probe, or for the drain's
-    /// next pass — says so where a failure this send met changed the last
-    /// failure's token, so once per change (SP-11). `Continue` where the line
-    /// is settled and sending goes on, `Break` where the line's document
-    /// stops at it.
+    /// that stands resends it after its read. A request the board gives no
+    /// answer to — the dial, a read the attest's composer made, the shift's
+    /// live read — ends the pass ([`Step::Unanswered`]; skep #863): the line
+    /// re-marked `unreachable`, its `sent` kept, its document's `held` event
+    /// back to `holding`, nothing said and no failure noted, the board marked
+    /// unanswered and the send owed to the next probe's verdict where its
+    /// request may have left (`Holds::note_unanswered`); a shift whose read
+    /// went so is untried, its verdict kept (`PrincipalHold::shift_owed`),
+    /// and the line's next send starts at it, the shift run and no stale
+    /// frame dialed first. A moved face whose hands' read the board gives no
+    /// answer to stands on the verdict, its hands named not read
+    /// ([`Hand::UNREAD`]), owed (`PrincipalHold::hands_owed`), and ends the
+    /// pass too. Every failed send of the line ([`Dialed::failure`]) is noted
+    /// on its clock ([`HAND_OVER_DEADLINE`]), and a line left standing — for
+    /// the next probe, or for the drain's next pass — says so where a
+    /// failure this send met changed the last failure's token, so once per
+    /// change (SP-11). [`Step::Goes`] where the line is settled and sending
+    /// goes on, [`Step::Stops`] where the line's document stops at it.
     ///
     /// **The landed test comes first.** This runs for a line
     /// [`Holds::resume_doc`] let go alone — a `sent` head read for its own
     /// landing and found unlanded — so no line is shifted before its read,
     /// and a landing the read keeps is shifted never.
-    fn send_line(&self, session: &SessionEntry, line: &HeldLine, steps: &mut usize) -> ControlFlow<()> {
+    fn send_line(&self, session: &SessionEntry, line: &HeldLine, steps: &mut usize) -> Step {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let given = || self.with_principal(board_reference, principal, |ph| ph.reissues.get(&line.k).cloned()).flatten().unwrap_or_default();
+        // A shift the board's silence left untried runs first, from the
+        // verdict it kept: nothing dialed before it (`left` false).
+        let kept = self.with_principal(board_reference, principal, |ph| ph.shift_owed.remove(&line.k)).flatten();
         // The line is marked as one that may have landed before its dial
         // leaves (§3c.2's `sent`), synced, so a crash or a refused write
         // between the dial and its answer never leaves a write that may have
@@ -979,12 +1196,15 @@ impl Holds {
         // while it is owed relaunches the line as one never sent. An attest
         // that could not be composed dials nothing and marks nothing: the
         // line keeps its own `sent`, and nothing left (`left` false).
-        let (mut dialed, mut sent, mut left) = match self.attest_where_owed(session, &line.frame) {
-            Ok(frame) => {
-                self.with_principal(board_reference, principal, |ph| self.remark_line(principal, ph, line.k, Reason { sent: true, ..line.reason.clone() }));
-                (self.dial(session, &frame, &given()), true, true)
-            }
-            Err(why) => (Dialed::from(why), line.reason.sent, false),
+        let (mut dialed, mut sent, mut left) = match kept {
+            Some(KeptShift { reason, refusal }) => (Dialed::Held { reason, refusal }, line.reason.sent, false),
+            None => match self.attest_where_owed(session, &line.frame) {
+                Ok(frame) => {
+                    self.with_principal(board_reference, principal, |ph| self.remark_line(principal, ph, line.k, Reason { sent: true, ..line.reason.clone() }));
+                    (self.dial(session, &frame, &given()), true, true)
+                }
+                Err(why) => (Dialed::from(why), line.reason.sent, false),
+            },
         };
         // The frame the dial sent, for its ack's noting: the line's, or the
         // shifted one.
@@ -993,12 +1213,16 @@ impl Holds {
         // token: a line its turn's steps leave for the next pass says so
         // once per change (SP-11), whichever refusal of its shifts made it.
         let mut changed = false;
+        // The verdict the shift this send tries runs from, kept where the
+        // board gives the shift's live read no answer.
+        let mut shifting: Option<KeptShift> = None;
         loop {
             // A failed send of the line notes its token on the line's clock:
             // `Some(true)` where the token differs from the last failure's as
             // it stood, a line's first failure among them; `Some(false)` where
             // it repeats it, said already; none where no send failed — an
-            // ack, the death signal, or a dial that never left.
+            // ack, the death signal, a request the board gave no answer to, or
+            // a dial that never left.
             let failed = if left { dialed.failure().map(|token| self.note_failure(board_reference, principal, line.k, token)) } else { None };
             changed |= failed == Some(true);
             match dialed {
@@ -1007,7 +1231,7 @@ impl Holds {
                     self.done(board_reference, principal, line.k, Done::Kept { at: acked_at(&ack) });
                     let rest = self.count(board_reference, principal, &line.doc);
                     self.emit_held(session, &line.doc, rest, if rest == 0 { HeldState::Kept } else { HeldState::Sending }, None, &[]);
-                    return ControlFlow::Continue(());
+                    return Step::Goes;
                 }
                 Dialed::Held { reason, refusal } if reason.cause == cause::MOVED => {
                     // The board refused the line as typed against an older
@@ -1020,12 +1244,14 @@ impl Holds {
                     // since the line's typed state, or since the person's last
                     // `send` on it where that is later (§3c.5).
                     let verdict = reason.refusal.clone().unwrap_or(Value::Null);
+                    let kept = KeptShift { reason: reason.clone(), refusal: refusal.clone() };
                     let step = || -> Result<(), NotShifted> {
                         *steps = steps.checked_sub(1).ok_or(NotShifted::NoStep)?;
                         Ok(())
                     };
                     match self.shift_and_send(session, line.k, &verdict, step, |shifted| self.dial(session, shifted, &given())) {
                         Ok(shifted) => {
+                            shifting = Some(kept);
                             sent |= shifted.left;
                             left = shifted.left;
                             frame = Cow::Owned(shifted.frame);
@@ -1035,27 +1261,59 @@ impl Holds {
                         // stands as its last dial left it — the cause it was
                         // held with, its `sent`, the frame its last shift
                         // wrote — and its document waits for the drain's next
-                        // pass, faced `sending` still, as its read let it go.
+                        // pass, faced `sending` still, as its read let it go;
+                        // a verdict this send started from, no dial made, is
+                        // kept for it.
                         Err(NotShifted::NoStep) => {
+                            if !left {
+                                self.with_principal(board_reference, principal, |ph| ph.shift_owed.insert(line.k, kept));
+                            }
                             if changed {
                                 self.say(format_args!(
                                     "line {} on {} was not taken ({refusal}) and the turn has no step left to shift it; it is shifted and sent again at the drain's next pass",
                                     line.k, line.doc
                                 ));
                             }
-                            return ControlFlow::Break(());
+                            return Step::Stops;
                         }
                         Err(NotShifted::Unshiftable(why)) => {
                             // The hands are read before anything is marked:
                             // the death at the read leaves the line standing,
-                            // as the death at its dial does.
-                            let HandsRead::Named(hands) = self.hands_since_typed_state(session, &line.doc, Some(line.k), &reason) else { return ControlFlow::Break(()) };
+                            // as the death at its dial does; the board's
+                            // silence at it faces the document moved, its
+                            // hands not read.
+                            let (hands, unread) = match self.hands_since_typed_state(session, &line.doc, Some(line.k), &reason) {
+                                HandsRead::Named(hands) => (hands, false),
+                                HandsRead::Unanswered => (vec![Hand::UNREAD], true),
+                                HandsRead::Died => return Step::Stops,
+                            };
                             self.say(format_args!("line {} on {} was not shifted ({why}); the document is held as moved", line.k, line.doc));
                             self.mark_moved(board_reference, principal, &line.doc, reason.refusal.map(|verdict| (line.k, verdict)));
+                            if unread {
+                                self.with_principal(board_reference, principal, |ph| ph.hands_owed.insert(line.doc.clone(), line.k));
+                                self.note_unanswered(&mut self.lock(board_reference), None);
+                            }
                             self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Moved, None, &hands);
-                            return ControlFlow::Break(());
+                            return if unread { Step::Unanswered } else { Step::Stops };
                         }
                     }
+                }
+                Dialed::Unanswered { reason, refusal } => {
+                    // The board gave the request no answer: the line holds
+                    // `unreachable`, its `sent` kept, the shift its read left
+                    // untried keeping its verdict, and its document goes back
+                    // to `holding`; the next probe's verdict decides whether
+                    // a send that may have left was the line's own failure.
+                    let cut = (left && reason.sent).then(|| CutSend { principal, k: line.k, doc: line.doc.clone(), at: self.now(), refusal: refusal.to_string() });
+                    self.with_principal(board_reference, principal, |ph| {
+                        if let Some(kept) = shifting.take().filter(|_| !left) {
+                            ph.shift_owed.insert(line.k, kept);
+                        }
+                        self.remark_line(principal, ph, line.k, Reason::of(cause::UNREACHABLE, reason.sent || sent));
+                    });
+                    self.note_unanswered(&mut self.lock(board_reference), cut);
+                    self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Holding, Some(cause::UNREACHABLE), &[]);
+                    return Step::Unanswered;
                 }
                 Dialed::Held { reason, refusal } => {
                     let state = line_state(&reason);
@@ -1074,7 +1332,7 @@ impl Holds {
                         self.say(format_args!("line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
                     }
                     self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), state, Some(&said), &[]);
-                    return ControlFlow::Break(());
+                    return Step::Stops;
                 }
                 Dialed::Reissue { kind, refusal } => {
                     // The rider's count (§3c.4), per line across its probes:
@@ -1083,7 +1341,7 @@ impl Holds {
                     if failed != Some(false) {
                         self.say(format_args!("line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
                     }
-                    return ControlFlow::Break(());
+                    return Step::Stops;
                 }
                 // The board's own verdict under a code the table holds
                 // nowhere: it cannot resolve, so the line is the person's at
@@ -1099,7 +1357,7 @@ impl Holds {
                     self.with_principal(board_reference, principal, |ph| self.remark_line(principal, ph, line.k, reason));
                     self.say(format_args!("line {} on {} was not taken ({r}), a code the shell holds no row for; it is handed to the person, who may send it again or drop it", line.k, line.doc));
                     self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Refused, Some(&token), &[]);
-                    return ControlFlow::Break(());
+                    return Step::Stops;
                 }
                 // A refusal of the shell's own, which dialed nothing the
                 // board judged and starts no clock: the line stands for the
@@ -1108,9 +1366,9 @@ impl Holds {
                     if failed != Some(false) {
                         self.say(format_args!("line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
                     }
-                    return ControlFlow::Break(());
+                    return Step::Stops;
                 }
-                Dialed::Died => return ControlFlow::Break(()),
+                Dialed::Died => return Step::Stops,
             }
         }
     }
@@ -1127,9 +1385,10 @@ impl Holds {
     /// [`Unshiftable`]'s reasons. `verdict` is the board's `arrangement_moved`,
     /// its `site.current` the floor the shifted frame is typed against. The
     /// line stands, with its anchors, its first failed send less than
-    /// [`HAND_OVER_DEADLINE`] past — each refusal that brings a line here is
-    /// a failed send of it, noted by the caller before it calls, so a document
-    /// another writer keeps moving stops the shell at the line's deadline —
+    /// [`HAND_OVER_DEADLINE`] of the board's answering past — each refusal
+    /// that brings a line here is a failed send of it, noted by the caller
+    /// before it calls, so a document another writer keeps moving stops the
+    /// shell at the line's deadline, the refusal naming the wall time since —
     /// and the step is taken, all before anything is read: a line with no
     /// anchors, or past its deadline, is held moved at once, whatever the
     /// turn has left. Then one live read is made, `image` over the whole
@@ -1144,7 +1403,12 @@ impl Holds {
     /// no reason the shift was not made: it is answered as a dial that never
     /// left and met the death ([`Dialed::Died`], `left` false, the line as it
     /// was), so each caller meets it as the death at its dial (§3c.4), never
-    /// as a moved document. Then the frame is attested (an attest that cannot
+    /// as a moved document; and a read the board gives no answer to leaves
+    /// the shift untried, never inexact: it is answered as a request the
+    /// board gave no answer to that dialed nothing ([`Dialed::Unanswered`],
+    /// `left` false, the line as it was; skep #863), each caller keeping the
+    /// verdict for the shift the board's answer runs. Then the frame is
+    /// attested (an attest that cannot
     /// be composed dials nothing and writes nothing: the dial that never left,
     /// `left` false, the line as it was), written to the line before it is
     /// dialed — `HeldQueue::rewrite`, synced, a copy the device refuses owed
@@ -1160,10 +1424,11 @@ impl Holds {
     ///
     /// 1. no line of ordinal `k` stands ([`Unshiftable::NoLine`]);
     /// 2. the line carries no anchors ([`Unshiftable::NoAnchors`]);
-    /// 3. its first failed send stands [`HAND_OVER_DEADLINE`] past or more
-    ///    ([`Unshiftable::PastTheDeadline`]);
+    /// 3. its first failed send stands [`HAND_OVER_DEADLINE`] of the board's
+    ///    answering past or more ([`Unshiftable::PastTheDeadline`]);
     /// 4. `step` refuses, nothing read: its refusal is answered;
-    /// 5. the image read is refused or unanswered ([`Unshiftable::Unread`]);
+    /// 5. the image read is refused, or answered with no image
+    ///    ([`Unshiftable::Unread`]);
     /// 6. the shift is not exact ([`shifted_frame`]'s refusal).
     pub(super) fn shift_and_send<E: From<Unshiftable>>(
         &self,
@@ -1177,10 +1442,10 @@ impl Holds {
         let line = self.line_of(board_reference, principal, k).ok_or(Unshiftable::NoLine)?;
         let anchors = line.anchors.as_ref().ok_or(Unshiftable::NoAnchors)?;
         // The line's deadline (HAND_OVER_DEADLINE), read before the shift's
-        // read: past it the line falls to the moved hold, the person's act.
-        let first_failed = self.with_principal(board_reference, principal, |ph| ph.reissues.get(&k).and_then(|given| given.first_failed)).flatten();
-        if let Some(elapsed) = first_failed.map(|first| self.now().saturating_duration_since(first)).filter(|elapsed| *elapsed >= HAND_OVER_DEADLINE) {
-            return Err(Unshiftable::PastTheDeadline { elapsed_ms: millis(elapsed) }.into());
+        // read: past it the line falls to the moved hold, the person's act,
+        // the refusal naming the wall time since its first failed send.
+        if let Some((elapsed, _)) = self.since_first_failure(board_reference, principal, k).filter(|(elapsed, _)| elapsed.answering >= HAND_OVER_DEADLINE) {
+            return Err(Unshiftable::PastTheDeadline { elapsed_ms: millis(elapsed.wall) }.into());
         }
         // The step the read and the shifted dial cost (TURN_STEPS), taken
         // past every check that reads nothing.
@@ -1194,6 +1459,9 @@ impl Holds {
             // The session's death, and no verdict on the document: no dial
             // leaves, and the caller meets the death as at its dial.
             Ok(Answer::Closed) => return Ok(Shifted { dialed: Dialed::Died, frame: line.frame, left: false }),
+            // The board's silence, and no verdict on the document either: the
+            // shift is not tried and no dial leaves (skep #863).
+            Err(h) if unanswered(&h) => return Ok(Shifted { dialed: Dialed::unanswered(false, Refusal::from(h)), frame: line.frame, left: false }),
             Err(h) => return Err(Unshiftable::Unread(h.to_string()).into()),
         };
         let as_of = image["as_of"].as_u64().unwrap_or(0).max(verdict["site"]["current"].as_u64().unwrap_or(0));
@@ -1214,8 +1482,9 @@ impl Holds {
 
     /// Hands a line at its deadline to the person (§3c.4).
     ///
-    /// Its first failed send stands `elapsed` past, [`HAND_OVER_DEADLINE`] or
-    /// more, and the read found no landing: the line is re-marked a refused
+    /// Its first failed send stands `elapsed` past in wall time, the line's
+    /// [`HAND_OVER_DEADLINE`] of the board's answering run or more, and the
+    /// read found no landing: the line is re-marked a refused
     /// run under the shell's `answers_lost`, its refusal naming `last`, the
     /// last failure's token, and `elapsed_ms`, its `sent` kept — so the
     /// person's `send` reads before it dials, and a landing the read finds
@@ -1248,10 +1517,12 @@ impl Holds {
     /// ([`Holds::shift_and_send`]: no anchors, a delete or a rearrange without
     /// its span, an anchor lost or at two places, the span between them cut or
     /// refilled, the read refused, the line's deadline passed), once the read
-    /// of the hands has answered: the death signal there marks nothing, being
-    /// the session's death and no verdict on the document
-    /// ([`Holds::hands_since_typed_state`]) — never from the resend's read,
-    /// which judges no move. A moved document is one the shift could not
+    /// of the hands has answered or gone unanswered, the hands then named not
+    /// read: the death signal there marks nothing, being the session's death
+    /// and no verdict on the document ([`Holds::hands_since_typed_state`]) —
+    /// never from the resend's read, which judges no move, nor from a shift
+    /// whose live read went unanswered, which is untried (skep #863). A moved
+    /// document is one the shift could not
     /// move through exactly: the exact rebase by identity is the shift, made
     /// where the page's anchors stand at one place each with the span's own
     /// units between them, and a burst it cannot carry so is held here, since a

@@ -176,6 +176,24 @@ fn only_the_librarys_typed_session_end_ends_the_session() {
     shell.shutdown();
 }
 
+/// Checks that a published journal crosses as typed data naming it.
+///
+/// The library's `PublishedJournal` is `merge_refused` with the arm
+/// `published_journal` and the journal's address beside it, so a page words
+/// it from data, and the session stands.
+#[test]
+fn a_published_journal_crosses_as_typed_data_naming_it() {
+    let dir = TempDir::new().unwrap();
+    let (shell, _) = open_shell(&super::door::nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let standing = register(&shell, "8e", signed_facts(2));
+    let journal = skep_client::address::parse_address("1.0.1.0.1").expect("an address");
+    let crossed = shell.merge_refusal(&shell.sessions.get(&standing).unwrap(), Library::PublishedJournal { journal });
+    let v = crossed.to_value();
+    assert_eq!((crossed.name(), v["arm"].as_str(), v["journal"].as_str()), ("merge_refused", Some("published_journal"), Some("1.0.1.0.1")), "{v}");
+    assert_eq!(shell.call("merge.land", &json!({"session": standing})).unwrap_err().name(), "no_merge", "the session stands");
+    shell.shutdown();
+}
+
 /// Checks a daughter composed and landed, and taken back, against the
 /// daemon.
 ///

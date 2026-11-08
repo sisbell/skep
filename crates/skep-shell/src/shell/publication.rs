@@ -12,7 +12,9 @@
 //! request as it would stand with every private row OFF and every window
 //! kept private — the widest request the default switches make — and
 //! answers the panel `{rows, formatting, read_with, count, price, windows,
-//! inherited, standing?, left_behind, hold?}`;
+//! inherited, merge_records, standing?, left_behind, hold?}` —
+//! `merge_records` the merge records the publication leaves out, per named
+//! draft, since no publication publishes one;
 //! `count` answers the four numbers and the price over the rows as
 //! switched, off the held panel, PURE LOCAL — no frame sent, the price the
 //! open's request re-priced with the entries the switches add, each end
@@ -523,6 +525,7 @@ impl Shell {
             Fault::SessionEnded => self.died(session),
             Fault::Busy => Refusal::shell(Name::BUSY, json!({"call": call, "reissues": lib::SCAN_BUSY_REISSUES})),
             Fault::SelectionNotArranged { index } => Refusal::shell(Name::SELECTION_NOT_ARRANGED, json!({"index": index})),
+            Fault::OnlyMergeRecords { draft } => Refusal::shell(Name::ONLY_MERGE_RECORDS, json!({"draft": draft.to_string()})),
             Fault::Shape { op, body } => Refusal::shell(Name::SHAPE, json!({"op": op, "body": body})),
             Fault::Halt(h) => Refusal::from(h),
         }
@@ -648,7 +651,8 @@ impl Shell {
     /// selection?, notes?, readable_drafts?, published?})` with the panel.
     ///
     /// The panel is `{rows, formatting, read_with, count, price, windows,
-    /// inherited, standing?, left_behind, hold?}` (the module doc): a held or
+    /// inherited, merge_records, standing?, left_behind, hold?}` (the module
+    /// doc): a held or
     /// standing panel of the draft re-opened as it stands where the selection
     /// is none or the same, its base's standing typed again and its windows
     /// re-read (`also`, the base and the family left behind as it held
@@ -690,9 +694,11 @@ impl Shell {
     ///    `at_head` or `first` — and the board's feed thread has stopped;
     /// 6. the reads' — the draft's arrangement where no selection is passed,
     ///    the family left behind, the enumeration, the panel: `unreadable`,
-    ///    `no_such_document`, `busy`, `selection_not_arranged`, `shape`, the
-    ///    board's own verdicts verbatim, `unreachable`, and `session_died`
-    ///    where a read met the death signal.
+    ///    `no_such_document`, `busy`, `selection_not_arranged`,
+    ///    `only_merge_records` naming the draft where every position of the
+    ///    selection holds a merge record, `shape`, the board's own verdicts
+    ///    verbatim, `unreachable`, and `session_died` where a read met the
+    ///    death signal.
     pub(super) fn publication_open(&self, args: &Value) -> Result<Value, Refusal> {
         // The row's own members first, each refused in another form before
         // the session is looked up — the order every row keeps.
@@ -1352,6 +1358,12 @@ fn inherited_json(i: &lib::Inherited) -> Value {
     json!({"draft": i.draft.to_string(), "passages": i.passages})
 }
 
+/// Returns one named draft's merge records the publication leaves out, as
+/// the panel answers them: `{draft, n}`.
+fn merge_records_json(m: &lib::MergeRecords) -> Value {
+    json!({"draft": m.draft.to_string(), "n": m.n})
+}
+
 /// Returns a base's standing as the panel and the re-statement spell it.
 fn standing_json(s: &Standing) -> &'static str {
     match s {
@@ -1385,6 +1397,7 @@ fn panel_json(state: &PanelState, hold: Option<Value>) -> Value {
         "price": price_json(&local_price(state)),
         "windows": panel.windows.iter().map(window_json).collect::<Vec<_>>(),
         "inherited": panel.inherited.iter().map(inherited_json).collect::<Vec<_>>(),
+        "merge_records": panel.merge_records.iter().map(merge_records_json).collect::<Vec<_>>(),
         "left_behind": addresses_json(&state.left_behind),
     });
     if let Some(standing) = &state.standing {

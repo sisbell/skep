@@ -17,12 +17,14 @@
 //!
 //! **The request.** From the confirmed rows: the runs from the held
 //! selection as the re-read placed them — a split run as its pieces in the
-//! draft's order, every named draft's run with the rendering draft's kept
-//! place beside it (its own words and an `also` draft's alike, which the
-//! rendering draft holds by identity), and, per draft `also` names, THAT
-//! draft's own kept places in `also_places`, read off its image, so the one
-//! commit re-windows every named draft at its own places (skep #739; the
-//! Nelson way, B3-S10) — every window onto the
+//! draft's order, each run cut around its merge records, which no
+//! publication carries as a run or with a kept place
+//! ([`Enumeration::pieces`]), every named draft's run with the rendering
+//! draft's kept place beside it (its own words and an `also` draft's
+//! alike, which the rendering draft holds by identity), and, per draft
+//! `also` names, THAT draft's own kept places in `also_places`, read off
+//! its image, so the one commit re-windows every named draft at its own
+//! places (skep #739; the Nelson way, B3-S10) — every window onto the
 //! person's own unpublished origin answered first (THE THREE ANSWERS:
 //! publish-first is NOT this request, which stays inert; DROP leaves the
 //! run out; KEEP PRIVATE sends it as a window with no place beside it) and
@@ -732,11 +734,9 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
     let mut publish_first = Vec::new();
     let mut counterparts: Vec<Counterpart> = Vec::new();
     for (i, run) in inputs.selection.iter().enumerate() {
-        let pieces: Vec<(Run, u64)> = match e.placed.get(i) {
-            Some(Placement::Whole { ordinal }) => vec![(run.clone(), *ordinal)],
-            Some(Placement::Split(parts)) => parts.iter().map(|(o, first, width)| (Run::new(run.origin.clone(), *first, *width), *o)).collect(),
-            Some(Placement::Absent) | None => Vec::new(),
-        };
+        // The run as placed, cut around its merge records, which no
+        // publication carries: no run and no kept place for one.
+        let pieces = e.pieces(i, run);
         // A named draft's run — the rendering draft's or an `also` draft's —
         // is the document's own words, re-minted, and the rendering draft's
         // kept place is sent for EVERY such run: its own position of the

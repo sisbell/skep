@@ -70,25 +70,30 @@
 //! owes, nothing sent; a signed frame refused `attestation_required` is this
 //! library's own fault.
 //!
-//! **The journal, before the first write and at the record.** A record's
-//! atom is appended to its journal as a plain insert, so a journal takes a
-//! record only as a draft the merger's account owns, readable and
-//! registered at this board (the merge record's decision 7). A journal the
-//! caller names is checked before the landing's first write — one
-//! `doc_metadata` at the head, after the read-first steps and before the
-//! head's read — and one this merger may not read (`withheld`), one this
-//! board does not register, another account's or a published one is refused
-//! there, naming the journal and the check it fails, with nothing sent
-//! (P13). A landing found standing makes no write before its record, and no
-//! journal is checked there. At the record the journal's extent is read,
+//! **The journal, before the first write and at the record.** A merge
+//! record is kept only in a private document: its atom is appended to its
+//! journal as a plain insert, which a published document refuses, so a
+//! journal takes a record only as a draft the merger's account owns,
+//! readable and registered at this board (the merge record's decision 7),
+//! and no record goes into a published document. A journal the caller names
+//! is checked before the landing's first write — one `doc_metadata` at the
+//! head, after the read-first steps and before the head's read — and one
+//! this merger may not read (`withheld`), one this board does not register
+//! or another account's is refused there as a halt naming the journal and
+//! the check it fails, a published one of the merger's own as
+//! [`Refusal::PublishedJournal`], with nothing sent (P13); [`journal::check`]
+//! is that check alone, for a caller that says it before it lands. A
+//! landing found standing makes no write before its record, and no journal
+//! is checked there. At the record the journal's extent is read,
 //! the end the atom is appended at: a journal that read answers `withheld`
 //! or `doc_not_registered`, or a journal named whose atom the board refuses
 //! `published_target` or `not_owner`, halts the record with nothing of it
 //! written, faced as the landing standing with its record unwritten — never
 //! as a refusal of the landing — for [`resume`] to record into a journal the
 //! merger can write, or into the account's own. The account's own journal,
-//! found or minted at the record, is this library's choice, so the board's
-//! refusal of its atom is this library's own fault.
+//! found or minted at the record, is this library's choice — a private
+//! draft of the account's, read before it is taken (`journal`'s doc) — so
+//! the board's refusal of its atom is this library's own fault.
 //!
 //! **The draft landing is one write.** M is sent whole as one
 //! `set_arrangement` of the draft (wire.md §Arrangement), TYPED against the
@@ -249,10 +254,11 @@ pub enum Landing<'a> {
         draft: Option<Address>,
         /// The merge journal the record goes to.
         ///
-        /// The account's default where `None` — the journal its first
-        /// record went to, or a private one minted (decision 7). One named
-        /// is checked before the shot: a draft this account owns, readable
-        /// and registered (P13; the module's doc).
+        /// The account's default where `None` — the private journal its
+        /// first record went to, or a private one minted (decision 7). One
+        /// named is checked before the shot: a draft this account owns,
+        /// readable and registered, a published one refused
+        /// [`Refusal::PublishedJournal`] (P13; the module's doc).
         journal: Option<Address>,
     },
     /// M set as the whole arrangement of a draft in one `set_arrangement`.
@@ -411,10 +417,11 @@ impl<'a> Landing<'a> {
 /// - [`Refusal::OverCap`], before any frame;
 /// - the reads' refusals, for a member already holding M or for the
 ///   merger's newest record for the key at a draft landing;
-/// - a journal named that cannot take the record — one this merger may not
-///   read, one this board does not register, another account's or a
-///   published one — as [`Refusal::Halt`] naming the journal and the check
-///   it fails, before the landing's first write, with nothing sent (P13);
+/// - a journal named that cannot take the record, before the landing's
+///   first write with nothing sent (P13): one this merger may not read, one
+///   this board does not register or another account's, as
+///   [`Refusal::Halt`] naming the journal and the check it fails; a
+///   published one of the merger's own, as [`Refusal::PublishedJournal`];
 ///   the journal's `doc_metadata` read's other refusals and halts;
 /// - the reads' refusals for the draft's `doc_metadata` at the position the
 ///   write is typed against;
@@ -1857,10 +1864,18 @@ impl Writer<'_> {
     ///
     /// # Errors
     ///
-    /// A journal that fails a check, as [`Refusal::Halt`] with a face naming
-    /// the journal and the check, nothing sent; a merger's account this
-    /// client cannot spell, as the library's own fault; the read's other
-    /// refusals and halts; the death signal, [`Refusal::SessionEnded`].
+    /// In this order, nothing sent:
+    ///
+    /// - a journal this merger may not read, one this board does not
+    ///   register, or another account's, as [`Refusal::Halt`] with a face
+    ///   naming the journal and the check it fails;
+    /// - a merger's account this client cannot spell, as the library's own
+    ///   fault;
+    /// - a published journal of the merger's own, as
+    ///   [`Refusal::PublishedJournal`] naming it: a merge record is kept only
+    ///   in a private document;
+    /// - the read's other refusals and halts; the death signal,
+    ///   [`Refusal::SessionEnded`].
     pub(super) fn check_journal(
         &self,
         journal: Option<&Address>,
@@ -1887,7 +1902,7 @@ impl Writer<'_> {
                 if parse_address(&meta.owner).as_ref() != Some(&account) {
                     (Unfit::Foreign, format!("its `doc_metadata` names the owner {}, and only a document's owner writes into it (not_owner)", meta.owner))
                 } else if meta.published {
-                    (Unfit::Published, "its `doc_metadata` names it published, and the atom goes in as a plain insert, which a published document refuses (published_target)".to_string())
+                    return Err(Refusal::PublishedJournal { journal: journal.clone() });
                 } else {
                     return Ok(());
                 }
@@ -2027,10 +2042,12 @@ impl Unwritten {
 /// A record's atom goes into its journal as a plain insert, so the journal
 /// is a draft the merger's account owns, readable and registered at this
 /// board (the merge record's decision 7). A journal named is checked before
-/// an act's first write (`Writer::check_journal`; P13); one the record's
-/// step finds failing a check leaves the act standing with its record
-/// unwritten ([`Unwritten::Journal`]). The checks run in the board's order
-/// for the atom: the read's answer, then the owner, then the published bit.
+/// an act's first write (`Writer::check_journal`; P13), which faces the
+/// first three and answers a published one [`Refusal::PublishedJournal`];
+/// one the record's step finds failing a check leaves the act standing with
+/// its record unwritten ([`Unwritten::Journal`]). The checks run in the
+/// board's order for the atom: the read's answer, then the owner, then the
+/// published bit.
 #[derive(Clone, Copy)]
 pub(super) enum Unfit {
     /// It answers `withheld`: this merger may not read it.

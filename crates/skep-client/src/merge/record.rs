@@ -8,6 +8,14 @@
 //! the journal's arrangement and never by identity), and [`verify`], the
 //! record's testimony recomputed.
 //!
+//! **Kept private.** A merge record is kept only in a private document: its
+//! journal is a private draft of the merger's own and a published one is
+//! refused before any write (the [`journal`](super::journal) module); no
+//! publication publishes a record, the publication's enumeration leaving
+//! every atom of the kind out of what it publishes
+//! (`crate::publication::is_merge_record`); and what a merge makes public is
+//! its version and, at a published daughter, the claim riding its shot.
+//!
 //! **Testimony, plainly (D4).** The record is a claim its writer makes, as
 //! the supersession claim beside it is; the daemon derives nothing from it,
 //! the member's arrangement is the fact. Everything it asserts is
@@ -49,8 +57,10 @@ use super::reads::{self, last_component, origin_of, OnEnd, Reader, Refusal, Role
 
 /// The kind's `type` member, `merge`.
 ///
-/// It is the word on every surface (decision 12).
-pub const TYPE: &str = "merge";
+/// It is the word on every surface (decision 12), stated once as the
+/// publication's [`MERGE_RECORD_TYPE`](crate::publication::MERGE_RECORD_TYPE),
+/// whose enumeration keeps every atom carrying it out of what it publishes.
+pub const TYPE: &str = crate::publication::MERGE_RECORD_TYPE;
 
 /// The schema's version, `v`.
 pub const SCHEMA_VERSION: u64 = 1;

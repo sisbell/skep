@@ -33,7 +33,10 @@
 //! documents — a second top-level account's private draft and fork — each
 //! `withheld` refusal saying beside the document what the run did, and the
 //! draft named as the journal refused before the shot, exit 3, nothing
-//! published.
+//! published; and A PUBLISHED JOURNAL — the trunk and the account's doc 1 —
+//! said by the composition's talk before any landing flag is acted on, and
+//! refused `published_target` in the command's words at `--publish`,
+//! `--new` and `--undo`, exit 1, nothing written.
 
 use std::path::{Path, PathBuf};
 
@@ -909,7 +912,7 @@ fn a_strangers_document_is_refused_with_what_the_run_did_and_as_the_journal_befo
     assert_eq!(rig.publishes_under(&token, &d), publishes, "nothing published");
     // Naming no journal, the next version lands with its record; naming the
     // stranger's draft again, the standing landing is answered, nothing
-    // written and the journal never read.
+    // written and no journal checked by the landing.
     let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--head", &head_s, "--publish", "--kind", &kind]);
     let v = report(&r);
     assert_eq!(v["landed"]["member"].as_str(), Some(member.as_str()), "the next version: {}", v["landed"]);
@@ -921,5 +924,63 @@ fn a_strangers_document_is_refused_with_what_the_run_did_and_as_the_journal_befo
     let v = report(&r);
     assert_eq!((v["landed"]["member"].as_str(), v["landed"]["record"].as_str()), (Some(member.as_str()), Some(link.as_str())), "the standing landing: {}", v["landed"]);
     assert_eq!(position(), before, "nothing written twice");
+    session.close().expect("close");
+}
+
+/// A published journal is refused in the command's words, before any write.
+///
+/// `D`, the published trunk, and the account's doc 1, born published, are
+/// each named as the journal. With no landing flag the composition's talk
+/// says the fact after its own line and the report is printed, exit 0; with
+/// `--publish` and with `--new` the talk says it, then the board's refusal
+/// `published_target` in the command's words, exit 1, nothing on stdout,
+/// nothing written and nothing published — never the library's own fault.
+/// `--undo` of a merge `--new` landed is refused the same naming `D`,
+/// nothing taken back.
+#[test]
+fn a_published_journal_is_refused_in_the_commands_words_before_any_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let kind = rig.draft().to_string();
+    let (d, base, head, daughter) = rig.race(&session);
+    let (d_s, daughter_s, head_s) = (d.to_string(), daughter.to_string(), head.to_string());
+    let doc1 = format!("{ACCOUNT}.0.1");
+    let position = || rig.board.health().unwrap().log_position();
+    let refusal = |journal: &str, undone: &str| {
+        format!("the board refused: published_target:{journal} is published, and a merge record is kept only in a private document — {undone} and nothing was written. Name a private document of yours with --journal, or leave --journal out to use your private journal.")
+    };
+    for journal in [d_s.as_str(), doc1.as_str()] {
+        let clause = format!("{journal} is published, and a merge record is kept only in a private document — landing this merge there is refused");
+        let before = position();
+        let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--head", &head_s, "--journal", journal, "--kind", &kind]);
+        report(&r);
+        let composed = r.err.find(&format!("composed over the base {base}")).unwrap_or_else(|| panic!("the composition said: {}", r.err));
+        let said = r.err.find(&clause).unwrap_or_else(|| panic!("{journal}: the fact said before any landing: {}", r.err));
+        assert!(composed < said, "{journal}: after the composition's line: {}", r.err);
+        assert_eq!(position(), before, "{journal}: nothing written");
+        for landing in ["--publish", "--new"] {
+            let (before, publishes) = (position(), rig.publishes_under(&token, &d));
+            let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--head", &head_s, landing, "--journal", journal, "--kind", &kind]);
+            assert_eq!(r.code, 1, "{journal} {landing}: {r:?}");
+            assert!(r.out.is_empty(), "{journal} {landing}: no report: {}", r.out);
+            let said = r.err.find(&clause).unwrap_or_else(|| panic!("{journal} {landing}: the fact said: {}", r.err));
+            let refused = r.err.find(&refusal(journal, "nothing was merged")).unwrap_or_else(|| panic!("{journal} {landing}: the refusal in the command's words: {}", r.err));
+            assert!(said < refused, "{journal} {landing}: the fact, then the refusal: {}", r.err);
+            assert!(!r.err.contains("fault in this library"), "{journal} {landing}: {}", r.err);
+            assert_eq!(position(), before, "{journal} {landing}: nothing written");
+            assert_eq!(rig.publishes_under(&token, &d), publishes, "{journal} {landing}: nothing published");
+        }
+    }
+    // A take-back names a published journal: refused before its one write.
+    let v = report(&rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--head", &head_s, "--new", "--kind", &kind]));
+    let draft = v["landed"]["draft"].as_str().expect("the fresh draft").to_string();
+    let before = position();
+    let r = rig.merge(&["--undo", &draft, "--journal", &d_s, "--kind", &kind]);
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.out.is_empty(), "no report: {}", r.out);
+    assert!(r.err.contains(&refusal(&d_s, "nothing was taken back")), "{}", r.err);
+    assert_eq!(position(), before, "nothing taken back, nothing written");
     session.close().expect("close");
 }

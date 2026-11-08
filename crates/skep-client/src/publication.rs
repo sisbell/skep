@@ -23,7 +23,12 @@
 //!
 //! 1. [`enumerate`](mod@enumerate) — THE ENUMERATION (§5.1): one `image` of the draft
 //!    inverted over the held selection, one of each draft `also` names for
-//!    its own kept places, one `find_links_v` over the
+//!    its own kept places; the atoms of the selection's runs of a named
+//!    draft read, each position whose atom is a MERGE RECORD left out of
+//!    what the publication carries — no publication publishes a merge
+//!    record (the merge record's decision 7), every later step composing
+//!    from the selection so cut — and a selection of merge records alone
+//!    refused; one `find_links_v` over the
 //!    selection's V-spans as one region array, each address kept where its
 //!    home's account is the person's exactly, each kept link read once and
 //!    kept where its STORED endset touches the selection through a content
@@ -43,8 +48,8 @@
 //!    counterpart each is offered first (§5.7), read at every panel — the
 //!    drafts `also` names excluded, their runs re-minted and not windowed —
 //!    and THE STATEMENT's count per `also` draft, the passages first written
-//!    in it (B3-S11 P2 (i)); and THE COUNT's four numbers from the rows as
-//!    switched (PUB-3.8).
+//!    in it (B3-S11 P2 (i)); the merge records left out, per named draft;
+//!    and THE COUNT's four numbers from the rows as switched (PUB-3.8).
 //! 3. [`price`](mod@price) — THE PRICE (§5.6): the lists, the body, the staged bytes,
 //!    the in-lock reads, each against its cap, from the worst-case table the
 //!    daemon prices by, pinned equal to it.
@@ -101,9 +106,9 @@ pub mod send;
 mod tests;
 
 pub use base::{draft_base, left_behind, standing, Standing, Unrecorded};
-pub use enumerate::{enumerate, AlsoImage, Candidate, Enumeration, Placement, Record, Successor, Via, MAX_WIRE_LIST};
+pub use enumerate::{enumerate, is_merge_record, AlsoImage, Candidate, Enumeration, Placement, Record, Successor, Via, MAX_WIRE_LIST, MERGE_RECORD_TYPE};
 pub use landed::{landed, twin_precheck, Base, Missing, Recomposed, Verdict};
-pub use panel::{count, inherited, panel, windows, Count, Counterpart, Destination, Formatting, Inherited, LineCounts, Panel, Removal, Row, RowKind, Switches, TypeFold, Window};
+pub use panel::{count, inherited, panel, windows, Count, Counterpart, Destination, Formatting, Inherited, LineCounts, MergeRecords, Panel, Removal, Row, RowKind, Switches, TypeFold, Window};
 pub use price::{price, Price, Term};
 pub use request::{build, reread, AlsoPlaces, Answer as OriginAnswer, Built, Confirmed, End, Entry, EntryHome, Inert, Piece, Reread, Request, Restatement, Unspellable};
 pub use send::{send, Ack, AckVia, OwnFault, RaceKey, Refusal, Sent, SupersedeCause};
@@ -403,6 +408,13 @@ pub enum Fault {
         /// The run's index in the selection.
         index: usize,
     },
+    /// The selection holds nothing but merge records, which no publication
+    /// publishes: there is nothing in it to publish, and nothing is sent
+    /// (the merge record's decision 7; [`enumerate`](mod@enumerate)).
+    OnlyMergeRecords {
+        /// The rendering draft.
+        draft: Address,
+    },
     /// The board answered a document this client cannot read as the frame's
     /// answer; `op` the frame, `body` the answer, clipped.
     Shape {
@@ -429,6 +441,7 @@ impl fmt::Display for Fault {
             Fault::SessionEnded => f.write_str("the session ended (Skepd-Session: closed); nothing further was read or written"),
             Fault::Busy => f.write_str("the board was busy (scan_busy or history_busy) past the bounded reissues; nothing was published"),
             Fault::SelectionNotArranged { index } => write!(f, "the draft no longer arranges the selection's run {index} whole at one place"),
+            Fault::OnlyMergeRecords { draft } => write!(f, "{draft} holds only merge records, and they stay private — there is nothing in it to publish"),
             Fault::Shape { op, body } => write!(f, "`{op}` answered a document this client cannot read: {body}"),
             Fault::Halt(h) => h.fmt(f),
         }
@@ -642,6 +655,38 @@ impl<'a> Door<'a> {
             return Err(shape(&frame, &v));
         }
         out.extend(items);
+        Ok(())
+    }
+
+    /// Reads the atoms at content ordinals `from ..` of `doc`, `width` of
+    /// them, each with its ordinal, in parts on `too_many_items`.
+    ///
+    /// A run's bytes are counted, one position each, and kept nowhere.
+    pub(crate) fn atoms(&self, doc: &str, from: u64, width: u64) -> Result<Vec<(u64, Vec<u8>)>, Fault> {
+        let mut out = Vec::new();
+        self.atoms_into(doc, from, width, &mut out)?;
+        Ok(out)
+    }
+
+    fn atoms_into(&self, doc: &str, from: u64, width: u64, out: &mut Vec<(u64, Vec<u8>)>) -> Result<(), Fault> {
+        if width == 0 {
+            return Ok(());
+        }
+        let frame = frames::retrieve_v(doc, from, width);
+        let v = self.read(&frame)?;
+        if let Some(r) = Rejection::of(&v) {
+            if r.key() != "too_many_items" || width == 1 {
+                return Err(self.refuse(doc, &r, &v));
+            }
+            let left = width / 2;
+            self.atoms_into(doc, from, left, out)?;
+            return self.atoms_into(doc, from + left, width - left, out);
+        }
+        let (covered, atoms) = answers::delivery_atoms(&v).ok_or_else(|| shape(&frame, &v))?;
+        if covered != width {
+            return Err(shape(&frame, &v));
+        }
+        out.extend(atoms.into_iter().map(|(k, bytes)| (from + k, bytes)));
         Ok(())
     }
 }

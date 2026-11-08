@@ -82,7 +82,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("Run", json!({"origin": "1.0.1.0.5", "i_start": 1, "width": 10})),
         (
             "PublicationPanel",
-            json!({"rows": [], "formatting": {"marks": [], "cut": 0, "removals": []}, "read_with": {"1.0.1.0.3": true}, "count": {"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": []}, "price": {"lists": [0, 0, 0, 0, 0], "body": 0, "values": 0, "reads": 0, "bytes": 0, "over": []}, "windows": [], "inherited": [{"draft": "1.0.1.0.9", "passages": 2}], "standing": "at_head", "left_behind": ["1.0.1.0.9"], "hold": {"since": 1}}),
+            json!({"rows": [], "formatting": {"marks": [], "cut": 0, "removals": []}, "read_with": {"1.0.1.0.3": true}, "count": {"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": []}, "price": {"lists": [0, 0, 0, 0, 0], "body": 0, "values": 0, "reads": 0, "bytes": 0, "over": []}, "windows": [], "inherited": [{"draft": "1.0.1.0.9", "passages": 2}], "merge_records": [{"draft": "1.0.1.0.11", "n": 2}], "standing": "at_head", "left_behind": ["1.0.1.0.9"], "hold": {"since": 1}}),
         ),
         ("PublicationRow", json!({"home": "1.0.1.0.5", "kind": {"public": {"read_with": false}}, "label": "notes here", "links": ["1.0.1.0.5.0.2.1"], "types": [], "line": {"p": 0, "d": 0, "c": 0, "t": 0, "u": 0}, "read_through": 0})),
         ("TypeFold", json!({"ty": "1.1.0.1.0.1.0.3.13", "n": 1, "far": ["1.0.1.0.8"]})),
@@ -97,6 +97,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("Window", json!({"run": 2, "origin": "1.0.1.0.7", "owner": "1.0.1", "i_start": 1, "width": 5, "counterpart": {"run": 2, "draft": "1.0.1.0.7", "record": "1.0.1.0.7.0.2.1", "from": {"chain": "1.0.1.0.7.0.1", "first": 1, "width": 4}, "to": {"chain": "1.0.1.0.2.0.1", "first": 16, "width": 4}}})),
         ("Counterpart", json!({"run": 2, "draft": "1.0.1.0.7", "record": "1.0.1.0.7.0.2.1", "from": {"chain": "1.0.1.0.7.0.1", "first": 1, "width": 4}, "to": {"chain": "1.0.1.0.2.0.1", "first": 16, "width": 4}})),
         ("Inherited", json!({"draft": "1.0.1.0.9", "passages": 2})),
+        ("MergeRecords", json!({"draft": "1.0.1.0.11", "n": 2})),
         ("ISpan", json!({"chain": "1.0.1.0.7.0.1", "first": 1, "width": 4})),
         ("Hold", json!({"since": 1_761_696_000_000u64})),
         ("Switches", json!({"on": ["1.0.1.0.6"], "destinations": {"1.0.1.0.6": {"set": "1.0.1.0.4"}}})),

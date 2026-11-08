@@ -455,6 +455,36 @@ pub(crate) fn delivery_values(v: &Value) -> Option<Vec<Vec<u8>>> {
     Some(out)
 }
 
+/// Returns a `delivery`'s atoms with the positions its items cover.
+///
+/// Each atom is the `atom` or `atom_hex` item's offset among those
+/// positions, from 0, with its bytes; a `content` item's and a `hex` run's
+/// bytes are counted, one position each, and kept nowhere (wire.md §Value
+/// encodings). `None` where [`delivery_values`] answers `None`.
+#[cfg_attr(not(feature = "acting"), allow(dead_code))]
+pub(crate) fn delivery_atoms(v: &Value) -> Option<(u64, Vec<(u64, Vec<u8>)>)> {
+    if v["resp"].as_str() != Some("delivery") {
+        return None;
+    }
+    let (mut covered, mut atoms) = (0u64, Vec::new());
+    for item in v["items"].as_array()? {
+        if let Some(text) = item["content"].as_str() {
+            covered += text.len() as u64;
+        } else if let Some(hex) = item["hex"].as_str() {
+            covered += crate::hex::decode(hex)?.len() as u64;
+        } else if let Some(text) = item["atom"].as_str() {
+            atoms.push((covered, text.as_bytes().to_vec()));
+            covered += 1;
+        } else if let Some(hex) = item["atom_hex"].as_str() {
+            atoms.push((covered, crate::hex::decode(hex)?));
+            covered += 1;
+        } else {
+            return None;
+        }
+    }
+    Some((covered, atoms))
+}
+
 /// Returns the origin of a `delivery`'s first `withheld` item.
 ///
 /// The item is a run the reader may not read inside a document it may,
@@ -795,6 +825,19 @@ mod tests {
         assert_eq!(first_atom(&json!({"as_of":9,"items":[{"atom_hex":"00ff"}],"resp":"delivery"})).as_deref(), Some(&[0x00, 0xff][..]));
         assert_eq!(first_atom(&json!({"as_of":9,"items":[{"ref":"1.0.1.0.1.0.2.1"}],"resp":"delivery"})), None);
         assert_eq!(first_atom(&json!({"code":"withheld","op":"retrieve_v","resp":"rejected"})), None);
+    }
+
+    /// A delivery's atoms are its composite items at their offsets.
+    ///
+    /// A run's bytes count one position each and are kept nowhere; a
+    /// `withheld` run or a `ref` spells no atom list, as it spells no values.
+    #[test]
+    fn a_deliverys_atoms_are_its_composite_items_at_their_offsets() {
+        let items = json!({"as_of":9,"items":[{"content":"hi"},{"atom":"chunk"},{"hex":"00ff"},{"atom_hex":"01"}],"resp":"delivery"});
+        assert_eq!(delivery_atoms(&items), Some((6, vec![(2, b"chunk".to_vec()), (5, vec![0x01])])));
+        assert_eq!(delivery_atoms(&json!({"as_of":9,"items":[{"content":"plain"}],"resp":"delivery"})), Some((5, vec![])));
+        assert_eq!(delivery_atoms(&json!({"as_of":9,"items":[{"ref":"1.0.1.0.1.0.2.1"}],"resp":"delivery"})), None);
+        assert_eq!(delivery_atoms(&json!({"code":"withheld","op":"retrieve_v","resp":"rejected"})), None);
     }
 
     /// A `withheld` item spells no value, and its origin is read off it.

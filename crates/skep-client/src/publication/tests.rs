@@ -155,6 +155,8 @@ struct World {
     position: u64,
     docs: BTreeMap<String, DocState>,
     values: BTreeMap<(String, u64), u8>,
+    /// The positions holding a composite value, an atom, in place of a byte.
+    atoms: BTreeMap<(String, u64), String>,
     links: Vec<LinkRow>,
     rows: Vec<FeedRow>,
     next_fresh: BTreeMap<String, u64>,
@@ -197,6 +199,13 @@ impl World {
         }
         let next = self.next_fresh.entry(origin.to_string()).or_insert(1);
         *next = (*next).max(from + text.len() as u64);
+    }
+
+    /// An atom at `origin`'s ordinal `n`: one composite value.
+    fn atom(&mut self, origin: &str, n: u64, atom: &str) {
+        self.atoms.insert((origin.to_string(), n), atom.to_string());
+        let next = self.next_fresh.entry(origin.to_string()).or_insert(1);
+        *next = (*next).max(n + 1);
     }
 
     /// A link homed in `home`, at the next position: its address.
@@ -503,9 +512,26 @@ impl World {
                 let (from, width) = span_of(&spec["span"]);
                 let Some(runs) = self.arrangement(doc) else { return Ok(rejected("doc_not_registered", json!({}))) };
                 let positions = Self::expand(&runs);
-                let text: String = positions.iter().skip(from as usize - 1).take(width as usize).map(|(o, n)| *self.values.get(&(o.to_string(), *n)).unwrap_or_else(|| panic!("no value at {o}.0.1.{n}")) as char).collect();
-                assert_eq!(text.len() as u64, width, "the span asked lies within the arrangement");
-                Ok(reply(200, json!({"resp": "delivery", "as_of": position, "items": [{"content": text}]})))
+                // A run of bytes is one `content` item, an atom an item of
+                // its own (wire.md §Value encodings).
+                let (mut items, mut text, mut covered) = (Vec::new(), String::new(), 0u64);
+                for (o, n) in positions.iter().skip(from as usize - 1).take(width as usize) {
+                    covered += 1;
+                    match self.atoms.get(&(o.to_string(), *n)) {
+                        Some(atom) => {
+                            if !text.is_empty() {
+                                items.push(json!({"content": std::mem::take(&mut text)}));
+                            }
+                            items.push(json!({"atom": atom}));
+                        }
+                        None => text.push(*self.values.get(&(o.to_string(), *n)).unwrap_or_else(|| panic!("no value at {o}.0.1.{n}")) as char),
+                    }
+                }
+                if !text.is_empty() {
+                    items.push(json!({"content": text}));
+                }
+                assert_eq!(covered, width, "the span asked lies within the arrangement");
+                Ok(reply(200, json!({"resp": "delivery", "as_of": position, "items": items})))
             }
             "find_links_v" => {
                 if self.busy > 0 {
@@ -818,8 +844,13 @@ impl World {
                         }
                         None => {
                             let f = self.fresh(&trunk);
-                            let value = self.values[&(origin.clone(), n)];
-                            self.values.insert((trunk.clone(), f), value);
+                            match self.atoms.get(&(origin.clone(), n)).cloned() {
+                                Some(atom) => drop(self.atoms.insert((trunk.clone(), f), atom)),
+                                None => {
+                                    let value = self.values[&(origin.clone(), n)];
+                                    self.values.insert((trunk.clone(), f), value);
+                                }
+                            }
                             fresh_of.insert((origin.clone(), n), f);
                             if minted_start.is_none() {
                                 minted_start = Some((n, f));
@@ -1195,7 +1226,8 @@ fn built(dialer: &Scripted, board: &Board, tok: &Token, signer: &HybridSigner, c
 // ── THE ENUMERATION ──────────────────────────────────────────────────────
 
 /// §5.1's reads IN ORDER with their frame counts — the extent and the one
-/// image, the one `find_links_v` over the selection as one region, one
+/// image, the atoms of the draft's own run (no merge record among them), the
+/// one `find_links_v` over the selection as one region, one
 /// `read_link` per owned link, the records read with its hits, the
 /// read-through's two batched reads, the two claims reads per candidate —
 /// and the candidates: the owned homes' links touching the selection kept,
@@ -1212,11 +1244,13 @@ fn the_enumeration_reads_in_order_and_keeps_the_owned_homes_links_on_the_words()
     let p = publisher(&board, &tok, &signer);
     let e = enumerate(&p, &inputs()).expect("enumerated");
     let steps: Vec<&str> = e.frames.iter().map(|(s, _)| *s).collect();
-    assert_eq!(steps, ["image", "find_links_v", "links", "records", "read_through", "claims"]);
+    assert_eq!(steps, ["image", "merge_records", "find_links_v", "links", "records", "read_through", "claims"]);
     assert_eq!(e.frames[0], ("image", 2), "the extent and one image");
-    assert_eq!(e.frames[1], ("find_links_v", 1), "ONE region read");
-    assert_eq!(e.frames[3], ("records", 1), "the records read; the record's own read_link was cached when the region read answered it");
-    assert_eq!(e.frames[4].1, 4, "two batched reads, the link's read_link and its home's metadata");
+    assert_eq!(e.frames[1], ("merge_records", 1), "the atoms of the draft's own run, one read; the edition's words and the window's none");
+    assert_eq!(e.frames[2], ("find_links_v", 1), "ONE region read");
+    assert_eq!(e.frames[4], ("records", 1), "the records read; the record's own read_link was cached when the region read answered it");
+    assert_eq!(e.frames[5].1, 4, "two batched reads, the link's read_link and its home's metadata");
+    assert_eq!((e.merge_atoms.clone(), e.selection.clone()), (vec![vec![], vec![], vec![]], inputs().selection), "no merge record: the selection as published is the held one");
     assert_eq!(e.region, vec![(1, 34)], "the selection's V-spans merged: the whole draft");
     assert_eq!(e.placed, vec![Placement::Whole { ordinal: 1 }, Placement::Whole { ordinal: 20 }, Placement::Whole { ordinal: 30 }]);
     let find = dialer.frames("find_links_v");
@@ -1536,7 +1570,7 @@ fn a_busy_region_read_is_reissued_and_halts_past_the_bound() {
     let p = publisher(&board, &tok, &signer);
     dialer.world().busy = 2;
     let e = enumerate(&p, &inputs()).expect("reissued");
-    assert_eq!(e.frames[1], ("find_links_v", 3), "two refusals and the answer");
+    assert_eq!(e.frames[2], ("find_links_v", 3), "two refusals and the answer");
     dialer.world().busy = SCAN_BUSY_REISSUES as usize + 1;
     assert_eq!(enumerate(&p, &inputs()).unwrap_err(), Fault::Busy);
     // `history_busy` at the same door: the panel's first metadata read
@@ -2881,8 +2915,8 @@ fn a_family_publication_re_mints_the_also_drafts_words_counts_its_passages_and_h
     assert_eq!(panel.windows.iter().map(|w| w.run).collect::<Vec<_>>(), vec![3], "O alone is a window: A's run is re-minted, not windowed");
     assert_eq!(panel.inherited, vec![Inherited { draft: a(A), passages: 1 }]);
     let scattered = Inputs { selection: vec![run(A, 1, 2), run(A, 3, 3), run(D, 1, 10), run(A, 1, 5)], ..inputs.clone() };
-    assert_eq!(inherited(&scattered), vec![Inherited { draft: a(A), passages: 2 }], "consecutive runs of one origin count once");
-    assert!(inherited(&self::inputs()).is_empty(), "no `also`, no count");
+    assert_eq!(inherited(&scattered.also, &scattered.selection), vec![Inherited { draft: a(A), passages: 2 }], "consecutive runs of one origin count once");
+    assert!(inherited(&self::inputs().also, &self::inputs().selection).is_empty(), "no `also`, no count");
     dialer.clear();
     let Built::Request(mut request) = build(&p, &inputs, &e, &panel, &family_confirmed()).unwrap() else { panic!("inert") };
     assert!(
@@ -3114,6 +3148,113 @@ fn a_kept_place_moved_in_an_also_draft_names_it_and_reads_the_race_under_it() {
     assert_eq!(send(&p, &inputs, &mut request).unwrap(), Sent::Refused(Refusal::OwnFault(OwnFault::StrayPlace { index: 2, draft: a(A) })));
     let before = dialer.world().position;
     assert_eq!(dialer.world().position, before, "nothing committed by a refusal");
+}
+
+// ── THE MERGE RECORDS (kept private) ─────────────────────────────────────
+
+/// `J`, a merge journal of the person's, though no list names it one: a
+/// private draft holding words of its own around two merge records' atoms,
+/// and an atom of another kind last — "ab", a record, "cd", a record, a
+/// note — at ordinals 1 to 7.
+const J: &str = "1.0.1.0.11";
+
+/// A merge record's atom, the JSON the merge library appends to a journal.
+fn record_atom(retries: u64) -> String {
+    json!({"type": MERGE_RECORD_TYPE, "v": 1, "rules": "merge-rules-1", "doc": E, "base": format!("{E}.1"), "sides": [], "landed": null, "claims": [], "runs": [], "retries": retries, "gaps": [], "values": {}, "replaces": null, "by": "skep-client"}).to_string()
+}
+
+/// The base fixture with `J` beside `D`.
+fn journal_world() -> World {
+    let (mut w, _) = World::base();
+    w.text(J, 1, "ab");
+    w.atom(J, 3, &record_atom(0));
+    w.text(J, 4, "cd");
+    w.atom(J, 6, &record_atom(1));
+    w.atom(J, 7, &json!({"type": "note", "text": "kept"}).to_string());
+    w.doc(J, false, ACCOUNT, vec![run(J, 1, 7)]);
+    w
+}
+
+/// `J` published as its own draft at the mint form, the whole of it held.
+fn journal_inputs(selection: Vec<Run>) -> Inputs {
+    Inputs { doc: None, mint: Some(a(ACCOUNT)), claim: true, base: None, draft: a(J), selection, notes: vec![], readable_drafts: vec![a(J)], published: vec![a(S), a(S2)], ..inputs() }
+}
+
+/// A MERGE RECORD IS NEVER PUBLISHED: `J` published at the mint form, the
+/// whole of it held. The enumeration reads `J`'s atoms through their places,
+/// one step after the image, and cuts the selection around the two records
+/// — the note kept, a test of the atom and never a list of journals — the
+/// region going by the cut; the panel counts the two under `J`; the request
+/// carries no run and no kept place for either; and after the commit the
+/// member holds the words and the note alone, while `J` still arranges both
+/// records by their own identity at their places, never re-windowed there.
+#[test]
+fn a_merge_record_is_never_published_and_its_journal_keeps_it_arranged() {
+    let (dialer, board, signer) = open(journal_world());
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = journal_inputs(vec![run(J, 1, 7)]);
+    let e = enumerate(&p, &inputs).unwrap();
+    let steps: Vec<&str> = e.frames.iter().map(|(s, _)| *s).collect();
+    assert_eq!(&steps[..2], ["image", "merge_records"], "the atoms read after the image: {steps:?}");
+    assert_eq!(e.merge_atoms, vec![vec![3, 6]], "the two records, never the note");
+    assert_eq!(e.selection, vec![run(J, 1, 2), run(J, 4, 2), run(J, 7, 1)], "the selection as published");
+    assert_eq!(e.region, vec![(1, 2), (4, 2), (7, 1)]);
+    assert_eq!(e.pieces(0, &inputs.selection[0]), vec![(run(J, 1, 2), 1), (run(J, 4, 2), 4), (run(J, 7, 1), 7)]);
+    let panel = panel(&p, &inputs, &e).unwrap();
+    assert_eq!(panel.merge_records, vec![MergeRecords { draft: a(J), n: 2 }]);
+    let Built::Request(mut request) = build(&p, &inputs, &e, &panel, &Confirmed::default()).unwrap() else { panic!("inert") };
+    assert_eq!(request.runs, vec![run(J, 1, 2), run(J, 4, 2), run(J, 7, 1)], "no run of a record");
+    assert_eq!(request.places, vec![Some(1), Some(4), Some(7)], "no kept place for one");
+    let Sent::Acknowledged(ack) = send(&p, &inputs, &mut request).unwrap() else { panic!("sent") };
+    let w = dialer.world();
+    assert_eq!(w.docs[&ack.member.to_string()].runs.iter().map(|r| r.width).sum::<u64>(), 5, "the member holds the words and the note alone");
+    let minted: Vec<&String> = w.atoms.iter().filter(|((doc, _), _)| doc != J).map(|(_, atom)| atom).collect();
+    assert!(!minted.is_empty() && minted.iter().all(|atom| !is_merge_record(atom.as_bytes())), "the note re-minted, no record: {minted:?}");
+    let positions = World::expand(&w.docs[J].runs);
+    assert_eq!((positions[2].clone(), positions[5].clone()), ((a(J), 3), (a(J), 6)), "J arranges both records by their own identity at their places");
+    assert!(positions.iter().enumerate().filter(|(k, _)| ![2, 5].contains(k)).all(|(_, (origin, _))| origin.to_string() != J), "the rest re-windowed onto the member's words: {positions:?}");
+}
+
+/// A SELECTION OF MERGE RECORDS ALONE IS REFUSED: every position held is a
+/// record — `J`'s two, held as two runs — so the enumeration answers
+/// `OnlyMergeRecords` naming the rendering draft after the atoms' read,
+/// nothing further read and nothing sent.
+#[test]
+fn a_selection_of_merge_records_alone_is_refused_before_any_link_is_read() {
+    let mut world = journal_world();
+    world.docs.get_mut(J).unwrap().runs = vec![run(J, 3, 1), run(J, 6, 1)];
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = journal_inputs(vec![run(J, 3, 1), run(J, 6, 1)]);
+    assert_eq!(enumerate(&p, &inputs).unwrap_err(), Fault::OnlyMergeRecords { draft: a(J) });
+    assert!(dialer.frames("find_links_v").is_empty() && dialer.frames("publish").is_empty(), "nothing read past the atoms, nothing sent: {:?}", dialer.ops());
+    assert_eq!(Fault::OnlyMergeRecords { draft: a(J) }.to_string(), format!("{J} holds only merge records, and they stay private — there is nothing in it to publish"));
+}
+
+/// A merge record of a draft `also` names is left out of both lists: `D`
+/// arranges its own ten words and `J`'s seven positions by identity, `J`
+/// named `also`. The records are cut out of `J`'s held run and counted
+/// under `J`, its words one passage, and neither the rendering draft's
+/// places nor `J`'s own list carries one.
+#[test]
+fn a_merge_record_of_an_also_draft_is_left_out_of_both_lists() {
+    let mut world = journal_world();
+    world.docs.get_mut(D).unwrap().runs = vec![run(D, 1, 10), run(J, 1, 7)];
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = Inputs { also: vec![a(J)], selection: vec![run(D, 1, 10), run(J, 1, 7)], readable_drafts: vec![a(D), a(N), a(J)], ..inputs() };
+    let e = enumerate(&p, &inputs).unwrap();
+    assert_eq!(e.merge_atoms, vec![vec![], vec![3, 6]]);
+    let panel = panel(&p, &inputs, &e).unwrap();
+    assert_eq!(panel.merge_records, vec![MergeRecords { draft: a(J), n: 2 }]);
+    assert_eq!(panel.inherited, vec![Inherited { draft: a(J), passages: 1 }], "J's words one passage, the records cut from it");
+    let Built::Request(request) = build(&p, &inputs, &e, &panel, &Confirmed::default()).unwrap() else { panic!("inert") };
+    assert_eq!(request.runs, vec![run(D, 1, 10), run(J, 1, 2), run(J, 4, 2), run(J, 7, 1)]);
+    assert_eq!(request.places, vec![Some(1), Some(11), Some(14), Some(17)], "the rendering draft's places: none at a record");
+    assert_eq!(request.also_places, vec![AlsoPlaces { draft: a(J), places: vec![None, Some(1), Some(4), Some(7)] }], "J's own list: none at a record");
 }
 
 // ── THE DRAFT'S BASE ─────────────────────────────────────────────────────

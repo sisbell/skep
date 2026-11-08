@@ -32,14 +32,27 @@
 //! exit 3. A `withheld` refusal — a document the merger may not read, or an
 //! origin a write's run windows — names the document, and the command says
 //! beside it what the run did: nothing composed; the merge composed, and
-//! nothing published or merged; nothing taken back or out. A `--journal`
-//! that cannot take the record — one the merger may not read, one the board
-//! does not register, another account's or a published one — is refused
-//! before the landing's or the take-back's first write: the library's halt
-//! names the journal and the check it fails, exit 3, nothing written. A
-//! run whose landing already stands writes its record first and checks no
-//! journal before it; a journal met failing there leaves the merge standing
-//! with its record unwritten, exit 3.
+//! nothing published or merged; nothing taken back or out.
+//!
+//! **The journal.** A merge record is kept only in a private document: a
+//! journal is a private document of the merger's own, a published one is
+//! refused before any write, no publication publishes a merge record, and
+//! what a merge makes public is its version and, at a published daughter,
+//! the claim riding its shot. A `--journal` that cannot take the record is
+//! refused before the landing's or the take-back's first write, nothing
+//! written: one the merger may not read, one the board does not register or
+//! another account's as the library's halt naming the journal and the
+//! check it fails, exit 3; a published one as the board's refusal under
+//! `published_target`, exit 1 — "⟨J⟩ is published, and a merge record is
+//! kept only in a private document — nothing was merged and nothing was
+//! written. Name a private document of yours with --journal, or leave
+//! --journal out to use your private journal.", the take-backs saying
+//! nothing was taken back or out. The composition's talk says the fact
+//! before any landing flag is acted on, where `--journal` names a published
+//! document: the refusal's first clause, then "— landing this merge there
+//! is refused". A run whose landing already stands writes its record first
+//! and checks no journal before it; a journal met failing there leaves the
+//! merge standing with its record unwritten, exit 3.
 //!
 //! **The two take-backs** (skep #783), each with `--kind` and nothing of
 //! the composition's: `--undo ⟨S⟩` puts the draft back as it stood before
@@ -92,16 +105,16 @@ use skep_client::ceremony::handshake::{handshake, Session, Site};
 use skep_client::dial::plaintext_non_loopback_warning;
 use skep_client::halt::{Halt, Refused};
 use skep_client::merge::{
-    compose, head_of, land, undo, withdraw, Choice, Family, Gap, GapId, GapKind, Inputs, Landed,
-    Landing, Merged, Merger, Options, Placement, Record, RecordLanding, Refusal, Resolution,
-    ResolvedBy, Side, SideIx, Undone, Withdrawn,
+    compose, head_of, journal, land, undo, withdraw, Choice, Family, Gap, GapId, GapKind, Inputs,
+    Landed, Landing, Merged, Merger, Options, Placement, Record, RecordLanding, Refusal,
+    Resolution, ResolvedBy, Side, SideIx, Undone, Withdrawn,
 };
 use skep_client::sign::Signer;
 use skep_client::store::{KeySelector, KeyStore, Purpose};
 
 use super::{
-    board_of, data_verbatim, has_terminal, key_named, principal_or_bound, refused, select_key,
-    store_of, talk, Step, Stop,
+    board_of, data_verbatim, has_terminal, journal_published, key_named, principal_or_bound,
+    refused, select_key, store_of, talk, Step, Stop,
 };
 use crate::args::{CommandLine, Usage};
 
@@ -255,6 +268,15 @@ fn run(
     };
     let merged = compose(board, Some(token), &inputs).map_err(|r| refused(r, Step::Compose))?;
     say_composed(&merged);
+    // A published `--journal` said before any landing flag is acted on: the
+    // landing's own check refuses it below, and a landing found standing
+    // checks none. Every other answer of the check is the landing's to say.
+    if let Some(journal) = &asked.journal {
+        let checked = journal::check(board, &merger, journal);
+        if let Err(Refusal::PublishedJournal { journal }) = checked {
+            talk(format!("{} — landing this merge there is refused", journal_published(&journal)));
+        }
+    }
     let mut report = report_of(&merged);
     if let Some(landing) = landing {
         let journal = asked.journal.clone();

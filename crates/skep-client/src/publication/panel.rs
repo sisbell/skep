@@ -43,7 +43,15 @@
 //! in it, the data of P2 (i)'s statement before the act ("⟨n⟩ passages first
 //! written in ⟨D⟩ publish as ⟨E⟩'s own words; ⟨D⟩ keeps a record of where
 //! they went"), consecutive runs of one origin in the selection's V-order
-//! counted once; the rendering draft's own words are counted nowhere.
+//! counted once; the rendering draft's own words are counted nowhere. THE
+//! MERGE RECORDS LEFT OUT ([`MergeRecords`]) are the panel's data too: per
+//! named draft whose runs of the selection hold any, how many — the
+//! enumeration's cut, which no publication carries (the merge record's
+//! decision 7), the data of the statement "⟨n⟩ merge records in ⟨label⟩
+//! stay private and are not published with it". Every test of the
+//! selection here — the line's ⟨c⟩ and ⟨d⟩, the formatting line's cut, the
+//! job list, the statement's passages — reads the selection as published
+//! ([`Enumeration::selection`]).
 //!
 //! **Ends read through the records.** The line's ⟨c⟩, ⟨d⟩ and far
 //! documents, the formatting line's cut and its re-make test read a
@@ -239,6 +247,20 @@ pub struct Inherited {
     pub passages: usize,
 }
 
+/// The merge records of one named draft the selection holds, left out of
+/// the publication (the merge record's decision 7).
+///
+/// It is the draft whose identity the records are and how many: the ⟨n⟩ of
+/// "⟨n⟩ merge records in ⟨label⟩ stay private and are not published with
+/// it", as DATA; the statement itself is the page's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeRecords {
+    /// The named draft the records were written in.
+    pub draft: Address,
+    /// The merge records of it the selection holds.
+    pub n: usize,
+}
+
 /// The panel's data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Panel {
@@ -255,24 +277,27 @@ pub struct Panel {
     /// The statement's count per draft `also` names, in the request's
     /// order ([`inherited`]).
     pub inherited: Vec<Inherited>,
+    /// The merge records left out, per named draft holding any, in the
+    /// selection's order: never published, so the page says so.
+    pub merge_records: Vec<MergeRecords>,
     /// The frames sent, per step.
     pub frames: Vec<(&'static str, usize)>,
 }
 
-/// Returns THE STATEMENT's count per draft `also` names, in the request's
-/// order: for each, the passages of the selection first written in it —
-/// the selection's runs of that origin, consecutive runs of one origin in
-/// the selection's V-order counted once. Request arithmetic over the
-/// selection, reading nothing; the rendering draft's own words are not
-/// counted (they are the draft's, said nowhere).
-pub fn inherited(inputs: &Inputs) -> Vec<Inherited> {
-    inputs
-        .also
-        .iter()
+/// Returns THE STATEMENT's count per draft of `also`, in its order.
+///
+/// For each it is the passages of `selection` — the selection as published
+/// ([`Enumeration::selection`]) — first written in it: the selection's runs
+/// of that origin, consecutive runs of one origin in the selection's
+/// V-order counted once. Request arithmetic over the selection, reading
+/// nothing; the rendering draft's own words are not counted (they are the
+/// draft's, said nowhere).
+pub fn inherited(also: &[Address], selection: &[Run]) -> Vec<Inherited> {
+    also.iter()
         .map(|draft| {
             let mut passages = 0usize;
             let mut within = false;
-            for run in &inputs.selection {
+            for run in selection {
                 let of_draft = run.origin == *draft;
                 if of_draft && !within {
                     passages += 1;
@@ -282,6 +307,21 @@ pub fn inherited(inputs: &Inputs) -> Vec<Inherited> {
             Inherited { draft: draft.clone(), passages }
         })
         .collect()
+}
+
+/// Returns the merge records the selection holds, per named draft holding
+/// any, in the selection's order: each held run's merge records counted
+/// under its origin, the draft whose identity they are (the enumeration's
+/// `merge_records` step). Arithmetic over the enumeration, reading nothing.
+fn merge_records(inputs: &Inputs, e: &Enumeration) -> Vec<MergeRecords> {
+    let mut out: Vec<MergeRecords> = Vec::new();
+    for (run, atoms) in inputs.selection.iter().zip(&e.merge_atoms).filter(|(_, atoms)| !atoms.is_empty()) {
+        match out.iter_mut().find(|m| m.draft == run.origin) {
+            Some(m) => m.n += atoms.len(),
+            None => out.push(MergeRecords { draft: run.origin.clone(), n: atoms.len() }),
+        }
+    }
+    out
 }
 
 /// Where a switched-on private row's links are published into.
@@ -414,7 +454,7 @@ pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         .iter()
         .filter(|&&i| {
             let c = &e.candidates[i];
-            c.end_spans().iter().any(|s| SpanReading::of(&walk, s, &c.via, &inputs.selection).past_the_cut())
+            c.end_spans().iter().any(|s| SpanReading::of(&walk, s, &c.via, &e.selection).past_the_cut())
         })
         .count();
 
@@ -433,16 +473,16 @@ pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
             continue;
         }
         let Some(mark_value) = door.link(&mark)? else { continue };
-        let on_selection = touches(&mark_value, &inputs.selection);
+        let on_selection = touches(&mark_value, &e.selection);
         let spent = !door.addrs(&mark, &frames::find_links_ftt(T_RETRACTION, &mark))?.is_empty();
         let (Some(record), Some(mark_addr)) = (parse_address(&hit), parse_address(&mark)) else { continue };
         let remake = (on_selection && !spent)
             .then(|| {
                 let mark_spans: Vec<ISpan> = mark_value.from.iter().chain(&mark_value.to).filter_map(ISpan::of).collect();
-                let mark_on = selected_ranges(&mark_spans, &inputs.selection);
+                let mark_on = selected_ranges(&mark_spans, &e.selection);
                 marks.iter().copied().find(|&i| {
                     let c = &e.candidates[i];
-                    c.value.type_address() == mark_value.type_address() && ranges_overlap(&selected_ranges(&walk.spans(c), &inputs.selection), &mark_on)
+                    c.value.type_address() == mark_value.type_address() && ranges_overlap(&selected_ranges(&walk.spans(c), &e.selection), &mark_on)
                 })
             })
             .flatten();
@@ -489,7 +529,7 @@ pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
             for span in c.value.from.iter().chain(&c.value.to) {
                 match ISpan::of(span) {
                     Some(s) => {
-                        let read = SpanReading::of(&walk, &s, &c.via, &inputs.selection);
+                        let read = SpanReading::of(&walk, &s, &c.via, &e.selection);
                         if read.past_the_cut() {
                             c_hit = true;
                         }
@@ -567,7 +607,15 @@ pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
     }
 
     let windows = windows_with(door, p, inputs)?;
-    Ok(Panel { rows, formatting: Formatting { marks, cut, removals }, read_with, windows, inherited: inherited(inputs), frames: door.counts() })
+    Ok(Panel {
+        rows,
+        formatting: Formatting { marks, cut, removals },
+        read_with,
+        windows,
+        inherited: inherited(&inputs.also, &e.selection),
+        merge_records: merge_records(inputs, e),
+        frames: door.counts(),
+    })
 }
 
 /// Reads the own-origin windows of the selection, each with its counterpart.

@@ -583,16 +583,25 @@ fn a_cross_account_fork_of_a_published_version_merges_from_its_served_source() {
 
     // A journal named that cannot take the record is refused before the
     // shot, nothing written: the forker's home, which the claimant reads as
-    // its ancestor and does not own, and the trunk, published.
+    // its ancestor and does not own, a halt naming the check; and the trunk,
+    // published, the typed refusal naming it — a merge record is kept only
+    // in a private document.
     let merger = Merger { token: session.token(), account: session.account(), signer: &device };
     let forker_home = addr(&format!("{FORKER_ACCOUNT}.0.1"));
-    for (journal, why) in [(&forker_home, "is another account's"), (&d, "is published")] {
+    for journal in [&forker_home, &d] {
         let before = board.health().unwrap().log_position();
         let named = Landing::Shot { merger, draft: None, journal: Some(journal.clone()) };
         let err = land(&board, &merged, named).expect_err("the journal refused");
-        let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{journal}: {err:?}") };
-        assert_eq!(face.state, format!("the journal {journal} {why}, so the merge cannot land"));
-        assert!(face.act.contains("nothing was written"), "{face}");
+        if journal == &d {
+            assert_eq!(err, Refusal::PublishedJournal { journal: d.clone() });
+        } else {
+            let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{journal}: {err:?}") };
+            assert_eq!(
+                face.state,
+                format!("the journal {journal} is another account's, so the merge cannot land")
+            );
+            assert!(face.act.contains("nothing was written"), "{face}");
+        }
         assert_eq!(board.health().unwrap().log_position(), before, "{journal}: nothing written");
     }
 

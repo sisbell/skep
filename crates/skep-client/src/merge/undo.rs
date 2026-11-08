@@ -111,10 +111,12 @@
 //! **The journal, before the write.** A journal named is checked before the
 //! one write, as a landing's is (the `land` module's doc): one
 //! `doc_metadata` at the head, after the reads and the cap, and one this
-//! merger may not read, one this board does not register, another
-//! account's or a published one is refused there, naming the journal and
-//! the check it fails, with nothing sent (P13) — whether or not a record of
-//! the landing stands to be replaced.
+//! merger may not read, one this board does not register or another
+//! account's is refused there as a halt naming the journal and the check it
+//! fails, a published one of the merger's own as
+//! [`Refusal::PublishedJournal`] — a merge record is kept only in a private
+//! document — with nothing sent (P13), whether or not a record of the
+//! landing stands to be replaced.
 //!
 //! **The head, before the write.** The board's head (`Board::board_head`;
 //! SP-14) is read before the one write, after the journal's check, as the
@@ -211,11 +213,12 @@ pub struct Withdrawn {
 ///   library's own fault;
 /// - the records' reads' refusals at the head, and [`Refusal::OverCap`]
 ///   where C mapped is in more runs than one write may name, nothing sent;
-/// - a journal named that cannot take the record — one this merger may not
-///   read, one this board does not register, another account's or a
-///   published one — as [`Refusal::Halt`] naming the journal and the check
-///   it fails, nothing sent (P13); the journal's `doc_metadata` read's other
-///   refusals and halts;
+/// - a journal named that cannot take the record, nothing sent (P13): one
+///   this merger may not read, one this board does not register or another
+///   account's, as [`Refusal::Halt`] naming the journal and the check it
+///   fails; a published one of the merger's own, as
+///   [`Refusal::PublishedJournal`]; the journal's `doc_metadata` read's
+///   other refusals and halts;
 /// - a claimed board serving no head record, as [`Refusal::Halt`] naming
 ///   `H.1`, before the one write, with nothing sent (SP-14);
 /// - the one write's: `arrangement_moved` as the board's verdict,

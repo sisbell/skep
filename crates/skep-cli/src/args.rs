@@ -499,8 +499,13 @@ flags (a flag beats its env variable; a variable set empty is unset):
             fork of a published version of D, readable to you; its base
             is the version it was forked from, which the board serves)
             [--head <D.h>] (else the
-            feed's last trunk version)  [--journal <J>] (else the
-            account's private one)  [--resolve <gap>=<choice>]... (a
+            feed's last trunk version)  [--journal <J>] (a private
+            document of yours, else the account's private journal: a
+            merge record is kept only in a private document, so a
+            published one is refused before any write and no
+            publication publishes a record; what a merge makes public
+            is its version and, at a published daughter, the claim
+            riding its shot)  [--resolve <gap>=<choice>]... (a
             choice: order:<side>,<side>...  after:<address>
             before:<address>  keep:<side>  both  omit; a side is its
             index as the report numbers it)  [--no-dedup]  [--retype]

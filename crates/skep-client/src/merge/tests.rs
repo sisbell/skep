@@ -5387,12 +5387,13 @@ mod scripted {
     /// act's reads and before its first write — the shot, the stage, a named
     /// draft's one write, an undo's or a withdrawal's. A journal this merger
     /// may not read (`J`, withheld), one this board does not register (`U`),
-    /// another account's draft it may read (`O`) or published document, or a
-    /// published document of its own (`D`, the trunk) refuses the act with a
-    /// face naming the journal and the check it fails, exit 3 and never this
-    /// library's fault: nothing written, no commit, the journal read once and
-    /// nothing after it. A draft of the merger's own (`G`) passes, and the
-    /// record's atom goes into it.
+    /// or another account's draft it may read (`O`) or published document
+    /// refuses the act with a face naming the journal and the check it fails,
+    /// exit 3 and never this library's fault; a published document of its
+    /// own — `D`, the trunk, and its doc 1, born published — is the typed
+    /// refusal naming it, `PublishedJournal`: each with nothing written, no
+    /// commit, the journal read once and nothing after it. A draft of the
+    /// merger's own (`G`) passes, and the record's atom goes into it.
     #[test]
     fn a_named_journal_is_checked_before_the_acts_first_write() {
         let (j, u, o, g) = ("1.0.2.0.8", "1.0.2.0.9", "1.0.2.0.6", "1.0.1.0.8");
@@ -5403,14 +5404,16 @@ mod scripted {
             w.doc(g, false, ACCOUNT, Vec::new());
             w
         };
+        // `None`: the typed refusal of a published journal of the merger's.
         let checks = [
-            (j, "is not readable to this merger (withheld)"),
-            (u, "is not registered at this board (doc_not_registered)"),
-            (o, "is another account's"),
-            (D, "is published"),
+            (j, Some("is not readable to this merger (withheld)")),
+            (u, Some("is not registered at this board (doc_not_registered)")),
+            (o, Some("is another account's")),
+            (D, None),
+            (DOC1, None),
             // Another account's published document: the owner is judged
             // before the published bit, as the board judges the atom.
-            (OTHER_DOC1, "is another account's"),
+            (OTHER_DOC1, Some("is another account's")),
         ];
         let writes = ["publish", "stage", "set_arrangement", "create_new_document", "insert", "make_link"];
         for cell in ["the shot", "a landing into S", "a fresh draft", "the undo", "the withdrawal"] {
@@ -5443,12 +5446,17 @@ mod scripted {
             for (journal, why) in checks {
                 dialer.clear();
                 let err = act(journal).expect_err(journal);
-                let Refusal::Halt(halt) = &err else { panic!("{cell}: {journal}: {err:?}") };
-                assert_eq!(halt.exit_code(), 3, "{cell}: {journal}: {err:?}");
-                let Halt::Halt(face) = halt else { panic!("{cell}: {journal}: {err:?}") };
-                assert_eq!(face.state, format!("the journal {journal} {why}, {blocked}"), "{cell}");
-                assert!(face.cause.contains("its `doc_metadata`"), "{cell}: {face}");
-                assert!(face.act.contains("nothing was written") && !face.act.contains("fault in this library"), "{cell}: {face}");
+                match why {
+                    None => assert_eq!(err, Refusal::PublishedJournal { journal: a(journal) }, "{cell}: a published journal of the merger's own"),
+                    Some(why) => {
+                        let Refusal::Halt(halt) = &err else { panic!("{cell}: {journal}: {err:?}") };
+                        assert_eq!(halt.exit_code(), 3, "{cell}: {journal}: {err:?}");
+                        let Halt::Halt(face) = halt else { panic!("{cell}: {journal}: {err:?}") };
+                        assert_eq!(face.state, format!("the journal {journal} {why}, {blocked}"), "{cell}");
+                        assert!(face.cause.contains("its `doc_metadata`"), "{cell}: {face}");
+                        assert!(face.act.contains("nothing was written") && !face.act.contains("fault in this library"), "{cell}: {face}");
+                    }
+                }
                 for op in writes {
                     assert!(dialer.frames(op).is_empty(), "{cell}: {journal}: no `{op}`: {:?}", dialer.ops());
                 }
@@ -5467,6 +5475,31 @@ mod scripted {
         }
     }
 
+    /// `journal::check` is the landing's check alone, nothing written.
+    ///
+    /// It answers each journal as an act's check does — a published one of
+    /// the merger's own (`D`) the typed refusal naming it, another account's
+    /// draft (`O`) the halt naming the check, a draft of the merger's own
+    /// (`G`) nothing — one `doc_metadata` of each and no other frame.
+    #[test]
+    fn the_journal_check_is_the_landings_check_alone() {
+        let (o, g) = ("1.0.2.0.6", "1.0.1.0.8");
+        let mut world = World::race();
+        world.doc(o, false, "1.0.2", Vec::new());
+        world.doc(g, false, ACCOUNT, Vec::new());
+        let (dialer, board, signer) = open(world);
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        assert_eq!(journal::check(&board, &m, &a(D)), Err(Refusal::PublishedJournal { journal: a(D) }));
+        let Err(Refusal::Halt(Halt::Halt(face))) = journal::check(&board, &m, &a(o)) else { panic!("another account's draft is a halt") };
+        assert_eq!(face.state, format!("the journal {o} is another account's, so the merge cannot land"));
+        assert_eq!(journal::check(&board, &m, &a(g)), Ok(()));
+        assert_eq!(dialer.ops(), ["doc_metadata"; 3], "one read of each journal and nothing else");
+        assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
+    }
+
     /// A named journal that refuses the atom leaves the member standing.
     ///
     /// Where the record is the call's first write — a `resume` after the
@@ -5477,8 +5510,9 @@ mod scripted {
     /// `published_target` or `not_owner`: faced as the merge standing at the
     /// member with its record unwritten, exit 3 and never this library's
     /// fault, no link sent and nothing committed. The account's own journal
-    /// refused so is this library's own fault, the library having chosen it;
-    /// with none standing, one is minted and the record goes into it, once.
+    /// is read before the library takes it: a published document its first
+    /// record's link points into is passed over, a private journal minted,
+    /// and the record goes into that, once.
     #[test]
     fn a_named_journal_that_refuses_the_atom_leaves_the_member_standing() {
         let (o, p) = ("1.0.2.0.6", "1.0.1.0.8");
@@ -5513,24 +5547,24 @@ mod scripted {
                 assert_eq!(dialer.world().rows.len(), rows, "{call}: {journal}: nothing committed");
             }
         }
-        // The account's own journal, a published document its first link of
-        // the kind from doc 1 points into: this library's own fault.
+        // The account's own journal is read before it is taken: a published
+        // document its first link of the kind from doc 1 points into is
+        // passed over, and a private journal minted takes the record, once.
         {
             let mut w = dialer.world();
             w.doc(p, true, ACCOUNT, Vec::new());
             file(&mut w, DOC1, p, &merged.record, &["1.0.1.0.5"]);
         }
         dialer.clear();
-        let err = resume(&board, &merged, shot_into(None)).expect_err("the library's own fault");
-        let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{err:?}") };
-        assert!(face.state == "the journal is not a draft" && face.cause.starts_with("published_target") && face.act.contains("fault in this library"), "{face}");
-        // No journal of the account standing: one minted, the record once.
-        dialer.world().links.clear();
-        dialer.clear();
-        let resumed = resume(&board, &merged, shot_into(None)).expect("resumed");
+        let resumed = resume(&board, &merged, shot_into(None)).expect("resumed, never the library's own fault");
         assert!(matches!(&resumed, Some(Landed::Member { address, .. }) if *address == member), "{resumed:?}");
-        assert_eq!((dialer.frames("insert").len(), dialer.frames("make_link").len()), (1, 1), "the record, once: {:?}", dialer.ops());
-        assert_eq!(dialer.frames("create_new_document").len(), 1, "the account's own journal minted");
+        assert_eq!(dialer.frames("doc_metadata").into_iter().filter(|f| f["doc"] == p).count(), 1, "the published journal read once and passed over: {:?}", dialer.ops());
+        let minted = dialer.frames("create_new_document");
+        assert_eq!(minted.len(), 1, "the account's own journal minted: {:?}", dialer.ops());
+        assert_eq!(minted[0]["published"], json!(false), "minted private");
+        let inserts = dialer.frames("insert");
+        assert_eq!((inserts.len(), dialer.frames("make_link").len()), (1, 1), "the record, once: {:?}", dialer.ops());
+        assert_ne!(inserts[0]["doc"], json!(p), "no record into the published document");
         assert!(dialer.frames("publish").is_empty(), "nothing landed twice");
     }
 
@@ -7368,6 +7402,33 @@ mod scripted {
         addr
     }
 
+    /// A record this library writes is an atom no publication publishes.
+    ///
+    /// Its JSON as a journal's atom carries it is a merge record by the
+    /// publication's one test (`publication::is_merge_record`), at another
+    /// schema version too; a text, another JSON kind and a bare word are
+    /// none.
+    #[test]
+    fn a_record_this_library_writes_is_one_no_publication_publishes() {
+        let (_, board, _) = open(World::race());
+        let merged = compose(&board, Some(&token()), &race_inputs()).expect("composed");
+        let atom = merged.record.to_value();
+        assert!(crate::publication::is_merge_record(atom.to_string().as_bytes()), "{atom}");
+        let mut later = atom.clone();
+        later["v"] = json!(record::SCHEMA_VERSION + 1);
+        assert!(
+            crate::publication::is_merge_record(later.to_string().as_bytes()),
+            "another schema version stays private too"
+        );
+        for other in [&b"merge"[..], b"{", br#"{"type":"skep-head"}"#, br#"["merge"]"#, b"m"] {
+            assert!(
+                !crate::publication::is_merge_record(other),
+                "{}",
+                String::from_utf8_lossy(other)
+            );
+        }
+    }
+
     /// `current` finds the newest record per key, the trunk owner's home
     /// over another account's: another account's landed record loses to
     /// the owner's question; two in the owner's home, the later link wins;
@@ -7448,7 +7509,9 @@ mod scripted {
 
     /// `journal::of`: the journal named is answered with no read; the
     /// default is the document the account's first link of the kind from
-    /// doc 1 points into; with none, a PRIVATE draft is minted.
+    /// doc 1 points into, read before it is taken and taken where it is a
+    /// private draft of the account's — a published one passed over, once,
+    /// for the next link's; with none, a PRIVATE draft is minted.
     #[test]
     fn the_journal_is_named_found_or_minted() {
         let (dialer, board, signer) = open(World::race());
@@ -7472,7 +7535,34 @@ mod scripted {
         }
         dialer.clear();
         assert_eq!(journal::of(&board, &merger, &a(K), None).expect("found"), a("1.0.1.0.6"));
-        assert_eq!(dialer.ops(), ["find_links_ftt", "read_link"]);
+        assert_eq!(dialer.ops(), ["find_links_ftt", "read_link", "doc_metadata"]);
+        // A first link into a published document, then another into it, then
+        // the private draft's: the published one read once and passed over.
+        {
+            let mut w = dialer.world();
+            w.links.clear();
+            w.doc("1.0.1.0.12", true, ACCOUNT, Vec::new());
+            file(&mut w, DOC1, "1.0.1.0.12", &record, &[&format!("{D}.1.1")]);
+            file(&mut w, DOC1, "1.0.1.0.12", &record, &[&format!("{D}.1.1")]);
+            file(&mut w, DOC1, "1.0.1.0.6", &record, &[&format!("{D}.1.1")]);
+        }
+        dialer.clear();
+        assert_eq!(
+            journal::of(&board, &merger, &a(K), None).expect("found"),
+            a("1.0.1.0.6"),
+            "the private draft, never the published document"
+        );
+        assert_eq!(
+            dialer.ops(),
+            [
+                "find_links_ftt",
+                "read_link",
+                "doc_metadata",
+                "read_link",
+                "read_link",
+                "doc_metadata"
+            ]
+        );
     }
 
     /// `verify`'s three verdicts: Equal where the member holds M over its
@@ -8263,7 +8353,10 @@ mod scripted {
             },
             rerun,
         );
-        assert_eq!(finding.ended, 2, "the find and the record's link");
+        assert_eq!(
+            finding.ended, 3,
+            "the find, the record's link and the journal's `doc_metadata`"
+        );
     }
 
     /// The three ways on say what each act leaves: a landing resumed, every

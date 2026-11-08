@@ -436,6 +436,7 @@ impl Shell {
             R::OverCap { runs, cap } => Refusal::shell(Name::OVER_CAP, json!({"n": runs, "cap": cap})),
             R::NotOwner { draft } | R::UnownedDraft { draft } => Refusal::shell(Name::NOT_OWNER, json!({"addr": s(&draft)})),
             R::Published { doc } => Refusal::shell(Name::NOT_OWNER, json!({"addr": s(&doc), "published": true})),
+            R::PublishedJournal { journal } => other("published_journal", json!({"journal": s(&journal)})),
             R::NothingToUndo { draft, why } => {
                 let mut detail = json!({"draft": s(&draft)});
                 match why {

@@ -7,7 +7,9 @@ the ceremonies `enroll`, `recover`, `retire`, `rotate`, `handoff`,
 `merge` feature (the design's merge record, §6), the one command that
 touches content: it composes the merge and prints the report as one JSON
 document, `--publish` lands it as the next version with its record,
-`--into` lands it in a draft, a daughter is reported and never retried,
+`--into` lands it in a draft, the record kept only in a private document
+— a published `--journal` said by the composition's talk and refused
+before any write, exit 1 — a daughter is reported and never retried,
 a fork of one of the document's published versions (`--fork`) is merged
 from the source the board serves for it, and a side whose base the board
 does not serve — a fork of the bare document before its first version, a

@@ -16,7 +16,9 @@
 //! (`OUTSTANDING_ACT`); the whole-set compare, from the held set to its
 //! halt (`held_set`, `compare_genesis`); and the merge library's refusals
 //! rendered as the board's verdict under the step that met them
-//! (`refused`, [`Step`]), which `merge` and `restore` share. What the dev binary shares with
+//! (`refused`, [`Step`]), which `merge` and `restore` share, with the fact a
+//! published journal is refused on (`journal_published`), which `merge`'s
+//! composition talk says too. What the dev binary shares with
 //! them — the two streams, the stops and their exit codes, the plumbing
 //! from the flags to a board, a store, a principal and a key — is
 //! `shared.rs`'s, taken here and handed down to the command files — the one
@@ -63,6 +65,7 @@ use std::io::{self, Read};
 use std::path::Path;
 
 use serde_json::Value;
+use skep_address::Address;
 use skep_client::board::Board;
 use skep_client::derive::records::{compare_whole_set, credential_records, Difference, Held};
 use skep_client::derive::Walk;
@@ -465,6 +468,26 @@ impl Step {
             Step::Restore => "nothing was restored",
         }
     }
+
+    /// Returns the act this step's write would have made, as a refusal
+    /// before it says the act undone.
+    fn undone(self) -> &'static str {
+        match self {
+            Step::Compose | Step::Publish | Step::Draft => "nothing was merged",
+            Step::Undo => "nothing was taken back",
+            Step::Withdraw => "nothing was taken out",
+            Step::Restore => "nothing was restored",
+        }
+    }
+}
+
+/// Returns why a published journal takes no merge record, as `merge` says
+/// it (the merge record's decision 7).
+///
+/// It is the refusal's first clause, and the composition's talk says it too
+/// where `--journal` names a published document.
+fn journal_published(journal: &Address) -> String {
+    format!("{journal} is published, and a merge record is kept only in a private document")
 }
 
 /// Returns the stop a merge library refusal comes to (§2.3's exit 1).
@@ -485,10 +508,14 @@ impl Step {
 /// — another account's draft under `not_owner`, a published document under
 /// `published_target`, nothing to undo under `nothing_to_undo` with the
 /// library's reason, a draft carrying no merge under `no_merge`; the
-/// restore's position at or past the draft's own under `not_past`; and the
-/// shot's own `supersede_refused`, whose detail at `head_moved` says the
-/// head moved under the merge, that nothing was published, and to run the
-/// merge again on the head it names. The two `withheld` refusals — a
+/// restore's position at or past the draft's own under `not_past`; a
+/// published `--journal` under `published_target` too, in the command's
+/// own words — the journal and why it takes no record, that nothing was
+/// merged, taken back or taken out ([`Step::undone`]) and nothing was
+/// written, and the two ways on; and the shot's own `supersede_refused`,
+/// whose detail at `head_moved` says the head moved under the merge, that
+/// nothing was published, and to run the merge again on the head it names.
+/// The two `withheld` refusals — a
 /// document the reader may not read, an origin a write's run windows —
 /// name the document alone, so their detail says beside it what `step`
 /// did and did not do ([`Step::outcome`]). The session's end keeps its own
@@ -515,7 +542,7 @@ fn refused(r: Refusal, step: Step) -> Stop {
         Refusal::UnownedDraft { .. } | Refusal::NotOwner { .. } => "not_owner",
         Refusal::ForkBaseMoved { .. } => "fork_base_moved",
         Refusal::BaseNotInChain { .. } => "base_not_in_chain",
-        Refusal::Published { .. } => "published_target",
+        Refusal::Published { .. } | Refusal::PublishedJournal { .. } => "published_target",
         Refusal::NothingToUndo { .. } => "nothing_to_undo",
         Refusal::NoMerge { .. } => "no_merge",
         Refusal::NotPast { .. } => "not_past",
@@ -528,6 +555,11 @@ fn refused(r: Refusal, step: Step) -> Stop {
                 Refusal::Unreadable(_) | Refusal::WindowWithheld(_) => {
                     format!("{other}; {}", step.outcome())
                 }
+                Refusal::PublishedJournal { journal } => format!(
+                    "{} — {} and nothing was written. Name a private document of yours with --journal, or leave --journal out to use your private journal.",
+                    journal_published(journal),
+                    step.undone()
+                ),
                 Refusal::SupersedeRefused { cause: SupersedeCause::HeadMoved { head }, .. } => {
                     format!(
                         "{other} — run this again{} to merge against it",
@@ -624,6 +656,28 @@ mod tests {
             assert_eq!(h, face, "the face itself, nothing of {:?} beside it", step.outcome());
         }
         assert_eq!(finish(Err(refused(Refusal::SessionEnded(face), Step::Publish))), 3);
+    }
+
+    /// Checks that a published journal is the board's refusal in the
+    /// command's words.
+    ///
+    /// The refusal is exit 1 under `published_target` at every step a
+    /// journal is checked at, its detail the journal and why it takes no
+    /// record, what the step left undone, and the two ways on — never the
+    /// library's own fault.
+    #[test]
+    fn a_published_journal_is_the_boards_refusal_in_the_commands_words() {
+        let journal = skep_client::address::parse_address("1.0.1.0.1").expect("an address");
+        let steps = [(Step::Publish, "nothing was merged"), (Step::Draft, "nothing was merged"), (Step::Undo, "nothing was taken back"), (Step::Withdraw, "nothing was taken out")];
+        for (step, undone) in steps {
+            let Stop::Halt(Halt::Refused(r)) = refused(Refusal::PublishedJournal { journal: journal.clone() }, step) else { panic!("the board's refusal") };
+            assert_eq!(r.code, "published_target");
+            assert_eq!(
+                r.detail.as_deref(),
+                Some(format!("1.0.1.0.1 is published, and a merge record is kept only in a private document — {undone} and nothing was written. Name a private document of yours with --journal, or leave --journal out to use your private journal.").as_str())
+            );
+            assert_eq!(finish(Err(refused(Refusal::PublishedJournal { journal: journal.clone() }, step))), 1);
+        }
     }
 
     /// Checks that a person door's refusal is a halt naming its own moments.

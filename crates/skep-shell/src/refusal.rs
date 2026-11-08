@@ -194,6 +194,12 @@ impl Name {
     /// before any re-read can re-state it; the detail names the run's
     /// `index` in the selection.
     pub const SELECTION_NOT_ARRANGED: Name = Name("selection_not_arranged");
+    /// A selection holding nothing but merge records, which no publication
+    /// publishes: nothing in it to publish.
+    ///
+    /// Brief 1's `Fault::OnlyMergeRecords`, at the enumeration, nothing
+    /// sent; the detail names the rendering `draft`.
+    pub const ONLY_MERGE_RECORDS: Name = Name("only_merge_records");
     /// A board answer the publication's reader cannot read.
     ///
     /// Brief 1's `Fault::Shape`; the detail names the frame's `op` and the
@@ -370,7 +376,9 @@ impl Name {
     /// position), `fork_base_moved {fork, source, head}`,
     /// `base_not_in_chain {into, head}`, `window_withheld {origin}`,
     /// `needs_signed_session`, `fork_base_named {fork, base}`,
-    /// `supersede_refused {index, detail, head}`.
+    /// `supersede_refused {index, detail, head}`, `published_journal
+    /// {journal}` (a published document named as the merge journal, which
+    /// keeps a record only private; nothing sent).
     pub const MERGE_REFUSED: Name = Name("merge_refused");
 
     // ── The halts' armed names: `Refusal::named`, `Refusal::of_named` ────

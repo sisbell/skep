@@ -560,6 +560,19 @@ pub enum Refusal {
         /// The document named.
         doc: Address,
     },
+    /// A published document named as the merge journal: a merge record is
+    /// kept only in a private document, so the act is refused before its
+    /// first write, nothing sent (P13; the merge record's decision 7).
+    ///
+    /// It is any document the journal's `doc_metadata` names published —
+    /// doc 1, a document born published, an edition or a version of one —
+    /// found by the check of a journal named before a landing's, an undo's
+    /// or a withdrawal's first write, the owner judged first: another
+    /// account's published document is another account's journal, a halt.
+    PublishedJournal {
+        /// The journal named.
+        journal: Address,
+    },
     /// Nothing to undo on the draft named: the merge its base record is
     /// about is not one an undo can take back, for the reason carried
     /// (the landing lane's precisions P2 and P4), and nothing was sent.
@@ -720,6 +733,7 @@ impl fmt::Display for Refusal {
             Refusal::UnownedDraft { draft } => write!(f, "the draft {draft} is another account's (not_owner): a publication keeps its records in the draft it was staged in, so the shot is refused; nothing was published"),
             Refusal::NotOwner { draft } => write!(f, "{draft} is another account's draft (not_owner): a merge is taken out of a draft by its owner alone; nothing was changed"),
             Refusal::Published { doc } => write!(f, "{doc} is published (published_target): a merge is taken out of a draft alone, and a published document carries none — nothing to undo or take out"),
+            Refusal::PublishedJournal { journal } => write!(f, "{journal} is published, and a merge record is kept only in a private document — nothing was written"),
             Refusal::NothingToUndo { draft, why } => match why {
                 NoUndo::Inherited => write!(f, "nothing to undo: {draft} inherited the merge when it was staged; discard it or edit it"),
                 NoUndo::Published { version } => write!(f, "nothing to undo; the merge is version {version} — to take it back, publish the older text again"),

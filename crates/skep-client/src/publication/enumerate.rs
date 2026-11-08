@@ -19,14 +19,16 @@
 //! rendering draft's or one `also` names, read through the rendering draft
 //! at the run's place, a run's bytes counted and kept nowhere: each
 //! position whose atom is a MERGE RECORD ([`is_merge_record`]) is left out
-//! of THE SELECTION AS PUBLISHED, the held runs cut around it
-//! ([`Enumeration::selection`]), which the region, every later read and
-//! every later step test and compose from — no publication places a merge
-//! record's atom as a run or sends a kept place for one, so a journal's
-//! records are never re-minted or re-windowed (the merge record's decision
-//! 7) — and a selection of merge records alone is refused
-//! [`Fault::OnlyMergeRecords`]; a window's run and the trunk's own are read
-//! for none, neither being re-minted; (3) `find_links_v` — ONE
+//! of THE SELECTION AS PUBLISHED ([`Enumeration::selection`]): the pieces
+//! of the held runs the draft arranges, cut around it, which the region,
+//! every later read and every later step test and compose from, so at the
+//! re-read a word the draft no longer arranges counts nowhere (PUB-3.108)
+//! — no publication places a merge record's atom as a run or sends a kept
+//! place for one, so a journal's records are never re-minted or re-windowed
+//! (the merge record's decision 7) — and a selection whose arranged
+//! positions are merge records alone is refused [`Fault::OnlyMergeRecords`];
+//! a window's run and the trunk's own are read for none, neither being
+//! re-minted; (3) `find_links_v` — ONE
 //! read over the region as one array; (4) `links` — each answered address
 //! read for its HOME off the address and kept where the home's account is
 //! the person's EXACTLY, never nested under theirs, and never a home in the
@@ -383,9 +385,13 @@ pub struct Enumeration {
     /// parallel to the selection: I-ordinals, ascending, none for a run of
     /// no named draft.
     pub merge_atoms: Vec<Vec<u64>>,
-    /// THE SELECTION AS PUBLISHED: the held runs in their order, each cut
-    /// around its merge records' positions — the runs every later step tests
-    /// and composes from, so no publication carries a merge record.
+    /// The selection as published: the pieces a publication carries.
+    ///
+    /// They are the held runs' pieces as the draft places them, in order,
+    /// each cut around its run's merge records' positions — the runs every
+    /// later step tests and composes from, so no publication carries a
+    /// merge record, and at the re-read a word the draft no longer arranges
+    /// counts nowhere (PUB-3.108).
     pub selection: Vec<Run>,
     /// The selection's V-spans in the draft, merged where adjacent, its
     /// merge records' positions left out.
@@ -606,7 +612,8 @@ fn selection_spans(selection: &[Run]) -> Vec<Value> {
 /// a held run is not arranged whole at one place — the first enumeration's
 /// answer, the re-read's a difference; the atoms' reads' faults; then
 /// [`Fault::OnlyMergeRecords`] where every position of the selection holds
-/// a merge record, nothing further read; then the other reads' faults. A
+/// a merge record, nothing further read — the re-read's answer too, over
+/// what the draft still arranges of it; then the other reads' faults. A
 /// read's faults are `withheld` and `doc_not_registered` on the draft or on
 /// a draft `also` names (each is imaged for its own kept places), the death
 /// signal, `scan_busy` past the reissues, a shape this client cannot read,
@@ -641,16 +648,18 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
         }
     }
 
-    // The merge records, which no publication carries: the selection as
-    // published, and its region, cut around them.
+    // The selection as published, and its region, from the pieces a
+    // publication carries: each held run as the draft places it, cut around
+    // its merge records — at the re-read, what the draft still arranges of
+    // it (PUB-3.108; the link-sets design §5.7).
     door.step("merge_records");
     let merge_atoms = merge_atoms_of(door, &d, inputs, &placed)?;
-    let selection: Vec<Run> = inputs.selection.iter().zip(&merge_atoms).flat_map(|(run, atoms)| cut(run, atoms)).collect();
+    let pieces: Vec<(Run, u64)> = inputs.selection.iter().zip(&placed).zip(&merge_atoms).flat_map(|((run, placement), atoms)| carried(run, placement, atoms)).collect();
+    let selection: Vec<Run> = pieces.iter().map(|(piece, _)| piece.clone()).collect();
     if selection.is_empty() && merge_atoms.iter().any(|atoms| !atoms.is_empty()) {
         return Err(Fault::OnlyMergeRecords { draft: inputs.draft.clone() });
     }
-    let pieces = inputs.selection.iter().zip(&placed).zip(&merge_atoms).flat_map(|((run, placement), atoms)| carried(run, placement, atoms));
-    let region = merged(pieces.map(|(piece, ordinal)| (ordinal, piece.width)).collect());
+    let region = merged(pieces.iter().map(|(piece, ordinal)| (*ordinal, piece.width)).collect());
     let trunk = inputs.doc.as_ref().map(ToString::to_string);
 
     door.step("find_links_v");

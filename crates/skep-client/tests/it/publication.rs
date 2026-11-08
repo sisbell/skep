@@ -668,6 +668,63 @@ fn a_far_end_original_is_offered_and_lands_at_the_shot_that_publishes_its_words(
     session.close().expect("close");
 }
 
+/// Checks against the daemon that the re-read counts no deleted word.
+///
+/// The far-end note of the test above is offered over the draft's new
+/// words 3..4, which are deleted after the panel. The re-read states the
+/// draft's run split and reads the note over what the draft still arranges
+/// (PUB-3.108): its copy in `S2` covers the end it keeps, so it is
+/// superseded, and the request confirmed again carries no entry for it and
+/// lands, where its entry, the `to` the deleted words as stored, is refused
+/// `superseded`.
+#[test]
+fn a_word_deleted_since_the_panel_drops_its_original_and_the_request_confirmed_again_lands() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session).expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+    let seeded = seed(&board, &session, &device, &bare_token, &dir.path().join("anchors"));
+    let Seeded { e, e1, d, n, o, .. } = &seeded;
+    let note = make_link(&board, &session, &bare_token, &device, n, false, spec(e1, 5, 5, e, 5), spec(d, 22, 2, d, 3), T_CITATION);
+    let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
+    let claims = |link: &str| read(&board, &token, &frames::in_claims(link))["claims"].as_array().map_or(0, Vec::len);
+    // The note accepted by a shot that leaves the draft's words out.
+    let first = Inputs { selection: vec![run(e, 1, 19), run(o, 1, 5)], ..inputs(&seeded) };
+    let mut windowed = confirmed(&seeded);
+    windowed.answers = BTreeMap::from([(1, OriginAnswer::KeepPrivate)]);
+    let en = enumerate(&p, &first).expect("enumerated");
+    let pn = panel(&p, &first, &en).expect("the panel");
+    let Built::Request(mut request) = build(&p, &first, &en, &pn, &windowed).expect("built") else { panic!("inert") };
+    let Sent::Acknowledged(_) = send(&p, &first, &mut request).expect("sent") else { panic!("refused") };
+    assert_eq!(claims(&note), 1, "the premise: the note accepted, its copy in S2");
+    // The panel over the whole draft offers it; then its 3..4 are deleted.
+    let second = Inputs { base: Some((addr(&format!("{e}.2")), 24)), ..inputs(&seeded) };
+    let en = enumerate(&p, &second).expect("enumerated");
+    let pn = panel(&p, &second, &en).expect("the panel");
+    assert!(en.candidates.iter().any(|c| c.link.to_string() == note && c.offered()), "the premise: offered over the new words");
+    let as_of = crate::common::typed_at(&board, &bare_token, d);
+    acked(board.op(Some(&bare_token), &json!({"op": "delete", "doc": d, "p": {"subspace": "1", "ordinal": "22"}, "width": "2", "as_of": as_of})));
+    let rr = reread(&p, &second, &en, &pn).expect("re-read");
+    let r = rr.restatement.expect("the draft moved");
+    assert_eq!(r.selection, vec![(1, publication::Placement::Split(vec![(20, 1, 2), (22, 5, 6)])), (2, publication::Placement::Whole { ordinal: 28 })]);
+    assert_eq!(r.superseded, vec![addr(&note)], "its copy in S2 covers the end it keeps");
+    // Confirmed again over what is left.
+    let again = reread(&p, &second, &rr.enumeration, &rr.panel).expect("re-read");
+    assert_eq!(again.restatement, None);
+    let Built::Request(mut request) = build(&p, &second, &again.enumeration, &again.panel, &confirmed(&seeded)).expect("built") else { panic!("inert") };
+    assert!(request.entries.iter().all(|entry| again.enumeration.candidates[entry.candidate].link.to_string() != note), "no entry for the note: {:?}", request.entries);
+    let sent = send(&p, &second, &mut request).expect("sent");
+    assert!(matches!(&sent, Sent::Acknowledged(ack) if ack.member.to_string() == format!("{e}.3")), "{sent:?}");
+    assert_eq!(claims(&note), 1, "no copy made over the deleted words");
+    session.close().expect("close");
+}
+
 /// A MOVED PLACE: a second draft whose words are swapped after the request
 /// was built is refused `kept_place_moved` naming the entry, with the race's
 /// key off the feed; the re-read then re-states the selection's new places

@@ -54,12 +54,13 @@
 //!    the in-lock reads, each against its cap, from the worst-case table the
 //!    daemon prices by, pinned equal to it.
 //! 4. [`request`](mod@request) — THE RE-READ (§5.6, §5.7) and THE REQUEST (§5.7): the
-//!    enumeration read again over the same held selection and the two
-//!    answers diffed, the held runs placed by the one image, a difference
-//!    answered as a re-statement for the caller to confirm again; then the
-//!    request built from the confirmed rows — every member, the kept places,
-//!    the member-position end spelled canonically from the client's own
-//!    runs, the signed body through the one body builder, a fresh `id`.
+//!    enumeration read again over the same held selection, every test over
+//!    what the draft still arranges of it, and the two answers diffed, the
+//!    held runs placed by the one image, a difference answered as a
+//!    re-statement for the caller to confirm again; then the request built
+//!    from the confirmed rows — every member, the kept places, the
+//!    member-position end spelled canonically from the client's own runs, the
+//!    signed body through the one body builder, a fresh `id`.
 //! 5. [`send`](mod@send) — THE SEND AND THE FACES (§5.7): the frame under the token,
 //!    never unsigned on a claimed board, the one re-ask under the same `id`,
 //!    the refusal family as typed arms with their sites, the one re-sign at

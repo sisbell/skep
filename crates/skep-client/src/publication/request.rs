@@ -1,13 +1,14 @@
 //! THE RE-READ (the link-sets design §5.6, §5.7) and THE REQUEST (§5.7).
 //!
 //! **The re-read.** At the confirmation the enumeration and the panel run
-//! AGAIN over the same held selection — the region read with its
-//! stored-endset test, the read-through, the filter's claims, the held
-//! removals — and the two answers are DIFFED: a link no longer offered (gone
-//! or retracted), a candidate a claim of the person's has since superseded,
-//! a held removal since undone, a link that has arrived, and the held runs
-//! against the one image in V-order — a run absent, split, moved or
-//! re-ordered since the panel's reads is a DIFFERENCE. Any difference is
+//! AGAIN over the same held selection, every test over what the draft still
+//! arranges of it ([`Enumeration::selection`]; PUB-3.108) — the region read
+//! with its stored-endset test, the read-through, the filter's claims, the
+//! held removals — and the two answers are DIFFED: a link no longer offered
+//! (gone or retracted), a candidate a claim of the person's has since
+//! superseded, a held removal since undone, a link that has arrived, and the
+//! held runs against the one image in V-order — a run absent, split, moved
+//! or re-ordered since the panel's reads is a DIFFERENCE. Any difference is
 //! answered as a [`Restatement`], data for the caller to confirm again over
 //! what is left; nothing is sent on it. The image's places are the kept
 //! places the request then carries per run of a named draft's identity; the
@@ -27,12 +28,13 @@
 //! places (skep #739; the Nelson way, B3-S10) — every window onto the
 //! person's own unpublished origin answered first (THE THREE ANSWERS:
 //! publish-first is NOT this request, which stays inert; DROP leaves the
-//! run out; KEEP PRIVATE sends it as a window with no place beside it) and
-//! THE COUNTERPART offered first where a record of a draft the person reads
-//! names a window's words — taken, the covered piece re-composed by
-//! reference to the record's `to`, in this document or another, with its
-//! kept place beside it as a stray's, so the commit re-windows the draft
-//! there through the record; the twin pre-check re-composing what the
+//! run out; KEEP PRIVATE sends it as a window with no place beside it), a
+//! window the draft no longer arranges carrying nothing and asked nothing
+//! (PUB-3.108), and THE COUNTERPART offered first where a record of a draft
+//! the person reads names a window's words — taken, the covered piece
+//! re-composed by reference to the record's `to`, in this document or another,
+//! with its kept place beside it as a stray's, so the commit re-windows the
+//! draft there through the record; the twin pre-check re-composing what the
 //! draft's records already name; then `links` — each switched-on row's offered
 //! links and the formatting line's marks, `home` the tag `member` or the
 //! row's picked set, `from`/`to` read through the records (`RecordWalk`)
@@ -113,8 +115,10 @@ pub struct Confirmed {
 /// Why no request is built.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Inert {
-    /// Windows onto the person's own unpublished origins with no answer yet,
-    /// by the run's index.
+    /// Unanswered windows the draft still arranges, by the run's index.
+    ///
+    /// Each is a run onto an unpublished origin of the person's own; a window
+    /// the draft no longer arranges carries nothing and is owed no answer.
     Unanswered(Vec<usize>),
     /// The caller publishes an origin first: those runs, by index; this
     /// request is not sent.
@@ -166,12 +170,14 @@ pub struct Reread {
     pub restatement: Option<Restatement>,
 }
 
-/// Reads the enumeration and the panel again and diffs them against the
-/// first.
+/// Reads the enumeration and the panel again and diffs them with the first.
 ///
 /// # Errors
 ///
-/// The reads' faults.
+/// The reads' faults, in `enumerate`'s order, save that a held run the
+/// draft no longer arranges whole is a difference and no fault; so
+/// [`Fault::OnlyMergeRecords`] where every position the draft still
+/// arranges of the selection holds a merge record, nothing further read.
 pub fn reread(p: &Publisher<'_>, inputs: &Inputs, first: &Enumeration, first_panel: &Panel) -> Result<Reread, Fault> {
     let door = Door::new(p.board, p.token);
     let enumeration = enumerate_with(&door, p, inputs, false)?;
@@ -735,8 +741,14 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
     let mut counterparts: Vec<Counterpart> = Vec::new();
     for (i, run) in inputs.selection.iter().enumerate() {
         // The run as placed, cut around its merge records, which no
-        // publication carries: no run and no kept place for one.
+        // publication carries: no run and no kept place for one. A run that
+        // carries nothing — the draft no longer arranges it, or it holds
+        // merge records alone — is sent nowhere and asked nothing, so a
+        // window the draft has deleted owes no answer (PUB-3.108).
         let pieces = e.pieces(i, run);
+        if pieces.is_empty() {
+            continue;
+        }
         // A named draft's run — the rendering draft's or an `also` draft's —
         // is the document's own words, re-minted, and the rendering draft's
         // kept place is sent for EVERY such run: its own position of the

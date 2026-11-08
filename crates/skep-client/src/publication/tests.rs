@@ -2154,6 +2154,119 @@ fn the_reread_states_each_difference_over_what_is_left() {
     assert_eq!(request.retract, vec![a(&named.mpub)]);
 }
 
+/// Checks that a word deleted since the panel counts nowhere at the re-read.
+///
+/// The draft's 3..4 are deleted after the panel. The re-read states the run
+/// split and reads every test over what the draft still arranges of the
+/// selection (PUB-3.108): the note whose `to` lay on those words is covered
+/// by its copy over its kept end and is superseded, the link whose content
+/// end lay there alone has left, and the formatting line's cut and the
+/// notes' ⟨d⟩ count the words as left out. Confirmed again, the request
+/// carries neither link and the board takes it, where the note's entry, its
+/// `to` the deleted words as stored, is refused `superseded`.
+#[test]
+fn a_word_deleted_since_the_panel_counts_nowhere_at_the_reread() {
+    let (mut world, _) = World::base();
+    let note = world.typed(N, vec![ispan(E, 5, 5)], vec![ispan(D, 3, 2)], T_CITATION);
+    let copy = world.typed(&format!("{E}.1"), vec![ispan(E, 5, 5)], vec![ispan(D, 3, 2)], T_CITATION);
+    world.claim(N, &note, &copy);
+    let far = world.typed(N, vec![ispan(E, 1, 3)], vec![ispan(D, 3, 2)], T_CITATION);
+    let whole_d = world.typed(N, vec![unit(D)], vec![ispan(D, 3, 2)], T_CITATION);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = inputs();
+    let e = enumerate(&p, &inputs).unwrap();
+    let first = panel(&p, &inputs, &e).unwrap();
+    assert!([&note, &far, &whole_d].iter().all(|l| candidate_at(&e, l).offered()), "the premise: all three offered over the draft's 3..4");
+    assert_eq!(first.formatting.cut, 1, "the premise: the heading alone runs past the cut");
+    dialer.world().docs.get_mut(D).unwrap().runs = vec![run(E, 1, 19), run(D, 1, 2), run(D, 5, 6), run(O, 1, 5)];
+    let again = reread(&p, &inputs, &e, &first).unwrap();
+    let r = again.restatement.clone().expect("a difference");
+    assert_eq!(r.selection, vec![(1, Placement::Split(vec![(20, 1, 2), (22, 5, 6)])), (2, Placement::Whole { ordinal: 28 })]);
+    assert_eq!(again.enumeration.selection, vec![run(E, 1, 19), run(D, 1, 2), run(D, 5, 6), run(O, 1, 5)], "the selection as published: what the draft still arranges");
+    let c = candidate_at(&again.enumeration, &note);
+    assert_eq!((keys_of(c), c.offered()), ((true, true, false), false), "its copy covers the end it keeps");
+    assert_eq!((r.superseded, r.left, r.came), (vec![a(&note)], vec![a(&whole_d)], vec![]));
+    assert_eq!(again.panel.formatting.cut, 2, "the bold over 2..4 runs past the cut now");
+    let notes = again.panel.rows.iter().find(|row| row.home == a(N)).expect("the notes' row");
+    assert_eq!(notes.line.d, 1, "the far link's end lies wholly on words left out");
+    // Confirmed again over what is left: nothing moves, and the board takes it.
+    let settled = reread(&p, &inputs, &again.enumeration, &again.panel).unwrap();
+    assert_eq!(settled.restatement, None);
+    let Built::Request(mut request) = build(&p, &inputs, &settled.enumeration, &settled.panel, &switched(None)).unwrap() else { panic!("inert") };
+    let entry_of = |link: &str| request.entries.iter().find(|en| settled.enumeration.candidates[en.candidate].link.to_string() == link);
+    assert!(entry_of(&note).is_none() && entry_of(&whole_d).is_none(), "{:?}", request.entries);
+    assert_eq!(entry_of(&far).expect("the far link's entry").to, End::Spans(vec![ISpan { chain: format!("{D}.0.1"), first: 3, width: 2 }]), "wholly left out: the draft's own span");
+    let sent = send(&p, &inputs, &mut request).unwrap();
+    assert!(matches!(sent, Sent::Acknowledged(_)), "{sent:?}");
+    let claims = dialer.world().links.iter().filter(|l| !l.retracted && l.ty[0].0 == T_SUPERSEDES && l.from[0].0 == note).count();
+    assert_eq!(claims, 1, "the note's one copy, none made over the deleted words");
+}
+
+/// Checks that a record of words deleted since the panel reaches no link.
+///
+/// `E`'s 16..19, the words an earlier shot's record in `D` names as its
+/// `to`, are deleted from the draft after the panel. The re-read holds no
+/// record, so the private link on the record's `from` is reached no more
+/// and has left (PUB-3.108); confirmed again, the member homes no copy over
+/// words it does not hold.
+#[test]
+fn a_record_of_deleted_words_reaches_no_link_at_the_reread() {
+    let (world, named) = World::base();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = inputs();
+    let e = enumerate(&p, &inputs).unwrap();
+    let first = panel(&p, &inputs, &e).unwrap();
+    assert!(candidate_at(&e, &named.l_rt).offered(), "the premise: reached through the record");
+    dialer.world().docs.get_mut(D).unwrap().runs = vec![run(E, 1, 15), run(D, 1, 10), run(O, 1, 5)];
+    let again = reread(&p, &inputs, &e, &first).unwrap();
+    let r = again.restatement.clone().expect("a difference");
+    assert_eq!(r.selection, vec![(0, Placement::Split(vec![(1, 1, 15)])), (1, Placement::Whole { ordinal: 16 }), (2, Placement::Whole { ordinal: 26 })]);
+    assert!(again.enumeration.records.is_empty(), "no record's `to` lies on what the draft still arranges: {:?}", again.enumeration.records);
+    assert_eq!((r.left, r.superseded, r.came), (vec![a(&named.l_rt)], vec![], vec![]));
+    let notes = again.panel.rows.iter().find(|row| row.home == a(N)).expect("the notes' row");
+    assert_eq!((links_of(&again.enumeration, &notes.links), notes.read_through), (vec![named.l1_n.clone()], 0));
+    let settled = reread(&p, &inputs, &again.enumeration, &again.panel).unwrap();
+    assert_eq!(settled.restatement, None);
+    let Built::Request(mut request) = build(&p, &inputs, &settled.enumeration, &settled.panel, &switched(None)).unwrap() else { panic!("inert") };
+    assert_eq!(request.runs, vec![run(E, 1, 15), run(D, 1, 10), run(O, 1, 5)]);
+    let Sent::Acknowledged(ack) = send(&p, &inputs, &mut request).unwrap() else { panic!("refused") };
+    let member = ack.member.to_string();
+    assert!(!dialer.world().links.iter().any(|l| l.home == member && l.from == vec![ispan(E, 16, 4)]), "no copy over E's 16..19, which the member does not hold");
+}
+
+/// Checks that a window deleted since the panel is owed no answer.
+///
+/// The window onto `O` is deleted from the draft after the panel and never
+/// answered. The re-read states it absent, and the request confirmed again
+/// carries the rest and is sent: a run the draft no longer arranges is
+/// asked nothing, and an answer given for it holds nothing back
+/// (PUB-3.108).
+#[test]
+fn a_window_deleted_since_the_panel_owes_no_answer() {
+    let (world, _) = World::base();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = inputs();
+    let e = enumerate(&p, &inputs).unwrap();
+    let first = panel(&p, &inputs, &e).unwrap();
+    dialer.world().docs.get_mut(D).unwrap().runs = vec![run(E, 1, 19), run(D, 1, 10)];
+    let again = reread(&p, &inputs, &e, &first).unwrap();
+    assert_eq!(again.restatement.expect("a difference").selection, vec![(2, Placement::Absent)]);
+    let mut confirmed = switched(None);
+    confirmed.answers.insert(2, OriginAnswer::PublishFirst);
+    let Built::Request(_) = build(&p, &inputs, &again.enumeration, &again.panel, &confirmed).unwrap() else { panic!("inert at an answer for a deleted run") };
+    confirmed.answers.clear();
+    let Built::Request(mut request) = build(&p, &inputs, &again.enumeration, &again.panel, &confirmed).unwrap() else { panic!("inert") };
+    assert_eq!((request.runs.clone(), request.places.clone()), (vec![run(E, 1, 19), run(D, 1, 10)], vec![None, Some(20)]));
+    let sent = send(&p, &inputs, &mut request).unwrap();
+    assert!(matches!(sent, Sent::Acknowledged(_)), "{sent:?}");
+}
+
 // ── THE REQUEST ──────────────────────────────────────────────────────────
 
 /// THE ONE REQUEST's members as built from the confirmed rows: every run with
@@ -3076,6 +3189,27 @@ fn a_family_publication_re_mints_the_also_drafts_words_counts_its_passages_and_h
     assert_eq!(w.docs[A].runs, vec![run(E, 30, 5)], "A re-windowed at its own place in the same commit: its words the member's identity, no counterpart left");
 }
 
+/// Checks that a passage deleted since the panel is counted in no statement.
+///
+/// `A`'s run is deleted from `D` after the panel. The re-read states it
+/// absent, and the statement's count reads what the draft still arranges of
+/// the selection: no passage first written in `A` publishes (PUB-3.108).
+#[test]
+fn a_passage_deleted_since_the_panel_is_counted_in_no_statement() {
+    let (world, _) = family_world();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = family_inputs();
+    let e = enumerate(&p, &inputs).unwrap();
+    let first = panel(&p, &inputs, &e).unwrap();
+    assert_eq!(first.inherited, vec![Inherited { draft: a(A), passages: 1 }], "the premise");
+    dialer.world().docs.get_mut(D).unwrap().runs = vec![run(E, 1, 19), run(D, 1, 10), run(O, 1, 5)];
+    let again = reread(&p, &inputs, &e, &first).unwrap();
+    assert_eq!(again.restatement.expect("a difference").selection, vec![(2, Placement::Absent), (3, Placement::Whole { ordinal: 30 })]);
+    assert_eq!(again.panel.inherited, vec![Inherited { draft: a(A), passages: 0 }]);
+}
+
 /// THE TWIN PRE-CHECK over the family: a run of `A`'s identity that a record
 /// of `A` already names is re-composed by reference to the record's `to`, in
 /// pieces where the record covers it in part, EVERY named draft's kept
@@ -3372,6 +3506,27 @@ fn a_selection_of_merge_records_alone_is_refused_before_any_link_is_read() {
     assert_eq!(enumerate(&p, &inputs).unwrap_err(), Fault::OnlyMergeRecords { draft: a(J) });
     assert!(dialer.frames("find_links_v").is_empty() && dialer.frames("publish").is_empty(), "nothing read past the atoms, nothing sent: {:?}", dialer.ops());
     assert_eq!(Fault::OnlyMergeRecords { draft: a(J) }.to_string(), format!("{J} holds only merge records, and they stay private — there is nothing in it to publish"));
+}
+
+/// Checks that the re-read refuses what is left where it is merge records.
+///
+/// `J`'s words are deleted after the panel, its two records left. What the
+/// draft still arranges of the selection is merge records alone, so the
+/// re-read answers `OnlyMergeRecords`, as the first enumeration does, and
+/// no request of an empty member is ever built over it (PUB-3.108; the
+/// merge record's decision 7).
+#[test]
+fn a_reread_over_merge_records_alone_is_refused() {
+    let (dialer, board, signer) = open(journal_world());
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = journal_inputs(vec![run(J, 1, 7)]);
+    let e = enumerate(&p, &inputs).unwrap();
+    let first = panel(&p, &inputs, &e).unwrap();
+    dialer.world().docs.get_mut(J).unwrap().runs = vec![run(J, 3, 1), run(J, 6, 1)];
+    dialer.clear();
+    assert_eq!(reread(&p, &inputs, &e, &first).unwrap_err(), Fault::OnlyMergeRecords { draft: a(J) });
+    assert!(dialer.frames("find_links_v").is_empty() && dialer.frames("publish").is_empty(), "nothing read past the atoms, nothing sent: {:?}", dialer.ops());
 }
 
 /// A merge record of a draft `also` names is left out of both lists: `D`

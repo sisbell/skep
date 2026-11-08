@@ -5,14 +5,15 @@
 //! — which APPLIES a publication as the daemon does (a frame with no
 //! `attest` refused at a claimed board serving `H.1`, the twin fence, the
 //! kept places, an `old` refused `superseded` where a public successor an
-//! active claim of the person's names covers the entry's published spans,
-//! one fresh identity per draft identity, the records, the copies resolved
-//! from the member's positions, the claims, the retractions, the
-//! read-withs, the re-window, the base's move, the memo) and keeps every
-//! frame it served, so a test pins what each step reads, in what order and
-//! how many frames, and what the composition makes of each answer, with no
-//! daemon. The suites that need
-//! the daemon itself are `tests/it/publication.rs`.
+//! active claim of the person's names covers the entry's published spans —
+//! the claim naming `old` itself only where no member-position end lies on
+//! the shot's new words — one fresh identity per draft identity, the
+//! records, the copies resolved from the member's positions, the claims,
+//! the retractions, the read-withs, the re-window, the base's move, the
+//! memo) and keeps every frame it served, so a test pins what each step
+//! reads, in what order and how many frames, and what the composition makes
+//! of each answer, with no daemon. The suites that need the daemon itself
+//! are `tests/it/publication.rs`.
 //!
 //! THE FIXTURE (`World::base`): the claimant `1.0.1` on a claimed board; `E`
 //! a published edition holding "the quick brown fox" at `E.1`; `D` the
@@ -409,15 +410,31 @@ impl World {
                         ISpan { chain: chain.to_string(), first: first.parse().unwrap(), width: x["width"].as_str().unwrap().parse().unwrap() }
                     })
                     .collect()
-            } else if let Some(list) = end["member"].as_array() {
-                let spans: Vec<(u64, u64)> = list.iter().map(|x| (x["ordinal"].as_str().unwrap().parse().unwrap(), x["width"].as_str().unwrap().parse().unwrap())).collect();
-                resolve_member_spans(runs, &spans).expect("inside the placed positions")
             } else {
-                Vec::new()
+                Self::member_end(end, runs).unwrap_or_default()
             };
             out.extend(spans.into_iter().filter(|s| !s.document().is_some_and(|d| named.contains(&d))));
         }
         out
+    }
+
+    /// Returns the I-spans a member-position end resolves to through `runs`.
+    ///
+    /// It resolves the end as the plan's `member_end` does; an end of
+    /// another form answers `None`.
+    fn member_end(end: &Value, runs: &[Run]) -> Option<Vec<ISpan>> {
+        let spans: Vec<(u64, u64)> = end["member"].as_array()?.iter().map(|x| (x["ordinal"].as_str().unwrap().parse().unwrap(), x["width"].as_str().unwrap().parse().unwrap())).collect();
+        Some(resolve_member_spans(runs, &spans).expect("inside the placed positions"))
+    }
+
+    /// Returns whether a `links` entry's member-position end holds new words.
+    ///
+    /// Some span the end resolves to through the request's runs lies on a
+    /// named draft's own words, as the plan's `holds_new_words` reads it. An
+    /// I-span end on those words names the draft's own identity, a far end
+    /// on words the shot leaves out, and holds none.
+    fn holds_new_words(entry: &Value, runs: &[Run], named: &[String]) -> bool {
+        [&entry["from"], &entry["to"]].into_iter().filter_map(|end| Self::member_end(end, runs)).flatten().any(|s| s.document().is_some_and(|d| named.contains(&d)))
     }
 
     /// Whether an active claim of the person's names `old` and a successor
@@ -782,10 +799,13 @@ impl World {
                 }
                 // Superseded, as the plan's `check_old` judges it: the
                 // entry's published spans covered by a public successor an
-                // active claim of the person's names from `old`, or from an
-                // original `old` itself revises.
+                // active claim of the person's names from `old`, where no
+                // member-position end lies on the shot's new words, or from
+                // an original `old` itself revises, whatever new words the
+                // entry holds.
                 let spans = Self::published_spans(entry, &runs, &named);
-                if self.superseded_by_own_claim(old, &spans) || self.originals_of(old).iter().any(|o| self.superseded_by_own_claim(o, &spans)) {
+                let new_words = Self::holds_new_words(entry, &runs, &named);
+                if (!new_words && self.superseded_by_own_claim(old, &spans)) || self.originals_of(old).iter().any(|o| self.superseded_by_own_claim(o, &spans)) {
                     return json!({"resp": "rejected", "code": "old_refused", "detail": "superseded", "disposition": "permanent", "op": "publish", "site": {"index": k}});
                 }
             }
@@ -1381,20 +1401,28 @@ fn a_link_moved_into_another_set_leaves_its_old_row_for_its_new_one() {
 ///
 /// Widened over the original's words, or moved off part of them (B3-S12),
 /// the successor is offered and the original is not: coverage is no key of
-/// this arm.
+/// this arm. On kept words the successor covers or not as its ends lie; on
+/// the draft's new words, which no successor covers, it covers nothing even
+/// widened, and the original is dropped all the same.
 #[test]
 fn an_end_moved_before_the_shot_drops_the_original_whether_or_not_its_successor_covers() {
     let tok = token();
-    for (what, from, covers) in [("widened", ispan(D, 4, 7), true), ("moved off part of its words", ispan(D, 4, 5), false)] {
-        let (mut world, named) = World::base();
-        let moved = world.typed(D, vec![from], vec![ispan(Z, 1, 3)], T_CITATION);
-        world.claim(D, &named.cite_d, &moved);
+    let (_, named) = World::base();
+    let cells = [
+        ("widened over kept words", &named.l1_n, N, ispan(E, 4, 7), ispan(N, 1, 5), true),
+        ("moved off part of kept words", &named.l1_n, N, ispan(E, 7, 5), ispan(N, 1, 5), false),
+        ("widened over new words", &named.cite_d, D, ispan(D, 4, 7), ispan(Z, 1, 3), false),
+    ];
+    for (what, original, home, from, to, covers) in cells {
+        let (mut world, _) = World::base();
+        let moved = world.typed(home, vec![from], vec![to], T_CITATION);
+        world.claim(home, original, &moved);
         let (_, board, signer) = open(world);
         let p = publisher(&board, &tok, &signer);
         let e = enumerate(&p, &inputs()).unwrap();
-        assert_eq!(keys_of(candidate_at(&e, &named.cite_d)), (false, covers, true), "{what}");
+        assert_eq!(keys_of(candidate_at(&e, original)), (false, covers, true), "{what}");
         let offered = links_of(&e, &e.offered());
-        assert!(offered.contains(&moved) && !offered.contains(&named.cite_d), "{what}: the successor offered, not its original: {offered:?}");
+        assert!(offered.contains(&moved) && !offered.contains(original), "{what}: the successor offered, not its original: {offered:?}");
     }
 }
 
@@ -1445,7 +1473,10 @@ fn an_original_drops_where_its_successor_is_a_candidate_dropped_in_turn() {
 /// copy in the public set `S` cut at the earlier selection — over `E`'s
 /// words the record names — is offered again at the shot that publishes the
 /// rest (W4): the copy touches the selection and is a candidate, but a
-/// public successor drops its original only where it covers.
+/// public successor drops its original only where it covers. Its entry
+/// holds the new words in the member-position form, and the board takes it
+/// beside the cut copy: the member homes the copy re-made over the whole
+/// run, and the original holds a second claim.
 #[test]
 fn a_cut_copy_in_a_public_set_is_a_candidate_and_leaves_its_original_offered() {
     let (mut world, _) = World::base();
@@ -1456,15 +1487,25 @@ fn a_cut_copy_in_a_public_set_is_a_candidate_and_leaves_its_original_offered() {
     let original = world.typed(N, vec![ispan(D, 20, 8)], vec![ispan(N, 1, 2)], T_CITATION);
     let cut = world.typed(S, vec![ispan(E, 16, 4)], vec![ispan(N, 1, 2)], T_CITATION);
     world.claim(N, &original, &cut);
-    let (_, board, signer) = open(world);
+    let (dialer, board, signer) = open(world);
     let tok = token();
     let p = publisher(&board, &tok, &signer);
     let rest = Inputs { selection: vec![run(E, 1, 19), run(D, 1, 10), run(O, 1, 5), run(D, 24, 4)], ..inputs() };
     let e = enumerate(&p, &rest).unwrap();
     let in_s: Vec<String> = e.homes.iter().filter(|(h, _)| h.to_string() == S).flat_map(|(_, indices)| links_of(&e, indices)).collect();
     assert!(in_s.contains(&cut), "the cut copy a candidate in S: {in_s:?}");
-    let original = candidate_at(&e, &original);
-    assert_eq!((keys_of(original), original.offered()), ((true, false, true), true), "public and cut: offered, though its copy is a candidate");
+    let c = candidate_at(&e, &original);
+    assert_eq!((keys_of(c), c.offered()), ((true, false, true), true), "public and cut: offered, though its copy is a candidate");
+    let pn = panel(&p, &rest, &e).unwrap();
+    let Built::Request(mut request) = build(&p, &rest, &e, &pn, &switched(None)).unwrap() else { panic!("inert") };
+    let entry = request.entries.iter().find(|en| e.candidates[en.candidate].link.to_string() == original).expect("the original's entry");
+    assert_eq!(entry.from, End::Member(vec![(16, 4), (35, 4)]), "the record's words and the new words beside them, at the member's positions");
+    let Sent::Acknowledged(ack) = send(&p, &rest, &mut request).unwrap() else { panic!("refused") };
+    let w = dialer.world();
+    let (member, whole_run) = (ack.member.to_string(), vec![ispan(E, 16, 4), ispan(E, 30, 4)]);
+    assert!(w.links.iter().any(|l| l.home == member && l.from == whole_run && l.to == vec![ispan(N, 1, 2)]), "the copy re-made over the whole run, the new words on their fresh identity");
+    let claims = w.links.iter().filter(|l| !l.retracted && l.ty[0].0 == T_SUPERSEDES && l.from[0].0 == original).count();
+    assert_eq!(claims, 2, "the cut copy's claim and the re-made copy's");
 }
 
 /// Checks the walk through the records piece by piece.
@@ -1537,6 +1578,50 @@ fn an_end_on_words_published_since_its_copy_is_offered_again_over_them() {
     assert_eq!((entry.from.clone(), entry.to.clone()), (on_e(5, 5), on_e(17, 2)), "both ends on E's words");
     let sent = send(&p, &inputs(), &mut request).unwrap();
     assert!(matches!(sent, Sent::Acknowledged(_)), "no successor covers it on E's words: {sent:?}");
+}
+
+/// Checks that a far-end original is offered when its words are published.
+///
+/// A note from `E`'s 5..9 to the draft's 3..4, accepted while 3..4 were
+/// left out, so its copy at `E.1` holds the draft's addresses verbatim
+/// (§5.2's ⟨d⟩). The shot that publishes the draft's words reads 3..4 as
+/// new words, which that copy never covers, so the note is offered, its
+/// `to` spelled at the member's positions, and the board takes it. At the
+/// next shot those words are the member's, the new copy covers them, and
+/// the note is offered no more.
+#[test]
+fn a_far_end_original_is_offered_at_the_publication_that_publishes_its_words() {
+    let (mut world, _) = World::base();
+    let note = world.typed(N, vec![ispan(E, 5, 5)], vec![ispan(D, 3, 2)], T_CITATION);
+    let copy = world.typed(&format!("{E}.1"), vec![ispan(E, 5, 5)], vec![ispan(D, 3, 2)], T_CITATION);
+    world.claim(N, &note, &copy);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let first = enumerate(&p, &inputs()).unwrap();
+    let c = candidate_at(&first, &note);
+    assert_eq!((keys_of(c), c.offered()), ((true, false, false), true), "its copy holds the draft's 3..4, which this shot publishes as new");
+    let (e, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(None));
+    let entry = request.entries.iter().find(|en| e.candidates[en.candidate].link.to_string() == note).expect("the note's entry");
+    let on_e = End::Spans(vec![ISpan { chain: format!("{E}.0.1"), first: 5, width: 5 }]);
+    assert_eq!((entry.from.clone(), entry.to.clone()), (on_e, End::Member(vec![(22, 2)])), "the far end on the new words, after the kept words' nineteen");
+    let Sent::Acknowledged(ack) = send(&p, &inputs(), &mut request).unwrap() else { panic!("refused") };
+    let e2 = format!("{E}.2");
+    assert_eq!(ack.member.to_string(), e2);
+    {
+        let mut w = dialer.world();
+        assert!(w.links.iter().any(|l| l.home == e2 && l.from == vec![ispan(E, 5, 5)] && l.to == vec![ispan(E, 22, 2)]), "the copy in the member, its far end on the fresh identity");
+        let claims = w.links.iter().filter(|l| !l.retracted && l.ty[0].0 == T_SUPERSEDES && l.from[0].0 == note).count();
+        assert_eq!(claims, 2, "the first copy's claim and the new copy's");
+        // A word typed into the re-windowed draft, for the next shot.
+        w.text(D, 30, "!");
+        w.docs.get_mut(D).unwrap().runs = vec![run(E, 1, 29), run(D, 30, 1), run(O, 1, 5)];
+    }
+    let again = Inputs { base: Some((a(&e2), 34)), selection: vec![run(E, 1, 29), run(D, 30, 1), run(O, 1, 5)], ..inputs() };
+    let e = enumerate(&p, &again).unwrap();
+    let c = candidate_at(&e, &note);
+    let keys: Vec<(bool, bool, bool)> = c.successors.iter().map(|s| (s.published_home, s.covers, s.candidate)).collect();
+    assert_eq!((keys, c.offered()), (vec![(true, false, false), (true, true, false)], false), "the new copy covers E's 22..23, the words the draft's 3..4 became");
 }
 
 /// Checks that the formatting line takes a retype in its original's place.
@@ -2402,6 +2487,47 @@ fn the_board_refuses_an_entry_re_offering_an_original_its_copy_covers() {
     let index = request.entries.len() as u64 - 1;
     let position = dialer.world().position;
     assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::OwnFault(OwnFault::Deposit { code: "old_refused".into(), index: Some(index), detail: Some("superseded".into()) })));
+    assert_eq!(dialer.world().position, position, "nothing committed");
+}
+
+/// Checks that the scripted board exempts new words as narrowly as the plan.
+///
+/// Two entries beside covering copies are still refused `old_refused`,
+/// `superseded`, as the plan's `check_old` refuses them. A far-end note
+/// whose copy holds the draft's 3..4 verbatim, its `to` spelled as that
+/// I-span, holds no new words: the end names the draft's own identity. The
+/// revision `l_rev`, its end at the member's positions over the new words
+/// beside its own, is judged by its original's accepted copy whatever new
+/// words it holds.
+#[test]
+fn the_board_exempts_only_a_member_position_end_on_new_words_and_only_the_claim_naming_old() {
+    let tok = token();
+    let span = |doc: &str, first: u64, width: u64| End::Spans(vec![ISpan { chain: format!("{doc}.0.1"), first, width }]);
+    let refused = |index: usize| Sent::Refused(Refusal::OwnFault(OwnFault::Deposit { code: "old_refused".into(), index: Some(index as u64), detail: Some("superseded".into()) }));
+    // The far-end note, spelled on the draft's own identity.
+    let (mut world, _) = World::base();
+    let note = world.typed(N, vec![ispan(E, 5, 5)], vec![ispan(D, 3, 2)], T_CITATION);
+    let copy = world.typed(&format!("{E}.1"), vec![ispan(E, 5, 5)], vec![ispan(D, 3, 2)], T_CITATION);
+    world.claim(N, &note, &copy);
+    let (dialer, board, signer) = open(world);
+    let p = publisher(&board, &tok, &signer);
+    let (e, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(None));
+    let candidate = e.candidates.iter().position(|c| c.link.to_string() == note).expect("a candidate");
+    request.entries.retain(|en| en.old != Some(a(&note)));
+    request.entries.push(Entry { home: EntryHome::Member, from: span(E, 5, 5), to: span(D, 3, 2), ty: End::Addrs(vec![T_CITATION.into()]), old: Some(a(&note)), candidate });
+    let (index, position) = (request.entries.len() - 1, dialer.world().position);
+    assert_eq!(send(&p, &inputs(), &mut request).unwrap(), refused(index), "an I-span end on the draft's words");
+    assert_eq!(dialer.world().position, position, "nothing committed");
+    // The revision, beside the draft's new words 1..2 at positions 20..21.
+    let (world, named) = World::base();
+    let (dialer, board, signer) = open(world);
+    let p = publisher(&board, &tok, &signer);
+    let (e, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(None));
+    let candidate = e.candidates.iter().position(|c| c.link.to_string() == named.l_rev).expect("a candidate");
+    let beside_new_words = End::Member(vec![(16, 3), (20, 2)]);
+    request.entries.push(Entry { home: EntryHome::Member, from: beside_new_words, to: span(N, 6, 4), ty: End::Addrs(vec![T_HEADING.into()]), old: Some(a(&named.l_rev)), candidate });
+    let (index, position) = (request.entries.len() - 1, dialer.world().position);
+    assert_eq!(send(&p, &inputs(), &mut request).unwrap(), refused(index), "a revision beside new words");
     assert_eq!(dialer.world().position, position, "nothing committed");
 }
 

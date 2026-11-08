@@ -58,9 +58,14 @@
 //! its ends as stored, read off one `read_link` of the successor, COVER
 //! every position of the candidate this publication publishes — the
 //! candidate's ends read through the records, below (keys (i) and (iii); no
-//! liveness key — sweep 5 S1) — so a copy an earlier selection cut leaves
-//! its original offered, to be re-made over the whole run (W4), and a copy
-//! an earlier shot made over the words it re-minted drops its original at
+//! liveness key — sweep 5 S1) — and none of those positions lies on a named
+//! draft's own words, which the shot publishes as new: a successor standing
+//! before the shot covers none of them, whatever its ends name (PUB-3.9). So
+//! a copy an earlier selection cut leaves its original offered, to be re-made
+//! over the whole run (W4); the original of an end that lay wholly on
+//! left-out words, its copy holding the draft's own addresses, is offered at
+//! the publication that publishes those words (§5.2's ⟨d⟩); and a copy an
+//! earlier shot made over the words it re-minted drops its original at
 //! every later publication. Any other successor drops it where it is itself
 //! a candidate of this enumeration, dropped or offered — a retype or an end
 //! move made in the draft before the shot (B3-S12), a move into another set
@@ -215,9 +220,14 @@ pub struct Successor {
     /// (i) `new`'s home is a published document of the person's, off the
     /// caller's list.
     pub published_home: bool,
-    /// (iii) `new`'s ends, as stored, cover every position of the candidate
-    /// this publication publishes: its ends read through the records as the
-    /// request spells them (`RecordWalk`).
+    /// (iii) Whether `new` covers the candidate's words this shot publishes.
+    ///
+    /// Its ends, as stored, hold every position of the candidate this
+    /// publication publishes — the candidate's ends read through the records
+    /// as the request spells them (`RecordWalk`) — and none of those
+    /// positions lies on a named draft's own words, which the shot publishes
+    /// as new: a successor standing before the shot covers none of them,
+    /// whatever addresses its ends name (PUB-3.9; §5.2's ⟨c⟩ and ⟨d⟩).
     pub covers: bool,
     /// Whether `new` is another candidate of this enumeration.
     ///
@@ -746,17 +756,20 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
     // still drops where a covering copy has superseded its successor in turn.
     let held: BTreeSet<Address> = candidates.iter().map(|c| c.link.clone()).collect();
     // Key (iii) reads the candidate's ends through the records, as the
-    // request spells them, and the successor's ends as stored.
+    // request spells them, and the successor's ends as stored. A selected
+    // position the records leave on a named draft's own words is one of the
+    // shot's new words, which no successor covers.
     let walk = RecordWalk::new(inputs, &records);
     for c in &mut candidates {
         let link = c.link.to_string();
         let on = selected_ranges(&walk.spans(c), &selection);
+        let new_words = on.iter().any(|(chain, ..)| walk.is_named_chain(chain));
         let ins = answers::claims(&door.answered(&link, &frames::in_claims(&link))?);
         for row in ins.iter().filter(|r| r.active && owned_by(&r.home, p.account)) {
             let (Some(claim), Some(new)) = (parse_address(&row.claim), parse_address(&row.new)) else { continue };
             let published_home = home_of_link(&row.new).is_some_and(|h| inputs.is_published_home(h));
             let covers = match door.link(&row.new)? {
-                Some(value) => !on.is_empty() && covered(&on, &value.from.iter().chain(&value.to).filter_map(ISpan::of).collect::<Vec<_>>()),
+                Some(value) => !on.is_empty() && !new_words && covered(&on, &value.from.iter().chain(&value.to).filter_map(ISpan::of).collect::<Vec<_>>()),
                 None => false,
             };
             let candidate = held.contains(&new);

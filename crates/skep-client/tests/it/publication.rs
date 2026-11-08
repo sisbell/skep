@@ -607,6 +607,67 @@ fn a_second_publication_offers_nothing_the_first_accepted_on_the_words_it_re_min
     session.close().expect("close");
 }
 
+/// Checks against the daemon that a far-end original arrives with its words.
+///
+/// A note from `E`'s 5..9 to the draft's new words 3..4 is published by a
+/// shot that leaves the draft's words out, so its copy in `S2` holds the
+/// draft's addresses verbatim. The shot that publishes the draft's words
+/// reads them as new words, which that copy never covers (§5.2's ⟨d⟩), so
+/// the note is offered, its `to` at the member's positions, and the board
+/// takes it beside the copy: the new copy in `S2` lies on `E`'s fresh words.
+#[test]
+fn a_far_end_original_is_offered_and_lands_at_the_shot_that_publishes_its_words() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session).expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+    let seeded = seed(&board, &session, &device, &bare_token, &dir.path().join("anchors"));
+    let Seeded { e, e1, s2, d, n, o, .. } = &seeded;
+    let note = make_link(&board, &session, &bare_token, &device, n, false, spec(e1, 5, 5, e, 5), spec(d, 22, 2, d, 3), T_CITATION);
+    let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
+    let claims = |link: &str| read(&board, &token, &frames::in_claims(link))["claims"].as_array().cloned().unwrap_or_default();
+    let to_of = |claim: &Value| read(&board, &token, &frames::read_link(claim["new"].as_str().unwrap()))["link"]["slots"][1].clone();
+    // The draft's words left out: the window, now the second run, kept
+    // private.
+    let first = Inputs { selection: vec![run(e, 1, 19), run(o, 1, 5)], ..inputs(&seeded) };
+    let mut windowed = confirmed(&seeded);
+    windowed.answers = BTreeMap::from([(1, OriginAnswer::KeepPrivate)]);
+    let en = enumerate(&p, &first).expect("enumerated");
+    let pn = panel(&p, &first, &en).expect("the panel");
+    let Built::Request(mut request) = build(&p, &first, &en, &pn, &windowed).expect("built") else { panic!("inert") };
+    let Sent::Acknowledged(ack) = send(&p, &first, &mut request).expect("sent") else { panic!("refused") };
+    let e2 = format!("{e}.2");
+    assert_eq!(ack.member.to_string(), e2);
+    let accepted = claims(&note);
+    assert_eq!(accepted.len(), 1, "the note accepted: {accepted:?}");
+    assert_eq!(to_of(&accepted[0]), json!([{"start": format!("{d}.0.1.3"), "width": "0.0.0.0.0.0.0.2"}]), "its copy holds the draft's 3..4 verbatim");
+    assert_eq!(publication::draft_base(&p, &addr(e), &addr(d)), Ok(publication::base::Base::Recorded { base: addr(&e2), copied: 24 }), "the board moved D's base to E.2");
+    // The shot that publishes the draft's words, off that base.
+    let second = Inputs { base: Some((addr(&e2), 24)), ..inputs(&seeded) };
+    let en = enumerate(&p, &second).expect("enumerated");
+    let c = en.candidates.iter().find(|c| c.link.to_string() == note).expect("the note a candidate");
+    let keys: Vec<(bool, bool, bool)> = c.successors.iter().map(|s| (s.published_home, s.covers, s.candidate)).collect();
+    assert_eq!((keys, c.offered()), (vec![(true, false, true)], true), "its copy in S2 never covers the new words: offered");
+    let pn = panel(&p, &second, &en).expect("the panel");
+    let Built::Request(mut request) = build(&p, &second, &en, &pn, &confirmed(&seeded)).expect("built") else { panic!("inert") };
+    let entry = request.entries.iter().find(|entry| en.candidates[entry.candidate].link.to_string() == note).expect("the note's entry");
+    assert_eq!(entry.to, publication::End::Member(vec![(22, 2)]), "the far end on the new words, after the kept words' nineteen");
+    let Sent::Acknowledged(ack) = send(&p, &second, &mut request).expect("sent") else { panic!("refused") };
+    assert_eq!(ack.member.to_string(), format!("{e}.3"));
+    let accepted = claims(&note);
+    assert_eq!(accepted.len(), 2, "a second claim beside the first: {accepted:?}");
+    let fresh: Vec<&Value> = accepted.iter().filter(|claim| to_of(claim) == json!([{"start": format!("{e}.0.1.22"), "width": "0.0.0.0.0.0.0.2"}])).collect();
+    assert_eq!(fresh.len(), 1, "one copy on E's fresh words 22..23: {accepted:?}");
+    assert_eq!(document_of(fresh[0]["new"].as_str().unwrap()).as_deref(), Some(s2.as_str()), "in S2, the notes' destination");
+    session.close().expect("close");
+}
+
 /// A MOVED PLACE: a second draft whose words are swapped after the request
 /// was built is refused `kept_place_moved` naming the entry, with the race's
 /// key off the feed; the re-read then re-states the selection's new places

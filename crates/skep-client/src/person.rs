@@ -77,6 +77,13 @@ pub struct LabelBox {
 }
 
 /// A question over public facts.
+///
+/// **Precondition.** Its text names no path on this machine, and nothing
+/// reads it for one: a question carries no rule, the one handle a statement
+/// gives an embedder to keep it out of a page, so an embedder routes every
+/// question with the public moments. A path the person needs beside a
+/// question is said just before it, in a statement under a rule whose
+/// statements name where key material rests (`client.md` §4b.3; SP-15).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Question {
     /// The question's text.

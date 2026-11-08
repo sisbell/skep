@@ -21,7 +21,11 @@
 //! each removal's answer read, a file the volume refuses to unlink said
 //! standing by its path, never "destroyed", as every removal of an anchor
 //! file is (AUTH-5.40: a seed on media is a findable paper until it is
-//! gone). Steps 1–3 alone — the generate, the export and the drop — are
+//! gone). AUTH-5.41's offer to destroy the file asks by the anchor's letter
+//! and its label rendered inert, never by the file's path, which is said
+//! just before it under that rule: a question carries no rule an embedder
+//! could keep it native by, and an anchor file's path is native (§4b.3).
+//! Steps 1–3 alone — the generate, the export and the drop — are
 //! `export_pair`, and statement (b) alone is `two_places`: the loss arm
 //! cites the order with those two and inherits nothing else (§4a.6 L3).
 
@@ -469,10 +473,18 @@ fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels
         }
         // Step 9: AUTH-5.41 where both exist and the print passed — offer to
         // destroy the file, never the act unasked; the removal's answer read,
-        // a file the volume keeps said standing and kept as the artifact.
+        // a file the volume keeps said standing and kept as the artifact. The
+        // question names the anchor by its letter, since two boxes may fix
+        // one label, and by its label rendered inert, as its sheet prints it.
+        // A question carries no rule an embedder could route it by, so it
+        // names no path: the file's is said just before it under AUTH-5.41,
+        // a native rule (§4b.3: an anchor file's path is the shell's own
+        // window's).
         if artifact.print == Some(Print::Verified) {
+            let anchor = format!("anchor {} (`{}`)", if i == 0 { "a" } else { "b" }, crate::sheet::render_inert(artifact.label.as_str()));
+            say(person, "AUTH-5.41", format!("{anchor}: its file is {} — the file the next question offers to destroy", path.display()));
             let destroy_it = person
-                .yes_no(Public(Question { text: format!("the print of anchor {} passed its re-type and is the KEPT artifact; destroy the file {} and keep the print? (AUTH-5.40)", artifact.label, path.display()) }))
+                .yes_no(Public(Question { text: format!("the print of {anchor} passed its re-type and is the KEPT artifact; destroy its file and keep the print? (AUTH-5.40)") }))
                 .map_err(abandoned)?;
             if destroy_it && destroy(person, "the file", &path, "AUTH-5.41") {
                 artifact.file = None;

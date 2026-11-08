@@ -239,8 +239,10 @@ impl MomentKind {
 /// "a key file's path, the store's location, an anchor file's path or
 /// contents: the same"). Each is a rule whose statements name where key
 /// material rests, or what was done with it there: AUTH-5.40's ladder words
-/// at the anchor file written; AUTH-5.41's line on the print, naming the
-/// file kept; §4.1 S3's read-back of an anchor file; AUTH-5.54 step 3's
+/// at the anchor file written; AUTH-5.41's lines on a print's file — the
+/// file kept beside an unverified print, the file said just before the
+/// offer to destroy it (the offer, a question, names none), and the file
+/// destroyed; §4.1 S3's read-back of an anchor file; AUTH-5.54 step 3's
 /// placed copy and kept artifact; §3a's key file written into the store;
 /// and §9 item 36's key file a retirement leaves in place. A statement is
 /// classed by its rule, the one handle a `Public<Statement>` carries.

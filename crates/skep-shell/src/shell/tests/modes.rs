@@ -10,7 +10,8 @@
 //! walk, the stale and foreign references, the token's text, a seed the walk
 //! made and the store's location in no answer, no event and no log entry — a
 //! paper claim's among them — a scripted claim's anchors placed where its
-//! script says, a claim halted at an anchor's destination and a refresh
+//! script says, a paper claim's offers to destroy its anchor files once
+//! their prints pass, a claim halted at an anchor's destination and a refresh
 //! halted at the index's save each handing the page no path, the path said
 //! on `Talk`, a search's query recorded nowhere, a death signal at a
 //! call's own dial ending its session, and a bare session's death at a
@@ -872,6 +873,56 @@ fn a_scripted_claim_places_its_anchors_where_its_script_says() {
         assert_eq!(files, 1, "anchor {which}'s one file under {}:\n{talked}", place.display());
         assert!(talked.contains(&format!("dev arm: anchor {which} is placed under {}", place.display())), "the dev arm placed anchor {which}:\n{talked}");
     }
+    shell.shutdown();
+    drop(shell);
+    answerer.join().unwrap();
+    sd.shutdown();
+}
+
+/// Checks that a paper claim's destroy offers hand the page no anchor path.
+///
+/// It is §4b.3's: an anchor file's path is native. A notebook claim with its
+/// anchors printed, each re-type typed off its sheet by the script, reaches
+/// AUTH-5.41's offer for both anchors, and the page answers each yes: the
+/// offer crosses naming its anchor by letter and label, the file's path is
+/// said on `Talk` under AUTH-5.41, and both files are destroyed, no anchor
+/// directory and not the store named in any answer, event or log entry
+/// (the mutant that puts the path back in the offer hands it to the page,
+/// and the one that says it under a rule the shell does not keep native
+/// hands it to the page as a statement).
+#[test]
+fn a_paper_claims_destroy_offer_hands_the_page_no_anchor_path() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let (a, b) = (dir.path().join("anchor-a"), dir.path().join("anchor-b"));
+    let store = dir.path().join("store");
+    let (talk, lines) = talk();
+    let mut opts = ShellOptions::new(vec![Origin::parse(&origin).unwrap()], store.clone(), SessionMode::Bare { principal: 1 }, talk);
+    opts.arm = ArmConfig::Script(vec![script::Answer::Destination(a.clone()), script::Answer::Destination(b.clone()), script::Answer::RetypeSheet(0), script::Answer::RetypeSheet(1)]);
+    let shell = Shell::open(opts);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    let board = shell.board_references().remove(0);
+    shell.call("keygen", &json!({"label": "notebook"})).unwrap();
+    let claimed = shell.call("claim", &json!({"board": board, "name": "a name", "paper": true})).unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
+    assert_eq!(claimed["account"], "1.0.1");
+    let talked = lines.lock().unwrap().join("\n");
+    let offers: Vec<Value> = seen.lock().unwrap().iter().filter(|e| e.name == EventName::Moment && e.data["kind"] == "yes_no").map(|e| e.data["data"]["text"].clone()).collect();
+    assert_eq!(offers.len(), 2, "one offer per verified print: {offers:?}\n{talked}");
+    for (offer, letter) in offers.iter().zip(["a", "b"]) {
+        assert!(offer.as_str().is_some_and(|text| text.contains(&format!("the print of anchor {letter} (`"))), "the offer names its anchor: {offer}");
+    }
+    for (letter, place) in [("a", &a), ("b", &b)] {
+        let said = talked.lines().any(|l| l.starts_with(&format!("dev arm: AUTH-5.41: anchor {letter} (`")) && l.contains(&place.display().to_string()) && !l.contains("is destroyed"));
+        assert!(said, "anchor {letter}'s file said on Talk:\n{talked}");
+        assert_eq!(std::fs::read_dir(place).map(Iterator::count).unwrap_or(0), 0, "anchor {letter}'s file destroyed on the page's yes:\n{talked}");
+    }
+    let crossed = format!("{claimed:?}{:?}{:?}", seen.lock().unwrap(), shell.log().entries());
+    for path in [&a, &b, &store] {
+        assert!(!crossed.contains(&path.display().to_string()), "{} crossed: {crossed}", path.display());
+    }
+    assert_events_declared(&seen.lock().unwrap());
     shell.shutdown();
     drop(shell);
     answerer.join().unwrap();

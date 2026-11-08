@@ -3,9 +3,10 @@
 //! write, the re-run from step 1 when the file is gone and the act named by
 //! venue when the runs run out, a pair file the unlink refuses said standing
 //! and never "destroyed", the paper path's re-type and dismissal and the
-//! file its offer cannot destroy said standing and kept, the label domain
-//! at the box, the one-place sentence, the store refused as a destination
-//! however the path reaches it.
+//! file its offer cannot destroy said standing and kept, the offer naming
+//! its anchor and never its file's path, said natively just before it, the
+//! label domain at the box, the one-place sentence, the store refused as a
+//! destination however the path reaches it.
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -345,6 +346,41 @@ fn the_paper_path_retypes_from_the_sheet_between_a_dismissal_and_the_offer() {
     let out = backup_moment(&mut person, &notebook_venue(), &options(vec![a, b], true, None)).expect("the moment");
     assert!(out.anchors.iter().all(|x| x.print == Some(Print::Unverified) && x.file.as_ref().is_some_and(|p| p.is_file())));
     assert!(person.said("the print is UNVERIFIED") && person.said("never destroyed in favor of an unverified one"));
+}
+
+/// Checks that the destroy offer names its anchor and says its file natively.
+///
+/// AUTH-5.41; §4b.3: the offer is a question, which carries no rule an
+/// embedder could keep it native by, so it names its anchor by its letter
+/// and its label rendered inert — both boxes fixing one label that holds a
+/// bidi control — and never a path or a file's name; the line just before
+/// it, under AUTH-5.41, a native rule, names that anchor's file. Anchor a's
+/// offer declined keeps its file and b's taken destroys it (the mutant that
+/// puts the path back in the question hands the page the file's path, and
+/// the one that drops the line before it asks over a file named nowhere).
+#[test]
+fn the_destroy_offer_names_its_anchor_and_says_the_files_path_natively_before_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+    let label = "sheet\u{202E}";
+    let script = vec![Script::Label(label.into()), Script::Label(label.into()), Script::RetypeFromSheet(0), Script::YesNo(false), Script::RetypeFromSheet(1), Script::YesNo(true)];
+    let mut person = Scripted::new(script);
+    let out = backup_moment(&mut person, &notebook_venue(), &options(vec![a.clone(), b.clone()], true, None)).expect("the moment");
+    let t = &person.transcript;
+    let offers: Vec<usize> = t.iter().enumerate().filter(|(_, l)| l.starts_with("PUBLIC yes_no: ")).map(|(n, _)| n).collect();
+    assert_eq!(offers.len(), 2, "one offer per verified print:\n{}", t.join("\n"));
+    let tmp = dir.path().display().to_string();
+    for ((&n, (letter, place)), anchor) in offers.iter().zip([("a", &a), ("b", &b)]).zip(&out.anchors) {
+        let named = format!("anchor {letter} (`sheet<U+202E>`)");
+        let offer = &t[n];
+        assert!(offer.contains(&format!("the print of {named} passed its re-type")), "the offer names its anchor by letter and inert label: {offer}");
+        assert!(!offer.contains(&tmp) && !offer.contains(".skep-key") && !offer.contains('\u{202E}'), "the offer names no path and renders its label inert: {offer}");
+        let file = place.join(anchor_file_name(&anchor.label, &anchor.fingerprint));
+        let before = &t[n - 1];
+        assert!(before.starts_with(&format!("PUBLIC say [AUTH-5.41]: {named}: ")) && before.contains(&file.display().to_string()), "anchor {letter}'s file said just before its offer: {before}");
+    }
+    assert!(out.anchors[0].file.as_ref().is_some_and(|p| p.is_file()), "a's offer declined keeps its file");
+    assert!(out.anchors[1].file.is_none() && files_in(&b).is_empty(), "b's offer taken destroys its file");
 }
 
 /// AUTH-1.24's domain, tested AT THE BOX (P13): 129 bytes refused, 128

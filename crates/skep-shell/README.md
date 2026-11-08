@@ -119,10 +119,6 @@ A `session-died` whose cause is a block is named by the re-open's
 `as_of`, not the genesis's position by bisection. No `held` event goes
 out at the launch for the documents a principal's held file holds: the
 file is read at its session's open, and `held(session)` lists its lines.
-The paper path's question whether to destroy an anchor file whose print
-passed its re-type names the file and crosses to the page: `skep-client`
-classes it PUBLIC, and a question carries no rule the shell could route it
-to its own window by, as it routes the NATIVE statements.
 
 No feature, no async runtime, no HTTP crate: std beside the workspace's
 crates, as `skep-client`'s rule has it. The transport is not here.

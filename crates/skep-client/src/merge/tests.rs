@@ -1242,6 +1242,10 @@ mod scripted {
         /// link the merge writes, a correspondence record's width for one
         /// a cell plants.
         width: u64,
+        /// The position of the commit that minted the link, as `read_link`
+        /// answers it: a `make_link`'s own, none for a row a cell plants
+        /// unless the cell names one.
+        at: Option<u64>,
     }
 
     #[derive(Debug, Clone)]
@@ -1294,6 +1298,10 @@ mod scripted {
         drop_acks: usize,
         /// `/op-at` answers `history_busy` this many times first.
         busy: usize,
+        /// A `find_links_ftt` whose `home` names an account — the merge
+        /// journal's find, a class scan — is refused `503 scan_busy` this
+        /// many times first (wire.md §Link discovery reads).
+        scan_busy: usize,
         /// `/op-at` answers `history_reclaimed` below this position, where
         /// one is set: the journal reclaimed there.
         floor: Option<u64>,
@@ -1770,10 +1778,19 @@ mod scripted {
                     let start = |slot: &Value| slot.as_array().and_then(|s| s.first()).and_then(|s| s["start"].as_str()).map(str::to_string);
                     let (ty, to, home, from) = (start(&q["ty"]), start(&q["to"]), start(&q["home"]), start(&q["from"]));
                     assert!(to.is_some() || home.is_some() || from.is_some(), "a class scan: {q}");
+                    // A `home` naming an account walks every home under it, a
+                    // class scan under the board's permits; one naming a
+                    // document reads the homes of its subtree.
+                    let account_home = home.as_ref().is_some_and(|h| crate::address::document_of(h).as_deref() != Some(h.as_str()));
+                    if account_home && self.scan_busy > 0 {
+                        self.scan_busy -= 1;
+                        return Ok(reply(503, json!({"error": "scan_busy", "detail": "all class-scan permits are in use; retry shortly", "op": "find_links_ftt"})));
+                    }
+                    let under = |l: &LinkRow, h: &str| l.home == h || l.home.starts_with(&format!("{h}."));
                     let addrs: Vec<&str> = self
                         .links
                         .iter()
-                        .filter(|l| ty.as_ref().is_none_or(|t| &l.ty == t) && to.as_ref().is_none_or(|t| l.to.contains(t)) && home.as_ref().is_none_or(|h| &l.home == h) && from.as_ref().is_none_or(|f| l.from.contains(f)))
+                        .filter(|l| ty.as_ref().is_none_or(|t| &l.ty == t) && to.as_ref().is_none_or(|t| l.to.contains(t)) && home.as_ref().is_none_or(|h| under(l, h)) && from.as_ref().is_none_or(|f| l.from.contains(f)))
                         .map(|l| l.addr.as_str())
                         .collect();
                     Ok(reply(200, json!({"resp": "addrs", "as_of": position, "addrs": addrs})))
@@ -1785,7 +1802,7 @@ mod scripted {
                     };
                     let span = |addr: &str, width: u64| json!({"start": addr, "width": format!("{}{width}", "0.".repeat(addr.split('.').count() - 1))});
                     let slot = |addrs: &[String]| addrs.iter().map(|x| span(x, l.width)).collect::<Vec<_>>();
-                    Ok(reply(200, json!({"resp": "link_value", "as_of": position, "link": {"slots": [slot(&l.from), slot(&l.to), vec![span(&l.ty, 1)]]}})))
+                    Ok(reply(200, json!({"resp": "link_value", "as_of": position, "at": l.at, "link": {"slots": [slot(&l.from), slot(&l.to), vec![span(&l.ty, 1)]]}})))
                 }
                 "in_claims" => {
                     let y = frame["y"].as_str().unwrap();
@@ -1905,15 +1922,21 @@ mod scripted {
                     };
                     let n = self.links.iter().filter(|l| l.home == home).count() + 1;
                     let addr = format!("{home}.0.2.{n}");
+                    let (from, to, ty) = (
+                        addrs(&frame["from"]),
+                        addrs(&frame["to"]),
+                        addrs(&frame["ty"])[0].clone(),
+                    );
+                    let at = self.commit("make_link", vec![home.clone()]);
                     self.links.push(LinkRow {
                         addr: addr.clone(),
-                        home: home.clone(),
-                        from: addrs(&frame["from"]),
-                        to: addrs(&frame["to"]),
-                        ty: addrs(&frame["ty"])[0].clone(),
+                        home,
+                        from,
+                        to,
+                        ty,
                         width: 1,
+                        at: Some(at),
                     });
-                    let at = self.commit("make_link", vec![home]);
                     json!({"resp": "ack_addr", "addr": addr, "at": at})
                 }
                 "publish" => {
@@ -2469,6 +2492,13 @@ mod scripted {
 
     fn token() -> crate::board::Token {
         crate::board::Token::parse(TOKEN).unwrap()
+    }
+
+    /// Makes the board too busy for the merge journal's next find: its first
+    /// send and each of its bounded reissues refused `scan_busy`, so the
+    /// record step meets the find unanswered (the `journal` module's doc).
+    fn too_busy_for_the_find(w: &mut World) {
+        w.scan_busy = crate::publication::SCAN_BUSY_REISSUES as usize + 1;
     }
 
     /// The race shape's inputs: the head `D.2`, the daughter `D.1.1`, the
@@ -3289,8 +3319,8 @@ mod scripted {
         };
         assert_eq!((address.to_string(), *retries, claims.len()), (format!("{D}.3"), 0, 0));
         assert!(
-            record.to_string().starts_with(&format!("{DOC1}.0.2.")),
-            "the record's link is homed in doc 1: {record}"
+            record.to_string().starts_with("1.0.1.0.10.0.2."),
+            "the record's link is homed in the journal minted: {record}"
         );
         let frames = dialer.frames("publish");
         assert_eq!(frames.len(), 1);
@@ -3382,10 +3412,11 @@ mod scripted {
     /// `assert_sup` — the scripted board panics on one), the record's read
     /// by the links of the kind to each side of the key, the daughter then
     /// the head, as the composition reads the prior records, the journal
-    /// found by the account's links from doc 1 then MINTED private, the
-    /// atom appended as a PLAIN insert at the journal's end, the link from
-    /// doc 1 to the member and the daughter under the kind. A second `land`
-    /// reads each of the three writes standing and writes nothing.
+    /// found by the account's own links of the kind — `home` the account —
+    /// then MINTED private, the atom appended as a PLAIN insert at the
+    /// journal's end, the link homed in the journal beside it, from the atom
+    /// to the member and the daughter under the kind, unsigned. A second
+    /// `land` reads each of the three writes standing and writes nothing.
     #[test]
     fn the_claim_is_read_and_the_record_is_written_after_the_shot_each_read_first() {
         let (dialer, board, signer) = open(World::race());
@@ -3430,8 +3461,8 @@ mod scripted {
         );
         assert_eq!(
             (links[2]["q"]["home"][0]["start"].as_str(), links[2]["q"]["to"].as_str()),
-            (Some(DOC1), Some("any")),
-            "the journal's find: the account's links from doc 1"
+            (Some(ACCOUNT), Some("any")),
+            "the journal's find: the account's own links of the kind"
         );
         assert_eq!(
             dialer.frames("create_new_document")[0],
@@ -3449,12 +3480,12 @@ mod scripted {
         let written = Record::from_value(&atom).expect("a record");
         assert_eq!((written.key(), written.landed.is_some()), (merged.key.clone(), true));
         let link = &dialer.frames("make_link")[0];
-        assert_eq!(link["home"], DOC1);
+        assert_eq!(link["home"], journal, "the link homed in the journal, beside the record");
         assert_eq!(link["from"]["addrs"], json!([format!("{journal}.0.1.1")]));
         assert_eq!(link["to"]["addrs"], json!([format!("{D}.3"), format!("{D}.1.1")]));
         assert_eq!(link["ty"]["addrs"], json!([K]));
-        assert!(link["attest"]["sig"].is_string(), "the link into the published doc 1 is attested");
-        assert_eq!(record.to_string(), format!("{DOC1}.0.2.1"));
+        assert!(link.get("attest").is_none(), "a private journal's link is unsigned: {link}");
+        assert_eq!(record.to_string(), format!("{journal}.0.2.1"));
         // The claim's read records a claim another writer filed.
         dialer.world().claims.push(ClaimRow {
             claim: format!("{DOC1}.0.2.9"),
@@ -3789,8 +3820,9 @@ mod scripted {
     /// sends NO `publish`: it reads the claims at the daughter and the
     /// merger's newest record for the key, writes the record — `landed` the
     /// member at that position, `claims` the shot's — in the journal with
-    /// its link from doc 1 under the shot's own ids, and answers the
-    /// landing; a second call answers the same record and writes nothing.
+    /// its link beside it, under the shot's own ids, reading no head: it
+    /// signs nothing — and answers the landing; a second call answers the
+    /// same record and writes nothing.
     /// The shot landing's read-first would not find the edited member
     /// (`resume` answers none), which is why the entry exists; a member
     /// outside the document's chain is the library's own fault, nothing
@@ -3826,7 +3858,7 @@ mod scripted {
         };
         assert_eq!(
             (address, *position, claims.clone(), record.to_string(), *retries),
-            (&member, at, vec![a(&format!("{D}.0.2.1"))], format!("{DOC1}.0.2.1"), 0)
+            (&member, at, vec![a(&format!("{D}.0.2.1"))], "1.0.1.0.10.0.2.1".to_string(), 0)
         );
         assert_eq!(
             dialer.ops(),
@@ -3834,19 +3866,13 @@ mod scripted {
                 "in_claims",
                 "find_links_ftt",
                 "find_links_ftt",
-                "retrieve_v",
                 "find_links_ftt",
                 "create_new_document",
                 "retrieve_doc_v_span_set",
                 "insert",
                 "make_link"
             ],
-            "the claims' read, the record's read-first, the head before the first write, the journal's find and mint, the two writes — no publish, no shot read-first"
-        );
-        assert_eq!(
-            dialer.frames("retrieve_v")[0]["specs"][0]["doc"],
-            HEAD_MEMBER_1,
-            "the one value read is the head record's, before the first write"
+            "the claims' read, the record's read-first, the journal's find and mint, the two writes — no head read, no publish, no shot read-first"
         );
         let insert = &dialer.frames("insert")[0];
         let atom: Value =
@@ -4959,143 +4985,151 @@ mod scripted {
         nothing_sent("the withdrawal");
     }
 
-    /// A CLAIMED BOARD WHOSE HEAD IS OWED LANDS NOTHING (SP-14): `/health`
-    /// names a claimant and `H.1` serves no record, so the shot, a draft
-    /// landing into `S` and a fresh draft each halt naming `H.1` before
-    /// their first write — no `publish`, `stage`, `set_arrangement`,
-    /// journal mint, `insert` or `make_link` sent, no commit made — and a
-    /// `resume` that finds nothing landed answers none with no head read.
-    /// The same board unclaimed lands each, the shot and the record's link
-    /// carrying no `attest`.
+    /// A CLAIMED BOARD WHOSE HEAD IS OWED LANDS NO SHOT (SP-14): `/health`
+    /// names a claimant and `H.1` serves no record, so the shot halts naming
+    /// `H.1` before its first write — no `publish`, journal mint, `insert` or
+    /// `make_link` sent, no commit made — and a `resume` that finds nothing
+    /// landed answers none with no head read. The same board unclaimed lands
+    /// it, carrying no `attest`, and the record's link carries none on either
+    /// board. A draft landing signs nothing — its stage, its one write and
+    /// its record's two writes go to private drafts — so it lands on the
+    /// claimed board whose head is owed, reading no head and sending no
+    /// `attest`.
     #[test]
     fn a_claimed_board_serving_no_head_record_lands_nothing_and_an_unclaimed_one_lands_unsigned() {
-        let writes =
-            ["publish", "stage", "set_arrangement", "create_new_document", "insert", "make_link"];
-        for cell in ["the shot", "a landing into S", "a fresh draft"] {
-            let (mut world, inputs) = match cell {
-                "the shot" => (World::race(), race_inputs()),
-                _ => (draft_landing_world(), draft_inputs()),
-            };
+        let head_read = |dialer: &Scripted| {
+            dialer.frames("retrieve_v").iter().any(|f| f["specs"][0]["doc"] == HEAD_MEMBER_1)
+        };
+        let mut world = World::race();
+        world.head = false;
+        let (dialer, board, signer) = open(world);
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        let err = land(&board, &merged, shot(&session, &signer)).expect_err("the head is owed");
+        let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{err:?}") };
+        assert!(face.state.contains("H.1") && face.state.contains("cannot land"), "{face}");
+        assert!(face.cause.contains(&format!("names {ACCOUNT} its claimant")), "{face}");
+        assert!(face.act.contains("nothing was written"), "{face}");
+        for op in ["publish", "create_new_document", "insert", "make_link"] {
+            assert!(dialer.frames(op).is_empty(), "no `{op}`: {:?}", dialer.ops());
+        }
+        assert_eq!(dialer.world().rows.len(), rows, "no commit");
+        dialer.clear();
+        assert_eq!(resume(&board, &merged, shot(&session, &signer)), Ok(None), "nothing landed");
+        assert!(
+            !head_read(&dialer),
+            "a resume with nothing to write reads no head: {:?}",
+            dialer.ops()
+        );
+        // The same board, no one its claimant: landed, unsigned.
+        dialer.world().claimed = false;
+        dialer.clear();
+        land(&board, &merged, shot(&session, &signer)).expect("landed");
+        let links = dialer.frames("make_link");
+        assert_eq!(links.len(), 1, "the record's link: {:?}", dialer.ops());
+        for frame in dialer.frames("publish").iter().chain(&links) {
+            assert!(frame.get("attest").is_none(), "unsigned: {frame}");
+        }
+
+        // The draft landings, on the claimed board whose head is owed.
+        for cell in ["a landing into S", "a fresh draft"] {
+            let mut world = draft_landing_world();
             world.head = false;
             let (dialer, board, signer) = open(world);
             let session = sign_in(&board, &signer);
-            let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
-            let landing = || match cell {
-                "the shot" => shot(&session, &signer),
-                "a landing into S" => draft_landing(&session, &signer, Some(a(S))),
-                _ => draft_landing(&session, &signer, None),
+            let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+            let (landing, writes) = match cell {
+                "a landing into S" => (
+                    draft_landing(&session, &signer, Some(a(S))),
+                    vec!["set_arrangement", "insert", "make_link"],
+                ),
+                _ => (
+                    draft_landing(&session, &signer, None),
+                    vec!["stage", "set_arrangement", "insert", "make_link"],
+                ),
             };
-            let rows = dialer.world().rows.len();
             dialer.clear();
-            let err = land(&board, &merged, landing()).expect_err("the head is owed");
-            let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{cell}: {err:?}") };
-            assert!(
-                face.state.contains("H.1") && face.state.contains("cannot land"),
-                "{cell}: {face}"
-            );
-            assert!(
-                face.cause.contains(&format!("names {ACCOUNT} its claimant")),
-                "{cell}: {face}"
-            );
-            assert!(face.act.contains("nothing was written"), "{cell}: {face}");
+            let landed = land(&board, &merged, landing).unwrap_or_else(|e| panic!("{cell}: {e}"));
+            assert!(matches!(landed, Landed::Draft { .. }), "{cell}: {landed:?}");
+            assert!(!head_read(&dialer), "{cell}: no head read: {:?}", dialer.ops());
             for op in writes {
-                assert!(dialer.frames(op).is_empty(), "{cell}: no `{op}`: {:?}", dialer.ops());
-            }
-            assert_eq!(dialer.world().rows.len(), rows, "{cell}: no commit");
-            dialer.clear();
-            assert_eq!(resume(&board, &merged, landing()), Ok(None), "{cell}: nothing landed");
-            assert!(
-                dialer.frames("retrieve_v").iter().all(|f| f["specs"][0]["doc"] != HEAD_MEMBER_1),
-                "{cell}: a resume with nothing to write reads no head: {:?}",
-                dialer.ops()
-            );
-            // The same board, no one its claimant: landed, unsigned.
-            dialer.world().claimed = false;
-            dialer.clear();
-            land(&board, &merged, landing()).unwrap_or_else(|e| panic!("{cell}: {e}"));
-            let links = dialer.frames("make_link");
-            assert_eq!(links.len(), 1, "{cell}: the record's link: {:?}", dialer.ops());
-            for frame in dialer.frames("publish").iter().chain(&links) {
-                assert!(frame.get("attest").is_none(), "{cell}: unsigned: {frame}");
+                let frames = dialer.frames(op);
+                assert_eq!(frames.len(), 1, "{cell}: one `{op}`: {:?}", dialer.ops());
+                assert!(frames[0].get("attest").is_none(), "{cell}: unsigned: {}", frames[0]);
             }
         }
     }
 
-    /// A LANDING THAT STANDS WITH ITS RECORD OWED (SP-14): the shot lands
-    /// and the record's link is refused `attestation_invalid:board_unavailable`
-    /// — the head owed past the landing's read — faced as the merge standing
-    /// with `resume` its act, never the library's fault. Read afresh with the
-    /// head still owed, the residue walk halts before the record's first
-    /// write — no journal mint, `insert` or `make_link` — and once the head
-    /// is written it writes the record, signed.
+    /// A LANDING THAT STANDS WRITES ITS RECORD UNSIGNED, WHATEVER THE HEAD
+    /// (SP-14): the shot lands and the record's step meets the board too
+    /// busy to find the account's journal — the merge standing with its
+    /// record unwritten, `resume` its act, never the library's fault — and,
+    /// read afresh with the head owed, the residue walk writes the record:
+    /// no head read, the atom and the link unsigned, no second shot.
     #[test]
-    fn a_landing_that_stands_writes_its_record_only_once_the_head_is_written() {
+    fn a_landing_that_stands_writes_its_record_unsigned_while_the_head_is_owed() {
         let (dialer, board, signer) = open(World::race());
         let session = sign_in(&board, &signer);
         let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
-        let link_id = landing_id(&merged.key.text(), "link");
-        dialer.world().memo.insert(
-            link_id.clone(),
-            json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_invalid:board_unavailable", "disposition": "reorder", "op": "make_link"}),
-        );
+        too_busy_for_the_find(&mut dialer.world());
         let member = format!("{D}.3");
-        let err = land(&board, &merged, shot(&session, &signer)).expect_err("the link refused");
+        let err = land(&board, &merged, shot(&session, &signer)).expect_err("the record unwritten");
         let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{err:?}") };
         assert!(
-            face.state.contains(&format!("the merge stands at {member}"))
-                && face.state.contains("H.1"),
+            face.state.contains(&format!("the merge stands at {member}, and its record is not written: the board was too busy to find the account's merge journal")),
             "{face}"
         );
-        assert!(face.cause.contains("attestation_invalid:board_unavailable"), "{face}");
+        assert!(face.cause.starts_with("scan_busy:"), "{face}");
         assert!(
             face.act.starts_with("resume") && !face.act.contains("fault in this library"),
             "{face}"
         );
         assert!(dialer.world().docs.contains_key(&member), "the premise: the shot landed");
-        // A board read afresh, its head still owed: no write of the record.
-        dialer.world().memo.remove(&link_id);
+        assert!(
+            dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(),
+            "nothing of the record: {:?}",
+            dialer.ops()
+        );
+        // A board read afresh, its head owed: the record written, unsigned.
         dialer.world().head = false;
         let afresh = Board::new(Origin::parse("http://127.0.0.1:8642").unwrap(), dialer.clone());
         dialer.clear();
-        let err = resume(&afresh, &merged, shot(&session, &signer)).expect_err("the head is owed");
-        let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{err:?}") };
-        assert!(face.state.contains(&format!("the merge stands at {member}")), "{face}");
-        assert!(face.cause.contains(&format!("names {ACCOUNT} its claimant")), "{face}");
-        for op in ["publish", "create_new_document", "insert", "make_link"] {
-            assert!(dialer.frames(op).is_empty(), "no `{op}`: {:?}", dialer.ops());
-        }
-        // The head written: the residue walk writes the record, signed.
-        dialer.world().head = true;
         let resumed = resume(&afresh, &merged, shot(&session, &signer)).expect("resumed");
         assert!(
             matches!(&resumed, Some(Landed::Member { address, .. }) if address.to_string() == member),
             "{resumed:?}"
         );
-        let links = dialer.frames("make_link");
-        assert_eq!(links.len(), 1, "{:?}", dialer.ops());
         assert!(
-            links[0]["attest"]["sig"].is_string(),
-            "signed over the head written: {}",
-            links[0]
+            dialer.frames("retrieve_v").iter().all(|f| f["specs"][0]["doc"] != HEAD_MEMBER_1),
+            "no head read: {:?}",
+            dialer.ops()
         );
+        for op in ["insert", "make_link"] {
+            let frames = dialer.frames(op);
+            assert_eq!(frames.len(), 1, "one `{op}`: {:?}", dialer.ops());
+            assert!(frames[0].get("attest").is_none(), "unsigned: {}", frames[0]);
+        }
+        assert!(dialer.frames("publish").is_empty(), "no second shot: {:?}", dialer.ops());
     }
 
-    /// A CLAIM PAST THE HEAD'S READ IS MET BY ONE SIGNED SEND UNDER THE
-    /// FRAME'S OWN ID: the landing reads a board no one has claimed and
-    /// sends the shot, or the record's link, unsigned; a claim lands ahead of
-    /// it with its head written, and the board refuses it
-    /// `attestation_required` before its transaction. The head is read again
-    /// and the same frame sent once more, signed, under the same id, which
-    /// the refusal left unmemoized — over the shot, the record's link after
-    /// the shot, and the record's link after a landing into `S` — and the
-    /// landing completes, the member minted once and the record linked once;
-    /// a second `land` meets it, writing nothing. That send's answer is a
-    /// signed frame's: `attestation_required` again this library's own fault
-    /// and `signed_session_required` its own arm, never a third frame. Where
-    /// the head read again serves none, the shot's refusal is the head the
-    /// board owes, one frame sent and nothing after it.
+    /// A CLAIM PAST THE HEAD'S READ IS MET BY ONE SIGNED SEND OF THE SHOT
+    /// UNDER ITS OWN ID: the landing reads a board no one has claimed and
+    /// sends the shot unsigned; a claim lands ahead of it with its head
+    /// written, and the board refuses it `attestation_required` before its
+    /// transaction. The head is read again and the same shot sent once more,
+    /// signed, under the same id, which the refusal left unmemoized, and the
+    /// landing completes, the member minted once and the record linked
+    /// once. The record's link is a private journal's, so a claim landing
+    /// ahead of it — after the shot, or after a landing into `S` — changes
+    /// nothing: it is sent once, unsigned, and lands; a second `land` meets
+    /// it, writing nothing. The signed send's answer is a signed frame's:
+    /// `attestation_required` again this library's own fault, never a third
+    /// shot. Where the head read again serves none, the shot's refusal is
+    /// the head the board owes, one frame sent and nothing after it.
     #[test]
-    fn a_claim_past_the_head_read_re_sends_the_shot_and_the_records_link_once_signed() {
+    fn a_claim_past_the_head_read_re_sends_the_shot_once_signed() {
         let unclaimed = |mut world: World, claim_before: Option<&'static str>| {
             world.claimed = false;
             world.head = false;
@@ -5113,8 +5147,7 @@ mod scripted {
             assert_eq!(signed, frames[0], "the same frame, signed");
             assert_eq!(frames[0]["id"].as_str(), Some(id), "under the frame's own id");
         };
-        let record_links =
-            |w: &World| w.links.iter().filter(|l| l.home == DOC1 && l.ty == K).count();
+        let record_links = |w: &World| w.links.iter().filter(|l| l.ty == K).count();
         let minted = |w: &World| w.rows.iter().filter(|r| r.op == "publish").count();
 
         // The shot.
@@ -5131,7 +5164,11 @@ mod scripted {
         resent(&dialer.frames("publish"), &landing_id(&merged.key.text(), "publish"));
         let links = dialer.frames("make_link");
         assert_eq!(links.len(), 1, "the record's link, once: {:?}", dialer.ops());
-        assert!(links[0]["attest"]["sig"].is_string(), "signed: {}", links[0]);
+        assert!(
+            links[0].get("attest").is_none(),
+            "a private journal's link, unsigned: {}",
+            links[0]
+        );
         let w = dialer.world();
         assert_eq!(minted(&w), shots + 1, "one shot committed");
         assert!(
@@ -5140,7 +5177,8 @@ mod scripted {
         );
         drop(w);
 
-        // The record's link, after the shot and after a landing into `S`.
+        // A claim ahead of the record's link, after the shot and after a
+        // landing into `S`: the link sent once, unsigned.
         for cell in ["the shot", "a landing into S"] {
             let (world, inputs) = match cell {
                 "the shot" => (World::race(), race_inputs()),
@@ -5171,7 +5209,15 @@ mod scripted {
                 dialer.frames("publish").iter().all(|f| f.get("attest").is_none()),
                 "{cell}: the shot went before the claim, unsigned"
             );
-            resent(&dialer.frames("make_link"), &landing_id(&stem, "link"));
+            let links = dialer.frames("make_link");
+            assert_eq!(links.len(), 1, "{cell}: one link: {:?}", dialer.ops());
+            assert!(links[0].get("attest").is_none(), "{cell}: unsigned: {}", links[0]);
+            assert_eq!(
+                links[0]["id"].as_str(),
+                Some(landing_id(&stem, "link").as_str()),
+                "{cell}: under its own id"
+            );
+            assert!(dialer.world().claimed, "{cell}: the premise, the claim landed ahead of it");
             assert_eq!(dialer.frames("insert").len(), 1, "{cell}: one atom: {:?}", dialer.ops());
             assert_eq!(record_links(&dialer.world()), 1, "{cell}: one record linked");
             let again = match cell {
@@ -5214,18 +5260,6 @@ mod scripted {
             "nothing after the shot"
         );
         assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
-        let (dialer, board, signer) = unclaimed(World::race(), Some("make_link"));
-        dialer.world().refuse_signed =
-            Some(permanent("make_link", "signed_session_required", Value::Null));
-        let session = sign_in(&board, &signer);
-        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
-        dialer.clear();
-        assert_eq!(
-            land(&board, &merged, shot(&session, &signer)),
-            Err(Refusal::NeedsSignedSession)
-        );
-        assert_eq!(dialer.frames("make_link").len(), 2, "never a third link: {:?}", dialer.ops());
-        assert_eq!(record_links(&dialer.world()), 0, "no record linked");
 
         // No head the second read finds: the head the board owes.
         let (dialer, board, signer) = unclaimed(World::race(), None);
@@ -5550,7 +5584,7 @@ mod scripted {
         {
             let mut w = dialer.world();
             w.doc(p, true, ACCOUNT, Vec::new());
-            file(&mut w, DOC1, p, &merged.record, &["1.0.1.0.5"]);
+            file(&mut w, p, &merged.record, &["1.0.1.0.5"], None);
         }
         dialer.clear();
         let resumed = resume(&board, &merged, shot_into(None)).expect("resumed, never the library's own fault");
@@ -5936,7 +5970,15 @@ mod scripted {
     /// `S·from`, `to` the trunk's `D·to`, `width` positions each.
     fn plant_record(w: &mut World, from: u64, to: u64, width: u64) -> String {
         let addr = format!("{S}.0.2.{}", 90 + w.links.len());
-        w.links.push(LinkRow { addr: addr.clone(), home: S.into(), from: vec![i_addr(&a(S), from)], to: vec![i_addr(&a(D), to)], ty: frames::T_CORRESPONDENCE.into(), width });
+        w.links.push(LinkRow {
+            addr: addr.clone(),
+            home: S.into(),
+            from: vec![i_addr(&a(S), from)],
+            to: vec![i_addr(&a(D), to)],
+            ty: frames::T_CORRESPONDENCE.into(),
+            width,
+            at: None,
+        });
         addr
     }
 
@@ -6174,7 +6216,6 @@ mod scripted {
         let wrote = |dialer: &Scripted| {
             dialer.ops().into_iter().filter(|o| writes.contains(&o.as_str())).collect::<Vec<_>>()
         };
-        let owed_link = || json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_invalid:board_unavailable", "disposition": "reorder", "op": "make_link"});
 
         // (a) A fresh session.
         let (dialer, board, signer) = open(baseless(c.clone()));
@@ -6221,19 +6262,19 @@ mod scripted {
             "(a): the undo's record current"
         );
 
-        // (b) The undo's record unwritten, its link refused for a head owed.
+        // (b) The undo's record unwritten, the board too busy to find its
+        // journal.
         let (dialer, board, signer) = open(baseless(c.clone()));
         let session = sign_in(&board, &signer);
         let m = merger(&session, &signer);
         let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
-        let (at, link) = landing_of(
+        let (_, link) = landing_of(
             &land(&board, &merged, draft_landing(&session, &signer, Some(a(plain))))
                 .expect("landed"),
         );
-        let link_id = format!("undo:{plain}:{at}.link");
-        dialer.world().memo.insert(link_id.clone(), owed_link());
+        too_busy_for_the_find(&mut dialer.world());
         let err =
-            undo(&board, m, &a(plain), &a(K), None, None).expect_err("the undo's link refused");
+            undo(&board, m, &a(plain), &a(K), None, None).expect_err("the undo's record unwritten");
         let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("(b): {err:?}") };
         assert!(
             face.state.contains("the record of the undo is not written"),
@@ -6249,17 +6290,15 @@ mod scripted {
             .expect("a record");
         assert_eq!(found.link, Some(link), "(b): the landing's record current");
 
-        // (c) The landing's record unwritten, its link refused for a head
-        // owed.
+        // (c) The landing's record unwritten, the board too busy to find its
+        // journal.
         let (dialer, board, signer) = open(baseless(c.clone()));
         let session = sign_in(&board, &signer);
         let m = merger(&session, &signer);
         let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
-        let link_id =
-            landing_id(&format!("{}:{plain}@{}", merged.key.text(), merged.as_of), "link");
-        dialer.world().memo.insert(link_id, owed_link());
+        too_busy_for_the_find(&mut dialer.world());
         land(&board, &merged, draft_landing(&session, &signer, Some(a(plain))))
-            .expect_err("(c): the premise, the landing's link refused");
+            .expect_err("(c): the premise, the landing's record unwritten");
         dialer.world().memo.clear();
         let undone = undo(&board, m, &a(plain), &a(K), None, None).expect("undone");
         assert_eq!(undone.record, None, "(c): no record stood to replace");
@@ -6347,6 +6386,7 @@ mod scripted {
                 to: vec![i_addr(&a(D), 19)],
                 ty: frames::T_CORRESPONDENCE.into(),
                 width: 2,
+                at: None,
             });
             w.memo.clear();
             addr
@@ -6565,7 +6605,16 @@ mod scripted {
         let links = dialer.frames("make_link");
         assert_eq!(links[0]["to"]["addrs"], json!([S]), "linked to the draft");
         assert!(withdrawn.record.is_some(), "the link written is answered");
-        assert!(links[0]["attest"]["sig"].is_string(), "signed over the head: {}", links[0]);
+        assert_eq!(
+            links[0]["home"],
+            dialer.frames("insert")[0]["doc"],
+            "homed in the journal beside the atom"
+        );
+        assert!(
+            links[0].get("attest").is_none(),
+            "a private journal's link, unsigned: {}",
+            links[0]
+        );
         // A landing by hand on a board holding no record of the kind: the
         // undo and the withdrawal write none, the links of the kind to the
         // draft read first.
@@ -6872,8 +6921,8 @@ mod scripted {
     /// (skep #888). (a) The landing withdrawn, the withdrawal recorded:
     /// `resume` naming the draft, which still holds M, answers none and
     /// writes nothing, the withdrawal's record current. (b) The landing's
-    /// record unwritten, its link refused for a head owed, then the landing
-    /// withdrawn: none, nothing written, no record of the key. (c) The
+    /// record unwritten, the board too busy to find its journal, then the
+    /// landing withdrawn: none, nothing written, no record of the key. (c) The
     /// withdrawal's record unwritten: none, nothing written, the landing's
     /// record current. (d) A draft with no recorded base, holding M's list
     /// before the landing, the landing undone: the undo's row names no merge,
@@ -6886,7 +6935,6 @@ mod scripted {
         let wrote = |dialer: &Scripted| {
             dialer.ops().into_iter().filter(|o| writes.contains(&o.as_str())).collect::<Vec<_>>()
         };
-        let owed_link = || json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_invalid:board_unavailable", "disposition": "reorder", "op": "make_link"});
 
         // (a) The landing withdrawn, the withdrawal recorded.
         let (dialer, board, signer) = open(draft_landing_world());
@@ -6916,21 +6964,19 @@ mod scripted {
             "(a): the withdrawal's record current"
         );
 
-        // (b) The landing's record unwritten, its link refused for a head
-        // owed, then the landing withdrawn with no record to replace.
+        // (b) The landing's record unwritten, the board too busy to find its
+        // journal, then the landing withdrawn with no record to replace.
         let (dialer, board, signer) = open(draft_landing_world());
         let session = sign_in(&board, &signer);
         let into_s = || draft_landing(&session, &signer, Some(a(S)));
         let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
-        let link_id = landing_id(&format!("{}:{S}@{}", merged.key.text(), merged.as_of), "link");
-        dialer.world().memo.insert(link_id.clone(), owed_link());
-        let err = land(&board, &merged, into_s()).expect_err("the link refused");
+        too_busy_for_the_find(&mut dialer.world());
+        let err = land(&board, &merged, into_s()).expect_err("the record unwritten");
         let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("(b): {err:?}") };
         assert!(
             face.state.contains(&format!("the merge stands at {S}")),
             "(b): the premise: {face}"
         );
-        dialer.world().memo.remove(&link_id);
         let withdrawn =
             withdraw(&board, merger(&session, &signer), &a(S), &a(K), None).expect("withdrawn");
         assert_eq!(withdrawn.record, None, "(b): the premise, no record stood to replace");
@@ -6947,23 +6993,21 @@ mod scripted {
             "(b): no record of the key"
         );
 
-        // (c) The withdrawal's record unwritten, its link refused for a head
-        // owed past the withdrawal's read.
+        // (c) The withdrawal's record unwritten, the board too busy to find
+        // its journal past the withdrawal's write.
         let (dialer, board, signer) = open(draft_landing_world());
         let session = sign_in(&board, &signer);
         let into_s = || draft_landing(&session, &signer, Some(a(S)));
         let (merged, landed) = landed_in_s(&board, &session, &signer);
         let (_, link) = landing_of(&landed);
-        let link_id = format!("withdraw:{S}:{}.link", dialer.world().position);
-        dialer.world().memo.insert(link_id.clone(), owed_link());
+        too_busy_for_the_find(&mut dialer.world());
         let err = withdraw(&board, merger(&session, &signer), &a(S), &a(K), None)
-            .expect_err("the withdrawal's link refused");
+            .expect_err("the withdrawal's record unwritten");
         let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("(c): {err:?}") };
         assert!(
             face.state.contains("the record of the withdrawal is not written"),
             "(c): the premise: {face}"
         );
-        dialer.world().memo.remove(&link_id);
         {
             let w = dialer.world();
             assert_eq!(w.docs.get(S).unwrap().runs, draft_m(), "(c): the premise, S holds M");
@@ -7045,8 +7089,8 @@ mod scripted {
     /// The landing recorded: the words name the draft, the landing's position
     /// and its record, never that nothing was merged, with `resume` the way
     /// on, which answers the landing writing nothing. (b) Its record
-    /// unwritten, the link refused for a head owed: the words say so, and
-    /// `resume` writes it at the marker's position. (c) The draft edited
+    /// unwritten, the board too busy to find its journal: the words say so,
+    /// and `resume` writes it at the marker's position. (c) The draft edited
     /// since: the words name the landing and the other list the draft holds,
     /// never `resume`, which answers none. (d) A composition made after the
     /// landing, raced by another hand's edit: the marker predates it, so the
@@ -7067,7 +7111,6 @@ mod scripted {
             assert_eq!(refused.code, "arrangement_moved", "{cell}: {refused:?}");
             refused.detail.clone().expect("the person's words")
         };
-        let owed_link = || json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_invalid:board_unavailable", "disposition": "reorder", "op": "make_link"});
 
         // (a) The landing recorded.
         let (dialer, board, signer) = open(draft_landing_world());
@@ -7117,15 +7160,14 @@ mod scripted {
         );
         assert!(wrote(&dialer).is_empty(), "(a): a resume writes nothing: {:?}", dialer.ops());
 
-        // (b) The record unwritten: the landing's link refused for a head
-        // owed past the landing's read.
+        // (b) The record unwritten: the board too busy to find the account's
+        // journal past the landing's write.
         let (dialer, board, signer) = open(draft_landing_world());
         let session = sign_in(&board, &signer);
         let into_s = || draft_landing(&session, &signer, Some(a(S)));
         let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
-        let link_id = landing_id(&format!("{}:{S}@{}", merged.key.text(), merged.as_of), "link");
-        dialer.world().memo.insert(link_id, owed_link());
-        let err = land(&board, &merged, into_s()).expect_err("the link refused");
+        too_busy_for_the_find(&mut dialer.world());
+        let err = land(&board, &merged, into_s()).expect_err("the record unwritten");
         let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("(b): {err:?}") };
         assert!(
             face.state.contains(&format!("the merge stands at {S}")),
@@ -7264,10 +7306,8 @@ mod scripted {
         let session = sign_in(&board, &signer);
         let into_plain = || draft_landing(&session, &signer, Some(a(plain)));
         let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
-        let link_id =
-            landing_id(&format!("{}:{plain}@{}", merged.key.text(), merged.as_of), "link");
-        dialer.world().memo.insert(link_id, owed_link());
-        let err = land(&board, &merged, into_plain()).expect_err("the link refused");
+        too_busy_for_the_find(&mut dialer.world());
+        let err = land(&board, &merged, into_plain()).expect_err("the record unwritten");
         let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("(f): {err:?}") };
         assert!(
             face.state.contains(&format!("the merge stands at {plain}")),
@@ -7367,7 +7407,7 @@ mod scripted {
         let planted = {
             let mut w = dialer.world();
             w.doc("1.0.2.0.5", false, "1.0.2", Vec::new());
-            file(&mut w, OTHER_DOC1, "1.0.2.0.5", &merged.record, &[S])
+            file(&mut w, "1.0.2.0.5", &merged.record, &[S], None)
         };
         let comps = crate::merge::reads::comps;
         assert!(comps(&a(&planted)) > comps(&link), "the premise: another home's link sorts above the merger's");
@@ -7477,24 +7517,24 @@ mod scripted {
         assert_eq!(dialer.world().docs.get(t).unwrap().runs, edited, "T as it stood before the second write: the edit");
         assert_eq!(appended_record(&dialer)["replaces"].as_str(), Some(first.to_string().as_str()), "the first landing's record replaced");
 
-        // (ii) A take-back whose record went unwritten: the undo's link
-        // refused for a head owed past the undo's read.
+        // (ii) A take-back whose record went unwritten: the board too busy
+        // to find the account's journal past the undo's write.
         let (dialer, board, signer) = open(world());
         let session = sign_in(&board, &signer);
         let m = merger(&session, &signer);
         let into_t = || draft_landing(&session, &signer, Some(a(t)));
         let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
         let (first_at, first) = landing_of(&land(&board, &merged, into_t()).expect("landed"));
-        let link_id = format!("undo:{t}:{first_at}.link");
-        dialer.world().memo.insert(
-            link_id.clone(),
-            json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_invalid:board_unavailable", "disposition": "reorder", "op": "make_link"}),
-        );
-        let err = undo(&board, m, &a(t), &a(K), None, None).expect_err("the undo's link refused");
+        too_busy_for_the_find(&mut dialer.world());
+        let err =
+            undo(&board, m, &a(t), &a(K), None, None).expect_err("the undo's record unwritten");
         let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{err:?}") };
-        assert!(face.state.contains("the record of the undo is not written: this board has no H.1 yet"), "{face}");
-        assert_eq!(dialer.world().docs.get(t).unwrap().runs, vec![run(D, 1, 11)], "the premise: the undo stands");
-        dialer.world().memo.remove(&link_id);
+        assert!(face.state.contains("the record of the undo is not written: the board was too busy to find the account's merge journal"), "{face}");
+        assert_eq!(
+            dialer.world().docs.get(t).unwrap().runs,
+            vec![run(D, 1, 11)],
+            "the premise: the undo stands"
+        );
         let again = compose(&board, Some(session.token()), &race_inputs()).expect("composed again");
         assert_eq!(
             again.prior.as_ref().and_then(|p| p.link.clone()),
@@ -7588,7 +7628,7 @@ mod scripted {
         let planted = {
             let mut w = dialer.world();
             w.doc("1.0.2.0.5", false, "1.0.2", Vec::new());
-            file(&mut w, OTHER_DOC1, "1.0.2.0.5", &record, &[theirs, S])
+            file(&mut w, "1.0.2.0.5", &record, &[theirs, S], None)
         };
         let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed after it");
         assert_eq!(merged.prior.as_ref().and_then(|p| p.link.as_ref()).map(ToString::to_string), Some(planted), "the premise: another home's record is the prior");
@@ -7708,7 +7748,7 @@ mod scripted {
         let planted = {
             let mut w = dialer.world();
             w.doc("1.0.2.0.5", false, "1.0.2", Vec::new());
-            file(&mut w, OTHER_DOC1, "1.0.2.0.5", &theirs, &[F, &daughter])
+            file(&mut w, "1.0.2.0.5", &theirs, &[F, &daughter], None)
         };
         let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed after it");
         assert_eq!(merged.record.replaces.as_ref().map(ToString::to_string), Some(planted), "the premise: the composition names another home's record");
@@ -7768,57 +7808,78 @@ mod scripted {
         assert_eq!(dialer.ops(), ["doc_metadata", "doc_metadata"], "the one read each, nothing sent");
     }
 
-    /// A CLAIMED BOARD WHOSE HEAD IS OWED TAKES NOTHING BACK (SP-14; skep
-    /// #729): `/health` names a claimant and `H.1` serves no record — read
-    /// afresh, since a board keeps the head it read — so the undo and the
-    /// withdrawal each halt naming `H.1` before the one write: the reads
-    /// made, no `set_arrangement`, no record, no commit.
+    /// A CLAIMED BOARD WHOSE HEAD IS OWED TAKES A MERGE BACK UNSIGNED:
+    /// `/health` names a claimant and `H.1` serves no record — read afresh,
+    /// since a board keeps the head it read — and neither take-back signs a
+    /// write, so the undo and the withdrawal each read no head, send their
+    /// one `set_arrangement` and the record's two writes with no `attest`,
+    /// and replace the landing's record.
     #[test]
-    fn a_claimed_board_serving_no_head_record_takes_nothing_back() {
-        let (dialer, board, signer) = open(draft_landing_world());
-        let session = sign_in(&board, &signer);
-        landed_in_s(&board, &session, &signer);
-        dialer.world().head = false;
-        let afresh = Board::new(Origin::parse("http://127.0.0.1:8642").unwrap(), dialer.clone());
-        let session = sign_in(&afresh, &signer);
-        let m = merger(&session, &signer);
-        let rows = dialer.world().rows.len();
-        dialer.clear();
-        for (name, err) in [("the undo", undo(&afresh, m, &a(S), &a(K), None, None).map(|_| ()).expect_err("the head is owed")), ("the withdrawal", withdraw(&afresh, m, &a(S), &a(K), None).map(|_| ()).expect_err("the head is owed"))] {
-            let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{name}: {err:?}") };
-            assert!(face.state.contains("H.1") && face.state.contains(S), "{name}: {face}");
-            assert!(face.cause.contains(&format!("names {ACCOUNT} its claimant")), "{name}: {face}");
-            assert!(face.act.contains("nothing was written"), "{name}: {face}");
+    fn a_claimed_board_serving_no_head_record_takes_a_merge_back_unsigned() {
+        for name in ["the undo", "the withdrawal"] {
+            let (dialer, board, signer) = open(draft_landing_world());
+            let session = sign_in(&board, &signer);
+            let (_, landed) = landed_in_s(&board, &session, &signer);
+            let (_, link) = landing_of(&landed);
+            dialer.world().head = false;
+            let afresh =
+                Board::new(Origin::parse("http://127.0.0.1:8642").unwrap(), dialer.clone());
+            let session = sign_in(&afresh, &signer);
+            let m = merger(&session, &signer);
+            dialer.clear();
+            let record = match name {
+                "the undo" => undo(&afresh, m, &a(S), &a(K), None, None).map(|u| u.record),
+                _ => withdraw(&afresh, m, &a(S), &a(K), None).map(|w| w.record),
+            };
+            let record = record.unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(record.is_some(), "{name}: the replacing record");
+            assert!(
+                dialer.frames("retrieve_v").iter().all(|f| f["specs"][0]["doc"] != HEAD_MEMBER_1),
+                "{name}: no head read: {:?}",
+                dialer.ops()
+            );
+            for op in ["set_arrangement", "insert", "make_link"] {
+                let frames = dialer.frames(op);
+                assert_eq!(frames.len(), 1, "{name}: one `{op}`: {:?}", dialer.ops());
+                assert!(frames[0].get("attest").is_none(), "{name}: unsigned: {}", frames[0]);
+            }
+            assert!(dialer.world().standing(S).1.is_none(), "{name}: the marker cleared");
+            assert_eq!(
+                appended_record(&dialer)["replaces"].as_str(),
+                Some(link.to_string().as_str()),
+                "{name}: the landing's record replaced"
+            );
         }
-        for op in ["set_arrangement", "create_new_document", "insert", "make_link"] {
-            assert!(dialer.frames(op).is_empty(), "no `{op}`: {:?}", dialer.ops());
-        }
-        assert_eq!(dialer.world().rows.len(), rows, "no commit");
-        assert!(dialer.world().standing(S).1.is_some(), "the marker stands");
     }
 
     // ── the record and the journal ───────────────────────────────────────
 
-    /// A record with its atom in `journal` and its public link from `home`
-    /// to `to`, typed `K`.
-    fn file(w: &mut World, home: &str, journal: &str, record: &Record, to: &[&str]) -> String {
+    /// A record with its atom in `journal` and its link homed there beside
+    /// it, to `to`, typed `K`, minted at `at` — none, a link the board
+    /// serves no position for, where the cell names none.
+    ///
+    /// The journal is a private draft of the account its address lies in,
+    /// registered where the world holds none at that address.
+    fn file(w: &mut World, journal: &str, record: &Record, to: &[&str], at: Option<u64>) -> String {
         let n = w.fresh(journal);
         w.values.insert((journal.to_string(), n), Val::Atom(record.to_value().to_string()));
+        let owner = crate::address::account_of(journal).expect("a journal's account");
         let d = w.docs.entry(journal.to_string()).or_insert_with(|| DocState {
             published: false,
-            owner: ACCOUNT.into(),
+            owner,
             ..DocState::default()
         });
         d.runs.push(run(journal, n, 1));
-        let k = w.links.iter().filter(|l| l.home == home).count() + 1;
-        let addr = format!("{home}.0.2.{k}");
+        let k = w.links.iter().filter(|l| l.home == journal).count() + 1;
+        let addr = format!("{journal}.0.2.{k}");
         w.links.push(LinkRow {
             addr: addr.clone(),
-            home: home.into(),
+            home: journal.into(),
             from: vec![i_addr(&a(journal), n)],
             to: to.iter().map(|t| t.to_string()).collect(),
             ty: K.into(),
             width: 1,
+            at,
         });
         addr
     }
@@ -7866,7 +7927,7 @@ mod scripted {
         let other_link = {
             let mut w = dialer.world();
             w.doc("1.0.2.0.5", false, "1.0.2", Vec::new());
-            file(&mut w, OTHER_DOC1, "1.0.2.0.5", &other, &[&format!("{D}.3"), &daughter])
+            file(&mut w, "1.0.2.0.5", &other, &[&format!("{D}.3"), &daughter], None)
         };
         let found = current(&board, Some(&token()), &a(K), &merged.key)
             .expect("the lookup")
@@ -7880,7 +7941,7 @@ mod scripted {
         let owners_link = {
             let mut w = dialer.world();
             w.doc("1.0.1.0.5", false, ACCOUNT, Vec::new());
-            file(&mut w, DOC1, "1.0.1.0.5", &question, &[&daughter])
+            file(&mut w, "1.0.1.0.5", &question, &[&daughter], None)
         };
         let found = current(&board, Some(&token()), &a(K), &merged.key)
             .expect("the lookup")
@@ -7893,10 +7954,10 @@ mod scripted {
         let mut later = merged.record.clone();
         later.landed = Some(RecordLanding::Member { member: a(&format!("{D}.3")), position: 120 });
         let later_link =
-            file(&mut dialer.world(), DOC1, "1.0.1.0.5", &later, &[&format!("{D}.3"), &daughter]);
+            file(&mut dialer.world(), "1.0.1.0.5", &later, &[&format!("{D}.3"), &daughter], None);
         let mut another_key = merged.record.clone();
         another_key.base = a(&format!("{D}.2"));
-        file(&mut dialer.world(), DOC1, "1.0.1.0.5", &another_key, &[&daughter]);
+        file(&mut dialer.world(), "1.0.1.0.5", &another_key, &[&daughter], None);
         dialer.clear();
         let found = current(&board, Some(&token()), &a(K), &merged.key)
             .expect("the lookup")
@@ -7929,10 +7990,13 @@ mod scripted {
     }
 
     /// `journal::of`: the journal named is answered with no read; the
-    /// default is the document the account's first link of the kind from
-    /// doc 1 points into, read before it is taken and taken where it is a
-    /// private draft of the account's — a published one passed over, once,
-    /// for the next link's; with none, a PRIVATE draft is minted.
+    /// default is found by the account's own links of the kind — one
+    /// `find_links_ftt` with `home` the account — each home read by its
+    /// earliest link alone: a home whose link's `from` lies outside it is no
+    /// journal, a sub-account's home is never read, and the journals are
+    /// taken in the order their earliest links were minted, the first a
+    /// private draft of the account's — a published one passed over — read
+    /// before it is taken; with none, a PRIVATE draft is minted.
     #[test]
     fn the_journal_is_named_found_or_minted() {
         let (dialer, board, signer) = open(World::race());
@@ -7948,25 +8012,50 @@ mod scripted {
         assert_eq!(minted, a("1.0.1.0.10"));
         assert_eq!(dialer.frames("create_new_document")[0]["published"], false);
         assert_eq!(dialer.ops(), ["find_links_ftt", "create_new_document"]);
+        let q = &dialer.frames("find_links_ftt")[0]["q"];
+        assert_eq!(
+            (
+                q["home"][0]["start"].as_str(),
+                q["ty"][0]["start"].as_str(),
+                q["from"].as_str(),
+                q["to"].as_str()
+            ),
+            (Some(ACCOUNT), Some(K), Some("any"), Some("any")),
+            "the account's own links of the kind"
+        );
         let record = compose(&board, Some(&token()), &race_inputs()).expect("composed").record;
         {
             let mut w = dialer.world();
             w.doc("1.0.1.0.6", false, ACCOUNT, Vec::new());
-            file(&mut w, DOC1, "1.0.1.0.6", &record, &[&format!("{D}.1.1")]);
+            file(&mut w, "1.0.1.0.6", &record, &[&format!("{D}.1.1")], Some(30));
         }
         dialer.clear();
         assert_eq!(journal::of(&board, &merger, &a(K), None).expect("found"), a("1.0.1.0.6"));
         assert_eq!(dialer.ops(), ["find_links_ftt", "read_link", "doc_metadata"]);
-        // A first link into a published document, then another into it, then
-        // the private draft's: the published one read once and passed over.
+        // A second journal, at a greater address, whose first record went
+        // in earlier, holding two: its earliest link alone read, and it is
+        // the journal the account's first record went to.
         {
             let mut w = dialer.world();
-            w.links.clear();
-            w.doc("1.0.1.0.12", true, ACCOUNT, Vec::new());
-            file(&mut w, DOC1, "1.0.1.0.12", &record, &[&format!("{D}.1.1")]);
-            file(&mut w, DOC1, "1.0.1.0.12", &record, &[&format!("{D}.1.1")]);
-            file(&mut w, DOC1, "1.0.1.0.6", &record, &[&format!("{D}.1.1")]);
+            w.doc("1.0.1.0.12", false, ACCOUNT, Vec::new());
+            file(&mut w, "1.0.1.0.12", &record, &[&format!("{D}.1.1")], Some(20));
+            file(&mut w, "1.0.1.0.12", &record, &[&format!("{D}.1.1")], Some(40));
         }
+        dialer.clear();
+        assert_eq!(
+            journal::of(&board, &merger, &a(K), None).expect("found"),
+            a("1.0.1.0.12"),
+            "the journal the first record went to"
+        );
+        assert_eq!(dialer.ops(), ["find_links_ftt", "read_link", "read_link", "doc_metadata"]);
+        assert_eq!(
+            dialer.frames("read_link").iter().map(|f| f["a"].clone()).collect::<Vec<_>>(),
+            [json!("1.0.1.0.6.0.2.1"), json!("1.0.1.0.12.0.2.1")],
+            "each home's earliest link, once"
+        );
+        assert_eq!(dialer.frames("doc_metadata")[0]["doc"], "1.0.1.0.12");
+        // That journal published: passed over for the next.
+        dialer.world().docs.get_mut("1.0.1.0.12").unwrap().published = true;
         dialer.clear();
         assert_eq!(
             journal::of(&board, &merger, &a(K), None).expect("found"),
@@ -7975,14 +8064,193 @@ mod scripted {
         );
         assert_eq!(
             dialer.ops(),
-            [
-                "find_links_ftt",
-                "read_link",
-                "doc_metadata",
-                "read_link",
-                "read_link",
-                "doc_metadata"
-            ]
+            ["find_links_ftt", "read_link", "read_link", "doc_metadata", "doc_metadata"]
+        );
+        // A link of the kind homed in doc 1, its `from` in a journal, and a
+        // sub-account's record: no journal of the account's own, so doc 1's
+        // link is read and passed over, the sub-account's never read, and a
+        // journal minted.
+        {
+            let mut w = dialer.world();
+            w.links.clear();
+            w.links.push(LinkRow {
+                addr: format!("{DOC1}.0.2.1"),
+                home: DOC1.into(),
+                from: vec![i_addr(&a("1.0.1.0.6"), 1)],
+                to: vec![format!("{D}.1.1")],
+                ty: K.into(),
+                width: 1,
+                at: Some(10),
+            });
+            file(&mut w, "1.0.1.2.0.3", &record, &[&format!("{D}.1.1")], Some(5));
+        }
+        dialer.clear();
+        assert_eq!(
+            journal::of(&board, &merger, &a(K), None).expect("minted"),
+            a("1.0.1.0.10"),
+            "the mint's id answered by the board's memo"
+        );
+        assert_eq!(dialer.ops(), ["find_links_ftt", "read_link", "create_new_document"]);
+        assert_eq!(
+            dialer.frames("read_link")[0]["a"],
+            format!("{DOC1}.0.2.1"),
+            "doc 1's link alone read"
+        );
+    }
+
+    /// THE JOURNAL'S FIND IS REISSUED WHILE THE BOARD IS BUSY: the find, a
+    /// class scan, refused `scan_busy` on its first send and on each of its
+    /// reissues but the last is sent again, nothing written between, and the
+    /// record is written once. Refused on every send, the record is not
+    /// written: `land` answers the merge standing with its record unwritten,
+    /// a halt naming the board's busy refusal, no journal minted and no atom
+    /// or link sent; `journal::of` answers the board's refusal itself.
+    #[test]
+    fn the_journals_find_is_reissued_while_the_board_is_busy() {
+        let reissues = crate::publication::SCAN_BUSY_REISSUES as usize;
+        let account_finds = |dialer: &Scripted| {
+            dialer
+                .frames("find_links_ftt")
+                .iter()
+                .filter(|f| f["q"]["home"][0]["start"] == ACCOUNT)
+                .count()
+        };
+        let (dialer, board, signer) = open(World::race());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        dialer.world().scan_busy = reissues;
+        dialer.clear();
+        let landed = land(&board, &merged, shot(&session, &signer)).expect("landed");
+        assert!(matches!(landed, Landed::Member { .. }), "{landed:?}");
+        assert_eq!(account_finds(&dialer), reissues + 1, "the first send and each reissue");
+        assert_eq!(
+            (
+                dialer.frames("create_new_document").len(),
+                dialer.frames("insert").len(),
+                dialer.frames("make_link").len()
+            ),
+            (1, 1, 1),
+            "the record, once: {:?}",
+            dialer.ops()
+        );
+        // Busy on every send: the merge standing, nothing of the record sent.
+        let (dialer, board, signer) = open(World::race());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        too_busy_for_the_find(&mut dialer.world());
+        dialer.clear();
+        let err = land(&board, &merged, shot(&session, &signer)).expect_err("the record unwritten");
+        let Refusal::Halt(halt) = &err else { panic!("{err:?}") };
+        assert_eq!(halt.exit_code(), 3, "a halt, never the board's refusal: {err:?}");
+        let Halt::Halt(face) = halt else { panic!("{err:?}") };
+        assert!(
+            face.state
+                .contains(&format!("the merge stands at {D}.3, and its record is not written")),
+            "{face}"
+        );
+        assert!(face.cause.starts_with("scan_busy:"), "{face}");
+        assert_eq!(account_finds(&dialer), reissues + 1, "never past the bound");
+        for op in ["create_new_document", "insert", "make_link"] {
+            assert!(dialer.frames(op).is_empty(), "no `{op}`: {:?}", dialer.ops());
+        }
+        assert!(dialer.world().docs.contains_key(&format!("{D}.3")), "the shot stands");
+        too_busy_for_the_find(&mut dialer.world());
+        let err = journal::of(&board, &merger(&session, &signer), &a(K), None).expect_err("busy");
+        assert!(
+            matches!(&err, Refusal::Halt(Halt::Refused(r)) if r.code == "scan_busy" && r.status == 503),
+            "{err:?}"
+        );
+    }
+
+    /// THE NEWEST RECORD IS THE ONE WHOSE LINK WAS MINTED LAST (§4, "Its
+    /// currency"): two records of one key in two journals of the account's,
+    /// the later link at the lower address, and every read that picks the
+    /// newest picks the later — `current` and the composition's `prior`,
+    /// the landing's read-first, whose record replaces it, and a take-back's
+    /// read of the record naming its draft, whose record replaces that one.
+    #[test]
+    fn the_newest_record_is_the_one_whose_link_was_minted_last() {
+        let (dialer, board, signer) = open(World::race());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        let daughter = format!("{D}.1.1");
+        let later = {
+            let mut w = dialer.world();
+            file(&mut w, "1.0.1.0.12", &merged.record, &[&daughter], Some(20));
+            file(&mut w, "1.0.1.0.6", &merged.record, &[&daughter], Some(40))
+        };
+        let link = |r: Option<Record>| r.and_then(|r| r.link).map(|l| l.to_string());
+        assert_eq!(
+            link(current(&board, Some(&token()), &a(K), &merged.key).expect("the lookup")),
+            Some(later.clone()),
+            "`current`"
+        );
+        let again = compose(&board, Some(session.token()), &race_inputs()).expect("composed again");
+        assert_eq!(link(again.prior.clone()), Some(later.clone()), "the composition's prior");
+        dialer.clear();
+        land(&board, &again, shot(&session, &signer)).expect("landed");
+        assert_eq!(
+            appended_record(&dialer)["replaces"].as_str(),
+            Some(later.as_str()),
+            "the landing's record replaces the later"
+        );
+        // The record naming a draft landing: the take-back's read.
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let (merged, landed) = landed_in_s(&board, &session, &signer);
+        let (position, first) = landing_of(&landed);
+        assert!(
+            first.to_string().starts_with("1.0.1.0.10.0.2."),
+            "the premise: the landing's record at the greater address"
+        );
+        let mut record = merged.record.clone();
+        record.landed = Some(RecordLanding::Draft { draft: a(S), position });
+        let later = {
+            let mut w = dialer.world();
+            let at = w.position + 100;
+            file(&mut w, "1.0.1.0.6", &record, &[S], Some(at))
+        };
+        dialer.clear();
+        withdraw(&board, merger(&session, &signer), &a(S), &a(K), None).expect("withdrawn");
+        assert_eq!(
+            appended_record(&dialer)["replaces"].as_str(),
+            Some(later.as_str()),
+            "the withdrawal's record replaces the later"
+        );
+    }
+
+    /// THE TRUNK OWNER'S RECORD IS CURRENT OVER A SUB-ACCOUNT'S (§4, "Its
+    /// currency"; decision 8): the owner's record of the key in a journal of
+    /// its own and a sub-account's in the sub-account's, at the greater
+    /// address and minted later — `current` and the composition's `prior`
+    /// answer the owner's, an account's records being those whose links lie
+    /// in it exactly, never in an account nested under it. With the owner's
+    /// journal withheld, the sub-account's record stands.
+    #[test]
+    fn the_trunk_owners_record_is_current_over_a_sub_accounts() {
+        let (dialer, board, signer) = open(World::race());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        let daughter = format!("{D}.1.1");
+        let (owners, subs) = {
+            let mut w = dialer.world();
+            let owners = file(&mut w, "1.0.1.0.6", &merged.record, &[&daughter], Some(20));
+            let subs = file(&mut w, "1.0.1.2.0.3", &merged.record, &[&daughter], Some(40));
+            (owners, subs)
+        };
+        let link = |r: Option<Record>| r.and_then(|r| r.link).map(|l| l.to_string());
+        assert_eq!(
+            link(current(&board, Some(&token()), &a(K), &merged.key).expect("the lookup")),
+            Some(owners.clone()),
+            "`current`"
+        );
+        let again = compose(&board, Some(session.token()), &race_inputs()).expect("composed again");
+        assert_eq!(link(again.prior), Some(owners), "the composition's prior");
+        dialer.world().withheld.insert("1.0.1.0.6".into());
+        assert_eq!(
+            link(current(&board, Some(&token()), &a(K), &merged.key).expect("the lookup")),
+            Some(subs),
+            "the owner's journal unreadable"
         );
     }
 
@@ -8336,11 +8604,23 @@ mod scripted {
 
     // ── the fences ───────────────────────────────────────────────────────
 
-    /// NO CLASS SCAN: every `find_links_ftt` the module sends — composing,
-    /// landing, looking a record up, finding the journal — constrains `to`
-    /// or `home`; and the three frame constructors constrain a second slot.
+    /// THE ONE CLASS SCAN IS THE JOURNAL'S FIND: of every `find_links_ftt`
+    /// the module sends — composing, landing, looking a record up, finding
+    /// the journal — the one that walks every home under an account is the
+    /// default journal's find, `home` the merger's account and `ty` the
+    /// kind, sent once for each record written with no journal named and
+    /// once by `journal::of`; every other constrains `to` or `from`, or a
+    /// `home` naming one document, and takes no permit (wire.md §Link
+    /// discovery reads). A record written into a journal named sends no
+    /// class scan. The frame constructors answer the same test.
     #[test]
-    fn no_frame_this_module_sends_is_a_class_scan() {
+    fn the_one_class_scan_the_module_sends_is_the_journals_find() {
+        let class_scan = |q: &Value| {
+            let home = q["home"][0]["start"].as_str();
+            let one_document =
+                home.is_some_and(|h| crate::address::document_of(h).as_deref() == Some(h));
+            q["to"] == "any" && q["from"] == "any" && !one_document
+        };
         let (dialer, board, signer) = open(World::race());
         let session = sign_in(&board, &signer);
         let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
@@ -8349,24 +8629,48 @@ mod scripted {
         journal::of(&board, &merger(&session, &signer), &a(K), None).expect("the journal");
         let queries = dialer.frames("find_links_ftt");
         assert!(queries.len() >= 5, "{}", queries.len());
-        for q in &queries {
-            let q = &q["q"];
-            assert!(
-                q["to"] != "any" || q["home"] != "any" || q["from"] != "any",
-                "a class scan: {q}"
+        let scans: Vec<&Value> =
+            queries.iter().map(|f| &f["q"]).filter(|q| class_scan(q)).collect();
+        assert_eq!(scans.len(), 2, "the landing's record and `journal::of`, once each: {scans:?}");
+        for q in scans {
+            assert_eq!(
+                (q["home"][0]["start"].as_str(), q["ty"][0]["start"].as_str()),
+                (Some(ACCOUNT), Some(K)),
+                "{q}"
             );
         }
+        // The record written into a journal named: no class scan.
+        let (dialer, board, signer) = open(World::race());
+        dialer.world().doc("1.0.1.0.6", false, ACCOUNT, Vec::new());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        let named = Landing::Shot {
+            merger: merger(&session, &signer),
+            draft: None,
+            journal: Some(a("1.0.1.0.6")),
+        };
+        land(&board, &merged, named).expect("landed");
+        assert_eq!(
+            dialer.frames("insert")[0]["doc"],
+            "1.0.1.0.6",
+            "the premise: the record in the journal named"
+        );
+        assert!(
+            dialer.frames("find_links_ftt").iter().all(|f| !class_scan(&f["q"])),
+            "no class scan: {:?}",
+            dialer.frames("find_links_ftt")
+        );
         for frame in [
             frames::find_links_ftt(K, D),
             frames::find_links_ftt_from(K, D),
             frames::find_links_ftt_home(K, DOC1),
         ] {
-            let q = &frame["q"];
-            assert!(
-                q["to"] != "any" || q["home"] != "any" || q["from"] != "any",
-                "a class scan: {q}"
-            );
+            assert!(!class_scan(&frame["q"]), "no class scan: {frame}");
         }
+        assert!(
+            class_scan(&frames::find_links_ftt_home(K, ACCOUNT)["q"]),
+            "an account's homes, walked"
+        );
     }
 
     /// THE HEAD-MEMBER FALLBACK: `head_of` walks the document's feed rows
@@ -8605,8 +8909,8 @@ mod scripted {
                 resume_on,
             );
             assert!(
-                landing.ended > 0 && landing.faulted == 1,
-                "{cell}: the head read once, before the first write"
+                landing.ended > 0 && landing.faulted == 0,
+                "{cell}: every request under the token, no head read"
             );
         }
         let lost =
@@ -8665,7 +8969,7 @@ mod scripted {
             },
             rerun,
         );
-        assert_eq!(recording.faulted, 1, "the head's read, before the record's first write");
+        assert_eq!(recording.faulted, 0, "no head read: the record signs nothing");
         let undo_s = |board: &Board, session: &Session<'_>, signer: &HybridSigner, _: &()| {
             undo(board, merger(session, signer), &a(S), &a(K), None, None).map(drop)
         };
@@ -8676,7 +8980,7 @@ mod scripted {
             undo_s,
             Ends::TakeBack,
         );
-        assert!(undoing.ended > 0 && undoing.faulted == 0, "the head was read at the landing");
+        assert!(undoing.ended > 0 && undoing.faulted == 0, "no head read: the undo signs nothing");
         const PLAIN: &str = "1.0.1.0.5";
         let baseless = || {
             let mut w = draft_landing_world();
@@ -8762,7 +9066,7 @@ mod scripted {
                 let record = race_composed(dialer, board, session, signer).record;
                 let mut w = dialer.world();
                 w.doc("1.0.1.0.6", false, ACCOUNT, Vec::new());
-                file(&mut w, DOC1, "1.0.1.0.6", &record, &[&format!("{D}.1.1")]);
+                file(&mut w, "1.0.1.0.6", &record, &[&format!("{D}.1.1")], None);
             };
         let finding = deaths_of(
             "journal::of finding",

@@ -88,7 +88,7 @@ use std::time::Duration;
 use serde_json::Value;
 use skep_address::{validate, Address, Nat, Tumbler};
 
-use crate::address::{doc_1_of, parse_address};
+use crate::address::parse_address;
 use crate::board::answers::{self, IRun, Metadata};
 use crate::board::{
     frames, guest_closed, Answer, AtAnswer, Board, ChangesAnswer, ChangesQuery, Rejection, Token,
@@ -335,7 +335,7 @@ pub struct Merged {
     /// The standing record for the key, where one is current.
     ///
     /// It is §3's "What a second agent sees", under the reader's currency
-    /// (the trunk owner's home first) at the composition. The landing never
+    /// (the trunk owner's records first) at the composition. The landing never
     /// lands by it: it reads the merger's own newest record for the key
     /// when it lands (the `land` module's doc).
     pub prior: Option<Record>,
@@ -2076,11 +2076,10 @@ pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<
         std::iter::once(inputs.head.clone())
             .chain(inputs.sides.iter().map(|s| s.address().clone())),
     );
-    // Step 7: the prior records, the trunk owner's home current over
+    // Step 7: the prior records, the trunk owner's account's current over
     // another's — the journal's reads, at the head: they raise the reader's
     // running `as_of` past P, which nothing below reads.
-    let owner_home = doc_1_of(&owner);
-    let prior = record::current_among(&reader, &inputs.kind, &key, Some(&owner_home))?;
+    let prior = record::current_among(&reader, &inputs.kind, &key, Some(&owner))?;
     // The record's sides: the head, then each side — a draft at P, the one
     // position it was read at.
     let mut sides: Vec<SideAt> = vec![SideAt::Member { at: inputs.head.clone(), role: Role::Head }];

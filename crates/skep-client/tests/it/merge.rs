@@ -413,19 +413,25 @@ fn one_whole_merge_lands_on_the_trunk_with_its_record() {
         vec![member.to_string(), daughter.to_string()],
         "to the member and the daughter"
     );
-    assert_eq!(
-        document_of(&link.to_string()).as_deref(),
-        Some("1.0.1.0.1"),
-        "homed in the merger's doc 1"
-    );
     let atom = &starts(0)[0];
     let journal = addr(&document_of(atom).expect("the atom's document"));
+    assert_eq!(
+        document_of(&link.to_string()),
+        Some(journal.to_string()),
+        "homed in the journal, beside the record"
+    );
     let journal_meta = read(&board, Some(&token), &frames::doc_metadata(&journal.to_string()));
     assert_eq!(
         journal_meta["published"].as_bool(),
         Some(false),
         "the default journal is a private draft: {journal_meta}"
     );
+    // No link of the kind homed in the merger's doc 1, and none a guest
+    // finds from the daughter: the record and its link are private.
+    let doc_1 = read(&board, Some(&token), &frames::find_links_ftt_home(&kind.to_string(), "1.0.1.0.1"));
+    assert_eq!(doc_1["addrs"], json!([]), "no link of the kind in doc 1: {doc_1}");
+    let guest = read(&board, None, &frames::find_links_ftt(&kind.to_string(), &daughter.to_string()));
+    assert_eq!(guest["addrs"], json!([]), "a guest finds no record: {guest}");
     // The record, current for the key, read through the journal.
     let record = current(&board, Some(&token), &kind, &merged.key)
         .expect("the lookup")

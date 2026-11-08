@@ -28,7 +28,7 @@
 //! the `head_moved` race typed, nothing re-sent; and the composition dying
 //! with its session.
 
-use skep_client::address::{document_of, parse_address};
+use skep_client::address::{account_of, document_of, parse_address};
 use skep_client::board::{frames, Opened, SessionBody};
 use skep_client::halt::Halt;
 use skep_client::merge::{Inputs, Merged, RecordLanding, Refusal as Library, Side};
@@ -169,9 +169,9 @@ fn mark(g: &Ground, token: &Token, draft: &str, merged: &Merged, side: &str) -> 
 /// Writes `other`'s record of [`KIND`], answering its link's address.
 ///
 /// It is the record `merged` describes, landed as `landed`. Its atom is
-/// appended to a private journal of theirs and its link homed there, from
-/// the atom to the landed address and `side` — the record writer's link
-/// from doc 1, homed where a bare session may write.
+/// appended to a private journal of theirs and its link homed there beside
+/// it, from the atom to the landed address and `side`, as the library's
+/// record writer homes it.
 fn record_of_the_kind(g: &Ground, other: &Other, merged: &Merged, landed: RecordLanding, side: &str) -> String {
     let minted = written(g, &other.token, &frames::create_document(&other.account, false, None));
     let journal = minted["addr"].as_str().unwrap().to_string();
@@ -189,7 +189,7 @@ fn record_of_the_kind(g: &Ground, other: &Other, merged: &Merged, landed: Record
 /// Asserts that the merge of E.2 with E.1.1 reads `link` as its `prior`.
 ///
 /// The library's currency takes another account's record where the
-/// claimant's doc 1 holds none.
+/// claimant's account holds none.
 fn assert_prior_is(g: &Ground, f: &Family, link: &str) {
     let prior = composed(g, f).prior.and_then(|p| p.link).map(|l| l.to_string());
     assert_eq!(prior.as_deref(), Some(link), "the premise: the other account's record is the composition's prior");
@@ -788,10 +788,10 @@ fn another_accounts_record_naming_the_persons_draft_never_steers_the_landing_int
 /// riding; another account writes a record of the claimant's kind naming E.3 as
 /// landed in, the composition's `prior`. `merge.compose` of the daughter
 /// answers merged, naming E.3, and writes the person's own record — its link
-/// homed in the claimant's doc 1, the board's position moved; a second
-/// `merge.compose` names that record, nothing written (the mutant that takes
-/// the `prior` naming the member for the person's own answers the other
-/// account's record and writes none).
+/// homed in a private journal of the claimant's, never its doc 1, the board's
+/// position moved; a second `merge.compose` names that record, nothing
+/// written (the mutant that takes the `prior` naming the member for the
+/// person's own answers the other account's record and writes none).
 #[test]
 fn merged_writes_the_persons_own_record_where_only_another_accounts_names_the_member() {
     let dir = TempDir::new().unwrap();
@@ -816,7 +816,11 @@ fn merged_writes_the_persons_own_record_where_only_another_accounts_names_the_me
     assert_eq!((answer["outcome"].as_str(), answer["member"].as_str()), (Some("merged"), Some(e3.as_str())), "{answer}");
     let record = answer["record_link"].as_str().expect("the record written").to_string();
     assert_ne!(record, theirs, "{answer}");
-    assert_eq!(document_of(&record).as_deref(), Some(KIND), "homed in the claimant's doc 1: {answer}");
+    let journal = document_of(&record).expect("the record's journal");
+    assert_eq!((account_of(&record), journal.as_str() == KIND), (account_of(KIND), false), "homed in a journal of the claimant's, never its doc 1: {answer}");
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let Answer::Document(meta) = entry.board.op(Some(&bare(&g, 1)), &frames::doc_metadata(&journal)).unwrap() else { panic!("the session stands") };
+    assert_eq!(meta["published"], json!(false), "a private draft: {meta}");
     assert!(g.position() > before, "the record's writes");
     let after = g.position();
     let again = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11})).unwrap_or_else(|r| panic!("{r}"));

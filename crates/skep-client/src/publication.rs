@@ -460,7 +460,7 @@ pub const SCAN_BUSY_REISSUES: u32 = 6;
 /// Returns whether a refusal's code is one of the two busy doors a read is
 /// reissued at: the class scan's `scan_busy`, the history read's
 /// `history_busy`.
-fn is_busy(code: &str) -> bool {
+pub(crate) fn is_busy(code: &str) -> bool {
     code == "scan_busy" || code == "history_busy"
 }
 

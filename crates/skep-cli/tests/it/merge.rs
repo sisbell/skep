@@ -36,7 +36,11 @@
 //! published; and A PUBLISHED JOURNAL — the trunk and the account's doc 1 —
 //! said by the composition's talk before any landing flag is acted on, and
 //! refused `published_target` in the command's words at `--publish`,
-//! `--new` and `--undo`, exit 1, nothing written.
+//! `--new` and `--undo`, exit 1, nothing written; and THE RECORD KEPT
+//! PRIVATE — each record's link homed in the journal beside its atom, none
+//! in doc 1, none a guest or a stranger finds; and THE NEWEST RECORD by
+//! when its link was minted — an undo recorded in an older journal leaving
+//! the key open, so `--new` stages a draft of its own.
 
 use std::path::{Path, PathBuf};
 
@@ -225,13 +229,13 @@ impl Rig {
         token
     }
 
-    /// A STRANGER's private draft and private fork of `source`: a second
-    /// top-level account delegated as the dev seed delegates one — the
-    /// node's bare session delegating the next prefix under `1` to a free
-    /// principal — whose bare session mints its home, then the two. The
-    /// claimant may read neither: an account's subtree runs above and
+    /// A STRANGER: a second top-level account delegated as the dev seed
+    /// delegates one — the node's bare session delegating the next prefix
+    /// under `1` to a free principal — answered with its prefix and its bare
+    /// session, which has minted its home. The claimant may read none of its
+    /// documents, nor it the claimant's: an account's subtree runs above and
     /// beneath it, never beside it (wire.md §The read predicate).
-    fn stranger(&self, source: &Address) -> (Address, Address) {
+    fn stranger_account(&self) -> (String, Token) {
         let bare = |principal: u64| match self.board.session_open(SessionBody::Bare { principal }).expect("a bare session") {
             Opened::Token(t) => t,
             other => panic!("principal {principal}'s bare bind answered {other:?}"),
@@ -244,9 +248,17 @@ impl Rig {
         let v = Rig::acked(self.board.op(Some(&bare(0)), &frames::delegate(&prefix, principal, None)));
         assert_eq!(acked_addr(&v), Some(prefix.as_str()), "the stranger's account: {v}");
         let token = bare(principal);
-        let mint = || addr(acked_addr(&Rig::acked(self.board.op(Some(&token), &json!({"op": "create_new_document", "account": prefix})))).expect("a minted address"));
-        assert_eq!(mint().to_string(), format!("{prefix}.0.1"), "the stranger's home first");
-        (mint(), self.fork(&token, source))
+        let home = Rig::acked(self.board.op(Some(&token), &json!({"op": "create_new_document", "account": prefix})));
+        assert_eq!(acked_addr(&home), Some(format!("{prefix}.0.1").as_str()), "the stranger's home first");
+        (prefix, token)
+    }
+
+    /// A STRANGER's private draft and private fork of `source`, minted by
+    /// its bare session ([`Rig::stranger_account`]).
+    fn stranger(&self, source: &Address) -> (Address, Address) {
+        let (prefix, token) = self.stranger_account();
+        let draft = addr(acked_addr(&Rig::acked(self.board.op(Some(&token), &json!({"op": "create_new_document", "account": prefix})))).expect("a minted address"));
+        (draft, self.fork(&token, source))
     }
 
     /// A private cross-owner fork of `source` by `forker`: the fresh document
@@ -855,6 +867,103 @@ fn the_two_take_backs_walk_on_the_real_daemon() {
     assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
     assert!(r.err.contains(&format!("the board refused: no_merge:{t} carries no merge: nothing to undo, nothing to take out")), "{}", r.err);
     assert_eq!(position(), before, "nothing written");
+    session.close().expect("close");
+}
+
+/// A MERGE'S RECORD AND ITS LINK STAY PRIVATE (skep #893; the merge
+/// record's §4, "Its home"): at `--publish`, `--new` and `--undo` each
+/// record's link is homed in the journal its atom lies in — a private draft
+/// of the claimant's, never its doc 1, each run finding the one journal the
+/// first minted by the account's links of the kind — so no link of the kind
+/// stands in doc 1, and neither a guest nor a stranger's session finds a
+/// record from the daughter or the draft, while the claimant's own find
+/// from the daughter answers all three; the same `--publish` again names
+/// the same record, nothing written.
+#[test]
+fn a_merges_record_and_its_link_stay_in_the_private_journal() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let kind_s = rig.draft().to_string();
+    let (d, _, head, daughter) = rig.race(&session);
+    let (d_s, daughter_s, head_s) = (d.to_string(), daughter.to_string(), head.to_string());
+    let position = || rig.board.health().unwrap().log_position();
+    let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind_s, "--publish"]);
+    let published = report(&r)["landed"]["record"].as_str().expect("the shot's record").to_string();
+    let before = position();
+    let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind_s, "--head", &head_s, "--publish"]);
+    assert_eq!(report(&r)["landed"]["record"].as_str(), Some(published.as_str()), "the same record");
+    assert_eq!(position(), before, "nothing written twice");
+    let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind_s, "--head", &head_s, "--new"]);
+    let v = report(&r);
+    let fresh = v["landed"]["draft"].as_str().expect("the fresh draft").to_string();
+    let staged = v["landed"]["record"].as_str().expect("the draft landing's record").to_string();
+    let r = rig.merge(&["--undo", &fresh, "--kind", &kind_s]);
+    let undone = report(&r)["record"].as_str().expect("the undo's record").to_string();
+    let homes: Vec<String> = [&published, &staged, &undone].iter().map(|l| skep_client::address::document_of(l).expect("a link's home")).collect();
+    assert!(homes.iter().all(|h| *h == homes[0]), "each run found the account's one journal by its links of the kind, minting none after the first: {homes:?}");
+    for link in [&published, &staged, &undone] {
+        let home = skep_client::address::document_of(link).expect("a link's home");
+        assert_ne!(home, format!("{ACCOUNT}.0.1"), "never doc 1: {link}");
+        let atom = rig.read(&token, &frames::read_link(link))["link"]["slots"][0][0]["start"].as_str().expect("the atom").to_string();
+        assert_eq!(skep_client::address::document_of(&atom).as_deref(), Some(home.as_str()), "homed in the journal its atom lies in: {link}");
+        let meta = rig.read(&token, &frames::doc_metadata(&home));
+        assert_eq!((meta["published"].as_bool(), meta["owner"].as_str()), (Some(false), Some(ACCOUNT)), "a private draft of the claimant's: {meta}");
+    }
+    let doc_1 = rig.read(&token, &frames::find_links_ftt_home(&kind_s, &format!("{ACCOUNT}.0.1")));
+    assert_eq!(doc_1["addrs"], json!([]), "no link of the kind in doc 1: {doc_1}");
+    let (_, stranger) = rig.stranger_account();
+    for target in [&daughter_s, &fresh] {
+        let find = frames::find_links_ftt(&kind_s, target);
+        assert_eq!(rig.board.guest(&find).expect("the guest's read")["addrs"], json!([]), "a guest finds no record from {target}");
+        assert_eq!(rig.read(&stranger, &find)["addrs"], json!([]), "a stranger finds no record from {target}");
+    }
+    let mut own: Vec<String> = rig.read(&token, &frames::find_links_ftt(&kind_s, &daughter_s))["addrs"].as_array().expect("addrs").iter().map(|a| a.as_str().unwrap().to_string()).collect();
+    own.sort();
+    let mut all = vec![published, staged, undone];
+    all.sort();
+    assert_eq!(own, all, "the claimant finds every record from the daughter");
+    session.close().expect("close");
+}
+
+/// THE NEWEST RECORD IS THE ONE WHOSE LINK WAS MINTED LAST (skep #893; the
+/// merge record's §4, "Its currency"): `--new` lands in `F`, its record in
+/// the account's own journal; `--undo F --journal J0` records the undo in
+/// `J0`, a private draft minted before that journal and so at the lower
+/// address; and `--new` again finds the undo's record the newest — the
+/// report's `prior` — so it stages a fresh draft of its own and lands
+/// there, `F` left as the undo put it.
+#[test]
+fn a_take_back_recorded_in_an_older_journal_leaves_the_key_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let kind_s = rig.draft().to_string();
+    let j0 = rig.draft();
+    let (d, _, _, daughter) = rig.race(&session);
+    let (d_s, daughter_s) = (d.to_string(), daughter.to_string());
+    let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind_s, "--new"]);
+    let v = report(&r);
+    let f = v["landed"]["draft"].as_str().expect("F").to_string();
+    let first = v["landed"]["record"].as_str().expect("the landing's record").to_string();
+    let journal = addr(&skep_client::address::document_of(&first).expect("the account's journal"));
+    let last = |a: &Address| a.to_string().rsplit('.').next().unwrap().parse::<u64>().unwrap();
+    assert!(last(&j0) < last(&journal), "the premise: J0 {j0} lies below the account's journal {journal}");
+    let r = rig.merge(&["--undo", &f, "--kind", &kind_s, "--journal", &j0.to_string()]);
+    let undone = report(&r)["record"].as_str().expect("the undo's record").to_string();
+    assert_eq!(skep_client::address::document_of(&undone), Some(j0.to_string()), "the undo recorded in J0");
+    let f_words = rig.image(&token, &addr(&f), 15);
+    assert_eq!(f_words.iter().map(|(_, w)| w.parse::<u64>().unwrap()).sum::<u64>(), 15, "the premise: F back to the head's words, \"the big cat sat\"");
+    let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind_s, "--new"]);
+    let v = report(&r);
+    assert_eq!(v["prior"]["link"].as_str(), Some(undone.as_str()), "the undo's record, the newest: {}", v["prior"]);
+    assert_eq!(v["landed"]["fresh"], json!(true), "{}", v["landed"]);
+    let landed_in = v["landed"]["draft"].as_str().expect("the draft");
+    assert_ne!(landed_in, f, "a draft of its own: {}", v["landed"]);
+    assert_eq!(rig.image(&token, &addr(landed_in), 11), runs_of(&v), "the fresh draft holds M");
+    assert_eq!(rig.image(&token, &addr(&f), 15), f_words, "F as the undo put it");
     session.close().expect("close");
 }
 

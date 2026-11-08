@@ -51,8 +51,8 @@
 //! the library's `record_published`, the resume of a stop between the shot
 //! and its record (P14). A standing record of the person's own naming a
 //! draft landing of the key is read before a fresh draft is asked for, as
-//! the library's landing reads it — the newest record in their doc 1, never
-//! the composition's `prior`, which can be another account's: that draft
+//! the library's landing reads it — the newest record of their own account,
+//! never the composition's `prior`, which can be another account's: that draft
 //! is read as `into` is, refused `not_owner` where it is published or
 //! another account's; its marker naming this merge is the re-open; else
 //! the landing goes into that draft, the library's same-landing rule
@@ -74,8 +74,8 @@
 //! the open; never at the draft side, whose side is a private draft. After
 //! the acknowledgment THE MERGE RECORD, the library's `record_published` —
 //! the member and position the board acknowledged, the claims read back at
-//! the daughter, written once in the account's merge journal with its
-//! public link, or the standing one answered — never a second shot. The
+//! the daughter, written once in the account's merge journal with its link
+//! beside it, or the standing one answered — never a second shot. The
 //! answer is the landing with the acknowledgment's data, the panel's
 //! re-statement, or its typed refusal: the race, `supersede_refused` with
 //! `head_moved`, crosses as the board answered it, nothing re-sent, the
@@ -522,8 +522,9 @@ impl Shell {
     ///    (`skep_client::merge::land`): the board's
     ///    `arrangement_moved` verbatim, nothing landed; `merge_refused`
     ///    with `fork_base_moved`, `base_not_in_chain`, `window_withheld` or
-    ///    `needs_signed_session`; `not_owner`; a halt's face — the board's
-    ///    head owed, the landing standing with its record unwritten; and
+    ///    `needs_signed_session`; `not_owner`; a halt's face — the board too
+    ///    busy to find the person's journal, the landing standing with its
+    ///    record unwritten; and
     ///    `session_died` where a read or the write met the death signal.
     pub(super) fn merge_compose(&self, args: &Value) -> Result<Value, Refusal> {
         // The row's own members first, each refused in another form before
@@ -614,7 +615,7 @@ impl Shell {
         }
         // A fresh draft asked for while a record of the person's own names a
         // draft landing of the key (the survey §5 item 2), read as the
-        // library's landing reads it: the newest record in their doc 1, by
+        // library's landing reads it: the newest record of their own, by
         // `lib::resume` with no draft named, which writes nothing — never
         // the composition's `prior`, which is read under the reader's
         // currency and can be another account's record of the kind. That
@@ -692,12 +693,12 @@ impl Shell {
         let inputs = lib::Inputs { doc: doc.clone(), head, base: None, sides: vec![lib::Side::Member(daughter.clone())], options: lib::Options::default(), kind: kind.clone() };
         let merged = lib::compose(&session.board, Some(&session.token), &inputs).map_err(|r| self.merge_refusal(session, r))?;
         // The person's own standing record naming the member: the
-        // composition's `prior` only where its link is homed in their doc 1.
-        // The claim's home is the trunk, theirs, and the currency puts the
-        // trunk owner's home first, so a `prior` homed elsewhere is another
-        // account's record of the kind, standing where the person holds none.
-        let home = doc_1_of(&signed.account);
-        let own = |p: &&lib::Record| p.link.as_ref().and_then(|l| document_of(&l.to_string())).is_some_and(|d| d == home);
+        // composition's `prior` only where its link lies in their account,
+        // exactly. The claim's home is the trunk, theirs, and the currency
+        // puts the trunk owner's records first, so a `prior` whose link lies
+        // elsewhere is another account's record of the kind, standing where
+        // the person holds none.
+        let own = |p: &&lib::Record| p.link.as_ref().and_then(|l| account_of(&l.to_string())).is_some_and(|a| a == signed.account);
         let standing = merged.prior.as_ref().filter(own).filter(|p| matches!(&p.landed, Some(lib::RecordLanding::Member { member: m, .. }) if m == member));
         // The record: the standing one, its body the report's, else written
         // now — the resume of a stop between the shot and its record.

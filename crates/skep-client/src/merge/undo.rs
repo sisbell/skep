@@ -104,9 +104,10 @@
 //!
 //! **The record.** After the write lands, the current record naming the
 //! draft as landed in — found by the links of the kind to the draft, the
-//! newest — is replaced: a record composed from it with `landed` none and
-//! `replaces` its link is appended to the journal (`journal`, or the
-//! account's default) and linked from the merger's doc 1, so a reader of
+//! newest by the order they were minted — is replaced: a record composed
+//! from it with `landed` none and `replaces` its link is appended to the
+//! journal (`journal`, or the account's default) and linked from its atom
+//! there, the link homed in the journal beside it, unsigned, so a reader of
 //! the journal sees the merge no longer stands on the draft. A merge landed
 //! in the draft again with no take-back recorded between is the same
 //! landing (skep #790; the `land` module's doc): the undo takes back the
@@ -114,18 +115,18 @@
 //! replaces is the first landing's. Where no record stands none is written,
 //! and the act stands all the same. A re-run after either act writes
 //! nothing (**The guarantees**) — so where the record is not written after
-//! the act's write, for a lost acknowledgment at its writes, a head owed
-//! there, or a journal the record's step finds unable to take it, the
-//! landing's record stands alone, which the halt says; a lost
-//! acknowledgment of the act's own write, the dialer's halt, leaves it
-//! alone too. A `resume` of the landing after either act finds nothing to
-//! resume, whether or not either record was written: it goes by the
-//! marker, which the act cleared, or for a baseless draft by the latest
-//! `set_arrangement` row, the act's own, naming no merge (the `land`
-//! module's doc). A landing of the key made after either act writes a
-//! record of its own, which replaces this one: the landing's read-first
-//! takes the merger's newest record of the key, and this one names no
-//! landing (the `land` module's doc).
+//! the act's write, for a lost acknowledgment at its writes, a board too
+//! busy to answer the find of the account's journal, or a journal the
+//! record's step finds unable to take it, the landing's record stands
+//! alone, which the halt says; a lost acknowledgment of the act's own
+//! write, the dialer's halt, leaves it alone too. A `resume` of the landing
+//! after either act finds nothing to resume, whether or not either record
+//! was written: it goes by the marker, which the act cleared, or for a
+//! baseless draft by the latest `set_arrangement` row, the act's own,
+//! naming no merge (the `land` module's doc). A landing of the key made
+//! after either act writes a record of its own, which replaces this one:
+//! the landing's read-first takes the merger's newest record of the key,
+//! and this one names no landing (the `land` module's doc).
 //!
 //! **The journal, before the write.** A journal named is checked before the
 //! one write, as a landing's is (the `land` module's doc): one
@@ -137,19 +138,18 @@
 //! document — with nothing sent (P13), whether or not a record of the
 //! landing stands to be replaced.
 //!
-//! **The head, before the write.** The board's head (`Board::board_head`;
-//! SP-14) is read before the one write, after the journal's check, as the
-//! landing reads it: a claimed board serving no head record halts with nothing
-//! sent, since the record's link could not be signed. A lost acknowledgment of
-//! the one write is the dialer's halt, with no re-ask: each act reads first on
-//! a re-run. The record's link is the landing's, sent once more, signed, under
-//! its own id where it went unsigned and a claim landed past the head's read
-//! (`Writer::write_record`).
+//! **Nothing signed.** The one write is a draft's `set_arrangement` and the
+//! record's two writes go into a private journal, none of which takes an
+//! `attest`, so neither act reads the board's head: each lands on a claimed
+//! board whose head is owed as on any other. A lost acknowledgment of the
+//! one write is the dialer's halt, with no re-ask: each act reads first on
+//! a re-run.
 //!
 //! **The session's end.** The death signal under the merger's token is
 //! [`Refusal::SessionEnded`]: up to and at the one write the act is run
 //! again, nothing having changed; at the record, after the write, the act
-//! stands with its record unwritten, as an owed head leaves it there.
+//! stands with its record unwritten, as a journal that cannot take the
+//! record leaves it there.
 
 use serde_json::Value;
 use skep_address::Address;
@@ -173,8 +173,8 @@ pub struct Undone {
     pub draft: Address,
     /// The one write's commit position, its ack's `at`.
     pub position: u64,
-    /// The replacing record's public link, where a record of the landing
-    /// stood; `None` where none did, and none was written.
+    /// The replacing record's link, homed in its journal, where a record of
+    /// the landing stood; `None` where none did, and none was written.
     pub record: Option<Address>,
     /// The base restored — the pair read before the landing, address and
     /// extent — where the board records a base for the draft; `None` where
@@ -190,8 +190,8 @@ pub struct Withdrawn {
     pub draft: Address,
     /// The one write's commit position, its ack's `at`.
     pub position: u64,
-    /// The replacing record's public link, where a record of the landing
-    /// stood; `None` where none did, and none was written.
+    /// The replacing record's link, homed in its journal, where a record of
+    /// the landing stood; `None` where none did, and none was written.
     pub record: Option<Address>,
 }
 
@@ -242,8 +242,6 @@ pub struct Withdrawn {
 ///   fails; a published one of the merger's own, as
 ///   [`Refusal::PublishedJournal`]; the journal's `doc_metadata` read's
 ///   other refusals and halts;
-/// - a claimed board serving no head record, as [`Refusal::Halt`] naming
-///   `H.1`, before the one write, with nothing sent (SP-14);
 /// - the one write's: `arrangement_moved` as the board's verdict,
 ///   [`Refusal::Halt`] with `Refused` saying the draft changed since the
 ///   position the write was typed against — the landing, or the caller's
@@ -409,8 +407,6 @@ pub fn undo(
 /// - the image read's refusals at the read's position;
 /// - a journal named that cannot take the record, as [`undo`]'s, nothing
 ///   sent (P13);
-/// - a claimed board serving no head record, as [`Refusal::Halt`] naming
-///   `H.1`, before the one write, with nothing sent (SP-14);
 /// - the one write's, as [`undo`]'s, `arrangement_moved` saying the draft
 ///   changed since it was read;
 /// - the record's, as [`undo`]'s.
@@ -677,21 +673,14 @@ pub(crate) fn frame_runs(runs: &[Run]) -> Result<Vec<Value>, Refusal> {
 
 /// Sends the one write, answering its position.
 ///
-/// The board's head is read first (SP-14), then the frame under the
-/// merger's token; its answer is judged by [`judge`].
+/// The frame goes under the merger's token, unsigned — a draft's
+/// `set_arrangement` takes no `attest`, so no head is read — and its answer
+/// is judged by [`judge`].
 ///
 /// # Errors
 ///
 /// As [`undo`]'s one write's.
 fn send(writer: &Writer<'_>, frame: &Value, draft: &Address, as_of: u64, act: Act) -> Result<u64, Refusal> {
-    let owed = |cause: String| {
-        Halt::face(
-            format!("this board has no H.1 yet, so the merge cannot be taken out of {draft}"),
-            cause,
-            "retry once the board has written its head; nothing was written",
-        )
-    };
-    writer.signing_term(&owed)?;
     let v = writer.answered_write(
         frame,
         match act {

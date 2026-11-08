@@ -51,8 +51,10 @@
 //! before any landing flag is acted on, where `--journal` names a published
 //! document: the refusal's first clause, then "— landing this merge there
 //! is refused". A run whose landing already stands writes its record first
-//! and checks no journal before it; a journal met failing there leaves the
-//! merge standing with its record unwritten, exit 3.
+//! and checks no journal before it; a journal met failing there, or a board
+//! too busy to answer the find of the account's own journal with no
+//! `--journal` named, leaves the merge standing with its record unwritten,
+//! exit 3.
 //!
 //! **The two take-backs** (skep #783), each with `--kind` and nothing of
 //! the composition's: `--undo ⟨S⟩` puts the draft back as it stood before
@@ -68,11 +70,12 @@
 //! The session is the command's own: the selected signing key (the file
 //! `--key` or `SKEP_KEY` names, else the store's), a content-scoped signed
 //! session opened as `skep session` opens its, and closed on every exit —
-//! the shot and the record's link are signed by that key, so `SKEP_SESSION`
-//! is never read here: a token cannot sign. The library's refusals come to
-//! their stops through the renderer the commands share (`commands.rs`'s
-//! `refused`, under a `Step`), the take-backs' `history_reclaimed` worded
-//! here ([`refused_taking_out`]).
+//! the shot is signed by that key, so `SKEP_SESSION` is never read here: a
+//! token cannot sign. The record and its link go into the merger's private
+//! journal, unsigned. The library's refusals come to their stops through
+//! the renderer the commands share (`commands.rs`'s `refused`, under a
+//! `Step`), the take-backs' `history_reclaimed` worded here
+//! ([`refused_taking_out`]).
 //!
 //! **A daughter is reported, never retried (decision 17).** Where the head
 //! moved under the merge the shot lands as the head's daughter, the report
@@ -183,8 +186,9 @@ pub fn merge(c: &CommandLine) -> Result<(), Stop> {
     let principal = principal_or_bound(given, &store, &board)?;
     let key = select_key(key_file.as_deref(), &store, &board, principal, Purpose::Sign)?;
     let signer = store.signer(&KeySelector::Path(&key.path))?;
-    // Content scope, as `skep session` opens its (RES-63): the shot and the
-    // record's link are content writes under this key.
+    // Content scope, as `skep session` opens its (RES-63): the shot, the
+    // draft landing, the take-backs and the record are content writes under
+    // this session, and the shot is signed by this key.
     let session = handshake(&board, Scope::Content, &*signer, principal, Site::Session)?;
     talk(format!(
         "merging as principal {principal} at account {} with key {}",
@@ -695,7 +699,8 @@ fn report_of(merged: &Merged) -> Value {
 
 /// Returns the standing record for the key, as the report carries it.
 ///
-/// It carries its public link, its key and where it landed.
+/// It carries its link, homed in the merger's journal, its key and where it
+/// landed.
 fn prior_of(prior: &Record) -> Value {
     let key = prior.key();
     json!({

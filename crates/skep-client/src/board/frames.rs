@@ -681,10 +681,14 @@ pub fn find_links_ftt_from(ty: &str, from: &str) -> Value {
 
 /// Builds `find_links_ftt` over `ty` and `home`.
 ///
-/// It reads every deposit of `ty` homed in one document, the head
-/// invariant's enumeration read (AUTH-5.59's head: "every account whose
-/// honored genesis stands in the doc 1 of an account the enumeration
-/// already holds"). Two slots constrained, so no class scan.
+/// It reads every deposit of `ty` homed under `home`. A `home` naming one
+/// document reads that document's links, the head invariant's enumeration
+/// read (AUTH-5.59's head: "every account whose honored genesis stands in
+/// the doc 1 of an account the enumeration already holds"), and takes no
+/// permit. One naming an account walks every home under it, a class scan
+/// the board admits under its class-scan permits (wire.md §Link discovery
+/// reads): the merge journal's find, which reissues it while they are
+/// taken (the `merge::journal` module's doc).
 pub fn find_links_ftt_home(ty: &str, home: &str) -> Value {
     json!({"op": "find_links_ftt", "q": {"home": unit_span(home), "from": "any", "to": "any", "ty": unit_span(ty)}})
 }

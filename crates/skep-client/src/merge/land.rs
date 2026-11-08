@@ -2,7 +2,7 @@
 //!
 //! The landing is the one `publish` of the merged list from the head with
 //! its signed body, the supersession claims riding it, then the claims'
-//! read and the record in the journal with its public link, each step
+//! read and the record in the journal with its link beside it, each step
 //! idempotent by reading first (P4, P14); the draft landing, ONE
 //! `set_arrangement` of the merged list into the draft (the landing lane's
 //! rulings R1, R4, R5; skep #764); [`resume`], the residue walk that
@@ -31,12 +31,14 @@
 //! record for the key, read by the landing itself as the composition reads
 //! the prior records (the merge record's §1.5 (ii), §1.3's step 7) — the
 //! links of the kind to each side of the key, kept to the merger's own
-//! doc 1, the newest there — standing where it names this landing's member
-//! or draft, whatever position it names; else the journal found or minted,
-//! the atom appended at its end, the link from the merger's doc 1 to the
-//! member and every side besides the head under the kind, the record naming
-//! that newest record in `replaces` (P20: a later record from the same home
-//! names the one it replaces). A newer record of the key — an undo's, a
+//! account, the newest by the order they were minted — standing where it
+//! names this landing's member or draft, whatever position it names; else
+//! the journal found or minted, the atom appended at its end, and the link
+//! homed in the journal beside it, from the atom to the member and every
+//! side besides the head under the kind, the record naming that newest
+//! record in `replaces` (P20: a later record names the one it replaces).
+//! The journal is a private draft, so the record and its link are private
+//! writes, signed by no `attest`. A newer record of the key — an undo's, a
 //! withdrawal's, a landing of it elsewhere — replaces this landing's, so a
 //! landing after it writes its own. A merge composed again and landed in
 //! the draft the newest record names, no take-back recorded between, is the
@@ -47,28 +49,25 @@
 //! answer: a composition kept across a take-back, or one made before its
 //! own landing, lands by the board as it stands.
 //!
-//! **The head, before any write.** Each write of the landing — the shot,
-//! the stage, the draft's one write, the record's journal, atom and link —
-//! is preceded by the board's head (`Board::board_head`; SP-14): `H.1`'s pair,
-//! which the shot and the record's link sign over, or none on a board no
-//! one has claimed, which takes them without an `attest`. A claimed board
-//! serving no head record halts the landing at the first write it would
-//! make, with nothing sent: the record's link could not be signed, so no
-//! write before it is begun — before the shot or the stage the merge has
-//! not landed, and before the record the landing stands and the residue
-//! walk writes the record once the head is written. The head is read after
-//! the read-first steps and the check of a journal named, so a [`resume`]
-//! that finds nothing landed answers with no head read. The board's own
-//! `attestation_invalid:board_unavailable` at the shot or the record's link — a
-//! head owed past that read — is faced the same, never as this library's fault.
-//! A shot or a record's link sent unsigned to a board read as no one's and
-//! refused `attestation_required` met a claim that landed past that read, its
-//! head written, and was refused before its transaction (wire.md §Credential
-//! refusals, a reorder): the head is read again and the frame sent ONCE more,
-//! signed over that pair, under its own id, its answer a signed frame's. A
-//! second read that finds no head to sign over is faced as the head the board
-//! owes, nothing sent; a signed frame refused `attestation_required` is this
-//! library's own fault.
+//! **The head, before the shot.** The shot is the landing's one public
+//! write, and the one signed: it is preceded by the board's head
+//! (`Board::board_head`; SP-14), `H.1`'s pair, which its `attest` signs
+//! over, or none on a board no one has claimed, which takes it without one.
+//! A claimed board serving no head record halts the shot with nothing sent,
+//! the merge not landed. The head is read after the read-first steps and
+//! the check of a journal named, so a [`resume`] that finds nothing landed
+//! answers with no head read. The board's own
+//! `attestation_invalid:board_unavailable` at the shot — a head owed past
+//! that read — is faced the same, never as this library's fault. A shot sent
+//! unsigned to a board read as no one's and refused `attestation_required`
+//! met a claim that landed past that read, its head written, and was refused
+//! before its transaction (wire.md §Credential refusals, a reorder): the head
+//! is read again and the shot sent ONCE more, signed over that pair, under
+//! its own id, its answer a signed frame's. A second read that finds no head
+//! to sign over is faced as the head the board owes, nothing sent; a signed
+//! shot refused `attestation_required` is this library's own fault. The
+//! draft landing's stage and one write, and every write of the record, go
+//! to private drafts, which take no `attest`, and read no head.
 //!
 //! **The journal, before the first write and at the record.** A merge
 //! record is kept only in a private document: its atom is appended to its
@@ -77,14 +76,14 @@
 //! readable and registered at this board (the merge record's decision 7),
 //! and no record goes into a published document. A journal the caller names
 //! is checked before the landing's first write — one `doc_metadata` at the
-//! head, after the read-first steps and before the head's read — and one
-//! this merger may not read (`withheld`), one this board does not register
-//! or another account's is refused there as a halt naming the journal and
-//! the check it fails, a published one of the merger's own as
-//! [`Refusal::PublishedJournal`], with nothing sent (P13); [`journal::check`]
-//! is that check alone, for a caller that says it before it lands. A
-//! landing found standing makes no write before its record, and no journal
-//! is checked there. At the record the journal's extent is read,
+//! head, after the read-first steps and, at the shot, before the head's
+//! read — and one this merger may not read (`withheld`), one this board
+//! does not register or another account's is refused there as a halt
+//! naming the journal and the check it fails, a published one of the
+//! merger's own as [`Refusal::PublishedJournal`], with nothing sent (P13);
+//! [`journal::check`] is that check alone, for a caller that says it before
+//! it lands. A landing found standing makes no write before its record, and
+//! no journal is checked there. At the record the journal's extent is read,
 //! the end the atom is appended at: a journal that read answers `withheld`
 //! or `doc_not_registered`, or a journal named whose atom the board refuses
 //! `published_target` or `not_owner`, halts the record with nothing of it
@@ -93,7 +92,10 @@
 //! merger can write, or into the account's own. The account's own journal,
 //! found or minted at the record, is this library's choice — a private
 //! draft of the account's, read before it is taken (`journal`'s doc) — so
-//! the board's refusal of its atom is this library's own fault.
+//! the board's refusal of its atom is this library's own fault. Its find is
+//! a class scan, reissued while the board is busy; refused busy past the
+//! bound, it leaves the landing standing with its record unwritten, as a
+//! journal that cannot take the record does.
 //!
 //! **The draft landing is one write.** M is sent whole as one
 //! `set_arrangement` of the draft (wire.md §Arrangement), TYPED against the
@@ -146,23 +148,22 @@
 //! against, `<key>:<draft>@<at>`, for `<stem>.draft`, `<stem>.record` and
 //! `<stem>.link` — for a draft named, `<key>:<draft>@<at>~<link>` where the
 //! landing follows a record (`Newest::follows`): `<link>` the merger's
-//! newest record of the key in its doc 1, or the one that record replaces
-//! where it names the draft as landed in, so a retry after the landing's
-//! own record is written spells its first call's text; the stage's names
-//! the key and P, the composition's position, `<key>@<P>`, or
-//! `<key>@<P>~<link>` where a record of the key stands in the merger's
-//! doc 1, `<link>` the newest one's, which the landing's record will
-//! replace, for `<stem>.stage`. The board answers a second call over one
-//! composition from its ids, and a landing composed after a take-back,
-//! landed into another draft, landed into its draft again after a
-//! take-back recorded since, or landed fresh again after its own landing
-//! was taken back, is a write of its own, which the board judges: one typed
-//! against a position its draft has changed since is refused
-//! `arrangement_moved`, nothing written. The one signed send of a shot or a
-//! record's link after a claim keeps its frame's id: the board never
-//! memoizes a refusal, so it judges that id afresh (wire.md §Correlation
-//! and idempotency), and only that id lets a second call over the
-//! composition meet the write it made, never make another.
+//! newest record of the key, or the one that record replaces where it names
+//! the draft as landed in, so a retry after the landing's own record is
+//! written spells its first call's text; the stage's names the key and P,
+//! the composition's position, `<key>@<P>`, or `<key>@<P>~<link>` where a
+//! record of the merger's of the key stands, `<link>` the newest one's,
+//! which the landing's record will replace, for `<stem>.stage`. The board
+//! answers a second call over one composition from its ids, and a landing
+//! composed after a take-back, landed into another draft, landed into its
+//! draft again after a take-back recorded since, or landed fresh again
+//! after its own landing was taken back, is a write of its own, which the
+//! board judges: one typed against a position its draft has changed since
+//! is refused `arrangement_moved`, nothing written. The one signed send of
+//! a shot after a claim keeps its frame's id: the board never memoizes a
+//! refusal, so it judges that id afresh (wire.md §Correlation and
+//! idempotency), and only that id lets a second call over the composition
+//! meet the write it made, never make another.
 //!
 //! **The claim rides the shot** (the merge record's §1.5 (i); the merge
 //! bridge lane). The shot's `supersede` names every `Member` side — the
@@ -187,28 +188,25 @@
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use skep_address::Address;
-use skep_identity::{
-    entry_body_make_link, entry_frame, unit_span, BoardTerm, DocTerm, EntryBody, EntrySlot,
-    LinkSlots,
-};
+use skep_identity::{entry_frame, BoardTerm, DocTerm, EntryBody};
 
-use crate::address::{doc_1_of, document_of, parse_address};
+use crate::address::parse_address;
 use crate::board::{
     acked_addr, acked_at, acked_head_moved, answers, frames, Answer, Board, BoardHead, Rejection,
     Token,
 };
 use crate::halt::{Halt, Refused};
-use crate::publication::{self, own_claim_names, Piece, SupersedeCause};
+use crate::publication::{self, own_claim_names, Piece, SupersedeCause, SCAN_BUSY_REISSUES};
 use crate::sign::{sig_hex, Signer};
 
 use super::compose::Run;
-use super::journal;
+use super::journal::{self, Unfound};
 use super::reads::{
-    comps, daughter_of, feed_rows, first_difference, is_trunk_member, next_trunk_member,
-    position_of, runs_of, session_ended, values_for, version_components, Family, Merged, OnEnd,
-    Reader, Refusal, Role, Side,
+    daughter_of, feed_rows, first_difference, is_trunk_member, next_trunk_member, position_of,
+    runs_of, session_ended, values_for, version_components, Family, Merged, OnEnd, Reader, Refusal,
+    Role, Side,
 };
-use super::record::{read_record, records_of, Record, RecordLanding};
+use super::record::{newest, read_record, records_of, Record, RecordLanding};
 
 /// The most bytes a shot's signed body may run to.
 ///
@@ -232,11 +230,12 @@ pub struct Merger<'a> {
     pub token: &'a Token,
     /// The account the session acts as, `principal_prefix(principal)`.
     ///
-    /// The record link's home is its doc 1.
+    /// Its own links of the record's kind find its journals and its
+    /// records.
     pub account: &'a str,
     /// The signer the session was opened with.
     ///
-    /// It is the shot's and the record link's hand.
+    /// It is the shot's hand.
     pub signer: &'a dyn Signer,
 }
 
@@ -295,7 +294,7 @@ pub enum Landed {
     /// The merge landed on the trunk.
     ///
     /// It carries the member, the shot's position, the claims standing at
-    /// the daughters, the record's public link, and the retries the record
+    /// the daughters, the record's link, and the retries the record
     /// carries.
     Member {
         /// The merged member, `D.h+1`.
@@ -311,10 +310,10 @@ pub enum Landed {
         /// trunk; none where the shot named no daughter, or where every
         /// daughter was already claimed by the merger's own and skipped.
         claims: Vec<Address>,
-        /// The record's public link.
+        /// The record's link.
         ///
-        /// It is the one written, homed in the merger's doc 1, or the one
-        /// already standing for this key and landing.
+        /// It is the one written, homed in the merger's journal beside the
+        /// record, or the one already standing for this key and landing.
         record: Address,
         /// `Options::retries`, as written into the record.
         retries: u32,
@@ -340,8 +339,8 @@ pub enum Landed {
     /// M landed into a draft.
     ///
     /// It carries the draft — the one named, or the fresh one staged — the
-    /// write's position, the record's public link, and the newer head where
-    /// the board told one.
+    /// write's position, the record's link, and the newer head where the
+    /// board told one.
     Draft {
         /// The draft.
         into: Address,
@@ -356,7 +355,7 @@ pub enum Landed {
         /// landing (skep #790): `position` is this write's, and the
         /// record's own is the first landing's.
         position: u64,
-        /// The record's public link.
+        /// The record's link, homed in the merger's journal.
         ///
         /// It is the one written, or the one standing for this landing,
         /// whose `landed` names the position of the write that first landed
@@ -431,9 +430,8 @@ impl<'a> Landing<'a> {
 /// - the reads' refusals for the draft's `doc_metadata` at the position the
 ///   write is typed against;
 /// - a claimed board serving no head record, as [`Refusal::Halt`] naming
-///   `H.1`, before the first write the landing would make — the shot, the
-///   stage, the draft's one write or the record's first — with nothing
-///   sent; and the `H.1` and `/health` reads' halts (SP-14);
+///   `H.1`, before the shot, with nothing sent; and the `H.1` and `/health`
+///   reads' halts (SP-14);
 /// - the shot's: the skip reads' refusals at the daughters, then the value
 ///   reads', [`Refusal::WindowWithheld`],
 ///   [`Refusal::NeedsSignedSession`], [`Refusal::NoSuchDocument`], the
@@ -465,17 +463,14 @@ impl<'a> Landing<'a> {
 ///   the head and the extent the merge read, and a base only where the
 ///   draft records one at the position the write is typed against — and a
 ///   lost acknowledgment as the dialer's halt, with no re-ask;
-/// - the claim's and the record's reads' refusals; a journal whose extent
-///   read answers `withheld` or `doc_not_registered`, or a journal named
-///   whose atom the board refuses as another account's or a published one,
-///   faced as the landing standing with its record unwritten, nothing of
-///   the record written, for [`resume`] to record into another; then the
-///   record's writes':
-///   [`Refusal::NeedsSignedSession`], and at its link
-///   `attestation_invalid:board_unavailable` faced as the head the board
-///   owes, the landing standing for [`resume`] to record, and
-///   `attestation_required` at a link sent unsigned answered by its one
-///   signed re-send, a head the second read does not find faced the same.
+/// - the claim's and the record's reads' refusals; the account's journal
+///   not found for a board too busy to answer the find, past its bounded
+///   reissues, a journal whose extent read answers `withheld` or
+///   `doc_not_registered`, or a journal named whose atom the board refuses
+///   as another account's or a published one, each faced as the landing
+///   standing with its record unwritten, nothing of the record written, for
+///   [`resume`] to record; then the record's writes', and
+///   [`Refusal::NeedsSignedSession`] at its link.
 ///
 /// At any step the library's own faults, the board's other refusals
 /// verbatim and transport halts are [`Refusal::Halt`]; the death signal
@@ -509,18 +504,18 @@ pub fn land(board: &Board, merged: &Merged, landing: Landing<'_>) -> Result<Land
 /// reads the merger's newest record for the key first, as [`land`] does, so
 /// the record it completes goes under the landing's own ids; a fresh
 /// landing names no draft to read, and that record is its answer where it
-/// names a draft landing, else `None`. The board's head is read only before
-/// the record's writes, so a walk that finds nothing landed answers `None`
-/// whatever the head.
+/// names a draft landing, else `None`. It reads no head: it sends no write
+/// but the record's, which a private journal takes unsigned.
 ///
 /// # Errors
 ///
-/// As [`land`]'s but the check of a journal named and the shot's, the
-/// stage's and the draft's write's: it sends no write before the record, so
-/// a journal it is given is met at the record alone. A draft named is read
-/// as it stands — its `doc_metadata`, the feed walk's pages on a draft with
-/// no recorded base, and its `image` where the board marks the landing —
-/// each refusal answered as itself, never as no landing (SP-14).
+/// As [`land`]'s but the check of a journal named, the head's and the
+/// shot's, the stage's and the draft's write's: it sends no write before
+/// the record, so a journal it is given is met at the record alone. A draft
+/// named is read as it stands — its `doc_metadata`, the feed walk's pages
+/// on a draft with no recorded base, and its `image` where the board marks
+/// the landing — each refusal answered as itself, never as no landing
+/// (SP-14).
 pub fn resume(
     board: &Board,
     merged: &Merged,
@@ -776,8 +771,8 @@ impl Stem {
 /// Only [`Writer::newest_record`] builds one, from the board, so what a
 /// landing finds standing, the record a draft landing's ids follow and the
 /// record it writes replaces are the board's state at the landing (P20),
-/// never what the composition saw. Empty where no record of the key stands
-/// in the merger's doc 1.
+/// never what the composition saw. Empty where no record of the merger's
+/// own of the key stands.
 struct Newest(Option<(Address, Record)>);
 
 impl Newest {
@@ -861,7 +856,7 @@ impl Newest {
 /// The landing's writer: the merger and a reader under its token.
 ///
 /// The undo and the withdrawal (the `undo` module) write through it too:
-/// the head's pre-check, the one write and the record are theirs as the
+/// the journal's check, the one write and the record are theirs as the
 /// landing's. Its reads and writes face a session's end alike, for the
 /// one act it was built for: its reader's [`OnEnd`].
 pub(super) struct Writer<'a> {
@@ -990,7 +985,7 @@ impl Writer<'_> {
     /// [`Refusal::SessionEnded`]; a dial fault after the one re-ask; the
     /// board's other refusals verbatim.
     fn publish(&self, merged: &Merged, draft: Option<&Address>) -> Result<(Address, u64), Refusal> {
-        let term = self.signing_term(&head_owed)?;
+        let term = self.signing_term()?;
         let doc = &merged.inputs.doc;
         let head = &merged.inputs.head;
         let supersede = self.daughters(merged)?;
@@ -1060,9 +1055,7 @@ impl Writer<'_> {
         let mut v = self.shoot(&request.frame(self.attest(term, doc, &body)?))?;
         // A claim landed past the head's read: the shot once more, signed,
         // under its own id (the module's doc).
-        if let Some(attest) =
-            self.attest_after_claim(term, &v, doc, &body, &head_owed, "the shot")?
-        {
+        if let Some(attest) = self.attest_after_claim(term, &v, doc, &body)? {
             v = self.shoot(&request.frame(Some(attest)))?;
         }
         if let (Some(addr), Some(at)) = (acked_addr(&v), acked_at(&v)) {
@@ -1142,37 +1135,35 @@ impl Writer<'_> {
         }
     }
 
-    /// Returns the `attest` a frame sent unsigned is sent again with, where
-    /// a claim landed past the head's read.
+    /// Returns the `attest` a shot sent unsigned is sent again with, where a
+    /// claim landed past the head's read.
     ///
-    /// The frame went out with `sent_with`, the term [`Writer::signing_term`]
+    /// The shot went out with `sent_with`, the term [`Writer::signing_term`]
     /// read before it; where that was none — a board read as no one's — and
     /// the board answered `v` refusing it `attestation_required`, a claim
-    /// landed between the read and the frame's turn, its head written, and
-    /// the board refused the frame before its transaction (wire.md
+    /// landed between the read and the shot's turn, its head written, and
+    /// the board refused the shot before its transaction (wire.md
     /// §Credential refusals, a reorder). The head is read again and the
-    /// `attest` composed over `body`, the frame's `doc` row `doc`, for the
-    /// frame's one re-send under its own id: the refusal left the id
+    /// `attest` composed over `body`, the shot's `doc` row `doc`, for the
+    /// shot's one re-send under its own id: the refusal left the id
     /// unmemoized (wire.md §Correlation and idempotency). `None` where the
-    /// frame went signed, or `v` is another answer: a signed frame refused
-    /// so is the caller's own fault arm.
+    /// shot went signed, or `v` is another answer: a signed shot refused so
+    /// is the shot's own fault arm.
     ///
     /// # Errors
     ///
     /// The second read's: a head that stands and cannot be read; a claimed
-    /// board serving no head record, faced by `owed`; and one serving none
-    /// with no claimant named, faced by `owed` naming `what` and the board's
-    /// token — the board refused the frame for want of a signature this read
-    /// finds no head to make. Then the attest's fault. Nothing is sent past
-    /// any of them.
+    /// board serving no head record, faced as [`head_owed`]; and one serving
+    /// none with no claimant named, faced the same, naming the board's token
+    /// — the board refused the shot for want of a signature this read finds
+    /// no head to make. Then the attest's fault. Nothing is sent past any of
+    /// them.
     fn attest_after_claim(
         &self,
         sent_with: Option<BoardTerm>,
         v: &Value,
         doc: &Address,
         body: &EntryBody,
-        owed: &dyn Fn(String) -> Halt,
-        what: &str,
     ) -> Result<Option<Value>, Refusal> {
         if sent_with.is_some() {
             return Ok(None);
@@ -1180,9 +1171,9 @@ impl Writer<'_> {
         let Some(r) = Rejection::of(v).filter(|r| r.key() == "attestation_required") else {
             return Ok(None);
         };
-        let Some(term) = self.signing_term(owed)? else {
-            return Err(owed(format!(
-                "{}: the board refused {what} for want of its signature and serves no head record (`H.1`) to sign it over",
+        let Some(term) = self.signing_term()? else {
+            return Err(head_owed(format!(
+                "{}: the board refused the shot for want of its signature and serves no head record (`H.1`) to sign it over",
                 r.token()
             ))
             .into());
@@ -1245,26 +1236,26 @@ impl Writer<'_> {
     /// §1.5 (ii), read first as §1.3's step 7 reads; §4's currency, newest
     /// per key), read by the landing from the board. It is found as the
     /// composition's prior records are, by the links of the kind to each
-    /// side of the key, and kept to the merger's own home, its doc 1, where
-    /// a link's ordinal is the order it was minted in: the newest there is
-    /// the record. A record of the key in another account's home is never
-    /// the merger's — its landing is another's, and a record names in
-    /// `replaces` one from its own home (P20). It stands for a landing it
-    /// names ([`Newest::naming`]); one naming no landing or another — an
-    /// undo's or a withdrawal's, or a landing of the key elsewhere —
-    /// replaced the record of this landing. A landing into a draft named
-    /// spells its ids over the record it follows ([`Newest::follows`]).
+    /// side of the key, each homed in the journal holding its record, and
+    /// kept to the merger's own account, exactly: the newest of those by the
+    /// order their links were minted, in whichever of its journals, is the
+    /// record. A record of the key in another account's journal — a
+    /// sub-account's among them — is never the merger's: its landing is
+    /// another's, and a record names in `replaces` one of its own account's
+    /// (P20). It stands for a landing it names ([`Newest::naming`]); one
+    /// naming no landing or another — an undo's or a withdrawal's, or a
+    /// landing of the key elsewhere — replaced the record of this landing. A
+    /// landing into a draft named spells its ids over the record it follows
+    /// ([`Newest::follows`]).
     ///
     /// # Errors
     ///
     /// A halt reading the links or a record.
     fn newest_record(&self, merged: &Merged) -> Result<Newest, Refusal> {
-        let home = doc_1_of(self.merger.account);
-        let newest = records_of(&self.reader, &merged.inputs.kind, &merged.key)?
+        let own = records_of(&self.reader, &merged.inputs.kind, &merged.key)?
             .into_iter()
-            .filter(|(link, _)| document_of(&link.to_string()).as_deref() == Some(home.as_str()))
-            .max_by_key(|(link, _)| comps(link));
-        Ok(Newest(newest))
+            .filter(|f| f.lies_in(self.merger.account));
+        Ok(Newest(newest(own).map(|f| (f.link, f.record))))
     }
 
     /// Writes a landing's record, answering its link's address.
@@ -1276,9 +1267,8 @@ impl Writer<'_> {
     /// over the key, or the draft landing's, over the key, the draft, the
     /// position its write is typed against and, for a draft named, the
     /// record the landing follows (the module's doc) — the link's first end
-    /// the landed address, and a head owed at its writes or a journal it
-    /// cannot write into faced as the landing standing with its record
-    /// unwritten ([`record_owed`]).
+    /// the landed address, and a journal it cannot find or write into faced
+    /// as the landing standing with its record unwritten ([`record_owed`]).
     ///
     /// # Errors
     ///
@@ -1306,40 +1296,35 @@ impl Writer<'_> {
 
     /// Writes `record` under `kind`, answering its link's address.
     ///
-    /// The board's head is read first, then the journal found or minted, the
-    /// atom appended at its end as a plain insert, and the public link made
-    /// from the merger's doc 1 to `target` — the landed address, or the
-    /// draft an undo or a withdrawal names — and every side of the record
-    /// besides its head under the kind, attested over `H.1`'s pair — sent
-    /// once more, signed, under the same id where it went unsigned and a
-    /// claim landed past the head's read ([`Writer::attest_after_claim`]).
-    /// The two writes carry the per-session ids `<stem>.record` and
+    /// The journal is found or minted, the atom appended at its end as a
+    /// plain insert, and the link homed in the journal beside it, from the
+    /// atom to `target` — the landed address, or the draft an undo or a
+    /// withdrawal names — and every side of the record besides its head
+    /// under the kind (§4, "Its home"). Both are writes into a private
+    /// draft, which takes no `attest`, so no head is read and nothing is
+    /// signed. The two writes carry the per-session ids `<stem>.record` and
     /// `<stem>.link`; `owed` faces the act standing with its record
-    /// unwritten, for the [`Unwritten`] reason it is given: the head owed
-    /// before the first write or at the link, a journal whose extent read
-    /// answers `withheld` or `doc_not_registered`, or a journal named whose
-    /// atom the board refuses `published_target` or `not_owner` — the
-    /// caller's journal, where the account's own is this library's choice.
+    /// unwritten, for the [`Unwritten`] reason it is given: the account's
+    /// journal not found, its find refused busy past the bounded reissues
+    /// (the `journal` module's doc); a journal whose extent read answers
+    /// `withheld` or `doc_not_registered`; or a journal named whose atom the
+    /// board refuses `published_target` or `not_owner` — the caller's
+    /// journal, where the account's own is this library's choice.
     ///
     /// # Errors
     ///
-    /// The head's refusal and halts ([`Writer::signing_term`]), the act
-    /// standing and nothing of the record sent; the journal's refusals
-    /// ([`journal::of`]); a journal this merger may not read or this board
-    /// does not register, faced by `owed` with nothing of the record sent;
-    /// the extent read's other refusals; a journal named whose atom the board
-    /// refuses as published or another account's, faced by `owed` with
+    /// The find of the account's journal refused busy past its reissues,
+    /// faced by `owed` with nothing of the record sent; the journal's other
+    /// refusals ([`journal::of`]); a journal this merger may not read or this
+    /// board does not register, faced by `owed` with nothing of the record
+    /// sent; the extent read's other refusals; a journal named whose atom the
+    /// board refuses as published or another account's, faced by `owed` with
     /// nothing of the record written; the account's own journal refused so,
-    /// a journal that is full, a doc 1 this session does not own, a doc 1 or
-    /// an account this client cannot spell, and an attest the board refuses,
-    /// as the library's own faults, but
-    /// `attestation_invalid:board_unavailable` at the link, faced as the head
-    /// the board owes with the act standing; after a claim, the second head
-    /// read's halts, and a head it does not find faced as the head the board
-    /// owes with the act standing, the link not sent again; an answer of a
-    /// shape this client does not know, faced;
-    /// [`Refusal::NeedsSignedSession`] at the link; the death signal,
-    /// [`Refusal::SessionEnded`]; the board's other refusals verbatim.
+    /// a journal that is full, and a journal whose link this session may not
+    /// make, as the library's own faults; an answer of a shape this client
+    /// does not know, faced; [`Refusal::NeedsSignedSession`] at the link; the
+    /// death signal, [`Refusal::SessionEnded`]; the board's other refusals
+    /// verbatim.
     pub(super) fn write_record(
         &self,
         kind: &Address,
@@ -1349,11 +1334,15 @@ impl Writer<'_> {
         journal: Option<&Address>,
         owed: &dyn Fn(Unwritten, String) -> Halt,
     ) -> Result<Address, Refusal> {
-        let owed_head = |cause: String| owed(Unwritten::HeadOwed, cause);
-        let term = self.signing_term(&owed_head)?;
         let named = journal.is_some();
-        let journal =
-            journal::found(self.board, &self.merger, kind, journal.cloned(), self.reader.on_end())?;
+        let on_end = self.reader.on_end();
+        let journal = match journal::found(self.board, &self.merger, kind, journal.cloned(), on_end) {
+            Ok(journal) => journal,
+            Err(Unfound::Busy(r)) => {
+                return Err(owed(Unwritten::Busy, format!("{}: the board refused the find of the account's merge journal, a class scan, on its first send and its {SCAN_BUSY_REISSUES} reissues — every class-scan permit was in use — so no write of the record was sent", r.code)).into())
+            }
+            Err(Unfound::Other(r)) => return Err(r),
+        };
         let text = record.to_value().to_string();
         // The journal's read at the record, after the act it records: a
         // journal the act cannot write its record into leaves the act
@@ -1405,66 +1394,39 @@ impl Writer<'_> {
                 });
             }
         };
-        // The link from doc 1: the atom's unit span to the target and every
-        // side of the record besides its head, typed the kind (§4, "Its
-        // home").
-        let home_text = doc_1_of(self.merger.account);
-        let home = parse_address(&home_text).ok_or_else(|| {
-            own_fault_face("the account's doc 1 cannot be spelled", home_text.clone())
-        })?;
+        // The link homed in the journal, beside the record: the atom's unit
+        // span to the target and every side of the record besides its head,
+        // typed the kind (§4, "Its home") — a private draft's link, unsigned.
         let mut to: Vec<Address> = vec![target.clone()];
         for side in record.sides.iter().filter(|s| s.role() != Role::Head) {
             if !to.contains(side.address()) {
                 to.push(side.address().clone());
             }
         }
-        let from_spans = [unit_span(&atom)];
-        let to_spans: Vec<_> = to.iter().map(unit_span).collect();
-        let ty_spans = [unit_span(kind)];
-        let body = entry_body_make_link(LinkSlots {
-            from: EntrySlot(&from_spans),
-            to: EntrySlot(&to_spans),
-            ty: EntrySlot(&ty_spans),
-        });
-        let attest = self.attest(term, &home, &body)?;
         let atom_text = atom.to_string();
         let to_text: Vec<String> = to.iter().map(ToString::to_string).collect();
         let to_refs: Vec<&str> = to_text.iter().map(String::as_str).collect();
-        let mut frame = frames::make_link(
-            &home_text,
+        let frame = frames::make_link(
+            &journal.to_string(),
             &[&atom_text],
             &to_refs,
             &kind.to_string(),
             Some(&format!("{stem}.link")),
         );
-        if let Some(a) = attest {
-            frame["attest"] = a;
-        }
-        let mut v = self.answered_write(&frame, "linking the record")?;
-        // A claim landed past the head's read: the link once more, signed,
-        // under its own id (the module's doc).
-        let what = "the record's link from doc 1";
-        if let Some(a) = self.attest_after_claim(term, &v, &home, &body, &owed_head, what)? {
-            frame["attest"] = a;
-            v = self.answered_write(&frame, "linking the record")?;
-        }
+        let v = self.answered_write(&frame, "linking the record")?;
         if let Some(link) = acked_addr(&v) {
             return parse_address(link).ok_or_else(|| shape_face("make_link", &v).into());
         }
         let Some(r) = Rejection::of(&v) else { return Err(shape_face("make_link", &v).into()) };
         Err(match r.key() {
             "not_owner" => own_fault_face(
-                "this session does not own its doc 1",
-                format!("{}: the record's link is homed in the merger's own doc 1", r.token()),
+                "this session does not own the journal its record's link is homed in",
+                format!(
+                    "{}: the record's link is homed in {journal}, the journal that took its atom",
+                    r.token()
+                ),
             ),
             "signed_session_required" => Refusal::NeedsSignedSession,
-            // The board's state, never this library's frame (a reorder).
-            "attestation_invalid:board_unavailable" => owed(Unwritten::HeadOwed, format!(
-                "{}: the board refused the record's link from doc 1, serving no head record (`H.1`) to verify its signature over — a head the board owes, never this library's frame",
-                r.token()
-            ))
-            .into(),
-            k if k.starts_with("attestation_") => own_fault("the record link's attest", &r),
             _ => Refusal::Halt(r.refused(&v)),
         })
     }
@@ -1473,10 +1435,11 @@ impl Writer<'_> {
     ///
     /// It is read through the links of `kind` to the draft, each record's
     /// atom through its journal, keeping the records whose `landed` is the
-    /// draft, and answering the newest of them by its link's address, with
-    /// that link; a record whose journal the merger may not read is no
-    /// candidate. `None` where none stands: the undo's and the withdrawal's
-    /// record is then not written (the `undo` module's doc).
+    /// draft, and answering the newest of them by the order their links
+    /// were minted, with that link; a record whose journal the merger may
+    /// not read is no candidate. `None` where none stands: the undo's and
+    /// the withdrawal's record is then not written (the `undo` module's
+    /// doc).
     ///
     /// # Errors
     ///
@@ -1491,23 +1454,16 @@ impl Writer<'_> {
             &frames::find_links_ftt(&kind.to_string(), &draft.to_string()),
             None,
         )?;
-        let mut newest: Option<(Address, Record)> = None;
+        let mut landed_here = Vec::new();
         for link in answers::addrs(&v) {
             let Some(link) = parse_address(link) else { continue };
-            let Some(record) = read_record(&self.reader, &link)? else { continue };
-            let lands_here =
-                matches!(&record.landed, Some(RecordLanding::Draft { draft: d, .. }) if d == draft);
-            if !lands_here {
-                continue;
-            }
-            if newest.as_ref().is_none_or(|(l, _)| comps(&link) > comps(l)) {
-                newest = Some((link, record));
+            let Some(found) = read_record(&self.reader, &link)? else { continue };
+            let landed = &found.record.landed;
+            if matches!(landed, Some(RecordLanding::Draft { draft: d, .. }) if d == draft) {
+                landed_here.push(found);
             }
         }
-        Ok(newest.map(|(link, mut record)| {
-            record.link = Some(link);
-            record
-        }))
+        Ok(newest(landed_here).map(|found| found.record))
     }
 
     /// Stages a fresh draft from the head, answering it and its position.
@@ -1523,14 +1479,12 @@ impl Writer<'_> {
     /// back, whose newest record is the take-back's. The board mints a
     /// private draft of the merger's account holding the head by identity
     /// and records the head as its base, so the write that follows
-    /// re-records that base on the same head. The board's head is read
-    /// first: the stage begins a landing whose record's link signs over it
-    /// (the module's doc).
+    /// re-records that base on the same head. A private draft's mint, it
+    /// carries no `attest` and reads no head (the module's doc).
     ///
     /// # Errors
     ///
-    /// The head's refusal and halts ([`Writer::signing_term`]), nothing
-    /// sent; [`Refusal::Unreadable`] and [`Refusal::NoSuchDocument`] naming
+    /// [`Refusal::Unreadable`] and [`Refusal::NoSuchDocument`] naming
     /// the head, as the board's `withheld` and `source_not_registered` on the
     /// stage's source — the first never met at a version member, since every
     /// member of a published chain is published (wire.md §Arrangement,
@@ -1538,7 +1492,6 @@ impl Writer<'_> {
     /// faced; the death signal, [`Refusal::SessionEnded`]; a dial fault; the
     /// board's other refusals verbatim — `mint_home_first` among them.
     fn stage(&self, merged: &Merged, newest: &Newest) -> Result<(Address, u64), Refusal> {
-        self.signing_term(&head_owed)?;
         let head = &merged.inputs.head;
         let text = match newest.link() {
             None => format!("{}@{}", merged.key.text(), merged.as_of),
@@ -1572,22 +1525,21 @@ impl Writer<'_> {
     /// and, for a draft named, the record the landing follows, which the
     /// board answers again in the same session for the same landing.
     /// It is sent where the draft already holds M too, so the base and the
-    /// marker are recorded, and only after the board's head is read: the
-    /// record's link that follows signs over it (the module's doc). A write
-    /// refused `arrangement_moved` is said in words read off the draft as it
-    /// stands ([`Writer::moved_words`]), `newest` the record they name. With
-    /// `shoot` off nothing is sent: the draft is read as it stands, and it
-    /// answers the position of this merge's landing as the board marks it
-    /// ([`Writer::marked_landing`]) where the draft holds M, or `None` where
-    /// the board marks no landing of this merge — a take-back cleared it, or
-    /// none was made — or the draft holds another list.
+    /// marker are recorded; a private draft's write, it reads no head (the
+    /// module's doc). A write refused `arrangement_moved` is said in words
+    /// read off the draft as it stands ([`Writer::moved_words`]), `newest`
+    /// the record they name. With `shoot` off nothing is sent: the draft is
+    /// read as it stands, and it answers the position of this merge's
+    /// landing as the board marks it ([`Writer::marked_landing`]) where the
+    /// draft holds M, or `None` where the board marks no landing of this
+    /// merge — a take-back cleared it, or none was made — or the draft holds
+    /// another list.
     ///
     /// # Errors
     ///
     /// The draft's reads' refusals — the feed walk's, with `shoot` off, on a
     /// draft with no recorded base ([`Writer::marked_landing`]), and a draft
-    /// that did not exist at `as_of`, faced, naming the way out; the head's
-    /// refusal and halts ([`Writer::signing_term`]), nothing sent; the
+    /// that did not exist at `as_of`, faced, naming the way out; the
     /// board's `arrangement_moved` as its verdict, [`Refusal::Halt`] with the
     /// `Refused` re-said in [`Writer::moved_words`]'s words — this merge's
     /// own landing named where it moved the draft after `as_of`, else the
@@ -1666,8 +1618,6 @@ impl Writer<'_> {
             Some(&side_refs),
             Some(&id),
         );
-        // The head before the one write: the record's link signs over it.
-        self.signing_term(&head_owed)?;
         let v = self.answered_write(&frame, "landing the merge in the draft")?;
         if let Some(at) = acked_at(&v) {
             let head_moved = match acked_head_moved(&v) {
@@ -1929,31 +1879,26 @@ impl Writer<'_> {
         .into())
     }
 
-    /// Returns the term the act's signed writes sign over (SP-14).
+    /// Returns the term the shot signs over (SP-14).
     ///
     /// It is `H.1`'s pair, or `None` on a board no one has claimed, which
-    /// takes the shot and the record's link without an `attest`
-    /// (`Board::board_head`). Every write of a landing, an undo or a
-    /// withdrawal reads it first (the module's doc); `owed` is the face a
-    /// claimed board serving no head record meets — [`head_owed`] before an
-    /// act's first write, [`record_owed`] where a landing stands with its
-    /// record all that is left to write.
+    /// takes the shot without an `attest` (`Board::board_head`). The shot
+    /// reads it first, and again where it went unsigned and a claim landed
+    /// past that read ([`Writer::attest_after_claim`]); no other write of a
+    /// merge is signed, so none reads it (the module's doc).
     ///
     /// # Errors
     ///
-    /// A claimed board serving no head record, faced by `owed`, with nothing
-    /// sent; `Board::board_head`'s halts, a head record that stands and
-    /// cannot be read among them.
-    pub(super) fn signing_term(
-        &self,
-        owed: &dyn Fn(String) -> Halt,
-    ) -> Result<Option<BoardTerm>, Refusal> {
+    /// A claimed board serving no head record, faced as [`head_owed`], with
+    /// nothing sent; `Board::board_head`'s halts, a head record that stands
+    /// and cannot be read among them.
+    fn signing_term(&self) -> Result<Option<BoardTerm>, Refusal> {
         let claimant = match self.board.board_head()? {
             BoardHead::Term(term) => return Ok(Some(term)),
             BoardHead::Unclaimed => return Ok(None),
             BoardHead::Owed { claimant } => claimant,
         };
-        Err(owed(format!("the board names {claimant} its claimant and serves no head record (`H.1`), and the shot and the record's link sign over that record's pair (signed ops), so no write of the act is sent before the board writes it")).into())
+        Err(head_owed(format!("the board names {claimant} its claimant and serves no head record (`H.1`), and the shot signs over that record's pair (signed ops), so it is not sent before the board writes it")).into())
     }
 
     /// Returns the `attest` member over `body`.
@@ -2004,12 +1949,11 @@ fn marked_sides(merged: &Merged, into: &Address) -> Vec<String> {
         .collect()
 }
 
-/// Faces a claimed board whose head is owed, met before the landing's first
-/// write (SP-14).
+/// Faces a claimed board whose head is owed, met before the shot (SP-14).
 ///
-/// Nothing of the landing is written: the record's link could not be
-/// signed, so no write before it is begun.
-pub(super) fn head_owed(cause: String) -> Halt {
+/// Nothing of the landing is written: the shot, its first write, could not
+/// be signed.
+fn head_owed(cause: String) -> Halt {
     Halt::face(
         "this board has no H.1 yet, so the merge cannot land",
         cause,
@@ -2023,9 +1967,10 @@ pub(super) fn head_owed(cause: String) -> Halt {
 /// the member or the draft already holds what the act wrote; the face says
 /// so, and why the record is not.
 pub(super) enum Unwritten {
-    /// The board serves no head record (`H.1`), and the record's link signs
-    /// over its pair (SP-14).
-    HeadOwed,
+    /// The account's journal is not found: the board refused its find, a
+    /// class scan, busy on every bounded reissue (the `journal` module's
+    /// doc).
+    Busy,
     /// The journal cannot take the record, for the check it fails.
     Journal(Address, Unfit),
 }
@@ -2034,7 +1979,9 @@ impl Unwritten {
     /// Returns why the record is not written, as a face's state says it.
     pub(super) fn reason(&self) -> String {
         match self {
-            Unwritten::HeadOwed => "this board has no H.1 yet".to_string(),
+            Unwritten::Busy => {
+                "the board was too busy to find the account's merge journal".to_string()
+            }
             Unwritten::Journal(journal, unfit) => unfit.reason(journal),
         }
     }
@@ -2042,7 +1989,7 @@ impl Unwritten {
     /// Returns when `resume` writes the record, as a face's act says it.
     fn remedy(&self) -> &'static str {
         match self {
-            Unwritten::HeadOwed => "once the board has written its head",
+            Unwritten::Busy => "once the board is less busy, or with a journal named",
             Unwritten::Journal(..) => {
                 "with a journal this account can write, or with none for its own"
             }
@@ -2094,22 +2041,18 @@ impl Unfit {
 /// Faces a landing that stands with its record unwritten.
 ///
 /// The member or the draft holds the merge and the record is not written,
-/// for `why` — the board's head owed (SP-14), or a journal that cannot take
-/// the record ([`Unfit`]): `resume` writes it once the board has written
-/// its head, or into a journal the merger can write, told the draft for a
-/// draft landing, since a fresh draft's landing is otherwise found by its
-/// record alone.
+/// for `why` — the account's journal not found, its find refused busy, or a
+/// journal that cannot take the record ([`Unfit`]): `resume` writes it once
+/// the board answers the find, or into a journal the merger can write, told
+/// the draft for a draft landing, since a fresh draft's landing is
+/// otherwise found by its record alone.
 fn record_owed(landed: &RecordLanding, why: &Unwritten, cause: String) -> Halt {
     let (at, act) = match landed {
         RecordLanding::Member { member, .. } => (member, format!("resume {}: it finds the member holding the merge and writes the record", why.remedy())),
         RecordLanding::Draft { draft, .. } => (draft, format!("resume naming {draft} {}: it finds the draft holding the merge and writes the record", why.remedy())),
     };
-    let unwritten = match why {
-        Unwritten::HeadOwed => "its record's link",
-        Unwritten::Journal(..) => "its record",
-    };
     Halt::face(
-        format!("the merge stands at {at}, and {unwritten} is not written: {}", why.reason()),
+        format!("the merge stands at {at}, and its record is not written: {}", why.reason()),
         cause,
         act,
     )

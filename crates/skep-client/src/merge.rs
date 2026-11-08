@@ -28,7 +28,7 @@
 //! carrying the supersession claims — one per daughter, each marking the
 //! daughter superseded by the member in the commit that mints it — the
 //! claims' read, the record in a merge journal, a private document of the
-//! merger's own and never a published one, with its public link,
+//! merger's own and never a published one, with its link homed beside it,
 //! the draft landing — one `set_arrangement` typed against the position the
 //! merge was composed at, into the draft named or into a fresh draft staged
 //! from the head, the draft's base re-recorded on that head and the merge

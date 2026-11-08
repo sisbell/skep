@@ -2,19 +2,21 @@
 //!
 //! It holds the schema as a struct whose JSON is built by hand, the key a
 //! record is current under and the currency rule ([`current`]: newest wins
-//! per key, the trunk owner's home over another's, decision 8), how a reader
-//! finds a record (the public link from the merger's doc 1 to the landed
-//! member or draft and every side besides the head, the atom read through
-//! the journal's arrangement and never by identity), and [`verify`], the
-//! record's testimony recomputed.
+//! per key, by the order the records' links were minted, the trunk owner's
+//! records over another account's, decision 8), how a reader finds a record
+//! (the link of the kind homed in the journal beside the record, from its
+//! atom to the landed member or draft and every side besides the head, the
+//! atom read through the journal's arrangement and never by identity), and
+//! [`verify`], the record's testimony recomputed.
 //!
 //! **Kept private.** A merge record is kept only in a private document: its
-//! journal is a private draft of the merger's own and a published one is
-//! refused before any write (the [`journal`](super::journal) module); no
-//! publication publishes a record, the publication's enumeration leaving
-//! every atom of the kind out of what it publishes
-//! (`crate::publication::is_merge_record`); and what a merge makes public is
-//! its version and, at a published daughter, the claim riding its shot.
+//! journal is a private draft of the merger's own, the record's link homed
+//! in it and hidden with it, unsigned, and a published one is refused before
+//! any write (the [`journal`](super::journal) module); no publication
+//! publishes a record, the publication's enumeration leaving every atom of
+//! the kind out of what it publishes (`crate::publication::is_merge_record`);
+//! and what a merge makes public is its version and, at a published
+//! daughter, the claim riding its shot.
 //!
 //! **Testimony, plainly (D4).** The record is a claim its writer makes, as
 //! the supersession claim beside it is; the daemon derives nothing from it,
@@ -42,12 +44,13 @@
 //! renders; a reader that does not know a member treats it as absent.
 
 use serde_json::{json, Value};
-use skep_address::Address;
+use skep_address::{Address, Nat};
 
-use crate::address::{doc_1_of, document_of, parse_address};
+use crate::address::{document_of, parse_address};
 use crate::board::answers;
 use crate::board::{frames, Board, Token};
 use crate::halt::Halt;
+use crate::publication::owned_by;
 
 use super::compose::{
     Choice, Gap, GapId, GapKind, Options, Placement, Resolution, ResolvedBy, Run, RunCounts,
@@ -289,13 +292,13 @@ pub struct Record {
     pub values: ValueLog,
     /// The record this one supersedes under the key.
     ///
-    /// It is its public link's address — or `None` at the first (P1). A
-    /// record with `landed` none replacing one that names a draft landing is
-    /// an undo's or a withdrawal's: the merge was taken out of that draft.
+    /// It is its link's address — or `None` at the first (P1). A record
+    /// with `landed` none replacing one that names a draft landing is an
+    /// undo's or a withdrawal's: the merge was taken out of that draft.
     pub replaces: Option<Address>,
     /// The library's crate and version.
     pub by: String,
-    /// The public link this record was found through.
+    /// The link this record was found through, homed in its journal.
     ///
     /// It stands where the record was read from a board; `None` for one
     /// composed and not yet landed. No member of the body.
@@ -560,23 +563,26 @@ fn side_ix(v: &Value) -> Option<SideIx> {
 
 /// Returns the current record for `key`.
 ///
-/// It is the newest record naming the key, the trunk owner's home current
-/// over another account's (§4, "Its currency"; decision 8), found as "How a
-/// reader finds it" says: the links of `kind` to each side (`find_links_ftt`
-/// over `ty` and `to`, never a class scan), each record's atom read through
-/// its journal's arrangement — `image` then `retrieve_v`, never
-/// `retrieve_i` — and its key checked. A record whose journal the reader
-/// may not read is no candidate: its link's type, ends and position stay
-/// visible, its body does not. Nor is one whose journal is not registered
-/// or is in more pieces than `image` answers, whose atom is not arranged,
-/// or whose bytes are no record of the kind (`read_record`); and the
-/// trunk's owner is unknown only where the trunk is withheld or not
-/// registered. Every other refusal of a read is answered as itself, never
-/// as no record standing (SP-14). `None` where no readable record names the
-/// key.
+/// It is the newest record naming the key, the trunk owner's records
+/// current over another account's (§4, "Its currency"; decision 8), found
+/// as "How a reader finds it" says: the links of `kind` to each side
+/// (`find_links_ftt` over `ty` and `to`, never a class scan), each homed in
+/// the journal holding its record, each record's atom read through its
+/// journal's arrangement — `image` then `retrieve_v`, never `retrieve_i` —
+/// and its key checked. A record whose journal the reader may not read is
+/// no candidate: a journal is a private draft, its links hidden with it, so
+/// a reader finds the records of the journals it may read. Nor is one whose
+/// journal is not registered or is in more pieces than `image` answers,
+/// whose atom is not arranged, or whose bytes are no record of the kind
+/// (`read_record`); and the trunk's owner is unknown only where the trunk
+/// is withheld or not registered. Every other refusal of a read is answered
+/// as itself, never as no record standing (SP-14). `None` where no readable
+/// record names the key.
 ///
-/// Newest: within one home the link minted last, by its ordinal; across
-/// homes the greater link address, the owner's home preferred before either.
+/// Newest: the record whose link was minted last (`Found::age`), the
+/// owner's account's records preferred before any other's — an account's
+/// records being those whose links lie in it exactly, never in an account
+/// nested under it.
 ///
 /// # Errors
 ///
@@ -591,15 +597,16 @@ pub fn current(
     key: &RecordKey,
 ) -> Result<Option<Record>, Refusal> {
     let reader = Reader::new(board, token, OnEnd::Rerun);
-    let owner_home = match reader.metadata(&key.doc, None) {
-        Ok(meta) => Some(doc_1_of(&meta.owner)),
+    let owner = match reader.metadata(&key.doc, None) {
+        Ok(meta) => Some(meta.owner),
         Err(Refusal::Unreadable(_) | Refusal::NoSuchDocument(_)) => None,
         Err(e) => return Err(e),
     };
-    current_among(&reader, kind, key, owner_home.as_deref())
+    current_among(&reader, kind, key, owner.as_deref())
 }
 
-/// Runs [`current`] over a reader, the owner's home known where it is.
+/// Runs [`current`] over a reader, the trunk owner's account known where it
+/// is.
 ///
 /// # Errors
 ///
@@ -608,27 +615,61 @@ pub(super) fn current_among(
     reader: &Reader<'_>,
     kind: &Address,
     key: &RecordKey,
-    owner_home: Option<&str>,
+    owner: Option<&str>,
 ) -> Result<Option<Record>, Refusal> {
     let found = records_of(reader, kind, key)?;
-    let home_of = |link: &Address| document_of(&link.to_string());
-    let owned: Vec<&(Address, Record)> =
-        found.iter().filter(|(link, _)| home_of(link).as_deref() == owner_home).collect();
-    let pool: Vec<&(Address, Record)> =
-        if owned.is_empty() { found.iter().collect() } else { owned };
-    Ok(pool.into_iter().max_by_key(|(link, _)| reads::comps(link)).map(|(link, record)| {
-        let mut record = record.clone();
-        record.link = Some(link.clone());
-        record
-    }))
+    let (owned, others): (Vec<Found>, Vec<Found>) =
+        found.into_iter().partition(|f| owner.is_some_and(|owner| f.lies_in(owner)));
+    let pool = if owned.is_empty() { others } else { owned };
+    Ok(newest(pool).map(|f| f.record))
+}
+
+/// A record as a reader found it: the record, the link it was found
+/// through, and that link's age.
+pub(super) struct Found {
+    /// The link of the kind, homed in the journal holding the record.
+    pub(super) link: Address,
+    /// The position of the commit that minted the link (`read_link`'s
+    /// `at`); `None` where the board serves none — a link a build before
+    /// the position map minted.
+    pub(super) at: Option<u64>,
+    /// The record, its `link` the one it was found through.
+    pub(super) record: Record,
+}
+
+impl Found {
+    /// Returns whether the record's link lies in `account` exactly — never
+    /// in an account nested under it.
+    pub(super) fn lies_in(&self, account: &str) -> bool {
+        owned_by(&self.link.to_string(), account)
+    }
+
+    /// Returns where the record stands in the order its links were minted
+    /// (§4, "Its currency": the latest one naming the key).
+    ///
+    /// It is the position its link was minted at — a link the board serves
+    /// none for was minted by a build before the position map, so before
+    /// any it serves one for — the link's address breaking a tie. Each link
+    /// is homed in the journal that holds its record, any number of them
+    /// per account, so an address orders links within one journal alone.
+    fn age(&self) -> (Option<u64>, Vec<Nat>) {
+        (self.at, reads::comps(&self.link))
+    }
+}
+
+/// Returns the newest of `found` by the order its links were minted in
+/// (`Found::age`).
+pub(super) fn newest(found: impl IntoIterator<Item = Found>) -> Option<Found> {
+    found.into_iter().max_by_key(Found::age)
 }
 
 /// Returns every record naming `key` that the reader can read.
 ///
-/// Each comes with the link it was found through, in the order the links
-/// were answered. They are found as [`current`] finds them: the links of
-/// `kind` to each side of the key, each link once, each record's atom read
-/// through its journal's arrangement and its key checked.
+/// Each comes with the link it was found through and that link's age, in
+/// the order the links were answered. They are found as [`current`] finds
+/// them: the links of `kind` to each side of the key, each link once, each
+/// record's atom read through its journal's arrangement and its key
+/// checked.
 ///
 /// # Errors
 ///
@@ -637,9 +678,9 @@ pub(super) fn records_of(
     reader: &Reader<'_>,
     kind: &Address,
     key: &RecordKey,
-) -> Result<Vec<(Address, Record)>, Refusal> {
+) -> Result<Vec<Found>, Refusal> {
     let mut seen: Vec<String> = Vec::new();
-    let mut found: Vec<(Address, Record)> = Vec::new();
+    let mut found: Vec<Found> = Vec::new();
     for side in &key.sides {
         let v = reader.read(&frames::find_links_ftt(&kind.to_string(), &side.to_string()), None)?;
         for link in answers::addrs(&v) {
@@ -648,9 +689,9 @@ pub(super) fn records_of(
             }
             seen.push(link.to_string());
             let Some(link_addr) = parse_address(link) else { continue };
-            if let Some(record) = read_record(reader, &link_addr)? {
-                if record.key() == *key {
-                    found.push((link_addr, record));
+            if let Some(f) = read_record(reader, &link_addr)? {
+                if f.record.key() == *key {
+                    found.push(f);
                 }
             }
         }
@@ -658,13 +699,14 @@ pub(super) fn records_of(
     Ok(found)
 }
 
-/// Returns the record a link of the kind names.
+/// Returns the record a link of the kind names, with the link's age.
 ///
-/// It is the atom its `from` slot starts at, read through the journal's
-/// arrangement; `None` where the journal or its atom is not readable to
-/// this reader, where the journal is not registered or is in more pieces
-/// than `image` answers, where the atom is not arranged, or where its bytes
-/// are no record of the kind.
+/// It is the atom the link's `from` slot starts at, read through the
+/// journal's arrangement, and the position `read_link` answers for the
+/// link; `None` where the journal or its atom is not readable to this
+/// reader, where the journal is not registered or is in more pieces than
+/// `image` answers, where the atom is not arranged, or where its bytes are
+/// no record of the kind.
 ///
 /// # Errors
 ///
@@ -672,9 +714,10 @@ pub(super) fn records_of(
 /// as itself: a transport fault and the board's other refusals,
 /// [`Refusal::Halt`]; the death signal under the token,
 /// [`Refusal::SessionEnded`].
-pub(super) fn read_record(reader: &Reader<'_>, link: &Address) -> Result<Option<Record>, Refusal> {
+pub(super) fn read_record(reader: &Reader<'_>, link: &Address) -> Result<Option<Found>, Refusal> {
     let lv = reader.read(&frames::read_link(&link.to_string()), None)?;
-    let Some(atom) = answers::link_from(&lv) else { return Ok(None) };
+    let Some(Some(value)) = answers::link_value(&lv) else { return Ok(None) };
+    let Some(atom) = value.from.first().map(|span| span.start.as_str()) else { return Ok(None) };
     let Some(journal) = document_of(atom).and_then(|j| parse_address(&j)) else { return Ok(None) };
     let unreadable = |e: Refusal| match e {
         Refusal::Unreadable(_) | Refusal::NoSuchDocument(_) | Refusal::TooFragmented { .. } => {
@@ -704,9 +747,9 @@ pub(super) fn read_record(reader: &Reader<'_>, link: &Address) -> Result<Option<
     };
     let Some(bytes) = answers::first_atom(&v) else { return Ok(None) };
     let Ok(body) = serde_json::from_slice::<Value>(&bytes) else { return Ok(None) };
-    Ok(Record::from_value(&body).map(|mut r| {
-        r.link = Some(link.clone());
-        r
+    Ok(Record::from_value(&body).map(|mut record| {
+        record.link = Some(link.clone());
+        Found { link: link.clone(), at: value.at, record }
     }))
 }
 

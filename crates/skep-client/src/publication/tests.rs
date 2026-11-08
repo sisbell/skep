@@ -3155,8 +3155,13 @@ fn a_kept_place_moved_in_an_also_draft_names_it_and_reads_the_race_under_it() {
 /// `J`, a merge journal of the person's, though no list names it one: a
 /// private draft holding words of its own around two merge records' atoms,
 /// and an atom of another kind last — "ab", a record, "cd", a record, a
-/// note — at ordinals 1 to 7.
+/// note — at ordinals 1 to 7, each record's link homed in `J` beside it, as
+/// the merge library writes it.
 const J: &str = "1.0.1.0.11";
+
+/// The merge record kind the journal's links are typed: the account's doc
+/// 1, as the shell names it.
+const MERGE_KIND: &str = "1.0.1.0.1";
 
 /// A merge record's atom, the JSON the merge library appends to a journal.
 fn record_atom(retries: u64) -> String {
@@ -3172,6 +3177,9 @@ fn journal_world() -> World {
     w.atom(J, 6, &record_atom(1));
     w.atom(J, 7, &json!({"type": "note", "text": "kept"}).to_string());
     w.doc(J, false, ACCOUNT, vec![run(J, 1, 7)]);
+    for n in [3, 6] {
+        w.typed(J, vec![ispan(J, n, 1)], vec![unit(&format!("{E}.1"))], MERGE_KIND);
+    }
     w
 }
 
@@ -3185,16 +3193,21 @@ fn journal_inputs(selection: Vec<Run>) -> Inputs {
 /// one step after the image, and cuts the selection around the two records
 /// — the note kept, a test of the atom and never a list of journals — the
 /// region going by the cut; the panel counts the two under `J`; the request
-/// carries no run and no kept place for either; and after the commit the
-/// member holds the words and the note alone, while `J` still arranges both
-/// records by their own identity at their places, never re-windowed there.
+/// carries no run and no kept place for either; the records' links, homed
+/// in `J` from the atoms cut, are offered as no candidate; and after the
+/// commit the member holds the words and the note alone, while `J` still
+/// arranges both records by their own identity at their places, never
+/// re-windowed there, and still homes both links.
 #[test]
 fn a_merge_record_is_never_published_and_its_journal_keeps_it_arranged() {
     let (dialer, board, signer) = open(journal_world());
     let tok = token();
     let p = publisher(&board, &tok, &signer);
     let inputs = journal_inputs(vec![run(J, 1, 7)]);
+    let record_links: Vec<String> = dialer.world().links.iter().filter(|l| l.home == J).map(|l| l.addr.clone()).collect();
+    assert_eq!(record_links, [format!("{J}.0.2.1"), format!("{J}.0.2.2")], "the premise: the records' links");
     let e = enumerate(&p, &inputs).unwrap();
+    assert!(e.candidates.iter().all(|c| !record_links.contains(&c.link.to_string())), "no record's link a candidate: {:?}", e.candidates);
     let steps: Vec<&str> = e.frames.iter().map(|(s, _)| *s).collect();
     assert_eq!(&steps[..2], ["image", "merge_records"], "the atoms read after the image: {steps:?}");
     assert_eq!(e.merge_atoms, vec![vec![3, 6]], "the two records, never the note");
@@ -3214,6 +3227,8 @@ fn a_merge_record_is_never_published_and_its_journal_keeps_it_arranged() {
     let positions = World::expand(&w.docs[J].runs);
     assert_eq!((positions[2].clone(), positions[5].clone()), ((a(J), 3), (a(J), 6)), "J arranges both records by their own identity at their places");
     assert!(positions.iter().enumerate().filter(|(k, _)| ![2, 5].contains(k)).all(|(_, (origin, _))| origin.to_string() != J), "the rest re-windowed onto the member's words: {positions:?}");
+    let homed: Vec<&str> = w.links.iter().filter(|l| l.ty == [unit(MERGE_KIND)]).map(|l| l.home.as_str()).collect();
+    assert_eq!(homed, [J, J], "the records' links homed in J alone, none re-homed in the member");
 }
 
 /// A SELECTION OF MERGE RECORDS ALONE IS REFUSED: every position held is a

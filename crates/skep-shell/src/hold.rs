@@ -1068,12 +1068,12 @@ fn line_state(reason: &Reason) -> HeldState {
     }
 }
 
-/// Returns whether a line waits for the person's act.
+/// Returns whether a line held for `reason` waits for the person's act.
 ///
 /// It does for a refused run's, or a moved document's (§3c.4, §3c.5): no
 /// probe sends it, and `resolve` alone moves it.
-fn awaits_act(line: &HeldLine) -> bool {
-    matches!(line_state(&line.reason), HeldState::Refused | HeldState::Moved)
+fn awaits_act(reason: &Reason) -> bool {
+    matches!(line_state(reason), HeldState::Refused | HeldState::Moved)
 }
 
 /// Why a held line stands with no copy on disk, as the `held` answer says it
@@ -1501,7 +1501,7 @@ impl PrincipalHold {
     /// the principal is not halted — no line is sent once a halt stands,
     /// wherever it is stored (P38; skep #858).
     fn drains(&self) -> bool {
-        !self.queue.lines().is_empty() && !matches!(self.custody, Custody::Halted { .. })
+        !self.queue.is_empty() && !matches!(self.custody, Custody::Halted { .. })
     }
 
     /// Holds a line under the principal's next ordinal (`HeldQueue::hold`).
@@ -1555,7 +1555,7 @@ impl PrincipalHold {
     /// line already walking after this run's; at the first touch the counter
     /// is fresh, so the file the door reads then keeps its own.
     fn renumbers(&self, file: &HeldQueue) -> bool {
-        file.lines().iter().any(|line| line.k < self.next_k)
+        file.first_k().is_some_and(|first| first < self.next_k)
     }
 
     /// Notes `at`, the position of a write of the principal's on `doc`.
@@ -1594,8 +1594,11 @@ impl PrincipalHold {
     }
 
     /// Returns how many lines stand on `doc`.
+    ///
+    /// It is read off the queue's entry for it (`HeldQueue::count_on`),
+    /// walking no line.
     fn count(&self, doc: &str) -> u64 {
-        self.queue.lines().iter().filter(|l| l.doc == doc).count() as u64
+        self.queue.count_on(doc) as u64
     }
 }
 
@@ -1883,7 +1886,7 @@ impl Holds {
     /// Returns the line of ordinal `k` in the principal's queue, where one
     /// stands.
     fn line_of(&self, board_reference: &str, principal: u64, k: u64) -> Option<HeldLine> {
-        self.with_principal(board_reference, principal, |ph| ph.queue.lines().iter().find(|l| l.k == k).cloned()).flatten()
+        self.with_principal(board_reference, principal, |ph| ph.queue.line(k)).flatten()
     }
 
     /// Returns how many lines stand on `doc` in the principal's queue.
@@ -1891,9 +1894,9 @@ impl Holds {
         self.with_principal(board_reference, principal, |ph| ph.count(doc)).unwrap_or(0)
     }
 
-    /// Returns how many lines of the session's principal stand held on `doc`
-    /// at its board, in any state (§3c.4, THE HELD-LINES GATE).
+    /// Returns how many lines of the session's principal stand held on `doc`.
     ///
+    /// They count at its board, in any state (§3c.4, THE HELD-LINES GATE).
     /// It is the shell's one write door's fourth question
     /// (`Shell::write_door`), asked of a whole-draft write — the restore's,
     /// the merge rows' and the shot's — for each draft it writes: a count
@@ -1901,8 +1904,9 @@ impl Holds {
     /// the draft under words the person typed and the board has not kept.
     /// Every standing line counts, whatever its state — holding, sending,
     /// refused, moved, `head_unreadable`, `session_died` — read under the
-    /// board's lock from the principal's queue, whose file its session's
-    /// open read whole (§3c.7); nothing is opened, dialed or moved here.
+    /// board's lock off the principal's queue's entry for `doc`
+    /// (`HeldQueue::count_on`), whose file its session's open read whole
+    /// (§3c.7), and walking no line; nothing is opened, dialed or moved here.
     ///
     /// # Panics
     ///
@@ -2314,7 +2318,7 @@ impl Holds {
     fn say_another_window(&self, board_hold: &BoardHold) {
         let (mut on_file, mut in_memory) = (0usize, 0usize);
         for ph in board_hold.principals.values() {
-            let standing = ph.queue.lines().len();
+            let standing = ph.queue.len();
             if ph.queue.is_opened() {
                 on_file += standing;
             } else {
@@ -2619,7 +2623,7 @@ impl Holds {
                 None
             };
             let (line_stands, base) = match self.principal_hold(&mut board_hold, session) {
-                Ok(ph) => (!ph.queue.lines().is_empty(), ph.base_of(&burst.doc, session.opened_at)),
+                Ok(ph) => (!ph.queue.is_empty(), ph.base_of(&burst.doc, session.opened_at)),
                 Err(refusal) => return OpAnswer::Answered(Err(refusal)),
             };
             // The hold's own door behind the shell's (§3c.3): a burst that
@@ -2957,7 +2961,7 @@ impl Holds {
     pub fn note_death(&self, session: &SessionEntry, held: DeathHeld, died: &Refusal) -> Value {
         let DeathHeld { k, answer } = held;
         self.with_principal(&session.board_reference, session.facts.principal, |ph| {
-            let standing = ph.queue.lines().iter().find(|l| l.k == k && l.reason.cause == cause::SESSION_DIED && l.reason.refusal.is_none()).map(|l| l.reason.sent);
+            let standing = ph.queue.line(k).filter(|l| l.reason.cause == cause::SESSION_DIED && l.reason.refusal.is_none()).map(|l| l.reason.sent);
             if let Some(sent) = standing {
                 self.remark_line(session.facts.principal, ph, k, Reason { cause: cause::SESSION_DIED.to_string(), refusal: Some(died.to_value()), sent });
             }
@@ -3160,14 +3164,14 @@ impl Holds {
     pub fn resolve(&self, session: &SessionEntry, k: u64, act: ResolveAct) -> Result<Resolved, Refusal> {
         let mut board_hold = self.lock(&session.board_reference);
         let ph = self.principal_hold(&mut board_hold, session)?;
-        let Some(line) = ph.queue.lines().iter().find(|l| l.k == k) else { return Err(Refusal::shell(Name::NO_SUCH_HELD, json!({"held": k}))) };
+        let Some(line) = ph.queue.line(k) else { return Err(Refusal::shell(Name::NO_SUCH_HELD, json!({"held": k}))) };
         // A line awaiting the person's act alone takes one (P10), save the
         // drop of a line held for want of its signature (skep #726).
         let droppable = act == ResolveAct::Drop && line.reason.cause == cause::HEAD_UNREADABLE;
-        if !awaits_act(line) && !droppable {
+        if !awaits_act(&line.reason) && !droppable {
             return Err(Refusal::shell(Name::NOT_RESOLVABLE, json!({"held": k})));
         }
-        let doc = line.doc.clone();
+        let doc = line.doc;
         match act {
             ResolveAct::Drop => {
                 let (count, state) = self.drop_run(session.facts.principal, ph, k, &doc);
@@ -3193,8 +3197,8 @@ impl Holds {
                 // named no more. A document whose lines carry no such verdict
                 // is re-marked as it stands. The re-marks are one run, one
                 // copy (skep #861).
-                let waiting: Vec<(u64, bool)> = ph.queue.lines().iter().filter(|l| l.doc == doc && awaits_act(l)).map(|l| (l.k, l.reason.sent)).collect();
-                let through = ph.queue.lines().iter().filter(|l| l.doc == doc && l.reason.cause == cause::MOVED).find_map(|l| l.reason.refusal.as_ref()?["site"]["current"].as_u64());
+                let waiting: Vec<(u64, bool)> = ph.queue.reasons_on(&doc).filter(|(_, reason)| awaits_act(reason)).map(|(k, reason)| (k, reason.sent)).collect();
+                let through = ph.queue.reasons_on(&doc).filter(|(_, reason)| reason.cause == cause::MOVED).find_map(|(_, reason)| reason.refusal.as_ref()?["site"]["current"].as_u64());
                 self.remark_lines(session.facts.principal, ph, waiting.iter().map(|&(k, sent)| (k, Reason::of(cause::BEHIND, sent))), through);
                 for &(k, _) in &waiting {
                     if let Some(at) = through {
@@ -3224,10 +3228,10 @@ impl Holds {
     /// stands first now — a moved line held before the dropped one keeps the
     /// document `moved` — `kept` only where no line stands.
     fn drop_run(&self, principal: u64, ph: &mut PrincipalHold, from: u64, doc: &str) -> (u64, HeldState) {
-        let ks: Vec<u64> = ph.queue.lines().iter().filter(|l| l.doc == doc && l.k >= from).map(|l| l.k).collect();
+        let ks: Vec<u64> = ph.queue.reasons_on(doc).map(|(k, _)| k).filter(|&k| k >= from).collect();
         self.done_lines(principal, ph, &ks, Done::Dropped);
-        let head = ph.queue.lines().iter().find(|l| l.doc == doc);
-        (ph.count(doc), head.map_or(HeldState::Kept, |l| line_state(&l.reason)))
+        let head = ph.queue.reasons_on(doc).next().map(|(_, reason)| line_state(reason));
+        (ph.count(doc), head.unwrap_or(HeldState::Kept))
     }
 
     /// Notes and answers the `writes.halted` of the board's `/health`.

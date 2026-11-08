@@ -54,7 +54,12 @@
 //! to it the `base` of every line held after it on its document
 //! ([`HeldQueue::done`]), in the queue as the `done` is written and again at
 //! a reopen from that `done` line, so no line is rewritten to carry it
-//! (§3c.2). The person's `send` on a moved document raises a line's `base`
+//! (§3c.2). The queue keeps its lines by ordinal beside an entry per
+//! document — the lines standing on it, and the floors its kept lines raised
+//! them to — and every base is read against its document's floor (`Lines`),
+//! so a settle, a count and a raise read and change one document's entry,
+//! never the whole queue (skep #816). The person's `send` on a moved
+//! document raises a line's `base`
 //! to the position the board's verdict read through
 //! ([`HeldQueue::remark_all`], §3c.4): a `held` line of its ordinal
 //! carrying the raised base beside its new reason, which the reader takes in
@@ -224,8 +229,9 @@
 //! line whose `done` the file still owes counted in both until the `done`
 //! lands or the file goes, since a reopen reads it standing. Both are
 //! defence bounds far past any outage a person meets (§3c.3), set where a
-//! launch's reopen and the resend's walk at them measure a few seconds
-//! ([`MAX_HELD_LINES`] states the figures). A reopened queue is read
+//! launch's reopen and the resend's walk at them measure a few seconds, each
+//! in time in proportion to the lines ([`MAX_HELD_LINES`] states the
+//! figures). A reopened queue is read
 //! whole, past either budget where its file is past it (a `done` the device
 //! refused leaves its line on disk, and a file another writer made may hold
 //! any number), and holds nothing more until it drains below them. Each line
@@ -253,6 +259,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
+use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -322,40 +329,46 @@ const MAX_HELD_LINE_BYTES: usize = 2 * MAX_FRAME_BYTES + MAX_ANCHOR_BYTES + 64 *
 ///
 /// **What it bounds.** A line costs the same whatever its frame holds, and
 /// the byte budget alone admits millions of empty bursts held behind one
-/// refused, so the lines a hold admits bound two costs the bytes do not, each
-/// growing at its worst as the square of the lines:
+/// refused, so the lines a hold admits bound costs the bytes do not, each in
+/// proportion to the lines, as each line's own work reads and changes its
+/// document's entry alone (`Lines`; skep #816):
 ///
 /// * the reopen's read at a launch ([`HeldDir::open_file`]), each `done` kept
 ///   at a position raising the lines standing after it on its document;
 /// * the resend's walk on the board's feed thread, each line it settles taken
 ///   out of the queue ([`HeldQueue::done`]) and the lines after it on its
-///   document raised, and each document's lines found and counted for its
-///   `held` event.
+///   document raised, and each document's lines counted for its `held`
+///   event;
+/// * the person's drop of a run, each line of it taken out of the queue.
 ///
-/// **Measured** on an Apple M1 Max, the figures the budget is set by, at it
-/// and [`MAX_HELD_BYTES`] (`held`'s and `hold`'s timing cells): a drained
-/// file — every line on one document held, marked `sent` and kept at a
-/// position by a `done`, the last refused — reopens in 1.1 s optimized and
-/// 11 s unoptimized; the walk's own work over a full queue in memory, the
-/// board answering at once and no attest owed, its turns run back to back,
-/// takes 1.7 s with every line on one document and 2.1 s with each on its
-/// own, 9 s and 11 s unoptimized. At twice the lines, optimized, the reopen
-/// takes 6.2 s and the walk 7.0 s and 8.7 s, past a few seconds. A drain
-/// also pays each line's send, as a burst never held pays it but for the
-/// copies: the attest a signed session composes, the board's write, and the
-/// two copies its mark and its `done` sync to the device — about 13 ms a
-/// line here, most of it the two copies.
+/// **Measured** on an Apple M1 Max, at it and [`MAX_HELD_BYTES`] (`held`'s
+/// and `hold`'s timing cells, which hold each figure within `TIMED_CEILING`
+/// and each line's work, its frame the least, within
+/// `held::tests::LINEAR_GROWTH` times its time at a quarter of the lines): a
+/// drained file — every line on one document held, marked `sent` and kept
+/// at a position by a `done`, the last refused — reopens in 0.11 s optimized
+/// and 1.1 s unoptimized; the walk's own work over a full queue in memory,
+/// the board answering at once, no attest owed and no copy synced or
+/// retried, its turns run back to back, takes 0.24 s with every line on one
+/// document and 0.28 s with each on its own, 3.6 s and 3.7 s unoptimized;
+/// and the person's drop of a refused run of every line takes 0.03 s, 1.0 s
+/// unoptimized, most of it each frame's bytes counted as its line leaves. A
+/// drain also pays each line's send, as a burst never held pays it but for
+/// the copies, none of which the walk's figure holds: the attest a signed
+/// session composes, the board's write, and the two copies its mark and its
+/// `done` sync to the device, with the retry that writes them — about 11 ms
+/// a line here, most of it the two copies.
 pub const MAX_HELD_LINES: usize = 16384;
 
-/// The ceiling the timing cells hold a reopen and a walk at the budgets to.
+/// The ceiling the timing cells hold each cost at both budgets to.
 ///
 /// It is some seven times the slowest figure [`MAX_HELD_LINES`] states for
-/// the build's profile — 2.1 s optimized, 11 s unoptimized — and loose on
+/// the build's profile — 0.28 s optimized, 3.7 s unoptimized — and loose on
 /// purpose, as a flaky bound is wrong and a loose one honest: the load of a
-/// full gate's parallel run stays under it, and a cost grown by another power
-/// of the lines does not.
+/// full gate's parallel run stays under it. A cost grown by another power of
+/// the lines is the growth check's to fail (`held::tests::LINEAR_GROWTH`).
 #[cfg(test)]
-pub(crate) const TIMED_CEILING: std::time::Duration = std::time::Duration::from_secs(if cfg!(debug_assertions) { 80 } else { 15 });
+pub(crate) const TIMED_CEILING: std::time::Duration = std::time::Duration::from_secs(if cfg!(debug_assertions) { 26 } else { 2 });
 
 /// The most bytes of re-mark lines one file copies, creation to compaction.
 ///
@@ -669,6 +682,11 @@ pub fn i_address(text: &str) -> Option<(&str, u64)> {
 }
 
 /// One `held` line, parsed: the burst the board could not take.
+///
+/// A queue hands its standing lines out in this form, each a copy whose
+/// `base` is raised by every line kept before it on its document
+/// ([`HeldQueue::lines`]); it keeps them otherwise, each base its own beside
+/// its document's floors (`Lines`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct HeldLine {
     /// The line's ordinal — the resend order, across the documents — one of
@@ -722,6 +740,278 @@ impl HeldLine {
     /// join adds, as the hold added them.
     fn held_bytes(&self) -> usize {
         json_len(&self.frame) + self.anchors.as_ref().map_or(0, Anchors::bytes)
+    }
+}
+
+/// A queue's standing lines by ordinal, beside an entry per document.
+///
+/// It is the one record of a queue's lines (§3c.2), and of a file's as the
+/// open reads it ([`HeldDir::open_file`]): each line under its ordinal, in
+/// `k` order, and each document's entry — the ordinals standing on it, and
+/// the floors its kept lines raised the rest to — so a settle, a count and a
+/// raise read and change one document's entry alone, and the raise behind a
+/// document's first line walks no line at all (skep #816). A line's base is
+/// its own raised by its document's floors ([`Lines::base`]), and every copy
+/// of a line and every line handed out reads it so ([`Lines::copy`],
+/// [`Lines::handout`]).
+///
+/// **The raise behind a kept line.** A line kept at a position — its ack's,
+/// or the landing the resend's read found: the person's own write — raises
+/// to it the base of every line standing after it on its document (§3c.2):
+/// a line behind it is never dialed while it stands, so no landing of its
+/// own lies below that position, and a base already past it stands. Where
+/// the kept line was the document's first, those are every line standing on
+/// the document, and the raise is one floor, given under a stamp past every
+/// line's: it raises each line that entered before it, and none that enters
+/// after. Where a line stands before it — two first dials racing at one
+/// document (`Holds::shift_at_first_dial`), or a file that so reads — the
+/// lines after it are raised one by one, each its own base.
+#[derive(Debug, Default)]
+struct Lines {
+    /// The standing lines by ordinal.
+    by_k: BTreeMap<u64, Standing>,
+    /// Each document's entry, while a line stands on it.
+    docs: HashMap<String, DocLines>,
+    /// The last stamp given: to a line as it entered, or to a floor.
+    stamp: u64,
+}
+
+/// One standing line as its queue keeps it ([`Lines`]).
+#[derive(Debug)]
+struct Standing {
+    /// The line, its `base` its own.
+    ///
+    /// Its document's floors raise it ([`Lines::base`]).
+    line: HeldLine,
+    /// The stamp it entered under: each floor given after it raises it.
+    stamp: u64,
+}
+
+/// One document's entry among a queue's lines ([`Lines`]).
+#[derive(Debug, Default)]
+struct DocLines {
+    /// The ordinals of the lines standing on the document.
+    ks: BTreeSet<u64>,
+    /// The floors the document's kept lines gave, each `(stamp, at)`.
+    ///
+    /// A floor raises to `at` each line stamped before it. Along the list
+    /// the stamps rise and the positions fall: a floor no higher than one
+    /// given after it raises no line that one does not raise as far, so it
+    /// is dropped as that one is given ([`DocLines::give`]).
+    floors: Vec<(u64, u64)>,
+}
+
+impl DocLines {
+    /// Returns the floor of a line stamped `stamp`, where one raises it.
+    ///
+    /// It is the highest of the floors given after the line: the first of
+    /// them, as the positions fall along the list.
+    fn floor(&self, stamp: u64) -> Option<u64> {
+        let first = self.floors.partition_point(|&(given, _)| given < stamp);
+        self.floors.get(first).map(|&(_, at)| at)
+    }
+
+    /// Gives the floor `at` under `stamp`, past every stamp given before.
+    fn give(&mut self, stamp: u64, at: u64) {
+        while self.floors.last().is_some_and(|&(_, below)| below <= at) {
+            self.floors.pop();
+        }
+        self.floors.push((stamp, at));
+    }
+}
+
+impl Lines {
+    /// Returns how many lines stand.
+    fn len(&self) -> usize {
+        self.by_k.len()
+    }
+
+    /// Returns whether no line stands.
+    fn is_empty(&self) -> bool {
+        self.by_k.is_empty()
+    }
+
+    /// Returns the least ordinal standing, where a line stands.
+    fn first_k(&self) -> Option<u64> {
+        self.by_k.first_key_value().map(|(&k, _)| k)
+    }
+
+    /// Returns the greatest ordinal standing, where a line stands.
+    fn last_k(&self) -> Option<u64> {
+        self.by_k.last_key_value().map(|(&k, _)| k)
+    }
+
+    /// Returns whether a line of ordinal `k` stands.
+    fn contains(&self, k: u64) -> bool {
+        self.by_k.contains_key(&k)
+    }
+
+    /// Returns the ordinals standing, in `k` order.
+    fn ordinals(&self) -> impl Iterator<Item = u64> + '_ {
+        self.by_k.keys().copied()
+    }
+
+    /// Returns how many lines stand on `doc`.
+    fn count_on(&self, doc: &str) -> usize {
+        self.docs.get(doc).map_or(0, |entry| entry.ks.len())
+    }
+
+    /// Returns the reason of line `k`, where it stands.
+    fn reason(&self, k: u64) -> Option<&Reason> {
+        self.by_k.get(&k).map(|standing| &standing.line.reason)
+    }
+
+    /// Returns a standing line's base, raised by its document's floor.
+    fn base(&self, standing: &Standing) -> u64 {
+        let floor = self.docs.get(&standing.line.doc).and_then(|entry| entry.floor(standing.stamp));
+        floor.map_or(standing.line.base, |floor| floor.max(standing.line.base))
+    }
+
+    /// Returns a standing line as the queue hands it out.
+    ///
+    /// It is a copy, its base read against its document's floor.
+    fn handout(&self, standing: &Standing) -> HeldLine {
+        HeldLine { base: self.base(standing), ..standing.line.clone() }
+    }
+
+    /// Returns each standing line in `k` order, as the queue hands it out.
+    fn handouts(&self) -> impl Iterator<Item = HeldLine> + '_ {
+        self.by_k.values().map(|standing| self.handout(standing))
+    }
+
+    /// Returns line `k` as the queue hands it out, where it stands.
+    fn line(&self, k: u64) -> Option<HeldLine> {
+        self.by_k.get(&k).map(|standing| self.handout(standing))
+    }
+
+    /// Returns each line's ordinal and reason on `doc`, in `k` order.
+    fn reasons_on(&self, doc: &str) -> impl Iterator<Item = (u64, &Reason)> + '_ {
+        let on_doc = self.docs.get(doc).map(|entry| &entry.ks);
+        on_doc.into_iter().flatten().filter_map(move |&k| Some((k, self.reason(k)?)))
+    }
+
+    /// Returns the first line past the ordinal `after` that `skip` keeps.
+    ///
+    /// A line is passed over where `skip` answers true for its document; the
+    /// line found is handed out as the queue hands it out.
+    fn next_after(&self, after: u64, skip: impl Fn(&str) -> bool) -> Option<HeldLine> {
+        let mut past = self.by_k.range((Bound::Excluded(after), Bound::Unbounded)).map(|(_, standing)| standing);
+        past.find(|standing| !skip(&standing.line.doc)).map(|standing| self.handout(standing))
+    }
+
+    /// Returns line `k`'s `held` copy, where it stands.
+    ///
+    /// Its base is read against its document's floor.
+    fn copy(&self, k: u64) -> Option<Vec<u8>> {
+        let standing = self.by_k.get(&k)?;
+        Some(held_line_bytes(&standing.line, self.base(standing)))
+    }
+
+    /// Returns what each line carries for the join's repeat test, by `k`.
+    ///
+    /// It is the test across runs ([`carried`]).
+    fn carried(&self) -> impl Iterator<Item = Carried<'_>> {
+        self.by_k.values().map(|standing| carried(&standing.line))
+    }
+
+    /// Returns the bytes the standing lines spend of the queue's budget.
+    fn held_bytes(&self) -> usize {
+        self.by_k.values().map(|standing| standing.line.held_bytes()).sum()
+    }
+
+    /// Enters `line` under a stamp past every one given.
+    ///
+    /// No floor given before it raises it.
+    ///
+    /// # Panics
+    ///
+    /// Panics, in a debug build, where a line of its ordinal stands (the
+    /// caller's precondition).
+    fn enter(&mut self, line: HeldLine) {
+        debug_assert!(!self.by_k.contains_key(&line.k), "PRECONDITION of `Lines::enter`: no line of the ordinal {} stands", line.k);
+        self.stamp += 1;
+        self.docs.entry(line.doc.clone()).or_default().ks.insert(line.k);
+        self.by_k.insert(line.k, Standing { line, stamp: self.stamp });
+    }
+
+    /// Puts `line` in its ordinal's place, or enters it where none stands.
+    ///
+    /// It is a `held` line read under an ordinal that stands, the line's
+    /// re-mark ([`HeldDir::open_file`]): taken whole, its base the one it
+    /// spells, under a stamp past every floor given, as the writer spelled it
+    /// raised by each.
+    fn put(&mut self, line: HeldLine) {
+        self.take(line.k, None);
+        self.enter(line);
+    }
+
+    /// Takes line `k` out, where it stands: the line, its base its own.
+    ///
+    /// Where `raise` names a position — the line kept there — the lines
+    /// standing after it on its document are raised to it (§3c.2): by one
+    /// floor where the line was the document's first, else one by one
+    /// ([`Lines`]).
+    fn take(&mut self, k: u64, raise: Option<u64>) -> Option<HeldLine> {
+        let Standing { line, .. } = self.by_k.remove(&k)?;
+        let entry = self.docs.get_mut(&line.doc).expect("a standing line's document has its entry");
+        entry.ks.remove(&k);
+        let first = entry.ks.first().copied();
+        match (raise, first) {
+            (Some(at), Some(first)) if first > k => {
+                self.stamp += 1;
+                entry.give(self.stamp, at);
+            }
+            (Some(at), Some(_)) => {
+                for after in entry.ks.range((Bound::Excluded(k), Bound::Unbounded)) {
+                    let behind = &mut self.by_k.get_mut(after).expect("a document's ordinals stand").line;
+                    behind.base = behind.base.max(at);
+                }
+            }
+            (None, _) | (_, None) => {}
+        }
+        if entry.ks.is_empty() {
+            self.docs.remove(&line.doc);
+        }
+        Some(line)
+    }
+
+    /// Re-marks line `k` in place, where it stands.
+    ///
+    /// The line takes `reason`, its base is raised to `raise` where that is
+    /// past it, and its `time` is the change's. It is the change every
+    /// re-mark makes ([`HeldQueue::remark`],
+    /// [`HeldQueue::remark_all`]). It answers whether the re-mark spends the
+    /// re-mark budget — one that marks the line `sent` (`marks_sent`) spends
+    /// none of it, and every other one is within it — and none where no line
+    /// of `k` stands or the line carries the reason and the base already.
+    fn restate(&mut self, k: u64, reason: Reason, raise: Option<u64>) -> Option<bool> {
+        let standing = self.by_k.get(&k)?;
+        let base = self.base(standing);
+        let raised = raise.map_or(base, |at| base.max(at));
+        if standing.line.reason == reason && raised == base {
+            return None;
+        }
+        let line = &mut self.by_k.get_mut(&k)?.line;
+        let spends = !marks_sent(&line.reason, &reason);
+        line.reason = reason;
+        line.base = raised;
+        line.time = now_ms();
+        Some(spends)
+    }
+
+    /// Rewrites line `k`'s frame in place, where it stands and differs.
+    ///
+    /// It answers the bytes the line spent of the queue's budget before, and
+    /// spends now.
+    fn rewrite(&mut self, k: u64, frame: Value) -> Option<(usize, usize)> {
+        let line = &mut self.by_k.get_mut(&k)?.line;
+        if line.frame == frame {
+            return None;
+        }
+        let spent = line.held_bytes();
+        line.frame = frame;
+        line.time = now_ms();
+        Some((spent, line.held_bytes()))
     }
 }
 
@@ -920,19 +1210,6 @@ fn is_done_line(m: &Map<String, Value>) -> bool {
     resolved && m.get("time").is_some_and(Value::is_u64)
 }
 
-/// Raises to `at` the `base` of each line of `behind` on `doc` (§3c.2).
-///
-/// `behind` are the lines held after a line on `doc` kept at `at` — its ack's
-/// position, or the landing the resend's read found: the person's own write,
-/// which the read of a line behind it starts past — a line behind is never
-/// dialed while the kept line stands, so no landing of its own lies below
-/// `at`. A base already past `at` stands.
-fn raise_bases<'a>(behind: impl Iterator<Item = &'a mut HeldLine>, doc: &str, at: u64) {
-    for line in behind.filter(|line| line.doc == doc) {
-        line.base = line.base.max(at);
-    }
-}
-
 /// Returns whether a re-mark from `was` to `now` marks its line `sent`.
 ///
 /// It is the one rule the writer ([`HeldQueue::remark`]) and the reader
@@ -1044,16 +1321,20 @@ impl HeldDir {
     /// them — and the re-mark lines' bytes counted against
     /// [`MAX_HELD_REMARK_BYTES`] as the writer counts them, a line's mark of
     /// `sent` spending none, so a relaunch keeps the file's budget where its
-    /// writer left it. The lines are keyed by ORDINAL as the file is read in
-    /// its order, and the file may hold a lower ordinal's lines after a
+    /// writer left it. The lines are keyed by *ordinal* as the file is read
+    /// in its order, and the file may hold a lower ordinal's lines after a
     /// higher one's (a join's ordered insert): a `held` line re-marks the
     /// line standing under its ordinal when it is read, wherever that line
     /// lies in the file, and is a new line where none stands; a `done` takes
     /// out the line standing under its ordinal and raises the standing lines
-    /// of HIGHER ordinals on its document, never the lines written after it;
-    /// and the re-mark budget counts a `held` line of a standing ordinal
+    /// of *higher* ordinals on its document, never the lines written after
+    /// it; and the re-mark budget counts a `held` line of a standing ordinal
     /// wherever it lies, so the queue read is the one the writer held, in
-    /// `k` order, whatever the file's order. The whole lines' bytes are counted
+    /// `k` order, whatever the file's order. The read holds the lines as the
+    /// queue does (`Lines`), each line, re-mark and `done` read in the
+    /// file's order taking the step the writer's act took, so a reopen
+    /// derives each document's floors as the writer's queue gave them. The
+    /// whole lines' bytes are counted
     /// too, so the next line is written where the last of them ends, a torn
     /// tail cut off first; the open itself writes nothing, a tail it meets
     /// left for that cut and answered ([`HeldQueue::torn`]) for the shell
@@ -1076,7 +1357,7 @@ impl HeldDir {
     pub fn open_file(&self, principal: u64, account: &str) -> io::Result<Opened> {
         let path = self.path.join(Self::file_name(principal));
         let disk = Disk { opened: true, ..self.disk(principal, account) };
-        let fresh = |disk: Disk, aside: Option<PathBuf>| Opened::Live { queue: HeldQueue { disk, lines: Vec::new(), greatest_k: 0, held_bytes: 0 }, aside };
+        let fresh = |disk: Disk, aside: Option<PathBuf>| Opened::Live { queue: HeldQueue { disk, lines: Lines::default(), greatest_k: 0, held_bytes: 0 }, aside };
         let Some(mut reader) = LineReader::open(&path, MAX_HELD_LINE_BYTES)? else { return Ok(fresh(disk, None)) };
         let halted = |why: HaltWhy| Ok(Opened::Halted { path: path.clone(), why });
         // The header: the first whole line. A file with no whole header line
@@ -1122,7 +1403,7 @@ impl HeldDir {
         }
         // The lines: `held` and `done`, no third, each read whole or the file
         // halted as damaged (§3c.3); a torn last line ignored, and answered.
-        let mut standing: BTreeMap<u64, HeldLine> = BTreeMap::new();
+        let mut lines = Lines::default();
         let mut max_k = 0u64;
         let mut remark_bytes = 0usize;
         let mut torn = None;
@@ -1149,27 +1430,23 @@ impl HeldDir {
                 // ([`HeldQueue::remark`]): it takes the earlier line's place,
                 // and its bytes count against the file's re-mark budget, save
                 // the mark of its line `sent`, as the writer counts them.
-                let spends = standing.get(&k).is_some_and(|was| !marks_sent(&was.reason, &line.reason));
-                standing.insert(k, line);
+                let spends = lines.reason(k).is_some_and(|was| !marks_sent(was, &line.reason));
+                lines.put(line);
                 if spends {
                     remark_bytes = remark_bytes.saturating_add(line_bytes);
                 }
             } else if let Some(done) = m.get("done") {
                 let Some(k) = ordinal(done).filter(|_| is_done_line(&m)) else { return halted(HaltWhy::Damaged) };
                 max_k = max_k.max(k);
-                // A `kept` line at a position raises the lines behind it on
-                // its document, as `HeldQueue::done` raised them; `k` is
-                // within MAX_ORDINAL, so its successor is a `u64`.
-                let settled = standing.remove(&k);
-                if let (Some(settled), Some(at)) = (settled, m.get("at").and_then(Value::as_u64)) {
-                    raise_bases(standing.range_mut(k + 1..).map(|(_, line)| line), &settled.doc, at);
-                }
+                // A `kept` line at a position raises the lines standing after
+                // it on its document, as `HeldQueue::done` raised them; a
+                // `done` of no standing line raises none.
+                lines.take(k, m.get("at").and_then(Value::as_u64));
             } else {
                 return halted(HaltWhy::Damaged);
             }
         }
-        let lines: Vec<HeldLine> = standing.into_values().collect();
-        let held_bytes = lines.iter().map(HeldLine::held_bytes).sum();
+        let held_bytes = lines.held_bytes();
         // The header's account is the file's own from here: what the join
         // opens the board's file under for a principal with no session now.
         let account = header.get("account").and_then(Value::as_str).map_or_else(|| disk.account.clone(), str::to_string);
@@ -1273,8 +1550,11 @@ impl HeldDir {
 
 /// One principal's queue, which the shell holds.
 ///
-/// It holds its un-done `held` lines in `k` order — a hold adding none past
-/// [`MAX_HELD_LINES`] — the greatest ordinal it has named, the bytes its
+/// It holds its un-done `held` lines in `k` order, beside each document's
+/// entry (`Lines`) — a hold adding none past [`MAX_HELD_LINES`] — and hands
+/// them out as copies, each base raised by the lines kept before it
+/// ([`HeldQueue::lines`]); beside them, the greatest ordinal it has named,
+/// the bytes its
 /// lines' frames and anchors hold ([`MAX_HELD_BYTES`]'s count, each line's
 /// its `HeldLine::held_bytes`, a line whose `done` the file still owes among
 /// them), and the file the lines are copied to — every queue names one, the
@@ -1286,7 +1566,7 @@ impl HeldDir {
 #[derive(Debug)]
 pub struct HeldQueue {
     disk: Disk,
-    lines: Vec<HeldLine>,
+    lines: Lines,
     /// The greatest ordinal the queue has named: its file's, over every held
     /// and done line read, grown by each line held or entered since; 0 where
     /// it has named none.
@@ -1591,7 +1871,7 @@ impl HeldQueue {
     /// ([`HeldQueue::join`]). `account` is the header's, where the file
     /// comes to be written.
     pub fn unopened(dir: &HeldDir, principal: u64, account: &str) -> HeldQueue {
-        HeldQueue { disk: dir.disk(principal, account), lines: Vec::new(), greatest_k: 0, held_bytes: 0 }
+        HeldQueue { disk: dir.disk(principal, account), lines: Lines::default(), greatest_k: 0, held_bytes: 0 }
     }
 
     /// Gives an unopened queue the store's refusal that keeps its file
@@ -1622,9 +1902,56 @@ impl HeldQueue {
         &self.disk.path
     }
 
-    /// Returns the un-done `held` lines, in `k` order.
-    pub fn lines(&self) -> &[HeldLine] {
-        &self.lines
+    /// Returns a copy of each un-done `held` line, in `k` order.
+    ///
+    /// Each line's `base` is its own raised by every line kept before it on
+    /// its document (§3c.2). It copies every line the queue holds: an act on
+    /// one line, on one document's lines or on their count reads
+    /// [`HeldQueue::line`], [`HeldQueue::reasons_on`] or
+    /// [`HeldQueue::count_on`], each of which reads that line or that
+    /// document's entry alone.
+    pub fn lines(&self) -> Vec<HeldLine> {
+        self.lines.handouts().collect()
+    }
+
+    /// Returns a copy of line `k`, where it stands.
+    pub fn line(&self, k: u64) -> Option<HeldLine> {
+        self.lines.line(k)
+    }
+
+    /// Returns each line's ordinal and reason on `doc`, in `k` order.
+    ///
+    /// The reasons are read in place, nothing copied.
+    pub fn reasons_on(&self, doc: &str) -> impl Iterator<Item = (u64, &Reason)> + '_ {
+        self.lines.reasons_on(doc)
+    }
+
+    /// Returns a copy of the first line past the ordinal `after` `skip` keeps.
+    ///
+    /// A line is passed over where `skip` answers true for its document: the
+    /// resend's walk, a line at a time (`hold::resend`).
+    pub fn next_after(&self, after: u64, skip: impl Fn(&str) -> bool) -> Option<HeldLine> {
+        self.lines.next_after(after, skip)
+    }
+
+    /// Returns how many un-done lines stand.
+    pub fn len(&self) -> usize {
+        self.lines.len()
+    }
+
+    /// Returns whether no un-done line stands.
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+
+    /// Returns how many lines stand on `doc`, read off its document's entry.
+    pub fn count_on(&self, doc: &str) -> usize {
+        self.lines.count_on(doc)
+    }
+
+    /// Returns the least ordinal a standing line holds, where one stands.
+    pub fn first_k(&self) -> Option<u64> {
+        self.lines.first_k()
     }
 
     /// Returns the greatest ordinal the queue has named: its file's, over
@@ -1697,7 +2024,7 @@ impl HeldQueue {
     /// precondition, the caller's).
     #[allow(clippy::too_many_arguments)]
     pub fn hold(&mut self, k: u64, doc: &str, id: Option<&str>, base: u64, frame: Value, anchors: Option<Anchors>, reason: Reason) -> Result<Entered, Unheld> {
-        assert!(self.lines.last().is_none_or(|last| last.k < k), "PRECONDITION of `HeldQueue::hold`: the ordinal {k} is past every one a standing line holds");
+        assert!(self.lines.last_k().is_none_or(|last| last < k), "PRECONDITION of `HeldQueue::hold`: the ordinal {k} is past every one a standing line holds");
         if document_address(doc).is_none() || !frame.is_object() {
             return Err(Unheld::Unreadable);
         }
@@ -1711,7 +2038,7 @@ impl HeldQueue {
         let line = HeldLine { k, doc: doc.to_string(), id: id.map(str::to_string), base, frame, anchors, reason, time: now_ms() };
         self.greatest_k = self.greatest_k.max(k);
         self.held_bytes += line_bytes;
-        self.lines.push(line);
+        self.lines.enter(line);
         // The line's first copy is owed behind every copy owed before it.
         self.disk.owing.get_or_insert_with(Box::default).first.insert(k);
         self.retry();
@@ -1744,7 +2071,8 @@ impl HeldQueue {
     /// the copies owed the lines on disk, each line's state now or its `done`,
     /// then the first copies of the lines that wait, each made whole in its
     /// state now, spending none of the re-mark budget, which a re-mark spent
-    /// as it was first tried. They are ONE copy — every line of them in one
+    /// as it was first tried — each line owed a copy found by its ordinal, and
+    /// no other line read. They are *one* copy — every line of them in one
     /// `write`, then one `sync_data`, the header its own copy before them
     /// where the file is new ([`Disk::write_copies`]) — so a retry the device
     /// takes costs one sync whatever the queue holds; only where the device
@@ -1787,12 +2115,12 @@ impl HeldQueue {
         let on_disk = owing.owed.iter().filter_map(|(&k, &due)| {
             let bytes = match due {
                 // A line no longer standing owes no copy of its state.
-                Due::Mark => held_line_bytes(&self.lines[self.lines.binary_search_by_key(&k, |l| l.k).ok()?]),
+                Due::Mark => self.lines.copy(k)?,
                 Due::Done { done, .. } => done_line_bytes(k, done),
             };
             Some(OwedCopy { k, owed: due.owed(), bytes })
         });
-        let first = self.lines.iter().filter(|line| owing.first.contains(&line.k)).map(|line| OwedCopy { k: line.k, owed: Owed::Line, bytes: held_line_bytes(line) });
+        let first = owing.first.iter().filter_map(|&k| Some(OwedCopy { k, owed: Owed::Line, bytes: self.lines.copy(k)? }));
         let mut copies = Vec::new();
         let mut stop = None;
         for copy in on_disk.chain(first) {
@@ -1863,8 +2191,8 @@ impl HeldQueue {
     /// [`MAX_HELD_LINE_BYTES`] — for the caller to say (a reopen then reads
     /// the earlier reason).
     pub fn remark(&mut self, k: u64, reason: Reason) -> io::Result<()> {
-        let Some((index, spends)) = self.restate(k, reason, None) else { return Ok(()) };
-        self.owe(index, spends)
+        let Some(spends) = self.lines.restate(k, reason, None) else { return Ok(()) };
+        self.owe(k, spends)
     }
 
     /// Re-marks a run of standing lines as one copy.
@@ -1905,9 +2233,9 @@ impl HeldQueue {
         let mut changed = false;
         let mut refused = Vec::new();
         for (k, reason) in marks {
-            let Some((index, spends)) = self.restate(k, reason, raise) else { continue };
+            let Some(spends) = self.lines.restate(k, reason, raise) else { continue };
             changed = true;
-            if let Err(e) = self.owe_copy(index, spends) {
+            if let Err(e) = self.owe_copy(k, spends) {
                 refused.push((k, e));
             }
         }
@@ -1917,30 +2245,7 @@ impl HeldQueue {
         refused
     }
 
-    /// Takes a re-mark's change into line `k`, in the queue alone.
-    ///
-    /// It is the change every re-mark makes ([`HeldQueue::remark`],
-    /// [`HeldQueue::remark_all`]): the line takes `reason`, its `base` is
-    /// raised to `raise` where that is past it, and its `time` is the
-    /// change's. It answers the line's index and whether its copy spends the
-    /// re-mark budget — one that marks the line `sent` (`marks_sent`) spends
-    /// none of it, and every other one is within it — and none where no line
-    /// of `k` stands or the line carries the reason and the base already.
-    fn restate(&mut self, k: u64, reason: Reason, raise: Option<u64>) -> Option<(usize, bool)> {
-        let index = self.lines.iter().position(|l| l.k == k)?;
-        let line = &mut self.lines[index];
-        let base = raise.map_or(line.base, |at| line.base.max(at));
-        if line.reason == reason && line.base == base {
-            return None;
-        }
-        let spends = !marks_sent(&line.reason, &reason);
-        line.reason = reason;
-        line.base = base;
-        line.time = now_ms();
-        Some((index, spends))
-    }
-
-    /// Owes the copy of line `index`'s state now, and runs the retry.
+    /// Owes the copy of line `k`'s state now, and runs the retry.
     ///
     /// It is one change's copy ([`HeldQueue::owe_copy`]), which the retry
     /// writes in its place in `k` order, behind every copy owed before it
@@ -1949,13 +2254,13 @@ impl HeldQueue {
     /// # Errors
     ///
     /// Returns the writer's refusal, the copy owed never.
-    fn owe(&mut self, index: usize, spends: bool) -> io::Result<()> {
-        let owed = self.owe_copy(index, spends);
+    fn owe(&mut self, k: u64, spends: bool) -> io::Result<()> {
+        let owed = self.owe_copy(k, spends);
         self.retry();
         owed
     }
 
-    /// Owes the copy of line `index`'s state now, for the next retry.
+    /// Owes the copy of line `k`'s state now, for the next retry.
     ///
     /// A line waiting for its first copy owes nothing more: its first copy
     /// carries its state. A line on disk owes one copy ([`Disk::owe_mark`]),
@@ -1966,13 +2271,12 @@ impl HeldQueue {
     /// # Errors
     ///
     /// Returns the writer's refusal, the copy owed never.
-    fn owe_copy(&mut self, index: usize, spends: bool) -> io::Result<()> {
-        let k = self.lines[index].k;
-        if self.disk.holds(k) {
-            self.disk.owe_mark(k, &held_line_bytes(&self.lines[index]), spends)
-        } else {
-            Ok(())
+    fn owe_copy(&mut self, k: u64, spends: bool) -> io::Result<()> {
+        if !self.disk.holds(k) {
+            return Ok(());
         }
+        let Some(copy) = self.lines.copy(k) else { return Ok(()) };
+        self.disk.owe_mark(k, &copy, spends)
     }
 
     /// Rewrites a standing line's frame: the shift's one act on a line
@@ -2005,16 +2309,9 @@ impl HeldQueue {
     /// read decides the line from there, the board judging the frame it sends
     /// as it judges every send.
     pub fn rewrite(&mut self, k: u64, frame: Value) -> io::Result<()> {
-        let Some(index) = self.lines.iter().position(|l| l.k == k) else { return Ok(()) };
-        let line = &mut self.lines[index];
-        if line.frame == frame {
-            return Ok(());
-        }
-        let was = line.held_bytes();
-        line.frame = frame;
-        line.time = now_ms();
-        self.held_bytes = self.held_bytes.saturating_sub(was).saturating_add(line.held_bytes());
-        self.owe(index, true)
+        let Some((spent, spends)) = self.lines.rewrite(k, frame) else { return Ok(()) };
+        self.held_bytes = self.held_bytes.saturating_sub(spent).saturating_add(spends);
+        self.owe(k, true)
     }
 
     /// Resolves line `k` with a `done` line (§3c.2).
@@ -2033,7 +2330,9 @@ impl HeldQueue {
     /// already past it standing (§3c.2): that position is the person's own
     /// write — its ack's, or the landing the resend's read found — and a line
     /// behind it is never dialed while it stands (§3c.4's `behind`), so no
-    /// landing of its own lies below it. A reopen raises them again from the
+    /// landing of its own lies below it. The raise reads and changes the
+    /// line's document's entry alone, one floor where the line was its
+    /// document's first (`Lines`), and a reopen raises them again from the
     /// `done` line ([`HeldDir::open_file`]).
     ///
     /// **Compaction.** Once the queue holds no line, its file is removed
@@ -2091,12 +2390,13 @@ impl HeldQueue {
     /// Returns [`DoneError::NoSuchLine`] for an ordinal with no `held` line,
     /// the queue as it stood.
     fn leave(&mut self, k: u64, done: Done) -> Result<(), DoneError> {
-        let Some(index) = self.lines.iter().position(|l| l.k == k) else { return Err(DoneError::NoSuchLine) };
-        let line = self.lines.remove(index);
-        // The lines from `index` on are those held after it, in `k` order.
-        if let Done::Kept { at: Some(at) } = done {
-            raise_bases(self.lines[index..].iter_mut(), &line.doc, at);
-        }
+        // A line kept at a position raises the lines standing after it on its
+        // document to it.
+        let kept_at = match done {
+            Done::Kept { at } => at,
+            Done::Dropped => None,
+        };
+        let line = self.lines.take(k, kept_at).ok_or(DoneError::NoSuchLine)?;
         // A file never created, or a line waiting for its first copy, holds
         // nothing on disk to resolve; a line on disk owes its `done`, counted
         // until it lands.
@@ -2196,7 +2496,7 @@ impl HeldQueue {
     /// Returns the ordinals of the standing lines whose first copy is in the
     /// queue's file.
     pub fn standing_on_disk(&self) -> BTreeSet<u64> {
-        self.lines.iter().map(|line| line.k).filter(|&k| self.disk.holds(k)).collect()
+        self.lines.ordinals().filter(|&k| self.disk.holds(k)).collect()
     }
 
     /// Returns the pending file this queue took its lines from, while it
@@ -2267,18 +2567,19 @@ impl HeldQueue {
     /// [`MAX_ORDINAL`] ends the entering, the lines from there on counted
     /// `left`.
     fn entering(&self, from: &HeldQueue, fresh: Option<u64>) -> Entering {
-        let by_ordinal: BTreeSet<u64> = if fresh.is_none() { self.lines.iter().map(|l| l.k).collect() } else { BTreeSet::new() };
         let mut by_carried: HashMap<Carried<'_>, usize> = HashMap::new();
         if fresh.is_some() {
-            for line in &self.lines {
-                *by_carried.entry(carried(line)).or_default() += 1;
+            for here in self.lines.carried() {
+                *by_carried.entry(here).or_default() += 1;
             }
         }
         let mut entering = Entering { next_k: fresh, ..Entering::default() };
-        for (n, line) in from.lines.iter().enumerate() {
+        // What each line of `from` carries, beside the line as `from` hands
+        // it out: both in `k` order.
+        for (n, (carries, line)) in from.lines.carried().zip(from.lines.handouts()).enumerate() {
             let repeated = match fresh {
-                None => by_ordinal.contains(&line.k),
-                Some(_) => by_carried.get_mut(&carried(line)).filter(|count| **count > 0).map(|count| *count -= 1).is_some(),
+                None => self.lines.contains(line.k),
+                Some(_) => by_carried.get_mut(&carries).filter(|count| **count > 0).map(|count| *count -= 1).is_some(),
             };
             if repeated {
                 entering.joined.repeated += 1;
@@ -2294,17 +2595,17 @@ impl HeldQueue {
                 *next = k + 1;
             }
             entering.joined.entered.push((line.k, k));
-            entering.lines.push(HeldLine { k, ..line.clone() });
+            entering.lines.push(HeldLine { k, ..line });
         }
         entering
     }
 
-    /// Enters `lines`, each under its ordinal and owed its first copy, the
-    /// queue kept in `k` order: the ordered insert.
+    /// Enters `lines`, each under its ordinal and owed its first copy.
     ///
-    /// `lines` are in `k` order among themselves, none under an ordinal a
-    /// standing line holds; the queue's bytes count each, and the greatest
-    /// ordinal named moves past them.
+    /// It is the ordered insert, the queue kept in `k` order. None of `lines`
+    /// is under an ordinal a standing line holds; each enters after every floor
+    /// given here, so no line kept before it raises it (`Lines`). The queue's
+    /// bytes count each, and the greatest ordinal named moves past them.
     fn enter(&mut self, lines: Vec<HeldLine>) {
         if lines.is_empty() {
             return;
@@ -2312,18 +2613,9 @@ impl HeldQueue {
         self.greatest_k = lines.iter().fold(self.greatest_k, |greatest, line| greatest.max(line.k));
         self.held_bytes = lines.iter().fold(self.held_bytes, |bytes, line| bytes.saturating_add(line.held_bytes()));
         self.disk.owing.get_or_insert_with(Box::default).first.extend(lines.iter().map(|line| line.k));
-        let standing = std::mem::take(&mut self.lines);
-        let mut merged = Vec::with_capacity(standing.len() + lines.len());
-        let (mut standing, mut entering) = (standing.into_iter().peekable(), lines.into_iter().peekable());
-        loop {
-            match (standing.peek(), entering.peek()) {
-                (Some(here), Some(new)) if here.k < new.k => merged.extend(standing.next()),
-                (Some(_), Some(_)) | (None, Some(_)) => merged.extend(entering.next()),
-                (Some(_), None) => merged.extend(standing.next()),
-                (None, None) => break,
-            }
+        for line in lines {
+            self.lines.enter(line);
         }
-        self.lines = merged;
     }
 
     /// Gives every standing line a fresh ordinal from `next_k`, in `k` order.
@@ -2363,33 +2655,37 @@ impl HeldQueue {
     /// its whole lines where the cut-back is refused too — whole lines a
     /// fresh read takes for the renumbering landed, which it is as good as.
     pub fn renumber(&mut self, next_k: &mut u64) -> Result<Vec<(u64, u64)>, RenumberRefused> {
-        let Some(first_k) = self.lines.first().map(|line| line.k) else { return Ok(Vec::new()) };
+        let Some(first_k) = self.lines.first_k() else { return Ok(Vec::new()) };
         let mut k = *next_k;
         let mut moved = Vec::with_capacity(self.lines.len());
+        let mut renumbered = Lines::default();
         let mut copy = Vec::new();
-        for line in &self.lines {
-            copy.extend(done_line_bytes(line.k, Done::Dropped));
+        for old in self.lines.ordinals() {
+            copy.extend(done_line_bytes(old, Done::Dropped));
         }
-        for line in &self.lines {
-            let refused = |error: io::Error| RenumberRefused { k: line.k, error };
+        for line in self.lines.handouts() {
+            let old = line.k;
+            let refused = |error: io::Error| RenumberRefused { k: old, error };
             if k > MAX_ORDINAL {
                 return Err(refused(io::Error::new(io::ErrorKind::InvalidInput, format!("the ordinal {k} is past the held store's {MAX_ORDINAL}"))));
             }
-            let bytes = held_line_bytes(&HeldLine { k, ..line.clone() });
+            let fresh = HeldLine { k, ..line };
+            let bytes = held_line_bytes(&fresh, fresh.base);
             if let Some(error) = past_the_line_bound(&bytes) {
                 return Err(refused(error));
             }
             copy.extend_from_slice(&bytes);
-            moved.push((line.k, k));
+            renumbered.enter(fresh);
+            moved.push((old, k));
             // `k` is within MAX_ORDINAL, so its successor is a `u64`.
             k += 1;
         }
         if let Err(error) = self.disk.ensure_header().and_then(|()| self.disk.append(&copy)) {
             return Err(RenumberRefused { k: first_k, error });
         }
-        for (line, &(_, fresh)) in self.lines.iter_mut().zip(&moved) {
-            line.k = fresh;
-        }
+        // The lines under their fresh ordinals, each base as it was handed
+        // out: a reader of the file finds the same.
+        self.lines = renumbered;
         self.greatest_k = self.greatest_k.max(k - 1);
         *next_k = k;
         Ok(moved)
@@ -2794,20 +3090,22 @@ fn header_bytes(named: &Named, principal: u64, account: &str) -> Vec<u8> {
     format!("{{\"type\":\"skep-held-bursts\",\"v\":{},\"board\":{},\"principal\":{principal},\"account\":{}}}\n", named.v(), json_str(&named.board()), json_str(account)).into_bytes()
 }
 
-/// Returns a `held` line's exact bytes (§3c.2).
+/// Returns a `held` line's exact bytes (§3c.2), `base` spelled as its base.
 ///
-/// Its members are `held, doc, id?, base, frame, anchors?, cause,
+/// The base is the caller's to give, so no copy spells a standing line's
+/// own base where its document's floor raised it (`Lines::copy`). Its
+/// members are `held, doc, id?, base, frame, anchors?, cause,
 /// refusal?, sent, time`, in that order — `anchors` as
 /// `{"before":<I-address or null>,"after":<I-address or null>}`, on a line
 /// whose burst carried them alone, a span they name spelled before its
 /// closing brace as `,"span":[{"start":<I-address>,"width":"<natural>"}]`,
 /// one object per run.
-fn held_line_bytes(l: &HeldLine) -> Vec<u8> {
+fn held_line_bytes(l: &HeldLine, base: u64) -> Vec<u8> {
     let mut s = format!("{{\"held\":{},\"doc\":{}", l.k, json_str(&l.doc));
     if let Some(id) = &l.id {
         let _ = write!(s, ",\"id\":{}", json_str(id));
     }
-    let _ = write!(s, ",\"base\":{},\"frame\":{}", l.base, l.frame);
+    let _ = write!(s, ",\"base\":{base},\"frame\":{}", l.frame);
     if let Some(anchors) = &l.anchors {
         let anchor = |a: &Option<String>| a.as_deref().map_or_else(|| "null".to_string(), json_str);
         let _ = write!(s, ",\"anchors\":{{\"before\":{},\"after\":{}", anchor(&anchors.before), anchor(&anchors.after));

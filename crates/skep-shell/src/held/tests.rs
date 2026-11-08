@@ -38,7 +38,10 @@
 //! joining again over the lines the device kept and doubling none, and a join
 //! whose cut-back was refused leaving its copy past the file's whole lines
 //! until the retry cuts it; a line kept at a position is the base of the
-//! lines behind it on its document, in the queue and at a reopen; a line
+//! lines behind it on its document, in the queue and at a reopen, a line
+//! held after it keeping its own and a lower raise lifting only the lines it
+//! stood with, and every line's base the eager raise's over thousands of
+//! seeded acts, in memory and at each reopen (skep #816); a line
 //! re-marked with its base raised — the person's `send` on a moved document —
 //! reads back with the raised base, never lowered by a raise below it or a
 //! later `done` kept below it; and a run of re-marks or `done`s (skep #861)
@@ -59,14 +62,15 @@
 //! missing or of another type, anchors past their bound, an ordinal past the
 //! page's, a line past the bound — while ignoring a torn last line cut
 //! mid-character. And, timed (`#[ignore]`, the full gate's), a drained file
-//! at both budgets reopened within its ceiling.
+//! at both budgets reopened within its ceiling, in time in proportion to its
+//! lines.
 
 use std::cell::{Cell, RefCell};
 use std::fs;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -795,6 +799,279 @@ fn a_line_kept_at_a_position_is_the_base_of_the_lines_behind_it() {
     assert_eq!(bases(&live(d.open_file(1, "1.0.1").unwrap())), raised, "a reopen raises them from the `done` line");
 }
 
+/// Returns each standing line's ordinal and base, in `k` order.
+fn bases(queue: &HeldQueue) -> Vec<(u64, u64)> {
+    queue.lines().iter().map(|l| (l.k, l.base)).collect()
+}
+
+/// Checks that a line held after a kept line keeps its own base (skep #816).
+///
+/// Two lines on one document held at 0, the first kept at 50, raise the
+/// second to 50; a third held at 10 after it stays at 10, as it did not
+/// stand when the first was kept; the second kept at 60 then raises it to
+/// 60; and a reopen reads each base as the queue holds it, after the third
+/// is held and at the end (the mutant whose floor raises every line of its
+/// document, held before it or after, lifts the third to 50, and its read
+/// for its own landing starts past that landing).
+#[test]
+fn a_line_held_after_a_kept_line_keeps_its_own_base() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let hold = |queue: &mut HeldQueue, base: u64| queue.hold_next("1.0.1.0.1", None, base, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap().k;
+    let (a, b) = (hold(&mut queue, 0), hold(&mut queue, 0));
+    queue.done(a, Done::Kept { at: Some(50) }).unwrap();
+    assert_eq!(bases(&queue), [(b, 50)], "the kept line raises the line behind it");
+    let c = hold(&mut queue, 10);
+    assert_eq!(bases(&queue), [(b, 50), (c, 10)], "a line held after the raise keeps its own base");
+    assert_eq!(bases(&live(d.open_file(1, "1.0.1").unwrap())), [(b, 50), (c, 10)], "and a reopen reads it so");
+    queue.done(b, Done::Kept { at: Some(60) }).unwrap();
+    assert_eq!(bases(&queue), [(c, 60)], "the next line kept raises it");
+    assert_eq!(bases(&live(d.open_file(1, "1.0.1").unwrap())), [(c, 60)], "and a reopen reads it so");
+}
+
+/// Checks that a lower raise lifts only the lines it stood with (skep #816).
+///
+/// Three lines on one document held at 0, the first kept at 50, raise the
+/// other two to 50; a fourth held at 0 after it stays at 0; the second kept
+/// at 40 then raises the fourth to 40 and leaves the third at 50, a base
+/// already past it; and a reopen reads each base as the queue holds it (the
+/// mutant that drops the higher floor as the lower one is given lowers the
+/// third to 40; the one that reads a line's floor off the last floor given
+/// after it lowers it too; the one whose floors raise a line held after
+/// them lifts the fourth to 50).
+#[test]
+fn a_kept_line_below_an_earlier_raise_raises_only_the_lines_it_stood_with() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let hold = |queue: &mut HeldQueue| queue.hold_next("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap().k;
+    let (a, b, c) = (hold(&mut queue), hold(&mut queue), hold(&mut queue));
+    queue.done(a, Done::Kept { at: Some(50) }).unwrap();
+    let e = hold(&mut queue);
+    assert_eq!(bases(&queue), [(b, 50), (c, 50), (e, 0)], "the lines that stood raised, the one held after not");
+    queue.done(b, Done::Kept { at: Some(40) }).unwrap();
+    assert_eq!(bases(&queue), [(c, 50), (e, 40)], "the lower raise lifts the line held after the first, and lowers none");
+    assert_eq!(bases(&live(d.open_file(1, "1.0.1").unwrap())), [(c, 50), (e, 40)], "a reopen reads the same bases");
+}
+
+/// Checks that a re-mark read after a kept line is taken whole (§3c.2).
+///
+/// It is a file of two lines on one document, the first kept at 50, and
+/// the second's re-mark after the `done`, spelling a base of 7: the reader
+/// takes a `held` line of a standing ordinal in the earlier line's place,
+/// its base the one it spells, so the second reads 7 — a writer re-marks a
+/// line with its base as raised, so a file a writer made never spells one
+/// below a raise (the mutant reader that keeps a re-marked line under the
+/// floors given before its re-mark reads it at 50, past the base its last
+/// copy spells).
+#[test]
+fn a_remark_read_after_a_kept_line_is_taken_whole() {
+    let tmp = TempDir::new().unwrap();
+    let line = |k: u64, base: u64| format!("{{\"held\":{k},\"doc\":\"1.0.1.0.1\",\"base\":{base},\"frame\":{{\"op\":\"insert\"}},\"cause\":\"unreachable\",\"sent\":false,\"time\":1}}\n");
+    let body = format!("{}{}{{\"done\":1,\"as\":\"kept\",\"at\":50,\"time\":1}}\n{}", line(1, 0), line(2, 0), line(2, 7));
+    assert_eq!(bases(&live(opened_over(&tmp, body.as_bytes()))), [(2, 7)]);
+}
+
+/// The eager raise's model of a queue's lines (skep #816).
+///
+/// It raises the lines behind a kept line one by one: the model a queue's
+/// lines are checked against.
+#[derive(Default)]
+struct Eager {
+    /// The standing lines, in `k` order.
+    lines: Vec<HeldLine>,
+}
+
+impl Eager {
+    /// Holds or joins `line`, entered where its ordinal falls.
+    fn enter(&mut self, line: HeldLine) {
+        let at = self.lines.partition_point(|l| l.k < line.k);
+        self.lines.insert(at, line);
+    }
+
+    /// Takes line `k` out, as a `done` of it does.
+    ///
+    /// A line kept at a position raises every line after it on its document
+    /// to it.
+    fn done(&mut self, k: u64, done: Done) {
+        let Some(index) = self.lines.iter().position(|l| l.k == k) else { return };
+        let line = self.lines.remove(index);
+        if let Done::Kept { at: Some(at) } = done {
+            for behind in self.lines[index..].iter_mut().filter(|l| l.doc == line.doc) {
+                behind.base = behind.base.max(at);
+            }
+        }
+    }
+
+    /// Re-marks line `k`, its base raised to `raise` where that is past it.
+    fn remark(&mut self, k: u64, reason: &Reason, raise: Option<u64>) {
+        if let Some(line) = self.lines.iter_mut().find(|l| l.k == k) {
+            line.reason = reason.clone();
+            line.base = raise.map_or(line.base, |at| line.base.max(at));
+        }
+    }
+
+    /// Rewrites line `k`'s frame.
+    fn rewrite(&mut self, k: u64, frame: &Value) {
+        if let Some(line) = self.lines.iter_mut().find(|l| l.k == k) {
+            line.frame = frame.clone();
+        }
+    }
+}
+
+/// Returns each line's members but its `time`, which the clock sets.
+///
+/// They are the members the model holds alike: a re-mark sets the `time`.
+fn modeled(lines: &[HeldLine]) -> Vec<(u64, String, u64, Value, Reason)> {
+    lines.iter().map(|l| (l.k, l.doc.clone(), l.base, l.frame.clone(), l.reason.clone())).collect()
+}
+
+/// A seeded xorshift, so a model cell takes the same acts at every run.
+struct Xorshift(u64);
+
+impl Xorshift {
+    /// Returns a number below `n`.
+    ///
+    /// # Panics
+    ///
+    /// Panics where `n` is 0.
+    fn below(&mut self, n: u64) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x % n
+    }
+}
+
+/// Runs `acts` seeded acts over `queue` and the eager model alike.
+///
+/// The acts are holds, each past every ordinal given and an ordinal passed
+/// over now and then; `done`s kept at a rising or a falling position, on a
+/// document's first line or any; drops; runs of `done`s; re-marks, alone
+/// and as a document's run with a raise; shifts of a frame; and joins of
+/// this run's lines under the ordinals the holds passed over, below lines
+/// that stand — over three documents. After each act the queue's lines are
+/// the model's, and every `reopen_every` acts so are `reopened`'s, where it
+/// reads any.
+fn modeled_acts(queue: &mut HeldQueue, store: &HeldDir, acts: usize, seed: u64, reopen_every: usize, reopened: impl Fn() -> Option<Vec<HeldLine>>) {
+    let docs = ["1.0.1.0.1", "1.0.1.0.2", "1.0.1.0.3"];
+    let reasons = [Reason::of("behind", false), Reason::of("moved", false), Reason::of("unreachable", true)];
+    let (mut model, mut rng) = (Eager::default(), Xorshift(seed));
+    let (mut next_k, mut passed_over) = (1u64, Vec::new());
+    for act in 0..acts {
+        let standing: Vec<(u64, String)> = model.lines.iter().map(|l| (l.k, l.doc.clone())).collect();
+        let doc = docs[rng.below(3) as usize];
+        // A standing line: a document's first now and then, else any.
+        let first_on = |doc: &str| standing.iter().find(|(_, on)| on == doc).map(|(k, _)| *k);
+        let any = |rng: &mut Xorshift| (!standing.is_empty()).then(|| standing[rng.below(standing.len() as u64) as usize].0);
+        let line = if rng.below(2) == 0 { first_on(doc) } else { any(&mut rng) };
+        match (rng.below(100), line) {
+            (0..=34, _) | (_, None) => {
+                if rng.below(4) == 0 {
+                    passed_over.push(next_k);
+                    next_k += 1;
+                }
+                let base = rng.below(100);
+                let frame = json!({"op": "insert", "n": act});
+                queue.hold(next_k, doc, None, base, frame.clone(), None, Reason::of("unreachable", false)).unwrap();
+                model.enter(HeldLine { k: next_k, doc: doc.to_string(), id: None, base, frame, anchors: None, reason: Reason::of("unreachable", false), time: 0 });
+                next_k += 1;
+            }
+            (35..=59, Some(k)) => {
+                let done = Done::Kept { at: Some(rng.below(200)) };
+                queue.done(k, done).unwrap();
+                model.done(k, done);
+            }
+            (60..=69, Some(k)) => {
+                queue.done(k, Done::Dropped).unwrap();
+                model.done(k, Done::Dropped);
+            }
+            (70..=74, Some(k)) => {
+                let run = [k, any(&mut rng).unwrap_or(k), any(&mut rng).unwrap_or(k)];
+                let done = if rng.below(2) == 0 { Done::Kept { at: Some(rng.below(200)) } } else { Done::Dropped };
+                queue.done_all(&run, done);
+                for k in run {
+                    model.done(k, done);
+                }
+            }
+            (75..=84, Some(_)) => {
+                let reason = &reasons[rng.below(3) as usize];
+                let raise = (rng.below(2) == 0).then(|| rng.below(200));
+                let marks: Vec<u64> = standing.iter().filter(|(_, on)| on == doc).map(|(k, _)| *k).collect();
+                assert!(queue.remark_all(marks.iter().map(|&k| (k, reason.clone())), raise).is_empty(), "act {act}: every re-mark copied");
+                for k in marks {
+                    model.remark(k, reason, raise);
+                }
+            }
+            (85..=89, Some(k)) => {
+                let reason = &reasons[rng.below(3) as usize];
+                queue.remark(k, reason.clone()).unwrap();
+                model.remark(k, reason, None);
+            }
+            (90..=94, Some(k)) => {
+                let frame = json!({"op": "insert", "n": act, "shifted": true});
+                queue.rewrite(k, frame.clone()).unwrap();
+                model.rewrite(k, &frame);
+            }
+            (_, Some(_)) => {
+                let mut from = HeldQueue::unopened(store, 1, "1.0.1");
+                for k in passed_over.drain(..) {
+                    let (doc, base) = (docs[rng.below(3) as usize], rng.below(100));
+                    from.hold(k, doc, None, base, json!({"op": "insert", "joined": k}), None, Reason::of("behind", false)).unwrap();
+                    model.enter(HeldLine { k, doc: doc.to_string(), id: None, base, frame: json!({"op": "insert", "joined": k}), anchors: None, reason: Reason::of("behind", false), time: 0 });
+                }
+                queue.join(&from, Joining::ThisRun);
+            }
+        }
+        assert_eq!(modeled(&queue.lines()), modeled(&model.lines), "act {act}: the queue's lines are the model's");
+        if (act + 1) % reopen_every == 0 {
+            if let Some(read) = reopened() {
+                assert_eq!(modeled(&read), modeled(&model.lines), "act {act}: a reopen reads the model's lines");
+            }
+        }
+    }
+}
+
+/// Checks that every line's base is the eager raise's, in memory (#816).
+///
+/// It is four thousand seeded acts ([`modeled_acts`]) over a queue whose
+/// file is not yet read, so no copy is synced: after each, every line's
+/// base, frame and reason are the model's, which raises the lines behind a
+/// kept line one by one (the mutant that raises by a floor where a line
+/// stands before the kept one on its document lifts that earlier line; the
+/// one whose floor raises the lines held after it lifts them; the one that
+/// keeps a floor below one given after it, or reads a line's floor off
+/// another than the first given after it, lowers a base).
+#[test]
+fn every_lines_base_is_the_eager_raises_in_memory() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = HeldQueue::unopened(&d, 1, "1.0.1");
+    modeled_acts(&mut queue, &d, 4000, 0x9e37_79b9_7f4a_7c15, usize::MAX, || None);
+}
+
+/// Checks that every line's base is the eager raise's at each reopen (#816).
+///
+/// It is four hundred seeded acts ([`modeled_acts`]) over a queue whose
+/// file is read, every copy synced, the file reopened every twenty acts:
+/// after each act the queue's lines are the model's, and at each reopen so
+/// are the file's, the reader deriving each document's floors from the
+/// `done`s, the re-marks and the joined lines in the file's order (the
+/// mutant reader whose floors raise the lines a join wrote after the `done`
+/// that gave them reads those lines past their own bases; the one whose
+/// `done` of a line behind another of its document gives a floor lifts the
+/// line before it).
+#[test]
+fn every_lines_base_is_the_eager_raises_at_each_reopen() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    modeled_acts(&mut queue, &d, 400, 0x2545_f491_4f6c_dd1d, 20, || Some(live(d.open_file(1, "1.0.1").unwrap()).lines()));
+}
+
 /// Checks that a raised re-mark reads back with its base, never lowered.
 ///
 /// It is the person's `send` on a moved document (§3c.4; skep #757): three
@@ -1233,7 +1510,7 @@ fn a_lines_mark_of_sent_spends_none_of_the_remark_budget() {
     // The large line spells a quarter of the budget less ten bytes: its frame
     // sized by the rest of its spelling, its two reasons spelled at one length.
     let spelled = HeldLine { k: 1, doc: "1.0.1.0.1".into(), id: None, base: 0, frame: json!({}), anchors: None, reason: refused(1), time: now_ms() };
-    let rest = held_line_bytes(&spelled).len() - 1 - json_len(&spelled.frame);
+    let rest = held_line_bytes(&spelled, spelled.base).len() - 1 - json_len(&spelled.frame);
     let large = queue.hold_next("1.0.1.0.1", None, 0, sized_frame(MAX_HELD_REMARK_BYTES / 4 - 10 - rest), None, refused(1)).unwrap().k;
     let small = queue.hold_next("1.0.1.0.2", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap().k;
     for n in [2, 1, 2, 1] {
@@ -1664,7 +1941,7 @@ fn a_sent_mark_the_device_refused_is_written_by_the_retry_past_a_spent_budget() 
     let spent = |queue: &HeldQueue| queue.disk.remark_bytes;
     let refused = |n: u64| Reason { sent: true, ..Reason::refused("out_of_bounds", json!({"n": n})) };
     let spelled = HeldLine { k: 1, doc: "1.0.1.0.1".into(), id: None, base: 0, frame: json!({}), anchors: None, reason: refused(1), time: now_ms() };
-    let rest = held_line_bytes(&spelled).len() - 1 - json_len(&spelled.frame);
+    let rest = held_line_bytes(&spelled, spelled.base).len() - 1 - json_len(&spelled.frame);
     let large = queue.hold_next("1.0.1.0.1", None, 0, sized_frame(MAX_HELD_REMARK_BYTES / 4 - 10 - rest), None, refused(1)).unwrap().k;
     let small = queue.hold_next("1.0.1.0.2", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap().k;
     for n in [2, 1, 2, 1] {
@@ -2031,9 +2308,9 @@ fn a_run_of_remarks_or_dones_is_one_copy_and_leaves_the_file_as_a_call_a_line_do
     let standing = |lines: &[HeldLine]| -> Vec<(u64, String, u64, Reason)> { lines.iter().map(|l| (l.k, l.doc.clone(), l.base, l.reason.clone())).collect() };
     let expect = |act: &str, queues: [&HeldQueue; 2], lines: &[(u64, &str, u64, &Reason)]| {
         let lines: Vec<(u64, String, u64, Reason)> = lines.iter().map(|&(k, doc, base, reason)| (k, doc.to_string(), base, reason.clone())).collect();
-        let files = [&by_line, &by_run].map(|tmp| standing(live(dir(tmp).open_file(1, "1.0.1").unwrap()).lines()));
+        let files = [&by_line, &by_run].map(|tmp| standing(&live(dir(tmp).open_file(1, "1.0.1").unwrap()).lines()));
         assert_eq!(
-            (queues.map(|queue| standing(queue.lines())), files),
+            (queues.map(|queue| standing(&queue.lines())), files),
             ([lines.clone(), lines.clone()], [lines.clone(), lines]),
             "{act}: each queue, and each file reopened, holds the lines expected"
         );
@@ -2177,8 +2454,8 @@ fn this_runs_lines_keep_their_ordinals_into_a_fresh_file_and_into_one_that_holds
     assert_eq!((joined.entered, joined.repeated), (vec![(3, 3), (5, 5)], 0));
     assert_eq!((ks(&into), into.greatest_k()), (vec![3, 5], 5));
     assert_eq!(into.hold_next("1.0.1.0.6", None, 0, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap().k, 6, "the next ordinal past them");
-    let reopened = live(chain_dir.open_file(1, "1.0.1").unwrap());
-    let read: Vec<(u64, &str, u64, &str, Option<&str>)> = reopened.lines().iter().map(|l| (l.k, l.doc.as_str(), l.base, l.reason.cause.as_str(), l.id.as_deref())).collect();
+    let reopened = live(chain_dir.open_file(1, "1.0.1").unwrap()).lines();
+    let read: Vec<(u64, &str, u64, &str, Option<&str>)> = reopened.iter().map(|l| (l.k, l.doc.as_str(), l.base, l.reason.cause.as_str(), l.id.as_deref())).collect();
     assert_eq!(read, [(3, "1.0.1.0.3", 7, "head_unreadable", Some("id")), (5, "1.0.1.0.5", 7, "head_unreadable", Some("id")), (6, "1.0.1.0.6", 0, "behind", None)], "the lines as they were held, on disk");
     into.supersede(from.path().to_path_buf(), from.standing_on_disk());
     assert!(!pending_path(&tmp).exists() && into.superseded().is_none(), "the pending file removed once nothing is owed");
@@ -2455,10 +2732,10 @@ fn a_join_cut_before_its_sync_joins_again_and_doubles_no_line() {
     }
     // The crash: the copy's first two lines whole, its third torn.
     let lines = from.lines();
-    let third = held_line_bytes(&lines[2]);
+    let third = held_line_bytes(&lines[2], lines[2].base);
     let mut crashed = header_bytes(&Named::Chain(chain()), 1, "1.0.1");
-    crashed.extend(held_line_bytes(&lines[0]));
-    crashed.extend(held_line_bytes(&lines[1]));
+    crashed.extend(held_line_bytes(&lines[0], lines[0].base));
+    crashed.extend(held_line_bytes(&lines[1], lines[1].base));
     crashed.extend_from_slice(&third[..third.len() / 2]);
     fs::write(file_path(&tmp), &crashed).unwrap();
     let mut chain = live(chain_dir.open_file(1, "1.0.1").unwrap());
@@ -2475,26 +2752,65 @@ fn a_join_cut_before_its_sync_joins_again_and_doubles_no_line() {
 
 // ── THE BUDGETS, TIMED (§3c.3) ──────────────────────────────────────────────
 
-/// Checks that a drained file at both budgets reopens within the ceiling.
+/// The most a timed cost may grow from a quarter of the lines to all of them.
 ///
-/// It is a launch's read of the worst file the budgets admit:
-/// [`MAX_HELD_LINES`] lines on one document, their frames and anchors
-/// [`MAX_HELD_BYTES`], written as a drain of the full queue writes them —
-/// every line held, then line by line marked `sent`, its base the one the
-/// line kept before it raised it to, and kept at a position by a `done`, the
-/// last refused instead, so the file stands — each `done` raising every line
-/// standing after it. The reopen reads the one line standing, raised by the
-/// last line kept before it, within [`TIMED_CEILING`]; the figure is printed
-/// with the build's profile, and [`MAX_HELD_LINES`] states it.
-#[test]
-#[ignore = "timing test - gate-full only"]
-fn a_drained_file_at_both_budgets_reopens_within_the_ceiling() {
-    let tmp = TempDir::new().unwrap();
-    let d = dir(&tmp);
-    let n = MAX_HELD_LINES as u64;
+/// It is the growth bound of skep #816: twice the four a cost in proportion to
+/// the lines grows by, and half the sixteen a cost growing as their square
+/// does: the timing cells hold the reopen, the walk and the drop to it
+/// ([`assert_linear`]), so a cost grown by another power of the lines fails
+/// them whatever the machine's speed.
+pub(crate) const LINEAR_GROWTH: u32 = 8;
+
+/// Returns the build's profile, as a timing cell's figure names it.
+pub(crate) fn profile() -> &'static str {
+    if cfg!(debug_assertions) {
+        "unoptimized"
+    } else {
+        "optimized"
+    }
+}
+
+/// Asserts that `what` takes time in proportion to its lines (skep #816).
+///
+/// `run` times its act over the lines it is given, each line's frame the
+/// least the act lets it be, so the time is each line's work and not its
+/// bytes, which the byte budget bounds apart. The least of three runs at a
+/// quarter of [`MAX_HELD_LINES`], and of three at all of it — the runs
+/// alternating, so a stretch of load beside the gate's run meets both counts
+/// alike — are printed with the build's profile, and the second is held
+/// within [`LINEAR_GROWTH`] times the first.
+pub(crate) fn assert_linear(what: &str, mut run: impl FnMut(usize) -> Duration) {
+    let (mut quarter, mut budget) = (Duration::MAX, Duration::MAX);
+    for _ in 0..3 {
+        quarter = quarter.min(run(MAX_HELD_LINES / 4));
+        budget = budget.min(run(MAX_HELD_LINES));
+    }
+    eprintln!("{what}, each line's frame its least: {budget:?} at {MAX_HELD_LINES} lines, {quarter:?} at a quarter of them ({})", profile());
+    assert!(budget < quarter * LINEAR_GROWTH, "{what}: {budget:?} at {MAX_HELD_LINES} lines, past {LINEAR_GROWTH} times the {quarter:?} at a quarter of them");
+}
+
+/// Asserts that `what` took `took` at both budgets, within the ceiling.
+///
+/// The ceiling is [`TIMED_CEILING`]. The figure is printed first, with the
+/// build's profile: the one [`MAX_HELD_LINES`] states.
+pub(crate) fn assert_within_the_ceiling(what: &str, took: Duration) {
+    eprintln!("{what}, at both budgets: {took:?} ({})", profile());
+    assert!(took < TIMED_CEILING, "{what}: {took:?} at both budgets, past {TIMED_CEILING:?}");
+}
+
+/// Returns a drained file of `n` lines, as a drain of a full queue writes it.
+///
+/// Each line, on one document, carries `frame`. Every line is held, then line
+/// by line marked `sent`, its base the one the line kept before it raised it
+/// to, and kept at a position by a `done` — line `k` at `100 + k` — the last
+/// refused instead, so the file stands, each `done` raising every line standing
+/// after it.
+fn drained_file(n: u64, frame: &Value) -> Vec<u8> {
     let edges = anchors(Some("1.0.1.0.1.0.1.4"), Some("1.0.1.0.1.0.1.5"));
-    let frame = sized_frame(MAX_HELD_BYTES / MAX_HELD_LINES - edges.bytes());
-    let line = |k: u64, base: u64, reason: Reason| held_line_bytes(&HeldLine { k, doc: "1.0.1.0.1".into(), id: None, base, frame: frame.clone(), anchors: Some(edges.clone()), reason, time: now_ms() });
+    let line = |k: u64, base: u64, reason: Reason| {
+        let line = HeldLine { k, doc: "1.0.1.0.1".into(), id: None, base, frame: frame.clone(), anchors: Some(edges.clone()), reason, time: now_ms() };
+        held_line_bytes(&line, base)
+    };
     // The position line `k` is kept at, and the base it raises the lines after
     // it to.
     let kept_at = |k: u64| 100 + k;
@@ -2510,13 +2826,50 @@ fn a_drained_file_at_both_budgets_reopens_within_the_ceiling() {
     let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent"});
     body.extend(line(n, kept_at(n - 1), Reason::of("unreachable", true)));
     body.extend(line(n, kept_at(n - 1), Reason { sent: true, ..Reason::refused("out_of_bounds", verdict) }));
-    fs::write(file_path(&tmp), &body).unwrap();
+    body
+}
+
+/// Returns a store holding a drained file of `n` lines carrying `frame`.
+///
+/// The file is [`drained_file`]'s.
+fn drained_store(n: u64, frame: &Value) -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    dir(&tmp);
+    fs::write(file_path(&tmp), drained_file(n, frame)).unwrap();
+    tmp
+}
+
+/// Returns the time a reopen of `store`'s drained file of `n` lines takes.
+///
+/// The one line standing is read, raised by the last line kept before it.
+fn reopened_in(store: &TempDir, n: u64) -> Duration {
+    let d = dir(store);
     let started = Instant::now();
     let reopened = live(d.open_file(1, "1.0.1").unwrap());
     let took = started.elapsed();
-    let profile = if cfg!(debug_assertions) { "unoptimized" } else { "optimized" };
-    eprintln!("a drained held file at both budgets, {n} lines in {} bytes, reopens in {took:?} ({profile})", body.len());
-    let standing: Vec<(u64, u64, &str)> = reopened.lines().iter().map(|l| (l.k, l.base, l.reason.cause.as_str())).collect();
-    assert_eq!(standing, [(n, kept_at(n - 1), "out_of_bounds")], "the one line standing, raised by the last line kept before it");
-    assert!(took < TIMED_CEILING, "the reopen took {took:?}, past {TIMED_CEILING:?}");
+    let standing: Vec<(u64, u64, String)> = reopened.lines().iter().map(|l| (l.k, l.base, l.reason.cause.clone())).collect();
+    assert_eq!(standing, [(n, 100 + n - 1, "out_of_bounds".to_string())], "the one line standing, raised by the last line kept before it");
+    took
+}
+
+/// Checks that a drained file at both budgets reopens within the ceiling.
+///
+/// It reopens in time in proportion to its lines (skep #816). It is a
+/// launch's read of a drained file ([`drained_file`]): at a quarter
+/// of [`MAX_HELD_LINES`] and at all of it, each line's frame the least an
+/// insert spells, held to [`LINEAR_GROWTH`] ([`assert_linear`]); and the
+/// worst file the budgets admit, at the line budget each line's frame and
+/// anchors their share of [`MAX_HELD_BYTES`], read within [`TIMED_CEILING`]
+/// ([`assert_within_the_ceiling`]) (the mutant reader whose `done` raises the
+/// lines standing after it one by one grows as the square of the lines).
+#[test]
+#[ignore = "timing test - gate-full only"]
+fn a_drained_file_at_both_budgets_reopens_within_the_ceiling() {
+    let least = json!({"op": "insert"});
+    let stores: Vec<(usize, TempDir)> = [MAX_HELD_LINES / 4, MAX_HELD_LINES].into_iter().map(|n| (n, drained_store(n as u64, &least))).collect();
+    assert_linear("a drained held file's reopen", |n| reopened_in(&stores.iter().find(|(lines, _)| *lines == n).expect("a store of each count").1, n as u64));
+    let edges = anchors(Some("1.0.1.0.1.0.1.4"), Some("1.0.1.0.1.0.1.5"));
+    let n = MAX_HELD_LINES as u64;
+    let full = drained_store(n, &sized_frame(MAX_HELD_BYTES / MAX_HELD_LINES - edges.bytes()));
+    assert_within_the_ceiling("a drained held file's reopen", reopened_in(&full, n));
 }

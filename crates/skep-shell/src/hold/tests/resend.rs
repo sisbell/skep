@@ -123,7 +123,8 @@
 //! over the board's feed thread, a search answered between two turns, the
 //! turns running back to back. And, timed (`#[ignore]`, the full gate's), the
 //! walk over a full queue drained within its ceiling, each line's send
-//! measured beside it.
+//! measured beside it, and the person's drop of a refused run over a full
+//! queue, each in time in proportion to the lines.
 
 use super::*;
 
@@ -3909,52 +3910,71 @@ fn a_board_that_keeps_committing_starves_no_turn_of_a_drain() {
 
 // ── THE BUDGETS, TIMED (§3c.3) ──────────────────────────────────────────────
 
+/// Returns a writer's ground holding `lines` lines in memory alone.
+///
+/// It is the board no one has claimed, over a store the device refuses
+/// ([`unclaimed_ground`]): line `n` on `doc(n)`, held for `reason(n)`, no
+/// line owing an attest or a synced copy. Where `at_both_budgets`, each
+/// line's frame and anchors are a share of `held::MAX_HELD_BYTES` by
+/// `held::MAX_HELD_LINES`, so at the line budget the queue is at both
+/// budgets; else each frame is the least an insert spells.
+fn full_ground(lines: usize, at_both_budgets: bool, doc: impl Fn(usize) -> String, reason: impl Fn(usize) -> Reason) -> Ground {
+    let g = unclaimed_ground();
+    let edges = anchors(Some(&i(4)), Some(&i(5)));
+    // The frame's values sized by the rest of its spelling.
+    let rest = json_len(&insert(&doc(0), json!([""]), g.fake.head()));
+    let values = if at_both_budgets { "x".repeat(MAX_HELD_BYTES / MAX_HELD_LINES - edges.bytes() - rest) } else { "x".to_string() };
+    g.holds
+        .with_principal("b-1", 1, |ph| {
+            for n in 0..lines {
+                ph.hold(&doc(n), None, 0, insert(&doc(n), json!([values]), g.fake.head()), Some(edges.clone()), reason(n)).unwrap();
+            }
+        })
+        .unwrap();
+    g
+}
+
 /// Checks that the walk over a full queue drains within the ceiling.
 ///
-/// It is the resend's own work at `held::MAX_HELD_LINES` lines whose frames
-/// and anchors are `held::MAX_HELD_BYTES`: the queue in memory alone — at a
-/// board no one has claimed that serves no head record, over a store the
-/// device refuses, the one memory case ([`unclaimed_ground`]) — no line
-/// owing an attest, no copy synced, the board answering at once — so the
+/// It drains in time in proportion to its lines (skep #816). It is the
+/// resend's own work over a full queue ([`full_ground`]): the
+/// queue in memory alone, the one memory case, no line owing an attest, no
+/// copy synced and no retry writing one, the board answering at once — so the
 /// figure is the walk's bookkeeping, in its two worst shapes, every line on
 /// one document and each on its own; the probes, one a turn until a turn
-/// answers `Done`, send every line and keep it, within `held::TIMED_CEILING`;
-/// a store this shell can write would put each line on the pending file at
-/// its hold, a copy synced a line, and the fill, not the walk, would set the
-/// figure. Beside
-/// it, what each line's send costs held or not: a queue of 256 lines on a
-/// claimed board under a writer's session, its file this shell's, drained
-/// turn by turn — each line attested, its mark and its `done` synced — and
-/// its cost a line printed. The figures are printed with the build's
-/// profile, and `held::MAX_HELD_LINES` states them.
+/// answers `Done`, send every line and keep it. Over a quarter of
+/// `held::MAX_HELD_LINES` and all of it, each line's frame the least an
+/// insert spells, the drain is held to `held::tests::LINEAR_GROWTH` (the
+/// mutants whose settle walks the queue, or whose count of a document's
+/// lines does, grow as the square of the lines); at both budgets, within
+/// `held::TIMED_CEILING`. A store this shell can write would put each line
+/// on the pending file at its hold, a copy synced a line, and the fill, not
+/// the walk, would set the figure. Beside it, what each line's send costs
+/// held or not: a queue of 256 lines on a claimed board under a writer's
+/// session, its file this shell's, drained turn by turn — each line
+/// attested, its mark and its `done` synced — and its cost a line printed.
+/// The figures are printed with the build's profile, and
+/// `held::MAX_HELD_LINES` states them.
 #[test]
 #[ignore = "timing test - gate-full only"]
 fn the_walk_over_a_full_queue_drains_within_the_ceiling() {
-    let profile = if cfg!(debug_assertions) { "unoptimized" } else { "optimized" };
-    let edges = anchors(Some(&i(4)), Some(&i(5)));
     for (shape, apart) in [("on one document", false), ("each on its own document", true)] {
-        let doc = |n: usize| if apart { format!("1.0.1.0.{}", 100_000 + n) } else { DOC.to_string() };
-        let g = unclaimed_ground();
-        // Each line's frame and anchors a share of the byte budget, the
-        // frame's values sized by the rest of its spelling.
-        let rest = json_len(&insert(&doc(0), json!([""]), g.fake.head()));
-        let values = "x".repeat(MAX_HELD_BYTES / MAX_HELD_LINES - edges.bytes() - rest);
-        g.holds
-            .with_principal("b-1", 1, |ph| {
-                for n in 0..MAX_HELD_LINES {
-                    ph.hold(&doc(n), None, 0, insert(&doc(n), json!([values]), g.fake.head()), Some(edges.clone()), Reason::of("unreachable", false)).unwrap();
-                }
-            })
-            .unwrap();
-        let started = Instant::now();
-        while g.holds.probe("b-1") == Turn::Bounded {}
-        let took = started.elapsed();
-        eprintln!("the walk over a full held queue, {MAX_HELD_LINES} lines {shape}, drains in {took:?} ({profile})");
-        assert_eq!((g.fake.sends(), g.lines().len()), (MAX_HELD_LINES, 0), "{shape}: every line sent and kept");
-        assert!(took < crate::held::TIMED_CEILING, "{shape}: the walk took {took:?}, past {:?}", crate::held::TIMED_CEILING);
+        let doc = move |n: usize| if apart { format!("1.0.1.0.{}", 100_000 + n) } else { DOC.to_string() };
+        let drained_in = |lines: usize, at_both_budgets: bool| {
+            let g = full_ground(lines, at_both_budgets, doc, |_| Reason::of("unreachable", false));
+            let started = Instant::now();
+            while g.holds.probe("b-1") == Turn::Bounded {}
+            let took = started.elapsed();
+            assert_eq!((g.fake.sends(), g.lines().len()), (lines, 0), "{shape}: every line sent and kept");
+            took
+        };
+        let what = format!("the walk over a full held queue, every line {shape}");
+        crate::held::tests::assert_linear(&what, |lines| drained_in(lines, false));
+        crate::held::tests::assert_within_the_ceiling(&what, drained_in(MAX_HELD_LINES, true));
     }
     // Each line's send, held or not: attested, its mark and its `done`
     // synced to the board's held file.
+    let edges = anchors(Some(&i(4)), Some(&i(5)));
     let g = ground();
     let lines = 256;
     let frame = insert(DOC, json!(["x".repeat(2000)]), g.fake.head());
@@ -3970,5 +3990,32 @@ fn the_walk_over_a_full_queue_drains_within_the_ceiling() {
     let took = started.elapsed();
     assert_eq!((g.fake.sends(), g.lines().len()), (lines, 0), "every line sent and kept");
     assert!(g.fake.sends.lock().unwrap().iter().all(|sent| sent.get("attest").is_some()), "each line attested");
-    eprintln!("each held line's send — attested, its mark and its `done` synced to the held file — takes {:?} ({profile})", took / u32::try_from(lines).unwrap());
+    eprintln!("each held line's send — attested, its mark and its `done` synced to the held file — takes {:?} ({})", took / u32::try_from(lines).unwrap(), crate::held::tests::profile());
+}
+
+/// Checks that a person's drop of a full refused run is within the ceiling.
+///
+/// It takes time in proportion to its lines (skep #816). It is
+/// `resolve(drop)` of a refused line heading a run on one document,
+/// the rest held `behind` it, every line of the run dropped with it, in
+/// memory alone ([`full_ground`]): over a quarter of `held::MAX_HELD_LINES`
+/// and all of it, each line's frame the least an insert spells, held to
+/// `held::tests::LINEAR_GROWTH` (the mutant whose settle removes each line
+/// from the front of a vector moves every line after it, and grows as the
+/// square of the lines); at both budgets, within `held::TIMED_CEILING`.
+#[test]
+#[ignore = "timing test - gate-full only"]
+fn the_drop_of_a_refused_run_over_a_full_queue_is_within_the_ceiling() {
+    let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent"});
+    let dropped_in = |lines: usize, at_both_budgets: bool| {
+        let g = full_ground(lines, at_both_budgets, |_| DOC.to_string(), |n| if n == 0 { Reason::refused("out_of_bounds", verdict.clone()) } else { Reason::of("behind", false) });
+        let started = Instant::now();
+        let dropped = g.holds.resolve(&g.session, 1, ResolveAct::Drop);
+        let took = started.elapsed();
+        assert_eq!((dropped.ok(), g.lines().len()), (Some(Resolved::Dropped), 0), "the run dropped whole");
+        took
+    };
+    let what = "the drop of a refused run over a full held queue";
+    crate::held::tests::assert_linear(what, |lines| dropped_in(lines, false));
+    crate::held::tests::assert_within_the_ceiling(what, dropped_in(MAX_HELD_LINES, true));
 }

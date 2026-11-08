@@ -651,8 +651,10 @@ impl Holds {
     /// no step left for its next shift among them — the others going on.
     /// Each send settles its line, an ack taking it out of the queue, or
     /// stops its document, and each decision lets its document go or stops
-    /// it, so the walk ends; each line is found from the last one the walk
-    /// handled on, so a turn reads the queue once beside its steps.
+    /// it, so the walk ends; each line is found by ordinal from the last one
+    /// the walk handled on (`HeldQueue::next_after`), so a turn reads the
+    /// queue once beside its steps, and each settle and count reads one
+    /// document's entry alone (skep #816).
     /// `head_unreadable` is whether the probe's one read of the board's head
     /// answered so: the documents whose head line waits on the head are then
     /// passed over ([`passed_over`]). It answers [`Turn::Bounded`] where a
@@ -667,8 +669,9 @@ impl Holds {
         let mut after = 0u64;
         loop {
             let next = self.with_principal(board_reference, principal, |ph| {
-                let lines = ph.queue.lines();
-                lines[lines.partition_point(|l| l.k <= after)..].iter().find(|l| !ph.stopped_in_pass.contains(&l.doc)).map(|l| (l.clone(), ph.queue.parked(l.k)))
+                let line = ph.queue.next_after(after, |doc| ph.stopped_in_pass.contains(doc))?;
+                let parked = ph.queue.parked(line.k);
+                Some((line, parked))
             });
             let Some((line, parked)) = next.flatten() else { return Turn::Done };
             // A line parked on the pending file its queue's file took it from
@@ -697,7 +700,7 @@ impl Holds {
                 }
                 continue;
             }
-            if awaits_act(&line) {
+            if awaits_act(&line.reason) {
                 after = line.k;
                 sending.remove(&line.doc);
                 self.stop_in_pass(board_reference, principal, &line.doc);
@@ -1270,12 +1273,10 @@ impl Holds {
         self.with_principal(board_reference, principal, |ph| {
             let marks: Vec<(u64, Reason)> = ph
                 .queue
-                .lines()
-                .iter()
-                .filter(|l| l.doc == doc)
-                .map(|l| {
-                    let refusal = judged.as_ref().filter(|(judged, _)| *judged == l.k).map(|(_, verdict)| verdict.clone());
-                    (l.k, Reason { refusal, ..Reason::of(cause::MOVED, l.reason.sent) })
+                .reasons_on(doc)
+                .map(|(k, reason)| {
+                    let refusal = judged.as_ref().filter(|(judged, _)| *judged == k).map(|(_, verdict)| verdict.clone());
+                    (k, Reason { refusal, ..Reason::of(cause::MOVED, reason.sent) })
                 })
                 .collect();
             self.remark_lines(principal, ph, marks, None);
@@ -1302,7 +1303,7 @@ impl Holds {
 /// is held `head_unreadable` while the probe's one read of the board's head
 /// answers so (`head_unreadable`), its send bound to fail the same way.
 fn passed_over(head: &HeldLine, head_unreadable: bool) -> bool {
-    awaits_act(head) || (head_unreadable && head.reason.cause == cause::HEAD_UNREADABLE)
+    awaits_act(&head.reason) || (head_unreadable && head.reason.cause == cause::HEAD_UNREADABLE)
 }
 
 /// Returns whether deciding a document at `head` reads the board for the

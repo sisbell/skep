@@ -1293,7 +1293,8 @@ pub(super) struct OpenArgs {
     pub(super) selection: Option<Vec<lib::Run>>,
     /// The person's notes documents.
     pub(super) notes: Option<Vec<Address>>,
-    /// The drafts the read-through reads; the shell's own list where none.
+    /// The person's drafts the page lists, which no step of the composition
+    /// reads; the shell's own list where none.
     pub(super) readable_drafts: Option<Vec<Address>>,
     /// The person's published documents; the shell's own list where none.
     pub(super) published: Option<Vec<Address>>,

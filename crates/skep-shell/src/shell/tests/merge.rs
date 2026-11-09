@@ -683,7 +683,8 @@ fn the_draft_side_composes_and_lands_with_no_claim_and_its_re_open_reads_the_sid
 /// window part no record names: the part the record names is left
 /// unanswered, so the landing answers the panel's `inert` refusal naming
 /// it as named, nothing sent (B3-S11 P2 (i): no placeholder over published
-/// words).
+/// words). The landing follows the publication at once, and holds whether
+/// or not the document index has listed `O`.
 #[test]
 fn a_landing_over_a_window_a_record_names_answers_inert_naming_the_part() {
     let dir = TempDir::new().unwrap();
@@ -701,7 +702,49 @@ fn a_landing_over_a_window_a_record_names_answers_inert_naming_the_part() {
     g.call("publication.open", json!({"session": g.session, "draft": o, "mint": "1.0.1", "readable_drafts": [o], "published": [f.edition]})).unwrap_or_else(|r| panic!("{r}"));
     let minted = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     assert!(minted["edition"].is_string(), "O published at the mint form: {minted}");
-    g.listed(&[&o, &b, &l]);
+    let before = g.position();
+    let answer = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("PublicationRefused", &answer);
+    assert_eq!(answer["arm"], "inert", "{answer}");
+    let owed = answer["inert"]["unanswered"].as_array().unwrap_or_else(|| panic!("unanswered parts: {answer}"));
+    assert!(owed.len() == 1 && owed[0]["part"] == 0 && owed[0]["named"] == true, "the part the record names, left for the page: {answer}");
+    assert_eq!(g.position(), before, "nothing sent");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a landing over the page's panel names a part whatever the
+/// page listed.
+///
+/// As above, B windows `O` and composes as the merge's side into L, and
+/// `O` is then published, so a record names its words. The page opens L's
+/// panel itself, B named `also` and `readable_drafts` leaving `O` out: the
+/// window's one part is named all the same, admitting the counterpart and
+/// `drop`. `merge.land` takes the page's panel, the part unanswered, and
+/// answers its `inert` refusal naming the part as named, nothing sent
+/// (B3-S11 P2 (i); the link-sets design §5.5).
+#[test]
+fn a_landing_over_a_page_panel_that_lists_no_origin_still_names_the_part() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let o = g.draft("quote");
+    let b = g.addr(skep_client::board::frames::stage(&f.e1, None));
+    g.op(json!({"op": "insert", "doc": b, "at": {"subspace": "1", "ordinal": "8"}, "values": [" quietly"], "as_of": g.position()}));
+    g.op(json!({"op": "copy", "doc": b, "at": {"subspace": "1", "ordinal": "16"}, "specs": [{"source": o, "span": {"start": "1.1", "width": "0.5"}}], "as_of": g.position()}));
+    let l = g.addr(skep_client::board::frames::stage(&f.e2, None));
+    let landed = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "draft": b, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(landed["outcome"].as_str(), Some("landed"), "{landed}");
+    g.call("publication.open", json!({"session": g.session, "draft": o, "mint": "1.0.1", "readable_drafts": [o], "published": [f.edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let minted = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert!(minted["edition"].is_string(), "O published at the mint form: {minted}");
+    let open = json!({"session": g.session, "draft": l, "doc": f.edition, "also": [b], "readable_drafts": [l, b], "published": [f.edition]});
+    let panel = g.call("publication.open", open).unwrap_or_else(|r| panic!("{r}"));
+    let windows = panel["windows"].as_array().unwrap_or_else(|| panic!("the windows: {panel}"));
+    assert!(windows.len() == 1 && windows[0]["origin"] == o, "the one window, onto O: {panel}");
+    let parts = windows[0]["parts"].as_array().unwrap_or_else(|| panic!("its parts: {panel}"));
+    assert!(parts.len() == 1 && parts[0]["record"].is_string() && parts[0]["admits"] == json!(["counterpart", "drop"]), "one part the record names: {panel}");
     let before = g.position();
     let answer = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     crate::shapes::assert_declared("PublicationRefused", &answer);

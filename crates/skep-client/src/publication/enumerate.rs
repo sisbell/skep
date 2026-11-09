@@ -29,12 +29,13 @@
 //! re-minted; (3) `windows` — THE WINDOWS (B3-S11 P2 (i); the link-sets
 //! design §5.7): each held run onto a document neither a named draft nor
 //! the trunk and owned by the person exactly is read for its state, one
-//! `doc_metadata` per origin, and kept where unpublished; where the origin
-//! is a draft the person reads, ONE four-set over the record class homed in
-//! it, `from` the run, every record kept; each piece of the run the draft
-//! arranges is cut into PARTS at the records' edges — a stretch one record
-//! names as published, or a stretch none names — each part admitting its
-//! own answers ([`Part::admits`]); (4) `twins` — THE TWINS (the link-sets
+//! `doc_metadata` per origin, and kept where unpublished; every window kept
+//! is onto a draft the person reads, so each takes ONE four-set over the
+//! record class homed in its origin, `from` the run, every record kept
+//! (§5.5); each piece of the run the draft arranges is cut into PARTS at
+//! the records' edges — a stretch one record names as published, or a
+//! stretch none names — each part admitting its own answers
+//! ([`Part::admits`]); (4) `twins` — THE TWINS (the link-sets
 //! design §5.1, the stray words; §5.5): each named draft's correspondence
 //! records whose `from` the selection's carried pieces hold — words an
 //! earlier shot published, shown as a draft's own again by an act the
@@ -1161,10 +1162,11 @@ pub fn windows(p: &Publisher<'_>, inputs: &Inputs) -> Result<Vec<Window>, Fault>
 /// rendering draft, or one `also` names, whose words are re-minted — nor the
 /// trunk and is an unpublished document owned by the person exactly (one
 /// `doc_metadata` read per origin, kept), and where the draft arranges some
-/// of it. Its records are read where the origin is a draft the person
-/// reads — one four-set read over the record class homed in the origin,
-/// `from` the run, every record kept — and each arranged piece cut into its
-/// parts at their edges ([`parts_of`]).
+/// of it. Each origin kept is a draft the person reads, so every window's
+/// records are read whatever drafts [`Inputs::readable_drafts`] lists: one
+/// four-set read over the record class homed in the origin, `from` the run,
+/// every record kept (the link-sets design §5.5). Each arranged piece is
+/// cut into its parts at their edges ([`parts_of`]).
 pub(crate) fn windows_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, placed: &[Placement]) -> Result<Vec<Window>, Fault> {
     door.step("windows");
     let trunk = inputs.doc.as_ref();
@@ -1183,7 +1185,7 @@ pub(crate) fn windows_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, 
         if pieces.is_empty() {
             continue;
         }
-        let records = if inputs.readable_drafts.contains(&run.origin) { window_records(door, p, run, &unit(&origin), &subtype)? } else { Vec::new() };
+        let records = window_records(door, p, run, &unit(&origin), &subtype)?;
         let parts = pieces.iter().flat_map(|(piece, ordinal)| parts_of(piece, *ordinal, &records)).collect();
         out.push(Window { run: i, origin: run.origin.clone(), owner: account_of(&origin).unwrap_or_default(), i_start: run.i_start, width: run.width, parts });
     }

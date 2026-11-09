@@ -98,12 +98,12 @@
 //!
 //! The caller — the shell for the page (brief 2), the merge landing for its
 //! bare shot, a test — holds the selection as I-runs in V-order (P51), its
-//! readable drafts, its published documents, the rows' switches, the
-//! answers at each part of a window onto its own unpublished origin and the
-//! originals a lineage refusal left out; nothing here asks a person
-//! anything. Every read goes through one door, `Door`, under the
-//! caller's token, which counts its frames per step and caches each link's
-//! value — links never change — so the report can say what each step costs.
+//! published documents, the rows' switches, the answers at each part of a
+//! window onto its own unpublished origin and the originals a lineage
+//! refusal left out; nothing here asks a person anything. Every read goes
+//! through one door, `Door`, under the caller's token, which counts its
+//! frames per step and caches each link's value — links never change — so
+//! the report can say what each step costs.
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -373,8 +373,12 @@ pub struct Inputs {
     pub selection: Vec<Run>,
     /// The person's notes documents, in the order their rows stand.
     pub notes: Vec<Address>,
-    /// Every draft of the person's the read-through reads — their own, in
-    /// the caller's order; the draft itself among them where it is one.
+    /// The person's drafts the caller lists, in its order.
+    ///
+    /// No step of the composition reads it: the read-through finds the
+    /// person's records by their `to`, in any home of theirs, and the
+    /// windows step reads the records of every window it keeps, each onto a
+    /// draft the person owns.
     pub readable_drafts: Vec<Address>,
     /// The person's own published documents, the client's own list: key
     /// (i)'s home test and the public rows' destinations.

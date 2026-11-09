@@ -1334,7 +1334,7 @@ fn the_enumeration_reads_in_order_and_keeps_the_owned_homes_links_on_the_words()
     assert_eq!(steps, ["image", "merge_records", "windows", "twins", "find_links_v", "links", "records", "read_through", "claims", "base"], "no named part and no stray words: the counterparts step sends nothing");
     assert_eq!(e.frames[0], ("image", 2), "the extent and one image");
     assert_eq!(e.frames[1], ("merge_records", 1), "the atoms of the draft's own run, one read; the edition's words and the window's none");
-    assert_eq!(e.frames[2], ("windows", 1), "the window's origin's state; O is no draft the person reads, so no record read");
+    assert_eq!(e.frames[2], ("windows", 2), "the window's origin's state and one four-set over the records homed in O, which finds none");
     assert_eq!(e.frames[3], ("twins", 1), "one four-set over D's records from its own run, D's alone: no record names those words");
     assert!(e.twins.is_empty(), "{:?}", e.twins);
     assert_eq!(e.frames[4], ("find_links_v", 1), "ONE region read");
@@ -2467,8 +2467,7 @@ fn the_answers_at_each_part_and_the_counterpart() {
     let panel = panel(&p, &inputs, &e).unwrap();
     // THE WINDOWS are the enumeration's: the one run onto `O`, the person's
     // own unpublished origin, its owner and where in `O` it was written, one
-    // part no record names (no record of a draft the person reads names its
-    // words).
+    // part no record names (`O` homes no record of its words).
     assert_eq!(e.windows.len(), 1, "{:?}", e.windows);
     let w = &e.windows[0];
     assert_eq!((w.run, w.origin.to_string(), w.owner.as_str(), w.i_start, w.width), (2, O.to_string(), ACCOUNT, 1, 5));
@@ -2837,6 +2836,47 @@ fn a_part_named_since_the_panel_is_restated_and_asks_its_answer_again() {
     let left_panel = first_panel.composed(&inputs, &left_out);
     let again = reread(&p, &inputs, &left_out, &left_panel).unwrap();
     assert_eq!(again.enumeration.answers, BTreeMap::from([(part(2, 0), OriginAnswer::Drop), (part(2, 1), OriginAnswer::Drop)]), "leave-out stands on both");
+}
+
+/// Checks that a window's records are read whatever drafts the caller
+/// lists (B3-S11 P2 (i); the link-sets design §5.5).
+///
+/// `readable_drafts` leaves `O` out. At the open, a record naming `O`'s
+/// words 1..4 as `E`'s 16..19 still cuts the window into the part it names
+/// and the rest, and keep-private at both leaves the request inert naming
+/// the named part: no placeholder over published words. At the re-read, a
+/// record landed since the panel names the part, and the re-statement says
+/// so.
+#[test]
+fn a_windows_records_are_read_whether_or_not_the_caller_lists_its_origin() {
+    let tok = token();
+    let inputs = inputs();
+    assert!(!inputs.readable_drafts.contains(&a(O)), "the premise: the caller lists no O");
+    let keep_private = BTreeMap::from([(part(2, 0), OriginAnswer::KeepPrivate), (part(2, 1), OriginAnswer::KeepPrivate)]);
+    let owed_named = Built::Inert(Inert::Unanswered(vec![OwedAnswer { part: part(2, 0), named: true }]));
+    // The open: the record stands before the panel.
+    let (mut world, _) = World::base();
+    let record = world.typed(O, vec![ispan(O, 1, 4)], vec![ispan(E, 16, 4)], T_CORRESPONDENCE);
+    let (_, board, signer) = open(world);
+    let p = publisher(&board, &tok, &signer);
+    let e = enumerate(&p, &inputs).unwrap();
+    assert_eq!(e.frames.iter().find(|(step, _)| *step == "windows"), Some(&("windows", 3)), "O's state, the four-set homed in O and the record's read: {:?}", e.frames);
+    let naming: Vec<(u64, u64, Option<String>)> = e.windows[0].parts.iter().map(|p| (p.span.first, p.span.width, p.record.as_ref().map(|r| r.link.to_string()))).collect();
+    assert_eq!(naming, vec![(1, 4, Some(record)), (5, 1, None)], "the words the record names a part of their own");
+    let pn = panel(&p, &inputs, &e).unwrap();
+    let confirmed = Confirmed { answers: keep_private, ..switched(None) };
+    assert_eq!(build(&p, &inputs, &e, &pn, &confirmed).unwrap(), owed_named, "a placeholder over published words is no answer");
+    // The re-read: the record lands after the panel.
+    let (world, _) = World::base();
+    let (dialer, board, signer) = open(world);
+    let p = publisher(&board, &tok, &signer);
+    let first = enumerate(&p, &inputs).unwrap().composed(&inputs, &BTreeMap::from([(part(2, 0), OriginAnswer::KeepPrivate)]), &BTreeSet::new());
+    let first_panel = panel(&p, &inputs, &first).unwrap();
+    let record = dialer.world().typed(O, vec![ispan(O, 1, 4)], vec![ispan(E, 16, 4)], T_CORRESPONDENCE);
+    let again = reread(&p, &inputs, &first, &first_panel).unwrap();
+    assert_eq!(again.restatement.clone().expect("a difference").parts, vec![(part(2, 0), Some(a(&record)))], "the part the record names since the panel");
+    let confirmed = Confirmed { answers: again.enumeration.answers.clone(), ..switched(None) };
+    assert_eq!(build(&p, &inputs, &again.enumeration, &again.panel, &confirmed).unwrap(), owed_named, "the named part asks its answer again");
 }
 
 /// THE TWIN PRE-CHECK: a draft-native run whose words an earlier shot

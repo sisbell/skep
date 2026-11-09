@@ -29,7 +29,10 @@
 //! nothing on stdout; and `--draft` WITHOUT `--base` — a draft `stage`
 //! minted off the base version merged over the base the board records for
 //! it, a `--base` that agrees taken, and one the board's record does not
-//! derive refused by name, exit 1, nothing on stdout; and A STRANGER's
+//! derive refused by name, exit 1, nothing on stdout; and `--draft` WITH
+//! `--publish` — the draft reading as the member's words by identity after
+//! the publish, its base the member, the same publish again landing
+//! nothing; and A STRANGER's
 //! documents — a second top-level account's private draft and fork — each
 //! `withheld` refusal saying beside the document what the run did, and the
 //! draft named as the journal refused before the shot, exit 3, nothing
@@ -871,6 +874,45 @@ fn a_draft_is_merged_over_the_base_the_board_records_and_a_disagreeing_base_is_r
     assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
     assert!(r.err.contains(&format!("the board refused: draft_base_disagrees:the base {head} was named for the draft {staged}, whose recorded base (doc_metadata's base) derives the base {base}")), "{}", r.err);
     assert_eq!(rig.board.health().unwrap().log_position(), before, "nothing written");
+    session.close().expect("close");
+}
+
+/// `--draft ⟨S⟩ --publish` (skep #938): the words the shot publishes are
+/// taken from the draft in its one commit, so the draft reads as the
+/// member's words by identity, not as its own, and its recorded base is the
+/// member. The same `--publish` again — the draft staged from the head and
+/// the head named, so the merge composes what it composed — finds the member
+/// and lands nothing.
+#[test]
+fn a_draft_published_by_a_merge_reads_as_the_members_words_and_the_same_publish_lands_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let kind = rig.draft().to_string();
+    let (d, _base, head, _daughter) = rig.race(&session);
+    let s = rig.stage(&head);
+    let as_of = rig.board.health().unwrap().log_position();
+    Rig::acked(rig.board.op(Some(&rig.bare), &json!({"op": "insert", "doc": s.to_string(), "at": {"subspace": "1", "ordinal": "16"}, "values": ["!!!"], "as_of": as_of})));
+    let (d_s, s_s, head_s) = (d.to_string(), s.to_string(), head.to_string());
+    assert_eq!(rig.image(&token, &s, 18)[3], (format!("{s}.0.1.1"), "3".into()), "the premise: the draft's own typed words");
+    let position = || rig.board.health().unwrap().log_position();
+
+    let r = rig.merge(&["--doc", &d_s, "--draft", &s_s, "--kind", &kind, "--publish"]);
+    let v = report(&r);
+    let member = v["landed"]["member"].as_str().expect("the member").to_string();
+    assert_eq!(member, format!("{d}.3"), "the trunk's next member");
+    assert_eq!(rig.image(&token, &s, 18), rig.image(&token, &addr(&member), 18), "the draft holds the member's words by identity");
+    let meta = rig.read(&token, &frames::doc_metadata(&s_s));
+    assert_eq!(meta["base"].as_str(), Some(member.as_str()), "the draft's recorded base moved to the member: {meta}");
+
+    let before = position();
+    let publishes = rig.publishes_under(&token, &d);
+    let r = rig.merge(&["--doc", &d_s, "--draft", &s_s, "--head", &head_s, "--kind", &kind, "--publish"]);
+    let v = report(&r);
+    assert_eq!(v["landed"]["member"].as_str(), Some(member.as_str()), "the same member, read first");
+    assert_eq!(position(), before, "nothing landed twice");
+    assert_eq!(rig.publishes_under(&token, &d), publishes, "no second publish");
     session.close().expect("close");
 }
 

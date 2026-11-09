@@ -1064,6 +1064,151 @@ fn the_withheld_refusals_name_the_document_and_leave_the_outcome_to_the_embedder
     }
 }
 
+// ── the draft's kept places (`windows::kept_places`) ─────────────────────
+
+mod kept_places {
+    use super::super::windows::{kept_places, AnsweredRun};
+    use super::*;
+    use crate::board::answers::IRun;
+
+    fn s() -> Address {
+        addr("1.0.1.0.4")
+    }
+
+    fn o() -> Address {
+        addr("1.0.1.0.5")
+    }
+
+    /// A run of the draft's own words, as the shot re-mints it.
+    fn native(first: u64, width: u64) -> AnsweredRun {
+        let run = Run::new(s(), first, width);
+        AnsweredRun { run: run.clone(), family: Family::DraftNative, side: None, through: run }
+    }
+
+    /// A part answered by its counterpart: `width` published words of `d`
+    /// from `to`, whose words the draft holds as a window onto `O` from
+    /// `from`.
+    fn counterpart(to: u64, from: u64, width: u64) -> AnsweredRun {
+        AnsweredRun {
+            run: Run::new(d(), to, width),
+            family: Family::Own,
+            side: None,
+            through: Run::new(o(), from, width),
+        }
+    }
+
+    /// One stretch of the draft's image: `width` of its own words from
+    /// `first`, arranged at `ordinal`.
+    fn held(first: u64, width: u64, ordinal: u64) -> IRun {
+        IRun { prefix: format!("{}.0.1", s()), first, width, ordinal }
+    }
+
+    fn held_of_o(first: u64, width: u64, ordinal: u64) -> IRun {
+        IRun { prefix: format!("{}.0.1", o()), first, width, ordinal }
+    }
+
+    #[test]
+    fn a_run_the_draft_holds_whole_takes_its_one_place() {
+        assert_eq!(
+            kept_places(&[native(1, 3)], Some(&[held(1, 3, 12)])),
+            vec![(native(1, 3), Some(12))]
+        );
+    }
+
+    /// Cut where the draft cuts it, tiled in I-order, each piece at its own
+    /// place, whatever order the draft arranges the pieces in.
+    #[test]
+    fn a_run_the_draft_cuts_is_tiled_in_i_order_each_piece_at_its_own_place() {
+        let image = [held(3, 2, 1), held(1, 2, 3)];
+        assert_eq!(
+            kept_places(&[native(1, 4)], Some(&image)),
+            vec![(native(1, 2), Some(3)), (native(3, 2), Some(1))]
+        );
+    }
+
+    /// Words the draft does not arrange go with no place, the pieces around
+    /// them each at theirs.
+    #[test]
+    fn words_the_draft_does_not_arrange_go_with_no_place() {
+        assert_eq!(
+            kept_places(&[native(1, 6)], Some(&[held(3, 2, 7)])),
+            vec![(native(1, 2), None), (native(3, 2), Some(7)), (native(5, 2), None)]
+        );
+    }
+
+    /// No place is named twice: a position of the draft an earlier piece
+    /// named holds no later one, so a copy takes the draft's next occurrence
+    /// and a copy past the draft's occurrences goes with no place.
+    #[test]
+    fn no_place_is_named_twice_and_a_copy_takes_the_next_occurrence() {
+        let image = [held(1, 4, 1), held(1, 2, 10)];
+        assert_eq!(
+            kept_places(&[native(1, 2), native(1, 4)], Some(&image)),
+            vec![(native(1, 2), Some(1)), (native(1, 2), Some(10)), (native(3, 2), Some(3))],
+            "the later, wider run takes the rest of the first occurrence and the whole of the second"
+        );
+        assert_eq!(
+            kept_places(&[native(1, 4), native(1, 2)], Some(&image)),
+            vec![(native(1, 4), Some(1)), (native(1, 2), Some(10))],
+            "the wider run first takes its occurrence whole"
+        );
+        assert_eq!(
+            kept_places(&[native(1, 3), native(1, 3)], Some(&[held(1, 3, 5)])),
+            vec![(native(1, 3), Some(5)), (native(1, 3), None)],
+            "a copy the draft does not hold goes with no place"
+        );
+    }
+
+    /// A part answered by its counterpart is cut where the draft cuts the
+    /// window it stands for, the published words and the window's own span
+    /// moving together.
+    #[test]
+    fn a_counterpart_part_is_cut_where_the_draft_cuts_its_window() {
+        let part = counterpart(20, 1, 5);
+        assert_eq!(
+            kept_places(std::slice::from_ref(&part), Some(&[held_of_o(1, 5, 9)])),
+            vec![(part.clone(), Some(9))]
+        );
+        assert_eq!(
+            kept_places(
+                std::slice::from_ref(&part),
+                Some(&[held_of_o(1, 2, 9), held_of_o(3, 3, 40)])
+            ),
+            vec![(counterpart(20, 1, 2), Some(9)), (counterpart(22, 3, 3), Some(40))]
+        );
+    }
+
+    /// A run that takes no place stands uncut, whatever the draft holds, and
+    /// with no draft's image no run is cut or placed.
+    #[test]
+    fn a_run_that_takes_no_place_stands_uncut_and_no_image_cuts_nothing() {
+        let trunk = AnsweredRun {
+            run: Run::new(d(), 1, 4),
+            family: Family::Own,
+            side: None,
+            through: Run::new(d(), 1, 4),
+        };
+        let window = AnsweredRun {
+            run: Run::new(o(), 1, 4),
+            family: Family::Window,
+            side: None,
+            through: Run::new(o(), 1, 4),
+        };
+        let image = [
+            IRun { prefix: format!("{}.0.1", d()), first: 1, width: 2, ordinal: 1 },
+            held_of_o(1, 2, 3),
+        ];
+        assert_eq!(
+            kept_places(&[trunk.clone(), window.clone()], Some(&image)),
+            vec![(trunk.clone(), None), (window.clone(), None)]
+        );
+        assert_eq!(
+            kept_places(&[trunk.clone(), native(1, 2)], None),
+            vec![(trunk, None), (native(1, 2), None)]
+        );
+    }
+}
+
 // ── THE READS, THE LANDING AND THE RECORD over a scripted board ──────────
 //
 // A `Dialer` whose answers come from a `World` the test writes — each
@@ -3419,6 +3564,14 @@ mod scripted {
                 (S.into(), format!("{S}.0.1.1"), "3".into())
             ]
         );
+        // The draft side's own words take its place in the draft, read off
+        // its image (the draft arranges "!!!" at 12); the trunk's words and
+        // the window take none.
+        assert_eq!(
+            frame["places"],
+            json!([null, null, null, {"subspace": "1", "ordinal": "12"}]),
+            "{frame}"
+        );
         // The body, hand-built from the same pieces, verifies the attest.
         let window = a(&format!("{Z}.0.1.1"));
         let values: Vec<[u8; 1]> = b"the cat sat!!!".iter().map(|b| [*b]).collect();
@@ -4876,8 +5029,10 @@ mod scripted {
         // The publication family's arms: `not_owner` naming the DRAFT side is
         // the unowned draft, named — never the library's own fault — while
         // naming `doc` is the own fault; the twin fence's member and the
-        // budget's detail ride verbatim; a place's token, which this frame
-        // never carries, the library's own fault.
+        // budget's detail ride verbatim; `kept_place_moved`, the draft changed
+        // since the merge was composed, the board's verdict and no fault of
+        // the library's; a place the records do not name, which only the
+        // library's own arithmetic sends, the library's own fault.
         let drafted = || Landing::Shot { merger: merger(&session, &signer), draft: Some(a(S)), answers: Answers::default(), journal: None };
         let verbatim = |err: Refusal, code: &str| -> crate::halt::Refused {
             match err {
@@ -4900,9 +5055,12 @@ mod scripted {
         );
         let budget = verbatim(land(&board, &merged, drafted()).unwrap_err(), "publication_over_budget");
         assert_eq!(budget.detail.as_deref(), Some("70000 in-lock reads priced over the budget of 65536"));
-        refuse("kept_place_moved", None);
+        refuse("kept_place_moved", Some(S));
+        let moved = verbatim(land(&board, &merged, drafted()).unwrap_err(), "kept_place_moved");
+        assert_eq!(moved.detail, Some(format!("{S} changed after the merge was composed at position {} — nothing was published; run the merge again, which reads the draft as it stands", merged.as_of)), "{moved:?}");
+        refuse("stray_place_unrecorded", Some(S));
         let err = land(&board, &merged, drafted()).expect_err("own fault");
-        assert!(matches!(&err, Refusal::Halt(h) if h.to_string().contains("kept_place_moved")), "{err}");
+        assert!(matches!(&err, Refusal::Halt(Halt::Halt(_))) && err.to_string().contains("stray_place_unrecorded"), "{err}");
         // The head the board owes past the landing's read of it: the board's
         // state, a retry its act — never this library's fault.
         dialer.world().memo.insert(
@@ -9718,6 +9876,159 @@ mod scripted {
         land(&board, &merged, answered(&session, &signer, Answers { window: vec![a(&format!("{E}.2"))], ..Answers::default() })).expect("landed");
         let id = dialer.frames("publish")[0]["id"].as_str().unwrap().to_string();
         assert_ne!(id, landing_id(&merged.key.text(), "publish"), "the key's text alone is every other shot's");
+    }
+
+    /// The `X abc Y def` shape: the draft `S`, staged from the base `D.1`
+    /// "abcdef", with `X` typed before "abc" and `Y` typed after it — `S·1`
+    /// and `S·2`, I-adjacent — and the head `D.2` having removed "abc". M
+    /// coalesces the two typed words into one run the draft holds at two
+    /// places.
+    fn cut_by_the_draft_world() -> World {
+        let mut w = World::new();
+        w.text(D, 1, "abcdef");
+        w.text(S, 1, "XY");
+        let head = vec![run(D, 4, 3)];
+        w.doc(D, true, ACCOUNT, head.clone());
+        w.member(&format!("{D}.1"), vec![run(D, 1, 6)], None);
+        w.member(&format!("{D}.2"), head, Some(6));
+        w.trunk_head.insert(D.to_string(), format!("{D}.2"));
+        let draft = vec![run(S, 1, 1), run(D, 1, 3), run(S, 2, 1), run(D, 4, 3)];
+        w.doc(S, false, ACCOUNT, draft.clone());
+        w.staged(S, &format!("{D}.1"), 6);
+        w.position += 1;
+        let at = w.position;
+        w.docs.get_mut(S).unwrap().history.insert(at, draft);
+        w
+    }
+
+    /// One run of M the draft holds at two places goes out as two runs, each
+    /// beside its own place: the board checks a place against the whole
+    /// entry beside it (`kept_place_moved`), so one place beside the coalesced
+    /// run would refuse a merge the draft has done nothing to.
+    #[test]
+    fn a_run_of_m_the_draft_holds_at_two_places_is_sent_as_two_at_their_places() {
+        let (dialer, board, signer) = open(cut_by_the_draft_world());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        assert_eq!(
+            m_runs(&merged),
+            vec![run(S, 1, 2), run(D, 4, 3)],
+            "the premise: M coalesced the two typed words"
+        );
+        dialer.clear();
+        land(&board, &merged, shot(&session, &signer)).expect("landed");
+        let frame = &dialer.frames("publish")[0];
+        assert_eq!(
+            frame["runs"],
+            json!([
+                {"origin": S, "i_start": format!("{S}.0.1.1"), "width": "1"},
+                {"origin": S, "i_start": format!("{S}.0.1.2"), "width": "1"},
+                {"origin": D, "i_start": format!("{D}.0.1.4"), "width": "3"},
+            ]),
+            "{frame}"
+        );
+        assert_eq!(
+            frame["places"],
+            json!([{"subspace": "1", "ordinal": "1"}, {"subspace": "1", "ordinal": "5"}, null]),
+            "{frame}"
+        );
+        assert_eq!(frame["draft"].as_str(), Some(S), "{frame}");
+    }
+
+    /// The list a draft's places cut is held to the shot's run cap too,
+    /// refused with its count before the head is read or anything sent.
+    #[test]
+    fn a_list_the_kept_places_cut_past_the_cap_is_refused_before_anything_is_sent() {
+        let (dialer, board, signer) = open(cut_by_the_draft_world());
+        let session = sign_in(&board, &signer);
+        let mut merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        merged.cap = merged.composed.counts.m;
+        dialer.clear();
+        let err = land(&board, &merged, shot(&session, &signer)).expect_err("over");
+        assert_eq!(err, Refusal::OverCap { runs: 3, cap: 2 });
+        nothing_sent(&dialer);
+        assert!(
+            dialer.frames("retrieve_v").iter().all(|f| f["specs"][0]["doc"] != HEAD_MEMBER_1),
+            "the head was not read: {:?}",
+            dialer.ops()
+        );
+    }
+
+    /// The draft's own window onto its private origin `O`: "hello" between
+    /// the base's words, and "!!!" typed at its end, the head unchanged.
+    fn window_in_the_draft_world() -> World {
+        let mut w = World::new();
+        w.text(D, 1, "the cat sat");
+        w.text(O, 1, "hello");
+        w.text(E, 1, "xxhello world");
+        w.text(S, 1, "!!!");
+        w.doc(O, false, ACCOUNT, vec![run(O, 1, 5)]);
+        w.doc(E, true, ACCOUNT, vec![run(E, 1, 13)]);
+        let head = vec![run(D, 1, 11)];
+        w.doc(D, true, ACCOUNT, head.clone());
+        w.member(&format!("{D}.1"), head.clone(), None);
+        w.member(&format!("{D}.2"), head, Some(11));
+        w.trunk_head.insert(D.to_string(), format!("{D}.2"));
+        let draft = vec![run(D, 1, 4), run(O, 1, 5), run(D, 5, 7), run(S, 1, 3)];
+        w.doc(S, false, ACCOUNT, draft.clone());
+        w.staged(S, &format!("{D}.1"), 11);
+        w.position += 1;
+        let at = w.position;
+        w.docs.get_mut(S).unwrap().history.insert(at, draft);
+        w
+    }
+
+    /// A part the draft holds as a window, answered by its counterpart,
+    /// takes the draft's place of the window — the commit re-windows the
+    /// draft there through the record; a part kept private takes none, the
+    /// words staying the window it was, and the draft's own words take theirs.
+    #[test]
+    fn a_part_answered_by_its_counterpart_takes_the_drafts_place_and_a_kept_private_one_none() {
+        let mut world = window_in_the_draft_world();
+        world.record_of_o(1, 5, 40);
+        let (dialer, board, signer) = open(world);
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        dialer.clear();
+        land(
+            &board,
+            &merged,
+            answered(
+                &session,
+                &signer,
+                Answers { window: vec![a(&format!("{E}.2"))], ..Answers::default() },
+            ),
+        )
+        .expect("landed");
+        let frame = &dialer.frames("publish")[0];
+        assert_eq!(
+            frame["runs"][1],
+            json!({"origin": E, "i_start": format!("{E}.0.1.3"), "width": "5"}),
+            "the part by its counterpart: {frame}"
+        );
+        assert_eq!(
+            frame["places"],
+            json!([null, {"subspace": "1", "ordinal": "5"}, null, {"subspace": "1", "ordinal": "17"}]),
+            "the window's own place in the draft, and the draft's own words': {frame}"
+        );
+
+        let (dialer, board, signer) = open(window_in_the_draft_world());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        dialer.clear();
+        land(
+            &board,
+            &merged,
+            answered(&session, &signer, Answers { keep_private: vec![a(O)], ..Answers::default() }),
+        )
+        .expect("landed");
+        let frame = &dialer.frames("publish")[0];
+        assert_eq!(frame["runs"][1]["i_start"], format!("{O}.0.1.1"), "the window itself: {frame}");
+        assert_eq!(
+            frame["places"],
+            json!([null, null, null, {"subspace": "1", "ordinal": "17"}]),
+            "no place beside the part kept private: {frame}"
+        );
     }
 
     /// A word whose control characters could forge a line comes back as

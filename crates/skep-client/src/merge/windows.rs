@@ -44,6 +44,21 @@
 //! bytes the shot signs by value, read through the window's own span — and
 //! a part left out is gone.
 //!
+//! **The draft's kept places** ([`kept_places`]; wire.md §The publish shot
+//! and head-float, the kept places). A shot that renders a draft side sends
+//! beside each run of the draft's words the place the draft holds it at, so
+//! the one commit re-windows the draft onto the published words and leaves it
+//! showing none of them as its own (the link-sets design §5.7 (viii); B3-S11
+//! P5). The runs that take a place are the draft's own words the shot
+//! re-mints and a part answered by its counterpart, whose words the draft
+//! holds as a window ([`AnsweredRun::takes_a_place`]); the trunk's words, a
+//! plain window and a part kept private take none, as the board refuses a
+//! place beside them (`stray_place_unrecorded`). The places are read off the
+//! draft's own image at the composition's one position, never another
+//! side's, so M's coalescing is undone where the draft cuts a run: one run of
+//! M the draft holds at two places goes out as two, each at its own place,
+//! and no place is named twice. What the draft does not arrange takes none.
+//!
 //! The merged list's words are the person's document's, and every word a
 //! refusal says comes back as data (SP-10); the program that embeds this
 //! library says them, rendered inert (SP-15).
@@ -53,13 +68,14 @@ use std::collections::BTreeMap;
 use skep_address::Address;
 
 use crate::address::{account_of, parse_address};
+use crate::board::answers::IRun;
 use crate::halt::Halt;
 use crate::publication::parts::{composed_parts, origin_state, parts_of, window_records, OriginState};
 use crate::publication::{self, answers_onto, compose_part, owned_by, renamed, Door, Fault, ISpan, OriginAnswer as Answer, OwedAnswer, PartComposition, PartKey, Publisher, Window};
 
 use super::compose::{Item, PlacedRun, Run, SideIx};
 use super::land::{own_fault_face, Merger, Writer};
-use super::reads::{session_ended, values_for, Family, Merged, Refusal, Side};
+use super::reads::{content_prefix, session_ended, values_for, Family, Merged, Refusal, Side};
 use super::record::{PartAnswer, RecordedAnswer};
 
 /// The positions read for a part's first words, or for the words before it.
@@ -209,6 +225,81 @@ pub(super) struct AnsweredRun {
     /// It is the run itself, or the window's own span where the run is the
     /// published words a record names.
     pub(super) through: Run,
+}
+
+impl AnsweredRun {
+    /// Returns whether the shot sends the draft's place beside this run.
+    ///
+    /// It is the draft's words the shot re-mints and a part answered by its
+    /// counterpart (the module's doc); the board refuses any other run a
+    /// place (`stray_place_unrecorded`; wire.md §The publish shot and
+    /// head-float).
+    fn takes_a_place(&self) -> bool {
+        self.family == Family::DraftNative || self.through != self.run
+    }
+
+    /// Returns the run's `width` positions from `offset`.
+    fn piece(&self, offset: u64, width: u64) -> AnsweredRun {
+        let cut = |r: &Run| Run::new(r.origin.clone(), r.i_start + offset, width);
+        AnsweredRun { run: cut(&self.run), family: self.family, side: self.side, through: cut(&self.through) }
+    }
+}
+
+/// Returns the list a shot sends, each piece beside its kept place.
+///
+/// `runs` are cut where the draft whose `image` is given cuts them, and each
+/// piece carries the draft's own place of its words, `None` for a run that
+/// takes no place and for words the draft does not arrange (the module's
+/// doc). A piece is the longest stretch of a run the draft holds at one
+/// place no earlier piece has named; a stretch it holds nowhere, or only at
+/// places already named, goes with no place. Each place is named once, so
+/// words the draft arranges twice take its occurrences in V-order, the k-th
+/// copy in M the k-th place. The board re-windows the entries in order, each
+/// moving only its own width, so the places stay true from the first entry
+/// to the last. With no `image` every run stands uncut with no place.
+pub(super) fn kept_places(runs: &[AnsweredRun], image: Option<&[IRun]>) -> Vec<(AnsweredRun, Option<u64>)> {
+    let Some(image) = image else {
+        return runs.iter().map(|answered| (answered.clone(), None)).collect();
+    };
+    // The draft's stretches no piece has named, in V-order.
+    let mut free: Vec<IRun> = image.to_vec();
+    let mut out = Vec::with_capacity(runs.len());
+    for answered in runs {
+        if !answered.takes_a_place() {
+            out.push((answered.clone(), None));
+            continue;
+        }
+        let through = &answered.through;
+        let chain = content_prefix(&through.origin);
+        let mut cursor = through.i_start;
+        while cursor < through.reach() {
+            let holding = free.iter().position(|r| r.prefix == chain && r.first <= cursor && cursor < r.first + r.width);
+            let (width, place) = match holding {
+                Some(k) => {
+                    let r = free.remove(k);
+                    let width = (through.reach() - cursor).min(r.first + r.width - cursor);
+                    let place = r.ordinal + (cursor - r.first);
+                    // What the piece leaves of the stretch, either side of it.
+                    let before = cursor - r.first;
+                    let after = r.first + r.width - cursor - width;
+                    if after > 0 {
+                        free.insert(k, IRun { prefix: r.prefix.clone(), first: cursor + width, width: after, ordinal: place + width });
+                    }
+                    if before > 0 {
+                        free.insert(k, IRun { prefix: r.prefix, first: r.first, width: before, ordinal: r.ordinal });
+                    }
+                    (width, Some(place))
+                }
+                None => {
+                    let next = free.iter().filter(|r| r.prefix == chain && r.first > cursor).map(|r| r.first).min().unwrap_or(through.reach()).min(through.reach());
+                    (next - cursor, None)
+                }
+            };
+            out.push((answered.piece(cursor - through.i_start, width), place));
+            cursor += width;
+        }
+    }
+    out
 }
 
 /// Returns M as `answers` leave it — the list a shot places, the read-first

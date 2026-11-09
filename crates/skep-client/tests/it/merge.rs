@@ -20,7 +20,12 @@
 //! the position the draft was read at and verifying Equal as of it once
 //! the shot has moved the draft's base and the draft is edited (skep #453),
 //! Unreadable to a guest the draft is withheld from, and refused as the
-//! record's where it names a position past the board's head (skep #761).
+//! record's where it names a position past the board's head (skep #761);
+//! THE KEPT PLACES (skep #938): the draft re-windowed onto the words the
+//! shot published and landed again over one composition with nothing
+//! written; a run of M the draft holds at two places sent as two, the
+//! draft re-windowed at both; and a draft changed after the composition
+//! refused `kept_place_moved` whole, the merge composed again landing.
 //! And ONE DRAFT LANDING (the landing lane's brief B; skep #762, #764): the
 //! merge composed at one position, the draft edited after it and the
 //! landing refused `arrangement_moved` whole; composed again and landed in
@@ -771,7 +776,9 @@ fn a_draft_side_merges_from_the_base_the_board_records() {
     let merger = Merger { token: session.token(), account: session.account(), signer: &device };
     let landed = land(&board, &merged, Landing::Shot { merger, draft: None, answers: Answers::default(), journal: None })
         .expect("landed");
-    let Landed::Member { address: member, record: link, .. } = landed else { panic!("{landed:?}") };
+    let Landed::Member { address: member, record: link, .. } = landed.clone() else {
+        panic!("{landed:?}")
+    };
     assert_eq!(member.to_string(), format!("{d}.3"), "the trunk's next member");
     assert_eq!(
         image(&board, &token, &member, 18),
@@ -783,6 +790,30 @@ fn a_draft_side_merges_from_the_base_the_board_records() {
         ],
         "the draft's text re-minted under D at D·16"
     );
+    // THE KEPT PLACES (wire.md §The publish shot and head-float): the commit
+    // re-windowed the draft onto the words it published — the draft holds
+    // the member's fresh run by identity where it held its own — and the
+    // draft holds no word it did not hold before.
+    assert_eq!(
+        image(&board, &token, &draft, 14),
+        vec![(format!("{d}.0.1.1"), 11), (format!("{d}.0.1.16"), 3)],
+        "the draft re-windowed: the base's text and the published words"
+    );
+    // LANDED AGAIN over the one composition: the read-first finds the member
+    // by its answered list, whatever the draft now holds, and writes nothing
+    // twice.
+    let at = board.health().unwrap().log_position();
+    assert_eq!(
+        land(
+            &board,
+            &merged,
+            Landing::Shot { merger, draft: None, answers: Answers::default(), journal: None }
+        )
+        .expect("landed"),
+        landed,
+        "the same landing read back"
+    );
+    assert_eq!(board.health().unwrap().log_position(), at, "nothing written twice");
     let found =
         read(&board, Some(&token), &frames::find_links_ftt(&kind.to_string(), &draft.to_string()));
     assert_eq!(found["addrs"], json!([link.to_string()]), "the record is found FROM the draft");
@@ -876,6 +907,184 @@ fn as_found(landed: &Landed) -> Landed {
         *staged = false;
     }
     found
+}
+
+/// The session, the document and the draft of the shot cells below: a
+/// content session on a claimed board, `D` published with `D.1` holding
+/// `base_text` and `D.2` the `Staged` list given, and the draft `S` staged
+/// from `D.1`.
+struct DraftShot {
+    board: Board,
+    device: HybridSigner,
+    bare_token: Token,
+    d: Address,
+    head: Address,
+    draft: Address,
+    kind: Address,
+    _daemon: skepd::Skepd,
+}
+
+fn draft_shot(dir: &std::path::Path, base_text: &str, head_list: &[Staged<'_>]) -> DraftShot {
+    let sd = spawn(&dir.join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session)
+        .expect("a content session");
+    let bare_token = bare(&board, PRINCIPAL);
+    let d = published_document(&board, &session, &device);
+    let base = shot(
+        &board,
+        &session,
+        &device,
+        &bare_token,
+        &d,
+        None,
+        &[Staged::Fresh { text: base_text }],
+    );
+    let head = shot(
+        &board,
+        &session,
+        &device,
+        &bare_token,
+        &d,
+        Some((&base, base_text.len() as u64)),
+        head_list,
+    );
+    let staged = acked(board.op(Some(&bare_token), &frames::stage(&base.to_string(), None)));
+    let draft = addr(acked_addr(&staged).expect("the staged draft's address"));
+    let kind = addr(&mint(&board, &bare_token, ACCOUNT, false));
+    session.close().expect("closed");
+    DraftShot { board, device, bare_token, d, head, draft, kind, _daemon: sd }
+}
+
+impl DraftShot {
+    fn inputs(&self) -> Inputs {
+        Inputs {
+            doc: self.d.clone(),
+            head: self.head.clone(),
+            base: None,
+            sides: vec![Side::Draft { at: self.draft.clone(), position: None }],
+            options: Default::default(),
+            kind: self.kind.clone(),
+        }
+    }
+
+    /// A content session, the shot's hand, and the shot of `merged`.
+    fn land(&self, merged: &skep_client::merge::Merged) -> Result<Landed, Refusal> {
+        let session =
+            handshake(&self.board, Scope::Content, &self.device, PRINCIPAL, Site::Session)
+                .expect("a content session");
+        let merger =
+            Merger { token: session.token(), account: session.account(), signer: &self.device };
+        land(
+            &self.board,
+            merged,
+            Landing::Shot { merger, draft: None, answers: Answers::default(), journal: None },
+        )
+    }
+
+    fn position(&self) -> u64 {
+        self.board.health().unwrap().log_position()
+    }
+}
+
+/// ONE RUN OF M THE DRAFT HOLDS AT TWO PLACES (the kept places, wire.md §The
+/// publish shot and head-float): the draft typed `X` before "abc" and `Y`
+/// after it, the head removed "abc", so M coalesces the two typed words into
+/// one run — the premise — and the shot sends them as two runs, each at its
+/// own place. The shot lands, the member holding M and the draft re-windowed
+/// at both places; a single place beside the coalesced run would have been
+/// refused `kept_place_moved`, which the shot composed right cannot meet.
+#[test]
+fn a_run_the_draft_holds_at_two_places_lands_and_re_windows_the_draft_at_both() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let w = draft_shot(dir.path(), "abcdef", &[Staged::Own { from: 4, text: "def" }]);
+    insert_text(&w.board, &w.bare_token, &w.draft.to_string(), 1, "X");
+    insert_text(&w.board, &w.bare_token, &w.draft.to_string(), 5, "Y");
+    let d = &w.d;
+    assert_eq!(
+        image(&w.board, &w.bare_token, &w.draft, 8),
+        vec![
+            (format!("{}.0.1.1", w.draft), 1),
+            (format!("{d}.0.1.1"), 3),
+            (format!("{}.0.1.2", w.draft), 1),
+            (format!("{d}.0.1.4"), 3)
+        ],
+        "the premise: X abc Y def, the two typed words I-adjacent"
+    );
+    let merged = compose(&w.board, Some(&w.bare_token), &w.inputs()).expect("composed");
+    assert_eq!(
+        merged.composed.runs[0].run,
+        Run::new(w.draft.clone(), 1, 2),
+        "the premise: M coalesced them"
+    );
+    let landed = w.land(&merged).expect("landed");
+    let Landed::Member { address: member, .. } = landed else { panic!("{landed:?}") };
+    assert_eq!(
+        image(&w.board, &w.bare_token, &member, 5),
+        vec![(format!("{d}.0.1.7"), 2), (format!("{d}.0.1.4"), 3)],
+        "the member holds M, the two words re-minted"
+    );
+    assert_eq!(
+        image(&w.board, &w.bare_token, &w.draft, 8),
+        vec![
+            (format!("{d}.0.1.7"), 1),
+            (format!("{d}.0.1.1"), 3),
+            (format!("{d}.0.1.8"), 1),
+            (format!("{d}.0.1.4"), 3)
+        ],
+        "the draft re-windowed at both places, its words where they stood"
+    );
+}
+
+/// THE DRAFT CHANGED AFTER THE COMPOSITION: a word typed at the draft's start
+/// moves every place the merge read; the board refuses the shot whole
+/// `kept_place_moved`, nothing committed, faced as the board's verdict naming
+/// the draft and the position composed at, never this library's fault. The
+/// merge composed again, which reads the draft as it stands, lands.
+#[test]
+fn a_shot_over_a_draft_changed_since_its_composition_is_refused_whole_and_lands_composed_again() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let w = draft_shot(
+        dir.path(),
+        "the cat sat",
+        &[
+            Staged::Own { from: 1, text: "the " },
+            Staged::Fresh { text: "big " },
+            Staged::Own { from: 5, text: "cat sat" },
+        ],
+    );
+    let draft = w.draft.to_string();
+    insert_text(&w.board, &w.bare_token, &draft, 12, "!!!");
+    let merged = compose(&w.board, Some(&w.bare_token), &w.inputs()).expect("composed");
+    insert_text(&w.board, &w.bare_token, &draft, 1, ">");
+    let (before, d, held) =
+        (w.position(), w.d.clone(), image(&w.board, &w.bare_token, &w.draft, 15));
+    let err = w.land(&merged).expect_err("refused");
+    let Refusal::Halt(Halt::Refused(refused)) = &err else {
+        panic!("the board's verdict: {err:?}")
+    };
+    assert_eq!(refused.code, "kept_place_moved", "{refused}");
+    assert_eq!(
+        refused.detail.as_deref(),
+        Some(format!("{draft} changed after the merge was composed at position {} — nothing was published; run the merge again, which reads the draft as it stands", merged.as_of).as_str()),
+        "{refused}"
+    );
+    assert_eq!(w.position(), before, "nothing committed");
+    assert_eq!(image(&w.board, &w.bare_token, &w.draft, 15), held, "the draft as it stood");
+
+    let merged = compose(&w.board, Some(&w.bare_token), &w.inputs()).expect("composed again");
+    let landed = w.land(&merged).expect("landed");
+    let Landed::Member { address: member, .. } = landed else { panic!("{landed:?}") };
+    assert_eq!(member.to_string(), format!("{d}.3"));
+    assert_eq!(
+        image(&w.board, &w.bare_token, &w.draft, 15),
+        vec![(format!("{d}.0.1.16"), 1), (format!("{d}.0.1.1"), 11), (format!("{d}.0.1.17"), 3)],
+        "the draft re-windowed at the places it holds now"
+    );
 }
 
 /// The draft landing on the real daemon is one write, refused whole once moved.

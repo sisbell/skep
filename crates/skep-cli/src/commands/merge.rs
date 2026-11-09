@@ -24,7 +24,10 @@
 //! `--keep-private`), this command answering none for the person: with a
 //! part unanswered it publishes nothing and refuses, exit 1, every part and
 //! the answers it admits said (`owed_block`; the merge record's §1.5
-//! and §6); with `--into` it lands the
+//! and §6) — and a `--draft` side's own words taken from the draft in the
+//! same commit, so it reads them as published, a draft changed since the
+//! composition refused with nothing published (the library's `land` doc);
+//! with `--into` it lands the
 //! merged list in a draft as one `set_arrangement` typed against that
 //! position — refused whole where the draft changed since, the draft's base
 //! re-recorded on the head and the merge marked beside it; with `--new` it

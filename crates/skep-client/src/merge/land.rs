@@ -29,15 +29,23 @@
 //! its body go through the publication composition's request builder
 //! (`crate::publication::Request`) with one deposit list — `supersede`, the
 //! daughters (the claim, below) — and no `links`, `retract` or `read_with`
-//! entry, no place beside any run, the document form — the merge's delta
-//! from a publication (the link-sets design §5.5: "the walk's base the
-//! `base` it holds"), so a shot naming no daughter signs today's body byte
-//! for byte through the one body builder. A part answered by its
-//! counterpart is the published words by reference — signed by value where
-//! they lie in the document's own chain, read through the window's own
-//! span, and by address elsewhere — a part kept private is a window with
-//! no place, a part left out sent nowhere. A daughter in the acknowledgment
-//! is reported at once ([`Landed::AsDaughter`]): the head moved under a shot
+//! entry, the document form — the merge's delta from a publication (the
+//! link-sets design §5.5: "the walk's base the `base` it holds"), so a shot
+//! naming no daughter signs today's body byte for byte through the one body
+//! builder. Beside the runs and outside the body (wire.md §Arrangement,
+//! `publish`), a shot that renders a draft side carries the draft's own
+//! place of each of its words the shot re-mints and of each part answered
+//! by its counterpart that the draft arranges, the list cut where the draft
+//! cuts it ([`windows::kept_places`]; the link-sets design §5.7 (viii)), so
+//! the one commit re-windows the draft onto the published words. The draft
+//! keeps only the words it held; those M holds beyond it stay out of it,
+//! while its recorded base moves to the member, as at every shot rendering
+//! a draft. A part answered by its counterpart is the published words by
+//! reference — signed by value where they lie in the document's own chain,
+//! read through the window's own span, and by address elsewhere — a part
+//! kept private is a window with no place, a part left out sent nowhere. A
+//! daughter in the acknowledgment is reported at once
+//! ([`Landed::AsDaughter`]): the head moved under a shot
 //! naming no daughter, the library never re-runs, the embedder does with
 //! `retries` one higher (decision 17). The record: the merger's current
 //! record for the key, read by the landing itself as the composition reads
@@ -473,6 +481,8 @@ impl<'a> Landing<'a> {
 ///   the journal's `doc_metadata` read's other refusals and halts;
 /// - the reads' refusals for the draft's `doc_metadata` at the position the
 ///   write is typed against;
+/// - at the shot, [`Refusal::OverCap`] over the list cut at a draft side's
+///   kept places, nothing sent;
 /// - a claimed board serving no head record, as [`Refusal::Halt`] naming
 ///   `H.1`, before the shot, with nothing sent; and the `H.1` and `/health`
 ///   reads' halts (SP-14);
@@ -486,7 +496,9 @@ impl<'a> Landing<'a> {
 ///   the trunk's head named, the merge to compose again on it, nothing
 ///   committed and nothing re-sent —
 ///   `already_published` and `publication_over_budget` verbatim as
-///   [`Refusal::Halt`] (never the library's fault),
+///   [`Refusal::Halt`] (never the library's fault), `kept_place_moved` as
+///   [`Refusal::Halt`] naming the draft that changed since the merge was
+///   composed, nothing published,
 ///   `attestation_invalid:board_unavailable` faced as the head the board
 ///   owes, nothing landed, `attestation_required` at a shot sent unsigned
 ///   answered by its one signed re-send, a head the second read does not
@@ -1016,21 +1028,25 @@ impl Writer<'_> {
     /// Sends the shot, answering the member minted and the ack's position.
     ///
     /// The frame and its body go through the publication's request builder
-    /// with the daughters as its one deposit list and no place — every
-    /// copied run's values re-read through the side that holds them, every
-    /// window by address, the base group the head and its extent as read,
-    /// `supersede` the `Member` sides with the skip read first
-    /// ([`Writer::daughters`]) — then the frame with its `attest` and its
-    /// id, the records read again first ([`windows::recheck`]), one re-ask
-    /// under the same id on a lost acknowledgment, and the frame sent once
-    /// more, signed, under the same id where it went unsigned and a claim
-    /// landed past the head's read ([`Writer::attest_after_claim`]).
+    /// with the daughters as its one deposit list — every copied run's values
+    /// re-read through the side that holds them, every window by address, the
+    /// base group the head and its extent as read, `supersede` the `Member`
+    /// sides with the skip read first ([`Writer::daughters`]) — and, where the
+    /// shot renders a draft side, the list cut where that draft cuts it with
+    /// its kept place beside each piece ([`windows::kept_places`]; none for
+    /// a draft named beside the sides, whose image no read made) — then the
+    /// frame with its `attest` and its id, the records read again first
+    /// ([`windows::recheck`]), one re-ask under the same id on a lost
+    /// acknowledgment, and the frame sent once more, signed, under the same
+    /// id where it went unsigned and a claim landed past the head's read
+    /// ([`Writer::attest_after_claim`]).
     ///
     /// # Errors
     ///
-    /// The head's refusal and halts ([`Writer::signing_term`]), read before
-    /// the values, nothing sent, and read again after a claim, nothing sent
-    /// past it; the skip reads' refusals at the daughters;
+    /// [`Refusal::OverCap`] over the list the kept places cut, nothing sent;
+    /// then the head's refusal and halts ([`Writer::signing_term`]), read
+    /// before the values, nothing sent, and read again after a claim,
+    /// nothing sent past it; the skip reads' refusals at the daughters;
     /// [`Refusal::WindowPartsOwed`] naming a part a record names since its
     /// answer was given; [`Refusal::WindowWithheld`],
     /// [`Refusal::NeedsSignedSession`] and [`Refusal::NoSuchDocument`] as the
@@ -1039,29 +1055,46 @@ impl Writer<'_> {
     /// [`Refusal::SupersedeRefused`] with its entry and cause,
     /// `already_published` and
     /// `publication_over_budget` as the board's refusal verbatim, never this
-    /// library's fault, and `attestation_invalid:board_unavailable` faced as
-    /// the head the board owes; the value reads' refusals; the attest's
-    /// fault; a body past [`SHOT_BODY_BUDGET`], a run with no address, a
-    /// window of width 0, and the board's refusal of the frame's substance —
-    /// the shot's own table, a place's or another deposit's token, which this
-    /// frame never carries — as the library's own faults; an answer of a
-    /// shape this client does not know, faced; the death signal,
+    /// library's fault, `kept_place_moved` as the board's verdict in the
+    /// person's words, naming the draft that changed since the merge was
+    /// composed and that nothing was published, and
+    /// `attestation_invalid:board_unavailable` faced as the head the board
+    /// owes; the value reads' refusals; the attest's fault; a body past
+    /// [`SHOT_BODY_BUDGET`], a run with no address, a window of width 0, and
+    /// the board's refusal of the frame's substance — the shot's own table,
+    /// a place the records do not name (`stray_place_unrecorded`), or another
+    /// deposit's token, which this frame never carries — as the library's own
+    /// faults; an answer of a shape this client does not know, faced; the
+    /// death signal,
     /// [`Refusal::SessionEnded`]; a dial fault after the one re-ask; the
     /// board's other refusals verbatim.
     fn publish(&self, merged: &Merged, draft: Option<&Address>, shot: &ShotParts) -> Result<(Address, u64), Refusal> {
-        let term = self.signing_term()?;
         let doc = &merged.inputs.doc;
         let head = &merged.inputs.head;
-        let supersede = self.daughters(merged)?;
         let draft_side = merged.inputs.sides.iter().find_map(|s| match s {
             Side::Draft { at, .. } => Some(at.clone()),
             _ => None,
         });
         let fresh = merged.families.contains(&Family::DraftNative);
-        let draft = draft.cloned().or(if fresh { draft_side } else { None });
-        let mut runs = Vec::with_capacity(shot.runs.len());
-        let mut pieces = Vec::with_capacity(shot.runs.len());
-        for placed in &shot.runs {
+        let draft = draft.cloned().or(if fresh { draft_side.clone() } else { None });
+        // The list as sent: cut at the kept places of the draft side the shot
+        // renders, its image the one read at the composition's position.
+        let image = draft
+            .as_ref()
+            .filter(|d| Some(*d) == draft_side.as_ref())
+            .and_then(|d| merged.maps.iter().find(|m| m.doc == *d))
+            .map(|m| m.runs.as_slice());
+        let sent = windows::kept_places(&shot.runs, image);
+        if sent.len() > merged.cap {
+            return Err(Refusal::OverCap { runs: sent.len(), cap: merged.cap });
+        }
+        let term = self.signing_term()?;
+        let supersede = self.daughters(merged)?;
+        let mut runs = Vec::with_capacity(sent.len());
+        let mut pieces = Vec::with_capacity(sent.len());
+        let mut places = Vec::with_capacity(sent.len());
+        for (placed, place) in &sent {
+            places.push(*place);
             let run = &placed.run;
             let i_start = run
                 .address_at(0)
@@ -1086,8 +1119,7 @@ impl Writer<'_> {
             }
         }
         // THE REQUEST BUILDER, with the daughters alone: the merge's delta
-        // from a publication is no other deposit and no place, in either
-        // list.
+        // from a publication is no other deposit and no `also_places`.
         let n = runs.len();
         let request = publication::Request {
             doc: Some(doc.clone()),
@@ -1097,7 +1129,7 @@ impl Writer<'_> {
             draft: draft.clone(),
             also: Vec::new(),
             runs,
-            places: vec![None; n],
+            places,
             also_places: Vec::new(),
             stray_records: vec![0; n],
             pieces,
@@ -1152,6 +1184,22 @@ impl Writer<'_> {
                 None => Refusal::Halt(r.refused(&v)),
             },
             "already_published" | "publication_over_budget" => Refusal::Halt(r.refused(&v)),
+            // The draft changed past the position its kept places were read
+            // at: the board's verdict, nothing committed, never this client's
+            // fault, in the person's words.
+            "kept_place_moved" => {
+                let changed = site.as_ref().or(draft.as_ref()).unwrap_or(doc);
+                Refusal::Halt(Halt::Refused(Refused {
+                    status: 200,
+                    code: r.code().to_string(),
+                    detail: Some(format!(
+                        "{changed} changed after the merge was composed at position {} — nothing was published; run the merge again, which reads the draft as it stands",
+                        merged.as_of
+                    )),
+                    op: r.op().map(str::to_string),
+                    body: v.clone(),
+                }))
+            }
             "base_superseded"
             | "base_not_in_chain"
             | "base_extent_too_large"
@@ -1162,7 +1210,6 @@ impl Writer<'_> {
             | "too_many_runs"
             | "too_many_values"
             | "private_source_versionless"
-            | "kept_place_moved"
             | "stray_place_unrecorded"
             | "link_home_refused"
             | "old_refused"

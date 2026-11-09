@@ -9,8 +9,11 @@ touches content: it composes the merge and prints the report as one JSON
 document, `--publish` lands it as the next version with its record, every
 window part of the merged text answered by name first (`--window`,
 `--leave-out`, `--keep-private` — it answers none for you, and refuses,
-exit 1, naming every part where one is owed, publishing nothing),
-`--into` lands it in a draft, the record kept only in a private document
+exit 1, naming every part where one is owed, publishing nothing), a
+`--draft` side's own words taken from the draft in the same commit so it
+reads them as published (a draft changed since the composition refused
+with nothing published), `--into` lands it in a draft, the record kept only
+in a private document
 — a published `--journal` said by the composition's talk and refused
 before any write, exit 1 — a daughter is reported and never retried,
 a fork of one of the document's published versions (`--fork`) is merged

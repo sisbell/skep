@@ -31,25 +31,30 @@
 //!    refused; THE WINDOWS (§5.7; B3-S11 P2 (i)), each run onto an
 //!    unpublished draft of the person's own cut into PARTS by the records
 //!    that name its words as published, each part admitting its own
-//!    answers; one `find_links_v` over the
-//!    selection's V-spans as one region array, each address kept where its
-//!    home's account is the person's exactly, each kept link read once and
-//!    kept where its STORED endset touches the words any answer can publish
-//!    through a content span; THE COUNTERPART'S IDENTITY, the links on every
-//!    named part's published words by two batched four-set reads; the
-//!    read-through of the counterpart records whose `to` lies in those
-//!    words and the links on their `from` spans by two batched four-set
-//!    reads; the filter's `in_claims` and `out_claims` per candidate, each
-//!    successor's ends kept; the candidates grouped by HOME. Then THE
-//!    COMPOSITION, re-made at every answer from those reads alone
-//!    (`Enumeration::composed`): the selection as the answers publish it —
-//!    a part by its counterpart, by its own words behind a placeholder, or
-//!    not at all — every candidate judged over it, dropped where an active
-//!    claim of the person's names a public successor homed in a published
-//!    document of theirs covering the published spans — the candidate's
-//!    ends read through the records, as the request spells them — or any
-//!    other successor that is itself a candidate, and a formatting mark
-//!    judged on the words a reader receives, never onto a placeholder.
+//!    answers; THE TWINS (§5.1, the stray words), each named draft's
+//!    records whose `from` the selection holds, read as the twin pre-check
+//!    reads them, the published words they name joining the words any
+//!    answer can publish; one `find_links_v` over the selection's V-spans
+//!    as one region array, each address kept where its home's account is
+//!    the person's exactly, each kept link read once and kept where its
+//!    STORED endset touches the words any answer can publish through a
+//!    content span; THE COUNTERPART'S IDENTITY, the links on every named
+//!    part's published words and on the stray words by two batched
+//!    four-set reads; the read-through of the counterpart records whose
+//!    `to` lies in those words and the links on their `from` spans by two
+//!    batched four-set reads; the filter's `in_claims` and `out_claims` per
+//!    candidate, each successor's ends kept; the candidates grouped by
+//!    HOME. Then THE COMPOSITION, re-made at every answer from those reads
+//!    alone (`Enumeration::composed`): the selection as the answers publish
+//!    it — a stray stretch by reference onto the published words its twin
+//!    names, as the twin pre-check sends it; a part by its counterpart, by
+//!    its own words behind a placeholder, or not at all — every candidate
+//!    judged over it, dropped where an active claim of the person's names a
+//!    public successor homed in a published document of theirs covering
+//!    the published spans — the candidate's ends read through the records,
+//!    as the request spells them — or any other successor that is itself a
+//!    candidate, and a formatting mark judged on the words a reader
+//!    receives, never onto a placeholder.
 //! 2. [`panel`](mod@panel) — THE PANEL's DATA (§5.2): the rows by home in the design's
 //!    order with each set's state and label, the links folded by type with
 //!    their far documents, the line counts, the formatting line by its test,

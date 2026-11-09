@@ -15,7 +15,11 @@
 //! draft of the family already published. A run of no named draft's identity passes
 //! through as given: with its place where the request's counterpart arm
 //! sent one beside a window part a record names — counted as the one record
-//! the commit reads for that part — and with none otherwise.
+//! the commit reads for that part — and with none otherwise. The read and
+//! the cut are the enumeration's too: it reads THE TWINS over the
+//! selection's carried pieces and composes the selection as published by
+//! the same cut, so every offer is judged over the words this pre-check
+//! sends (the link-sets design §5.1, the stray words).
 //!
 //! **The landed test, after a lost answer or `already_published`.** ONE
 //! composition answering whether THIS request's effect committed and in
@@ -108,40 +112,19 @@ pub fn twin_precheck(p: &Publisher<'_>, inputs: &Inputs, runs: &[Run], places: &
 
 /// Reads the named drafts' records through `door` and re-composes.
 ///
-/// One four-set read per named draft — the rendering draft first, then
-/// each `also` draft, in the request's order — over that draft's records
-/// for the runs of its own identity; a named draft with no run of its
-/// identity in `runs` is not read. A run of no named draft's identity is
-/// passed through as given, its record count `1` where it carries a place
-/// — a window part taken by its counterpart, re-composed by the request's
-/// arm by reference to the record the enumeration read — and `0`
-/// otherwise. Every list is
-/// carried beside the pieces: a piece re-composed by reference, or left as
-/// given, takes the rendering draft's place and each `also` draft's at the
-/// piece's offset into the run, so a draft that arranges the recorded words
-/// is re-windowed there through the record whichever list places it.
+/// The records are the twin fence's own read ([`twin_records`]). A run of
+/// no named draft's identity is passed through as given, its record count
+/// `1` where it carries a place — a window part taken by its counterpart,
+/// re-composed by the request's arm by reference to the record the
+/// enumeration read — and `0` otherwise; a named draft's run is cut by the
+/// records ([`recompose`]). Every list is carried beside the pieces: a
+/// piece re-composed by reference, or left as given, takes the rendering
+/// draft's place and each `also` draft's at the piece's offset into the
+/// run, so a draft that arranges the recorded words is re-windowed there
+/// through the record whichever list places it.
 pub(crate) fn twin_precheck_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, runs: &[Run], places: &[Option<u64>], draft_places: &[Option<u64>], also_places: &[AlsoPlaces]) -> Result<Recomposed, Fault> {
     door.step("twin_precheck");
-    let subtype = frames::unit_span(T_CORRESPONDENCE).as_array().cloned().unwrap_or_default();
-    let mut records: Vec<Record> = Vec::new();
-    for draft in inputs.named_drafts() {
-        let native: Vec<Value> = runs.iter().filter(|r| r.origin == *draft).map(|r| frames::i_span(&r.i_start_text(), r.width)).collect();
-        if native.is_empty() {
-            continue;
-        }
-        let draft = draft.to_string();
-        let unit = frames::unit_span(&draft).as_array().cloned().unwrap_or_default();
-        for chunk in native.chunks(super::enumerate::MAX_WIRE_LIST) {
-            for hit in door.addrs(&draft, &frames::find_links_four(Slot::Spans(&unit), Slot::Spans(chunk), Slot::Any, Slot::Spans(&subtype)))? {
-                if records.iter().any(|r| r.link.to_string() == hit) {
-                    continue;
-                }
-                if let Some(record) = read_record(door, p, &hit)? {
-                    records.push(record);
-                }
-            }
-        }
-    }
+    let records = twin_records(door, p, inputs, runs)?;
     let mut out = Recomposed {
         runs: Vec::new(),
         places: Vec::new(),
@@ -164,32 +147,90 @@ pub(crate) fn twin_precheck_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &In
             out.push(run.clone(), place, in_draft, usize::from(place.is_some()), &also_at);
             continue;
         }
-        // The pieces: each ordinal of the run either covered by one record
-        // (the first covering it) or not, consecutive alike merged.
-        let chain = run.chain();
-        let mut cursor = run.i_start;
-        while cursor < run.reach() {
-            let covering = records.iter().find(|r| r.from.overlap(&chain, cursor, cursor + 1).is_some());
-            let end = match covering {
-                Some(r) => r.from.reach().min(run.reach()),
-                None => records.iter().filter_map(|r| (r.from.chain == chain && r.from.first > cursor).then_some(r.from.first)).min().unwrap_or(run.reach()).min(run.reach()),
-            };
-            let width = end - cursor;
-            let offset = cursor - run.i_start;
-            match covering {
-                Some(r) => {
-                    let to = r.map(&chain, cursor, end).expect("the record covers the piece");
-                    let origin = to.document().and_then(|d| parse_address(&d)).expect("a record's to is a content span");
-                    out.push(Run::new(origin, to.first, width), place.map(|p| p + offset), in_draft.map(|p| p + offset), 1, &also_from(offset));
-                }
-                None => out.push(Run::new(run.origin.clone(), cursor, width), place.map(|p| p + offset), in_draft.map(|p| p + offset), 0, &also_from(offset)),
-            }
-            cursor = end;
+        for (piece, offset, by_reference) in recompose(run, &records) {
+            out.push(piece, place.map(|p| p + offset), in_draft.map(|p| p + offset), usize::from(by_reference), &also_from(offset));
         }
     }
     out.records = records;
     out.frames = door.counts();
     Ok(out)
+}
+
+/// Reads THE TWINS through `door`: each named draft's records whose `from`
+/// overlaps `runs` of that draft's identity — the twin fence's own read.
+///
+/// One four-set read per chunk of each named draft's spans — the rendering
+/// draft first, then each `also` draft, in the request's order — `{home:
+/// [the draft], ty: [the subtype], from: [its spans]}`, each hit read once
+/// and kept by the exact type (`read_record`); a named draft with no run of
+/// its identity in `runs` is not read, and a run of no named draft's
+/// identity reads nothing. The twin pre-check reads them over the request's
+/// runs, the enumeration over the selection's carried pieces (the link-sets
+/// design §5.1, the stray words); the caller names the step.
+///
+/// # Errors
+///
+/// The reads' faults.
+pub(crate) fn twin_records(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, runs: &[Run]) -> Result<Vec<Record>, Fault> {
+    let subtype = frames::unit_span(T_CORRESPONDENCE).as_array().cloned().unwrap_or_default();
+    let mut records: Vec<Record> = Vec::new();
+    for draft in inputs.named_drafts() {
+        let native: Vec<Value> = runs.iter().filter(|r| r.origin == *draft).map(|r| frames::i_span(&r.i_start_text(), r.width)).collect();
+        if native.is_empty() {
+            continue;
+        }
+        let draft = draft.to_string();
+        let unit = frames::unit_span(&draft).as_array().cloned().unwrap_or_default();
+        for chunk in native.chunks(super::enumerate::MAX_WIRE_LIST) {
+            for hit in door.addrs(&draft, &frames::find_links_four(Slot::Spans(&unit), Slot::Spans(chunk), Slot::Any, Slot::Spans(&subtype)))? {
+                if records.iter().any(|r| r.link.to_string() == hit) {
+                    continue;
+                }
+                if let Some(record) = read_record(door, p, &hit)? {
+                    records.push(record);
+                }
+            }
+        }
+    }
+    Ok(records)
+}
+
+/// Returns `run`, a run of a named draft's identity, cut by `records` into
+/// the pieces the request sends, in order — THE TWIN PRE-CHECK's cut.
+///
+/// Each stretch the first record covering its first position names, up to
+/// the end of that record's `from`, is re-composed BY REFERENCE onto the
+/// record's `to` at its offset ([`Record::map`]); each stretch no record
+/// covers, up to the next record's first position, is the run's own. Each
+/// piece comes with its offset into `run`, where its places are read, and
+/// whether a record re-composed it.
+///
+/// # Panics
+///
+/// Where a record's `to` is no content span — never for a record
+/// [`Record::of`] reads.
+pub(crate) fn recompose(run: &Run, records: &[Record]) -> Vec<(Run, u64, bool)> {
+    let chain = run.chain();
+    let mut out = Vec::new();
+    let mut cursor = run.i_start;
+    while cursor < run.reach() {
+        let covering = records.iter().find(|r| r.from.overlap(&chain, cursor, cursor + 1).is_some());
+        let end = match covering {
+            Some(r) => r.from.reach().min(run.reach()),
+            None => records.iter().filter_map(|r| (r.from.chain == chain && r.from.first > cursor).then_some(r.from.first)).min().unwrap_or(run.reach()).min(run.reach()),
+        };
+        let offset = cursor - run.i_start;
+        out.push(match covering {
+            Some(r) => {
+                let to = r.map(&chain, cursor, end).expect("the record covers the piece");
+                let origin = to.document().and_then(|d| parse_address(&d)).expect("a record's to is a content span");
+                (Run::new(origin, to.first, end - cursor), offset, true)
+            }
+            None => (Run::new(run.origin.clone(), cursor, end - cursor), offset, false),
+        });
+        cursor = end;
+    }
+    out
 }
 
 impl Recomposed {

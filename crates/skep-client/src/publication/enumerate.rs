@@ -34,34 +34,48 @@
 //! it, `from` the run, every record kept; each piece of the run the draft
 //! arranges is cut into PARTS at the records' edges — a stretch one record
 //! names as published, or a stretch none names — each part admitting its
-//! own answers ([`Part::admits`]); (4) `find_links_v` — ONE read over the
-//! region as one array; (5) `links` — each answered address read for its
-//! HOME off the address and kept where the home's account is the person's
-//! EXACTLY, never nested under theirs, and never a home in the edition's
-//! own chain ("`E` no row"); each kept link read once (`read_link`) and
-//! kept as a candidate only where its STORED endset touches THE WORDS ANY
-//! ANSWER CAN PUBLISH ([`Enumeration::publishable`]) through a content span
-//! — a whole-work end, a unit span at a document's or an account's
-//! address, is no candidate — and where its stored type is no record class,
-//! by the reader's own exact test (the correspondence subtype, the held
-//! removal, a grant, a credential, a claim, the succession pair, a
-//! retraction, the `replaces` link, an edition claim, the journal
-//! designation, the consumption marker); (6) `counterparts` — THE
-//! COUNTERPART'S IDENTITY: the links on every named part's published words
-//! by TWO batched four-set reads, `{from: […]}` and `{to: […]}`, up to the
-//! cap a read, each answered link kept as (5) keeps one, so an answer at a
-//! part needs no read; (7) `records` — THE READ-THROUGH's first hop: the
-//! counterpart records whose `to` lies in the publishable words — a named
-//! part's own record among them — one four-set read `{home: "any", ty:
-//! [the subtype], to: [their I-spans]}` in chunks of the wire list cap,
-//! each record read once, kept by the exact type and where its home's
-//! account is the person's (a record of a draft the person reads but does
-//! not own is dropped); (8) `read_through` — the second hop, the links on
-//! every record's `from` by TWO batched four-set reads over all of them,
+//! own answers ([`Part::admits`]); (4) `twins` — THE TWINS (the link-sets
+//! design §5.1, the stray words; §5.5): each named draft's correspondence
+//! records whose `from` the selection's carried pieces hold — words an
+//! earlier shot published, shown as a draft's own again by an act the
+//! editor's mapping does not reach (a second device's undo, an agent's raw
+//! `reinstate`) or left so in an `also` draft a shot left as it stood —
+//! read as the twin pre-check reads them, one four-set read per named
+//! draft holding a carried piece, in chunks of the wire list cap, each
+//! record read once; each stretch a twin names is STRAY: the request
+//! re-composes it by reference onto the published words the record's `to`
+//! names (`landed`'s cut), and those words join the words any answer can
+//! publish; (5) `find_links_v` — ONE read over the region as one array;
+//! (6) `links` — each answered address read for its HOME off the address
+//! and kept where the home's account is
+//! the person's EXACTLY, never nested under theirs, and never a home in
+//! the edition's own chain ("`E` no row"); each kept link read once
+//! (`read_link`) and kept as a candidate only where its STORED endset
+//! touches THE WORDS ANY ANSWER CAN PUBLISH ([`Enumeration::publishable`])
+//! through a content span — a whole-work end, a unit span at a document's
+//! or an account's address, is no candidate — and where its stored type is
+//! no record class, by the reader's own exact test (the correspondence
+//! subtype, the held removal, a grant, a credential, a claim, the
+//! succession pair, a retraction, the `replaces` link, an edition claim,
+//! the journal designation, the consumption marker); (7) `counterparts` —
+//! THE COUNTERPART'S IDENTITY: the links on every named part's published
+//! words and on every stray stretch's by TWO batched four-set reads,
 //! `{from: […]}` and `{to: […]}`, up to the cap a read, each answered link
-//! kept where its home is a PRIVATE one of the person's (the read-through
-//! is private-only: a public link there is the carriage v1 does not make)
-//! and mapped back to the records whose `from` it overlaps; (9) `claims` —
+//! kept as (6) keeps one, so an answer at a part needs no read and a link
+//! the person made on published words the draft no longer shows is a
+//! candidate as it was while the draft showed them; (8) `records` — THE
+//! READ-THROUGH's first hop: the twins, then the counterpart records whose
+//! `to` lies in the publishable words — a named part's own record among
+//! them — one four-set read `{home: "any", ty: [the subtype], to: [their
+//! I-spans]}` in chunks of the wire list cap, each record read once, kept
+//! by the exact type and where its home's account is the person's (a
+//! record of a draft the person reads but does not own is dropped); (9)
+//! `read_through` — the second hop, the links on every record's `from` by
+//! TWO batched four-set reads over all of them, `{from: […]}` and `{to:
+//! […]}`, up to the cap a read, each answered link kept where its home is
+//! a PRIVATE one of the person's (the read-through is private-only: a
+//! public link there is the carriage v1 does not make) and mapped back to
+//! the records whose `from` it overlaps; (10) `claims` —
 //! THE FILTER's reads, run once every candidate is known: one `in_claims`
 //! and one `out_claims`, both `view: "active"`, per candidate; each active
 //! claim of the person's — homed in a home whose account is theirs, off
@@ -78,14 +92,15 @@
 //! **The composition** ([`Enumeration::composed`]), from those reads and no
 //! other. The answers at the windows' parts decide THE SELECTION AS
 //! PUBLISHED ([`Enumeration::selection`]): the named drafts' runs and the
-//! trunk's as the draft places them, cut around their merge records; a part
-//! answered by its counterpart as the published words its record names; a
-//! part kept private as its own words, behind a placeholder; a part left
-//! out, answered publish-first or not yet answered, nothing — a window
-//! awaiting its answer counts toward nothing. Over that selection every
-//! candidate is judged again: the stored-endset test, and THE FILTER's
-//! drop — a public successor, homed in a published document of the
-//! person's, drops a candidate where its ends as stored COVER every
+//! trunk's as the draft places them, cut around their merge records, a
+//! named draft's stray stretch as the published words its twin names; a
+//! part answered by its counterpart as the published words its record
+//! names; a part kept private as its own words, behind a placeholder; a
+//! part left out, answered publish-first or not yet answered, nothing — a
+//! window awaiting its answer counts toward nothing. Over that selection
+//! every candidate is judged again: the stored-endset test, and THE
+//! FILTER's drop — a public successor, homed in a published document of
+//! the person's, drops a candidate where its ends as stored COVER every
 //! position of the candidate this publication publishes — the candidate's
 //! ends read through the walk below (keys (i) and (iii); no liveness key —
 //! sweep 5 S1) — and none of those positions lies on a named draft's own
@@ -96,13 +111,16 @@
 //! words, its copy holding the draft's own addresses, is offered at the
 //! publication that publishes those words (§5.2's ⟨d⟩); a copy an earlier
 //! shot made over the words it re-minted drops its original at every later
-//! publication; and a first copy laid on a placeholder's words drops its
-//! original while the part is kept private there and not once the part's
-//! counterpart is published in its place. Any other successor drops it
-//! where it is itself a candidate, dropped or offered — a retype or an end
-//! move made in the draft before the shot (B3-S12), a move into another set
-//! of theirs (§2) — one since retracted being no candidate, nor one
-//! touching nothing selected, and its original offered. A FORMATTING MARK
+//! publication — stray words among them, which the walk reads as the
+//! published words they are, so where the draft shows them as its own
+//! nothing is offered again and nothing refused (§5.1); and a first copy
+//! laid on a placeholder's words drops its original while the part is kept
+//! private there and not once the part's counterpart is published in its
+//! place. Any other successor drops it where it is itself a candidate,
+//! dropped or offered — a retype or an end move made in the draft before
+//! the shot (B3-S12), a move into another set of theirs (§2) — one since
+//! retracted being no candidate, nor one touching nothing selected, and
+//! its original offered. A FORMATTING MARK
 //! — the formatting line's shape test, its inline-mark exception kept
 //! ([`is_formatting`]) — is judged on THE WORDS A READER RECEIVES
 //! ([`Enumeration::received`]), the selection less every placeholder: no
@@ -119,12 +137,12 @@
 //! are read as the request spells them. Every end of a candidate the
 //! read-through reached, and a span on a named draft's own words of any
 //! candidate, is walked through the counterpart records the enumeration
-//! holds: the record covering the first position not yet read maps the
-//! piece, up to the end of its `from`, onto the published words of its
-//! `to`, and a piece no record covers runs as stored up to the next record's
-//! first position. Every position of a window part answered by its
-//! counterpart is mapped through that part's own record, whoever's link
-//! the end is. Every other span is read as stored. Key (iii), the panel's
+//! holds, the twins among them: the record covering the first position not
+//! yet read maps the piece, up to the end of its `from`, onto the published
+//! words of its `to`, and a piece no record covers runs as stored up to the
+//! next record's first position. Every position of a window part answered
+//! by its counterpart is mapped through that part's own record, whoever's
+//! link the end is. Every other span is read as stored. Key (iii), the panel's
 //! line counts and the request's `spell_end` read this one walk,
 //! `RecordWalk`, so a candidate is judged on the words its entry sends.
 //!
@@ -142,6 +160,7 @@ use crate::board::answers::{self, IRun, LinkValue};
 use crate::board::frames::{self, Slot, REGISTRY_DOCUMENT, T_CORRESPONDENCE, T_EDITION, T_GRANT, T_HELD_REMOVAL, T_REPLACES};
 use crate::board::{T_CLAIM, T_ENROLL, T_RETIRE, T_RETRACTION, T_SUPERSEDES};
 
+use super::landed::{recompose, twin_records};
 use super::{home_of_link, owned_by, trunk_of, Door, Fault, ISpan, Inputs, Publisher, Run};
 
 /// The most elements one wire array may carry — the codec's `MAX_WIRE_LIST`,
@@ -627,6 +646,12 @@ pub struct Enumeration {
     /// The own-origin windows, in the selection's order, each in its parts;
     /// the drafts `also` names excluded.
     pub windows: Vec<Window>,
+    /// THE TWINS: each named draft's correspondence records whose `from`
+    /// the selection's carried pieces hold, in the order the twin
+    /// pre-check reads them — the records that re-compose a stray stretch
+    /// by reference onto the published words their `to` names (the
+    /// link-sets design §5.1, §5.5).
+    pub twins: Vec<Record>,
     /// The answers the composition stands under, by part — an answer a part
     /// does not admit counting as none.
     pub answers: BTreeMap<PartKey, Answer>,
@@ -637,12 +662,15 @@ pub struct Enumeration {
     /// the answers.
     ///
     /// They are the named drafts' and the trunk's pieces as the draft places
-    /// them, each cut around its run's merge records' positions, and each
-    /// window part as its answer composes it — its counterpart, or its own
-    /// words behind a placeholder; a part left out or not yet answered holds
-    /// nothing — the runs every later step tests and composes from, so no
-    /// publication carries a merge record, and at the re-read a word the
-    /// draft no longer arranges counts nowhere (PUB-3.108).
+    /// them, each cut around its run's merge records' positions, a named
+    /// draft's stretch a twin names as the published words the twin pre-check
+    /// re-composes it onto, and each window part as its answer composes it —
+    /// its counterpart, or its own words behind a placeholder; a part left
+    /// out or not yet answered holds nothing — the runs every later step
+    /// tests and composes from, so no publication carries a merge record, no
+    /// offer is judged on words the request sends by reference as their own,
+    /// and at the re-read a word the draft no longer arranges counts nowhere
+    /// (PUB-3.108).
     pub selection: Vec<Run>,
     /// THE WORDS A READER RECEIVES: the selection less every part kept behind
     /// a placeholder — what a formatting mark is judged on.
@@ -653,7 +681,9 @@ pub struct Enumeration {
     pub region: Vec<(u64, u64)>,
     /// Every candidate, dropped ones included.
     pub candidates: Vec<Candidate>,
-    /// The counterpart records the read-through kept.
+    /// The counterpart records the walk maps through and the read-through
+    /// read: the twins, then each record whose `to` lies in the words any
+    /// answer can publish.
     pub records: Vec<Record>,
     /// The candidates by home, in the order the homes first answered: each
     /// home with the indices of its candidates into `candidates`.
@@ -677,14 +707,15 @@ impl Enumeration {
     }
 
     /// Returns THE WORDS ANY ANSWER CAN PUBLISH: every held run's carried
-    /// pieces — each window's whole among them — then every named part's
-    /// counterpart.
+    /// pieces — each window's whole among them — then the published words
+    /// every twin names for them, then every named part's counterpart.
     ///
     /// It is the union the enumeration's reads are made over, so every
     /// composition is decided from them.
     pub fn publishable(&self, inputs: &Inputs) -> Vec<Run> {
         let pieces: Vec<Run> = inputs.selection.iter().enumerate().flat_map(|(i, run)| self.pieces(i, run)).map(|(piece, _)| piece).collect();
-        publishable_of(pieces, &self.windows)
+        let stray = stray_words(inputs, &pieces, &self.twins);
+        publishable_of(pieces, &stray, &self.windows)
     }
 
     /// Returns the answer `window`'s `k`-th part stands under: the one given,
@@ -753,7 +784,8 @@ impl Enumeration {
             // request spells them, and the successor's ends as stored. A
             // published position the walk leaves on a named draft's own
             // words is one of the shot's new words, which no successor
-            // covers.
+            // covers; one a twin names the walk maps onto the published
+            // words it is.
             let new_words = on.iter().any(|(chain, ..)| walk.is_named_chain(chain));
             for s in &mut c.successors {
                 s.covers = !on.is_empty() && !new_words && covered(&on, &s.ends);
@@ -766,13 +798,19 @@ impl Enumeration {
 
     /// Returns the selection as published and the words a reader receives,
     /// as the answers compose the held runs.
+    ///
+    /// A named draft's carried piece is cut by the twins as the twin
+    /// pre-check cuts it (`landed`'s `recompose`), each stretch a twin names
+    /// the published words the request sends in its place.
     fn composed_runs(&self, inputs: &Inputs) -> (Vec<Run>, Vec<Run>) {
         let (mut selection, mut received) = (Vec::new(), Vec::new());
         for (i, run) in inputs.selection.iter().enumerate() {
             let Some(window) = self.windows.iter().find(|w| w.run == i) else {
+                let named = inputs.is_named_draft(&run.origin);
                 for (piece, _) in self.pieces(i, run) {
-                    selection.push(piece.clone());
-                    received.push(piece);
+                    let sent = if named { recompose(&piece, &self.twins).into_iter().map(|(sent, ..)| sent).collect() } else { vec![piece] };
+                    selection.extend(sent.iter().cloned());
+                    received.extend(sent);
                 }
                 continue;
             };
@@ -860,11 +898,20 @@ impl Enumeration {
     }
 }
 
-/// Returns `pieces`, the carried pieces of every held run, then every named
-/// part's counterpart among `windows`: the words any answer can publish.
-fn publishable_of(mut pieces: Vec<Run>, windows: &[Window]) -> Vec<Run> {
+/// Returns `pieces`, the carried pieces of every held run, then `stray`,
+/// the published words the twins name for them, then every named part's
+/// counterpart among `windows`: the words any answer can publish.
+fn publishable_of(mut pieces: Vec<Run>, stray: &[Run], windows: &[Window]) -> Vec<Run> {
+    pieces.extend(stray.iter().cloned());
     pieces.extend(windows.iter().flat_map(|w| &w.parts).filter_map(|p| p.counterpart()?.run()));
     pieces
+}
+
+/// Returns THE STRAY WORDS of `pieces`, carried pieces of the held runs:
+/// the published words `twins` name for a named draft's piece, each
+/// stretch the twin pre-check re-composes by reference, in order.
+fn stray_words(inputs: &Inputs, pieces: &[Run], twins: &[Record]) -> Vec<Run> {
+    pieces.iter().filter(|piece| inputs.is_named_draft(&piece.origin)).flat_map(|piece| recompose(piece, twins)).filter_map(|(sent, _, by_reference)| by_reference.then_some(sent)).collect()
 }
 
 /// Places the held runs in the image: each whole at one V-ordinal, in
@@ -1178,7 +1225,15 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
     let trunk = inputs.doc.as_ref().map(ToString::to_string);
 
     let windows = windows_with(door, p, inputs, &placed)?;
-    let publishable = publishable_of(pieces.into_iter().map(|(piece, _)| piece).collect(), &windows);
+
+    // THE TWINS: the records whose `from` the named drafts' carried pieces
+    // hold, read as the twin pre-check reads them, and the stray words they
+    // name — published words the request sends in the pieces' place.
+    door.step("twins");
+    let carried_runs: Vec<Run> = pieces.into_iter().map(|(piece, _)| piece).collect();
+    let twins = twin_records(door, p, inputs, &carried_runs)?;
+    let stray = stray_words(inputs, &carried_runs, &twins);
+    let publishable = publishable_of(carried_runs, &stray, &windows);
 
     door.step("find_links_v");
     let addrs = if region.is_empty() { Vec::new() } else { door.addrs(&d, &frames::find_links_v(&d, &region))? };
@@ -1228,10 +1283,11 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
     }
 
     // THE COUNTERPART'S IDENTITY: the links on each named part's published
-    // words, kept as the region's are, so an answer at the part reads
-    // nothing.
+    // words and on the stray words, kept as the region's are, so an answer
+    // at the part reads nothing and a link made on published words the
+    // draft shows as its own again is read as it was while it showed them.
     door.step("counterparts");
-    let published_words: Vec<Value> = windows.iter().flat_map(|w| &w.parts).filter_map(Part::counterpart).map(|s| s.wire()).collect();
+    let published_words: Vec<Value> = windows.iter().flat_map(|w| &w.parts).filter_map(Part::counterpart).map(|s| s.wire()).chain(run_spans(&stray)).collect();
     for chunk in published_words.chunks(MAX_WIRE_LIST) {
         let mut hits = door.addrs(&d, &frames::find_links_four(Slot::Any, Slot::Spans(chunk), Slot::Any, Slot::Any))?;
         hits.extend(door.addrs(&d, &frames::find_links_four(Slot::Any, Slot::Any, Slot::Spans(chunk), Slot::Any))?);
@@ -1240,9 +1296,12 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
         }
     }
 
+    // The twins first, so the walk and the read-through take them as any
+    // earlier shot's record; the read below meets them again over the stray
+    // words and keeps none of them twice.
     door.step("records");
-    let mut records: Vec<Record> = Vec::new();
-    let mut record_seen: BTreeSet<String> = BTreeSet::new();
+    let mut records: Vec<Record> = twins.clone();
+    let mut record_seen: BTreeSet<String> = twins.iter().map(|r| r.link.to_string()).collect();
     let spans = run_spans(&publishable);
     let subtype = frames::unit_span(T_CORRESPONDENCE);
     let subtype_spans = subtype.as_array().cloned().unwrap_or_default();
@@ -1333,6 +1392,7 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
         placed,
         merge_atoms,
         windows,
+        twins,
         answers: BTreeMap::new(),
         left_out: BTreeSet::new(),
         selection: Vec::new(),

@@ -23,7 +23,8 @@
 //! connection with the records read after it, `already_published` on a
 //! re-send read as the acknowledgment, `kept_place_moved` after a move
 //! with its re-statement, and a second publication off the member the first
-//! made, offering nothing the first accepted on the words it re-minted.
+//! made, offering nothing the first accepted on the words it re-minted —
+//! nor where the draft shows those words as its own again.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
@@ -684,6 +685,69 @@ fn a_second_publication_offers_nothing_the_first_accepted_on_the_words_it_re_min
     let e3 = format!("{e}.3");
     assert_eq!(ack.member.to_string(), e3);
     assert!(read(&board, &token, &frames::read_link(&format!("{e3}.0.2.1")))["link"].is_null(), "no copy in E.3");
+    session.close().expect("close");
+}
+
+/// Checks against the daemon that a draft's stray words offer nothing.
+///
+/// The seeded draft publishes as the first test's request does, landing
+/// `E.2` and re-windowing `D` onto the member's identity; then an agent's
+/// raw `reinstate` lays `D`'s own ten words back beside `E`'s and a
+/// `delete` takes `E`'s out, so `D` shows its own words again beside the
+/// record naming them as `E`'s 20..29 (the link-sets design §5.1). The
+/// enumeration reads that record as a twin: the bold, the heading and the
+/// citation read through it onto the words their copies in `E.2` cover,
+/// and none is offered; the request re-composes the run by reference with
+/// its kept place, carries no entry, and the board takes it, landing `E.3`
+/// and re-windowing `D` onto `E`'s words.
+#[test]
+fn a_draft_showing_its_published_words_as_its_own_again_offers_nothing_and_lands() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session).expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+    let seeded = seed(&board, &session, &device, &bare_token, &dir.path().join("anchors"));
+    let Seeded { e, d, o, .. } = &seeded;
+    let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
+    let first = inputs(&seeded);
+    let en = enumerate(&p, &first).expect("enumerated");
+    let pn = panel(&p, &first, &en).expect("the panel");
+    let Built::Request(mut request) = build(&p, &first, &en, &pn, &confirmed(&seeded)).expect("built") else { panic!("inert") };
+    let Sent::Acknowledged(ack) = send(&p, &first, &mut request).expect("sent") else { panic!("refused") };
+    let e2 = format!("{e}.2");
+    assert_eq!(ack.member.to_string(), e2);
+    // An agent's raw reinstate of D's own words at V 30, then E's 20..29
+    // deleted from in front of them.
+    let as_of = crate::common::typed_at(&board, &bare_token, d);
+    acked(board.op(Some(&bare_token), &frames::reinstate(d, 30, &[frames::shot_run(d, &format!("{d}.0.1.1"), 10)], as_of, None)));
+    let as_of = crate::common::typed_at(&board, &bare_token, d);
+    acked(board.op(Some(&bare_token), &json!({"op": "delete", "doc": d, "p": {"subspace": "1", "ordinal": "20"}, "width": "10", "as_of": as_of})));
+    assert_eq!(image(&board, &bare_token, d, 1, 34), vec![(format!("{e}.0.1.1"), 19), (format!("{d}.0.1.1"), 10), (format!("{o}.0.1.1"), 5)], "the premise: D shows its own words again");
+    let second = Inputs { base: Some((addr(&e2), 34)), ..inputs(&seeded) };
+    let en = enumerate(&p, &second).expect("enumerated");
+    assert_eq!(en.twins.iter().map(|r| (r.home.to_string(), r.from.first, r.from.width, r.to.first)).collect::<Vec<_>>(), vec![(d.clone(), 1, 10, 20)], "the record naming D's words as E's 20..29");
+    for link in [&seeded.mark_d, &seeded.heading_d, &seeded.cite_d] {
+        let c = en.candidates.iter().find(|c| c.link.to_string() == *link).unwrap_or_else(|| panic!("{link} is a candidate"));
+        let keys: Vec<(bool, bool, bool)> = c.successors.iter().map(|s| (s.published_home, s.covers, s.candidate)).collect();
+        assert_eq!(keys, vec![(true, true, false)], "{link}: its copy in E.2 covers its ends read through the twin");
+        assert!(!c.offered(), "{link}");
+    }
+    let pn = panel(&p, &second, &en).expect("the panel");
+    assert!(pn.formatting.marks.is_empty(), "no mark on the line");
+    let Built::Request(mut request) = build(&p, &second, &en, &pn, &confirmed(&seeded)).expect("built") else { panic!("inert") };
+    assert_eq!(request.runs, vec![run(e, 1, 19), run(e, 20, 10), run(o, 1, 5)], "D's words by reference to E's");
+    assert_eq!(request.places, vec![None, Some(20), None], "with their kept place");
+    assert!(request.entries.is_empty(), "{:?}", request.entries);
+    let sent = send(&p, &second, &mut request).expect("sent");
+    let Sent::Acknowledged(ack) = sent else { panic!("{sent:?}") };
+    assert_eq!(ack.member.to_string(), format!("{e}.3"));
+    assert_eq!(image(&board, &bare_token, d, 1, 34), vec![(format!("{e}.0.1.1"), 29), (format!("{o}.0.1.1"), 5)], "D re-windowed onto E's words at the kept place");
     session.close().expect("close");
 }
 

@@ -58,7 +58,9 @@
 //! statement before the act ("⟨n⟩ passages first written in ⟨D⟩ publish as
 //! ⟨E⟩'s own words; ⟨D⟩ keeps a record of where they went"), consecutive
 //! runs of one origin in the selection's V-order counted once; the
-//! rendering draft's own words are counted nowhere. THE MERGE RECORDS LEFT
+//! rendering draft's own words are counted nowhere, nor a passage an
+//! earlier shot already published, which the selection as published holds
+//! as the published words its twin names. THE MERGE RECORDS LEFT
 //! OUT ([`MergeRecords`]) are the panel's data too: per named draft whose
 //! runs of the selection hold any, how many — the enumeration's cut, which
 //! no publication carries (the merge record's decision 7), the data of the

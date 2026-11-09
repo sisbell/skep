@@ -45,7 +45,10 @@
 //! answer the part does not admit, or none, leaving the request inert
 //! naming the part), a window the draft no longer arranges carrying nothing
 //! and asked nothing (PUB-3.108); the twin pre-check re-composing what the
-//! draft's records already name; then `links` — each switched-on row's
+//! draft's records already name, read again just before the send — the cut
+//! the enumeration composed the selection by over its own read of the
+//! twins, so a stray stretch's offers were judged on the published words
+//! the request sends; then `links` — each switched-on row's
 //! offered links and the formatting line's marks, `home` the tag `member`
 //! or the row's picked set, `from`/`to` read through the records and the
 //! parts taken by their counterpart (`RecordWalk`) and spelled in the

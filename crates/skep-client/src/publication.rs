@@ -51,13 +51,18 @@
 //!    its own words behind a placeholder, or not at all — every candidate
 //!    judged over it, dropped where an active claim of the person's names a
 //!    public successor homed in a published document of theirs covering
-//!    the published spans — the candidate's ends read through the records,
-//!    as the request spells them — or any other successor that is itself a
-//!    candidate, and a formatting mark judged on the words a reader
-//!    receives, never onto a placeholder.
+//!    the published spans version ⟨k⟩ did not hold — the candidate's ends
+//!    read through the records, as the request spells them, and VERSION
+//!    ⟨k⟩, the member the request's `base` names, imaged once (key (iii);
+//!    E4 2.1) — or any other successor that is itself a candidate, each
+//!    candidate decided UNCHANGED since version ⟨k⟩ or not (the fold, E4
+//!    1.1), and a formatting mark judged on the words a reader receives,
+//!    never onto a placeholder.
 //! 2. [`panel`](mod@panel) — THE PANEL's DATA (§5.2): the rows by home in the design's
 //!    order with each set's state and label, the links folded by type with
-//!    their far documents, the line counts, the formatting line by its test,
+//!    their far documents, the line counts, each row's FOLD — its links
+//!    unchanged since version ⟨k⟩ and not (E4 1.8) — and whether P3 stands
+//!    (E4 1.4), the formatting line by its test,
 //!    the held removals as its job list with the re-makes split out, the
 //!    public row's read-with state, and THE STATEMENT's count per `also`
 //!    draft, the passages first written in it (B3-S11 P2 (i)); the merge
@@ -127,9 +132,9 @@ pub mod send;
 mod tests;
 
 pub use base::{draft_base, left_behind, standing, Standing, Unrecorded};
-pub use enumerate::{enumerate, is_formatting, is_formatting_type, is_merge_record, windows, AlsoImage, Answer as OriginAnswer, Candidate, Enumeration, Part, PartKey, Placement, Record, Successor, Via, Window, MAX_WIRE_LIST, MERGE_RECORD_TYPE};
+pub use enumerate::{enumerate, is_formatting, is_formatting_type, is_merge_record, windows, AlsoImage, Answer as OriginAnswer, BaseImage, Candidate, Enumeration, Part, PartKey, Placement, Record, Successor, Via, Window, MAX_WIRE_LIST, MERGE_RECORD_TYPE};
 pub use landed::{landed, twin_precheck, Base, Missing, Recomposed, Verdict};
-pub use panel::{count, inherited, panel, Count, Destination, Formatting, Inherited, LineCounts, MergeRecords, Original, Panel, PartCounts, Removal, Row, RowKind, Switches, TypeFold};
+pub use panel::{count, inherited, panel, Count, Destination, FoldCounts, Formatting, Inherited, LineCounts, MergeRecords, Original, Panel, PartCounts, Removal, Row, RowKind, Switches, TypeFold};
 pub use price::{price, OriginalShape, Price, Term};
 pub use request::{build, originals_of, reread, AlsoPlaces, Built, Confirmed, End, Entry, EntryHome, Inert, OriginalEntry, OwedAnswer, Piece, Reread, Request, Restatement, Unspellable};
 pub use send::{send, Ack, AckVia, LineageCause, OwnFault, RaceKey, Refusal, Sent, SupersedeCause};

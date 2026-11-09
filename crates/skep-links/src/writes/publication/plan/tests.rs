@@ -623,3 +623,59 @@ fn a_publication_naming_an_original_takes_its_homes_link_key() {
     sorted.dedup();
     assert_eq!(keys, sorted, "M2's order, duplicates collapsed");
 }
+
+/// The citation type, a commons row: what the cells below type their links.
+fn citation() -> Address {
+    a(&[1, 1, 0, 1, 0, 1, 0, 3, 13])
+}
+
+/// THE BASE'S WORDS, subtracted by identity: the base's runs merged — two
+/// overlapping, one apart — and a published span cut where they hold part
+/// of it, the rest kept in order; a span they hold whole leaves nothing; a
+/// span on another chain, or at another depth, is kept whole; no base word
+/// leaves every span.
+#[test]
+fn the_bases_words_leave_the_published_positions_it_did_not_hold() {
+    let base = BaseWords::of(&[run(&pca(3), 2), run(&pca(9), 1), run(&pca(4), 3)]);
+    assert_eq!(base.unheld(&[ispan(&pca(1), 10)]), vec![ispan(&pca(1), 2), ispan(&pca(7), 2), ispan(&pca(10), 1)]);
+    assert!(base.unheld(&[ispan(&pca(3), 4), ispan(&pca(9), 1)]).is_empty(), "every position held");
+    assert_eq!(base.unheld(&[ispan(&ca(1), 5)]), vec![ispan(&ca(1), 5)], "another chain");
+    let document = subtree_of(trunk().tumbler());
+    assert_eq!(base.unheld(&[document.clone()]), vec![document], "another depth");
+    assert_eq!(BaseWords::of(&[]).unheld(&[ispan(&pca(1), 3)]), vec![ispan(&pca(1), 3)], "no base word");
+}
+
+/// THE VALIDATION's (3) against the base (§5.1's key (iii) as E4 2.1
+/// re-says it): an original on the edition's words 1..5, claimed onto a
+/// public copy over 1..2 alone. With no base word read the copy covers too
+/// little and the entry is planned; with the base holding every published
+/// word none is left to cover and it is refused `superseded`; holding 3..5
+/// the copy covers what is left and it is refused; holding 1..3, the words
+/// 4..5 are left uncovered and it is planned; base words of another chain
+/// change nothing. A revision of the original, judged by the original's
+/// copy over the entry's spans whole (W17), is planned whatever the base
+/// holds.
+#[test]
+fn an_entrys_original_is_superseded_over_the_published_words_its_base_does_not_hold() {
+    let draft = a(&[1, 0, 1, 0, 1]);
+    let ty = citation();
+    let on = |start: &Address, width: u32| Endset::from_spans([ispan(start, width)]);
+    let world = with_link(chain_world(), &draft, 1, Link::triple(on(&pca(1), 5), Endset::empty(), enc([&ty])));
+    let world = with_link(world, &trunk(), 1, Link::triple(on(&pca(1), 2), Endset::empty(), enc([&ty])));
+    let world = with_claim(world, &draft, 2, &link_in(&draft, 1), &link_in(&trunk(), 1));
+    let world = with_link(world, &draft, 3, Link::triple(on(&pca(1), 5), Endset::empty(), enc([&a(&[1, 1, 0, 1, 0, 1, 0, 3, 20])])));
+    let world = with_claim(world, &draft, 4, &link_in(&draft, 1), &link_in(&draft, 3));
+    let (target, shot) = (PublishTarget::Document(trunk()), off(&member(2)));
+    let plan = |old: Address, base_runs: Vec<Run>| {
+        let entry = LinkEntry { home: NamedAddress::Member, from: EndArg::Spans(vec![ispan(&pca(1), 5)]), to: EndArg::Addrs(vec![]), ty: EndArg::Addrs(vec![NamedAddress::Address(ty.clone())]), old: Some(old) };
+        plan_deposits(&world, P1, &target, &shot, &PublishDeposits { links: vec![entry], base_runs, ..PublishDeposits::default() }).map(|_| ())
+    };
+    let superseded: Result<(), PlanFault> = Err(PlanFault::Old { index: 0, cause: OldCause::Superseded });
+    let original = link_in(&draft, 1);
+    assert_eq!(plan(original.clone(), vec![]), Ok(()), "no base word: the copy covers 1..2 of 1..5");
+    assert_eq!(plan(original.clone(), vec![run(&pca(1), 5)]), superseded, "every published word the base's: none left to cover");
+    assert_eq!(plan(original.clone(), vec![run(&pca(3), 3)]), superseded, "the copy covers what the base left");
+    assert_eq!(plan(original.clone(), vec![run(&pca(1), 3)]), Ok(()), "4..5 left, which no copy covers");
+    assert_eq!(plan(original, vec![run(&ca(1), 5)]), Ok(()), "the base's words on another chain");
+    assert_eq!(plan(link_in(&draft, 3), vec![run(&pca(1), 5)]), Ok(()), "a revision: its original's copy over the spans whole");
+}

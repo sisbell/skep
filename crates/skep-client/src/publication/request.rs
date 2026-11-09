@@ -17,9 +17,12 @@
 //! [`Restatement`], data for the caller to confirm again over what is left;
 //! nothing is sent on it. The image's places are the kept places the
 //! request then carries per run of a named draft's identity; the `also`
-//! drafts' images, read again beside it, give each its own list. The base's
-//! standing is the caller's to read again beside it ([`super::standing`]),
-//! a moved one riding the same re-statement.
+//! drafts' images, read again beside it, give each its own list. Version
+//! ⟨k⟩'s image is the first read's ([`Enumeration::base`]): a published
+//! member's positions never change, so key (iii) and the fold are decided
+//! at the re-read against the member the request's `base` names, read
+//! once. The base's standing is the caller's to read again beside it
+//! ([`super::standing`]), a moved one riding the same re-statement.
 //!
 //! **The request.** From the confirmed rows, the enumeration and the panel
 //! composed under the answers at the windows' parts before anything is
@@ -210,8 +213,9 @@ pub struct Reread {
 ///
 /// The re-read is composed under `first`'s answers carried onto its own
 /// windows ([`Enumeration::answers_onto`]) and `first`'s originals left
-/// out, so the two are diffed over one composition; the caller composes
-/// `first` under the answers it confirms before the re-read.
+/// out, so the two are diffed over one composition, against the base
+/// `first` imaged ([`Enumeration::base`]), never imaged again; the caller
+/// composes `first` under the answers it confirms before the re-read.
 ///
 /// # Errors
 ///
@@ -221,7 +225,7 @@ pub struct Reread {
 /// arranges of the selection holds a merge record, nothing further read.
 pub fn reread(p: &Publisher<'_>, inputs: &Inputs, first: &Enumeration, first_panel: &Panel) -> Result<Reread, Fault> {
     let door = Door::new(p.board, p.token);
-    let read = enumerate_with(&door, p, inputs, false)?;
+    let read = enumerate_with(&door, p, inputs, false, first.base.as_ref())?;
     let enumeration = read.composed(inputs, &first.answers_onto(&read.windows), &first.left_out);
     let panel = panel_with(&door, p, inputs, &enumeration)?;
     let restatement = restate(first, first_panel, &enumeration, &panel);
@@ -988,12 +992,16 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
     // Inert where nothing changes against the base: a place in either list
     // — the rendering draft's, or an `also` draft's re-window alone — is a
     // change to that draft, and a daughter claimed is a change to the trunk.
+    // The base's image is the enumeration's where it read version ⟨k⟩.
     door.step("base");
     let fresh = runs.iter().any(|r| inputs.is_named_draft(&r.origin));
     let placed = places.iter().any(Option::is_some) || also_places.iter().any(AlsoPlaces::carries_a_place);
     if !fresh && entries.is_empty() && retract.is_empty() && read_with.is_empty() && supersede.is_empty() && inputs.mint.is_none() && !placed {
-        if let Some((base, extent)) = &inputs.base {
-            let image = door.image(&base.to_string(), 1, *extent)?;
+        if let Some(base) = &inputs.base {
+            let image = match e.base.as_ref().filter(|known| known.is_of(base)) {
+                Some(known) => known.image.clone(),
+                None => door.image(&base.0.to_string(), 1, base.1)?,
+            };
             let same = image.len() == runs.len() && image.iter().zip(&runs).all(|(a, r)| a.prefix == r.chain() && a.first == r.i_start && a.width == r.width);
             if same {
                 return Ok(Built::Inert(Inert::Unchanged));

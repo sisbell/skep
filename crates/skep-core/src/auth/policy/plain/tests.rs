@@ -93,7 +93,7 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
         shot,
         places,
         also_places: Vec::new(),
-        deposits: PublishDeposits { claim: false, links: Vec::new(), retract: Vec::new(), read_with: vec![home.clone(); read_with], supersede: Vec::new(), originals: Vec::new() },
+        deposits: PublishDeposits { claim: false, links: Vec::new(), retract: Vec::new(), read_with: vec![home.clone(); read_with], supersede: Vec::new(), originals: Vec::new(), base_runs: Vec::new() },
     };
     // A drafted shot carries one kept place — beside its first run, a stray
     // place — so the re-window reads the draft; a draftless one none.
@@ -158,6 +158,7 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
             read_with: Vec::new(),
             supersede: Vec::new(),
             originals: Vec::new(),
+            base_runs: Vec::new(),
         },
     };
     assert_eq!(publication_read_refusal(snap.world(), &wide(1), maker_id), None, "one wide entry is inside both budgets");
@@ -183,6 +184,52 @@ fn exec(febe: &skep_febe::OperationSurface<skep_engine::World>, sid: skep_febe::
         Response::AckAddr { addr, .. } => addr,
         other => panic!("{frame}: {}", String::from_utf8_lossy(&JsonCodec.marshal(&other))),
     }
+}
+
+/// THE BASE AHEAD OF THE LOCK (§5.1's key (iii) as E4 2.1 re-says it): the
+/// maker's draft `abc` published as its home's first member, a publication
+/// off that member whose `links` entry names an original has the member's
+/// runs over its positions `1 ..= base_extent` set on its deposits — cut
+/// where the extent stops inside a run — and one naming no original, or
+/// standing off the bare document, carries none.
+#[test]
+fn a_publications_base_runs_are_set_ahead_of_the_lock_where_an_entry_names_an_original() {
+    use serde_json::json;
+    use skep_address::Nat;
+    use skep_arrangement::{Base, HasM5};
+    use skep_febe::{EndArg, LinkEntry, NamedAddress, PublishDeposits, PublishTarget, Run, Shot};
+
+    use crate::auth::policy::publication_base;
+
+    let board = TwoAccounts::open();
+    let (_, maker) = board.maker;
+    exec(&board.febe, maker, json!({"op": "insert", "doc": board.draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"], "as_of": board.febe.log_position().0}));
+    let draft_word = format!("{}.0.1.1", board.draft);
+    let member = exec(&board.febe, maker, json!({"op": "publish", "doc": board.home, "draft": board.draft, "runs": [{"origin": board.draft, "i_start": draft_word, "width": "3"}]}));
+    let home = crate::codec::wire_address(&board.home).expect("the home's address");
+    let publish = |base: &Address, extent: u32, old: Option<Address>| Op::Publish {
+        target: PublishTarget::Document(home.clone()),
+        shot: Shot { base: Some(Base { member: base.clone(), extent: Nat::from(extent) }), draft: None, also: Vec::new(), runs: Vec::new() },
+        places: Vec::new(),
+        also_places: Vec::new(),
+        deposits: PublishDeposits {
+            links: vec![LinkEntry { home: NamedAddress::Member, from: EndArg::Addrs(Vec::new()), to: EndArg::Addrs(Vec::new()), ty: EndArg::Addrs(vec![NamedAddress::Address(home.clone())]), old }],
+            ..PublishDeposits::default()
+        },
+    };
+    let snap = board.engine.kernel().snapshot();
+    let based = |mut op: Op| -> Vec<Run> {
+        publication_base(snap.world(), &mut op);
+        let Op::Publish { deposits, .. } = op else { unreachable!("a publish") };
+        deposits.base_runs
+    };
+    let runs: Vec<Run> = snap.world().m5().content_runs(&member).cloned().collect();
+    assert_eq!(runs.len(), 1, "the premise: the member's one run of three");
+    let original = Some(addr_of(&[1, 0, 1, 0, 2, 0, 2, 1]));
+    assert_eq!(based(publish(&member, 3, original.clone())), runs, "the member's positions 1..3");
+    assert_eq!(based(publish(&member, 2, original.clone())), vec![Run::new(runs[0].i_start().clone(), Nat::from(2u32)).expect("a run")], "cut where the extent stops");
+    assert!(based(publish(&member, 3, None)).is_empty(), "no entry names an original: no read");
+    assert!(based(publish(&home, 3, original)).is_empty(), "the bare document keys nothing");
 }
 
 /// Checks the sole-writer fence's correspondence half (the link-sets design

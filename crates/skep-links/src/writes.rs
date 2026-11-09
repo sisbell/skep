@@ -82,7 +82,7 @@ pub use emit::emit_tuple;
 pub use makelink::{slot_endset, SlotArg};
 pub use nullify::retraction_tuple;
 pub use publication::{
-    canonical_member_spans, edition_type, member_end, member_image, names_read_with,
+    base_runs, canonical_member_spans, edition_type, member_end, member_image, names_read_with,
     plan_deposits, price_publication_reads, price_staged_bytes, read_with_in, read_with_type,
     request_image, resolve_end, stage_correspondence, stage_publication, stored_span_bytes,
     stored_tumbler_bytes, supersession_claim_in, AlsoPlaces, DepositPlan, EndArg, LinkEntry,

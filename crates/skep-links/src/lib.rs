@@ -148,7 +148,7 @@ pub use state::{
     CurrentMember, LinkRec, LinkState, Pattern, Tip, Touch, Tuple, View, FROM, TO, TYPE,
 };
 pub use writes::{
-    canonical_member_spans, correspondence_type, edition_type, emit_tuple, is_correspondence_class,
+    base_runs, canonical_member_spans, correspondence_type, edition_type, emit_tuple, is_correspondence_class,
     is_replaces_class, member_end, member_image, names_read_with, plan_deposits,
     price_publication_reads, price_staged_bytes, read_with_in, read_with_type, replaces_type,
     request_image, resolve_end, retraction_tuple, slot_endset, stage_correspondence,

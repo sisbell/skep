@@ -1831,8 +1831,9 @@ whole_work — the original reaches the words the shot publishes through a
 whole-work end alone, a unit span at a document's address or an
 account's, and through no content span: the corner's link, which no
 panel offers — or superseded, where an active claim of yours names a
-public successor covering the entry's published spans and the entry has
-no end on the shot's own new words, or where the original is a revision
+public successor covering the entry's published spans the member the
+request's base names does not hold and the entry has no end on the
+shot's own new words, or where the original is a revision
 whose own original has such a claim, whatever new words the entry
 holds), `duplicate_original`
 (a second links entry naming one original; the second's index),
@@ -2304,12 +2305,17 @@ reaching them through a whole-work end alone, a unit span at a
 document's address or an account's, is refused with `whole_work`: the
 corner's link, which no panel offers — and not superseded by an active
 claim of yours naming a public successor homed in a published document
-of yours whose ends cover every published content span of the entry, an
-entry with an end on the shot's own new words never so superseded, as
-nothing standing covers fresh words, nor, where `old` is itself a
-successor, its own original superseded by such a claim over the entry's
-published content spans, whatever new words the entry holds
-(`old_refused`, `detail` the cause); a second
+of yours whose ends cover every published content span of the entry
+that the member the request's `base` names does not arrange over its
+positions 1..`base_extent` — a span the base holds is no successor's to
+cover, so an original is offered again only at a version that brings in
+words of it its copy does not reach, and every published span held, the
+claim supersedes it; the bare document and a request with no base hold
+none — an entry with an end on the shot's own new words never so
+superseded, as nothing standing covers fresh words, nor, where `old` is
+itself a successor, its own original superseded by such a claim over the
+entry's published content spans whole, whatever new words the entry
+holds (`old_refused`, `detail` the cause); a second
 entry naming one `old` is `duplicate_original` at the second. (4) each
 `retract` entry names a resident link of yours homed in a published
 document of yours (`retract_refused`: absent, not_owner,
@@ -2482,7 +2488,13 @@ earlier runs is re-windowed piece by piece — so the price, not the
 body cap, is what keeps a publication's staging inside the budget. The
 same board prices the same request the same, so the act that exists is
 a narrower request — fewer entries, narrower slots, or a draft re-read
-into fewer runs — which the ceremony prices before the act.
+into fewer runs — which the ceremony prices before the act. Off the same
+snapshot, a request whose `links` name an `old` has its BASE read too:
+the runs the member its `base` names arranges over its positions
+1..`base_extent`, which (3) leaves out of what a successor must cover. A
+published member's positions never change, so the read the lock does
+not cover is the read the commit would make, and it is no term of the
+price.
 
 **The position-fenced read** (the link-sets design §5.7). A home's link
 ordinals RISE WITH COMMIT POSITION — within one commit in the order

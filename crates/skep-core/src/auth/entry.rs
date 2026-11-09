@@ -633,8 +633,10 @@ fn refused(refusal: PublishRefusal) -> ComposeFault {
 ///
 /// The deposits are M7's own plan over this snapshot ([`plan_deposits`]) —
 /// the function the composite stages from inside the transaction, over the
-/// base this snapshot is under the serialization lock, so the rows signed
-/// here and the links stored agree by construction — spelled per home in
+/// base this snapshot is under the serialization lock, and from the same
+/// request, the words its base holds among its deposits as the daemon set
+/// them ahead of the lock (`publication_base`), so the rows signed here and
+/// the links stored agree by construction — spelled per home in
 /// the plan's order by skep-identity's one builder
 /// ([`entry_body_publication`]), each deposit the rows its own act would
 /// sign ([`deposit_rows`]). A request carrying no deposit and no rider is

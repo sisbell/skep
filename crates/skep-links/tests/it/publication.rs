@@ -1026,7 +1026,7 @@ fn a_window_onto_words_published_into_another_document_is_re_windowed_through_th
 // ───────────────────────── the deposits in the one commit (S3) ─────────────────────────
 
 use skep_links::{
-    edition_type, plan_deposits, read_with_type, retraction_tuple, supersession_claim, EndArg,
+    base_runs, edition_type, plan_deposits, read_with_type, retraction_tuple, supersession_claim, EndArg,
     LinkEntry, MemberSpan, NamedAddress, OldCause, OriginalCause, OriginalEntry, PlanFault,
     PlannedDeposit, ReadWithCause, RetractCause, TYPE,
 };
@@ -1150,6 +1150,7 @@ fn a_publication_lands_its_copy_claim_retraction_and_read_with_in_one_commit() {
         read_with: vec![set_s()],
         supersede: vec![],
         originals: vec![],
+        base_runs: vec![],
     };
     let (member, seq) = publish(&k, &the_shot, &deposits).expect("the one commit");
     assert_eq!(member, pmember(2));
@@ -1187,6 +1188,39 @@ fn a_publication_lands_its_copy_claim_retraction_and_read_with_in_one_commit() {
     }
 }
 
+/// THE BASE'S WORDS ON ONE KERNEL (§5.1's key (iii) as E4 2.1 re-says it):
+/// `base_runs` answers the runs the shot's base arranges over its positions
+/// `1 ..= extent` — `E.1`'s `pca(1..=3)`, cut where the extent stops inside
+/// the run — and none for the bare document or the birth shape. Set on the
+/// deposits, (3) leaves them out of what a copy must cover: `L`, accepted at
+/// `E.2` with a copy over `pca(1..=2)` alone, is planned again over
+/// `pca(1..=3)` where no base word is read, and refused `superseded` where
+/// the words of `E.2`, which holds all three, are — by the composite as by
+/// the plan, nothing committed.
+#[test]
+fn the_bases_runs_are_its_positions_to_the_extent_and_three_leaves_them_out_of_the_cover() {
+    let k = kernel_over(deposits_world());
+    let (l, _) = board(&k);
+    let snap = k.snapshot();
+    let base_of = |base: Option<(&Address, u32)>| base_runs(snap.world(), &shot(base, vec![]));
+    assert_eq!(base_of(Some((&pmember(1), 3))), vec![run(&pca(1), 3)], "E.1's positions 1..3");
+    assert_eq!(base_of(Some((&pmember(1), 2))), vec![run(&pca(1), 2)], "cut where the extent stops");
+    assert!(base_of(Some((&pdoc(), 3))).is_empty(), "the bare document keys nothing");
+    assert!(base_of(None).is_empty(), "nor the birth shape");
+    let offer = |width: u32, base_runs: Vec<Run>| PublishDeposits { links: vec![entry(NamedAddress::Member, ispans(&pca(1), width), addrs(&[&doc2()]), addrs(&[&citation()]), Some(l.clone()))], base_runs, ..PublishDeposits::default() };
+    let (e2, _) = publish(&k, &shot_off_head(&k, vec![]), &offer(2, vec![])).expect("E.2, the copy cut to pca(1..=2)");
+    assert_eq!(e2, pmember(2));
+    let the_shot = shot_off_head(&k, vec![]);
+    let snap = k.snapshot();
+    let held = base_runs(snap.world(), &the_shot);
+    assert_eq!(held, vec![run(&pca(1), 3)], "E.2 holds all three");
+    let target = PublishTarget::Document(pdoc());
+    assert!(plan_deposits(snap.world(), P1, &target, &the_shot, &offer(3, vec![])).is_ok(), "no base word read: the copy covers pca(1..=2) of pca(1..=3)");
+    let superseded = PlanFault::Old { index: 0, cause: OldCause::Superseded };
+    assert_eq!(plan_deposits(snap.world(), P1, &target, &the_shot, &offer(3, held.clone())).expect_err("refused"), superseded, "the base holds every word: none left to cover");
+    assert_eq!(refused_plan(&k, &the_shot, offer(3, held)), superseded, "the composite plans on the same deposits");
+}
+
 /// THE ORDER (the pin: within one commit a home's link addresses rise in
 /// the order the daemon mints them): three `links` entries into the member
 /// and one into `S`, then a read-with to `S`, land at consecutive ordinals
@@ -1211,6 +1245,7 @@ fn a_homes_link_addresses_rise_in_the_plans_order_within_one_commit() {
         read_with: vec![set_s()],
         supersede: vec![],
         originals: vec![],
+        base_runs: vec![],
     };
     let (member, _) = publish(&k, &the_shot, &deposits).expect("the commit");
     let s = k.snapshot();
@@ -1239,7 +1274,7 @@ fn a_minting_publication_mints_the_edition_and_homes_the_claim_in_it() {
     let before = k.snapshot();
     let the_shot = Shot { base: None, draft: Some(doc1()), also: vec![], runs: vec![shot_run(&doc1(), &ca(1), 3)] };
     let target = PublishTarget::Mint { account: account.clone() };
-    let deposits = PublishDeposits { claim: true, links: vec![], retract: vec![], read_with: vec![set_s()], supersede: vec![], originals: vec![] };
+    let deposits = PublishDeposits { claim: true, links: vec![], retract: vec![], read_with: vec![set_s()], supersede: vec![], originals: vec![], base_runs: vec![] };
     let (member, seq) = writer(&k).publication(P1, &target, &the_shot, &[], &[], &deposits).expect("the mint");
     let edition = a(&[1, 0, 1, 0, 5]);
     assert_eq!(member, a(&[1, 0, 1, 0, 5, 1]), "the edition's first member");
@@ -1364,7 +1399,7 @@ fn each_refused_entry_names_its_index_and_commits_nothing() {
     let theirs = w.makelink(P2, &sib_doc(), SlotArg::Addrs(vec![sib_doc()]), SlotArg::Addrs(vec![]), SlotArg::Addrs(vec![citation()])).expect("their link").0;
     let the_shot = shot_off_head(&k, vec![]);
     let copy = |home: NamedAddress, old: Option<Address>| entry(home, ispans(&pca(1), 3), addrs(&[&doc2()]), addrs(&[&citation()]), old);
-    let links_only = |links: Vec<LinkEntry>| PublishDeposits { claim: false, links, retract: vec![], read_with: vec![], supersede: vec![], originals: vec![] };
+    let links_only = |links: Vec<LinkEntry>| PublishDeposits { claim: false, links, retract: vec![], read_with: vec![], supersede: vec![], originals: vec![], base_runs: vec![] };
     assert_eq!(refused_plan(&k, &the_shot, links_only(vec![copy(NamedAddress::Address(doc2()), None)])), PlanFault::LinkHome { index: 0 }, "a private home");
     assert_eq!(refused_plan(&k, &the_shot, links_only(vec![copy(NamedAddress::Address(pmember(1)), None)])), PlanFault::LinkHome { index: 0 }, "a member");
     assert_eq!(refused_plan(&k, &the_shot, links_only(vec![copy(NamedAddress::Address(sib_doc()), None)])), PlanFault::NotOwner(sib_doc()), "another's");
@@ -1396,11 +1431,11 @@ fn each_refused_entry_names_its_index_and_commits_nothing() {
         PlanFault::MemberSpan { index: 0 },
         "past the member's placed positions"
     );
-    let retract_only = |retract: Vec<Address>| PublishDeposits { claim: false, links: vec![], retract, read_with: vec![], supersede: vec![], originals: vec![] };
+    let retract_only = |retract: Vec<Address>| PublishDeposits { claim: false, links: vec![], retract, read_with: vec![], supersede: vec![], originals: vec![], base_runs: vec![] };
     assert_eq!(refused_plan(&k, &the_shot, retract_only(vec![theirs.clone()])), PlanFault::Retract { index: 0, cause: RetractCause::NotOwner });
     assert_eq!(refused_plan(&k, &the_shot, retract_only(vec![l.clone()])), PlanFault::Retract { index: 0, cause: RetractCause::NotPublished });
     assert_eq!(refused_plan(&k, &the_shot, retract_only(vec![m.clone(), link_of(&pmember(1), 7)])), PlanFault::Retract { index: 1, cause: RetractCause::Absent });
-    let read_with_only = |read_with: Vec<Address>| PublishDeposits { claim: false, links: vec![], retract: vec![], read_with, supersede: vec![], originals: vec![] };
+    let read_with_only = |read_with: Vec<Address>| PublishDeposits { claim: false, links: vec![], retract: vec![], read_with, supersede: vec![], originals: vec![], base_runs: vec![] };
     assert_eq!(refused_plan(&k, &the_shot, read_with_only(vec![doc2()])), PlanFault::ReadWith { index: 0, cause: ReadWithCause::NotPublished });
     assert_eq!(refused_plan(&k, &the_shot, read_with_only(vec![set_s(), pmember(1)])), PlanFault::ReadWith { index: 1, cause: ReadWithCause::NotDocument });
     assert_eq!(refused_plan(&k, &the_shot, read_with_only(vec![sib_doc()])), PlanFault::ReadWith { index: 0, cause: ReadWithCause::NotOwner });
@@ -1408,11 +1443,11 @@ fn each_refused_entry_names_its_index_and_commits_nothing() {
     // The order: a links fault speaks ahead of a retract fault ahead of a
     // read-with fault.
     assert_eq!(
-        refused_plan(&k, &the_shot, PublishDeposits { claim: false, links: vec![copy(NamedAddress::Address(doc2()), None)], retract: vec![theirs.clone()], read_with: vec![doc2()], supersede: vec![], originals: vec![] }),
+        refused_plan(&k, &the_shot, PublishDeposits { claim: false, links: vec![copy(NamedAddress::Address(doc2()), None)], retract: vec![theirs.clone()], read_with: vec![doc2()], supersede: vec![], originals: vec![], base_runs: vec![] }),
         PlanFault::LinkHome { index: 0 }
     );
     assert_eq!(
-        refused_plan(&k, &the_shot, PublishDeposits { claim: false, links: vec![], retract: vec![theirs], read_with: vec![doc2()], supersede: vec![], originals: vec![] }),
+        refused_plan(&k, &the_shot, PublishDeposits { claim: false, links: vec![], retract: vec![theirs], read_with: vec![doc2()], supersede: vec![], originals: vec![], base_runs: vec![] }),
         PlanFault::Retract { index: 0, cause: RetractCause::NotOwner }
     );
     // THE SUPERSEDED OLD: once `L` is accepted — its copy in the member,
@@ -1524,7 +1559,7 @@ fn an_original_reaching_the_published_words_through_a_whole_work_end_alone_is_re
     assert_eq!(whole, link_of(&doc2(), 2));
     let the_shot = shot_off_head(&k, vec![]);
     let copy = |old: &Address| entry(NamedAddress::Member, member_spans(1, 3), addrs(&[&doc2()]), addrs(&[&citation()]), Some(old.clone()));
-    let links_only = |links: Vec<LinkEntry>| PublishDeposits { claim: false, links, retract: vec![], read_with: vec![], supersede: vec![], originals: vec![] };
+    let links_only = |links: Vec<LinkEntry>| PublishDeposits { claim: false, links, retract: vec![], read_with: vec![], supersede: vec![], originals: vec![], base_runs: vec![] };
     assert_eq!(
         refused_plan(&k, &the_shot, links_only(vec![copy(&whole)])),
         PlanFault::Old { index: 0, cause: OldCause::WholeWork },
@@ -1567,7 +1602,7 @@ fn a_retracted_target_and_a_standing_read_with_are_skipped_and_a_private_one_is_
     // A read-with in the PRIVATE notes alone: not counted.
     w.makelink(P1, &doc2(), SlotArg::Addrs(vec![pdoc()]), SlotArg::Addrs(vec![set_s()]), SlotArg::Addrs(vec![read_with_type().clone()])).expect("a private read-with");
     let the_shot = shot_off_head(&k, vec![]);
-    let deposits = PublishDeposits { claim: false, links: vec![], retract: vec![m.clone()], read_with: vec![set_s()], supersede: vec![], originals: vec![] };
+    let deposits = PublishDeposits { claim: false, links: vec![], retract: vec![m.clone()], read_with: vec![set_s()], supersede: vec![], originals: vec![], base_runs: vec![] };
     let (m2, _) = publish(&k, &the_shot, &deposits).expect("the rest lands");
     assert_eq!(m2, pmember(2));
     let s = k.snapshot();
@@ -1580,13 +1615,13 @@ fn a_retracted_target_and_a_standing_read_with_are_skipped_and_a_private_one_is_
     );
     // Now the public one stands: a third publication's read-with is skipped.
     let the_shot = shot_off_head(&k, vec![]);
-    let (m3, _) = publish(&k, &the_shot, &PublishDeposits { claim: false, links: vec![], retract: vec![], read_with: vec![set_s()], supersede: vec![], originals: vec![] }).expect("the shot lands");
+    let (m3, _) = publish(&k, &the_shot, &PublishDeposits { claim: false, links: vec![], retract: vec![], read_with: vec![set_s()], supersede: vec![], originals: vec![], base_runs: vec![] }).expect("the shot lands");
     assert_eq!(m3, pmember(3));
     assert_eq!(k.snapshot().world().links().readlink(&link_of(&set_s(), 2)), None, "the standing read-with skips the entry");
     // Retracted, the public read-with no longer stands, and the next is written.
     w.nullify(P1, &set_s(), &link_of(&set_s(), 1)).expect("retracted");
     let the_shot = shot_off_head(&k, vec![]);
-    publish(&k, &the_shot, &PublishDeposits { claim: false, links: vec![], retract: vec![], read_with: vec![set_s()], supersede: vec![], originals: vec![] }).expect("the shot lands");
+    publish(&k, &the_shot, &PublishDeposits { claim: false, links: vec![], retract: vec![], read_with: vec![set_s()], supersede: vec![], originals: vec![], base_runs: vec![] }).expect("the shot lands");
     assert_eq!(k.snapshot().world().links().readlink(&link_of(&set_s(), 3)).map(|l| l.type_slot().clone()), Some(enc([read_with_type()])));
 }
 
@@ -1612,7 +1647,7 @@ fn a_homes_link_ordinals_rise_with_commit_position_across_commits() {
     for (commit, count) in [2u32, 3, 1].into_iter().enumerate() {
         let the_shot = shot_off_head(&k, vec![]);
         let base = 10 * commit as u32;
-        let deposits = PublishDeposits { claim: false, links: (1..=count).map(|n| into_s(base + n)).collect(), retract: vec![], read_with: vec![], supersede: vec![], originals: vec![] };
+        let deposits = PublishDeposits { claim: false, links: (1..=count).map(|n| into_s(base + n)).collect(), retract: vec![], read_with: vec![], supersede: vec![], originals: vec![], base_runs: vec![] };
         let (_, seq) = publish(&k, &the_shot, &deposits).expect("the commit");
         seqs.push(seq);
     }
@@ -1686,6 +1721,7 @@ fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() 
         read_with: vec![set_s(), set_s()],
         supersede: vec![],
         originals: vec![],
+        base_runs: vec![],
     };
     // No place: the draft is not read, and the draft term is nothing.
     let unplaced = price_publication_reads(world, P1, &target, &the_shot, &[], &[], &deposits);
@@ -1888,7 +1924,7 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
         ty: EndArg::Addrs((1..=MAX_SLOT_SPANS as u32).map(|i| NamedAddress::Address(a(&[1, 1, 0, 1, 0, 1, 0, 3, 23, i]))).collect()),
         old: None,
     };
-    let with = |links: Vec<LinkEntry>, retract: Vec<Address>, read_with: Vec<Address>| PublishDeposits { claim: false, links, retract, read_with, supersede: vec![], originals: vec![] };
+    let with = |links: Vec<LinkEntry>, retract: Vec<Address>, read_with: Vec<Address>| PublishDeposits { claim: false, links, retract, read_with, supersede: vec![], originals: vec![], base_runs: vec![] };
     let copy = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &with(vec![full.clone()], vec![], vec![]))) - shot_bytes;
     // THE SHOT AT AN EMPTY HEAD: the shots above left the head a member of
     // no positions, and a shot off it carries `base_extent` 0 — a zero
@@ -2009,6 +2045,7 @@ fn the_plan_is_a_pure_function_of_the_world_and_the_request() {
         read_with: vec![set_s()],
         supersede: vec![],
         originals: vec![],
+        base_runs: vec![],
     };
     let snap = k.snapshot();
     let target = PublishTarget::Document(pdoc());

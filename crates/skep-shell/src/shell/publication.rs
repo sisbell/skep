@@ -13,7 +13,13 @@
 //! a record names taken by its counterpart and every other kept private —
 //! the widest request the default switches make — and answers the panel
 //! `{rows, formatting, read_with, count, price, windows, parts, inherited,
-//! merge_records, standing?, left_behind, hold?}` — `windows` each
+//! merge_records, p3_stands, standing?, left_behind, hold?}` — each row
+//! with THE FOLD (E4 1.8): `unchanged` its links unchanged since the
+//! recorded base by the fold's test, by address, and `fold` the two
+//! counts, links unchanged and not, decided against the image of the
+//! member the request's `base` names, read once at the open and kept for
+//! the confirm's re-read; `p3_stands` whether P3 stands (E4 1.4);
+//! `windows` each
 //! own-origin window in its PARTS, each part with the answers it admits
 //! (B3-S11 P2 (i)), a window awaiting its answer counting toward nothing;
 //! `parts` what each part's answer brings, the answered row's clause's
@@ -22,9 +28,10 @@
 //! draft, since no publication publishes one;
 //! `count` is THE CALL PER ANSWER: it re-keys the held panel by the
 //! answers at the windows' parts — the rows and their candidates, the
-//! formatting line, the windows, what each part's answer brings — from the
-//! open's reads alone, and answers `{count, price, rows, formatting,
-//! windows, parts}` with the four numbers and
+//! formatting line, the windows, what each part's answer brings, each
+//! row's fold and whether P3 stands — from the open's reads alone, and
+//! answers `{count, price, rows, formatting, windows, parts, p3_stands}`
+//! with the four numbers and
 //! the price over the rows as switched, PURE LOCAL — no frame sent, the
 //! price the open's request re-priced with the entries the switches add,
 //! each end spelled by its stored slot's shape (an address form, an I-span
@@ -139,6 +146,9 @@
 //! sibling's shot landing while it stood, `at_head` → `behind` or `first` →
 //! `superseded_first` — is re-stated with the new `standing`, nothing sent,
 //! and a base the board no longer records is refused as at `open`. The
+//! request's `base` is the member the open read and tested against — the
+//! panel's fold and key (iii) decided against its image — so the panel and
+//! the board's validation (3) test one member by one rule. The
 //! reads run once the session stands and before the index or the draft is
 //! read, so a refusal waits on neither; the mint form has no chain and is
 //! the birth shape, with no standing. A `base` the page sends is no member
@@ -926,11 +936,12 @@ impl Shell {
 
     /// Answers `publication.count(session, {switches, answers})`.
     ///
-    /// It answers `{count, price, rows, formatting, windows, parts}` off the
-    /// standing panel, pure local: the panel re-keyed by the answers at the
-    /// windows' parts from the open's reads alone — the rows and their
-    /// candidates, the formatting line, the windows, what each part's
-    /// answer brings — the four numbers as
+    /// It answers `{count, price, rows, formatting, windows, parts,
+    /// p3_stands}` off the standing panel, pure local: the panel re-keyed by
+    /// the answers at the windows' parts from the open's reads alone — the
+    /// rows and their candidates with each row's fold, the formatting line,
+    /// the windows, what each part's answer brings, whether P3 stands — the
+    /// four numbers as
     /// the switches and the answers stand now, and the price re-run over
     /// the rows as switched (the module doc).
     ///
@@ -958,6 +969,7 @@ impl Shell {
             "formatting": formatting_json(&state.enumeration, &state.panel.formatting),
             "windows": state.enumeration.windows.iter().map(window_json).collect::<Vec<_>>(),
             "parts": state.panel.parts.iter().map(part_counts_json).collect::<Vec<_>>(),
+            "p3_stands": state.panel.p3_stands,
         });
         let reference = session.reference.clone();
         self.publications.update(&key, |s| {
@@ -1422,6 +1434,8 @@ fn row_json(e: &lib::Enumeration, row: &lib::Row) -> Value {
         "types": row.types.iter().map(|t| json!({"ty": t.ty, "n": t.n, "far": t.far})).collect::<Vec<_>>(),
         "line": {"p": row.line.p, "d": row.line.d, "c": row.line.c, "t": row.line.t, "u": row.line.u},
         "read_through": row.read_through,
+        "unchanged": row.links.iter().filter(|i| e.candidates[**i].unchanged).map(|i| e.candidates[*i].link.to_string()).collect::<Vec<_>>(),
+        "fold": {"unchanged": row.fold.unchanged, "changed": row.fold.changed},
     })
 }
 
@@ -1556,6 +1570,7 @@ fn panel_json(state: &PanelState, hold: Option<Value>) -> Value {
         "parts": panel.parts.iter().map(part_counts_json).collect::<Vec<_>>(),
         "inherited": panel.inherited.iter().map(inherited_json).collect::<Vec<_>>(),
         "merge_records": panel.merge_records.iter().map(merge_records_json).collect::<Vec<_>>(),
+        "p3_stands": panel.p3_stands,
         "left_behind": addresses_json(&state.left_behind),
     });
     if let Some(standing) = &state.standing {

@@ -500,7 +500,7 @@ fn the_publication_cards_state_the_shells_shapes() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
     let entry = |name: &str| catalog.tools.iter().find(|t| t["name"] == name).unwrap_or_else(|| panic!("the {name} card"));
     for (name, row, nested) in [
-        ("publication_open", "publication.open", &["PublicationRow", "Formatting", "Count", "Price", "Window", "Part", "PartCounts", "Hold"][..]),
+        ("publication_open", "publication.open", &["PublicationRow", "RowFold", "Formatting", "Count", "Price", "Window", "Part", "PartCounts", "Hold"][..]),
         ("publication_count", "publication.count", &["Count"][..]),
         ("publication_confirm", "publication.confirm", &[][..]),
         ("publication_cancel", "publication.cancel", &[][..]),

@@ -1527,7 +1527,9 @@ impl Fields {
     /// `member` and `edition` are admitted where an address is expected
     /// inside an entry — a home, an element of an address-form end —
     /// `edition` at the mint form alone; the member-position end form is
-    /// read against the shot's runs ([`p_end`]).
+    /// read against the shot's runs ([`p_end`]). The board's own member, the
+    /// base's runs, is never read off the wire: it is left empty here, and a
+    /// frame naming it meets the closed member set as any unknown field does.
     ///
     /// # Errors
     ///
@@ -1557,7 +1559,7 @@ impl Fields {
             None => Vec::new(),
             Some(v) => indexed_list(&v, "supersede", p_addr)?,
         };
-        Ok(PublishDeposits { claim, links, retract, read_with, supersede, originals })
+        Ok(PublishDeposits { claim, links, retract, read_with, supersede, originals, base_runs: Vec::new() })
     }
 }
 

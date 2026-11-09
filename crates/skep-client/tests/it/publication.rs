@@ -264,17 +264,20 @@ fn seed(board: &Board, session: &Session<'_>, signer: &HybridSigner, bare_token:
 /// per candidate; each claim's `new` read for its home and its two ends,
 /// as the plan's `covers_all` reads a successor; the
 /// candidate dropped where some successor is homed in a published document
-/// of the claimant's AND covers the candidate's positions on the selection —
-/// the keys as the daemon's suite reads them (its liveness key, struck by
+/// of the claimant's AND covers the candidate's positions on the selection
+/// that `base` — the member the request's `base` names, over its positions
+/// 1..`base_extent` — does not hold (key (iii) as E4 2.1 re-says it) — the
+/// keys as the daemon's suite reads them (its liveness key, struck by
 /// sweep 5 S1, left out: nothing here is retracted). Grouped by home, in the
 /// order the homes answer.
-fn offered_oracle(board: &Board, token: &Token, doc: &str, from: u64, width: u64) -> Vec<(String, Vec<String>)> {
+fn offered_oracle(board: &Board, token: &Token, doc: &str, from: u64, width: u64, base: (&str, u64)) -> Vec<(String, Vec<String>)> {
     let expand = |start: &str, w: u64| -> Vec<String> {
         let (prefix, first) = start.rsplit_once('.').unwrap();
         let first: u64 = first.parse().unwrap();
         (first..first + w).map(|k| format!("{prefix}.{k}")).collect()
     };
     let selection: BTreeSet<String> = image(board, token, doc, from, width).iter().flat_map(|(s, w)| expand(s, *w)).collect();
+    let held: BTreeSet<String> = image(board, token, base.0, 1, base.1).iter().flat_map(|(s, w)| expand(s, *w)).collect();
     let slot_addresses = |slot: &Value| -> BTreeSet<String> {
         slot.as_array().unwrap().iter().flat_map(|s| {
             let start = s["start"].as_str().unwrap();
@@ -315,7 +318,7 @@ fn offered_oracle(board: &Board, token: &Token, doc: &str, from: u64, width: u64
             let successor = read(board, token, &frames::read_link(new));
             let mut ends = slot_addresses(&successor["link"]["slots"][0]);
             ends.extend(slot_addresses(&successor["link"]["slots"][1]));
-            new_owner == ACCOUNT && new_published && !on_selection.is_empty() && on_selection.is_subset(&ends)
+            new_owner == ACCOUNT && new_published && !on_selection.is_empty() && on_selection.difference(&held).all(|a| ends.contains(a))
         });
         if dropped {
             continue;
@@ -399,7 +402,7 @@ fn the_composition_enumerates_as_the_daemon_filters_and_its_one_request_lands() 
     // THE FIRST GATE.
     let before = board.health().unwrap().log_position();
     let en = enumerate(&p, &inputs).expect("enumerated");
-    let oracle = offered_oracle(&board, &token, d, 1, 34);
+    let oracle = offered_oracle(&board, &token, d, 1, 34, (e1, 19));
     let by_home = |groups: Vec<(String, Vec<String>)>| -> BTreeMap<String, Vec<String>> { groups.into_iter().collect() };
     let private: Vec<(String, Vec<String>)> = en.offered_by_home().into_iter().filter(|(h, _)| h.to_string() != *s && h.to_string() != *s2).map(|(h, links)| (h.to_string(), links.iter().map(ToString::to_string).collect())).collect();
     // THE STORED-ENDSET TEST, met on the wire: the region read answers the
@@ -514,7 +517,6 @@ fn the_composition_enumerates_as_the_daemon_filters_and_its_one_request_lands() 
     request.id = publication::fresh_id();
     let twin = send(&p, &inputs, &mut request).expect("sent");
     assert!(matches!(&twin, Sent::Acknowledged(a) if a.via == AckVia::Twin && a.member.to_string() == member), "{twin:?}");
-    let _ = e1;
     session.close().expect("close");
 }
 
@@ -675,7 +677,7 @@ fn a_second_publication_offers_nothing_the_first_accepted_on_the_words_it_re_min
     let private: Vec<(String, Vec<String>)> =
         en.offered_by_home().into_iter().filter(|(h, _)| h.to_string() != *s && h.to_string() != *s2).map(|(h, links)| (h.to_string(), links.iter().map(ToString::to_string).collect())).collect();
     assert_eq!(private, Vec::<(String, Vec<String>)>::new(), "nothing private the first publication accepted is offered");
-    assert_eq!(private, offered_oracle(&board, &token, d, 1, 35), "as the daemon's own filter over the region offers it");
+    assert_eq!(private, offered_oracle(&board, &token, d, 1, 35, (&e2, 34)), "as the daemon's own filter over the region offers it");
     let pn = panel(&p, &second, &en).expect("the panel");
     assert!(pn.formatting.marks.is_empty(), "no mark on the line");
     let Built::Request(mut request) = build(&p, &second, &en, &pn, &confirmed(&seeded)).expect("built") else { panic!("inert") };
@@ -685,6 +687,90 @@ fn a_second_publication_offers_nothing_the_first_accepted_on_the_words_it_re_min
     let e3 = format!("{e}.3");
     assert_eq!(ack.member.to_string(), e3);
     assert!(read(&board, &token, &frames::read_link(&format!("{e3}.0.2.1")))["link"].is_null(), "no copy in E.3");
+    session.close().expect("close");
+}
+
+/// Checks against the daemon that a cut copy's original is offered once,
+/// where its rest arrives, and that the board agrees before and after.
+///
+/// A note on the draft's new words 3..8 is published at version 2 with only
+/// 1..5 selected, its copy in `E.2` cut to the words that version
+/// re-minted. Version 3 publishes the rest as new words: the note is offered
+/// again — the save — and left off. At version 4 its base `E.3` holds every
+/// word of it, read through the draft's records, so the panel offers it no
+/// more (E4 2.1), and an entry pushing it again — the write a switch turned
+/// on for an unrelated link would make — is refused `old_refused`,
+/// `superseded`, by the board, which reads the same base ahead of its lock.
+#[test]
+fn the_panel_and_the_board_agree_on_a_cut_copys_original_before_and_after_its_rest_arrives() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session).expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+    let seeded = seed(&board, &session, &device, &bare_token, &dir.path().join("anchors"));
+    let Seeded { e, d, n, o, .. } = &seeded;
+    let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
+    // The note on the draft's new words 3..8, its positions 22..27.
+    let cut_n = make_link(&board, &session, &bare_token, &device, n, false, spec(d, 22, 6, d, 3), spec(n, 1, 2, n, 1), T_CITATION);
+    let answered = |notes: bool| -> Confirmed {
+        let mut switches = Switches::default();
+        if notes {
+            switches.on.insert(addr(n));
+        }
+        Confirmed { switches, answers: BTreeMap::from([(PartKey { run: 2, part: 0 }, OriginAnswer::KeepPrivate)]), left_out: BTreeSet::new() }
+    };
+    let publish = |inputs: &Inputs, confirmed: &Confirmed| -> String {
+        let en = enumerate(&p, inputs).expect("enumerated");
+        let pn = panel(&p, inputs, &en).expect("the panel");
+        let Built::Request(mut request) = build(&p, inputs, &en, &pn, confirmed).expect("built") else { panic!("inert") };
+        let sent = send(&p, inputs, &mut request).expect("sent");
+        let Sent::Acknowledged(ack) = sent else { panic!("{sent:?}") };
+        ack.member.to_string()
+    };
+    let recorded = || -> (Address, u64) {
+        match publication::draft_base(&p, &addr(e), &addr(d)).expect("the base") {
+            publication::base::Base::Recorded { base, copied } => (base, copied),
+            other => panic!("{other:?}"),
+        }
+    };
+    // Version 2: the draft's 1..5 alone, the note into the member — its copy
+    // cut to the new words 3..5.
+    let v2 = Inputs { selection: vec![run(e, 1, 19), run(d, 1, 5), run(o, 1, 5)], ..inputs(&seeded) };
+    assert_eq!(publish(&v2, &answered(true)), format!("{e}.2"));
+    // Version 3: the rest arrives as new words, and the note is offered
+    // again; the person leaves it off.
+    assert_eq!(image(&board, &bare_token, d, 1, 34), vec![(format!("{e}.0.1.1"), 24), (format!("{d}.0.1.6"), 5), (format!("{o}.0.1.1"), 5)], "the premise: 1..5 re-minted, 6..10 the draft's own");
+    let v3 = Inputs { base: Some(recorded()), selection: vec![run(e, 1, 24), run(d, 6, 5), run(o, 1, 5)], ..inputs(&seeded) };
+    let en = enumerate(&p, &v3).expect("enumerated");
+    let c = en.candidates.iter().find(|c| c.link.to_string() == cut_n).expect("the note is a candidate");
+    let keys: Vec<(bool, bool, bool)> = c.successors.iter().map(|s| (s.published_home, s.covers, s.candidate)).collect();
+    assert_eq!((keys, c.offered(), c.unchanged), (vec![(true, false, false)], true, false), "the save: its rest arrives at this version");
+    assert_eq!(publish(&v3, &answered(false)), format!("{e}.3"));
+    // Version 4: a word typed; the base holds every word of the note.
+    insert_text(&board, &bare_token, d, 30, "!");
+    assert_eq!(image(&board, &bare_token, d, 1, 35), vec![(format!("{e}.0.1.1"), 29), (format!("{d}.0.1.11"), 1), (format!("{o}.0.1.1"), 5)], "the premise");
+    let v4 = Inputs { base: Some(recorded()), selection: vec![run(e, 1, 29), run(d, 11, 1), run(o, 1, 5)], ..inputs(&seeded) };
+    assert_eq!(v4.base, Some((addr(&format!("{e}.3")), 34)));
+    let en = enumerate(&p, &v4).expect("enumerated");
+    let c = en.candidates.iter().find(|c| c.link.to_string() == cut_n).expect("read through the draft's records");
+    let keys: Vec<(bool, bool, bool)> = c.successors.iter().map(|s| (s.published_home, s.covers, s.candidate)).collect();
+    assert_eq!((keys, c.offered(), c.unchanged), (vec![(true, true, false)], false, true), "the base holds every word of it: offered no more, and unchanged");
+    let pn = panel(&p, &v4, &en).expect("the panel");
+    let Built::Request(mut request) = build(&p, &v4, &en, &pn, &answered(true)).expect("built") else { panic!("inert") };
+    assert!(request.entries.iter().all(|entry| entry.old != Some(addr(&cut_n))), "{:?}", request.entries);
+    let candidate = en.candidates.iter().position(|c| c.link.to_string() == cut_n).expect("a candidate");
+    let span = |doc: &str, first: u64, width: u64| publication::End::Spans(vec![publication::ISpan { chain: format!("{doc}.0.1"), first, width }]);
+    request.entries.push(publication::Entry { home: publication::EntryHome::Member, from: span(e, 22, 6), to: span(n, 1, 2), ty: publication::End::Addrs(vec![T_CITATION.to_string()]), old: Some(addr(&cut_n)), candidate });
+    let before = board.health().unwrap().log_position();
+    let sent = send(&p, &v4, &mut request).expect("sent");
+    assert!(matches!(&sent, Sent::Refused(Refusal::Lineage { original, cause: publication::LineageCause::Superseded, .. }) if *original == addr(&cut_n)), "the board refuses the re-offer the panel no longer makes: {sent:?}");
+    assert_eq!(board.health().unwrap().log_position(), before, "nothing committed");
     session.close().expect("close");
 }
 

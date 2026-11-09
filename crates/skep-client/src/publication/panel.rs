@@ -29,7 +29,12 @@
 //! private documents, ⟨d⟩ links with an end wholly on words of the draft
 //! the selection leaves out, ⟨c⟩ links with an end running past the
 //! selection's cut, ⟨t⟩ links typed by a private document, ⟨u⟩ revisions of
-//! links already published. THE FORMATTING LINE, in the draft's own set
+//! links already published; and per row THE FOLD ([`FoldCounts`], E4 1.8):
+//! its offered links counted UNCHANGED since version ⟨k⟩ — the fold's test
+//! the enumeration decides against the member the request's `base` names
+//! ([`Candidate::unchanged`]) — and not, so a private row whose every link
+//! passes is drawn compact and one with any that fails whole, folded by
+//! change (E4 1.2, 1.3). THE FORMATTING LINE, in the draft's own set
 //! alone, holds the offered links the line's TEST keeps: exactly one of
 //! `from` and `to` non-empty, the type slot exactly one unit span in the
 //! formatting types' own subtrees — `3.20` heading, `3.21` paragraph and its
@@ -65,9 +70,17 @@
 //! runs of the selection hold any, how many — the enumeration's cut, which
 //! no publication carries (the merge record's decision 7), the data of the
 //! statement "⟨n⟩ merge records in ⟨label⟩ stay private and are not
-//! published with it". Every test of the selection here — the line's ⟨c⟩
-//! and ⟨d⟩, the formatting line's cut, the job list, the statement's
-//! passages — reads the selection as published ([`Enumeration::selection`]).
+//! published with it". WHETHER P3 STANDS ([`Panel::p3_stands`], E4 1.4) is
+//! the panel's data too: it stands where it holds something to decide or to
+//! say before the act — a private row with a link not unchanged since
+//! version ⟨k⟩, the formatting line's marks or listed removals, a
+//! re-offered original (an offered candidate a public successor of the
+//! person's names), or a public row's link on words this version publishes
+//! as new — and not where it would draw compact rows and public rows alone.
+//! Every test of the selection here — the line's ⟨c⟩ and ⟨d⟩, the
+//! formatting line's cut, the job list, the statement's passages, P3's
+//! new words — reads the selection as published
+//! ([`Enumeration::selection`]).
 //!
 //! **Ends read through the records.** The line's ⟨c⟩, ⟨d⟩ and far
 //! documents, the formatting line's cut and its re-make test read a
@@ -138,6 +151,17 @@ pub struct LineCounts {
     pub u: usize,
 }
 
+/// A row's FOLD (E4 1.8): its offered links counted by the fold's test —
+/// unchanged since version ⟨k⟩ ([`Candidate::unchanged`]) and not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FoldCounts {
+    /// Links unchanged since version ⟨k⟩: made before it, on words it holds.
+    pub unchanged: usize,
+    /// Links not: made since, or touching words version ⟨k⟩ did not hold or
+    /// this version publishes as new.
+    pub changed: usize,
+}
+
 /// One row of the panel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
@@ -157,6 +181,10 @@ pub struct Row {
     /// How many of the row's links the read-through reached: the private
     /// move's share where the row is left off.
     pub read_through: usize,
+    /// The row's links counted by the fold's test: a private row whose
+    /// every link is unchanged since version ⟨k⟩ is drawn compact (E4 1.2),
+    /// one with any link changed whole, folded by change (E4 1.3).
+    pub fold: FoldCounts,
 }
 
 /// The private original a held removal's mark stands for, which the commit
@@ -317,6 +345,13 @@ pub struct Panel {
     /// The merge records left out, per named draft holding any, in the
     /// selection's order: never published, so the page says so.
     pub merge_records: Vec<MergeRecords>,
+    /// Whether P3 stands (E4 1.4): it holds something to decide or to say
+    /// before the act — a private row holding a link changed since version
+    /// ⟨k⟩, the formatting line's marks or listed removals, a re-offered
+    /// original, or a public row's link on words this version publishes as
+    /// new. Where it does not stand, P2's own line says the links stayed
+    /// private.
+    pub p3_stands: bool,
     /// The frames sent, per step.
     pub frames: Vec<(&'static str, usize)>,
     /// The reads the open made, which every composition reads.
@@ -324,9 +359,10 @@ pub struct Panel {
 }
 
 impl Panel {
-    /// Returns the panel as `e`'s composition decides it — the rows, the
-    /// formatting line, the job list, the statement's count — from the
-    /// reads this panel's open made: nothing is read.
+    /// Returns the panel as `e`'s composition decides it — the rows and
+    /// their folds, the formatting line, the job list, the statement's
+    /// count, whether P3 stands — from the reads this panel's open made:
+    /// nothing is read.
     ///
     /// `e` is the enumeration the panel was read over, composed under the
     /// answers that stand ([`Enumeration::composed`]).
@@ -683,7 +719,9 @@ fn compose(inputs: &Inputs, e: &Enumeration, reads: &PanelReads, frames: Vec<(&'
         let links: Vec<usize> = indices.iter().copied().filter(|i| e.candidates[*i].offered() && !marks.contains(i)).collect();
         let u = indices.iter().filter(|i| e.candidates[**i].revised).count();
         let label = reads.labels.get(home).cloned().unwrap_or_default();
-        rows.push(Row { home: home.clone(), kind, label, links, types: Vec::new(), line: LineCounts { u, ..LineCounts::default() }, read_through: 0 });
+        let unchanged = links.iter().filter(|i| e.candidates[**i].unchanged).count();
+        let fold = FoldCounts { unchanged, changed: links.len() - unchanged };
+        rows.push(Row { home: home.clone(), kind, label, links, types: Vec::new(), line: LineCounts { u, ..LineCounts::default() }, read_through: 0, fold });
     }
     rows.sort_by_key(|r| match r.kind {
         RowKind::Own => (0, 0, r.home.to_string()),
@@ -776,6 +814,17 @@ fn compose(inputs: &Inputs, e: &Enumeration, reads: &PanelReads, frames: Vec<(&'
         }
     }
 
+    // Whether P3 stands (E4 1.4): a private row holding a link changed since
+    // version ⟨k⟩, the formatting line holding a mark or a listed removal, a
+    // re-offered original — one a public successor of the person's does not
+    // drop — or a public row's link on words this version publishes as new.
+    let on_new_words = |c: &Candidate| selected_ranges(&walk.spans(c), e.judged(c)).iter().any(|(chain, ..)| walk.is_named_chain(chain));
+    let p3_stands = rows.iter().any(|r| !matches!(r.kind, RowKind::Public { .. }) && r.fold.changed > 0)
+        || !marks.is_empty()
+        || removals.iter().any(Removal::listed)
+        || e.candidates.iter().any(|c| c.offered() && c.successors.iter().any(|s| s.published_home))
+        || rows.iter().filter(|r| matches!(r.kind, RowKind::Public { .. })).flat_map(|r| &r.links).any(|&i| on_new_words(&e.candidates[i]));
+
     Panel {
         rows,
         formatting: Formatting { marks, cut, removals },
@@ -783,6 +832,7 @@ fn compose(inputs: &Inputs, e: &Enumeration, reads: &PanelReads, frames: Vec<(&'
         parts,
         inherited: inherited(&inputs.also, &e.selection),
         merge_records: merge_records(inputs, e),
+        p3_stands,
         frames,
         reads: reads.clone(),
     }

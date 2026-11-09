@@ -86,8 +86,14 @@
 //! `out_claims` row of the person's names an `old` — the candidate a
 //! successor — that original's `in_claims`, the candidate REVISED where an
 //! accept's claim of the person's names a public copy, wherever the
-//! original's ends lie (W17). The candidates are grouped BY HOME in the
-//! order their homes first answered.
+//! original's ends lie (W17); (11) `base` — VERSION ⟨k⟩ (**The base**,
+//! below): where the request's `base` names a version member, one
+//! `doc_metadata` of it for its position and one `image` of it over its
+//! positions `1 ..= base_extent`, in parts past the run budget — the read
+//! the request's inert check makes, kept on the enumeration
+//! ([`Enumeration::base`]) so the re-read and the build image it never
+//! again. The candidates are grouped BY HOME in the order their homes
+//! first answered.
 //!
 //! **The composition** ([`Enumeration::composed`]), from those reads and no
 //! other. The answers at the windows' parts decide THE SELECTION AS
@@ -101,22 +107,28 @@
 //! every candidate is judged again: the stored-endset test, and THE
 //! FILTER's drop — a public successor, homed in a published document of
 //! the person's, drops a candidate where its ends as stored COVER every
-//! position of the candidate this publication publishes — the candidate's
-//! ends read through the walk below (keys (i) and (iii); no liveness key —
-//! sweep 5 S1) — and none of those positions lies on a named draft's own
-//! words, which the shot publishes as new: a successor standing before the
-//! shot covers none of them, whatever its ends name (PUB-3.9). So a copy an
-//! earlier selection cut leaves its original offered, to be re-made over
-//! the whole run (W4); the original of an end that lay wholly on left-out
-//! words, its copy holding the draft's own addresses, is offered at the
-//! publication that publishes those words (§5.2's ⟨d⟩); a copy an earlier
-//! shot made over the words it re-minted drops its original at every later
-//! publication — stray words among them, which the walk reads as the
-//! published words they are, so where the draft shows them as its own
-//! nothing is offered again and nothing refused (§5.1); and a first copy
-//! laid on a placeholder's words drops its original while the part is kept
-//! private there and not once the part's counterpart is published in its
-//! place. Any other successor drops it where it is itself a candidate,
+//! position of the candidate this publication publishes and version ⟨k⟩
+//! did not hold — the candidate's ends read through the walk below, the
+//! base's words compared in the same identity (**The base**; keys (i) and
+//! (iii); no liveness key — sweep 5 S1) — and none of those positions lies
+//! on a named draft's own words, which the shot publishes as new: a
+//! successor standing before the shot covers none of them, whatever its
+//! ends name (PUB-3.9). So a copy an earlier selection cut leaves its
+//! original offered at the version that brings in words of it the copy
+//! does not reach, to be re-made over the whole run (W4), and at no later
+//! one while those words stay in the base (E4 2.1's save); the original of
+//! an end that lay wholly on left-out words, its copy holding the draft's
+//! own addresses, is offered at the publication that publishes those words
+//! (§5.2's ⟨d⟩); a copy an earlier shot made over the words it re-minted
+//! drops its original at every later publication — stray words among them,
+//! which the walk reads as the published words they are, so where the
+//! draft shows them as its own nothing is offered again and nothing refused
+//! (§5.1); and a first copy laid on a placeholder's words drops its
+//! original while the part is kept private there, is offered at the version
+//! whose counterpart fills it and at no later one. Each candidate is
+//! decided UNCHANGED since version ⟨k⟩ or not ([`Candidate::unchanged`]),
+//! the fold's test the panel's rows count. Any other successor drops it
+//! where it is itself a candidate,
 //! dropped or offered — a retype or an end move made in the draft before
 //! the shot (B3-S12), a move into another set of theirs (§2) — one since
 //! retracted being no candidate, nor one touching nothing selected, and
@@ -145,6 +157,31 @@
 //! link the end is. Every other span is read as stored. Key (iii), the panel's
 //! line counts and the request's `spell_end` read this one walk,
 //! `RecordWalk`, so a candidate is judged on the words its entry sends.
+//!
+//! **The base.** VERSION ⟨k⟩ is the member the request's `base` names, the
+//! draft's recorded base (A-350), and THE WORDS IT HOLDS are what it
+//! arranges itself — every run its image answers over its positions
+//! `1 ..= base_extent`, its own words and its windows onto other documents
+//! alike ([`BaseImage`]) — compared in the identity this publication
+//! publishes them in: a candidate's positions are the walk's, so a span on
+//! the draft's earlier words is compared as the published words its record
+//! names, a part taken by its counterpart as the counterpart's, a part kept
+//! private as its origin's own words and a part left out not at all (the
+//! counterpart-first decision §1). A run this shot places by reference is
+//! held only where the base arranged it: a window's words are held from the
+//! version after the one that first windows them, and a placeholder's
+//! passage while the hole stands but not at the version that fills it.
+//! KEY (III) leaves the positions the base holds out of those a public
+//! successor must cover (E4 2.1, the save: an original is offered at a
+//! version that brings in words of it its copy does not reach, and at none
+//! while those words stay in the versions), and THE FOLD (E4 1.1) decides a
+//! candidate UNCHANGED since version ⟨k⟩ where (i) its own commit position,
+//! `read_link`'s `at`, is lower than the base's, `doc_metadata`'s `at`, both
+//! read, and (ii) every position by which it touches the selection as
+//! composed lies on words the base holds and none on a named draft's own
+//! words. A base that is no version member — the bare document, and no base
+//! at all at the birth shape and the mint form — folds nothing and keys no
+//! save: key (iii) asks a successor to cover every published position.
 //!
 //! What it does not read: other people's links, left out by the owned-homes
 //! rule and no refusal; links of the person's touching no word any answer
@@ -447,15 +484,19 @@ pub struct Successor {
     /// candidate's published positions to at every composition. Empty where
     /// `new` is absent.
     pub ends: Vec<ISpan>,
-    /// (iii) Whether `new` covers the candidate's words this shot publishes.
+    /// (iii) Whether `new` covers the candidate's words this shot publishes
+    /// and version ⟨k⟩ did not hold.
     ///
     /// Its ends, as stored, hold every position of the candidate this
-    /// publication publishes — the candidate's ends read through the records
-    /// as the request spells them (`RecordWalk`) — and none of those
-    /// positions lies on a named draft's own words, which the shot publishes
-    /// as new: a successor standing before the shot covers none of them,
-    /// whatever addresses its ends name (PUB-3.9; §5.2's ⟨c⟩ and ⟨d⟩).
-    /// Decided by the composition ([`Enumeration::composed`]).
+    /// publication publishes that the base's image does not — the
+    /// candidate's ends read through the records as the request spells them
+    /// (`RecordWalk`), the base held in the same identity (the module's
+    /// doc, **The base**) — and none of those positions lies on a named
+    /// draft's own words, which the shot publishes as new: a successor
+    /// standing before the shot covers none of them, whatever addresses its
+    /// ends name (PUB-3.9; §5.2's ⟨c⟩ and ⟨d⟩). Every published position held
+    /// by the base, none is left to cover and it covers (E4 2.1). Decided by
+    /// the composition ([`Enumeration::composed`]).
     pub covers: bool,
     /// Whether `new` is another candidate of this enumeration.
     ///
@@ -468,9 +509,11 @@ impl Successor {
     /// Returns whether this successor drops its original from the list.
     ///
     /// A public successor drops it where it covers, keys (i) and (iii), so a
-    /// copy an earlier selection cut drops nothing (W4); any other drops it
-    /// where it is a candidate — the retype, end move or move the person
-    /// made in the draft before the shot (§5.1, proposal 23; B3-S12).
+    /// copy an earlier selection cut drops nothing at the version that
+    /// brings in the words it does not reach (W4) and drops it at every
+    /// version whose base holds them (E4 2.1); any other drops it where it
+    /// is a candidate — the retype, end move or move the person made in the
+    /// draft before the shot (§5.1, proposal 23; B3-S12).
     pub fn drops(&self) -> bool {
         if self.published_home {
             self.covers
@@ -504,6 +547,13 @@ pub struct Candidate {
     /// Left out of the offer: the board refused it by its lineage at an
     /// earlier send of this publication.
     pub left_out: bool,
+    /// Whether the candidate is UNCHANGED since version ⟨k⟩, by the fold's
+    /// test (E4 1.1; the module's doc, **The base**): its commit position
+    /// lower than the base's, and every position by which it touches the
+    /// selection as composed held by the base, none on a named draft's own
+    /// words. Never where no version member is the base. Decided by the
+    /// composition ([`Enumeration::composed`]).
+    pub unchanged: bool,
 }
 
 impl Candidate {
@@ -626,6 +676,51 @@ pub struct AlsoImage {
     pub image: Vec<IRun>,
 }
 
+/// VERSION ⟨k⟩ imaged: the member the request's `base` names, read once
+/// per open (the module's doc, **The base**).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BaseImage {
+    /// The member, as the request's `base` names it.
+    pub member: Address,
+    /// The positions imaged, `1 ..= extent`: the request's `base_extent`.
+    pub extent: u64,
+    /// The position of the commit that minted the member — its shot's, off
+    /// `doc_metadata`; `None` where the board serves none.
+    pub at: Option<u64>,
+    /// Its image over positions `1 ..= extent`, in V-order: its own words
+    /// and its windows onto other documents alike.
+    pub image: Vec<IRun>,
+}
+
+impl BaseImage {
+    /// Returns whether this is the image of `base`, a request's `base` and
+    /// `base_extent`.
+    pub(crate) fn is_of(&self, base: &(Address, u64)) -> bool {
+        self.member == base.0 && self.extent == base.1
+    }
+
+    /// Returns the words the base holds: each run of its image, as an
+    /// I-span.
+    fn held(&self) -> Vec<ISpan> {
+        self.image.iter().map(|r| ISpan { chain: r.prefix.clone(), first: r.first, width: r.width }).collect()
+    }
+
+    /// Returns whether a link minted at `at` came before the base — the
+    /// fold's test (i) (E4 1.1): its commit position lower than the base's,
+    /// never where either was served `null`.
+    fn precedes(&self, at: Option<u64>) -> bool {
+        matches!((at, self.at), (Some(link), Some(base)) if link < base)
+    }
+}
+
+/// Returns whether `member`, a request's `base`, is a version member — the
+/// base that keys the fold and the save — and not the bare document, which
+/// keys neither (E4 1.1).
+fn is_version_member(member: &Address) -> bool {
+    let text = member.to_string();
+    trunk_of(&text).is_some_and(|trunk| trunk != text)
+}
+
 /// What the enumeration answers: its reads, and the composition the answers
 /// make of them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -637,6 +732,11 @@ pub struct Enumeration {
     /// Each draft `also` names, in `also`'s order, with its extent and its
     /// image — the places its own list carries are read off it.
     pub also: Vec<AlsoImage>,
+    /// VERSION ⟨k⟩, where the request's `base` names a version member: the
+    /// words it holds and its position, read once per open and handed to the
+    /// re-read; `None` at the bare document, the birth shape and the mint
+    /// form, where nothing folds and no save is keyed.
+    pub base: Option<BaseImage>,
     /// Where each held run stands, parallel to the selection.
     pub placed: Vec<Placement>,
     /// The positions of each held run whose atom is a merge record,
@@ -764,8 +864,9 @@ impl Enumeration {
     ///
     /// The selection as published and the words a reader receives are
     /// composed from the held runs and the answers; each candidate's
-    /// stored-endset test and its successors' key (iii) are decided over
-    /// them through the walk, a formatting mark on the words a reader
+    /// stored-endset test, its successors' key (iii) and the fold's test are
+    /// decided over them through the walk, against the words the base holds
+    /// ([`Enumeration::base`]), a formatting mark on the words a reader
     /// receives; a candidate `left_out` names is offered nowhere. Any
     /// composition this enumeration made before is replaced whole.
     pub fn composed(&self, inputs: &Inputs, answers: &BTreeMap<PartKey, Answer>, left_out: &BTreeSet<Address>) -> Enumeration {
@@ -777,6 +878,8 @@ impl Enumeration {
         e.received = received.clone();
         let records = e.records.clone();
         let walk = RecordWalk::composed(inputs, &records, &e);
+        let base = e.base.clone();
+        let held = base.as_ref().map(BaseImage::held).unwrap_or_default();
         for c in &mut e.candidates {
             let against: &[Run] = if is_formatting(&c.value) { &received } else { &selection };
             let on = selected_ranges(&walk.spans(c), against);
@@ -785,13 +888,18 @@ impl Enumeration {
             // published position the walk leaves on a named draft's own
             // words is one of the shot's new words, which no successor
             // covers; one a twin names the walk maps onto the published
-            // words it is.
+            // words it is. The positions the base holds, in that identity,
+            // are no successor's to cover (E4 2.1).
             let new_words = on.iter().any(|(chain, ..)| walk.is_named_chain(chain));
+            let unheld = unheld_ranges(&on, &held);
             for s in &mut c.successors {
-                s.covers = !on.is_empty() && !new_words && covered(&on, &s.ends);
+                s.covers = !on.is_empty() && !new_words && covered(&unheld, &s.ends);
             }
             c.touching = touches(&c.value, against) || !on.is_empty();
             c.left_out = left_out.contains(&c.link);
+            // The fold's two tests (E4 1.1): made before the base, and every
+            // position it touches the selection at held by the base.
+            c.unchanged = base.as_ref().is_some_and(|b| b.precedes(c.value.at)) && !on.is_empty() && !new_words && unheld.is_empty();
         }
         e
     }
@@ -1147,7 +1255,19 @@ pub(crate) fn selected_ranges(spans: &[ISpan], selection: &[Run]) -> Vec<(String
     out
 }
 
-/// Returns whether `cover` holds every position of `ranges`.
+/// Returns the positions of `ranges` that `held` does not hold, as
+/// `(chain, lo, hi)` ranges: the published positions version ⟨k⟩ did not
+/// arrange (key (iii); the fold's test (ii)).
+fn unheld_ranges(ranges: &[(String, u64, u64)], held: &[ISpan]) -> Vec<(String, u64, u64)> {
+    ranges
+        .iter()
+        .flat_map(|(chain, lo, hi)| ISpan { chain: chain.clone(), first: *lo, width: hi - lo }.less(held))
+        .map(|s| (s.chain.clone(), s.first, s.reach()))
+        .collect()
+}
+
+/// Returns whether `cover` holds every position of `ranges` — vacuously
+/// where `ranges` is empty.
 fn covered(ranges: &[(String, u64, u64)], cover: &[ISpan]) -> bool {
     ranges.iter().all(|(chain, lo, hi)| {
         let mut held = 0u64;
@@ -1182,15 +1302,18 @@ fn run_spans(runs: &[Run]) -> Vec<Value> {
 /// the board's other refusals and transport faults verbatim.
 pub fn enumerate(p: &Publisher<'_>, inputs: &Inputs) -> Result<Enumeration, Fault> {
     let door = Door::new(p.board, p.token);
-    enumerate_with(&door, p, inputs, true)
+    enumerate_with(&door, p, inputs, true, None)
 }
 
 /// Makes the enumeration's reads through `door`, and answers their
 /// composition under no answer.
 ///
 /// `strict` refuses a held run not arranged whole; the re-read passes
-/// `false` and reads the placements as differences.
-pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, strict: bool) -> Result<Enumeration, Fault> {
+/// `false` and reads the placements as differences. `known` is version
+/// ⟨k⟩ as an earlier read of this publication imaged it: where it is the
+/// image of the request's `base`, it is kept and the base is read never
+/// again — a published member's positions never change.
+pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, strict: bool, known: Option<&BaseImage>) -> Result<Enumeration, Fault> {
     let d = inputs.draft.to_string();
     door.step("image");
     let extent = door.extent(&d)?;
@@ -1275,7 +1398,7 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
         }
         let (Some(link_addr), Some(home_addr)) = (parse_address(link), parse_address(home)) else { return Ok(()) };
         seen.insert(link.to_string(), candidates.len());
-        candidates.push(Candidate { link: link_addr, home: home_addr, value, via, successors: Vec::new(), revised: false, touching: false, left_out: false });
+        candidates.push(Candidate { link: link_addr, home: home_addr, value, via, successors: Vec::new(), revised: false, touching: false, left_out: false, unchanged: false });
         Ok(())
     };
     for a in &addrs {
@@ -1378,6 +1501,24 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
         }
     }
 
+    // VERSION ⟨k⟩: the member the request's `base` names, its position and
+    // its image over the positions the draft's copy took — kept where an
+    // earlier read of this publication imaged it, a member's positions
+    // never changing.
+    door.step("base");
+    let base = match &inputs.base {
+        Some(base) if is_version_member(&base.0) => match known.filter(|k| k.is_of(base)) {
+            Some(known) => Some(known.clone()),
+            None => {
+                let member = base.0.to_string();
+                let at = door.metadata(&member)?.at;
+                let image = door.image(&member, 1, base.1)?;
+                Some(BaseImage { member: base.0.clone(), extent: base.1, at, image })
+            }
+        },
+        Some(_) | None => None,
+    };
+
     let mut homes: Vec<(Address, Vec<usize>)> = Vec::new();
     for (i, c) in candidates.iter().enumerate() {
         match homes.iter_mut().find(|(h, _)| *h == c.home) {
@@ -1389,6 +1530,7 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
         extent,
         image,
         also,
+        base,
         placed,
         merge_atoms,
         windows,

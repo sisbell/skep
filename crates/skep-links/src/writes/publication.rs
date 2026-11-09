@@ -92,7 +92,7 @@ mod sizes;
 mod stray;
 
 pub use plan::{
-    canonical_member_spans, edition_type, member_end, member_image, names_read_with,
+    base_runs, canonical_member_spans, edition_type, member_end, member_image, names_read_with,
     plan_deposits, read_with_in, read_with_type, request_image, resolve_end,
     supersession_claim_in, DepositPlan, EndArg, LinkEntry, MemberEnd, MemberSpan, NamedAddress,
     OriginalEntry, PlannedClaim, PlannedDeposit, PlannedEnd, PlannedHome, PlannedOriginal,

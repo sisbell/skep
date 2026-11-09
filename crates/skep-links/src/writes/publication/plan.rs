@@ -64,13 +64,19 @@
 //! survey's C8), and the plan is a pure function of that world and the
 //! request, so the body the composer signs against and the deposits the
 //! composite stages agree by construction; `tests/it/publication.rs` pins
-//! the purity.
+//! the purity. The one read the plan takes from outside that world is the
+//! request's own [`PublishDeposits::base_runs`] — the words version ⟨k⟩
+//! holds, read by the daemon ahead of the lock ([`base_runs`]) and carried
+//! on the request to both planners, a published member's positions being
+//! the same on every snapshot — so (3) applies the panel filter's rule
+//! against the request's own base and the in-lock read price gains no
+//! term.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use skep_address::{
     content_subspace, document_of, is_prefix, subtree_of, validate, Address, Level, Nat, Span,
-    Tumbler,
+    SpanSet, Tumbler,
 };
 use skep_arrangement::{trunk_head, trunk_of, Caller, HasM5, Pairing, Run, Shot};
 use skep_namespace::M3State;
@@ -265,6 +271,16 @@ pub struct OriginalEntry {
 /// re-window are; it rides the request as the four lists do, and is a
 /// member of it, so a request carrying the rider alone is not empty and is
 /// planned.
+///
+/// `base_runs` is THE BOARD'S OWN MEMBER, never the wire's: the runs
+/// VERSION ⟨k⟩ — the member the shot's base names — arranges over its
+/// positions `1 ..= extent` ([`base_runs`]), which THE VALIDATION's (3)
+/// leaves out of what a successor must cover (§5.1's key (iii); E4 2.1).
+/// The daemon reads them off the snapshot it prices the request on, ahead
+/// of the serialization lock, and sets them here, so the composer and the
+/// composite plan on one value; the codec never fills the member and
+/// refuses a frame naming it. Empty, the plan holds no word as the base's:
+/// every published content span is a successor's to cover.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct PublishDeposits {
     /// Whether the commit writes the edition claim (`claim: true`): typed the
@@ -282,11 +298,16 @@ pub struct PublishDeposits {
     /// The originals the commit ends, one entry each — the private rider;
     /// absent and empty alike on the wire.
     pub originals: Vec<OriginalEntry>,
+    /// The runs version ⟨k⟩ arranges over its positions `1 ..= extent`, in
+    /// V-order — the daemon's read ahead of the lock ([`base_runs`]), no
+    /// member of the wire's; empty where none was read.
+    pub base_runs: Vec<Run>,
 }
 
 impl PublishDeposits {
     /// Returns whether the request carries no deposit and no rider: no
-    /// claim, none of the four lists, no original.
+    /// claim, none of the four lists, no original. The base's runs are no
+    /// deposit: they key (3)'s check of a `links` entry, and carry nothing.
     pub fn is_empty(&self) -> bool {
         !self.claim
             && self.links.is_empty()
@@ -294,6 +315,81 @@ impl PublishDeposits {
             && self.read_with.is_empty()
             && self.supersede.is_empty()
             && self.originals.is_empty()
+    }
+}
+
+/// Returns the runs VERSION ⟨k⟩ arranges — the member `shot`'s base names —
+/// over its positions `1 ..= extent`, in V-order: the words it holds, its
+/// own and its windows onto other documents alike, which THE VALIDATION's
+/// (3) leaves out of what a successor must cover (§5.1's key (iii); E4 2.1).
+///
+/// A published member's positions `1 ..= extent` never change — its content
+/// grows only by exempt deposits past them (PUB-2.43) — so the daemon reads
+/// them off the snapshot it prices the request on, ahead of the
+/// serialization lock, and the runs read there are the runs the commit's
+/// base arranges. Empty where the shot has no base, or its base is no
+/// version member: the bare document keys no save (E4 1.1). A base the
+/// world does not hold reads empty, and the shot's own admission refuses
+/// it.
+pub fn base_runs<W: HasM5>(world: &W, shot: &Shot) -> Vec<Run> {
+    let Some(base) = &shot.base else { return Vec::new() };
+    if trunk_of(&base.member) == base.member {
+        return Vec::new();
+    }
+    let mut left = base.extent.clone();
+    let mut out = Vec::new();
+    for run in world.m5().content_runs(&base.member) {
+        if left == Nat::default() {
+            break;
+        }
+        if *run.width() <= left {
+            left -= run.width();
+            out.push(run.clone());
+        } else {
+            out.extend(Run::new(run.i_start().clone(), left).ok());
+            break;
+        }
+    }
+    out
+}
+
+/// The words VERSION ⟨k⟩ holds, as THE VALIDATION's (3) subtracts them: the
+/// base's runs as I-spans, merged per level class into disjoint spans in
+/// address order.
+struct BaseWords(BTreeMap<usize, Vec<Span>>);
+
+impl BaseWords {
+    /// Returns the words `runs` hold: each run's I-extent, its class merged.
+    fn of(runs: &[Run]) -> BaseWords {
+        let all: SpanSet = runs.iter().map(Run::iextent).collect();
+        let classes = all.by_level_class().into_iter().filter_map(|(len, class)| Some((len, class.normalize().ok()?.iter().cloned().collect())));
+        BaseWords(classes.collect())
+    }
+
+    /// Returns `spans` less every position the base holds, each span cut on
+    /// its own: the published positions version ⟨k⟩ did not arrange, the
+    /// pieces in order.
+    fn unheld(&self, spans: &[Span]) -> Vec<Span> {
+        spans.iter().flat_map(|s| self.unheld_of(s)).collect()
+    }
+
+    /// Returns `s` less every position the base holds: the pieces left.
+    fn unheld_of(&self, s: &Span) -> Vec<Span> {
+        let Some(class) = self.0.get(&s.start().len()).filter(|_| s.is_level_uniform()) else { return vec![s.clone()] };
+        let reach = s.reach();
+        let first = class.partition_point(|held| held.reach() <= *s.start());
+        let mut out = Vec::new();
+        let mut from = s.start().clone();
+        for held in class[first..].iter().take_while(|held| *held.start() < reach) {
+            if *held.start() > from {
+                out.extend(Span::from_endpoints(from.clone(), held.start()).ok());
+            }
+            from = from.max(held.reach());
+        }
+        if from < reach {
+            out.extend(Span::from_endpoints(from, &reach).ok());
+        }
+        out
     }
 }
 
@@ -497,9 +593,13 @@ impl DepositPlan {
 ///    panel's, and is refused); not superseded by an active claim of the
 ///    caller's naming a public successor homed in a published document of
 ///    the caller's whose ends cover every published content span of this
-///    entry, an entry with a member-position end on the shot's own new
-///    words never so superseded, as nothing standing covers fresh words
-///    (§5.1's key (iii), PUB-3.9); nor, where `old` is itself a successor,
+///    entry that VERSION ⟨k⟩ — the member the shot's base names — does not
+///    hold ([`PublishDeposits::base_runs`]; every span held, none is left
+///    to cover and the claim supersedes it: E4 2.1's save fires only at a
+///    version that brings in words its copy does not reach), an entry with
+///    a member-position end on the shot's own new words never so
+///    superseded, as nothing standing covers fresh words (§5.1's key (iii),
+///    PUB-3.9); nor, where `old` is itself a successor,
 ///    its original superseded by such a claim over the entry's published
 ///    content spans, whatever new words the entry holds; a second entry
 ///    naming one `old` refused at the second;
@@ -589,6 +689,7 @@ pub fn plan_deposits<W: LinkWorld + HasM5>(
         homes.entry(edition).or_default().push(PlannedDeposit::EditionClaim { origin });
     }
     let image = request_image(shot);
+    let base_words = BaseWords::of(&deposits.base_runs);
     let mut originals: BTreeSet<&Address> = BTreeSet::new();
     // (3) each link.
     for (index, entry) in deposits.links.iter().enumerate() {
@@ -621,7 +722,7 @@ pub fn plan_deposits<W: LinkWorld + HasM5>(
                 }
                 let spans = published_spans(&from, &to, &image, shot);
                 let new_words = holds_new_words(&from, &to, &image, shot);
-                let home = check_old(world, caller, old, &image, &spans, new_words)
+                let home = check_old(world, caller, old, &image, &spans, new_words, &base_words)
                     .map_err(|cause| PlanFault::Old { index, cause })?;
                 Some(PlannedClaim { old: old.clone(), home })
             }
@@ -1047,10 +1148,14 @@ fn is_unit_depth(s: &Span) -> bool {
 /// ([`request_image`]), the words the publication publishes; `spans` are
 /// the entry's published content spans ([`published_spans`]); `new_words`
 /// is whether a member-position end lies on the shot's own new words
-/// ([`holds_new_words`]). A claim naming `old` supersedes it only where
-/// `new_words` is false, no successor covering fresh words (§5.1's key
-/// (iii)); where `old` is a revision, a claim naming its original
-/// supersedes it over `spans` whatever new words the entry holds.
+/// ([`holds_new_words`]); `base` the words version ⟨k⟩ holds
+/// ([`PublishDeposits::base_runs`]). A claim naming `old` supersedes it
+/// only where `new_words` is false, no successor covering fresh words, and
+/// then by covering every span of `spans` the base does not hold (§5.1's
+/// key (iii), the panel filter's rule as E4 2.1 re-says it); where `old` is
+/// a revision, a claim naming its original supersedes it over `spans`
+/// whole, whatever new words the entry holds — the panel offers no revision
+/// of a published original at all (W17).
 fn check_old<W: LinkWorld + HasM5>(
     world: &W,
     caller: Caller,
@@ -1058,6 +1163,7 @@ fn check_old<W: LinkWorld + HasM5>(
     image: &[Run],
     spans: &[Span],
     new_words: bool,
+    base: &BaseWords,
 ) -> Result<Address, OldCause> {
     let (m3, links) = (world.m3(), world.links());
     let Some(link) = links.readlink(old) else {
@@ -1077,14 +1183,14 @@ fn check_old<W: LinkWorld + HasM5>(
         return Err(OldCause::WholeWork);
     }
     let own_homes = own_homes(m3, links, caller);
-    if !new_words && superseded_by_own_claim(m3, links, caller, &own_homes, old, spans) {
+    if !new_words && superseded_by_own_claim(m3, links, caller, &own_homes, old, spans, &base.unheld(spans)) {
         return Err(OldCause::Superseded);
     }
     // Where `old` is itself a successor — a revision of an original — its
     // own original not superseded by an accept's claim of the caller's,
     // whatever new words the entry holds.
     for original in originals_of(links, &own_homes, old) {
-        if superseded_by_own_claim(m3, links, caller, &own_homes, &original, spans) {
+        if superseded_by_own_claim(m3, links, caller, &own_homes, &original, spans, spans) {
             return Err(OldCause::Superseded);
         }
     }
@@ -1138,16 +1244,18 @@ fn own_homes(m3: &M3State, links: &LinkState, caller: Caller) -> Vec<Address> {
 }
 
 /// Returns whether an active claim of the caller's supersedes `y` by a
-/// public successor covering `spans`.
+/// public successor covering `to_cover`, the part of `spans` it must cover.
 ///
 /// Over the caller's homes alone (`homes`): one typed stab per home of the
 /// supersession class at `FROM` over `y`'s unit span, each claim kept where
 /// its `from` denotes `y` itself; its `new` a resident link homed in a
 /// published document of the caller's; and `new`'s content ends covering
-/// every span of `spans` — none where `spans` is empty, the entry publishing
-/// no span a successor could cover. No liveness of `new` is asked (§5.1's
-/// keys (i) and (iii)); the entry's new words, which key (iii) never
-/// covers, are [`check_old`]'s to weigh.
+/// every span of `to_cover` — none where `spans`, the entry's published
+/// content spans, is empty, the entry publishing no span a successor could
+/// cover, and vacuously where `to_cover` is: every published span held by
+/// the base (E4 2.1). No liveness of `new` is asked (§5.1's keys (i) and
+/// (iii)); the entry's new words, which key (iii) never covers, are
+/// [`check_old`]'s to weigh.
 fn superseded_by_own_claim(
     m3: &M3State,
     links: &LinkState,
@@ -1155,6 +1263,7 @@ fn superseded_by_own_claim(
     homes: &[Address],
     y: &Address,
     spans: &[Span],
+    to_cover: &[Span],
 ) -> bool {
     if spans.is_empty() {
         return false;
@@ -1174,7 +1283,7 @@ fn superseded_by_own_claim(
                 continue;
             }
             let Some(successor) = links.readlink(&new) else { continue };
-            if covers_all(successor, spans) {
+            if covers_all(successor, to_cover) {
                 return true;
             }
         }

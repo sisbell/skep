@@ -25,8 +25,8 @@ use super::{ClaimLine, Daemon, WRITE_POOL};
 use skep_core::auth::key_set_of;
 use skep_core::auth::policy::{
     deposits_credential_link, deposits_registry_link, op_shape_refusal, plain_admission,
-    publication_read_refusal, registry_admission, retract_class_refusal, CredentialRefusal,
-    DepositSpans, RecordSig,
+    publication_base, publication_read_refusal, registry_admission, retract_class_refusal,
+    CredentialRefusal, DepositSpans, RecordSig,
 };
 use skep_core::auth::session::Actor;
 use skep_core::auth::LockWrite;
@@ -407,10 +407,20 @@ impl Daemon {
     /// lock and commits nothing. Ahead of `serial_lock()` means off a
     /// snapshot the lock does not cover (the survey's C8): the counts may
     /// move before the composite reads them, and the budget is conservative
-    /// by design. A guest is not priced — the sequence refuses it below as
-    /// it did — and every other op passes the step untouched. The twin
-    /// fence, the plan's reads and the kept-place check stay where S1 and S2
-    /// put them; the price merely bounds them.
+    /// by design. A guest is not priced — the sequence refuses it below — and
+    /// every other op passes the step untouched. The twin fence, the plan's
+    /// reads and the kept-place check stay where S1 and S2 put them; the
+    /// price merely bounds them.
+    ///
+    /// **The base ahead of the lock** (§5.1's key (iii), as E4 2.1 re-says
+    /// it). Off the same snapshot, a priced `publish` whose `links` name an
+    /// `old` has the words its base holds — the runs the member its shot's
+    /// base names arranges over positions `1 ..= base_extent` — set on its
+    /// deposits (`publication_base`): THE VALIDATION's (3) leaves them out
+    /// of what a successor must cover, and the composer and the composite
+    /// both plan from the frame, so the two test one member by the panel's
+    /// rule. A published member's positions never change, so the lock adds
+    /// nothing to the read and the in-lock price no term.
     fn plain_sequence(
         &self,
         resolved: &Resolved,
@@ -424,11 +434,18 @@ impl Daemon {
         // refused past the budget with nothing taken. No `with_signal`, for
         // the credential path's reason: a pre-lock refusal carries the head
         // resolution's death signal, which `token_route`'s wrap attaches.
+        // Off the same snapshot, the words the publication's base holds,
+        // set on the frame for both planners — the composer's under the
+        // lock and the composite's inside the commit — which THE
+        // VALIDATION's (3) leaves out of what a successor must cover: a
+        // published member's positions never change, so the in-lock price
+        // gains no term (E4 2.1; `publication_base`).
         if let Actor::Principal(binding) = &resolved.actor {
             let snap = self.engine.kernel().snapshot();
             if let Some(price) = publication_read_refusal(snap.world(), &frame.op, binding.principal) {
                 return publication_over_budget(meta.kind, &price);
             }
+            publication_base(snap.world(), &mut frame.op);
         }
         // The write pool's permit, first past the price (§4 rows 25, 27):
         // one of `MAX_CONCURRENT_WRITES`, before the credential lock and the

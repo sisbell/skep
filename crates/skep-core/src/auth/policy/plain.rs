@@ -5,7 +5,11 @@
 //! `replaces` class's and the correspondence class's, one producer), the
 //! claim-complementary board-state pair and the nullify class — with the
 //! publish-class classification (PUB-6.43) the pair reads and the
-//! type-recognition input the nullify class reads.
+//! type-recognition input the nullify class reads. Beside them stand a
+//! publication's two reads ahead of the lock, both off the snapshot the
+//! daemon takes before its permit: its price against the in-lock budgets
+//! ([`publication_read_refusal`]) and the words its base holds, set on the
+//! request for both planners ([`publication_base`]).
 
 use std::sync::LazyLock;
 
@@ -22,8 +26,8 @@ use skep_identity::{
 };
 use skep_kernel::Attestation;
 use skep_links::{
-    enc, is_correspondence_class, is_replaces_class, price_publication_reads, registry, EndArg,
-    Endset, HasLinks, Link, NamedAddress, PublishTarget, ReadPrice, ShippedType, SlotArg,
+    base_runs, enc, is_correspondence_class, is_replaces_class, price_publication_reads, registry,
+    EndArg, Endset, HasLinks, Link, NamedAddress, PublishTarget, ReadPrice, ShippedType, SlotArg,
 };
 use skep_namespace::{
     first_document_address, system_account, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL,
@@ -402,6 +406,26 @@ pub fn publication_read_refusal(
         staged_bytes,
         byte_budget: ReadPrice::BYTE_BUDGET,
     })
+}
+
+/// Sets a publication's BASE RUNS — the words VERSION ⟨k⟩, the member its
+/// shot's base names, holds — on its deposits, read off `world` ahead of the
+/// serialization lock (§5.1's key (iii), as E4 2.1 re-says it; skep-links'
+/// `base_runs`).
+///
+/// It is the read THE VALIDATION's (3) applies the panel filter's rule
+/// against: the composer under the lock and the composite inside the commit
+/// both plan from the request's own deposits, so the two test one member by
+/// one rule, and the panel tests the member the request's `base` names. Read
+/// where a `links` entry names an `old` — key (iii)'s case — and set empty
+/// for every other `publish`, which plans as it would without it. A
+/// published member's positions `1 ..= base_extent` never change (PUB-2.43),
+/// so the snapshot the price reads is the one this reads, and the in-lock
+/// read price gains no term. An op that is no `publish` is left as it
+/// stands.
+pub fn publication_base(world: &World, op: &mut Op) {
+    let Op::Publish { shot, deposits, .. } = op else { return };
+    deposits.base_runs = if deposits.links.iter().any(|entry| entry.old.is_some()) { base_runs(world, shot) } else { Vec::new() };
 }
 
 /// Returns the `nullify` class's refusal of retracting `target` from `home`

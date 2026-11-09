@@ -329,6 +329,7 @@ fn all_requests() -> Vec<Request> {
                     read_with: vec![d2()],
                     supersede: vec![],
                     originals: vec![],
+                    base_runs: vec![],
                 },
             },
         ),
@@ -380,6 +381,7 @@ fn all_requests() -> Vec<Request> {
                     read_with: vec![d2()],
                     supersede: vec![],
                     originals: vec![],
+                    base_runs: vec![],
                 },
             },
         ),
@@ -1135,6 +1137,12 @@ fn a_publications_members_parse_in_their_forms_and_are_refused_by_entry() {
     // The target's two forms, and the shapes that are neither.
     let plain = parse_ok(&codec, &doc(""));
     assert!(matches!(&plain.op, Op::Publish { target: PublishTarget::Document(d), deposits, .. } if *d == d1() && deposits.is_empty()));
+    // The base's runs are the board's own member (E4 2.1): never read off
+    // the wire — a parsed request carries none, and a frame naming the
+    // member is refused as any member the op does not take.
+    let Op::Publish { deposits, .. } = &plain.op else { panic!("a publish") };
+    assert!(deposits.base_runs.is_empty(), "the codec reads no base runs");
+    assert!(detail_of(&doc(r#","base_runs":[]"#)).contains("'base_runs'"), "the board's member on the wire is refused");
     let minted = parse_ok(&codec, &mint(r#","claim":true"#));
     assert!(matches!(&minted.op, Op::Publish { target: PublishTarget::Mint { account }, deposits, .. } if *account == a(&[1, 0, 1]) && deposits.claim));
     let unclaimed = parse_ok(&codec, &mint(r#","claim":false"#));

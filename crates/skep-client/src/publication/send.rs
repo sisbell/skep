@@ -51,8 +51,14 @@
 //! → the entry and its cause typed, `head_moved` carrying the trunk's head
 //! the board refused the whole publication against — the caller composes
 //! again on it, nothing re-sent — never this library's fault (the merge
-//! bridge lane); the six deposit tokens
-//! → own-bug arms with their entry and detail; `attestation_invalid:signature`
+//! bridge lane); `old_refused` with `superseded` or `retracted` → THE
+//! LINEAGE arm: the entry, the original it names and the cause — its words
+//! already carry its copy, or the original stands retracted — with the
+//! race's key where a claim or a retraction of the person's naming the
+//! original came after the request's reads, so the caller reads again,
+//! leaves the entry out and re-states, never this library's fault alone
+//! (B3-S11 P4); the deposit tokens otherwise → own-bug arms with their
+//! entry and detail; `attestation_invalid:signature`
 //! → one re-sign with the skipped deposits dropped — presence re-read for
 //! every `retract`, `read_with` and `supersede` entry — under a fresh `id`;
 //! `attestation_required` at a frame sent unsigned → the one signed send
@@ -76,6 +82,7 @@ use skep_address::Address;
 use skep_identity::{entry_frame, BoardTerm, DocTerm};
 
 use crate::address::parse_address;
+use crate::board::answers;
 use crate::board::frames;
 use crate::board::{acked_addr, acked_at, Answer, BoardHead, ChangesAnswer, ChangesQuery, Rejection, Site, T_RETRACTION};
 use crate::halt::Halt;
@@ -84,7 +91,7 @@ use crate::sign::sig_hex;
 use super::landed::{landed_with, Base, Missing, Verdict};
 use super::panel::read_with_stands;
 use super::request::{claimed_by_own, AlsoPlaces, Request};
-use super::{trunk_of, Door, Fault, Inputs, Publisher};
+use super::{home_of_link, owned_by, trunk_of, Door, Fault, Inputs, Publisher};
 
 /// How the acknowledgment was reached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,9 +180,44 @@ impl SupersedeCause {
     }
 }
 
-/// The race's key at `kept_place_moved`: the feed's newest row under the
-/// draft the refusal names — the rendering draft, or a draft `also` names —
-/// since the request's reads, and whose it was.
+/// Why the board refused an entry by its lineage — `old_refused`'s `detail`
+/// (wire.md §Rejection codes, `old_refused`; the composite publication's
+/// validation (3)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineageCause {
+    /// `superseded`: an active claim of the person's names a public
+    /// successor whose ends already cover every word the entry publishes —
+    /// its copy is there.
+    Superseded,
+    /// `retracted`: the original stands retracted.
+    Retracted,
+}
+
+impl LineageCause {
+    /// Returns the cause an `old_refused` rejection's `detail` names; `None`
+    /// for every other detail, which is this library's own fault.
+    pub(crate) fn of(detail: Option<&str>) -> Option<LineageCause> {
+        match detail? {
+            "superseded" => Some(LineageCause::Superseded),
+            "retracted" => Some(LineageCause::Retracted),
+            _ => None,
+        }
+    }
+
+    /// Returns the cause's `detail` token as the wire spells it.
+    pub fn token(self) -> &'static str {
+        match self {
+            LineageCause::Superseded => "superseded",
+            LineageCause::Retracted => "retracted",
+        }
+    }
+}
+
+/// The race's key: the feed's newest row since the request's reads under
+/// the document a refusal's change lies in — at `kept_place_moved` the draft
+/// the refusal names, the rendering draft or a draft `also` names; at a
+/// lineage refusal the home of the claim or the retraction that came after
+/// those reads — and whose it was.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RaceKey {
     /// The row's position.
@@ -200,7 +242,8 @@ pub enum OwnFault {
         /// older board names none).
         draft: Address,
     },
-    /// One of the six deposit tokens at an entry.
+    /// One of the deposit tokens at an entry — `old_refused` at any cause
+    /// but the lineage's.
     Deposit {
         /// The code.
         code: String,
@@ -254,6 +297,25 @@ pub enum Refusal {
         draft: Address,
         /// Whose write moved them, where the feed tells: the newest row
         /// under `draft` since the request's reads.
+        race: Option<RaceKey>,
+    },
+    /// `old_refused` with `superseded` or `retracted`: the board refused the
+    /// entry by its lineage, the whole publication with it and nothing
+    /// committed (B3-S11 P4). The caller reads again, leaves the original
+    /// out ([`super::Confirmed::left_out`]) and re-states what the version
+    /// now publishes — never this library's fault alone.
+    Lineage {
+        /// The entry in `links`, `site.index`.
+        index: u64,
+        /// The original the entry names as its `old`.
+        original: Address,
+        /// The cause, `detail`.
+        cause: LineageCause,
+        /// Where a change of the person's since the request's reads explains
+        /// it — a claim naming the original, or its retraction — the newest
+        /// row under that change's home since those reads; `None` where no
+        /// such change stands, the panel having offered the original by
+        /// mistake.
         race: Option<RaceKey>,
     },
     /// `not_owner` naming a draft the request names — the rendering draft,
@@ -362,7 +424,8 @@ pub enum Sent {
 /// `base_superseded` aside, its own arm ([`Refusal::BaseSuperseded`]).
 const SHOT_CODES: [&str; 8] = ["base_not_in_chain", "base_extent_too_large", "bad_run", "dangling_source", "source_not_registered", "too_many_runs", "too_many_values", "private_source_versionless"];
 
-/// The seven deposit tokens: the six lists' and the rider's.
+/// The seven deposit tokens: the six lists' and the rider's — `old_refused`
+/// among them where its cause is no lineage's ([`LineageCause`]).
 const DEPOSIT_CODES: [&str; 7] = ["link_home_refused", "old_refused", "duplicate_original", "read_with_in_links", "retract_refused", "original_refused", "read_with_refused"];
 
 /// Sends the request, once, with its arms.
@@ -493,6 +556,19 @@ pub(crate) fn send_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, req
                 Some(first) => Refusal::BaseSuperseded { first },
                 None => Refusal::Other(r.refused(&v)),
             },
+            // The entry's lineage: its words already carry its copy, or its
+            // original stands retracted — the entry the caller leaves out.
+            "old_refused" if LineageCause::of(detail.as_deref()).is_some() => {
+                let cause = LineageCause::of(detail.as_deref()).expect("a lineage cause");
+                let index = site.index.unwrap_or(0);
+                match usize::try_from(index).ok().and_then(|k| request.entries.get(k)).and_then(|entry| entry.old.clone()) {
+                    Some(original) => {
+                        let race = lineage_race(door, p, &original, cause, request.as_of)?;
+                        Refusal::Lineage { index, original, cause, race }
+                    }
+                    None => Refusal::OwnFault(OwnFault::Deposit { code: "old_refused".to_string(), index: site.index, detail }),
+                }
+            }
             code if DEPOSIT_CODES.contains(&code) => Refusal::OwnFault(OwnFault::Deposit { code: code.to_string(), index: site.index, detail }),
             code if SHOT_CODES.contains(&code) || code == "malformed" => Refusal::OwnFault(OwnFault::Shot { code: code.to_string() }),
             // The board's state, never this library's frame (a reorder): its
@@ -568,9 +644,38 @@ fn skipped(door: &Door<'_>, p: &Publisher<'_>, request: &Request) -> Result<(Vec
     Ok((retract, read_with, supersede))
 }
 
-/// Reads the race's key: the newest row under `draft` — the draft the
-/// refusal names, whose run moved — since `since` on the drafts page, under
-/// the token.
+/// Reads the race behind a lineage refusal of `original`: the claim of the
+/// person's naming it — homed in a home of theirs, active, its `new` a
+/// public copy — or the retraction of it, whichever the cause names,
+/// minted after `since`, the request's reads; and the key of the newest row
+/// under that change's home since then ([`race_key`]), at the change's own
+/// position where the feed tells none.
+///
+/// # Errors
+///
+/// The reads' faults.
+fn lineage_race(door: &Door<'_>, p: &Publisher<'_>, original: &Address, cause: LineageCause, since: u64) -> Result<Option<RaceKey>, Fault> {
+    door.step("lineage");
+    let old = original.to_string();
+    let changes: Vec<String> = match cause {
+        LineageCause::Superseded => answers::claims(&door.answered(&old, &frames::in_claims(&old))?).into_iter().filter(|c| c.active && owned_by(&c.home, p.account)).map(|c| c.claim).collect(),
+        LineageCause::Retracted => door.addrs(&old, &frames::find_links_ftt(T_RETRACTION, &old))?,
+    };
+    for change in changes {
+        let Some(at) = door.link(&change)?.and_then(|v| v.at) else { continue };
+        if at <= since {
+            continue;
+        }
+        let Some(home) = home_of_link(&change).and_then(parse_address) else { continue };
+        let race = race_key(p, &home, since)?;
+        return Ok(Some(race.unwrap_or(RaceKey { at, key: None, signed: false })));
+    }
+    Ok(None)
+}
+
+/// Reads the race's key: the newest row under `draft` — the document whose
+/// change the refusal follows — since `since` on the drafts page, under the
+/// token.
 fn race_key(p: &Publisher<'_>, draft: &Address, since: u64) -> Result<Option<RaceKey>, Fault> {
     let draft = draft.to_string();
     let mut newest: Option<RaceKey> = None;

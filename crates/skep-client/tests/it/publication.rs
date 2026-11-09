@@ -34,7 +34,7 @@ use skep_client::address::{document_of, parse_address};
 use skep_client::board::frames::{self, T_HELD_REMOVAL, T_READ_WITH};
 use skep_client::board::{acked_addr, Answer, Board, ChangesAnswer, ChangesQuery, Scope, Token, T_RETRACTION};
 use skep_client::ceremony::handshake::{handshake, Session, Site};
-use skep_client::publication::{self, build, count, enumerate, landed, panel, reread, send, AckVia, AlsoPlaces, Base, Built, Confirmed, Destination, Inputs, OriginAnswer, Publisher, Refusal, RowKind, Run, Sent, Switches, Verdict};
+use skep_client::publication::{self, build, count, enumerate, landed, panel, reread, send, AckVia, AlsoPlaces, Base, Built, Confirmed, Destination, Inputs, OriginAnswer, PartKey, Publisher, Refusal, RowKind, Run, Sent, Switches, Verdict};
 use skep_client::sign::{sig_hex, Signer};
 use skep_identity::{entry_body_empty, entry_body_make_link, entry_body_publish, entry_frame, unit_span, ContentFreeOp, DocTerm, EntryBody, EntrySlot, LinkSlots, ShotSegmentPiece};
 use skep_signature::HybridSigner;
@@ -344,15 +344,15 @@ fn inputs(seeded: &Seeded) -> Inputs {
 }
 
 /// The switches: the draft's own set into the member, the notes into `S2`;
-/// the window onto `O` kept private.
+/// the window onto `O`, one part no record names, kept private.
 fn confirmed(seeded: &Seeded) -> Confirmed {
     let mut switches = Switches::default();
     switches.on.insert(addr(&seeded.d));
     switches.on.insert(addr(&seeded.n));
     switches.destinations.insert(addr(&seeded.n), Destination::Set(addr(&seeded.s2)));
     let mut answers = BTreeMap::new();
-    answers.insert(2, OriginAnswer::KeepPrivate);
-    Confirmed { switches, answers }
+    answers.insert(PartKey { run: 2, part: 0 }, OriginAnswer::KeepPrivate);
+    Confirmed { switches, answers, left_out: BTreeSet::new() }
 }
 
 /// Sends one `POST /op` under `token` and DROPS the connection without
@@ -434,9 +434,12 @@ fn the_composition_enumerates_as_the_daemon_filters_and_its_one_request_lands() 
     assert_eq!(jobs, vec![seeded.mpub.clone()]);
     assert_eq!(pn.read_with, BTreeMap::from([(addr(s), true), (addr(s2), false)]));
     // The one window: the run onto `O`, the person's own unpublished origin,
-    // with no counterpart (no record of a draft the person reads names it).
-    assert_eq!(pn.windows.len(), 1, "{:?}", pn.windows);
-    assert_eq!((pn.windows[0].run, pn.windows[0].origin.to_string(), pn.windows[0].owner.as_str(), pn.windows[0].i_start, pn.windows[0].width, pn.windows[0].counterpart.is_none()), (2, o.clone(), ACCOUNT, 1, 5, true));
+    // one part no record names (no record of a draft the person reads names
+    // its words).
+    assert_eq!(en.windows.len(), 1, "{:?}", en.windows);
+    let window = &en.windows[0];
+    assert_eq!((window.run, window.origin.to_string(), window.owner.as_str(), window.i_start, window.width), (2, o.clone(), ACCOUNT, 1, 5));
+    assert_eq!(window.parts.iter().map(|part| (part.span.first, part.span.width, part.ordinal, part.named())).collect::<Vec<_>>(), vec![(1, 5, 30, false)]);
     let c = count(&pn, &confirmed(&seeded).switches, &inputs);
     assert_eq!((c.l, c.n, c.r, c.e, c.claim, c.read_with.clone()), (3, 2, 1, 0, false, vec![addr(s2)]));
 
@@ -684,6 +687,95 @@ fn a_second_publication_offers_nothing_the_first_accepted_on_the_words_it_re_min
     session.close().expect("close");
 }
 
+/// Checks against the daemon that the board takes the request each answer
+/// composes (B3-S11 P2 (i)).
+///
+/// Version 2 keeps the window onto `O` private and publishes a note on `O`'s
+/// 2..3 into `S2`, its copy there on `O`'s own identity. `O` is then
+/// published at the mint form, its record naming those words as the new
+/// edition's. At the next version the window is one part the record names:
+/// keep-private is no answer there and the request is inert naming the
+/// part; leaving it out lands a version holding nothing of `O` and no entry
+/// on its words; and the counterpart, taken at the version after, offers
+/// the note again on the edition's words, which its copy never covered, and
+/// the board takes it, the window re-composed by reference with its kept
+/// place.
+#[test]
+fn the_board_accepts_the_request_each_answer_composes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session).expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+    let seeded = seed(&board, &session, &device, &bare_token, &dir.path().join("anchors"));
+    let Seeded { e, s, s2, d, n, o, .. } = &seeded;
+    let note_o = make_link(&board, &session, &bare_token, &device, n, false, spec(d, 31, 2, o, 2), spec(n, 1, 2, n, 1), T_CITATION);
+    let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
+    let names = |request: &publication::Request, link: &str| request.entries.iter().any(|entry| entry.old.as_ref().map(ToString::to_string).as_deref() == Some(link));
+    // Version 2: the window kept private, the note into S2 on O's own words.
+    let first = inputs(&seeded);
+    let en = enumerate(&p, &first).expect("enumerated");
+    let pn = panel(&p, &first, &en).expect("the panel");
+    let Built::Request(mut request) = build(&p, &first, &en, &pn, &confirmed(&seeded)).expect("built") else { panic!("inert") };
+    assert!(names(&request, &note_o), "the note offered on the placeholder's words: {:?}", request.entries);
+    let Sent::Acknowledged(ack) = send(&p, &first, &mut request).expect("sent") else { panic!("refused") };
+    assert_eq!(ack.member.to_string(), format!("{e}.2"));
+    // O published at the mint form: its words the new edition's, its record
+    // in O.
+    let origin = Inputs { doc: None, mint: Some(addr(ACCOUNT)), claim: false, base: None, draft: addr(o), also: vec![], selection: vec![run(o, 1, 5)], notes: vec![], readable_drafts: vec![addr(o)], published: vec![addr(e), addr(s), addr(s2)], supersede: vec![] };
+    let oe = enumerate(&p, &origin).expect("O enumerated");
+    let opn = panel(&p, &origin, &oe).expect("O's panel");
+    let Built::Request(mut request) = build(&p, &origin, &oe, &opn, &Confirmed::default()).expect("built") else { panic!("inert") };
+    let Sent::Acknowledged(published) = send(&p, &origin, &mut request).expect("sent") else { panic!("refused") };
+    let edition = published.edition.expect("an edition minted").to_string();
+    // Each next version: the draft as it stands — the member's words and the
+    // window — off the base the board records.
+    let version = || -> Inputs {
+        let base = match publication::draft_base(&p, &addr(e), &addr(d)).expect("the base") {
+            publication::base::Base::Recorded { base, copied } => (base, copied),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(image(&board, &bare_token, d, 1, 34), vec![(format!("{e}.0.1.1"), 29), (format!("{o}.0.1.1"), 5)], "the premise: the member's words and the window");
+        Inputs { base: Some(base), selection: vec![run(e, 1, 29), run(o, 1, 5)], readable_drafts: vec![addr(d), addr(n), addr(o)], ..inputs(&seeded) }
+    };
+    let key = PartKey { run: 1, part: 0 };
+    let answered = |answer: OriginAnswer| -> Confirmed { Confirmed { answers: BTreeMap::from([(key, answer)]), ..confirmed(&seeded) } };
+    let third = version();
+    let en = enumerate(&p, &third).expect("enumerated");
+    let parts = &en.windows[0].parts;
+    assert_eq!((en.windows[0].run, parts.len(), parts[0].named()), (1, 1, true), "{parts:?}");
+    assert_eq!(parts[0].counterpart().and_then(|c| c.document()).as_deref(), Some(edition.as_str()), "O's words are the edition's now");
+    let pn = panel(&p, &third, &en).expect("the panel");
+    assert_eq!(build(&p, &third, &en, &pn, &answered(OriginAnswer::KeepPrivate)).expect("built"), Built::Inert(publication::Inert::Unanswered(vec![publication::OwedAnswer { part: key, named: true }])), "no placeholder over published words");
+    let Built::Request(mut left) = build(&p, &third, &en, &pn, &answered(OriginAnswer::Drop)).expect("built") else { panic!("inert") };
+    assert_eq!(left.runs, vec![run(e, 1, 29)], "the part left out");
+    assert!(!names(&left, &note_o), "no entry on the words left out: {:?}", left.entries);
+    let sent = send(&p, &third, &mut left).expect("sent");
+    let Sent::Acknowledged(ack) = sent else { panic!("{sent:?}") };
+    assert_eq!(ack.member.to_string(), format!("{e}.3"));
+    // The counterpart: the note on the edition's words, which its copy in S2
+    // never covered.
+    let fourth = version();
+    let en = enumerate(&p, &fourth).expect("enumerated");
+    let pn = panel(&p, &fourth, &en).expect("the panel");
+    let taken = answered(OriginAnswer::Counterpart);
+    let composed = taken.compose(&fourth, &en);
+    assert!(composed.candidates.iter().any(|c| c.link.to_string() == note_o && c.offered()), "offered again on the published words");
+    let Built::Request(mut request) = build(&p, &fourth, &en, &pn, &taken).expect("built") else { panic!("inert") };
+    let entry = request.entries.iter().find(|entry| entry.old.as_ref().map(ToString::to_string).as_deref() == Some(note_o.as_str())).expect("the note's entry");
+    assert!(matches!(&entry.from, publication::End::Spans(spans) if spans.iter().all(|span| span.chain == format!("{edition}.0.1"))), "on the edition's words: {:?}", entry.from);
+    assert_eq!(request.places, vec![None, Some(30)], "the window's kept place beside its counterpart");
+    let sent = send(&p, &fourth, &mut request).expect("sent");
+    let Sent::Acknowledged(ack) = sent else { panic!("{sent:?}") };
+    assert_eq!(ack.member.to_string(), format!("{e}.4"));
+    session.close().expect("close");
+}
+
 /// Checks against the daemon that a far-end original arrives with its words.
 ///
 /// A note from `E`'s 5..9 to the draft's new words 3..4 is published by a
@@ -714,7 +806,7 @@ fn a_far_end_original_is_offered_and_lands_at_the_shot_that_publishes_its_words(
     // private.
     let first = Inputs { selection: vec![run(e, 1, 19), run(o, 1, 5)], ..inputs(&seeded) };
     let mut windowed = confirmed(&seeded);
-    windowed.answers = BTreeMap::from([(1, OriginAnswer::KeepPrivate)]);
+    windowed.answers = BTreeMap::from([(PartKey { run: 1, part: 0 }, OriginAnswer::KeepPrivate)]);
     let en = enumerate(&p, &first).expect("enumerated");
     let pn = panel(&p, &first, &en).expect("the panel");
     let Built::Request(mut request) = build(&p, &first, &en, &pn, &windowed).expect("built") else { panic!("inert") };
@@ -774,7 +866,7 @@ fn a_word_deleted_since_the_panel_drops_its_original_and_the_request_confirmed_a
     // The note accepted by a shot that leaves the draft's words out.
     let first = Inputs { selection: vec![run(e, 1, 19), run(o, 1, 5)], ..inputs(&seeded) };
     let mut windowed = confirmed(&seeded);
-    windowed.answers = BTreeMap::from([(1, OriginAnswer::KeepPrivate)]);
+    windowed.answers = BTreeMap::from([(PartKey { run: 1, part: 0 }, OriginAnswer::KeepPrivate)]);
     let en = enumerate(&p, &first).expect("enumerated");
     let pn = panel(&p, &first, &en).expect("the panel");
     let Built::Request(mut request) = build(&p, &first, &en, &pn, &windowed).expect("built") else { panic!("inert") };
@@ -960,7 +1052,7 @@ fn a_family_publication_re_mints_two_drafts_words_and_homes_a_record_in_each() {
     };
     let en = enumerate(&p, &inputs).expect("enumerated");
     let pn = panel(&p, &inputs, &en).expect("the panel");
-    assert_eq!(pn.windows, vec![], "D's run is re-minted, not windowed");
+    assert_eq!(en.windows, vec![], "D's run is re-minted, not windowed");
     assert_eq!(pn.inherited, vec![publication::Inherited { draft: addr(d), passages: 1 }]);
     let Built::Request(mut request) = build(&p, &inputs, &en, &pn, &Confirmed::default()).expect("built") else { panic!("inert") };
     assert_eq!(request.also, vec![addr(d)]);

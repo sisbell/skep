@@ -1067,7 +1067,6 @@ impl Writer<'_> {
             read_with: Vec::new(),
             supersede,
             unspellable: Vec::new(),
-            counterparts: Vec::new(),
             id: Stem::of(&merged.key.text()).id("publish"),
             count: publication::Count::default(),
             price: publication::Price::default(),

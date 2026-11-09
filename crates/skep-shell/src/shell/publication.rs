@@ -9,21 +9,31 @@
 //! address, never a string a person reads (the strings `ux/copy.md`'s and
 //! the UI lane's). `open` reads the draft's base and types its standing
 //! (**The base**), runs the library's `enumerate` → `panel` and prices the
-//! request as it would stand with every private row OFF and every window
-//! kept private — the widest request the default switches make — and
-//! answers the panel `{rows, formatting, read_with, count, price, windows,
-//! inherited, merge_records, standing?, left_behind, hold?}` —
+//! request as it would stand with every private row OFF, every window part
+//! a record names taken by its counterpart and every other kept private —
+//! the widest request the default switches make — and answers the panel
+//! `{rows, formatting, read_with, count, price, windows, parts, inherited,
+//! merge_records, standing?, left_behind, hold?}` — `windows` each
+//! own-origin window in its PARTS, each part with the answers it admits
+//! (B3-S11 P2 (i)), a window awaiting its answer counting toward nothing;
+//! `parts` what each part's answer brings, the answered row's clause's
+//! data;
 //! `merge_records` the merge records the publication leaves out, per named
 //! draft, since no publication publishes one;
-//! `count` answers the four numbers and the price over the rows as
-//! switched, off the held panel, PURE LOCAL — no frame sent, the price the
-//! open's request re-priced with the entries the switches add, each end
-//! spelled by its stored slot's shape (an address form, an I-span form, the
-//! member-position form for a span on the draft's own words); `confirm`
-//! runs the re-read, the build, the price's verdict, the send and the
-//! landed test, and answers ONCE with the acknowledgment, the re-statement
-//! — a moved standing among what it states — or a typed refusal; `cancel`
-//! drops the standing panel, idempotent.
+//! `count` is THE CALL PER ANSWER: it re-keys the held panel by the
+//! answers at the windows' parts — the rows and their candidates, the
+//! formatting line, the windows, what each part's answer brings — from the
+//! open's reads alone, and answers `{count, price, rows, formatting,
+//! windows, parts}` with the four numbers and
+//! the price over the rows as switched, PURE LOCAL — no frame sent, the
+//! price the open's request re-priced with the entries the switches add,
+//! each end spelled by its stored slot's shape (an address form, an I-span
+//! form, the member-position form for a span on the draft's own words);
+//! `confirm` runs the re-read, the build, the price's verdict, the send and
+//! the landed test, and answers ONCE with the acknowledgment, the
+//! re-statement — a moved standing, a window part named since, an entry the
+//! board refused by its lineage among what it states — or a typed refusal;
+//! `cancel` drops the standing panel, idempotent.
 //!
 //! **The panels** ([`Publications`]). One family per (board, principal): the
 //! STANDING panel — the ceremony that stands, the one `count`, `confirm` and
@@ -33,9 +43,12 @@
 //! draft with no selection, or the held one, re-opens it as it stands — the
 //! switches and answers the page last sent it, the base its first open
 //! read and the family it left behind, `hold: {since}`, the base's standing
-//! typed again and the windows re-read, never from the read's cache — while
-//! a differing selection ends the hold, the held answers lost, a fresh
-//! panel answered (item 1 (a)). Every panel records the session it was
+//! typed again and the windows re-read, never from the read's cache — where
+//! a part's naming changed since, its origin published meanwhile, the
+//! open's reads run again and the answers carried onto the parts as they
+//! stand, one a part no longer admits asked again — while a differing
+//! selection ends the hold, the held answers lost, a fresh panel answered
+//! (item 1 (a)). Every panel records the session it was
 //! opened or last touched under and dies with it: the bus's watcher
 //! ([`Publications::ended`]) drops a dead session's panels and says `ended`
 //! for each, whichever thread met the death (§4b.1's one session rule;
@@ -61,8 +74,20 @@
 //! and a request changing nothing, a window unanswered or an origin to
 //! publish first is `inert`. Every member of every call is read as
 //! UNTRUSTED input: an address by §1.6's grammar within the component
-//! budget, a switch by a row the panel holds, an answer by a window it
-//! names, each refused `malformed_args` naming the member.
+//! budget, a switch by a row the panel holds, an answer by a window part it
+//! holds, keyed `⟨run⟩.⟨part⟩`, and one the part admits — the counterpart
+//! or `drop` where a record names its words, `publish_first`, `drop` or
+//! `keep_private` where none does — each refused `malformed_args` naming
+//! the member.
+//!
+//! **The lineage re-statement** (B3-S11 P4). Where the board refuses an
+//! entry by its lineage — `old_refused`, `superseded` or `retracted`: its
+//! words already carry its copy, or its original stands retracted —
+//! `confirm` reads again with that original left out of the offer, keeps it
+//! left out for the panel's later confirms, and answers `restated` with
+//! `left_out` naming the entry, the original and the cause, and `race`
+//! where a change of the person's since the request's reads explains it —
+//! never the own-bug class alone, the formatting line having no switch.
 //!
 //! **The family** (the Nelson way, B3-S10; `client.md` §4b.1 item 60):
 //! `draft` is the RENDERING draft — the draft whose arrangement the
@@ -156,7 +181,7 @@
 //! `readable_drafts`). It is read at a fresh open alone: a re-opened panel
 //! keeps the family it first left behind, and `confirm` reads it never.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -165,7 +190,7 @@ use skep_address::Address;
 use skep_client::address::is_address_text;
 use skep_client::board::{frames, merge_marker, Answer, LinkSpan, LinkValue, Rejection};
 use skep_client::halt::Halt;
-use skep_client::publication::{self as lib, Ack, AckVia, Base, Built, Confirmed, Destination, Fault, Inert, Missing, OriginAnswer, OwnFault, Placement, Publisher, RaceKey, Refusal as PubRefusal, Restatement, RowKind, Sent, Standing, SupersedeCause, Switches, Term, Unrecorded, Verdict};
+use skep_client::publication::{self as lib, Ack, AckVia, Base, Built, Confirmed, Destination, Fault, Inert, LineageCause, Missing, OriginAnswer, OwnFault, PartKey, Placement, Publisher, RaceKey, Refusal as PubRefusal, Restatement, RowKind, Sent, Standing, SupersedeCause, Switches, Term, Unrecorded, Verdict};
 use skep_client::sheet::render_inert;
 use skep_client::sign::Signer;
 
@@ -187,16 +212,22 @@ pub(super) struct PanelState {
     /// The session it was opened or last touched under; it dies with it.
     session: String,
     pub(super) inputs: lib::Inputs,
-    enumeration: lib::Enumeration,
+    /// The enumeration, composed under the answers that stand.
+    pub(super) enumeration: lib::Enumeration,
+    /// The panel, composed under the answers that stand.
     pub(super) panel: lib::Panel,
     /// The request as built at the open — every private row OFF, every
-    /// window kept private — whose runs, places and body pieces the count's
-    /// price is taken over; `None` where that build was inert.
+    /// window part a record names taken by its counterpart and every other
+    /// kept private — whose runs, places and body pieces the count's price
+    /// is taken over; `None` where that build was inert.
     base: Option<lib::Request>,
     /// The switches the page last sent (`count`, `confirm`).
     pub(super) switches: Switches,
-    /// The answers the page last sent, by the run's index in the selection.
-    pub(super) answers: BTreeMap<usize, OriginAnswer>,
+    /// The answers the page last sent, by window part.
+    pub(super) answers: BTreeMap<PartKey, OriginAnswer>,
+    /// The originals left out of the offer: each one the board refused by
+    /// its lineage at a confirm of this panel (B3-S11 P4).
+    left_out: BTreeSet<Address>,
     /// When the panel was put behind another, in unix milliseconds; `None`
     /// while it stands.
     since: Option<u64>,
@@ -651,7 +682,7 @@ impl Shell {
     /// selection?, notes?, readable_drafts?, published?})` with the panel.
     ///
     /// The panel is `{rows, formatting, read_with, count, price, windows,
-    /// inherited, merge_records, standing?, left_behind, hold?}` (the module
+    /// parts, inherited, merge_records, standing?, left_behind, hold?}` (the module
     /// doc): a held or
     /// standing panel of the draft re-opened as it stands where the selection
     /// is none or the same, its base's standing typed again and its windows
@@ -758,7 +789,18 @@ impl Shell {
                     state.standing = Some(self.typed_base(session, &p, "publication.open", trunk, &draft)?.1);
                     state.inputs.supersede = self.marker_claim(session, trunk, &draft)?;
                 }
-                state.panel.windows = lib::windows(&p, &state.inputs).map_err(fault)?;
+                // The windows re-read: where a part's naming changed — its
+                // origin published meanwhile — the open's reads run again
+                // and the answers are carried onto the parts as they stand,
+                // one no longer admitted asked again.
+                let windows = lib::windows(&p, &state.inputs).map_err(fault)?;
+                if !state.enumeration.renamed(&windows).is_empty() {
+                    let read = lib::enumerate(&p, &state.inputs).map_err(fault)?;
+                    state.answers = state.enumeration.answers_onto(&read.windows);
+                    state.enumeration = read.composed(&state.inputs, &state.answers, &state.left_out);
+                    state.panel = lib::panel(&p, &state.inputs, &state.enumeration).map_err(fault)?;
+                    state.base = widest(&p, &state.inputs, &state.enumeration, &state.panel).map_err(fault)?;
+                }
                 let hold = state.since.map(|since| json!({"since": since}));
                 state.session = session.reference.clone();
                 state.since = None;
@@ -798,11 +840,8 @@ impl Shell {
         };
         let enumeration = lib::enumerate(&p, &inputs).map_err(fault)?;
         let panel = lib::panel(&p, &inputs, &enumeration).map_err(fault)?;
-        let base = match lib::build(&p, &inputs, &enumeration, &panel, &pricing_confirmed(&panel)).map_err(fault)? {
-            Built::Request(request) => Some(*request),
-            Built::Inert(_) => None,
-        };
-        let state = PanelState { board: session.board_reference.clone(), session: session.reference.clone(), inputs, enumeration, panel, base, switches: Switches::default(), answers: BTreeMap::new(), since: None, standing, left_behind };
+        let base = widest(&p, &inputs, &enumeration, &panel).map_err(fault)?;
+        let state = PanelState { board: session.board_reference.clone(), session: session.reference.clone(), inputs, enumeration, panel, base, switches: Switches::default(), answers: BTreeMap::new(), left_out: BTreeSet::new(), since: None, standing, left_behind };
         Ok((state, None))
     }
 
@@ -826,16 +865,40 @@ impl Shell {
     /// Binds a call's `switches` and `answers`, read in their form, to the
     /// standing panel.
     ///
+    /// The answers are bound first, since they decide the panel's rows: the
+    /// switches are bound to the rows the panel holds as those answers
+    /// compose it (`Panel::composed`), read off the open's reads alone.
+    ///
     /// # Errors
     ///
-    /// Returns `malformed_args` naming `switches.on` (a home no private row
-    /// of the panel holds), `switches.destinations` (a home no such row
-    /// holds, a destination the row does not spell, or a set that is no
-    /// published document of the person's), or `answers` (a run no window
-    /// names, an answer the row does not spell, or `counterpart` where none
-    /// was offered).
-    fn confirmed_args(state: &PanelState, on: Vec<Address>, destinations: &Map<String, Value>, answers: &Map<String, Value>) -> Result<(Switches, BTreeMap<usize, OriginAnswer>), Refusal> {
-        let switchable = |home: &Address| state.panel.rows.iter().any(|r| r.home == *home && !matches!(r.kind, RowKind::Public { .. }));
+    /// In this order: `malformed_args` naming `answers` (a key that is no
+    /// `⟨run⟩.⟨part⟩` of a window part the panel holds, an answer the row
+    /// does not spell, or one the part does not admit — keep-private or
+    /// publish-first where a record names the part's words, the counterpart
+    /// where none does); then naming `switches.on` (a home no private row of
+    /// the panel so composed holds) or `switches.destinations` (a home no
+    /// such row holds, a destination the row does not spell, or a set that
+    /// is no published document of the person's).
+    fn confirmed_args(state: &PanelState, on: Vec<Address>, destinations: &Map<String, Value>, answers: &Map<String, Value>) -> Result<(Switches, BTreeMap<PartKey, OriginAnswer>), Refusal> {
+        let mut bound = BTreeMap::new();
+        for (key, answer) in answers {
+            let key = part_key(key).ok_or_else(|| Refusal::malformed("answers"))?;
+            let part = state.enumeration.windows.iter().find(|w| w.run == key.run).and_then(|w| w.parts.get(key.part)).ok_or_else(|| Refusal::malformed("answers"))?;
+            let answer = match answer.as_str() {
+                Some("publish_first") => OriginAnswer::PublishFirst,
+                Some("drop") => OriginAnswer::Drop,
+                Some("keep_private") => OriginAnswer::KeepPrivate,
+                Some("counterpart") => OriginAnswer::Counterpart,
+                _ => return Err(Refusal::malformed("answers")),
+            };
+            if !part.admits(answer) {
+                return Err(Refusal::malformed("answers"));
+            }
+            bound.insert(key, answer);
+        }
+        let composed = state.enumeration.composed(&state.inputs, &bound, &state.left_out);
+        let panel = state.panel.composed(&state.inputs, &composed);
+        let switchable = |home: &Address| panel.rows.iter().any(|r| r.home == *home && !matches!(r.kind, RowKind::Public { .. }));
         let mut switches = Switches::default();
         for home in on {
             if !switchable(&home) {
@@ -858,27 +921,18 @@ impl Shell {
             };
             switches.destinations.insert(home, destination);
         }
-        let mut bound = BTreeMap::new();
-        for (run, answer) in answers {
-            let run: usize = run.parse().map_err(|_| Refusal::malformed("answers"))?;
-            let window = state.panel.windows.iter().find(|w| w.run == run).ok_or_else(|| Refusal::malformed("answers"))?;
-            let answer = match answer.as_str() {
-                Some("publish_first") => OriginAnswer::PublishFirst,
-                Some("drop") => OriginAnswer::Drop,
-                Some("keep_private") => OriginAnswer::KeepPrivate,
-                Some("counterpart") if window.counterpart.is_some() => OriginAnswer::Counterpart,
-                _ => return Err(Refusal::malformed("answers")),
-            };
-            bound.insert(run, answer);
-        }
         Ok((switches, bound))
     }
 
     /// Answers `publication.count(session, {switches, answers})`.
     ///
-    /// It answers `{count, price}` off the standing panel, pure local: the
-    /// four numbers as the switches and the answers stand now, and the
-    /// price re-run over the rows as switched (the module doc).
+    /// It answers `{count, price, rows, formatting, windows, parts}` off the
+    /// standing panel, pure local: the panel re-keyed by the answers at the
+    /// windows' parts from the open's reads alone — the rows and their
+    /// candidates, the formatting line, the windows, what each part's
+    /// answer brings — the four numbers as
+    /// the switches and the answers stand now, and the price re-run over
+    /// the rows as switched (the module doc).
     ///
     /// # Errors
     ///
@@ -892,17 +946,28 @@ impl Shell {
         let key = Self::family_key(&session);
         let mut state = self.publications.standing(&key).ok_or_else(|| Refusal::shell(Name::NO_PANEL, json!({"session": session.reference})))?;
         let (switches, answers) = Self::confirmed_args(&state, on, &destinations, &raw_answers)?;
-        state.switches = switches.clone();
-        state.answers = answers.clone();
+        state.switches = switches;
+        state.answers = answers;
+        state.enumeration = state.enumeration.composed(&state.inputs, &state.answers, &state.left_out);
+        state.panel = state.panel.composed(&state.inputs, &state.enumeration);
         let count = lib::count(&state.panel, &state.switches, &state.inputs);
-        let price = local_price(&state);
+        let answer = json!({
+            "count": count_json(&count),
+            "price": price_json(&local_price(&state)),
+            "rows": state.panel.rows.iter().map(|r| row_json(&state.enumeration, r)).collect::<Vec<_>>(),
+            "formatting": formatting_json(&state.enumeration, &state.panel.formatting),
+            "windows": state.enumeration.windows.iter().map(window_json).collect::<Vec<_>>(),
+            "parts": state.panel.parts.iter().map(part_counts_json).collect::<Vec<_>>(),
+        });
         let reference = session.reference.clone();
         self.publications.update(&key, |s| {
-            s.switches = switches;
-            s.answers = answers;
+            s.switches = state.switches;
+            s.answers = state.answers;
+            s.enumeration = state.enumeration;
+            s.panel = state.panel;
             s.session = reference;
         });
-        Ok(json!({"count": count_json(&count), "price": price_json(&price)}))
+        Ok(answer)
     }
 
     /// Answers `publication.cancel(session)` with `{}`: the standing panel
@@ -928,10 +993,13 @@ impl Shell {
     ///
     /// Inside the one call: the standing hold asked before anything is
     /// composed; at the document form the draft's base read again and its
-    /// standing typed again (**The base**); the re-read, a difference — a
-    /// moved standing among them, beside the enumeration's or alone —
-    /// answered as the re-statement with nothing sent and the panel
-    /// re-stated for the next confirm; the build, an inert request refused
+    /// standing typed again (**The base**); the panel composed under the
+    /// answers and the re-read composed under them as they carry onto its
+    /// windows, a difference — a moved standing among them, beside the
+    /// enumeration's or alone, and a window part named since, whose answer is
+    /// asked again unless it left the words out — answered as the
+    /// re-statement with nothing sent and the panel re-stated for the next
+    /// confirm; the build, an inert request refused
     /// `inert`; the price's verdict, `over_cap`; a head record that stands
     /// and cannot be read, or a claimed board that serves none,
     /// `head_unreadable` with the refusal that says why (SP-14); then
@@ -941,7 +1009,8 @@ impl Shell {
     /// the draft that moved, the rendering draft or one `also` names — the
     /// re-read run again in this call, its difference answered as the
     /// re-statement with the race's key, the refusal, naming the draft,
-    /// crossing only where it finds none. A
+    /// crossing only where it finds none; and at a refusal of an entry by
+    /// its lineage, THE LINEAGE RE-STATEMENT (the module doc). A
     /// death at the write ends the session: where the restart arm re-opens
     /// it the landed test runs under the new session before any re-send,
     /// else the `session_ended` arm, the panels gone with the session.
@@ -992,7 +1061,7 @@ impl Shell {
     /// # Errors
     ///
     /// [`Shell::publication_confirm`]'s from `write_in_bare_session` on.
-    pub(super) fn confirm_standing(&self, session: &Arc<SessionEntry>, key: &(String, u64), state: &PanelState, switches: Switches, answers: BTreeMap<usize, OriginAnswer>, call: &str) -> Result<Confirmation, Refusal> {
+    pub(super) fn confirm_standing(&self, session: &Arc<SessionEntry>, key: &(String, u64), state: &PanelState, switches: Switches, answers: BTreeMap<PartKey, OriginAnswer>, call: &str) -> Result<Confirmation, Refusal> {
         {
             let (switches, answers, reference) = (switches.clone(), answers.clone(), session.reference.clone());
             self.publications.update(key, |s| {
@@ -1035,7 +1104,13 @@ impl Shell {
             },
             None => None,
         };
-        let rr = lib::reread(&p, inputs, &state.enumeration, &state.panel).map_err(fault)?;
+        // The panel composed under the answers confirmed, and the re-read
+        // composed under them as they carry onto its windows: the two
+        // diffed over one composition (B3-S11 P4).
+        let confirmed = Confirmed { switches, answers, left_out: state.left_out.clone() };
+        let first = confirmed.compose(inputs, &state.enumeration);
+        let first_panel = state.panel.composed(inputs, &first);
+        let rr = lib::reread(&p, inputs, &first, &first_panel).map_err(fault)?;
         // A standing moved since the panel rides the enumeration's
         // re-statement where one stands, or is re-stated alone.
         let mut restatement = rr.restatement;
@@ -1043,16 +1118,19 @@ impl Shell {
             restatement.get_or_insert_with(Restatement::default).standing = standing.clone();
         }
         if let Some(restatement) = restatement {
+            // The answers as they carry onto the re-read's parts: one at a
+            // part named, un-named or re-named since asked again, unless it
+            // left the words out.
             let (enumeration, panel) = (rr.enumeration, rr.panel);
             self.publications.update(key, |s| {
+                s.answers = enumeration.answers.clone();
                 s.enumeration = enumeration;
                 s.panel = panel;
                 s.standing = standing;
             });
             self.publication_event(session, &draft, "restated", json!({}));
-            return Ok(Confirmation::Answered(restated_json(&restatement, None)));
+            return Ok(Confirmation::Answered(restated_json(&restatement, None, None)));
         }
-        let confirmed = Confirmed { switches, answers };
         let mut request = match lib::build(&p, inputs, &rr.enumeration, &rr.panel, &confirmed).map_err(fault)? {
             Built::Request(request) => *request,
             Built::Inert(inert) => {
@@ -1097,19 +1175,44 @@ impl Shell {
                 }
                 Sent::Refused(PubRefusal::KeptPlaceMoved { index, draft: moved, race }) => {
                     let p = signed.publisher(&current);
-                    let again = lib::reread(&p, inputs, &state.enumeration, &state.panel).map_err(|f| self.fault(&current, call, f))?;
+                    let again = lib::reread(&p, inputs, &first, &first_panel).map_err(|f| self.fault(&current, call, f))?;
                     return Ok(Confirmation::Answered(match again.restatement {
                         Some(restatement) => {
                             let (enumeration, panel) = (again.enumeration, again.panel);
                             self.publications.update(key, |s| {
+                                s.answers = enumeration.answers.clone();
                                 s.enumeration = enumeration;
                                 s.panel = panel;
                             });
                             self.publication_event(&current, &draft, "restated", json!({}));
-                            restated_json(&restatement, race.as_ref())
+                            restated_json(&restatement, race.as_ref(), None)
                         }
                         None => self.refused(&current, &draft, PubRefusal::KeptPlaceMoved { index, draft: moved, race }),
                     }));
+                }
+                // THE LINEAGE RE-STATEMENT (B3-S11 P4): the board refused an
+                // entry by its lineage — its words already carry its copy, or
+                // its original stands retracted. The enumeration is read
+                // again with that original left out, and what the version
+                // now publishes re-stated for a fresh confirmation, nothing
+                // sent: never the own-bug face alone.
+                Sent::Refused(PubRefusal::Lineage { index, original, cause, race }) => {
+                    let p = signed.publisher(&current);
+                    let mut left_out = confirmed.left_out.clone();
+                    left_out.insert(original.clone());
+                    let first = first.composed(inputs, &first.answers, &left_out);
+                    let first_panel = first_panel.composed(inputs, &first);
+                    let again = lib::reread(&p, inputs, &first, &first_panel).map_err(|f| self.fault(&current, call, f))?;
+                    let restatement = again.restatement.unwrap_or_default();
+                    let (enumeration, panel) = (again.enumeration, again.panel);
+                    self.publications.update(key, |s| {
+                        s.answers = enumeration.answers.clone();
+                        s.left_out = left_out;
+                        s.enumeration = enumeration;
+                        s.panel = panel;
+                    });
+                    self.publication_event(&current, &draft, "restated", json!({}));
+                    return Ok(Confirmation::Answered(restated_json(&restatement, race.as_ref(), Some((index, &original, cause)))));
                 }
                 Sent::Refused(PubRefusal::SessionEnded) if !reopened => {
                     reopened = true;
@@ -1196,10 +1299,30 @@ pub(super) enum Confirmation {
 }
 
 /// Returns the confirmation the open prices with: every private row OFF,
-/// every window kept private — the widest request the defaults make.
-pub(super) fn pricing_confirmed(panel: &lib::Panel) -> Confirmed {
-    let answers = panel.windows.iter().map(|w| (w.run, OriginAnswer::KeepPrivate)).collect();
-    Confirmed { switches: Switches::default(), answers }
+/// every window part a record names taken by its counterpart and every
+/// other kept private — the widest request the defaults make.
+pub(super) fn pricing_confirmed(e: &lib::Enumeration) -> Confirmed {
+    let answers = e.windows.iter().flat_map(|w| w.parts.iter().enumerate().map(move |(k, part)| (w.key(k), if part.named() { OriginAnswer::Counterpart } else { OriginAnswer::KeepPrivate }))).collect();
+    Confirmed { switches: Switches::default(), answers, left_out: BTreeSet::new() }
+}
+
+/// Returns the request the open prices the count over: the widest the
+/// defaults make (`pricing_confirmed`), `None` where it is inert.
+///
+/// # Errors
+///
+/// The build's faults.
+fn widest(p: &Publisher<'_>, inputs: &lib::Inputs, e: &lib::Enumeration, panel: &lib::Panel) -> Result<Option<lib::Request>, Fault> {
+    Ok(match lib::build(p, inputs, e, panel, &pricing_confirmed(e))? {
+        Built::Request(request) => Some(*request),
+        Built::Inert(_) => None,
+    })
+}
+
+/// Returns an answer's key, `⟨run⟩.⟨part⟩`, as the part it names.
+fn part_key(text: &str) -> Option<PartKey> {
+    let (run, part) = text.split_once('.')?;
+    Some(PartKey { run: run.parse().ok()?, part: part.parse().ok()? })
 }
 
 /// Returns the price of the standing panel as switched, pure local.
@@ -1349,12 +1472,41 @@ fn price_json(p: &lib::Price) -> Value {
     json!({"lists": p.lists, "body": p.body, "values": p.values, "reads": p.reads, "bytes": p.bytes, "over": over_json(p)})
 }
 
-fn window_json(w: &lib::Window) -> Value {
-    let mut v = json!({"run": w.run, "origin": w.origin.to_string(), "owner": w.owner, "i_start": w.i_start, "width": w.width});
-    if let Some(c) = &w.counterpart {
-        v["counterpart"] = json!({"run": c.run, "draft": c.draft.to_string(), "record": c.record.to_string(), "from": ispan_json(&c.from), "to": ispan_json(&c.to)});
+/// Returns an answer as the page spells it.
+fn answer_json(answer: OriginAnswer) -> &'static str {
+    match answer {
+        OriginAnswer::PublishFirst => "publish_first",
+        OriginAnswer::Drop => "drop",
+        OriginAnswer::KeepPrivate => "keep_private",
+        OriginAnswer::Counterpart => "counterpart",
     }
-    v
+}
+
+/// Returns a window as the panel answers it, each part with the answers it
+/// admits and, where a record names its words, the record and the
+/// counterpart.
+fn window_json(w: &lib::Window) -> Value {
+    let parts: Vec<Value> = w
+        .parts
+        .iter()
+        .enumerate()
+        .map(|(k, part)| {
+            let admits: Vec<&str> = [OriginAnswer::Counterpart, OriginAnswer::PublishFirst, OriginAnswer::Drop, OriginAnswer::KeepPrivate].into_iter().filter(|a| part.admits(*a)).map(answer_json).collect();
+            let mut v = json!({"part": k, "from": ispan_json(&part.span), "ordinal": part.ordinal, "admits": admits});
+            if let (Some(record), Some(to)) = (&part.record, part.counterpart()) {
+                v["record"] = json!(record.link.to_string());
+                v["to"] = ispan_json(&to);
+            }
+            v
+        })
+        .collect();
+    json!({"run": w.run, "origin": w.origin.to_string(), "owner": w.owner, "i_start": w.i_start, "width": w.width, "parts": parts})
+}
+
+/// Returns what one window part's answer brings, as the panel and the count
+/// answer it: `{run, part, marks, links, kept_marks}`.
+fn part_counts_json(c: &lib::PartCounts) -> Value {
+    json!({"run": c.part.run, "part": c.part.part, "marks": c.marks, "links": c.links, "kept_marks": c.kept_marks})
 }
 
 /// Returns the statement's count for one draft `also` names, as the panel
@@ -1400,7 +1552,8 @@ fn panel_json(state: &PanelState, hold: Option<Value>) -> Value {
         "read_with": Value::Object(read_with),
         "count": count_json(&count),
         "price": price_json(&local_price(state)),
-        "windows": panel.windows.iter().map(window_json).collect::<Vec<_>>(),
+        "windows": e.windows.iter().map(window_json).collect::<Vec<_>>(),
+        "parts": panel.parts.iter().map(part_counts_json).collect::<Vec<_>>(),
         "inherited": panel.inherited.iter().map(inherited_json).collect::<Vec<_>>(),
         "merge_records": panel.merge_records.iter().map(merge_records_json).collect::<Vec<_>>(),
         "left_behind": addresses_json(&state.left_behind),
@@ -1446,8 +1599,11 @@ fn race_json(race: &RaceKey) -> Value {
     json!({"at": race.at, "key": race.key, "signed": race.signed})
 }
 
-/// Returns the re-statement as `publication.confirm` answers it.
-fn restated_json(r: &Restatement, race: Option<&RaceKey>) -> Value {
+/// Returns the re-statement as `publication.confirm` answers it: with the
+/// race's key where one follows the refusal, and the entry the board refused
+/// by its lineage — its index, its original and the cause — where that
+/// refusal left it out.
+pub(super) fn restated_json(r: &Restatement, race: Option<&RaceKey>, lineage: Option<(u64, &Address, LineageCause)>) -> Value {
     let mut v = json!({
         "outcome": "restated",
         "left": addresses_json(&r.left),
@@ -1457,6 +1613,12 @@ fn restated_json(r: &Restatement, race: Option<&RaceKey>) -> Value {
         "removals_came": addresses_json(&r.removals_came),
         "selection": r.selection.iter().map(|(run, placement)| json!({"run": run, "placement": placement_json(placement)})).collect::<Vec<_>>(),
     });
+    if !r.parts.is_empty() {
+        v["parts"] = json!(r.parts.iter().map(|(key, record)| json!({"run": key.run, "part": key.part, "record": record.as_ref().map(ToString::to_string)})).collect::<Vec<_>>());
+    }
+    if let Some((entry, original, cause)) = lineage {
+        v["left_out"] = json!([{"entry": entry, "original": original.to_string(), "cause": cause.token()}]);
+    }
     if let Some(race) = race {
         v["race"] = race_json(race);
     }
@@ -1468,8 +1630,8 @@ fn restated_json(r: &Restatement, race: Option<&RaceKey>) -> Value {
 
 fn inert_json(inert: &Inert) -> Value {
     match inert {
-        Inert::Unanswered(runs) => json!({"unanswered": runs}),
-        Inert::PublishFirst(runs) => json!({"publish_first": runs}),
+        Inert::Unanswered(owed) => json!({"unanswered": owed.iter().map(|o| json!({"run": o.part.run, "part": o.part.part, "named": o.named})).collect::<Vec<_>>()}),
+        Inert::PublishFirst(parts) => json!({"publish_first": parts.iter().map(|k| json!({"run": k.run, "part": k.part})).collect::<Vec<_>>()}),
         Inert::Unchanged => json!("unchanged"),
     }
 }
@@ -1515,6 +1677,9 @@ pub(super) fn refusal_arm(refusal: &PubRefusal) -> (&'static str, Value) {
         PubRefusal::BudgetRace { detail } => ("budget_race", json!({"detail": detail})),
         PubRefusal::MayAlreadyStand => ("may_already_stand", json!({})),
         PubRefusal::BaseSuperseded { first } => ("base_superseded", json!({"first": first.to_string()})),
+        // The confirm answers a lineage refusal by its re-statement
+        // (`Shell::confirm_standing`); the arm's members are its own.
+        PubRefusal::Lineage { index, original, cause, race } => ("lineage", json!({"index": index, "original": original.to_string(), "cause": cause.token(), "race": race.as_ref().map(race_json)})),
         PubRefusal::OwnFault(fault) => ("own_fault", json!({"fault": own_fault_json(fault)})),
         PubRefusal::Other(halt) => ("other", json!({"refusal": Refusal::from(halt.clone()).to_value()})),
     }

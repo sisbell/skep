@@ -1,85 +1,92 @@
 //! THE PANEL's DATA (the link-sets design §5.2) and THE COUNT (§5.6;
 //! PUB-3.8's four terms).
 //!
-//! The rows, one per home the enumeration grouped, in the design's order:
-//! the draft's own set first, then the notes set(s) in the caller's order,
-//! then the person's other sets, PRIVATE before PUBLIC — the state off
-//! `doc_metadata`, one read per home; each row's label the home's first
-//! line, read by one `retrieve_doc_v_span_set` and one `retrieve_v` per
-//! home; per row the offered links folded by TYPE with each type's count
-//! and each far document, and the line's counts as DATA — ⟨p⟩ links
-//! pointing into private documents, ⟨d⟩ links with an end wholly on words
-//! of the draft the selection leaves out, ⟨c⟩ links with an end running
-//! past the selection's cut, ⟨t⟩ links typed by a private document, ⟨u⟩
-//! revisions of links already published. THE FORMATTING LINE, in the
-//! draft's own set alone, holds the links the line's TEST keeps: exactly one
-//! of `from` and `to` non-empty, the type slot exactly one unit span in the
+//! **The reads, once, at the open**, over every candidate of every identity
+//! the enumeration read — so an answer at a window part re-decides the
+//! panel from them with no read ([`Panel::composed`]): THE HELD REMOVALS,
+//! `D`'s `3.24` records read home-constrained and kept by the exact type,
+//! each naming a published mark by address, the mark read once, whether its
+//! retraction already STANDS (the retraction-stands read), and for a mark
+//! of THE FORMATTING TYPES (the line's shape test without its inline-mark
+//! exception, P11) not spent and lying on words any answer can publish, its
+//! private original read from its own accept claim; each home's state off
+//! `doc_metadata`, one read per home; the state of every document a
+//! candidate's ends or a record's `to` can name as a far document, and of a
+//! type's own document, one read each; each home's label, its first line,
+//! read by one `retrieve_doc_v_span_set` and one `retrieve_v` per home; and
+//! the read-with presence over the person's published homes (W1 (a)),
+//! for every published document of the person's, the possible
+//! destinations, so the count knows which read-with a destination still
+//! needs.
+//!
+//! **The composition**, from the enumeration as the answers compose it
+//! ([`Enumeration::composed`]) and those reads alone. The rows, one per
+//! home with a candidate touching the selection as composed, in the
+//! design's order: the draft's own set first, then the notes set(s) in the
+//! caller's order, then the person's other sets, PRIVATE before PUBLIC; per
+//! row the offered links folded by TYPE with each type's count and each far
+//! document, and the line's counts as DATA — ⟨p⟩ links pointing into
+//! private documents, ⟨d⟩ links with an end wholly on words of the draft
+//! the selection leaves out, ⟨c⟩ links with an end running past the
+//! selection's cut, ⟨t⟩ links typed by a private document, ⟨u⟩ revisions of
+//! links already published. THE FORMATTING LINE, in the draft's own set
+//! alone, holds the offered links the line's TEST keeps: exactly one of
+//! `from` and `to` non-empty, the type slot exactly one unit span in the
 //! formatting types' own subtrees — `3.20` heading, `3.21` paragraph and its
 //! family, `3.23` inline and its family save `3.23.4` mark — and no other
-//! span save a parameter inside the registry document. THE HELD REMOVALS are
-//! its job list: `D`'s `3.24` records, read home-constrained and kept by
-//! the exact type, each naming a published mark by address; the mark read
-//! once; a removal whose mark is off the selection stays off the line; one
-//! whose retraction already STANDS (the retraction-stands read) is spent
-//! and dropped; the ⟨r⟩/⟨e⟩ split by the job list's overlap with the line's
-//! own marks of the same type — a RE-MAKE is the mark's `links` entry and
-//! the removal's `retract` entry, counted once in ⟨e⟩ and in neither ⟨n⟩
-//! nor ⟨r⟩. A PUBLIC row states whether `E` is read with the set — the
-//! read-with presence read over the person's published homes (W1 (a)) —
-//! and draws no switch; the same read runs for every published document of
-//! the person's, the possible destinations, so the count knows which
-//! read-with a destination still needs. Every row's SWITCH is the caller's
-//! input ([`Switches`]: a private row OFF by default, the formatting line no
-//! switch, a public row its state). THE WINDOWS (§5.7; B3-S11 P2 (i)) are
-//! the panel's too: each run of the selection onto an unpublished draft of
-//! the person's own — the origin's state one `doc_metadata` read — with the
-//! COUNTERPART offered first where a record of a draft the person reads
-//! names the run's words as published (one four-set read per such run,
-//! made at every panel and never from a cache); the request takes them as
-//! given ([`windows`]). The drafts `also` names are EXCLUDED from the
-//! windows — their runs are re-minted as the document's own words, not
-//! windowed (the Nelson way, B3-S10) — and the panel answers for each
-//! instead THE STATEMENT's count ([`inherited`]): the passages first written
-//! in it, the data of P2 (i)'s statement before the act ("⟨n⟩ passages first
-//! written in ⟨D⟩ publish as ⟨E⟩'s own words; ⟨D⟩ keeps a record of where
-//! they went"), consecutive runs of one origin in the selection's V-order
-//! counted once; the rendering draft's own words are counted nowhere. THE
-//! MERGE RECORDS LEFT OUT ([`MergeRecords`]) are the panel's data too: per
-//! named draft whose runs of the selection hold any, how many — the
-//! enumeration's cut, which no publication carries (the merge record's
-//! decision 7), the data of the statement "⟨n⟩ merge records in ⟨label⟩
-//! stay private and are not published with it". Every test of the
-//! selection here — the line's ⟨c⟩ and ⟨d⟩, the formatting line's cut, the
-//! job list, the statement's passages — reads the selection as published
-//! ([`Enumeration::selection`]).
+//! span save a parameter inside the registry document. A mark is judged on
+//! THE WORDS A READER RECEIVES (`Enumeration::received`): no mark goes onto
+//! a window part kept behind a placeholder — formatting goes out with the
+//! words readers receive, and a placeholder gives them none — so one lying
+//! partly there runs past the cut at its edge, and one lying wholly there
+//! is no mark of the line and stays in the draft's own set. Per window
+//! part, what its answer brings ([`PartCounts`]): at the counterpart, the
+//! line's marks and the private rows' links on the published words; behind
+//! a placeholder, the person's formatting marks held back there. THE HELD
+//! REMOVALS are the line's job list: a removal whose mark is off the
+//! selection stays off the line; one whose retraction already stands is
+//! spent and dropped; the ⟨r⟩/⟨e⟩ split by the job list's overlap with the
+//! line's own marks of the same type — a RE-MAKE is the mark's `links` entry
+//! and the removal's `retract` entry, counted once in ⟨e⟩ and in neither
+//! ⟨n⟩ nor ⟨r⟩. A PUBLIC row states whether `E` is read with the set and
+//! draws no switch. Every row's SWITCH is the caller's input ([`Switches`]:
+//! a private row OFF by default, the formatting line no switch, a public row
+//! its state). The drafts `also` names have no window — their runs are
+//! re-minted as the document's own words, not windowed (the Nelson way,
+//! B3-S10) — and the panel answers for each instead THE STATEMENT's count
+//! ([`inherited`]): the passages first written in it, the data of P2 (i)'s
+//! statement before the act ("⟨n⟩ passages first written in ⟨D⟩ publish as
+//! ⟨E⟩'s own words; ⟨D⟩ keeps a record of where they went"), consecutive
+//! runs of one origin in the selection's V-order counted once; the
+//! rendering draft's own words are counted nowhere. THE MERGE RECORDS LEFT
+//! OUT ([`MergeRecords`]) are the panel's data too: per named draft whose
+//! runs of the selection hold any, how many — the enumeration's cut, which
+//! no publication carries (the merge record's decision 7), the data of the
+//! statement "⟨n⟩ merge records in ⟨label⟩ stay private and are not
+//! published with it". Every test of the selection here — the line's ⟨c⟩
+//! and ⟨d⟩, the formatting line's cut, the job list, the statement's
+//! passages — reads the selection as published ([`Enumeration::selection`]).
 //!
 //! **Ends read through the records.** The line's ⟨c⟩, ⟨d⟩ and far
 //! documents, the formatting line's cut and its re-make test read a
 //! candidate's ends as the filter reads them (`RecordWalk`), so an end on
 //! words an earlier shot published counts as the published words the
-//! request spells it on, never as words of this draft left out.
+//! request spells it on, never as words of this draft left out, and an end
+//! on a window part taken by its counterpart as the published words its
+//! record names.
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
 use skep_address::Address;
 
-use crate::address::{account_of, document_of, parse_address};
+use crate::address::{document_of, parse_address};
 use crate::board::answers::{self, LinkValue};
-use crate::board::frames::{self, Slot, REGISTRY_DOCUMENT, T_CORRESPONDENCE, T_HELD_REMOVAL, T_READ_WITH};
+use crate::board::frames::{self, Slot, REGISTRY_DOCUMENT, T_HELD_REMOVAL, T_READ_WITH};
 use crate::board::T_RETRACTION;
 
-use super::enumerate::{selected_ranges, touches, Candidate, EndPiece, Enumeration, Record, RecordWalk, Via};
-use super::landed::read_record;
+use super::enumerate::{is_formatting, is_formatting_type, selected_ranges, touches, Answer, Candidate, EndPiece, Enumeration, PartKey, Record, RecordWalk, Via};
 use super::{home_of_link, owned_by, Door, Fault, ISpan, Inputs, Publisher, Run};
-
-/// The formatting types' subtrees (the link-sets design §5.2; the registry's
-/// vocabulary): heading `3.20`, the paragraph family `3.21`, the inline
-/// family `3.23`.
-pub const FORMATTING_TYPES: [&str; 3] = ["1.1.0.1.0.1.0.3.20", "1.1.0.1.0.1.0.3.21", "1.1.0.1.0.1.0.3.23"];
-
-/// The one member of the inline family the line does NOT take: `3.23.4`
-/// mark, a highlight, offered in its set's own row (proposal 15).
-pub const INLINE_MARK: &str = "1.1.0.1.0.1.0.3.23.4";
 
 /// How many positions of a home the label read takes at most: the first
 /// line is cut at the first newline within them.
@@ -213,7 +220,8 @@ impl Removal {
 pub struct Formatting {
     /// The marks on the line: indices into the enumeration's candidates.
     pub marks: Vec<usize>,
-    /// How many of them run past the selection's cut.
+    /// How many of them run past the selection's cut, or lie partly on a
+    /// placeholder, cut at its edge.
     pub cut: usize,
     /// The held removals, listed or not.
     pub removals: Vec<Removal>,
@@ -224,44 +232,6 @@ impl Formatting {
     pub fn job_list(&self) -> Vec<&Removal> {
         self.removals.iter().filter(|r| r.listed()).collect()
     }
-}
-
-/// The counterpart offered first at a window onto a draft the person reads:
-/// a record of that draft names the run's words as published.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Counterpart {
-    /// The run's index in the selection.
-    pub run: usize,
-    /// The draft the record is homed in.
-    pub draft: Address,
-    /// The record.
-    pub record: Address,
-    /// The part of the run the record covers, on the run's own chain.
-    pub from: ISpan,
-    /// The published span that part became.
-    pub to: ISpan,
-}
-
-/// One own-origin window of the selection (the link-sets design §5.7;
-/// B3-S11 P2 (i)): a run onto an unpublished draft of the person's own,
-/// which the three answers are asked for — never a run of a named draft,
-/// the rendering draft's or one `also` names, whose words are re-minted.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Window {
-    /// The run's index in the selection — the key an answer takes.
-    pub run: usize,
-    /// The origin: the person's unpublished draft.
-    pub origin: Address,
-    /// The origin's owner account, off its address.
-    pub owner: String,
-    /// Where in the origin's I-space the passage was written: the run's
-    /// first ordinal.
-    pub i_start: u64,
-    /// The run's width.
-    pub width: u64,
-    /// The counterpart, where a record of a draft the person reads names
-    /// the run's words as published.
-    pub counterpart: Option<Counterpart>,
 }
 
 /// THE STATEMENT's count for one draft `also` names (B3-S11 P2 (i)'s
@@ -293,6 +263,39 @@ pub struct MergeRecords {
     pub n: usize,
 }
 
+/// What one window part's answer brings to the panel: the data of the
+/// answered row's clause (B3-S11 P2 (i)), the words the page's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PartCounts {
+    /// The part.
+    pub part: PartKey,
+    /// Taken by its counterpart: the formatting line's marks on the
+    /// published words, which go out with them.
+    pub marks: usize,
+    /// Taken by its counterpart: the private rows' offered links on the
+    /// published words, offered next.
+    pub links: usize,
+    /// Kept behind a placeholder: the person's formatting marks on its
+    /// words, which stay in the draft until a version shows them.
+    pub kept_marks: usize,
+}
+
+/// What the panel read at the open: every fact a composition needs, so an
+/// answer reads nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct PanelReads {
+    /// Per document — each home, and each document a composition can name
+    /// as a far document or a type's own — whether it is published.
+    published: BTreeMap<String, bool>,
+    /// Per home, its first line.
+    labels: BTreeMap<Address, Vec<u8>>,
+    /// The held removals as read: whether each is spent, and the original
+    /// of a mark that may be listed under some composition.
+    removals: Vec<Removal>,
+    /// Per published document of the person's, whether `E` is read with it.
+    read_with: BTreeMap<Address, bool>,
+}
+
 /// The panel's data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Panel {
@@ -303,9 +306,9 @@ pub struct Panel {
     /// Per published document of the person's, whether `E` is read with it
     /// now — the destinations' states.
     pub read_with: BTreeMap<Address, bool>,
-    /// The own-origin windows, in the selection's order, each with its
-    /// counterpart where one is offered; the drafts `also` names excluded.
-    pub windows: Vec<Window>,
+    /// What each window part's answer brings, one per part in the windows'
+    /// order — zeros at a part left out or awaiting its answer.
+    pub parts: Vec<PartCounts>,
     /// The statement's count per draft `also` names, in the request's
     /// order ([`inherited`]).
     pub inherited: Vec<Inherited>,
@@ -314,6 +317,20 @@ pub struct Panel {
     pub merge_records: Vec<MergeRecords>,
     /// The frames sent, per step.
     pub frames: Vec<(&'static str, usize)>,
+    /// The reads the open made, which every composition reads.
+    reads: PanelReads,
+}
+
+impl Panel {
+    /// Returns the panel as `e`'s composition decides it — the rows, the
+    /// formatting line, the job list, the statement's count — from the
+    /// reads this panel's open made: nothing is read.
+    ///
+    /// `e` is the enumeration the panel was read over, composed under the
+    /// answers that stand ([`Enumeration::composed`]).
+    pub fn composed(&self, inputs: &Inputs, e: &Enumeration) -> Panel {
+        compose(inputs, e, &self.reads, self.frames.clone())
+    }
 }
 
 /// Returns THE STATEMENT's count per draft of `also`, in its order.
@@ -410,38 +427,6 @@ pub struct Count {
     pub supersede: Vec<Address>,
 }
 
-/// Returns whether `value` is a mark the formatting line takes.
-pub fn is_formatting(value: &LinkValue) -> bool {
-    formatting_shape(value, false)
-}
-
-/// Returns whether `value` is a mark of THE FORMATTING TYPES: the line's
-/// shape test without its inline-mark exception (P11) — the test the rider
-/// applies to a held removal's mark, an inline mark's original ending with
-/// its copy as a bold's does (the link-sets design §2, E3).
-pub fn is_formatting_type(value: &LinkValue) -> bool {
-    formatting_shape(value, true)
-}
-
-/// The formatting line's shape test: one content end, and one unit type
-/// span under the formatting types — the inline mark among them where
-/// `inline_marks` — beside nothing but registry addresses.
-fn formatting_shape(value: &LinkValue, inline_marks: bool) -> bool {
-    if value.from.is_empty() == value.to.is_empty() {
-        return false;
-    }
-    let mut named = 0usize;
-    for span in &value.ty {
-        let under = |root: &str| span.start == root || span.start.starts_with(&format!("{root}."));
-        if span.is_unit() && FORMATTING_TYPES.iter().any(|t| under(t)) && (inline_marks || !under(INLINE_MARK)) {
-            named += 1;
-        } else if !under(REGISTRY_DOCUMENT) {
-            return false;
-        }
-    }
-    named == 1
-}
-
 /// Returns the original a held removal's `mark` stands for, with its rest,
 /// read through `door` (the link-sets design §5.7 (vi′)).
 ///
@@ -477,39 +462,8 @@ fn original_of(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, mark: &str, 
             covered.push(span);
         }
     }
-    let spans: Vec<ISpan> = value.from.iter().chain(&value.to).filter_map(ISpan::of).collect();
-    let rest = subtract(spans, &covered);
+    let rest = value.from.iter().chain(&value.to).filter_map(ISpan::of).flat_map(|span| span.less(&covered)).collect();
     Ok(Some(Original { link, value, rest }))
-}
-
-/// Returns `spans` less every position `covered` holds on the same chain,
-/// each remainder a span, in `spans`' order.
-fn subtract(spans: Vec<ISpan>, covered: &[ISpan]) -> Vec<ISpan> {
-    let mut out = Vec::new();
-    for span in spans {
-        let mut pieces = vec![(span.first, span.reach())];
-        for c in covered.iter().filter(|c| c.chain == span.chain) {
-            let (lo_c, hi_c) = (c.first, c.reach());
-            pieces = pieces
-                .into_iter()
-                .flat_map(|(lo, hi)| {
-                    if hi_c <= lo || lo_c >= hi {
-                        return vec![(lo, hi)];
-                    }
-                    let mut kept = Vec::new();
-                    if lo < lo_c {
-                        kept.push((lo, lo_c));
-                    }
-                    if hi_c < hi {
-                        kept.push((hi_c, hi));
-                    }
-                    kept
-                })
-                .collect();
-        }
-        out.extend(pieces.into_iter().map(|(lo, hi)| ISpan { chain: span.chain.clone(), first: lo, width: hi - lo }));
-    }
-    out
 }
 
 /// One stored content span of a candidate's end, read through the records
@@ -554,30 +508,16 @@ pub fn panel(p: &Publisher<'_>, inputs: &Inputs, enumeration: &Enumeration) -> R
     panel_with(&door, p, inputs, enumeration)
 }
 
-/// Builds the panel's data through `door`.
+/// Makes the panel's reads through `door` and answers it composed as `e`
+/// stands.
 pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e: &Enumeration) -> Result<Panel, Fault> {
     let draft = inputs.draft.to_string();
     let trunk = inputs.doc.as_ref().map(ToString::to_string);
-
-    // Every candidate's ends read through the records, as the filter reads
-    // them and the request spells them.
-    let walk = RecordWalk::new(inputs, &e.records);
-
-    // The formatting line: the draft's own set's marks by the line's test.
-    door.step("formatting");
-    let own: Vec<usize> = e.homes.iter().find(|(h, _)| *h == inputs.draft).map(|(_, i)| i.clone()).unwrap_or_default();
-    let marks: Vec<usize> = own.iter().copied().filter(|&i| e.candidates[i].offered() && is_formatting(&e.candidates[i].value)).collect();
-    let cut = marks
-        .iter()
-        .filter(|&&i| {
-            let c = &e.candidates[i];
-            c.end_spans().iter().any(|s| SpanReading::of(&walk, s, &c.via, &e.selection).past_the_cut())
-        })
-        .count();
+    let publishable = e.publishable(inputs);
 
     // The held removals: D's 3.24 records, the mark read, the retraction
-    // read, and for a listed mark of the formatting types its original read
-    // from its own accept claim.
+    // read, and for a mark of the formatting types some composition can
+    // list its original read from its own accept claim.
     door.step("removals");
     let unit = |a: &str| frames::unit_span(a).as_array().cloned().unwrap_or_default();
     let mut removals = Vec::new();
@@ -592,42 +532,156 @@ pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
             continue;
         }
         let Some(mark_value) = door.link(&mark)? else { continue };
-        let on_selection = touches(&mark_value, &e.selection);
         let spent = !door.addrs(&mark, &frames::find_links_ftt(T_RETRACTION, &mark))?.is_empty();
         let (Some(record), Some(mark_addr)) = (parse_address(&hit), parse_address(&mark)) else { continue };
-        let listed = on_selection && !spent;
-        let remake = listed
-            .then(|| {
-                let mark_spans: Vec<ISpan> = mark_value.from.iter().chain(&mark_value.to).filter_map(ISpan::of).collect();
-                let mark_on = selected_ranges(&mark_spans, &e.selection);
-                marks.iter().copied().find(|&i| {
-                    let c = &e.candidates[i];
-                    c.value.type_address() == mark_value.type_address() && ranges_overlap(&selected_ranges(&walk.spans(c), &e.selection), &mark_on)
-                })
-            })
-            .flatten();
-        let original = if listed && is_formatting_type(&mark_value) { original_of(door, p, inputs, &mark, &e.records)? } else { None };
-        removals.push(Removal { record, mark: mark_addr, mark_value, on_selection, spent, remake, original });
+        let listable = !spent && touches(&mark_value, &publishable) && is_formatting_type(&mark_value);
+        let original = if listable { original_of(door, p, inputs, &mark, &e.records)? } else { None };
+        removals.push(Removal { record, mark: mark_addr, mark_value, on_selection: false, spent, remake: None, original });
     }
 
-    // The rows: state, label, the fold by type, the line's counts.
+    // The homes' states, then every document a composition can name as a
+    // far document or a type's own.
     door.step("homes");
+    let mut published: BTreeMap<String, bool> = BTreeMap::new();
+    for (home, _) in &e.homes {
+        let home_text = home.to_string();
+        let state = door.metadata(&home_text)?.published;
+        published.insert(home_text, state);
+    }
+    door.step("far");
+    for doc in far_documents(inputs, e) {
+        if let Entry::Vacant(slot) = published.entry(doc) {
+            let state = door.metadata(slot.key())?.published;
+            slot.insert(state);
+        }
+    }
+
+    door.step("labels");
+    let mut labels: BTreeMap<Address, Vec<u8>> = BTreeMap::new();
+    for (home, _) in &e.homes {
+        let home_text = home.to_string();
+        let extent = if *home == inputs.draft { e.extent } else { door.extent(&home_text)? };
+        let width = extent.min(LABEL_POSITIONS);
+        let mut label = Vec::new();
+        if width > 0 {
+            let bytes: Vec<u8> = door.values(&home_text, 1, width)?.into_iter().flatten().collect();
+            let end = bytes.iter().position(|b| *b == b'\n').unwrap_or(bytes.len());
+            label = bytes[..end].to_vec();
+        }
+        labels.insert(home.clone(), label);
+    }
+
+    door.step("read_with");
+    let mut read_with: BTreeMap<Address, bool> = BTreeMap::new();
+    if let Some(edition) = &trunk {
+        for set in &inputs.published {
+            let set_text = set.to_string();
+            if set_text == *edition {
+                continue;
+            }
+            let stands = read_with_stands(door, p, edition, &set_text)?;
+            read_with.insert(set.clone(), stands);
+        }
+    }
+
+    let reads = PanelReads { published, labels, removals, read_with };
+    Ok(compose(inputs, e, &reads, door.counts()))
+}
+
+/// Returns every document a composition can name as a far document of a
+/// candidate that may be offered — each content span's own, a unit span's,
+/// each record's `to` the walk can map onto, a window part's among them —
+/// or as the document of its type, the registry's, the draft and the trunk
+/// left out.
+fn far_documents(inputs: &Inputs, e: &Enumeration) -> BTreeSet<String> {
+    let mut docs: BTreeSet<String> = BTreeSet::new();
+    for c in e.candidates.iter().filter(|c| !c.revised) {
+        for span in c.value.from.iter().chain(&c.value.to) {
+            match ISpan::of(span) {
+                Some(s) => docs.extend(s.document()),
+                None => docs.extend(document_of(&span.start)),
+            }
+        }
+        docs.extend(c.value.type_address().and_then(document_of).filter(|doc| doc != REGISTRY_DOCUMENT));
+    }
+    let part_records = e.windows.iter().flat_map(|w| &w.parts).filter_map(|p| p.record.as_ref());
+    docs.extend(e.records.iter().chain(part_records).filter_map(|r| r.to.document()));
+    docs.remove(&inputs.draft.to_string());
+    if let Some(trunk) = &inputs.doc {
+        docs.remove(&trunk.to_string());
+    }
+    docs
+}
+
+/// Composes the panel from the enumeration as composed and the open's
+/// reads (the module's doc, **The composition**).
+fn compose(inputs: &Inputs, e: &Enumeration, reads: &PanelReads, frames: Vec<(&'static str, usize)>) -> Panel {
+    let draft = inputs.draft.to_string();
+    let trunk = inputs.doc.as_ref().map(ToString::to_string);
+    let is_published = |doc: &str| reads.published.get(doc).copied().unwrap_or(false);
+
+    // Every candidate's ends read through the records and the parts taken by
+    // their counterpart, as the filter reads them and the request spells
+    // them.
+    let walk = RecordWalk::composed(inputs, &e.records, e);
+
+    // The formatting line: the draft's own set's offered marks by the line's
+    // test, each on the words a reader receives.
+    let own: Vec<usize> = e.homes.iter().find(|(h, _)| *h == inputs.draft).map(|(_, i)| i.clone()).unwrap_or_default();
+    let marks: Vec<usize> = own.iter().copied().filter(|&i| e.candidates[i].offered() && is_formatting(&e.candidates[i].value)).collect();
+    let placeholders = e.placeholder_words();
+    let on_placeholder = |s: &ISpan| placeholders.iter().any(|w| w.overlap(&s.chain, s.first, s.reach()).is_some());
+    let cut = marks
+        .iter()
+        .filter(|&&i| {
+            let c = &e.candidates[i];
+            c.end_spans().iter().any(|s| SpanReading::of(&walk, s, &c.via, e.judged(c)).past_the_cut()) || walk.spans(c).iter().any(on_placeholder)
+        })
+        .count();
+
+    // The job list: each removal on the selection as composed, its re-make
+    // among the line's marks, its original where it is listed.
+    let removals: Vec<Removal> = reads
+        .removals
+        .iter()
+        .map(|read| {
+            let on_selection = touches(&read.mark_value, &e.selection);
+            let listed = on_selection && !read.spent;
+            let remake = listed
+                .then(|| {
+                    let mark_spans: Vec<ISpan> = read.mark_value.from.iter().chain(&read.mark_value.to).filter_map(ISpan::of).collect();
+                    let mark_on = selected_ranges(&mark_spans, &e.selection);
+                    marks.iter().copied().find(|&i| {
+                        let c = &e.candidates[i];
+                        c.value.type_address() == read.mark_value.type_address() && ranges_overlap(&selected_ranges(&walk.spans(c), &e.selection), &mark_on)
+                    })
+                })
+                .flatten();
+            let original = if listed && is_formatting_type(&read.mark_value) { read.original.clone() } else { None };
+            Removal { on_selection, remake, original, ..read.clone() }
+        })
+        .collect();
+
+    // The rows: one per home a candidate touches the composition at — its
+    // state, its label, the fold by type, the line's counts.
     let mut rows: Vec<Row> = Vec::new();
     for (home, indices) in &e.homes {
-        let home_text = home.to_string();
-        let published = door.metadata(&home_text)?.published;
+        if !indices.iter().any(|i| e.candidates[*i].touching) {
+            continue;
+        }
         let kind = if *home == inputs.draft {
             RowKind::Own
         } else if inputs.notes.contains(home) {
             RowKind::Notes
-        } else if published {
-            RowKind::Public { read_with: false }
+        } else if is_published(&home.to_string()) {
+            RowKind::Public { read_with: reads.read_with.get(home).copied().unwrap_or(false) }
         } else {
             RowKind::Private
         };
         let links: Vec<usize> = indices.iter().copied().filter(|i| e.candidates[*i].offered() && !marks.contains(i)).collect();
         let u = indices.iter().filter(|i| e.candidates[**i].revised).count();
-        rows.push(Row { home: home.clone(), kind, label: Vec::new(), links, types: Vec::new(), line: LineCounts { u, ..LineCounts::default() }, read_through: 0 });
+        let label = reads.labels.get(home).cloned().unwrap_or_default();
+        rows.push(Row { home: home.clone(), kind, label, links, types: Vec::new(), line: LineCounts { u, ..LineCounts::default() }, read_through: 0 });
     }
     rows.sort_by_key(|r| match r.kind {
         RowKind::Own => (0, 0, r.home.to_string()),
@@ -636,7 +690,6 @@ pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         RowKind::Public { .. } => (3, 0, address_key(&r.home.to_string())),
     });
 
-    door.step("far");
     for row in &mut rows {
         let mut folds: BTreeMap<String, (usize, BTreeSet<String>)> = BTreeMap::new();
         let mut line = row.line;
@@ -650,7 +703,7 @@ pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
             for span in c.value.from.iter().chain(&c.value.to) {
                 match ISpan::of(span) {
                     Some(s) => {
-                        let read = SpanReading::of(&walk, &s, &c.via, &e.selection);
+                        let read = SpanReading::of(&walk, &s, &c.via, e.judged(c));
                         if read.past_the_cut() {
                             c_hit = true;
                         }
@@ -676,13 +729,13 @@ pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
                 if trunk.as_deref() == Some(doc.as_str()) {
                     continue;
                 }
-                if !door.metadata(doc)?.published {
+                if !is_published(doc) {
                     p_hit = true;
                 }
             }
             let ty = c.value.type_address().unwrap_or("").to_string();
             if let Some(doc) = document_of(&ty) {
-                if doc != REGISTRY_DOCUMENT && !door.metadata(&doc)?.published {
+                if doc != REGISTRY_DOCUMENT && !is_published(&doc) {
                     line.t += 1;
                 }
             }
@@ -697,102 +750,40 @@ pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         row.types = folds.into_iter().map(|(ty, (n, far))| TypeFold { ty, n, far: far.into_iter().collect() }).collect();
     }
 
-    door.step("labels");
-    for row in &mut rows {
-        let home = row.home.to_string();
-        let extent = if row.home == inputs.draft { e.extent } else { door.extent(&home)? };
-        let width = extent.min(LABEL_POSITIONS);
-        if width > 0 {
-            let bytes: Vec<u8> = door.values(&home, 1, width)?.into_iter().flatten().collect();
-            let end = bytes.iter().position(|b| *b == b'\n').unwrap_or(bytes.len());
-            row.label = bytes[..end].to_vec();
-        }
-    }
-
-    door.step("read_with");
-    let mut read_with: BTreeMap<Address, bool> = BTreeMap::new();
-    if let Some(edition) = &trunk {
-        for set in &inputs.published {
-            let set_text = set.to_string();
-            if set_text == *edition {
-                continue;
+    // What each part's answer brings: at the counterpart, the line's marks
+    // and the private rows' links on the published words; behind a
+    // placeholder, the person's formatting marks held back on its words.
+    let lies_on = |words: &ISpan, c: &Candidate| walk.spans(c).iter().any(|s| words.overlap(&s.chain, s.first, s.reach()).is_some());
+    let mut parts = Vec::new();
+    for window in &e.windows {
+        for (k, part) in window.parts.iter().enumerate() {
+            let mut counts = PartCounts { part: window.key(k), marks: 0, links: 0, kept_marks: 0 };
+            match e.answer_at(window, k) {
+                Some(Answer::Counterpart) => {
+                    if let Some(words) = part.counterpart() {
+                        counts.marks = marks.iter().filter(|&&i| lies_on(&words, &e.candidates[i])).count();
+                        counts.links = rows.iter().filter(|r| !matches!(r.kind, RowKind::Public { .. })).flat_map(|r| &r.links).filter(|&&i| lies_on(&words, &e.candidates[i])).count();
+                    }
+                }
+                Some(Answer::KeepPrivate) => {
+                    counts.kept_marks = e.candidates.iter().filter(|c| is_formatting(&c.value) && !c.revised && !c.left_out && lies_on(&part.span, c)).count();
+                }
+                Some(Answer::Drop | Answer::PublishFirst) | None => {}
             }
-            let stands = read_with_stands(door, p, edition, &set_text)?;
-            read_with.insert(set.clone(), stands);
-        }
-    }
-    for row in &mut rows {
-        if let RowKind::Public { read_with: state } = &mut row.kind {
-            *state = read_with.get(&row.home).copied().unwrap_or(false);
+            parts.push(counts);
         }
     }
 
-    let windows = windows_with(door, p, inputs)?;
-    Ok(Panel {
+    Panel {
         rows,
         formatting: Formatting { marks, cut, removals },
-        read_with,
-        windows,
+        read_with: reads.read_with.clone(),
+        parts,
         inherited: inherited(&inputs.also, &e.selection),
         merge_records: merge_records(inputs, e),
-        frames: door.counts(),
-    })
-}
-
-/// Reads the own-origin windows of the selection, each with its counterpart.
-///
-/// It is the panel's windows step run on its own — the shell re-reads them
-/// at a held panel's re-open, never from the read's cache (B3-S11 P2 (i)).
-///
-/// # Errors
-///
-/// The reads' faults, as `enumerate`'s.
-pub fn windows(p: &Publisher<'_>, inputs: &Inputs) -> Result<Vec<Window>, Fault> {
-    let door = Door::new(p.board, p.token);
-    windows_with(&door, p, inputs)
-}
-
-/// Reads the windows through `door`.
-///
-/// A run is a window where its origin is neither a named draft — the
-/// rendering draft, or one `also` names, whose words are re-minted — nor the
-/// trunk and is an unpublished document owned by the person exactly (one
-/// `doc_metadata` read per origin, kept); its counterpart is read where the
-/// origin is a draft the person reads — one four-set read over the record
-/// class homed in the origin, `from` the run — the first record covering
-/// the run offered.
-pub(crate) fn windows_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs) -> Result<Vec<Window>, Fault> {
-    door.step("windows");
-    let trunk = inputs.doc.as_ref();
-    let unit = |a: &str| frames::unit_span(a).as_array().cloned().unwrap_or_default();
-    let subtype = unit(T_CORRESPONDENCE);
-    let mut out = Vec::new();
-    for (i, run) in inputs.selection.iter().enumerate() {
-        if inputs.is_named_draft(&run.origin) || trunk == Some(&run.origin) {
-            continue;
-        }
-        let origin = run.origin.to_string();
-        if !owned_by(&origin, p.account) || door.metadata(&origin)?.published {
-            continue;
-        }
-        let counterpart = if inputs.readable_drafts.contains(&run.origin) { counterpart_of(door, p, i, run, &unit(&origin), &subtype)? } else { None };
-        out.push(Window { run: i, origin: run.origin.clone(), owner: account_of(&origin).unwrap_or_default(), i_start: run.i_start, width: run.width, counterpart });
+        frames,
+        reads: reads.clone(),
     }
-    Ok(out)
-}
-
-/// Reads the counterpart of `run`, the `i`-th of the selection: the first
-/// record homed in its origin whose `from` covers part of it.
-fn counterpart_of(door: &Door<'_>, p: &Publisher<'_>, i: usize, run: &Run, origin_unit: &[serde_json::Value], subtype: &[serde_json::Value]) -> Result<Option<Counterpart>, Fault> {
-    let span = [frames::i_span(&run.i_start_text(), run.width)];
-    for hit in door.addrs(&run.origin.to_string(), &frames::find_links_four(Slot::Spans(origin_unit), Slot::Spans(&span), Slot::Any, Slot::Spans(subtype)))? {
-        if let Some(record) = read_record(door, p, &hit)? {
-            if let (Some((lo, hi)), Some(to)) = (record.from.overlap(&run.chain(), run.i_start, run.reach()), record.map(&run.chain(), run.i_start, run.reach())) {
-                return Ok(Some(Counterpart { run: i, draft: run.origin.clone(), record: record.link.clone(), from: ISpan { chain: run.chain(), first: lo, width: hi - lo }, to }));
-            }
-        }
-    }
-    Ok(None)
 }
 
 /// Returns an address's components as numbers, the address order's key.

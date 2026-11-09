@@ -735,9 +735,10 @@ each ceremony:
   COMPOSITION, a draft's one `publish` request as one composition family
   (P28): `publication.rs` the module, the reading door and the shared
   types; `publication/base.rs` the draft's base, read off the board;
-  `publication/enumerate.rs` the enumeration; `publication/panel.rs`
-  the panel's data, the count and the own-origin windows with their
-  counterparts; `publication/price.rs` the price against the caps;
+  `publication/enumerate.rs` the enumeration — the own-origin windows in
+  their parts among its reads — and the composition the answers make of
+  it; `publication/panel.rs` the panel's data and the count;
+  `publication/price.rs` the price against the caps;
   `publication/request.rs` the re-read and the request, the windows taken
   as given; `publication/send.rs` the send and the refusal family;
   `publication/landed.rs` the twin pre-check and the landed test — its unit

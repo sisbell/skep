@@ -46,7 +46,7 @@ use crate::sign::Signer;
 use super::base::Base as DraftBase;
 use super::enumerate::RecordWalk;
 use super::panel::Destination;
-use super::request::{Answer as OriginAnswer, Confirmed, Inert, OwnedRow, Piece};
+use super::request::{Confirmed, Inert, OwnedRow, Piece};
 use super::send::{AckVia, OwnFault, Refusal, Sent};
 use super::*;
 
@@ -1235,6 +1235,11 @@ fn publisher<'a>(board: &'a Board, token: &'a Token, signer: &'a HybridSigner) -
     Publisher { board, token, account: ACCOUNT, signer }
 }
 
+/// The key of the `part`-th part of the window over the selection's `run`.
+fn part(run: usize, part: usize) -> PartKey {
+    PartKey { run, part }
+}
+
 fn links_of(e: &Enumeration, indices: &[usize]) -> Vec<String> {
     indices.iter().map(|i| e.candidates[*i].link.to_string()).collect()
 }
@@ -1259,7 +1264,8 @@ fn keys_of(c: &Candidate) -> (bool, bool, bool) {
 }
 
 /// The switches: the draft's own set and the notes ON, the notes into
-/// `dest` where one is named.
+/// `dest` where one is named; the window onto `O`, one part no record names,
+/// kept private.
 fn switched(dest: Option<&str>) -> Confirmed {
     let mut switches = Switches::default();
     switches.on.insert(a(D));
@@ -1268,8 +1274,8 @@ fn switched(dest: Option<&str>) -> Confirmed {
         switches.destinations.insert(a(N), Destination::Set(a(s)));
     }
     let mut answers = BTreeMap::new();
-    answers.insert(2, OriginAnswer::KeepPrivate);
-    Confirmed { switches, answers }
+    answers.insert(part(2, 0), OriginAnswer::KeepPrivate);
+    Confirmed { switches, answers, left_out: BTreeSet::new() }
 }
 
 /// The whole composition to a built request over the base fixture.
@@ -1306,13 +1312,18 @@ fn the_enumeration_reads_in_order_and_keeps_the_owned_homes_links_on_the_words()
     let p = publisher(&board, &tok, &signer);
     let e = enumerate(&p, &inputs()).expect("enumerated");
     let steps: Vec<&str> = e.frames.iter().map(|(s, _)| *s).collect();
-    assert_eq!(steps, ["image", "merge_records", "find_links_v", "links", "records", "read_through", "claims"]);
+    assert_eq!(steps, ["image", "merge_records", "windows", "find_links_v", "links", "records", "read_through", "claims"], "no named part: the counterparts step sends nothing");
     assert_eq!(e.frames[0], ("image", 2), "the extent and one image");
     assert_eq!(e.frames[1], ("merge_records", 1), "the atoms of the draft's own run, one read; the edition's words and the window's none");
-    assert_eq!(e.frames[2], ("find_links_v", 1), "ONE region read");
-    assert_eq!(e.frames[4], ("records", 1), "the records read; the record's own read_link was cached when the region read answered it");
-    assert_eq!(e.frames[5].1, 4, "two batched reads, the link's read_link and its home's metadata");
-    assert_eq!((e.merge_atoms.clone(), e.selection.clone()), (vec![vec![], vec![], vec![]], inputs().selection), "no merge record: the selection as published is the held one");
+    assert_eq!(e.frames[2], ("windows", 1), "the window's origin's state; O is no draft the person reads, so no record read");
+    assert_eq!(e.frames[3], ("find_links_v", 1), "ONE region read");
+    assert_eq!(e.frames[5], ("records", 1), "the records read; the record's own read_link was cached when the region read answered it");
+    assert_eq!(e.frames[6].1, 4, "two batched reads, the link's read_link and its home's metadata");
+    assert_eq!(e.merge_atoms, vec![Vec::<u64>::new(); 3], "no merge record");
+    assert_eq!(e.windows.len(), 1, "{:?}", e.windows);
+    assert_eq!((e.windows[0].run, e.windows[0].parts.len(), e.windows[0].parts[0].named()), (2, 1, false), "the window onto O, one part no record names");
+    assert_eq!(e.selection, vec![run(E, 1, 19), run(D, 1, 10)], "the window awaiting its answer counts toward nothing");
+    assert_eq!(e.composed(&inputs(), &BTreeMap::from([(part(2, 0), OriginAnswer::KeepPrivate)]), &BTreeSet::new()).selection, inputs().selection, "kept private, the selection as published is the held one");
     assert_eq!(e.region, vec![(1, 34)], "the selection's V-spans merged: the whole draft");
     assert_eq!(e.placed, vec![Placement::Whole { ordinal: 1 }, Placement::Whole { ordinal: 20 }, Placement::Whole { ordinal: 30 }]);
     let find = dialer.frames("find_links_v");
@@ -1697,7 +1708,7 @@ fn a_busy_region_read_is_reissued_and_halts_past_the_bound() {
     let p = publisher(&board, &tok, &signer);
     dialer.world().busy = 2;
     let e = enumerate(&p, &inputs()).expect("reissued");
-    assert_eq!(e.frames[2], ("find_links_v", 3), "two refusals and the answer");
+    assert_eq!(e.frames[3], ("find_links_v", 3), "two refusals and the answer");
     dialer.world().busy = SCAN_BUSY_REISSUES as usize + 1;
     assert_eq!(enumerate(&p, &inputs()).unwrap_err(), Fault::Busy);
     // `history_busy` at the same door: the panel's first metadata read
@@ -1766,7 +1777,7 @@ fn the_panel_orders_the_rows_and_counts_each_line() {
     assert_eq!(panel.formatting.job_list().len(), 2);
     assert_eq!(panel.read_with, BTreeMap::from([(a(S), true), (a(S2), false)]));
     let steps: Vec<&str> = panel.frames.iter().map(|(s, _)| *s).collect();
-    assert_eq!(steps, ["removals", "homes", "far", "labels", "read_with", "windows"], "the formatting line's test sends no frame; the windows read last");
+    assert_eq!(steps, ["removals", "homes", "far", "labels", "read_with"], "the formatting line's test sends no frame; the windows are the enumeration's");
 }
 
 /// Checks that an end over words before a record reads both.
@@ -2218,7 +2229,9 @@ fn a_word_deleted_since_the_panel_counts_nowhere_at_the_reread() {
     let tok = token();
     let p = publisher(&board, &tok, &signer);
     let inputs = inputs();
-    let e = enumerate(&p, &inputs).unwrap();
+    // Composed under the answers the confirm carries, as the caller does
+    // before its re-read: the window kept private.
+    let e = switched(None).compose(&inputs, &enumerate(&p, &inputs).unwrap());
     let first = panel(&p, &inputs, &e).unwrap();
     assert!([&note, &far, &whole_d].iter().all(|l| candidate_at(&e, l).offered()), "the premise: all three offered over the draft's 3..4");
     assert_eq!(first.formatting.cut, 1, "the premise: the heading alone runs past the cut");
@@ -2300,7 +2313,7 @@ fn a_window_deleted_since_the_panel_owes_no_answer() {
     let again = reread(&p, &inputs, &e, &first).unwrap();
     assert_eq!(again.restatement.expect("a difference").selection, vec![(2, Placement::Absent)]);
     let mut confirmed = switched(None);
-    confirmed.answers.insert(2, OriginAnswer::PublishFirst);
+    confirmed.answers.insert(part(2, 0), OriginAnswer::PublishFirst);
     let Built::Request(_) = build(&p, &inputs, &again.enumeration, &again.panel, &confirmed).unwrap() else { panic!("inert at an answer for a deleted run") };
     confirmed.answers.clear();
     let Built::Request(mut request) = build(&p, &inputs, &again.enumeration, &again.panel, &confirmed).unwrap() else { panic!("inert") };
@@ -2372,22 +2385,26 @@ fn the_request_spells_every_member_and_the_canonical_member_end() {
     let e2 = enumerate(&p, &twice).unwrap();
     let panel2 = panel(&p, &twice, &e2).unwrap();
     let mut twice_confirmed = switched(None);
-    twice_confirmed.answers.insert(3, OriginAnswer::KeepPrivate);
+    twice_confirmed.answers.insert(part(3, 0), OriginAnswer::KeepPrivate);
     let Built::Request(r2) = build(&p, &twice, &e2, &panel2, &twice_confirmed).unwrap() else { panic!("inert") };
     let mark = r2.entries.iter().find(|en| e2.candidates[en.candidate].link.to_string() == named.mark_d).unwrap();
     assert_eq!(mark.to, End::Member(vec![(21, 3)]), "the lowest positions holding each value, never the second occurrence's");
     assert_eq!(r2.places, vec![None, Some(20), Some(30), None]);
 }
 
-/// THE THREE ANSWERS at a window onto the person's own unpublished origin:
-/// unanswered the request is INERT naming the run; publish-first is not this
-/// request; DROP leaves the run out; KEEP PRIVATE sends it as a window with
-/// no place; and THE COUNTERPART FIRST — a record of a draft the person reads
-/// naming the window's words — offered as data and, taken, re-composed by
-/// reference WITH the covered piece's kept place, the rest a window with
-/// none.
+/// THE ANSWERS at each part of a window onto the person's own unpublished
+/// origin (B3-S11 P2 (i)): at a part no record names, unanswered the
+/// request is INERT naming the part, an answer the part does not admit is
+/// none, publish-first is not this request, DROP leaves the part out and
+/// KEEP PRIVATE sends it as a window with no place; and where a record —
+/// read by the enumeration's windows step — names some of the run's words
+/// as published, the run is two parts: the named one admits the
+/// counterpart and DROP alone, keep-private there leaving the request inert
+/// naming the part as named, and the counterpart, taken, re-composes it by
+/// reference WITH its kept place, the part no record names answered on its
+/// own.
 #[test]
-fn the_three_answers_and_the_counterpart_first() {
+fn the_answers_at_each_part_and_the_counterpart() {
     let (world, _) = World::base();
     let (_, board, signer) = open(world);
     let tok = token();
@@ -2395,28 +2412,36 @@ fn the_three_answers_and_the_counterpart_first() {
     let inputs = inputs();
     let e = enumerate(&p, &inputs).unwrap();
     let panel = panel(&p, &inputs, &e).unwrap();
-    // THE WINDOWS are the panel's: the one run onto `O`, the person's own
-    // unpublished origin, its owner and where in `O` it was written, no
-    // counterpart (no record of a draft the person reads names its words).
-    assert_eq!(panel.windows.len(), 1, "{:?}", panel.windows);
-    assert_eq!((panel.windows[0].run, panel.windows[0].origin.to_string(), panel.windows[0].owner.as_str(), panel.windows[0].i_start, panel.windows[0].width), (2, O.to_string(), ACCOUNT, 1, 5));
-    assert_eq!(panel.windows[0].counterpart, None);
+    // THE WINDOWS are the enumeration's: the one run onto `O`, the person's
+    // own unpublished origin, its owner and where in `O` it was written, one
+    // part no record names (no record of a draft the person reads names its
+    // words).
+    assert_eq!(e.windows.len(), 1, "{:?}", e.windows);
+    let w = &e.windows[0];
+    assert_eq!((w.run, w.origin.to_string(), w.owner.as_str(), w.i_start, w.width), (2, O.to_string(), ACCOUNT, 1, 5));
+    assert_eq!(w.parts, vec![Part { span: ISpan { chain: format!("{O}.0.1"), first: 1, width: 5 }, ordinal: 30, record: None }]);
+    let unnamed = &w.parts[0];
+    assert!([OriginAnswer::PublishFirst, OriginAnswer::Drop, OriginAnswer::KeepPrivate].iter().all(|a| unnamed.admits(*a)) && !unnamed.admits(OriginAnswer::Counterpart), "a part no record names: the three answers");
+    let owed = |run: usize, k: usize, named: bool| Built::Inert(Inert::Unanswered(vec![OwedAnswer { part: part(run, k), named }]));
     let mut confirmed = switched(None);
     confirmed.answers.clear();
-    assert_eq!(build(&p, &inputs, &e, &panel, &confirmed).unwrap(), Built::Inert(Inert::Unanswered(vec![2])));
-    confirmed.answers.insert(2, OriginAnswer::PublishFirst);
-    assert_eq!(build(&p, &inputs, &e, &panel, &confirmed).unwrap(), Built::Inert(Inert::PublishFirst(vec![2])));
-    confirmed.answers.insert(2, OriginAnswer::Drop);
+    assert_eq!(build(&p, &inputs, &e, &panel, &confirmed).unwrap(), owed(2, 0, false));
+    confirmed.answers.insert(part(2, 0), OriginAnswer::Counterpart);
+    assert_eq!(build(&p, &inputs, &e, &panel, &confirmed).unwrap(), owed(2, 0, false), "an answer the part does not admit is none");
+    confirmed.answers.insert(part(2, 0), OriginAnswer::PublishFirst);
+    assert_eq!(build(&p, &inputs, &e, &panel, &confirmed).unwrap(), Built::Inert(Inert::PublishFirst(vec![part(2, 0)])));
+    confirmed.answers.insert(part(2, 0), OriginAnswer::Drop);
     let Built::Request(dropped) = build(&p, &inputs, &e, &panel, &confirmed).unwrap() else { panic!() };
     assert_eq!(dropped.runs, vec![run(E, 1, 19), run(D, 1, 10)]);
-    confirmed.answers.insert(2, OriginAnswer::KeepPrivate);
+    confirmed.answers.insert(part(2, 0), OriginAnswer::KeepPrivate);
     let Built::Request(kept) = build(&p, &inputs, &e, &panel, &confirmed).unwrap() else { panic!() };
     assert_eq!((kept.runs.len(), kept.places[2]), (3, None));
     assert!(matches!(kept.pieces[2], Piece::Window { .. }));
-    // The counterpart: O published before as E's words 16..19 (a record in O).
-    // It is read at the PANEL — the windows step, one four-set over the record
-    // class homed in O — and the request takes it as given: no read of O at
-    // the build.
+    // The counterpart: O's `quot` published before as E's words 16..19 (a
+    // record in O). It is read at the ENUMERATION — the windows step, one
+    // four-set over the record class homed in O — and cuts the run into the
+    // part the record names and the part none does; the build reads nothing
+    // of O.
     let (mut world, _) = World::base();
     let record = world.typed(O, vec![ispan(O, 1, 4)], vec![ispan(E, 16, 4)], T_CORRESPONDENCE);
     let (dialer, board, signer) = open(world);
@@ -2424,37 +2449,71 @@ fn the_three_answers_and_the_counterpart_first() {
     let mut with_o = inputs.clone();
     with_o.readable_drafts.push(a(O));
     let e = enumerate(&p, &with_o).unwrap();
-    let panel = super::panel::panel(&p, &with_o, &e).unwrap();
-    let counterpart = panel.windows[0].counterpart.as_ref().expect("the counterpart offered at the panel");
-    assert_eq!((counterpart.run, counterpart.record.to_string(), counterpart.to.first, counterpart.to.width), (2, record.clone(), 16, 4));
-    assert!(panel.frames.iter().any(|(step, _)| *step == "windows"), "the windows are a step of the panel: {:?}", panel.frames);
+    assert_eq!(e.frames.iter().find(|(step, _)| *step == "windows"), Some(&("windows", 3)), "the origin's state, the four-set homed in O and the record's read: {:?}", e.frames);
     let reads_o = |frames: &[Value]| frames.iter().filter(|f| f["q"]["home"][0]["start"].as_str() == Some(O)).count();
-    assert_eq!(reads_o(&dialer.frames("find_links_ftt")), 1, "one four-set homed in O at the panel");
+    assert_eq!(reads_o(&dialer.frames("find_links_ftt")), 1, "one four-set homed in O at the enumeration");
+    let parts = &e.windows[0].parts;
+    assert_eq!(parts.len(), 2, "{parts:?}");
+    assert_eq!((parts[0].span.first, parts[0].span.width, parts[0].ordinal, parts[0].record.as_ref().map(|r| r.link.to_string())), (1, 4, 30, Some(record.clone())), "the words the record names");
+    assert_eq!(parts[0].counterpart(), Some(ISpan { chain: format!("{E}.0.1"), first: 16, width: 4 }));
+    assert_eq!((parts[1].span.first, parts[1].span.width, parts[1].ordinal, parts[1].named()), (5, 1, 34, false), "the rest, which no record names");
+    assert!(parts[0].admits(OriginAnswer::Counterpart) && parts[0].admits(OriginAnswer::Drop) && !parts[0].admits(OriginAnswer::KeepPrivate) && !parts[0].admits(OriginAnswer::PublishFirst), "a part a record names: the counterpart or leave out");
+    let panel = super::panel::panel(&p, &with_o, &e).unwrap();
     dialer.clear();
-    confirmed.answers.insert(2, OriginAnswer::KeepPrivate);
-    let Built::Request(offered) = build(&p, &with_o, &e, &panel, &confirmed).unwrap() else { panic!() };
-    assert_eq!(reads_o(&dialer.frames("find_links_ftt")), 0, "the build reads no counterpart of its own: {:?}", dialer.ops());
+    confirmed.answers = BTreeMap::from([(part(2, 0), OriginAnswer::KeepPrivate), (part(2, 1), OriginAnswer::KeepPrivate)]);
+    assert_eq!(build(&p, &with_o, &e, &panel, &confirmed).unwrap(), owed(2, 0, true), "a placeholder over published words is no answer");
+    assert_eq!(reads_o(&dialer.frames("find_links_ftt")), 0, "the build reads no record of its own: {:?}", dialer.ops());
     assert!(dialer.frames("doc_metadata").iter().all(|f| f["doc"].as_str() != Some(O)), "nor O's state: {:?}", dialer.ops());
-    assert_eq!(offered.counterparts.len(), 1);
-    assert_eq!((offered.counterparts[0].run, offered.counterparts[0].record.to_string(), offered.counterparts[0].to.first, offered.counterparts[0].to.width), (2, record.clone(), 16, 4));
-    confirmed.answers.insert(2, OriginAnswer::Counterpart);
+    confirmed.answers.insert(part(2, 0), OriginAnswer::Counterpart);
     let Built::Request(taken) = build(&p, &with_o, &e, &panel, &confirmed).unwrap() else { panic!() };
-    assert_eq!(taken.runs[2], run(E, 16, 4), "the covered part re-composed by reference to the record's to");
-    assert_eq!(taken.runs[3], run(O, 5, 1), "the rest a window still");
-    assert_eq!(&taken.places[2..], &[Some(30), None], "the covered piece with its kept place, the rendering draft's own position of it; the window with none");
-    assert_eq!(&taken.stray_records[2..], &[1, 0], "the covered piece counts the one record the commit reads for it");
+    assert_eq!(taken.runs[2], run(E, 16, 4), "the named part re-composed by reference to the record's to");
+    assert_eq!(taken.runs[3], run(O, 5, 1), "the part no record names kept private, a window still");
+    assert_eq!(&taken.places[2..], &[Some(30), None], "the named part with its kept place, the rendering draft's own position of it; the window with none");
+    assert_eq!(&taken.stray_records[2..], &[1, 0], "the named part counts the one record the commit reads for it");
+    confirmed.answers.insert(part(2, 1), OriginAnswer::Drop);
+    let Built::Request(trimmed) = build(&p, &with_o, &e, &panel, &confirmed).unwrap() else { panic!() };
+    assert_eq!(&trimmed.runs[2..], &[run(E, 16, 4)], "each part answered on its own: the rest left out");
+}
+
+/// Checks that a run two records name holds two named parts, each answered
+/// on its own.
+///
+/// `O`'s words 1..2 published as `E`'s 5..6 and its 3..4 as `E`'s 10..11,
+/// a record in `O` for each: the window is three parts, the two the records
+/// name and the one none does, and the counterpart at both re-composes each
+/// by reference to its own record's `to`, each with its own kept place.
+#[test]
+fn a_run_two_records_name_has_two_named_parts() {
+    let (mut world, _) = World::base();
+    let first = world.typed(O, vec![ispan(O, 1, 2)], vec![ispan(E, 5, 2)], T_CORRESPONDENCE);
+    let second = world.typed(O, vec![ispan(O, 3, 2)], vec![ispan(E, 10, 2)], T_CORRESPONDENCE);
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = Inputs { readable_drafts: vec![a(D), a(N), a(O)], ..inputs() };
+    let e = enumerate(&p, &inputs).unwrap();
+    let naming: Vec<(u64, u64, Option<String>)> = e.windows[0].parts.iter().map(|p| (p.span.first, p.span.width, p.record.as_ref().map(|r| r.link.to_string()))).collect();
+    assert_eq!(naming, vec![(1, 2, Some(first)), (3, 2, Some(second)), (5, 1, None)], "each record's words a part of their own");
+    let panel = panel(&p, &inputs, &e).unwrap();
+    let mut confirmed = switched(None);
+    confirmed.answers = BTreeMap::from([(part(2, 0), OriginAnswer::Counterpart), (part(2, 1), OriginAnswer::Counterpart), (part(2, 2), OriginAnswer::KeepPrivate)]);
+    let Built::Request(request) = build(&p, &inputs, &e, &panel, &confirmed).unwrap() else { panic!("inert") };
+    assert_eq!(&request.runs[2..], &[run(E, 5, 2), run(E, 10, 2), run(O, 5, 1)]);
+    assert_eq!(&request.places[2..], &[Some(30), Some(32), None], "each named part at its own kept place");
+    assert_eq!(&request.stray_records[2..], &[1, 1, 0]);
 }
 
 /// THE COUNTERPART's KEPT PLACE (the link-sets design §5.5: "its KEPT
-/// PLACE sent beside it as a stray's is"): the covered piece of a window
-/// re-composed by reference to a record's `to` carries the rendering
-/// draft's own V-position of it — in THIS document, where the record's `to`
-/// is `E`'s identity, and in ANOTHER, where an earlier shot published the
-/// origin's words into `F` — the uncovered remainder a window with none;
-/// the pre-check passes the piece through with its place and counts its
-/// one record, the price charges the kept place beside the run; the request
-/// is not inert for it; and the scripted board, reading the record wherever
-/// homed, re-windows `D` there onto the published identity, `E`'s or `F`'s.
+/// PLACE sent beside it as a stray's is"): a window part a record names,
+/// taken by its counterpart, re-composed by reference to the record's `to`,
+/// carries the rendering draft's own V-position of it — in THIS document,
+/// where the record's `to` is `E`'s identity, and in ANOTHER, where an
+/// earlier shot published the origin's words into `F` — the part no record
+/// names kept private, a window with none; the pre-check passes the part
+/// through with its place and counts its one record, the price charges the
+/// kept place beside the run; the request is not inert for it; and the
+/// scripted board, reading the record wherever homed, re-windows `D` there
+/// onto the published identity, `E`'s or `F`'s.
 #[test]
 fn the_counterpart_arm_sends_the_covered_pieces_place_in_this_document_or_another_and_the_precheck_counts_its_record() {
     const F: &str = "1.0.1.0.10";
@@ -2475,21 +2534,22 @@ fn the_counterpart_arm_sends_the_covered_pieces_place_in_this_document_or_anothe
         inputs.readable_drafts.push(a(O));
         let e = enumerate(&p, &inputs).unwrap();
         let panel = super::panel::panel(&p, &inputs, &e).unwrap();
-        let counterpart = panel.windows[0].counterpart.as_ref().expect("the counterpart offered at the panel");
-        assert_eq!((counterpart.record.to_string(), counterpart.to.document().as_deref(), counterpart.to.first), (record.clone(), Some(to_doc), to_first), "{what}");
+        let named = &e.windows[0].parts[0];
+        let counterpart = named.counterpart().expect("the counterpart read at the enumeration");
+        assert_eq!((named.record.as_ref().map(|r| r.link.to_string()), counterpart.document().as_deref(), counterpart.first), (Some(record.clone()), Some(to_doc), to_first), "{what}");
         let mut confirmed = switched(None);
-        confirmed.answers.insert(2, OriginAnswer::Counterpart);
+        confirmed.answers = BTreeMap::from([(part(2, 0), OriginAnswer::Counterpart), (part(2, 1), OriginAnswer::KeepPrivate)]);
         let Built::Request(mut taken) = build(&p, &inputs, &e, &panel, &confirmed).unwrap() else { panic!("{what}: inert") };
-        assert_eq!(taken.runs, vec![run(E, 1, 19), run(D, 1, 10), run(to_doc, to_first, 4), run(O, 5, 1)], "{what}: the covered part by reference to the record's to, the rest a window");
-        assert_eq!(taken.places, vec![None, Some(20), Some(30), None], "{what}: the covered piece's place is D's own position of it; the window has none");
-        assert_eq!(taken.stray_records, vec![0, 0, 1, 0], "{what}: the one record the commit reads for the piece");
+        assert_eq!(taken.runs, vec![run(E, 1, 19), run(D, 1, 10), run(to_doc, to_first, 4), run(O, 5, 1)], "{what}: the named part by reference to the record's to, the rest a window");
+        assert_eq!(taken.places, vec![None, Some(20), Some(30), None], "{what}: the named part's place is D's own position of it; the window has none");
+        assert_eq!(taken.stray_records, vec![0, 0, 1, 0], "{what}: the one record the commit reads for the part");
         assert!(matches!(taken.pieces[2], Piece::Values(_)) == !published_into_f, "{what}: E's own identity reads through the draft, F's is a window by address");
-        // The price charges the piece's kept place per record it counts.
+        // The price charges the part's kept place per record it counts.
         let mut unplaced = (*taken).clone();
         (unplaced.places[2], unplaced.stray_records[2]) = (None, 0);
         let mut twice = (*taken).clone();
         twice.stray_records[2] = 2;
-        assert_eq!(taken.priced(0, 0, &[]).bytes, unplaced.priced(0, 0, &[]).bytes + super::price::KEPT_PLACE_BYTES, "{what}: the kept place beside the piece, at its one record");
+        assert_eq!(taken.priced(0, 0, &[]).bytes, unplaced.priced(0, 0, &[]).bytes + super::price::KEPT_PLACE_BYTES, "{what}: the kept place beside the part, at its one record");
         assert_eq!(twice.priced(0, 0, &[]).bytes, taken.priced(0, 0, &[]).bytes + super::price::KEPT_PLACE_BYTES, "{what}: per record");
         assert!(taken.price.admits(), "{what}: {:?}", taken.price);
         // Sent: the board finds the record in O by its `to`, checks D
@@ -2503,6 +2563,227 @@ fn the_counterpart_arm_sends_the_covered_pieces_place_in_this_document_or_anothe
         let row = w.rows.iter().find(|r| r.at == ack.at).expect("the publish row");
         assert_eq!(row.docs[..2], [format!("{E}.2"), D.to_string()], "{what}: the member, then the re-windowed draft");
     }
+}
+
+/// `F`, a published document holding `O`'s words 1..4 as its 16..19, the
+/// record in `O`, for the identity suites below.
+const F_ORIGIN: &str = "1.0.1.0.10";
+
+/// The base fixture with `O`'s words 1..4 published before as `F`'s 16..19:
+/// `mark_o` a bold in `D` on `O`'s 2..3, published at `E.1` while the window
+/// stood behind a placeholder — its first copy there on `O`'s own identity,
+/// the claim in `D` — and `note_o` a note in `N` on `O`'s 1..2, never
+/// published. Returns `mark_o`, `note_o` and the record.
+fn counterpart_world() -> (World, Named, String, String, String) {
+    let (mut world, named) = World::base();
+    world.text(F_ORIGIN, 1, "another document one");
+    world.doc(F_ORIGIN, true, ACCOUNT, vec![run(F_ORIGIN, 1, 20)]);
+    let record = world.typed(O, vec![ispan(O, 1, 4)], vec![ispan(F_ORIGIN, 16, 4)], T_CORRESPONDENCE);
+    let mark_o = world.typed(D, vec![], vec![ispan(O, 2, 2)], T_STRONG);
+    let c1 = world.typed(&format!("{E}.1"), vec![], vec![ispan(O, 2, 2)], T_STRONG);
+    world.claim(D, &mark_o, &c1);
+    let note_o = world.typed(N, vec![ispan(O, 1, 2)], vec![ispan(N, 1, 2)], T_CITATION);
+    (world, named, mark_o, note_o, record)
+}
+
+/// Checks that the counterpart offers again a mark whose first copy lies on
+/// the placeholder.
+///
+/// `mark_o`'s first copy at `E.1` holds `O`'s own identity, which version 1
+/// arranged behind a placeholder. With the counterpart taken at the part
+/// the record names and the rest kept private, the mark is read on the
+/// published words `F`'s 17..18, its copy covers none of them, and it goes
+/// out on the formatting line spelled there; `note_o` is offered on `F`'s
+/// 16..17 and spelled there; and the board takes the request (B3-S11 P2
+/// (i): the identity the request publishes).
+#[test]
+fn the_counterpart_offers_again_a_mark_whose_first_copy_lies_on_the_placeholder() {
+    let (world, _, mark_o, note_o, _) = counterpart_world();
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = Inputs { readable_drafts: vec![a(D), a(N), a(O)], ..inputs() };
+    let e = enumerate(&p, &inputs).unwrap();
+    assert!(!candidate_at(&e, &mark_o).offered() && !candidate_at(&e, &note_o).offered(), "awaiting the answer, the window's words count toward nothing");
+    let panel = panel(&p, &inputs, &e).unwrap();
+    let mut confirmed = switched(None);
+    confirmed.answers = BTreeMap::from([(part(2, 0), OriginAnswer::Counterpart), (part(2, 1), OriginAnswer::KeepPrivate)]);
+    let composed = confirmed.compose(&inputs, &e);
+    let c = candidate_at(&composed, &mark_o);
+    assert_eq!((keys_of(c), c.offered()), ((true, false, false), true), "its copy holds O's words, not F's 17..18");
+    let Built::Request(mut request) = build(&p, &inputs, &e, &panel, &confirmed).unwrap() else { panic!("inert") };
+    let entry = |link: &str| request.entries.iter().find(|en| en.old == Some(a(link))).unwrap_or_else(|| panic!("{link}'s entry: {:?}", request.entries));
+    let f = |first: u64, width: u64| End::Spans(vec![ISpan { chain: format!("{F_ORIGIN}.0.1"), first, width }]);
+    assert_eq!((entry(&mark_o).home.clone(), entry(&mark_o).to.clone()), (EntryHome::Member, f(17, 2)), "on the formatting line, on the published words");
+    assert_eq!(entry(&note_o).from, f(16, 2), "the note on the published words, never O's own");
+    let sent = send(&p, &inputs, &mut request).unwrap();
+    assert!(matches!(sent, Sent::Acknowledged(_)), "{sent:?}");
+}
+
+/// Checks that leaving a part out takes its links and marks with it.
+///
+/// A bold wholly on `O`'s 1..5 is not on the line, a bold over the draft's
+/// 9..10 and `O`'s 1 is cut to the member positions over the draft's words,
+/// and a link with a whole-work end on `D` and its content on `O` is no
+/// candidate; the board takes the request.
+#[test]
+fn leave_out_takes_the_parts_links_and_marks_with_it() {
+    let (mut world, _) = World::base();
+    let bold_o = world.typed(D, vec![], vec![ispan(O, 1, 5)], T_STRONG);
+    let crossing = world.link(D, vec![], vec![ispan(D, 9, 2), ispan(O, 1, 1)], vec![unit(T_STRONG)]);
+    let whole_o = world.typed(N, vec![unit(D)], vec![ispan(O, 1, 3)], T_CITATION);
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = inputs();
+    let e = enumerate(&p, &inputs).unwrap();
+    let panel = panel(&p, &inputs, &e).unwrap();
+    let mut confirmed = switched(None);
+    confirmed.answers = BTreeMap::from([(part(2, 0), OriginAnswer::Drop)]);
+    let composed = confirmed.compose(&inputs, &e);
+    let marks = links_of(&composed, &panel.composed(&inputs, &composed).formatting.marks);
+    assert!(!marks.contains(&bold_o) && marks.contains(&crossing), "{marks:?}");
+    assert!(!candidate_at(&composed, &whole_o).offered(), "its content end lies on words left out");
+    let Built::Request(mut request) = build(&p, &inputs, &e, &panel, &confirmed).unwrap() else { panic!("inert") };
+    let entry = request.entries.iter().find(|en| en.old == Some(a(&crossing))).expect("the crossing bold's entry");
+    assert_eq!(entry.to, End::Member(vec![(28, 2)]), "cut to the draft's 9..10 at the member's 28..29");
+    assert!(request.entries.iter().all(|en| en.old != Some(a(&bold_o)) && en.old != Some(a(&whole_o))), "{:?}", request.entries);
+    let sent = send(&p, &inputs, &mut request).unwrap();
+    assert!(matches!(sent, Sent::Acknowledged(_)), "{sent:?}");
+}
+
+/// Checks that no mark is composed onto a placeholder (B3-S11 P3 (1), (2)).
+///
+/// The window kept private, no record naming its words: the bold wholly on
+/// `O` has no entry and stays in the draft's own set; the bold over the
+/// draft's 9..10 and `O`'s 1 is cut at the placeholder's edge and counted
+/// in the line's cut; a highlight on `O`'s 1..3, the line's inline-mark
+/// exception, stays in the draft's own row as a link; the board takes the
+/// request.
+#[test]
+fn no_mark_is_composed_onto_a_placeholder() {
+    let (mut world, _) = World::base();
+    let bold_o = world.typed(D, vec![], vec![ispan(O, 1, 5)], T_STRONG);
+    let crossing = world.link(D, vec![], vec![ispan(D, 9, 2), ispan(O, 1, 1)], vec![unit(T_STRONG)]);
+    let highlight = world.typed(D, vec![], vec![ispan(O, 1, 3)], T_MARK);
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = inputs();
+    let e = enumerate(&p, &inputs).unwrap();
+    let panel = panel(&p, &inputs, &e).unwrap();
+    let confirmed = switched(None);
+    let composed = confirmed.compose(&inputs, &e);
+    let kept = panel.composed(&inputs, &composed);
+    let marks = links_of(&composed, &kept.formatting.marks);
+    assert!(!marks.contains(&bold_o) && marks.contains(&crossing) && !marks.contains(&highlight), "{marks:?}");
+    assert_eq!(kept.formatting.cut, 2, "the heading past the selection, the crossing bold at the placeholder's edge");
+    assert_eq!(kept.parts, vec![PartCounts { part: part(2, 0), marks: 0, links: 0, kept_marks: 2 }], "the two bolds' words held back behind the placeholder");
+    assert!(!candidate_at(&composed, &bold_o).offered(), "wholly on the placeholder: not offered, kept in the draft");
+    assert!(links_of(&composed, &kept.rows[0].links).contains(&highlight), "the highlight a link of the draft's own row");
+    let Built::Request(mut request) = build(&p, &inputs, &e, &panel, &confirmed).unwrap() else { panic!("inert") };
+    let entry = request.entries.iter().find(|en| en.old == Some(a(&crossing))).expect("the crossing bold's entry");
+    assert_eq!(entry.to, End::Member(vec![(28, 2)]), "cut at the placeholder's edge");
+    assert!(request.entries.iter().all(|en| en.old != Some(a(&bold_o))), "{:?}", request.entries);
+    let sent = send(&p, &inputs, &mut request).unwrap();
+    assert!(matches!(sent, Sent::Acknowledged(_)), "{sent:?}");
+}
+
+/// Checks that each answer re-keys the panel with no board read.
+///
+/// Over the counterpart fixture, the enumeration and the panel read once:
+/// the counterpart puts the bold on the line and the note in the notes'
+/// row, leaving the part out holds back both, and an unanswered window
+/// counts toward nothing — three panels, no frame sent between them.
+#[test]
+fn each_answer_re_keys_the_panel_with_no_board_read() {
+    let (world, _, mark_o, note_o, _) = counterpart_world();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = Inputs { readable_drafts: vec![a(D), a(N), a(O)], ..inputs() };
+    let e = enumerate(&p, &inputs).unwrap();
+    let panel = panel(&p, &inputs, &e).unwrap();
+    dialer.clear();
+    let view = |answers: BTreeMap<PartKey, OriginAnswer>| -> (Vec<String>, Vec<String>, Count) {
+        let composed = e.composed(&inputs, &answers, &BTreeSet::new());
+        let pn = panel.composed(&inputs, &composed);
+        let notes = pn.rows.iter().find(|r| r.home == a(N)).map(|r| links_of(&composed, &r.links)).unwrap_or_default();
+        (links_of(&composed, &pn.formatting.marks), notes, count(&pn, &switched(None).switches, &inputs))
+    };
+    let taken = view(BTreeMap::from([(part(2, 0), OriginAnswer::Counterpart), (part(2, 1), OriginAnswer::KeepPrivate)]));
+    let left = view(BTreeMap::from([(part(2, 0), OriginAnswer::Drop), (part(2, 1), OriginAnswer::Drop)]));
+    let awaiting = view(BTreeMap::new());
+    assert!(taken.0.contains(&mark_o) && taken.1.contains(&note_o), "{taken:?}");
+    let brought = panel.composed(&inputs, &e.composed(&inputs, &BTreeMap::from([(part(2, 0), OriginAnswer::Counterpart), (part(2, 1), OriginAnswer::KeepPrivate)]), &BTreeSet::new())).parts;
+    assert_eq!(brought, vec![PartCounts { part: part(2, 0), marks: 1, links: 1, kept_marks: 0 }, PartCounts { part: part(2, 1), marks: 0, links: 0, kept_marks: 0 }], "the counterpart brings the bold and the note; the placeholder holds no mark back");
+    assert!(!left.0.contains(&mark_o) && !left.1.contains(&note_o), "{left:?}");
+    assert_eq!(left, awaiting, "a window awaiting its answer counts toward nothing, as one left out");
+    assert_eq!((taken.2.n, taken.2.l), (left.2.n + 1, left.2.l + 1), "the count follows the answer");
+    assert!(dialer.ops().is_empty(), "no frame: {:?}", dialer.ops());
+}
+
+/// Checks that keep-private offers no original its first copy covers.
+///
+/// A note on `O`'s 1..2, accepted at `E.1` while the window stood behind a
+/// placeholder — its copy on `O`'s own identity — is no candidate with the
+/// window kept private again: its copy covers every word this publication
+/// publishes of it (sweep 5 S1). The request carries no entry for it and
+/// the board takes it.
+#[test]
+fn keep_private_offers_no_original_its_first_copy_covers_and_lands() {
+    let (mut world, _) = World::base();
+    let note = world.typed(N, vec![ispan(O, 1, 2)], vec![ispan(N, 1, 2)], T_CITATION);
+    let copy = world.typed(&format!("{E}.1"), vec![ispan(O, 1, 2)], vec![ispan(N, 1, 2)], T_CITATION);
+    world.claim(N, &note, &copy);
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = inputs();
+    let e = enumerate(&p, &inputs).unwrap();
+    let panel = panel(&p, &inputs, &e).unwrap();
+    let confirmed = switched(None);
+    let composed = confirmed.compose(&inputs, &e);
+    let c = candidate_at(&composed, &note);
+    assert_eq!((keys_of(c), c.offered()), ((true, true, false), false), "its copy covers the placeholder's words");
+    let Built::Request(mut request) = build(&p, &inputs, &e, &panel, &confirmed).unwrap() else { panic!("inert") };
+    assert!(request.entries.iter().all(|en| en.old != Some(a(&note))), "{:?}", request.entries);
+    let sent = send(&p, &inputs, &mut request).unwrap();
+    assert!(matches!(sent, Sent::Acknowledged(_)), "{sent:?}");
+}
+
+/// Checks that a part named since the panel is re-stated and asks its
+/// answer again (PUB-3.108).
+///
+/// The window kept private at the panel, `O` publishes its words 1..4 as
+/// `E`'s 16..19 before the confirm. The re-read cuts the run into the part
+/// the record names and the rest, re-states the named part, and carries
+/// keep-private onto the rest alone, so the request is inert naming the
+/// named part until it is answered; a leave-out stands on both.
+#[test]
+fn a_part_named_since_the_panel_is_restated_and_asks_its_answer_again() {
+    let (world, _) = World::base();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = Inputs { readable_drafts: vec![a(D), a(N), a(O)], ..inputs() };
+    let e = enumerate(&p, &inputs).unwrap();
+    let kept_private = BTreeMap::from([(part(2, 0), OriginAnswer::KeepPrivate)]);
+    let first = e.composed(&inputs, &kept_private, &BTreeSet::new());
+    let first_panel = panel(&p, &inputs, &first).unwrap();
+    assert_eq!(reread(&p, &inputs, &first, &first_panel).unwrap().restatement, None, "nothing moved");
+    let record = dialer.world().typed(O, vec![ispan(O, 1, 4)], vec![ispan(E, 16, 4)], T_CORRESPONDENCE);
+    let again = reread(&p, &inputs, &first, &first_panel).unwrap();
+    let r = again.restatement.clone().expect("a difference");
+    assert_eq!(r.parts, vec![(part(2, 0), Some(a(&record)))], "the part the record names now");
+    assert_eq!(again.enumeration.answers, BTreeMap::from([(part(2, 1), OriginAnswer::KeepPrivate)]), "keep-private carried onto the part no record names alone");
+    let mut confirmed = switched(None);
+    confirmed.answers = again.enumeration.answers.clone();
+    assert_eq!(build(&p, &inputs, &again.enumeration, &again.panel, &confirmed).unwrap(), Built::Inert(Inert::Unanswered(vec![OwedAnswer { part: part(2, 0), named: true }])));
+    let left_out = e.composed(&inputs, &BTreeMap::from([(part(2, 0), OriginAnswer::Drop)]), &BTreeSet::new());
+    let left_panel = first_panel.composed(&inputs, &left_out);
+    let again = reread(&p, &inputs, &left_out, &left_panel).unwrap();
+    assert_eq!(again.enumeration.answers, BTreeMap::from([(part(2, 0), OriginAnswer::Drop), (part(2, 1), OriginAnswer::Drop)]), "leave-out stands on both");
 }
 
 /// THE TWIN PRE-CHECK: a draft-native run whose words an earlier shot
@@ -2626,7 +2907,8 @@ fn the_send_is_acknowledged_and_the_commit_holds_every_deposit() {
 /// `l_rt` accepted with its copy at `E.1` over `E`'s 16..19: an entry
 /// carrying it again over those words is refused `old_refused`,
 /// `superseded`, naming the entry, as the plan's `check_old` refuses it,
-/// and nothing is committed.
+/// and nothing is committed — answered as THE LINEAGE arm naming the entry
+/// and its original, no race behind it (B3-S11 P4).
 #[test]
 fn the_board_refuses_an_entry_re_offering_an_original_its_copy_covers() {
     let (mut world, named) = World::base();
@@ -2641,8 +2923,72 @@ fn the_board_refuses_an_entry_re_offering_an_original_its_copy_covers() {
     request.entries.push(Entry { home: EntryHome::Member, from: span(E, 16, 4), to: span(N, 1, 2), ty: End::Addrs(vec![T_CITATION.into()]), old: Some(a(&named.l_rt)), candidate });
     let index = request.entries.len() as u64 - 1;
     let position = dialer.world().position;
-    assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::OwnFault(OwnFault::Deposit { code: "old_refused".into(), index: Some(index), detail: Some("superseded".into()) })));
+    assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::Lineage { index, original: a(&named.l_rt), cause: LineageCause::Superseded, race: None }));
     assert_eq!(dialer.world().position, position, "nothing committed");
+}
+
+/// Checks that a lineage refusal names the change that raced the request.
+///
+/// A claim of the person's naming the entry's original, made on another
+/// device after the request's reads, explains the board's `superseded`: the
+/// arm carries the race's key — the newest row under the claim's home since
+/// those reads, whose write it was. A retraction of the original after the
+/// reads explains `retracted` alike.
+#[test]
+fn a_lineage_refusal_names_the_change_that_raced_the_request() {
+    let (world, named) = World::base();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let (_, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(None));
+    let index = request.entries.iter().position(|en| en.old == Some(a(&named.l1_n))).expect("the note's entry");
+    let refusal = |detail: &str| json!({"resp": "rejected", "code": "old_refused", "detail": detail, "disposition": "permanent", "op": "publish", "site": {"index": index}});
+    let (claim_at, retraction_at) = {
+        let mut w = dialer.world();
+        let copy = w.typed(S2, vec![ispan(E, 5, 5)], vec![ispan(N, 1, 5)], T_CITATION);
+        w.claim(N, &named.l1_n, &copy);
+        let claim_at = w.position;
+        w.retract(N, &named.l1_n);
+        (claim_at, w.position)
+    };
+    dialer.world().refuse_next = Some(refusal("superseded"));
+    let sent = send(&p, &inputs(), &mut request).unwrap();
+    let Sent::Refused(Refusal::Lineage { index: at, original, cause, race }) = sent else { panic!("{sent:?}") };
+    assert_eq!((at, original, cause), (index as u64, a(&named.l1_n), LineageCause::Superseded));
+    let race = race.expect("the claim came after the request's reads");
+    assert!(race.at >= claim_at && race.key.as_deref() == Some("bare"), "the newest row under the claim's home: {race:?}");
+    dialer.world().refuse_next = Some(refusal("retracted"));
+    let sent = send(&p, &inputs(), &mut request).unwrap();
+    assert!(matches!(&sent, Sent::Refused(Refusal::Lineage { cause: LineageCause::Retracted, race: Some(r), .. }) if r.at == retraction_at), "{sent:?}");
+}
+
+/// Checks that an original a lineage refusal left out is offered nowhere.
+///
+/// The confirm that met the refusal leaves the entry's original out
+/// ([`Confirmed::left_out`]): composed so, the note is no longer offered,
+/// its row and the count drop it, and the request built next carries no
+/// entry naming it and lands (B3-S11 P4).
+#[test]
+fn an_original_left_out_by_its_lineage_is_offered_nowhere_and_the_next_request_lands() {
+    let (world, named) = World::base();
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = inputs();
+    let e = enumerate(&p, &inputs).unwrap();
+    let panel = panel(&p, &inputs, &e).unwrap();
+    let mut confirmed = switched(None);
+    let before = count(&panel.composed(&inputs, &confirmed.compose(&inputs, &e)), &confirmed.switches, &inputs);
+    confirmed.left_out.insert(a(&named.l1_n));
+    let composed = confirmed.compose(&inputs, &e);
+    let c = candidate_at(&composed, &named.l1_n);
+    assert!(c.left_out && !c.offered(), "left out of the offer");
+    let after = count(&panel.composed(&inputs, &composed), &confirmed.switches, &inputs);
+    assert_eq!(after.l, before.l - 1, "the count drops it");
+    let Built::Request(mut request) = build(&p, &inputs, &e, &panel, &confirmed).unwrap() else { panic!("inert") };
+    assert!(request.entries.iter().all(|en| en.old != Some(a(&named.l1_n))), "{:?}", request.entries);
+    let sent = send(&p, &inputs, &mut request).unwrap();
+    assert!(matches!(sent, Sent::Acknowledged(_)), "{sent:?}");
 }
 
 /// Checks that the scripted board exempts new words as narrowly as the plan.
@@ -2658,7 +3004,7 @@ fn the_board_refuses_an_entry_re_offering_an_original_its_copy_covers() {
 fn the_board_exempts_only_a_member_position_end_on_new_words_and_only_the_claim_naming_old() {
     let tok = token();
     let span = |doc: &str, first: u64, width: u64| End::Spans(vec![ISpan { chain: format!("{doc}.0.1"), first, width }]);
-    let refused = |index: usize| Sent::Refused(Refusal::OwnFault(OwnFault::Deposit { code: "old_refused".into(), index: Some(index as u64), detail: Some("superseded".into()) }));
+    let refused = |index: usize, original: &str| Sent::Refused(Refusal::Lineage { index: index as u64, original: a(original), cause: LineageCause::Superseded, race: None });
     // The far-end note, spelled on the draft's own identity.
     let (mut world, _) = World::base();
     let note = world.typed(N, vec![ispan(E, 5, 5)], vec![ispan(D, 3, 2)], T_CITATION);
@@ -2671,7 +3017,7 @@ fn the_board_exempts_only_a_member_position_end_on_new_words_and_only_the_claim_
     request.entries.retain(|en| en.old != Some(a(&note)));
     request.entries.push(Entry { home: EntryHome::Member, from: span(E, 5, 5), to: span(D, 3, 2), ty: End::Addrs(vec![T_CITATION.into()]), old: Some(a(&note)), candidate });
     let (index, position) = (request.entries.len() - 1, dialer.world().position);
-    assert_eq!(send(&p, &inputs(), &mut request).unwrap(), refused(index), "an I-span end on the draft's words");
+    assert_eq!(send(&p, &inputs(), &mut request).unwrap(), refused(index, &note), "an I-span end on the draft's words");
     assert_eq!(dialer.world().position, position, "nothing committed");
     // The revision, beside the draft's new words 1..2 at positions 20..21.
     let (world, named) = World::base();
@@ -2682,7 +3028,7 @@ fn the_board_exempts_only_a_member_position_end_on_new_words_and_only_the_claim_
     let beside_new_words = End::Member(vec![(16, 3), (20, 2)]);
     request.entries.push(Entry { home: EntryHome::Member, from: beside_new_words, to: span(N, 6, 4), ty: End::Addrs(vec![T_HEADING.into()]), old: Some(a(&named.l_rev)), candidate });
     let (index, position) = (request.entries.len() - 1, dialer.world().position);
-    assert_eq!(send(&p, &inputs(), &mut request).unwrap(), refused(index), "a revision beside new words");
+    assert_eq!(send(&p, &inputs(), &mut request).unwrap(), refused(index, &named.l_rev), "a revision beside new words");
     assert_eq!(dialer.world().position, position, "nothing committed");
 }
 
@@ -2952,9 +3298,20 @@ fn every_refusal_arm_carries_its_face_data() {
     assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::NotOwner { addr: Some(a(E)) }));
     refuse("claim_refused", json!({"site": {"addr": E}, "detail": "member_stands"}));
     assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::ClaimRefused { edition: Some(a(E)) }));
-    for code in ["link_home_refused", "old_refused", "duplicate_original", "read_with_in_links", "retract_refused", "read_with_refused"] {
+    for code in ["link_home_refused", "duplicate_original", "read_with_in_links", "retract_refused", "read_with_refused"] {
         refuse(code, json!({"site": {"index": 2}, "detail": "superseded"}));
         assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::OwnFault(OwnFault::Deposit { code: code.into(), index: Some(2), detail: Some("superseded".into()) })));
+    }
+    // `old_refused` by the entry's lineage is the arm the caller leaves the
+    // entry out by; at any other cause, this library's own fault.
+    let original = request.entries[2].old.clone().expect("an entry names its original");
+    for (detail, cause) in [("superseded", LineageCause::Superseded), ("retracted", LineageCause::Retracted)] {
+        refuse("old_refused", json!({"site": {"index": 2}, "detail": detail}));
+        assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::Lineage { index: 2, original: original.clone(), cause, race: None }), "{detail}");
+    }
+    for detail in ["absent", "public", "not_owner", "whole_work"] {
+        refuse("old_refused", json!({"site": {"index": 2}, "detail": detail}));
+        assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::OwnFault(OwnFault::Deposit { code: "old_refused".into(), index: Some(2), detail: Some(detail.into()) })), "{detail}");
     }
     dialer.world().refuse_next = Some(json!({"resp": "rejected", "code": "malformed", "detail": "unknown field `links`", "disposition": "permanent", "op": "unparseable"}));
     assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::OlderBoard { detail: Some("unknown field `links`".into()) }));
@@ -3169,7 +3526,7 @@ fn family_inputs() -> Inputs {
 /// run) kept private.
 fn family_confirmed() -> Confirmed {
     let mut confirmed = Confirmed::default();
-    confirmed.answers.insert(3, OriginAnswer::KeepPrivate);
+    confirmed.answers.insert(part(3, 0), OriginAnswer::KeepPrivate);
     confirmed
 }
 
@@ -3193,7 +3550,7 @@ fn a_family_publication_re_mints_the_also_drafts_words_counts_its_passages_and_h
     let inputs = family_inputs();
     let e = enumerate(&p, &inputs).unwrap();
     let panel = panel(&p, &inputs, &e).unwrap();
-    assert_eq!(panel.windows.iter().map(|w| w.run).collect::<Vec<_>>(), vec![3], "O alone is a window: A's run is re-minted, not windowed");
+    assert_eq!(e.windows.iter().map(|w| w.run).collect::<Vec<_>>(), vec![3], "O alone is a window: A's run is re-minted, not windowed");
     assert_eq!(panel.inherited, vec![Inherited { draft: a(A), passages: 1 }]);
     let scattered = Inputs { selection: vec![run(A, 1, 2), run(A, 3, 3), run(D, 1, 10), run(A, 1, 5)], ..inputs.clone() };
     assert_eq!(inherited(&scattered.also, &scattered.selection), vec![Inherited { draft: a(A), passages: 2 }], "consecutive runs of one origin count once");
@@ -4045,7 +4402,7 @@ fn a_cut_copys_rest_is_composed_by_identity_through_the_records_and_kept_by_a_fr
     let panel = panel(&p, &inputs, &e).expect("the panel");
     // The window onto `O` is the selection's fourth run here.
     let mut confirmed = switched(None);
-    confirmed.answers = BTreeMap::from([(3, OriginAnswer::KeepPrivate)]);
+    confirmed.answers = BTreeMap::from([(part(3, 0), OriginAnswer::KeepPrivate)]);
     let built = build(&p, &inputs, &e, &panel, &confirmed).expect("built");
     let Built::Request(mut request) = built else { panic!("{built:?}") };
     let entry = |old: &str| request.originals.iter().find(|o| o.old.to_string() == old).unwrap_or_else(|| panic!("{old}'s entry: {:?}", request.originals));

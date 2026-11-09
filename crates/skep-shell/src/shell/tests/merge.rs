@@ -674,6 +674,45 @@ fn the_draft_side_composes_and_lands_with_no_claim_and_its_re_open_reads_the_sid
     sd.shutdown();
 }
 
+/// Checks that a landing over a window a record names asks the page.
+///
+/// B, staged from E.1, windows `O`, a draft of the person's, beside words
+/// of its own, and composes as the merge's side into L; `O` is then
+/// published at the mint form, so a record names its words as the new
+/// edition's. `merge.land`, opening the panel itself, keeps private only a
+/// window part no record names: the part the record names is left
+/// unanswered, so the landing answers the panel's `inert` refusal naming
+/// it as named, nothing sent (B3-S11 P2 (i): no placeholder over published
+/// words).
+#[test]
+fn a_landing_over_a_window_a_record_names_answers_inert_naming_the_part() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let o = g.draft("quote");
+    let b = g.addr(skep_client::board::frames::stage(&f.e1, None));
+    g.op(json!({"op": "insert", "doc": b, "at": {"subspace": "1", "ordinal": "8"}, "values": [" quietly"], "as_of": g.position()}));
+    g.op(json!({"op": "copy", "doc": b, "at": {"subspace": "1", "ordinal": "16"}, "specs": [{"source": o, "span": {"start": "1.1", "width": "0.5"}}], "as_of": g.position()}));
+    let l = g.addr(skep_client::board::frames::stage(&f.e2, None));
+    let landed = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "draft": b, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(landed["outcome"].as_str(), Some("landed"), "{landed}");
+    assert!(g.text(&l, 26).contains("quote"), "L windows O's words: {:?}", g.text(&l, 26));
+    g.call("publication.open", json!({"session": g.session, "draft": o, "mint": "1.0.1", "readable_drafts": [o], "published": [f.edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let minted = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert!(minted["edition"].is_string(), "O published at the mint form: {minted}");
+    g.listed(&[&o, &b, &l]);
+    let before = g.position();
+    let answer = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("PublicationRefused", &answer);
+    assert_eq!(answer["arm"], "inert", "{answer}");
+    let owed = answer["inert"]["unanswered"].as_array().unwrap_or_else(|| panic!("unanswered parts: {answer}"));
+    assert!(owed.len() == 1 && owed[0]["part"] == 0 && owed[0]["named"] == true, "the part the record names, left for the page: {answer}");
+    assert_eq!(g.position(), before, "nothing sent");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
 /// Checks the merged arm's record written once where the page's own slot
 /// published the merge, against the daemon.
 ///

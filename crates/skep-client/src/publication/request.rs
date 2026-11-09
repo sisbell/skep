@@ -4,44 +4,59 @@
 //! AGAIN over the same held selection, every test over what the draft still
 //! arranges of it ([`Enumeration::selection`]; PUB-3.108) — the region read
 //! with its stored-endset test, the read-through, the filter's claims, the
-//! held removals — and the two answers are DIFFED: a link no longer offered
-//! (gone or retracted), a candidate a claim of the person's has since
-//! superseded, a held removal since undone, a link that has arrived, and the
-//! held runs against the one image in V-order — a run absent, split, moved
-//! or re-ordered since the panel's reads is a DIFFERENCE. Any difference is
-//! answered as a [`Restatement`], data for the caller to confirm again over
-//! what is left; nothing is sent on it. The image's places are the kept
-//! places the request then carries per run of a named draft's identity; the
-//! `also` drafts' images, read again beside it, give each its own list. The
-//! base's standing is the caller's to read again beside it
-//! ([`super::standing`]), a moved one riding the same re-statement.
+//! held removals — composed under the answers the first stood under, each
+//! carried onto the part of the re-read's windows holding its words
+//! ([`Enumeration::answers_onto`]), and the two answers are DIFFED: a link
+//! no longer offered (gone or retracted), a candidate a claim of the
+//! person's has since superseded, a held removal since undone, a link that
+//! has arrived, the held runs against the one image in V-order — a run
+//! absent, split, moved or re-ordered since the panel's reads — and a
+//! window part named, un-named or named by another record since (its origin
+//! published meanwhile), whose answer stands only where it left the words
+//! out, are each a DIFFERENCE. Any difference is answered as a
+//! [`Restatement`], data for the caller to confirm again over what is left;
+//! nothing is sent on it. The image's places are the kept places the
+//! request then carries per run of a named draft's identity; the `also`
+//! drafts' images, read again beside it, give each its own list. The base's
+//! standing is the caller's to read again beside it ([`super::standing`]),
+//! a moved one riding the same re-statement.
 //!
-//! **The request.** From the confirmed rows: the runs from the held
-//! selection as the re-read placed them — a split run as its pieces in the
-//! draft's order, each run cut around its merge records, which no
-//! publication carries as a run or with a kept place
+//! **The request.** From the confirmed rows, the enumeration and the panel
+//! composed under the answers at the windows' parts before anything is
+//! taken from either ([`Enumeration::composed`], [`Panel::composed`]), so no
+//! entry is composed from a key decided before the answers: the runs from
+//! the held selection as the re-read placed them — a split run as its
+//! pieces in the draft's order, each run cut around its merge records,
+//! which no publication carries as a run or with a kept place
 //! ([`Enumeration::pieces`]), every named draft's run with the rendering
 //! draft's kept place beside it (its own words and an `also` draft's
 //! alike, which the rendering draft holds by identity), and, per draft
 //! `also` names, THAT draft's own kept places in `also_places`, read off
 //! its image, so the one commit re-windows every named draft at its own
-//! places (skep #739; the Nelson way, B3-S10) — every window onto the
-//! person's own unpublished origin answered first (THE THREE ANSWERS:
-//! publish-first is NOT this request, which stays inert; DROP leaves the
-//! run out; KEEP PRIVATE sends it as a window with no place beside it), a
-//! window the draft no longer arranges carrying nothing and asked nothing
-//! (PUB-3.108), and THE COUNTERPART offered first where a record of a draft
-//! the person reads names a window's words — taken, the covered piece
-//! re-composed by reference to the record's `to`, in this document or another,
-//! with its kept place beside it as a stray's, so the commit re-windows the
-//! draft there through the record; the twin pre-check re-composing what the
-//! draft's records already name; then `links` — each switched-on row's offered
-//! links and the formatting line's marks, `home` the tag `member` or the
-//! row's picked set, `from`/`to` read through the records (`RecordWalk`)
-//! and spelled in the address form, the I-span form or THE MEMBER-POSITION
-//! FORM for an end on this shot's new words, spelled CANONICALLY from the
-//! client's own runs (the lowest positions holding each value, consecutive
-//! positions merged), `ty` verbatim, `old` the original;
+//! places (skep #739; the Nelson way, B3-S10) — every part of a window onto
+//! the person's own unpublished origin answered first (THE ANSWERS, B3-S11
+//! P2 (i): at a part a record names, THE COUNTERPART — the part
+//! re-composed by reference to the record's `to`, in this document or
+//! another, with its kept place beside it as a stray's, so the commit
+//! re-windows the draft there through the record — or DROP, which leaves
+//! the words out; at a part no record names, publish-first, which is NOT
+//! this request and leaves it inert, DROP, or KEEP PRIVATE, which sends the
+//! part as a window with no place beside it, a placeholder to readers; an
+//! answer the part does not admit, or none, leaving the request inert
+//! naming the part), a window the draft no longer arranges carrying nothing
+//! and asked nothing (PUB-3.108); the twin pre-check re-composing what the
+//! draft's records already name; then `links` — each switched-on row's
+//! offered links and the formatting line's marks, `home` the tag `member`
+//! or the row's picked set, `from`/`to` read through the records and the
+//! parts taken by their counterpart (`RecordWalk`) and spelled in the
+//! address form, the I-span form or THE MEMBER-POSITION FORM for an end on
+//! this shot's new words, spelled CANONICALLY from the client's own runs
+//! (the lowest positions holding each value, consecutive positions merged),
+//! an end's words on a part left out or awaiting its answer cut away as at
+//! the selection's edge and a formatting mark's on a part kept behind a
+//! placeholder cut at its edge, an end cut whole written as stored, `ty`
+//! verbatim, `old` the original; a candidate the board refused by its
+//! lineage at an earlier send left out ([`Confirmed::left_out`]);
 //! `retract` the job list's marks, and beside it THE PRIVATE RIDER
 //! `originals` (the link-sets design §5.7 (vi′)): each listed mark of the
 //! formatting types' own original, found from the mark's accept claim at
@@ -85,48 +100,57 @@ use crate::board::frames::{self, AlsoPlacesFrame, PublishFrame, T_EDITION, T_REA
 use crate::board::{T_RETRACTION, T_SUPERSEDES};
 
 use super::base::Standing;
-use super::enumerate::{enumerate_with, place_selection, Enumeration, Placement, Record, RecordWalk, Via};
+use super::enumerate::{enumerate_with, is_formatting, place_selection, Answer, Enumeration, PartKey, Placement, Record, RecordWalk, Via};
 use super::landed::twin_precheck_with;
-use super::panel::{count, panel_with, Count, Counterpart, Destination, Panel, Removal, RowKind};
+use super::panel::{count, panel_with, Count, Destination, Panel, Removal, RowKind};
 use super::price::{self, EndShape, EntryShape, OriginalShape, Price, Shape};
 use super::{canonical_member_spans, fresh_id, own_claim_names, Door, Fault, ISpan, Inputs, Publisher, Run};
-
-/// The caller's answer at a window onto their own unpublished origin, or
-/// onto words a counterpart record names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Answer {
-    /// Publish the origin first: NOT this request, which stays inert.
-    PublishFirst,
-    /// Leave the run out of `runs` and `places`.
-    Drop,
-    /// Send the run as a window onto the private origin, no place beside it.
-    KeepPrivate,
-    /// Take the counterpart: the run re-composed by reference to the
-    /// record's published words, its covered piece sent with its kept place
-    /// so the commit re-windows the draft there through the record.
-    Counterpart,
-}
 
 /// What the caller confirmed.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Confirmed {
     /// The rows' switches.
     pub switches: super::panel::Switches,
-    /// The answers, by the run's index in the selection.
-    pub answers: BTreeMap<usize, Answer>,
+    /// The answers, by window part.
+    pub answers: BTreeMap<PartKey, Answer>,
+    /// The originals left out of the offer: each one the board refused by
+    /// its lineage — superseded or retracted — at an earlier send of this
+    /// publication, its words already carrying its copy (B3-S11 P4).
+    pub left_out: BTreeSet<Address>,
+}
+
+impl Confirmed {
+    /// Returns `e` composed under these answers, the originals left out
+    /// left out ([`Enumeration::composed`]).
+    pub fn compose(&self, inputs: &Inputs, e: &Enumeration) -> Enumeration {
+        e.composed(inputs, &self.answers, &self.left_out)
+    }
+}
+
+/// A part whose answer is owed: the part, and whether a record names its
+/// words — which answers it admits, and so which inert reason the page
+/// draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OwedAnswer {
+    /// The part.
+    pub part: PartKey,
+    /// Whether a record names the part's words as published.
+    pub named: bool,
 }
 
 /// Why no request is built.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Inert {
-    /// Unanswered windows the draft still arranges, by the run's index.
+    /// Window parts the draft still arranges whose answer is owed: none
+    /// given, or one the part does not admit.
     ///
-    /// Each is a run onto an unpublished origin of the person's own; a window
-    /// the draft no longer arranges carries nothing and is owed no answer.
-    Unanswered(Vec<usize>),
-    /// The caller publishes an origin first: those runs, by index; this
-    /// request is not sent.
-    PublishFirst(Vec<usize>),
+    /// Each is a part of a run onto an unpublished origin of the person's
+    /// own; a window the draft no longer arranges carries nothing and is
+    /// owed no answer.
+    Unanswered(Vec<OwedAnswer>),
+    /// The caller publishes an origin first: those parts; this request is
+    /// not sent.
+    PublishFirst(Vec<PartKey>),
     /// The request changes nothing against its base: every run by reference
     /// to the base member's in its order and no entry.
     Unchanged,
@@ -149,6 +173,11 @@ pub struct Restatement {
     /// Held runs whose placement in the rendering draft changed: the run's
     /// index and where it stands now.
     pub selection: Vec<(usize, Placement)>,
+    /// Window parts whose naming changed since the panel's reads — named,
+    /// un-named or named by another record — each by its key in the
+    /// re-read with the record naming it now: an answer there other than
+    /// DROP is asked again.
+    pub parts: Vec<(PartKey, Option<Address>)>,
     /// The base's standing where it moved since the panel — a sibling's shot
     /// landing while the panel stood — as the caller typed it again; `None`
     /// where it stands as it stood, and from [`restate`], which diffs the
@@ -158,7 +187,7 @@ pub struct Restatement {
 
 impl Restatement {
     fn is_empty(&self) -> bool {
-        self.left.is_empty() && self.superseded.is_empty() && self.came.is_empty() && self.removals_undone.is_empty() && self.removals_came.is_empty() && self.selection.is_empty() && self.standing.is_none()
+        self.left.is_empty() && self.superseded.is_empty() && self.came.is_empty() && self.removals_undone.is_empty() && self.removals_came.is_empty() && self.selection.is_empty() && self.parts.is_empty() && self.standing.is_none()
     }
 }
 
@@ -176,6 +205,11 @@ pub struct Reread {
 
 /// Reads the enumeration and the panel again and diffs them with the first.
 ///
+/// The re-read is composed under `first`'s answers carried onto its own
+/// windows ([`Enumeration::answers_onto`]) and `first`'s originals left
+/// out, so the two are diffed over one composition; the caller composes
+/// `first` under the answers it confirms before the re-read.
+///
 /// # Errors
 ///
 /// The reads' faults, in `enumerate`'s order, save that a held run the
@@ -184,13 +218,15 @@ pub struct Reread {
 /// arranges of the selection holds a merge record, nothing further read.
 pub fn reread(p: &Publisher<'_>, inputs: &Inputs, first: &Enumeration, first_panel: &Panel) -> Result<Reread, Fault> {
     let door = Door::new(p.board, p.token);
-    let enumeration = enumerate_with(&door, p, inputs, false)?;
+    let read = enumerate_with(&door, p, inputs, false)?;
+    let enumeration = read.composed(inputs, &first.answers_onto(&read.windows), &first.left_out);
     let panel = panel_with(&door, p, inputs, &enumeration)?;
     let restatement = restate(first, first_panel, &enumeration, &panel);
     Ok(Reread { enumeration, panel, restatement })
 }
 
-/// Diffs two answers of the enumeration and the panel.
+/// Diffs two answers of the enumeration and the panel, each composed under
+/// the same answers.
 ///
 /// The placements diffed are the RENDERING draft's — the held selection
 /// against its one image — and no member is added for an `also` draft's: a
@@ -223,6 +259,7 @@ pub fn restate(first: &Enumeration, first_panel: &Panel, now: &Enumeration, now_
             out.selection.push((i, b.clone()));
         }
     }
+    out.parts = first.renamed(&now.windows);
     (!out.is_empty()).then_some(out)
 }
 
@@ -411,8 +448,8 @@ pub struct Request {
     /// `also`'s order.
     pub also_places: Vec<AlsoPlaces>,
     /// Per run, the records covering a run re-composed by reference with a
-    /// place — a stray run the twin pre-check re-composed, or a counterpart's
-    /// covered piece, one record each; zero elsewhere.
+    /// place — a stray run the twin pre-check re-composed, or a window part
+    /// taken by its counterpart, one record each; zero elsewhere.
     pub stray_records: Vec<usize>,
     /// The signed body's pieces, parallel to the runs.
     pub pieces: Vec<Piece>,
@@ -439,8 +476,6 @@ pub struct Request {
     pub supersede: Vec<Address>,
     /// The switched-on links left out for want of one form, with why.
     pub unspellable: Vec<(Address, Unspellable)>,
-    /// The counterparts offered at windows onto drafts the person reads.
-    pub counterparts: Vec<Counterpart>,
     /// The per-session `id`, fresh per request.
     pub id: String,
     /// The count the rows as switched give.
@@ -792,8 +827,11 @@ pub enum Built {
 
 /// Builds the request from the confirmed rows over the re-read's answer.
 ///
-/// The windows and their counterparts are the panel's, taken as given
-/// (`panel::windows`): nothing is read of an origin here.
+/// The enumeration and the panel are composed under `confirmed` first —
+/// its answers at the windows' parts and its originals left out — and
+/// every member is taken from that composition alone. The windows' parts
+/// and their records are the enumeration's, taken as given: nothing is
+/// read of an origin here.
 ///
 /// # Errors
 ///
@@ -805,14 +843,18 @@ pub fn build(p: &Publisher<'_>, inputs: &Inputs, e: &Enumeration, panel: &Panel,
 
 /// Builds the request through `door`.
 pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e: &Enumeration, panel: &Panel, confirmed: &Confirmed) -> Result<Built, Fault> {
+    // The one composition the request is taken from: the answers decide
+    // the selection, every offer and the formatting line before any member
+    // is composed (B3-S11 P2 (i)).
+    let e = &confirmed.compose(inputs, e);
+    let panel = &panel.composed(inputs, e);
     let trunk = inputs.doc.clone();
     // The runs as placed, each with its kept place and its place in the draft.
     let mut runs: Vec<Run> = Vec::new();
     let mut places: Vec<Option<u64>> = Vec::new();
     let mut draft_places: Vec<Option<u64>> = Vec::new();
-    let mut unanswered = Vec::new();
-    let mut publish_first = Vec::new();
-    let mut counterparts: Vec<Counterpart> = Vec::new();
+    let mut unanswered: Vec<OwedAnswer> = Vec::new();
+    let mut publish_first: Vec<PartKey> = Vec::new();
     for (i, run) in inputs.selection.iter().enumerate() {
         // The run as placed, cut around its merge records, which no
         // publication carries: no run and no kept place for one. A run that
@@ -840,56 +882,43 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
             }
             continue;
         }
-        // A window. Onto the person's own unpublished origin — one the panel's
-        // windows name — an answer is owed; the counterpart is the window's,
-        // offered first where the panel read one.
-        let window = panel.windows.iter().find(|w| w.run == i);
-        let own_unpublished = window.is_some();
-        let counterpart: Option<Counterpart> = window.and_then(|w| w.counterpart.clone());
-        let answer = confirmed.answers.get(&i).copied();
-        if let Some(c) = &counterpart {
-            counterparts.push(c.clone());
-        }
-        match (own_unpublished, answer) {
-            (_, Some(Answer::Drop)) => {}
-            (_, Some(Answer::PublishFirst)) => publish_first.push(i),
-            (_, Some(Answer::Counterpart)) if counterpart.is_some() => {
-                // The part the record covers by reference to its published
-                // words — in whichever document the record's `to` lies,
-                // this request's or another's — WITH ITS KEPT PLACE, the
-                // rendering draft's own V-position of the piece, so the
-                // commit re-windows the draft there through the record (the
-                // link-sets design §5.5, the counterpart first; its "KEPT
-                // PLACE sent beside it as a stray's is"); the uncovered
-                // remainder a window with none, in the piece's order. A
-                // request whose only place is such a piece is NOT inert: the
-                // healed window is a change to the draft.
-                let c = counterpart.as_ref().expect("a counterpart");
-                let origin = parse_address(&c.to.document().unwrap_or_default()).unwrap_or_else(|| run.origin.clone());
-                for (piece, ordinal) in pieces {
-                    let mut cursor = piece.i_start;
-                    while cursor < piece.reach() {
-                        let hi = c.from.reach().min(piece.reach());
-                        let covered = c.from.first <= cursor && cursor < hi;
-                        let end = if covered { hi } else if c.from.first > cursor && c.from.first < piece.reach() { c.from.first } else { piece.reach() };
-                        let run_out = if covered { Run::new(origin.clone(), c.to.first + (cursor - c.from.first), end - cursor) } else { Run::new(piece.origin.clone(), cursor, end - cursor) };
-                        let in_draft = ordinal + (cursor - piece.i_start);
-                        runs.push(run_out);
-                        places.push(covered.then_some(in_draft));
-                        draft_places.push(Some(in_draft));
-                        cursor = end;
-                    }
-                }
+        // A window onto the person's own unpublished origin, part by part,
+        // each as its answer composes it; any other window — onto a
+        // published origin or another's draft — by address, no place.
+        let Some(window) = e.windows.iter().find(|w| w.run == i) else {
+            for (piece, ordinal) in pieces {
+                runs.push(piece);
+                places.push(None);
+                draft_places.push(Some(ordinal));
             }
-            (true, None) => unanswered.push(i),
-            _ => {
-                // KEEP PRIVATE, or a window onto a published origin or
-                // another's draft: by address, no place.
-                for (piece, ordinal) in pieces {
-                    runs.push(piece);
-                    places.push(None);
-                    draft_places.push(Some(ordinal));
+            continue;
+        };
+        for (k, part) in window.parts.iter().enumerate() {
+            match e.answer_at(window, k) {
+                // The part by reference to the published words its record
+                // names — in whichever document the record's `to` lies,
+                // this request's or another's — WITH ITS KEPT PLACE, the
+                // rendering draft's own V-position of it, so the commit
+                // re-windows the draft there through the record (the
+                // link-sets design §5.5; its "KEPT PLACE sent beside it as a
+                // stray's is"). A request whose only place is such a part is
+                // NOT inert: the healed window is a change to the draft.
+                Some(Answer::Counterpart) => {
+                    let Some(published) = part.counterpart().and_then(|s| s.run()) else { continue };
+                    runs.push(published);
+                    places.push(Some(part.ordinal));
+                    draft_places.push(Some(part.ordinal));
                 }
+                // By address onto the private origin, no place: readers see
+                // a placeholder.
+                Some(Answer::KeepPrivate) => {
+                    runs.push(Run::new(window.origin.clone(), part.span.first, part.span.width));
+                    places.push(None);
+                    draft_places.push(Some(part.ordinal));
+                }
+                Some(Answer::Drop) => {}
+                Some(Answer::PublishFirst) => publish_first.push(window.key(k)),
+                None => unanswered.push(OwedAnswer { part: window.key(k), named: part.named() }),
             }
         }
     }
@@ -917,10 +946,11 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
     door.step("entries");
     let mut entries: Vec<Entry> = Vec::new();
     let mut unspellable: Vec<(Address, Unspellable)> = Vec::new();
-    let ctx = SpellContext { walk: RecordWalk::new(inputs, &records), runs: &runs };
+    let ctx = SpellContext { walk: RecordWalk::composed(inputs, &records, e), runs: &runs, held_back: e.held_back_words(), placeholders: e.placeholder_words() };
     let mut add = |candidate: usize, home: EntryHome| {
         let c = &e.candidates[candidate];
-        let ends = (spell_end(&c.value.from, &c.via, &ctx), spell_end(&c.value.to, &c.via, &ctx), spell_type(&c.value.ty));
+        let formatting = is_formatting(&c.value);
+        let ends = (spell_end(&c.value.from, &c.via, &ctx, formatting), spell_end(&c.value.to, &c.via, &ctx, formatting), spell_type(&c.value.ty));
         match ends {
             (Ok(from), Ok(to), Ok(ty)) => entries.push(Entry { home, from, to, ty, old: Some(c.link.clone()), candidate }),
             (Err(why), _, _) | (_, Err(why), _) | (_, _, Err(why)) => unspellable.push((c.link.clone(), why)),
@@ -1001,7 +1031,6 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         read_with,
         supersede,
         unspellable,
-        counterparts,
         id: fresh_id(),
         count,
         price: Price { lists: [0; 6], body: 0, values: 0, reads: 0, bytes: 0, over: Vec::new() },
@@ -1050,24 +1079,46 @@ pub(crate) fn also_places_of(e: &Enumeration, runs: &[Run]) -> Vec<AlsoPlaces> {
 /// What spelling an end needs.
 struct SpellContext<'a> {
     /// The walk through the records — the enumeration's and the twin
-    /// pre-check's — that reads a candidate's ends as the filter reads them.
+    /// pre-check's — and the window parts taken by their counterpart, which
+    /// reads a candidate's ends as the filter reads them.
     walk: RecordWalk<'a>,
     runs: &'a [Run],
+    /// The words no answer publishes: every window part left out, answered
+    /// publish-first or awaiting its answer.
+    held_back: Vec<ISpan>,
+    /// The words kept behind a placeholder, which no formatting mark is
+    /// spelled onto.
+    placeholders: Vec<ISpan>,
+}
+
+impl SpellContext<'_> {
+    /// Returns `span` less the words the end may not be spelled on: those
+    /// no answer publishes, and for a formatting mark those behind a
+    /// placeholder.
+    fn kept(&self, span: &ISpan, formatting: bool) -> Vec<ISpan> {
+        let mut cut = self.held_back.clone();
+        if formatting {
+            cut.extend(self.placeholders.iter().cloned());
+        }
+        span.less(&cut)
+    }
 }
 
 /// Spells one end of a candidate reached `via` from its stored slot.
 ///
 /// The address form where every span is a unit span at a non-content
 /// address. Otherwise each span is read in the pieces the walk through the
-/// records reads it in (`RecordWalk`), in the stored order: a piece a
-/// record maps is the published words it became, a piece of a named
-/// draft's own words no record maps is this shot's new words where the
-/// shot's runs hold them and is cut where they do not, and any other piece
-/// is kept as stored. The end is the member-position form where a piece
-/// lies on this shot's new words, every other piece then one the member
-/// holds; else the I-span form over the pieces kept, or over the stored
-/// spans as written where every piece was cut.
-fn spell_end(slot: &[LinkSpan], via: &Via, ctx: &SpellContext<'_>) -> Result<End, Unspellable> {
+/// records and the parts taken by their counterpart reads it in
+/// (`RecordWalk`), in the stored order, each piece less the words the end
+/// may not be spelled on ([`SpellContext::kept`]): a piece a record maps is
+/// the published words it became, a piece of a named draft's own words no
+/// record maps is this shot's new words where the shot's runs hold them
+/// and is cut where they do not, and any other piece is kept as stored. The
+/// end is the member-position form where a piece lies on this shot's new
+/// words, every other piece then one the member holds; else the I-span form
+/// over the pieces kept, or over the stored spans as written where every
+/// piece was cut.
+fn spell_end(slot: &[LinkSpan], via: &Via, ctx: &SpellContext<'_>, formatting: bool) -> Result<End, Unspellable> {
     if slot.is_empty() {
         return Ok(End::Addrs(Vec::new()));
     }
@@ -1084,23 +1135,24 @@ fn spell_end(slot: &[LinkSpan], via: &Via, ctx: &SpellContext<'_>) -> Result<End
     let mut sent: Vec<(ISpan, bool)> = Vec::new();
     for s in &spans {
         for piece in ctx.walk.pieces(s, via) {
-            let p = piece.span;
-            if piece.mapped || !ctx.walk.is_named_chain(&p.chain) {
-                sent.push((p, false));
-                continue;
-            }
-            // The shot's runs of the piece's own chain hold the named
-            // draft's new words; the rest is left out and cut.
-            let native_runs: Vec<&Run> = ctx.runs.iter().filter(|r| r.chain() == p.chain).collect();
-            let mut cursor = p.first;
-            while cursor < p.reach() {
-                match native_runs.iter().find(|r| r.i_start <= cursor && cursor < r.reach()) {
-                    Some(run) => {
-                        let end = run.reach().min(p.reach());
-                        sent.push((ISpan { chain: p.chain.clone(), first: cursor, width: end - cursor }, true));
-                        cursor = end;
+            for p in ctx.kept(&piece.span, formatting) {
+                if piece.mapped || !ctx.walk.is_named_chain(&p.chain) {
+                    sent.push((p, false));
+                    continue;
+                }
+                // The shot's runs of the piece's own chain hold the named
+                // draft's new words; the rest is left out and cut.
+                let native_runs: Vec<&Run> = ctx.runs.iter().filter(|r| r.chain() == p.chain).collect();
+                let mut cursor = p.first;
+                while cursor < p.reach() {
+                    match native_runs.iter().find(|r| r.i_start <= cursor && cursor < r.reach()) {
+                        Some(run) => {
+                            let end = run.reach().min(p.reach());
+                            sent.push((ISpan { chain: p.chain.clone(), first: cursor, width: end - cursor }, true));
+                            cursor = end;
+                        }
+                        None => cursor = native_runs.iter().filter(|r| r.i_start > cursor).map(|r| r.i_start).min().unwrap_or(p.reach()).min(p.reach()),
                     }
-                    None => cursor = native_runs.iter().filter(|r| r.i_start > cursor).map(|r| r.i_start).min().unwrap_or(p.reach()).min(p.reach()),
                 }
             }
         }
@@ -1115,8 +1167,8 @@ fn spell_end(slot: &[LinkSpan], via: &Via, ctx: &SpellContext<'_>) -> Result<End
         return Ok(End::Member(canonical));
     }
     if sent.is_empty() {
-        // Wholly on left-out words of the draft: decision 5's far end with
-        // this draft as its document, written as it is.
+        // Wholly on words this shot leaves out: decision 5's far end, or
+        // words no answer publishes, written as it is.
         return Ok(End::Spans(spans));
     }
     Ok(End::Spans(sent.into_iter().map(|(s, _)| s).collect()))

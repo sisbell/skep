@@ -69,8 +69,10 @@
 //! CLAIM, then the record: ONE PATH for the shot, the publication family's
 //! — the panel standing for the draft, which the page opened over it with
 //! the switches and answers it last sent, or one this row opens over the
-//! whole draft (every private row OFF, every window kept private, the draft
-//! side named `also` so its words re-mint as the document's own), confirmed
+//! whole draft (every private row OFF, every window part no record names
+//! kept private — a part a record names left unanswered, so the shot
+//! answers the panel's `inert` refusal naming it for the page to answer —
+//! the draft side named `also` so its words re-mint as the document's own), confirmed
 //! by the family's one composition, signature and send
 //! (`Shell::confirm_standing`) — so the claim is composed in one place,
 //! the open's read of the marker (`shell/publication.rs`, **The claim**),
@@ -785,9 +787,14 @@ impl Shell {
         };
         let switches = state.switches.clone();
         let mut answers = state.answers.clone();
+        // A panel opened here keeps private every window part no record
+        // names; a part a record names is left unanswered, so the shot is
+        // the panel's inert refusal naming it, for the page to answer.
         if opened_here {
-            for window in &state.panel.windows {
-                answers.entry(window.run).or_insert(OriginAnswer::KeepPrivate);
+            for window in &state.enumeration.windows {
+                for (k, _) in window.parts.iter().enumerate().filter(|(_, part)| !part.named()) {
+                    answers.entry(window.key(k)).or_insert(OriginAnswer::KeepPrivate);
+                }
             }
         }
         match self.confirm_standing(&session, &key, &state, switches, answers, "merge.land")? {

@@ -14,8 +14,8 @@
 //! record, so the request never meets `already_published` for words any
 //! draft of the family already published. A run of no named draft's identity passes
 //! through as given: with its place where the request's counterpart arm
-//! sent one beside a record's covered piece — counted as the one record the
-//! commit reads for that piece — and with none otherwise.
+//! sent one beside a window part a record names — counted as the one record
+//! the commit reads for that part — and with none otherwise.
 //!
 //! **The landed test, after a lost answer or `already_published`.** ONE
 //! composition answering whether THIS request's effect committed and in
@@ -60,10 +60,10 @@ use crate::board::answers::{IRun, LinkValue};
 use crate::board::frames::{self, Slot, T_CORRESPONDENCE, T_EDITION};
 use crate::board::{ChangesAnswer, ChangesQuery, T_RETRACTION};
 
-use super::enumerate::Record;
+use super::enumerate::{read_record, Record};
 use super::request::{AlsoPlaces, End, EntryHome, Request};
 use super::send::{Ack, AckVia};
-use super::{home_of_link, owned_by, resolve_member_spans, trunk_of, Door, Fault, Inputs, Publisher, Run};
+use super::{owned_by, resolve_member_spans, trunk_of, Door, Fault, Inputs, Publisher, Run};
 
 /// The runs and places after the twin pre-check re-composed what the
 /// draft's records already name.
@@ -84,7 +84,7 @@ pub struct Recomposed {
     pub draft_places: Vec<Option<u64>>,
     /// Per run, the records covering it where it was re-composed by
     /// reference with a place — one for a piece this pre-check re-composed,
-    /// one for a counterpart's covered piece the request's arm placed;
+    /// one for a window part the request's arm placed by its counterpart;
     /// zero elsewhere.
     pub stray_records: Vec<usize>,
     /// The records the pre-check read.
@@ -113,8 +113,9 @@ pub fn twin_precheck(p: &Publisher<'_>, inputs: &Inputs, runs: &[Run], places: &
 /// for the runs of its own identity; a named draft with no run of its
 /// identity in `runs` is not read. A run of no named draft's identity is
 /// passed through as given, its record count `1` where it carries a place
-/// — the counterpart's covered piece, re-composed by the request's arm by
-/// reference to a record the panel read — and `0` otherwise. Every list is
+/// — a window part taken by its counterpart, re-composed by the request's
+/// arm by reference to the record the enumeration read — and `0`
+/// otherwise. Every list is
 /// carried beside the pieces: a piece re-composed by reference, or left as
 /// given, takes the rendering draft's place and each `also` draft's at the
 /// piece's offset into the run, so a draft that arranges the recorded words
@@ -204,17 +205,6 @@ impl Recomposed {
             entry.places.push(*place);
         }
     }
-}
-
-/// Reads one record by address: `None` where it is absent, of another type,
-/// another account's, or of no I-span shape (`Record::of`); the home is
-/// judged off the address first, so another's record costs no read.
-pub(crate) fn read_record(door: &Door<'_>, p: &Publisher<'_>, hit: &str) -> Result<Option<Record>, Fault> {
-    if !home_of_link(hit).is_some_and(|home| owned_by(home, p.account)) {
-        return Ok(None);
-    }
-    let Some(value) = door.link(hit)? else { return Ok(None) };
-    Ok(Record::of(hit, &value, p.account))
 }
 
 /// Where the landed test starts.

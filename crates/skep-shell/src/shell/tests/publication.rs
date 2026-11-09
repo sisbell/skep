@@ -513,7 +513,7 @@ fn the_family_publishes_a_drafts_links_and_answers_as_data() {
     let bad_home = g.call("publication.count", json!({"session": g.session, "switches": {"on": [edition]}})).unwrap_err();
     assert_eq!((bad_home.name(), bad_home.to_value()["what"].as_str()), ("malformed_args", Some("switches.on")), "a home no private row holds");
     let bad_answer = g.call("publication.count", json!({"session": g.session, "answers": {"0": "drop"}})).unwrap_err();
-    assert_eq!((bad_answer.name(), bad_answer.to_value()["what"].as_str()), ("malformed_args", Some("answers")), "a run no window names");
+    assert_eq!((bad_answer.name(), bad_answer.to_value()["what"].as_str()), ("malformed_args", Some("answers")), "a key no window part holds");
     // The confirm: acknowledged, the events, the feed row.
     let before = g.position();
     let acked = g.call("publication.confirm", json!({"session": g.session, "switches": {"on": [notes]}})).unwrap_or_else(|r| panic!("{r}"));
@@ -786,6 +786,91 @@ fn a_family_confirm_over_an_also_draft_moved_since_the_panel_sends_no_place_for_
     assert_eq!(row["docs"], json!([e2, a_draft, d]), "D named for the record homed in it: {row}");
     g.shell.shutdown();
     sd.shutdown();
+}
+
+/// Checks the answers at a window's parts against the daemon (B3-S11 P2
+/// (i)).
+///
+/// `D`, staged from the memberless edition, windows `O`, a draft of the
+/// person's, and a note in the notes lies on `O`'s words; `O` is then
+/// published at the mint form, so a record names those words as the new
+/// edition's. The open answers the window as one part the record names,
+/// admitting the counterpart and `drop`, the note counting toward nothing
+/// while the part awaits its answer; `keep_private` there is refused
+/// `malformed_args` naming `answers`; `count`, the call per answer, re-keys
+/// the panel with no dial — the counterpart puts the note in the notes' row
+/// and counts it, leaving the words out takes it back; and the confirm with
+/// the counterpart is acknowledged, the note's entry on the edition's words.
+#[test]
+fn a_windows_parts_take_their_own_answers_and_each_answer_re_keys_the_panel() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let draft = g.staged(&edition, "the quick brown fox");
+    let origin = g.draft("quote");
+    let notes = g.draft("notes here");
+    let citation = "1.1.0.1.0.1.0.3.13";
+    g.op(json!({"op": "copy", "doc": draft, "at": {"subspace": "1", "ordinal": "20"}, "specs": [{"source": origin, "span": {"start": "1.1", "width": "0.5"}}], "as_of": g.position()}));
+    let note = g.addr(json!({"op": "make_link", "home": notes, "from": [{"source": origin, "span": {"start": "1.2", "width": "0.2"}}], "to": {"addrs": []}, "ty": {"addrs": [citation]}}));
+    // O published at the mint form: its words a new edition's, its record
+    // in O, the draft still windowing O's own.
+    g.call("publication.open", json!({"session": g.session, "draft": origin, "mint": "1.0.1", "readable_drafts": [origin], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let minted = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let published = minted["edition"].as_str().unwrap_or_else(|| panic!("an edition minted: {minted}")).to_string();
+    let inputs = json!({"session": g.session, "draft": draft, "doc": edition, "notes": [notes], "readable_drafts": [draft, notes, origin], "published": [edition, published]});
+    let panel = g.call("publication.open", inputs).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("PublicationPanel", &panel);
+    let windows = panel["windows"].as_array().unwrap();
+    assert_eq!(windows.len(), 1, "{panel}");
+    crate::shapes::assert_declared("Window", &windows[0]);
+    let part = &windows[0]["parts"][0];
+    crate::shapes::assert_declared("Part", part);
+    assert_eq!((windows[0]["run"].as_u64(), windows[0]["parts"].as_array().map(Vec::len), part["admits"].clone()), (Some(1), Some(1), json!(["counterpart", "drop"])), "one part the record names: {panel}");
+    assert_eq!(part["to"]["chain"], format!("{published}.0.1"), "its counterpart the edition's words");
+    assert!(panel["rows"].as_array().unwrap().iter().all(|row| row["home"] != notes), "the note counts toward nothing while the part awaits its answer: {panel}");
+    let refused = g.call("publication.count", json!({"session": g.session, "answers": {"1.0": "keep_private"}})).unwrap_err();
+    assert_eq!((refused.name(), refused.to_value()["what"].as_str()), ("malformed_args", Some("answers")), "no placeholder over published words");
+    let dials = g.shell.log().entries().iter().filter(|e| e["kind"] == "dial").count();
+    let taken = g.call("publication.count", json!({"session": g.session, "switches": {"on": [notes]}, "answers": {"1.0": "counterpart"}})).unwrap_or_else(|r| panic!("{r}"));
+    let notes_row = taken["rows"].as_array().unwrap().iter().find(|row| row["home"] == notes).unwrap_or_else(|| panic!("the notes' row: {taken}")).clone();
+    assert_eq!((notes_row["links"].clone(), taken["count"]["l"].as_u64()), (json!([note]), Some(1)), "the counterpart offers the note: {taken}");
+    crate::shapes::assert_declared("Formatting", &taken["formatting"]);
+    crate::shapes::assert_declared("PartCounts", &taken["parts"][0]);
+    assert_eq!(taken["parts"], json!([{"run": 1, "part": 0, "marks": 0, "links": 1, "kept_marks": 0}]), "what the counterpart brings: the note, offered next");
+    let left = g.call("publication.count", json!({"session": g.session, "answers": {"1.0": "drop"}})).unwrap_or_else(|r| panic!("{r}"));
+    assert!(left["rows"].as_array().unwrap().iter().all(|row| row["home"] != notes) && left["count"]["l"] == 0, "the words left out take the note's row with them: {left}");
+    let stale = g.call("publication.count", json!({"session": g.session, "switches": {"on": [notes]}, "answers": {"1.0": "drop"}})).unwrap_err();
+    assert_eq!((stale.name(), stale.to_value()["what"].as_str()), ("malformed_args", Some("switches.on")), "a switch names a row the panel holds as answered");
+    assert_eq!(g.shell.log().entries().iter().filter(|e| e["kind"] == "dial").count(), dials, "each answer re-keys with no dial");
+    let acked = g.call("publication.confirm", json!({"session": g.session, "switches": {"on": [notes]}, "answers": {"1.0": "counterpart"}})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("Acknowledged", &acked);
+    assert_eq!(acked["member"], format!("{edition}.1"), "{acked}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks the lineage re-statement's face, as `confirm` composes it and as
+/// the declaration spells it (B3-S11 P4): `restated` with `left_out`
+/// naming the entry the board refused by its lineage, its original and the
+/// cause, and `race` where a change since the request's reads explains it —
+/// never the own-bug class — and a window part named since the panel among
+/// the re-statement's `parts`.
+#[test]
+fn the_lineage_re_statement_names_the_entry_its_original_and_cause() {
+    use skep_client::publication::{LineageCause, PartKey, RaceKey, Restatement};
+    let original = skep_client::address::parse_address("1.0.1.0.6.0.2.1").expect("an address");
+    let record = skep_client::address::parse_address("1.0.1.0.7.0.2.1").expect("an address");
+    let race = RaceKey { at: 999, key: Some("bare".into()), signed: false };
+    let restatement = Restatement { parts: vec![(PartKey { run: 2, part: 0 }, Some(record))], ..Restatement::default() };
+    let answer = super::super::publication::restated_json(&restatement, Some(&race), Some((3, &original, LineageCause::Superseded)));
+    crate::shapes::assert_declared("Restated", &answer);
+    assert_eq!(answer["left_out"], json!([{"entry": 3, "original": "1.0.1.0.6.0.2.1", "cause": "superseded"}]));
+    assert_eq!(answer["parts"], json!([{"run": 2, "part": 0, "record": "1.0.1.0.7.0.2.1"}]));
+    assert_eq!((answer["outcome"].as_str(), answer["race"]["at"].as_u64()), (Some("restated"), Some(999)));
+    let quiet = super::super::publication::restated_json(&Restatement::default(), None, Some((0, &original, LineageCause::Retracted)));
+    crate::shapes::assert_declared("Restated", &quiet);
+    assert!(quiet.get("race").is_none() && quiet.get("parts").is_none() && quiet["left_out"][0]["cause"] == "retracted", "no race behind it, no part moved: {quiet}");
 }
 
 /// Checks the refused answers that name a draft, as `confirm` composes

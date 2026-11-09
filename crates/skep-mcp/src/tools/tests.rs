@@ -446,7 +446,7 @@ fn each_adapter_tool_takes_its_shell_rows_members_bar_the_session_and_board() {
 /// declares for its row (`shapes::declarations`) — a shape as `{a, b, c?}`, a
 /// field typed by one string literal with its value and an open shape ending
 /// `, …`, the empty answer as `{}` — and the open and count cards the shapes
-/// of the panel's members; the open card names each standing the shell's
+/// of the panel's members — a window's parts among them; the open card names each standing the shell's
 /// `BaseStanding` spells and its one refusal of a base by the shell's name —
 /// `base_unrecorded` with its members and reasons — and no `base_superseded`
 /// (the shell refuses no standing; a draft begun before version 1 is told
@@ -500,7 +500,7 @@ fn the_publication_cards_state_the_shells_shapes() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
     let entry = |name: &str| catalog.tools.iter().find(|t| t["name"] == name).unwrap_or_else(|| panic!("the {name} card"));
     for (name, row, nested) in [
-        ("publication_open", "publication.open", &["PublicationRow", "Formatting", "Count", "Price", "Window", "Hold"][..]),
+        ("publication_open", "publication.open", &["PublicationRow", "Formatting", "Count", "Price", "Window", "Part", "PartCounts", "Hold"][..]),
         ("publication_count", "publication.count", &["Count"][..]),
         ("publication_confirm", "publication.confirm", &[][..]),
         ("publication_cancel", "publication.cancel", &[][..]),

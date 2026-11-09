@@ -19,66 +19,100 @@
 //! rendering draft's or one `also` names, read through the rendering draft
 //! at the run's place, a run's bytes counted and kept nowhere: each
 //! position whose atom is a MERGE RECORD ([`is_merge_record`]) is left out
-//! of THE SELECTION AS PUBLISHED ([`Enumeration::selection`]): the pieces
-//! of the held runs the draft arranges, cut around it, which the region,
-//! every later read and every later step test and compose from, so at the
+//! of every run a publication carries ([`Enumeration::pieces`]), so at the
 //! re-read a word the draft no longer arranges counts nowhere (PUB-3.108)
 //! — no publication places a merge record's atom as a run or sends a kept
 //! place for one, so a journal's records are never re-minted or re-windowed
 //! (the merge record's decision 7) — and a selection whose arranged
 //! positions are merge records alone is refused [`Fault::OnlyMergeRecords`];
 //! a window's run and the trunk's own are read for none, neither being
-//! re-minted; (3) `find_links_v` — ONE
-//! read over the region as one array; (4) `links` — each answered address
-//! read for its HOME off the address and kept where the home's account is
-//! the person's EXACTLY, never nested under theirs, and never a home in the
-//! edition's own chain ("`E` no row"); each kept link read once
-//! (`read_link`) and kept as a candidate only where its STORED endset
-//! touches the selection through a content span — a whole-work end, a unit
-//! span at a document's or an account's address, is no candidate — and
-//! where its stored type is no record class, by the reader's own exact test
-//! (the correspondence subtype, the held removal, a grant, a credential, a
-//! claim, the succession pair, a retraction, the `replaces` link, an edition
-//! claim, the journal designation, the consumption marker); (5) `records` —
-//! THE READ-THROUGH's first hop: the counterpart records whose `to` lies in
-//! the selection, one four-set read `{home: "any", ty: [the subtype], to:
-//! [the selection's I-spans]}` in chunks of the wire list cap, each record
-//! read once, kept by the exact type and where its home's account is the
-//! person's (a record of a draft the person reads but does not own is
-//! dropped); (6) `read_through` — the second hop, the links on every
-//! record's `from` by TWO batched four-set reads over all of them, `{from:
-//! […]}` and `{to: […]}`, up to the cap a read, each answered link kept where
-//! its home is a PRIVATE one of the person's (the read-through is
-//! private-only: a public link there is the carriage v1 does not make) and
-//! mapped back to the records whose `from` it overlaps; (7) `claims` — THE
-//! FILTER, run once every candidate is known: one `in_claims` and one
-//! `out_claims`, both `view: "active"`, per candidate; a candidate DROPPED
-//! where an active claim of the person's — homed in a home whose account is
-//! theirs, off the claim's address — names, as its `new`, a successor that
-//! drops it by one of two arms. A public successor, homed in a published
-//! document of theirs off the caller's own list and no read, drops it where
-//! its ends as stored, read off one `read_link` of the successor, COVER
-//! every position of the candidate this publication publishes — the
-//! candidate's ends read through the records, below (keys (i) and (iii); no
-//! liveness key — sweep 5 S1) — and none of those positions lies on a named
-//! draft's own words, which the shot publishes as new: a successor standing
-//! before the shot covers none of them, whatever its ends name (PUB-3.9). So
-//! a copy an earlier selection cut leaves its original offered, to be re-made
-//! over the whole run (W4); the original of an end that lay wholly on
-//! left-out words, its copy holding the draft's own addresses, is offered at
-//! the publication that publishes those words (§5.2's ⟨d⟩); and a copy an
-//! earlier shot made over the words it re-minted drops its original at
-//! every later publication. Any other successor drops it where it is itself
-//! a candidate of this enumeration, dropped or offered — a retype or an end
-//! move made in the draft before the shot (B3-S12), a move into another set
-//! of theirs (§2) — read off the candidates' own addresses and no read
-//! (proposal 23): one since retracted is no candidate, nor is one touching
-//! nothing selected, and its original is offered. And where an `out_claims`
-//! row of the person's names an `old` — the candidate a successor — that
-//! original's `in_claims`, the candidate dropped as REVISED where an
+//! re-minted; (3) `windows` — THE WINDOWS (B3-S11 P2 (i); the link-sets
+//! design §5.7): each held run onto a document neither a named draft nor
+//! the trunk and owned by the person exactly is read for its state, one
+//! `doc_metadata` per origin, and kept where unpublished; where the origin
+//! is a draft the person reads, ONE four-set over the record class homed in
+//! it, `from` the run, every record kept; each piece of the run the draft
+//! arranges is cut into PARTS at the records' edges — a stretch one record
+//! names as published, or a stretch none names — each part admitting its
+//! own answers ([`Part::admits`]); (4) `find_links_v` — ONE read over the
+//! region as one array; (5) `links` — each answered address read for its
+//! HOME off the address and kept where the home's account is the person's
+//! EXACTLY, never nested under theirs, and never a home in the edition's
+//! own chain ("`E` no row"); each kept link read once (`read_link`) and
+//! kept as a candidate only where its STORED endset touches THE WORDS ANY
+//! ANSWER CAN PUBLISH ([`Enumeration::publishable`]) through a content span
+//! — a whole-work end, a unit span at a document's or an account's
+//! address, is no candidate — and where its stored type is no record class,
+//! by the reader's own exact test (the correspondence subtype, the held
+//! removal, a grant, a credential, a claim, the succession pair, a
+//! retraction, the `replaces` link, an edition claim, the journal
+//! designation, the consumption marker); (6) `counterparts` — THE
+//! COUNTERPART'S IDENTITY: the links on every named part's published words
+//! by TWO batched four-set reads, `{from: […]}` and `{to: […]}`, up to the
+//! cap a read, each answered link kept as (5) keeps one, so an answer at a
+//! part needs no read; (7) `records` — THE READ-THROUGH's first hop: the
+//! counterpart records whose `to` lies in the publishable words — a named
+//! part's own record among them — one four-set read `{home: "any", ty:
+//! [the subtype], to: [their I-spans]}` in chunks of the wire list cap,
+//! each record read once, kept by the exact type and where its home's
+//! account is the person's (a record of a draft the person reads but does
+//! not own is dropped); (8) `read_through` — the second hop, the links on
+//! every record's `from` by TWO batched four-set reads over all of them,
+//! `{from: […]}` and `{to: […]}`, up to the cap a read, each answered link
+//! kept where its home is a PRIVATE one of the person's (the read-through
+//! is private-only: a public link there is the carriage v1 does not make)
+//! and mapped back to the records whose `from` it overlaps; (9) `claims` —
+//! THE FILTER's reads, run once every candidate is known: one `in_claims`
+//! and one `out_claims`, both `view: "active"`, per candidate; each active
+//! claim of the person's — homed in a home whose account is theirs, off
+//! the claim's address — kept with its successor's `new`, whether that
+//! successor is homed in a published document of theirs (off the caller's
+//! own list and no read), whether it is itself a candidate (proposal 23)
+//! and its stored content ends, read off one `read_link`; and where an
+//! `out_claims` row of the person's names an `old` — the candidate a
+//! successor — that original's `in_claims`, the candidate REVISED where an
 //! accept's claim of the person's names a public copy, wherever the
 //! original's ends lie (W17). The candidates are grouped BY HOME in the
 //! order their homes first answered.
+//!
+//! **The composition** ([`Enumeration::composed`]), from those reads and no
+//! other. The answers at the windows' parts decide THE SELECTION AS
+//! PUBLISHED ([`Enumeration::selection`]): the named drafts' runs and the
+//! trunk's as the draft places them, cut around their merge records; a part
+//! answered by its counterpart as the published words its record names; a
+//! part kept private as its own words, behind a placeholder; a part left
+//! out, answered publish-first or not yet answered, nothing — a window
+//! awaiting its answer counts toward nothing. Over that selection every
+//! candidate is judged again: the stored-endset test, and THE FILTER's
+//! drop — a public successor, homed in a published document of the
+//! person's, drops a candidate where its ends as stored COVER every
+//! position of the candidate this publication publishes — the candidate's
+//! ends read through the walk below (keys (i) and (iii); no liveness key —
+//! sweep 5 S1) — and none of those positions lies on a named draft's own
+//! words, which the shot publishes as new: a successor standing before the
+//! shot covers none of them, whatever its ends name (PUB-3.9). So a copy an
+//! earlier selection cut leaves its original offered, to be re-made over
+//! the whole run (W4); the original of an end that lay wholly on left-out
+//! words, its copy holding the draft's own addresses, is offered at the
+//! publication that publishes those words (§5.2's ⟨d⟩); a copy an earlier
+//! shot made over the words it re-minted drops its original at every later
+//! publication; and a first copy laid on a placeholder's words drops its
+//! original while the part is kept private there and not once the part's
+//! counterpart is published in its place. Any other successor drops it
+//! where it is itself a candidate, dropped or offered — a retype or an end
+//! move made in the draft before the shot (B3-S12), a move into another set
+//! of theirs (§2) — one since retracted being no candidate, nor one
+//! touching nothing selected, and its original offered. A FORMATTING MARK
+//! — the formatting line's shape test, its inline-mark exception kept
+//! ([`is_formatting`]) — is judged on THE WORDS A READER RECEIVES
+//! ([`Enumeration::received`]), the selection less every placeholder: no
+//! mark goes onto a placeholder, one lying partly there is cut at its edge
+//! and one lying wholly there is not offered, kept in the draft's own set
+//! until a version shows its words. An original the board refused by its
+//! lineage at an earlier send of the publication is left out of the offer
+//! ([`Enumeration::left_out`]). [`enumerate`] answers the composition under
+//! no answer, and every later step composes from the composition it is
+//! handed.
 //!
 //! **The walk through the records.** A link on a record's `from` run "is a
 //! candidate as a link on its `to` run is" (§5.1), so a candidate's ends
@@ -88,22 +122,24 @@
 //! holds: the record covering the first position not yet read maps the
 //! piece, up to the end of its `from`, onto the published words of its
 //! `to`, and a piece no record covers runs as stored up to the next record's
-//! first position. Every other span is read as stored. Key (iii), the
-//! panel's line counts and the request's `spell_end` read this one walk,
+//! first position. Every position of a window part answered by its
+//! counterpart is mapped through that part's own record, whoever's link
+//! the end is. Every other span is read as stored. Key (iii), the panel's
+//! line counts and the request's `spell_end` read this one walk,
 //! `RecordWalk`, so a candidate is judged on the words its entry sends.
 //!
 //! What it does not read: other people's links, left out by the owned-homes
-//! rule and no refusal; links of the person's touching no span of the
-//! selection; the edition's own links (its home projects to `E`).
+//! rule and no refusal; links of the person's touching no word any answer
+//! can publish; the edition's own links (its home projects to `E`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 use skep_address::Address;
 
-use crate::address::parse_address;
+use crate::address::{account_of, parse_address};
 use crate::board::answers::{self, IRun, LinkValue};
-use crate::board::frames::{self, Slot, T_CORRESPONDENCE, T_EDITION, T_GRANT, T_HELD_REMOVAL, T_REPLACES};
+use crate::board::frames::{self, Slot, REGISTRY_DOCUMENT, T_CORRESPONDENCE, T_EDITION, T_GRANT, T_HELD_REMOVAL, T_REPLACES};
 use crate::board::{T_CLAIM, T_ENROLL, T_RETIRE, T_RETRACTION, T_SUPERSEDES};
 
 use super::{home_of_link, owned_by, trunk_of, Door, Fault, ISpan, Inputs, Publisher, Run};
@@ -130,6 +166,15 @@ const T_CONSUMPTION_MARKER: &str = "1.1.0.1.0.1.0.3.91";
 /// its `type` by it.
 pub const MERGE_RECORD_TYPE: &str = "merge";
 
+/// The formatting types' subtrees (the link-sets design §5.2; the registry's
+/// vocabulary): heading `3.20`, the paragraph family `3.21`, the inline
+/// family `3.23`.
+pub const FORMATTING_TYPES: [&str; 3] = ["1.1.0.1.0.1.0.3.20", "1.1.0.1.0.1.0.3.21", "1.1.0.1.0.1.0.3.23"];
+
+/// The one member of the inline family the line does NOT take: `3.23.4`
+/// mark, a highlight, offered in its set's own row (proposal 15).
+pub const INLINE_MARK: &str = "1.1.0.1.0.1.0.3.23.4";
+
 /// Returns whether `atom`, one position's value, is a merge record.
 ///
 /// It is one where the value is one JSON object whose `type` is
@@ -138,6 +183,39 @@ pub const MERGE_RECORD_TYPE: &str = "merge";
 /// decision 7), never a list of journals.
 pub fn is_merge_record(atom: &[u8]) -> bool {
     atom.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{') && serde_json::from_slice::<Value>(atom).is_ok_and(|v| v["type"].as_str() == Some(MERGE_RECORD_TYPE))
+}
+
+/// Returns whether `value` is a mark the formatting line takes: the line's
+/// shape test, its inline-mark exception kept (the link-sets design §5.2).
+pub fn is_formatting(value: &LinkValue) -> bool {
+    formatting_shape(value, false)
+}
+
+/// Returns whether `value` is a mark of THE FORMATTING TYPES: the line's
+/// shape test without its inline-mark exception (P11) — the test the rider
+/// applies to a held removal's mark, an inline mark's original ending with
+/// its copy as a bold's does (the link-sets design §2, E3).
+pub fn is_formatting_type(value: &LinkValue) -> bool {
+    formatting_shape(value, true)
+}
+
+/// The formatting line's shape test: one content end, and one unit type
+/// span under the formatting types — the inline mark among them where
+/// `inline_marks` — beside nothing but registry addresses.
+fn formatting_shape(value: &LinkValue, inline_marks: bool) -> bool {
+    if value.from.is_empty() == value.to.is_empty() {
+        return false;
+    }
+    let mut named = 0usize;
+    for span in &value.ty {
+        let under = |root: &str| span.start == root || span.start.starts_with(&format!("{root}."));
+        if span.is_unit() && FORMATTING_TYPES.iter().any(|t| under(t)) && (inline_marks || !under(INLINE_MARK)) {
+            named += 1;
+        } else if !under(REGISTRY_DOCUMENT) {
+            return false;
+        }
+    }
+    named == 1
 }
 
 /// Where a held run stands in the draft's image.
@@ -208,10 +286,126 @@ impl Record {
     }
 }
 
+/// Reads one record by address: `None` where it is absent, of another type,
+/// another account's, or of no I-span shape (`Record::of`); the home is
+/// judged off the address first, so another's record costs no read.
+pub(crate) fn read_record(door: &Door<'_>, p: &Publisher<'_>, hit: &str) -> Result<Option<Record>, Fault> {
+    if !home_of_link(hit).is_some_and(|home| owned_by(home, p.account)) {
+        return Ok(None);
+    }
+    let Some(value) = door.link(hit)? else { return Ok(None) };
+    Ok(Record::of(hit, &value, p.account))
+}
+
+/// The caller's answer at one part of a window onto their own unpublished
+/// origin (B3-S11 P2 (i); the link-sets design §5.7).
+///
+/// Which answers a part admits is the part's to say ([`Part::admits`]): a
+/// part a record names takes the counterpart or [`Answer::Drop`], a part no
+/// record names publish-first, [`Answer::Drop`] or keep-private.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answer {
+    /// Publish the origin first: NOT this request, which stays inert.
+    PublishFirst,
+    /// Leave the part's words out of the request.
+    Drop,
+    /// Send the part as a window onto the private origin, no place beside
+    /// it: readers see a placeholder there.
+    KeepPrivate,
+    /// Window the published words the part's record names, re-composed by
+    /// reference with the part's kept place, so the commit re-windows the
+    /// draft there through the record.
+    Counterpart,
+}
+
+/// A part of a window: the window's run and the part's place in it — the
+/// key an answer is given at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PartKey {
+    /// The window's run, by its index in the selection.
+    pub run: usize,
+    /// The part, by its index in the window's parts.
+    pub part: usize,
+}
+
+/// One part of a window: a stretch of its words one record names as
+/// published, or a stretch none names (B3-S11 P2 (i), its scope sentence).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Part {
+    /// The part's words, on the origin's chain.
+    pub span: ISpan,
+    /// The V-ordinal the rendering draft arranges the part's first word at —
+    /// its kept place where its counterpart is taken.
+    pub ordinal: u64,
+    /// The record that names the part's words as published, where one does;
+    /// its `to` is the counterpart.
+    pub record: Option<Record>,
+}
+
+impl Part {
+    /// Returns whether a record names the part's words as published.
+    pub fn named(&self) -> bool {
+        self.record.is_some()
+    }
+
+    /// Returns whether the part admits `answer`: the counterpart and
+    /// [`Answer::Drop`] at a part a record names, never keep-private or
+    /// publish-first, whose placeholder would withhold words anyone reads at
+    /// the version that published them; publish-first, [`Answer::Drop`] and
+    /// keep-private at a part no record names.
+    pub fn admits(&self, answer: Answer) -> bool {
+        match answer {
+            Answer::Drop => true,
+            Answer::Counterpart => self.named(),
+            Answer::PublishFirst | Answer::KeepPrivate => !self.named(),
+        }
+    }
+
+    /// Returns the published words the part's record names at the part's
+    /// offset — THE COUNTERPART; `None` at a part no record names.
+    pub fn counterpart(&self) -> Option<ISpan> {
+        self.record.as_ref().and_then(|r| r.map(&self.span.chain, self.span.first, self.span.reach()))
+    }
+}
+
+/// One own-origin window of the selection (the link-sets design §5.7;
+/// B3-S11 P2 (i)).
+///
+/// It is a run onto an unpublished draft of the person's own, in its parts,
+/// whose answers are asked — never a run of a named draft, the rendering
+/// draft's or one `also` names, whose words are re-minted, nor one the
+/// draft no longer arranges, which carries nothing and is owed no answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Window {
+    /// The run's index in the selection.
+    pub run: usize,
+    /// The origin: the person's unpublished draft.
+    pub origin: Address,
+    /// The origin's owner account, off its address.
+    pub owner: String,
+    /// Where in the origin's I-space the passage was written: the run's
+    /// first ordinal.
+    pub i_start: u64,
+    /// The run's width.
+    pub width: u64,
+    /// The window's parts, in the draft's order: each piece the draft
+    /// arranges of the run, cut where a record's naming starts or ends.
+    pub parts: Vec<Part>,
+}
+
+impl Window {
+    /// Returns the key of the window's `part`-th part.
+    pub fn key(&self, part: usize) -> PartKey {
+        PartKey { run: self.run, part }
+    }
+}
+
 /// How a candidate was reached.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Via {
-    /// The region read over the selection.
+    /// A read over the words a publication can carry: the region read over
+    /// the draft's arrangement, or the counterpart read over a named part's
+    /// published words.
     Region,
     /// The read-through: the records whose `from` the link's ends overlap.
     ReadThrough(Vec<Address>),
@@ -230,6 +424,10 @@ pub struct Successor {
     /// (i) `new`'s home is a published document of the person's, off the
     /// caller's list.
     pub published_home: bool,
+    /// `new`'s content ends as stored, read once: what key (iii) holds the
+    /// candidate's published positions to at every composition. Empty where
+    /// `new` is absent.
+    pub ends: Vec<ISpan>,
     /// (iii) Whether `new` covers the candidate's words this shot publishes.
     ///
     /// Its ends, as stored, hold every position of the candidate this
@@ -238,6 +436,7 @@ pub struct Successor {
     /// positions lies on a named draft's own words, which the shot publishes
     /// as new: a successor standing before the shot covers none of them,
     /// whatever addresses its ends name (PUB-3.9; §5.2's ⟨c⟩ and ⟨d⟩).
+    /// Decided by the composition ([`Enumeration::composed`]).
     pub covers: bool,
     /// Whether `new` is another candidate of this enumeration.
     ///
@@ -263,7 +462,7 @@ impl Successor {
 }
 
 /// One candidate of the enumeration: an active link in a home the person
-/// owns, touching the selection.
+/// owns, touching words some answer can publish.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
     /// The link.
@@ -279,13 +478,21 @@ pub struct Candidate {
     /// Dropped as a successor whose original has a public copy of the
     /// person's (the `out_claims` key; the row's ⟨u⟩).
     pub revised: bool,
+    /// Whether the candidate touches the selection as the answers compose
+    /// it — its stored endset, or its ends read through the walk — a
+    /// formatting mark the words a reader receives.
+    pub touching: bool,
+    /// Left out of the offer: the board refused it by its lineage at an
+    /// earlier send of this publication.
+    pub left_out: bool,
 }
 
 impl Candidate {
-    /// Whether the candidate is offered: no successor drops it and it is no
-    /// revision of a published original.
+    /// Whether the candidate is offered: it touches the selection as
+    /// composed, no successor drops it, it is no revision of a published
+    /// original and it was not left out.
     pub fn offered(&self) -> bool {
-        !self.revised && !self.successors.iter().any(Successor::drops)
+        self.touching && !self.revised && !self.left_out && !self.successors.iter().any(Successor::drops)
     }
 
     /// Returns the candidate's ends as stored, as I-spans — `from` then
@@ -315,18 +522,30 @@ pub(crate) struct EndPiece {
 /// words. A taken span is read from its first position: the record covering
 /// the position maps the piece up to the end of the record's `from` onto
 /// its `to`, and a piece no record covers runs as stored up to the next
-/// record's first position. Every other span is read as stored. The filter's
-/// key (iii), the panel's line counts and the request's spelling read this
-/// one walk.
+/// record's first position. Every span of any candidate is mapped through
+/// the record of a window part answered by its counterpart, over that
+/// part's words. Every other span is read as stored. The filter's key
+/// (iii), the panel's line counts and the request's spelling read this one
+/// walk.
 pub(crate) struct RecordWalk<'r> {
     records: &'r [Record],
     named_chains: Vec<String>,
+    /// The parts answered by their counterpart: each part's words and the
+    /// record that maps them.
+    counterparts: Vec<(ISpan, Record)>,
 }
 
 impl<'r> RecordWalk<'r> {
-    /// Returns the walk through `records` for the drafts `inputs` names.
+    /// Returns the walk through `records` for the drafts `inputs` names,
+    /// mapping no window part.
     pub(crate) fn new(inputs: &Inputs, records: &'r [Record]) -> RecordWalk<'r> {
-        RecordWalk { records, named_chains: inputs.named_drafts().map(|d| format!("{d}.0.1")).collect() }
+        RecordWalk { records, named_chains: inputs.named_drafts().map(|d| format!("{d}.0.1")).collect(), counterparts: Vec::new() }
+    }
+
+    /// Returns the walk through `records` with the parts `e`'s answers take
+    /// by their counterpart mapped through their own records.
+    pub(crate) fn composed(inputs: &Inputs, records: &'r [Record], e: &Enumeration) -> RecordWalk<'r> {
+        RecordWalk { counterparts: e.counterpart_parts(), ..RecordWalk::new(inputs, records) }
     }
 
     /// Returns whether `chain` is a named draft's content chain, whose words
@@ -339,18 +558,29 @@ impl<'r> RecordWalk<'r> {
     /// publication reads it in: the walk's, in order, or the span itself
     /// where the walk does not take it.
     pub(crate) fn pieces(&self, span: &ISpan, via: &Via) -> Vec<EndPiece> {
-        if !matches!(via, Via::ReadThrough(_)) && !self.is_named_chain(&span.chain) {
+        let walked = matches!(via, Via::ReadThrough(_)) || self.is_named_chain(&span.chain);
+        // The stretches that map, each with its record: a counterpart part's
+        // words first, then — where the walk takes the span — every record's
+        // `from`.
+        let maps: Vec<(&ISpan, &Record)> = self
+            .counterparts
+            .iter()
+            .map(|(words, record)| (words, record))
+            .chain(self.records.iter().filter(|_| walked).map(|r| (&r.from, r)))
+            .filter(|(range, _)| range.chain == span.chain)
+            .collect();
+        if maps.is_empty() {
             return vec![EndPiece { span: span.clone(), mapped: false }];
         }
         let mut out = Vec::new();
         let mut cursor = span.first;
         while cursor < span.reach() {
-            let covering = self.records.iter().find(|r| r.from.overlap(&span.chain, cursor, cursor + 1).is_some());
+            let covering = maps.iter().find(|(range, _)| range.first <= cursor && cursor < range.reach());
             let end = match covering {
-                Some(r) => r.from.reach().min(span.reach()),
-                None => self.records.iter().filter_map(|r| (r.from.chain == span.chain && r.from.first > cursor).then_some(r.from.first)).min().unwrap_or(span.reach()).min(span.reach()),
+                Some((range, _)) => range.reach().min(span.reach()),
+                None => maps.iter().filter(|(range, _)| range.first > cursor).map(|(range, _)| range.first).min().unwrap_or(span.reach()).min(span.reach()),
             };
-            out.push(match covering.and_then(|r| r.map(&span.chain, cursor, end)) {
+            out.push(match covering.and_then(|(_, r)| r.map(&span.chain, cursor, end)) {
                 Some(to) => EndPiece { span: to, mapped: true },
                 None => EndPiece { span: ISpan { chain: span.chain.clone(), first: cursor, width: end - cursor }, mapped: false },
             });
@@ -377,7 +607,8 @@ pub struct AlsoImage {
     pub image: Vec<IRun>,
 }
 
-/// What the enumeration answers.
+/// What the enumeration answers: its reads, and the composition the answers
+/// make of them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Enumeration {
     /// The draft's content extent.
@@ -393,16 +624,32 @@ pub struct Enumeration {
     /// parallel to the selection: I-ordinals, ascending, none for a run of
     /// no named draft.
     pub merge_atoms: Vec<Vec<u64>>,
-    /// The selection as published: the pieces a publication carries.
+    /// The own-origin windows, in the selection's order, each in its parts;
+    /// the drafts `also` names excluded.
+    pub windows: Vec<Window>,
+    /// The answers the composition stands under, by part — an answer a part
+    /// does not admit counting as none.
+    pub answers: BTreeMap<PartKey, Answer>,
+    /// The originals the composition leaves out of the offer: each one the
+    /// board refused by its lineage at an earlier send.
+    pub left_out: BTreeSet<Address>,
+    /// The selection as published: the runs a publication carries under
+    /// the answers.
     ///
-    /// They are the held runs' pieces as the draft places them, in order,
-    /// each cut around its run's merge records' positions — the runs every
-    /// later step tests and composes from, so no publication carries a
-    /// merge record, and at the re-read a word the draft no longer arranges
-    /// counts nowhere (PUB-3.108).
+    /// They are the named drafts' and the trunk's pieces as the draft places
+    /// them, each cut around its run's merge records' positions, and each
+    /// window part as its answer composes it — its counterpart, or its own
+    /// words behind a placeholder; a part left out or not yet answered holds
+    /// nothing — the runs every later step tests and composes from, so no
+    /// publication carries a merge record, and at the re-read a word the
+    /// draft no longer arranges counts nowhere (PUB-3.108).
     pub selection: Vec<Run>,
+    /// THE WORDS A READER RECEIVES: the selection less every part kept behind
+    /// a placeholder — what a formatting mark is judged on.
+    pub received: Vec<Run>,
     /// The selection's V-spans in the draft, merged where adjacent, its
-    /// merge records' positions left out.
+    /// merge records' positions left out — every window's whole among them,
+    /// as the region read reads it.
     pub region: Vec<(u64, u64)>,
     /// Every candidate, dropped ones included.
     pub candidates: Vec<Candidate>,
@@ -429,6 +676,169 @@ impl Enumeration {
         self.placed.get(i).map_or_else(Vec::new, |placement| carried(run, placement, atoms))
     }
 
+    /// Returns THE WORDS ANY ANSWER CAN PUBLISH: every held run's carried
+    /// pieces — each window's whole among them — then every named part's
+    /// counterpart.
+    ///
+    /// It is the union the enumeration's reads are made over, so every
+    /// composition is decided from them.
+    pub fn publishable(&self, inputs: &Inputs) -> Vec<Run> {
+        let pieces: Vec<Run> = inputs.selection.iter().enumerate().flat_map(|(i, run)| self.pieces(i, run)).map(|(piece, _)| piece).collect();
+        publishable_of(pieces, &self.windows)
+    }
+
+    /// Returns the answer `window`'s `k`-th part stands under: the one given,
+    /// where the part admits it.
+    pub fn answer_at(&self, window: &Window, k: usize) -> Option<Answer> {
+        let part = window.parts.get(k)?;
+        self.answers.get(&window.key(k)).copied().filter(|a| part.admits(*a))
+    }
+
+    /// Returns the parts answered by their counterpart: each part's words
+    /// and its record, the walk's mappings.
+    pub(crate) fn counterpart_parts(&self) -> Vec<(ISpan, Record)> {
+        self.answered_parts().filter(|(_, answer)| *answer == Some(Answer::Counterpart)).filter_map(|(part, _)| Some((part.span.clone(), part.record.clone()?))).collect()
+    }
+
+    /// Returns the words kept behind a placeholder: every part answered
+    /// keep-private.
+    pub(crate) fn placeholder_words(&self) -> Vec<ISpan> {
+        self.answered_parts().filter(|(_, answer)| *answer == Some(Answer::KeepPrivate)).map(|(part, _)| part.span.clone()).collect()
+    }
+
+    /// Returns the words no answer publishes: every part left out, answered
+    /// publish-first or awaiting its answer.
+    pub(crate) fn held_back_words(&self) -> Vec<ISpan> {
+        self.answered_parts().filter(|(_, answer)| !matches!(answer, Some(Answer::Counterpart | Answer::KeepPrivate))).map(|(part, _)| part.span.clone()).collect()
+    }
+
+    /// Returns every window part with the answer it stands under.
+    fn answered_parts(&self) -> impl Iterator<Item = (&Part, Option<Answer>)> + '_ {
+        self.windows.iter().flat_map(move |w| w.parts.iter().enumerate().map(move |(k, part)| (part, self.answer_at(w, k))))
+    }
+
+    /// Returns the runs `c` is judged against: the words a reader receives
+    /// for a formatting mark, the selection as published otherwise.
+    pub(crate) fn judged(&self, c: &Candidate) -> &[Run] {
+        if is_formatting(&c.value) {
+            &self.received
+        } else {
+            &self.selection
+        }
+    }
+
+    /// Returns the enumeration as `answers` compose it, `left_out` left out
+    /// of the offer — THE COMPOSITION (the module's doc), from the reads
+    /// alone: nothing is read.
+    ///
+    /// The selection as published and the words a reader receives are
+    /// composed from the held runs and the answers; each candidate's
+    /// stored-endset test and its successors' key (iii) are decided over
+    /// them through the walk, a formatting mark on the words a reader
+    /// receives; a candidate `left_out` names is offered nowhere. Any
+    /// composition this enumeration made before is replaced whole.
+    pub fn composed(&self, inputs: &Inputs, answers: &BTreeMap<PartKey, Answer>, left_out: &BTreeSet<Address>) -> Enumeration {
+        let mut e = self.clone();
+        e.answers = answers.clone();
+        e.left_out = left_out.clone();
+        let (selection, received) = e.composed_runs(inputs);
+        e.selection = selection.clone();
+        e.received = received.clone();
+        let records = e.records.clone();
+        let walk = RecordWalk::composed(inputs, &records, &e);
+        for c in &mut e.candidates {
+            let against: &[Run] = if is_formatting(&c.value) { &received } else { &selection };
+            let on = selected_ranges(&walk.spans(c), against);
+            // Key (iii) reads the candidate's ends through the walk, as the
+            // request spells them, and the successor's ends as stored. A
+            // published position the walk leaves on a named draft's own
+            // words is one of the shot's new words, which no successor
+            // covers.
+            let new_words = on.iter().any(|(chain, ..)| walk.is_named_chain(chain));
+            for s in &mut c.successors {
+                s.covers = !on.is_empty() && !new_words && covered(&on, &s.ends);
+            }
+            c.touching = touches(&c.value, against) || !on.is_empty();
+            c.left_out = left_out.contains(&c.link);
+        }
+        e
+    }
+
+    /// Returns the selection as published and the words a reader receives,
+    /// as the answers compose the held runs.
+    fn composed_runs(&self, inputs: &Inputs) -> (Vec<Run>, Vec<Run>) {
+        let (mut selection, mut received) = (Vec::new(), Vec::new());
+        for (i, run) in inputs.selection.iter().enumerate() {
+            let Some(window) = self.windows.iter().find(|w| w.run == i) else {
+                for (piece, _) in self.pieces(i, run) {
+                    selection.push(piece.clone());
+                    received.push(piece);
+                }
+                continue;
+            };
+            for (k, part) in window.parts.iter().enumerate() {
+                match self.answer_at(window, k) {
+                    Some(Answer::Counterpart) => {
+                        if let Some(published) = part.counterpart().and_then(|s| s.run()) {
+                            selection.push(published.clone());
+                            received.push(published);
+                        }
+                    }
+                    Some(Answer::KeepPrivate) => selection.push(Run::new(window.origin.clone(), part.span.first, part.span.width)),
+                    Some(Answer::Drop | Answer::PublishFirst) | None => {}
+                }
+            }
+        }
+        (selection, received)
+    }
+
+    /// Returns the part of these windows holding the first word of `part`,
+    /// a part of the window over the held run `run`, with its index.
+    fn part_holding(&self, run: usize, part: &Part) -> Option<(usize, &Part)> {
+        let window = self.windows.iter().find(|w| w.run == run)?;
+        window.parts.iter().enumerate().find(|(_, before)| before.span.overlap(&part.span.chain, part.span.first, part.span.first + 1).is_some())
+    }
+
+    /// Returns each part of `now` — a later read of the same selection's
+    /// windows — whose naming differs from this enumeration's at its first
+    /// word: named, un-named or named by another record since, or a part
+    /// these windows held nothing of. Each with the record naming it now.
+    pub fn renamed(&self, now: &[Window]) -> Vec<(PartKey, Option<Address>)> {
+        let mut out = Vec::new();
+        for window in now {
+            for (k, part) in window.parts.iter().enumerate() {
+                let naming = part.record.as_ref().map(|r| r.link.clone());
+                let before = self.part_holding(window.run, part).map(|(_, p)| p.record.as_ref().map(|r| r.link.clone()));
+                if before.as_ref() != Some(&naming) {
+                    out.push((window.key(k), naming));
+                }
+            }
+        }
+        out
+    }
+
+    /// Returns this composition's answers carried onto `now`, a later read
+    /// of the same selection's windows (PUB-3.108).
+    ///
+    /// Each part of `now` takes the answer of the part here holding its
+    /// first word, where the two are named alike and the part admits it;
+    /// where their naming differs ([`Enumeration::renamed`]) a
+    /// [`Answer::Drop`] alone stands, every other answer asked again.
+    pub fn answers_onto(&self, now: &[Window]) -> BTreeMap<PartKey, Answer> {
+        let mut out = BTreeMap::new();
+        for window in now {
+            for (k, part) in window.parts.iter().enumerate() {
+                let Some((j, before)) = self.part_holding(window.run, part) else { continue };
+                let Some(answer) = self.windows.iter().find(|w| w.run == window.run).and_then(|w| self.answer_at(w, j)) else { continue };
+                let alike = before.record.as_ref().map(|r| &r.link) == part.record.as_ref().map(|r| &r.link);
+                if (alike || answer == Answer::Drop) && part.admits(answer) {
+                    out.insert(window.key(k), answer);
+                }
+            }
+        }
+        out
+    }
+
     /// Returns the offered candidates' indices, in order.
     pub fn offered(&self) -> Vec<usize> {
         self.candidates.iter().enumerate().filter(|(_, c)| c.offered()).map(|(i, _)| i).collect()
@@ -448,6 +858,13 @@ impl Enumeration {
             .filter(|(_, links): &(Address, Vec<Address>)| !links.is_empty())
             .collect()
     }
+}
+
+/// Returns `pieces`, the carried pieces of every held run, then every named
+/// part's counterpart among `windows`: the words any answer can publish.
+fn publishable_of(mut pieces: Vec<Run>, windows: &[Window]) -> Vec<Run> {
+    pieces.extend(windows.iter().flat_map(|w| &w.parts).filter_map(|p| p.counterpart()?.run()));
+    pieces
 }
 
 /// Places the held runs in the image: each whole at one V-ordinal, in
@@ -564,6 +981,95 @@ fn merge_atoms_of(door: &Door<'_>, d: &str, inputs: &Inputs, placed: &[Placement
     Ok(out)
 }
 
+/// Reads the own-origin windows of the selection, each in its parts.
+///
+/// It is the enumeration's windows step run on its own over one image of
+/// the draft — the shell re-reads them at a held panel's re-open, never
+/// from the read's cache (B3-S11 P2 (i)).
+///
+/// # Errors
+///
+/// The reads' faults, as [`enumerate`]'s.
+pub fn windows(p: &Publisher<'_>, inputs: &Inputs) -> Result<Vec<Window>, Fault> {
+    let door = Door::new(p.board, p.token);
+    let d = inputs.draft.to_string();
+    door.step("image");
+    let extent = door.extent(&d)?;
+    let image = door.image(&d, 1, extent)?;
+    windows_with(&door, p, inputs, &place_selection(&image, &inputs.selection))
+}
+
+/// Reads the windows through `door`, over the held runs as `placed` places
+/// them.
+///
+/// A run is a window where its origin is neither a named draft — the
+/// rendering draft, or one `also` names, whose words are re-minted — nor the
+/// trunk and is an unpublished document owned by the person exactly (one
+/// `doc_metadata` read per origin, kept), and where the draft arranges some
+/// of it. Its records are read where the origin is a draft the person
+/// reads — one four-set read over the record class homed in the origin,
+/// `from` the run, every record kept — and each arranged piece cut into its
+/// parts at their edges ([`parts_of`]).
+pub(crate) fn windows_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, placed: &[Placement]) -> Result<Vec<Window>, Fault> {
+    door.step("windows");
+    let trunk = inputs.doc.as_ref();
+    let unit = |a: &str| frames::unit_span(a).as_array().cloned().unwrap_or_default();
+    let subtype = unit(T_CORRESPONDENCE);
+    let mut out = Vec::new();
+    for (i, run) in inputs.selection.iter().enumerate() {
+        if inputs.is_named_draft(&run.origin) || trunk == Some(&run.origin) {
+            continue;
+        }
+        let origin = run.origin.to_string();
+        if !owned_by(&origin, p.account) || door.metadata(&origin)?.published {
+            continue;
+        }
+        let pieces = placed.get(i).map_or_else(Vec::new, |placement| carried(run, placement, &[]));
+        if pieces.is_empty() {
+            continue;
+        }
+        let records = if inputs.readable_drafts.contains(&run.origin) { window_records(door, p, run, &unit(&origin), &subtype)? } else { Vec::new() };
+        let parts = pieces.iter().flat_map(|(piece, ordinal)| parts_of(piece, *ordinal, &records)).collect();
+        out.push(Window { run: i, origin: run.origin.clone(), owner: account_of(&origin).unwrap_or_default(), i_start: run.i_start, width: run.width, parts });
+    }
+    Ok(out)
+}
+
+/// Reads the records homed in `run`'s origin whose `from` covers part of
+/// it: one four-set read over the record class, each record read once.
+fn window_records(door: &Door<'_>, p: &Publisher<'_>, run: &Run, origin_unit: &[Value], subtype: &[Value]) -> Result<Vec<Record>, Fault> {
+    let span = [frames::i_span(&run.i_start_text(), run.width)];
+    let mut out: Vec<Record> = Vec::new();
+    for hit in door.addrs(&run.origin.to_string(), &frames::find_links_four(Slot::Spans(origin_unit), Slot::Spans(&span), Slot::Any, Slot::Spans(subtype)))? {
+        if let Some(record) = read_record(door, p, &hit)? {
+            if record.from.overlap(&run.chain(), run.i_start, run.reach()).is_some() && !out.iter().any(|r| r.link == record.link) {
+                out.push(record);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Returns `piece`, a window's run as the draft places it at `ordinal`, cut
+/// into its parts: each stretch the first record covering its first word
+/// names, up to the end of that record's `from`, and each stretch no record
+/// covers, up to the next record's first word.
+fn parts_of(piece: &Run, ordinal: u64, records: &[Record]) -> Vec<Part> {
+    let chain = piece.chain();
+    let mut out = Vec::new();
+    let mut cursor = piece.i_start;
+    while cursor < piece.reach() {
+        let covering = records.iter().find(|r| r.from.overlap(&chain, cursor, cursor + 1).is_some());
+        let end = match covering {
+            Some(r) => r.from.reach().min(piece.reach()),
+            None => records.iter().filter_map(|r| (r.from.chain == chain && r.from.first > cursor).then_some(r.from.first)).min().unwrap_or(piece.reach()).min(piece.reach()),
+        };
+        out.push(Part { span: ISpan { chain: chain.clone(), first: cursor, width: end - cursor }, ordinal: ordinal + (cursor - piece.i_start), record: covering.cloned() });
+        cursor = end;
+    }
+    out
+}
+
 /// Returns whether `ty` is a record class no enumeration offers: the exact
 /// test over the stored type slot, the edition class with its subtypes.
 pub fn is_record_class(value: &LinkValue) -> bool {
@@ -607,12 +1113,13 @@ fn covered(ranges: &[(String, u64, u64)], cover: &[ISpan]) -> bool {
     })
 }
 
-/// Returns the selection's I-spans as four-set slot elements.
-fn selection_spans(selection: &[Run]) -> Vec<Value> {
-    selection.iter().map(|r| frames::i_span(&r.i_start_text(), r.width)).collect()
+/// Returns the runs' I-spans as four-set slot elements.
+fn run_spans(runs: &[Run]) -> Vec<Value> {
+    runs.iter().map(|r| frames::i_span(&r.i_start_text(), r.width)).collect()
 }
 
-/// Makes the enumeration's reads under a door of its own.
+/// Makes the enumeration's reads under a door of its own, and answers their
+/// composition under no answer.
 ///
 /// # Errors
 ///
@@ -631,7 +1138,8 @@ pub fn enumerate(p: &Publisher<'_>, inputs: &Inputs) -> Result<Enumeration, Faul
     enumerate_with(&door, p, inputs, true)
 }
 
-/// Makes the enumeration's reads through `door`.
+/// Makes the enumeration's reads through `door`, and answers their
+/// composition under no answer.
 ///
 /// `strict` refuses a held run not arranged whole; the re-read passes
 /// `false` and reads the placements as differences.
@@ -656,19 +1164,21 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
         }
     }
 
-    // The selection as published, and its region, from the pieces a
-    // publication carries: each held run as the draft places it, cut around
-    // its merge records — at the re-read, what the draft still arranges of
-    // it (PUB-3.108; the link-sets design §5.7).
+    // The pieces a publication can carry and their region: each held run as
+    // the draft places it, cut around its merge records — at the re-read,
+    // what the draft still arranges of it (PUB-3.108; the link-sets design
+    // §5.7).
     door.step("merge_records");
     let merge_atoms = merge_atoms_of(door, &d, inputs, &placed)?;
     let pieces: Vec<(Run, u64)> = inputs.selection.iter().zip(&placed).zip(&merge_atoms).flat_map(|((run, placement), atoms)| carried(run, placement, atoms)).collect();
-    let selection: Vec<Run> = pieces.iter().map(|(piece, _)| piece.clone()).collect();
-    if selection.is_empty() && merge_atoms.iter().any(|atoms| !atoms.is_empty()) {
+    if pieces.is_empty() && merge_atoms.iter().any(|atoms| !atoms.is_empty()) {
         return Err(Fault::OnlyMergeRecords { draft: inputs.draft.clone() });
     }
     let region = merged(pieces.iter().map(|(piece, ordinal)| (*ordinal, piece.width)).collect());
     let trunk = inputs.doc.as_ref().map(ToString::to_string);
+
+    let windows = windows_with(door, p, inputs, &placed)?;
+    let publishable = publishable_of(pieces.into_iter().map(|(piece, _)| piece).collect(), &windows);
 
     door.step("find_links_v");
     let addrs = if region.is_empty() { Vec::new() } else { door.addrs(&d, &frames::find_links_v(&d, &region))? };
@@ -702,7 +1212,7 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
             return Ok(());
         }
         let touching = match &via {
-            Via::Region => touches(&value, &selection),
+            Via::Region => touches(&value, &publishable),
             Via::ReadThrough(_) => true,
         };
         if !touching {
@@ -710,17 +1220,30 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
         }
         let (Some(link_addr), Some(home_addr)) = (parse_address(link), parse_address(home)) else { return Ok(()) };
         seen.insert(link.to_string(), candidates.len());
-        candidates.push(Candidate { link: link_addr, home: home_addr, value, via, successors: Vec::new(), revised: false });
+        candidates.push(Candidate { link: link_addr, home: home_addr, value, via, successors: Vec::new(), revised: false, touching: false, left_out: false });
         Ok(())
     };
     for a in &addrs {
         keep(a, Via::Region, door, &mut candidates, false)?;
     }
 
+    // THE COUNTERPART'S IDENTITY: the links on each named part's published
+    // words, kept as the region's are, so an answer at the part reads
+    // nothing.
+    door.step("counterparts");
+    let published_words: Vec<Value> = windows.iter().flat_map(|w| &w.parts).filter_map(Part::counterpart).map(|s| s.wire()).collect();
+    for chunk in published_words.chunks(MAX_WIRE_LIST) {
+        let mut hits = door.addrs(&d, &frames::find_links_four(Slot::Any, Slot::Spans(chunk), Slot::Any, Slot::Any))?;
+        hits.extend(door.addrs(&d, &frames::find_links_four(Slot::Any, Slot::Any, Slot::Spans(chunk), Slot::Any))?);
+        for hit in hits {
+            keep(&hit, Via::Region, door, &mut candidates, false)?;
+        }
+    }
+
     door.step("records");
     let mut records: Vec<Record> = Vec::new();
     let mut record_seen: BTreeSet<String> = BTreeSet::new();
-    let spans = selection_spans(&selection);
+    let spans = run_spans(&publishable);
     let subtype = frames::unit_span(T_CORRESPONDENCE);
     let subtype_spans = subtype.as_array().cloned().unwrap_or_default();
     for chunk in spans.chunks(MAX_WIRE_LIST) {
@@ -771,26 +1294,21 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
     door.step("claims");
     // Candidacy reads every candidate, dropped ones included, so an original
     // still drops where a covering copy has superseded its successor in turn.
+    // Each successor's ends are kept, so key (iii) is decided at every
+    // composition without a read.
     let held: BTreeSet<Address> = candidates.iter().map(|c| c.link.clone()).collect();
-    // Key (iii) reads the candidate's ends through the records, as the
-    // request spells them, and the successor's ends as stored. A selected
-    // position the records leave on a named draft's own words is one of the
-    // shot's new words, which no successor covers.
-    let walk = RecordWalk::new(inputs, &records);
     for c in &mut candidates {
         let link = c.link.to_string();
-        let on = selected_ranges(&walk.spans(c), &selection);
-        let new_words = on.iter().any(|(chain, ..)| walk.is_named_chain(chain));
         let ins = answers::claims(&door.answered(&link, &frames::in_claims(&link))?);
         for row in ins.iter().filter(|r| r.active && owned_by(&r.home, p.account)) {
             let (Some(claim), Some(new)) = (parse_address(&row.claim), parse_address(&row.new)) else { continue };
             let published_home = home_of_link(&row.new).is_some_and(|h| inputs.is_published_home(h));
-            let covers = match door.link(&row.new)? {
-                Some(value) => !on.is_empty() && !new_words && covered(&on, &value.from.iter().chain(&value.to).filter_map(ISpan::of).collect::<Vec<_>>()),
-                None => false,
+            let ends = match door.link(&row.new)? {
+                Some(value) => value.from.iter().chain(&value.to).filter_map(ISpan::of).collect(),
+                None => Vec::new(),
             };
             let candidate = held.contains(&new);
-            c.successors.push(Successor { claim, new, published_home, covers, candidate });
+            c.successors.push(Successor { claim, new, published_home, ends, covers: false, candidate });
         }
         let outs = answers::claims(&door.answered(&link, &frames::out_claims(&link))?);
         for row in outs.iter().filter(|r| r.active && owned_by(&r.home, p.account)) {
@@ -808,5 +1326,23 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
             None => homes.push((c.home.clone(), vec![i])),
         }
     }
-    Ok(Enumeration { extent, image, also, placed, merge_atoms, selection, region, candidates, records, homes, frames: door.counts(), as_of: door.as_of() })
+    let read = Enumeration {
+        extent,
+        image,
+        also,
+        placed,
+        merge_atoms,
+        windows,
+        answers: BTreeMap::new(),
+        left_out: BTreeSet::new(),
+        selection: Vec::new(),
+        received: Vec::new(),
+        region,
+        candidates,
+        records,
+        homes,
+        frames: door.counts(),
+        as_of: door.as_of(),
+    };
+    Ok(read.composed(inputs, &BTreeMap::new(), &BTreeSet::new()))
 }

@@ -28,43 +28,57 @@
 //!    what the publication carries — no publication publishes a merge
 //!    record (the merge record's decision 7), every later step composing
 //!    from the selection so cut — and a selection of merge records alone
-//!    refused; one `find_links_v` over the
+//!    refused; THE WINDOWS (§5.7; B3-S11 P2 (i)), each run onto an
+//!    unpublished draft of the person's own cut into PARTS by the records
+//!    that name its words as published, each part admitting its own
+//!    answers; one `find_links_v` over the
 //!    selection's V-spans as one region array, each address kept where its
 //!    home's account is the person's exactly, each kept link read once and
-//!    kept where its STORED endset touches the selection through a content
-//!    span; the read-through of the counterpart records whose `to` lies in
-//!    the selection and the links on their `from` spans by two batched
-//!    four-set reads; the filter's `in_claims` and `out_claims` per
-//!    candidate, a candidate dropped where an active claim of the person's
-//!    names a public successor homed in a published document of theirs
-//!    covering the published spans — the candidate's ends read through the
-//!    records, as the request spells them — or any other successor that is
-//!    itself a candidate; the candidates grouped by HOME.
+//!    kept where its STORED endset touches the words any answer can publish
+//!    through a content span; THE COUNTERPART'S IDENTITY, the links on every
+//!    named part's published words by two batched four-set reads; the
+//!    read-through of the counterpart records whose `to` lies in those
+//!    words and the links on their `from` spans by two batched four-set
+//!    reads; the filter's `in_claims` and `out_claims` per candidate, each
+//!    successor's ends kept; the candidates grouped by HOME. Then THE
+//!    COMPOSITION, re-made at every answer from those reads alone
+//!    (`Enumeration::composed`): the selection as the answers publish it —
+//!    a part by its counterpart, by its own words behind a placeholder, or
+//!    not at all — every candidate judged over it, dropped where an active
+//!    claim of the person's names a public successor homed in a published
+//!    document of theirs covering the published spans — the candidate's
+//!    ends read through the records, as the request spells them — or any
+//!    other successor that is itself a candidate, and a formatting mark
+//!    judged on the words a reader receives, never onto a placeholder.
 //! 2. [`panel`](mod@panel) — THE PANEL's DATA (§5.2): the rows by home in the design's
 //!    order with each set's state and label, the links folded by type with
 //!    their far documents, the line counts, the formatting line by its test,
 //!    the held removals as its job list with the re-makes split out, the
-//!    public row's read-with state, the own-origin WINDOWS with the
-//!    counterpart each is offered first (§5.7), read at every panel — the
-//!    drafts `also` names excluded, their runs re-minted and not windowed —
-//!    and THE STATEMENT's count per `also` draft, the passages first written
-//!    in it (B3-S11 P2 (i)); the merge records left out, per named draft;
-//!    and THE COUNT's four numbers from the rows as switched (PUB-3.8).
+//!    public row's read-with state, and THE STATEMENT's count per `also`
+//!    draft, the passages first written in it (B3-S11 P2 (i)); the merge
+//!    records left out, per named draft; and THE COUNT's four numbers from
+//!    the rows as switched (PUB-3.8). Its reads are made once, at the open,
+//!    over every candidate of every identity, and the panel is re-decided
+//!    at each answer from them alone (`Panel::composed`).
 //! 3. [`price`](mod@price) — THE PRICE (§5.6): the lists, the body, the staged bytes,
 //!    the in-lock reads, each against its cap, from the worst-case table the
 //!    daemon prices by, pinned equal to it.
 //! 4. [`request`](mod@request) — THE RE-READ (§5.6, §5.7) and THE REQUEST (§5.7): the
-//!    enumeration read again over the same held selection, every test over
-//!    what the draft still arranges of it, and the two answers diffed, the
-//!    held runs placed by the one image, a difference answered as a
+//!    enumeration read again over the same held selection and composed
+//!    under the answers carried onto its windows, every test over what the
+//!    draft still arranges of it, and the two answers diffed — a window part
+//!    named, un-named or re-named since among the differences — the held
+//!    runs placed by the one image, a difference answered as a
 //!    re-statement for the caller to confirm again; then the request built
-//!    from the confirmed rows — every member, the kept places, the
-//!    member-position end spelled canonically from the client's own runs, the
-//!    signed body through the one body builder, a fresh `id`.
+//!    from the confirmed rows, composed from the answers at each part —
+//!    every member, the kept places, the member-position end spelled
+//!    canonically from the client's own runs, the signed body through the
+//!    one body builder, a fresh `id`.
 //! 5. [`send`](mod@send) — THE SEND AND THE FACES (§5.7): the frame under the token,
 //!    never unsigned on a claimed board, the one re-ask under the same `id`,
-//!    the refusal family as typed arms with their sites, the one re-sign at
-//!    a skipped deposit.
+//!    the refusal family as typed arms with their sites — an entry the
+//!    board refuses by its lineage the arm the caller leaves it out by —
+//!    the one re-sign at a skipped deposit.
 //! 6. [`landed`](mod@landed) — THE LANDED TEST (§5.5, §5.7): the twin pre-check before
 //!    the act, and after a lost answer or `already_published` the one test
 //!    that says whether THIS request's effect committed and in which member
@@ -74,9 +88,10 @@
 //!
 //! The caller — the shell for the page (brief 2), the merge landing for its
 //! bare shot, a test — holds the selection as I-runs in V-order (P51), its
-//! readable drafts, its published documents, the rows' switches and the
-//! answers at a window onto its own unpublished origin; nothing here asks a
-//! person anything. Every read goes through one door, `Door`, under the
+//! readable drafts, its published documents, the rows' switches, the
+//! answers at each part of a window onto its own unpublished origin and the
+//! originals a lineage refusal left out; nothing here asks a person
+//! anything. Every read goes through one door, `Door`, under the
 //! caller's token, which counts its frames per step and caches each link's
 //! value — links never change — so the report can say what each step costs.
 
@@ -107,12 +122,12 @@ pub mod send;
 mod tests;
 
 pub use base::{draft_base, left_behind, standing, Standing, Unrecorded};
-pub use enumerate::{enumerate, is_merge_record, AlsoImage, Candidate, Enumeration, Placement, Record, Successor, Via, MAX_WIRE_LIST, MERGE_RECORD_TYPE};
+pub use enumerate::{enumerate, is_formatting, is_formatting_type, is_merge_record, windows, AlsoImage, Answer as OriginAnswer, Candidate, Enumeration, Part, PartKey, Placement, Record, Successor, Via, Window, MAX_WIRE_LIST, MERGE_RECORD_TYPE};
 pub use landed::{landed, twin_precheck, Base, Missing, Recomposed, Verdict};
-pub use panel::{count, inherited, is_formatting_type, panel, windows, Count, Counterpart, Destination, Formatting, Inherited, LineCounts, MergeRecords, Original, Panel, Removal, Row, RowKind, Switches, TypeFold, Window};
+pub use panel::{count, inherited, panel, Count, Destination, Formatting, Inherited, LineCounts, MergeRecords, Original, Panel, PartCounts, Removal, Row, RowKind, Switches, TypeFold};
 pub use price::{price, OriginalShape, Price, Term};
-pub use request::{build, originals_of, reread, AlsoPlaces, Answer as OriginAnswer, Built, Confirmed, End, Entry, EntryHome, Inert, OriginalEntry, Piece, Reread, Request, Restatement, Unspellable};
-pub use send::{send, Ack, AckVia, OwnFault, RaceKey, Refusal, Sent, SupersedeCause};
+pub use request::{build, originals_of, reread, AlsoPlaces, Built, Confirmed, End, Entry, EntryHome, Inert, OriginalEntry, OwedAnswer, Piece, Reread, Request, Restatement, Unspellable};
+pub use send::{send, Ack, AckVia, LineageCause, OwnFault, RaceKey, Refusal, Sent, SupersedeCause};
 
 /// One run of permanent content I-addresses — the selection's unit, and a
 /// request's.
@@ -239,6 +254,32 @@ impl ISpan {
             }
         }
         covered >= self.width
+    }
+
+    /// Returns the span less every position `cut` holds on its chain: the
+    /// stretches left, in order.
+    pub(crate) fn less(&self, cut: &[ISpan]) -> Vec<ISpan> {
+        let mut pieces = vec![(self.first, self.reach())];
+        for c in cut.iter().filter(|c| c.chain == self.chain) {
+            let (lo_c, hi_c) = (c.first, c.reach());
+            pieces = pieces
+                .into_iter()
+                .flat_map(|(lo, hi)| {
+                    if hi_c <= lo || lo_c >= hi {
+                        return vec![(lo, hi)];
+                    }
+                    let mut kept = Vec::new();
+                    if lo < lo_c {
+                        kept.push((lo, lo_c));
+                    }
+                    if hi_c < hi {
+                        kept.push((hi_c, hi));
+                    }
+                    kept
+                })
+                .collect();
+        }
+        pieces.into_iter().map(|(lo, hi)| ISpan { chain: self.chain.clone(), first: lo, width: hi - lo }).collect()
     }
 
     /// Returns the span's spelling as a `spans`-form element.

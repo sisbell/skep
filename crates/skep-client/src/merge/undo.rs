@@ -81,11 +81,16 @@
 //! or against `own_ack`, the caller's own last acknowledged write on the
 //! draft, where that is later: the editor's rule, as every burst is typed,
 //! so the person's own later changes, taken back first on the editor's
-//! stack, never leave the undo refused. No position below the landing's
-//! lands, the landing having changed the arrangement there, so the later of
-//! the two is the one sent; a position past the board's head as the first
-//! read names it is no acknowledgment's, and is refused before any other
-//! read. The write's id names the draft and the typed position.
+//! stack, never leave the undo refused. With `own_ack` none it lands only
+//! where the arrangement has not changed since the landing: taking a later
+//! change back changes it again, and no frame typed below the arrangement's
+//! last change lands (wire.md §Rejection codes, `arrangement_moved`), so its
+//! refusal says to edit the draft, never to take the change back first. No
+//! position below the landing's lands, the landing having changed the
+//! arrangement there, so the later of the two is the one sent; a position
+//! past the board's head as the first read names it is no acknowledgment's,
+//! and is refused before any other read. The write's id names the draft and
+//! the typed position.
 //!
 //! **The guarantees.** Each act is one write: a draft changed since the
 //! position it is typed against is refused `arrangement_moved` by the board
@@ -245,10 +250,11 @@ pub struct Withdrawn {
 /// - the one write's: `arrangement_moved` as the board's verdict,
 ///   [`Refusal::Halt`] with `Refused` saying the draft changed since the
 ///   position the write was typed against — the landing, or the caller's
-///   last write with the landing's position beside it — and that nothing
-///   was changed; [`Refusal::NotOwner`];
-///   [`Refusal::Published`]; [`Refusal::WindowWithheld`];
-///   [`Refusal::NeedsSignedSession`]; [`Refusal::NoSuchDocument`];
+///   last write with the landing's position beside it — that nothing was
+///   changed, and with `own_ack` none that the undo can no longer land;
+///   [`Refusal::NotOwner`]; [`Refusal::Published`];
+///   [`Refusal::WindowWithheld`]; [`Refusal::NeedsSignedSession`];
+///   [`Refusal::NoSuchDocument`];
 ///   `source_not_registered`, `no_base_to_record`, `base_not_in_chain`,
 ///   `base_extent_too_large` and the runs' refusals as the library's own
 ///   faults, since it sends only the base it read and the runs it read,
@@ -381,7 +387,7 @@ pub fn undo(
         Some(&format!("{stem}.arrangement")),
     );
     writer.check_journal(journal, &format!("the merge cannot be taken out of {draft}"))?;
-    let act = Act::Undo { landing };
+    let act = Act::Undo { landing, own_ack: own_ack.is_some() };
     let position = send(&writer, &frame, draft, as_of, act)?;
     let record = replace_record(board, merger, kind, draft, &stem, journal, act)?;
     Ok(Undone { draft: draft.clone(), position, record, restored })
@@ -465,10 +471,14 @@ pub fn withdraw(
 /// restore, whose write is judged by [`judge`] as theirs are.
 #[derive(Clone, Copy)]
 pub(crate) enum Act {
-    /// An undo, carrying the position of the landing it takes back, which
-    /// its words name where the write was typed past it.
+    /// An undo: its landing's position and whether `own_ack` was given.
+    ///
+    /// Its words name `landing` where the write was typed past it. With
+    /// `own_ack` false the write is typed against the landing (P3), and no
+    /// later change, one taken back included, lets it land.
     Undo {
         landing: u64,
+        own_ack: bool,
     },
     Withdraw,
     Restore,
@@ -696,9 +706,10 @@ fn send(writer: &Writer<'_>, frame: &Value, draft: &Address, as_of: u64, act: Ac
 ///
 /// The frame was typed against `as_of` for `act`; its refusals are mapped
 /// as the module's doc lists them, each the same at every act but
-/// `arrangement_moved`, whose words are the act's own — an undo typed past
-/// its landing naming `as_of` as the caller's last write, and the landing's
-/// position beside it.
+/// `arrangement_moved`, whose words are the act's own — an undo with no
+/// `own_ack` saying it can no longer land, and one typed past its landing
+/// naming `as_of` as the caller's last write, and the landing's position
+/// beside it.
 ///
 /// # Errors
 ///
@@ -716,9 +727,9 @@ pub(crate) fn judge(v: &Value, draft: &Address, as_of: u64, act: Act) -> Result<
     let Some(r) = Rejection::of(v) else { return Err(shape_face("set_arrangement", v).into()) };
     let site = r.site().addr.as_deref().and_then(parse_address);
     Err(match r.key() {
-        // Another hand's edit past the typed position: the board's verdict,
-        // its words the person's, and nothing was changed (the one write
-        // wipes nothing).
+        // A change past the typed position: the board's verdict, its words
+        // the person's, and nothing was changed (the one write wipes
+        // nothing).
         "arrangement_moved" => {
             let current = v["site"]["current"].as_u64();
             let since = |what: &str| match current {
@@ -726,10 +737,16 @@ pub(crate) fn judge(v: &Value, draft: &Address, as_of: u64, act: Act) -> Result<
                 None => format!(" ({what} at position {as_of})"),
             };
             let detail = match act {
-                Act::Undo { landing } if landing == as_of => format!("{draft} changed since the merge landed{} — nothing was changed; undo the later changes first, or edit", since("the merge landed")),
+                // Typed at the landing with no `own_ack`: taking a change back
+                // changes the draft again, so this undo never lands.
+                Act::Undo { own_ack: false, .. } => format!("{draft} changed since the merge landed{} — nothing was changed; an undo typed against the landing can no longer land, since taking the later changes back changes the draft again: edit the draft as it stands", since("the merge landed")),
+                // Typed at the landing, the caller's own last write before it:
+                // the later changes taken back through the caller move that
+                // write past the landing, where the next undo is typed.
+                Act::Undo { landing, .. } if landing == as_of => format!("{draft} changed since the merge landed{} — nothing was changed; undo the later changes first, or edit", since("the merge landed")),
                 // Typed at the caller's own last write past the landing: the
                 // change since it is another hand's.
-                Act::Undo { landing } => format!("{draft} changed since your last write to it{} — the change is another hand's, made after the merge landed at position {landing}, and it stands; nothing was changed: edit the draft as it stands", since("your last write was")),
+                Act::Undo { landing, .. } => format!("{draft} changed since your last write to it{} — the change is another hand's, made after the merge landed at position {landing}, and it stands; nothing was changed: edit the draft as it stands", since("your last write was")),
                 Act::Withdraw | Act::Restore => format!("{draft} changed since it was read{} — nothing was changed; run this again, which reads the draft as it stands", since("read")),
             };
             Refusal::Halt(Halt::Refused(Refused {

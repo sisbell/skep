@@ -5827,11 +5827,14 @@ mod scripted {
         assert_eq!(dialer.frames("make_link")[0]["to"]["addrs"], json!([S]));
     }
 
-    /// ANOTHER HAND's EDIT SINCE THE LANDING: the undo, typed against the
-    /// landing's position, is refused `arrangement_moved` by the board — its
-    /// words the person's, naming the draft and that nothing was changed —
-    /// with the edit standing, nothing committed, the base and the marker as
-    /// they stood and no record.
+    /// An undo past another hand's edit since the landing is refused whole.
+    ///
+    /// Typed against the landing's position, `own_ack` none, the undo is
+    /// refused `arrangement_moved` by the board, its words the person's: the
+    /// draft, that nothing was changed, and that an undo typed against the
+    /// landing can no longer land, never to undo the later changes first
+    /// (P3). The edit stands, nothing is committed, the base and the marker
+    /// stand as they did, and no record is written.
     #[test]
     fn undo_after_another_hands_edit_is_refused_arrangement_moved_with_nothing_committed() {
         let (dialer, board, signer) = open(draft_landing_world());
@@ -5852,6 +5855,8 @@ mod scripted {
         let detail = refused.detail.as_deref().expect("the person's words");
         assert!(detail.contains(S) && detail.contains("changed since the merge landed") && detail.contains("nothing was changed"), "{detail}");
         assert!(detail.contains(&format!("position {at}")) && detail.contains(&format!("changed at {edit_at}")), "{detail}");
+        assert!(detail.contains("can no longer land") && detail.contains("edit the draft as it stands"), "{detail}");
+        assert!(!detail.contains("undo the later changes first"), "no take-back lands an undo typed at the landing: {detail}");
         assert_eq!(dialer.frames("set_arrangement")[0]["as_of"].as_u64(), Some(at), "typed against the landing's position, never a fresh read");
         let w = dialer.world();
         assert_eq!(w.docs.get(S).unwrap().runs, edited, "the other hand's edit stands: nothing wiped");
@@ -5861,15 +5866,18 @@ mod scripted {
         assert!(dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(), "no record");
     }
 
-    /// THE EDITOR's TYPING (P3; skep #811): after the landing the person
-    /// edits `S` and takes the edit back — two commits, `S` holding M again
-    /// with its arrangement moved past the landing — so the undo typed
-    /// against the landing is refused `arrangement_moved`; typed against
+    /// An undo typed at the editor's last ack lands past an edit taken back.
+    ///
+    /// After the landing the person edits `S` and takes the edit back: two
+    /// commits, `S` holding M again with its arrangement moved past the
+    /// landing (P3; skep #811). Typed against the landing, `own_ack` none,
+    /// the undo is refused `arrangement_moved`, its words saying it can no
+    /// longer land and never to undo the later changes first. Typed against
     /// the editor's own last acknowledgment, the taking-back's position `r`,
-    /// it lands: one frame, `as_of` `r`, C as the runs, the old base, no
-    /// head and no merge, the id naming the draft and `r`; the draft holds
-    /// C, its base `D.1` at eleven, the marker cleared, and the replacing
-    /// record is written under the same stem.
+    /// it lands: one frame, `as_of` `r`, C as the runs, the old base, no head
+    /// and no merge, the id naming the draft and `r`; the draft holds C, its
+    /// base `D.1` at eleven, the marker cleared, and the replacing record is
+    /// written under the same stem.
     #[test]
     fn undo_typed_at_the_editors_own_last_ack_lands_after_its_later_edit_was_taken_back() {
         let (dialer, board, signer) = open(draft_landing_world());
@@ -5884,6 +5892,9 @@ mod scripted {
         let err = undo(&board, merger(&session, &signer), &a(S), &a(K), None, None).expect_err("typed at the landing");
         let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
         assert_eq!(refused.code, "arrangement_moved", "the premise: the landing's typing is refused once the arrangement moved, M again or not");
+        let detail = refused.detail.as_deref().expect("the person's words");
+        assert!(detail.contains("can no longer land") && detail.contains("edit the draft as it stands"), "{detail}");
+        assert!(!detail.contains("undo the later changes first"), "taking the edit back left it refused: {detail}");
         dialer.clear();
         let undone = undo(&board, merger(&session, &signer), &a(S), &a(K), Some(r), None).expect("undone at the editor's own last ack");
         assert_eq!(undone.restored, Some((a(&format!("{D}.1")), 11)), "the pair read before the landing");
@@ -5921,6 +5932,37 @@ mod scripted {
         let frame = &dialer.frames("set_arrangement")[0];
         assert_eq!(frame["as_of"].as_u64(), Some(at), "the landing's position, the later: {frame}");
         assert_eq!(frame["id"].as_str(), Some(format!("undo:{S}:{at}.arrangement").as_str()));
+        assert_eq!(dialer.world().docs.get(S).unwrap().runs, draft_c(), "C again");
+    }
+
+    /// An undo typed at the landing for an earlier own ack advises a take-back.
+    ///
+    /// The editor's last acknowledgment on `S` names a write before the
+    /// landing, and another hand edits `S` after the landing, so the undo,
+    /// typed against the landing's position, is refused `arrangement_moved`,
+    /// its words saying to undo the later changes first, or edit, and never
+    /// that it can no longer land (P3). The editor taking the edit back makes
+    /// a write of its own past the landing, and the undo typed at it lands C.
+    #[test]
+    fn undo_typed_at_an_own_ack_before_the_landing_advises_taking_a_later_change_back() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let before = dialer.world().position;
+        let (_, landed) = landed_in_s(&board, &session, &signer);
+        let (at, _) = landing_of(&landed);
+        // Another hand's edit after the landing: the "!!!" deleted.
+        dialer.world().change(S, vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7)]);
+        dialer.clear();
+        let err = undo(&board, merger(&session, &signer), &a(S), &a(K), Some(before), None).expect_err("another hand's edit since the landing");
+        let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
+        assert_eq!(refused.code, "arrangement_moved");
+        assert_eq!(dialer.frames("set_arrangement")[0]["as_of"].as_u64(), Some(at), "typed against the landing's position, the later");
+        let detail = refused.detail.as_deref().expect("the person's words");
+        assert!(detail.contains("changed since the merge landed") && detail.contains("undo the later changes first, or edit"), "{detail}");
+        assert!(!detail.contains("can no longer land"), "{detail}");
+        // The editor takes the edit back: a write of its own past the landing.
+        let r = dialer.world().change(S, draft_m());
+        undo(&board, merger(&session, &signer), &a(S), &a(K), Some(r), None).expect("undone at the editor's own last ack");
         assert_eq!(dialer.world().docs.get(S).unwrap().runs, draft_c(), "C again");
     }
 
@@ -6211,12 +6253,12 @@ mod scripted {
     /// since the undo, the re-run typed at their own last ack: nothing sent,
     /// the edit standing. (e) A restore of M after the undo, the latest
     /// re-arrangement M: the undo is the board's to judge — typed at the
-    /// landing in a fresh session it is refused `arrangement_moved`, typed
-    /// at the restore it lands C. (f) A record minted over C's own words
-    /// between the two runs: the state at the undo's row, mapped through
-    /// it, is C mapped. (g) The undo's acknowledgment lost: its re-run in
-    /// the same session finds the merge taken back, the landing's record
-    /// current.
+    /// landing in a fresh session it is refused `arrangement_moved`, its
+    /// words saying it can no longer land, and typed at the restore it lands
+    /// C. (f) A record minted over C's own words between the two runs: the
+    /// state at the undo's row, mapped through it, is C mapped. (g) The
+    /// undo's acknowledgment lost: its re-run in the same session finds the
+    /// merge taken back, the landing's record current.
     #[test]
     fn a_baseless_undo_run_again_after_it_landed_is_nothing_to_undo() {
         let plain = "1.0.1.0.5";
@@ -6372,7 +6414,8 @@ mod scripted {
         assert!(
             detail.contains("changed since the merge landed")
                 && detail.contains(&format!("position {at}"))
-                && detail.contains(&format!("changed at {r}")),
+                && detail.contains(&format!("changed at {r}"))
+                && detail.contains("can no longer land"),
             "(e): {detail}"
         );
         assert_eq!(dialer.world().docs.get(plain).unwrap().runs, restored, "(e): M stands");

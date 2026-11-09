@@ -1395,10 +1395,12 @@ fn a_resume_finds_no_landing_in_a_draft_staged_from_the_one_it_landed_in() {
     session.close().expect("close");
 }
 
-/// AN EDIT SINCE THE LANDING: "?" typed at the start of the landed draft,
-/// then `undo` — typed against the landing's position — is refused
-/// `arrangement_moved` by the board, the edit kept, the marker standing,
-/// nothing written.
+/// An undo after an edit since the landing is refused, the edit kept.
+///
+/// "?" is typed at the start of the landed draft, then `undo`, typed against
+/// the landing's position with `own_ack` none, is refused `arrangement_moved`
+/// by the board, its words saying it can no longer land (P3); the edit is
+/// kept, the marker stands and nothing is written.
 #[test]
 fn an_undo_after_an_edit_since_the_landing_is_refused_with_the_edit_kept() {
     let rig = Rig::new();
@@ -1421,7 +1423,7 @@ fn an_undo_after_an_edit_since_the_landing_is_refused_with_the_edit_kept() {
     assert_eq!(refused.code, "arrangement_moved", "{refused:?}");
     let detail = refused.detail.as_deref().expect("the person's words");
     assert!(detail.contains(&draft.to_string()) && detail.contains("changed since the merge landed") && detail.contains("nothing was changed"), "{detail}");
-    assert!(detail.contains(&format!("position {at}")), "{detail}");
+    assert!(detail.contains(&format!("position {at}")) && detail.contains("can no longer land"), "{detail}");
     assert_eq!(image(&rig.board, &token, &draft, 19), edited, "the edit kept");
     let meta = rig.metadata(&token, &draft);
     assert_eq!((meta["base"].as_str(), meta["merge"]["at"].as_u64()), (Some(head.to_string().as_str()), Some(at)), "the base and the marker as they stood: {meta}");
@@ -1429,15 +1431,17 @@ fn an_undo_after_an_edit_since_the_landing_is_refused_with_the_edit_kept() {
     session.close().expect("close");
 }
 
-/// THE EDITOR's TYPING (P3; skep #811): after the landing the editor types
-/// "?" at the start of the draft and deletes it, each typed at its own last
-/// ack — the draft holding M again, its arrangement moved past the landing,
-/// so the undo typed at the landing is refused. Another hand's "#" then
-/// lands, and the undo typed at the editor's own last ack is refused
-/// `arrangement_moved` naming both positions, the insert kept, the marker
-/// standing, nothing written. Once the editor takes the "#" out in turn, the
-/// undo typed at that ack lands: C again, the base `D.1` at eleven, the
-/// marker gone, the undo's row naming the base and no merge, and the
+/// An undo typed at the editor's own last ack lands past its own edits alone.
+///
+/// After the landing the editor types "?" at the start of the draft and
+/// deletes it, each typed at its own last ack (P3; skep #811): the draft
+/// holds M again, its arrangement moved past the landing, so the undo typed
+/// at the landing is refused, its words saying it can no longer land.
+/// Another hand's "#" then lands, and the undo typed at the editor's own last
+/// ack is refused `arrangement_moved` naming both positions, the insert kept,
+/// the marker standing, nothing written. Once the editor takes the "#" out in
+/// turn, the undo typed at that ack lands: C again, the base `D.1` at eleven,
+/// the marker gone, the undo's row naming the base and no merge, and the
 /// replacing record current for the key.
 #[test]
 fn an_undo_typed_at_the_editors_own_last_ack_lands_once_its_later_edits_are_taken_back_and_refuses_another_hands() {
@@ -1461,6 +1465,8 @@ fn an_undo_typed_at_the_editors_own_last_ack_lands_once_its_later_edits_are_take
     assert_eq!(image(&rig.board, &token, &draft, 18), m, "the premise: M again");
     let Err(Refusal::Halt(Halt::Refused(moved))) = undo(&rig.board, merger, &draft, &kind, None, None) else { panic!("the landing's typing lands past the editor's own edits") };
     assert_eq!(moved.code, "arrangement_moved", "the premise: typed at the landing, refused: {moved:?}");
+    let words = moved.detail.as_deref().expect("the person's words");
+    assert!(words.contains("can no longer land") && !words.contains("undo the later changes first"), "taking the edit back left it refused: {words}");
     // Another hand's insert past the editor's last ack: refused.
     let theirs = insert_text(&rig.board, &rig.bare, &s, 1, "#");
     let edited = image(&rig.board, &token, &draft, 19);

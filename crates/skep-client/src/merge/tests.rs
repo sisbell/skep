@@ -1675,11 +1675,12 @@ mod scripted {
                         return Ok(rejected("doc_not_registered"));
                     }
                     // The recorded base and the marker as they stood at
-                    // `position`.
+                    // `position`, and the document's age, the position the
+                    // world minted it at.
                     let staged = d.staged.range(..=position).next_back().map(|(_, s)| s);
                     let marker = d.markers.range(..=position).next_back().and_then(|(_, m)| m.clone());
                     let merge = marker.map(|m| json!({"sides": m.sides, "head": m.head, "head_copied": m.head_copied.to_string(), "at": m.at}));
-                    Ok(reply(200, json!({"resp": "doc_metadata", "as_of": position, "doc": doc, "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string()), "source": d.source, "base": staged.map(|(b, _)| b.clone()), "base_copied": staged.map(|(_, c)| c.to_string()), "merge": merge})))
+                    Ok(reply(200, json!({"resp": "doc_metadata", "as_of": position, "doc": doc, "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string()), "source": d.source, "base": staged.map(|(b, _)| b.clone()), "base_copied": staged.map(|(_, c)| c.to_string()), "merge": merge, "at": d.history.keys().next()})))
                 }
                 "retrieve_doc_v_span_set" => {
                     let doc = frame["doc"].as_str().unwrap();
@@ -7095,6 +7096,110 @@ mod scripted {
             "(e): the landing, at the marker's position"
         );
         assert!(wrote(&dialer).is_empty(), "(e): nothing written: {:?}", dialer.ops());
+    }
+
+    /// A resume never finds a landing by a marker its draft was staged with.
+    ///
+    /// A stage of a draft the merge landed in copies its words and its
+    /// marker, the marker stamped at the stage's own commit, the copy's mint
+    /// (P2): the copy holds M and a marker naming the merge, and no landing
+    /// of it (skep #913). The race shape is landed in `T`, a draft no side
+    /// names, and `T′` is staged from `T`. (a) `resume` naming `T′` answers
+    /// none, reading nothing at a position and writing nothing, `T`'s record
+    /// current. (b) `resume` naming `T` answers `T`'s landing. (c) The
+    /// journal reclaimed past the landing and the stage: (a) and (b) answer
+    /// as they did. (d) The merge composed again and landed in `T′`: that
+    /// landing's marker stands past the mint, and `resume` answers it,
+    /// writing nothing. (e) `T″` staged from `T′`: none, nothing written.
+    #[test]
+    fn a_resume_never_finds_a_landing_by_a_marker_its_draft_was_staged_with() {
+        let writes = ["stage", "set_arrangement", "create_new_document", "insert", "make_link"];
+        let wrote = |dialer: &Scripted| {
+            dialer.ops().into_iter().filter(|o| writes.contains(&o.as_str())).collect::<Vec<_>>()
+        };
+        let t = "1.0.1.0.5";
+        let mut w = World::race();
+        w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
+        w.staged(t, &format!("{D}.1"), 11);
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let into = |draft: &str| draft_landing(&session, &signer, Some(a(draft)));
+        let stage = |from: &str| -> (String, u64) {
+            let frame = frames::stage(from, None);
+            let Answer::Document(ack) = board.op(Some(session.token()), &frame).expect("the stage")
+            else {
+                panic!("closed")
+            };
+            (acked_addr(&ack).expect("the copy").to_string(), acked_at(&ack).expect("its position"))
+        };
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        let landed = land(&board, &merged, into(t)).expect("landed in T");
+        let (landed_at, link) = landing_of(&landed);
+        let (copy, staged_at) = stage(t);
+        {
+            let w = dialer.world();
+            assert_eq!(w.docs.get(&copy).unwrap().runs, m_runs(&merged), "the premise: T′ holds M");
+            let marker = w.standing(&copy).1.expect("the premise: T′'s marker");
+            assert_eq!(
+                (marker.head, marker.sides, marker.at),
+                (format!("{D}.2"), vec![format!("{D}.1.1")], staged_at),
+                "the premise: the merge's marker, stamped at T′'s mint"
+            );
+        }
+        let rows = dialer.world().rows.len();
+        let t_record = |cell: &str| {
+            let found = current(&board, Some(session.token()), &a(K), &merged.key)
+                .expect("the lookup")
+                .expect("a record");
+            let in_t = RecordLanding::Draft { draft: a(t), position: landed_at };
+            assert_eq!(
+                (found.link, found.landed),
+                (Some(link.clone()), Some(in_t)),
+                "{cell}: T's record current"
+            );
+        };
+
+        // (a) The copy: no landing.
+        dialer.clear();
+        assert_eq!(resume(&board, &merged, into(&copy)), Ok(None), "(a): no landing in T′");
+        assert!(wrote(&dialer).is_empty(), "(a): nothing written: {:?}", dialer.ops());
+        assert!(
+            dialer.ops().iter().all(|o| !o.starts_with("at:")),
+            "(a): nothing read at a position: {:?}",
+            dialer.ops()
+        );
+        assert_eq!(dialer.world().rows.len(), rows, "(a): nothing committed");
+        t_record("(a)");
+
+        // (b) The draft the merge landed in: its landing.
+        dialer.clear();
+        assert_eq!(resume(&board, &merged, into(t)), Ok(Some(as_found(&landed))), "(b)");
+        assert!(wrote(&dialer).is_empty(), "(b): nothing written: {:?}", dialer.ops());
+
+        // (c) The journal reclaimed past the landing and the stage.
+        let floor = dialer.world().position;
+        dialer.world().floor = Some(floor);
+        assert_eq!(resume(&board, &merged, into(&copy)), Ok(None), "(c): no landing in T′");
+        assert_eq!(resume(&board, &merged, into(t)), Ok(Some(as_found(&landed))), "(c): T's");
+        assert_eq!(dialer.world().rows.len(), rows, "(c): nothing committed");
+        t_record("(c)");
+
+        // (d) Composed again and landed in the copy: a landing of its own.
+        let again = compose(&board, Some(session.token()), &race_inputs()).expect("composed again");
+        let relanded = land(&board, &again, into(&copy)).expect("landed in T′");
+        let (again_at, _) = landing_of(&relanded);
+        assert!(again_at > staged_at, "(d): the premise, a write past T′'s mint");
+        dialer.clear();
+        assert_eq!(resume(&board, &again, into(&copy)), Ok(Some(as_found(&relanded))), "(d)");
+        assert!(wrote(&dialer).is_empty(), "(d): nothing written: {:?}", dialer.ops());
+
+        // (e) A copy of the copy: no landing.
+        let (copy2, _) = stage(&copy);
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        assert_eq!(resume(&board, &again, into(&copy2)), Ok(None), "(e): no landing in T″");
+        assert!(wrote(&dialer).is_empty(), "(e): nothing written: {:?}", dialer.ops());
+        assert_eq!(dialer.world().rows.len(), rows, "(e): nothing committed");
     }
 
     /// A composition landed again in a fresh session names its own landing.

@@ -133,7 +133,11 @@
 //! the write's `at`. [`resume`] finds a landing in a draft named by that same
 //! marker or row, at the position it marks, the draft holding M — never by
 //! the draft's words, which a withdrawal keeps: a landing withdrawn or
-//! undone, its mark cleared, leaves nothing to resume (R2).
+//! undone, its mark cleared, leaves nothing to resume (R2). Nor is a
+//! landing found by a marker the draft inherited when it was staged from a
+//! marked draft: the stage copies the marker with the words, stamped at its
+//! own commit, the draft's mint (P2), so a marker whose `at` is the draft's
+//! own `at` in its `doc_metadata` marks no landing in it.
 //!
 //! **The per-session ids.** Every write of a landing carries the id
 //! `<stem>.<frame>`, its stem `merge:` and the SHA-256, in lowercase hex,
@@ -514,7 +518,9 @@ pub fn land(board: &Board, merged: &Merged, landing: Landing<'_>) -> Result<Land
 /// to find. The draft's mark is the marker naming this merge, or on a draft
 /// with no recorded base its latest `set_arrangement` row naming it, never
 /// the draft's words: a landing withdrawn or undone, its mark cleared, is
-/// no landing to resume, whatever the draft holds (R2). A draft landing
+/// no landing to resume, whatever the draft holds (R2); nor is a marker the
+/// draft inherited when it was staged from a draft the merge landed in,
+/// whose `at` is the draft's own mint (P2). A draft landing
 /// reads the merger's newest record for the key first, as [`land`] does, so
 /// the record it completes goes under the landing's own ids; a fresh
 /// landing names no draft to read, and that record is its answer where it
@@ -1550,8 +1556,9 @@ impl Writer<'_> {
     /// read as it stands, and it answers the position of this merge's
     /// landing as the board marks it ([`Writer::marked_landing`]) where the
     /// draft holds M, or `None` where the board marks no landing of this
-    /// merge — a take-back cleared it, or none was made — or the draft holds
-    /// another list.
+    /// merge — a take-back cleared it, none was made, or the draft's marker
+    /// is the one its stage copied from the draft it was staged from — or
+    /// the draft holds another list.
     ///
     /// # Errors
     ///
@@ -1710,19 +1717,24 @@ impl Writer<'_> {
     /// Returns the position of this merge's landing in `into`, as the board
     /// marks it.
     ///
-    /// It is the landing the board shows, read as the undo finds one, by the
-    /// base record `meta` answers for the draft as it stands (P4, N4). With a
-    /// base, it is the marker (`meta`'s `merge`) where it names the head the
-    /// merge composed on and the sides the landing marks ([`marked_sides`]):
-    /// set by the landing whether or not its record was written, cleared by a
-    /// take-back and by the draft's `publish`. With none, the draft carries no
-    /// marker, and it is the draft's latest `set_arrangement` row on the
-    /// supplement where that row's `merge` names them (wire.md §The change
-    /// feed): an undo or a restore after the landing writes a row naming no
-    /// merge, and another merge's landing a row naming another. `None` where
-    /// no such landing stands, whatever the draft holds: a withdrawal keeps
-    /// M's words and another write can leave a list equal to M, so the words
-    /// never tell a landing (R2).
+    /// It is the landing the board shows, read by the base record `meta`
+    /// answers for the draft as it stands (P4, N4). With a base, it is the
+    /// marker (`meta`'s `merge`) where it names the head the merge composed
+    /// on and the sides the landing marks ([`marked_sides`]): set by the
+    /// landing whether or not its record was written, cleared by a take-back
+    /// and by the draft's `publish`. A marker whose `at` is the draft's own
+    /// mint, `meta`'s `at`, marks none: the stage that minted the draft
+    /// copied it from the draft it was staged from, stamped at that stage's
+    /// commit (P2), while a landing's own stands past the mint, the board
+    /// writing only into a draft it has registered. With no base, the draft
+    /// carries no marker, and it is the draft's latest `set_arrangement` row
+    /// on the supplement where that row's `merge` names them (wire.md §The
+    /// change feed): an undo or a restore after the landing writes a row
+    /// naming no merge, and another merge's landing a row naming another.
+    /// `None` where no such landing stands, whatever the draft holds: a
+    /// withdrawal keeps M's words, a stage copies them with the marker, and
+    /// another write can leave a list equal to M, so the words never tell a
+    /// landing (R2).
     ///
     /// # Errors
     ///
@@ -1740,7 +1752,8 @@ impl Writer<'_> {
                 .merge
                 .as_ref()
                 .filter(|m| m.head == head && m.sides == sides)
-                .and_then(|m| m.at));
+                .and_then(|m| m.at)
+                .filter(|at| meta.at != Some(*at)));
         }
         let mut latest = None;
         feed_rows(&self.reader, &into.to_string(), true, |row| {

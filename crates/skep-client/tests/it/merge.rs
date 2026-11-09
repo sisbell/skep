@@ -42,7 +42,9 @@
 //! and landed after it, in the same session and in a fresh one, a write and
 //! a record of its own; a landing withdrawn
 //! — the words kept, the marker cleared, and a `resume` naming the draft
-//! finding no landing (skep #888); an undo after an edit refused with
+//! finding no landing (skep #888); a `resume` naming a draft staged from a
+//! landed one finding none in the copy, whose marker the stage stamped at
+//! the copy's mint (skep #913); an undo after an edit refused with
 //! the edit kept; an undo typed at the editor's own last ack landing once
 //! its later edits are taken back, and refused past another hand's change
 //! (skep #811); and words published since the landing brought back by the
@@ -1344,6 +1346,52 @@ fn a_landed_merge_is_withdrawn_keeping_the_words_and_clearing_the_marker() {
     assert_eq!(rig.position(), standing, "nothing written");
     let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
     assert_eq!(record.link, Some(replacing), "the withdrawal's record current");
+    session.close().expect("close");
+}
+
+/// A resume finds no landing in a draft staged from the one it landed in.
+///
+/// The stage copies the draft's words and its marker, the marker stamped at
+/// the stage's own commit, the copy's mint (P2; skep #913). The race shape
+/// with the daughter `D.1.1` removing " sat" is merged with `D.2` and landed
+/// in `T`, a draft staged from `D.1` that no side names; `T′`, staged from
+/// `T`, holds M and a marker naming the merge whose `at` is its own in its
+/// `doc_metadata`. `resume` naming `T′` answers none with nothing written,
+/// `T`'s record current, and `resume` naming `T` answers `T`'s landing.
+#[test]
+fn a_resume_finds_no_landing_in_a_draft_staged_from_the_one_it_landed_in() {
+    let rig = Rig::new();
+    let session = rig.session();
+    let token = session.token().clone();
+    let (d, base, head) = rig.race(&session);
+    let daughter = shot(&rig.board, &session, &rig.device, &rig.bare, &d, Some((&base, 11)), &[Staged::Own { from: 1, text: "the cat" }]);
+    assert_eq!(daughter.to_string(), format!("{d}.1.1"), "the premise: the base's daughter");
+    let stage = |from: &Address| acked(rig.board.op(Some(&rig.bare), &frames::stage(&from.to_string(), None)));
+    let t = addr(acked_addr(&stage(&base)).expect("T"));
+    let kind = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    let merger = merger(&rig, &session);
+    let inputs = Inputs { doc: d.clone(), head: head.clone(), base: None, sides: vec![Side::Member(daughter.clone())], options: Default::default(), kind: kind.clone() };
+    let merged = compose(&rig.board, Some(&token), &inputs).expect("composed");
+    let into = |draft: &Address| Landing::Draft { merger, into: Some(draft.clone()), journal: None };
+    let landed = land(&rig.board, &merged, into(&t)).expect("landed in T");
+    let Landed::Draft { position: at, record: link, .. } = landed.clone() else { panic!("{landed:?}") };
+    let ack = stage(&t);
+    let copy = addr(acked_addr(&ack).expect("T′"));
+    let staged_at = acked_at(&ack).expect("the stage's position");
+    assert_eq!(image(&rig.board, &token, &copy, 11), as_image(&m_of(&merged)), "the premise: T′ holds M");
+    let meta = rig.metadata(&token, &copy);
+    assert_eq!(
+        (meta["at"].as_u64(), meta["merge"]["at"].as_u64(), meta["merge"]["sides"].clone()),
+        (Some(staged_at), Some(staged_at), json!([daughter.to_string()])),
+        "the premise: the merge's marker, stamped at T′'s mint: {meta}"
+    );
+    let standing = rig.position();
+    assert_eq!(resume(&rig.board, &merged, into(&copy)), Ok(None), "no landing in T′");
+    assert_eq!(rig.position(), standing, "nothing written");
+    let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
+    assert_eq!((record.link, record.landed), (Some(link), Some(RecordLanding::Draft { draft: t.clone(), position: at })), "T's record current");
+    assert_eq!(resume(&rig.board, &merged, into(&t)), Ok(Some(landed)), "T's landing");
+    assert_eq!(rig.position(), standing, "nothing written");
     session.close().expect("close");
 }
 

@@ -547,12 +547,13 @@ pub(crate) struct Metadata {
 /// the compose — what the base beside it records — and the position of the
 /// commit that put the marker on the document. The board records it at a
 /// `set_arrangement` naming a base and a merge, copies it to a draft staged
-/// from the marked one, and clears it at the draft's own `publish` and at a
-/// `set_arrangement` naming no merge (the withdrawal, the undo). An
-/// embedder reads it off a `doc_metadata` answer through [`merge_marker`]:
-/// the editor's shell, for the supersession claim its publication carries
-/// and the re-open of a merge the draft already carries (the merge bridge
-/// lane).
+/// from the marked one — its `at` that stage's, the copy's own mint, which
+/// marks no landing in the copy — and clears it at the draft's own
+/// `publish` and at a `set_arrangement` naming no merge (the withdrawal,
+/// the undo). An embedder reads it off a `doc_metadata` answer through
+/// [`merge_marker`]: the editor's shell, for the supersession claim its
+/// publication carries and the re-open of a merge the draft already carries
+/// (the merge bridge lane).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeMarker {
     /// The merge's sides by address, possibly empty.

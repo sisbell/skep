@@ -547,6 +547,7 @@ fn refused(r: Refusal, step: Step) -> Stop {
         Refusal::NoMerge { .. } => "no_merge",
         Refusal::NotPast { .. } => "not_past",
         Refusal::SupersedeRefused { .. } => "supersede_refused",
+        Refusal::WindowPartsOwed { .. } => "window_parts_owed",
     };
     match r {
         Refusal::Halt(h) | Refusal::SessionEnded(h) => Stop::Halt(h),

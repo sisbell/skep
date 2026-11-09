@@ -718,7 +718,9 @@ each ceremony:
   `merge/reads.rs` the READS over a board, writing nothing, the read of
   the publication's correspondence records and the mapping of a past
   state through them among them; `merge/land.rs` the LANDING and
-  `resume`; `merge/record.rs` the `merge` record kind, its currency and
+  `resume`; `merge/windows.rs` THE SHOT's WINDOW PARTS, the merged list's
+  window runs read and composed through the publication family's one
+  core; `merge/record.rs` the `merge` record kind, its currency and
   `verify`; `merge/journal.rs` the merge journal — its unit suite in
   `merge/tests.rs` over the record's vectors and a scripted board, its
   daemon walk in `tests/it/merge.rs`. Beside it under the same feature,
@@ -735,9 +737,11 @@ each ceremony:
   COMPOSITION, a draft's one `publish` request as one composition family
   (P28): `publication.rs` the module, the reading door and the shared
   types; `publication/base.rs` the draft's base, read off the board;
-  `publication/enumerate.rs` the enumeration — the own-origin windows in
-  their parts among its reads — and the composition the answers make of
-  it; `publication/panel.rs` the panel's data and the count;
+  `publication/enumerate.rs` the enumeration — the windows in their parts
+  among its reads — and the composition the answers make of it;
+  `publication/parts.rs` THE WINDOW PARTS, the draft-free rules of a
+  window's parts that this family and the merge library's shot both call;
+  `publication/panel.rs` the panel's data and the count;
   `publication/price.rs` the price against the caps;
   `publication/request.rs` the re-read and the request, the windows taken
   as given; `publication/send.rs` the send and the refusal family;

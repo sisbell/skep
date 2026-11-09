@@ -429,7 +429,7 @@ fn next_member(trunk: &Address, base: &Address) -> Option<Address> {
 
 /// Returns the member the publish row at `at` under `trunk` names first,
 /// off one page of the feed.
-fn member_at(door: &Door<'_>, p: &Publisher<'_>, trunk: &str, at: u64) -> Result<Option<Address>, Fault> {
+pub(crate) fn member_at(door: &Door<'_>, p: &Publisher<'_>, trunk: &str, at: u64) -> Result<Option<Address>, Fault> {
     let query = ChangesQuery { since: at.saturating_sub(1), under: Some(trunk), drafts: false, limit: Some(1) };
     match p.board.changes(Some(p.token), &query)? {
         ChangesAnswer::Page(page) => Ok(page.changes.iter().find(|row| row["at"].as_u64() == Some(at) && row["op"].as_str() == Some("publish")).and_then(|row| row["docs"][0].as_str()).and_then(parse_address)),

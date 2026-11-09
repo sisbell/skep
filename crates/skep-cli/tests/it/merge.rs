@@ -124,6 +124,9 @@ enum Staged<'a> {
     Own { from: u64, text: &'a str },
     /// A draft minted and filled with `text`, re-inserted by the shot.
     Fresh { text: &'a str },
+    /// `width` positions of the document `origin` from ordinal `from`, kept
+    /// by reference as a window, signed by address.
+    Window { origin: &'a Address, from: u64, width: u64 },
 }
 
 /// A claimed PERMISSIVE board (bare sessions mint the staging drafts), its
@@ -323,11 +326,17 @@ impl Rig {
         let mut runs = Vec::new();
         let mut values: Vec<u8> = Vec::new();
         let mut draft: Option<Address> = None;
+        let mut windows: Vec<(usize, Address, u64)> = Vec::new();
         for stage in staged {
             match stage {
                 Staged::Own { from, text } => {
                     runs.push(frames::shot_run(&doc.to_string(), &format!("{doc}.0.1.{from}"), text.len() as u64));
                     values.extend_from_slice(text.as_bytes());
+                }
+                Staged::Window { origin, from, width } => {
+                    let start = format!("{origin}.0.1.{from}");
+                    runs.push(frames::shot_run(&origin.to_string(), &start, *width));
+                    windows.push((values.len(), addr(&start), *width));
                 }
                 Staged::Fresh { text } => {
                     let d = self.draft();
@@ -343,14 +352,58 @@ impl Rig {
                 }
             }
         }
-        let pieces: Vec<[u8; 1]> = values.iter().map(|b| [*b]).collect();
-        let body = entry_body_publish(pieces.iter().map(|b| ShotSegmentPiece::Value(b)), base.map(|(member, extent)| ShotBase { member, extent }));
+        let bytes: Vec<[u8; 1]> = values.iter().map(|b| [*b]).collect();
+        let mut pieces: Vec<ShotSegmentPiece<'_>> = Vec::new();
+        let mut at = 0usize;
+        for (cut, start, width) in &windows {
+            pieces.extend(bytes[at..*cut].iter().map(|b| ShotSegmentPiece::Value(b)));
+            pieces.push(ShotSegmentPiece::Window { start, width: std::num::NonZeroU64::new(*width).expect("a width") });
+            at = *cut;
+        }
+        pieces.extend(bytes[at..].iter().map(|b| ShotSegmentPiece::Value(b)));
+        let body = entry_body_publish(pieces, base.map(|(member, extent)| ShotBase { member, extent }));
         let base_text = base.map(|(m, e)| (m.to_string(), e));
         let draft_text = draft.as_ref().map(ToString::to_string);
         let doc_text = doc.to_string();
         let mut frame = frames::publication(&frames::PublishFrame { doc: Some(&doc_text), base: base_text.as_ref().map(|(m, e)| (m.as_str(), *e)), draft: draft_text.as_deref(), runs: &runs, ..frames::PublishFrame::default() });
         frame["attest"] = self.attest(doc, &body);
         addr(acked_addr(&Rig::acked(session.op(&frame))).expect("the member's address"))
+    }
+
+    /// A draft of the claimant's own holding `text`, the merge's window
+    /// origin.
+    fn draft_with(&self, text: &str) -> Address {
+        let o = self.draft();
+        let as_of = self.board.health().unwrap().log_position();
+        let insert = json!({"op": "insert", "doc": o.to_string(), "at": {"subspace": "1", "ordinal": "1"}, "values": [text], "as_of": as_of});
+        Rig::acked(self.board.op(Some(&self.bare), &insert));
+        o
+    }
+
+    /// Publishes the draft `o`, holding `text`, as `e`'s first member, so a
+    /// correspondence record homed in `o` names its words as published
+    /// there — the record `--window` answers.
+    fn publish_draft(&self, session: &Session<'_>, e: &Address, o: &Address, text: &str) -> Address {
+        let (e_s, o_s) = (e.to_string(), o.to_string());
+        let runs = [frames::shot_run(&o_s, &format!("{o}.0.1.1"), text.len() as u64)];
+        let places = [frames::place(1)];
+        let pieces: Vec<[u8; 1]> = text.bytes().map(|b| [b]).collect();
+        let body = entry_body_publish(pieces.iter().map(|b| ShotSegmentPiece::Value(b)), None);
+        let mut frame = frames::publication(&frames::PublishFrame { doc: Some(&e_s), draft: Some(&o_s), runs: &runs, places: &places, ..frames::PublishFrame::default() });
+        frame["attest"] = self.attest(e, &body);
+        addr(acked_addr(&Rig::acked(session.op(&frame))).expect("the member's address"))
+    }
+
+    /// THE WINDOW SHAPE: the base `D.1` "the cat sat", the head `D.2` adding
+    /// "big ", and a daughter of the base windowing "quote" of `o` — words
+    /// `D.1.2`'s readers meet as a placeholder — answered as `(D, daughter)`.
+    fn windowed(&self, session: &Session<'_>, o: &Address) -> (Address, Address) {
+        let d = self.document(session);
+        let base = self.shot(session, &d, None, &[Staged::Fresh { text: "the cat sat" }]);
+        let _head = self.shot(session, &d, Some((&base, 11)), &[Staged::Own { from: 1, text: "the " }, Staged::Fresh { text: "big " }, Staged::Own { from: 5, text: "cat sat" }]);
+        let daughter = self.shot(session, &d, Some((&base, 11)), &[Staged::Own { from: 1, text: "the cat" }, Staged::Window { origin: o, from: 1, width: 5 }]);
+        assert_eq!(daughter.to_string(), format!("{d}.1.1"), "the base's daughter");
+        (d, daughter)
     }
 
     /// THE RACE SHAPE over a fresh document (the merge record's §9): the base
@@ -424,6 +477,11 @@ fn the_usage_forms_are_refused_before_any_socket() {
     refused(&["--doc", doc, "--alternative", alt], "--kind <address> (or SKEP_MERGE_KIND) is required");
     refused(&["--doc", "not-an-address", "--alternative", alt, "--kind", kind], "--doc: 'not-an-address' is not an address");
     refused(&["--doc", doc, "--alternative", alt, "--kind", kind, "--retries", "x"], "--retries: 'x' is not a count");
+    // The window parts' answers are the shot's alone, each by name.
+    refused(&["--doc", doc, "--alternative", alt, "--kind", kind, "--window", base], "`--window` belongs to `merge --publish` and is refused without `--publish`");
+    refused(&["--doc", doc, "--alternative", alt, "--kind", kind, "--leave-out", base], "`--leave-out` belongs to `merge --publish` and is refused without `--publish`");
+    refused(&["--doc", doc, "--alternative", alt, "--kind", kind, "--keep-private", draft], "`--keep-private` belongs to `merge --publish` and is refused without `--publish`");
+    refused(&["--doc", doc, "--alternative", alt, "--kind", kind, "--publish", "--window", "no-such"], "--window: 'no-such' is not an address");
     // THE TWO TAKE-BACKS (skep #783): each apart from the other, from every
     // side, `--doc`, `--head`, and the three landings; `--base` outside
     // `--draft` is refused as before; each needs `--kind` and an address.
@@ -813,6 +871,179 @@ fn a_draft_is_merged_over_the_base_the_board_records_and_a_disagreeing_base_is_r
     assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
     assert!(r.err.contains(&format!("the board refused: draft_base_disagrees:the base {head} was named for the draft {staged}, whose recorded base (doc_metadata's base) derives the base {base}")), "{}", r.err);
     assert_eq!(rig.board.health().unwrap().log_position(), before, "nothing written");
+    session.close().expect("close");
+}
+
+/// `merge` naming the daughter and `answers`, the shot's arguments.
+fn publish_args<'a>(d: &'a str, side: &'a str, kind: &'a str, answers: &[&'a str]) -> Vec<&'a str> {
+    let mut v = vec!["--doc", d, "--alternative", side, "--kind", kind, "--publish"];
+    v.extend_from_slice(answers);
+    v
+}
+
+/// THE WINDOW PARTS at `--publish`, unnamed (skep #932): the command
+/// publishes nothing and refuses, exit 1, every part and its answers said in
+/// the command's own words, nothing on stdout, and the merge lands only under
+/// an answer given by name: `--keep-private` publishes the placeholder,
+/// `left_out` at its origin leaves the words out, a window onto a PUBLISHED
+/// document asks nothing, and the talk names the answers and the links' line.
+#[test]
+fn a_window_part_no_record_names_is_refused_and_lands_under_each_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let o = rig.draft_with("quote");
+    let (d, daughter) = rig.windowed(&session, &o);
+    let kind = rig.draft().to_string();
+    let (d_s, daughter_s, o_s) = (d.to_string(), daughter.to_string(), o.to_string());
+    let before = rig.board.health().unwrap().log_position();
+    let r = rig.merge(&publish_args(&d_s, &daughter_s, &kind, &[]));
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
+    let block = format!("nothing was published — 1 passage in this merge needs your answer, and this command never answers for you:\n“quote” — words of {o_s}, which is private; version 1.1 shows a placeholder here — answer --keep-private {o_s}, and readers of version 3 meet a placeholder here: they see that a private passage of {o_s} stands here, whose it is, how long it is and where in {o_s} it was written, never what it says; version 3 keeps it so for good, and only a later version fills it, once those words of {o_s} are published — or --leave-out {o_s}; or publish those words of {o_s} first, then run this again");
+    assert!(r.err.contains(&block), "the command's lines, in order: {}", r.err);
+    assert_eq!(rig.board.health().unwrap().log_position(), before, "nothing written");
+
+    // An answer that fits nothing is refused, nothing published.
+    let stray = format!("{o_s}.99");
+    let r = rig.merge(&publish_args(&d_s, &daughter_s, &kind, &["--window", &stray]));
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.err.contains(&format!("--window {stray} answers nothing here — no words in this merge are published in {stray}")), "{}", r.err);
+    assert_eq!(rig.board.health().unwrap().log_position(), before, "nothing written");
+
+    // Two answers for one part.
+    let r = rig.merge(&publish_args(&d_s, &daughter_s, &kind, &["--keep-private", &o_s, "--leave-out", &o_s]));
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.err.contains(&format!("--keep-private {o_s} and --leave-out {o_s} both answer the same words — give one")), "{}", r.err);
+    assert_eq!(rig.board.health().unwrap().log_position(), before, "nothing written");
+
+    // `--leave-out` publishes without the words.
+    let r = rig.merge(&publish_args(&d_s, &daughter_s, &kind, &["--leave-out", &o_s]));
+    let v = report(&r);
+    let member = v["landed"]["member"].as_str().expect("the member").to_string();
+    assert_eq!(member, format!("{d}.3"), "the trunk's next member");
+    assert!(r.err.contains(&format!("published version 3 of {d}, with its claim that version 1.1 is superseded by it")), "{}", r.err);
+    assert!(r.err.contains(&format!("left out: “quote” — its words stay in {o_s}; this command does not ask about them again")), "{}", r.err);
+    assert!(r.err.contains("no links were published with this version — the links on its words stay where they were made"), "{}", r.err);
+    assert!(!rig.image(&token, &addr(&member), 11).iter().any(|(start, _)| start.starts_with(&format!("{o_s}."))), "the words are out");
+    assert_eq!(v["landed"]["answers"][0]["answer"], "leave_out", "{}", v["landed"]);
+    session.close().expect("close");
+}
+
+/// `--keep-private ⟨origin⟩` publishes the placeholder, the window onto the
+/// origin standing in the member; the words stay asked no other way.
+#[test]
+fn a_keep_private_answer_publishes_the_window_as_a_placeholder() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let o = rig.draft_with("quote");
+    let (d, daughter) = rig.windowed(&session, &o);
+    let kind = rig.draft().to_string();
+    let (d_s, daughter_s, o_s) = (d.to_string(), daughter.to_string(), o.to_string());
+    let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind, "--publish", "--keep-private", &o_s]);
+    let v = report(&r);
+    let member = v["landed"]["member"].as_str().expect("the member").to_string();
+    assert!(r.err.contains("kept private, behind a placeholder: “quote”"), "{}", r.err);
+    assert!(rig.image(&token, &addr(&member), 16).iter().any(|(start, _)| start == &format!("{o_s}.0.1.1")), "the window stands: {:?}", rig.image(&token, &addr(&member), 16));
+    assert_eq!(v["landed"]["answers"][0]["answer"], "keep_private", "{}", v["landed"]);
+    session.close().expect("close");
+}
+
+/// THE WINDOW PARTS at `--publish`, a part a record names: the refusal names
+/// the pair and the two answers a named part admits, `--keep-private` is
+/// refused pointing at the version that publishes the words, `--window` and
+/// `--leave-out` by the version answer it, and the member holds the
+/// published words by reference.
+#[test]
+fn a_window_part_a_record_names_is_refused_naming_its_pair_and_windowed_from_its_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let o = rig.draft_with("quote");
+    let (d, daughter) = rig.windowed(&session, &o);
+    let e = rig.document(&session);
+    let e1 = rig.publish_draft(&session, &e, &o, "quote");
+    let kind = rig.draft().to_string();
+    let (d_s, daughter_s, o_s, e_s, e1_s) = (d.to_string(), daughter.to_string(), o.to_string(), e.to_string(), e1.to_string());
+    let before = rig.board.health().unwrap().log_position();
+    let r = rig.merge(&publish_args(&d_s, &daughter_s, &kind, &[]));
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.err.contains(&format!("“quote” — already published in {e1_s}; version 1.1 shows a placeholder here — here: after “the big cat”; published: {e1_s} {e_s}.0.1.")), "{}", r.err);
+    assert!(r.err.contains(&format!("— answer --window {e1_s} to window them from version 1, or --leave-out {e1_s} to leave them out")), "{}", r.err);
+    assert_eq!(rig.board.health().unwrap().log_position(), before, "nothing written");
+
+    // Keep-private at words a record names is no answer: the two the part admits.
+    let r = rig.merge(&publish_args(&d_s, &daughter_s, &kind, &["--keep-private", &o_s]));
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.err.contains(&format!("--keep-private {o_s} answers nothing here — {o_s}’s words in this merge are already published in {e1_s}; answer --window {e1_s} or --leave-out {e1_s}")), "{}", r.err);
+    assert_eq!(rig.board.health().unwrap().log_position(), before, "nothing written");
+
+    // A version named twice, the same words.
+    let r = rig.merge(&publish_args(&d_s, &daughter_s, &kind, &["--window", &e1_s, "--leave-out", &e1_s]));
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.err.contains(&format!("--window {e1_s} and --leave-out {e1_s} both answer the same words — give one")), "{}", r.err);
+
+    let r = rig.merge(&publish_args(&d_s, &daughter_s, &kind, &["--window", &e1_s]));
+    let v = report(&r);
+    let member = v["landed"]["member"].as_str().expect("the member").to_string();
+    assert!(r.err.contains(&format!("windowed from {e1_s}: “quote” — the same words, now in this version too")), "{}", r.err);
+    let runs = rig.image(&token, &addr(&member), 16);
+    assert!(runs.iter().any(|(start, _)| start.starts_with(&format!("{e_s}.0.1."))), "the published words by reference: {runs:?}");
+    assert!(!runs.iter().any(|(start, _)| start.starts_with(&format!("{o_s}."))), "no placeholder over published words: {runs:?}");
+    session.close().expect("close");
+}
+
+/// THE WINDOW PARTS at `--publish`, another account's words (a fork's own
+/// words, the merge record's §1.2 (4)): the refusal names the owner and its
+/// answers — never publish-first, and `--keep-private ⟨F⟩` publishes the
+/// placeholder knowingly — and a window onto a published document asks
+/// nothing.
+#[test]
+fn another_accounts_words_are_asked_naming_their_owner_and_a_published_origin_is_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let kind = rig.draft().to_string();
+    let d = rig.document(&session);
+    let base = rig.shot(&session, &d, None, &[Staged::Fresh { text: "the cat sat" }]);
+    let head = rig.shot(&session, &d, Some((&base, 11)), &[Staged::Own { from: 1, text: "the " }, Staged::Fresh { text: "big " }, Staged::Own { from: 5, text: "cat sat" }]);
+    let forker = rig.forker();
+    let fork = rig.fork(&forker, &base);
+    let as_of = rig.board.health().unwrap().log_position();
+    let insert = json!({"op": "insert", "doc": fork.to_string(), "at": {"subspace": "1", "ordinal": "12"}, "values": ["!!!"], "as_of": as_of});
+    Rig::acked(rig.board.op(Some(&forker), &insert));
+    let (d_s, fork_s) = (d.to_string(), fork.to_string());
+    let before = rig.board.health().unwrap().log_position();
+    let r = rig.merge(&["--doc", &d_s, "--fork", &fork_s, "--kind", &kind, "--publish"]);
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.err.contains(&format!("“!!!” — written by {FORKER_ACCOUNT} in {fork_s}, which readers of {d_s} cannot read; they would see a placeholder here — ask {FORKER_ACCOUNT} to publish those words, then run this again; or answer --leave-out {fork_s}, or --keep-private {fork_s} to publish the placeholder knowingly")), "{}", r.err);
+    assert!(!r.err.contains("publish those words of"), "the owner's words are not the merger's to publish: {}", r.err);
+    assert_eq!(rig.board.health().unwrap().log_position(), before, "nothing written");
+    let r = rig.merge(&["--doc", &d_s, "--fork", &fork_s, "--kind", &kind, "--publish", "--keep-private", &fork_s]);
+    let v = report(&r);
+    let member = v["landed"]["member"].as_str().expect("the member").to_string();
+    let runs = rig.image(&token, &addr(&member), 18);
+    assert!(runs.iter().any(|(start, _)| start.starts_with(&format!("{fork_s}.0.1."))), "the placeholder, knowingly: {runs:?}");
+    let _ = head;
+
+    // A window onto a published document is not asked about.
+    let p = rig.document(&session);
+    let p1 = rig.shot(&session, &p, None, &[Staged::Fresh { text: "public words" }]);
+    let d2 = rig.document(&session);
+    let base2 = rig.shot(&session, &d2, None, &[Staged::Fresh { text: "the cat sat" }]);
+    let head2 = rig.shot(&session, &d2, Some((&base2, 11)), &[Staged::Own { from: 1, text: "the " }, Staged::Fresh { text: "big " }, Staged::Own { from: 5, text: "cat sat" }]);
+    let daughter2 = rig.shot(&session, &d2, Some((&base2, 11)), &[Staged::Own { from: 1, text: "the cat" }, Staged::Window { origin: &p, from: 1, width: 12 }]);
+    let (d2_s, daughter2_s) = (d2.to_string(), daughter2.to_string());
+    let r = rig.merge(&["--doc", &d2_s, "--alternative", &daughter2_s, "--kind", &kind, "--publish"]);
+    let v = report(&r);
+    assert!(v["landed"]["member"].is_string(), "the published origin asked nothing: {r:?}");
+    assert_eq!(v["landed"]["answers"], json!([]), "{}", v["landed"]);
+    let _ = (head2, p1);
     session.close().expect("close");
 }
 

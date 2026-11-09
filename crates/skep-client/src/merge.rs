@@ -24,9 +24,13 @@
 //! the reads of §1.3 in order over a board but step 6's, the shot's bytes,
 //! which the landing reads — every read at ONE board position, which the
 //! result carries as `as_of` — writing nothing; [`land()`] and [`resume`],
-//! the one `publish` of the merged list from the head with its signed body
-//! carrying the supersession claims — one per daughter, each marking the
-//! daughter superseded by the member in the commit that mints it — the
+//! the one `publish` of the merged list from the head — every window part
+//! of the merge answered by its caller first and composed through the
+//! publication family's one core, a part unanswered refused with nothing
+//! sent ([`Refusal::WindowPartsOwed`]; the `windows` module's doc) — with
+//! its signed body carrying the supersession claims — one per daughter,
+//! each marking the daughter superseded by the member in the commit that
+//! mints it — the
 //! claims' read, the record in a merge journal, a private document of the
 //! merger's own and never a published one, with its link homed beside it,
 //! the draft landing — one `set_arrangement` typed against the position the
@@ -92,6 +96,7 @@ pub(crate) mod land;
 pub(crate) mod reads;
 pub mod record;
 pub(crate) mod undo;
+pub(crate) mod windows;
 
 #[cfg(test)]
 mod tests;
@@ -101,10 +106,11 @@ pub use compose::{
     PlacedRun, Placement, ResolvedBy, Resolution, Run, RunCounts, SideIx, ValueLog,
 };
 pub use land::{land, record_published, resume, Landed, Landing, Merger, SHOT_BODY_BUDGET};
+pub use windows::{given_parts, owed_parts, part_answers, Answers, Flag, Misfit, WindowPart};
 pub use reads::{
     compose, head_of, origin_of, Family, Inputs, Merged, NoUndo, Refusal, Role, Side,
     SHOT_RUN_CAP,
 };
 pub use crate::publication::SupersedeCause;
-pub use record::{current, verify, Record, RecordKey, RecordLanding, SideAt, Verdict};
+pub use record::{current, verify, PartAnswer, Record, RecordKey, RecordLanding, RecordedAnswer, SideAt, Verdict};
 pub use undo::{undo, withdraw, Undone, Withdrawn};

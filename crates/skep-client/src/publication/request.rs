@@ -46,8 +46,9 @@
 //! this request and leaves it inert, DROP, or KEEP PRIVATE, which sends the
 //! part as a window with no place beside it, a placeholder to readers; an
 //! answer the part does not admit, or none, leaving the request inert
-//! naming the part), a window the draft no longer arranges carrying nothing
-//! and asked nothing (PUB-3.108); the twin pre-check re-composing what the
+//! naming the part), each part composed by the core the merge library's
+//! shot calls too ([`compose_part`]), a window the draft no longer arranges
+//! carrying nothing and asked nothing (PUB-3.108); the twin pre-check re-composing what the
 //! draft's records already name, read again just before the send — the cut
 //! the enumeration composed the selection by over its own read of the
 //! twins, so a stray stretch's offers were judged on the published words
@@ -106,7 +107,8 @@ use crate::board::frames::{self, AlsoPlacesFrame, PublishFrame, T_EDITION, T_REA
 use crate::board::{T_RETRACTION, T_SUPERSEDES};
 
 use super::base::Standing;
-use super::enumerate::{enumerate_with, is_formatting, place_selection, Answer, Enumeration, PartKey, Placement, Record, RecordWalk, Via};
+use super::enumerate::{enumerate_with, is_formatting, place_selection, Enumeration, Placement, Record, RecordWalk, Via};
+use super::parts::{compose_part, Answer, OwedAnswer, PartComposition, PartKey};
 use super::landed::twin_precheck_with;
 use super::panel::{count, panel_with, Count, Destination, Panel, Removal, RowKind};
 use super::price::{self, EndShape, EntryShape, OriginalShape, Price, Shape};
@@ -133,17 +135,6 @@ impl Confirmed {
     }
 }
 
-/// A part whose answer is owed: the part, and whether a record names its
-/// words — which answers it admits, and so which inert reason the page
-/// draws.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OwedAnswer {
-    /// The part.
-    pub part: PartKey,
-    /// Whether a record names the part's words as published.
-    pub named: bool,
-}
-
 /// Why no request is built.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Inert {
@@ -151,8 +142,8 @@ pub enum Inert {
     /// given, or one the part does not admit.
     ///
     /// Each is a part of a run onto an unpublished origin of the person's
-    /// own; a window the draft no longer arranges carries nothing and is
-    /// owed no answer.
+    /// own or, at a merge, another account's; a window the draft no longer
+    /// arranges carries nothing and is owed no answer.
     Unanswered(Vec<OwedAnswer>),
     /// The caller publishes an origin first: those parts; this request is
     /// not sent.
@@ -901,7 +892,7 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
             continue;
         };
         for (k, part) in window.parts.iter().enumerate() {
-            match e.answer_at(window, k) {
+            match compose_part(window, k, e.answer_at(window, k)) {
                 // The part by reference to the published words its record
                 // names — in whichever document the record's `to` lies,
                 // this request's or another's — WITH ITS KEPT PLACE, the
@@ -910,22 +901,21 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
                 // link-sets design §5.5; its "KEPT PLACE sent beside it as a
                 // stray's is"). A request whose only place is such a part is
                 // NOT inert: the healed window is a change to the draft.
-                Some(Answer::Counterpart) => {
-                    let Some(published) = part.counterpart().and_then(|s| s.run()) else { continue };
+                PartComposition::ByReference(published) => {
                     runs.push(published);
                     places.push(Some(part.ordinal));
                     draft_places.push(Some(part.ordinal));
                 }
                 // By address onto the private origin, no place: readers see
                 // a placeholder.
-                Some(Answer::KeepPrivate) => {
-                    runs.push(Run::new(window.origin.clone(), part.span.first, part.span.width));
+                PartComposition::KeptPrivate(words) => {
+                    runs.push(words);
                     places.push(None);
                     draft_places.push(Some(part.ordinal));
                 }
-                Some(Answer::Drop) => {}
-                Some(Answer::PublishFirst) => publish_first.push(window.key(k)),
-                None => unanswered.push(OwedAnswer { part: window.key(k), named: part.named() }),
+                PartComposition::LeftOut => {}
+                PartComposition::PublishFirst => publish_first.push(window.key(k)),
+                PartComposition::Owed => unanswered.push(OwedAnswer::of(window, k)),
             }
         }
     }

@@ -11,20 +11,32 @@
 //! publication made, written once and never a second shot.
 //!
 //! **The order, and what each step reads first.** The cap: `counts.m`
-//! against the shot's run cap before any frame (decision 13; P13). A journal
-//! named: checked after the read-first steps, before the first write. The shot:
-//! the trunk's next member, then the head's daughters, read for a member
-//! whose first `placed` positions already hold M — else one `publish` from
-//! the head, its body every copied run's bytes re-read through the side that
-//! holds them and every window signed by address, re-asked once under the
-//! same per-session `id` where the acknowledgment was lost. The frame and
+//! against the shot's run cap before any frame (decision 13; P13). The
+//! shot's window parts ([`Answers`]; the `windows` module's doc): every
+//! window of M answered through the publication family's one core before
+//! anything is read first, the answered list checked against the cap
+//! again, and a part with no answer, or an answer that fits nothing,
+//! refused with nothing sent ([`Refusal::WindowPartsOwed`]). A journal
+//! named: checked after the read-first steps, before the first write. The
+//! shot: the trunk's next member, then the head's daughters, read for a
+//! member whose first `placed` positions already hold the answered list —
+//! else one `publish` from the head, its body every copied run's bytes
+//! re-read through the side that holds them and every window signed by
+//! address, the records read again just before the send so a part a record
+//! names since its answer was given is refused again, nothing published
+//! (PUB-3.108), and re-asked once under the same per-session `id` where the
+//! acknowledgment was lost. The frame and
 //! its body go through the publication composition's request builder
 //! (`crate::publication::Request`) with one deposit list — `supersede`, the
 //! daughters (the claim, below) — and no `links`, `retract` or `read_with`
 //! entry, no place beside any run, the document form — the merge's delta
 //! from a publication (the link-sets design §5.5: "the walk's base the
 //! `base` it holds"), so a shot naming no daughter signs today's body byte
-//! for byte through the one body builder. A daughter in the acknowledgment
+//! for byte through the one body builder. A part answered by its
+//! counterpart is the published words by reference — signed by value where
+//! they lie in the document's own chain, read through the window's own
+//! span, and by address elsewhere — a part kept private is a window with
+//! no place, a part left out sent nowhere. A daughter in the acknowledgment
 //! is reported at once ([`Landed::AsDaughter`]): the head moved under a shot
 //! naming no daughter, the library never re-runs, the embedder does with
 //! `retries` one higher (decision 17). The record: the merger's current
@@ -147,7 +159,8 @@
 //! frame under an id it has acknowledged with that acknowledgment, never
 //! judging the frame (wire.md §Correlation and idempotency), so the text
 //! names all that makes a write another. `<key>` is the key's text
-//! (`RecordKey::text`). The shot's text is `<key>`, for `<stem>.publish`,
+//! (`RecordKey::text`). The shot's text is `<key>`, and `~` and the answers
+//! it was given where any window part was answered, for `<stem>.publish`,
 //! then the record's `<stem>.record` and `<stem>.link`; the draft
 //! landing's names the key, the draft and the position the write is typed
 //! against, `<key>:<draft>@<at>`, for `<stem>.draft`, `<stem>.record` and
@@ -211,7 +224,8 @@ use super::reads::{
     runs_of, session_ended, values_for, version_components, Family, Merged, OnEnd, Reader, Refusal,
     Role, Side,
 };
-use super::record::{newest, read_record, records_of, Record, RecordLanding};
+use super::record::{newest, read_record, records_of, PartAnswer, Record, RecordLanding};
+use super::windows::{self, Answers, ShotParts, WindowPart};
 
 /// The most bytes a shot's signed body may run to.
 ///
@@ -259,6 +273,11 @@ pub enum Landing<'a> {
         /// The caller names it where the merger typed any; a draft side's
         /// is named without asking where M holds its fresh text.
         draft: Option<Address>,
+        /// The caller's answers at M's window parts (the merge record's §7,
+        /// `Answers`; the `windows` module's doc): empty where M windows
+        /// nothing unpublished, and a part left unanswered refuses before
+        /// the shot's first write.
+        answers: Answers,
         /// The merge journal the record goes to.
         ///
         /// The account's default where `None` — the private journal its
@@ -322,6 +341,9 @@ pub enum Landed {
         record: Address,
         /// `Options::retries`, as written into the record.
         retries: u32,
+        /// Each window part as answered, in M's order (the merge record's
+        /// §1.5: the acknowledgment names every answer given).
+        answers: Vec<WindowPart>,
     },
     /// The head moved under the merge; the shot landed as its daughter.
     ///
@@ -436,9 +458,13 @@ impl<'a> Landing<'a> {
 ///
 /// In this order:
 ///
-/// - [`Refusal::OverCap`], before any frame;
-/// - the reads' refusals, for a member already holding M or for the
-///   merger's newest record for the key at a draft landing;
+/// - [`Refusal::OverCap`], before any frame, and again over the list the
+///   answers leave;
+/// - at the shot, the window parts' reads' refusals, then
+///   [`Refusal::WindowPartsOwed`] where a part stands unanswered or an
+///   answer fits nothing, nothing sent;
+/// - the reads' refusals, for a member already holding the answered list or
+///   for the merger's newest record for the key at a draft landing;
 /// - a journal named that cannot take the record, before the landing's
 ///   first write with nothing sent (P13): one this merger may not read, one
 ///   this board does not register or another account's, as
@@ -451,7 +477,9 @@ impl<'a> Landing<'a> {
 ///   `H.1`, before the shot, with nothing sent; and the `H.1` and `/health`
 ///   reads' halts (SP-14);
 /// - the shot's: the skip reads' refusals at the daughters, then the value
-///   reads', [`Refusal::WindowWithheld`],
+///   reads', [`Refusal::WindowPartsOwed`] naming a part a record names
+///   since its answer was given (the re-read just before the send),
+///   [`Refusal::WindowWithheld`],
 ///   [`Refusal::NeedsSignedSession`], [`Refusal::NoSuchDocument`], the
 ///   board's `not_owner` naming the draft side as [`Refusal::UnownedDraft`],
 ///   `supersede_refused` as [`Refusal::SupersedeRefused`] — at `head_moved`
@@ -532,7 +560,10 @@ pub fn land(board: &Board, merged: &Merged, landing: Landing<'_>) -> Result<Land
 ///
 /// As [`land`]'s but the check of a journal named, the head's and the
 /// shot's, the stage's and the draft's write's: it sends no write before
-/// the record, so a journal it is given is met at the record alone. A draft
+/// the record, so a journal it is given is met at the record alone. A
+/// window part left unanswered at the shot is refused
+/// [`Refusal::WindowPartsOwed`], never answered as no landing: a landing
+/// is compared by the list its answers make (SP-14). A draft
 /// named is read as it stands — its `doc_metadata`, the feed walk's pages
 /// on a draft with no recorded base, and its `image` where the board marks
 /// the landing — each refusal answered as itself, never as no landing
@@ -573,6 +604,10 @@ pub fn resume(
 /// journal this merger may not read or this board does not register, or
 /// one named that is another account's or published, faced as the landing
 /// standing with its record unwritten, and the record's writes'.
+///
+/// `answers` are the window parts' answers the publication composed, kept
+/// in the record so [`record::verify`](super::record::verify) reads the
+/// member as answered.
 /// The death signal under the merger's token is [`Refusal::SessionEnded`],
 /// its way on this call made again: it reads the record first and writes
 /// it once, where [`resume`] would read no landing in a member the person
@@ -584,6 +619,7 @@ pub fn record_published(
     member: &Address,
     position: u64,
     journal: Option<&Address>,
+    answers: &[PartAnswer],
 ) -> Result<Landed, Refusal> {
     if version_components(&merged.inputs.doc, member).is_none() {
         return Err(own_fault_face(
@@ -599,7 +635,7 @@ pub fn record_published(
         Some(link) => link.clone(),
         None => {
             let stem = Stem::of(&merged.key.text());
-            writer.write_landing_record(merged, landed, &claims, &newest, &stem, journal)?
+            writer.write_landing_record(merged, landed, &claims, &newest, &stem, journal, answers)?
         }
     };
     Ok(Landed::Member {
@@ -608,6 +644,7 @@ pub fn record_published(
         claims,
         record,
         retries: merged.inputs.options.retries,
+        answers: Vec::new(),
     })
 }
 
@@ -636,8 +673,12 @@ fn walk(
     let writer = Writer::new(board, merger, OnEnd::Resume);
     let check_journal = || writer.check_journal(landing.journal(), "the merge cannot land");
     match &landing {
-        Landing::Shot { draft, .. } => {
-            let (member, position) = match writer.standing_member(merged)? {
+        Landing::Shot { draft, answers, .. } => {
+            let shot = windows::step(&writer, merged, answers, draft.as_ref())?;
+            if shot.runs.len() > cap {
+                return Err(Refusal::OverCap { runs: shot.runs.len(), cap });
+            }
+            let (member, position) = match writer.standing_member(merged, &shot)? {
                 Standing::Trunk(member, at) => (member, at),
                 Standing::Daughter(address, position) => {
                     return Ok(Some(Landed::AsDaughter { address, position }))
@@ -647,7 +688,7 @@ fn walk(
                         return Ok(None);
                     }
                     check_journal()?;
-                    let (address, position) = writer.publish(merged, draft.as_ref())?;
+                    let (address, position) = writer.publish(merged, draft.as_ref(), &shot)?;
                     if !is_trunk_member(&merged.inputs.doc, &address) {
                         return Ok(Some(Landed::AsDaughter { address, position }));
                     }
@@ -660,9 +701,9 @@ fn walk(
             let record = match newest.naming(&landed) {
                 Some(link) => link.clone(),
                 None => {
-                    let stem = Stem::of(&merged.key.text());
+                    let stem = Stem::of(&shot.text(merged));
                     let journal = landing.journal();
-                    writer.write_landing_record(merged, landed, &claims, &newest, &stem, journal)?
+                    writer.write_landing_record(merged, landed, &claims, &newest, &stem, journal, &shot.recorded)?
                 }
             };
             Ok(Some(Landed::Member {
@@ -671,6 +712,7 @@ fn walk(
                 claims,
                 record,
                 retries: merged.inputs.options.retries,
+                answers: shot.given.clone(),
             }))
         }
         Landing::Draft { into, .. } => {
@@ -724,7 +766,7 @@ fn walk(
                 Some(link) => link.clone(),
                 None => {
                     let journal = landing.journal();
-                    writer.write_landing_record(merged, landed, &[], &newest, &stem, journal)?
+                    writer.write_landing_record(merged, landed, &[], &newest, &stem, journal, &[])?
                 }
             };
             Ok(Some(Landed::Draft { into, position, record, head_moved, staged }))
@@ -898,7 +940,8 @@ impl<'a> Writer<'a> {
 }
 
 impl Writer<'_> {
-    /// Finds the member that already holds M, the shot's read-first.
+    /// Finds the member that already holds the answered list, the shot's
+    /// read-first.
     ///
     /// It reads the trunk's next member, then — where that is another's —
     /// the head's daughters in order until the first absent.
@@ -907,7 +950,7 @@ impl Writer<'_> {
     ///
     /// A member's reads' refusals, as `holds` answers them; a head or a
     /// daughter whose address cannot be spelled, as the library's own fault.
-    fn standing_member(&self, merged: &Merged) -> Result<Standing, Refusal> {
+    fn standing_member(&self, merged: &Merged, shot: &ShotParts) -> Result<Standing, Refusal> {
         let head = &merged.inputs.head;
         let next = next_trunk_member(head).ok_or_else(|| {
             own_fault_face(
@@ -915,7 +958,7 @@ impl Writer<'_> {
                 format!("{head} has no component to count on"),
             )
         })?;
-        match self.holds(merged, &next)? {
+        match self.holds(merged, shot, &next)? {
             Holds::Merged(at) => return Ok(Standing::Trunk(next, at)),
             Holds::Nothing => return Ok(Standing::Absent),
             Holds::Other => {}
@@ -927,7 +970,7 @@ impl Writer<'_> {
                     format!("{head} extended by {k}"),
                 )
             })?;
-            match self.holds(merged, &daughter)? {
+            match self.holds(merged, shot, &daughter)? {
                 Holds::Merged(at) => return Ok(Standing::Daughter(daughter, at)),
                 Holds::Nothing => return Ok(Standing::Absent),
                 Holds::Other => {}
@@ -936,7 +979,8 @@ impl Writer<'_> {
         Ok(Standing::Absent)
     }
 
-    /// Returns whether `member` holds M over its first `placed` positions.
+    /// Returns whether `member` holds the answered list over its first
+    /// `placed` positions.
     ///
     /// # Errors
     ///
@@ -944,7 +988,7 @@ impl Writer<'_> {
     /// on its metadata and a member too fragmented to image, which answer as
     /// what it holds; an `image` run that is no content I-address; the feed
     /// walk's halts.
-    fn holds(&self, merged: &Merged, member: &Address) -> Result<Holds, Refusal> {
+    fn holds(&self, merged: &Merged, shot: &ShotParts, member: &Address) -> Result<Holds, Refusal> {
         let meta = match self.reader.metadata(member, None) {
             Ok(m) => m,
             Err(Refusal::NoSuchDocument(_)) => return Ok(Holds::Nothing),
@@ -960,13 +1004,8 @@ impl Writer<'_> {
             Err(e) => return Err(e),
         };
         let actual = runs_of(&image)?;
-        let expected: Vec<(Run, Family)> = merged
-            .composed
-            .runs
-            .iter()
-            .map(|p| p.run.clone())
-            .zip(merged.families.iter().copied())
-            .collect();
+        let expected: Vec<(Run, Family)> =
+            shot.runs.iter().map(|a| (a.run.clone(), a.family)).collect();
         if first_difference(&expected, &actual, &merged.inputs.doc).is_some() {
             return Ok(Holds::Other);
         }
@@ -982,17 +1021,18 @@ impl Writer<'_> {
     /// window by address, the base group the head and its extent as read,
     /// `supersede` the `Member` sides with the skip read first
     /// ([`Writer::daughters`]) — then the frame with its `attest` and its
-    /// id, one re-ask under the same id on a lost acknowledgment, and the
-    /// frame sent once more, signed, under the same id where it went
-    /// unsigned and a claim landed past the head's read
-    /// ([`Writer::attest_after_claim`]).
+    /// id, the records read again first ([`windows::recheck`]), one re-ask
+    /// under the same id on a lost acknowledgment, and the frame sent once
+    /// more, signed, under the same id where it went unsigned and a claim
+    /// landed past the head's read ([`Writer::attest_after_claim`]).
     ///
     /// # Errors
     ///
     /// The head's refusal and halts ([`Writer::signing_term`]), read before
     /// the values, nothing sent, and read again after a claim, nothing sent
     /// past it; the skip reads' refusals at the daughters;
-    /// [`Refusal::WindowWithheld`],
+    /// [`Refusal::WindowPartsOwed`] naming a part a record names since its
+    /// answer was given; [`Refusal::WindowWithheld`],
     /// [`Refusal::NeedsSignedSession`] and [`Refusal::NoSuchDocument`] as the
     /// board answers them; `not_owner` naming the draft side as
     /// [`Refusal::UnownedDraft`], `supersede_refused` as
@@ -1008,7 +1048,7 @@ impl Writer<'_> {
     /// shape this client does not know, faced; the death signal,
     /// [`Refusal::SessionEnded`]; a dial fault after the one re-ask; the
     /// board's other refusals verbatim.
-    fn publish(&self, merged: &Merged, draft: Option<&Address>) -> Result<(Address, u64), Refusal> {
+    fn publish(&self, merged: &Merged, draft: Option<&Address>, shot: &ShotParts) -> Result<(Address, u64), Refusal> {
         let term = self.signing_term()?;
         let doc = &merged.inputs.doc;
         let head = &merged.inputs.head;
@@ -1019,15 +1059,15 @@ impl Writer<'_> {
         });
         let fresh = merged.families.contains(&Family::DraftNative);
         let draft = draft.cloned().or(if fresh { draft_side } else { None });
-        let mut runs = Vec::with_capacity(merged.composed.runs.len());
-        let mut pieces = Vec::with_capacity(merged.composed.runs.len());
-        for (placed, family) in merged.composed.runs.iter().zip(&merged.families) {
+        let mut runs = Vec::with_capacity(shot.runs.len());
+        let mut pieces = Vec::with_capacity(shot.runs.len());
+        for placed in &shot.runs {
             let run = &placed.run;
             let i_start = run
                 .address_at(0)
                 .ok_or_else(|| own_fault_face("a run of M names no address", format!("{run:?}")))?;
             runs.push(publication::Run::new(run.origin.clone(), run.i_start, run.width));
-            match family {
+            match placed.family {
                 Family::Window => {
                     if run.width == 0 {
                         return Err(own_fault_face("a window of width 0", format!("{run:?}")));
@@ -1039,7 +1079,7 @@ impl Writer<'_> {
                         &self.reader,
                         &merged.maps,
                         placed.side.map(|s| s.0 as usize),
-                        run,
+                        &placed.through,
                     )?;
                     pieces.push(Piece::Values(items));
                 }
@@ -1067,7 +1107,7 @@ impl Writer<'_> {
             read_with: Vec::new(),
             supersede,
             unspellable: Vec::new(),
-            id: Stem::of(&merged.key.text()).id("publish"),
+            id: Stem::of(&shot.text(merged)).id("publish"),
             count: publication::Count::default(),
             price: publication::Price::default(),
             as_of: self.reader.as_of(),
@@ -1076,6 +1116,9 @@ impl Writer<'_> {
         if body.as_bytes().len() > SHOT_BODY_BUDGET {
             return Err(own_fault_face("the shot's body cannot be composed", format!("the merged list's values pass what one shot's body may carry ({SHOT_BODY_BUDGET} bytes)")));
         }
+        // The records read again just before the send: a part a record names
+        // since its answer was given is refused again, nothing published.
+        windows::recheck(self, merged, shot, draft.as_ref())?;
         let mut v = self.shoot(&request.frame(self.attest(term, doc, &body)?))?;
         // A claim landed past the head's read: the shot once more, signed,
         // under its own id (the module's doc).
@@ -1284,11 +1327,12 @@ impl Writer<'_> {
 
     /// Writes a landing's record, answering its link's address.
     ///
-    /// The record is the composition's with `landed` and `claims` filled
-    /// and `replaces` the link of `newest`, the merger's newest record for
-    /// the key as the landing read it — none where none stands (P20). It is
-    /// written through [`Writer::write_record`] under `stem` — the shot's,
-    /// over the key, or the draft landing's, over the key, the draft, the
+    /// The record is the composition's with `landed`, `claims` and the
+    /// window parts' `answers` filled and `replaces` the link of `newest`,
+    /// the merger's newest record for the key as the landing read it — none
+    /// where none stands (P20). It is written through
+    /// [`Writer::write_record`] under `stem` — the shot's, over the key and
+    /// its answers, or the draft landing's, over the key, the draft, the
     /// position its write is typed against and, for a draft named, the
     /// record the landing follows (the module's doc) — the link's first end
     /// the landed address, and a journal it cannot find or write into faced
@@ -1297,6 +1341,7 @@ impl Writer<'_> {
     /// # Errors
     ///
     /// [`Writer::write_record`]'s.
+    #[allow(clippy::too_many_arguments)]
     fn write_landing_record(
         &self,
         merged: &Merged,
@@ -1305,6 +1350,7 @@ impl Writer<'_> {
         newest: &Newest,
         stem: &Stem,
         journal: Option<&Address>,
+        answers: &[PartAnswer],
     ) -> Result<Address, Refusal> {
         let target = match &landed {
             RecordLanding::Member { member, .. } => member.clone(),
@@ -1313,6 +1359,7 @@ impl Writer<'_> {
         let mut record = merged.record.clone();
         record.landed = Some(landed.clone());
         record.claims = claims.to_vec();
+        record.answers = answers.to_vec();
         record.replaces = newest.link().cloned();
         let owed = |why: Unwritten, cause: String| record_owed(&landed, &why, cause);
         self.write_record(&merged.inputs.kind, &record, &target, stem.as_str(), journal, &owed)

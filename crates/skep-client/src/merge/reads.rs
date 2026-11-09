@@ -99,6 +99,7 @@ use crate::publication::{self, home_of_link, owned_by, SupersedeCause};
 
 use super::compose::{base_of, compose_runs, Composed, Item, Options, Run, SideIx};
 use super::record::{self, Record, RecordKey, SideAt};
+use super::windows::{Misfit, WindowPart};
 
 /// The most runs one shot may name.
 ///
@@ -620,6 +621,23 @@ pub enum Refusal {
         /// The cause, the rejection's `detail`.
         cause: SupersedeCause,
     },
+    /// A window part of the shot with no answer, or an answer that fits
+    /// nothing: nothing is sent (the merge record's §1.5, THE SHOT's WINDOW
+    /// PARTS; §7).
+    ///
+    /// It names every part that needs an answer, final in meaning and the
+    /// same for every caller: the landing never answers a window's part for
+    /// its caller. A part named since its answer was given is among them,
+    /// flagged [`WindowPart::named_since`](super::windows::WindowPart::named_since)
+    /// (PUB-3.108).
+    WindowPartsOwed {
+        /// Every part that needs an answer.
+        parts: Vec<WindowPart>,
+        /// The answers given that fit nothing, or name the same words.
+        misfits: Vec<Misfit>,
+        /// The answers that stand beside them.
+        given: Vec<WindowPart>,
+    },
     /// The death signal under the caller's token: the session ended
     /// (wire.md §Sessions).
     ///
@@ -754,6 +772,13 @@ impl fmt::Display for Refusal {
                 SupersedeCause::Base => write!(f, "the board refused the supersession claim at entry {index} (supersede_refused, base): the side is the member the shot appends to — nothing was published"),
                 SupersedeCause::Duplicate => write!(f, "the board refused the supersession claim at entry {index} (supersede_refused, duplicate): the side is named twice — nothing was published"),
             },
+            Refusal::WindowPartsOwed { parts, misfits, .. } => {
+                write!(f, "nothing was published: {} window part{} of this merge need{} an answer", parts.len(), if parts.len() == 1 { "" } else { "s" }, if parts.len() == 1 { "s" } else { "" })?;
+                if !misfits.is_empty() {
+                    write!(f, ", and {} answer{} fit{} nothing", misfits.len(), if misfits.len() == 1 { "" } else { "s" }, if misfits.len() == 1 { "s" } else { "" })?;
+                }
+                Ok(())
+            }
             Refusal::SessionEnded(h) | Refusal::Halt(h) => h.fmt(f),
         }
     }
@@ -2099,6 +2124,7 @@ pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<
         retries: inputs.options.retries,
         gaps: composed.gaps.clone(),
         values: composed.values.clone(),
+        answers: Vec::new(),
         replaces: prior.as_ref().and_then(|p| p.link.clone()),
         by: record::by(),
         link: None,

@@ -28,12 +28,15 @@
 //! a window's run and the trunk's own are read for none, neither being
 //! re-minted; (3) `windows` — THE WINDOWS (B3-S11 P2 (i); the link-sets
 //! design §5.7): each held run onto a document neither a named draft nor
-//! the trunk and owned by the person exactly is read for its state, one
-//! `doc_metadata` per origin, and kept where unpublished; every window kept
-//! is onto a draft the person reads, so each takes ONE four-set over the
-//! record class homed in its origin, `from` the run, every record kept
-//! (§5.5); each piece of the run the draft arranges is cut into PARTS at
-//! the records' edges — a stretch one record names as published, or a
+//! the trunk is read for its state, one `doc_metadata` per origin, and kept
+//! where unpublished and the person's own exactly — or, at a merge, where
+//! another account's ([`Inputs::merge_landing`]; a run onto another's
+//! document stays a window by address, unasked, at every other publication)
+//! — the origin's ONE four-set over the record class homed in it, `from`
+//! the run, every record kept in the origin's own account (§5.5), and none
+//! read where the origin answers `withheld`; each piece of the run the
+//! draft arranges is cut into PARTS at the records' edges by the shared
+//! core ([`parts`]) — a stretch one record names as published, or a
 //! stretch none names — each part admitting its own answers
 //! ([`Part::admits`]); (4) `twins` — THE TWINS (the link-sets
 //! design §5.1, the stray words; §5.5): each named draft's correspondence
@@ -199,6 +202,7 @@ use crate::board::frames::{self, Slot, REGISTRY_DOCUMENT, T_CORRESPONDENCE, T_ED
 use crate::board::{T_CLAIM, T_ENROLL, T_RETIRE, T_RETRACTION, T_SUPERSEDES};
 
 use super::landed::{recompose, twin_records};
+use super::parts::{self, compose_part, origin_state, parts_of, window_records, Answer, OriginState, Part, PartComposition, PartKey, Window};
 use super::{home_of_link, owned_by, trunk_of, Door, Fault, ISpan, Inputs, Publisher, Run};
 
 /// The most elements one wire array may carry — the codec's `MAX_WIRE_LIST`,
@@ -347,114 +351,18 @@ impl Record {
 /// another account's, or of no I-span shape (`Record::of`); the home is
 /// judged off the address first, so another's record costs no read.
 pub(crate) fn read_record(door: &Door<'_>, p: &Publisher<'_>, hit: &str) -> Result<Option<Record>, Fault> {
-    if !home_of_link(hit).is_some_and(|home| owned_by(home, p.account)) {
+    read_record_as(door, p.account, hit)
+}
+
+/// Reads one record by address, held to `account` as [`read_record`] holds
+/// one to the person's: the record of a window onto another account's origin
+/// is read in that account's own name (the [`parts`] module's doc).
+pub(crate) fn read_record_as(door: &Door<'_>, account: &str, hit: &str) -> Result<Option<Record>, Fault> {
+    if !home_of_link(hit).is_some_and(|home| owned_by(home, account)) {
         return Ok(None);
     }
     let Some(value) = door.link(hit)? else { return Ok(None) };
-    Ok(Record::of(hit, &value, p.account))
-}
-
-/// The caller's answer at one part of a window onto their own unpublished
-/// origin (B3-S11 P2 (i); the link-sets design §5.7).
-///
-/// Which answers a part admits is the part's to say ([`Part::admits`]): a
-/// part a record names takes the counterpart or [`Answer::Drop`], a part no
-/// record names publish-first, [`Answer::Drop`] or keep-private.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Answer {
-    /// Publish the origin first: NOT this request, which stays inert.
-    PublishFirst,
-    /// Leave the part's words out of the request.
-    Drop,
-    /// Send the part as a window onto the private origin, no place beside
-    /// it: readers see a placeholder there.
-    KeepPrivate,
-    /// Window the published words the part's record names, re-composed by
-    /// reference with the part's kept place, so the commit re-windows the
-    /// draft there through the record.
-    Counterpart,
-}
-
-/// A part of a window: the window's run and the part's place in it — the
-/// key an answer is given at.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PartKey {
-    /// The window's run, by its index in the selection.
-    pub run: usize,
-    /// The part, by its index in the window's parts.
-    pub part: usize,
-}
-
-/// One part of a window: a stretch of its words one record names as
-/// published, or a stretch none names (B3-S11 P2 (i), its scope sentence).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Part {
-    /// The part's words, on the origin's chain.
-    pub span: ISpan,
-    /// The V-ordinal the rendering draft arranges the part's first word at —
-    /// its kept place where its counterpart is taken.
-    pub ordinal: u64,
-    /// The record that names the part's words as published, where one does;
-    /// its `to` is the counterpart.
-    pub record: Option<Record>,
-}
-
-impl Part {
-    /// Returns whether a record names the part's words as published.
-    pub fn named(&self) -> bool {
-        self.record.is_some()
-    }
-
-    /// Returns whether the part admits `answer`: the counterpart and
-    /// [`Answer::Drop`] at a part a record names, never keep-private or
-    /// publish-first, whose placeholder would withhold words anyone reads at
-    /// the version that published them; publish-first, [`Answer::Drop`] and
-    /// keep-private at a part no record names.
-    pub fn admits(&self, answer: Answer) -> bool {
-        match answer {
-            Answer::Drop => true,
-            Answer::Counterpart => self.named(),
-            Answer::PublishFirst | Answer::KeepPrivate => !self.named(),
-        }
-    }
-
-    /// Returns the published words the part's record names at the part's
-    /// offset — THE COUNTERPART; `None` at a part no record names.
-    pub fn counterpart(&self) -> Option<ISpan> {
-        self.record.as_ref().and_then(|r| r.map(&self.span.chain, self.span.first, self.span.reach()))
-    }
-}
-
-/// One own-origin window of the selection (the link-sets design §5.7;
-/// B3-S11 P2 (i)).
-///
-/// It is a run onto an unpublished draft of the person's own, in its parts,
-/// whose answers are asked — never a run of a named draft, the rendering
-/// draft's or one `also` names, whose words are re-minted, nor one the
-/// draft no longer arranges, which carries nothing and is owed no answer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Window {
-    /// The run's index in the selection.
-    pub run: usize,
-    /// The origin: the person's unpublished draft.
-    pub origin: Address,
-    /// The origin's owner account, off its address.
-    pub owner: String,
-    /// Where in the origin's I-space the passage was written: the run's
-    /// first ordinal.
-    pub i_start: u64,
-    /// The run's width.
-    pub width: u64,
-    /// The window's parts, in the draft's order: each piece the draft
-    /// arranges of the run, cut where a record's naming starts or ends.
-    pub parts: Vec<Part>,
-}
-
-impl Window {
-    /// Returns the key of the window's `part`-th part.
-    pub fn key(&self, part: usize) -> PartKey {
-        PartKey { run: self.run, part }
-    }
+    Ok(Record::of(hit, &value, account))
 }
 
 /// How a candidate was reached.
@@ -744,8 +652,9 @@ pub struct Enumeration {
     /// parallel to the selection: I-ordinals, ascending, none for a run of
     /// no named draft.
     pub merge_atoms: Vec<Vec<u64>>,
-    /// The own-origin windows, in the selection's order, each in its parts;
-    /// the drafts `also` names excluded.
+    /// The windows, in the selection's order, each in its parts: the
+    /// person's own unpublished origins and, at a merge, another account's
+    /// (`Inputs::merge_landing`); the drafts `also` names excluded.
     pub windows: Vec<Window>,
     /// THE TWINS: each named draft's correspondence records whose `from`
     /// the selection's carried pieces hold, in the order the twin
@@ -822,8 +731,7 @@ impl Enumeration {
     /// Returns the answer `window`'s `k`-th part stands under: the one given,
     /// where the part admits it.
     pub fn answer_at(&self, window: &Window, k: usize) -> Option<Answer> {
-        let part = window.parts.get(k)?;
-        self.answers.get(&window.key(k)).copied().filter(|a| part.admits(*a))
+        parts::answer_at(window, k, &self.answers)
     }
 
     /// Returns the parts answered by their counterpart: each part's words
@@ -923,67 +831,31 @@ impl Enumeration {
                 }
                 continue;
             };
-            for (k, part) in window.parts.iter().enumerate() {
-                match self.answer_at(window, k) {
-                    Some(Answer::Counterpart) => {
-                        if let Some(published) = part.counterpart().and_then(|s| s.run()) {
-                            selection.push(published.clone());
-                            received.push(published);
-                        }
+            for (k, _) in window.parts.iter().enumerate() {
+                match compose_part(window, k, self.answer_at(window, k)) {
+                    PartComposition::ByReference(published) => {
+                        selection.push(published.clone());
+                        received.push(published);
                     }
-                    Some(Answer::KeepPrivate) => selection.push(Run::new(window.origin.clone(), part.span.first, part.span.width)),
-                    Some(Answer::Drop | Answer::PublishFirst) | None => {}
+                    PartComposition::KeptPrivate(words) => selection.push(words),
+                    PartComposition::LeftOut | PartComposition::PublishFirst | PartComposition::Owed => {}
                 }
             }
         }
         (selection, received)
     }
 
-    /// Returns the part of these windows holding the first word of `part`,
-    /// a part of the window over the held run `run`, with its index.
-    fn part_holding(&self, run: usize, part: &Part) -> Option<(usize, &Part)> {
-        let window = self.windows.iter().find(|w| w.run == run)?;
-        window.parts.iter().enumerate().find(|(_, before)| before.span.overlap(&part.span.chain, part.span.first, part.span.first + 1).is_some())
-    }
-
     /// Returns each part of `now` — a later read of the same selection's
     /// windows — whose naming differs from this enumeration's at its first
-    /// word: named, un-named or named by another record since, or a part
-    /// these windows held nothing of. Each with the record naming it now.
+    /// word ([`parts::renamed`]), each with the record naming it now.
     pub fn renamed(&self, now: &[Window]) -> Vec<(PartKey, Option<Address>)> {
-        let mut out = Vec::new();
-        for window in now {
-            for (k, part) in window.parts.iter().enumerate() {
-                let naming = part.record.as_ref().map(|r| r.link.clone());
-                let before = self.part_holding(window.run, part).map(|(_, p)| p.record.as_ref().map(|r| r.link.clone()));
-                if before.as_ref() != Some(&naming) {
-                    out.push((window.key(k), naming));
-                }
-            }
-        }
-        out
+        parts::renamed(&self.windows, now)
     }
 
     /// Returns this composition's answers carried onto `now`, a later read
-    /// of the same selection's windows (PUB-3.108).
-    ///
-    /// Each part of `now` takes the answer of the part here holding its
-    /// first word, where the two are named alike and the part admits it;
-    /// where their naming differs ([`Enumeration::renamed`]) a
-    /// [`Answer::Drop`] alone stands, every other answer asked again.
+    /// of the same selection's windows (PUB-3.108; [`parts::answers_onto`]).
     pub fn answers_onto(&self, now: &[Window]) -> BTreeMap<PartKey, Answer> {
-        let mut out = BTreeMap::new();
-        for window in now {
-            for (k, part) in window.parts.iter().enumerate() {
-                let Some((j, before)) = self.part_holding(window.run, part) else { continue };
-                let Some(answer) = self.windows.iter().find(|w| w.run == window.run).and_then(|w| self.answer_at(w, j)) else { continue };
-                let alike = before.record.as_ref().map(|r| &r.link) == part.record.as_ref().map(|r| &r.link);
-                if (alike || answer == Answer::Drop) && part.admits(answer) {
-                    out.insert(window.key(k), answer);
-                }
-            }
-        }
-        out
+        parts::answers_onto(&self.windows, &self.answers, now)
     }
 
     /// Returns the offered candidates' indices, in order.
@@ -1137,7 +1009,7 @@ fn merge_atoms_of(door: &Door<'_>, d: &str, inputs: &Inputs, placed: &[Placement
     Ok(out)
 }
 
-/// Reads the own-origin windows of the selection, each in its parts.
+/// Reads the windows of the selection, each in its parts.
 ///
 /// It is the enumeration's windows step run on its own over one image of
 /// the draft — the shell re-reads them at a held panel's re-open, never
@@ -1160,71 +1032,47 @@ pub fn windows(p: &Publisher<'_>, inputs: &Inputs) -> Result<Vec<Window>, Fault>
 ///
 /// A run is a window where its origin is neither a named draft — the
 /// rendering draft, or one `also` names, whose words are re-minted — nor the
-/// trunk and is an unpublished document owned by the person exactly (one
-/// `doc_metadata` read per origin, kept), and where the draft arranges some
-/// of it. Each origin kept is a draft the person reads, so every window's
-/// records are read whatever drafts [`Inputs::readable_drafts`] lists: one
-/// four-set read over the record class homed in the origin, `from` the run,
-/// every record kept (the link-sets design §5.5). Each arranged piece is
-/// cut into its parts at their edges ([`parts_of`]).
+/// trunk, where the draft arranges some of it, and where its origin is
+/// unpublished ([`origin_state`]): the person's own exactly, or at a merge
+/// any other account's (`Inputs::merge_landing`), each asked the one way —
+/// one `doc_metadata` read per origin, kept. Each window's records are read
+/// in the origin's own account, every record kept (the link-sets design
+/// §5.5; [`window_records`]), and none where the origin answers `withheld`;
+/// each arranged piece is cut into its parts at their edges ([`parts_of`]).
+///
+/// # Errors
+///
+/// The reads' faults; [`Fault::Unreadable`] naming a window onto the
+/// person's own document that answers `withheld`.
 pub(crate) fn windows_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, placed: &[Placement]) -> Result<Vec<Window>, Fault> {
     door.step("windows");
     let trunk = inputs.doc.as_ref();
-    let unit = |a: &str| frames::unit_span(a).as_array().cloned().unwrap_or_default();
-    let subtype = unit(T_CORRESPONDENCE);
     let mut out = Vec::new();
     for (i, run) in inputs.selection.iter().enumerate() {
         if inputs.is_named_draft(&run.origin) || trunk == Some(&run.origin) {
             continue;
         }
         let origin = run.origin.to_string();
-        if !owned_by(&origin, p.account) || door.metadata(&origin)?.published {
+        let foreign = !owned_by(&origin, p.account);
+        if foreign && !inputs.merge_landing {
             continue;
+        }
+        let state = origin_state(door, &origin)?;
+        match state {
+            OriginState::Published => continue,
+            OriginState::Withheld if !foreign => return Err(Fault::Unreadable(run.origin.clone())),
+            OriginState::Private | OriginState::Withheld => {}
         }
         let pieces = placed.get(i).map_or_else(Vec::new, |placement| carried(run, placement, &[]));
         if pieces.is_empty() {
             continue;
         }
-        let records = window_records(door, p, run, &unit(&origin), &subtype)?;
-        let parts = pieces.iter().flat_map(|(piece, ordinal)| parts_of(piece, *ordinal, &records)).collect();
-        out.push(Window { run: i, origin: run.origin.clone(), owner: account_of(&origin).unwrap_or_default(), i_start: run.i_start, width: run.width, parts });
+        let owner = account_of(&origin).unwrap_or_default();
+        let records = if state == OriginState::Private { window_records(door, &owner, run)? } else { Vec::new() };
+        let parts = pieces.iter().flat_map(|(piece, ordinal)| parts_of(piece, *ordinal, &records, foreign)).collect();
+        out.push(Window { run: i, origin: run.origin.clone(), owner, i_start: run.i_start, width: run.width, parts });
     }
     Ok(out)
-}
-
-/// Reads the records homed in `run`'s origin whose `from` covers part of
-/// it: one four-set read over the record class, each record read once.
-fn window_records(door: &Door<'_>, p: &Publisher<'_>, run: &Run, origin_unit: &[Value], subtype: &[Value]) -> Result<Vec<Record>, Fault> {
-    let span = [frames::i_span(&run.i_start_text(), run.width)];
-    let mut out: Vec<Record> = Vec::new();
-    for hit in door.addrs(&run.origin.to_string(), &frames::find_links_four(Slot::Spans(origin_unit), Slot::Spans(&span), Slot::Any, Slot::Spans(subtype)))? {
-        if let Some(record) = read_record(door, p, &hit)? {
-            if record.from.overlap(&run.chain(), run.i_start, run.reach()).is_some() && !out.iter().any(|r| r.link == record.link) {
-                out.push(record);
-            }
-        }
-    }
-    Ok(out)
-}
-
-/// Returns `piece`, a window's run as the draft places it at `ordinal`, cut
-/// into its parts: each stretch the first record covering its first word
-/// names, up to the end of that record's `from`, and each stretch no record
-/// covers, up to the next record's first word.
-fn parts_of(piece: &Run, ordinal: u64, records: &[Record]) -> Vec<Part> {
-    let chain = piece.chain();
-    let mut out = Vec::new();
-    let mut cursor = piece.i_start;
-    while cursor < piece.reach() {
-        let covering = records.iter().find(|r| r.from.overlap(&chain, cursor, cursor + 1).is_some());
-        let end = match covering {
-            Some(r) => r.from.reach().min(piece.reach()),
-            None => records.iter().filter_map(|r| (r.from.chain == chain && r.from.first > cursor).then_some(r.from.first)).min().unwrap_or(piece.reach()).min(piece.reach()),
-        };
-        out.push(Part { span: ISpan { chain: chain.clone(), first: cursor, width: end - cursor }, ordinal: ordinal + (cursor - piece.i_start), record: covering.cloned() });
-        cursor = end;
-    }
-    out
 }
 
 /// Returns whether `ty` is a record class no enumeration offers: the exact

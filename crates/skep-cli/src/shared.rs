@@ -66,6 +66,12 @@ pub enum Stop {
     ///
     /// The codes are 3 halt and surface, 1 the board refused, 4 transport.
     Halt(Halt),
+    /// The command's own refusal, its lines as written: exit 1 (§2.3), the
+    /// board never asked. A library refusal that names the parts and the
+    /// answers a person gives, each in the command's own words (SP-10),
+    /// and no halt's face of its own: the first line is what the person
+    /// reads.
+    Refusal(String),
 }
 
 impl From<Usage> for Stop {
@@ -101,6 +107,7 @@ pub fn finish(program: Program, outcome: Result<(), Stop>) -> i32 {
             Some(act) => (format!("{h}\n  act: {act}"), h.exit_code()),
             None => (h.to_string(), h.exit_code()),
         },
+        Err(Stop::Refusal(block)) => (block, 1),
     };
     talk(format!("{}: {block}", program.name));
     code

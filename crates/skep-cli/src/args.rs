@@ -329,7 +329,7 @@ const GRAMMAR: [Row<Command>; 16] = [
     Row {
         command: Command::Merge,
         once: &["--doc", "--alternative", "--draft", "--base", "--fork", "--head", "--kind", "--journal", "--into", "--retries", "--undo", "--withdraw"],
-        repeated: &["--resolve"],
+        repeated: &["--resolve", "--window", "--leave-out", "--keep-private"],
         switches: &["--publish", "--new", "--no-dedup", "--retype"],
         forms: &[
             Form::Apart("--alternative", "--draft"),
@@ -339,6 +339,10 @@ const GRAMMAR: [Row<Command>; 16] = [
             Form::Apart("--publish", "--into"),
             Form::Apart("--publish", "--new"),
             Form::Apart("--into", "--new"),
+            // The window parts' answers are the shot's alone.
+            Form::Within("--window", "--publish"),
+            Form::Within("--leave-out", "--publish"),
+            Form::Within("--keep-private", "--publish"),
             // The two take-backs: each apart from the composition's flags,
             // its landings and the other.
             Form::Apart("--undo", "--withdraw"),
@@ -427,7 +431,9 @@ usage: skep <command> [flags]
                the head and the side read at one position, the merged
                list and its gaps composed under the rules and reported as
                one JSON document on stdout; --publish lands it as the next
-               version with its record, --into lands it in a draft in one
+               version with its record, asking first at every window part
+               of the merged text (no answer given for you), --into lands
+               it in a draft in one
                write (refused whole where the draft changed since), --new
                in a fresh draft staged from the head; a newer version
                published since is told; --undo puts a draft back as it
@@ -510,7 +516,13 @@ flags (a flag beats its env variable; a variable set empty is unset):
             before:<address>  keep:<side>  both  omit; a side is its
             index as the report numbers it)  [--no-dedup]  [--retype]
             [--retries <n>]  [--publish, or --into <draft>, or --new];
-            with none it composes and prints; or --undo <S>  --kind
+            with none it composes and prints; at --publish each window
+            part of the merged text is answered by name, none for you
+            (the refusal lists them and exits 1, publishing nothing):
+            [--window <E.j>]... windows words a record names as
+            published in <E.j>, [--leave-out <E.j or origin>]... leaves
+            words out, [--keep-private <origin>]... keeps words behind a
+            placeholder; or --undo <S>  --kind
             <address>  [--journal <J>] without them (the draft back as it
             stood before the merge landed, its base restored, the merge
             taken out — refused where the draft changed since); or

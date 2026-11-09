@@ -674,19 +674,20 @@ fn the_draft_side_composes_and_lands_with_no_claim_and_its_re_open_reads_the_sid
     sd.shutdown();
 }
 
-/// Checks that a landing over a window a record names asks the page.
+/// Checks that a landing over a window a record names refuses by name.
 ///
 /// B, staged from E.1, windows `O`, a draft of the person's, beside words
 /// of its own, and composes as the merge's side into L; `O` is then
 /// published at the mint form, so a record names its words as the new
-/// edition's. `merge.land`, opening the panel itself, keeps private only a
-/// window part no record names: the part the record names is left
-/// unanswered, so the landing answers the panel's `inert` refusal naming
-/// it as named, nothing sent (B3-S11 P2 (i): no placeholder over published
+/// edition's. `merge.land`, opening the panel itself, composes no answer it
+/// was not given: the shot refuses `window_parts_owed`, final in meaning,
+/// the part named — its words, its pair, its origin, the sides showing it —
+/// nothing sent (skep #932; B3-S11 P2 (i): no placeholder over published
 /// words). The landing follows the publication at once, and holds whether
-/// or not the document index has listed `O`.
+/// or not the document index has listed `O`. The refusal is the panel's
+/// `inert` nowhere: the page reads a landing's answer, not an open panel's.
 #[test]
-fn a_landing_over_a_window_a_record_names_answers_inert_naming_the_part() {
+fn a_landing_over_a_window_a_record_names_refuses_naming_the_part() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let g = ground(&dir, &sd);
@@ -703,11 +704,15 @@ fn a_landing_over_a_window_a_record_names_answers_inert_naming_the_part() {
     let minted = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     assert!(minted["edition"].is_string(), "O published at the mint form: {minted}");
     let before = g.position();
-    let answer = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
-    crate::shapes::assert_declared("PublicationRefused", &answer);
-    assert_eq!(answer["arm"], "inert", "{answer}");
-    let owed = answer["inert"]["unanswered"].as_array().unwrap_or_else(|| panic!("unanswered parts: {answer}"));
-    assert!(owed.len() == 1 && owed[0]["part"] == 0 && owed[0]["named"] == true, "the part the record names, left for the page: {answer}");
+    let refusal = g.call("merge.land", json!({"session": g.session})).unwrap_err();
+    assert_eq!(refusal.name(), "window_parts_owed", "{refusal}");
+    let v = refusal.to_value();
+    crate::shapes::assert_declared("WindowPartsOwedRefusal", &v);
+    let parts = v["parts"].as_array().unwrap_or_else(|| panic!("the parts: {v}"));
+    assert_eq!(parts.len(), 1, "{v}");
+    crate::shapes::assert_declared("WindowPart", &parts[0]);
+    assert_eq!((parts[0]["words"].as_str(), parts[0]["origin"].as_str(), parts[0]["admits"].clone()), (Some("quote"), Some(o.as_str()), json!(["counterpart", "drop"])), "the part a record names: {v}");
+    assert!(parts[0]["record"].is_string() && parts[0]["counterpart"].is_object(), "the pair: {v}");
     assert_eq!(g.position(), before, "nothing sent");
     g.shell.shutdown();
     sd.shutdown();
@@ -721,8 +726,8 @@ fn a_landing_over_a_window_a_record_names_answers_inert_naming_the_part() {
 /// panel itself, B named `also` and `readable_drafts` leaving `O` out: the
 /// window's one part is named all the same, admitting the counterpart and
 /// `drop`. `merge.land` takes the page's panel, the part unanswered, and
-/// answers its `inert` refusal naming the part as named, nothing sent
-/// (B3-S11 P2 (i); the link-sets design §5.5).
+/// refuses `window_parts_owed` naming the part, nothing sent (B3-S11 P2
+/// (i); the link-sets design §5.5).
 #[test]
 fn a_landing_over_a_page_panel_that_lists_no_origin_still_names_the_part() {
     let dir = TempDir::new().unwrap();
@@ -746,14 +751,76 @@ fn a_landing_over_a_page_panel_that_lists_no_origin_still_names_the_part() {
     let parts = windows[0]["parts"].as_array().unwrap_or_else(|| panic!("its parts: {panel}"));
     assert!(parts.len() == 1 && parts[0]["record"].is_string() && parts[0]["admits"] == json!(["counterpart", "drop"]), "one part the record names: {panel}");
     let before = g.position();
-    let answer = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
-    crate::shapes::assert_declared("PublicationRefused", &answer);
-    assert_eq!(answer["arm"], "inert", "{answer}");
-    let owed = answer["inert"]["unanswered"].as_array().unwrap_or_else(|| panic!("unanswered parts: {answer}"));
-    assert!(owed.len() == 1 && owed[0]["part"] == 0 && owed[0]["named"] == true, "the part the record names, left for the page: {answer}");
+    let refusal = g.call("merge.land", json!({"session": g.session})).unwrap_err();
+    assert_eq!(refusal.name(), "window_parts_owed", "{refusal}");
+    let v = refusal.to_value();
+    crate::shapes::assert_declared("WindowPartsOwedRefusal", &v);
+    assert_eq!(v["parts"].as_array().map(Vec::len), Some(1), "{v}");
     assert_eq!(g.position(), before, "nothing sent");
     g.shell.shutdown();
     sd.shutdown();
+}
+
+/// Checks that a part no record names is asked, never kept private, and that
+/// answers compose as the panel's.
+///
+/// B windows `O`, a draft of the person's no record names. `merge.land`
+/// refuses `window_parts_owed` naming the part's three answers, nothing
+/// sent; given `keep_private` it lands, the member holding the window and
+/// the acknowledgment naming the answer, its private rows left private and
+/// the merge's defaults taken. The same answers through the page's panel
+/// compose the same member (skep #932: the one request, the shared core).
+#[test]
+fn a_part_no_record_names_is_asked_and_its_answer_composes_as_the_panels() {
+    let compose = |dir: &TempDir, sd: &Skepd, panel_route: bool| -> Vec<(String, String)> {
+        let g = ground(dir, sd);
+        let f = family(&g);
+        let o = g.draft("quote");
+        let b = g.addr(skep_client::board::frames::stage(&f.e1, None));
+        g.op(json!({"op": "insert", "doc": b, "at": {"subspace": "1", "ordinal": "8"}, "values": [" quietly"], "as_of": g.position()}));
+        g.op(json!({"op": "copy", "doc": b, "at": {"subspace": "1", "ordinal": "16"}, "specs": [{"source": o, "span": {"start": "1.1", "width": "0.5"}}], "as_of": g.position()}));
+        let l = g.addr(skep_client::board::frames::stage(&f.e2, None));
+        let landed = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "draft": b, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+        assert_eq!(landed["outcome"].as_str(), Some("landed"), "{landed}");
+        let before = g.position();
+        let refused = g.call("merge.land", json!({"session": g.session})).unwrap_err();
+        assert_eq!(refused.name(), "window_parts_owed", "{refused}");
+        let v = refused.to_value();
+        crate::shapes::assert_declared("WindowPartsOwedRefusal", &v);
+        let part = v["parts"][0].clone();
+        assert_eq!((part["words"].as_str(), part["record"].clone(), part["admits"].clone()), (Some("quote"), Value::Null, json!(["publish_first", "drop", "keep_private"])), "{v}");
+        assert_eq!(g.position(), before, "nothing sent");
+        let key = format!("{}.{}", part["run"], part["part"]);
+        let answers = json!({ key: "keep_private" });
+        let member = if panel_route {
+            let open = json!({"session": g.session, "draft": l, "doc": f.edition, "also": [b], "readable_drafts": [l, b], "published": [f.edition]});
+            g.call("publication.open", open).unwrap_or_else(|r| panic!("{r}"));
+            let acked = g.call("publication.confirm", json!({"session": g.session, "answers": answers})).unwrap_or_else(|r| panic!("{r}"));
+            acked["member"].as_str().expect("the member").to_string()
+        } else {
+            let landed = g.call("merge.land", json!({"session": g.session, "answers": answers})).unwrap_or_else(|r| panic!("{r}"));
+            crate::shapes::assert_declared("MergeLanded", &landed);
+            assert_eq!(landed["answers"].as_array().map(Vec::len), Some(1), "the answer named: {landed}");
+            crate::shapes::assert_declared("WindowPart", &landed["answers"][0]);
+            assert_eq!(landed["answers"][0]["answer"], "keep_private", "{landed}");
+            assert!(landed["left_private"].is_array() && landed["defaults"].is_array(), "{landed}");
+            landed["member"].as_str().expect("the member").to_string()
+        };
+        let image = g.op(frames::image(&member, 1, 26));
+        let runs = image["runs"].as_array().unwrap_or_else(|| panic!("the image: {image}"));
+        assert!(runs.iter().any(|r| r["i_start"].as_str().is_some_and(|i| i.starts_with(&o))), "the member windows O: {image}");
+        g.shell.shutdown();
+        runs.iter().map(|r| (r["i_start"].as_str().unwrap().to_string(), r["width"].as_str().unwrap().to_string())).collect()
+    };
+    let dir_a = TempDir::new().unwrap();
+    let sd_a = spawn(&dir_a.path().join("board"), true);
+    let landed = compose(&dir_a, &sd_a, false);
+    sd_a.shutdown();
+    let dir_b = TempDir::new().unwrap();
+    let sd_b = spawn(&dir_b.path().join("board"), true);
+    let paneled = compose(&dir_b, &sd_b, true);
+    sd_b.shutdown();
+    assert_eq!(landed, paneled, "the same request through either route");
 }
 
 /// Checks the merged arm's record written once where the page's own slot

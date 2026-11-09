@@ -64,25 +64,30 @@
 //! `staged`, never whether `into` was named. So another account's record of
 //! the kind never decides where a merge lands.
 //!
-//! **`merge.land`** — `{resolutions?}` — publishes the merge from the draft
-//! the standing composition landed in, THE SHOT CARRYING THE SUPERSESSION
-//! CLAIM, then the record: ONE PATH for the shot, the publication family's
-//! — the panel standing for the draft, which the page opened over it with
-//! the switches and answers it last sent, or one this row opens over the
-//! whole draft (every private row OFF, every window part no record names
-//! kept private — a part a record names left unanswered, so the shot
-//! answers the panel's `inert` refusal naming it for the page to answer —
-//! the draft side named `also` so its words re-mint as the document's own), confirmed
-//! by the family's one composition, signature and send
-//! (`Shell::confirm_standing`) — so the claim is composed in one place,
+//! **`merge.land`** — `{resolutions?, answers?}` — publishes the merge from
+//! the draft the standing composition landed in, THE SHOT CARRYING THE
+//! SUPERSESSION CLAIM, then the record: ONE PATH for the shot, the
+//! publication family's — the panel standing for the draft, which the page
+//! opened over it with the switches and answers it last sent, or one this
+//! row opens over the whole draft (every private row OFF, the draft side
+//! named `also` so its words re-mint as the document's own), confirmed by
+//! the family's one composition, signature and send
+//! (`Shell::confirm_standing`), under the answers the call names, each
+//! keyed `⟨run⟩.⟨part⟩` as the panel keys them. The landing answers no
+//! window part for its caller: a part with no answer refuses the row
+//! `window_parts_owed` (the merge record's §1.5), nothing sent, every part
+//! named whole by the library's one refusal (`owed_parts`), the same the
+//! `skep merge --publish` refusal comes from. So the claim is composed in one place,
 //! the open's read of the marker (`shell/publication.rs`, **The claim**),
 //! and rides only where the marker's head is the trunk's head as read at
 //! the open; never at the draft side, whose side is a private draft. After
 //! the acknowledgment THE MERGE RECORD, the library's `record_published` —
 //! the member and position the board acknowledged, the claims read back at
-//! the daughter, written once in the account's merge journal with its link
-//! beside it, or the standing one answered — never a second shot. The
-//! answer is the landing with the acknowledgment's data, the panel's
+//! the daughter, the window parts' answers beside it, written once in the
+//! account's merge journal with its link beside it, or the standing one
+//! answered — never a second shot. The answer is the landing with the
+//! acknowledgment's data, the answers as given, each private row OFF named
+//! with its count, each gap left at its default, the panel's
 //! re-statement, or its typed refusal: the race, `supersede_refused` with
 //! `head_moved`, crosses as the board answered it, nothing re-sent, the
 //! composition gone, to be made again on the head it names (skep #806).
@@ -156,10 +161,11 @@ use skep_address::{validate, Address, Nat, Tumbler};
 use skep_client::address::{account_of, doc_1_of, document_of};
 use skep_client::board::{frames, merge_marker, ChangesAnswer, ChangesQuery, MergeMarker, Rejection};
 use skep_client::halt::Halt;
-use skep_client::merge::{self as lib, Family, Gap, GapKind, NoUndo, Placement, ResolvedBy, Role, Run, SideAt, SideIx};
-use skep_client::publication::{OriginAnswer, Run as SelectionRun};
+use skep_client::merge::{self as lib, Family, Gap, GapKind, Misfit, NoUndo, Placement, ResolvedBy, Role, Run, SideAt, SideIx, WindowPart};
+use skep_client::publication::Run as SelectionRun;
+use skep_client::sheet::render_inert;
 
-use super::publication::{address_arg, clipped, via_name, Confirmation, OpenArgs, Signed};
+use super::publication::{address_arg, answer_json, clipped, ispan_json, left_private_json, via_name, Confirmation, OpenArgs, Signed};
 use super::{optional, Shell, Write, Writer};
 use crate::refusal::{Name, Refusal};
 use crate::sessions::SessionEntry;
@@ -478,6 +484,7 @@ impl Shell {
                 };
                 other("supersede_refused", json!({"index": index, "detail": cause.token(), "head": head}))
             }
+            R::WindowPartsOwed { parts, misfits, given } => Refusal::shell(Name::WINDOW_PARTS_OWED, owed_detail(&parts, &given, &misfits, json!([]), json!([]))),
             R::SessionEnded(_) => self.died(session),
             R::Halt(h) => Refusal::from(h),
         }
@@ -714,7 +721,10 @@ impl Shell {
             None => {
                 let position = self.metadata_read(session, member)?["at"].as_u64().unwrap_or(merged.as_of);
                 let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
-                match lib::record_published(&session.board, &merged, merger, member, position, None).map_err(|r| self.merge_refusal(session, r))? {
+                // The resume of a stop between the shot and its record: the
+                // answers the shot was given are not known here, so none are
+                // recorded.
+                match lib::record_published(&session.board, &merged, merger, member, position, None, &[]).map_err(|r| self.merge_refusal(session, r))? {
                     lib::Landed::Member { record, claims, .. } => (Some(record), claims, None),
                     _ => (None, claims, None),
                 }
@@ -728,14 +738,15 @@ impl Shell {
         Ok(report_json(&merged, &form, "merged", extra))
     }
 
-    /// Answers `merge.land(session, {resolutions?})` with the landing, the
-    /// panel's re-statement or its typed refusal (the module doc; `shapes`'
-    /// `MergeLanded`).
+    /// Answers `merge.land(session, {resolutions?, answers?})` with the
+    /// landing, the panel's re-statement or its typed refusal (the module
+    /// doc; `shapes`' `MergeLanded`).
     ///
     /// # Errors
     ///
     /// In this order: `malformed_args` naming `resolutions` where it is
-    /// present and no object; `malformed_args` naming `session`, then
+    /// present and no object, naming `answers` where it is present and no
+    /// object of strings; `malformed_args` naming `session`, then
     /// `session_ended`; `no_merge` naming the session where no composition
     /// stands under its board and principal; `malformed_args` naming
     /// `resolutions` where a gap id names no gap of the composition or a
@@ -745,13 +756,19 @@ impl Shell {
     /// composition landed in or the draft side and the lines of the
     /// principal's standing on it — nothing read at any; `store_unreadable`,
     /// `no_account`; the panel's open's where the shell opens one
-    /// (`publication.open`'s steps 4 to 6); then `publication.confirm`'s
-    /// from `write_in_bare_session` on — the door asked again over the
-    /// panel's drafts, a draft the page's panel names `also` among them,
-    /// nothing composed. The record's refusal after an acknowledgment is no
-    /// error: the member stands, and the answer carries it as `unrecorded`.
+    /// (`publication.open`'s steps 4 to 6); `malformed_args` naming `answers`
+    /// where one is no `⟨run⟩.⟨part⟩` of a part the panel holds or one the
+    /// part does not admit; the words' reads of the window parts' refusal
+    /// and acknowledgment; then `publication.confirm`'s from
+    /// `write_in_bare_session` on — the door asked again over the panel's
+    /// drafts, a draft the page's panel names `also` among them, nothing
+    /// composed — and `window_parts_owed` where a window part is unanswered
+    /// when the shot would be composed, every part named, nothing sent. The
+    /// record's refusal after an acknowledgment is no error: the member
+    /// stands, and the answer carries it as `unrecorded`.
     pub(super) fn merge_land(&self, args: &Value) -> Result<Value, Refusal> {
         let resolutions = optional(args, "resolutions", |v| v.as_object().cloned())?;
+        let raw_answers = optional(args, "answers", |v| v.as_object().filter(|m| m.values().all(Value::is_string)).cloned())?.unwrap_or_default();
         let session = self.session(&args["session"])?;
         let key = Self::family_key(&session);
         let Some(mut composition) = self.merges.standing(&key) else {
@@ -771,37 +788,44 @@ impl Shell {
             Form::Daughter(_) => None,
         };
         let signed = self.signed(&session, Write::call("merge.land", "publish").over(std::iter::once(&into).chain(side.as_ref()).map(ToString::to_string)))?;
-        // The panel: the page's over the draft, or one opened here over the
-        // whole draft, the draft side named `also`.
-        let (state, opened_here) = match self.publications.stood_for(&key, &into, &session.reference) {
-            Some(state) => (state, false),
+        // The panel: the page's over the draft, its windows re-read where it
+        // was opened with no merge marked on the draft, or one opened here
+        // over the whole draft, the draft side named `also`.
+        let state = match self.publications.stood_for(&key, &into, &session.reference) {
+            Some(mut state) => {
+                if !state.inputs.merge_landing {
+                    state.inputs.merge_landing = true;
+                    let p = signed.publisher(&session);
+                    Self::reread_windows(&p, &mut state, |f| self.fault(&session, "merge.land", f))?;
+                    self.publications.stand(key.clone(), state.clone());
+                }
+                state
+            }
             None => {
                 let also = match &composition.form {
                     Form::Draft(d) => vec![d.clone()],
                     Form::Daughter(_) => Vec::new(),
                 };
-                let (state, _) = self.open_panel(&session, &signed, OpenArgs { draft: into.clone(), also, doc: Some(composition.merged.inputs.doc.clone()), mint: None, claim: false, selection: None, notes: None, readable_drafts: None, published: None })?;
+                let (state, _) = self.open_panel(&session, &signed, OpenArgs { draft: into.clone(), also, doc: Some(composition.merged.inputs.doc.clone()), mint: None, claim: false, selection: None, notes: None, readable_drafts: None, published: None, merge_landing: true })?;
                 self.publications.stand(key.clone(), state.clone());
-                (state, true)
+                state
             }
         };
         let switches = state.switches.clone();
         let mut answers = state.answers.clone();
-        // A panel opened here keeps private every window part no record
-        // names; a part a record names is left unanswered, so the shot is
-        // the panel's inert refusal naming it, for the page to answer.
-        if opened_here {
-            for window in &state.enumeration.windows {
-                for (k, _) in window.parts.iter().enumerate().filter(|(_, part)| !part.named()) {
-                    answers.entry(window.key(k)).or_insert(OriginAnswer::KeepPrivate);
-                }
-            }
-        }
+        // The caller's answers, in the panel's form. The landing composes no
+        // answer of its own at any window part (the module doc).
+        answers.extend(Self::bound_answers(&state, &raw_answers)?);
+        let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
+        let given = lib::given_parts(&session.board, &composition.merged, merger, &into, &state.enumeration.windows, &answers).map_err(|r| self.merge_refusal(&session, r))?;
+        let part_answers = lib::part_answers(&state.enumeration.windows, &answers);
+        let left_private = left_private_json(&state, &answers, &switches);
+        let defaults: Vec<Value> = composition.merged.record.gaps.iter().filter(|g| !g.settled).map(default_json).collect();
         match self.confirm_standing(&session, &key, &state, switches, answers, "merge.land")? {
             Confirmation::Acknowledged { session: current, ack } => {
                 let signed = self.signed_within_call(&current, "merge.land")?;
                 let merger = lib::Merger { token: &current.token, account: &signed.account, signer: &*signed.signer };
-                let recorded = lib::record_published(&current.board, &composition.merged, merger, &ack.member, ack.at, None);
+                let recorded = lib::record_published(&current.board, &composition.merged, merger, &ack.member, ack.at, None, &part_answers);
                 self.merges.take(&key);
                 self.acknowledged(&current, &key, &into, &ack);
                 let daughter = !is_trunk_member(&composition.merged.inputs.doc, &ack.member);
@@ -816,6 +840,9 @@ impl Shell {
                     "record": Value::Null,
                     "claims": Vec::<Value>::new(),
                     "retries": composition.merged.inputs.options.retries,
+                    "answers": given.iter().map(window_part_json).collect::<Vec<_>>(),
+                    "left_private": left_private,
+                    "defaults": defaults,
                 });
                 match recorded {
                     Ok(lib::Landed::Member { record, claims, retries, .. }) => {
@@ -827,6 +854,13 @@ impl Shell {
                     Err(r) => v["unrecorded"] = self.merge_refusal(&current, r).to_value(),
                 }
                 Ok(v)
+            }
+            // The parts that need an answer: the same refusal, every part
+            // named, as `skep merge --publish` makes — no panel or page reading of its own.
+            Confirmation::Owed(owed) => {
+                let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
+                let parts = lib::owed_parts(&session.board, &composition.merged, merger, &into, &state.enumeration.windows, &owed).map_err(|r| self.merge_refusal(&session, r))?;
+                Err(Refusal::shell(Name::WINDOW_PARTS_OWED, owed_detail(&parts, &given, &[], left_private, Value::Array(defaults))))
             }
             Confirmation::Answered(answer) => {
                 // The race: the composition made again on the head the
@@ -1019,6 +1053,62 @@ fn settle_by_edit(merged: &mut lib::Merged, image: &[SelectionRun]) {
 }
 
 // ── The shapes, as the page reads them ───────────────────────────────────
+
+/// Returns one window part as `window_parts_owed` and `merge.land`'s
+/// acknowledgment answer it (`shapes`' `WindowPart`), its words rendered
+/// inert as a label is.
+fn window_part_json(p: &WindowPart) -> Value {
+    json!({
+        "run": p.key.run,
+        "part": p.key.part,
+        "words": p.words.as_deref().map(render_inert),
+        "after": p.after.as_deref().map(render_inert),
+        "ordinal": p.ordinal,
+        "origin": p.origin.to_string(),
+        "owner": p.owner,
+        "span": ispan_json(&p.span),
+        "record": p.record.as_ref().map(ToString::to_string),
+        "counterpart": p.counterpart.as_ref().map(ispan_json),
+        "version": p.version.as_ref().map(ToString::to_string),
+        "sides": p.sides.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "admits": p.admits.iter().copied().map(answer_json).collect::<Vec<_>>(),
+        "answer": p.answer.map(answer_json),
+        "named_since": p.named_since,
+    })
+}
+
+/// Returns one answer the shot's window step could not place as
+/// `window_parts_owed` names it (`shapes`' `WindowMisfit`).
+fn misfit_json(m: &Misfit) -> Value {
+    let flag = |f: &lib::Flag| match f {
+        lib::Flag::Window => "window",
+        lib::Flag::LeaveOut => "leave_out",
+        lib::Flag::KeepPrivate => "keep_private",
+    };
+    match m {
+        Misfit::FitsNothing { flag: f, key, published_in } => json!({"flag": flag(f), "key": key.to_string(), "published_in": published_in.iter().map(ToString::to_string).collect::<Vec<_>>()}),
+        Misfit::TwoAnswers { first, second, key } => json!({"flag": flag(first), "second": flag(second), "key": key.to_string(), "published_in": Vec::<String>::new()}),
+    }
+}
+
+/// Returns the `window_parts_owed` detail: the parts that need an answer,
+/// the answers that stand beside them, what fits nothing, and each default
+/// the landing takes (`shapes`' `WindowPartsOwedRefusal`).
+fn owed_detail(parts: &[WindowPart], given: &[WindowPart], misfits: &[Misfit], left_private: Value, defaults: Value) -> Value {
+    json!({
+        "parts": parts.iter().map(window_part_json).collect::<Vec<_>>(),
+        "answers": given.iter().map(window_part_json).collect::<Vec<_>>(),
+        "misfits": misfits.iter().map(misfit_json).collect::<Vec<_>>(),
+        "left_private": left_private,
+        "defaults": defaults,
+    })
+}
+
+/// Returns one gap left at its default (`shapes`' `MergeDefault`).
+fn default_json(g: &Gap) -> Value {
+    let v = gap_json(g);
+    json!({"id": v["id"], "kind": v["kind"], "after": v["after"], "before": v["before"], "placed": v["placed"]})
+}
 
 /// Returns the report as `merge.compose` answers it (`shapes`' `MergeReport`).
 fn report_json(merged: &lib::Merged, form: &Form, outcome: &str, extra: Value) -> Value {

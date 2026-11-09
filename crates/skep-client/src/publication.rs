@@ -58,6 +58,10 @@
 //!    candidate decided UNCHANGED since version ⟨k⟩ or not (the fold, E4
 //!    1.1), and a formatting mark judged on the words a reader receives,
 //!    never onto a placeholder.
+//!    [`parts`](mod@parts) holds the rules of a window's parts once, over
+//!    placed runs and their records with no draft in them, which the
+//!    enumeration calls with the draft's placements and the merge library's
+//!    shot with the merged list's (the merge record's §1.5).
 //! 2. [`panel`](mod@panel) — THE PANEL's DATA (§5.2): the rows by home in the design's
 //!    order with each set's state and label, the links folded by type with
 //!    their far documents, the line counts, each row's FOLD — its links
@@ -124,6 +128,7 @@ pub mod base;
 pub mod enumerate;
 pub mod landed;
 pub mod panel;
+pub mod parts;
 pub mod price;
 pub mod request;
 pub mod send;
@@ -132,11 +137,12 @@ pub mod send;
 mod tests;
 
 pub use base::{draft_base, left_behind, standing, Standing, Unrecorded};
-pub use enumerate::{enumerate, is_formatting, is_formatting_type, is_merge_record, windows, AlsoImage, Answer as OriginAnswer, BaseImage, Candidate, Enumeration, Part, PartKey, Placement, Record, Successor, Via, Window, MAX_WIRE_LIST, MERGE_RECORD_TYPE};
+pub use enumerate::{enumerate, is_formatting, is_formatting_type, is_merge_record, windows, AlsoImage, BaseImage, Candidate, Enumeration, Placement, Record, Successor, Via, MAX_WIRE_LIST, MERGE_RECORD_TYPE};
 pub use landed::{landed, twin_precheck, Base, Missing, Recomposed, Verdict};
+pub use parts::{answers_onto, compose_part, parts_of, renamed, Answer as OriginAnswer, OwedAnswer, Part, PartComposition, PartKey, Window};
 pub use panel::{count, inherited, panel, Count, Destination, FoldCounts, Formatting, Inherited, LineCounts, MergeRecords, Original, Panel, PartCounts, Removal, Row, RowKind, Switches, TypeFold};
 pub use price::{price, OriginalShape, Price, Term};
-pub use request::{build, originals_of, reread, AlsoPlaces, Built, Confirmed, End, Entry, EntryHome, Inert, OriginalEntry, OwedAnswer, Piece, Reread, Request, Restatement, Unspellable};
+pub use request::{build, originals_of, reread, AlsoPlaces, Built, Confirmed, End, Entry, EntryHome, Inert, OriginalEntry, Piece, Reread, Request, Restatement, Unspellable};
 pub use send::{send, Ack, AckVia, LineageCause, OwnFault, RaceKey, Refusal, Sent, SupersedeCause};
 
 /// One run of permanent content I-addresses — the selection's unit, and a
@@ -397,6 +403,13 @@ pub struct Inputs {
     /// daughter no member of the chain, the base or a repeat
     /// ([`send::Refusal::SupersedeRefused`]). The document form's alone.
     pub supersede: Vec<Address>,
+    /// Whether this publication carries a merge landed in the draft.
+    ///
+    /// At a merge, a window onto another account's unpublished document is
+    /// asked as a window onto the person's own is, since a reader of the
+    /// new version would meet a placeholder there (the merge record's §1.5;
+    /// `parts`). Off, such a window stays a window by address, unasked.
+    pub merge_landing: bool,
 }
 
 impl Inputs {

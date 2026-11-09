@@ -40,8 +40,13 @@
 //! **One schema**, kind `merge`: `type` fixed, `v` the schema's version,
 //! `rules` the rule set's, then `doc`, `base`, `sides`, `landed`, `claims`,
 //! `runs`, `retries`, `gaps`, `values`, `replaces` and `by` (§4, "Under
-//! D13"). The record is encoded as the one JSON object `serde_json`
-//! renders; a reader that does not know a member treats it as absent.
+//! D13"), with `answers` beside them only where a window part was answered
+//! (§1.5, THE SHOT's WINDOW PARTS): each is that part's words and its
+//! answer, the published words it was windowed from where it was — so the
+//! list `verify` recomputes is M as those answers left it, one function
+//! with the shot's own (`merge::windows`). The record is encoded as the one
+//! JSON object `serde_json` renders; a reader that does not know a member
+//! treats it as absent.
 
 use serde_json::{json, Value};
 use skep_address::{Address, Nat};
@@ -252,6 +257,84 @@ pub enum RecordLanding {
     },
 }
 
+// ── the answers at the window parts ───────────────────────────────────────
+
+/// How a window part was answered (§1.5, THE SHOT's WINDOW PARTS), as the
+/// record spells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordedAnswer {
+    /// Windowed from the published words a record names.
+    Window,
+    /// Left out of the merge.
+    LeaveOut,
+    /// Kept behind a placeholder.
+    KeepPrivate,
+}
+
+impl RecordedAnswer {
+    /// Returns the answer's spelling in the record.
+    ///
+    /// It is `window`, `leave_out` or `keep_private`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RecordedAnswer::Window => "window",
+            RecordedAnswer::LeaveOut => "leave_out",
+            RecordedAnswer::KeepPrivate => "keep_private",
+        }
+    }
+
+    /// Returns the answer a spelling names, `None` for any other text.
+    pub fn parse(text: &str) -> Option<RecordedAnswer> {
+        match text {
+            "window" => Some(RecordedAnswer::Window),
+            "leave_out" => Some(RecordedAnswer::LeaveOut),
+            "keep_private" => Some(RecordedAnswer::KeepPrivate),
+            _ => None,
+        }
+    }
+}
+
+/// One window part's answer as the record keeps it (§4, `answers`).
+///
+/// It is identified by its words, never by a position in a draft, so the
+/// answer can be applied to the merged list a verifier recomputes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartAnswer {
+    /// The part's words, on its origin.
+    pub from: Run,
+    /// The answer given.
+    pub answer: RecordedAnswer,
+    /// The published words it was windowed from, where it was.
+    pub to: Option<Run>,
+}
+
+impl PartAnswer {
+    fn to_value(&self) -> Value {
+        let spell = |run: &Run| json!({"i_start": run.address_at(0).map(|a| a.to_string()), "width": run.width.to_string()});
+        let mut v = json!({"from": spell(&self.from), "answer": self.answer.as_str()});
+        if let Some(to) = &self.to {
+            v["to"] = spell(to);
+        }
+        v
+    }
+
+    fn from_value(v: &Value) -> Option<PartAnswer> {
+        let run = |m: &Value| {
+            let i_start = m["i_start"].as_str()?;
+            let origin = origin_of(i_start)?;
+            let first = last_component(&parse_address(i_start)?)?;
+            let width: u64 = m["width"].as_str()?.parse().ok()?;
+            Some(Run::new(origin, first, width))
+        };
+        let answer = RecordedAnswer::parse(v["answer"].as_str()?)?;
+        let to = match v.get("to") {
+            None | Some(Value::Null) => None,
+            Some(to) => Some(run(to)?),
+        };
+        Some(PartAnswer { from: run(&v["from"])?, answer, to })
+    }
+}
+
 // ── the record ────────────────────────────────────────────────────────────
 
 /// The merge record (§4, "Under D13"), as a struct.
@@ -290,6 +373,9 @@ pub struct Record {
     pub gaps: Vec<Gap>,
     /// The value rule's switches and where it fired.
     pub values: ValueLog,
+    /// The merger's answers at the window parts of the shot, where any was
+    /// given (§1.5, THE SHOT's WINDOW PARTS).
+    pub answers: Vec<PartAnswer>,
     /// The record this one supersedes under the key.
     ///
     /// It is its link's address — or `None` at the first (P1). A record
@@ -317,7 +403,7 @@ impl Record {
                 json!({"draft": draft.to_string(), "position": position})
             }
         };
-        json!({
+        let mut body = json!({
             "type": TYPE,
             "v": SCHEMA_VERSION,
             "rules": RULES,
@@ -332,7 +418,11 @@ impl Record {
             "values": {"dedup": self.values.dedup, "retype": self.values.retype, "applied": self.values.applied.iter().map(|g| g.0).collect::<Vec<_>>()},
             "replaces": self.replaces.as_ref().map(ToString::to_string),
             "by": self.by,
-        })
+        });
+        if !self.answers.is_empty() {
+            body["answers"] = Value::Array(self.answers.iter().map(PartAnswer::to_value).collect());
+        }
+        body
     }
 
     /// Returns the record a JSON object spells.
@@ -341,8 +431,8 @@ impl Record {
     /// one missing a member this build cannot do without or spelling one it
     /// cannot read — a gap naming a side past the one byte a side is
     /// numbered by among them; a missing `landed`, `claims`, `retries`,
-    /// `replaces`, `by` or `values.applied` reads as its empty value, and
-    /// `rules` is not read. A member this build does not know is left
+    /// `replaces`, `by`, `values.applied` or `answers` reads as its empty
+    /// value, and `rules` is not read. A member this build does not know is left
     /// unread.
     pub fn from_value(v: &Value) -> Option<Record> {
         if v["type"].as_str() != Some(TYPE) || v["v"].as_u64() != Some(SCHEMA_VERSION) {
@@ -374,6 +464,9 @@ impl Record {
         let applied = v["values"]["applied"].as_array().map_or(Some(Vec::new()), |a| {
             a.iter().map(|g| g.as_u64().map(|n| GapId(n as u32))).collect()
         })?;
+        let answers = v["answers"].as_array().map_or(Some(Vec::new()), |a| {
+            a.iter().map(PartAnswer::from_value).collect()
+        })?;
         Some(Record {
             doc: addr(&v["doc"])?,
             base: addr(&v["base"])?,
@@ -388,6 +481,7 @@ impl Record {
                 retype: v["values"]["retype"].as_bool()?,
                 applied,
             },
+            answers,
             replaces: v["replaces"].as_str().and_then(parse_address),
             by: v["by"].as_str().unwrap_or("").to_string(),
             link: None,
@@ -783,9 +877,11 @@ pub enum Verdict {
 /// Verifies a record's testimony (§4, testimony; §7, `verify`).
 ///
 /// M is recomputed from the record's inputs — its base, its sides, its
-/// value switches and the choices its gaps record — and compared with the
-/// landed member's image over its first `placed` positions, or the draft's
-/// whole image at the position recorded. A member is compared as the shot
+/// value switches and the choices its gaps record — the merger's answers at
+/// its window parts applied to it (`answers`, one function with the shot's
+/// own, `merge::windows`'s `applied`), and compared with the landed
+/// member's image over its first `placed` positions, or the draft's whole
+/// image at the position recorded. A member is compared as the shot
 /// minted it, a draft side's fresh text re-minted under the trunk; a draft
 /// is compared by identity, every run of M as the sides hold it, since the
 /// one `set_arrangement` that landed it re-mints nothing. A draft side, and
@@ -904,14 +1000,13 @@ pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<V
     };
     let actual = reads::runs_of(&image)?;
     // A member holds a draft side's text re-minted under the trunk, which
-    // its family says; a draft holds every run of M by identity.
+    // its family says, and each part as the merger's answer left it; a
+    // draft holds every run of M by identity.
     let by_identity = matches!(record.landed, Some(RecordLanding::Draft { .. }));
-    let expected: Vec<(Run, reads::Family)> = readings
-        .composed
-        .runs
-        .iter()
-        .map(|p| p.run.clone())
-        .zip(readings.families.iter().map(|f| if by_identity { reads::Family::Own } else { *f }))
+    let answered = super::windows::applied(&readings.composed.runs, &readings.families, &record.doc, &record.answers);
+    let expected: Vec<(Run, reads::Family)> = answered
+        .into_iter()
+        .map(|a| (a.run, if by_identity { reads::Family::Own } else { a.family }))
         .collect();
     Ok(match reads::first_difference(&expected, &actual, &record.doc) {
         None => Verdict::Equal,

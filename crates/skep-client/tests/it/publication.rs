@@ -344,6 +344,7 @@ fn inputs(seeded: &Seeded) -> Inputs {
         readable_drafts: vec![addr(&seeded.d), addr(&seeded.n)],
         published: vec![addr(&seeded.e), addr(&seeded.s), addr(&seeded.s2)],
         supersede: vec![],
+        merge_landing: false,
     }
 }
 
@@ -877,7 +878,7 @@ fn the_board_accepts_the_request_each_answer_composes() {
     assert_eq!(ack.member.to_string(), format!("{e}.2"));
     // O published at the mint form: its words the new edition's, its record
     // in O.
-    let origin = Inputs { doc: None, mint: Some(addr(ACCOUNT)), claim: false, base: None, draft: addr(o), also: vec![], selection: vec![run(o, 1, 5)], notes: vec![], readable_drafts: vec![addr(o)], published: vec![addr(e), addr(s), addr(s2)], supersede: vec![] };
+    let origin = Inputs { doc: None, mint: Some(addr(ACCOUNT)), claim: false, base: None, draft: addr(o), also: vec![], selection: vec![run(o, 1, 5)], notes: vec![], readable_drafts: vec![addr(o)], published: vec![addr(e), addr(s), addr(s2)], supersede: vec![], merge_landing: false };
     let oe = enumerate(&p, &origin).expect("O enumerated");
     let opn = panel(&p, &origin, &oe).expect("O's panel");
     let Built::Request(mut request) = build(&p, &origin, &oe, &opn, &Confirmed::default()).expect("built") else { panic!("inert") };
@@ -901,7 +902,8 @@ fn the_board_accepts_the_request_each_answer_composes() {
     assert_eq!((en.windows[0].run, parts.len(), parts[0].named()), (1, 1, true), "{parts:?}");
     assert_eq!(parts[0].counterpart().and_then(|c| c.document()).as_deref(), Some(edition.as_str()), "O's words are the edition's now");
     let pn = panel(&p, &third, &en).expect("the panel");
-    assert_eq!(build(&p, &third, &en, &pn, &answered(OriginAnswer::KeepPrivate)).expect("built"), Built::Inert(publication::Inert::Unanswered(vec![publication::OwedAnswer { part: key, named: true }])), "no placeholder over published words");
+    let Built::Inert(publication::Inert::Unanswered(owed)) = build(&p, &third, &en, &pn, &answered(OriginAnswer::KeepPrivate)).expect("built") else { panic!("no owed answer") };
+    assert_eq!(owed.iter().map(|o| (o.part, o.named)).collect::<Vec<_>>(), vec![(key, true)], "no placeholder over published words");
     let Built::Request(mut left) = build(&p, &third, &en, &pn, &answered(OriginAnswer::Drop)).expect("built") else { panic!("inert") };
     assert_eq!(left.runs, vec![run(e, 1, 29)], "the part left out");
     assert!(!names(&left, &note_o), "no entry on the words left out: {:?}", left.entries);
@@ -1066,7 +1068,7 @@ fn a_moved_place_is_refused_with_its_entry_and_the_reread_restates_the_selection
     insert_text(&board, &bare_token, &d, 1, "xyz");
     let y = format!("{d}.0.1.2");
     let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
-    let inputs = Inputs { doc: Some(addr(&e)), mint: None, claim: false, base: Some((addr(&e1), 19)), draft: addr(&d), also: vec![], selection: vec![run(&d, 2, 2)], notes: vec![], readable_drafts: vec![addr(&d)], published: vec![addr(&e)], supersede: vec![] };
+    let inputs = Inputs { doc: Some(addr(&e)), mint: None, claim: false, base: Some((addr(&e1), 19)), draft: addr(&d), also: vec![], selection: vec![run(&d, 2, 2)], notes: vec![], readable_drafts: vec![addr(&d)], published: vec![addr(&e)], supersede: vec![], merge_landing: false };
     let en = enumerate(&p, &inputs).unwrap();
     assert_eq!(en.placed, vec![publication::Placement::Whole { ordinal: 2 }]);
     let pn = panel(&p, &inputs, &en).unwrap();
@@ -1134,7 +1136,7 @@ fn cost_of_the_enumeration_and_the_panel_over_many_links() {
         make_link(&board, &session, &bare_token, &device, &s, true, spec(&e1, at, 2, &e, at), End::Addrs(vec![]), T_CITATION);
     }
     let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
-    let inputs = Inputs { doc: Some(addr(&e)), mint: None, claim: false, base: Some((addr(&e1), 1000)), draft: addr(&d), also: vec![], selection: vec![run(&e, 1, 1000), run(&d, 1, 4)], notes: vec![addr(&n)], readable_drafts: vec![addr(&d), addr(&n)], published: vec![addr(&e), addr(&s)], supersede: vec![] };
+    let inputs = Inputs { doc: Some(addr(&e)), mint: None, claim: false, base: Some((addr(&e1), 1000)), draft: addr(&d), also: vec![], selection: vec![run(&e, 1, 1000), run(&d, 1, 4)], notes: vec![addr(&n)], readable_drafts: vec![addr(&d), addr(&n)], published: vec![addr(&e), addr(&s)], supersede: vec![], merge_landing: false };
     let mut enumerate_ms = Vec::new();
     let mut panel_ms = Vec::new();
     let mut reread_ms = Vec::new();
@@ -1343,7 +1345,7 @@ fn a_base_under_a_trunk_member_stands_behind_and_its_next_shot_lands_its_daughte
                 run(origin, ordinal.parse().expect("an ordinal"), w)
             })
             .collect();
-        let inputs = Inputs { doc: Some(addr(&x)), mint: None, claim: false, base: Some(base), draft: addr(draft), also: vec![], selection, notes: vec![], readable_drafts: vec![addr(draft)], published: vec![addr(&x)], supersede: vec![] };
+        let inputs = Inputs { doc: Some(addr(&x)), mint: None, claim: false, base: Some(base), draft: addr(draft), also: vec![], selection, notes: vec![], readable_drafts: vec![addr(draft)], published: vec![addr(&x)], supersede: vec![], merge_landing: false };
         let en = enumerate(&p, &inputs).expect("enumerated");
         let pn = panel(&p, &inputs, &en).expect("the panel");
         let Built::Request(mut request) = build(&p, &inputs, &en, &pn, &Confirmed::default()).expect("built") else { panic!("inert") };

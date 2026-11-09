@@ -100,7 +100,8 @@ use crate::board::answers::{self, LinkValue};
 use crate::board::frames::{self, Slot, REGISTRY_DOCUMENT, T_HELD_REMOVAL, T_READ_WITH};
 use crate::board::T_RETRACTION;
 
-use super::enumerate::{is_formatting, is_formatting_type, selected_ranges, touches, Answer, Candidate, EndPiece, Enumeration, PartKey, Record, RecordWalk, Via};
+use super::enumerate::{is_formatting, is_formatting_type, selected_ranges, touches, Candidate, EndPiece, Enumeration, Record, RecordWalk, Via};
+use super::parts::{Answer, PartKey};
 use super::{home_of_link, owned_by, Door, Fault, ISpan, Inputs, Publisher, Run};
 
 /// How many positions of a home the label read takes at most: the first

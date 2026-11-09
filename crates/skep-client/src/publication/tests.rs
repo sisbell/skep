@@ -1246,6 +1246,7 @@ fn inputs() -> Inputs {
         readable_drafts: vec![a(D), a(N)],
         published: vec![a(E), a(S), a(S2)],
         supersede: vec![],
+        merge_landing: false,
     }
 }
 
@@ -1256,6 +1257,16 @@ fn publisher<'a>(board: &'a Board, token: &'a Token, signer: &'a HybridSigner) -
 /// The key of the `part`-th part of the window over the selection's `run`.
 fn part(run: usize, part: usize) -> PartKey {
     PartKey { run, part }
+}
+
+/// The answers `built` owes, each by its part and whether a record names it.
+///
+/// # Panics
+///
+/// Panics where `built` is no `Inert::Unanswered`.
+fn owed_of(built: Built) -> Vec<(PartKey, bool)> {
+    let Built::Inert(Inert::Unanswered(owed)) = built else { panic!("no owed answer: {built:?}") };
+    owed.iter().map(|o| (o.part, o.named)).collect()
 }
 
 fn links_of(e: &Enumeration, indices: &[usize]) -> Vec<String> {
@@ -2456,6 +2467,107 @@ fn the_request_spells_every_member_and_the_canonical_member_end() {
 /// naming the part as named, and the counterpart, taken, re-composes it by
 /// reference WITH its kept place, the part no record names answered on its
 /// own.
+/// One span on `doc`'s chain, of `width` from `first`.
+fn span(doc: &str, first: u64, width: u64) -> ISpan {
+    ISpan { chain: format!("{doc}.0.1"), first, width }
+}
+
+/// A record of `doc`'s words `[from_first, from_first + width)` as published
+/// in `to` at `to_first`.
+fn record_in(doc: &str, from_first: u64, width: u64, to: &str, to_first: u64) -> Record {
+    Record { link: a(&format!("{doc}.0.2.1")), home: a(doc), from: span(doc, from_first, width), to: span(to, to_first, width), at: Some(7) }
+}
+
+/// THE SHARED CORE (skep #932; `parts`): a part's admitted answers and its
+/// composition are the core's alone, the same read by the family's
+/// `build_with` and by the merge library's shot: a part a record names takes
+/// its counterpart or a leave-out, never keep-private or publish-first; a
+/// part no record names keep-private, leave-out or publish-first, and
+/// another account's words never publish-first, which are not the person's
+/// to publish; a counterpart is the published words by reference, a kept
+/// part its own words, a leave-out nothing, no answer an owed one — never
+/// composed for the caller, and a counterpart this client cannot spell owed
+/// too rather than silently nothing.
+#[test]
+fn the_core_says_what_a_part_admits_and_composes_it_from_each_answer() {
+    let named = Part { span: span(O, 1, 5), ordinal: 30, record: Some(record_in(O, 1, 5, E, 12)), foreign: false };
+    let unnamed = Part { span: span(O, 6, 2), ordinal: 35, record: None, foreign: false };
+    let foreign = Part { span: span(OTHER, 1, 3), ordinal: 37, record: None, foreign: true };
+    use OriginAnswer::{Counterpart, Drop, KeepPrivate, PublishFirst};
+    let admits = |p: &Part| [Counterpart, PublishFirst, Drop, KeepPrivate].map(|x| p.admits(x));
+    assert_eq!(admits(&named), [true, false, true, false]);
+    assert_eq!(admits(&unnamed), [false, true, true, true]);
+    assert_eq!(admits(&foreign), [false, false, true, true], "publish-first is the owner's");
+    assert_eq!(named.admitted(), vec![Counterpart, Drop]);
+    assert_eq!(foreign.admitted(), vec![Drop, KeepPrivate]);
+    assert_eq!(named.counterpart(), Some(span(E, 12, 5)));
+
+    let w = Window { run: 2, origin: a(O), owner: ACCOUNT.to_string(), i_start: 1, width: 7, parts: vec![named, unnamed] };
+    assert_eq!(compose_part(&w, 0, Some(Counterpart)), PartComposition::ByReference(run(E, 12, 5)));
+    assert_eq!(compose_part(&w, 1, Some(KeepPrivate)), PartComposition::KeptPrivate(run(O, 6, 2)));
+    assert_eq!(compose_part(&w, 0, Some(Drop)), PartComposition::LeftOut);
+    assert_eq!(compose_part(&w, 1, Some(PublishFirst)), PartComposition::PublishFirst);
+    assert_eq!(compose_part(&w, 0, None), PartComposition::Owed, "no answer composes nothing the caller did not give");
+    let mut unspellable = w.clone();
+    unspellable.parts[0].record = Some(Record { to: ISpan { chain: "not an address".into(), first: 12, width: 5 }, ..record_in(O, 1, 5, E, 12) });
+    assert_eq!(compose_part(&unspellable, 0, Some(Counterpart)), PartComposition::Owed, "a counterpart this client cannot spell is owed, never dropped");
+    let owed = OwedAnswer::of(&w, 0);
+    assert_eq!((owed.part, owed.named, owed.origin.clone(), owed.owner.clone()), (part(2, 0), true, a(O), ACCOUNT.to_string()));
+    assert_eq!((owed.record.clone(), owed.counterpart.clone(), owed.admits.clone()), (Some(a(&format!("{O}.0.2.1"))), Some(span(E, 12, 5)), vec![Counterpart, Drop]));
+}
+
+/// THE RE-READ's diff is the core's too (PUB-3.108): a part named since an
+/// answer is reported, a part's answer carries where the naming is alike
+/// and a leave-out carries where it is not — the rule both routes read.
+#[test]
+fn the_cores_diff_reports_a_part_named_since_and_carries_only_what_stands() {
+    let window = |record: Option<Record>| Window { run: 1, origin: a(O), owner: ACCOUNT.to_string(), i_start: 1, width: 5, parts: vec![Part { span: span(O, 1, 5), ordinal: 9, record, foreign: false }] };
+    let (unnamed, now_named) = (window(None), window(Some(record_in(O, 1, 5, E, 12))));
+    let key = part(1, 0);
+    assert_eq!(renamed(&[unnamed.clone()], &[now_named.clone()]), vec![(key, Some(a(&format!("{O}.0.2.1"))))]);
+    assert_eq!(renamed(&[unnamed.clone()], &[unnamed.clone()]), vec![], "named alike: no difference");
+    let keep = BTreeMap::from([(key, OriginAnswer::KeepPrivate)]);
+    assert_eq!(answers_onto(&[unnamed.clone()], &keep, &[now_named.clone()]), BTreeMap::new(), "keep-private does not carry onto words named since");
+    assert_eq!(answers_onto(&[unnamed.clone()], &keep, &[unnamed.clone()]), keep, "named alike: it stands");
+    let left = BTreeMap::from([(key, OriginAnswer::Drop)]);
+    assert_eq!(answers_onto(&[unnamed], &left, &[now_named]), left, "a leave-out carries");
+}
+
+/// A MERGE LANDING asks at another account's unpublished origin — the panel
+/// lists it, its part admits no publish-first, and no answer leaves it
+/// owed, naming the owner — where a plain publication keeps the same run an
+/// unasked window by address (the merge record's §1.5, the fork's window;
+/// `Inputs::merge_landing`).
+#[test]
+fn a_merge_landing_asks_at_another_accounts_origin_and_a_plain_publication_does_not() {
+    let (mut world, _) = World::base();
+    world.docs.get_mut(D).unwrap().runs.push(run(OTHER, 1, 5));
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let selection = vec![run(E, 1, 19), run(D, 1, 10), run(O, 1, 5), run(OTHER, 1, 5)];
+    let plain = Inputs { selection: selection.clone(), ..inputs() };
+    let e = enumerate(&p, &plain).unwrap();
+    assert!(e.windows.iter().all(|w| w.origin != a(OTHER)), "a plain publication keeps another's window unasked: {:?}", e.windows);
+    let mut merge = Inputs { merge_landing: true, ..plain };
+    merge.selection = selection;
+    let e = enumerate(&p, &merge).unwrap();
+    let w = e.windows.iter().find(|w| w.origin == a(OTHER)).expect("the merge asks at another account's origin");
+    assert_eq!((w.run, w.owner.as_str()), (3, "1.0.2"));
+    assert_eq!(w.parts[0].admitted(), vec![OriginAnswer::Drop, OriginAnswer::KeepPrivate]);
+    assert!(w.parts[0].foreign);
+    let panel = panel(&p, &merge, &e).unwrap();
+    let mut confirmed = switched(None);
+    confirmed.answers.insert(part(2, 0), OriginAnswer::KeepPrivate);
+    let Built::Inert(Inert::Unanswered(owed)) = build(&p, &merge, &e, &panel, &confirmed).unwrap() else { panic!("the other account's part is owed") };
+    assert_eq!(owed.len(), 1, "{owed:?}");
+    assert_eq!((owed[0].part, owed[0].origin.clone(), owed[0].owner.as_str(), owed[0].foreign), (part(3, 0), a(OTHER), "1.0.2", true));
+    assert_eq!(owed[0].admits, vec![OriginAnswer::Drop, OriginAnswer::KeepPrivate]);
+    confirmed.answers.insert(part(3, 0), OriginAnswer::KeepPrivate);
+    let Built::Request(request) = build(&p, &merge, &e, &panel, &confirmed).unwrap() else { panic!("a request") };
+    assert_eq!(request.runs.last(), Some(&run(OTHER, 1, 5)), "keep-private composes the window");
+}
+
 #[test]
 fn the_answers_at_each_part_and_the_counterpart() {
     let (world, _) = World::base();
@@ -2471,15 +2583,15 @@ fn the_answers_at_each_part_and_the_counterpart() {
     assert_eq!(e.windows.len(), 1, "{:?}", e.windows);
     let w = &e.windows[0];
     assert_eq!((w.run, w.origin.to_string(), w.owner.as_str(), w.i_start, w.width), (2, O.to_string(), ACCOUNT, 1, 5));
-    assert_eq!(w.parts, vec![Part { span: ISpan { chain: format!("{O}.0.1"), first: 1, width: 5 }, ordinal: 30, record: None }]);
+    assert_eq!(w.parts, vec![Part { span: ISpan { chain: format!("{O}.0.1"), first: 1, width: 5 }, ordinal: 30, record: None, foreign: false }]);
     let unnamed = &w.parts[0];
     assert!([OriginAnswer::PublishFirst, OriginAnswer::Drop, OriginAnswer::KeepPrivate].iter().all(|a| unnamed.admits(*a)) && !unnamed.admits(OriginAnswer::Counterpart), "a part no record names: the three answers");
-    let owed = |run: usize, k: usize, named: bool| Built::Inert(Inert::Unanswered(vec![OwedAnswer { part: part(run, k), named }]));
+    let owed = |run: usize, k: usize, named: bool| vec![(part(run, k), named)];
     let mut confirmed = switched(None);
     confirmed.answers.clear();
-    assert_eq!(build(&p, &inputs, &e, &panel, &confirmed).unwrap(), owed(2, 0, false));
+    assert_eq!(owed_of(build(&p, &inputs, &e, &panel, &confirmed).unwrap()), owed(2, 0, false));
     confirmed.answers.insert(part(2, 0), OriginAnswer::Counterpart);
-    assert_eq!(build(&p, &inputs, &e, &panel, &confirmed).unwrap(), owed(2, 0, false), "an answer the part does not admit is none");
+    assert_eq!(owed_of(build(&p, &inputs, &e, &panel, &confirmed).unwrap()), owed(2, 0, false), "an answer the part does not admit is none");
     confirmed.answers.insert(part(2, 0), OriginAnswer::PublishFirst);
     assert_eq!(build(&p, &inputs, &e, &panel, &confirmed).unwrap(), Built::Inert(Inert::PublishFirst(vec![part(2, 0)])));
     confirmed.answers.insert(part(2, 0), OriginAnswer::Drop);
@@ -2513,7 +2625,7 @@ fn the_answers_at_each_part_and_the_counterpart() {
     let panel = super::panel::panel(&p, &with_o, &e).unwrap();
     dialer.clear();
     confirmed.answers = BTreeMap::from([(part(2, 0), OriginAnswer::KeepPrivate), (part(2, 1), OriginAnswer::KeepPrivate)]);
-    assert_eq!(build(&p, &with_o, &e, &panel, &confirmed).unwrap(), owed(2, 0, true), "a placeholder over published words is no answer");
+    assert_eq!(owed_of(build(&p, &with_o, &e, &panel, &confirmed).unwrap()), owed(2, 0, true), "a placeholder over published words is no answer");
     assert_eq!(reads_o(&dialer.frames("find_links_ftt")), 0, "the build reads no record of its own: {:?}", dialer.ops());
     assert!(dialer.frames("doc_metadata").iter().all(|f| f["doc"].as_str() != Some(O)), "nor O's state: {:?}", dialer.ops());
     confirmed.answers.insert(part(2, 0), OriginAnswer::Counterpart);
@@ -2831,7 +2943,7 @@ fn a_part_named_since_the_panel_is_restated_and_asks_its_answer_again() {
     assert_eq!(again.enumeration.answers, BTreeMap::from([(part(2, 1), OriginAnswer::KeepPrivate)]), "keep-private carried onto the part no record names alone");
     let mut confirmed = switched(None);
     confirmed.answers = again.enumeration.answers.clone();
-    assert_eq!(build(&p, &inputs, &again.enumeration, &again.panel, &confirmed).unwrap(), Built::Inert(Inert::Unanswered(vec![OwedAnswer { part: part(2, 0), named: true }])));
+    assert_eq!(owed_of(build(&p, &inputs, &again.enumeration, &again.panel, &confirmed).unwrap()), vec![(part(2, 0), true)]);
     let left_out = e.composed(&inputs, &BTreeMap::from([(part(2, 0), OriginAnswer::Drop)]), &BTreeSet::new());
     let left_panel = first_panel.composed(&inputs, &left_out);
     let again = reread(&p, &inputs, &left_out, &left_panel).unwrap();
@@ -2853,7 +2965,7 @@ fn a_windows_records_are_read_whether_or_not_the_caller_lists_its_origin() {
     let inputs = inputs();
     assert!(!inputs.readable_drafts.contains(&a(O)), "the premise: the caller lists no O");
     let keep_private = BTreeMap::from([(part(2, 0), OriginAnswer::KeepPrivate), (part(2, 1), OriginAnswer::KeepPrivate)]);
-    let owed_named = Built::Inert(Inert::Unanswered(vec![OwedAnswer { part: part(2, 0), named: true }]));
+    let owed_named = vec![(part(2, 0), true)];
     // The open: the record stands before the panel.
     let (mut world, _) = World::base();
     let record = world.typed(O, vec![ispan(O, 1, 4)], vec![ispan(E, 16, 4)], T_CORRESPONDENCE);
@@ -2865,7 +2977,7 @@ fn a_windows_records_are_read_whether_or_not_the_caller_lists_its_origin() {
     assert_eq!(naming, vec![(1, 4, Some(record)), (5, 1, None)], "the words the record names a part of their own");
     let pn = panel(&p, &inputs, &e).unwrap();
     let confirmed = Confirmed { answers: keep_private, ..switched(None) };
-    assert_eq!(build(&p, &inputs, &e, &pn, &confirmed).unwrap(), owed_named, "a placeholder over published words is no answer");
+    assert_eq!(owed_of(build(&p, &inputs, &e, &pn, &confirmed).unwrap()), owed_named, "a placeholder over published words is no answer");
     // The re-read: the record lands after the panel.
     let (world, _) = World::base();
     let (dialer, board, signer) = open(world);
@@ -2876,7 +2988,7 @@ fn a_windows_records_are_read_whether_or_not_the_caller_lists_its_origin() {
     let again = reread(&p, &inputs, &first, &first_panel).unwrap();
     assert_eq!(again.restatement.clone().expect("a difference").parts, vec![(part(2, 0), Some(a(&record)))], "the part the record names since the panel");
     let confirmed = Confirmed { answers: again.enumeration.answers.clone(), ..switched(None) };
-    assert_eq!(build(&p, &inputs, &again.enumeration, &again.panel, &confirmed).unwrap(), owed_named, "the named part asks its answer again");
+    assert_eq!(owed_of(build(&p, &inputs, &again.enumeration, &again.panel, &confirmed).unwrap()), owed_named, "the named part asks its answer again");
 }
 
 /// THE TWIN PRE-CHECK: a draft-native run whose words an earlier shot

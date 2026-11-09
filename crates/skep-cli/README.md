@@ -6,7 +6,10 @@ the ceremonies `enroll`, `recover`, `retire`, `rotate`, `handoff`,
 `accept`, `merge` — the editor's act on a daughter over the library's
 `merge` feature (the design's merge record, §6), the one command that
 touches content: it composes the merge and prints the report as one JSON
-document, `--publish` lands it as the next version with its record,
+document, `--publish` lands it as the next version with its record, every
+window part of the merged text answered by name first (`--window`,
+`--leave-out`, `--keep-private` — it answers none for you, and refuses,
+exit 1, naming every part where one is owed, publishing nothing),
 `--into` lands it in a draft, the record kept only in a private document
 — a published `--journal` said by the composition's talk and refused
 before any write, exit 1 — a daughter is reported and never retried,

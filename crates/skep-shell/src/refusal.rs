@@ -156,6 +156,14 @@ impl Name {
     /// refusal is that rule's answer for a write that arrives anyway: an
     /// agent's, or a page that missed the state.
     pub const HELD_LINES: Name = Name("held_lines");
+    /// A `merge.land` with a window part unanswered: the landing composes
+    /// no answer the caller did not give (the merge record's §1.5), so it
+    /// publishes nothing and names every part that needs one, each part's
+    /// words, its pair, its origin and owner, the sides showing it as a
+    /// placeholder and the answers it admits, beside the answers given and
+    /// each default taken — `shapes`' `WindowPartsOwedRefusal`. It is the
+    /// same refusal `skep merge --publish` prints, final in meaning.
+    pub const WINDOW_PARTS_OWED: Name = Name("window_parts_owed");
     /// A `publication.count` or `publication.confirm` with no panel standing.
     ///
     /// None was opened under the session's board and principal, or it was

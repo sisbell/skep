@@ -286,5 +286,5 @@ pub use skep_retrieval::{
 // is unbuildable without them (the link-sets design §5.7).
 pub use skep_links::{
     enc, AlsoPlaces, EndArg, Endset, Invalid, Link, LinkEntry, MemberSpan, NamedAddress,
-    PublishDeposits, PublishTarget, SlotArg, View, FROM, MAX_SLOT_SPANS, TO, TYPE,
+    OriginalEntry, PublishDeposits, PublishTarget, SlotArg, View, FROM, MAX_SLOT_SPANS, TO, TYPE,
 };

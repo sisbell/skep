@@ -1063,6 +1063,7 @@ impl Writer<'_> {
             pieces,
             entries: Vec::new(),
             retract: Vec::new(),
+            originals: Vec::new(),
             read_with: Vec::new(),
             supersede,
             unspellable: Vec::new(),

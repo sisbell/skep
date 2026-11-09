@@ -540,3 +540,86 @@ fn a_publication_naming_a_daughter_takes_the_trunks_link_key() {
     sorted.dedup();
     assert_eq!(keys, sorted, "M2's order, duplicates collapsed");
 }
+
+// ──────────── THE VALIDATION's (4′): the originals the rider ends ────────────
+//
+// The private rider (the link-sets design §5.7 (vi′)), planned over a world
+// of M3, M7 and an empty M5 and no kernel, as the daughters are above: the
+// cells the kernel suite cannot build — an original of a fenced class behind
+// a hand-written claim — and the lock set; `tests/it/publication.rs` holds
+// the step's refusals and its writes over a kernel.
+
+use super::super::super::correspondence_type;
+use crate::error::OriginalCause;
+
+/// `world` with `value` deposited at link `k` of `home`.
+fn with_link(world: World, home: &Address, k: u32, value: Link) -> World {
+    world.apply(Seq(1), &LinkRec::Deposit { addr: link_in(home, k).tumbler().clone(), value })
+}
+
+/// The rider naming `old` with `rest`, beside the retraction of `copy`.
+fn take_off(copy: &Address, old: &Address, rest: Vec<Span>) -> PublishDeposits {
+    PublishDeposits { retract: vec![copy.clone()], originals: vec![OriginalEntry { old: old.clone(), rest }], ..PublishDeposits::default() }
+}
+
+/// THE FENCED TYPE: an original whose stored type is a class the open
+/// surface never writes — here a correspondence record in the owner's draft,
+/// behind a claim onto a copy in `E` the request retracts — is refused
+/// `fenced_type` where the entry names a rest, no fresh mark of that class
+/// being a `make_link`'s to write; with no rest the entry passes the step
+/// and is planned, the daemon's class cell being where the record's
+/// retraction is refused. A plain original of the same shape plans its
+/// fresh mark over the rest in the end that holds it.
+#[test]
+fn an_original_of_a_fenced_class_takes_no_fresh_mark_and_a_plain_one_does() {
+    let (draft, draft_word, trunk_word) = (a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, 1, 0, 1, 1]), a(&[1, 0, 1, 0, 3, 0, 1, 1]));
+    let span = |start: &Address, width: u32| Run::new(start.clone(), Nat::from(width)).unwrap().iextent();
+    let copy = link_in(&trunk(), 1);
+    let plain_ty = a(&[1, 1, 0, 1, 0, 1, 0, 3, 23, 2]);
+    let world = with_link(chain_world(), &trunk(), 1, Link::triple(Endset::from_spans([span(&trunk_word, 3)]), Endset::empty(), enc([&plain_ty])));
+    // The record, and the plain mark, each over the draft's three words, each claimed onto the copy.
+    let record = Link::triple(Endset::from_spans([span(&draft_word, 3)]), Endset::from_spans([span(&trunk_word, 3)]), enc([correspondence_type()]));
+    let mark = Link::triple(Endset::empty(), Endset::from_spans([span(&draft_word, 3)]), enc([&plain_ty]));
+    let world = with_link(world, &draft, 1, record);
+    let world = with_link(world, &draft, 2, mark);
+    let world = with_claim(world, &draft, 3, &link_in(&draft, 1), &copy);
+    let world = with_claim(world, &draft, 4, &link_in(&draft, 2), &copy);
+    let (target, shot) = (PublishTarget::Document(trunk()), off(&member(2)));
+    let plan = |deposits: PublishDeposits| plan_deposits(&world, P1, &target, &shot, &deposits);
+    let rest = span(&a(&[1, 0, 1, 0, 1, 0, 1, 3]), 1);
+    assert_eq!(
+        plan(take_off(&copy, &link_in(&draft, 1), vec![rest.clone()])).expect_err("refused"),
+        PlanFault::Original { index: 0, cause: OriginalCause::FencedType },
+        "a rest over a correspondence record: no fresh record is made"
+    );
+    let planned = plan(take_off(&copy, &link_in(&draft, 1), vec![])).expect("planned");
+    assert_eq!((planned.originals.len(), planned.originals[0].rest.as_ref()), (1, None), "no rest: the record's retraction alone is planned");
+    let planned = plan(take_off(&copy, &link_in(&draft, 2), vec![rest.clone()])).expect("planned");
+    assert_eq!(
+        planned.originals[0].rest,
+        Some(Link::triple(Endset::empty(), Endset::from_spans([rest]), enc([&plain_ty]))),
+        "the plain mark's rest in the end that holds it, its type kept"
+    );
+    assert_eq!(planned.homes.len(), 1, "the copy's retraction alone is homed: {planned:?}");
+    assert_eq!(planned.homes[0].home, NamedAddress::Address(trunk()));
+    assert!(!planned.is_empty());
+}
+
+/// THE LOCK SET gains the link key of each original's home where the rider
+/// names one: its retraction and its rest's fresh mark are minted there, a
+/// home that stands before the commit, the home key covering the
+/// retraction's dedup as it does a `retract` target's.
+#[test]
+fn a_publication_naming_an_original_takes_its_homes_link_key() {
+    let (target, shot) = (PublishTarget::Document(trunk()), off(&member(2)));
+    let draft = a(&[1, 0, 1, 0, 2]);
+    let keys = publication_lock_keys(&target, &shot, &[], &[], &PublishDeposits::default());
+    assert!(!keys.contains(&M3State::link_lock_key(&draft)), "no original: no key: {keys:?}");
+    let keys = publication_lock_keys(&target, &shot, &[], &[], &take_off(&link_in(&trunk(), 1), &link_in(&draft, 1), vec![]));
+    assert!(keys.contains(&M3State::link_lock_key(&draft)), "an original named: its home's link key: {keys:?}");
+    assert!(keys.contains(&M3State::link_lock_key(&trunk())), "and the copy's home's: {keys:?}");
+    let mut sorted = keys.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(keys, sorted, "M2's order, duplicates collapsed");
+}

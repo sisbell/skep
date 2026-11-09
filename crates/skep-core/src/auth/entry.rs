@@ -70,8 +70,13 @@
 //!   home by tag or address, the kind, the three slots as the store will
 //!   hold them — a tag where a slot names the member or the edition the
 //!   commit mints, the member-position row where the request spelled an
-//!   end as the member's positions — and the `replaces` row empty. A
-//!   request carrying no deposit spells today's body byte for byte.
+//!   end as the member's positions — and the `replaces` row empty. The
+//!   `originals` rider the request carries beside `retract` (§5.7 (vi′))
+//!   is planned with them and spelled in NO row: its writes are private,
+//!   outside the preimage as the records and the re-window are, and the
+//!   plan holds them apart from the homes the rows are built from. A
+//!   request carrying no deposit spells today's body byte for byte, and so
+//!   does one carrying the rider alone.
 //!
 //! Nine bodies the daemon does not compose. Each is answered as the
 //! [`ComposeFault`] that names its reason, and no more: what the write is
@@ -632,9 +637,14 @@ fn refused(refusal: PublishRefusal) -> ComposeFault {
 /// here and the links stored agree by construction — spelled per home in
 /// the plan's order by skep-identity's one builder
 /// ([`entry_body_publication`]), each deposit the rows its own act would
-/// sign ([`deposit_rows`]). A request carrying no deposit is `shot_body`
+/// sign ([`deposit_rows`]). A request carrying no deposit and no rider is
+/// `shot_body`
 /// byte for byte; the plan is not asked for it, so a shot alone costs what
-/// it cost before.
+/// it cost before. A request carrying the `originals` rider is planned —
+/// its refusal is answered here, ahead of the signature check, as every
+/// plan fault is — and spells the rows of its public deposits alone, the
+/// rider in none (the link-sets design §5.7 (vi′)): with the rider alone it
+/// spells `shot_body` byte for byte, which is what the client signs.
 ///
 /// # Errors
 ///
@@ -756,7 +766,9 @@ impl OwnedRow {
 /// Returns the deposit rows of `plan`, per home in the plan's order — the
 /// signed entry's — each deposit as the rows its own act would sign over
 /// the link the composite stages (`skep_links`'s `stage_deposits`, the one
-/// other reader of the plan):
+/// other reader of the plan's homes); the originals the plan holds beside
+/// the homes (`DepositPlan::originals`, the private rider's) are read by
+/// the composite alone and are in no row:
 ///
 /// * the edition claim: the edition type's unit span, `from` the edition —
 ///   by tag where the commit mints it, its unit span where `doc` names it,

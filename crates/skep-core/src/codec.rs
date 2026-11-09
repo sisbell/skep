@@ -70,7 +70,7 @@ use skep_identity::SigAlgRow;
 use skep_kernel::{Attestation, Seq};
 use skep_links::{
     member_end, request_image, AlsoPlaces, EndArg, Endset, LinkEntry, MemberSpan, NamedAddress,
-    PublishDeposits, PublishTarget, View, MAX_SLOT_SPANS,
+    OriginalEntry, PublishDeposits, PublishTarget, View, MAX_SLOT_SPANS,
 };
 use skep_namespace::PrincipalId;
 use skep_retrieval::{RegionSpec, Spec};
@@ -1511,8 +1511,9 @@ impl Fields {
     }
 
     /// Takes a `publish`'s four deposit lists (the link-sets design §5.7;
-    /// the merge bridge lane, brief A): `links`, `retract`, `read_with` and
-    /// `supersede`, each optional and read as the empty list where absent
+    /// the merge bridge lane, brief A) — `links`, `retract`, `read_with` and
+    /// `supersede` — and the private rider beside `retract`, `originals`
+    /// (§5.7 (vi′)), each optional and read as the empty list where absent
     /// — and carries `claim`, the edition claim's flag the `publish` arm
     /// read ahead of the shot, beside them.
     ///
@@ -1521,7 +1522,8 @@ impl Fields {
     /// a link address; a `read_with` entry a document address; a `supersede`
     /// entry a version member's address — the daughter the member takes
     /// in, whose membership of `doc`'s chain is the plan's question, not
-    /// the codec's. The tags
+    /// the codec's; an `originals` entry `{old, rest?}`
+    /// ([`p_original_entry`]). The tags
     /// `member` and `edition` are admitted where an address is expected
     /// inside an entry — a home, an element of an address-form end —
     /// `edition` at the mint form alone; the member-position end form is
@@ -1543,6 +1545,10 @@ impl Fields {
             None => Vec::new(),
             Some(v) => indexed_list(&v, "retract", p_addr)?,
         };
+        let originals = match self.take_opt("originals") {
+            None => Vec::new(),
+            Some(v) => indexed_list(&v, "originals", p_original_entry)?,
+        };
         let read_with = match self.take_opt("read_with") {
             None => Vec::new(),
             Some(v) => indexed_list(&v, "read_with", p_addr)?,
@@ -1551,8 +1557,31 @@ impl Fields {
             None => Vec::new(),
             Some(v) => indexed_list(&v, "supersede", p_addr)?,
         };
-        Ok(PublishDeposits { claim, links, retract, read_with, supersede })
+        Ok(PublishDeposits { claim, links, retract, read_with, supersede, originals })
     }
+}
+
+/// Parses one entry of a `publish`'s `originals` rider (the link-sets design
+/// §5.7 (vi′)): `{"old": …, "rest"?: [i-spans…]}`.
+///
+/// `old` is the original's address; `rest` its words no copy of it ever
+/// covered, in the I-span form ([`p_ispan_slot`]), absent and `null` alike
+/// the empty rest. Whether `old` is the caller's, private, active and
+/// claimed onto a mark the request retracts is the plan's question
+/// (`original_refused`, by entry), not the codec's.
+///
+/// # Errors
+///
+/// A [`PErr`] where the entry is no object of those keys, `old` is missing
+/// or no address, or `rest` is refused.
+fn p_original_entry(v: &Value) -> PResult<OriginalEntry> {
+    let m = p_obj(v, &["old", "rest"])?;
+    let old = field(m, "old", p_addr)?;
+    let rest = match m.get("rest") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(v) => p_ispan_slot(v).map_err(|e| PErr(format!("rest: {e}")))?,
+    };
+    Ok(OriginalEntry { old, rest })
 }
 
 /// Parses one wire list whose entries' refusals name their index.

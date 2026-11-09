@@ -287,6 +287,7 @@ fn documented_disposition(c: RejectCode) -> Disposition {
         | RejectCode::DuplicateOriginal
         | RejectCode::ReadWithInLinks
         | RejectCode::RetractRefused
+        | RejectCode::OriginalRefused
         | RejectCode::ReadWithRefused
         // The merge bridge lane's: a daughter outside the chain, the base, a
         // repeat or a base the trunk moved past (`head_moved`) is a fact of
@@ -319,7 +320,7 @@ fn documented_disposition(c: RejectCode) -> Disposition {
 /// Every code, in declaration order — the domain the policy is total
 /// over. A newly added code lands here and in
 /// [`documented_disposition`].
-const ALL_CODES: [RejectCode; 93] = [
+const ALL_CODES: [RejectCode; 94] = [
     RejectCode::Unauthenticated,
     RejectCode::Malformed,
     RejectCode::Durability,
@@ -396,6 +397,7 @@ const ALL_CODES: [RejectCode; 93] = [
     RejectCode::DuplicateOriginal,
     RejectCode::ReadWithInLinks,
     RejectCode::RetractRefused,
+    RejectCode::OriginalRefused,
     RejectCode::ReadWithRefused,
     RejectCode::SupersedeRefused,
     RejectCode::ClaimRefused,

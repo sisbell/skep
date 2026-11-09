@@ -995,6 +995,48 @@ impl World {
                 homes.push(home);
             }
         }
+        // The private rider (the link-sets design §5.7 (vi′)): each original
+        // the request names ended at its own home — over a rest, a fresh mark
+        // of the original's type first, the rest's spans in the end the
+        // original holds them in — an original already retracted skipped;
+        // the home joins the row.
+        for entry in frame["originals"].as_array().cloned().unwrap_or_default() {
+            let old = entry["old"].as_str().unwrap().to_string();
+            let Some(original) = self.links.iter().find(|l| l.addr == old).cloned() else { continue };
+            if original.retracted {
+                continue;
+            }
+            let home = home_of_link(&old).unwrap().to_string();
+            let rest: Vec<(String, String)> = entry["rest"]
+                .as_array()
+                .map(|list| {
+                    list.iter()
+                        .map(|x| {
+                            let start = x["start"].as_str().unwrap().to_string();
+                            let width: u64 = x["width"].as_str().unwrap().parse().unwrap();
+                            let depth = start.split('.').count();
+                            (start, format!("{}{width}", "0.".repeat(depth - 1)))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !rest.is_empty() {
+                let within = |end: &[(String, String)], span: &(String, String)| {
+                    let positions = addresses(span);
+                    end.iter().any(|e| positions.iter().all(|p| addresses(e).contains(p)))
+                };
+                let (from, to): (Vec<_>, Vec<_>) = rest.iter().cloned().partition(|span| within(&original.from, span));
+                assert!(to.iter().all(|span| within(&original.to, span)), "a rest span outside the original: the plan refuses it");
+                push_link(self, &home, from, to, original.ty.clone());
+            }
+            push_link(self, &home, vec![unit(&home)], vec![unit(&old)], vec![unit(T_RETRACTION)]);
+            if let Some(l) = self.links.iter_mut().find(|l| l.addr == old) {
+                l.retracted = true;
+            }
+            if !homes.contains(&home) {
+                homes.push(home);
+            }
+        }
         // The read-withs, a standing one skipped.
         let from_edition = edition.clone().unwrap_or(trunk.clone());
         for set in frame["read_with"].as_array().cloned().unwrap_or_default() {
@@ -2083,10 +2125,10 @@ fn each_term_past_its_cap_is_refused_before_any_frame() {
     let draft = a(D);
     let term = a(E);
     let one = vec![run(D, 1, 1)];
-    let shape = price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[Some(1)], also_places: &[], also_runs: &[], stray_records: &[0], entries: &[], retract: 0, read_with: 0, body_bytes: 100, homes: 3, draft_runs: 2 };
+    let shape = price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[Some(1)], also_places: &[], also_runs: &[], stray_records: &[0], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: 100, homes: 3, draft_runs: 2 };
     let within = price::price(&shape);
     assert!(within.admits(), "{within:?}");
-    assert_eq!((within.lists, within.values, within.reads), ([1, 1, 0, 0, 0], 1, 2));
+    assert_eq!((within.lists, within.values, within.reads), ([1, 1, 0, 0, 0, 0], 1, 2));
     assert_eq!(within.bytes, price::SHOT_BYTES + price::PLACED_RUN_BYTES + price::CORRESPONDENCE_RECORD_BYTES + price::KEPT_PLACE_BYTES + price::REINSERTED_VALUE_BYTES);
     // Naming the rendering draft stores its address in the placing record's
     // own slot: the daemon's term, `stored_tumbler_bytes` of it.
@@ -2095,21 +2137,21 @@ fn each_term_past_its_cap_is_refused_before_any_frame() {
     assert_eq!(named.bytes, within.bytes + price::stored_tumbler_bytes(&comps), "{named:?}");
     let over = |shape: &price::Shape<'_>| price::price(shape).over.iter().map(|(t, _)| *t).collect::<Vec<_>>();
     let many: Vec<Run> = (0..4097).map(|k| run(E, 1 + k, 1)).collect();
-    assert_eq!(over(&price::Shape { runs: &many, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 }), [price::Term::Runs]);
-    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 4097, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 }), [price::Term::Retract]);
-    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: price::REQUEST_BODY_BYTES + 1, homes: 0, draft_runs: 0 }), [price::Term::Body]);
+    assert_eq!(over(&price::Shape { runs: &many, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 }), [price::Term::Runs]);
+    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 4097, originals: &[], read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 }), [price::Term::Retract]);
+    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: price::REQUEST_BODY_BYTES + 1, homes: 0, draft_runs: 0 }), [price::Term::Body]);
     let wide = vec![run(D, 1, price::MAX_REINSERTED_VALUES + 1)];
-    let values = price::price(&price::Shape { runs: &wide, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 });
+    let values = price::price(&price::Shape { runs: &wide, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 });
     assert!(values.over.iter().any(|(t, by)| *t == price::Term::Values && *by == 1), "{values:?}");
-    let reads = price::price(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 0, read_with: 4096, body_bytes: 0, homes: 17, draft_runs: 0 });
+    let reads = price::price(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 0, originals: &[], read_with: 4096, body_bytes: 0, homes: 17, draft_runs: 0 });
     assert_eq!(reads.over, vec![(price::Term::Reads, (17 * 4096 - price::MAX_PUBLICATION_READS) as u64)]);
     let entry = price::EntryShape { from: price::EndShape::Member(vec![(1, 4096)]), to: price::EndShape::Addrs(vec![]), ty: price::EndShape::Addrs(vec![T_CITATION.into()]), old: false };
     let runs4096: Vec<Run> = (0..4096).map(|k| run(D, 1 + k, 1)).collect();
     let entries = vec![entry; 100];
-    let bytes = price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &entries, retract: 0, read_with: 0, body_bytes: 0, homes: 1, draft_runs: 1 });
+    let bytes = price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &entries, retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 1, draft_runs: 1 });
     assert_eq!(bytes.over.iter().map(|(t, _)| *t).collect::<Vec<_>>(), [price::Term::Bytes], "a hundred member-position slots over 4096 runs stage past the budget: {bytes:?}");
     let entries = vec![entries[0].clone()];
-    assert!(price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &entries, retract: 0, read_with: 0, body_bytes: 0, homes: 1, draft_runs: 1 }).admits(), "one such entry is inside both budgets");
+    assert!(price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &entries, retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 1, draft_runs: 1 }).admits(), "one such entry is inside both budgets");
 }
 
 // ── THE RE-READ ──────────────────────────────────────────────────────────
@@ -3364,13 +3406,13 @@ fn the_reads_draft_term_sums_every_draft_a_list_places_as_the_boards_does() {
     let also = |a_places: Vec<Option<u64>>, b_places: Vec<Option<u64>>| vec![AlsoPlaces { draft: a_draft.clone(), places: a_places }, AlsoPlaces { draft: b.clone(), places: b_places }];
     let none: [Option<u64>; 3] = [None; 3];
     let no_also = also(vec![None; 3], vec![None; 3]);
-    let base = price::Shape { runs: &runs, drafts: &drafts, draft: Some(&d), term: &term, mint: false, claim: false, places: &none, also_places: &no_also, also_runs: &[1, 9], stray_records: &[0, 0, 0], entries: &[], retract: 0, read_with: 0, body_bytes: 0, homes: 3, draft_runs: 4 };
+    let base = price::Shape { runs: &runs, drafts: &drafts, draft: Some(&d), term: &term, mint: false, claim: false, places: &none, also_places: &no_also, also_runs: &[1, 9], stray_records: &[0, 0, 0], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 3, draft_runs: 4 };
     assert_eq!(price::price(&base).reads, 0, "no list places a draft: no draft is read");
     let placed = [Some(20), Some(30), None];
     let family = also(vec![None, Some(1), None], vec![None; 3]);
     let priced = price::price(&price::Shape { places: &placed, also_places: &family, ..base.clone() });
     assert_eq!(priced.reads, (4 + 1) * 3, "D's four runs and A's one, once per run of the request; B, unplaced, adds none");
-    assert_eq!(priced.lists, [3, 2, 0, 0, 0], "places counts its two entries; also_places is no sixth list");
+    assert_eq!(priced.lists, [3, 2, 0, 0, 0, 0], "places counts its two entries; also_places is no list of the price, the rider its sixth");
     let also_alone = price::price(&price::Shape { also_places: &family, ..base.clone() });
     assert_eq!(also_alone.reads, 3, "an also draft's re-window alone reads that draft");
     let b_too = also(vec![None, Some(1), None], vec![None, None, Some(4)]);
@@ -3917,4 +3959,152 @@ fn the_family_left_behind_is_also_then_the_drafts_on_this_base_where_the_publica
     let p = publisher(&board, &tok, &signer);
     let bare = Inputs { doc: Some(a(X)), base: Some((a(X), 0)), draft: a(first), also: Vec::new(), ..inputs };
     assert_eq!(left_behind(&p, &bare, &Standing::First, &[a(first), a(second)]), Ok(vec![a(second)]), "the first version leaves the bare document's other drafts behind");
+}
+
+// ── THE PRIVATE RIDER (the link-sets design §5.7 (vi′); skep #894) ───────
+
+/// THE RIDER COMPOSED FROM THE COPY: a held removal's mark of the formatting
+/// types with an accept claim in the draft — `orig` the claim's `old`, the
+/// mark its `new` — composes one `originals` entry, `old` the original, no
+/// rest (the copy covers every word), paired with the mark; the frame
+/// carries `originals: [{"old": …}]` and no `rest`; the price counts the
+/// rider's list and its retraction; a citation's held removal with the same
+/// claim shape composes NO entry — notes, citations and typed links keep
+/// their originals — and the mark of another type is no removal's original;
+/// the send is acknowledged and the world ends the original at its home,
+/// retracted beside the copy, the citation's original standing.
+#[test]
+fn a_held_removals_original_rides_the_rider_and_ends_with_its_copy() {
+    let (mut world, named) = World::base();
+    let e1 = format!("{E}.1");
+    // The strong mark's original in D, claimed onto `mpub`; a citation's
+    // held removal with its original in N, claimed onto its copy.
+    let orig = world.typed(D, vec![], vec![ispan(E, 5, 5)], T_STRONG);
+    world.claim(D, &orig, &named.mpub);
+    let cpub = world.typed(&e1, vec![ispan(E, 1, 3)], vec![ispan(N, 1, 2)], T_CITATION);
+    world.typed(D, vec![], vec![unit(&cpub)], T_HELD_REMOVAL);
+    let orig_c = world.typed(N, vec![ispan(E, 1, 3)], vec![ispan(N, 1, 2)], T_CITATION);
+    world.claim(N, &orig_c, &cpub);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let (_, panel, mut request) = built(&dialer, &board, &tok, &signer, &switched(None));
+    let removal = |mark: &str| panel.formatting.removals.iter().find(|r| r.mark.to_string() == mark).unwrap_or_else(|| panic!("{mark}'s removal"));
+    assert_eq!(removal(&named.mpub).original.as_ref().map(|o| (o.link.to_string(), o.rest.clone())), Some((orig.clone(), vec![])), "the strong mark's original, every word covered");
+    assert_eq!(removal(&cpub).original, None, "a citation's held removal composes no original");
+    assert_eq!(removal(&named.mpub3).original, None, "a mark with no accept claim has no original");
+    assert_eq!(request.retract.len(), 3, "mpub, cpub and mpub3: {:?}", request.retract);
+    assert_eq!(request.originals.len(), 1);
+    assert_eq!((request.originals[0].old.to_string(), request.originals[0].rest.clone(), request.originals[0].marks.clone()), (orig.clone(), vec![], vec![a(&named.mpub)]));
+    assert_eq!(request.originals[0].ty, vec![LinkSpan { start: T_STRONG.to_string(), width: "0.0.0.0.0.0.0.0.0.1".to_string() }], "the original's stored type, for the price");
+    let frame = request.frame(None);
+    assert_eq!(frame["originals"], json!([{"old": orig}]), "the rider, no rest spelled");
+    assert_eq!(request.price.lists[5], 1, "the rider's list counted");
+    let p = publisher(&board, &tok, &signer);
+    let sent = send(&p, &inputs(), &mut request).unwrap();
+    assert!(matches!(sent, Sent::Acknowledged(_)), "{sent:?}");
+    let w = dialer.world();
+    assert!(w.links.iter().find(|l| l.addr == orig).unwrap().retracted, "the original ended at its home");
+    assert!(w.links.iter().any(|l| l.home == D && l.ty[0].0 == T_RETRACTION && l.to[0].0 == orig), "its retraction tuple in D");
+    assert!(w.links.iter().find(|l| l.addr == named.mpub).unwrap().retracted, "the copy retracted beside it");
+    assert!(!w.links.iter().find(|l| l.addr == orig_c).unwrap().retracted, "the citation's original stands");
+}
+
+/// THE REST, COMPUTED BY IDENTITY: an original over `E`'s words 10–15 whose
+/// copy covers 10–14 composes its rest, 15, as one I-span; one over a
+/// record's draft words `D` 20–23 whose copy lies on the published words the
+/// record maps them to, `E` 16–17, composes its rest on the DRAFT's chain,
+/// `D` 22–23, through the record; the frame spells each rest in the I-span
+/// form; the price carries the fresh marks; and the world writes each fresh
+/// mark of the original's type over exactly the rest, in the end the
+/// original holds it in, ahead of the original's retraction. The selection
+/// — `E`'s words 1–12 and 16–17, the draft's own and the window — holds
+/// the copies' words and leaves the rests' out, so each original is folded
+/// under its copy on the selection and offered nowhere.
+#[test]
+fn a_cut_copys_rest_is_composed_by_identity_through_the_records_and_kept_by_a_fresh_mark() {
+    let (mut world, _named) = World::base();
+    let e1 = format!("{E}.1");
+    let heading = world.typed(D, vec![], vec![ispan(E, 10, 6)], T_HEADING);
+    let hpub = world.typed(&e1, vec![], vec![ispan(E, 10, 5)], T_HEADING);
+    world.typed(D, vec![], vec![unit(&hpub)], T_HELD_REMOVAL);
+    world.claim(D, &heading, &hpub);
+    // On the record's draft words (D 20–23 → E 16–19): the original on D's
+    // chain, its copy on E's.
+    let emph = world.typed(N, vec![], vec![ispan(D, 20, 4)], T_EMPHASIS);
+    let epub = world.typed(&e1, vec![], vec![ispan(E, 16, 2)], T_EMPHASIS);
+    world.typed(D, vec![], vec![unit(&epub)], T_HELD_REMOVAL);
+    world.claim(N, &emph, &epub);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    // The selection publishes E's words 1–12 and 16–17 and the draft's own:
+    // the copies' words, the rests left out.
+    let mut inputs = inputs();
+    inputs.selection = vec![run(E, 1, 12), run(E, 16, 2), run(D, 1, 10), run(O, 1, 5)];
+    let e = enumerate(&p, &inputs).expect("enumerated");
+    let panel = panel(&p, &inputs, &e).expect("the panel");
+    // The window onto `O` is the selection's fourth run here.
+    let mut confirmed = switched(None);
+    confirmed.answers = BTreeMap::from([(3, OriginAnswer::KeepPrivate)]);
+    let built = build(&p, &inputs, &e, &panel, &confirmed).expect("built");
+    let Built::Request(mut request) = built else { panic!("{built:?}") };
+    let entry = |old: &str| request.originals.iter().find(|o| o.old.to_string() == old).unwrap_or_else(|| panic!("{old}'s entry: {:?}", request.originals));
+    assert_eq!(entry(&heading).rest, vec![ISpan { chain: format!("{E}.0.1"), first: 15, width: 1 }], "the word the copy left out");
+    assert_eq!(entry(&emph).rest, vec![ISpan { chain: format!("{D}.0.1"), first: 22, width: 2 }], "on the draft's chain, through the record");
+    let frame = request.frame(None);
+    let originals = frame["originals"].as_array().unwrap();
+    let spelled = |old: &str| originals.iter().find(|o| o["old"] == old).unwrap()["rest"].clone();
+    assert_eq!(spelled(&heading), json!([{"start": format!("{E}.0.1.15"), "width": "1"}]));
+    assert_eq!(spelled(&emph), json!([{"start": format!("{D}.0.1.22"), "width": "2"}]));
+    let without = Request { originals: Vec::new(), ..(*request).clone() }.priced(0, 0, &[]);
+    assert!(request.priced(0, 0, &[]).bytes > without.bytes + 2 * price::RETRACTION_BYTES, "the fresh marks priced beside the retractions");
+    let sent = send(&p, &inputs, &mut request).unwrap();
+    assert!(matches!(sent, Sent::Acknowledged(_)), "{sent:?}");
+    let w = dialer.world();
+    let fresh = |home: &str, ty: &str, span: (String, String)| w.links.iter().any(|l| l.home == home && !l.retracted && l.ty[0].0 == ty && l.from.is_empty() && l.to == vec![span.clone()]);
+    assert!(fresh(D, T_HEADING, ispan(E, 15, 1)), "the heading's rest keeps a fresh heading in D");
+    assert!(fresh(N, T_EMPHASIS, ispan(D, 22, 2)), "the emphasis's rest keeps a fresh emphasis in N, on the draft's words");
+    for (original, home, ty, rest) in [(&heading, D, T_HEADING, ispan(E, 15, 1)), (&emph, N, T_EMPHASIS, ispan(D, 22, 2))] {
+        assert!(w.links.iter().find(|l| l.addr == *original).unwrap().retracted, "{original} ended");
+        let mark = w.links.iter().position(|l| l.home == home && l.ty[0].0 == ty && l.to == vec![rest.clone()]).unwrap();
+        let retraction = w.links.iter().position(|l| l.home == home && l.ty[0].0 == T_RETRACTION && l.to.first().is_some_and(|s| s.0 == *original)).unwrap();
+        assert!(mark < retraction, "{original}: the fresh mark ahead of the retraction");
+    }
+}
+
+/// THE ONE RE-SIGN DROPS THE ORIGINAL WITH ITS COPY: `mpub3`'s original
+/// rides the rider paired with `mpub3`; `mpub3` retracted meanwhile — a
+/// skipped `retract` entry — the board's `attestation_invalid:signature`
+/// makes the one re-sign drop the entry AND the original paired with it, so
+/// the second frame carries neither and the publication is acknowledged;
+/// an original paired with two marks rides while either does.
+#[test]
+fn a_skipped_copys_original_is_dropped_with_it_at_the_one_re_sign() {
+    let (mut world, named) = World::base();
+    let orig3 = world.typed(D, vec![], vec![ispan(E, 15, 5)], T_HEADING);
+    world.claim(D, &orig3, &named.mpub3);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let (_, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(None));
+    assert_eq!(request.originals.iter().map(|o| (o.old.to_string(), o.marks.clone())).collect::<Vec<_>>(), vec![(orig3.clone(), vec![a(&named.mpub3)])]);
+    let p = publisher(&board, &tok, &signer);
+    dialer.world().retract(&format!("{E}.1"), &named.mpub3);
+    dialer.world().refuse_next = Some(json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_invalid:signature", "disposition": "permanent", "op": "publish"}));
+    dialer.clear();
+    let sent = send(&p, &inputs(), &mut request).unwrap();
+    assert!(matches!(sent, Sent::Acknowledged(_)), "{sent:?}");
+    assert_eq!(request.retract, vec![a(&named.mpub)], "the retracted mark's entry dropped");
+    assert!(request.originals.is_empty(), "and its original with it");
+    let frames = dialer.frames("publish");
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0]["originals"], json!([{"old": orig3}]), "the first frame carried the rider");
+    assert!(frames[1].get("originals").is_none(), "the second carries neither the entry nor the original: {}", frames[1]);
+    assert!(!dialer.world().links.iter().find(|l| l.addr == orig3).unwrap().retracted, "the original stands: the other device's take-off is where it ends");
+    // Paired with two marks: dropped only with the last.
+    let mut two = Request { originals: vec![OriginalEntry { old: a(&orig3), rest: vec![], ty: vec![], marks: vec![a(&named.mpub), a(&named.mpub3)] }], ..request.clone() };
+    two.retract = vec![a(&named.mpub), a(&named.mpub3)];
+    two.without(&[1], &[], &[]);
+    assert_eq!(two.originals.len(), 1, "one mark still rides");
+    two.without(&[0], &[], &[]);
+    assert!(two.originals.is_empty(), "none does");
 }

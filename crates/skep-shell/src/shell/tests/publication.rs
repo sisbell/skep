@@ -1190,3 +1190,58 @@ fn a_draft_placing_a_run_of_its_own_words_twice_publishes_whole() {
     g.shell.shutdown();
     sd.shutdown();
 }
+
+/// THE PRIVATE RIDER through the shell (the link-sets design §5.7 (vi′);
+/// skep #894): after a first version, the draft holds a strong mark of its
+/// own over the member's words, its public copy in `E.1` with the accept
+/// claim in the draft, and the held removal of the copy. `publication.open`
+/// answers the removal under its declared shape with `original` the draft's
+/// mark and `rest` empty — every word covered — and the price counts the
+/// rider as its sixth list; `publication.confirm` lands the version, after
+/// which the copy and the original are both retracted, the original's
+/// retraction homed in the draft, and the feed row names the draft.
+#[test]
+fn a_held_removals_original_is_answered_under_its_shape_and_ended_by_the_confirm() {
+    use skep_client::board::frames::{find_links_ftt, T_HELD_REMOVAL};
+    use skep_client::board::T_RETRACTION;
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let draft = g.staged(&edition, "the quick brown fox");
+    let inputs = json!({"session": g.session, "draft": draft, "doc": edition, "readable_drafts": [draft], "published": [edition]});
+    g.call("publication.open", inputs.clone()).unwrap_or_else(|r| panic!("{r}"));
+    let first = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let member = format!("{edition}.1");
+    assert_eq!(first["member"].as_str(), Some(member.as_str()), "{first}");
+    // The strong mark in the draft over "quick", its copy in E.1 over the
+    // same words, the accept claim in the draft, the held removal.
+    let strong = "1.1.0.1.0.1.0.3.23.2";
+    let original = g.addr(json!({"op": "make_link", "home": draft, "from": {"addrs": []}, "to": [{"source": draft, "span": {"start": "1.5", "width": "0.5"}}], "ty": {"addrs": [strong]}}));
+    let copy = g.addr(json!({"op": "make_link", "home": member, "from": {"addrs": []}, "to": [{"source": member, "span": {"start": "1.5", "width": "0.5"}}], "ty": {"addrs": [strong]}}));
+    g.addr(json!({"op": "assert_sup", "home": draft, "old": original, "new": copy}));
+    g.addr(json!({"op": "make_link", "home": draft, "from": {"addrs": []}, "to": {"addrs": [copy]}, "ty": {"addrs": [T_HELD_REMOVAL]}}));
+    let panel = g.call("publication.open", inputs).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("Formatting", &panel["formatting"]);
+    let removals = panel["formatting"]["removals"].as_array().unwrap();
+    assert_eq!(removals.len(), 1, "{panel}");
+    crate::shapes::assert_declared("Removal", &removals[0]);
+    assert_eq!((removals[0]["mark"].as_str(), removals[0]["original"].as_str(), removals[0]["rest"].as_array().map(Vec::len)), (Some(copy.as_str()), Some(original.as_str()), Some(0)), "{}", removals[0]);
+    assert_eq!(panel["price"]["lists"].as_array().map(Vec::len), Some(6), "the rider is the sixth list: {}", panel["price"]);
+    assert_eq!(panel["price"]["lists"][5], json!(1), "{}", panel["price"]);
+    assert_eq!(panel["count"]["r"], json!(1), "{}", panel["count"]);
+    let before = g.position();
+    let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(acked["member"].as_str(), Some(format!("{edition}.2").as_str()), "{acked}");
+    let at = acked["at"].as_u64().unwrap();
+    assert!(at > before);
+    let retractions = |link: &str| g.call("op", json!({"session": g.session, "frame": find_links_ftt(T_RETRACTION, link)})).unwrap()["addrs"].as_array().map(Vec::len);
+    assert_eq!((retractions(&copy), retractions(&original)), (Some(1), Some(1)), "the copy and its original both retracted");
+    let ended = g.call("op", json!({"session": g.session, "frame": find_links_ftt(T_RETRACTION, &original)})).unwrap();
+    assert!(ended["addrs"][0].as_str().unwrap().starts_with(&format!("{draft}.0.2.")), "the original's retraction homed in the draft: {ended}");
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let rows = changes_under(&entry.board, &entry.token, &edition, at - 1);
+    let row = rows.iter().find(|r| r["at"] == at && r["op"] == "publish").unwrap_or_else(|| panic!("the publish row at {at}: {rows:?}"));
+    let docs: Vec<&str> = row["docs"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert!(docs.contains(&draft.as_str()) && docs.contains(&member.as_str()), "the row names the draft, the original's home, and E.1, the copy's: {docs:?}");
+}

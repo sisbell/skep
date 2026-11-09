@@ -419,10 +419,9 @@ pub fn shot_run(origin: &str, i_start: &str, width: u64) -> Value {
 }
 
 /// Every member of a `publish` request (wire.md §Arrangement, `publish`;
-/// §The publish shot and head-float; `crates/skep-mcp/tools.json`'s
-/// `publish` entry — the thirteen members as the catalog spells them: `doc`,
-/// `draft`, `also`, `runs`, `places`, `base`, `base_extent`, `account`,
-/// `mint`, `claim`, `links`, `retract`, `read_with`).
+/// §The publish shot and head-float): `doc`, `draft`, `also`, `runs`,
+/// `places`, `also_places`, `base`, `base_extent`, `account`, `mint`,
+/// `claim`, `links`, `retract`, `originals`, `read_with`, `supersede`.
 ///
 /// The two forms the link-sets design §5.7 draws: the DOCUMENT form, `doc`
 /// present and `account` absent; THE MINT FORM, `account` present with
@@ -472,6 +471,11 @@ pub struct PublishFrame<'a> {
     pub links: &'a [Value],
     /// The `retract` entries: link addresses.
     pub retract: &'a [&'a str],
+    /// The `originals` rider (wire.md §Arrangement, `publish`; the link-sets
+    /// design §5.7 (vi′)): the originals the commit ends with the marks
+    /// `retract` names, each as [`original_entry`] spells it — outside the
+    /// signed preimage; sent only where non-empty.
+    pub originals: &'a [Value],
     /// The `read_with` entries: published documents.
     pub read_with: &'a [&'a str],
     /// The `supersede` entries: THE DAUGHTERS the member takes in (wire.md
@@ -503,8 +507,8 @@ pub struct AlsoPlacesFrame<'a> {
 /// (a list of `null`s is the shot as before, so it is left out),
 /// `also_places` only with the entries whose list carries a place, in
 /// `also`'s order, and only where one remains (the canonical form the codec
-/// writes), `also`, `links`, `retract`, `read_with` and `supersede` only
-/// where non-empty, `mint` and `claim` only where true.
+/// writes), `also`, `links`, `retract`, `originals`, `read_with` and
+/// `supersede` only where non-empty, `mint` and `claim` only where true.
 pub fn publication(p: &PublishFrame<'_>) -> Value {
     let mut frame = with_id(json!({"op": "publish", "runs": p.runs}), p.id);
     if let Some(doc) = p.doc {
@@ -542,6 +546,9 @@ pub fn publication(p: &PublishFrame<'_>) -> Value {
     if !p.retract.is_empty() {
         frame["retract"] = json!(p.retract);
     }
+    if !p.originals.is_empty() {
+        frame["originals"] = Value::Array(p.originals.to_vec());
+    }
     if !p.read_with.is_empty() {
         frame["read_with"] = json!(p.read_with);
     }
@@ -552,6 +559,18 @@ pub fn publication(p: &PublishFrame<'_>) -> Value {
         frame["attest"] = a.clone();
     }
     frame
+}
+
+/// Builds one entry of a `publish` request's `originals` rider (wire.md
+/// §Arrangement, `publish`; the link-sets design §5.7 (vi′)): `old` the
+/// original's address and `rest` its spans in the I-span form, each as
+/// [`i_span`] spells one — the member left out where the rest is empty.
+pub fn original_entry(old: &str, rest: &[Value]) -> Value {
+    let mut entry = json!({"old": old});
+    if !rest.is_empty() {
+        entry["rest"] = Value::Array(rest.to_vec());
+    }
+    entry
 }
 
 /// Builds one kept place: the content V-position at `ordinal`.

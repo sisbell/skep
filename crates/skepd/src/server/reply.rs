@@ -10,7 +10,7 @@ use skep_util::json::obj;
 
 use super::scan::ScanBusy;
 use skep_core::auth::policy::{
-    CredentialRefusal, PublicationReadRefusal, RegistryRefusal, RetractClassRefusal,
+    CredentialRefusal, PublicationReadRefusal, RegistryRefusal, RetractClassRefusal, RetractList,
 };
 use skep_core::auth::session::HandshakeRefusal;
 use skep_core::codec::{
@@ -833,19 +833,26 @@ pub(super) fn credential_refused(kind: OpKind, r: &CredentialRefusal) -> Reply {
     op_answer(credential_refused_reply(kind, r.token(), r.disposition()))
 }
 
-/// Returns a publication's `retract` entry refused by its target's class as
-/// its 200-enveloped rejection (the link-sets design §5.7; lane S3).
+/// Returns a publication's `retract` or `originals` entry refused by its
+/// target's class as its 200-enveloped rejection (the link-sets design
+/// §5.7; lane S3; §5.7 (vi′)).
 ///
-/// It is M10's own `retract_refused` — permanent, `site.index` the entry —
-/// built as M10 builds it ([`Rejection::classified`]) with the class token
+/// It is M10's own `retract_refused` for an entry of the `retract` list and
+/// `original_refused` for one of the private rider — permanent, `site.index`
+/// the entry in its own list — built as M10 builds it
+/// ([`Rejection::classified`]) with the class token
 /// the daemon's producer answered (`retract_class_refusal`:
 /// `not_retraction`, `not_revocation`, `audit_view`) as its `detail`, the
-/// shape the store's own refusals of the code take with their causes
-/// (`absent`, `not_owner`, `not_published`); the daemon's one cell of that
-/// code, marshaled by the one codec.
+/// shape the store's own refusals of the two codes take with their causes
+/// (`absent`, `not_owner`, `not_published`; `unclaimed` and the rest's);
+/// the daemon's one cell of each code, marshaled by the one codec.
 pub(super) fn retract_refused(kind: OpKind, r: RetractClassRefusal) -> Reply {
     let site = FaultSite { index: Some(r.index), ..FaultSite::default() };
-    let mut rejection = Rejection::classified(kind, RejectCode::RetractRefused, Some(site));
+    let code = match r.list {
+        RetractList::Retract => RejectCode::RetractRefused,
+        RetractList::Originals => RejectCode::OriginalRefused,
+    };
+    let mut rejection = Rejection::classified(kind, code, Some(site));
     rejection.detail = Some(r.cause.to_string());
     op_answer(JsonCodec.marshal(&Response::Rejected(rejection)))
 }

@@ -492,8 +492,9 @@ pub enum RejectCode {
     /// A type slot breaks a sole-writer fence or the DC guard's claim schema.
     DcViolation,
     // ── M7 link: the publication's deposits (the link-sets design §5.7's
-    //    validation (3)–(6); lane S3 and the merge bridge lane). Each is
-    //    permanent, carries its entry's index in `site.index`, and the four
+    //    validation (3)–(6) and (4′); lane S3 and the merge bridge lane).
+    //    Each is
+    //    permanent, carries its entry's index in `site.index`, and the five
     //    that name a cause carry it as `detail`, `head_moved` naming the
     //    trunk's head in `site.addr` beside the index; the edition claim's
     //    own, last of them, names the edition in `site.addr` instead. ──
@@ -524,9 +525,28 @@ pub enum RejectCode {
     /// A `retract` entry is refused.
     ///
     /// `detail` names which: `absent`, `not_owner`, `not_published` (the
-    /// target is not homed in a published document of the caller's), or
-    /// `audit_view` (a class retraction never ends, the daemon's own cell).
+    /// target is not homed in a published document of the caller's), or the
+    /// target's class, which the `nullify` class refuses to retract — the
+    /// daemon's own cell: `audit_view` (the audit-view class),
+    /// `not_retraction` (a credential-typed target), `not_revocation` (a
+    /// grant).
     RetractRefused,
+    /// An `originals` entry — the private rider's, naming an original the
+    /// commit ends (the link-sets design §5.7 (vi′)) — is refused.
+    ///
+    /// `detail` names which: `absent`, `not_owner`, `public` (homed in a
+    /// published document), `duplicate` (a second entry naming one original,
+    /// the second's index), `not_content_span` (a rest span that is no
+    /// content I-span), `too_large` (the rest past the slot budget),
+    /// `fenced_type` (the original's type a class the open surface never
+    /// writes, so no fresh mark of it over a rest), `rest_outside` (a rest
+    /// span within no content span of the original's ends), `unclaimed` (no
+    /// active claim of the caller's names the original as `old` and a mark
+    /// of this request's `retract` list as `new`), or the target's class the
+    /// daemon's own cell refuses, as `retract_refused` carries it:
+    /// `audit_view`, `not_retraction`, `not_revocation`. An original already
+    /// retracted is SKIPPED, never refused.
+    OriginalRefused,
     /// A `read_with` entry is refused.
     ///
     /// `detail` names which: `not_registered`, `not_document` (a member),

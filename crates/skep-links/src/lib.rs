@@ -138,8 +138,8 @@ pub use endset::{enc, Endset, IntoSpans, Link, Spans};
 pub use skep_arrangement::Caller;
 pub use error::{
     AssertSupError, EditLinkError, EmitError, Invalid, MakeLinkError, NotBh4, NullifyError,
-    OldCause, PlanFault, PublicationError, ReadWithCause, RetractCause, RetractStaleError,
-    SupersedeCause,
+    OldCause, OriginalCause, PlanFault, PublicationError, ReadWithCause, RetractCause,
+    RetractStaleError, SupersedeCause,
 };
 pub use registry::{
     registry, Behavior, Registration, ReservedAddrs, Shape, ShippedType, TypeRegistry,
@@ -154,8 +154,9 @@ pub use writes::{
     request_image, resolve_end, retraction_tuple, slot_endset, stage_correspondence,
     stage_publication, stored_span_bytes, stored_tumbler_bytes, supersession_claim,
     supersession_claim_in, AlsoPlaces,
-    DepositPlan, Edit, EndArg, LinkEntry, LinkWriter, MemberEnd, MemberSpan, NamedAddress, PlannedClaim,
-    PlannedDeposit, PlannedEnd, PlannedHome, PublishDeposits, PublishTarget, ReadPrice, SlotArg,
+    DepositPlan, Edit, EndArg, LinkEntry, LinkWriter, MemberEnd, MemberSpan, NamedAddress, OriginalEntry,
+    PlannedClaim, PlannedDeposit, PlannedEnd, PlannedHome, PlannedOriginal, PublishDeposits, PublishTarget,
+    ReadPrice, SlotArg,
     Visibility, CLAIM_BYTES, COPY_BYTES, COPY_FIXED_BYTES, CORRESPONDENCE_RECORD_BYTES,
     EDITION_CLAIM_BYTES, EDITION_MINT_BYTES, KEPT_PLACE_BYTES, MAXIMAL_PUBLICATION_BYTES,
     PLACED_RUN_BYTES, READ_WITH_BYTES, REACHABLE_PUBLICATION_BYTES, REINSERTED_VALUE_BYTES,

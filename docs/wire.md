@@ -1842,7 +1842,17 @@ read-with list alone deposits), `retract_refused` (a retract entry, with
 `detail` naming which: absent, not_owner, not_published — the target not
 homed in a published document of yours — or the target's class, which
 the nullify class refuses to retract: audit_view, not_retraction for a
-credential, not_revocation for a grant), `read_with_refused` (a
+credential, not_revocation for a grant), `original_refused` (an entry
+of the originals rider — the private original a retracted mark stands
+for, which the commit ends — with `detail` naming which: absent,
+not_owner, public — homed in a published document — duplicate, a
+second entry naming one original; not_content_span, too_large,
+fenced_type, rest_outside — the rest's spans no content I-spans, past
+the slot budget, of an original of a class no fresh mark may take, or
+outside the original's ends; unclaimed — no active claim of yours names
+the original as old and a mark of this request's retract list as new;
+or the target's class as `retract_refused` carries it: audit_view,
+not_retraction, not_revocation), `read_with_refused` (a
 read-with entry, with `detail` naming which: not_registered,
 not_document, not_owner, not_published), and `supersede_refused` (a
 supersede entry — the merge bridge lane — with `detail` naming which:
@@ -2271,7 +2281,11 @@ the shot, the records, then the deposits per home (the member first,
 then a minted edition, then every other home in address order, an
 edition `doc` names among them; inside a home the edition claim, the
 copies, the retractions, the read-withs, the supersession claims, each
-list in its declared order), then the re-window. Within one commit a home's link
+list in its declared order), then THE ORIGINALS the private rider
+`originals` ends, in declared order, each at its own home — over a
+rest, the fresh mark of the original's type first, seated as any draft
+formatting is, then the original's retraction, `nullify`'s tuple,
+unseated — then the re-window. Within one commit a home's link
 addresses RISE in that order, so a reader sorting a home's links by
 address reads them as the signed entry lists them. THE PLAN, read on
 the committed state the transaction opens on: (3) each `links` entry's
@@ -2302,7 +2316,24 @@ document of yours (`retract_refused`: absent, not_owner,
 not_published), and one of a class the nullify class refuses to
 retract (§Links (writes)) is `retract_refused` with that class's token
 — audit_view, not_retraction, not_revocation; a target ALREADY
-RETRACTED is SKIPPED, the entry committing nothing. (5) each
+RETRACTED is SKIPPED, the entry committing nothing. (4′) each
+`originals` entry — THE PRIVATE RIDER beside `retract` — names a
+resident link of yours homed in a PRIVATE document of yours
+(`original_refused`: absent, not_owner, public), once (duplicate at the
+second); its `rest`, where it names one, content I-spans within the
+slot budget (not_content_span, too_large) of an original whose type is
+no class the open surface never writes — the retraction, supersession,
+`replaces` and correspondence classes, each with one writer that is
+never a fresh mark (fenced_type) — each span within some content span
+of the original's ends (rest_outside), the fresh mark then the
+original's type over the rest's spans, each in the end of the original
+it lies within; and an ACTIVE claim of yours names the original as
+`old` and, as `new`, a mark of THIS request's `retract` list, as sent
+(unclaimed) — so only the original of a mark taken off in this commit
+can ride, never an arbitrary private retraction; one of a class the
+nullify class refuses to retract is `original_refused` with that
+class's token, as a `retract` entry is; an original ALREADY RETRACTED
+is SKIPPED, the entry committing nothing, as (4) skips its target. (5) each
 `read_with` entry names a registered trunk document of yours,
 published (`read_with_refused`: not_registered, not_document,
 not_owner, not_published); a read-with from the edition to it already
@@ -2354,7 +2385,11 @@ unit span, the daughter's unit span, and `to` ONE TAG ELEMENT, `member`
 — the member the commit mints, whose address no signer holds before the
 commit — then the EMPTY row. A skipped entry has no
 group — the signer reads the skip as the board does — and the private
-claims are in no group. A request carrying no deposit signs today's
+claims are in no group, nor is the `originals` rider: its writes are
+private, a retraction and a fresh mark at the original's own home, so a
+request carrying the rider alone signs today's body byte for byte,
+while the board plans it and refuses it by entry ahead of the signature
+check as it does every deposit. A request carrying no deposit signs today's
 body byte for byte. A signature over a body missing a deposit's rows,
 or naming a skipped one, is `attestation_invalid:signature`. A retry
 of a committed publication under the same `id` on the same session is
@@ -2546,6 +2581,7 @@ commits nothing:
 | `claim_refused` | permanent | `addr` = the edition | the document form carries `claim: true` and `doc` already holds a member (the claim is a first version's alone; the deposits, above) — read inside the transaction with the plan, after the twin fence and ahead of the shot; `detail` is `member_stands` |
 | `link_home_refused`, `old_refused`, `duplicate_original`, `read_with_in_links`, `retract_refused`, `read_with_refused` | permanent | `index` = the entry in its own list | the plan's refusal of a deposit (the deposits, above) — read inside the transaction after the twin fence and ahead of the shot, the first refused entry answering; `old_refused`, `retract_refused` and `read_with_refused` carry the cause as `detail` |
 | `supersede_refused` | permanent | `index` = the entry in `supersede`; at `head_moved`, `index` = 0 and `addr` = the trunk's head | the plan's refusal of a `supersede` entry (the deposits, above) — read as the other lists' are, after them, the cause as `detail`: `head_moved` (a member stands and the base is not the trunk's head, so the shot would mint the base's daughter: the list refused whole, ahead of every entry's own check), then `not_member`, `base`, `duplicate` |
+| `original_refused` | permanent | `index` = the entry in `originals` | the plan's refusal of an entry of the private rider (the deposits, above) — read after the retract list's and ahead of the read-with list's, the cause as `detail`: `absent`, `not_owner`, `public`, `duplicate`, `not_content_span`, `too_large`, `fenced_type`, `rest_outside`, `unclaimed`; or the target's class, the daemon's own cell ahead of the store, as `retract_refused` carries it: `audit_view`, `not_retraction`, `not_revocation` |
 
 The daemon's own publish-class gate (`signed_session_required`, slot 4)
 stands ahead of the store: a shot is publication's own act whatever
@@ -3808,7 +3844,20 @@ codes): `links`, one entry per accepted link — `{home, ty, from, to,
 old?}`, `home` the tag `member` (the member the commit mints) or a
 published document of yours, `old` the private original the copy stands
 for, whose supersession claim the commit writes in the original's home;
-`retract`, link addresses of yours to retract from their homes;
+`retract`, link addresses of yours to retract from their homes — and
+beside it THE PRIVATE RIDER `originals`, no deposit and no term of the
+count, outside the signed preimage as `draft` is: one entry per
+original of a mark of the formatting types this request's `retract`
+list retracts, `{old, rest?}`, `old` the original's address — a private
+link of yours whose own accept claim names a mark of `retract` as its
+`new` — and `rest`, where one stands, the original's words NO COPY OF
+IT HAS EVER COVERED, in the I-span form; the commit ends each original
+at its own home beside the mark's retraction, writing first, over a
+rest, a fresh mark of the original's type over exactly those words, so
+the mark taken off is drawn nowhere after and the words never published
+keep their formatting as the draft's own (§The publish shot and
+head-float, the originals; refused `original_refused` by entry, §Rejection
+codes);
 `read_with`, published documents of yours the edition is newly read
 with; and `supersede`, THE DAUGHTERS the member takes in (the merge
 bridge lane; skep #805) — version members of `doc`'s own chain, a
@@ -3892,11 +3941,12 @@ commit re-windows the draft at its ordinal 4; and beside the shot one
 accepted link homed in the member, `from` the member's own fourth and
 fifth positions (the draft's new words, by the member-position form)
 and `to` another document, its private original named, one link
-retracted and one read-with:
+retracted with the private original it stands for ended by the rider,
+and one read-with:
 
 <!-- wire: request publish -->
 ```json
-{"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.7","links":[{"from":{"member":[{"ordinal":"4","width":"2"}]},"home":"member","old":"1.0.1.0.7.0.2.1","to":{"addrs":["1.0.1.0.2"]},"ty":{"addrs":["1.1.0.1.0.1.0.3.13"]}}],"op":"publish","places":[null,{"ordinal":"4","subspace":"1"}],"read_with":["1.0.1.0.2"],"retract":["1.0.1.0.1.0.2.1"],"runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"},{"i_start":"1.0.1.0.7.0.1.1","origin":"1.0.1.0.7","width":"2"}]}
+{"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.7","links":[{"from":{"member":[{"ordinal":"4","width":"2"}]},"home":"member","old":"1.0.1.0.7.0.2.1","to":{"addrs":["1.0.1.0.2"]},"ty":{"addrs":["1.1.0.1.0.1.0.3.13"]}}],"op":"publish","originals":[{"old":"1.0.1.0.7.0.2.2"}],"places":[null,{"ordinal":"4","subspace":"1"}],"read_with":["1.0.1.0.2"],"retract":["1.0.1.0.1.0.2.1"],"runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"},{"i_start":"1.0.1.0.7.0.1.1","origin":"1.0.1.0.7","width":"2"}]}
 ```
 
 ### Media — the reference cell and its door (lane A; the fence) and the upload (lane B)
@@ -4856,7 +4906,12 @@ answering plain `not_owner` (§Credential refusals, item 5). A `retract`
 entry of a `publish` naming a link of any of the three classes is judged
 by the same producer and refused `retract_refused` with the class as its
 `detail` — audit_view, not_retraction, not_revocation — `site.index` the
-entry (§The publish shot and head-float, the deposits). And the
+entry (§The publish shot and head-float, the deposits), and so is an
+entry of its `originals` rider, refused `original_refused` with the same
+class token — the rider is admitted by the store on a claim of the
+owner's alone, so the cell judges it as it judges the `nullify` of the
+same link: a correspondence record homed in the draft, the audit-view
+class, is never ended by it. And the
 publish-class gate reads a `nullify` (PUB-6.43's row): a retraction
 lands at its TARGET, so on a claimed board a bare session's `nullify`
 whose record home OR target home is published is
@@ -5958,7 +6013,8 @@ Each entry:
   publish shot and head-float) — then every other home the commit's
   deposits touched, in address order, each once: a links entry's home
   named by address, the private home of an original whose claim landed,
-  a retracted link's home, a set the read-with landed in — never a home
+  a retracted link's home, the private home of an original the
+  `originals` rider ended, a set the read-with landed in — never a home
   whose entry the plan skipped (§The publish shot and head-float, the
   deposits); reduced to the documents the reader may read, the member
   alone for a reader who can read none of the rest; `delegate` and `register_node`

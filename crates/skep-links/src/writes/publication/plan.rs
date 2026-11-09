@@ -10,11 +10,17 @@
 //! lands — a published document of the caller's, or an edition minted under
 //! an account in the commit (`mint: true` with `account`, `doc` absent);
 //! [`PublishDeposits`], the edition claim's flag (`claim: true`, at either
-//! form) and the four lists — `links`, one [`LinkEntry`] per accepted link,
+//! form), the four lists — `links`, one [`LinkEntry`] per accepted link,
 //! `retract`, the held removals' marks by address, `read_with`, the sets
 //! the document is newly read with, and `supersede`, the daughters the
-//! member takes in, by address (the merge bridge lane, brief A: skep #805).
-//! An entry names an address the commit
+//! member takes in, by address (the merge bridge lane, brief A: skep #805)
+//! — and, beside `retract`, THE PRIVATE RIDER `originals` (§5.7 (vi′)):
+//! one [`OriginalEntry`] per original the commit ends — a private link of
+//! the caller's whose copy this request's `retract` list retracts, by
+//! address, and the REST where one stands, the original's words no copy of
+//! it ever covered, as content I-spans. The rider is outside the signed
+//! preimage and no term of the count: its writes are private, in the
+//! original's home. An entry names an address the commit
 //! mints by TAG ([`NamedAddress`]): the member by `member`, the edition by
 //! `edition`. An end is one of three forms
 //! ([`EndArg`]): the address form, the I-span form, or THE MEMBER-POSITION
@@ -23,17 +29,21 @@
 //! spelled in the signed row as the request spells it and stored as the
 //! I-spans the commit mints.
 //!
-//! **The plan** ([`plan_deposits`]) runs THE VALIDATION's (3), (4), (5)
-//! and (6) over a world — never a staging — and answers a [`DepositPlan`]:
-//! the deposits per home in THE SIGNED ENTRY's order (the member first,
-//! then a minted edition, then every other home in address order; inside a
-//! home the edition claim, then the copies, then the retractions, then the
-//! read-withs, then the supersession claims, each list in declared order),
-//! each skip decided — a retraction whose target is already retracted, a
-//! read-with that stands in a published home of the caller's, a daughter a
-//! claim of the caller's own already names — and each copy's private claim
-//! beside it, outside the signed set. The first fault in list order refuses
-//! the whole ([`PlanFault`]), naming the entry. The edition claim is homed in
+//! **The plan** ([`plan_deposits`]) runs THE VALIDATION's (3), (4), (4′),
+//! (5) and (6) over a world — never a staging — and answers a
+//! [`DepositPlan`]: the deposits per home in THE SIGNED ENTRY's order (the
+//! member first, then a minted edition, then every other home in address
+//! order; inside a home the edition claim, then the copies, then the
+//! retractions, then the read-withs, then the supersession claims, each
+//! list in declared order), each skip decided — a retraction whose target
+//! is already retracted, a read-with that stands in a published home of the
+//! caller's, a daughter a claim of the caller's own already names — each
+//! copy's private claim beside it, outside the signed set, and, in a list
+//! of its own that is in no home ([`DepositPlan::originals`]), the
+//! originals the rider ends ([`PlannedOriginal`]), each with the fresh mark
+//! its rest takes, an original already retracted skipped. The first fault
+//! in list order refuses the whole ([`PlanFault`]), naming the entry. The
+//! edition claim is homed in
 //! the edition whichever form names it — the tag `edition` at the mint
 //! form, the trunk's own address at the document form, where it sorts among
 //! the other homes — and the plan plans the row either way: whether the
@@ -72,7 +82,7 @@ use crate::budget::MAX_SLOT_SPANS;
 use crate::class::coverage_class;
 use crate::endset::{enc, Endset, Link};
 use crate::registry::{registry, ShippedType};
-use crate::error::{OldCause, PlanFault, ReadWithCause, RetractCause, SupersedeCause};
+use crate::error::{OldCause, OriginalCause, PlanFault, ReadWithCause, RetractCause, SupersedeCause};
 use crate::state::{LinkState, View, FROM, TO, TYPE};
 use crate::LinkWorld;
 
@@ -206,8 +216,30 @@ pub struct LinkEntry {
     pub old: Option<Address>,
 }
 
+/// One entry of a publication's `originals` rider: an original the commit
+/// ends, and the rest it keeps formatted (the link-sets design §5.7 (vi′);
+/// §2).
+///
+/// `old` is a private link of the caller's whose copy — the `new` of an
+/// active claim of the caller's naming `old` — this request's `retract`
+/// list retracts; the commit retracts `old` at its own home in the same
+/// transaction, so the mark taken off is drawn nowhere after. `rest` is the
+/// original's words NO COPY OF IT HAS EVER COVERED — a cut copy's rest,
+/// words a selection left out — as content I-spans; where it holds a span
+/// the commit first writes a fresh mark of the original's type over exactly
+/// those words in the original's home, so they keep the formatting as the
+/// draft's own, then retracts the original. Empty where no rest stands.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct OriginalEntry {
+    /// The original: a private link of the caller's, by address.
+    pub old: Address,
+    /// The rest's spans, content I-spans within the original's own ends;
+    /// empty where no rest stands.
+    pub rest: Vec<Span>,
+}
+
 /// The deposits a publication carries beside its shot: the edition claim's
-/// flag and the four optional lists.
+/// flag, the four optional lists and the private rider.
 ///
 /// The claim is the first deposit of the edition's group whichever form
 /// minted or named the edition, so its flag lives here, once, beside the
@@ -224,6 +256,15 @@ pub struct LinkEntry {
 /// form, in the shot's one commit. The two claims never land together: the
 /// edition claim is a first version's, and a daughter exists only once a
 /// member stands.
+///
+/// `originals` (the link-sets design §5.7 (vi′)) is THE PRIVATE RIDER
+/// beside `retract`: the originals the commit ends, one [`OriginalEntry`]
+/// each. Its writes are private — a retraction at the original's own home
+/// and, over a rest, a fresh mark there — so it is outside the signed
+/// preimage and no term of the count, as the correspondence records and the
+/// re-window are; it rides the request as the four lists do, and is a
+/// member of it, so a request carrying the rider alone is not empty and is
+/// planned.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct PublishDeposits {
     /// Whether the commit writes the edition claim (`claim: true`): typed the
@@ -238,17 +279,21 @@ pub struct PublishDeposits {
     /// The daughters the member supersedes, by address — version members of
     /// `doc`'s own chain; absent and empty alike on the wire.
     pub supersede: Vec<Address>,
+    /// The originals the commit ends, one entry each — the private rider;
+    /// absent and empty alike on the wire.
+    pub originals: Vec<OriginalEntry>,
 }
 
 impl PublishDeposits {
-    /// Returns whether the request carries no deposit: no claim and none of
-    /// the four lists.
+    /// Returns whether the request carries no deposit and no rider: no
+    /// claim, none of the four lists, no original.
     pub fn is_empty(&self) -> bool {
         !self.claim
             && self.links.is_empty()
             && self.retract.is_empty()
             && self.read_with.is_empty()
             && self.supersede.is_empty()
+            && self.originals.is_empty()
     }
 }
 
@@ -381,34 +426,60 @@ pub struct PlannedHome {
     pub deposits: Vec<PlannedDeposit>,
 }
 
-/// The deposits a publication stages, per home in the signed entry's order.
+/// One original the commit ends, as planned (the link-sets design §5.7
+/// (vi′)): the private rider's staged writes, in no home of the signed
+/// entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedOriginal {
+    /// The entry's position in `originals`.
+    pub index: usize,
+    /// The original, a private link of the caller's.
+    pub old: Address,
+    /// Its home, a private document of the caller's: where both writes land.
+    pub home: Address,
+    /// The fresh mark over the rest, where one stands: the original's type
+    /// slot, and the rest's spans in the end of the original each lies
+    /// within — staged, seated, ahead of the original's retraction. `None`
+    /// where the entry names no rest.
+    pub rest: Option<Link>,
+}
+
+/// The deposits a publication stages, per home in the signed entry's order,
+/// and beside them the originals the private rider ends.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DepositPlan {
     /// The homes written, the member first, then a minted edition, then
     /// every other in address order; a home with no deposit is absent.
     pub homes: Vec<PlannedHome>,
+    /// The originals the commit ends, in declared order, each with its
+    /// fresh mark where a rest stands — never among `homes`, from which the
+    /// signed rows are built: the rider is outside the preimage by
+    /// construction. An original already retracted is absent, skipped.
+    pub originals: Vec<PlannedOriginal>,
 }
 
 impl DepositPlan {
-    /// Returns whether the plan stages nothing.
+    /// Returns whether the plan stages nothing: no deposit, no original.
     pub fn is_empty(&self) -> bool {
-        self.homes.is_empty()
+        self.homes.is_empty() && self.originals.is_empty()
     }
 }
 
 /// Plans a publication's deposits over `world`: THE VALIDATION's (3), (4),
-/// (5) and (6) in the design's order, and the deposits per home in the
-/// signed entry's order.
+/// (4′), (5) and (6) in the design's order, the deposits per home in the
+/// signed entry's order, and the originals the rider ends beside them.
 ///
 /// `caller` is the writer, whose homes the reads range over; `target` the
 /// request's form; `shot` the request's shot, read for its draft, for its
 /// base and for the member's positions a member-position end names;
-/// `deposits` the four lists. The reads are the design's in-lock reads,
+/// `deposits` the four lists and the rider. The reads are the design's
+/// in-lock reads,
 /// composed from M7's own primitives (the survey's C16): (3)'s claims
 /// naming `old` over the caller's homes alone — `homes_under` of the
 /// caller's account, then one typed stab per home — never another hand's;
 /// `old`'s residence, activity and ownership off the store and the
-/// registry; (5)'s presence over the caller's PUBLISHED homes, each row kept
+/// registry; (4′)'s claims naming the original over the caller's homes,
+/// as (3)'s; (5)'s presence over the caller's PUBLISHED homes, each row kept
 /// where its stored `from` is the edition's own unit span and its stored
 /// `to` the set's, exactly; (6)'s claims naming the daughter over the
 /// caller's homes, as (3)'s.
@@ -434,6 +505,30 @@ impl DepositPlan {
 ///    naming one `old` refused at the second;
 /// 4. each `retract` entry: the target resident, the caller's own, homed in
 ///    a published document of the caller's; already retracted → SKIPPED;
+///
+/// 4′. each `originals` entry (the private rider, §5.7 (vi′)): the
+///    original resident (`absent`), the caller's own (`not_owner`), homed
+///    in a private document (`public`), named once (`duplicate` at the
+///    second); where a rest stands, its spans content I-spans by the
+///    content clause (`not_content_span`), within the slot budget
+///    (`too_large`), the original's type no class the open surface never
+///    writes — the retraction, supersession, `replaces` and correspondence
+///    classes, whose one writer each is never a fresh mark (`fenced_type`)
+///    — and each span within some content span of the original's two ends
+///    (`rest_outside`), the fresh mark then the original's type over the
+///    rest's spans, each in the end of the original it lies within; then
+///    an ACTIVE claim of the caller's — one typed stab of the supersession
+///    class at `FROM` per own home, as (3)'s — naming the original as `old`
+///    and, as `new`, an address of THIS REQUEST's `retract` list, as sent
+///    (`unclaimed`): so only the original of a mark taken off in this
+///    commit can ride, never an arbitrary private retraction. Membership in
+///    the list, not a landed retraction, is the test: the daemon's composer
+///    runs this plan ahead of the signature check, and a copy retracted on
+///    another device since the panel is a skipped `retract` entry the
+///    client's one re-sign drops with the original paired to it — a test on
+///    the landing would turn that benign race into a refusal. Last, an
+///    original already retracted → SKIPPED, nothing planned for it, as (4)
+///    skips its target;
 /// 5. each `read_with` entry: `S` a registered trunk document, the
 ///    caller's, published; a read-with from the edition to `S` standing in
 ///    a published home of the caller's → SKIPPED, the maker's published
@@ -548,6 +643,37 @@ pub fn plan_deposits<W: LinkWorld + HasM5>(
             .or_default()
             .push(PlannedDeposit::Retraction { index, target: target_link.clone() });
     }
+    // (4′) each original the rider ends: resident, the caller's own, private,
+    // named once, its rest within it, and claimed onto a mark this request
+    // retracts; one already retracted is skipped, as (4) skips its target.
+    let mut originals: Vec<PlannedOriginal> = Vec::new();
+    let mut ended: BTreeSet<&Address> = BTreeSet::new();
+    let own = (!deposits.originals.is_empty()).then(|| own_homes(m3, links, caller));
+    let marks: BTreeSet<&Address> = deposits.retract.iter().collect();
+    for (index, entry) in deposits.originals.iter().enumerate() {
+        let fault = |cause| PlanFault::Original { index, cause };
+        let Some(link) = links.readlink(&entry.old) else {
+            return Err(fault(OriginalCause::Absent));
+        };
+        let home = document_of(&entry.old).ok_or(fault(OriginalCause::Absent))?;
+        if !caller.is_owner(m3, &entry.old) {
+            return Err(fault(OriginalCause::NotOwner));
+        }
+        if m3.published(&home) {
+            return Err(fault(OriginalCause::Public));
+        }
+        if !ended.insert(&entry.old) {
+            return Err(fault(OriginalCause::Duplicate));
+        }
+        let rest = rest_mark(link, &entry.rest).map_err(fault)?;
+        if !claimed_onto_a_mark(links, own.as_deref().unwrap_or(&[]), &entry.old, &marks) {
+            return Err(fault(OriginalCause::Unclaimed));
+        }
+        if !links.is_active(&entry.old) {
+            continue; // already retracted: the entry commits nothing
+        }
+        originals.push(PlannedOriginal { index, old: entry.old.clone(), home, rest });
+    }
     // (5) each read-with.
     let edition = target.document().map(trunk_of);
     for (index, set) in deposits.read_with.iter().enumerate() {
@@ -597,6 +723,91 @@ pub fn plan_deposits<W: LinkWorld + HasM5>(
     }
     Ok(DepositPlan {
         homes: homes.into_iter().map(|(home, deposits)| PlannedHome { home, deposits }).collect(),
+        originals,
+    })
+}
+
+/// Returns the fresh mark an `originals` entry's rest takes, or `None` for
+/// an entry naming no rest (THE VALIDATION's (4′); the link-sets design §2,
+/// a cut copy's rest).
+///
+/// The mark is the original's type slot over the rest's spans, each span
+/// placed in the end of the original it lies within — `from` where a span
+/// of the original's `from` contains it, else `to` — so a formatting mark,
+/// whose one content end holds its words, yields a mark of the same shape
+/// over exactly the rest, and no other end is carried.
+///
+/// # Errors
+///
+/// In order: `NotContentSpan` for a rest span that is no content I-span —
+/// the content clause every I-span slot passes ([`SlotArg::ill_formed_span`]);
+/// `TooLarge` past the slot budget; `FencedType` where the original's type
+/// is the retraction, supersession, `replaces` or correspondence class,
+/// each with one writer that is never a fresh mark — of the four only a
+/// correspondence record has content ends a rest could lie within, and the
+/// daemon's class cell refuses it ahead of the store, so this is the plan's
+/// own backstop; `RestOutside` for a span within no content span of the
+/// original's two ends.
+fn rest_mark(original: &Link, rest: &[Span]) -> Result<Option<Link>, OriginalCause> {
+    if rest.is_empty() {
+        return Ok(None);
+    }
+    if SlotArg::ill_formed_span(rest).is_some() {
+        return Err(OriginalCause::NotContentSpan);
+    }
+    if rest.len() > MAX_SLOT_SPANS {
+        return Err(OriginalCause::TooLarge);
+    }
+    let ty = original.type_slot();
+    // The two reserved classes are address-denoting, so a type that is not
+    // names neither and is never classified here; the two commons fences
+    // are total.
+    let reserved = ty.is_address_denoting() && {
+        let class = coverage_class(ty);
+        class == *registry().shipped_class(ShippedType::Retraction)
+            || class == *registry().shipped_class(ShippedType::Supersedes)
+    };
+    if reserved || is_replaces_class(ty) || is_correspondence_class(ty) {
+        return Err(OriginalCause::FencedType);
+    }
+    let (mut from, mut to) = (Vec::new(), Vec::new());
+    for span in rest {
+        if original.from_slot().spans().any(|end| lies_within(span, end)) {
+            from.push(span.clone());
+        } else if original.to_slot().spans().any(|end| lies_within(span, end)) {
+            to.push(span.clone());
+        } else {
+            return Err(OriginalCause::RestOutside);
+        }
+    }
+    Ok(Some(Link::triple(Endset::from_spans(from), Endset::from_spans(to), ty.clone())))
+}
+
+/// Returns whether the content span `s` lies within the content span `end`:
+/// one depth, and `s`'s positions among `end`'s.
+fn lies_within(s: &Span, end: &Span) -> bool {
+    end.start().len() == s.start().len() && *end.start() <= *s.start() && s.reach() <= end.reach()
+}
+
+/// Returns whether an ACTIVE claim homed in one of `homes` — the caller's
+/// own — names `old` as its `old` and one of `marks` as its `new`: the
+/// claim (4′) admits an original on, `marks` the request's `retract` list
+/// as sent. One typed stab of the supersession class at `FROM` over the
+/// original's unit span per home, as [`claimed_by_own`] makes it, each claim
+/// kept where its `from` denotes the original itself and its `to` denotes a
+/// mark of the list.
+fn claimed_onto_a_mark(links: &LinkState, homes: &[Address], old: &Address, marks: &BTreeSet<&Address>) -> bool {
+    let sup = registry().shipped_class(ShippedType::Supersedes);
+    let probe = subtree_of(old.tumbler());
+    homes.iter().any(|home| {
+        links.stab_typed_in(sup, home, FROM, [&probe], View::Active).iter().any(|claim| {
+            claim.from.single_denoted() == Some(old.tumbler())
+                && claim
+                    .to
+                    .single_denoted()
+                    .and_then(|t| validate(t.clone()).ok())
+                    .is_some_and(|new| marks.contains(&new))
+        })
     })
 }
 

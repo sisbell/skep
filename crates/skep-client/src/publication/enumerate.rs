@@ -198,6 +198,14 @@ impl Record {
         let (lo, hi) = self.from.overlap(chain, first, reach)?;
         Some(ISpan { chain: self.to.chain.clone(), first: self.to.first + (lo - self.from.first), width: hi - lo })
     }
+
+    /// Maps `[first, reach)` on the record's `to` chain back onto the `from`
+    /// span at the same offset, where the record covers it — [`Record::map`]
+    /// inverted: the draft words a published span stands for.
+    pub fn unmap(&self, chain: &str, first: u64, reach: u64) -> Option<ISpan> {
+        let (lo, hi) = self.to.overlap(chain, first, reach)?;
+        Some(ISpan { chain: self.from.chain.clone(), first: self.from.first + (lo - self.to.first), width: hi - lo })
+    }
 }
 
 /// How a candidate was reached.

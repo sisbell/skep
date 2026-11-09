@@ -4,7 +4,8 @@
 //! deposit the request carries (the accepted links as copies with their
 //! claims, the held removals' retractions, the read-withs, the edition
 //! claim, the supersession claims over the daughters a merged member takes
-//! in — the merge bridge lane, brief A) and every named draft re-windowed at
+//! in — the merge bridge lane, brief A), the private rider's originals ended
+//! at their own homes (§5.7 (vi′)) and every named draft re-windowed at
 //! its own kept places, in one transaction.
 //!
 //! [`stage_publication`] is the composite as a function over a caller-opened
@@ -17,7 +18,9 @@
 //! in the named draft whose identity the piece was — the rendering `draft`'s
 //! in it, an `also` draft's in that draft (the Nelson way, B3-S10; A-328) —
 //! ([`stage_correspondence`]); THE DEPOSITS, exactly as planned, per home in
-//! the signed entry's order; and THE RE-WINDOW OF EVERY NAMED DRAFT, each at
+//! the signed entry's order; THE ORIGINALS the rider ends, each in its own
+//! home — the fresh mark over its rest where one stands, then its
+//! retraction; and THE RE-WINDOW OF EVERY NAMED DRAFT, each at
 //! its own kept places (§5.7 (viii), the Nelson way): the rendering draft at
 //! the request's `places`, then each draft `also` names at its
 //! [`AlsoPlaces`] entry, in `also`'s order — for each run a list carries a
@@ -35,7 +38,8 @@
 //! [`LinkWriter::publication`] the public op: one `transact_attested` over
 //! the union of the shot's keys, each named draft's link key where a run of
 //! its identity is re-inserted, each re-windowed draft's content key where
-//! its list carries a place, every home's link key where a deposit lands,
+//! its list carries a place, every home's link key where a deposit lands or
+//! an original is ended,
 //! and the account's document key where an edition is minted. The
 //! correspondence class has this one writer; the fences on the three
 //! request-typed doors keep every other act off it. Within one commit a
@@ -91,7 +95,8 @@ pub use plan::{
     canonical_member_spans, edition_type, member_end, member_image, names_read_with,
     plan_deposits, read_with_in, read_with_type, request_image, resolve_end,
     supersession_claim_in, DepositPlan, EndArg, LinkEntry, MemberEnd, MemberSpan, NamedAddress,
-    PlannedClaim, PlannedDeposit, PlannedEnd, PlannedHome, PublishDeposits, PublishTarget,
+    OriginalEntry, PlannedClaim, PlannedDeposit, PlannedEnd, PlannedHome, PlannedOriginal,
+    PublishDeposits, PublishTarget,
 };
 pub use sizes::{
     price_staged_bytes, stored_span_bytes, stored_tumbler_bytes, CLAIM_BYTES, COPY_BYTES,
@@ -160,9 +165,10 @@ pub struct ReadPrice {
     /// plan's `own_homes` before its ownership filter, so at or above the
     /// homes the plan reads.
     pub homes: usize,
-    /// The `links` entries, the `read_with` entries and the `supersede`
-    /// entries, summed: the entries whose read ranges over the caller's
-    /// homes — (3)'s claim read, (5)'s presence read and (6)'s claim read.
+    /// The `links` entries, the `originals` entries, the `read_with` entries
+    /// and the `supersede` entries, summed: the entries whose read ranges
+    /// over the caller's homes — (3)'s claim read, (4′)'s claim read, (5)'s
+    /// presence read and (6)'s claim read.
     pub entries: usize,
     /// The content runs of every draft the re-window reads, summed:
     /// `content_run_count` of the rendering draft where `places` carries a
@@ -268,6 +274,7 @@ pub fn price_publication_reads<W: LinkWorld + HasM5>(
         entries: deposits
             .links
             .len()
+            .saturating_add(deposits.originals.len())
             .saturating_add(deposits.read_with.len())
             .saturating_add(deposits.supersede.len()),
         draft_runs,
@@ -301,13 +308,15 @@ impl From<HomeFault> for PublicationError {
 }
 
 impl From<EmitCoreError> for PublicationError {
-    // The record, the edition claim, a copy and a read-with take the Open
-    // gate over a type slot the plan found non-empty; the two claims — a
-    // copy's over its original, a daughter's over the member — take the
-    // Managed gate over the registry-fixed `[K_sup]` class and the
-    // retraction the Retraction gate over the shipped `[R]` class, each
-    // Binary over a tuple built one address a side — so of the gate's
-    // verdicts only Home and Mint are reachable.
+    // The record, the edition claim, a copy, a read-with and a rest's fresh
+    // mark take the Open gate over a type slot the plan found non-empty —
+    // the mark's the stored type of a resident link, which the gate that
+    // deposited it held non-empty; the two claims — a copy's over its
+    // original, a daughter's over the member — take the Managed gate over
+    // the registry-fixed `[K_sup]` class and the retractions — a `retract`
+    // target's, an original's — the Retraction gate over the shipped `[R]`
+    // class, each Binary over a tuple built one address a side — so of the
+    // gate's verdicts only Home and Mint are reachable.
     fn from(e: EmitCoreError) -> Self {
         match e {
             EmitCoreError::Home(f) => f.into(),
@@ -328,7 +337,8 @@ impl From<EmitCoreError> for PublicationError {
 /// the request mints one, the shot, for every piece of draft identity it
 /// minted one correspondence record in the named draft whose identity the
 /// piece was, every public deposit the request carries as the plan holds
-/// it, and every named draft's re-window at the kept places the request
+/// it, every original the private rider ends, and every named draft's
+/// re-window at the kept places the request
 /// carries for it — the rendering draft's in `places`, each `also` draft's
 /// in its `also_places` entry.
 ///
@@ -377,8 +387,9 @@ impl From<EmitCoreError> for PublicationError {
 ///    onto such a chain lands as the first member's daughter and is refused
 ///    here all the same where it claims, the claim being no daughter's; the
 ///    mint form's edition is memberless by construction. Then the plan
-///    ([`plan_deposits`]) — THE VALIDATION's (3), (4), (5) and (6), the
-///    first fault in list order refusing the whole as `Plan`, (6) refusing
+///    ([`plan_deposits`]) — THE VALIDATION's (3), (4), (4′), (5) and (6),
+///    the first fault in list order refusing the whole as `Plan`, (6)
+///    refusing
 ///    a `supersede` list whole, `head_moved`, where a member stands and the
 ///    base is not the trunk's head, so every supersession claim staged
 ///    below names the trunk's next member — the same world the daemon's
@@ -387,7 +398,8 @@ impl From<EmitCoreError> for PublicationError {
 ///    the base), so the deposits staged below are the deposits the
 ///    signature covers, by one function over one world; the claim's row
 ///    among them, homed in the edition by tag where the commit mints it and
-///    by address where `doc` names it.
+///    by address where `doc` names it; the rider's originals beside the
+///    homes, in no row.
 /// 5. THE SHOT: [`stage_publish`] — the admission again, one answer (its
 ///    card states why), the re-insert's count, the existence walk, the
 ///    placement with each draft identity minted once, the member's mint and
@@ -430,7 +442,21 @@ impl From<EmitCoreError> for PublicationError {
 ///    a home the plan did not read is refused `NotOwner` with its address.
 ///    A request carrying no deposit stages none here and commits as S2
 ///    left it.
-/// 8. THE RE-WINDOW, last (`stage_rewindow`), of EVERY NAMED DRAFT at its
+/// 8. THE ORIGINALS the private rider ends (`stage_originals`; the
+///    link-sets design §5.7 (vi′)), in declared order, each in the
+///    original's own home — a private document of the caller's the plan
+///    read: where the entry names a rest, the fresh mark the plan built
+///    (`Gate::Open`, the original's type over exactly the rest's spans, as
+///    `makelink` deposits a draft's own formatting; seated), then the
+///    original's retraction (`retraction_tuple(home, old)` under
+///    `Gate::Retraction`, as `nullify` deposits it, unseated) — so the
+///    mark's address rises ahead of the retraction's within the home (THE
+///    PIN), the words still published keep the formatting through their
+///    copy, the words never published keep it as the draft's own, and the
+///    words taken off lose it. Private writes, outside the signed body;
+///    the plan found each original active, so no incumbent retraction
+///    answers.
+/// 9. THE RE-WINDOW, last (`stage_rewindow`), of EVERY NAMED DRAFT at its
 ///    own kept places (the design's §5.7 (viii), the Nelson way): first THE
 ///    RENDERING DRAFT at `places`, then EACH `also` DRAFT at its
 ///    `also_places` entry, in `also`'s order — each re-window reading the
@@ -487,7 +513,8 @@ impl From<EmitCoreError> for PublicationError {
 /// records will be minted in it (a run of its identity re-inserted), each
 /// re-windowed draft's `content_lock_key` — the rendering draft's where
 /// `places` carries a place, each `also` draft's where its `also_places`
-/// entry does — `link_lock_key` of every home a deposit names by address and
+/// entry does — `link_lock_key` of every home a deposit names by address,
+/// of every original's home, and
 /// the account's `document_lock_key` at the mint form —
 /// [`LinkWriter::publication`] supplies exactly that. The visibility class
 /// `readable` is the caller's: the shot's source gate consults it per
@@ -599,7 +626,10 @@ where
     }
     // 7. The deposits, exactly as planned.
     stage_deposits(stg, readable, caller, &plan, &member, edition.as_ref(), &trunk_of(doc), shot, &pairing)?;
-    // 8. The re-window, last: the rendering draft at `places`, then each
+    // 8. The originals the rider ends, each at its own home: the rest's
+    //    fresh mark where one stands, then the retraction.
+    stage_originals(stg, readable, caller, &plan.originals)?;
+    // 9. The re-window, last: the rendering draft at `places`, then each
     //    `also` draft at its own list, in `also`'s order, each over the
     //    working world the ones before it left — every stray read at the
     //    caller's own visibility class.
@@ -705,6 +735,45 @@ where
                 }
             }
         }
+    }
+    Ok(())
+}
+
+/// Stages the originals the private rider ends, in declared order, each in
+/// its own home: the fresh mark over the rest where the plan built one,
+/// then the original's retraction.
+///
+/// The body of [`stage_publication`]'s step 8, which states each write's
+/// gate, value and seat: the mark through the one deposit gate under
+/// `Gate::Open` and seated, as `makelink` deposits a draft's own formatting
+/// (the link-sets design §2, B3-S13 (1)'s form); the retraction
+/// `retraction_tuple(home, old)` under `Gate::Retraction`, unseated, as
+/// `nullify` deposits it — `address`, as the `retract` arm takes it: the
+/// plan found the original active, so no incumbent stands, and the address
+/// is taken either way.
+///
+/// # Errors
+///
+/// A write's gate (`HomeNotRegistered`, `NotOwner` — backstops, the plan
+/// having read the home), its `Mint` and, for the mark, its `Seat`.
+fn stage_originals<W>(
+    stg: &mut Staging<W>,
+    readable: &Visibility<'_, W>,
+    caller: Caller,
+    originals: &[PlannedOriginal],
+) -> Result<(), PublicationError>
+where
+    W: PublishWorld + LinkWorld,
+    W::Record: From<LinkRec>,
+{
+    for PlannedOriginal { old, home, rest, .. } in originals {
+        if let Some(value) = rest {
+            // `minted`: the Open gate runs no dedup, so no incumbent can
+            // answer.
+            let mark = emit_core(stg, readable, caller, home, value.clone(), Gate::Open)?.minted();
+            seat(stg, home, &mark)?;
+        }
+        emit_core(stg, readable, caller, home, retraction_tuple(home, old), Gate::Retraction)?.address();
     }
     Ok(())
 }
@@ -1034,7 +1103,8 @@ where
 {
     /// THE PUBLICATION (the link-sets design §5.7): the publish shot, the
     /// edition where the request mints one, its correspondence records in
-    /// each named draft, every public deposit the request carries and every
+    /// each named draft, every public deposit the request carries, every
+    /// original the private rider ends and every
     /// named draft's re-window at its own kept places in ONE commit.
     ///
     /// It opens one transaction over the union of the shot's keys —
@@ -1048,7 +1118,8 @@ where
     /// where its `also_places` entry does (the re-window edits exactly those
     /// drafts' arrangements) — the
     /// `link_lock_key` of every home a deposit names by address (a `links`
-    /// entry's bare home, its `old`'s home, a `retract` target's home, a
+    /// entry's bare home, its `old`'s home, a `retract` target's home, an
+    /// `originals` entry's home, a
     /// `read_with` set, and the trunk of `doc` where the deposits claim at
     /// the document form or name a daughter superseded — the edition claim
     /// and the supersession claims are minted in its link
@@ -1058,7 +1129,7 @@ where
     /// sorted and deduped as `editlink`'s pair is, under this handle's
     /// attestation, and stages [`stage_publication`]: the mint, the shot's
     /// admission, the twin fence, the plan, the shot, the records, the
-    /// deposits, the re-window. What the shot does and refuses is M5's
+    /// deposits, the originals, the re-window. What the shot does and refuses is M5's
     /// `publish` word for word; what this adds is stated on the staging
     /// function. The visibility class this handle carries is the shot's
     /// `readable`, the value M10 lends M5's shot on the plain path.
@@ -1067,7 +1138,8 @@ where
     /// parallel to `shot.runs` by index — empty for a request that sends
     /// none; `also_places` the kept places of each draft `also` names, one
     /// [`AlsoPlaces`] per draft that is re-windowed — empty for one that
-    /// re-windows no `also` draft; `deposits` the request's four lists —
+    /// re-windows no `also` draft; `deposits` the request's four lists and
+    /// its private rider —
     /// empty for one that sends none. All empty, at the document form, is
     /// today's shot.
     ///
@@ -1123,7 +1195,9 @@ where
 /// rendering draft's where `places` carries a place, each `also` draft's
 /// where its `also_places` entry does; a named draft no list places takes
 /// none, nothing being re-windowed in it; the `link_lock_key` of every home
-/// a deposit names by address. M2's own bytewise order, duplicates
+/// a deposit names by address, and of every original's home — the rider's
+/// two writes are minted there, the home key covering the retraction's
+/// dedup as it does a `retract` target's. M2's own bytewise order, duplicates
 /// collapsed, as `editlink` hands its pair.
 fn publication_lock_keys(
     target: &PublishTarget,
@@ -1178,6 +1252,11 @@ fn publication_lock_keys(
     }
     for target_link in &deposits.retract {
         if let Some(home) = document_of(target_link) {
+            keys.push(M3State::link_lock_key(&home));
+        }
+    }
+    for entry in &deposits.originals {
+        if let Some(home) = document_of(&entry.old) {
             keys.push(M3State::link_lock_key(&home));
         }
     }

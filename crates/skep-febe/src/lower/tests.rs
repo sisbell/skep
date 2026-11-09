@@ -1,7 +1,7 @@
 use super::*;
 use crate::reject::Disposition;
 use skep_address::{validate, Nat, Tumbler};
-use skep_links::{OldCause, ReadWithCause, RetractCause, SupersedeCause, FROM, TO};
+use skep_links::{OldCause, OriginalCause, ReadWithCause, RetractCause, SupersedeCause, FROM, TO};
 use skep_retrieval::{Operand, SpanFault};
 
 /// The standard test document address.
@@ -69,6 +69,17 @@ fn a_plan_refusal_names_its_entry_and_the_content_clause_its_slot() {
         (PlanFault::CorrespondenceClass { index: 4 }, RejectCode::DcViolation, None),
         (PlanFault::MemberSpan { index: 4 }, RejectCode::Malformed, None),
         (PlanFault::Retract { index: 4, cause: RetractCause::NotPublished }, RejectCode::RetractRefused, Some("not_published")),
+        // The private rider's (the link-sets design §5.7 (vi′)): the fifth
+        // detailed code, each cause its token.
+        (PlanFault::Original { index: 4, cause: OriginalCause::Absent }, RejectCode::OriginalRefused, Some("absent")),
+        (PlanFault::Original { index: 4, cause: OriginalCause::NotOwner }, RejectCode::OriginalRefused, Some("not_owner")),
+        (PlanFault::Original { index: 4, cause: OriginalCause::Public }, RejectCode::OriginalRefused, Some("public")),
+        (PlanFault::Original { index: 4, cause: OriginalCause::Duplicate }, RejectCode::OriginalRefused, Some("duplicate")),
+        (PlanFault::Original { index: 4, cause: OriginalCause::NotContentSpan }, RejectCode::OriginalRefused, Some("not_content_span")),
+        (PlanFault::Original { index: 4, cause: OriginalCause::TooLarge }, RejectCode::OriginalRefused, Some("too_large")),
+        (PlanFault::Original { index: 4, cause: OriginalCause::FencedType }, RejectCode::OriginalRefused, Some("fenced_type")),
+        (PlanFault::Original { index: 4, cause: OriginalCause::RestOutside }, RejectCode::OriginalRefused, Some("rest_outside")),
+        (PlanFault::Original { index: 4, cause: OriginalCause::Unclaimed }, RejectCode::OriginalRefused, Some("unclaimed")),
         (PlanFault::ReadWith { index: 4, cause: ReadWithCause::NotDocument }, RejectCode::ReadWithRefused, Some("not_document")),
         // The merge bridge lane's (brief A): the fourth detailed code.
         (PlanFault::Supersede { index: 4, cause: SupersedeCause::NotMember }, RejectCode::SupersedeRefused, Some("not_member")),
@@ -580,6 +591,11 @@ fn flat_variants_lower_to_the_same_named_code() {
         "Retract",
         PlanFault::Retract { index: 0, cause: RetractCause::Absent },
         RejectCode::RetractRefused,
+    );
+    deviates(
+        "Original",
+        PlanFault::Original { index: 0, cause: OriginalCause::Absent },
+        RejectCode::OriginalRefused,
     );
     deviates(
         "ReadWith",

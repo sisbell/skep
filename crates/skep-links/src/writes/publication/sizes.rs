@@ -33,8 +33,11 @@
 //! entry ([`RETRACTION_BYTES`]), a read-with per `read_with` entry
 //! ([`READ_WITH_BYTES`]), a claim per `supersede` entry ([`CLAIM_BYTES`]
 //! again — a claim over two version members spells shorter spans than one
-//! over two links, so the link-ended figure bounds it), the re-window per
-//! piece at a kept place
+//! over two links, so the link-ended figure bounds it), per `originals`
+//! entry a retraction ([`RETRACTION_BYTES`]) and, over a rest, the fresh
+//! mark — a copy's fixed part ([`COPY_FIXED_BYTES`]) with the rest's spans
+//! and the original's stored type slot at their own bytes — the re-window
+//! per piece at a kept place
 //! ([`KEPT_PLACE_BYTES`], a placement and a removal), the shot's own
 //! placement per run ([`PLACED_RUN_BYTES`]) and its re-insert per value
 //! ([`REINSERTED_VALUE_BYTES`], the value's own bytes on top), the shot's
@@ -157,19 +160,24 @@ const SHALLOW_TYPE_SPAN_BYTES: u64 = 208;
 /// (`MAX_WIRE_LIST`, the codec's, equal to `MAX_SLOT_SPANS`) — 4096 `links`
 /// entries each with a copy at full slots and a claim, 4096 `retract`
 /// entries, 4096 `read_with` entries, 4096 `supersede` entries each a
-/// claim, 4096 runs each minting a record and
+/// claim, 4096 `originals` entries each a retraction and a fresh mark over
+/// a rest at `MAX_SLOT_SPANS` content spans with a stored type at as many
+/// type spans, 4096 runs each minting a record and
 /// re-windowed at a place as one piece — the placement at `MAX_PLACED_RUNS`
 /// runs, the re-insert at `MAX_REINSERTED_VALUES` values every one an atom,
-/// the shot's fixed records and the mint form's two: 9,193,628,953 bytes,
+/// the shot's fixed records and the mint form's two: 15,507,621,145 bytes,
 /// which DOES NOT FIT `MAX_TXN_BYTES` (64 MiB) — by two orders, the copies
-/// at full slots being 9,132,613,632 of it. With the copies at one span a
-/// slot (1,029 bytes apiece: the fixed part, a content span, a document's
-/// unit span and a nine-component type's) every other cap at once sums to
-/// 68,740,377 bytes, PAST the budget by 1,631,513 since the fourth list,
-/// `supersede`, joined the caps (its 4096 claims are 3,510,272 of it;
-/// without them the sum stood inside the budget by 1,878,759) — the
-/// re-inserted atoms' 37,617,664 the largest term; the live price
-/// ([`price_staged_bytes`]) refuses such a request ahead of the lock. What
+/// at full slots being 9,132,613,632 of it and the fresh marks at full
+/// slots 6,313,992,192. With the copies and the fresh marks at one span a
+/// slot (a copy 1,029 bytes apiece: the fixed part, a content span, a
+/// document's unit span and a nine-component type's; an entry of the rider
+/// 1,782: its retraction, the fixed part, a content span and a
+/// ten-component type's) every other cap at once sums to 76,039,449 bytes,
+/// PAST the budget by 8,930,585 — the fourth list, `supersede`, is
+/// 3,510,272 of it and the rider 7,299,072; without both the sum stands
+/// inside the budget by 1,878,759 — the re-inserted atoms' 37,617,664 the
+/// largest term; the live price ([`price_staged_bytes`]) refuses such a
+/// request ahead of the lock. What
 /// a body within the frame routes' cap can command is
 /// [`REACHABLE_PUBLICATION_BYTES`]. The caps are the design's to move;
 /// `tests` pins the figures.
@@ -180,9 +188,26 @@ pub const MAXIMAL_PUBLICATION_BYTES: u64 = SHOT_BYTES
     + MAX_WIRE_LIST * RETRACTION_BYTES
     + MAX_WIRE_LIST * READ_WITH_BYTES
     + MAX_WIRE_LIST * CLAIM_BYTES
+    + MAX_WIRE_LIST * MAXIMAL_ORIGINAL_BYTES
     + MAX_WIRE_LIST * (CORRESPONDENCE_RECORD_BYTES + KEPT_PLACE_BYTES)
     + MAX_PLACED_RUNS as u64 * PLACED_RUN_BYTES
     + MAX_REINSERTED_VALUES as u64 * REINSERTED_VALUE_BYTES;
+
+/// The bytes one `originals` entry stages at the worst case: its
+/// retraction, and a fresh mark whose rest is `MAX_SLOT_SPANS` content
+/// spans of the shallow depth and whose type — the original's, as stored —
+/// is as many unit spans of ten-component commons addresses.
+const MAXIMAL_ORIGINAL_BYTES: u64 = RETRACTION_BYTES
+    + COPY_FIXED_BYTES
+    + MAX_SLOT_SPANS as u64 * (SHALLOW_CONTENT_SPAN_BYTES + SHALLOW_TYPE_SPAN_BYTES);
+
+/// The bytes one `originals` entry stages at one span a slot: its
+/// retraction, and a fresh mark over one content span of the shallow depth
+/// with one ten-component type span — the rider's share of the one-span
+/// sum `tests` pins.
+#[cfg(test)]
+const ONE_SPAN_ORIGINAL_BYTES: u64 =
+    RETRACTION_BYTES + COPY_FIXED_BYTES + SHALLOW_CONTENT_SPAN_BYTES + SHALLOW_TYPE_SPAN_BYTES;
 
 /// The pieces a request of `MAX_WIRE_LIST` draft-native runs can have the
 /// re-window stage, with every run placed: the first half of the runs each
@@ -201,12 +226,14 @@ const REACHABLE_PIECES: u64 = MAX_WIRE_LIST / 2 + (MAX_WIRE_LIST / 2) * (MAX_WIR
 /// ([`MAXIMAL_PUBLICATION_BYTES`]) counts what no body can spell.
 ///
 /// The lane's arithmetic. A request's lists at their caps cost about
-/// 1,060,000 bytes of body in their cheapest spellings — a run `{"origin":
+/// 1,420,000 bytes of body in their cheapest spellings — a run `{"origin":
 /// "1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":1},` 61 bytes, a place
 /// `{"subspace":1,"ordinal":1},` 27, a `links` entry in the member-position
-/// form about 140, a `retract` address 18 and a `read_with` address 12,
+/// form about 140, a `retract` address 18, a `read_with` address 12, a
+/// `supersede` address 14 and an `originals` entry with one rest span about
+/// 74,
 /// 4096 of each — so EVERY list stands at its cap inside the body, and what
-/// the body bounds is not the entries but the spans a slot spells. Three
+/// the body bounds is not the entries but the spans a slot spells. Four
 /// kinds of term then stand whole, bounded by the caps and not the body:
 ///
 /// * THE VALUES: `MAX_REINSERTED_VALUES` atoms, 37,617,664 bytes — a run's
@@ -225,17 +252,26 @@ const REACHABLE_PIECES: u64 = MAX_WIRE_LIST / 2 + (MAX_WIRE_LIST / 2) * (MAX_WIR
 ///   stores at ABOUT TEN TIMES its spelling (an eight-component address,
 ///   `"1.0.1.0.1.0.1.1",` 18 bytes, is a 168-byte stored span), so the
 ///   `addrs` and `spans` forms command 10 bytes per body byte besides.
+/// * THE FRESH MARKS' TYPES: an `originals` entry's rest takes the
+///   original's type slot AS STORED, which a `make_link` may have filled
+///   to `MAX_SLOT_SPANS` type spans — so an entry of about 74 bytes with
+///   one rest span commands up to `MAX_SLOT_SPANS` stored type spans of the
+///   shallow depth, 851,968 bytes, and 4096 entries 3,489,660,928; the rest
+///   spans themselves are spelled in the body and store at the ten-to-one
+///   ratio of the `spans` form, left out of the figure as that form's are.
 ///
 /// Summed with the shot's fixed records, the mint form's two, a record per
 /// minting run of the first half, a claim per entry and the retractions,
-/// read-withs and supersession claims at their caps, the figure is
-/// 7,228,636,441 bytes: PAST
-/// `MAX_TXN_BYTES` by two orders, each of the two large terms past it
+/// read-withs, supersession claims and the rider's retractions and marks at
+/// their caps, the figure is
+/// 10,724,744,473 bytes: PAST
+/// `MAX_TXN_BYTES` by two orders, each of the three large terms past it
 /// alone. So a request within the body cap can command more staged bytes
 /// than one transaction holds, and the kernel's `txn_over_budget` is met
 /// by an honest request unless it is priced ahead of the lock — which
 /// [`price_staged_bytes`] does, from this table, per span the request
-/// spells. The caps are the design's to move; `tests` pins the figure and
+/// spells and per stored type span it reads. The caps are the design's to
+/// move; `tests` pins the figure and
 /// its side of the budget.
 pub const REACHABLE_PUBLICATION_BYTES: u64 = SHOT_BYTES
     + EDITION_MINT_BYTES
@@ -249,7 +285,16 @@ pub const REACHABLE_PUBLICATION_BYTES: u64 = SHOT_BYTES
             + 2 * MAX_SLOT_SPANS as u64 * SHALLOW_CONTENT_SPAN_BYTES
             + SHALLOW_TYPE_SPAN_BYTES
             + CLAIM_BYTES)
-    + MAX_WIRE_LIST * (RETRACTION_BYTES + READ_WITH_BYTES + CLAIM_BYTES);
+    + MAX_WIRE_LIST * (RETRACTION_BYTES + READ_WITH_BYTES + CLAIM_BYTES)
+    + MAX_WIRE_LIST * REACHABLE_ORIGINAL_BYTES;
+
+/// The bytes one `originals` entry can have the commit stage from a body
+/// of about 74 bytes: its retraction, and a fresh mark over one rest span of
+/// the shallow depth whose stored type is `MAX_SLOT_SPANS` type spans.
+const REACHABLE_ORIGINAL_BYTES: u64 = RETRACTION_BYTES
+    + COPY_FIXED_BYTES
+    + SHALLOW_CONTENT_SPAN_BYTES
+    + MAX_SLOT_SPANS as u64 * SHALLOW_TYPE_SPAN_BYTES;
 
 /// The bytes one component of a tumbler stores: bincode fixint's 8-byte
 /// length before the magnitude's 32-bit digits, 4 bytes each, zero having
@@ -319,16 +364,23 @@ pub fn stored_span_bytes(span: &Span) -> u64 {
 /// * per `retract` entry [`RETRACTION_BYTES`], per `read_with` entry
 ///   [`READ_WITH_BYTES`], per `supersede` entry [`CLAIM_BYTES`] — the
 ///   daughter's claim, its two member-ended spans shorter than the
-///   link-ended figure's.
+///   link-ended figure's;
+/// * per `originals` entry [`RETRACTION_BYTES`] and, where it names a rest,
+///   the fresh mark: [`COPY_FIXED_BYTES`] + [`stored_span_bytes`] of every
+///   rest span the request spells + [`stored_span_bytes`] of every span of
+///   the original's type slot as stored, read by one `readlink` — the
+///   shallow type span where no link stands at the address, an entry the
+///   plan refuses.
 ///
 /// An upper bound: the twin fence refuses before anything is staged, the
 /// plan's skips (a retracted target, a standing read-with, a daughter
-/// already claimed) stage less, a
+/// already claimed, an original already retracted) stage less, a
 /// run named twice stages its identity once, a member-position end's
 /// pieces merge where the member's runs are I-adjacent, and a byte of prose
 /// costs a fraction of an atom. Request arithmetic — `O(n log n)` in the
 /// draft-native runs for the endpoints' sort, linear in the lists — plus
-/// the stray stabs; saturating, so an absurd request prices at `u64::MAX`.
+/// the stray stabs and one `readlink` per rest; saturating, so an absurd
+/// request prices at `u64::MAX`.
 pub fn price_staged_bytes<W: LinkWorld>(
     world: &W,
     target: &PublishTarget,
@@ -416,7 +468,23 @@ pub fn price_staged_bytes<W: LinkWorld>(
     }
     bytes = bytes.saturating_add((deposits.retract.len() as u64).saturating_mul(RETRACTION_BYTES));
     bytes = bytes.saturating_add((deposits.read_with.len() as u64).saturating_mul(READ_WITH_BYTES));
-    bytes.saturating_add((deposits.supersede.len() as u64).saturating_mul(CLAIM_BYTES))
+    bytes = bytes.saturating_add((deposits.supersede.len() as u64).saturating_mul(CLAIM_BYTES));
+    // The rider: a retraction per original and, over a rest, the fresh mark
+    // — the rest's spans as spelled and the original's type as stored.
+    for entry in &deposits.originals {
+        bytes = bytes.saturating_add(RETRACTION_BYTES);
+        if entry.rest.is_empty() {
+            continue;
+        }
+        let ty = world.links().readlink(&entry.old).map_or(SHALLOW_TYPE_SPAN_BYTES, |original| {
+            original.type_slot().spans().map(stored_span_bytes).fold(0u64, u64::saturating_add)
+        });
+        bytes = bytes
+            .saturating_add(COPY_FIXED_BYTES)
+            .saturating_add(entry.rest.iter().map(stored_span_bytes).fold(0u64, u64::saturating_add))
+            .saturating_add(ty);
+    }
+    bytes
 }
 
 /// Returns a content I-span of the edition's chain, one position wide at a
@@ -456,25 +524,33 @@ mod tests {
 
     /// THE ARITHMETIC (M6): the maximal request's bytes against the
     /// transaction budget — a product of caps. At full slots it does not
-    /// fit; at one span a slot every other cap at once stood inside the
-    /// budget narrowly until the fourth list, `supersede`, joined the caps
-    /// (the merge bridge lane, brief A), and is past it narrowly since —
-    /// the live price refuses such a request ahead of the lock. Both
-    /// figures are pinned so a cap or an encoding that moves either is a
+    /// fit; at one span a slot — the copies' and the rider's fresh marks' —
+    /// every other cap at once is past the budget, the fourth list,
+    /// `supersede` (the merge bridge lane, brief A), and the rider,
+    /// `originals` (the link-sets design §5.7 (vi′)), carrying it there,
+    /// and inside it without the two — the live price refuses such a
+    /// request ahead of the lock. The
+    /// figures are pinned so a cap or an encoding that moves one is a
     /// visible decision here.
     #[test]
     fn the_maximal_request_is_priced_against_the_transaction_budget() {
-        assert_eq!(MAXIMAL_PUBLICATION_BYTES, 9_193_628_953, "the table's sum");
+        assert_eq!(MAXIMAL_PUBLICATION_BYTES, 15_507_621_145, "the table's sum");
         assert!(
             MAXIMAL_PUBLICATION_BYTES > MAX_TXN_BYTES,
             "the maximal request at the table's figures does not fit the budget: {MAXIMAL_PUBLICATION_BYTES} bytes against {MAX_TXN_BYTES}"
         );
-        let one_span_a_slot = MAXIMAL_PUBLICATION_BYTES - MAX_WIRE_LIST * (COPY_BYTES - 1_029);
-        assert_eq!(one_span_a_slot, 68_740_377, "every other cap at once, the copies at one span a slot");
+        assert_eq!(MAX_WIRE_LIST * MAXIMAL_ORIGINAL_BYTES, 6_313_992_192, "the fresh marks at full slots, with their retractions");
+        assert_eq!(ONE_SPAN_ORIGINAL_BYTES, 1_782, "an entry of the rider at one span a slot");
+        let one_span_a_slot = MAXIMAL_PUBLICATION_BYTES
+            - MAX_WIRE_LIST * (COPY_BYTES - 1_029)
+            - MAX_WIRE_LIST * (MAXIMAL_ORIGINAL_BYTES - ONE_SPAN_ORIGINAL_BYTES);
+        assert_eq!(one_span_a_slot, 76_039_449, "every other cap at once, the copies and the fresh marks at one span a slot");
         assert_eq!(MAX_WIRE_LIST * CLAIM_BYTES, 3_510_272, "the supersession claims' share at their cap");
+        assert_eq!(MAX_WIRE_LIST * ONE_SPAN_ORIGINAL_BYTES, 7_299_072, "the rider's share at its cap");
         assert!(
-            one_span_a_slot > MAX_TXN_BYTES && one_span_a_slot - MAX_WIRE_LIST * CLAIM_BYTES <= MAX_TXN_BYTES,
-            "…past the budget by {} bytes, and inside it without the fourth list",
+            one_span_a_slot > MAX_TXN_BYTES
+                && one_span_a_slot - MAX_WIRE_LIST * (CLAIM_BYTES + ONE_SPAN_ORIGINAL_BYTES) <= MAX_TXN_BYTES,
+            "…past the budget by {} bytes, and inside it without the fourth list and the rider",
             one_span_a_slot.saturating_sub(MAX_TXN_BYTES)
         );
         // The copy at full slots is the fixed part plus its spans at the
@@ -488,15 +564,16 @@ mod tests {
 
     /// THE REACHABLE MAXIMUM (lane F4): what a body within the frame routes'
     /// cap can command is PAST the budget — by two orders — and each of its
-    /// two large terms is past it alone: the re-window's pieces from 4096
-    /// runs and places, and the copies' member-position slots from 4096
-    /// entries; the lists at their caps cost about an eighth of the body.
+    /// three large terms is past it alone: the re-window's pieces from 4096
+    /// runs and places, the copies' member-position slots from 4096
+    /// entries, and the fresh marks' stored types from 4096 `originals`
+    /// entries; the lists at their caps cost about a sixth of the body.
     /// Pinned, with the side of the budget it falls on, so the figure and
     /// the verdict are a visible decision here.
     #[test]
     fn the_reachable_request_is_priced_against_the_transaction_budget() {
         assert_eq!(REACHABLE_PIECES, 2_048 + 2_048 * 2_048);
-        assert_eq!(REACHABLE_PUBLICATION_BYTES, 7_228_636_441, "the lane's arithmetic");
+        assert_eq!(REACHABLE_PUBLICATION_BYTES, 10_724_744_473, "the lane's arithmetic");
         assert!(
             REACHABLE_PUBLICATION_BYTES > MAX_TXN_BYTES,
             "the reachable request is past the budget: {REACHABLE_PUBLICATION_BYTES} against {MAX_TXN_BYTES}"
@@ -504,11 +581,14 @@ mod tests {
         assert!(REACHABLE_PUBLICATION_BYTES / MAX_TXN_BYTES >= 100, "by two orders");
         assert!(REACHABLE_PIECES * KEPT_PLACE_BYTES > MAX_TXN_BYTES, "the re-window's pieces alone");
         assert!(MAX_WIRE_LIST * 2 * MAX_SLOT_SPANS as u64 * SHALLOW_CONTENT_SPAN_BYTES > MAX_TXN_BYTES, "the copies' slots alone");
+        assert_eq!(MAX_WIRE_LIST * MAX_SLOT_SPANS as u64 * SHALLOW_TYPE_SPAN_BYTES, 3_489_660_928, "the fresh marks' stored types");
+        assert!(MAX_WIRE_LIST * MAX_SLOT_SPANS as u64 * SHALLOW_TYPE_SPAN_BYTES > MAX_TXN_BYTES, "the fresh marks' types alone");
         assert!(REACHABLE_PUBLICATION_BYTES < MAXIMAL_PUBLICATION_BYTES, "and under the product of caps");
         // The body the division costs: every list at its cap in its cheapest
-        // spelling, about an eighth of the cap — a `supersede` address 14.
-        let body = MAX_WIRE_LIST * (61 + 27 + 140 + 18 + 12 + 14);
-        assert!(body < REQUEST_BODY_BYTES / 7, "{body} bytes of body for every list at its cap");
+        // spelling, about a sixth of the cap — a `supersede` address 14, an
+        // `originals` entry with one rest span 74.
+        let body = MAX_WIRE_LIST * (61 + 27 + 140 + 18 + 12 + 14 + 74);
+        assert!(body < REQUEST_BODY_BYTES / 5, "{body} bytes of body for every list at its cap");
     }
 
     /// THE SPAN's BYTES: the kernel's fixint layout — an 8-byte length

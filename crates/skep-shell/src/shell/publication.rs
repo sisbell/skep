@@ -1253,7 +1253,9 @@ fn local_price(state: &PanelState) -> lib::Price {
         }
     }
     request.entries = entries;
-    request.retract = panel.formatting.job_list().iter().map(|r| r.mark.clone()).collect();
+    let job_list = panel.formatting.job_list();
+    request.retract = job_list.iter().map(|r| r.mark.clone()).collect();
+    request.originals = lib::originals_of(&job_list);
     let count = lib::count(panel, &state.switches, &state.inputs);
     request.read_with = count.read_with.clone();
     request.count = count;
@@ -1312,6 +1314,8 @@ fn formatting_json(e: &lib::Enumeration, f: &lib::Formatting) -> Value {
                 "on_selection": r.on_selection,
                 "spent": r.spent,
                 "remake": r.remake.map(|i| e.candidates[i].link.to_string()),
+                "original": r.original.as_ref().map(|o| o.link.to_string()),
+                "rest": r.original.as_ref().map(|o| o.rest.iter().map(ispan_json).collect::<Vec<_>>()).unwrap_or_default(),
             })
         })
         .collect();
@@ -1329,6 +1333,7 @@ fn term_json(t: Term) -> &'static str {
         Term::Links => "links",
         Term::Retract => "retract",
         Term::ReadWith => "read_with",
+        Term::Originals => "originals",
         Term::Body => "body",
         Term::Values => "values",
         Term::Reads => "reads",

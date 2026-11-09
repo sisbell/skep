@@ -64,11 +64,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use skep_address::Address;
 
 use crate::address::{account_of, document_of, parse_address};
-use crate::board::answers::LinkValue;
+use crate::board::answers::{self, LinkValue};
 use crate::board::frames::{self, Slot, REGISTRY_DOCUMENT, T_CORRESPONDENCE, T_HELD_REMOVAL, T_READ_WITH};
 use crate::board::T_RETRACTION;
 
-use super::enumerate::{selected_ranges, touches, Candidate, EndPiece, Enumeration, RecordWalk, Via};
+use super::enumerate::{selected_ranges, touches, Candidate, EndPiece, Enumeration, Record, RecordWalk, Via};
 use super::landed::read_record;
 use super::{home_of_link, owned_by, Door, Fault, ISpan, Inputs, Publisher, Run};
 
@@ -150,6 +150,30 @@ pub struct Row {
     pub read_through: usize,
 }
 
+/// The private original a held removal's mark stands for, which the commit
+/// ends with the mark (the link-sets design §5.7 (vi′); §2).
+///
+/// Found FROM THE COPY, never from the draft: the `old` of the mark's own
+/// accept claim — the active claim homed in a private document of the
+/// person's whose `new` is the mark, one `out_claims` at the mark — read
+/// once for its value. The rider the request carries names it, with the
+/// rest, and the one commit retracts it at its home beside the mark's
+/// retraction, so the mark taken off is drawn nowhere after.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Original {
+    /// The original, by address.
+    pub link: Address,
+    /// Its value as stored.
+    pub value: LinkValue,
+    /// The rest: the original's content spans less every span a copy of it
+    /// covers — the copies the active claims at the original name, each
+    /// read once, their published spans mapped back through the records
+    /// where a shot re-minted the words — the words no copy ever covered,
+    /// which the commit keeps formatted by a fresh mark; empty where every
+    /// word is covered.
+    pub rest: Vec<ISpan>,
+}
+
 /// One held removal of the draft: the formatting line's job list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Removal {
@@ -166,6 +190,14 @@ pub struct Removal {
     /// The formatting-line mark that re-makes it, where one does: an index
     /// into the enumeration's candidates.
     pub remake: Option<usize>,
+    /// The original the mark stands for, where the removal is on the job
+    /// list, the mark is of THE FORMATTING TYPES (the line's shape test
+    /// without its inline-mark exception, P11) and an active claim homed in
+    /// a private document of the person's names the mark as its `new`;
+    /// `None` for a removal off the list, a mark of another type — a note,
+    /// a citation, a typed link keep their originals — one no such claim
+    /// names, or whose original is gone or already retracted.
+    pub original: Option<Original>,
 }
 
 impl Removal {
@@ -380,19 +412,104 @@ pub struct Count {
 
 /// Returns whether `value` is a mark the formatting line takes.
 pub fn is_formatting(value: &LinkValue) -> bool {
+    formatting_shape(value, false)
+}
+
+/// Returns whether `value` is a mark of THE FORMATTING TYPES: the line's
+/// shape test without its inline-mark exception (P11) — the test the rider
+/// applies to a held removal's mark, an inline mark's original ending with
+/// its copy as a bold's does (the link-sets design §2, E3).
+pub fn is_formatting_type(value: &LinkValue) -> bool {
+    formatting_shape(value, true)
+}
+
+/// The formatting line's shape test: one content end, and one unit type
+/// span under the formatting types — the inline mark among them where
+/// `inline_marks` — beside nothing but registry addresses.
+fn formatting_shape(value: &LinkValue, inline_marks: bool) -> bool {
     if value.from.is_empty() == value.to.is_empty() {
         return false;
     }
     let mut named = 0usize;
     for span in &value.ty {
         let under = |root: &str| span.start == root || span.start.starts_with(&format!("{root}."));
-        if span.is_unit() && FORMATTING_TYPES.iter().any(|t| under(t)) && !under(INLINE_MARK) {
+        if span.is_unit() && FORMATTING_TYPES.iter().any(|t| under(t)) && (inline_marks || !under(INLINE_MARK)) {
             named += 1;
         } else if !under(REGISTRY_DOCUMENT) {
             return false;
         }
     }
     named == 1
+}
+
+/// Returns the original a held removal's `mark` stands for, with its rest,
+/// read through `door` (the link-sets design §5.7 (vi′)).
+///
+/// One `out_claims` at the mark: the first active claim homed in a private
+/// document of the person's — owned by the account, not among the
+/// published documents — names the original as its `old`. One `read_link`
+/// of it: gone, or a retraction of it standing, is no entry. The rest is
+/// the original's content spans less every span a copy covers: one
+/// `in_claims` at the original, each active claim's `new` read once, its
+/// content spans and the draft words they stand for through `records`
+/// ([`Record::unmap`]) subtracted on their chains.
+///
+/// # Errors
+///
+/// The reads' faults.
+fn original_of(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, mark: &str, records: &[Record]) -> Result<Option<Original>, Fault> {
+    let private = |home: &str| owned_by(home, p.account) && !inputs.is_published_home(home);
+    let claims = answers::claims(&door.answered(mark, &frames::out_claims(mark))?);
+    let Some(claim) = claims.iter().find(|c| c.active && c.new == mark && private(&c.home)) else { return Ok(None) };
+    let Some(value) = door.link(&claim.old)? else { return Ok(None) };
+    if !door.addrs(&claim.old, &frames::find_links_ftt(T_RETRACTION, &claim.old))?.is_empty() {
+        return Ok(None); // already retracted: nothing to end
+    }
+    let Some(link) = parse_address(&claim.old) else { return Ok(None) };
+    let mut covered: Vec<ISpan> = Vec::new();
+    for copy in answers::claims(&door.answered(&claim.old, &frames::in_claims(&claim.old))?) {
+        if !copy.active || copy.old != claim.old {
+            continue;
+        }
+        let Some(copy_value) = door.link(&copy.new)? else { continue };
+        for span in copy_value.from.iter().chain(&copy_value.to).filter_map(ISpan::of) {
+            covered.extend(records.iter().filter_map(|r| r.unmap(&span.chain, span.first, span.reach())));
+            covered.push(span);
+        }
+    }
+    let spans: Vec<ISpan> = value.from.iter().chain(&value.to).filter_map(ISpan::of).collect();
+    let rest = subtract(spans, &covered);
+    Ok(Some(Original { link, value, rest }))
+}
+
+/// Returns `spans` less every position `covered` holds on the same chain,
+/// each remainder a span, in `spans`' order.
+fn subtract(spans: Vec<ISpan>, covered: &[ISpan]) -> Vec<ISpan> {
+    let mut out = Vec::new();
+    for span in spans {
+        let mut pieces = vec![(span.first, span.reach())];
+        for c in covered.iter().filter(|c| c.chain == span.chain) {
+            let (lo_c, hi_c) = (c.first, c.reach());
+            pieces = pieces
+                .into_iter()
+                .flat_map(|(lo, hi)| {
+                    if hi_c <= lo || lo_c >= hi {
+                        return vec![(lo, hi)];
+                    }
+                    let mut kept = Vec::new();
+                    if lo < lo_c {
+                        kept.push((lo, lo_c));
+                    }
+                    if hi_c < hi {
+                        kept.push((hi_c, hi));
+                    }
+                    kept
+                })
+                .collect();
+        }
+        out.extend(pieces.into_iter().map(|(lo, hi)| ISpan { chain: span.chain.clone(), first: lo, width: hi - lo }));
+    }
+    out
 }
 
 /// One stored content span of a candidate's end, read through the records
@@ -458,7 +575,9 @@ pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         })
         .count();
 
-    // The held removals: D's 3.24 records, the mark read, the retraction read.
+    // The held removals: D's 3.24 records, the mark read, the retraction
+    // read, and for a listed mark of the formatting types its original read
+    // from its own accept claim.
     door.step("removals");
     let unit = |a: &str| frames::unit_span(a).as_array().cloned().unwrap_or_default();
     let mut removals = Vec::new();
@@ -476,7 +595,8 @@ pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         let on_selection = touches(&mark_value, &e.selection);
         let spent = !door.addrs(&mark, &frames::find_links_ftt(T_RETRACTION, &mark))?.is_empty();
         let (Some(record), Some(mark_addr)) = (parse_address(&hit), parse_address(&mark)) else { continue };
-        let remake = (on_selection && !spent)
+        let listed = on_selection && !spent;
+        let remake = listed
             .then(|| {
                 let mark_spans: Vec<ISpan> = mark_value.from.iter().chain(&mark_value.to).filter_map(ISpan::of).collect();
                 let mark_on = selected_ranges(&mark_spans, &e.selection);
@@ -486,7 +606,8 @@ pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
                 })
             })
             .flatten();
-        removals.push(Removal { record, mark: mark_addr, mark_value, on_selection, spent, remake });
+        let original = if listed && is_formatting_type(&mark_value) { original_of(door, p, inputs, &mark, &e.records)? } else { None };
+        removals.push(Removal { record, mark: mark_addr, mark_value, on_selection, spent, remake, original });
     }
 
     // The rows: state, label, the fold by type, the line's counts.

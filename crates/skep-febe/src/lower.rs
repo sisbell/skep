@@ -465,7 +465,8 @@ impl Lower for PublishError {
 /// own token or the slot-form and
 /// class-fence code `make_link` answers, with the entry's index as
 /// `site.index` — and, for `old_refused`, `retract_refused`,
-/// `read_with_refused` and `supersede_refused`, the cause as `detail`.
+/// `original_refused`, `read_with_refused` and `supersede_refused`, the
+/// cause as `detail`.
 ///
 /// `NotOwner`, a `links` entry's home that is not the caller's, rides
 /// `not_owner` with the home as `site.addr`, ω's own site; `supersede_refused`
@@ -498,6 +499,7 @@ impl Lower for PlanFault {
             PlanFault::MemberSpan { index } => (RejectCode::Malformed, at(index)),
             PlanFault::ClaimWithoutDraft => (RejectCode::Malformed, None),
             PlanFault::Retract { index, .. } => (RejectCode::RetractRefused, at(index)),
+            PlanFault::Original { index, .. } => (RejectCode::OriginalRefused, at(index)),
             PlanFault::ReadWith { index, .. } => (RejectCode::ReadWithRefused, at(index)),
             // A moved head names the trunk's head in `site.addr` beside the
             // first entry, the base the client composes again on, as
@@ -518,11 +520,12 @@ impl Lower for PlanFault {
         }
     }
 
-    /// The four detailed codes carry their cause's token as `detail`.
+    /// The five detailed codes carry their cause's token as `detail`.
     fn lower_with_detail(self) -> (RejectCode, Option<FaultSite>, Option<String>) {
         let detail = match &self {
             PlanFault::Old { cause, .. } => Some(cause.token().to_string()),
             PlanFault::Retract { cause, .. } => Some(cause.token().to_string()),
+            PlanFault::Original { cause, .. } => Some(cause.token().to_string()),
             PlanFault::ReadWith { cause, .. } => Some(cause.token().to_string()),
             PlanFault::Supersede { cause, .. } => Some(cause.token().to_string()),
             _ => None,

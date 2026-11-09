@@ -252,8 +252,8 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "Removal",
         open: false,
-        doc: "one held removal on the job list: `record` the `3.24` record in the draft, `mark` the published mark it names, `mark_value` the mark's value as stored, `on_selection` whether the mark is on the selection's words, `spent` whether a retraction of it already stands, `remake` the formatting-line mark that re-makes it, where one does",
-        fields: &[req("record", "string"), req("mark", "string"), req("mark_value", "LinkValue"), req("on_selection", "boolean"), req("spent", "boolean"), req("remake", "string | null")],
+        doc: "one held removal on the job list: `record` the `3.24` record in the draft, `mark` the published mark it names, `mark_value` the mark's value as stored, `on_selection` whether the mark is on the selection's words, `spent` whether a retraction of it already stands, `remake` the formatting-line mark that re-makes it, where one does; `original` the person's own original the mark stands for — the `old` of the mark's accept claim, found from the copy — where the mark is of the formatting types and such a claim stands, which the one commit ENDS with the mark through the request's `originals` rider (outside the signed body), null for a mark of another type or one with no original standing; `rest` the original's words no copy ever covered, kept formatted by a fresh mark of its type in the one commit, empty where none",
+        fields: &[req("record", "string"), req("mark", "string"), req("mark_value", "LinkValue"), req("on_selection", "boolean"), req("spent", "boolean"), req("remake", "string | null"), req("original", "string | null"), req("rest", "ISpan[]")],
     },
     Shape { name: "LinkValue", open: false, doc: "a link's value as stored: the three slots as spans, and the position of the commit that minted it — null where the board serves none", fields: &[req("from", "LinkSpan[]"), req("to", "LinkSpan[]"), req("ty", "LinkSpan[]"), req("at", "number | null")] },
     Shape { name: "LinkSpan", open: false, doc: "one span of a stored slot: its start and its width in their dotted spelling (wire.md §Value encodings)", fields: &[req("start", "string"), req("width", "string")] },
@@ -266,7 +266,7 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "Price",
         open: false,
-        doc: "THE PRICE: the five terms against their caps — `lists` the five lists (`runs`, `places`, `links`, `retract`, `read_with`; 4,096 each), `body` the signed body (8 MiB), `values` the distinct draft-native positions (131,072), `reads` the in-lock reads (65,536), `bytes` the staged bytes (64 MiB) — and `over`, each term past its cap with how far: a non-empty `over` is refused `over_cap` at `confirm` BEFORE ANY FRAME (P13); `count` re-runs it over the rows as switched, so the caps are decided at P3 as a set flips",
+        doc: "THE PRICE: the five terms against their caps — `lists` the six lists (`runs`, `places`, `links`, `retract`, `read_with`, `originals`; 4,096 each), `body` the signed body (8 MiB), `values` the distinct draft-native positions (131,072), `reads` the in-lock reads (65,536), `bytes` the staged bytes (64 MiB) — and `over`, each term past its cap with how far: a non-empty `over` is refused `over_cap` at `confirm` BEFORE ANY FRAME (P13); `count` re-runs it over the rows as switched, so the caps are decided at P3 as a set flips",
         fields: &[req("lists", "number[]"), req("body", "number"), req("values", "number"), req("reads", "number"), req("bytes", "number"), req("over", "PriceOver[]")],
     },
     Shape { name: "PriceOver", open: false, doc: "one term of the price past its cap, and by how much", fields: &[req("term", "Term"), req("by", "number")] },

@@ -221,31 +221,54 @@ fn nullify_refusal(
     retraction_class_refusal(world, home, target, principal)
 }
 
-/// A `retract` entry of a publication refused by its target's class (the
-/// link-sets design §5.7; lane S3): the entry's index, and the cause as the
-/// `retract_refused` rejection's `detail` token.
+/// Which list of a publication a retraction's target is named in.
+///
+/// The two lists whose entries the commit retracts: `retract`, the held
+/// removals' marks, judged `retract_refused`; and `originals`, the private
+/// rider's originals (the link-sets design §5.7 (vi′)), judged
+/// `original_refused` — the daemon's reply chooses the code by it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetractList {
+    /// The `retract` list.
+    Retract,
+    /// The `originals` rider.
+    Originals,
+}
+
+/// A `retract` or `originals` entry of a publication refused by its target's
+/// class (the link-sets design §5.7; lane S3): the list, the entry's index
+/// in it, and the cause as the rejection's `detail` token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetractClassRefusal {
-    /// The entry's position in `retract`.
+    /// The list the entry is in.
+    pub list: RetractList,
+    /// The entry's position in its list.
     pub index: usize,
     /// The cause's token: `not_retraction` (a credential-typed target),
     /// `not_revocation` (a grant), `audit_view` (the audit-view class).
     pub cause: &'static str,
 }
 
-/// Returns the first `retract` entry of a publication whose target the
-/// `nullify` class refuses to retract — the producer behind
-/// `retract_refused` with its class detail, the daemon's own cell.
+/// Returns the first entry of a publication's `retract` list, then of its
+/// `originals` rider, whose target the `nullify` class refuses to retract —
+/// the producer behind `retract_refused` and `original_refused` with their
+/// class detail, the daemon's own cell.
 ///
 /// It is [`nullify_refusal`]'s read over each entry of a `publish`'s
-/// `retract` list in order — the one producer, [`retraction_class_refusal`],
+/// `retract` list in order, then over each original the rider names — the
+/// one producer, [`retraction_class_refusal`],
 /// asked with the target's own home as the record's home, which is where
-/// the publication deposits the retraction — so a `retract` entry is judged
+/// the publication deposits the retraction — so an entry is judged
 /// exactly as the `nullify` of the same target would be: the credential,
 /// grant and audit-view cells, each to the record's owner alone, a
 /// stranger's or a plain target's entry answering nothing here and the
-/// store's own plan judging it. A target no link occupies answers nothing
-/// here too (`retract_refused` with `absent` is the plan's). `None` for an
+/// store's own plan judging it. The rider is judged here because the plan
+/// admits an original on a claim alone, which any owner may assert: a
+/// correspondence record homed in the draft, the audit-view class, is a
+/// private, active link of the owner's a hand-written claim could name,
+/// and without this cell the rider would retract what every other route
+/// refuses to. A target no link occupies answers nothing
+/// here too (`absent` is the plan's). `None` for an
 /// op that is no `publish`, or one carrying no refused entry.
 ///
 /// **Its place in the write order:** after `plain_admission` — the
@@ -262,16 +285,23 @@ pub fn retract_class_refusal(
     principal: PrincipalId,
 ) -> Option<RetractClassRefusal> {
     let Op::Publish { deposits, .. } = op else { return None };
-    deposits.retract.iter().enumerate().find_map(|(index, target)| {
+    let judge = |target: &Address| -> Option<&'static str> {
         let home = document_of(target)?;
-        let cause = match retraction_class_refusal(world, &home, target, principal)? {
+        Some(match retraction_class_refusal(world, &home, target, principal)? {
             CredentialRefusal::NullifyNotRetraction => "not_retraction",
             CredentialRefusal::NullifyNotRevocation => "not_revocation",
             CredentialRefusal::NullifyAuditView => "audit_view",
             // The producer answers the three class tokens and nothing else.
             other => unreachable!("the retraction class producer answers a class token, not {other:?}"),
-        };
-        Some(RetractClassRefusal { index, cause })
+        })
+    };
+    let retract = deposits.retract.iter().enumerate().find_map(|(index, target)| {
+        judge(target).map(|cause| RetractClassRefusal { list: RetractList::Retract, index, cause })
+    });
+    retract.or_else(|| {
+        deposits.originals.iter().enumerate().find_map(|(index, entry)| {
+            judge(&entry.old).map(|cause| RetractClassRefusal { list: RetractList::Originals, index, cause })
+        })
     })
 }
 
@@ -285,7 +315,8 @@ pub fn retract_class_refusal(
 pub struct PublicationReadRefusal {
     /// The caller's link-holding homes, `homes_under` of the account.
     pub homes: usize,
-    /// The `links` entries and the `read_with` entries, summed.
+    /// The `links`, `originals`, `read_with` and `supersede` entries,
+    /// summed: the entries whose read ranges over the caller's homes.
     pub entries: usize,
     /// The content runs of every draft the commit re-windows, summed — the
     /// rendering draft where `places` carries a place, each `also` draft

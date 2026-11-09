@@ -109,9 +109,9 @@ mod tests;
 pub use base::{draft_base, left_behind, standing, Standing, Unrecorded};
 pub use enumerate::{enumerate, is_merge_record, AlsoImage, Candidate, Enumeration, Placement, Record, Successor, Via, MAX_WIRE_LIST, MERGE_RECORD_TYPE};
 pub use landed::{landed, twin_precheck, Base, Missing, Recomposed, Verdict};
-pub use panel::{count, inherited, panel, windows, Count, Counterpart, Destination, Formatting, Inherited, LineCounts, MergeRecords, Panel, Removal, Row, RowKind, Switches, TypeFold, Window};
-pub use price::{price, Price, Term};
-pub use request::{build, reread, AlsoPlaces, Answer as OriginAnswer, Built, Confirmed, End, Entry, EntryHome, Inert, Piece, Reread, Request, Restatement, Unspellable};
+pub use panel::{count, inherited, is_formatting_type, panel, windows, Count, Counterpart, Destination, Formatting, Inherited, LineCounts, MergeRecords, Original, Panel, Removal, Row, RowKind, Switches, TypeFold, Window};
+pub use price::{price, OriginalShape, Price, Term};
+pub use request::{build, originals_of, reread, AlsoPlaces, Answer as OriginAnswer, Built, Confirmed, End, Entry, EntryHome, Inert, OriginalEntry, Piece, Reread, Request, Restatement, Unspellable};
 pub use send::{send, Ack, AckVia, OwnFault, RaceKey, Refusal, Sent, SupersedeCause};
 
 /// One run of permanent content I-addresses — the selection's unit, and a

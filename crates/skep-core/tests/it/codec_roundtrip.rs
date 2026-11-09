@@ -328,6 +328,7 @@ fn all_requests() -> Vec<Request> {
                     retract: vec![link1(), link2()],
                     read_with: vec![d2()],
                     supersede: vec![],
+                    originals: vec![],
                 },
             },
         ),
@@ -378,6 +379,7 @@ fn all_requests() -> Vec<Request> {
                     retract: vec![],
                     read_with: vec![d2()],
                     supersede: vec![],
+                    originals: vec![],
                 },
             },
         ),
@@ -1109,7 +1111,8 @@ fn a_shots_also_places_are_each_also_drafts_own_kept_places_and_refused_by_entry
 /// form or the member-position form, and a V-spec array is refused in
 /// every entry; the member-position form is held to its canonical spelling
 /// over the shot's runs; `ty` takes no tag and no member position; a
-/// refused entry of `links`, `retract` or `read_with` names its index in
+/// refused entry of `links`, `retract`, `originals` or `read_with` names
+/// its index in
 /// `site.index`, a list that is no array none; an unset flag marshals to
 /// no member, and the canonical form parses back to the same request.
 #[test]
@@ -1228,6 +1231,48 @@ fn a_publications_members_parse_in_their_forms_and_are_refused_by_entry() {
     assert_eq!(index_of(&doc(r#","retract":["1.0.1.0.1.0.2.1","x"]"#)), Some(1), "a retract entry that is no address");
     assert_eq!(index_of(&doc(r#","read_with":[7]"#)), Some(0), "a read_with entry that is no address");
     assert_eq!(index_of(&doc(r#","links":{}"#)), None, "no array: refused with no site");
+    // THE PRIVATE RIDER (the link-sets design §5.7 (vi′)): `originals`, one
+    // entry per original the commit ends — `old` the address, `rest` its
+    // spans in the I-span form where one stands — parsed in order and
+    // written back only where it holds an entry, `rest` only where it holds
+    // a span; absent, `null` and the empty list alike are the empty rider
+    // and no member; a `rest` that is absent or `null` is the empty rest.
+    // A request carrying the rider alone is not empty. An entry that is no
+    // object of `old` and `rest`, one with no `old`, one whose `old` is no
+    // address, a stray member, a zero-width rest span and a rest that is no
+    // array each name the entry's index; a rider that is no array none.
+    let ridden = parse_ok(&codec, &doc(r#","originals":[{"old":"1.0.1.0.3.0.2.1"},{"old":"1.0.1.0.3.0.2.2","rest":[{"start":"1.0.1.0.3.0.1.4","width":"1"}]}]"#));
+    let Op::Publish { deposits, .. } = &ridden.op else { panic!("a publish") };
+    assert_eq!(deposits.originals.len(), 2);
+    assert_eq!((&deposits.originals[0].old, deposits.originals[0].rest.len()), (&a(&[1, 0, 1, 0, 3, 0, 2, 1]), 0));
+    assert_eq!(deposits.originals[1].old, a(&[1, 0, 1, 0, 3, 0, 2, 2]));
+    assert_eq!(deposits.originals[1].rest.len(), 1);
+    assert!(!deposits.is_empty(), "the rider alone is a member the plan reads");
+    let canonical = codec.marshal_request(&ridden);
+    let text = String::from_utf8_lossy(&canonical);
+    assert!(text.contains(r#""originals":[{"old":"1.0.1.0.3.0.2.1"},{"old":"1.0.1.0.3.0.2.2","rest":[{"start":"1.0.1.0.3.0.1.4","width":"1"}]}]"#), "{text}");
+    assert_eq!(parse_ok(&codec, &canonical), ridden, "the canonical form parses to the same request");
+    for (tail, why) in [(r#","originals":[]"#, "the empty rider"), (r#","originals":null"#, "null"), ("", "absent")] {
+        let req = parse_ok(&codec, &doc(tail));
+        let Op::Publish { deposits, .. } = &req.op else { panic!("a publish") };
+        assert!(deposits.originals.is_empty(), "{why}");
+        assert!(!String::from_utf8_lossy(&codec.marshal_request(&req)).contains("originals"), "{why}: no member written");
+    }
+    let empty_rest = parse_ok(&codec, &doc(r#","originals":[{"old":"1.0.1.0.3.0.2.1","rest":null}]"#));
+    let Op::Publish { deposits, .. } = &empty_rest.op else { panic!("a publish") };
+    assert!(deposits.originals[0].rest.is_empty(), "a null rest is the empty rest");
+    for (bad, why) in [
+        (r#","originals":["1.0.1.0.3.0.2.1"]"#, "an entry that is no object"),
+        (r#","originals":[{"rest":[]}]"#, "no old"),
+        (r#","originals":[{"old":7}]"#, "an old that is no address"),
+        (r#","originals":[{"old":"1.0.1.0.3.0.2.1","extra":1}]"#, "a stray member"),
+        (r#","originals":[{"old":"1.0.1.0.3.0.2.1","rest":[{"start":"1.0.1.0.3.0.1.4","width":"0"}]}]"#, "a zero-width rest span"),
+        (r#","originals":[{"old":"1.0.1.0.3.0.2.1","rest":{}}]"#, "a rest that is no array"),
+    ] {
+        assert_eq!(index_of(&doc(bad)), Some(0), "{why}");
+    }
+    assert_eq!(index_of(&doc(r#","originals":[{"old":"1.0.1.0.3.0.2.1"},{"old":"x"}]"#)), Some(1), "the second entry refused names index 1");
+    assert_eq!(index_of(&doc(r#","originals":{}"#)), None, "no array: refused with no site");
     // The fourth list (the merge bridge lane, brief A): `supersede`, the
     // daughters by address, parsed in order and written back only where it
     // holds an entry — absent, `null` and the empty list alike are the
@@ -2061,7 +2106,7 @@ fn documented_reject_codes() -> Vec<String> {
 /// the document lists save the one the daemon originates itself.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 94] = [
+    let table: [(RejectCode, &str); 95] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
@@ -2139,6 +2184,7 @@ fn reject_code_names_are_pinned() {
         (RejectCode::DuplicateOriginal, "duplicate_original"),
         (RejectCode::ReadWithInLinks, "read_with_in_links"),
         (RejectCode::RetractRefused, "retract_refused"),
+        (RejectCode::OriginalRefused, "original_refused"),
         (RejectCode::ReadWithRefused, "read_with_refused"),
         (RejectCode::SupersedeRefused, "supersede_refused"),
         (RejectCode::ClaimRefused, "claim_refused"),

@@ -1027,8 +1027,8 @@ fn a_window_onto_words_published_into_another_document_is_re_windowed_through_th
 
 use skep_links::{
     edition_type, plan_deposits, read_with_type, retraction_tuple, supersession_claim, EndArg,
-    LinkEntry, MemberSpan, NamedAddress, OldCause, PlanFault, PlannedDeposit, ReadWithCause,
-    RetractCause, TYPE,
+    LinkEntry, MemberSpan, NamedAddress, OldCause, OriginalCause, OriginalEntry, PlanFault,
+    PlannedDeposit, ReadWithCause, RetractCause, TYPE,
 };
 
 /// The owner's second published document, the SET `S`: `[1,0,1,0,4]`,
@@ -1149,6 +1149,7 @@ fn a_publication_lands_its_copy_claim_retraction_and_read_with_in_one_commit() {
         retract: vec![m.clone()],
         read_with: vec![set_s()],
         supersede: vec![],
+        originals: vec![],
     };
     let (member, seq) = publish(&k, &the_shot, &deposits).expect("the one commit");
     assert_eq!(member, pmember(2));
@@ -1209,6 +1210,7 @@ fn a_homes_link_addresses_rise_in_the_plans_order_within_one_commit() {
         retract: vec![],
         read_with: vec![set_s()],
         supersede: vec![],
+        originals: vec![],
     };
     let (member, _) = publish(&k, &the_shot, &deposits).expect("the commit");
     let s = k.snapshot();
@@ -1237,7 +1239,7 @@ fn a_minting_publication_mints_the_edition_and_homes_the_claim_in_it() {
     let before = k.snapshot();
     let the_shot = Shot { base: None, draft: Some(doc1()), also: vec![], runs: vec![shot_run(&doc1(), &ca(1), 3)] };
     let target = PublishTarget::Mint { account: account.clone() };
-    let deposits = PublishDeposits { claim: true, links: vec![], retract: vec![], read_with: vec![set_s()], supersede: vec![] };
+    let deposits = PublishDeposits { claim: true, links: vec![], retract: vec![], read_with: vec![set_s()], supersede: vec![], originals: vec![] };
     let (member, seq) = writer(&k).publication(P1, &target, &the_shot, &[], &[], &deposits).expect("the mint");
     let edition = a(&[1, 0, 1, 0, 5]);
     assert_eq!(member, a(&[1, 0, 1, 0, 5, 1]), "the edition's first member");
@@ -1362,7 +1364,7 @@ fn each_refused_entry_names_its_index_and_commits_nothing() {
     let theirs = w.makelink(P2, &sib_doc(), SlotArg::Addrs(vec![sib_doc()]), SlotArg::Addrs(vec![]), SlotArg::Addrs(vec![citation()])).expect("their link").0;
     let the_shot = shot_off_head(&k, vec![]);
     let copy = |home: NamedAddress, old: Option<Address>| entry(home, ispans(&pca(1), 3), addrs(&[&doc2()]), addrs(&[&citation()]), old);
-    let links_only = |links: Vec<LinkEntry>| PublishDeposits { claim: false, links, retract: vec![], read_with: vec![], supersede: vec![] };
+    let links_only = |links: Vec<LinkEntry>| PublishDeposits { claim: false, links, retract: vec![], read_with: vec![], supersede: vec![], originals: vec![] };
     assert_eq!(refused_plan(&k, &the_shot, links_only(vec![copy(NamedAddress::Address(doc2()), None)])), PlanFault::LinkHome { index: 0 }, "a private home");
     assert_eq!(refused_plan(&k, &the_shot, links_only(vec![copy(NamedAddress::Address(pmember(1)), None)])), PlanFault::LinkHome { index: 0 }, "a member");
     assert_eq!(refused_plan(&k, &the_shot, links_only(vec![copy(NamedAddress::Address(sib_doc()), None)])), PlanFault::NotOwner(sib_doc()), "another's");
@@ -1394,11 +1396,11 @@ fn each_refused_entry_names_its_index_and_commits_nothing() {
         PlanFault::MemberSpan { index: 0 },
         "past the member's placed positions"
     );
-    let retract_only = |retract: Vec<Address>| PublishDeposits { claim: false, links: vec![], retract, read_with: vec![], supersede: vec![] };
+    let retract_only = |retract: Vec<Address>| PublishDeposits { claim: false, links: vec![], retract, read_with: vec![], supersede: vec![], originals: vec![] };
     assert_eq!(refused_plan(&k, &the_shot, retract_only(vec![theirs.clone()])), PlanFault::Retract { index: 0, cause: RetractCause::NotOwner });
     assert_eq!(refused_plan(&k, &the_shot, retract_only(vec![l.clone()])), PlanFault::Retract { index: 0, cause: RetractCause::NotPublished });
     assert_eq!(refused_plan(&k, &the_shot, retract_only(vec![m.clone(), link_of(&pmember(1), 7)])), PlanFault::Retract { index: 1, cause: RetractCause::Absent });
-    let read_with_only = |read_with: Vec<Address>| PublishDeposits { claim: false, links: vec![], retract: vec![], read_with, supersede: vec![] };
+    let read_with_only = |read_with: Vec<Address>| PublishDeposits { claim: false, links: vec![], retract: vec![], read_with, supersede: vec![], originals: vec![] };
     assert_eq!(refused_plan(&k, &the_shot, read_with_only(vec![doc2()])), PlanFault::ReadWith { index: 0, cause: ReadWithCause::NotPublished });
     assert_eq!(refused_plan(&k, &the_shot, read_with_only(vec![set_s(), pmember(1)])), PlanFault::ReadWith { index: 1, cause: ReadWithCause::NotDocument });
     assert_eq!(refused_plan(&k, &the_shot, read_with_only(vec![sib_doc()])), PlanFault::ReadWith { index: 0, cause: ReadWithCause::NotOwner });
@@ -1406,11 +1408,11 @@ fn each_refused_entry_names_its_index_and_commits_nothing() {
     // The order: a links fault speaks ahead of a retract fault ahead of a
     // read-with fault.
     assert_eq!(
-        refused_plan(&k, &the_shot, PublishDeposits { claim: false, links: vec![copy(NamedAddress::Address(doc2()), None)], retract: vec![theirs.clone()], read_with: vec![doc2()], supersede: vec![] }),
+        refused_plan(&k, &the_shot, PublishDeposits { claim: false, links: vec![copy(NamedAddress::Address(doc2()), None)], retract: vec![theirs.clone()], read_with: vec![doc2()], supersede: vec![], originals: vec![] }),
         PlanFault::LinkHome { index: 0 }
     );
     assert_eq!(
-        refused_plan(&k, &the_shot, PublishDeposits { claim: false, links: vec![], retract: vec![theirs], read_with: vec![doc2()], supersede: vec![] }),
+        refused_plan(&k, &the_shot, PublishDeposits { claim: false, links: vec![], retract: vec![theirs], read_with: vec![doc2()], supersede: vec![], originals: vec![] }),
         PlanFault::Retract { index: 0, cause: RetractCause::NotOwner }
     );
     // THE SUPERSEDED OLD: once `L` is accepted — its copy in the member,
@@ -1522,7 +1524,7 @@ fn an_original_reaching_the_published_words_through_a_whole_work_end_alone_is_re
     assert_eq!(whole, link_of(&doc2(), 2));
     let the_shot = shot_off_head(&k, vec![]);
     let copy = |old: &Address| entry(NamedAddress::Member, member_spans(1, 3), addrs(&[&doc2()]), addrs(&[&citation()]), Some(old.clone()));
-    let links_only = |links: Vec<LinkEntry>| PublishDeposits { claim: false, links, retract: vec![], read_with: vec![], supersede: vec![] };
+    let links_only = |links: Vec<LinkEntry>| PublishDeposits { claim: false, links, retract: vec![], read_with: vec![], supersede: vec![], originals: vec![] };
     assert_eq!(
         refused_plan(&k, &the_shot, links_only(vec![copy(&whole)])),
         PlanFault::Old { index: 0, cause: OldCause::WholeWork },
@@ -1565,7 +1567,7 @@ fn a_retracted_target_and_a_standing_read_with_are_skipped_and_a_private_one_is_
     // A read-with in the PRIVATE notes alone: not counted.
     w.makelink(P1, &doc2(), SlotArg::Addrs(vec![pdoc()]), SlotArg::Addrs(vec![set_s()]), SlotArg::Addrs(vec![read_with_type().clone()])).expect("a private read-with");
     let the_shot = shot_off_head(&k, vec![]);
-    let deposits = PublishDeposits { claim: false, links: vec![], retract: vec![m.clone()], read_with: vec![set_s()], supersede: vec![] };
+    let deposits = PublishDeposits { claim: false, links: vec![], retract: vec![m.clone()], read_with: vec![set_s()], supersede: vec![], originals: vec![] };
     let (m2, _) = publish(&k, &the_shot, &deposits).expect("the rest lands");
     assert_eq!(m2, pmember(2));
     let s = k.snapshot();
@@ -1578,13 +1580,13 @@ fn a_retracted_target_and_a_standing_read_with_are_skipped_and_a_private_one_is_
     );
     // Now the public one stands: a third publication's read-with is skipped.
     let the_shot = shot_off_head(&k, vec![]);
-    let (m3, _) = publish(&k, &the_shot, &PublishDeposits { claim: false, links: vec![], retract: vec![], read_with: vec![set_s()], supersede: vec![] }).expect("the shot lands");
+    let (m3, _) = publish(&k, &the_shot, &PublishDeposits { claim: false, links: vec![], retract: vec![], read_with: vec![set_s()], supersede: vec![], originals: vec![] }).expect("the shot lands");
     assert_eq!(m3, pmember(3));
     assert_eq!(k.snapshot().world().links().readlink(&link_of(&set_s(), 2)), None, "the standing read-with skips the entry");
     // Retracted, the public read-with no longer stands, and the next is written.
     w.nullify(P1, &set_s(), &link_of(&set_s(), 1)).expect("retracted");
     let the_shot = shot_off_head(&k, vec![]);
-    publish(&k, &the_shot, &PublishDeposits { claim: false, links: vec![], retract: vec![], read_with: vec![set_s()], supersede: vec![] }).expect("the shot lands");
+    publish(&k, &the_shot, &PublishDeposits { claim: false, links: vec![], retract: vec![], read_with: vec![set_s()], supersede: vec![], originals: vec![] }).expect("the shot lands");
     assert_eq!(k.snapshot().world().links().readlink(&link_of(&set_s(), 3)).map(|l| l.type_slot().clone()), Some(enc([read_with_type()])));
 }
 
@@ -1610,7 +1612,7 @@ fn a_homes_link_ordinals_rise_with_commit_position_across_commits() {
     for (commit, count) in [2u32, 3, 1].into_iter().enumerate() {
         let the_shot = shot_off_head(&k, vec![]);
         let base = 10 * commit as u32;
-        let deposits = PublishDeposits { claim: false, links: (1..=count).map(|n| into_s(base + n)).collect(), retract: vec![], read_with: vec![], supersede: vec![] };
+        let deposits = PublishDeposits { claim: false, links: (1..=count).map(|n| into_s(base + n)).collect(), retract: vec![], read_with: vec![], supersede: vec![], originals: vec![] };
         let (_, seq) = publish(&k, &the_shot, &deposits).expect("the commit");
         seqs.push(seq);
     }
@@ -1683,6 +1685,7 @@ fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() 
         retract: vec![m],
         read_with: vec![set_s(), set_s()],
         supersede: vec![],
+        originals: vec![],
     };
     // No place: the draft is not read, and the draft term is nothing.
     let unplaced = price_publication_reads(world, P1, &target, &the_shot, &[], &[], &deposits);
@@ -1885,7 +1888,7 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
         ty: EndArg::Addrs((1..=MAX_SLOT_SPANS as u32).map(|i| NamedAddress::Address(a(&[1, 1, 0, 1, 0, 1, 0, 3, 23, i]))).collect()),
         old: None,
     };
-    let with = |links: Vec<LinkEntry>, retract: Vec<Address>, read_with: Vec<Address>| PublishDeposits { claim: false, links, retract, read_with, supersede: vec![] };
+    let with = |links: Vec<LinkEntry>, retract: Vec<Address>, read_with: Vec<Address>| PublishDeposits { claim: false, links, retract, read_with, supersede: vec![], originals: vec![] };
     let copy = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &with(vec![full.clone()], vec![], vec![]))) - shot_bytes;
     // THE SHOT AT AN EMPTY HEAD: the shots above left the head a member of
     // no positions, and a shot off it carries `base_extent` 0 — a zero
@@ -2005,6 +2008,7 @@ fn the_plan_is_a_pure_function_of_the_world_and_the_request() {
         retract: vec![m.clone()],
         read_with: vec![set_s()],
         supersede: vec![],
+        originals: vec![],
     };
     let snap = k.snapshot();
     let target = PublishTarget::Document(pdoc());
@@ -2066,6 +2070,222 @@ fn a_shot_naming_a_daughter_lands_on_the_trunk_or_is_refused_as_head_moved() {
     assert_eq!(member, pmember(3), "the trunk's next member");
     let s = k.snapshot();
     assert!(supersession_claim_in(s.world().links(), &pdoc(), &e11, &member), "the claim names the trunk's next member");
+}
+
+// ───────────────── the originals the commit ends (the private rider) ─────────────────
+
+/// The rider naming `old` with `rest`.
+fn originals(entries: Vec<(Address, Vec<Span>)>) -> PublishDeposits {
+    PublishDeposits {
+        originals: entries.into_iter().map(|(old, rest)| OriginalEntry { old, rest }).collect(),
+        ..PublishDeposits::default()
+    }
+}
+
+/// THE BOARD after the accept: `board`, then `L`'s copy into `E.2` with its
+/// claim in the notes. Answers `(L, M, the copy)`: the copy `E.2`'s first
+/// link, the claim the notes' second.
+fn accepted(k: &Kernel<World>) -> (Address, Address, Address) {
+    let (l, m) = board(k);
+    let copy = entry(NamedAddress::Member, member_spans(1, 3), addrs(&[&doc2()]), addrs(&[&citation()]), Some(l.clone()));
+    let (e2, _) = publish(k, &shot_off_head(k, vec![]), &PublishDeposits { links: vec![copy], ..PublishDeposits::default() }).expect("L accepted");
+    assert_eq!(e2, pmember(2));
+    let copy = link_of(&e2, 1);
+    assert_eq!(k.snapshot().world().links().readlink(&link_of(&doc2(), 2)), Some(&supersession_claim(&l, &copy)), "the premise: the accept's claim");
+    (l, m, copy)
+}
+
+/// THE TAKE-OFF ENDS THE ORIGINAL IN THE ONE COMMIT (the link-sets design
+/// §5.7 (vi′); THE VALIDATION's (4′)): a publication retracting `L`'s copy
+/// with the rider naming `L` lands as ONE commit — one boundary above the
+/// position before it, on a journaled kernel — after which the copy and the
+/// original are both off the active view, the original's retraction tuple
+/// is the notes' next link, minted at the commit's coordinate, unseated as
+/// `nullify` leaves it, and the accept's claim stands active, provenance;
+/// the plan holds the original in its own list and in no home, so the
+/// signed rows name no private write; and the member alone, with no copy
+/// to fold under, is drawn nowhere after.
+#[test]
+fn a_take_off_naming_its_original_ends_it_in_the_one_commit() {
+    let k = journaled_over(deposits_world());
+    let (l, _, copy) = accepted(&k);
+    let the_shot = shot_off_head(&k, vec![]);
+    let deposits = PublishDeposits { retract: vec![copy.clone()], ..originals(vec![(l.clone(), vec![])]) };
+    let before = k.snapshot();
+    // The plan: the original outside the homes, which build the signed body.
+    let plan = plan_deposits(before.world(), P1, &PublishTarget::Document(pdoc()), &the_shot, &deposits).expect("planned");
+    assert_eq!(plan.originals.len(), 1);
+    assert_eq!((plan.originals[0].index, &plan.originals[0].old, &plan.originals[0].home, &plan.originals[0].rest), (0, &l, &doc2(), &None));
+    assert_eq!(plan.homes.len(), 1, "the retraction's home alone: {plan:?}");
+    assert_eq!(plan.homes[0].home, NamedAddress::Address(pmember(2)));
+    assert!(plan.homes.iter().all(|h| h.home != NamedAddress::Address(doc2())), "the original's home is in no row");
+    let (member, seq) = publish(&k, &the_shot, &deposits).expect("the take-off");
+    assert_eq!(member, pmember(3));
+    assert_eq!(k.boundaries_above(before.seq()).expect("boundaries"), vec![(seq, None)], "ONE commit: the member, the copy's retraction and the original's");
+    let s = k.snapshot();
+    let (links, m3) = (s.world().links(), s.world().m3());
+    assert!(!links.is_active(&copy), "the copy is off the active view");
+    assert!(!links.is_active(&l), "and so is its original");
+    let retraction = link_of(&doc2(), 3);
+    assert_eq!(links.readlink(&retraction), Some(&retraction_tuple(&doc2(), &l)), "the original's retraction tuple, the notes' next link");
+    assert_eq!(links.retractions_of(&l).collect::<Vec<_>>(), vec![retraction.clone()]);
+    assert_eq!(m3.minted_at(&retraction), Some(seq), "minted at the one commit");
+    assert_eq!(links.readlink(&link_of(&doc2(), 4)), None, "and nothing past it");
+    assert_eq!(s.world().m5().link_count(&doc2()), n(1), "unseated, as nullify leaves a retraction: L alone is seated");
+    assert!(links.is_active(&link_of(&doc2(), 2)), "the accept's claim stands");
+}
+
+/// A CUT COPY's REST KEEPS A FRESH MARK (the link-sets design §2, D5 (a)):
+/// the mark `B` in the notes over the draft's `a b c d`, its copy cut at the
+/// member's `a b c`; the take-off names `B` with the rest `d` as its one
+/// span, and the one commit writes, in the notes, FIRST a fresh mark of `B`'s
+/// type over exactly `d` in the end `B` holds it in — seated, as any draft
+/// formatting is — THEN `B`'s retraction, the addresses rising in that
+/// order (THE PIN); the fresh mark active, `B` not, the copy not. The price
+/// carries the mark: a copy's fixed part, the rest's span and `B`'s stored
+/// type span, beside the retraction.
+#[test]
+fn a_cut_copys_rest_keeps_a_fresh_mark_written_ahead_of_the_originals_retraction() {
+    use skep_links::{price_staged_bytes, stored_span_bytes, COPY_FIXED_BYTES, RETRACTION_BYTES};
+
+    let k = kernel_over(deposits_world());
+    board(&k);
+    Vstream::new(&k).insert(P1, &doc1(), vp(1, 4), vec![Val::new([b'd'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("d at ca(4)");
+    let ty = a(&[1, 1, 0, 1, 0, 1, 0, 3, 23, 2]);
+    let b = writer(&k)
+        .makelink(P1, &doc2(), SlotArg::Spans(vec![run(&ca(1), 4).iextent()]), SlotArg::Addrs(vec![]), SlotArg::Addrs(vec![ty.clone()]))
+        .expect("the mark over the whole run")
+        .0;
+    assert_eq!(b, link_of(&doc2(), 2));
+    let copy_entry = entry(NamedAddress::Member, member_spans(1, 3), addrs(&[]), addrs(&[&ty]), Some(b.clone()));
+    let (e2, _) = publish(&k, &shot_off_head(&k, vec![]), &PublishDeposits { links: vec![copy_entry], ..PublishDeposits::default() }).expect("the copy, cut at the selection");
+    let copy = link_of(&e2, 1);
+    let rest = run(&ca(4), 1).iextent();
+    let the_shot = shot_off_head(&k, vec![]);
+    let deposits = PublishDeposits { retract: vec![copy.clone()], ..originals(vec![(b.clone(), vec![rest.clone()])]) };
+    let target = PublishTarget::Document(pdoc());
+    let snap = k.snapshot();
+    let plan = plan_deposits(snap.world(), P1, &target, &the_shot, &deposits).expect("planned");
+    let fresh = Link::triple(Endset::from_spans([rest.clone()]), Endset::empty(), enc([&ty]));
+    assert_eq!(plan.originals[0].rest, Some(fresh.clone()), "the fresh mark: B's type over exactly the rest, in the end B holds it in");
+    let base = price_staged_bytes(snap.world(), &target, &the_shot, &[], &[], &PublishDeposits { retract: vec![copy.clone()], ..PublishDeposits::default() });
+    assert_eq!(
+        price_staged_bytes(snap.world(), &target, &the_shot, &[], &[], &deposits) - base,
+        RETRACTION_BYTES + COPY_FIXED_BYTES + stored_span_bytes(&rest) + stored_span_bytes(&skep_address::subtree_of(ty.tumbler())),
+        "the rider's price: the retraction, and the fresh mark at its spans"
+    );
+    assert_eq!(
+        price_staged_bytes(snap.world(), &target, &the_shot, &[], &[], &PublishDeposits { retract: vec![copy.clone()], ..originals(vec![(b.clone(), vec![])]) }) - base,
+        RETRACTION_BYTES,
+        "no rest: the retraction alone"
+    );
+    let seated_before = snap.world().m5().link_count(&doc2());
+    let (member, seq) = publish(&k, &the_shot, &deposits).expect("the take-off with its rest");
+    assert_eq!(member, pmember(3));
+    let s = k.snapshot();
+    let (links, m3, m5) = (s.world().links(), s.world().m3(), s.world().m5());
+    let (mark, retraction) = (link_of(&doc2(), 4), link_of(&doc2(), 5));
+    assert_eq!(links.readlink(&mark), Some(&fresh), "the fresh mark first");
+    assert_eq!(links.readlink(&retraction), Some(&retraction_tuple(&doc2(), &b)), "then B's retraction");
+    assert_eq!(links.readlink(&link_of(&doc2(), 6)), None);
+    assert_eq!((m3.minted_at(&mark), m3.minted_at(&retraction)), (Some(seq), Some(seq)));
+    assert_eq!(m5.link_count(&doc2()), &seated_before + n(1), "the mark is seated, the retraction not");
+    assert!(links.is_active(&mark), "the rest keeps its formatting as the draft's own");
+    assert!(!links.is_active(&b) && !links.is_active(&copy), "the mark taken off is drawn nowhere");
+    assert_eq!(bytes_of(&k, &member), "abc");
+}
+
+/// THE REFUSALS of the rider, each with its entry and nothing committed
+/// (THE VALIDATION's (4′)), in the step's order: an absent address, another
+/// account's link, the public mark in `E.1`, a second entry naming one
+/// original (the SECOND), a rest span that is no content span, a rest past
+/// the slot budget, a rest span outside the original, an original no claim
+/// of the caller's names, one whose claim names a copy this request does
+/// not retract, one whose claim is retracted; and the order among the
+/// lists — (4) ahead of (4′) ahead of (5), (3) ahead of them all.
+#[test]
+fn each_refused_original_names_its_entry_and_commits_nothing() {
+    let k = kernel_over(deposits_world());
+    let (l, m) = board(&k);
+    let w = writer(&k);
+    let theirs = w.makelink(P2, &sib_doc(), SlotArg::Addrs(vec![sib_doc()]), SlotArg::Addrs(vec![]), SlotArg::Addrs(vec![citation()])).expect("their link").0;
+    let the_shot = shot_off_head(&k, vec![]);
+    let refused = |cause: OriginalCause, index: usize| PlanFault::Original { index, cause };
+    let with_mark = |rider: PublishDeposits| PublishDeposits { retract: vec![m.clone()], ..rider };
+    // Before any accept: no claim names L.
+    assert_eq!(refused_plan(&k, &the_shot, with_mark(originals(vec![(link_of(&doc2(), 9), vec![])]))), refused(OriginalCause::Absent, 0));
+    assert_eq!(refused_plan(&k, &the_shot, with_mark(originals(vec![(theirs.clone(), vec![])]))), refused(OriginalCause::NotOwner, 0), "another account's");
+    assert_eq!(refused_plan(&k, &the_shot, with_mark(originals(vec![(m.clone(), vec![])]))), refused(OriginalCause::Public, 0), "the public mark");
+    assert_eq!(refused_plan(&k, &the_shot, with_mark(originals(vec![(l.clone(), vec![])]))), refused(OriginalCause::Unclaimed, 0), "no claim names L");
+    // The order among the lists.
+    assert_eq!(
+        refused_plan(&k, &the_shot, PublishDeposits { retract: vec![theirs.clone()], ..originals(vec![(link_of(&doc2(), 9), vec![])]) }),
+        PlanFault::Retract { index: 0, cause: RetractCause::NotOwner },
+        "(4) speaks ahead of (4′)"
+    );
+    assert_eq!(
+        refused_plan(&k, &the_shot, PublishDeposits { read_with: vec![doc2()], ..with_mark(originals(vec![(link_of(&doc2(), 9), vec![])])) }),
+        refused(OriginalCause::Absent, 0),
+        "(4′) speaks ahead of (5)"
+    );
+    let private_home = entry(NamedAddress::Address(doc2()), ispans(&pca(1), 3), addrs(&[]), addrs(&[&citation()]), None);
+    assert_eq!(
+        refused_plan(&k, &the_shot, PublishDeposits { links: vec![private_home], ..with_mark(originals(vec![(link_of(&doc2(), 9), vec![])])) }),
+        PlanFault::LinkHome { index: 0 },
+        "(3) speaks ahead of (4′)"
+    );
+    // After the accept: L's copy in E.2, its claim in the notes.
+    let copy_entry = entry(NamedAddress::Member, member_spans(1, 3), addrs(&[&doc2()]), addrs(&[&citation()]), Some(l.clone()));
+    let (e2, _) = publish(&k, &the_shot, &PublishDeposits { links: vec![copy_entry], ..PublishDeposits::default() }).expect("L accepted");
+    let copy = link_of(&e2, 1);
+    let the_shot = shot_off_head(&k, vec![]);
+    let with_copy = |rider: PublishDeposits| PublishDeposits { retract: vec![copy.clone()], ..rider };
+    assert_eq!(refused_plan(&k, &the_shot, with_copy(originals(vec![(l.clone(), vec![]), (l.clone(), vec![])]))), refused(OriginalCause::Duplicate, 1), "the second entry naming L");
+    assert_eq!(
+        refused_plan(&k, &the_shot, with_copy(originals(vec![(l.clone(), vec![skep_address::subtree_of(doc1().tumbler())])]))),
+        refused(OriginalCause::NotContentSpan, 0),
+        "a rest span at a document's address"
+    );
+    let too_many: Vec<Span> = (0..=skep_links::MAX_SLOT_SPANS).map(|_| run(&ca(1), 1).iextent()).collect();
+    assert_eq!(refused_plan(&k, &the_shot, with_copy(originals(vec![(l.clone(), too_many)]))), refused(OriginalCause::TooLarge, 0));
+    assert_eq!(
+        refused_plan(&k, &the_shot, with_copy(originals(vec![(l.clone(), vec![run(&ca(4), 1).iextent()])]))),
+        refused(OriginalCause::RestOutside, 0),
+        "a rest span outside L's words"
+    );
+    assert_eq!(refused_plan(&k, &the_shot, originals(vec![(l.clone(), vec![])])), refused(OriginalCause::Unclaimed, 0), "the claim's copy is not in this request's retract list");
+    assert_eq!(refused_plan(&k, &the_shot, with_mark(originals(vec![(l.clone(), vec![])]))), refused(OriginalCause::Unclaimed, 0), "another mark retracted, not the copy");
+    // The claim retracted: L is unclaimed again.
+    w.nullify(P1, &doc2(), &link_of(&doc2(), 2)).expect("the claim retracted");
+    assert_eq!(refused_plan(&k, &the_shot, with_copy(originals(vec![(l.clone(), vec![])]))), refused(OriginalCause::Unclaimed, 0), "a retracted claim admits nothing");
+}
+
+/// THE SKIP AND THE CONTROL: an original already retracted — taken off on
+/// another device since the panel — is SKIPPED, the entry committing
+/// nothing while the rest of the request lands; and a copy retracted
+/// WITHOUT the rider leaves its original standing, active, which is the
+/// state the rider exists to end.
+#[test]
+fn a_retracted_original_is_skipped_and_a_copy_retracted_without_the_rider_leaves_it_standing() {
+    let k = kernel_over(deposits_world());
+    let (l, _, copy) = accepted(&k);
+    let w = writer(&k);
+    // The control: the copy alone.
+    let (e3, _) = publish(&k, &shot_off_head(&k, vec![]), &PublishDeposits { retract: vec![copy.clone()], ..PublishDeposits::default() }).expect("the copy retracted");
+    assert_eq!(e3, pmember(3));
+    let s = k.snapshot();
+    assert!(!s.world().links().is_active(&copy) && s.world().links().is_active(&l), "no rider: the original stands");
+    assert_eq!(s.world().links().readlink(&link_of(&doc2(), 3)), None, "nothing written in the notes");
+    // The skip: L retracted on another device, then the request naming it
+    // — the copy's entry skipped too, both already retracted — lands with
+    // nothing written in the notes.
+    let retraction = w.nullify(P1, &doc2(), &l).expect("L retracted elsewhere").0;
+    assert_eq!(retraction, link_of(&doc2(), 3));
+    let (e4, _) = publish(&k, &shot_off_head(&k, vec![]), &PublishDeposits { retract: vec![copy.clone()], ..originals(vec![(l.clone(), vec![])]) }).expect("the request lands");
+    assert_eq!(e4, pmember(4));
+    let s = k.snapshot();
+    assert_eq!(s.world().links().readlink(&link_of(&doc2(), 4)), None, "the skipped entry writes nothing");
+    assert_eq!(s.world().links().retractions_of(&l).collect::<Vec<_>>(), vec![retraction], "the one retraction, the other device's");
 }
 
 // ───────────────────────── the family (the Nelson way) ─────────────────────────

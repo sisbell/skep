@@ -192,6 +192,7 @@ struct Seeded {
     k2_s2: String,
     mpub: String,
     held: String,
+    orig_d: String,
     sub_link: String,
 }
 
@@ -229,9 +230,14 @@ fn seed(board: &Board, session: &Session<'_>, signer: &HybridSigner, bare_token:
     let k_s = make_link(board, session, bare_token, signer, &s, true, spec(&e1, 1, 3, &e, 1), End::Addrs(vec![]), T_CITATION);
     let k2_s2 = make_link(board, session, bare_token, signer, &s2, true, spec(&e1, 1, 3, &e, 1), End::Addrs(vec![]), T_MARK);
     make_link(board, session, bare_token, signer, &s, true, End::Addrs(vec![&e]), End::Addrs(vec![&s]), T_READ_WITH);
-    // The edition's own published mark, and the held removal of it in D.
+    // The edition's own published mark, and the held removal of it in D;
+    // the mark's PRIVATE ORIGINAL in D, of the same shape, claimed onto the
+    // mark as an accept claims it — folded under its copy, offered nowhere,
+    // and ended with the copy by the rider.
     let mpub = make_link(board, session, bare_token, signer, &e1, true, End::Addrs(vec![]), spec(&e1, 5, 5, &e, 5), T_STRONG);
     let held = make_link(board, session, bare_token, signer, &d, false, End::Addrs(vec![]), End::Addrs(vec![&mpub]), T_HELD_REMOVAL);
+    let orig_d = make_link(board, session, bare_token, signer, &d, false, End::Addrs(vec![]), spec(&e1, 5, 5, &e, 5), T_STRONG);
+    acked(board.op(Some(bare_token), &frames::assert_sup(&d, &orig_d, &mpub, None, None)));
     // A sub-account's link on the same words: never the person's.
     let as_owner = wire_session(board, PRINCIPAL, signer);
     wire_delegate(board, &as_owner, SUB_ACCOUNT, SUB).expect("delegated");
@@ -242,7 +248,7 @@ fn seed(board: &Board, session: &Session<'_>, signer: &HybridSigner, bare_token:
     let sub_frame = json!({"op": "make_link", "home": sub_draft, "from": spec(&e1, 1, 3, &e, 1).wire(), "to": {"addrs": []}, "ty": {"addrs": [T_CITATION]}});
     let sub_link = acked_addr(&acked(board.op(Some(&sub), &sub_frame))).unwrap().to_string();
     let _ = anchors;
-    Seeded { e, e1, s, s2, d, n, o, z, mark_d, heading_d, cite_d, l1_n, whole_n, k_s, k2_s2, mpub, held, sub_link }
+    Seeded { e, e1, s, s2, d, n, o, z, mark_d, heading_d, cite_d, l1_n, whole_n, k_s, k2_s2, mpub, held, orig_d, sub_link }
 }
 
 /// THE ORACLE, ported from skepd's `accept_originals.rs`: `find_links_v` over
@@ -254,7 +260,8 @@ fn seed(board: &Board, session: &Session<'_>, signer: &HybridSigner, bare_token:
 /// document's address, expands to that address alone, never a position the
 /// selection holds, so a link reaching the selection through one alone has
 /// nothing on it and is no candidate; one `in_claims {y, view: active}`
-/// per candidate; each claim's `new` read for its home and its FROM; the
+/// per candidate; each claim's `new` read for its home and its two ends,
+/// as the plan's `covers_all` reads a successor; the
 /// candidate dropped where some successor is homed in a published document
 /// of the claimant's AND covers the candidate's positions on the selection —
 /// the keys as the daemon's suite reads them (its liveness key, struck by
@@ -304,8 +311,10 @@ fn offered_oracle(board: &Board, token: &Token, doc: &str, from: u64, width: u64
         let dropped = claims["claims"].as_array().unwrap().iter().any(|row| {
             let new = row["new"].as_str().unwrap();
             let (new_owner, new_published) = owner_and_state(&home_of(new));
-            let from_end = slot_addresses(&read(board, token, &frames::read_link(new))["link"]["slots"][0]);
-            new_owner == ACCOUNT && new_published && !on_selection.is_empty() && on_selection.is_subset(&from_end)
+            let successor = read(board, token, &frames::read_link(new));
+            let mut ends = slot_addresses(&successor["link"]["slots"][0]);
+            ends.extend(slot_addresses(&successor["link"]["slots"][1]));
+            new_owner == ACCOUNT && new_published && !on_selection.is_empty() && on_selection.is_subset(&ends)
         });
         if dropped {
             continue;
@@ -439,9 +448,11 @@ fn the_composition_enumerates_as_the_daemon_filters_and_its_one_request_lands() 
     assert_eq!(request.runs, vec![run(e, 1, 19), run(d, 1, 10), run(o, 1, 5)]);
     assert_eq!(request.places, vec![None, Some(20), None]);
     assert_eq!(request.retract, vec![addr(&seeded.mpub)]);
+    assert_eq!(request.originals.iter().map(|o| (o.old.to_string(), o.rest.clone(), o.marks.clone())).collect::<Vec<_>>(), vec![(seeded.orig_d.clone(), vec![], vec![addr(&seeded.mpub)])], "the rider: the held mark's original, found from the copy, every word covered");
     assert_eq!(request.read_with, vec![addr(s2)]);
     assert_eq!(request.entries.len(), 4, "the line's two marks, the citation, the note");
     let frame = request.frame(None);
+    assert_eq!(frame["originals"], json!([{"old": seeded.orig_d}]), "the rider on the wire, no rest");
     assert_eq!(frame["links"][0]["to"], json!({"member": [{"ordinal": "21", "width": "3"}]}), "the bold's end in the member-position form, canonical");
     assert_eq!(frame["links"][3]["home"].as_str(), Some(s2.as_str()));
     assert_eq!(frame["links"][3]["from"], json!({"spans": [{"start": format!("{e}.0.1.5"), "width": "5"}]}), "the note's kept-word end by reference, the width a natural");
@@ -484,6 +495,9 @@ fn the_composition_enumerates_as_the_daemon_filters_and_its_one_request_lands() 
     assert_eq!(document_of(claims["claims"][0]["new"].as_str().unwrap()).as_deref(), Some(s2.as_str()), "the copy in S2");
     let retracted = read(&board, &token, &frames::find_links_ftt(T_RETRACTION, &seeded.mpub));
     assert_eq!(retracted["addrs"].as_array().map(Vec::len), Some(1), "the held mark retracted: {retracted}");
+    let ended = read(&board, &token, &frames::find_links_ftt(T_RETRACTION, &seeded.orig_d));
+    assert_eq!(ended["addrs"].as_array().map(Vec::len), Some(1), "the mark's original ended with it, by the rider: {ended}");
+    assert_eq!(ended["addrs"][0].as_str().and_then(document_of).as_deref(), Some(d.as_str()), "its retraction homed in the draft: {ended}");
     let rw2 = read(&board, &token, &frames::find_links_four(frames::Slot::Any, frames::Slot::Spans(&frames::unit_span(e).as_array().unwrap().clone()), frames::Slot::Spans(&frames::unit_span(s2).as_array().unwrap().clone()), frames::Slot::Spans(&frames::unit_span(T_READ_WITH).as_array().unwrap().clone())));
     assert_eq!(rw2["addrs"].as_array().map(Vec::len), Some(1), "E read with S2 now: {rw2}");
     let rw1 = read(&board, &token, &frames::find_links_four(frames::Slot::Any, frames::Slot::Spans(&frames::unit_span(e).as_array().unwrap().clone()), frames::Slot::Spans(&frames::unit_span(s).as_array().unwrap().clone()), frames::Slot::Spans(&frames::unit_span(T_READ_WITH).as_array().unwrap().clone())));
@@ -497,6 +511,69 @@ fn the_composition_enumerates_as_the_daemon_filters_and_its_one_request_lands() 
     let twin = send(&p, &inputs, &mut request).expect("sent");
     assert!(matches!(&twin, Sent::Acknowledged(a) if a.via == AckVia::Twin && a.member.to_string() == member), "{twin:?}");
     let _ = e1;
+    session.close().expect("close");
+}
+
+/// THE REST AND THE CONTROL on the daemon (the link-sets design §5.7 (vi′);
+/// §2, a cut copy's rest): a heading in `D` over `E`'s words 10–16 whose
+/// copy in `E.1` covers 10–14, its held removal in `D` and its accept claim;
+/// a citation's copy in `E.1` with a held removal and an accept claim onto a
+/// citation in `N`. The selection publishes `E`'s words 1–12 and the draft's
+/// own, so the heading's rest, 15–16, is outside it and the heading is
+/// offered nowhere. The composition names the heading's original with its
+/// rest as one I-span and composes NO entry for the citation's; the one
+/// request lands; after it the heading and its copy are retracted, `D`
+/// holds a fresh heading over exactly 15–16 — the mark's address below the
+/// retraction's — and the citation's original stands.
+#[test]
+fn a_cut_copys_rest_keeps_a_fresh_mark_and_a_citations_original_stands() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session).expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+    let seeded = seed(&board, &session, &device, &bare_token, &dir.path().join("anchors"));
+    let Seeded { e, e1, d, n, .. } = &seeded;
+    // The heading and its cut copy; the citation and its copy.
+    let heading = make_link(&board, &session, &bare_token, &device, d, false, End::Addrs(vec![]), spec(e1, 10, 7, e, 10), T_HEADING);
+    let hpub = make_link(&board, &session, &bare_token, &device, e1, true, End::Addrs(vec![]), spec(e1, 10, 5, e, 10), T_HEADING);
+    make_link(&board, &session, &bare_token, &device, d, false, End::Addrs(vec![]), End::Addrs(vec![&hpub]), T_HELD_REMOVAL);
+    acked(board.op(Some(&bare_token), &frames::assert_sup(d, &heading, &hpub, None, None)));
+    let cite_n = make_link(&board, &session, &bare_token, &device, n, false, spec(e1, 1, 3, e, 1), spec(n, 1, 2, n, 1), T_CITATION);
+    let cpub = make_link(&board, &session, &bare_token, &device, e1, true, spec(e1, 1, 3, e, 1), spec(n, 1, 2, n, 1), T_CITATION);
+    make_link(&board, &session, &bare_token, &device, d, false, End::Addrs(vec![]), End::Addrs(vec![&cpub]), T_HELD_REMOVAL);
+    acked(board.op(Some(&bare_token), &frames::assert_sup(n, &cite_n, &cpub, None, None)));
+    let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
+    let mut inputs = inputs(&seeded);
+    inputs.selection = vec![run(e, 1, 12), run(d, 1, 10), run(&seeded.o, 1, 5)];
+    let en = enumerate(&p, &inputs).expect("enumerated");
+    assert!(!en.candidates.iter().any(|c| c.offered() && c.link.to_string() == heading), "the heading is folded under its copy on the selection's words: offered nowhere");
+    let pn = panel(&p, &inputs, &en).expect("the panel");
+    let jobs: Vec<String> = pn.formatting.job_list().iter().map(|r| r.mark.to_string()).collect();
+    assert_eq!(jobs.len(), 3, "mpub, hpub and cpub: {jobs:?}");
+    let original_of = |mark: &str| pn.formatting.removals.iter().find(|r| r.mark.to_string() == mark).unwrap().original.clone();
+    assert_eq!(original_of(&hpub).map(|o| (o.link.to_string(), o.rest)), Some((heading.clone(), vec![skep_client::publication::ISpan { chain: format!("{e}.0.1"), first: 15, width: 2 }])), "the heading's rest: the words its copy left out");
+    assert_eq!(original_of(&cpub), None, "a citation's held removal composes no original");
+    let rr = reread(&p, &inputs, &en, &pn).expect("re-read");
+    let Built::Request(mut request) = build(&p, &inputs, &rr.enumeration, &rr.panel, &confirmed(&seeded)).expect("built") else { panic!("inert") };
+    assert_eq!(request.originals.len(), 2, "the strong mark's and the heading's: {:?}", request.originals);
+    let sent = send(&p, &inputs, &mut request).expect("sent");
+    let Sent::Acknowledged(ack) = sent else { panic!("{sent:?}") };
+    let retractions = |link: &str| read(&board, &token, &frames::find_links_ftt(T_RETRACTION, link))["addrs"].as_array().map(Vec::len).unwrap_or(0);
+    assert_eq!((retractions(&hpub), retractions(&heading), retractions(&cpub), retractions(&cite_n)), (1, 1, 1, 0), "the heading ended with its copy; the citation's original stands");
+    let fresh = read(&board, &token, &frames::find_links_four(frames::Slot::Spans(&frames::unit_span(d).as_array().unwrap().clone()), frames::Slot::Any, frames::Slot::Spans(&[frames::i_span(&format!("{e}.0.1.15"), 2)]), frames::Slot::Spans(&frames::unit_span(T_HEADING).as_array().unwrap().clone())));
+    let marks: Vec<&str> = fresh["addrs"].as_array().unwrap().iter().filter_map(Value::as_str).filter(|a| *a != heading).collect();
+    assert_eq!(marks.len(), 1, "one fresh heading in D over the rest: {fresh}");
+    let value = read(&board, &token, &frames::read_link(marks[0]));
+    assert_eq!(value["link"]["slots"][1], json!([{"start": format!("{e}.0.1.15"), "width": "0.0.0.0.0.0.0.2"}]), "over exactly the rest: {value}");
+    assert_eq!(value["at"].as_u64(), Some(ack.at), "written in the one commit");
+    let ended = read(&board, &token, &frames::find_links_ftt(T_RETRACTION, &heading));
+    assert!(ended["addrs"][0].as_str().unwrap() > marks[0], "the fresh mark's address below the retraction's: {ended}");
     session.close().expect("close");
 }
 

@@ -93,7 +93,7 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
         shot,
         places,
         also_places: Vec::new(),
-        deposits: PublishDeposits { claim: false, links: Vec::new(), retract: Vec::new(), read_with: vec![home.clone(); read_with], supersede: Vec::new() },
+        deposits: PublishDeposits { claim: false, links: Vec::new(), retract: Vec::new(), read_with: vec![home.clone(); read_with], supersede: Vec::new(), originals: Vec::new() },
     };
     // A drafted shot carries one kept place — beside its first run, a stray
     // place — so the re-window reads the draft; a draftless one none.
@@ -157,6 +157,7 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
             retract: Vec::new(),
             read_with: Vec::new(),
             supersede: Vec::new(),
+            originals: Vec::new(),
         },
     };
     assert_eq!(publication_read_refusal(snap.world(), &wide(1), maker_id), None, "one wide entry is inside both budgets");
@@ -360,6 +361,41 @@ fn a_correspondence_records_nullify_is_refused_to_its_owner_and_falls_through_fo
     assert_eq!(class_of(&record, maker_id), Some(CredentialRefusal::NullifyAuditView), "the owner: PUB-6.64's cell");
     assert_eq!(class_of(&record, other_id), None, "a stranger: nothing here, `not_owner` downstream");
     assert_eq!(class_of(&counterpart, maker_id), None, "the parent counterpart: an ordinary link, its retraction admitted");
+    // THE RIDER's CLASS CELL (the link-sets design §5.7 (vi′)): a publication
+    // whose `originals` names the record — behind whatever claim the owner
+    // may have asserted onto a copy, which the store's plan alone would
+    // admit — is refused by the same producer at the entry's index in the
+    // rider, `audit_view`, so the record stays active; the counterpart
+    // passes, and a stranger's request answers nothing here. The `retract`
+    // list is judged first: an entry of each refused names the `retract`
+    // list's.
+    use crate::auth::policy::{retract_class_refusal, RetractClassRefusal, RetractList};
+    use skep_arrangement::Shot;
+    use skep_links::{OriginalEntry, PublishDeposits, PublishTarget};
+    let publish = |retract: Vec<Address>, originals: Vec<Address>| Op::Publish {
+        target: PublishTarget::Document(addr_of(&[1, 0, 1, 0, 1])),
+        shot: Shot { base: None, draft: None, also: vec![], runs: vec![] },
+        places: vec![],
+        also_places: vec![],
+        deposits: PublishDeposits {
+            retract,
+            originals: originals.into_iter().map(|old| OriginalEntry { old, rest: vec![] }).collect(),
+            ..PublishDeposits::default()
+        },
+    };
+    let rider = |caller: PrincipalId, originals: Vec<Address>| retract_class_refusal(&lock.read(), world, &publish(vec![], originals), caller);
+    assert_eq!(
+        rider(maker_id, vec![counterpart.clone(), record.clone()]),
+        Some(RetractClassRefusal { list: RetractList::Originals, index: 1, cause: "audit_view" }),
+        "the record named in the rider: refused at its entry, the counterpart passing"
+    );
+    assert_eq!(rider(other_id, vec![record.clone()]), None, "a stranger's rider: nothing here");
+    assert_eq!(
+        retract_class_refusal(&lock.read(), world, &publish(vec![record.clone()], vec![record.clone()]), maker_id),
+        Some(RetractClassRefusal { list: RetractList::Retract, index: 0, cause: "audit_view" }),
+        "the retract list is judged ahead of the rider"
+    );
+    assert!(world.links().is_active(&record), "the record stands: nothing here writes");
 }
 
 /// Checks that PUB-2.15's projection is address arithmetic and total.

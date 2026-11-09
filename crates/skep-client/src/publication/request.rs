@@ -42,7 +42,11 @@
 //! FORM for an end on this shot's new words, spelled CANONICALLY from the
 //! client's own runs (the lowest positions holding each value, consecutive
 //! positions merged), `ty` verbatim, `old` the original;
-//! `retract` the job list's marks; `read_with` the switched-on rows'
+//! `retract` the job list's marks, and beside it THE PRIVATE RIDER
+//! `originals` (the link-sets design §5.7 (vi′)): each listed mark of the
+//! formatting types' own original, found from the mark's accept claim at
+//! the panel, with the rest no copy ever covered — in no signed row, the
+//! board ending each at its home with the mark; `read_with` the switched-on rows'
 //! destinations other than the edition, once each, none where the edition
 //! is already read with it; `claim` where the caller asks it, at either
 //! form — with `mint` and `account` at a first publication of a
@@ -83,8 +87,8 @@ use crate::board::{T_RETRACTION, T_SUPERSEDES};
 use super::base::Standing;
 use super::enumerate::{enumerate_with, place_selection, Enumeration, Placement, Record, RecordWalk, Via};
 use super::landed::twin_precheck_with;
-use super::panel::{count, panel_with, Count, Counterpart, Destination, Panel, RowKind};
-use super::price::{self, EndShape, EntryShape, Price, Shape};
+use super::panel::{count, panel_with, Count, Counterpart, Destination, Panel, Removal, RowKind};
+use super::price::{self, EndShape, EntryShape, OriginalShape, Price, Shape};
 use super::{canonical_member_spans, fresh_id, own_claim_names, Door, Fault, ISpan, Inputs, Publisher, Run};
 
 /// The caller's answer at a window onto their own unpublished origin, or
@@ -324,6 +328,49 @@ impl AlsoPlaces {
     }
 }
 
+/// One entry of the request's `originals` rider (wire.md §Arrangement,
+/// `publish`; the link-sets design §5.7 (vi′)): an original a held
+/// removal's mark stands for, which the one commit ends with the mark.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OriginalEntry {
+    /// The original's address, the entry's `old`.
+    pub old: Address,
+    /// The rest's spans, the entry's `rest` — the original's words no copy
+    /// ever covered, which the commit keeps formatted by a fresh mark;
+    /// empty where none stands.
+    pub rest: Vec<ISpan>,
+    /// The original's stored type slot, which the fresh mark over the rest
+    /// carries: the price reads it, the frame does not.
+    pub ty: Vec<LinkSpan>,
+    /// The marks of `retract` the original is paired with — the job list's
+    /// marks whose accept claim names it. The board admits the entry while
+    /// one of them rides, so the one re-sign drops it with the last.
+    pub marks: Vec<Address>,
+}
+
+/// Returns the rider the job list composes: one entry per original among
+/// the listed removals' originals, in the job list's order, the marks of
+/// one original grouped under it (the link-sets design §5.7 (vi′)).
+///
+/// The one composition of the member, the shell's local price and the
+/// request's build both reading it, so the two agree.
+pub fn originals_of(job_list: &[&Removal]) -> Vec<OriginalEntry> {
+    let mut out: Vec<OriginalEntry> = Vec::new();
+    for removal in job_list {
+        let Some(original) = &removal.original else { continue };
+        match out.iter_mut().find(|entry| entry.old == original.link) {
+            Some(entry) => entry.marks.push(removal.mark.clone()),
+            None => out.push(OriginalEntry {
+                old: original.link.clone(),
+                rest: original.rest.clone(),
+                ty: original.value.ty.clone(),
+                marks: vec![removal.mark.clone()],
+            }),
+        }
+    }
+    out
+}
+
 /// The one request, as built.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
@@ -373,6 +420,12 @@ pub struct Request {
     pub entries: Vec<Entry>,
     /// The `retract` entries.
     pub retract: Vec<Address>,
+    /// The `originals` rider (wire.md §Arrangement, `publish`; the
+    /// link-sets design §5.7 (vi′)): the originals the commit ends with
+    /// the marks `retract` names, composed from the job list
+    /// ([`originals_of`]) — outside the signed body, each dropped at the one
+    /// re-sign with the last mark it is paired with.
+    pub originals: Vec<OriginalEntry>,
     /// The `read_with` entries.
     pub read_with: Vec<Address>,
     /// The `supersede` entries: the daughters the member takes in, AS KEPT
@@ -440,6 +493,11 @@ impl Request {
         let places: Vec<Value> = self.places.iter().map(|p| p.map_or(Value::Null, frames::place)).collect();
         let links: Vec<Value> = self.entries.iter().map(|e| frames::link_entry(&home_text(&e.home), e.from.wire(), e.to.wire(), e.ty.wire(), e.old.as_ref().map(ToString::to_string).as_deref())).collect();
         let retract: Vec<String> = self.retract.iter().map(ToString::to_string).collect();
+        let originals: Vec<Value> = self
+            .originals
+            .iter()
+            .map(|o| frames::original_entry(&o.old.to_string(), &o.rest.iter().map(|s| frames::end_span(&format!("{}.{}", s.chain, s.first), s.width)).collect::<Vec<_>>()))
+            .collect();
         let read_with: Vec<String> = self.read_with.iter().map(ToString::to_string).collect();
         let supersede: Vec<String> = self.supersede.iter().map(ToString::to_string).collect();
         let (doc, account, base, draft) = (self.doc.as_ref().map(ToString::to_string), self.mint.as_ref().map(ToString::to_string), self.base.as_ref().map(|(m, e)| (m.to_string(), *e)), self.draft.as_ref().map(ToString::to_string));
@@ -459,6 +517,7 @@ impl Request {
             also_places: &also_entries,
             links: &links,
             retract: &retract.iter().map(String::as_str).collect::<Vec<_>>(),
+            originals: &originals,
             read_with: &read_with.iter().map(String::as_str).collect::<Vec<_>>(),
             supersede: &supersede.iter().map(String::as_str).collect::<Vec<_>>(),
             attest,
@@ -529,12 +588,19 @@ impl Request {
         self.entries.iter().map(|e| EntryShape { from: e.from.shape(), to: e.to.shape(), ty: e.ty.shape(), old: e.old.is_some() }).collect()
     }
 
+    /// Returns the rider's shapes for the price: each original's rest and
+    /// stored type.
+    fn original_shapes(&self) -> Vec<OriginalShape> {
+        self.originals.iter().map(|o| OriginalShape { rest: o.rest.clone(), ty: o.ty.clone() }).collect()
+    }
+
     /// Prices the request as it stands, with the caller's home count, the
     /// rendering draft's content run count and each `also` draft's in
     /// `also`'s order (`Enumeration::also_run_counts`): the price counts a
     /// draft's runs only where its list places it.
     pub fn priced(&self, homes: usize, draft_runs: usize, also_runs: &[usize]) -> Price {
         let entries = self.entry_shapes();
+        let originals = self.original_shapes();
         let term = self.term().clone();
         // The named drafts — the rendering draft, then each of `also` — whose
         // runs are re-inserted and priced as values; none at a bare shot.
@@ -552,6 +618,7 @@ impl Request {
             stray_records: &self.stray_records,
             entries: &entries,
             retract: self.retract.len(),
+            originals: &originals,
             read_with: self.read_with.len(),
             body_bytes: self.body().as_bytes().len(),
             homes,
@@ -562,10 +629,17 @@ impl Request {
     /// Re-composes the request without the entries at `retract_skipped`,
     /// `read_with_skipped` and `supersede_skipped`, under a FRESH `id` — the
     /// one re-sign at `attestation_invalid:signature` for a deposit the
-    /// transaction skipped.
+    /// transaction skipped. An original of the rider rides only while a
+    /// mark it is paired with does: the board admits it on a claim onto a
+    /// mark of THIS request's `retract` list, so one whose every mark is
+    /// dropped is dropped with them — a copy retracted meanwhile ended its
+    /// original on the other device, or leaves it to the design's own
+    /// handling, never to a refusal here.
     pub fn without(&mut self, retract_skipped: &[usize], read_with_skipped: &[usize], supersede_skipped: &[usize]) {
         let retract = std::mem::take(&mut self.retract);
         self.retract = retract.into_iter().enumerate().filter(|(i, _)| !retract_skipped.contains(i)).map(|(_, m)| m).collect();
+        let kept = &self.retract;
+        self.originals.retain(|o| o.marks.iter().any(|m| kept.contains(m)));
         let read_with = std::mem::take(&mut self.read_with);
         self.read_with = read_with.into_iter().enumerate().filter(|(i, _)| !read_with_skipped.contains(i)).map(|(_, s)| s).collect();
         let supersede = std::mem::take(&mut self.supersede);
@@ -867,7 +941,9 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
             add(i, home.clone());
         }
     }
-    let retract: Vec<Address> = panel.formatting.job_list().iter().map(|r| r.mark.clone()).collect();
+    let job_list = panel.formatting.job_list();
+    let retract: Vec<Address> = job_list.iter().map(|r| r.mark.clone()).collect();
+    let originals = originals_of(&job_list);
     let count = count(panel, &confirmed.switches, inputs);
     let read_with = count.read_with.clone();
 
@@ -921,13 +997,14 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         pieces,
         entries,
         retract,
+        originals,
         read_with,
         supersede,
         unspellable,
         counterparts,
         id: fresh_id(),
         count,
-        price: Price { lists: [0; 5], body: 0, values: 0, reads: 0, bytes: 0, over: Vec::new() },
+        price: Price { lists: [0; 6], body: 0, values: 0, reads: 0, bytes: 0, over: Vec::new() },
         as_of: door.as_of().max(e.as_of),
     };
     let homes = e.homes.len() + inputs.published.iter().filter(|s| !e.homes.iter().any(|(h, _)| h == *s)).count();

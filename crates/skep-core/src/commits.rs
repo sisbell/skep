@@ -1506,14 +1506,17 @@ impl Commits {
             // (`feed::Inner::visible`) — then every other home the deposits
             // touched, in address order (the link-sets design §5.7): the
             // homes the request named by address, and, of the three lists
-            // the plan may skip an entry of, each home whose deposit LANDED,
+            // and the rider the plan may skip an entry of, each home whose
+            // write LANDED,
             // read off the commit's two worlds — a `retract` target active
-            // before and retracted after, a `read_with` set holding the
+            // before and retracted after, an original of the rider active
+            // before and retracted after (its home, the private document the
+            // rider ended it in), a `read_with` set holding the
             // read-with after and not before, the trunk holding a daughter's
             // claim onto the minted member after (it cannot before: the
             // member is this commit's) — so a skipped entry's home is not
             // named.
-            AffectedDocs::Published { drafts, mints, homes, retract, read_with, supersede } => {
+            AffectedDocs::Published { drafts, mints, homes, retract, originals, read_with, supersede } => {
                 debug_assert!(
                     minted.is_some(),
                     "a publish answers AckAddr, the ack carrying the member it minted"
@@ -1528,7 +1531,7 @@ impl Commits {
                     docs.extend(drafts);
                     let mut others: BTreeSet<Address> = homes.into_iter().collect();
                     let (before, after) = (pre.links(), post.world().links());
-                    for target in &retract {
+                    for target in retract.iter().chain(&originals) {
                         if before.is_active(target) && !after.is_active(target) {
                             others.extend(document_of(target));
                         }
@@ -2175,20 +2178,26 @@ enum AffectedDocs {
     /// mint form, the edition then the member's own trunk. `homes` are the
     /// homes the request's `links` entries name by address, and the private
     /// homes of the originals they name, each of which the commit writes
-    /// where it lands at all; `retract` the targets, `read_with` the sets
-    /// and `supersede` the daughters of the three lists whose deposit the
-    /// plan may SKIP — a target already retracted, a read-with standing in
+    /// where it lands at all; `retract` the targets, `originals` the
+    /// originals the private rider ends (the link-sets design §5.7 (vi′)),
+    /// `read_with` the sets
+    /// and `supersede` the daughters of the lists whose write the
+    /// plan may SKIP — a target already retracted, an original already
+    /// retracted, a read-with standing in
     /// a published home of the maker's, a daughter a claim of the maker's
     /// own already names — so whether each landed is read at record time
     /// off the commit's two worlds ([`Commits::record`]), and a home nothing
     /// touched is not named: a landed supersession claim names the trunk of
-    /// `doc`, its home (the merge bridge lane, brief A). The same `AckAddr`
+    /// `doc`, its home (the merge bridge lane, brief A), a landed
+    /// retraction of an original the private document it is homed in. The
+    /// same `AckAddr`
     /// obligation as `Minted`'s.
     Published {
         drafts: Vec<Address>,
         mints: bool,
         homes: Vec<Address>,
         retract: Vec<Address>,
+        originals: Vec<Address>,
         read_with: Vec<Address>,
         supersede: Vec<Address>,
     },
@@ -2478,6 +2487,7 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
                     mints: target.mints(),
                     homes: homes.into_iter().collect(),
                     retract: deposits.retract.clone(),
+                    originals: deposits.originals.iter().map(|entry| entry.old.clone()).collect(),
                     read_with: deposits.read_with.clone(),
                     supersede: deposits.supersede.clone(),
                 },

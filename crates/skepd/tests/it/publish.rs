@@ -1981,6 +1981,70 @@ fn each_refused_deposit_names_its_entry_and_commits_nothing() {
     sd.shutdown();
 }
 
+/// THE PRIVATE RIDER on the wire (the link-sets design §5.7 (vi′); skep
+/// #894): `L` accepted into `E.1` — its copy there, its claim in `N` — then
+/// a second publication retracting the copy with `originals` naming `L`
+/// lands ONE commit (one feed entry) after which the copy and `L` are both
+/// off the active view, `L`'s retraction tuple is `N`'s next link, typed the
+/// retraction class and `to` `L`, and the row's `docs` name `N`, the
+/// original's home, among the homes for the owner and not for a guest; a
+/// signature over the shot's rows with the retraction's alone — the rider in
+/// no row — is what lands it. THE REFUSALS, each `original_refused` with
+/// `site.index` the entry and its cause as `detail`, nothing committed: an
+/// absent address `absent`; `R`, homed in the published `SET`, `public`; `L`
+/// with no mark of the request's `retract` list claimed onto it `unclaimed`
+/// — the one case the panel never composes, and the cell that keeps the
+/// rider from retracting any private link.
+#[test]
+fn a_publication_ends_a_retracted_marks_original_through_the_rider_and_refuses_an_unclaimed_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let b = deposit_board(port);
+    // L accepted: the copy E.1's first link, the claim N's second.
+    let member = acked_addr(&op(port, Some(&b.signed), &with_members(&b.shot(), serde_json::json!({"links": [b.copy_entry()]}))));
+    assert_eq!(member, format!("{}.1", b.e));
+    let copy = format!("{member}.0.2.1");
+    assert_eq!(slot_span(&read_link(port, Some(&b.bare), &format!("{}.0.2.2", b.n)), 1).0, copy, "the premise: the claim L → the copy");
+    let before = head(port);
+    // The refusals, ahead of the take-off.
+    let off_head = |members: Value| with_members(&records_less_shot(port, &b, &member), members);
+    for (members, index, detail) in [
+        (serde_json::json!({"retract": [copy], "originals": [{"old": format!("{}.0.2.9", b.n)}]}), 0, "absent"),
+        (serde_json::json!({"retract": [copy], "originals": [{"old": b.r}]}), 0, "public"),
+        (serde_json::json!({"originals": [{"old": b.l}]}), 0, "unclaimed"),
+        (serde_json::json!({"retract": [copy], "originals": [{"old": b.l}, {"old": b.l}]}), 1, "duplicate"),
+    ] {
+        let v = op(port, Some(&b.signed), &off_head(members));
+        assert_deposit_refused(&v, "original_refused", index, Some(detail));
+        assert_eq!(head(port), before, "{detail}: nothing committed");
+    }
+    // The take-off: the copy retracted, L ended with it.
+    let v = op(port, Some(&b.signed), &off_head(serde_json::json!({"retract": [copy], "originals": [{"old": b.l}]})));
+    let second = acked_addr(&v);
+    assert_eq!(second, format!("{}.2", b.e));
+    let entries = changes_since_as(port, Some(&b.signed), before);
+    assert_eq!(entries.len(), 1, "one commit: {entries:?}");
+    let active_in_n = find_links_ftt_home(port, Some(&b.bare), &b.n);
+    assert!(!active_in_n.contains(&b.l), "L is off the active view: {active_in_n:?}");
+    let retraction = read_link(port, Some(&b.bare), &format!("{}.0.2.3", b.n));
+    assert_eq!(slot_span(&retraction, 2).0, T_RETRACTION, "L's retraction tuple, N's next link: {retraction}");
+    assert_eq!(slot_span(&retraction, 1).0, b.l, "`to` L: {retraction}");
+    assert!(read_link(port, Some(&b.bare), &format!("{}.0.2.4", b.n)).is_null(), "and nothing past it");
+    let active_in_e1 = find_links_ftt_home(port, None, &member);
+    assert!(!active_in_e1.contains(&copy), "the copy is retracted: {active_in_e1:?}");
+    // The row: the member, then E.1 (the copy's home) and N (the original's)
+    // in address order; the guest sees no N.
+    let mut others = vec![member.clone(), b.n.clone()];
+    others.sort_by_key(|a| a.split('.').map(|c| c.parse::<u64>().unwrap()).collect::<Vec<_>>());
+    let mut want = vec![second.clone()];
+    want.extend(others);
+    assert_eq!(entries[0]["docs"], serde_json::json!(want), "{}", entries[0]);
+    let guests = changes_since(port, before);
+    assert_eq!(guests[0]["docs"], serde_json::json!([second, member]), "reduced for the guest: {}", guests[0]);
+    sd.shutdown();
+}
+
 // ───────────────────────── the ops items (lane S4) ─────────────────────────
 
 /// THE HOLD's RELEASE on every path (`write_pool.rs`'s shape): a worker

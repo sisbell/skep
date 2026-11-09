@@ -18,7 +18,7 @@ use skep_febe::{
 };
 use skep_identity::{KeySet, SigAlgRow};
 use skep_kernel::{Attestation, Seq};
-use skep_links::{EndArg, Endset, Invalid, Link, LinkEntry, NamedAddress, PublishTarget, View};
+use skep_links::{EndArg, Endset, Invalid, Link, LinkEntry, NamedAddress, OriginalEntry, PublishTarget, View};
 use skep_retrieval::{CorrPair, Deletions, DeliveryItem, Operand, RegionSpec, SpanFault, Spec};
 use skep_util::json::{hex_string, obj};
 
@@ -325,8 +325,8 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         // deposits (the link-sets design §5.7): the target in its one form
         // (`doc`, or `account` with `mint: true`), `claim: true` where the
         // deposits claim, at either form (an unset flag is no field), and
-        // each of `links`, `retract`, `read_with` and `supersede` only
-        // where it holds an entry.
+        // each of `links`, `retract`, `originals`, `read_with` and
+        // `supersede` only where it holds an entry.
         Op::Publish { target, shot, places, also_places, deposits } => {
             let mut pairs = match target {
                 PublishTarget::Document(doc) => vec![("doc", j_addr(doc))],
@@ -372,6 +372,9 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             }
             if !deposits.retract.is_empty() {
                 pairs.push(("retract", j_addrs(&deposits.retract)));
+            }
+            if !deposits.originals.is_empty() {
+                pairs.push(("originals", Value::Array(deposits.originals.iter().map(j_original_entry).collect())));
             }
             if !deposits.read_with.is_empty() {
                 pairs.push(("read_with", j_addrs(&deposits.read_with)));
@@ -942,6 +945,17 @@ fn j_link_entry(entry: &LinkEntry) -> Value {
     ];
     if let Some(old) = &entry.old {
         pairs.push(("old", j_addr(old)));
+    }
+    obj(pairs)
+}
+
+/// Renders one entry of a `publish`'s `originals` rider (the link-sets
+/// design §5.7 (vi′)) — [`p_original_entry`](super::p_original_entry)'s
+/// inverse: `old`, and `rest` only where the entry names one.
+fn j_original_entry(entry: &OriginalEntry) -> Value {
+    let mut pairs = vec![("old", j_addr(&entry.old))];
+    if !entry.rest.is_empty() {
+        pairs.push(("rest", j_ispan_slot(&entry.rest)));
     }
     obj(pairs)
 }
@@ -1603,6 +1617,7 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::DuplicateOriginal => "duplicate_original",
         RejectCode::ReadWithInLinks => "read_with_in_links",
         RejectCode::RetractRefused => "retract_refused",
+        RejectCode::OriginalRefused => "original_refused",
         RejectCode::ReadWithRefused => "read_with_refused",
         RejectCode::SupersedeRefused => "supersede_refused",
         RejectCode::ClaimRefused => "claim_refused",

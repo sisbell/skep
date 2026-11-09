@@ -362,8 +362,8 @@ pub enum Sent {
 /// `base_superseded` aside, its own arm ([`Refusal::BaseSuperseded`]).
 const SHOT_CODES: [&str; 8] = ["base_not_in_chain", "base_extent_too_large", "bad_run", "dangling_source", "source_not_registered", "too_many_runs", "too_many_values", "private_source_versionless"];
 
-/// The six deposit tokens.
-const DEPOSIT_CODES: [&str; 6] = ["link_home_refused", "old_refused", "duplicate_original", "read_with_in_links", "retract_refused", "read_with_refused"];
+/// The seven deposit tokens: the six lists' and the rider's.
+const DEPOSIT_CODES: [&str; 7] = ["link_home_refused", "old_refused", "duplicate_original", "read_with_in_links", "retract_refused", "original_refused", "read_with_refused"];
 
 /// Sends the request, once, with its arms.
 ///
@@ -509,7 +509,7 @@ pub(crate) fn send_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, req
 /// a `claim` at the document form among them, which a board before skep
 /// #692 refused `malformed`.
 fn carries_members(request: &Request) -> bool {
-    !request.entries.is_empty() || !request.retract.is_empty() || !request.read_with.is_empty() || !request.supersede.is_empty() || request.places.iter().any(Option::is_some) || request.also_places.iter().any(AlsoPlaces::carries_a_place) || request.mint.is_some() || request.claim
+    !request.entries.is_empty() || !request.retract.is_empty() || !request.originals.is_empty() || !request.read_with.is_empty() || !request.supersede.is_empty() || request.places.iter().any(Option::is_some) || request.also_places.iter().any(AlsoPlaces::carries_a_place) || request.mint.is_some() || request.claim
 }
 
 /// Returns the draft a re-window refusal names — `site.addr`, the draft

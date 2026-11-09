@@ -41,7 +41,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `SessionRejected`) and `CHALLENGE_TTL_MS`.
 - **The policy**, `auth::policy` — the three write sequences' admission:
   `plain_admission` and, behind it, `retract_class_refusal`
-  (`RetractClassRefusal`); `precheck` with `RecordSig`, `DepositSpans` (`of`,
+  (`RetractClassRefusal`, `RetractList` — the `retract` list's entries and
+  the `originals` rider's, each judged as the `nullify` of its target would
+  be); `precheck` with `RecordSig`, `DepositSpans` (`of`,
   `deposit`) and `op_shape_refusal`; `publication_read_refusal`
   (`PublicationReadRefusal`: the price's four read terms, their total and
   budget, and the staged bytes with the transaction budget; `reads_over`

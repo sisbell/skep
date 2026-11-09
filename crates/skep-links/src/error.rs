@@ -379,6 +379,56 @@ impl RetractCause {
     }
 }
 
+/// Why an `originals` entry is refused: the `original_refused` token's
+/// `detail` (THE VALIDATION's (4′); the link-sets design §5.7 (vi′)).
+///
+/// In the order the step asks them of one entry: the original's residence,
+/// ownership and privacy, then a repeat, then the rest where one stands —
+/// its form, the original's type, its place within the original's ends —
+/// then the claim that admits the entry at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OriginalCause {
+    /// No resident link stands at the original.
+    Absent,
+    /// The original is not the caller's own.
+    NotOwner,
+    /// The original is homed in a published document.
+    Public,
+    /// A second entry names one original.
+    Duplicate,
+    /// A rest span is no content I-span.
+    NotContentSpan,
+    /// The rest is past M7's per-slot budget.
+    TooLarge,
+    /// The original's type is a class the open surface never writes — the
+    /// retraction, supersession, `replaces` or correspondence class — so no
+    /// fresh mark of it can be made over a rest.
+    FencedType,
+    /// A rest span lies within no content span of the original's ends.
+    RestOutside,
+    /// No active claim of the caller's names the original as `old` and a
+    /// mark of this request's `retract` list as `new`: only the original of
+    /// a mark taken off in this commit can ride.
+    Unclaimed,
+}
+
+impl OriginalCause {
+    /// Returns the cause's `detail` token.
+    pub fn token(self) -> &'static str {
+        match self {
+            OriginalCause::Absent => "absent",
+            OriginalCause::NotOwner => "not_owner",
+            OriginalCause::Public => "public",
+            OriginalCause::Duplicate => "duplicate",
+            OriginalCause::NotContentSpan => "not_content_span",
+            OriginalCause::TooLarge => "too_large",
+            OriginalCause::FencedType => "fenced_type",
+            OriginalCause::RestOutside => "rest_outside",
+            OriginalCause::Unclaimed => "unclaimed",
+        }
+    }
+}
+
 /// Why a `read_with` entry is refused: the `read_with_refused` token's
 /// `detail` (THE VALIDATION's (5)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -444,7 +494,7 @@ impl SupersedeCause {
 }
 
 /// The deposit plan's refusal (the link-sets design §5.7, THE VALIDATION's
-/// (3)–(6)): the first fault in list order, naming its entry.
+/// (3)–(6) and (4′)): the first fault in list order, naming its entry.
 ///
 /// The lane's tokens (the survey's ruling 8), each a `RejectCode` with a
 /// site — the entry's index, beside it the trunk's head for a moved head
@@ -535,6 +585,14 @@ pub enum PlanFault {
         /// Which clause refused it.
         cause: RetractCause,
     },
+    /// An `originals` entry — the private rider's — is refused, the cause
+    /// named.
+    Original {
+        /// The entry's position in `originals`.
+        index: usize,
+        /// Which clause refused it.
+        cause: OriginalCause,
+    },
     /// A `read_with` entry is refused, the cause named.
     ReadWith {
         /// The entry's position in `read_with`.
@@ -564,7 +622,8 @@ pub enum PlanFault {
 /// then THE TWIN FENCE (`AlreadyPublished`), before anything is staged;
 /// then, at the document form, the edition claim's precondition (`Publish`
 /// carrying `ClaimRefused`); then THE DEPOSIT PLAN (`Plan`: THE
-/// VALIDATION's (3), (4), (5) and (6), the first fault in list order); then
+/// VALIDATION's (3), (4), (4′), (5) and (6), the first fault in list
+/// order); then
 /// the shot's staging (`Publish` again: the re-insert's count, the existence
 /// walk, the placement, the member's mint); then, per correspondence
 /// record, the deposit gate's home check (`HomeNotRegistered`, `NotOwner`)
@@ -573,7 +632,9 @@ pub enum PlanFault {
 /// [`stage_correspondence`](crate::stage_correspondence) alone — and the
 /// record's mint and seat; then the deposits as planned — each deposit's
 /// gate (`NotOwner` on a home the plan did not read, a backstop), its mint
-/// and its seat; then THE RE-WINDOW, per re-windowed draft — the rendering
+/// and its seat; then the originals the private rider ends, each in its
+/// own home — the fresh mark's gate, mint and seat where a rest stands,
+/// then the retraction's gate and mint; then THE RE-WINDOW, per re-windowed draft — the rendering
 /// draft at the request's `places`, then each draft `also` names at its
 /// `also_places` entry, in `also`'s order — and within each per `runs`
 /// entry that carries a kept place there, in `runs`' order: for a stray run
@@ -587,8 +648,8 @@ pub enum PublicationError {
     /// The shot's own refusal, as `publish` states it — and, at the mint
     /// form, the account's registration and ownership under its codes.
     Publish(PublishError),
-    /// The deposit plan's refusal: a `links`, `retract`, `read_with` or
-    /// `supersede` entry, the first fault in list order.
+    /// The deposit plan's refusal: a `links`, `retract`, `originals`,
+    /// `read_with` or `supersede` entry, the first fault in list order.
     Plan(PlanFault),
     /// A draft-native run of the request overlaps a span a correspondence
     /// record homed in the named draft whose identity the run is — the
@@ -945,6 +1006,9 @@ impl fmt::Display for PlanFault {
             }
             PlanFault::Retract { index, cause } => {
                 write!(f, "retract[{index}]: refused: {}", cause.token())
+            }
+            PlanFault::Original { index, cause } => {
+                write!(f, "originals[{index}]: refused: {}", cause.token())
             }
             PlanFault::ReadWith { index, cause } => {
                 write!(f, "read_with[{index}]: refused: {}", cause.token())

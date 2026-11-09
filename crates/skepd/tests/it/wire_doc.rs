@@ -741,6 +741,58 @@ fn doc_states_the_deposits_their_body_and_their_tokens() {
     assert!(feed.contains("then every other home the commit's"), "§The change feed states the row's homes");
 }
 
+/// THE PRIVATE RIDER (the link-sets design §5.7 (vi′); skep #894):
+/// §Arrangement's `publish` names `originals` beside `retract` — one entry
+/// per original of a retracted formatting mark, `{old, rest?}`, no deposit,
+/// outside the signed preimage; §The publish shot and head-float places
+/// the originals' writes in the one commit after the deposits and ahead of
+/// the re-window, the fresh mark ahead of the retraction, states the
+/// plan's (4′) with its nine causes and the skip, and keeps the rider out
+/// of the signed groups; §Rejection codes carries the token with its
+/// details and its row; §Links (writes) states the rider's class cell;
+/// §The change feed names the ended original's home. The daemon's answers
+/// are pinned in `publish.rs`; this pins that the contract says so.
+#[test]
+fn doc_states_the_private_rider_and_its_token() {
+    let arrangement = prose("\n### Arrangement (document editing)", &["\n### Media"]);
+    for fact in [
+        "THE DEPOSITS, four",
+        "beside it THE PRIVATE RIDER `originals`, no deposit and no term of the count, outside the signed preimage as `draft` is",
+        "`{old, rest?}`, `old` the original's address",
+        "the original's words NO COPY OF IT HAS EVER COVERED, in the I-span form",
+        "writing first, over a rest, a fresh mark of the original's type over exactly those words",
+        "refused `original_refused` by entry",
+    ] {
+        assert!(arrangement.contains(fact), "§Arrangement says {fact:?}");
+    }
+    let shot = prose("\n### The publish shot and head-float", &["\n### Credential refusals"]);
+    for fact in [
+        "then THE ORIGINALS the private rider `originals` ends, in declared order, each at its own home",
+        "the fresh mark of the original's type first, seated as any draft formatting is, then the original's retraction, `nullify`'s tuple, unseated — then the re-window",
+        "(4′) each `originals` entry — THE PRIVATE RIDER beside `retract`",
+        "(`original_refused`: absent, not_owner, public), once (duplicate at the second)",
+        "(not_content_span, too_large)",
+        "(fenced_type)",
+        "(rest_outside)",
+        "a mark of THIS request's `retract` list, as sent (unclaimed)",
+        "never an arbitrary private retraction",
+        "an original ALREADY RETRACTED is SKIPPED, the entry committing nothing, as (4) skips its target",
+        "nor is the `originals` rider: its writes are private",
+        "a request carrying the rider alone signs today's body byte for byte",
+        "| `original_refused` | permanent | `index` = the entry in `originals` |",
+    ] {
+        assert!(shot.contains(fact), "§The publish shot and head-float says {fact:?}");
+    }
+    let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
+    for fact in ["`original_refused` (an entry of the originals rider", "unclaimed — no active claim of yours names the original as old and a mark of this request's retract list as new"] {
+        assert!(codes.contains(fact), "§Rejection codes says {fact:?}");
+    }
+    let links = prose("\n### Links (writes)", &["\n### Links (raw reads)"]);
+    assert!(links.contains("entry of its `originals` rider, refused `original_refused` with the same class token"), "§Links (writes) states the rider's class cell");
+    let feed = prose("\n## The change feed", &["\n## The other endpoints"]);
+    assert!(feed.contains("the private home of an original the `originals` rider ended"), "§The change feed names the ended original's home");
+}
+
 /// THE SUPERSESSION CLAIM A PUBLICATION CARRIES (the merge bridge lane,
 /// brief A; skep #805, #806): §Arrangement's `publish` names the
 /// `supersede` member — the daughters by address, each one claim homed in

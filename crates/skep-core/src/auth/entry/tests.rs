@@ -273,6 +273,7 @@ fn the_supersession_claims_rows_are_the_class_the_daughter_and_the_member_by_tag
             home: NamedAddress::Address(trunk.clone()),
             deposits: vec![PlannedDeposit::Supersede { index: 0, old: daughter.clone() }],
         }],
+        originals: vec![],
     };
     let rows = deposit_rows(&plan, Some(&trunk));
     assert_eq!(rows.len(), 1);

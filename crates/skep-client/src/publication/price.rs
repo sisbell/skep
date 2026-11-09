@@ -3,12 +3,13 @@
 //! cap BEFORE the act, from the worst-case table the daemon prices by.
 //!
 //! The five terms the wire names, each a [`Term`] with how far it passes
-//! its cap: THE LISTS — `runs`, `places`, `links`, `retract`, `read_with`,
-//! each against the codec's wire-list cap, 4,096; THE BODY — the signed
+//! its cap: THE LISTS — `runs`, `places`, `links`, `retract`, `read_with`
+//! and the `originals` rider, each against the codec's wire-list cap,
+//! 4,096; THE BODY — the signed
 //! body against the frame routes' request-body cap, 8 MiB; THE VALUES — the
 //! distinct draft-native positions against the shot's re-insert budget; THE
 //! IN-LOCK READS — the person's link-holding home count × (`links` +
-//! `read_with` entries) + the content run count of EVERY DRAFT A LIST
+//! `originals` + `read_with` entries) + the content run count of EVERY DRAFT A LIST
 //! PLACES (the rendering draft where `places` carries a place, each `also`
 //! draft where its `also_places` entry does, summed; a draft no list
 //! places is not re-windowed, not read, and adds none — the board's
@@ -36,6 +37,7 @@ use skep_address::Address;
 use super::enumerate::MAX_WIRE_LIST;
 use super::request::AlsoPlaces;
 use super::{ISpan, Run};
+use crate::board::answers::LinkSpan;
 
 /// The most spans one link slot may resolve to: M7's `MAX_SLOT_SPANS`.
 pub const MAX_SLOT_SPANS: usize = 4096;
@@ -97,6 +99,8 @@ pub enum Term {
     Retract,
     /// The `read_with` list against the wire-list cap.
     ReadWith,
+    /// The `originals` rider against the wire-list cap.
+    Originals,
     /// The signed body against the request-body cap.
     Body,
     /// The distinct draft-native positions against the re-insert budget.
@@ -129,6 +133,16 @@ pub struct EntryShape {
     pub ty: EndShape,
     /// Whether the entry names an original — a claim staged beside the copy.
     pub old: bool,
+}
+
+/// One entry of the `originals` rider, as priced: its rest and the stored
+/// type the fresh mark over the rest carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OriginalShape {
+    /// The rest's spans; empty where none stands, no fresh mark then.
+    pub rest: Vec<ISpan>,
+    /// The original's stored type slot.
+    pub ty: Vec<LinkSpan>,
 }
 
 /// The request's shape, as the price reads it.
@@ -171,6 +185,8 @@ pub struct Shape<'a> {
     pub entries: &'a [EntryShape],
     /// The `retract` entries.
     pub retract: usize,
+    /// The `originals` rider's entries.
+    pub originals: &'a [OriginalShape],
     /// The `read_with` entries.
     pub read_with: usize,
     /// The signed body's bytes.
@@ -191,8 +207,9 @@ pub struct Shape<'a> {
 /// The price.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Price {
-    /// Each list's length: `runs`, `places`, `links`, `retract`, `read_with`.
-    pub lists: [usize; 5],
+    /// Each list's length: `runs`, `places`, `links`, `retract`, `read_with`,
+    /// `originals`.
+    pub lists: [usize; 6],
     /// The signed body's bytes.
     pub body: usize,
     /// The distinct draft-native positions.
@@ -247,6 +264,12 @@ fn unit_span_bytes(addr: &str) -> u64 {
         *last = 1;
     }
     stored_span_bytes(&start, &width)
+}
+
+/// Returns the bytes of a stored slot's span, as the board spells it: its
+/// start and its width, each a dotted tumbler.
+fn link_span_bytes(span: &LinkSpan) -> u64 {
+    stored_span_bytes(&comps(&span.start), &comps(&span.width))
 }
 
 /// Returns the bytes of an I-span: its start, and a width of zeros then the
@@ -312,7 +335,7 @@ pub fn distinct_draft_positions(runs: &[Run], drafts: &[Address]) -> u64 {
 pub fn price(shape: &Shape<'_>) -> Price {
     let drafts = shape.drafts;
     let is_draft = |run: &Run| drafts.contains(&run.origin);
-    let lists = [shape.runs.len(), shape.places.iter().filter(|p| p.is_some()).count(), shape.entries.len(), shape.retract, shape.read_with];
+    let lists = [shape.runs.len(), shape.places.iter().filter(|p| p.is_some()).count(), shape.entries.len(), shape.retract, shape.read_with, shape.originals.len()];
     let values = distinct_draft_positions(shape.runs, drafts);
     // The draft term: the run count of every draft a list places, summed —
     // the rendering draft where `places` carries a place, each `also` draft
@@ -325,7 +348,7 @@ pub fn price(shape: &Shape<'_>) -> Price {
         .filter(|(entry, _)| entry.carries_a_place())
         .map(|(_, runs)| *runs)
         .fold(if rendering_placed { shape.draft_runs } else { 0 }, usize::saturating_add);
-    let reads = shape.homes.saturating_mul(shape.entries.len() + shape.read_with).saturating_add(draft_runs.saturating_mul(shape.runs.len()));
+    let reads = shape.homes.saturating_mul(shape.entries.len() + shape.originals.len() + shape.read_with).saturating_add(draft_runs.saturating_mul(shape.runs.len()));
     // The lists that place an entry: the rendering draft's and each `also`
     // draft's — one re-window per list that carries a place at it, each
     // priced a kept place's bytes per piece (the board's `placed_in`).
@@ -396,9 +419,22 @@ pub fn price(shape: &Shape<'_>) -> Price {
     }
     bytes = bytes.saturating_add((shape.retract as u64).saturating_mul(RETRACTION_BYTES));
     bytes = bytes.saturating_add((shape.read_with as u64).saturating_mul(READ_WITH_BYTES));
+    // The rider, the daemon's term by term: a retraction per original and,
+    // over a rest, the fresh mark — a copy's fixed part, the rest's spans and
+    // the original's type as stored.
+    for original in shape.originals {
+        bytes = bytes.saturating_add(RETRACTION_BYTES);
+        if original.rest.is_empty() {
+            continue;
+        }
+        bytes = bytes
+            .saturating_add(COPY_FIXED_BYTES)
+            .saturating_add(original.rest.iter().map(i_span_bytes).fold(0u64, u64::saturating_add))
+            .saturating_add(original.ty.iter().map(link_span_bytes).fold(0u64, u64::saturating_add));
+    }
 
     let mut over = Vec::new();
-    for (term, n) in [Term::Runs, Term::Places, Term::Links, Term::Retract, Term::ReadWith].into_iter().zip(lists) {
+    for (term, n) in [Term::Runs, Term::Places, Term::Links, Term::Retract, Term::ReadWith, Term::Originals].into_iter().zip(lists) {
         if n > MAX_WIRE_LIST {
             over.push((term, (n - MAX_WIRE_LIST) as u64));
         }

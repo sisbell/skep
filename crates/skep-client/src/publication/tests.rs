@@ -1457,6 +1457,44 @@ fn the_filter_drops_only_on_both_keys_of_the_persons_own_claim() {
     assert!(acc.successors.is_empty() && acc.offered(), "another's claim is never read as the person's");
 }
 
+/// Checks that a successor's ends hold a position once however many name it.
+///
+/// An original on `F`'s words this version first quotes, its copy at `E.1`
+/// holding some of them in both its ends: key (iii) counts each position
+/// once, so ends that share words cover only what they hold between them,
+/// and the words the base holds are no part of what they must hold.
+#[test]
+fn a_successor_whose_ends_share_words_covers_only_the_words_they_hold() {
+    let tok = token();
+    let f = |first: u64, width: u64| ispan(F_ORIGIN, first, width);
+    let note = ispan(N, 1, 5);
+    // `F`'s first words the base holds, the original's width on `F` from its
+    // first word, the copy's two ends and whether they cover.
+    let cells = [
+        ("one stretch in both ends", 0, 5, f(1, 3), f(1, 3), false),
+        ("ends overlapping, short of the last words", 0, 5, f(1, 3), f(2, 3), false),
+        ("ends overlapping, reaching the last word", 0, 5, f(1, 3), f(3, 3), true),
+        ("one stretch of the unheld words in both ends", 2, 6, f(3, 2), f(3, 2), false),
+        ("one end holding every unheld word", 2, 6, f(3, 4), note.clone(), true),
+    ];
+    for (what, held, width, from, to, covers) in cells {
+        let (mut world, _) = World::base();
+        with_f(&mut world);
+        let e1 = format!("{E}.1");
+        world.docs.get_mut(&e1).unwrap().runs.extend((held > 0).then(|| run(F_ORIGIN, 1, held)));
+        world.docs.get_mut(D).unwrap().runs.push(run(F_ORIGIN, 1, width));
+        let original = world.typed(N, vec![f(1, width)], vec![note.clone()], T_CITATION);
+        let copy = world.typed(&e1, vec![from], vec![to], T_CITATION);
+        world.claim(N, &original, &copy);
+        let (_, board, signer) = open(world);
+        let p = publisher(&board, &tok, &signer);
+        let quoting = Inputs { base: Some((a(&e1), 19 + held)), selection: vec![run(E, 1, 19), run(D, 1, 10), run(O, 1, 5), run(F_ORIGIN, 1, width)], ..inputs() };
+        let e = enumerate(&p, &quoting).unwrap();
+        let c = candidate_at(&e, &original);
+        assert_eq!((keys_of(c), c.offered()), ((true, covers, false), !covers), "{what}");
+    }
+}
+
 /// Checks that a retype is offered in its original's place until retracted.
 ///
 /// THE FILTER's other arm (proposal 23) at a retype made in the draft
@@ -1863,6 +1901,41 @@ fn an_end_over_words_before_a_record_runs_past_the_cut_and_spells_the_records_wo
     assert_eq!(notes.line, LineCounts { p: 3, d: 0, c: 1, t: 0, u: 1 }, "past the cut, never wholly on left-out words");
     let entry = request.entries.iter().find(|en| e.candidates[en.candidate].link.to_string() == ahead).expect("its entry");
     assert_eq!(entry.from, End::Spans(vec![ISpan { chain: format!("{E}.0.1"), first: 16, width: 4 }]), "the record's words once, the words before it cut");
+}
+
+/// Checks that a position the selection holds twice counts once.
+///
+/// The draft arranges its own words in two runs that share positions, the
+/// selection holding both. The formatting line's cut and the row's ⟨c⟩ read
+/// an end as cut exactly where the two runs leave a position of it unheld,
+/// and the request cuts the end there.
+#[test]
+fn a_selection_holding_a_position_twice_reads_an_end_past_it_as_cut() {
+    let tok = token();
+    let confirmed = Confirmed { answers: BTreeMap::from([(part(3, 0), OriginAnswer::KeepPrivate)]), ..switched(None) };
+    // The two runs, the line's cut and the own row's ⟨c⟩ over them, then
+    // the heading's `to` and the cited end's `from` as the request spells
+    // them.
+    let cells = [
+        ("the same run twice", run(D, 1, 10), run(D, 1, 10), 1, 1, vec![(20, 10)], vec![(28, 2)]),
+        ("overlapping runs short of the heading's end", run(D, 1, 6), run(D, 3, 8), 1, 1, vec![(20, 6), (30, 4)], vec![(32, 2)]),
+        ("overlapping runs reaching the heading's end", run(D, 1, 8), run(D, 3, 10), 0, 0, vec![(20, 8), (34, 4)], vec![(34, 4)]),
+    ];
+    for (what, first, second, cut, c, heading, cited) in cells {
+        let (mut world, named) = World::base();
+        world.text(D, 11, "xy");
+        world.docs.get_mut(D).unwrap().runs = vec![run(E, 1, 19), first.clone(), second.clone(), run(O, 1, 5)];
+        let (_, board, signer) = open(world);
+        let p = publisher(&board, &tok, &signer);
+        let held = Inputs { selection: vec![run(E, 1, 19), first, second, run(O, 1, 5)], ..inputs() };
+        let e = enumerate(&p, &held).unwrap();
+        let pn = panel(&p, &held, &e).unwrap();
+        assert_eq!((pn.formatting.cut, pn.rows[0].line.c), (cut, c), "{what}: the line's cut and the own row's ⟨c⟩");
+        let Built::Request(request) = build(&p, &held, &e, &pn, &confirmed).unwrap() else { panic!("{what}: inert") };
+        let entry = |link: &str| request.entries.iter().find(|en| e.candidates[en.candidate].link.to_string() == link).unwrap_or_else(|| panic!("{what}: no entry for {link}"));
+        assert_eq!(entry(&named.heading_d).to, End::Member(heading), "{what}: the heading as the request cuts it");
+        assert_eq!(entry(&named.cut_d).from, End::Member(cited), "{what}: the cited end as the request cuts it");
+    }
 }
 
 /// Checks that the formatting line reads its marks through the records.

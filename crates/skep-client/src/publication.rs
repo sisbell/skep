@@ -263,13 +263,8 @@ impl ISpan {
 
     /// Returns whether every position of the span lies in `runs`.
     pub fn within(&self, runs: &[Run]) -> bool {
-        let mut covered = 0u64;
-        for r in runs {
-            if let Some((lo, hi)) = r.overlap(&self.chain, self.first, self.reach()) {
-                covered += hi - lo;
-            }
-        }
-        covered >= self.width
+        let held: Vec<ISpan> = runs.iter().map(|r| ISpan { chain: r.chain(), first: r.i_start, width: r.width }).collect();
+        self.less(&held).is_empty()
     }
 
     /// Returns the span less every position `cut` holds on its chain: the

@@ -1119,15 +1119,7 @@ fn unheld_ranges(ranges: &[(String, u64, u64)], held: &[ISpan]) -> Vec<(String, 
 /// Returns whether `cover` holds every position of `ranges` — vacuously
 /// where `ranges` is empty.
 fn covered(ranges: &[(String, u64, u64)], cover: &[ISpan]) -> bool {
-    ranges.iter().all(|(chain, lo, hi)| {
-        let mut held = 0u64;
-        for c in cover {
-            if let Some((a, b)) = c.overlap(chain, *lo, *hi) {
-                held += b - a;
-            }
-        }
-        held >= hi - lo
-    })
+    ranges.iter().all(|(chain, lo, hi)| ISpan { chain: chain.clone(), first: *lo, width: hi - lo }.less(cover).is_empty())
 }
 
 /// Returns the runs' I-spans as four-set slot elements.

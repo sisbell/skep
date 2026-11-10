@@ -2900,12 +2900,11 @@ fn a_held_file_the_compaction_cannot_remove_is_said_on_talk_and_appended_on() {
 ///
 /// The same state, count and `sendable` for one board, session and document
 /// is emitted once; a changed count, a changed state or a changed `sendable`
-/// is emitted; nothing bypasses the memory — the join's forced re-emit went
-/// with the renumbering it coped with (skep #856) — so the pair said again
-/// after the same pair is not emitted; a document kept with no line left
-/// clears its key, so the same pair after it is news again; and the memory
-/// is per session — a second session of the principal sees its own first
-/// emit (the mutant that
+/// is emitted; only an emit naming a line kept bypasses the memory, so the
+/// pair said again after the same pair is not emitted; a document kept with
+/// no line left clears its key, so the same pair after it is news again; and
+/// the memory is per session — a second session of the principal sees its
+/// own first emit (the mutant that
 /// forgets the memory floods the page with the same state at every probe;
 /// the one that never clears a key keeps a map entry per document ever
 /// held; the one that keys by document alone starves a second tab of its
@@ -2923,7 +2922,7 @@ fn the_held_events_memory_emits_a_pair_once_until_it_changes_or_is_cleared() {
     emit(HeldState::Sending, 2);
     assert_eq!(g.states(), ["holding", "sending"], "a changed count, then a changed state, each once");
     emit(HeldState::Sending, 2);
-    assert_eq!(g.states(), Vec::<String>::new(), "nothing bypasses the memory: the same pair again is not news");
+    assert_eq!(g.states(), Vec::<String>::new(), "only an emit naming a line kept bypasses the memory: the same pair again is not news");
     emit(HeldState::Kept, 0);
     emit(HeldState::Holding, 1);
     assert_eq!(g.states(), ["kept", "holding"], "a document kept with no line clears its key: the pair after it is news");
@@ -2943,6 +2942,39 @@ fn the_held_events_memory_emits_a_pair_once_until_it_changes_or_is_cleared() {
     waits("read only", UnwritableClass::ReadOnly);
     emit(HeldState::Holding, 1);
     assert_eq!(g.states(), ["holding", "holding", "holding"], "why a line is off disk joins the memory: each change said once, a repeat none (skep #860)");
+}
+
+/// Checks that an event naming a line kept is said though its pair repeats.
+///
+/// Its pair is still remembered (skep #968). A `sending` pair said, the same
+/// pair naming a line kept is said all the same, its `landed` the line's one
+/// entry; after a `holding` pair, a keep's `sending` pair is said and
+/// remembered, so the same pair after it, naming no line, is not said; and a
+/// keep that leaves no line clears the document's key as any `kept` does
+/// (the mutant that judges an event naming a line kept by its pair alone
+/// drops the ack of a line that lands while a line no event said stands
+/// behind it; the one that skips the memory at such an event says the pair
+/// after it again).
+#[test]
+fn an_event_naming_a_line_kept_is_said_though_its_pair_repeats() {
+    let g = ground();
+    let lines = |held: u64| LinesOn { held, unwritable: None };
+    let emit = |state: HeldState| g.holds.emit_held(&g.session, DOC, lines(1), state, None, MovedFace::default());
+    let landed = |k: u64, at: u64| LandedLine { k, burst: Some("b-1".into()), at: Some(at), addr: Some(i(9)) };
+    emit(HeldState::Sending);
+    g.holds.say_kept(&g.session, DOC, lines(1), &landed(1, 50));
+    emit(HeldState::Holding);
+    g.holds.say_kept(&g.session, DOC, lines(1), &landed(2, 51));
+    emit(HeldState::Sending);
+    let said: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).collect();
+    said.iter().for_each(assert_held_event_declared);
+    let told: Vec<(&str, Option<&Value>)> = said.iter().map(|e| (e["state"].as_str().unwrap_or("?"), e.get("landed"))).collect();
+    let entry = |k: u64, at: u64| json!([{"held": k, "burst": "b-1", "at": at, "addr": i(9)}]);
+    let (first, second) = (entry(1, 50), entry(2, 51));
+    assert_eq!(told, [("sending", None), ("sending", Some(&first)), ("holding", None), ("sending", Some(&second))], "each keep said, the pair after the last one remembered");
+    g.holds.say_kept(&g.session, DOC, lines(0), &LandedLine { k: 3, burst: None, at: Some(52), addr: None });
+    assert_eq!(g.states(), ["kept"]);
+    assert!(g.holds.last_emitted.lock().unwrap().is_empty(), "a keep that leaves no line clears the document's key");
 }
 
 /// Checks that the compaction keeps the principal's counter: the next

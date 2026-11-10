@@ -563,6 +563,46 @@ struct MovedFace<'h> {
     sendable: Option<bool>,
 }
 
+/// A held line that left the store kept, as the `held` event names it.
+///
+/// It is how the page learns the ack of a line the shell sent after its `op`
+/// answered `held` (§4b.2's `held` event; skep #968): the line's ordinal,
+/// the one the `held` answer named; the envelope `id` its frame carried,
+/// where the page sent one (A-60); the position the board took it at, its
+/// ack's `at` (A-62, A-63) or the one the resend's read found it landed at,
+/// none where the read found it under a reclaimed history; and the first
+/// I-address an insert's `ack_addr` minted (A-63), none for the other kinds
+/// and for a landing the read found, which no ack names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LandedLine {
+    k: u64,
+    burst: Option<String>,
+    at: Option<u64>,
+    addr: Option<String>,
+}
+
+impl LandedLine {
+    /// Returns `line`'s entry, kept at `at`, `addr` the I-address it minted.
+    fn of(line: &HeldLine, at: Option<u64>, addr: Option<&str>) -> LandedLine {
+        LandedLine { k: line.k, burst: line.id.clone(), at, addr: addr.map(str::to_owned) }
+    }
+
+    /// Returns the entry as the `held` event's `landed` carries it.
+    fn json(&self) -> Value {
+        let mut v = json!({"held": self.k});
+        if let Some(burst) = &self.burst {
+            v["burst"] = Value::from(burst.as_str());
+        }
+        if let Some(at) = self.at {
+            v["at"] = Value::from(at);
+        }
+        if let Some(addr) = &self.addr {
+            v["addr"] = Value::from(addr.as_str());
+        }
+        v
+    }
+}
+
 /// What the shift test answered of a moved line's `send` (§3c.5; skep #867).
 ///
 /// The test runs the shift a `send` would run against the document as it
@@ -1648,7 +1688,9 @@ type HeldKey = (String, String, String);
 ///
 /// It is the members the event repeats where a retry lands
 /// ([`Holds::say_landed`]) and those a repeat is judged by
-/// ([`HeldSaid::repeated_by`]).
+/// ([`HeldSaid::repeated_by`]). The line a keep names is none of them: it
+/// is said on the one event that keeps it ([`LandedLine`]), and no repeat
+/// says it again.
 #[derive(Debug, Clone)]
 struct HeldSaid {
     state: HeldState,
@@ -1660,6 +1702,15 @@ struct HeldSaid {
 }
 
 impl HeldSaid {
+    /// Returns what an event says of a document.
+    ///
+    /// It is the `lines` standing on it, its `state`, its `cause` and its
+    /// `face`.
+    fn of(lines: LinesOn, state: HeldState, cause: Option<&str>, face: MovedFace<'_>) -> HeldSaid {
+        let LinesOn { held, unwritable } = lines;
+        HeldSaid { state, held, cause: cause.map(str::to_owned), hands: face.hands.to_vec(), sendable: face.sendable, unwritable }
+    }
+
     /// Returns whether `now` would say nothing this has not said.
     ///
     /// It compares the state, the count, whether the hands are named not
@@ -2519,15 +2570,17 @@ pub struct Holds {
     /// The `held` event last emitted per (board, session, document).
     ///
     /// It is its state, its count, whether it named the hands not read, and
-    /// its `sendable` ([`Holds::emit_held`]).
+    /// its `sendable` ([`Holds::emit_said`]).
     ///
-    /// The event goes out once per change of a document's state (skep #727):
-    /// an emit of what was last emitted for its key is none, so a moved face
-    /// whose hands are read at last is said again with them (skep #863). A
-    /// leaf lock, taken inside `emit_held` alone and never held while another
-    /// lock is taken — the emit is made under the board's lock from `resolve`
-    /// and a hold among others, so the memory lives beside the boards' locks,
-    /// not under one. A document kept with no line left clears its key.
+    /// The event goes out once per change of a document's state (skep #727): an
+    /// emit of what was last emitted for its key is none, so a moved face whose
+    /// hands are read at last is said again with them (skep #863), and one
+    /// naming a line kept is said whatever was last told (skep #968). A leaf
+    /// lock, taken inside `emit_said` and `told` alone and never held while
+    /// another lock is taken — the emit is made under the board's lock from
+    /// `resolve` and a hold among others, so the memory lives beside the
+    /// boards' locks, not under one. A document kept with no line left clears
+    /// its key.
     last_emitted: Mutex<HashMap<HeldKey, HeldSaid>>,
     /// The milliseconds a suite moved the clock forward ([`Holds::now`]).
     ///
@@ -4168,16 +4221,17 @@ impl Holds {
     /// acted on under the lock again, the door taken again and the line asked
     /// to stand with the reason it was read under: a landing found keeps the
     /// line `done kept` as the resend keeps a landed head
-    /// ([`Holds::keep_landing`]), nothing dropped, the lines behind it handed
-    /// to the machine as a `send`'s are ([`Resolved::Kept`]); no row that
-    /// could be its landing drops it, as every drop does; the death signal
-    /// drops nothing ([`Resolved::Died`]); and where the read cannot tell —
-    /// no answer, no page, a row that could be the landing and is not
-    /// confirmed — nothing is dropped and the drop is refused, a board the
-    /// read went unanswered at marked so until a `/health` answers. Such a
-    /// line leaves by `send` there, whose dial the board judges by its typed
-    /// state. A drop of a line never sent, and the keyless session's discard,
-    /// whose rows are never its own, make no read.
+    /// ([`Holds::keep_landing`]), nothing dropped, the `held` event naming
+    /// the line and the position the read found it at (skep #968), the lines
+    /// behind it handed to the machine as a `send`'s are ([`Resolved::Kept`]);
+    /// no row that could be its landing drops it, as every drop does; the
+    /// death signal drops nothing ([`Resolved::Died`]); and where the read
+    /// cannot tell — no answer, no page, a row that could be the landing and
+    /// is not confirmed — nothing is dropped and the drop is refused, a board
+    /// the read went unanswered at marked so until a `/health` answers. Such
+    /// a line leaves by `send` there, whose dial the board judges by its
+    /// typed state. A drop of a line never sent, and the keyless session's
+    /// discard, whose rows are never its own, make no read.
     ///
     /// # Errors
     ///
@@ -4231,13 +4285,13 @@ impl Holds {
                 // A pass under way walks the document again at its next turn.
                 ph.stopped_in_pass.remove(&read.doc);
                 ph.cut_in_pass.remove(&read.doc);
-                self.say_standing(session, ph, &read.doc);
+                self.say_standing(session, ph, &read.doc, Some(&LandedLine::of(&read, at, None)));
                 return Ok(Resolved::Kept);
             }
             ReadOutcome::NoLanding => {
                 let ph = self.still_as_read(&mut board_hold, session, &read)?;
                 self.drop_run(principal, ph, k, &read.doc);
-                self.say_standing(session, ph, &read.doc);
+                self.say_standing(session, ph, &read.doc, None);
                 return Ok(Resolved::Dropped);
             }
         };
@@ -4272,7 +4326,7 @@ impl Holds {
         match act {
             ResolveAct::Drop => {
                 self.drop_run(session.facts.principal, ph, k, doc);
-                self.say_standing(session, ph, doc);
+                self.say_standing(session, ph, doc, None);
                 Resolved::Dropped
             }
             ResolveAct::Send => {
@@ -4331,14 +4385,27 @@ impl Holds {
     ///
     /// It says what stands ([`state_on`]) under the session that acted, a
     /// moved face its `sendable` and the hands it last named, none under the
-    /// keyless session, which is offered no `send` (§4b.1). `emit_held`
-    /// touches the bus alone, so it is safe under the board's lock.
-    fn say_standing(&self, session: &SessionEntry, ph: &mut PrincipalHold, doc: &str) {
+    /// keyless session, which is offered no `send` (§4b.1), and names
+    /// `landed`, the line the act kept, where it kept one (skep #968).
+    /// `emit_said` touches the bus alone, so it is safe under the board's
+    /// lock.
+    fn say_standing(&self, session: &SessionEntry, ph: &mut PrincipalHold, doc: &str, landed: Option<&LandedLine>) {
         let state = state_on(ph, doc);
         let moved = state == HeldState::Moved;
         let sendable = if moved && session.may_write() { ph.sendable_told(doc) } else { None };
         let hands = if moved { self.told(session, doc).map_or_else(Vec::new, |told| told.hands) } else { Vec::new() };
-        self.emit_held(session, doc, ph.lines_on(doc), state, None, MovedFace { hands: &hands, sendable });
+        self.emit_said(session, doc, HeldSaid::of(ph.lines_on(doc), state, None, MovedFace { hands: &hands, sendable }), landed);
+    }
+
+    /// Emits the `held` event for a line the resend kept.
+    ///
+    /// It names `landed` (skep #968), `lines` standing on `doc` after it: the
+    /// state `sending` where one stands, else `kept`. It is a resent line's
+    /// ack and a head the resend's read found landed (`resend`'s
+    /// `send_line` and `resume_doc`).
+    fn say_kept(&self, session: &SessionEntry, doc: &str, lines: LinesOn, landed: &LandedLine) {
+        let state = if lines.held == 0 { HeldState::Kept } else { HeldState::Sending };
+        self.emit_said(session, doc, HeldSaid::of(lines, state, None, MovedFace::default()), Some(landed));
     }
 
     /// Marks owed the shift tests of the documents a drafts read named.
@@ -4687,52 +4754,66 @@ impl Holds {
         }
     }
 
-    /// Emits the `held` event (§4b.2) at the session's board.
+    /// Emits the `held` event (§4b.2), naming no line kept.
     ///
-    /// It goes out once per change of the document's state.
+    /// It says `lines`, `state`, `cause` and `face` of `doc` at the session's
+    /// board, as [`Holds::emit_said`] says every `held` event.
+    fn emit_held(&self, session: &SessionEntry, doc: &str, lines: LinesOn, state: HeldState, cause: Option<&str>, face: MovedFace<'_>) {
+        self.emit_said(session, doc, HeldSaid::of(lines, state, cause, face), None);
+    }
+
+    /// Emits the `held` event (§4b.2) that says `said` of `doc`.
+    ///
+    /// It goes out once per change of the document's state, and at every
+    /// line kept.
     ///
     /// It is `{board, session, doc, held, state, cause?, hands?, sendable?,
-    /// unwritable?, unwritable_class?}`, under the session the change was
-    /// made for — `hands` with the `moved` state alone, the hands whose rows
-    /// moved the document (§3c.5), each once, or the one hand `unread` where
-    /// the board gave their read no answer; `sendable` with that state alone,
-    /// where the shell knows what a `send` would do ([`Tested`]; skep #867);
-    /// and the two members together while a line of the document has no copy
-    /// on disk ([`Unwritable`]; skep #860). An emit that repeats what was
-    /// last emitted for the same board, session and document is none
+    /// unwritable?, unwritable_class?, landed?}`, under the session the
+    /// change was made for — `hands` with the `moved` state alone, the hands
+    /// whose rows moved the document (§3c.5), each once, or the one hand
+    /// `unread` where the board gave their read no answer; `sendable` with
+    /// that state alone, where the shell knows what a `send` would do
+    /// ([`Tested`]; skep #867); the two members together while a line of the
+    /// document has no copy on disk ([`Unwritable`]; skep #860); and
+    /// `landed` where `landed` names the line just kept, its one entry — a
+    /// resent line's ack, a head the resend's read found landed, a drop's
+    /// read that found its line landed (skep #968). An emit that repeats what
+    /// was last emitted for the same board, session and document is none
     /// ([`HeldSaid::repeated_by`]; skep #727): a document's state is said as
     /// it changes, never again per probe; the first emit for a key is always
-    /// made, and a document kept with no line left clears its key
-    /// ([`Holds::last_emitted`]). The memory's lock is a leaf, taken here
-    /// alone and released before the bus is reached, so the emit is safe
-    /// under the board's lock as it is without one.
-    fn emit_held(&self, session: &SessionEntry, doc: &str, lines: LinesOn, state: HeldState, cause: Option<&str>, face: MovedFace<'_>) {
-        let key = (session.board_reference.clone(), session.reference.clone(), doc.to_string());
-        let LinesOn { held, unwritable } = lines;
-        let said = HeldSaid { state, held, cause: cause.map(str::to_owned), hands: face.hands.to_vec(), sendable: face.sendable, unwritable: unwritable.clone() };
+    /// made, one naming a line kept is made whatever was last told, its pair
+    /// the one remembered from it, and a document kept with no line left
+    /// clears its key ([`Holds::last_emitted`]). The memory's lock is a
+    /// leaf, taken here alone and released before the bus is reached, so the
+    /// emit is safe under the board's lock as it is without one.
+    fn emit_said(&self, session: &SessionEntry, doc: &str, said: HeldSaid, landed: Option<&LandedLine>) {
+        let mut data = json!({"board": session.board_reference, "session": session.reference, "doc": doc, "held": said.held, "state": said.state.as_str()});
+        if let Some(c) = &said.cause {
+            data["cause"] = Value::from(c.as_str());
+        }
+        if !said.hands.is_empty() {
+            data["hands"] = Value::Array(said.hands.iter().map(Hand::json).collect());
+        }
+        if let Some(sendable) = said.sendable {
+            data["sendable"] = Value::from(sendable);
+        }
+        if let Some(why) = &said.unwritable {
+            why.answer_in(&mut data);
+        }
+        if let Some(landed) = landed {
+            data["landed"] = json!([landed.json()]);
+        }
         {
+            let key = (session.board_reference.clone(), session.reference.clone(), doc.to_string());
             let mut last = self.last_emitted.lock().expect("the held events' memory");
-            if last.get(&key).is_some_and(|told| told.repeated_by(&said)) {
+            if landed.is_none() && last.get(&key).is_some_and(|told| told.repeated_by(&said)) {
                 return;
             }
-            if state == HeldState::Kept && held == 0 {
+            if said.state == HeldState::Kept && said.held == 0 {
                 last.remove(&key);
             } else {
                 last.insert(key, said);
             }
-        }
-        let mut data = json!({"board": session.board_reference, "session": session.reference, "doc": doc, "held": held, "state": state.as_str()});
-        if let Some(c) = cause {
-            data["cause"] = Value::from(c);
-        }
-        if !face.hands.is_empty() {
-            data["hands"] = Value::Array(face.hands.iter().map(Hand::json).collect());
-        }
-        if let Some(sendable) = face.sendable {
-            data["sendable"] = Value::from(sendable);
-        }
-        if let Some(why) = &unwritable {
-            why.answer_in(&mut data);
         }
         self.bus.emit(EventName::Held, data);
     }

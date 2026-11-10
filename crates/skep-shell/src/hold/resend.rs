@@ -147,7 +147,11 @@
 //! every failed send of it noted on its clock and its "sent again" said once
 //! per change of the failure; one the board refuses under a code the table
 //! holds nowhere is handed to the person at once, a refused run under the
-//! board's token, since it cannot resolve (§3c.4).
+//! board's token, since it cannot resolve (§3c.4). Each line the walk keeps,
+//! at its ack or found landed by the read, is named on its document's `held`
+//! event — its ordinal, its frame's `id`, the position the board took it at
+//! and, at an insert's ack, the I-address it minted (`LandedLine`;
+//! skep #968).
 //! A resend marks its line as one that may have landed before it dials, synced,
 //! and the line stays so through every resend short of its ack and through a
 //! move, so its next read takes a landing it finds as the line's own — after a
@@ -162,12 +166,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use skep_client::board::{acked_at, frames, Answer, ChangesAnswer, ChangesQuery, Rejection};
+use skep_client::board::{acked_addr, acked_at, frames, Answer, ChangesAnswer, ChangesQuery, Rejection};
 use skep_client::halt::Halt;
 
 use super::{
-    awaits_act, cause, line_state, millis, unanswered, AttestedWhereOwed, BoardHold, BoardSlot, CutSend, Dialed, Hand, HandsRead, HeldState, Holds, KeptShift, MovedFace, Tested, Turn, Verdict,
-    HAND_OVER_DEADLINE, TURN_STEPS,
+    awaits_act, cause, line_state, millis, unanswered, AttestedWhereOwed, BoardHold, BoardSlot, CutSend, Dialed, Hand, HandsRead, HeldState, Holds, KeptShift, LandedLine, MovedFace, Tested, Turn,
+    Verdict, HAND_OVER_DEADLINE, TURN_STEPS,
 };
 use crate::held::{i_address, Anchors, Done, HeldLine, Reason, SpanRun};
 use crate::refusal::{Name, Refusal};
@@ -1175,6 +1179,9 @@ impl Holds {
     /// `held` event and the `Talk` line were said once as the state began;
     /// it is tried again the probe the head reads. Whether a read is made is
     /// [`read_owed`]'s, which the walk counts it by.
+    ///
+    /// A landed head's `held` event names it, at the position the read found
+    /// ([`LandedLine`]; skep #968), and no I-address: no ack names one.
     fn resume_doc(&self, session: &SessionEntry, head: &HeldLine, head_unreadable: bool) -> Step {
         let (board_reference, principal, doc) = (session.board_reference.as_str(), session.facts.principal, head.doc.as_str());
         if passed_over(head, head_unreadable) {
@@ -1190,12 +1197,12 @@ impl Holds {
             ReadOutcome::Landed { at } => {
                 self.keep_landing(&mut self.lock(board_reference), principal, doc, head.k, at);
                 let lines = self.lines_on(board_reference, principal, doc);
-                if lines.held == 0 {
-                    self.emit_held(session, doc, lines, HeldState::Kept, None, MovedFace::default());
-                    Step::Stops
-                } else {
-                    self.emit_held(session, doc, lines, HeldState::Sending, None, MovedFace::default());
+                let goes = lines.held > 0;
+                self.say_kept(session, doc, lines, &LandedLine::of(head, at, None));
+                if goes {
                     Step::Goes
+                } else {
+                    Step::Stops
                 }
             }
             ReadOutcome::NoLanding | ReadOutcome::Undecided => {
@@ -1369,7 +1376,9 @@ impl Holds {
     /// past the position noted, a later write noted since the read standing;
     /// the line is `done kept` with `at`. It is the resend's keep of a head
     /// ([`Holds::resume_doc`]) and the drop's, where the read the drop makes
-    /// first finds the line landed (`Holds::resolve`; skep #866).
+    /// first finds the line landed (`Holds::resolve`; skep #866), each caller
+    /// saying the `held` event that names the line kept at `at`
+    /// ([`LandedLine`]; skep #968).
     pub(super) fn keep_landing(&self, board_hold: &mut BoardHold, principal: u64, doc: &str, k: u64, at: Option<u64>) {
         if let Some(at) = at {
             board_hold.acked.insert(at);
@@ -1436,6 +1445,11 @@ impl Holds {
     /// [`Holds::resume_doc`] let go alone — a `sent` head read for its own
     /// landing and found unlanded — so no line is shifted before its read,
     /// and a landing the read keeps is shifted never.
+    ///
+    /// **The ack names the line.** An ack's `held` event names the line kept,
+    /// the ack's position and an insert's minted I-address ([`LandedLine`];
+    /// skep #968): the page's one word of a line's ack once its `op` answered
+    /// `held`.
     fn send_line(&self, session: &SessionEntry, line: &HeldLine, steps: &mut usize) -> Step {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let given = || self.with_principal(board_reference, principal, |ph| ph.reissues.get(&line.k).cloned()).flatten().unwrap_or_default();
@@ -1484,10 +1498,10 @@ impl Holds {
             match dialed {
                 Dialed::Acked(ack) => {
                     self.note_ack(session, &frame, &ack);
-                    self.done(board_reference, principal, line.k, Done::Kept { at: acked_at(&ack) });
+                    let at = acked_at(&ack);
+                    self.done(board_reference, principal, line.k, Done::Kept { at });
                     let rest = self.lines_on(board_reference, principal, &line.doc);
-                    let state = if rest.held == 0 { HeldState::Kept } else { HeldState::Sending };
-                    self.emit_held(session, &line.doc, rest, state, None, MovedFace::default());
+                    self.say_kept(session, &line.doc, rest, &LandedLine::of(line, at, acked_addr(&ack)));
                     return Step::Goes;
                 }
                 Dialed::Held { reason, refusal } if reason.cause == cause::MOVED => {

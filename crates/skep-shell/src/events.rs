@@ -74,18 +74,22 @@ pub enum EventName {
     /// document, whichever is later, or the one hand `unread` where the
     /// board gave that read no answer, read again at its answer (skep #863);
     /// the resend's read judges only whether a line's own write landed
-    /// (§3c.5).
-    /// Emitted ONCE PER CHANGE of a document's state (skep #727): at a hold's
+    /// (§3c.5). An event that says a line kept after its `op` answered
+    /// `held` names it, `landed`: its ordinal, its frame's `id`, the position
+    /// the board took it at and, at an insert's ack, the I-address it minted
+    /// — the one place the page learns a resent line's ack (skep #968).
+    /// Emitted once per change of a document's state (skep #727): at a hold's
     /// start, at each line's resolution or drop, and at each state the resend
     /// moves a document through — the same state and count said again for
-    /// the same board, session and document is not emitted again, so a
-    /// document waiting on a board's head record that will not read is said
-    /// once, not at each probe — never when a principal's file is read at its
-    /// session's open, whose lines `held(session)` lists, never for a join of
-    /// lines held before the board's held file was this shell's, which moves
-    /// no ordinal the page holds (each line's is its own for the shell's
-    /// life; skep #856), nor for a line a call enters, shifts and settles
-    /// within itself.
+    /// the same board, session and document is not emitted again, save an
+    /// event naming a line kept, so a document waiting on a board's head
+    /// record that will not read is said once, not at each probe — never when
+    /// a principal's file is read at its session's open, whose lines
+    /// `held(session)` lists, never for a join of lines held before the
+    /// board's held file was this shell's, which moves no ordinal the page
+    /// holds (each line's is its own for the shell's life; skep #856), nor
+    /// for a line a call enters, shifts and settles within itself, whose ack
+    /// the `op` answer carries.
     Held,
     /// The state of a publication's one request as it moves: `publication`.
     ///

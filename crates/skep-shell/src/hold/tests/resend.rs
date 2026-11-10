@@ -164,7 +164,12 @@
 //! or handed to the person at the first read past its deadline; a full
 //! pending file joined at the session's open in one copy with one sync; and,
 //! over the board's feed thread, a search answered between two turns, the
-//! turns running back to back. And, timed (`#[ignore]`, the full gate's), the
+//! turns running back to back. And each line kept, named (skep #968): a
+//! resent line's ack named on its `held` event with its `id`, its position
+//! and the I-address an insert minted, two lines kept in one pass each on
+//! its own event, an ack said though it leaves the state and count as told,
+//! and a landing the read found, or the drop's read, named at its position.
+//! And, timed (`#[ignore]`, the full gate's), the
 //! walk over a full queue drained within its ceiling, each line's send
 //! measured beside it, and the person's drop of a refused run over a full
 //! queue, each in time in proportion to the lines.
@@ -190,9 +195,12 @@ fn outcome_i_no_row_sends_from_the_head() {
 ///
 /// The in-flight burst (its line `sent: true`) landed — one row of the
 /// session's own hand, consistent, its five values read back equal at the
-/// site — so the head is `done kept` and nothing is re-sent (the mutant that
-/// resends the head; the mutant that compares the frame's one string with
-/// one position's value faces the person's own text `moved`).
+/// site — so the head is `done kept` and nothing is re-sent, its `kept`
+/// event naming the line at its row's position and no I-address, which no
+/// ack names (skep #968) (the mutant that resends the head; the mutant that
+/// compares the frame's one string with one position's value faces the
+/// person's own text `moved`; the one that names no line leaves the page no
+/// position for the words it typed).
 #[test]
 fn outcome_ii_a_landed_burst_is_kept_not_resent() {
     let g = ground();
@@ -202,8 +210,91 @@ fn outcome_ii_a_landed_burst_is_kept_not_resent() {
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 0, "the landed head is NOT re-sent: {:?}", g.fake.sends.lock().unwrap());
     assert!(g.lines().is_empty(), "the line is done kept");
-    let states = g.states();
-    assert!(states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "{states:?}");
+    let said = held_events(&g);
+    let states: Vec<&str> = said.iter().filter_map(|e| e["state"].as_str()).collect();
+    assert!(states.contains(&"kept") && !states.contains(&"moved"), "{states:?}");
+    let kept = said.iter().find(|e| e["state"] == "kept").expect("the document kept");
+    assert_eq!(kept["landed"], json!([{"held": 1, "at": 77}]), "the line the read found landed, at its row's position: {kept}");
+}
+
+/// Returns each `held` event's state, its count and the lines it names kept.
+fn named_kept(said: &[Value]) -> Vec<(&str, u64, Option<&Value>)> {
+    said.iter().map(|e| (e["state"].as_str().unwrap_or("?"), e["held"].as_u64().unwrap_or(u64::MAX), e.get("landed"))).collect()
+}
+
+/// Checks that a resent line's ack names the line on its `held` event.
+///
+/// It is the page's one word of the ack (§4b.2; skep #968). An insert
+/// carrying the page's `id` is held before any dial, and the board takes
+/// its resend, answering `ack_addr`: the `kept` event names the line — its
+/// ordinal, the `id`, the ack's `at` and the I-address the insert minted —
+/// and no event before it names a line (the mutant that drops the ack once
+/// the line is `done` leaves the page naming the words it typed by its own
+/// name after the board holds them).
+#[test]
+fn a_resent_lines_ack_names_the_line_on_its_held_event() {
+    let g = ground();
+    let mut frame = insert(DOC, json!(["hello"]), g.fake.head());
+    frame["id"] = json!("b-1");
+    let k = g.hold(&frame, "unreachable", false)["held"].as_u64().unwrap();
+    g.fake.op_rejected.next(1, json!({"resp": "ack_addr", "addr": i(9), "at": 50}));
+    g.holds.probe("b-1");
+    assert!(g.lines().is_empty(), "the line is kept");
+    let landed = json!([{"held": k, "burst": "b-1", "at": 50, "addr": i(9)}]);
+    assert_eq!(named_kept(&held_events(&g)), [("holding", 1, None), ("sending", 1, None), ("kept", 0, Some(&landed))]);
+}
+
+/// Checks that two lines kept in one pass are named each on its own event.
+///
+/// They are named in order (skep #968). Two deletes on one document are
+/// resent in one pass: the first's ack says the document `sending`, naming
+/// the first line at its ack's position, the second's says it `kept`, naming
+/// the second, and neither names an I-address, a delete minting none (the
+/// mutant that names the lines on the document's last event alone tells the
+/// page of the first line only when the last one lands).
+#[test]
+fn two_lines_kept_in_one_pass_are_named_each_on_its_own_event() {
+    let g = ground();
+    for _ in 0..2 {
+        g.hold(&delete(DOC, g.fake.head()), "unreachable", false);
+    }
+    let _ = g.states();
+    g.holds.probe("b-1");
+    let (first, second) = (json!([{"held": 1, "at": 50}]), json!([{"held": 2, "at": 51}]));
+    assert_eq!(named_kept(&held_events(&g)), [("sending", 2, None), ("sending", 1, Some(&first)), ("kept", 0, Some(&second))]);
+}
+
+/// Checks that an ack is said though it leaves the state and count as told.
+///
+/// It is said whatever the event last said (skep #968). A line held before
+/// any dial is resent, and as its dial reaches the board a line is entered
+/// behind it on its document with no event said — as a first dial's shift
+/// enters its line, or a hold under another session of the principal's — so
+/// the ack leaves the document `sending` with one line, the pair the walk
+/// said before the dial. The ack's event is said all the same, naming the
+/// line kept, and the line entered is sent and named in its turn (the mutant
+/// that judges an event naming a line kept by its pair alone drops the
+/// ack's one word).
+#[test]
+fn an_ack_that_leaves_the_state_and_count_as_told_is_said() {
+    let g = ground();
+    let typed = g.fake.head();
+    g.hold(&insert(DOC, json!(["a"]), typed), "unreachable", false);
+    let _ = g.states();
+    let (holds, entered) = (Arc::downgrade(&g.holds), AtomicBool::new(false));
+    *g.fake.at_send.lock().unwrap() = Some(Box::new(move || {
+        if entered.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        if let Some(holds) = holds.upgrade() {
+            holds.with_principal("b-1", 1, |ph| ph.hold(DOC, None, 0, insert(DOC, json!(["b"]), typed), None, Reason::of("behind", false)).unwrap());
+        }
+    }));
+    g.holds.probe("b-1");
+    *g.fake.at_send.lock().unwrap() = None;
+    let (first, second) = (json!([{"held": 1, "at": 50}]), json!([{"held": 2, "at": 51}]));
+    assert_eq!(named_kept(&held_events(&g)), [("sending", 1, None), ("sending", 1, Some(&first)), ("kept", 0, Some(&second))]);
+    assert!(g.lines().is_empty(), "both lines kept");
 }
 
 /// Checks that the resend sends its lines in `k` order across the documents.
@@ -555,7 +646,8 @@ fn a_read_the_board_refuses_decides_nothing() {
 ///
 /// No row can be read, so the arrangement alone decides the one question
 /// (§3c.5) — a `sent` head whose values read back equal at its site is (ii),
-/// kept and not re-sent; values that differ are no landing found, and the
+/// kept and not re-sent, its `kept` event naming the line with no position,
+/// none read (skep #968); values that differ are no landing found, and the
 /// head is sent from the head and kept, never faced `moved` (the mutant that
 /// faces the difference `moved` marks text nothing moved as "not placed");
 /// a site read the board does not answer decides nothing and the line
@@ -571,7 +663,8 @@ fn history_reclaimed_keeps_the_head_where_its_site_confirms_it_alone() {
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 0, "the landed head is not re-sent");
     assert!(g.lines().is_empty(), "the values at the site keep it");
-    assert!(g.states().contains(&"kept".to_string()));
+    let landed = json!([{"held": 1}]);
+    assert_eq!(named_kept(&held_events(&g)), [("holding", 1, None), ("kept", 0, Some(&landed))], "kept, the line named with no position");
 
     let g = ground();
     *g.fake.changes_refused.lock().unwrap() = reclaimed();
@@ -1871,10 +1964,11 @@ fn every_read_answer_meets_the_drop_of_a_line_whose_answer_was_lost_as_the_table
 /// line `done kept` at its row's position, nothing dialed and nothing
 /// dropped, the position noted as an ack's is — the document's base, the
 /// principal's latest arrangement write there, an acked position — and the
-/// `held` event saying the line behind `holding`; the next probe sends and
-/// keeps that line. The mutant that drops unread drops both lines and the
-/// words the board holds; the one that drops the lines behind a kept line
-/// loses the person's later words.
+/// `held` event saying the line behind `holding`, naming the line kept at
+/// that position (skep #968); the next probe sends and keeps that line. The
+/// mutant that drops unread drops both lines and the words the board holds;
+/// the one that drops the lines behind a kept line loses the person's later
+/// words; the one that names no line leaves the page no position for them.
 #[test]
 fn a_drop_of_a_handed_over_line_whose_write_landed_keeps_it_and_sends_the_line_behind() {
     let g = ground();
@@ -1902,6 +1996,7 @@ fn a_drop_of_a_handed_over_line_whose_write_landed_keeps_it_and_sends_the_line_b
     assert_eq!(said.len(), 1, "{said:?}");
     assert_held_event_declared(&said[0]);
     assert_eq!((said[0]["held"].as_u64(), said[0]["state"].as_str()), (Some(1), Some("holding")), "the document as it stands: {}", said[0]);
+    assert_eq!(said[0]["landed"], json!([{"held": k, "at": 77}]), "the line kept, at its row's position: {}", said[0]);
     assert_eq!((g.base_of(DOC), g.holds.last_arranged(&g.session, DOC), g.holds.acked("b-1", 77)), (77, Some(77), true), "noted as an ack is");
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), sends + 1, "the line behind is sent");

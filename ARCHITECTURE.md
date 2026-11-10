@@ -796,8 +796,9 @@ SP-17, SP-18, SP-20, SP-24, SP-28.
 
 `skep-shell` is the bridge of `client.md` §4b as a library — one method
 per call of §4b.1 (the `publication` family's four among them), of the
-read of a draft's standing `publication.standing`, of the document
-index's listing `places` (A-255) and of the change feed's page `changes`,
+read of a draft's standing `publication.standing`, of the read of a
+draft's past state `history.past`, of the document index's listing
+`places` (A-255) and of the change feed's page `changes`,
 every event of §4b.2 on one stream — and
 the three things `skep-client` does not hold and every shell needs,
 written once so the dev provider (`skep-dev serve`) and the desktop shell
@@ -863,8 +864,8 @@ re-exports counted as the module it is brought from (held by
   `Shell::write_door`, the ONE WRITE DOOR every write the shell sends
   meets before any dial — the `op` row's frames, and through
   `Shell::signed` every row of `shell/publication.rs`, `shell/merge.rs` and
-  `shell/history.rs`, and every ceremony of `shell/ceremony.rs` that writes
-  to the board.
+  `shell/history.rs` that writes, and every ceremony of `shell/ceremony.rs`
+  that writes to the board.
 - `shell/ceremony.rs` the ten ceremonial rows — `keygen`, `fingerprint` and
   the eight walks over `skep_client::ceremony` — `pub(super)` to `call`.
 - `shell/follow.rs` `Followers`: the bursts each session sent with an `id`
@@ -883,9 +884,11 @@ re-exports counted as the module it is brought from (held by
   `Merges`, the compositions they stand on: one per (board, principal), the
   latest standing, dying with its session through the bus's watcher; the
   shot of `land` goes through `shell/publication.rs`'s panel and send.
-- `shell/history.rs` the `history.restore` row over `skep_client::history`
-  — `pub(super)` to `call` — its refusals crossing through
-  `shell/merge.rs`'s mapping and its write noted in `hold.rs`'s holds.
+- `shell/history.rs` the two `history` rows over `skep_client::history` —
+  `history.past`, its reads alone, and `history.restore`, its reads and its
+  write — `pub(super)` to `call`, their refusals crossing through
+  `shell/merge.rs`'s mapping and the restore's write noted in `hold.rs`'s
+  holds.
 - `shapes.rs` the declarations' table and `declarations()`, pinned by its
   suite — the board's verdict with its `site`, the publication family's
   panel, inputs, outcomes and event among them.

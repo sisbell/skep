@@ -24,8 +24,8 @@ use crate::sessions;
 /// `feed::places_without_index`, the index state through `feed::state_json`,
 /// the death through `sessions`, the rest in the shape `shell`'s and its
 /// rows' children's `json!` spell (the publication family's, the merge
-/// family's and the restore's answers are held to their declarations
-/// against the real board by the shell's own suite,
+/// family's, the past state's and the restore's answers are held to their
+/// declarations against the real board by the shell's own suite,
 /// `shell/tests/publication.rs`, `merge.rs` and `history.rs`).
 fn samples() -> Vec<(&'static str, Value)> {
     let facts = json!({"principal": 1, "account": "1.0.1", "origin": "http://127.0.0.1:8642"});
@@ -127,6 +127,10 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("MergeDefault", json!({"id": 1, "kind": "order", "after": null, "before": null, "placed": [0]})),
         ("Undone", json!({"draft": "1.0.1.0.5", "position": 14, "record": null, "restored": {"base": "1.0.1.0.2.1", "extent": 19}})),
         ("Withdrawn", json!({"draft": "1.0.1.0.5", "position": 14, "record": "1.0.1.0.1.0.2.4"})),
+        (
+            "Past",
+            json!({"draft": "1.0.1.0.5", "at": 9, "as_of": 15, "state": [{"origin": "1.0.1.0.5", "i_start": 1, "width": 19}], "sent": [{"origin": "1.0.1.0.2", "i_start": 1, "width": 19}], "covered": 19, "marker": null}),
+        ),
         ("Restored", json!({"draft": "1.0.1.0.5", "at": 9, "position": 16, "as_of": 15, "marker": {"sides": ["1.0.1.0.2.1.1"], "head": "1.0.1.0.2.2", "head_copied": "13", "at": 12}})),
         ("MergeMarker", json!({"sides": ["1.0.1.0.2.1.1"], "head": "1.0.1.0.2.2", "head_copied": null, "at": null})),
     ]
@@ -174,7 +178,7 @@ fn the_file_names_every_shape_call_and_event() {
     for row in CALL_ROWS {
         assert!(text.contains(&format!("  {}(args: ", method_name(row.name))), "{}", row.name);
     }
-    assert_eq!(CALL_ROWS.len(), 35, "the thirty-five calls: §4b.1's with the publication family's four, the merge family's four, `history.restore` and `held.show`, the read of a draft's standing, the document index's listing and the change feed's page");
+    assert_eq!(CALL_ROWS.len(), 36, "the thirty-six calls: §4b.1's with the publication family's four, the merge family's four, `history.restore` and `held.show`, the read of a draft's standing, the read of a draft's past state, the document index's listing and the change feed's page");
     assert_eq!(CALL_ROWS.iter().map(|row| row.name).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
     for line in [
         "  boards(args: {}): Promise<Outcome<BoardRow[]>>;\n",
@@ -190,6 +194,8 @@ fn the_file_names_every_shape_call_and_event() {
         "  'merge.land'(args: { session: string; resolutions?: Record<string, MergeChoice>; answers?: Record<string, OriginAnswer> }): Promise<Outcome<MergeLanded | Restated | PublicationRefused>>;\n",
         "  'merge.undo'(args: { session: string }): Promise<Outcome<Undone>>;\n",
         "  'merge.withdraw'(args: { session: string; draft: string }): Promise<Outcome<Withdrawn>>;\n",
+        "  'history.past'(args: { session: string; draft: string; at: number }): Promise<Outcome<Past>>;\n",
+        "export interface Past {\n  draft: string;\n  at: number;\n  as_of: number;\n  state: Run[];\n  sent: Run[];\n  covered: number;\n  marker: MergeMarker | null;\n}\n",
         "  'history.restore'(args: { session: string; draft: string; at: number; as_of: number }): Promise<Outcome<Restored>>;\n",
         "  marker: MergeMarker | null;\n",
         "  head_copied: string | null;\n",

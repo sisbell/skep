@@ -60,9 +60,10 @@ fn an_op_at_refusal_is_the_boards_verdict_under_the_wires_status() {
 ///
 /// Every call parses back from its own spelling, so no two calls share one;
 /// `CALLS` is those spellings in §4b.1's order — the publication family
-/// after `op`, the merge family after it, `history.restore` closing the
-/// merge row ahead of the media rows, `held.show` after `held` — the
-/// document index's listing `places` beside `search`; a name of no call
+/// after `op`, the merge family after it, `history.past` and
+/// `history.restore` closing the merge row ahead of the media rows, the
+/// read before the write, `held.show` after `held` — the document index's
+/// listing `places` beside `search`; a name of no call
 /// names none, and `call` answers it `unknown_call`; and `fetch`, which
 /// streams on its transport's own route, is answered `streamed_call`
 /// through the door, whatever its arguments.
@@ -72,12 +73,16 @@ fn every_call_is_named_by_its_own_spelling() {
         assert_eq!(Call::named(call.as_str()), Some(call));
     }
     assert_eq!(CALLS.map(Call::named), Call::ALL.map(Some));
-    assert_eq!((CALLS.len(), CALLS[0], CALLS[34]), (35, "boards", "changes"));
-    assert_eq!((CALLS[29], CALLS[30]), ("search", "places"));
-    assert_eq!(&CALLS[31..34], ["held", "held.show", "resolve"], "`held.show` stands after `held`, whose row owes it");
+    assert_eq!((CALLS.len(), CALLS[0], CALLS[35]), (36, "boards", "changes"));
+    assert_eq!((CALLS[30], CALLS[31]), ("search", "places"));
+    assert_eq!(&CALLS[32..35], ["held", "held.show", "resolve"], "`held.show` stands after `held`, whose row owes it");
     assert_eq!(&CALLS[16..21], ["publication.open", "publication.count", "publication.confirm", "publication.cancel", "publication.standing"], "the publication family stands after `op`, whose publish arm it carries, its read of a draft's standing closing it");
     assert_eq!(&CALLS[21..25], ["merge.compose", "merge.land", "merge.undo", "merge.withdraw"], "the merge family stands after the publication family, whose shot its landing rides");
-    assert_eq!(&CALLS[25..29], ["history.restore", "upload", "fetch", "restore"], "the past state's restore closes the merge row, apart from the media rows' `restore`");
+    assert_eq!(
+        &CALLS[25..30],
+        ["history.past", "history.restore", "upload", "fetch", "restore"],
+        "the past state's read and its restore close the merge row, the read first, apart from the media rows' `restore`"
+    );
     assert_eq!(Call::named("verify"), None);
     let (dir, (talk, _)) = (TempDir::new().unwrap(), talk());
     let shell = Shell::open(ShellOptions::new(Vec::new(), dir.path().join("store"), SessionMode::Bare { principal: 1 }, talk));

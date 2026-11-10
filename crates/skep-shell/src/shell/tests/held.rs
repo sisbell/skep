@@ -1489,12 +1489,13 @@ fn a_burst_held_while_the_head_will_not_read_survives_a_relaunch_and_is_sent_onc
 /// a mint, a link, a publication's open, a merge's withdrawal, a restore —
 /// is refused `another_window` naming its `op` or its `call`, nothing sent
 /// (the board's position unmoved) and nothing held (`held` lists nothing,
-/// no held file stands); a read and the change feed still answer. The first
-/// shell gone, the second's next session takes the store, says so once, and
-/// its burst is acked (the mutant that keeps a second shell's bursts in
-/// memory loses them at its close; the one that refuses at the hold alone
-/// dials the non-burst writes; the one that never tries the lock again
-/// leaves the window reading alone for its life).
+/// no held file stands); a read, a past state's read and the change feed still
+/// answer. The first shell gone, the second's next session takes the store,
+/// says so once, and its burst is acked (the mutant that keeps a second shell's
+/// bursts in memory loses them at its close; the one that refuses at the hold
+/// alone dials the non-burst writes; the one that never tries the lock again
+/// leaves the window reading alone for its life; the one that asks the write
+/// door of the past state's read refuses it `another_window`).
 #[test]
 fn a_second_shell_over_the_data_directory_refuses_every_write_and_holds_nothing() {
     let dir = TempDir::new().unwrap();
@@ -1530,6 +1531,10 @@ fn a_second_shell_over_the_data_directory_refuses_every_write_and_holds_nothing(
         let refused = second.call(call, &args).unwrap_err();
         assert_eq!((refused.name(), refused.to_value()["call"].as_str()), ("another_window", Some(call)), "{refused}");
     }
+    // The past state's read sends no write: it reads at the board, whose
+    // position answers an `at` at the head `not_past`.
+    let past = second.call("history.past", &json!({"session": session, "draft": draft, "at": before})).unwrap_err().to_value();
+    assert_eq!((past["name"].as_str(), past["arm"].as_str(), past["current"].as_u64()), (Some("merge_refused"), Some("not_past"), Some(before)), "the read reached the board: {past}");
     assert_eq!(position(), before, "nothing is sent");
     assert!(second.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty(), "nothing is held");
     assert!(held_path(&store).is_none(), "no held file stands");

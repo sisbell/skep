@@ -251,7 +251,11 @@ impl Name {
     pub const ACCOUNT_DISAGREES: Name = Name("account_disagrees");
     /// `accept` with no address.
     pub const NO_ADDRESS: Name = Name("no_address");
-    /// An attest asked of a session the board answered no account for.
+    /// A row that acts as the session's account, under a session that has none.
+    ///
+    /// The board answered the session no account: an attest signs as it, the
+    /// publication and merge families and the restore take their hand from
+    /// it, and `history.past` reads the correspondence records it owns.
     pub const NO_ACCOUNT: Name = Name("no_account");
     /// The held-burst store's file was written by a newer skep, or is damaged.
     ///
@@ -371,20 +375,23 @@ impl Name {
     ///
     /// `skep_client::merge::Refusal::OverCap`, met at `merge.compose` with
     /// nothing landed (the merge record's decision 13, "refuse with count";
-    /// B3-S11's cap face at the act), and at `history.restore` where the
-    /// state, mapped through the records, is in more runs than one write may
-    /// name, nothing sent; the detail names `n`, the runs, and the `cap`.
+    /// B3-S11's cap face at the act), and at `history.past` and
+    /// `history.restore` where the state, mapped through the records, is in
+    /// more runs than one write may name, nothing sent; the detail names `n`,
+    /// the runs, and the `cap`.
     pub const OVER_CAP: Name = Name("over_cap");
-    /// A draft the merge family or the restore would write into that is
-    /// another account's, or published.
+    /// A row's draft that is another account's, or a published document.
     ///
     /// The draft `merge.compose` is to land into (`into`), read off its
     /// `doc_metadata` before anything is composed — the page's member,
     /// UNTRUSTED (skep #799) — or the one an undo or a withdrawal is to
     /// take a merge out of, or a restore to set, as the library's read or
     /// the board refuses it (`not_owner`, `published_target`;
-    /// `skep_client::merge::Refusal::{NotOwner, UnownedDraft, Published}`);
-    /// the detail names the `addr`.
+    /// `skep_client::merge::Refusal::{NotOwner, UnownedDraft, Published}`),
+    /// and a published document `history.past` is asked to read, refused
+    /// before any read at a position as the restore refuses it; the detail
+    /// names the `addr`, and `published` true where the document is
+    /// published.
     pub const NOT_OWNER: Name = Name("not_owner");
     /// Nothing to undo on the draft the composition landed in.
     ///
@@ -398,19 +405,18 @@ impl Name {
     ///
     /// Each crosses as typed data under this one name, its `arm` the
     /// library's arm in snake case and the arm's members beside it
-    /// (`shell/merge.rs`'s `merge_refusal`, which `history.restore`'s
-    /// refusals cross through too): `too_fragmented {doc, runs_seen}`,
-    /// `history_busy`, `history_reclaimed {at, floor}`, `beyond_head {at,
-    /// head}`, `not_a_position {at, nearest}`, `not_past {draft, at,
-    /// current}` (a restore's `at` at or past `current`, the draft's
-    /// position), `fork_base_moved {fork, source, head}`,
+    /// (`shell/merge.rs`'s `merge_refusal`, which the refusals of
+    /// `history.past` and `history.restore` cross through too): `too_fragmented
+    /// {doc, runs_seen}`, `history_busy`, `history_reclaimed {at, floor}`,
+    /// `beyond_head {at, head}`, `not_a_position {at, nearest}`, `not_past
+    /// {draft, at, current}` (a past state's `at` at or past `current`, the
+    /// draft's position), `fork_base_moved {fork, source, head}`,
     /// `base_not_in_chain {into, head}`, `window_withheld {origin}`,
     /// `needs_signed_session`, `fork_base_named {fork, base}`,
-    /// `supersede_refused {index, detail, head}`, `published_journal
-    /// {journal}` (a published document named as the merge journal, which
-    /// keeps a record only private; nothing sent), `already_published
-    /// {draft, member}` (the shot sent again met the twin fence again;
-    /// nothing published).
+    /// `supersede_refused {index, detail, head}`, `published_journal {journal}`
+    /// (a published document named as the merge journal, which keeps a record
+    /// only private; nothing sent), `already_published {draft, member}` (the
+    /// shot sent again met the twin fence again; nothing published).
     pub const MERGE_REFUSED: Name = Name("merge_refused");
 
     // ── The halts' armed names: `Refusal::named`, `Refusal::of_named` ────

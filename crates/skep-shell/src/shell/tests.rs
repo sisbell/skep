@@ -17,8 +17,10 @@
 //! keeps, and the panel, the count, the confirm and the cancel against the
 //! daemon; `merge` the merge family — the compose, the land, the undo and
 //! the withdrawal against the daemon, and the rules the shell alone keeps;
-//! `history` the restore — its typing, its way back and its note in the
-//! hold against the daemon, and the rules the shell alone keeps; `follow`
+//! `history` the past state's read and its restore — the read's state, its
+//! mapping and its marker with nothing written, the restore's typing, its
+//! way back and its note in the hold against the daemon, and the rules the
+//! shell alone keeps; `follow`
 //! the follower write — a mark landing on its insert's words, refused where
 //! its burst is held, following a delete, overtaking its insert, and
 //! finished by the stop before its session closes — against the daemon;

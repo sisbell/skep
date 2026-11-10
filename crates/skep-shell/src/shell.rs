@@ -8,8 +8,9 @@
 //! reads alone, or signed content-scoped with a dev key in the store, which
 //! writes too (both selectable per run); and one method per row of
 //! `client.md` §4b.1 — and of `places`, the document index's listing beside
-//! `search` (A-255), and of `publication.standing`, the read of a draft's
-//! standing (skep #864) — each taking the row's input as a value and answering
+//! `search` (A-255), of `publication.standing`, the read of a draft's
+//! standing (skep #864), and of `history.past`, the read of a draft's past
+//! state (skep #853) — each taking the row's input as a value and answering
 //! the row's output or a [`Refusal`] under the row's armed name, the board's
 //! own refusals carried verbatim — and of `changes`, the change feed's page
 //! from a position at the session's class, or narrowed to its drafts, or as
@@ -47,9 +48,10 @@
 //! The four `merge` rows — the composition landed in a draft, the shot
 //! carrying the supersession claim with the record after it, the undo, the
 //! withdrawal — are the child module `merge`'s, `pub(super)` to the door,
-//! with the compositions they stand on. The `history.restore` row — a
-//! draft's past state made current by one write, typed against the page's
-//! own state of the draft (B3-S7) — is the child module `history`'s,
+//! with the compositions they stand on. The two `history` rows — a draft's
+//! past state read and mapped with nothing written, `history.past`, and made
+//! current by one write, `history.restore`, typed against the page's own
+//! state of the draft (B3-S7) — are the child module `history`'s,
 //! `pub(super)` to the door. The bursts a session sends with an `id`, and
 //! the FOLLOWER writes the page hands over with them — a `make_link` or a
 //! `nullify` sent with `after`, written at its burst's ack, its pieces
@@ -111,8 +113,8 @@
 //! a follower write sent at its burst's ack — and what a signed
 //! session's attest signs is `SessionEntry::attest`'s. Where the library
 //! does not reach a row at this pin — `upload` and `restore`, the media rows,
-//! whose walk is not in `skep-client` (the past state's `history.restore` is
-//! another row) — the call answers `not_reached` naming where it stops,
+//! whose walk is not in `skep-client` (the past state's two `history` rows
+//! are others) — the call answers `not_reached` naming where it stops,
 //! never a silent stub; `fetch` reaches the dialer's streamed form and no
 //! further (the §Recovery order of the media design is not run here).
 
@@ -407,7 +409,8 @@ impl<'a> Write<'a> {
 /// family's four, `history.restore`, the past state the merge row draws
 /// beside them, and `held.show`, the `held` row's call for the halt face's
 /// own act, among them — the read of a draft's standing beside the
-/// publication family, `publication.standing` (skep #864), the document
+/// publication family, `publication.standing` (skep #864), the read of a
+/// past state before its restore, `history.past` (skep #853), the document
 /// index's listing `places` (A-255), or the change feed's page `changes`:
 /// one arm per call, which the compiler holds exhaustive, and the list a
 /// transport admits a call by, [`CALLS`], spelled from `Call::ALL` — so no
@@ -439,6 +442,7 @@ enum Call {
     MergeLand,
     MergeUndo,
     MergeWithdraw,
+    HistoryPast,
     HistoryRestore,
     Upload,
     Fetch,
@@ -456,11 +460,11 @@ impl Call {
     ///
     /// The `publication` family stands after `op`, whose publish arm it
     /// carries, its read of a draft's standing closing it, and the `merge`
-    /// family after it, whose shot its landing rides, `history.restore`
-    /// closing the merge row that draws it;
-    /// `places` stands beside `search`, `held.show` after `held`, whose row
-    /// owes it, and the change feed's `changes` last.
-    const ALL: [Call; 35] = [
+    /// family after it, whose shot its landing rides, `history.past` and
+    /// `history.restore` closing the merge row that draws the restore, the
+    /// read before the write; `places` stands beside `search`, `held.show`
+    /// after `held`, whose row owes it, and the change feed's `changes` last.
+    const ALL: [Call; 36] = [
         Call::Boards,
         Call::Session,
         Call::Close,
@@ -486,6 +490,7 @@ impl Call {
         Call::MergeLand,
         Call::MergeUndo,
         Call::MergeWithdraw,
+        Call::HistoryPast,
         Call::HistoryRestore,
         Call::Upload,
         Call::Fetch,
@@ -526,6 +531,7 @@ impl Call {
             Call::MergeLand => "merge.land",
             Call::MergeUndo => "merge.undo",
             Call::MergeWithdraw => "merge.withdraw",
+            Call::HistoryPast => "history.past",
             Call::HistoryRestore => "history.restore",
             Call::Upload => "upload",
             Call::Fetch => "fetch",
@@ -545,14 +551,15 @@ impl Call {
     }
 }
 
-/// The bridge's thirty-five calls, as it spells them, in its order.
+/// The bridge's thirty-six calls, as it spells them, in its order.
 ///
 /// They are §4b.1's thirty-two — the `publication` family's four, the
 /// `merge` family's four, `history.restore` and `held.show` among them —
 /// the read of a draft's standing, `publication.standing` (skep #864), the
-/// document index's listing, `places` (A-255), and the change feed's page,
-/// `changes`: the list a transport admits a call by, every name of it one
-/// [`Shell::call`] answers.
+/// read of a past state before its restore, `history.past` (skep #853),
+/// the document index's listing, `places` (A-255), and the change feed's
+/// page, `changes`: the list a transport admits a call by, every name of it
+/// one [`Shell::call`] answers.
 pub const CALLS: [&str; Call::ALL.len()] = {
     let mut names = [""; Call::ALL.len()];
     let mut i = 0;
@@ -1151,6 +1158,7 @@ impl Shell {
             Some(Call::MergeLand) => self.merge_land(args),
             Some(Call::MergeUndo) => self.merge_undo(args),
             Some(Call::MergeWithdraw) => self.merge_withdraw(args),
+            Some(Call::HistoryPast) => self.history_past(args),
             Some(Call::HistoryRestore) => self.history_restore(args),
             Some(Call::Upload) => self.upload(args),
             Some(Call::Fetch) => Err(Refusal::shell(Name::STREAMED_CALL, json!({"call": "fetch", "detail": "fetch streams its bytes: a transport serves it on its own route, and a direct caller takes `Shell::fetch`"}))),

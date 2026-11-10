@@ -6,8 +6,8 @@
 //! input and output, every event, the refusal, the `feed` update's shape (a
 //! `changes` entry's too), the index state's ten arms, the publication
 //! family's panel, inputs and outcomes, the merge family's report and
-//! outcomes, and the restore's answer with the merge marker it carries —
-//! from the table below, which is
+//! outcomes, and the past state's and the restore's answers with the merge
+//! marker each carries — from the table below, which is
 //! written by hand beside the code that builds each value (`shell`,
 //! `shell::publication`, `shell::merge`, `shell::history`, `feed`,
 //! `sessions`, `refusal`, `person`, `hold`)
@@ -255,7 +255,7 @@ const SHAPES: &[Shape] = &[
         doc: "`another-window(board, another_window)` (§3c.3; skep #827, #828, #873) — another shell's hold on the board's held store, at each edge of that state: `true` where a session's open or a probe finds another shell over the data directory holding a lock of the store, the pending directory's or the board's own — every write at the board refused `another_window` from then, nothing held and nothing sent — and `false` where this shell takes the locks, the pending one's and the board's own where a term has read, at a later session's open or at a probe; emitted once at each edge, and never at an open or a probe that finds no change — the `session` answer's `another_window` gives the state as a session opens",
         fields: &[req("board", "string"), req("another_window", "boolean")],
     },
-    Shape { name: "Run", open: false, doc: "one run of a selection, I-runs in V-order (P51): `width` positions of the document `origin`'s content I-space from the ordinal `i_start`", fields: &[req("origin", "string"), req("i_start", "number"), req("width", "number")] },
+    Shape { name: "Run", open: false, doc: "one run of a selection or of a past state's arrangement (`Past`), I-runs in V-order (P51): `width` positions of the document `origin`'s content I-space from the ordinal `i_start`", fields: &[req("origin", "string"), req("i_start", "number"), req("width", "number")] },
     Shape {
         name: "PublicationStanding",
         open: false,
@@ -468,6 +468,12 @@ const SHAPES: &[Shape] = &[
         fields: &[req("draft", "string"), req("position", "number"), req("record", "string | null")],
     },
     Shape {
+        name: "Past",
+        open: false,
+        doc: "`history.past(session, {draft, at})` — a past state read, nothing written (B3-S7; skep #853): the reads `history.restore` makes before its write — the draft's `doc_metadata` at the head, its extent and image as of `at` through `/op-at`, the image in parts where the board answers it too large, then the person's correspondence records at the head, one read per chunk of each origin of the person's own the state holds — answered with no write, so the page draws, while the person rests on a past state, what that state brings back and which links the change would orphan (its own `delete_orphans` read over the current text, less the links whose ends `sent` keeps) before \"make this state current\"; it asks no write door, so a bare session and a second window read it and a hold standing at the board stops none of its reads, and it holds, notes and changes nothing, `history.restore` reading again for itself: `draft` the draft, `at` the position read, `as_of` the position the reads were made at — no typed state: `history.restore` stays typed at the page's own state of the draft, and one typed at this `as_of` would write over a change the page never showed — `state` the draft's runs as read at `at`, in V order, for drawing and never for sending: a run a publication has re-minted since is the draft's own words there, which the board's twin fence refuses sent as draft-native (`already_published`); `sent` the same positions in the same order mapped through the records, words published since as the published words they became — what a restore made now would send; `covered` the positions of `state` a record covers, the words that come back as published words; `marker` the draft's merge marker as it stands, which a restore leaves standing, or null; `at` at or past the draft's position refused `merge_refused` with `not_past`, a published document `not_owner` with `published`, and a session the board answered no account for `no_account`",
+        fields: &[req("draft", "string"), req("at", "number"), req("as_of", "number"), req("state", "Run[]"), req("sent", "Run[]"), req("covered", "number"), req("marker", "MergeMarker | null")],
+    },
+    Shape {
         name: "Restored",
         open: false,
         doc: "`history.restore(session, {draft, at, as_of})` — A PAST STATE MADE CURRENT (B3-S7): ONE `set_arrangement` of the draft's runs as read at `at`, mapped through the person's correspondence records so words published since come back as the published words they became, naming no base and no merge — the draft's recorded base and its marker stand — typed against the call's `as_of`, THE TYPED STATE, the page's own state of the draft as its burst frames on it carry it, and refused `arrangement_moved` where the draft's arrangement changed past it, nothing changed; `at` at or past the draft's position refused `merge_refused` with `not_past`; a draft holding lines of yours the board has not kept refused `held_lines` (`HeldLinesRefusal`) before any read, nothing sent — resolve them, then restore: `draft` the draft, `at` the position restored, `position` the write's commit, `as_of` the position the draft stood at as the shell's read found it before the write — the way back, `history.restore` again at `{at: as_of}` typed at `position` — and `marker` the draft's merge marker as it stands, which a restore never takes out, or null",
@@ -558,6 +564,7 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
     CallRow { name: "merge.land", forms: &[&[req("session", "string"), opt("resolutions", "Record<string, MergeChoice>"), opt("answers", "Record<string, OriginAnswer>")]], result: "MergeLanded | Restated | PublicationRefused" },
     CallRow { name: "merge.undo", forms: &[&[req("session", "string")]], result: "Undone" },
     CallRow { name: "merge.withdraw", forms: &[&[req("session", "string"), req("draft", "string")]], result: "Withdrawn" },
+    CallRow { name: "history.past", forms: &[&[req("session", "string"), req("draft", "string"), req("at", "number")]], result: "Past" },
     CallRow { name: "history.restore", forms: &[&[req("session", "string"), req("draft", "string"), req("at", "number"), req("as_of", "number")]], result: "Restored" },
     CallRow { name: "upload", forms: &[&[req("session", "string"), req("target", "string"), req("path", "string")]], result: "never" },
     CallRow {
@@ -667,7 +674,7 @@ pub fn declarations() -> String {
         }
         out.push_str("}\n\n");
     }
-    out.push_str("/** The calls (client.md §4b.1 — the `publication` family's four, the `merge` family's four and `history.restore` among them — the read of a draft's standing `publication.standing`, the document index's listing `places`, and the change feed's page `changes`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
+    out.push_str("/** The calls (client.md §4b.1 — the `publication` family's four, the `merge` family's four and `history.restore` among them — the read of a draft's standing `publication.standing`, the read of a draft's past state `history.past`, the document index's listing `places`, and the change feed's page `changes`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
     out.push_str("export interface Bridge {\n");
     for row in CALL_ROWS {
         let forms: Vec<String> = row.forms.iter().map(|form| argument_object(form)).collect();

@@ -514,6 +514,39 @@ fn a_refused_run_holds_behind_it_and_resolve_acts_on_it() {
     sd.shutdown();
 }
 
+/// Checks that a drop of a handed-over line whose write landed answers kept.
+///
+/// It is against the real board (§3c.4; skep #866). A write of the
+/// session's, signed and dialed past the shell's hold, lands on the draft
+/// unacked; the same burst held as a line the shell handed the person under
+/// `answers_lost`, `sent`, the person's `resolve(drop)` reads first, finds
+/// the row its own hand's and its values at its site, and answers `{kept:
+/// true}`: no line stands, and the draft holds the words once (the mutant
+/// that drops unread answers `{}` and leaves the page to remove words the
+/// board holds).
+#[test]
+fn a_drop_of_a_handed_over_line_whose_write_landed_answers_kept() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let HeldGround { shell, session, draft, at, .. } = held_ground(&dir, &sd);
+    let entry = shell.sessions.get(&session).unwrap();
+    let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["bc"], "as_of": at});
+    let attested = entry.attest(&shell.store, &frame).unwrap();
+    let Answer::Document(landed) = entry.board.op(Some(&entry.token), &attested).unwrap() else { panic!("the dial closed") };
+    assert!(landed["at"].as_u64().is_some_and(|landed_at| landed_at > at), "the write lands, its answer the hold's never: {landed}");
+    let lost = Refusal::shell(Name::ANSWERS_LOST, json!({"last": "unreachable", "elapsed_ms": 120_000})).to_value();
+    let reason = Reason { sent: true, ..Reason::refused(Name::ANSWERS_LOST.as_str(), lost) };
+    let held = shell.holds.hold(&entry, Burst::admit(frame, &entry).unwrap(), reason, Some("unreachable".into()), at).answered().unwrap();
+    let k = held["held"].as_u64().unwrap();
+    assert_eq!(shell.call("resolve", &json!({"session": session, "held": k, "act": "drop"})).unwrap(), json!({"kept": true}));
+    assert!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty(), "the line kept, nothing left held");
+    let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 3)})).unwrap();
+    assert_eq!(text_of(&read), "abc", "the words stand on the board: {read}");
+    assert_eq!(changes_under(&entry.board, &entry.token, &draft, at).len(), 1, "written once");
+    shell.shutdown();
+    sd.shutdown();
+}
+
 /// Checks the close order: the held line persists and the relaunch lists it.
 ///
 /// A held burst's line is on disk and listed by `held(session)` before

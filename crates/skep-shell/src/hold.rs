@@ -95,9 +95,12 @@
 //! reissue-class answer there reissued at the next probe; a line no landing
 //! of which is found [`HAND_OVER_DEADLINE`] after its first failed send,
 //! whatever the failure, is handed to the person, a refused run under
-//! `answers_lost`, and one the board refuses at a resend under a code the
-//! table holds nowhere is handed over at once, a refused run under the
-//! board's token (§3c.4).
+//! `answers_lost` — whose drop, where a dial of it may have landed, reads
+//! for its landing first and drops nothing the board is found to hold, nor
+//! anything where the read cannot tell ([`Holds::resolve`]; skep #866) —
+//! and one the board refuses at a resend under a code the table holds
+//! nowhere is handed over at once, a refused run under the board's token
+//! (§3c.4).
 //! The anchors a burst carries over the bridge (`held::Anchors`) ride with
 //! its line and never with its frame: the frame dialed is the wire's frame,
 //! as the attest is stripped at the hold and composed at every send.
@@ -255,6 +258,8 @@ use crate::Talk;
 
 mod resend;
 
+use resend::ReadOutcome;
+
 /// The interim probe cadence (§3c.4): `GET /health` at this interval.
 ///
 /// The probe reads it while a burst is held at a board, or while the board
@@ -358,7 +363,10 @@ pub enum Verdict {
 /// `answers_lost`, naming the last failure and the wall time since its first
 /// failed send, its `sent` kept and the lines behind it waiting with it
 /// (§3c.5); a read that finds its landing keeps it, so the hand-over never
-/// sends it twice. A code the table holds nowhere is handed over at once,
+/// sends it twice, and the person's drop of a `sent` line reads for its
+/// landing again before it drops anything ([`Holds::resolve`]; skep #866),
+/// since a write whose answer was lost can land after the hand-over's read.
+/// A code the table holds nowhere is handed over at once,
 /// since it cannot resolve; a shift is refused past the deadline, so the
 /// clock bounds the shifts a document another writer keeps moving asks of a
 /// line, a turn of the resend making at most its steps of them
@@ -882,14 +890,17 @@ pub struct DeathHeld {
 /// off the call's arguments by [`ResolveAct::named`] alone, so no act
 /// reaches the hold that the row does not spell. The drop reaches further
 /// ([`Holds::resolve`]): a line held `head_unreadable`, and, under the
-/// keyless session, every line, the session's discard.
+/// keyless session, every line, the session's discard; and it reads first
+/// where its line was handed over as `answers_lost` and may have landed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolveAct {
     /// `"drop"`: the line dropped, with the lines after it on its document.
     ///
     /// The lines after it are a refused run's `behind` lines, a moved
     /// document's later lines, or every later line of its document at a
-    /// line held `head_unreadable` or under the keyless session.
+    /// line held `head_unreadable` or under the keyless session. A `sent`
+    /// line handed over as `answers_lost` is read for its landing first, and
+    /// kept where it landed, its later lines standing (skep #866).
     Drop,
     /// `"send"`: the document's waiting lines handed back.
     ///
@@ -912,8 +923,10 @@ impl ResolveAct {
 
 /// What a `resolve` act did (§4b.1's `resolve` row).
 ///
-/// The call's answer is `{}` either way.
-#[must_use = "a `HandedBack` document's resend waits on the probe its caller hands the board's feed thread"]
+/// The call answers `{}` where the lines were dropped or handed back,
+/// `{kept: true}` where a drop found its line landed, and the session's
+/// death where the drop's read met it (the shell's `resolve` row).
+#[must_use = "a `HandedBack` or `Kept` document's lines wait on the probe its caller hands the board's feed thread, and a `Died` session on the end its caller runs"]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Resolved {
     /// `"drop"`: the line `done … dropped`, with the lines after it.
@@ -929,6 +942,65 @@ pub enum Resolved {
     /// call answers once the lines are handed back, never after a resend's
     /// ack.
     HandedBack,
+    /// `"drop"` whose read for the line's landing found it landed.
+    ///
+    /// The line, a `sent` one handed over as `answers_lost`, is `done kept`
+    /// and nothing is dropped (§3c.4; skep #866): the lines behind it on its
+    /// document were typed after a write the board kept, and go out in order
+    /// at the probe the caller hands the board's feed thread.
+    Kept,
+    /// `"drop"` whose read for the line's landing met the death signal.
+    ///
+    /// Nothing is dropped, the line standing for the session that stands
+    /// next, and the caller ends the session: the death is neither a landing
+    /// nor its absence (§3c.4).
+    Died,
+}
+
+/// Why a drop that reads first cannot tell whether its line landed.
+///
+/// It is the `why` of the `landing_unread` refusal (§3c.4; skep #866), in
+/// the words `shapes`' `LandingUnreadRefusal` declares: the drop of a `sent`
+/// line handed over as `answers_lost` reads for the line's landing first
+/// ([`Holds::resolve`]), and drops nothing where the read cannot tell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LandingUnread {
+    /// The board gave the read no answer, or is not answering the hold.
+    ///
+    /// Its last `/health` found it silent, or a request of the hold's there
+    /// pends its verdict, and the read is not made (§3c.5).
+    Unanswered,
+    /// The board answered the read, or its site read, with no page.
+    Unread,
+    /// A row could be the line's landing, and the read could not confirm it.
+    Undecided,
+    /// The own node stands stopped by its owner's act: no read is made.
+    Stopped,
+    /// The board's write path stands poisoned: no read is made.
+    ///
+    /// A restart rebuilds the board's write path from its journal, so a
+    /// landing no read sees yet may stand after it.
+    Poisoned,
+    /// The board's writes stand halted: no read is made, as at `Poisoned`.
+    Halted,
+}
+
+impl LandingUnread {
+    /// Every why, in the order the declaration spells them.
+    #[cfg(test)]
+    const ALL: [LandingUnread; 6] = [LandingUnread::Unanswered, LandingUnread::Unread, LandingUnread::Undecided, LandingUnread::Stopped, LandingUnread::Poisoned, LandingUnread::Halted];
+
+    /// Returns the why as the refusal spells it.
+    fn as_str(self) -> &'static str {
+        match self {
+            LandingUnread::Unanswered => "unanswered",
+            LandingUnread::Unread => "unread",
+            LandingUnread::Undecided => "undecided",
+            LandingUnread::Stopped => cause::STOPPED,
+            LandingUnread::Poisoned => cause::POISONED,
+            LandingUnread::Halted => cause::HALTED,
+        }
+    }
 }
 
 /// A burst admitted: a frame some send of which the board can take.
@@ -1960,6 +2032,23 @@ impl BoardHold {
         }
     }
 
+    /// Returns why no read for a line's landing is made at the board now.
+    ///
+    /// It is the drop's check before its read (§3c.4; skep #866), and none
+    /// where the read is made: a hold stands — the own node stopped, the
+    /// write path poisoned, the writes halted, in that order, a restart of a
+    /// halted board rebuilding from its journal a landing no read sees yet —
+    /// or the board is not answering, nothing more of the hold's dialed there
+    /// until a `/health` answers (§3c.5).
+    fn landing_unreadable(&self) -> Option<LandingUnread> {
+        match self.standing_cause() {
+            Some(cause::STOPPED) => Some(LandingUnread::Stopped),
+            Some(cause::POISONED) => Some(LandingUnread::Poisoned),
+            Some(_) => Some(LandingUnread::Halted),
+            None => (!self.answers()).then_some(LandingUnread::Unanswered),
+        }
+    }
+
     /// Returns the file P38 halted for `principal` at the board, and why.
     ///
     /// It is the principal's custody where that is the halt
@@ -2044,10 +2133,11 @@ struct BoardSlot {
     ///
     /// One drain per board runs at a time, whatever thread reaches
     /// [`Holds::probe`] — the board's feed thread every `PROBE_CADENCE`, at
-    /// its daemon-running tick, at the hand-overs of `resolve(send)` and
-    /// `set_node_state(Running)`, and at each turn after one its bound
-    /// stopped — so none double-sends; the mark is held for one turn, and
-    /// only the drain that holds it ends the pass ([`BoardHold::end_pass`]).
+    /// its daemon-running tick, at the hand-overs of `resolve(send)`, of a
+    /// `resolve(drop)` that kept its line and of `set_node_state(Running)`,
+    /// and at each turn after one its bound stopped — so none double-sends;
+    /// the mark is held for one turn, and only the drain that holds it ends
+    /// the pass ([`BoardHold::end_pass`]).
     draining: AtomicBool,
 }
 
@@ -3579,7 +3669,8 @@ impl Holds {
 
     /// Answers `resolve(session, {held, act})` (§3c.4, §4b.1).
     ///
-    /// It is checked and acted on under the board's one lock.
+    /// It is checked and acted on under the board's one lock, save the drop
+    /// that reads first, whose read is made outside it (below).
     /// [`ResolveAct::Drop`] marks the line and every line held after it on
     /// that document — a refused run's `behind` lines, a moved document's
     /// later lines — `done … dropped`; [`ResolveAct::Send`] re-marks the
@@ -3650,33 +3741,128 @@ impl Holds {
     /// line. The shell's row refuses `send` under it before it reaches here
     /// (`write_in_bare_session`).
     ///
+    /// **The drop of a line whose answer was lost** (§3c.4; skep #866). A
+    /// line the shell handed the person under `answers_lost` with `sent`
+    /// standing may have landed after the read that handed it over: a dial
+    /// the client gave up on commits late, or a `poisoned` commit is rebuilt
+    /// from the journal at the board's restart. So its drop under a session
+    /// that may write reads for the line's landing first, as a resend does
+    /// (`resend`'s `read_outcome`), and never drops words the board is found
+    /// to hold. No read is made where a hold stands at the board or the
+    /// board is not answering (`BoardHold::landing_unreadable`): the drop is
+    /// refused. The read is made outside the board's lock, and its outcome
+    /// acted on under the lock again, the door taken again and the line asked
+    /// to stand with the reason it was read under: a landing found keeps the
+    /// line `done kept` as the resend keeps a landed head
+    /// ([`Holds::keep_landing`]), nothing dropped, the lines behind it handed
+    /// to the machine as a `send`'s are ([`Resolved::Kept`]); no row that
+    /// could be its landing drops it, as every drop does; the death signal
+    /// drops nothing ([`Resolved::Died`]); and where the read cannot tell —
+    /// no answer, no page, a row that could be the landing and is not
+    /// confirmed — nothing is dropped and the drop is refused, a board the
+    /// read went unanswered at marked so until a `/health` answers. Such a
+    /// line leaves by `send` there, whose dial the board judges by its typed
+    /// state. A drop of a line never sent, and the keyless session's discard,
+    /// whose rows are never its own, make no read.
+    ///
     /// # Errors
     ///
     /// Its refusals come in this order, the first that holds answering:
-    /// `store_halted` where P38 halted the principal's file; `no_such_held`
-    /// where no line of ordinal `k` stands; `not_resolvable` where the line
-    /// awaits no act of the person's (P10) — save the drop of a line held
-    /// `head_unreadable`, and every drop under a session that may not write.
+    ///
+    /// 1. `store_halted` where P38 halted the principal's file;
+    /// 2. `no_such_held` where no line of ordinal `k` stands;
+    /// 3. `not_resolvable` where the line awaits no act of the person's (P10)
+    ///    — save the drop of a line held `head_unreadable`, and every drop
+    ///    under a session that may not write;
+    /// 4. for a drop that reads first, before its read: `landing_unread`
+    ///    `{held, why}`, `why` `stopped`, `poisoned` or `halted` where that
+    ///    hold stands at the board, else `unanswered` where the board is not
+    ///    answering;
+    /// 5. after its read: `landing_unread` with `why` `unanswered` where the
+    ///    board gave it no answer, `unread` where it answered no page, and
+    ///    `undecided` where a row could be the line's landing and is not
+    ///    confirmed;
+    /// 6. at the check under the lock again: `store_halted`, `no_such_held`,
+    ///    and `not_resolvable` where the line was re-marked while the read
+    ///    was out.
     pub fn resolve(&self, session: &SessionEntry, k: u64, act: ResolveAct) -> Result<Resolved, Refusal> {
+        let principal = session.facts.principal;
+        let read = {
+            let mut board_hold = self.lock(&session.board_reference);
+            let ph = self.principal_hold(&mut board_hold, session)?;
+            let line = resolvable(ph, session, k, act)?;
+            if !reads_first(&line, act, session) {
+                return Ok(self.act_at_once(session, ph, k, &line.doc, act));
+            }
+            if let Some(why) = board_hold.landing_unreadable() {
+                return Err(landing_unread(k, why));
+            }
+            line
+        };
+        // Outside the lock, as every dial is: the read takes it itself.
+        let outcome = self.read_outcome(session, &read.doc, &read);
         let mut board_hold = self.lock(&session.board_reference);
-        let ph = self.principal_hold(&mut board_hold, session)?;
-        let Some(line) = ph.queue.line(k) else { return Err(Refusal::shell(Name::NO_SUCH_HELD, json!({"held": k}))) };
-        // A line awaiting the person's act alone takes one (P10), save the
-        // drop of a line held for want of its signature (skep #726) and every
-        // drop under a session that may not write: the keyless session's
-        // discard, which no resend overtakes (skep #896).
-        let droppable = act == ResolveAct::Drop && (line.reason.cause == cause::HEAD_UNREADABLE || !session.may_write());
-        if !awaits_act(&line.reason) && !droppable {
-            return Err(Refusal::shell(Name::NOT_RESOLVABLE, json!({"held": k})));
+        let why = match outcome {
+            ReadOutcome::Died => return Ok(Resolved::Died),
+            ReadOutcome::Unanswered => {
+                self.note_unanswered(&mut board_hold, None);
+                LandingUnread::Unanswered
+            }
+            ReadOutcome::Unread => LandingUnread::Unread,
+            ReadOutcome::Undecided => LandingUnread::Undecided,
+            ReadOutcome::Landed { at } => {
+                self.still_as_read(&mut board_hold, session, &read)?;
+                self.keep_landing(&mut board_hold, principal, &read.doc, k, at);
+                let ph = board_hold.principals.get_mut(&principal).expect("the principal's hold, entered by its door");
+                // A pass under way walks the document again at its next turn.
+                ph.stopped_in_pass.remove(&read.doc);
+                ph.cut_in_pass.remove(&read.doc);
+                let (count, state) = standing_on(ph, &read.doc);
+                self.emit_held(session, &read.doc, count, state, None, &[]);
+                return Ok(Resolved::Kept);
+            }
+            ReadOutcome::NoLanding => {
+                let ph = self.still_as_read(&mut board_hold, session, &read)?;
+                let (count, state) = self.drop_run(principal, ph, k, &read.doc);
+                self.emit_held(session, &read.doc, count, state, None, &[]);
+                return Ok(Resolved::Dropped);
+            }
+        };
+        Err(landing_unread(k, why))
+    }
+
+    /// Returns the principal's hold where line `read.k` stands as read.
+    ///
+    /// It is the drop's check under the lock again after its read
+    /// ([`Holds::resolve`]): the principal's door taken again, and the line
+    /// asked to stand with the reason the read was made under.
+    ///
+    /// # Errors
+    ///
+    /// Returns `store_halted` where P38 halted the principal's file,
+    /// `no_such_held` where no line of the ordinal stands, and
+    /// `not_resolvable` where the line was re-marked while the read was out —
+    /// a `send` of it, whose resend the drop's read says nothing of.
+    fn still_as_read<'b>(&self, board_hold: &'b mut BoardHold, session: &SessionEntry, read: &HeldLine) -> Result<&'b mut PrincipalHold, Refusal> {
+        let ph = self.principal_hold(board_hold, session)?;
+        match ph.queue.line(read.k) {
+            None => Err(Refusal::shell(Name::NO_SUCH_HELD, json!({"held": read.k}))),
+            Some(line) if line.reason != read.reason => Err(Refusal::shell(Name::NOT_RESOLVABLE, json!({"held": read.k}))),
+            Some(_) => Ok(ph),
         }
-        let doc = line.doc;
+    }
+
+    /// Acts on line `k` at once, under the board's lock: the drop or the send.
+    ///
+    /// It is every act save the drop that reads first ([`Holds::resolve`]).
+    fn act_at_once(&self, session: &SessionEntry, ph: &mut PrincipalHold, k: u64, doc: &str, act: ResolveAct) -> Resolved {
         match act {
             ResolveAct::Drop => {
-                let (count, state) = self.drop_run(session.facts.principal, ph, k, &doc);
+                let (count, state) = self.drop_run(session.facts.principal, ph, k, doc);
                 // `emit_held` touches the bus alone, so it is safe under the
                 // board's lock.
-                self.emit_held(session, &doc, count, state, None, &[]);
-                Ok(Resolved::Dropped)
+                self.emit_held(session, doc, count, state, None, &[]);
+                Resolved::Dropped
             }
             ResolveAct::Send => {
                 // Re-enter the automatic machine (§3c.4): the document's
@@ -3695,8 +3881,8 @@ impl Holds {
                 // named no more. A document whose lines carry no such verdict
                 // is re-marked as it stands. The re-marks are one run, one
                 // copy (skep #861).
-                let waiting: Vec<(u64, bool)> = ph.queue.reasons_on(&doc).filter(|(_, reason)| awaits_act(reason)).map(|(k, reason)| (k, reason.sent)).collect();
-                let through = ph.queue.reasons_on(&doc).filter(|(_, reason)| reason.cause == cause::MOVED).find_map(|(_, reason)| reason.refusal.as_ref()?["site"]["current"].as_u64());
+                let waiting: Vec<(u64, bool)> = ph.queue.reasons_on(doc).filter(|(_, reason)| awaits_act(reason)).map(|(k, reason)| (k, reason.sent)).collect();
+                let through = ph.queue.reasons_on(doc).filter(|(_, reason)| reason.cause == cause::MOVED).find_map(|(_, reason)| reason.refusal.as_ref()?["site"]["current"].as_u64());
                 self.remark_lines(session.facts.principal, ph, waiting.iter().map(|&(k, sent)| (k, Reason::of(cause::BEHIND, sent))), through);
                 for &(k, _) in &waiting {
                     if let Some(at) = through {
@@ -3710,10 +3896,10 @@ impl Holds {
                 }
                 // A pass under way walks the document again at its next turn,
                 // and its moved face, gone, owes no hands.
-                ph.stopped_in_pass.remove(&doc);
-                ph.cut_in_pass.remove(&doc);
-                ph.hands_owed.remove(&doc);
-                Ok(Resolved::HandedBack)
+                ph.stopped_in_pass.remove(doc);
+                ph.cut_in_pass.remove(doc);
+                ph.hands_owed.remove(doc);
+                Resolved::HandedBack
             }
         }
     }
@@ -3724,15 +3910,12 @@ impl Holds {
     /// document's later lines — `done … dropped`, as one run, its `done`s one
     /// copy with one sync however many lines it drops ([`Holds::done_lines`];
     /// skep #861), the file compacting where the queue empties, and answers
-    /// for the `held` event its caller emits under the session that acted:
-    /// the lines that stand on the document, and the state of the one that
-    /// stands first now — a moved line held before the dropped one keeps the
-    /// document `moved` — `kept` only where no line stands.
+    /// for the `held` event its caller emits under the session that acted
+    /// what stands on the document now ([`standing_on`]).
     fn drop_run(&self, principal: u64, ph: &mut PrincipalHold, from: u64, doc: &str) -> (u64, HeldState) {
         let ks: Vec<u64> = ph.queue.reasons_on(doc).map(|(k, _)| k).filter(|&k| k >= from).collect();
         self.done_lines(principal, ph, &ks, Done::Dropped);
-        let head = ph.queue.reasons_on(doc).next().map(|(_, reason)| line_state(reason));
-        (ph.count(doc), head.unwrap_or(HeldState::Kept))
+        standing_on(ph, doc)
     }
 
     /// Notes and answers the `writes.halted` of the board's `/health`.
@@ -4162,6 +4345,53 @@ fn queue_refused(why: Unheld) -> Refusal {
 /// page asks for its showing ([`Holds::show_halted`]).
 fn store_halted(why: HaltWhy) -> Refusal {
     Refusal::shell(Name::STORE_HALTED, json!({"why": why.token()}))
+}
+
+/// Returns line `k` of `ph`'s queue where the person's `act` may take it.
+///
+/// It is `resolve`'s check of the line (P10): a line awaiting the person's
+/// act alone takes one, save the drop of a line held for want of its
+/// signature (skep #726) and every drop under a session that may not write,
+/// the keyless session's discard, which no resend overtakes (skep #896).
+///
+/// # Errors
+///
+/// Returns `no_such_held` where no line of ordinal `k` stands, then
+/// `not_resolvable` where the act may not take the line.
+fn resolvable(ph: &PrincipalHold, session: &SessionEntry, k: u64, act: ResolveAct) -> Result<HeldLine, Refusal> {
+    let Some(line) = ph.queue.line(k) else { return Err(Refusal::shell(Name::NO_SUCH_HELD, json!({"held": k}))) };
+    let droppable = act == ResolveAct::Drop && (line.reason.cause == cause::HEAD_UNREADABLE || !session.may_write());
+    if !awaits_act(&line.reason) && !droppable {
+        return Err(Refusal::shell(Name::NOT_RESOLVABLE, json!({"held": k})));
+    }
+    Ok(line)
+}
+
+/// Returns whether `act` on `line` reads for the line's landing first.
+///
+/// It does for the drop of a line handed over as `answers_lost` whose dial
+/// may have landed (`sent`), under a session that may write (§3c.4; skep
+/// #866): the keyless session's rows are never its own, so no read of its
+/// finds the line's landing, and its discard reads nothing.
+fn reads_first(line: &HeldLine, act: ResolveAct, session: &SessionEntry) -> bool {
+    act == ResolveAct::Drop && line.reason.cause == Name::ANSWERS_LOST.as_str() && line.reason.sent && session.may_write()
+}
+
+/// Returns the refusal of a drop that cannot tell whether line `k` landed.
+///
+/// It is `landing_unread {held, why}` (§3c.4; skep #866): nothing dropped.
+fn landing_unread(k: u64, why: LandingUnread) -> Refusal {
+    Refusal::shell(Name::LANDING_UNREAD, json!({"held": k, "why": why.as_str()}))
+}
+
+/// Returns what stands on `doc` in `ph`'s queue, as the `held` event says it.
+///
+/// It is the lines standing, and the state of the one that stands first — a
+/// moved line held before a dropped one keeps the document `moved` — or
+/// `kept` where no line stands.
+fn standing_on(ph: &PrincipalHold, doc: &str) -> (u64, HeldState) {
+    let head = ph.queue.reasons_on(doc).next().map(|(_, reason)| line_state(reason));
+    (ph.count(doc), head.unwrap_or(HeldState::Kept))
 }
 
 /// Returns the line showing a halted held file in the shell's own window.

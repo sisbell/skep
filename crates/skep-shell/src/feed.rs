@@ -40,7 +40,8 @@
 //! (`Holds::probe`) on this thread alone — every `PROBE_CADENCE`, measured
 //! from the last cadence's or hand-over's probe whatever woke the thread
 //! between, at the tick that ends an announced silence, and at a hand-over
-//! ([`Feed::probe`], `resolve(send)`'s and `set_node_state(Running)`'s).
+//! ([`Feed::probe`]: `resolve(send)`'s, a `resolve(drop)`'s that kept its
+//! line, and `set_node_state(Running)`'s).
 //!
 //! **The `daemon` event is the probe's verdict** (§4b.2; P37; skep #863).
 //! The board is announced `unreachable` once where a `/health` read goes
@@ -250,9 +251,9 @@ impl Feed {
     /// It runs there once the commands queued before it are served, and the
     /// probe's cadence is counted from it — or, where a drain's turns are
     /// running, it is the drain's next turn — and the caller does not wait:
-    /// `resolve(send)`'s hand-over, so
-    /// the call answers once the lines are handed back, never after a
-    /// resend's ack (§4b.1), and `set_node_state(Running)`'s, so the verb
+    /// `resolve(send)`'s hand-over, and a `resolve(drop)`'s that kept its
+    /// line, so the call answers once the lines are handed back, never after
+    /// a resend's ack (§4b.1), and `set_node_state(Running)`'s, so the verb
     /// that owns the node is held by no resend. A thread that has stopped
     /// takes nothing.
     pub fn probe(&self) {

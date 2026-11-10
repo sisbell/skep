@@ -5,7 +5,8 @@
 //! every [`PROBE_CADENCE`](super::PROBE_CADENCE) while a line stands or the
 //! board's silence awaits a verdict, and
 //! there too at its daemon-running tick and at the hand-overs of
-//! `resolve(send)` and `set_node_state(Running)`, because `Cmd::Tick` is
+//! `resolve(send)`, of a `resolve(drop)` that kept its line (skep #866) and
+//! of `set_node_state(Running)`, because `Cmd::Tick` is
 //! driven by committed writes and a poisoned, halted, stopped or
 //! unreachable board commits nothing. Each probe first runs the store's
 //! retry (`Holds::retry_store`, §3c.1, §3c.3; skep #813, #821, #857, #859,
@@ -69,19 +70,23 @@
 //! The walk's read: one per document (`GET
 //! /changes`) before its first resend, which answers one question of the
 //! document's head — did its own write land? — and nothing more: (i)
-//! nothing of it landed, send from the head, or, the head's first failed
-//! send standing [`HAND_OVER_DEADLINE`] of the board's answering past,
-//! whatever the failure, hand it to the person as a refused run
-//! (`answers_lost`), naming the last failure and the wall time since it,
+//! no landing of it found, or none confirmed, send from the head, or, the
+//! head's first failed send standing [`HAND_OVER_DEADLINE`] of the board's
+//! answering past, whatever the failure, hand it to the person as a refused
+//! run (`answers_lost`), naming the last failure and the wall time since it,
 //! dialed never again until the person sends it; (ii)
 //! the in-flight burst landed, the head `done kept` and its
 //! position the document's base, as an ack's is (§3c.2). A head no dial of
 //! which left is not read at all: it goes from the head. A row that is not
 //! the head's own landing is no verdict — the person's own later write, a
 //! sibling's, another hand's — and the head goes from the head; and a read
-//! the board answered with no page decides nothing: the next probe reads
-//! again, as it does after a read the board gave no answer to, which ends the
-//! pass.
+//! the board answered with no page, or with the death signal, decides
+//! nothing: the next probe reads again, as it does after a read the board
+//! gave no answer to, which ends the pass. The same read decides the
+//! person's drop of a `sent` line handed over as `answers_lost`, made first
+//! (`Holds::resolve`; skep #866): a landing found keeps the line, no row
+//! that could be its landing drops it, and a row that could be and is not
+//! confirmed, or a read that decides nothing, drops nothing.
 //! Whether the *document moved* is the board's to say, (iii), by one route: a
 //! line it refuses as typed against an older state of its document
 //! (`arrangement_moved`, the frame's `as_of` below the arrangement's last
@@ -140,8 +145,8 @@ use serde_json::{json, Value};
 use skep_client::board::{acked_at, frames, Answer, ChangesAnswer, ChangesQuery, Rejection};
 
 use super::{
-    awaits_act, cause, line_state, millis, unanswered, AttestedWhereOwed, BoardSlot, CutSend, Dialed, Hand, HandsRead, HeldState, Holds, KeptShift, PrincipalHold, Turn, Verdict, HAND_OVER_DEADLINE,
-    TURN_STEPS,
+    awaits_act, cause, line_state, millis, unanswered, AttestedWhereOwed, BoardHold, BoardSlot, CutSend, Dialed, Hand, HandsRead, HeldState, Holds, KeptShift, PrincipalHold, Turn, Verdict,
+    HAND_OVER_DEADLINE, TURN_STEPS,
 };
 use crate::held::{i_address, Anchors, Done, HeldLine, Reason, SpanRun};
 use crate::refusal::{Name, Refusal};
@@ -508,18 +513,31 @@ fn shifted_frame(frame: &Value, anchors: &Anchors, image: &Value, as_of: u64) ->
     span.displaced(frame, displacement, as_of).ok_or_else(|| Unshiftable::Malformed("a position the frame names moves to no position".into()))
 }
 
-/// The outcome of the resend's one read per document (§3c.5).
+/// The outcome of the hold's one read for a line's landing (§3c.5).
 ///
 /// The read answers whether the document's head's own write landed, and
 /// nothing more: whether the document moved is the board's verdict on the
-/// send ([`Holds::send_line`]'s moved arm), never the read's.
+/// send ([`Holds::send_line`]'s moved arm), never the read's. Two readers
+/// take it. The resend sends the head wherever no landing was found
+/// ([`ReadOutcome::NoLanding`], [`ReadOutcome::Undecided`]), the board
+/// judging the send's typed state. The drop of a line whose answer was lost
+/// drops the line only where no row could be its landing, and refuses where
+/// the read cannot tell (`Holds::resolve`; skep #866).
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum ReadOutcome {
-    /// No row since `base` is the head's own landing — send from the head.
+pub(super) enum ReadOutcome {
+    /// No row since `base` could be the head's own landing.
     ///
-    /// Every row read is no verdict: the person's own later write, a
-    /// sibling's, another hand's. The board judges the send's typed state.
-    SendFromHead,
+    /// Every row read is no verdict: the person's own later write of another
+    /// kind, a sibling's, another hand's.
+    NoLanding,
+    /// A row since `base` could be the head's landing, and is not confirmed.
+    ///
+    /// It is a row whose testimony the board lost, on a kind no site read
+    /// confirms; a row of the session's own hand or of a lost testimony
+    /// whose site holds other values than the head's, the landing moved
+    /// since or no landing; or a `history_reclaimed`, no row read, the site
+    /// confirming nothing.
+    Undecided,
     /// The in-flight burst landed — the head is `done kept` with this `at`.
     ///
     /// The position, where the read names one, becomes the document's base,
@@ -527,15 +545,20 @@ enum ReadOutcome {
     Landed { at: Option<u64> },
     /// The board answered no page: nothing is decided.
     ///
-    /// It answered a refusal (`feed_rebuilding`), the death signal, or an
-    /// answer no read takes — or the site read the landing needed did — and
-    /// the next probe reads again.
+    /// It answered a refusal (`feed_rebuilding`) or an answer no read takes
+    /// — or the site read the landing needed did — and the next probe reads
+    /// again.
     Unread,
     /// The board gave the read no answer: nothing is decided.
     ///
     /// The read is the document's, or the site read the landing needed; the
     /// pass ends there.
     Unanswered,
+    /// The death signal on the session's token met the read or its site read.
+    ///
+    /// Nothing is decided: it is the session's death and no verdict on the
+    /// line (§3c.4).
+    Died,
 }
 
 /// What a step of the walk at a document leaves the walk to do (§3c.5).
@@ -585,12 +608,12 @@ enum Site {
     /// It is a burst of another kind than `insert`, or a frame that names no
     /// site.
     Unconfirmable,
-    /// The board answered the read with no delivery.
-    ///
-    /// It answered the death signal, or an answer no read takes.
+    /// The board answered the read with no delivery: an answer no read takes.
     Unread,
     /// The board gave the read no answer (skep #863).
     Unanswered,
+    /// The death signal on the session's token met the read.
+    Died,
 }
 
 /// A board's drain mark (`BoardSlot`'s `draining`), held for one drain.
@@ -620,10 +643,11 @@ impl Holds {
     ///
     /// It runs on the board's feed thread alone — every
     /// [`PROBE_CADENCE`](super::PROBE_CADENCE), at its daemon-running tick,
-    /// at the hand-overs of `resolve(send)` and `set_node_state(Running)`, and
-    /// after a turn its bound stopped, once the work queued behind that turn
-    /// is served. First, whatever the board's state — its node stopped, the
-    /// board away — the store's retry ([`Holds::retry_store`], §3c.1, §3c.3;
+    /// at the hand-overs of `resolve(send)`, of a `resolve(drop)` that kept
+    /// its line and of `set_node_state(Running)`, and after a turn its bound
+    /// stopped, once the work queued behind that turn is served. First,
+    /// whatever the board's state — its node stopped, the board away — the
+    /// store's retry ([`Holds::retry_store`], §3c.1, §3c.3;
     /// skep #813, #821, #857, #859, #873): the board's locks this shell does
     /// not hold are tried again, each principal's queue is brought to the
     /// store as it stands — its file read where the device refused it before,
@@ -913,60 +937,43 @@ impl Holds {
     /// Resumes one document by its read (resume-by-read, §3c.5).
     ///
     /// `head` is the document's head, its first standing line, as the walk
-    /// reached it. It runs the read and its outcome — a landed head kept,
-    /// its position made the document's base (§3c.2) and the principal's
-    /// latest arrangement write on it, and entered in the board's acked
-    /// positions — and answers whether the document's lines go out now
-    /// ([`Step::Goes`]): a document the read sends from the head, or whose
-    /// landed head leaves lines behind it; never one whose head awaits the
-    /// person's act, which is read never, nor one the read left undecided,
-    /// nor one whose head it hands to the person: a head no landing of which
-    /// the read found, its first failed send [`HAND_OVER_DEADLINE`] of the
-    /// board's answering past or more ([`Holds::hand_over`]) — each
-    /// [`Step::Stops`]. A read the board gives no answer to decides nothing
-    /// and ends the pass ([`Step::Unanswered`]; skep #863): the board marked
-    /// unanswered, the line as it was, nothing said. The read runs first, so
-    /// a landing it finds is kept and never handed over. A head no dial of
-    /// which left (`sent` false) is not read at all: nothing of it can stand
-    /// on the board, so it goes from the head — or is handed over, where its
-    /// deadline has passed. A head held `head_unreadable` while the probe's
-    /// read of the board's head answers so (`head_unreadable`) is skipped
-    /// whole — no read, no `sending`, nothing said (skep #727): its send
-    /// would fail the same way, and the `held` event and the `Talk` line were
-    /// said once as the state began; it is tried again the probe the head
-    /// reads. Whether a read is made is [`read_owed`]'s, which the walk counts
-    /// it by.
+    /// reached it. It runs the read and its outcome — a landed head kept
+    /// ([`Holds::keep_landing`]) — and answers whether the document's lines
+    /// go out now ([`Step::Goes`]): a document the read sends from the head,
+    /// no landing found or none confirmed, or whose landed head leaves lines
+    /// behind it; never one whose head awaits the person's act, which is
+    /// read never, nor one whose read decided nothing — the board answering
+    /// no page, or the death signal, the line left standing for the session
+    /// that stands next — nor one whose head it hands to the person: a head
+    /// no landing of which the read found, its first failed send
+    /// [`HAND_OVER_DEADLINE`] of the board's answering past or more
+    /// ([`Holds::hand_over`]) — each [`Step::Stops`]. A read the board gives
+    /// no answer to decides nothing and ends the pass ([`Step::Unanswered`];
+    /// skep #863): the board marked unanswered, the line as it was, nothing
+    /// said. The read runs first, so a landing it finds is kept and never
+    /// handed over. A head no dial of which left (`sent` false) is not read
+    /// at all: nothing of it can stand on the board, so it goes from the
+    /// head — or is handed over, where its deadline has passed. A head held
+    /// `head_unreadable` while the probe's read of the board's head answers
+    /// so (`head_unreadable`) is skipped whole — no read, no `sending`,
+    /// nothing said (skep #727): its send would fail the same way, and the
+    /// `held` event and the `Talk` line were said once as the state began;
+    /// it is tried again the probe the head reads. Whether a read is made is
+    /// [`read_owed`]'s, which the walk counts it by.
     fn resume_doc(&self, session: &SessionEntry, head: &HeldLine, head_unreadable: bool) -> Step {
         let (board_reference, principal, doc) = (session.board_reference.as_str(), session.facts.principal, head.doc.as_str());
         if passed_over(head, head_unreadable) {
             return Step::Stops;
         }
-        let outcome = if read_owed(head, head_unreadable) { self.read_outcome(session, doc, head) } else { ReadOutcome::SendFromHead };
+        let outcome = if read_owed(head, head_unreadable) { self.read_outcome(session, doc, head) } else { ReadOutcome::NoLanding };
         match outcome {
-            ReadOutcome::Unread => Step::Stops,
+            ReadOutcome::Unread | ReadOutcome::Died => Step::Stops,
             ReadOutcome::Unanswered => {
                 self.note_unanswered(&mut self.lock(board_reference), None);
                 Step::Unanswered
             }
             ReadOutcome::Landed { at } => {
-                // The landing is noted as the session's ack is (§3c.2, §3c.5):
-                // a line held on the document from here reads past it, and no
-                // read takes its row for another line's landing; a later write
-                // noted since the read stands. A held line is a burst, so its
-                // landing is an arrangement write on the document too.
-                {
-                    let mut board_hold = self.lock(board_reference);
-                    if let Some(at) = at {
-                        board_hold.acked.insert(at);
-                    }
-                    if let Some(ph) = board_hold.principals.get_mut(&principal) {
-                        if let Some(at) = at {
-                            ph.note_position(doc, at);
-                            ph.note_arranged(doc, at);
-                        }
-                        self.done_line(principal, ph, head.k, Done::Kept { at });
-                    }
-                }
+                self.keep_landing(&mut self.lock(board_reference), principal, doc, head.k, at);
                 match self.count(board_reference, principal, doc) {
                     0 => {
                         self.emit_held(session, doc, 0, HeldState::Kept, None, &[]);
@@ -978,8 +985,8 @@ impl Holds {
                     }
                 }
             }
-            ReadOutcome::SendFromHead => {
-                // Nothing of the head has landed: its first failed send two
+            ReadOutcome::NoLanding | ReadOutcome::Undecided => {
+                // No landing of the head was found: its first failed send two
                 // minutes of the board's answering past or more, it is the
                 // person's, dialed never again, the hand-over naming the wall
                 // time since (§3c.4; skep #716, #863).
@@ -1020,21 +1027,27 @@ impl Holds {
     /// the residue. The site ([`Holds::site`])
     /// is the document's now, read once for the first row that asks for it:
     /// an `insert` whose values stand at its site landed; one whose values do
-    /// not is no landing of any row, so the head goes from the head at once;
-    /// a kind no read confirms trusts the own hand and the op alone, and
-    /// trusts a row whose hand is lost not at all. Every other row — the
-    /// person's own later write of another kind, a sibling's, another hand's
-    /// — is no verdict: whether the document moved is the board's
-    /// (`arrangement_moved`, [`Holds::send_line`]), not this read's. A page,
-    /// or the site read, the board gives no answer to is
-    /// [`ReadOutcome::Unanswered`] (skep #863), and every other answer that is
-    /// no page [`ReadOutcome::Unread`].
-    fn read_outcome(&self, session: &SessionEntry, doc: &str, head: &HeldLine) -> ReadOutcome {
+    /// not is no landing the read can confirm, so the read ends there
+    /// [`ReadOutcome::Undecided`]; a kind no read confirms trusts the own
+    /// hand and the op alone, and trusts a row whose hand is lost not at all,
+    /// such a row leaving the read undecided where no later row is the
+    /// landing. Every other row — the person's own later write of another
+    /// kind, a sibling's, another hand's — is no verdict: whether the
+    /// document moved is the board's (`arrangement_moved`,
+    /// [`Holds::send_line`]), not this read's. A page, or the site read, the
+    /// board gives no answer to is [`ReadOutcome::Unanswered`] (skep #863),
+    /// the death signal at either is [`ReadOutcome::Died`], and every other
+    /// answer that is no page [`ReadOutcome::Unread`]. It is the resend's
+    /// read and the drop's (`Holds::resolve`; skep #866), made outside every
+    /// lock.
+    pub(super) fn read_outcome(&self, session: &SessionEntry, doc: &str, head: &HeldLine) -> ReadOutcome {
         let board_reference = session.board_reference.as_str();
         let mut query = ChangesQuery { since: head.base, under: Some(doc), drafts: true, limit: None };
         // The site is the document's, not a row's: read once, for the first
         // row that asks.
         let mut site = None;
+        // Whether a row read so far could be the landing, and is not confirmed.
+        let mut undecided = false;
         loop {
             let page = match session.board.changes(Some(&session.token), &query) {
                 Ok(ChangesAnswer::Page(page)) => page,
@@ -1048,6 +1061,7 @@ impl Holds {
                     query.limit = Some(fits);
                     continue;
                 }
+                Ok(ChangesAnswer::Closed) => return ReadOutcome::Died,
                 Err(h) if unanswered(&h) => return ReadOutcome::Unanswered,
                 Ok(_) | Err(_) => return ReadOutcome::Unread,
             };
@@ -1066,18 +1080,20 @@ impl Holds {
                     // A kind the site read cannot confirm trusts the op-and-hand
                     // match; a row whose hand the board lost has none to trust.
                     Site::Unconfirmable => own,
-                    // The head's values do not stand at its site: no row is its
-                    // landing, and the board judges the send's typed state.
-                    Site::Differs => return ReadOutcome::SendFromHead,
+                    // The head's values do not stand at its site: the row is no
+                    // landing the read can confirm, nor any row after it.
+                    Site::Differs => return ReadOutcome::Undecided,
                     Site::Unread => return ReadOutcome::Unread,
                     Site::Unanswered => return ReadOutcome::Unanswered,
+                    Site::Died => return ReadOutcome::Died,
                 };
                 if landed {
                     return ReadOutcome::Landed { at };
                 }
+                undecided = true;
             }
             if !page.more {
-                return ReadOutcome::SendFromHead;
+                return if undecided { ReadOutcome::Undecided } else { ReadOutcome::NoLanding };
             }
             query.since = page.last;
             query.limit = None;
@@ -1089,17 +1105,19 @@ impl Holds {
     /// No row can be read, so the arrangement alone decides the one
     /// question: a `sent` head's values read back equal at its site is (ii),
     /// kept with no position to name; any difference, or a kind no read
-    /// confirms, is no landing found, and the head goes from the head — the
-    /// board judging its typed state (`arrangement_moved`), as it judges
-    /// every send; a site read the board answers with no delivery decides
-    /// nothing, and one it gives no answer to decides nothing and ends the
-    /// pass.
+    /// confirms, is no landing confirmed ([`ReadOutcome::Undecided`]), and
+    /// the resend sends the head from the head — the board judging its typed
+    /// state (`arrangement_moved`), as it judges every send; a site read the
+    /// board answers with no delivery decides nothing, the death signal at it
+    /// is the session's, and one it gives no answer to decides nothing and
+    /// ends the pass.
     fn reclaimed_outcome(&self, session: &SessionEntry, doc: &str, head: &HeldLine) -> ReadOutcome {
         match self.site(session, doc, head) {
             Site::Equal => ReadOutcome::Landed { at: None },
-            Site::Differs | Site::Unconfirmable => ReadOutcome::SendFromHead,
+            Site::Differs | Site::Unconfirmable => ReadOutcome::Undecided,
             Site::Unread => ReadOutcome::Unread,
             Site::Unanswered => ReadOutcome::Unanswered,
+            Site::Died => ReadOutcome::Died,
         }
     }
 
@@ -1122,8 +1140,33 @@ impl Holds {
                 }
             }
             Ok(Answer::Document(_)) => Site::Differs,
+            Ok(Answer::Closed) => Site::Died,
             Err(h) if unanswered(&h) => Site::Unanswered,
-            Ok(Answer::Closed) | Err(_) => Site::Unread,
+            Err(_) => Site::Unread,
+        }
+    }
+
+    /// Keeps line `k`, whose write the read found landed at `at` (§3c.5).
+    ///
+    /// `board_hold` is the board's hold, under its lock. The landing is noted
+    /// as the session's ack is (§3c.2): `at` joins the board's acked
+    /// positions, so no read takes its row for another line's landing, and
+    /// becomes the base of the next hold on `doc` and the principal's latest
+    /// arrangement write there — a held line is a burst — each where it is
+    /// past the position noted, a later write noted since the read standing;
+    /// the line is `done kept` with `at`. It is the resend's keep of a head
+    /// ([`Holds::resume_doc`]) and the drop's, where the read the drop makes
+    /// first finds the line landed (`Holds::resolve`; skep #866).
+    pub(super) fn keep_landing(&self, board_hold: &mut BoardHold, principal: u64, doc: &str, k: u64, at: Option<u64>) {
+        if let Some(at) = at {
+            board_hold.acked.insert(at);
+        }
+        if let Some(ph) = board_hold.principals.get_mut(&principal) {
+            if let Some(at) = at {
+                ph.note_position(doc, at);
+                ph.note_arranged(doc, at);
+            }
+            self.done_line(principal, ph, k, Done::Kept { at });
         }
     }
 
@@ -1489,9 +1532,10 @@ impl Holds {
     /// last failure's token, and `elapsed_ms`, its `sent` kept — so the
     /// person's `send` reads before it dials, and a landing the read finds
     /// then is kept (§3c.5) — and the lines behind it wait with it, as behind
-    /// any refused run, until `resolve` sends or drops it. It is said once in
-    /// the shell's own window, and on the `held` event as `refused` (skep
-    /// #716).
+    /// any refused run, until `resolve` sends or drops it, the drop of a
+    /// `sent` line read for its landing first (`Holds::resolve`; skep #866).
+    /// It is said once in the shell's own window, and on the `held` event as
+    /// `refused` (skep #716).
     fn hand_over(&self, session: &SessionEntry, head: &HeldLine, last: &str, elapsed: Duration) {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let refusal = Refusal::shell(Name::ANSWERS_LOST, json!({"last": last, "elapsed_ms": millis(elapsed)})).to_value();

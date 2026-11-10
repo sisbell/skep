@@ -478,7 +478,8 @@ pub struct Reason {
     /// refused, says nothing of an earlier dial's write. A moved document's
     /// lines keep theirs, a line handed to the person keeps it too, and
     /// `resolve(send)` keeps every line's own, so a line that may have landed
-    /// reads before it is sent again (§3c.5).
+    /// reads before it is sent again (§3c.5), and a line handed over reads
+    /// before the person's drop drops it (§3c.4; skep #866).
     pub sent: bool,
 }
 

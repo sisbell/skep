@@ -582,11 +582,14 @@ fn the_publication_cards_state_the_shells_shapes() {
 /// `arrangement_moved` (skep #826); the `resolve` card says what `send` and
 /// `drop` do with such a line, that `send` on a moved document records the
 /// changes that moved it as seen, so a document moved again names only the
-/// changes since (skep #757), and that `drop` alone is admitted on a line
-/// held `head_unreadable`, the write given up for good (skep #726); HELD
-/// BURSTS says a burst answered `unwritable` is lost with the process (skep
-/// #733, #700) and names the head's hold and the death's, at either of its
-/// two points; and REJECTIONS ARE DATA names `head_unreadable` among the
+/// changes since (skep #757), that `drop` alone is admitted on a line held
+/// `head_unreadable`, the write given up for good (skep #726), and that the
+/// drop of a `sent` line handed back reads first, keeps a line whose write
+/// landed and answers `{"kept": true}`, and is refused `landing_unread` where
+/// the read cannot tell (skep #866); HELD BURSTS says a burst answered
+/// `unwritable` is lost with the process (skep #733, #700), names the head's
+/// hold and the death's, at either of its two points, and says what that
+/// drop does; and REJECTIONS ARE DATA names `head_unreadable` among the
 /// halts with a garbled answer from the board's head record among its
 /// causes (skep #728). A card that names neither leaves an agent to guess
 /// whether a line handed back may have landed, and free to stop a process
@@ -595,7 +598,8 @@ fn the_publication_cards_state_the_shells_shapes() {
 /// again; one silent on the head's hold leaves an agent to wait for a repair
 /// that may never come, with no act it knows of; one that names the death at
 /// the dial alone leaves an agent to guess why a burst the board refused
-/// stale is held for the next session.
+/// stale is held for the next session; and one that calls every drop final
+/// leaves an agent to write again words the board kept.
 #[test]
 fn the_held_cards_name_the_shells_hand_over_and_a_burst_kept_in_memory_alone() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
@@ -618,6 +622,13 @@ fn the_held_cards_name_the_shells_hand_over_and_a_burst_kept_in_memory_alone() {
     let resolve = card("resolve");
     assert!(resolve.contains(&format!("that the shell handed back to you ({lost})")), "the resolve card names the line: {resolve}");
     assert!(resolve.contains("dropped, given up for good") && resolve.contains("is read first and kept where it landed, and otherwise sent again, its two-minute clock started afresh"), "the resolve card says what each act does: {resolve}");
+    let unread = skep_shell::Name::LANDING_UNREAD.as_str();
+    assert!(
+        resolve.contains(&format!("save a line handed back as {lost} with sent true, which may have landed after all: its drop reads first, and where its write landed keeps the line, nothing dropped and the lines behind it sent in order, answering {{\"kept\": true}}"))
+            && resolve.contains(&format!("where the read cannot tell whether it landed, nothing is dropped and the drop is refused {unread} {{held, why}}"))
+            && resolve.ends_with("Response: {}, or {\"kept\": true} where a drop kept the line."),
+        "the resolve card says a drop of a line handed back reads first, may keep it, and names the refusal: {resolve}"
+    );
     assert!(
         resolve.contains("on a moved document, it first records that the changes which moved it have been seen: a document moved again names only the changes since"),
         "the resolve card says what send records on a moved document: {resolve}"
@@ -630,6 +641,12 @@ fn the_held_cards_name_the_shells_hand_over_and_a_burst_kept_in_memory_alone() {
     let paragraph = |head: &str| catalog.instructions().split("\n\n").find(|paragraph| paragraph.starts_with(head)).unwrap_or_else(|| panic!("the {head} paragraph"));
     let held_bursts = paragraph("HELD BURSTS. ");
     assert!(held_bursts.contains("A burst whose held answer carries unwritable — why the shell could not write its line to disk — is kept in memory alone, and is lost if the process ends before it is resent."), "{held_bursts}");
+    assert!(
+        held_bursts.contains(&format!(
+            "none of which the shell then sends, save a line handed back as {lost} with sent true, whose drop reads first: kept where its write landed, nothing discarded and the lines behind it sent (answering {{\"kept\": true}}), and refused {unread} where the read cannot tell, nothing discarded"
+        )),
+        "HELD BURSTS says what a drop of a line handed back does: {held_bursts}"
+    );
     assert!(
         held_bursts.contains(&format!("its head record unreadable (cause {unreadable}: the shell cannot sign the write until the record reads, keeps the line on disk meanwhile, skips it at each probe, and admits your \"drop\" on it)")),
         "HELD BURSTS names the head's hold: {held_bursts}"

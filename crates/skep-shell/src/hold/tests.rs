@@ -14,14 +14,16 @@
 //! five kinds are bursts and the eleven other
 //! `WRITE_KINDS` are not; the five held states are the declared ones, a
 //! line's its cause's whatever refusal stands beside it, and the two acts of
-//! `resolve` the declared words and no other spelling; and the class of why a
-//! line stands off disk is its refusal's kind's row, every kind of no row
+//! `resolve` the declared words and no other spelling; the whys a drop that
+//! reads first refuses by the declared words; and the class of why a line
+//! stands off disk is its refusal's kind's row, every kind of no row
 //! `other`, the three classes the declared words, set with the words.
 //!
 //! The ground is a fake board (`Fake`) — its `H.1`, or an answer armed in the
 //! record's place, whether it names a claimant, and its `/health` unanswered
 //! where a cell arms it; its `/changes` rows, or no answer to them, and
-//! the reads of them counted, each read slowed where a cell asks; its commit
+//! the reads of them counted, each read slowed where a cell asks, and a look
+//! taken once as the next reaches the board; its commit
 //! stream, none or endless; a draft's text, its content image and the
 //! reads of it counted, a look taken as each image read reaches the board,
 //! the death signal, no answer or a refusal at either read where a cell arms
@@ -351,6 +353,24 @@ fn the_three_unwritable_classes_are_the_declared_words() {
     }
 }
 
+/// Checks that the whys of a drop's `landing_unread` are the declared words.
+///
+/// They are the `LandingUnreadRefusal.why` union's words, in its order, each
+/// spelled as the refusal carries it, and every refusal the drop answers is
+/// held to its declaration (skep #866; the mutant that misspells a why names
+/// one no page keys its statement by).
+#[test]
+fn the_landing_unread_whys_are_the_declared_words() {
+    let declared = crate::shapes::shape("LandingUnreadRefusal").unwrap().fields.iter().find(|f| f.name == "why").unwrap().ty;
+    let spelled: Vec<String> = LandingUnread::ALL.iter().map(|why| format!("'{}'", why.as_str())).collect();
+    assert_eq!(spelled, declared.split(" | ").collect::<Vec<_>>(), "{declared}");
+    for why in LandingUnread::ALL {
+        let refused = landing_unread(7, why).to_value();
+        crate::shapes::assert_declared("LandingUnreadRefusal", &refused);
+        assert_eq!((refused["held"].as_u64(), refused["why"].as_str()), (Some(7), Some(why.as_str())), "{refused}");
+    }
+}
+
 /// The store's states are three and three (the record
 /// `2026-11-06-held-store-investigation` §7: the state count, which the
 /// reviews read the classes closed by): every variant of `Directory` and of
@@ -482,7 +502,8 @@ impl<T: Clone> Armed<T> {
 /// under its `under`, or a refusal armed in the page's place — the page
 /// budget's for the next few reads among them — or the death signal where every
 /// read is armed closed, or no answer where every read is armed unanswered, and
-/// the reads of them counted; the draft's text, of which a `retrieve_v` answers
+/// the reads of them counted, a look the cell takes once as the next reaches
+/// the board; the draft's text, of which a `retrieve_v` answers
 /// the positions it names — or no answer, the death signal, or one position
 /// more than it names, where the site is armed so; the draft's content image,
 /// of which an `image` answers the runs its region covers, clipped as the board
@@ -534,6 +555,11 @@ struct Fake {
     changes_unanswered: AtomicBool,
     /// The `/changes` reads made, a page or a refusal answered alike.
     changes_reads: AtomicUsize,
+    /// A look taken once, as the next `/changes` read reaches the board.
+    ///
+    /// It runs before the read answers: an act of the person's while a read
+    /// is out.
+    at_changes: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     text: Mutex<String>,
     site_unread: AtomicBool,
     site_closed: AtomicBool,
@@ -616,6 +642,7 @@ impl Fake {
             changes_closed: AtomicBool::new(false),
             changes_unanswered: AtomicBool::new(false),
             changes_reads: AtomicUsize::new(0),
+            at_changes: Mutex::new(None),
             text: Mutex::new(String::new()),
             site_unread: AtomicBool::new(false),
             site_closed: AtomicBool::new(false),
@@ -763,6 +790,10 @@ impl Dialer for Fake {
         }
         if req.method == Method::Get && req.path.starts_with("/changes") {
             self.changes_reads.fetch_add(1, Ordering::SeqCst);
+            let look = self.at_changes.lock().unwrap().take();
+            if let Some(look) = look {
+                look();
+            }
             thread::sleep(Duration::from_millis(self.changes_delay_ms.load(Ordering::SeqCst)));
             if self.changes_closed.load(Ordering::SeqCst) {
                 return Ok(closed());

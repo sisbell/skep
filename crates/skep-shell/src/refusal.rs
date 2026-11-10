@@ -273,7 +273,24 @@ impl Name {
     /// the shell hands the line to the person under `answers_lost` (P10).
     /// Two drops are admitted all the same: of a line held `head_unreadable`,
     /// and of every line under a bare session, the keyless session's discard.
+    /// It answers too a drop whose line was re-marked while the drop's read
+    /// for its landing was out — a `send` of it — nothing dropped.
     pub const NOT_RESOLVABLE: Name = Name("not_resolvable");
+    /// `resolve(session, …)`'s drop of a line whose answer was lost, refused.
+    ///
+    /// The line is a `sent` one handed over as `answers_lost`, and the read
+    /// its drop makes first cannot tell whether its write landed (§3c.4; skep
+    /// #866): nothing is dropped, since a drop never removes words the board
+    /// may hold. The detail names `held`, the line's ordinal, and `why`:
+    /// `unanswered` where the board gave the read no answer, or is not
+    /// answering, so no read was made; `unread` where it answered the read
+    /// with no page; `undecided` where a row could be the line's landing and
+    /// the read could not confirm it; `stopped`, `poisoned` or `halted` where
+    /// that hold stands at the board, a restart of a halted board rebuilding
+    /// what its journal holds, so no read is made. The drop is asked again
+    /// once the board answers and takes writes, and a line `undecided` leaves
+    /// by `send`, whose dial the board judges by its typed state.
+    pub const LANDING_UNREAD: Name = Name("landing_unread");
     /// A burst whose frame passes the board's frame cap, refused at the act.
     ///
     /// The frame passes it as sent or as a resend's attest would carry it —
@@ -297,9 +314,10 @@ impl Name {
     /// against an older state, shifted or not — and the read found no
     /// landing, so the shell stopped resending it: the line is a refused run
     /// under this token, its `sent` kept, until `resolve` sends it again or
-    /// drops it (§3c.4). Its detail names `last`, the last failure's token —
-    /// the held cause, or the board's — and `elapsed_ms`, the milliseconds
-    /// since the line's first failed send.
+    /// drops it (§3c.4), a drop of a `sent` line reading for its landing
+    /// first ([`Name::LANDING_UNREAD`]; skep #866). Its detail names `last`,
+    /// the last failure's token — the held cause, or the board's — and
+    /// `elapsed_ms`, the milliseconds since the line's first failed send.
     pub const ANSWERS_LOST: Name = Name("answers_lost");
     /// `answer(id, …)` or `cancel(id)` where no moment of that id waits.
     pub const NO_SUCH_MOMENT: Name = Name("no_such_moment");

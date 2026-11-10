@@ -152,7 +152,18 @@ const SHAPES: &[Shape] = &[
         doc: "a refusal: the shell's own `window_parts_owed` (skep #932) — `merge.land`, or an agent's merge tool once one lands, met a window part with no answer: nothing was published, and the landing composes no answer the caller did not give, at any window part. FINAL in meaning and the same for every caller, `skep merge --publish`'s printed refusal composed from the same library data. `parts` every part that needs an answer, `answers` the answers that stand beside them, `misfits` an answer of the shot's that fits nothing or names words another also answers, `left_private` the private sets the shot left out of `merge.land` (each with its count, none at the shot), `defaults` the merge's places left at their defaults (kind, where, as placed). `merge.land` then again with `answers` in the panel's form, each part keyed `⟨run⟩.⟨part⟩`",
         fields: &[req("kind", "'shell'"), req("name", "'window_parts_owed'"), req("parts", "WindowPart[]"), req("answers", "WindowPart[]"), req("misfits", "WindowMisfit[]"), req("left_private", "LeftPrivate[]"), req("defaults", "MergeDefault[]")],
     },
-    Shape { name: "ShellRefusal", open: true, doc: "a refusal: the shell's own, its detail beside the name (`held_lines`'s declared whole as `HeldLinesRefusal`, `window_parts_owed`'s as `WindowPartsOwedRefusal`)", fields: &[req("kind", "'shell'"), req("name", "string")] },
+    Shape {
+        name: "LandingUnreadRefusal",
+        open: false,
+        doc: "a refusal: the shell's own `landing_unread` (§3c.4; skep #866) — `resolve(session, {held, act: 'drop'})` on a line handed over as `answers_lost` with `sent` true reads for the line's landing before it drops anything, since a dial whose answer was lost can commit late and a `poisoned` commit is rebuilt at the board's restart; where that read cannot tell, nothing is dropped and the drop is refused naming `held`, the line, and `why`: `unanswered` the board gave the read no answer, or is not answering the shell, which then makes no read; `unread` the board answered it with no page; `undecided` a row could be the line's landing and the read could not confirm it; `stopped`, `poisoned` or `halted` that hold stands at the board, no read made — the drop is asked again once the board answers and takes writes, and an `undecided` line leaves by `send`, which the board judges by its typed state; the page draws the line as still held, never as discarded",
+        fields: &[req("kind", "'shell'"), req("name", "'landing_unread'"), req("held", "number"), req("why", "'unanswered' | 'unread' | 'undecided' | 'stopped' | 'poisoned' | 'halted'")],
+    },
+    Shape {
+        name: "ShellRefusal",
+        open: true,
+        doc: "a refusal: the shell's own, its detail beside the name (`held_lines`'s declared whole as `HeldLinesRefusal`, `window_parts_owed`'s as `WindowPartsOwedRefusal`, `landing_unread`'s as `LandingUnreadRefusal`)",
+        fields: &[req("kind", "'shell'"), req("name", "string")],
+    },
     Shape { name: "ModeEvent", open: false, doc: "`mode(board, …)` — the pair moved", fields: &[req("board", "string"), req("mode", "Mode"), req("claimant", "string | null"), req("local_trust", "boolean")] },
     Shape { name: "SessionDiedEvent", open: false, doc: "`session-died(session, reason)`", fields: &[req("session", "string"), req("reason", "DeathReason")] },
     Shape {
@@ -195,7 +206,7 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "HeldRow",
         open: false,
-        doc: "`held(session)` — one held burst of the acting principal at the session's board, in resend order (§3c.2): `held` the ordinal — the line's for the shell's life, naming it until it leaves and no other line after (skep #856) — `doc` the draft, `base` the resend's read start, `frame` the wire frame (no attest) — the page's as composed, or as the shell last shifted it through another writer's change, every position it names moved by one displacement and its `as_of` the state they are true of — `anchors` the page's, where the burst carried them (the `op` row's member): the identities on either side of the span the frame edits and, for a delete or a rearrange, the I-runs of the units it holds, by which the shell shifts it, `sent` whether a dial of the line was attempted since the last read, so it may have landed — a first dial whose answer was lost (the board's `internal_panic` among them), a `poisoned` answer, or any resend, which marks its line before it dials (§3c.2) — kept through a move, `refusal` the verdict for a refused run — the board's, a refusal at a resend under a code the shell's table holds nowhere among them, handed to the person at once, or the shell's `answers_lost` where it handed the person a line no landing of which was found two minutes after its first failed send, whatever the failure (§3c.4): `last` the last failure's token, the held cause or the board's, and `elapsed_ms` the milliseconds since that first failed send — its `sent` kept; at a line held `moved` because the board refused it as typed against an older state and the shift could not move it through the change exactly, the board's `arrangement_moved` (`site.as_of` the state it was typed against, `site.current` the document's); at a line held `head_unreadable`, the shell's refusal naming why its signature could not be made, the line holding all the same (SP-14); at a line held `session_died`, the shell's `session_died` refusal once the session's end derives the death, its `reason` the death's arm (§4b.2; the `retired` arm's `own` among its members), the line holding all the same until a session of the principal's that may write stands and resends it (§3c.4)",
+        doc: "`held(session)` — one held burst of the acting principal at the session's board, in resend order (§3c.2): `held` the ordinal — the line's for the shell's life, naming it until it leaves and no other line after (skep #856) — `doc` the draft, `base` the resend's read start, `frame` the wire frame (no attest) — the page's as composed, or as the shell last shifted it through another writer's change, every position it names moved by one displacement and its `as_of` the state they are true of — `anchors` the page's, where the burst carried them (the `op` row's member): the identities on either side of the span the frame edits and, for a delete or a rearrange, the I-runs of the units it holds, by which the shell shifts it, `sent` whether a dial of the line was attempted since the last read, so it may have landed — a first dial whose answer was lost (the board's `internal_panic` among them), a `poisoned` answer, or any resend, which marks its line before it dials (§3c.2) — kept through a move, `refusal` the verdict for a refused run — the board's, a refusal at a resend under a code the shell's table holds nowhere among them, handed to the person at once, or the shell's `answers_lost` where it handed the person a line no landing of which was found two minutes after its first failed send, whatever the failure (§3c.4): `last` the last failure's token, the held cause or the board's, and `elapsed_ms` the milliseconds since that first failed send — its `sent` kept, a drop of it then reading for its landing first (`Resolve`; skep #866); at a line held `moved` because the board refused it as typed against an older state and the shift could not move it through the change exactly, the board's `arrangement_moved` (`site.as_of` the state it was typed against, `site.current` the document's); at a line held `head_unreadable`, the shell's refusal naming why its signature could not be made, the line holding all the same (SP-14); at a line held `session_died`, the shell's `session_died` refusal once the session's end derives the death, its `reason` the death's arm (§4b.2; the `retired` arm's `own` among its members), the line holding all the same until a session of the principal's that may write stands and resends it (§3c.4)",
         fields: &[req("held", "number"), req("doc", "string"), req("base", "number"), req("frame", "unknown"), opt("anchors", "Anchors"), req("cause", "string"), req("sent", "boolean"), req("time", "number"), opt("refusal", "unknown")],
     },
     Shape {
@@ -222,7 +233,12 @@ const SHAPES: &[Shape] = &[
         doc: "one hand whose row moved a held document (§3c.5): `own` this store's own key with its fingerprint, `other` another key with its fingerprint and the label the shell's key store holds for it (rendered inert), `bare` an unsigned hand under local trust, `lost` a row whose testimony the board lost — the data of the three forms the moved face draws, the strings `ux/copy.md`'s; `unread`, the one hand, where the board gave the read of the rows no answer after a real verdict — the hands not read yet, never `lost`, read again when the board answers and the `moved` state said once more with them (skep #863)",
         fields: &[req("key", "HandKey"), opt("fingerprint", "string"), opt("label", "string")],
     },
-    Shape { name: "Resolve", open: false, doc: "`resolve(session, {held, act})` — the person's act at a REFUSED run's face or a MOVED document's", fields: &[req("session", "string"), req("held", "number"), req("act", "'drop' | 'send'")] },
+    Shape {
+        name: "Resolve",
+        open: false,
+        doc: "`resolve(session, {held, act})` — the person's act at a REFUSED run's face or a MOVED document's; answered `{}`, save a `drop` of a line handed over as `answers_lost` with `sent` true, which reads for the line's landing first (§3c.4; skep #866): a landing found keeps the line, nothing dropped, the lines behind it going out in order, answered `{kept: true}`; none that could be its landing drops it, answered `{}`; a read that cannot tell drops nothing, refused `landing_unread` (`LandingUnreadRefusal`); a read the death signal met ends the session, `session_died` — the page takes the outcome from the answer, the `held` event saying `kept` with `held: 0` after a drop as after a keep",
+        fields: &[req("session", "string"), req("held", "number"), req("act", "'drop' | 'send'")],
+    },
     Shape {
         name: "AnotherWindowEvent",
         open: false,
@@ -547,7 +563,7 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
     },
     CallRow { name: "held", forms: &[&[req("session", "string")]], result: "HeldRow[]" },
     CallRow { name: "held.show", forms: &[&[req("session", "string")]], result: "{ shown: boolean }" },
-    CallRow { name: "resolve", forms: &[&[req("session", "string"), req("held", "number"), req("act", "'drop' | 'send'")]], result: "Empty" },
+    CallRow { name: "resolve", forms: &[&[req("session", "string"), req("held", "number"), req("act", "'drop' | 'send'")]], result: "{ kept?: true }" },
     CallRow {
         name: "changes",
         forms: &[
@@ -618,7 +634,7 @@ pub fn declarations() -> String {
         out.push_str(alias);
         out.push('\n');
     }
-    out.push_str("export type Refusal = RefusedByBoard | HaltFace | BlockedFace | Unreachable | HeldLinesRefusal | WindowPartsOwedRefusal | ShellRefusal;\n");
+    out.push_str("export type Refusal = RefusedByBoard | HaltFace | BlockedFace | Unreachable | HeldLinesRefusal | WindowPartsOwedRefusal | LandingUnreadRefusal | ShellRefusal;\n");
     out.push_str("export type Outcome<T> = { result: T } | { refused: Refusal };\n");
     let event_names: Vec<String> = EventName::ALL.iter().map(|name| format!("'{name}'")).collect();
     let _ = writeln!(out, "export type EventName = {};\n", event_names.join(" | "));

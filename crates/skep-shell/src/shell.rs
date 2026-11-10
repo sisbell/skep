@@ -1800,17 +1800,24 @@ impl Shell {
         Ok(json!({"shown": self.holds.show_halted(&session)}))
     }
 
-    /// Answers `resolve(session, {held, act})` with `{}` (§4b.1).
+    /// Answers `resolve(session, {held, act})` with `{}`, or `{kept: true}`.
     ///
-    /// `"drop"` on a `refused` or `moved` line marks it, and every line held
-    /// after it on that document — a refused run's `behind` lines, a moved
-    /// document's later lines — dropped. `"send"` re-enters the automatic
-    /// machine for that document, the call answering "once the line is
-    /// handed to the machine, never after its ack": the probe that resends
-    /// it is handed to the board's feed thread (`Feed::probe`). Under a bare
-    /// session, which reads alone ([`SessionEntry::may_write`]), `"drop"`
-    /// stands on every line, a holding one among them — the keyless
-    /// session's discard, a local act that commits nothing to the board
+    /// The answer is §4b.1's. `"drop"` on a `refused` or `moved` line marks
+    /// it, and every line held after it on that document — a refused run's
+    /// `behind` lines, a moved document's later lines — dropped, and answers
+    /// `{}`; on a `sent` line handed over as `answers_lost` it reads for the
+    /// line's landing first (§3c.4; skep #866): a landing found keeps the
+    /// line, nothing dropped, and answers `{kept: true}`, the lines behind it
+    /// handed to the board's feed thread's probe as a `"send"`'s are; a read
+    /// that cannot tell drops nothing and is refused; and a read that meets
+    /// the death signal ends the session by the one sequence. `"send"`
+    /// re-enters the automatic machine for that document, the call answering
+    /// "once the line is handed to the machine, never after its ack": the
+    /// probe that resends it is handed to the board's feed thread
+    /// (`Feed::probe`). Under a bare session, which reads alone
+    /// ([`SessionEntry::may_write`]), `"drop"` stands on every line, a
+    /// holding one among them — the keyless session's discard, a local act
+    /// that commits nothing to the board and reads nothing
     /// (`Holds::resolve`) — and `"send"` does not, since no resend sends
     /// under it. At a board whose held store another shell holds (§3c.3)
     /// both stand: the write door refuses every new write there, and the
@@ -1827,8 +1834,10 @@ impl Shell {
     ///    not spell (`ResolveAct::named`) is the argument it is, refused
     ///    before any line is asked;
     /// 3. `write_in_bare_session` for `"send"` under a bare session;
-    /// 4. `store_halted`, `no_such_held` and `not_resolvable`, as
-    ///    `Holds::resolve` orders them.
+    /// 4. `store_halted`, `no_such_held`, `not_resolvable` and
+    ///    `landing_unread`, as `Holds::resolve` orders them;
+    /// 5. `session_died` where the drop's read met the death signal, the
+    ///    session ended by the one sequence.
     fn resolve(&self, args: &Value) -> Result<Value, Refusal> {
         let session = self.session(&args["session"])?;
         let k = args["held"].as_u64().ok_or_else(|| Refusal::malformed("held"))?;
@@ -1837,10 +1846,17 @@ impl Shell {
             return Err(Refusal::shell(Name::WRITE_IN_BARE_SESSION, json!({"act": "send"})));
         }
         match self.holds.resolve(&session, k, act)? {
-            Resolved::Dropped => {}
-            Resolved::HandedBack => self.feed(&session.board_reference).probe(),
+            Resolved::Dropped => Ok(json!({})),
+            Resolved::HandedBack => {
+                self.feed(&session.board_reference).probe();
+                Ok(json!({}))
+            }
+            Resolved::Kept => {
+                self.feed(&session.board_reference).probe();
+                Ok(json!({"kept": true}))
+            }
+            Resolved::Died => Err(self.died(&session)),
         }
-        Ok(json!({}))
     }
 
     /// Answers `changes(session, since, limit?, class?)`, and its guest form,

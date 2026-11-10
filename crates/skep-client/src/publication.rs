@@ -84,8 +84,9 @@
 //!    enumeration read again over the same held selection and composed
 //!    under the answers carried onto its windows, every test over what the
 //!    draft still arranges of it, and the two answers diffed — a window part
-//!    named, un-named or re-named since among the differences — the held
-//!    runs placed by the one image, a difference answered as a
+//!    named, un-named or re-named since and a run standing whole at a second
+//!    place since among the differences — the held runs placed by the one
+//!    image, a difference answered as a
 //!    re-statement for the caller to confirm again; then the request built
 //!    from the confirmed rows, composed from the answers at each part —
 //!    every member, the kept places, the member-position end spelled
@@ -140,7 +141,7 @@ pub mod send;
 mod tests;
 
 pub use base::{draft_base, left_behind, standing, Standing, Unrecorded};
-pub use enumerate::{enumerate, is_formatting, is_formatting_type, is_merge_record, windows, AlsoImage, BaseImage, Candidate, Enumeration, Placement, Record, Successor, Via, MAX_WIRE_LIST, MERGE_RECORD_TYPE};
+pub use enumerate::{enumerate, enumerate_again, is_formatting, is_formatting_type, is_merge_record, windows, AlsoImage, BaseImage, Candidate, Enumeration, Placement, Record, Successor, Via, MAX_WIRE_LIST, MERGE_RECORD_TYPE};
 pub use landed::{landed, twin_precheck, Base, Missing, Recomposed, Verdict};
 pub use parts::{answers_onto, compose_part, parts_of, renamed, Answer as OriginAnswer, OwedAnswer, Part, PartComposition, PartKey, Window};
 pub use panel::{count, inherited, panel, Count, Destination, FoldCounts, Formatting, Inherited, LineCounts, MergeRecords, Original, Panel, PartCounts, Removal, Row, RowKind, Switches, TypeFold};

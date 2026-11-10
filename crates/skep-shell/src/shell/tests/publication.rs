@@ -1668,6 +1668,80 @@ fn a_draft_placing_a_run_of_its_own_words_twice_publishes_whole() {
     sd.shutdown();
 }
 
+/// Checks that a held run arranged at a second place since the panel is
+/// re-stated, and then lands at both (PUB-3.108; the link-sets design §5.7).
+///
+/// A draft of the memberless edition reads `abcd`, one run the panel holds;
+/// the run is copied after itself while the panel stands. The confirm
+/// answers `restated`, the run's `places` under its declared shape, nothing
+/// sent; the next confirm is acknowledged and the member reads `abcdabcd`.
+#[test]
+fn a_run_arranged_at_a_second_place_since_the_panel_is_re_stated_and_lands_at_both() {
+    use skep_client::board::frames::retrieve_v;
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let draft = g.staged(&edition, "abcd");
+    g.call("publication.open", json!({"session": g.session, "draft": draft, "doc": edition, "readable_drafts": [draft], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    g.op(json!({"op": "copy", "doc": draft, "at": {"subspace": "1", "ordinal": "5"}, "specs": [{"source": draft, "span": {"start": "1.1", "width": "0.4"}}], "as_of": g.position()}));
+    assert_eq!(g.text(&draft, 9), "abcdabcd", "the premise: the run twice since the panel");
+    let before = g.position();
+    let restated = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("re-stated, never refused: {r}"));
+    crate::shapes::assert_declared("Restated", &restated);
+    assert_eq!(restated, json!({"outcome": "restated", "left": [], "superseded": [], "came": [], "removals_undone": [], "removals_came": [], "selection": [{"run": 0, "placement": {"places": [1, 5]}}]}), "the run re-stated at both places");
+    assert_eq!(g.position(), before, "nothing sent");
+    assert_eq!(g.states_once(1), ["restated"], "{:?}", g.states());
+    let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let e1 = format!("{edition}.1");
+    assert_eq!((acked["outcome"].as_str(), acked["member"].as_str()), (Some("acknowledged"), Some(e1.as_str())), "{acked}");
+    let member = g.call("op", json!({"guest": true, "board": g.board, "frame": retrieve_v(&e1, 1, 9)})).unwrap();
+    assert_eq!(member["items"].as_array().unwrap().iter().map(|i| i["content"].as_str().unwrap_or("")).collect::<String>(), "abcdabcd", "the version holds what the draft shows: {member}");
+    assert_eq!(g.states_once(3), ["restated", "sent", "acknowledged"], "{:?}", g.states());
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a held panel's re-open keeps a second place the re-statement
+/// showed (PUB-3.108; the link-sets design §5.7).
+///
+/// A panel over `abcd` and a window onto `O` is re-stated with `abcd` at a
+/// second place, then held behind `O`'s own publication. `O`'s part is
+/// named since, so the re-open runs the open's reads again: the run stays
+/// at both places, and the confirm lands them, the window by its
+/// counterpart.
+#[test]
+fn a_held_panels_re_open_keeps_a_second_place_the_re_statement_showed() {
+    use skep_client::board::frames::retrieve_v;
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let draft = g.staged(&edition, "abcd");
+    let origin = g.draft("quote");
+    g.op(json!({"op": "copy", "doc": draft, "at": {"subspace": "1", "ordinal": "5"}, "specs": [{"source": origin, "span": {"start": "1.1", "width": "0.5"}}], "as_of": g.position()}));
+    let open_draft = json!({"session": g.session, "draft": draft, "doc": edition, "readable_drafts": [draft, origin], "published": [edition]});
+    let panel = g.call("publication.open", open_draft.clone()).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(panel["windows"][0]["run"], 1, "the premise: the window is the second held run: {panel}");
+    g.op(json!({"op": "copy", "doc": draft, "at": {"subspace": "1", "ordinal": "10"}, "specs": [{"source": draft, "span": {"start": "1.1", "width": "0.4"}}], "as_of": g.position()}));
+    let restated = g.call("publication.confirm", json!({"session": g.session, "answers": {"1.0": "keep_private"}})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(restated["selection"], json!([{"run": 0, "placement": {"places": [1, 10]}}]), "{restated}");
+    // O published at the mint form, the draft's panel held behind its panel.
+    g.call("publication.open", json!({"session": g.session, "draft": origin, "mint": "1.0.1", "readable_drafts": [origin], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let minted = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert!(minted["edition"].is_string(), "an edition minted: {minted}");
+    let held = g.call("publication.open", open_draft).unwrap_or_else(|r| panic!("{r}"));
+    assert!(held["hold"]["since"].is_u64(), "re-opened from behind O's panel: {held}");
+    assert_eq!(held["windows"][0]["parts"][0]["admits"], json!(["counterpart", "drop"]), "the part named since: {held}");
+    let acked = g.call("publication.confirm", json!({"session": g.session, "answers": {"1.0": "counterpart"}})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(acked["outcome"].as_str(), Some("acknowledged"), "{acked}");
+    let e1 = format!("{edition}.1");
+    let member = g.call("op", json!({"guest": true, "board": g.board, "frame": retrieve_v(&e1, 1, 14)})).unwrap();
+    assert_eq!(member["items"].as_array().unwrap().iter().map(|i| i["content"].as_str().unwrap_or("")).collect::<String>(), "abcdquoteabcd", "the run at both places, the window by its counterpart: {member}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
 /// THE PRIVATE RIDER through the shell (the link-sets design §5.7 (vi′);
 /// skep #894): after a first version, the draft holds a strong mark of its
 /// own over the member's words, its public copy in `E.1` with the accept

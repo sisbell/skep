@@ -2347,9 +2347,11 @@ fn the_reread_states_each_difference_over_what_is_left() {
     assert_eq!(r.came.len(), 1);
     assert_eq!(r.removals_came, Vec::<Address>::new());
     assert_eq!(r.selection, vec![(0, Placement::Whole { ordinal: 11 }), (1, Placement::Whole { ordinal: 1 })], "the two runs traded places");
-    // Confirmed again, the request carries the new places and nothing that left.
+    // Confirmed again, the request carries the runs in the order the
+    // re-statement showed, each at its new place, and nothing that left.
     let Built::Request(request) = build(&p, &inputs, &again.enumeration, &again.panel, &switched(None)).unwrap() else { panic!("inert") };
-    assert_eq!(request.places, vec![None, Some(1), None]);
+    assert_eq!(request.runs, vec![run(D, 1, 10), run(E, 1, 19), run(O, 1, 5)], "the draft's order, the two runs traded");
+    assert_eq!(request.places, vec![Some(1), None, None]);
     assert!(!request.entries.iter().any(|en| en.old.as_ref().map(ToString::to_string).as_deref() == Some(named.l1_n.as_str())));
     assert_eq!(request.retract, vec![a(&named.mpub)]);
 }
@@ -4383,6 +4385,237 @@ fn a_copy_held_more_often_than_the_draft_arranges_it_names_no_second_place() {
     let sent = send(&p, &inputs, &mut request).unwrap();
     assert!(matches!(&sent, Sent::Acknowledged(_)), "{sent:?}");
     assert_eq!(dialer.world().docs[D].runs, vec![run(E, 1, 29)], "D re-windowed at the first place alone");
+}
+
+// ── THE SECOND PLACES (PUB-3.108; the link-sets design §5.7, sweep 6 W10) ─
+
+/// The base fixture's draft with `D`'s ten words arranged again after the
+/// window: the run at 20 and 35.
+fn doubled() -> Vec<Run> {
+    vec![run(E, 1, 19), run(D, 1, 10), run(O, 1, 5), run(D, 1, 10)]
+}
+
+/// Checks that a held run standing whole at a second place since the panel
+/// is re-stated, and carried at both.
+///
+/// `D`'s run is held once; after the panel's reads the draft arranges it
+/// again after the window. The confirm's re-read re-states it at both
+/// places, the next re-read finds nothing moved, and the request carries
+/// the run once per place in the draft's order, each with its own kept
+/// place, so the version holds what the draft shows.
+#[test]
+fn a_held_run_arranged_at_a_second_place_is_restated_and_carried() {
+    let (world, _) = World::base();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = inputs();
+    let e = switched(None).compose(&inputs, &enumerate(&p, &inputs).unwrap());
+    let first = panel(&p, &inputs, &e).unwrap();
+    assert_eq!(e.placed[1], Placement::Whole { ordinal: 20 }, "the premise: one place at the panel's reads");
+    dialer.world().docs.get_mut(D).unwrap().runs = doubled();
+    let again = reread(&p, &inputs, &e, &first).unwrap();
+    assert_eq!(again.restatement.clone().expect("a difference").selection, vec![(1, Placement::Places(vec![20, 35]))]);
+    assert_eq!(again.enumeration.selection, doubled(), "the selection as published: what the draft now arranges");
+    assert_eq!(again.enumeration.region, vec![(1, 44)]);
+    let settled = reread(&p, &inputs, &again.enumeration, &again.panel).unwrap();
+    assert_eq!(settled.restatement, None, "nothing moved since the re-statement");
+    let Built::Request(mut request) = build(&p, &inputs, &settled.enumeration, &settled.panel, &switched(None)).unwrap() else { panic!("inert") };
+    assert_eq!(request.runs, doubled(), "the runs in the draft's order");
+    assert_eq!(request.places, vec![None, Some(20), None, Some(35)], "each with its own kept place");
+    let sent = send(&p, &inputs, &mut request).unwrap();
+    let Sent::Acknowledged(ack) = sent else { panic!("{sent:?}") };
+    let shown = vec![run(E, 1, 29), run(O, 1, 5), run(E, 20, 10)];
+    assert_eq!(dialer.world().docs[&ack.member.to_string()].runs, shown, "the version holds what the draft shows, the run on one fresh identity");
+    assert_eq!(dialer.world().docs[D].runs, shown, "the draft re-windowed at both places");
+}
+
+/// Checks that a second place moved or gone is re-stated again.
+///
+/// Once the re-statement shows the run at 20 and 35, a move of the second
+/// copy is a difference, and so is its deletion, which leaves the run at
+/// one place and the request carrying it there alone.
+#[test]
+fn a_second_place_moved_or_gone_is_restated_again() {
+    let (world, _) = World::base();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = inputs();
+    let e = switched(None).compose(&inputs, &enumerate(&p, &inputs).unwrap());
+    let first = panel(&p, &inputs, &e).unwrap();
+    dialer.world().docs.get_mut(D).unwrap().runs = doubled();
+    let again = reread(&p, &inputs, &e, &first).unwrap();
+    assert!(again.restatement.is_some(), "the premise: the second place re-stated");
+    dialer.world().docs.get_mut(D).unwrap().runs = vec![run(E, 1, 19), run(D, 1, 10), run(O, 1, 5), run(Z, 1, 3), run(D, 1, 10)];
+    let moved = reread(&p, &inputs, &again.enumeration, &again.panel).unwrap();
+    assert_eq!(moved.restatement.expect("a difference").selection, vec![(1, Placement::Places(vec![20, 38]))], "a move of the second copy");
+    dialer.world().docs.get_mut(D).unwrap().runs = vec![run(E, 1, 19), run(D, 1, 10), run(O, 1, 5)];
+    let back = reread(&p, &inputs, &moved.enumeration, &moved.panel).unwrap();
+    assert_eq!(back.restatement.expect("a difference").selection, vec![(1, Placement::Whole { ordinal: 20 })], "the run back at one place");
+    let Built::Request(request) = build(&p, &inputs, &back.enumeration, &back.panel, &switched(None)).unwrap() else { panic!("inert") };
+    assert_eq!((request.runs.clone(), request.places.clone()), (vec![run(E, 1, 19), run(D, 1, 10), run(O, 1, 5)], vec![None, Some(20), None]));
+}
+
+/// Checks that a place standing when the panel opened stays out.
+///
+/// The selection holds `D`'s run once and the draft already arranges it
+/// twice when the panel is read: the person selected one passage, the
+/// re-read finds no difference, and the request carries the run at its
+/// first place alone, leaving the other copy as it stands.
+#[test]
+fn a_place_standing_when_the_panel_opened_stays_out() {
+    let (mut world, _) = World::base();
+    world.docs.get_mut(D).unwrap().runs = doubled();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = inputs();
+    let e = switched(None).compose(&inputs, &enumerate(&p, &inputs).unwrap());
+    assert_eq!(e.placed[1], Placement::Whole { ordinal: 20 }, "one place at the panel's reads, the first");
+    let first = panel(&p, &inputs, &e).unwrap();
+    let again = reread(&p, &inputs, &e, &first).unwrap();
+    assert_eq!(again.restatement, None, "nothing moved since the panel");
+    assert_eq!(again.enumeration.placed[1], Placement::Whole { ordinal: 20 });
+    let Built::Request(mut request) = build(&p, &inputs, &again.enumeration, &again.panel, &switched(None)).unwrap() else { panic!("inert") };
+    assert_eq!((request.runs.clone(), request.places.clone()), (vec![run(E, 1, 19), run(D, 1, 10), run(O, 1, 5)], vec![None, Some(20), None]), "the run the selection holds, once");
+    assert!(matches!(send(&p, &inputs, &mut request).unwrap(), Sent::Acknowledged(_)));
+    assert_eq!(dialer.world().docs[D].runs, vec![run(E, 1, 29), run(O, 1, 5), run(D, 1, 10)], "the draft's other copy left as it stands");
+}
+
+/// Checks what a re-read finds of each held run's places.
+///
+/// Each row is a selection, the draft before the panel's reads, the draft
+/// at the re-read and what the re-read places: a run standing at more whole
+/// places than the panel's reads found takes every one no held run's place
+/// overlaps, a run held twice its last copy alone, and a part of a run
+/// copied elsewhere is none of its places.
+#[test]
+fn a_held_run_joins_every_whole_place_since_the_panel_none_overlapping_a_held_runs() {
+    let whole = |ordinal: u64| Placement::Whole { ordinal };
+    let places = |ordinals: &[u64]| Placement::Places(ordinals.to_vec());
+    let e_d = vec![run(E, 1, 19), run(D, 1, 10)];
+    let cells = [
+        ("a copy before the first place", e_d.clone(), e_d.clone(), vec![run(D, 1, 10), run(E, 1, 19), run(D, 1, 10)], vec![whole(11), places(&[1, 30])]),
+        ("a third place", e_d.clone(), e_d.clone(), vec![run(E, 1, 19), run(D, 1, 10), run(D, 1, 10), run(D, 1, 10)], vec![whole(1), places(&[20, 30, 40])]),
+        ("a run held twice, a third place: its last copy", vec![run(E, 1, 19), run(D, 1, 10), run(D, 1, 10)], vec![run(E, 1, 19), run(D, 1, 10), run(D, 1, 10)], vec![run(E, 1, 19), run(D, 1, 10), run(D, 1, 10), run(D, 1, 10)], vec![whole(1), whole(20), places(&[30, 40])]),
+        ("a new place inside another held run's is not taken", vec![run(E, 1, 19), run(D, 1, 10), run(D, 5, 6)], vec![run(E, 1, 19), run(D, 1, 10), run(D, 5, 6)], vec![run(E, 1, 19), run(D, 1, 10), run(D, 5, 6), run(D, 1, 10)], vec![whole(1), places(&[20, 36]), whole(30)]),
+        ("a part of the run copied elsewhere is no place", e_d.clone(), e_d.clone(), vec![run(E, 1, 19), run(D, 1, 10), run(D, 3, 5)], vec![whole(1), whole(20)]),
+    ];
+    for (what, selection, before, after, want) in cells {
+        let (mut world, _) = World::base();
+        world.docs.get_mut(D).unwrap().runs = before;
+        let (dialer, board, signer) = open(world);
+        let tok = token();
+        let p = publisher(&board, &tok, &signer);
+        let inputs = Inputs { selection, ..inputs() };
+        let e = enumerate(&p, &inputs).unwrap();
+        let first = panel(&p, &inputs, &e).unwrap();
+        dialer.world().docs.get_mut(D).unwrap().runs = after;
+        assert_eq!(reread(&p, &inputs, &e, &first).unwrap().enumeration.placed, want, "{what}");
+    }
+}
+
+/// Checks that a window at a second place takes its first place's answer at
+/// both.
+///
+/// The window onto `O`, answered keep-private, is arranged again after the
+/// panel. The re-read carries a part per place, the answer given at the
+/// first standing at both, and the request sends the window at each place
+/// with no kept place beside it.
+#[test]
+fn a_window_at_a_second_place_takes_the_first_places_answer_at_both() {
+    let (world, _) = World::base();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = inputs();
+    let e = switched(None).compose(&inputs, &enumerate(&p, &inputs).unwrap());
+    let first = panel(&p, &inputs, &e).unwrap();
+    dialer.world().docs.get_mut(D).unwrap().runs = vec![run(E, 1, 19), run(D, 1, 10), run(O, 1, 5), run(O, 1, 5)];
+    let again = reread(&p, &inputs, &e, &first).unwrap();
+    assert_eq!(again.restatement.expect("a difference").selection, vec![(2, Placement::Places(vec![30, 35]))]);
+    let window = again.enumeration.windows.iter().find(|w| w.run == 2).expect("the window");
+    assert_eq!(window.parts.iter().map(|part| part.ordinal).collect::<Vec<_>>(), vec![30, 35], "a part per place");
+    assert_eq!(again.enumeration.answers, BTreeMap::from([(part(2, 0), OriginAnswer::KeepPrivate), (part(2, 1), OriginAnswer::KeepPrivate)]), "the first place's answer at both");
+    let confirmed = Confirmed { answers: again.enumeration.answers.clone(), ..switched(None) };
+    let Built::Request(mut request) = build(&p, &inputs, &again.enumeration, &again.panel, &confirmed).unwrap() else { panic!("inert") };
+    assert_eq!(request.runs, vec![run(E, 1, 19), run(D, 1, 10), run(O, 1, 5), run(O, 1, 5)]);
+    assert_eq!(request.places, vec![None, Some(20), None, None], "a window kept private names no place");
+    assert!(matches!(send(&p, &inputs, &mut request).unwrap(), Sent::Acknowledged(_)));
+}
+
+/// Checks that a held panel's re-open keeps what the re-statement showed and
+/// takes no new place.
+///
+/// [`enumerate_again`] over a panel the re-statement left at two places
+/// answers both; a third place since then waits for the confirm's re-read
+/// to re-state it, as a plain [`enumerate`] of the same selection holds one.
+#[test]
+fn a_held_panels_re_open_keeps_the_places_shown_and_takes_no_new_one() {
+    let (world, _) = World::base();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = inputs();
+    let e = switched(None).compose(&inputs, &enumerate(&p, &inputs).unwrap());
+    let first = panel(&p, &inputs, &e).unwrap();
+    dialer.world().docs.get_mut(D).unwrap().runs = doubled();
+    let again = reread(&p, &inputs, &e, &first).unwrap();
+    assert_eq!(enumerate_again(&p, &inputs, &again.enumeration).unwrap().placed[1], Placement::Places(vec![20, 35]), "the re-open carries what the re-statement showed");
+    assert_eq!(enumerate(&p, &inputs).unwrap().placed[1], Placement::Whole { ordinal: 20 }, "a fresh open holds one");
+    dialer.world().docs.get_mut(D).unwrap().runs = vec![run(E, 1, 19), run(D, 1, 10), run(O, 1, 5), run(D, 1, 10), run(D, 1, 10)];
+    assert_eq!(enumerate_again(&p, &inputs, &again.enumeration).unwrap().placed[1], Placement::Places(vec![20, 35]), "no new place joins without the re-statement");
+    let rr = reread(&p, &inputs, &again.enumeration, &again.panel).unwrap();
+    assert_eq!(rr.restatement.expect("a difference").selection, vec![(1, Placement::Places(vec![20, 35, 45]))], "the confirm re-states the third place");
+}
+
+/// Checks that an `also` draft's kept places ride a run carried at a second
+/// place, by occurrence.
+///
+/// `A`'s run is held once and the rendering draft arranges it again after
+/// the window, re-stated. The run named twice in `runs`, `A`'s own list
+/// finds each place by its occurrence, the k-th entry the k-th place; a
+/// draft arranging the run once places only the first, left as it stands at
+/// the other as at any run it does not arrange whole.
+#[test]
+fn an_also_drafts_kept_places_ride_a_second_place_by_occurrence() {
+    for (a_runs, a_places) in [(vec![run(A, 1, 5), run(A, 1, 5)], vec![None, None, Some(1), None, Some(6)]), (vec![run(A, 1, 5)], vec![None, None, Some(1), None, None])] {
+        let (mut world, _) = family_world();
+        world.docs.get_mut(A).unwrap().runs = a_runs;
+        let (dialer, board, signer) = open(world);
+        let tok = token();
+        let p = publisher(&board, &tok, &signer);
+        let inputs = family_inputs();
+        let e = family_confirmed().compose(&inputs, &enumerate(&p, &inputs).unwrap());
+        let first = panel(&p, &inputs, &e).unwrap();
+        dialer.world().docs.get_mut(D).unwrap().runs = vec![run(E, 1, 19), run(D, 1, 10), run(A, 1, 5), run(O, 1, 5), run(A, 1, 5)];
+        let again = reread(&p, &inputs, &e, &first).unwrap();
+        assert_eq!(again.restatement.clone().expect("a difference").selection, vec![(2, Placement::Places(vec![30, 40]))]);
+        let Built::Request(request) = build(&p, &inputs, &again.enumeration, &again.panel, &family_confirmed()).unwrap() else { panic!("inert") };
+        assert_eq!(request.runs, vec![run(E, 1, 19), run(D, 1, 10), run(A, 1, 5), run(O, 1, 5), run(A, 1, 5)]);
+        assert_eq!(request.places, vec![None, Some(20), Some(30), None, Some(40)]);
+        assert_eq!(request.also_places, vec![AlsoPlaces { draft: a(A), places: a_places }]);
+    }
+}
+
+/// Checks that a run carried at two places counts its merge records once and
+/// is cut around them at each.
+#[test]
+fn a_run_carried_at_two_places_counts_its_merge_records_once() {
+    let (dialer, board, signer) = open(journal_world());
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = journal_inputs(vec![run(J, 1, 7)]);
+    let e = enumerate(&p, &inputs).unwrap();
+    let first = panel(&p, &inputs, &e).unwrap();
+    dialer.world().docs.get_mut(J).unwrap().runs = vec![run(J, 1, 7), run(J, 1, 7)];
+    let again = reread(&p, &inputs, &e, &first).unwrap();
+    assert_eq!(again.enumeration.placed[0], Placement::Places(vec![1, 8]), "the premise: two whole places");
+    assert_eq!(again.enumeration.merge_atoms, vec![vec![3, 6]], "each atom once");
+    assert_eq!(again.panel.merge_records, vec![MergeRecords { draft: a(J), n: 2 }]);
+    let Built::Request(request) = build(&p, &inputs, &again.enumeration, &again.panel, &Confirmed::default()).unwrap() else { panic!("inert") };
+    assert_eq!(request.places, vec![Some(1), Some(4), Some(7), Some(8), Some(11), Some(14)], "cut around the records at each place");
 }
 
 /// Checks that a window part taken by its counterpart names no place inside

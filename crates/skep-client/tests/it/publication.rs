@@ -1496,12 +1496,55 @@ fn a_nested_held_run_takes_its_own_place_and_lands() {
     copy(&board, &bare_token, &d, 30, &d, 24, 6);
     let inputs = nesting_inputs(&e, &e1, &d, vec![run(&e, 1, 19), run(&d, 5, 6), run(&d, 1, 10)]);
     let mut request = confirmed_request(&p, &inputs);
-    assert_eq!(request.places, vec![None, Some(30), Some(20)], "the nested run clear of the enclosing one, whichever comes first");
+    assert_eq!(request.runs, vec![run(&e, 1, 19), run(&d, 1, 10), run(&d, 5, 6)], "the draft's order, whichever comes first in the selection");
+    assert_eq!(request.places, vec![None, Some(20), Some(30)], "the nested run clear of the enclosing one");
     let ack = acknowledged(&p, &inputs, &mut request);
     assert_eq!(ack.member.to_string(), format!("{e}.2"));
-    assert_eq!(image(&board, &token, &ack.member.to_string(), 1, 35), vec![(format!("{e}.0.1.1"), 29), (format!("{e}.0.1.20"), 6)], "the member holds both runs");
-    assert_eq!(image(&board, &bare_token, &d, 1, 35), vec![(format!("{e}.0.1.1"), 19), (format!("{e}.0.1.26"), 4), (format!("{e}.0.1.20"), 6), (format!("{e}.0.1.20"), 6)], "the draft re-windowed at both places, reading as it did");
+    let words = vec![(format!("{e}.0.1.1"), 29), (format!("{e}.0.1.24"), 6)];
+    assert_eq!(image(&board, &token, &ack.member.to_string(), 1, 35), words, "the member holds both runs");
+    assert_eq!(image(&board, &bare_token, &d, 1, 35), words, "the draft re-windowed at both places, reading as it did");
     assert_eq!(text_of(&board, &bare_token, &d, 35), format!("{P}{W}{}", &W[4..]));
+    session.close().expect("close");
+}
+
+/// Checks against the daemon that a held run arranged at a second place
+/// since the panel is re-stated and then lands at both.
+///
+/// `W` is held once and copied after itself once the panel stands. The
+/// re-read re-states it at both places, and the request confirmed over the
+/// re-statement carries each with its own kept place: the board
+/// acknowledges, the member reads as the draft shows, the run on one fresh
+/// identity at both places, and the draft is re-windowed onto it at each.
+#[test]
+fn a_held_run_arranged_at_a_second_place_lands_at_both() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session).expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+    let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
+    let (e, e1, d) = nesting_ground(&board, &session, &device, &bare_token);
+    let inputs = nesting_inputs(&e, &e1, &d, vec![run(&e, 1, 19), run(&d, 1, 10)]);
+    let en = enumerate(&p, &inputs).expect("enumerated");
+    let pn = panel(&p, &inputs, &en).expect("the panel");
+    copy(&board, &bare_token, &d, 30, &d, 20, 10);
+    assert_eq!(image(&board, &bare_token, &d, 1, 39), vec![(format!("{e}.0.1.1"), 19), (format!("{d}.0.1.1"), 10), (format!("{d}.0.1.1"), 10)], "the premise: the run twice since the panel");
+    let rr = reread(&p, &inputs, &en, &pn).expect("re-read");
+    assert_eq!(rr.restatement.clone().expect("a difference").selection, vec![(1, publication::Placement::Places(vec![20, 30]))]);
+    let settled = reread(&p, &inputs, &rr.enumeration, &rr.panel).expect("re-read");
+    assert_eq!(settled.restatement, None, "nothing moved since the re-statement");
+    let Built::Request(mut request) = build(&p, &inputs, &settled.enumeration, &settled.panel, &Confirmed::default()).expect("built") else { panic!("inert") };
+    assert_eq!(request.places, vec![None, Some(20), Some(30)]);
+    let ack = acknowledged(&p, &inputs, &mut request);
+    let words = vec![(format!("{e}.0.1.1"), 29), (format!("{e}.0.1.20"), 10)];
+    assert_eq!(image(&board, &token, &ack.member.to_string(), 1, 39), words, "the member holds the run at both places on one fresh identity");
+    assert_eq!(image(&board, &bare_token, &d, 1, 39), words, "the draft re-windowed at both places");
+    assert_eq!(text_of(&board, &token, &ack.member.to_string(), 39), format!("{P}{W}{W}"));
     session.close().expect("close");
 }
 

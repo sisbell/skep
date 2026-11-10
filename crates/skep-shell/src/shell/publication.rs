@@ -920,7 +920,8 @@ impl Shell {
     /// Re-reads the windows of `state`, the open's reads run again where a
     /// part's naming changed (the module doc): the panel is re-composed
     /// from those reads alone, the answers carried onto the parts as they
-    /// stand.
+    /// stand, a run a re-statement showed at several places staying carried
+    /// at as many.
     ///
     /// # Errors
     ///
@@ -928,7 +929,7 @@ impl Shell {
     pub(super) fn reread_windows(p: &Publisher<'_>, state: &mut PanelState, fault: impl Fn(Fault) -> Refusal) -> Result<(), Refusal> {
         let windows = lib::windows(p, &state.inputs).map_err(&fault)?;
         if !state.enumeration.renamed(&windows).is_empty() {
-            let read = lib::enumerate(p, &state.inputs).map_err(&fault)?;
+            let read = lib::enumerate_again(p, &state.inputs, &state.enumeration).map_err(&fault)?;
             state.answers = state.enumeration.answers_onto(&read.windows);
             state.enumeration = read.composed(&state.inputs, &state.answers, &state.left_out);
             state.panel = lib::panel(p, &state.inputs, &state.enumeration).map_err(&fault)?;
@@ -1741,6 +1742,7 @@ pub(super) fn via_name(via: AckVia) -> &'static str {
 fn placement_json(p: &Placement) -> Value {
     match p {
         Placement::Whole { ordinal } => json!({"whole": {"ordinal": ordinal}}),
+        Placement::Places(ordinals) => json!({"places": ordinals}),
         Placement::Split(pieces) => json!({"split": pieces.iter().map(|(o, f, w)| json!([o, f, w])).collect::<Vec<_>>()}),
         Placement::Absent => json!("absent"),
     }

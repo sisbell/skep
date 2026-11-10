@@ -6,10 +6,11 @@
 //! parts past the run budget and never refused, inverted locally over the
 //! held selection: each held run placed at a V-ordinal the draft arranges
 //! it at, widest run first and no two held runs at overlapping places
-//! ([`place_selection`]; a run absent, split or arranged at a second place
-//! is a fault at the first enumeration and a DIFFERENCE at the re-read,
-//! `request`'s), the placed runs' V-spans, less (2)'s merge records, the
-//! selection's REGION —
+//! ([`place_selection`]; a run absent or split is a fault at the first
+//! enumeration and, like a run standing whole at a second place since the
+//! panel's reads, a DIFFERENCE at the re-read, `request`'s — **The second
+//! places**, below), the placed runs' V-spans, less (2)'s merge records,
+//! the selection's REGION —
 //! and, per draft `also`
 //! names, one `retrieve_doc_v_span_set` and one `image` of THAT draft whole,
 //! in `also`'s order, held for the kept places the request sends in its
@@ -164,6 +165,22 @@
 //! line counts and the request's `spell_end` read this one walk,
 //! `RecordWalk`, so a candidate is judged on the words its entry sends.
 //!
+//! **The second places** (PUB-3.108; the link-sets design §5.7, sweep 6
+//! W10). The selection holds no place, and a held run takes one at the
+//! first enumeration: a place the draft arranged it at when the panel was
+//! read, and the person did not pick, stays out of the version. A second
+//! place since — the run standing whole at more places than the panel's
+//! image shows — is a difference at the re-read, and the re-statement
+//! showing it is what lets it join the request: the run's last held copy
+//! then takes every whole place no held run's place overlaps
+//! ([`Placement::Places`], `place_again`), a count because any edit
+//! shifts every ordinal and identity says what, never where. A run already
+//! carried so is placed the same way at each later re-read, so a place
+//! gone or moved is re-stated too. A part of the run copied elsewhere is
+//! none of its places. A held panel's re-open re-reads without a
+//! re-statement ([`enumerate_again`]), so no new place joins there, and a
+//! run the panel carries at several takes no more than it had.
+//!
 //! **The base.** VERSION ⟨k⟩ is the member the request's `base` names, the
 //! draft's recorded base (A-350), and THE WORDS IT HOLDS are what it
 //! arranges itself — every run its image answers over its positions
@@ -293,11 +310,36 @@ pub enum Placement {
         /// The V-ordinal of the run's first position.
         ordinal: u64,
     },
+    /// Carried whole at more than one place: each V-ordinal, ascending, none
+    /// overlapping another held run's place.
+    ///
+    /// The re-read's answer alone, for a run standing at more places than
+    /// the panel's reads found (the module's doc, **The second places**),
+    /// and the request carries the run once per place.
+    Places(Vec<u64>),
     /// Arranged in pieces: each piece's V-ordinal, first I-ordinal and
     /// width, in the draft's order.
     Split(Vec<(u64, u64, u64)>),
     /// Not arranged.
     Absent,
+}
+
+impl Placement {
+    /// Returns the V-ordinal of the occurrence of the run holding position
+    /// `at`: the placement's own ordinal at or before it.
+    ///
+    /// The request and the selection as published are ordered by occurrence,
+    /// so a run cut into pieces or parts keeps them together and a run
+    /// nested in another's place comes after it, while a run the draft moved
+    /// or arranged at a second place stands where the draft now shows it.
+    pub(crate) fn occurrence_at(&self, at: u64) -> u64 {
+        match self {
+            Placement::Whole { ordinal } => *ordinal,
+            Placement::Places(ordinals) => ordinals.iter().rev().find(|o| **o <= at).copied().unwrap_or(at),
+            Placement::Split(pieces) => pieces.iter().rev().map(|(o, ..)| *o).find(|o| *o <= at).unwrap_or(at),
+            Placement::Absent => at,
+        }
+    }
 }
 
 /// One counterpart record the read-through holds: a correspondence record
@@ -675,7 +717,7 @@ pub struct Enumeration {
     /// board refused by its lineage at an earlier send.
     pub left_out: BTreeSet<Address>,
     /// The selection as published: the runs a publication carries under
-    /// the answers.
+    /// the answers, in the draft's order.
     ///
     /// They are the named drafts' and the trunk's pieces as the draft places
     /// them, each cut around its run's merge records' positions, a named
@@ -714,9 +756,9 @@ impl Enumeration {
     /// Returns the pieces of `run`, the `i`-th held run, a publication
     /// carries, each with the V-ordinal the rendering draft arranges it at.
     ///
-    /// They are the run's placement — whole at one place, in pieces, or none
-    /// — cut around its merge records' positions, which no publication
-    /// carries.
+    /// They are the run's placement — whole at one place or at several, in
+    /// pieces, or none — cut around its merge records' positions, which no
+    /// publication carries.
     pub fn pieces(&self, i: usize, run: &Run) -> Vec<(Run, u64)> {
         let atoms = self.merge_atoms.get(i).map_or(&[][..], Vec::as_slice);
         self.placed.get(i).map_or_else(Vec::new, |placement| carried(run, placement, atoms))
@@ -839,35 +881,42 @@ impl Enumeration {
     }
 
     /// Returns the selection as published and the words a reader receives,
-    /// as the answers compose the held runs.
+    /// as the answers compose the held runs, in the draft's order, occurrence
+    /// by occurrence: a run the draft moved since the panel's reads, or
+    /// carries at a second place, stands where the draft now shows it, as
+    /// the request sends it.
     ///
     /// A named draft's carried piece is cut by the twins as the twin
     /// pre-check cuts it (`landed`'s `recompose`), each stretch a twin names
     /// the published words the request sends in its place.
     fn composed_runs(&self, inputs: &Inputs) -> (Vec<Run>, Vec<Run>) {
-        let (mut selection, mut received) = (Vec::new(), Vec::new());
+        let mut placed: Vec<(u64, Run, bool)> = Vec::new();
         for (i, run) in inputs.selection.iter().enumerate() {
+            let occurrence = |at: u64| self.placed.get(i).map_or(at, |placement| placement.occurrence_at(at));
             let Some(window) = self.windows.iter().find(|w| w.run == i) else {
                 let named = inputs.is_named_draft(&run.origin);
-                for (piece, _) in self.pieces(i, run) {
-                    let sent = if named { recompose(&piece, &self.twins).into_iter().map(|(sent, ..)| sent).collect() } else { vec![piece] };
-                    selection.extend(sent.iter().cloned());
-                    received.extend(sent);
+                for (piece, ordinal) in self.pieces(i, run) {
+                    let at = occurrence(ordinal);
+                    if named {
+                        placed.extend(recompose(&piece, &self.twins).into_iter().map(|(sent, ..)| (at, sent, true)));
+                    } else {
+                        placed.push((at, piece, true));
+                    }
                 }
                 continue;
             };
-            for (k, _) in window.parts.iter().enumerate() {
+            for (k, part) in window.parts.iter().enumerate() {
+                let at = occurrence(part.ordinal);
                 match compose_part(window, k, self.answer_at(window, k)) {
-                    PartComposition::ByReference(published) => {
-                        selection.push(published.clone());
-                        received.push(published);
-                    }
-                    PartComposition::KeptPrivate(words) => selection.push(words),
+                    PartComposition::ByReference(published) => placed.push((at, published, true)),
+                    PartComposition::KeptPrivate(words) => placed.push((at, words, false)),
                     PartComposition::LeftOut | PartComposition::PublishFirst | PartComposition::Owed => {}
                 }
             }
         }
-        (selection, received)
+        placed.sort_by_key(|(at, ..)| *at);
+        let received = placed.iter().filter(|(.., reader)| *reader).map(|(_, run, _)| run.clone()).collect();
+        (placed.into_iter().map(|(_, run, _)| run).collect(), received)
     }
 
     /// Returns each part of `now` — a later read of the same selection's
@@ -986,10 +1035,44 @@ fn arranged_in(image: &[IRun], run: &Run) -> (Vec<(u64, u64, u64)>, Vec<u64>) {
 /// k-th, in pieces past the last — and `disjoint_places` gives that place
 /// up where the request is composed, the run enclosing it covering its
 /// words.
+///
+/// A run takes one place here, whatever else of it the draft arranges: the
+/// first enumeration's answer, and the one an `also` draft's list takes
+/// its occurrences by. A place the run gains since the panel's reads is the
+/// re-read's to take (the module's doc, **The second places**).
 pub fn place_selection(image: &[IRun], selection: &[Run]) -> Vec<Placement> {
+    place_runs(image, selection, |_, _| 1)
+}
+
+/// Places the held runs as a later read does, over `first`, the enumeration
+/// the panel was read over (the module's doc, **The second places**).
+///
+/// `grows` is the re-read's: a run standing whole at more places than
+/// `first`'s image shows, and any `first` carries at several, takes every
+/// whole place it stands at. Without it, at a held panel's re-open, a run
+/// `first` carries at several takes as many as `first` carried, and any
+/// other run the one [`place_selection`] gives it.
+fn place_again(image: &[IRun], selection: &[Run], first: &Enumeration, grows: bool) -> Vec<Placement> {
+    place_runs(image, selection, |k, standing| match first.placed.get(k) {
+        Some(Placement::Places(held)) if !grows => held.len(),
+        Some(Placement::Places(_)) => usize::MAX,
+        _ if grows && standing > arranged_in(&first.image, &selection[k]).1.len() => usize::MAX,
+        _ => 1,
+    })
+}
+
+/// Places each held run as [`place_selection`] does, then lets a run take
+/// further whole places.
+///
+/// `most` answers how many places the run at an index may stand at, given
+/// how many it stands whole at now. Only a run's last held copy takes more,
+/// so the k-th copy keeps the k-th place, each in V-order through the same
+/// [`TakenPlaces`], so none lies inside a place a held run took.
+fn place_runs(image: &[IRun], selection: &[Run], most: impl Fn(usize, usize) -> usize) -> Vec<Placement> {
     let mut taken = TakenPlaces::default();
     let mut out = vec![Placement::Absent; selection.len()];
-    for k in widest_first(selection) {
+    let order = widest_first(selection);
+    for &k in &order {
         let run = &selection[k];
         let (pieces, wholes) = arranged_in(image, run);
         let occurrence = selection[..k].iter().filter(|s| *s == run).count();
@@ -998,6 +1081,28 @@ pub fn place_selection(image: &[IRun], selection: &[Run]) -> Vec<Placement> {
             None if pieces.is_empty() => Placement::Absent,
             None => Placement::Split(pieces),
         };
+    }
+    for &k in &order {
+        let run = &selection[k];
+        let Placement::Whole { ordinal } = out[k] else { continue };
+        if selection[k + 1..].contains(run) {
+            continue;
+        }
+        let (_, wholes) = arranged_in(image, run);
+        let limit = most(k, wholes.len());
+        let mut places = vec![ordinal];
+        for at in wholes {
+            if places.len() >= limit {
+                break;
+            }
+            if taken.take(at, run.width) {
+                places.push(at);
+            }
+        }
+        if places.len() > 1 {
+            places.sort_unstable();
+            out[k] = Placement::Places(places);
+        }
     }
     out
 }
@@ -1026,6 +1131,7 @@ pub fn region_of(placed: &[Placement], selection: &[Run]) -> Vec<(u64, u64)> {
     for (p, run) in placed.iter().zip(selection) {
         match p {
             Placement::Whole { ordinal } => spans.push((*ordinal, run.width)),
+            Placement::Places(ordinals) => spans.extend(ordinals.iter().map(|o| (*o, run.width))),
             Placement::Split(pieces) => spans.extend(pieces.iter().map(|(o, _, w)| (*o, *w))),
             Placement::Absent => {}
         }
@@ -1065,6 +1171,7 @@ fn cut(run: &Run, atoms: &[u64]) -> Vec<Run> {
 fn carried(run: &Run, placement: &Placement, atoms: &[u64]) -> Vec<(Run, u64)> {
     let placed: Vec<(Run, u64)> = match placement {
         Placement::Whole { ordinal } => vec![(run.clone(), *ordinal)],
+        Placement::Places(ordinals) => ordinals.iter().map(|ordinal| (run.clone(), *ordinal)).collect(),
         Placement::Split(parts) => parts.iter().map(|(o, first, width)| (Run::new(run.origin.clone(), *first, *width), *o)).collect(),
         Placement::Absent => Vec::new(),
     };
@@ -1098,6 +1205,7 @@ fn merge_atoms_of(door: &Door<'_>, d: &str, inputs: &Inputs, placed: &[Placement
                 }
             }
             atoms.sort_unstable();
+            atoms.dedup();
         }
         out.push(atoms);
     }
@@ -1242,15 +1350,33 @@ pub fn enumerate(p: &Publisher<'_>, inputs: &Inputs) -> Result<Enumeration, Faul
     enumerate_with(&door, p, inputs, true, None)
 }
 
+/// Makes the enumeration's reads again for a panel `first` was read over, a
+/// held panel's re-open, and answers their composition under no answer.
+///
+/// [`enumerate`] with one exception (the module's doc, **The second
+/// places**): a run `first` carries at several places stays carried at as
+/// many. A place since then waits for the re-read's re-statement.
+///
+/// # Errors
+///
+/// [`enumerate`]'s.
+pub fn enumerate_again(p: &Publisher<'_>, inputs: &Inputs, first: &Enumeration) -> Result<Enumeration, Fault> {
+    let door = Door::new(p.board, p.token);
+    enumerate_with(&door, p, inputs, true, Some(first))
+}
+
 /// Makes the enumeration's reads through `door`, and answers their
 /// composition under no answer.
 ///
 /// `strict` refuses a held run not arranged whole; the re-read passes
-/// `false` and reads the placements as differences. `known` is version
-/// ⟨k⟩ as an earlier read of this publication imaged it: where it is the
-/// image of the request's `base`, it is kept and the base is read never
-/// again — a published member's positions never change.
-pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, strict: bool, known: Option<&BaseImage>) -> Result<Enumeration, Fault> {
+/// `false` and reads the placements as differences. `first` is an earlier
+/// read of this publication: a run it carries at several places is carried
+/// so again and, at the re-read, a run standing at more places than its
+/// image shows joins them (the module's doc, **The second places**); and
+/// its version ⟨k⟩, where that is the image of the request's `base`, is
+/// kept and the base read never again — a published member's positions
+/// never change.
+pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, strict: bool, first: Option<&Enumeration>) -> Result<Enumeration, Fault> {
     let d = inputs.draft.to_string();
     door.step("image");
     let extent = door.extent(&d)?;
@@ -1264,9 +1390,12 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
         let image = door.image(&text, 1, extent)?;
         also.push(AlsoImage { draft: draft.clone(), extent, image });
     }
-    let placed = place_selection(&image, &inputs.selection);
+    let placed = match first {
+        Some(first) => place_again(&image, &inputs.selection, first, !strict),
+        None => place_selection(&image, &inputs.selection),
+    };
     if strict {
-        if let Some(index) = placed.iter().position(|pl| !matches!(pl, Placement::Whole { .. })) {
+        if let Some(index) = placed.iter().position(|pl| !matches!(pl, Placement::Whole { .. } | Placement::Places(_))) {
             return Err(Fault::SelectionNotArranged { index });
         }
     }
@@ -1444,7 +1573,7 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
     // never changing.
     door.step("base");
     let base = match &inputs.base {
-        Some(base) if is_version_member(&base.0) => match known.filter(|k| k.is_of(base)) {
+        Some(base) if is_version_member(&base.0) => match first.and_then(|f| f.base.as_ref()).filter(|k| k.is_of(base)) {
             Some(known) => Some(known.clone()),
             None => {
                 let member = base.0.to_string();

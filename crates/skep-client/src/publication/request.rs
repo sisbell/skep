@@ -13,7 +13,9 @@
 //! absent, split, moved or re-ordered since the panel's reads — and a
 //! window part named, un-named or named by another record since (its origin
 //! published meanwhile), whose answer stands only where it left the words
-//! out, are each a DIFFERENCE. Any difference is answered as a
+//! out, are each a DIFFERENCE, a run standing whole at a second place since
+//! the panel's reads among them (`enumerate`'s **The second places**;
+//! PUB-3.108). Any difference is answered as a
 //! [`Restatement`], data for the caller to confirm again over what is left;
 //! nothing is sent on it. The image's places are the kept places the
 //! request then carries per run of a named draft's identity; the `also`
@@ -32,8 +34,11 @@
 //! composed under the answers at the windows' parts before anything is
 //! taken from either ([`Enumeration::composed`], [`Panel::composed`]), so no
 //! entry is composed from a key decided before the answers: the runs from
-//! the held selection as the re-read placed them — a split run as its
-//! pieces in the draft's order, each run cut around its merge records,
+//! the held selection as the re-read placed them, in the draft's order
+//! however they were held, the version holding what the re-statement showed
+//! — a run the draft carries at several places once per place, each with
+//! its own kept place, a split run as its pieces, each run cut around its
+//! merge records,
 //! which no publication carries as a run or with a kept place
 //! ([`Enumeration::pieces`]), every named draft's run with the rendering
 //! draft's kept place beside it (its own words and an `also` draft's
@@ -178,7 +183,9 @@ pub struct Restatement {
     /// Held removals on the job list now that were not before.
     pub removals_came: Vec<Address>,
     /// Held runs whose placement in the rendering draft changed: the run's
-    /// index and where it stands now.
+    /// index and where it stands now — [`Placement::Places`] where it stands
+    /// whole at a second place since the panel's reads, the places the
+    /// request carries it at.
     pub selection: Vec<(usize, Placement)>,
     /// Window parts whose naming changed since the panel's reads — named,
     /// un-named or named by another record — each by its key in the
@@ -223,7 +230,10 @@ pub struct Reread {
 /// windows ([`Enumeration::answers_onto`]) and `first`'s originals left
 /// out, so the two are diffed over one composition, against the base
 /// `first` imaged ([`Enumeration::base`]), never imaged again; the caller
-/// composes `first` under the answers it confirms before the re-read.
+/// composes `first` under the answers it confirms before the re-read. The
+/// held runs are placed against `first`'s image and placements: a run
+/// standing whole at a second place since is a difference, and a place
+/// `first` carries is carried again (`enumerate`'s **The second places**).
 /// Where the caller moved [`Inputs::base`] off the member `first` imaged —
 /// the draft's recorded base read again — the re-read images the moved
 /// member once, `first`'s image being no longer the request's; where it
@@ -240,7 +250,7 @@ pub struct Reread {
 /// arranges of the selection holds a merge record, nothing further read.
 pub fn reread(p: &Publisher<'_>, inputs: &Inputs, first: &Enumeration, first_panel: &Panel) -> Result<Reread, Fault> {
     let door = Door::new(p.board, p.token);
-    let read = enumerate_with(&door, p, inputs, false, first.base.as_ref())?;
+    let read = enumerate_with(&door, p, inputs, false, Some(first))?;
     let enumeration = read.composed(inputs, &first.answers_onto(&read.windows), &first.left_out);
     let panel = panel_with(&door, p, inputs, &enumeration)?;
     let restatement = restate(first, first_panel, &enumeration, &panel);
@@ -841,6 +851,19 @@ fn span_of(s: &ISpan) -> Span {
     Span::new(start, width).expect("a count at the start's depth is well-formed")
 }
 
+/// One run the request carries, as the build first places it.
+struct CarriedRun {
+    /// The run.
+    run: Run,
+    /// The kept place the rendering draft's list names, where it names one.
+    place: Option<u64>,
+    /// Where the rendering draft arranges it: what its values are read at.
+    in_draft: u64,
+    /// The place of the held occurrence it belongs to: what the request's
+    /// order is by ([`Placement::occurrence_at`]).
+    occurrence: u64,
+}
+
 /// What `build` answers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Built {
@@ -881,10 +904,9 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         return Err(Fault::SelectionNotArranged { index: 0 });
     }
     let trunk = inputs.doc.clone();
-    // The runs as placed, each with its kept place and its place in the draft.
-    let mut runs: Vec<Run> = Vec::new();
-    let mut places: Vec<Option<u64>> = Vec::new();
-    let mut draft_places: Vec<Option<u64>> = Vec::new();
+    // The runs as placed, each with its kept place, its place in the draft
+    // and the place of the occurrence it belongs to.
+    let mut placed: Vec<CarriedRun> = Vec::new();
     let mut unanswered: Vec<OwedAnswer> = Vec::new();
     let mut publish_first: Vec<PartKey> = Vec::new();
     for (i, run) in inputs.selection.iter().enumerate() {
@@ -897,6 +919,7 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         if pieces.is_empty() {
             continue;
         }
+        let occurrence = |in_draft: u64| e.placed.get(i).map_or(in_draft, |placement| placement.occurrence_at(in_draft));
         // A named draft's run — the rendering draft's or an `also` draft's —
         // is the document's own words, re-minted, and every such run names
         // the rendering draft's kept place: its own position of the run,
@@ -909,9 +932,7 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         let own = trunk.as_ref() == Some(&run.origin);
         if native || own {
             for (piece, ordinal) in pieces {
-                runs.push(piece);
-                places.push(native.then_some(ordinal));
-                draft_places.push(Some(ordinal));
+                placed.push(CarriedRun { run: piece, place: native.then_some(ordinal), in_draft: ordinal, occurrence: occurrence(ordinal) });
             }
             continue;
         }
@@ -920,9 +941,7 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         // published origin or another's draft — by address, no place.
         let Some(window) = e.windows.iter().find(|w| w.run == i) else {
             for (piece, ordinal) in pieces {
-                runs.push(piece);
-                places.push(None);
-                draft_places.push(Some(ordinal));
+                placed.push(CarriedRun { run: piece, place: None, in_draft: ordinal, occurrence: occurrence(ordinal) });
             }
             continue;
         };
@@ -936,18 +955,10 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
                 // link-sets design §5.5; its "KEPT PLACE sent beside it as a
                 // stray's is"). A request whose only place is such a part is
                 // NOT inert: the healed window is a change to the draft.
-                PartComposition::ByReference(published) => {
-                    runs.push(published);
-                    places.push(Some(part.ordinal));
-                    draft_places.push(Some(part.ordinal));
-                }
+                PartComposition::ByReference(published) => placed.push(CarriedRun { run: published, place: Some(part.ordinal), in_draft: part.ordinal, occurrence: occurrence(part.ordinal) }),
                 // By address onto the private origin, no place: readers see
                 // a placeholder.
-                PartComposition::KeptPrivate(words) => {
-                    runs.push(words);
-                    places.push(None);
-                    draft_places.push(Some(part.ordinal));
-                }
+                PartComposition::KeptPrivate(words) => placed.push(CarriedRun { run: words, place: None, in_draft: part.ordinal, occurrence: occurrence(part.ordinal) }),
                 PartComposition::LeftOut => {}
                 PartComposition::PublishFirst => publish_first.push(window.key(k)),
                 PartComposition::Owed => unanswered.push(OwedAnswer::of(window, k)),
@@ -960,6 +971,14 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
     if !publish_first.is_empty() {
         return Ok(Built::Inert(Inert::PublishFirst(publish_first)));
     }
+
+    // The runs in the draft's order, occurrence by occurrence, as the
+    // composition's selection stands: the re-statement said what `D` now
+    // arranges, and the version holds that.
+    placed.sort_by_key(|carried| carried.occurrence);
+    let places: Vec<Option<u64>> = placed.iter().map(|carried| carried.place).collect();
+    let draft_places: Vec<Option<u64>> = placed.iter().map(|carried| Some(carried.in_draft)).collect();
+    let runs: Vec<Run> = placed.into_iter().map(|carried| carried.run).collect();
 
     // No two places of the rendering draft's list overlap, a piece's or a
     // window part's among them; each `also` draft's own kept places off its

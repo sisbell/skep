@@ -47,7 +47,7 @@ use crate::origin::Origin;
 use crate::sign::Signer;
 
 use super::base::Base as DraftBase;
-use super::enumerate::RecordWalk;
+use super::enumerate::{disjoint_places, place_selection, RecordWalk};
 use super::panel::{region_reads, Destination};
 use super::request::{Confirmed, Inert, OwnedRow, Piece};
 use super::send::{AckVia, OwnFault, Refusal, Sent};
@@ -751,6 +751,9 @@ impl World {
         // draft's its own alone — or, at a stray run, the from-words of a
         // correspondence record the caller may read, wherever homed, naming
         // the run whole as its to; a refusal names the entry and the draft.
+        // Each list is checked over what its entries before left, a place
+        // that passed reading as re-windowed, as the board's check of its
+        // working state reads it: a later place over it is refused.
         if draft.is_none() {
             if let Some(k) = places.iter().position(Option::is_some) {
                 return refused("stray_place_unrecorded", json!({"index": k}));
@@ -760,7 +763,7 @@ impl World {
         lists.extend(also_places.iter().cloned());
         let mut stray_froms: Vec<(String, usize, Vec<(Address, u64)>)> = Vec::new();
         for (d, list) in &lists {
-            let positions: Vec<(Address, u64)> = self.arrangement(d).map(|r| Self::expand(&r)).unwrap_or_default();
+            let mut positions: Vec<(Address, u64)> = self.arrangement(d).map(|r| Self::expand(&r)).unwrap_or_default();
             for (k, (run, place)) in runs.iter().zip(list).enumerate() {
                 let Some(place) = place else { continue };
                 let at_place: Vec<(Address, u64)> = positions.iter().skip(*place as usize - 1).take(run.width as usize).cloned().collect();
@@ -791,6 +794,11 @@ impl World {
                         return refused("kept_place_moved", json!({"index": k, "addr": d}));
                     }
                     stray_froms.push((d.clone(), k, from));
+                }
+                // The place passed: its words read as re-windowed, a marker
+                // no run's address equals, content ordinals opening at 1.
+                for held in positions.iter_mut().skip(*place as usize - 1).take(run.width as usize) {
+                    *held = (a(E), 0);
                 }
             }
         }
@@ -4261,6 +4269,175 @@ fn a_kept_place_moved_in_an_also_draft_names_it_and_reads_the_race_under_it() {
     assert_eq!(send(&p, &inputs, &mut request).unwrap(), Sent::Refused(Refusal::OwnFault(OwnFault::StrayPlace { index: 2, draft: a(A) })));
     let before = dialer.world().position;
     assert_eq!(dialer.world().position, before, "nothing committed by a refusal");
+}
+
+// ── THE KEPT PLACES (no two overlapping) ─────────────────────────────────
+
+/// One stretch of `doc`'s words in an image, `width` wide from `first`, at
+/// V-ordinal `ordinal`.
+fn image_run(doc: &str, first: u64, width: u64, ordinal: u64) -> IRun {
+    IRun { prefix: format!("{doc}.0.1"), first, width, ordinal }
+}
+
+/// Checks that no held run takes a whole place another held run took.
+///
+/// Each row is an image, a selection and what it answers: a run nested in
+/// another takes a place of its own whichever comes first in the selection;
+/// a run whose every whole place lies inside another's answers the place
+/// its occurrence names; a copy held twice takes the draft's occurrences in
+/// V-order, in pieces past the last; and runs no other overlaps stand where
+/// they are arranged.
+#[test]
+fn no_held_run_takes_a_whole_place_another_held_run_took() {
+    let whole = |ordinal: u64| Placement::Whole { ordinal };
+    let at_20 = image_run(D, 1, 10, 20);
+    let nested_at_30 = image_run(D, 5, 6, 30);
+    let cells = [
+        ("the enclosing run first", vec![at_20.clone(), nested_at_30.clone()], vec![run(D, 1, 10), run(D, 5, 6)], vec![whole(20), whole(30)]),
+        ("the enclosing run second", vec![at_20.clone(), nested_at_30], vec![run(D, 5, 6), run(D, 1, 10)], vec![whole(30), whole(20)]),
+        ("a nested run either side of the enclosing one", vec![image_run(D, 5, 6, 20), image_run(D, 1, 10, 26), image_run(D, 5, 6, 36)], vec![run(D, 5, 6), run(D, 1, 10), run(D, 5, 6)], vec![whole(20), whole(26), whole(36)]),
+        ("nested at the enclosing run's start", vec![at_20.clone(), image_run(D, 1, 4, 30)], vec![run(D, 1, 10), run(D, 1, 4)], vec![whole(20), whole(30)]),
+        ("a chain of three", vec![image_run(D, 1, 12, 10), image_run(D, 3, 6, 50), image_run(D, 4, 2, 100)], vec![run(D, 4, 2), run(D, 3, 6), run(D, 1, 12)], vec![whole(100), whole(50), whole(10)]),
+        ("every whole place inside another's: the one its occurrence names", vec![at_20.clone()], vec![run(D, 1, 10), run(D, 5, 6)], vec![whole(20), whole(24)]),
+        ("a copy held twice, arranged twice", vec![at_20.clone(), image_run(D, 1, 10, 30)], vec![run(D, 1, 10), run(D, 1, 10)], vec![whole(20), whole(30)]),
+        ("a copy held twice, arranged once: the second in pieces", vec![at_20.clone()], vec![run(D, 1, 10), run(D, 1, 10)], vec![whole(20), Placement::Split(vec![(20, 1, 10)])]),
+        ("runs no other overlaps", vec![image_run(E, 1, 19, 1), at_20.clone(), image_run(O, 1, 5, 30)], vec![run(E, 1, 19), run(D, 1, 10), run(O, 1, 5)], vec![whole(1), whole(20), whole(30)]),
+        ("a run in pieces takes no whole place", vec![image_run(D, 1, 6, 30), image_run(D, 7, 4, 50), image_run(D, 2, 2, 70)], vec![run(D, 1, 10), run(D, 2, 2)], vec![Placement::Split(vec![(30, 1, 6), (50, 7, 4), (70, 2, 2)]), whole(31)]),
+        ("a run the image does not hold", vec![at_20], vec![run(D, 20, 2)], vec![Placement::Absent]),
+    ];
+    for (what, image, selection, want) in cells {
+        assert_eq!(place_selection(&image, &selection), want, "{what}");
+    }
+}
+
+/// Checks that a list keeps no two overlapping places, whichever comes
+/// first: the wider run keeps its place, runs of one width the first's.
+#[test]
+fn a_kept_places_list_holds_no_two_overlapping_places() {
+    let cells = [
+        ("a place enclosed, the enclosing run first", vec![run(D, 1, 10), run(D, 5, 6)], vec![Some(20), Some(24)], vec![Some(20), None]),
+        ("a place enclosed, the enclosing run second", vec![run(D, 5, 6), run(D, 1, 10)], vec![Some(24), Some(20)], vec![None, Some(20)]),
+        ("one place named twice", vec![run(D, 1, 10), run(D, 1, 10)], vec![Some(20), Some(20)], vec![Some(20), None]),
+        ("a partial overlap: the wider keeps its place", vec![run(D, 1, 10), run(D, 5, 8)], vec![Some(20), Some(24)], vec![Some(20), None]),
+        ("a partial overlap of one width: the first keeps its place", vec![run(D, 1, 6), run(D, 3, 6)], vec![Some(10), Some(12)], vec![Some(10), None]),
+        ("one position in common at the narrower run's end", vec![run(D, 5, 6), run(D, 1, 5)], vec![Some(24), Some(20)], vec![Some(24), None]),
+        ("one position in common at the narrower run's start", vec![run(D, 1, 6), run(D, 6, 5)], vec![Some(20), Some(25)], vec![Some(20), None]),
+        ("places that touch stand", vec![run(D, 1, 10), run(D, 5, 6)], vec![Some(20), Some(30)], vec![Some(20), Some(30)]),
+        ("a place beside a run that names none stands", vec![run(O, 1, 5), run(O, 2, 2)], vec![None, Some(31)], vec![None, Some(31)]),
+        ("no place", vec![run(D, 1, 10), run(D, 5, 6)], vec![None, None], vec![None, None]),
+    ];
+    for (what, runs, places, want) in cells {
+        assert_eq!(disjoint_places(&runs, &places), want, "{what}");
+    }
+}
+
+/// Checks that a place inside another of its list is refused as the board
+/// refuses it.
+///
+/// The composition places the nested run at its own place; a request sent
+/// with that place moved inside the enclosing run's is refused
+/// `kept_place_moved` at the later entry, the list checked over what the
+/// entries before it left.
+#[test]
+fn a_place_inside_another_of_its_list_is_refused_kept_place_moved() {
+    let (world, _) = World::base();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let held = vec![run(E, 1, 19), run(D, 1, 10), run(D, 5, 6)];
+    let inputs = Inputs { selection: held.clone(), ..inputs() };
+    dialer.world().docs.get_mut(D).unwrap().runs = held;
+    let e = enumerate(&p, &inputs).unwrap();
+    let pn = panel(&p, &inputs, &e).unwrap();
+    let Built::Request(mut request) = build(&p, &inputs, &e, &pn, &Confirmed::default()).unwrap() else { panic!("inert") };
+    assert_eq!(request.places, vec![None, Some(20), Some(30)], "the nested run at its own place");
+    request.places[2] = Some(24);
+    let sent = send(&p, &inputs, &mut request).unwrap();
+    assert!(matches!(sent, Sent::Refused(Refusal::KeptPlaceMoved { index: 2, .. })), "{sent:?}");
+}
+
+/// Checks that a copy held more often than the draft arranges it names no
+/// second place.
+///
+/// The selection holds `D`'s run twice, the draft arranging it twice, and
+/// the second copy is deleted after the panel. The re-read states it in
+/// pieces at the first copy's place; the request names that place once and
+/// the board re-windows `D` there alone.
+#[test]
+fn a_copy_held_more_often_than_the_draft_arranges_it_names_no_second_place() {
+    let (world, _) = World::base();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let held = vec![run(E, 1, 19), run(D, 1, 10), run(D, 1, 10)];
+    let inputs = Inputs { selection: held.clone(), ..inputs() };
+    dialer.world().docs.get_mut(D).unwrap().runs = held;
+    let e = enumerate(&p, &inputs).unwrap();
+    let pn = panel(&p, &inputs, &e).unwrap();
+    assert_eq!(e.placed[2], Placement::Whole { ordinal: 30 }, "the premise: the second copy at its own place");
+    dialer.world().docs.get_mut(D).unwrap().runs = vec![run(E, 1, 19), run(D, 1, 10)];
+    let rr = reread(&p, &inputs, &e, &pn).unwrap();
+    assert_eq!(rr.restatement.expect("the second copy is gone").selection, vec![(2, Placement::Split(vec![(20, 1, 10)]))]);
+    let Built::Request(mut request) = build(&p, &inputs, &rr.enumeration, &rr.panel, &Confirmed::default()).unwrap() else { panic!("inert") };
+    assert_eq!(request.places, vec![None, Some(20), None], "the place named once, the first copy keeping it");
+    let sent = send(&p, &inputs, &mut request).unwrap();
+    assert!(matches!(&sent, Sent::Acknowledged(_)), "{sent:?}");
+    assert_eq!(dialer.world().docs[D].runs, vec![run(E, 1, 29)], "D re-windowed at the first place alone");
+}
+
+/// Checks that a window part taken by its counterpart names no place inside
+/// another held window part's.
+///
+/// `O`'s 1..4 stand published as `E`'s 5..8. A draft arranging `O`'s five
+/// words at 30 and its 2..3 again at 35 takes each part by its counterpart
+/// at its own place; a draft arranging them at 30 alone names no place for
+/// the nested part, the part enclosing it re-windowing its words.
+#[test]
+fn a_window_part_taken_by_its_counterpart_names_no_place_inside_another_held_window_parts() {
+    let held = vec![run(E, 1, 19), run(D, 1, 10), run(O, 1, 5), run(O, 2, 2)];
+    let sent_runs = vec![run(E, 1, 19), run(D, 1, 10), run(E, 5, 4), run(O, 5, 1), run(E, 6, 2)];
+    let answers = BTreeMap::from([(part(2, 0), OriginAnswer::Counterpart), (part(2, 1), OriginAnswer::KeepPrivate), (part(3, 0), OriginAnswer::Counterpart)]);
+    let cells = [
+        ("arranged again at 35", held.clone(), vec![None, Some(20), Some(30), None, Some(35)], vec![run(E, 1, 29), run(E, 5, 4), run(O, 5, 1), run(E, 6, 2)]),
+        ("arranged at 30 alone", held[..3].to_vec(), vec![None, Some(20), Some(30), None, None], vec![run(E, 1, 29), run(E, 5, 4), run(O, 5, 1)]),
+    ];
+    for (what, arranged, places, after) in cells {
+        let (mut world, _) = World::base();
+        world.docs.get_mut(D).unwrap().runs = arranged;
+        world.typed(O, vec![ispan(O, 1, 4)], vec![ispan(E, 5, 4)], T_CORRESPONDENCE);
+        let (dialer, board, signer) = open(world);
+        let tok = token();
+        let p = publisher(&board, &tok, &signer);
+        let inputs = Inputs { selection: held.clone(), readable_drafts: vec![a(D), a(N), a(O)], ..inputs() };
+        let e = enumerate(&p, &inputs).unwrap();
+        let pn = panel(&p, &inputs, &e).unwrap();
+        let confirmed = Confirmed { answers: answers.clone(), ..Confirmed::default() };
+        let Built::Request(mut request) = build(&p, &inputs, &e, &pn, &confirmed).unwrap() else { panic!("{what}: inert") };
+        assert_eq!(request.runs, sent_runs, "{what}: each named part by reference to the record's to");
+        assert_eq!(request.places, places, "{what}");
+        let sent = send(&p, &inputs, &mut request).unwrap();
+        assert!(matches!(&sent, Sent::Acknowledged(_)), "{what}: {sent:?}");
+        assert_eq!(dialer.world().docs[D].runs, after, "{what}: D re-windowed");
+    }
+}
+
+/// Checks that a by-reference piece of a run no list places counts no
+/// record.
+///
+/// The twin pre-check cuts `A`'s run as it does a placed one, its recorded
+/// piece by reference; with no list placing the run the piece names no
+/// record for the commit to read.
+#[test]
+fn a_recorded_piece_of_a_run_no_list_places_counts_no_record() {
+    let (mut world, _) = family_world();
+    world.typed(A, vec![ispan(A, 2, 2)], vec![ispan(E, 40, 2)], T_CORRESPONDENCE);
+    let (_dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let unplaced = [AlsoPlaces { draft: a(A), places: vec![None] }];
+    let re = twin_precheck(&p, &family_inputs(), &[run(A, 1, 5)], &[None], &[Some(30)], &unplaced).unwrap();
+    assert_eq!(re.runs, vec![run(A, 1, 1), run(E, 40, 2), run(A, 4, 2)]);
+    assert_eq!(re.stray_records, vec![0, 0, 0], "no place, so no record the commit reads");
 }
 
 // ── THE MERGE RECORDS (kept private) ─────────────────────────────────────

@@ -2199,6 +2199,12 @@ draft arranging a run's identity twice is re-windowed at the place the
 request names and left standing at the other, which the twin fence
 meets at its own publication; a run named twice in `runs` with a place
 on each re-windows both onto the one fresh run the first entry minted.
+Each list is walked in `runs`' order over what the entries before it
+left, so of two places in one list whose V-spans overlap the later is
+refused `kept_place_moved`, its words already re-windowed; a client names
+no place overlapping another in its list, a run lying inside a place
+another entry names taking none, that entry's re-window covering its
+words.
 Where the check fails in any draft — that draft moved the run, split
 it, deleted it, or arranges it elsewhere or in another order since the
 place was read — the whole publication is refused `kept_place_moved`,

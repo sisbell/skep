@@ -117,7 +117,8 @@ pub fn twin_precheck(p: &Publisher<'_>, inputs: &Inputs, runs: &[Run], places: &
 /// `1` where it carries a place — a window part taken by its counterpart,
 /// re-composed by the request's arm by reference to the record the
 /// enumeration read — and `0` otherwise; a named draft's run is cut by the
-/// records ([`recompose`]). Every list is carried beside the pieces: a
+/// records ([`recompose`]), a piece re-composed by reference counting `1`
+/// where a list places it. Every list is carried beside the pieces: a
 /// piece re-composed by reference, or left as given, takes the rendering
 /// draft's place and each `also` draft's at the piece's offset into the
 /// run, so a draft that arranges the recorded words is re-windowed there
@@ -147,8 +148,9 @@ pub(crate) fn twin_precheck_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &In
             out.push(run.clone(), place, in_draft, usize::from(place.is_some()), &also_at);
             continue;
         }
+        let placed = place.is_some() || also_at.iter().any(Option::is_some);
         for (piece, offset, by_reference) in recompose(run, &records) {
-            out.push(piece, place.map(|p| p + offset), in_draft.map(|p| p + offset), usize::from(by_reference), &also_from(offset));
+            out.push(piece, place.map(|p| p + offset), in_draft.map(|p| p + offset), usize::from(by_reference && placed), &also_from(offset));
         }
     }
     out.records = records;

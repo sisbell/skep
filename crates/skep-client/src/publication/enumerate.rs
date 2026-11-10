@@ -4,10 +4,12 @@
 //! The reads, in order, each a step the door counts: (1) `image` — ONE
 //! `retrieve_doc_v_span_set` and ONE `image` of the draft whole, read in
 //! parts past the run budget and never refused, inverted locally over the
-//! held selection: each held run placed at the V-ordinal the draft arranges
-//! it at (a run absent, split or arranged at a second place is a fault at
-//! the first enumeration and a DIFFERENCE at the re-read, `request`'s), the
-//! placed runs' V-spans, less (2)'s merge records, the selection's REGION —
+//! held selection: each held run placed at a V-ordinal the draft arranges
+//! it at, widest run first and no two held runs at overlapping places
+//! ([`place_selection`]; a run absent, split or arranged at a second place
+//! is a fault at the first enumeration and a DIFFERENCE at the re-read,
+//! `request`'s), the placed runs' V-spans, less (2)'s merge records, the
+//! selection's REGION —
 //! and, per draft `also`
 //! names, one `retrieve_doc_v_span_set` and one `image` of THAT draft whole,
 //! in `also`'s order, held for the kept places the request sends in its
@@ -284,7 +286,9 @@ fn formatting_shape(value: &LinkValue, inline_marks: bool) -> bool {
 /// Where a held run stands in the draft's image.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Placement {
-    /// Arranged whole at one place: its V-ordinal.
+    /// Arranged whole at one place: its V-ordinal, which overlaps no other
+    /// held run's place unless every place the run stands whole at does
+    /// (`place_selection`).
     Whole {
         /// The V-ordinal of the run's first position.
         ordinal: u64,
@@ -916,33 +920,103 @@ fn stray_words(inputs: &Inputs, pieces: &[Run], twins: &[Record]) -> Vec<Run> {
     pieces.iter().filter(|piece| inputs.is_named_draft(&piece.origin)).flat_map(|piece| recompose(piece, twins)).filter_map(|(sent, _, by_reference)| by_reference.then_some(sent)).collect()
 }
 
-/// Places the held runs in the image: each whole at one V-ordinal, in
-/// pieces, or absent. A run the selection holds TWICE — a request may name
-/// a run twice (the design's M7 (b)) — takes the draft's occurrences in
-/// V-order, the k-th held copy the k-th place.
-pub fn place_selection(image: &[IRun], selection: &[Run]) -> Vec<Placement> {
-    let mut out = Vec::with_capacity(selection.len());
-    for (k, run) in selection.iter().enumerate() {
-        let chain = run.chain();
-        let mut pieces: Vec<(u64, u64, u64)> = Vec::new();
-        let mut wholes: Vec<u64> = Vec::new();
-        for r in image.iter().filter(|r| r.prefix == chain) {
-            let (lo, hi) = (run.i_start.max(r.first), run.reach().min(r.first + r.width));
-            if lo < hi {
-                pieces.push((r.ordinal + (lo - r.first), lo, hi - lo));
-                if lo == run.i_start && hi == run.reach() {
-                    wholes.push(r.ordinal + (lo - r.first));
-                }
+/// Returns the indices of `runs` widest first, runs of one width in their
+/// order: the order held runs take their kept places in, so a run takes
+/// its place before any run it encloses.
+fn widest_first(runs: &[Run]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..runs.len()).collect();
+    order.sort_by_key(|&k| std::cmp::Reverse(runs[k].width));
+    order
+}
+
+/// The kept places held runs have taken in one draft: V-spans, keyed by
+/// their first ordinal, no two of which overlap.
+#[derive(Debug, Default)]
+struct TakenPlaces(BTreeMap<u64, u64>);
+
+impl TakenPlaces {
+    /// Takes the V-span `width` wide at `at`, answering whether it took it:
+    /// it takes nothing where the span overlaps a place already taken.
+    fn take(&mut self, at: u64, width: u64) -> bool {
+        // No two taken spans overlap, so the only one that can reach into
+        // this span is the one opening last before its end.
+        let free = self.0.range(..at.saturating_add(width)).next_back().is_none_or(|(start, taken)| start.saturating_add(*taken) <= at);
+        if free {
+            self.0.insert(at, width);
+        }
+        free
+    }
+}
+
+/// Returns where `image` arranges `run`: each piece of it as its V-ordinal,
+/// first I-ordinal and width, and the V-ordinals it stands whole at, both
+/// in V-order.
+fn arranged_in(image: &[IRun], run: &Run) -> (Vec<(u64, u64, u64)>, Vec<u64>) {
+    let chain = run.chain();
+    let mut pieces: Vec<(u64, u64, u64)> = Vec::new();
+    let mut wholes: Vec<u64> = Vec::new();
+    for r in image.iter().filter(|r| r.prefix == chain) {
+        let (lo, hi) = (run.i_start.max(r.first), run.reach().min(r.first + r.width));
+        if lo < hi {
+            pieces.push((r.ordinal + (lo - r.first), lo, hi - lo));
+            if lo == run.i_start && hi == run.reach() {
+                wholes.push(r.ordinal + (lo - r.first));
             }
         }
+    }
+    (pieces, wholes)
+}
+
+/// Places the held runs in the image: each whole at one V-ordinal, in
+/// pieces, or absent.
+///
+/// No two held runs take overlapping places (PUB-3.9 step 5, the re-window
+/// checked by identity): the board re-windows a list's places in the runs'
+/// order over what the entries before left, so a place inside one already
+/// re-windowed is refused `kept_place_moved`. The runs take their places
+/// widest first, runs of one width in the selection's order, each the
+/// first place in V-order it stands whole at that overlaps none taken: a
+/// run enclosing another takes its place whichever comes first in the
+/// selection, and a run the selection holds TWICE — a request may name a
+/// run twice (the design's M7 (b)) — takes the draft's occurrences in
+/// V-order, the k-th held copy the k-th place.
+///
+/// Where every place a run stands whole at overlaps one taken, the run
+/// answers the place its occurrence names — the k-th held copy whole at the
+/// k-th, in pieces past the last — and `disjoint_places` gives that place
+/// up where the request is composed, the run enclosing it covering its
+/// words.
+pub fn place_selection(image: &[IRun], selection: &[Run]) -> Vec<Placement> {
+    let mut taken = TakenPlaces::default();
+    let mut out = vec![Placement::Absent; selection.len()];
+    for k in widest_first(selection) {
+        let run = &selection[k];
+        let (pieces, wholes) = arranged_in(image, run);
         let occurrence = selection[..k].iter().filter(|s| *s == run).count();
-        out.push(match wholes.get(occurrence) {
-            Some(ordinal) => Placement::Whole { ordinal: *ordinal },
+        out[k] = match wholes.iter().copied().find(|&at| taken.take(at, run.width)).or_else(|| wholes.get(occurrence).copied()) {
+            Some(ordinal) => Placement::Whole { ordinal },
             None if pieces.is_empty() => Placement::Absent,
             None => Placement::Split(pieces),
-        });
+        };
     }
     out
+}
+
+/// Returns `places`, one draft's kept places parallel to `runs`, with no
+/// two overlapping (PUB-3.9, the re-window checked by identity).
+///
+/// The runs keep their places in the order `place_selection` takes them,
+/// widest first, and a place overlapping one already kept becomes `None`.
+/// The draft stands as it is at that run: the words the kept place holds
+/// are re-windowed by the run that kept it, and any of a partial overlap's
+/// words outside it stay the draft's own until its next shot.
+pub(crate) fn disjoint_places(runs: &[Run], places: &[Option<u64>]) -> Vec<Option<u64>> {
+    let mut taken = TakenPlaces::default();
+    let mut kept = vec![None; places.len()];
+    for k in widest_first(runs) {
+        kept[k] = places[k].filter(|&at| taken.take(at, runs[k].width));
+    }
+    kept
 }
 
 /// Returns the V-spans the placements cover, sorted and merged where

@@ -40,9 +40,11 @@
 //! alike, which the rendering draft holds by identity), and, per draft
 //! `also` names, THAT draft's own kept places in `also_places`, read off
 //! its image, so the one commit re-windows every named draft at its own
-//! places (skep #739; the Nelson way, B3-S10) — every part of a window onto
-//! the person's own unpublished origin answered first (THE ANSWERS, B3-S11
-//! P2 (i): at a part a record names, THE COUNTERPART — the part
+//! places (skep #739; the Nelson way, B3-S10), no two places of one list
+//! overlapping — a run a place encloses taking none, that place's re-window
+//! covering its words (`disjoint_places`; PUB-3.9) — every part of a window
+//! onto the person's own unpublished origin answered first (THE ANSWERS,
+//! B3-S11 P2 (i): at a part a record names, THE COUNTERPART — the part
 //! re-composed by reference to the record's `to`, in this document or
 //! another, with its kept place beside it as a stray's, so the commit
 //! re-windows the draft there through the record — or DROP, which leaves
@@ -115,7 +117,7 @@ use crate::board::frames::{self, AlsoPlacesFrame, PublishFrame, T_EDITION, T_REA
 use crate::board::{T_RETRACTION, T_SUPERSEDES};
 
 use super::base::Standing;
-use super::enumerate::{enumerate_with, is_formatting, place_selection, Enumeration, Placement, Record, RecordWalk, Via};
+use super::enumerate::{disjoint_places, enumerate_with, is_formatting, place_selection, Enumeration, Placement, Record, RecordWalk, Via};
 use super::parts::{compose_part, Answer, OwedAnswer, PartComposition, PartKey};
 use super::landed::twin_precheck_with;
 use super::panel::{count, panel_with, Count, Destination, Panel, Removal, RowKind};
@@ -373,7 +375,8 @@ pub struct AlsoPlaces {
     /// Its kept places, parallel to the request's `runs`: at a run of this
     /// draft's identity the V-position its image arranged the run at when
     /// the request was composed, `None` where it did not arrange it whole
-    /// and in order, and `None` at every run of another origin.
+    /// and in order or where that place overlaps another run's in this
+    /// list (`disjoint_places`), and `None` at every run of another origin.
     pub places: Vec<Option<u64>>,
 }
 
@@ -451,19 +454,21 @@ pub struct Request {
     /// any named draft's identity — its own, or an `also` draft's it holds
     /// by identity — the rendering draft's own V-position of it; at a stray
     /// run re-composed by reference, the place of the words it stood for;
-    /// `None` at a window.
+    /// `None` at a window, and at a run whose place overlaps another run's
+    /// in this list (`disjoint_places`).
     pub places: Vec<Option<u64>>,
     /// Each `also` draft's OWN kept places (the wire's `also_places`; skep
     /// #739), one entry per draft `also` names in its order, each list
     /// parallel to the runs: at a run of that draft's identity the
     /// V-position its image arranged the run at when the request was
     /// composed; `None` where it did not arrange it whole and in order —
-    /// moved, split or deleted since the panel — the draft then left as it
-    /// stands at that run and healed at its own next shot; `None` at every
-    /// other run; a piece the twin pre-check re-composed by reference
-    /// carries the draft's place at the piece's offset, a stray place the
-    /// commit re-windows the draft at through its own record. An entry
-    /// carrying no place is not sent. The one commit re-windows the
+    /// moved, split or deleted since the panel — or where that place
+    /// overlaps another run's in the list (`disjoint_places`), the draft
+    /// then left as it stands at that run and healed at its own next shot;
+    /// `None` at every other run; a piece the twin pre-check re-composed by
+    /// reference carries the draft's place at the piece's offset, a stray
+    /// place the commit re-windows the draft at through its own record. An
+    /// entry carrying no place is not sent. The one commit re-windows the
     /// rendering draft at `places`, then each `also` draft at its entry, in
     /// `also`'s order.
     pub also_places: Vec<AlsoPlaces>,
@@ -893,12 +898,13 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
             continue;
         }
         // A named draft's run — the rendering draft's or an `also` draft's —
-        // is the document's own words, re-minted, and the rendering draft's
-        // kept place is sent for EVERY such run: its own position of the
-        // run, which the commit re-windows it at whichever named draft's
-        // identity the run was (skep #739; an `also` draft's own place for
-        // its run rides that draft's `also_places` entry, composed below).
-        // The trunk's own words, held by reference, take no place.
+        // is the document's own words, re-minted, and every such run names
+        // the rendering draft's kept place: its own position of the run,
+        // which the commit re-windows it at whichever named draft's identity
+        // the run was (skep #739; an `also` draft's own place for its run
+        // rides that draft's `also_places` entry, composed below). The list
+        // keeps it where no other run's place overlaps it (`disjoint_places`,
+        // below). The trunk's own words, held by reference, take no place.
         let native = inputs.is_named_draft(&run.origin);
         let own = trunk.as_ref() == Some(&run.origin);
         if native || own {
@@ -955,9 +961,12 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         return Ok(Built::Inert(Inert::PublishFirst(publish_first)));
     }
 
-    // Each `also` draft's own kept places off its image, beside the rendering
-    // draft's; then the twin pre-check: what each named draft's records
-    // already name, by reference, every list carried beside the pieces.
+    // No two places of the rendering draft's list overlap, a piece's or a
+    // window part's among them; each `also` draft's own kept places off its
+    // image, beside it; then the twin pre-check: what each named draft's
+    // records already name, by reference, every list carried beside the
+    // pieces.
+    let places = disjoint_places(&runs, &places);
     let also_places = also_places_of(e, &runs);
     let recomposed = twin_precheck_with(door, p, inputs, &runs, &places, &draft_places, &also_places)?;
     let (runs, places, draft_places, stray_records, also_places) = (recomposed.runs, recomposed.places, recomposed.draft_places, recomposed.stray_records, recomposed.also_places);
@@ -1076,11 +1085,13 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
 ///
 /// At a run of THAT draft's identity: the V-ordinal its image arranges the
 /// run at, found as the rendering draft's places are (`place_selection`:
-/// whole and in order, the k-th equal run the k-th occurrence); `None`
-/// where its image does not arrange it whole — moved, split or deleted
-/// since the panel, a place the client is not sure of, so the draft is left
-/// as it stands at that run and the board's fence meets it at the draft's
-/// own next shot. `None` at every other run — the rendering draft's own,
+/// whole and in order, the k-th equal run the k-th occurrence, no two
+/// places of the list overlapping, `disjoint_places`); `None` where its
+/// image does not arrange it whole — moved, split or deleted since the
+/// panel, a place the client is not sure of, so the draft is left as it
+/// stands at that run and the board's fence meets it at the draft's own
+/// next shot — and where its every place overlaps another run's in the
+/// list. `None` at every other run — the rendering draft's own,
 /// the trunk's, a window's, another `also` draft's — whose place is no
 /// business of this draft's list; a stray of the draft's own (published
 /// words it arranges that a record names) is not composed here, and heals
@@ -1093,7 +1104,7 @@ pub(crate) fn also_places_of(e: &Enumeration, runs: &[Run]) -> Vec<AlsoPlaces> {
         .iter()
         .map(|a| {
             let placed = place_selection(&a.image, runs);
-            let places = runs
+            let places: Vec<Option<u64>> = runs
                 .iter()
                 .zip(&placed)
                 .map(|(run, placement)| match placement {
@@ -1101,6 +1112,7 @@ pub(crate) fn also_places_of(e: &Enumeration, runs: &[Run]) -> Vec<AlsoPlaces> {
                     _ => None,
                 })
                 .collect();
+            let places = disjoint_places(runs, &places);
             AlsoPlaces { draft: a.draft.clone(), places }
         })
         .collect()

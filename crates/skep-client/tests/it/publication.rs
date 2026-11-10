@@ -1370,3 +1370,264 @@ fn a_base_under_a_trunk_member_stands_behind_and_its_next_shot_lands_its_daughte
     assert!(matches!(&verdict, Verdict::Passed(found) if found.member.to_string() == x111 && found.via == AckVia::Walk), "the walk from the daughter finds the member the shot made: {verdict:?}");
     session.close().expect("close");
 }
+
+/// The ground the nested-run suites arrange on: an edition `E` holding `P`
+/// at `E.1` and a staging draft arranging its words, then `W`, the draft's
+/// ten new words, at 20. Answers `E`, `E.1` and the draft.
+fn nesting_ground(board: &Board, session: &Session<'_>, signer: &HybridSigner, bare_token: &Token) -> (String, String, String) {
+    let e = published_document(board, session, signer);
+    let e1 = first_shot(board, session, signer, bare_token, &e, P);
+    let d = mint(board, bare_token, ACCOUNT, false);
+    copy(board, bare_token, &d, 1, &e1, 1, 19);
+    insert_text(board, bare_token, &d, 20, W);
+    (e, e1, d)
+}
+
+/// The inputs publishing `selection` from the draft `d` off `E.1`.
+fn nesting_inputs(e: &str, e1: &str, d: &str, selection: Vec<Run>) -> Inputs {
+    Inputs { doc: Some(addr(e)), mint: None, claim: false, base: Some((addr(e1), 19)), draft: addr(d), also: vec![], selection, notes: vec![], readable_drafts: vec![addr(d)], published: vec![addr(e)], supersede: vec![], merge_landing: false }
+}
+
+/// Builds the publication of `inputs` through the panel and the re-read,
+/// which finds nothing moved.
+fn confirmed_request(p: &Publisher<'_>, inputs: &Inputs) -> Box<publication::Request> {
+    let en = enumerate(p, inputs).expect("enumerated");
+    let pn = panel(p, inputs, &en).expect("the panel");
+    let rr = reread(p, inputs, &en, &pn).expect("re-read");
+    assert_eq!(rr.restatement, None, "nothing moved since the panel");
+    let Built::Request(request) = build(p, inputs, &rr.enumeration, &rr.panel, &Confirmed::default()).expect("built") else { panic!("inert") };
+    request
+}
+
+/// Sends `request` and answers its acknowledgment.
+fn acknowledged(p: &Publisher<'_>, inputs: &Inputs, request: &mut publication::Request) -> publication::Ack {
+    let sent = send(p, inputs, request).expect("sent");
+    let Sent::Acknowledged(ack) = sent else { panic!("{sent:?}") };
+    ack
+}
+
+/// The text `doc` reads over its first `width` positions.
+fn text_of(board: &Board, token: &Token, doc: &str, width: u64) -> String {
+    read(board, token, &frames::retrieve_v(doc, 1, width))["items"].as_array().expect("items").iter().filter_map(|item| item["content"].as_str()).collect()
+}
+
+/// `delete` of `width` positions of `doc` from ordinal `at`.
+fn delete(board: &Board, token: &Token, doc: &str, at: u64, width: u64) {
+    let as_of = crate::common::typed_at(board, token, doc);
+    acked(board.op(Some(token), &json!({"op": "delete", "doc": doc, "p": {"subspace": "1", "ordinal": at.to_string()}, "width": width.to_string(), "as_of": as_of})));
+}
+
+/// Checks against the daemon that a held run nested in another takes a
+/// place of its own and lands.
+///
+/// In each cell the draft arranges `E`'s words, `W` and a held run nested
+/// in `W`, and the nested run takes the place the enclosing run leaves it,
+/// whichever comes first in the selection: the board acknowledges, the
+/// member holds every run and the draft is re-windowed onto the member's
+/// identity at every place. The first cell's request, handed the nested
+/// run's whole place inside the enclosing run's, is refused
+/// `kept_place_moved` at that later entry, as `docs/wire.md` says of two
+/// overlapping places in one list.
+#[test]
+fn a_nested_held_run_takes_its_own_place_and_lands() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session).expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+    let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
+    let ground = || nesting_ground(&board, &session, &device, &bare_token);
+
+    // `D` 1..10 at 20, `D` 5..10 at 30.
+    let (e, e1, d) = ground();
+    copy(&board, &bare_token, &d, 30, &d, 24, 6);
+    assert_eq!(image(&board, &bare_token, &d, 1, 35), vec![(format!("{e}.0.1.1"), 19), (format!("{d}.0.1.1"), 10), (format!("{d}.0.1.5"), 6)], "the premise");
+    let inputs = nesting_inputs(&e, &e1, &d, vec![run(&e, 1, 19), run(&d, 1, 10), run(&d, 5, 6)]);
+    let mut request = confirmed_request(&p, &inputs);
+    assert_eq!(request.places, vec![None, Some(20), Some(30)]);
+    let mut inside = request.clone();
+    inside.places[2] = Some(24);
+    inside.id = publication::fresh_id();
+    let refused = send(&p, &inputs, &mut inside).expect("sent");
+    assert!(matches!(&refused, Sent::Refused(Refusal::KeptPlaceMoved { index: 2, draft, .. }) if *draft == addr(&d)), "the later of two overlapping places: {refused:?}");
+    let ack = acknowledged(&p, &inputs, &mut request);
+    assert_eq!(ack.member.to_string(), format!("{e}.2"));
+    let words = vec![(format!("{e}.0.1.1"), 29), (format!("{e}.0.1.24"), 6)];
+    assert_eq!(image(&board, &token, &ack.member.to_string(), 1, 35), words, "the member holds both runs on the one fresh identity");
+    assert_eq!(image(&board, &bare_token, &d, 1, 35), words, "the draft re-windowed at both places");
+    assert_eq!(text_of(&board, &token, &ack.member.to_string(), 35), format!("{P}{W}{}", &W[4..]));
+
+    // `D` 5..10 at 20, `D` 1..10 at 26, `D` 5..10 at 36: the enclosing run
+    // between two copies, each copy clear of it.
+    let (e, e1, d) = ground();
+    copy(&board, &bare_token, &d, 20, &d, 24, 6);
+    copy(&board, &bare_token, &d, 36, &d, 30, 6);
+    assert_eq!(image(&board, &bare_token, &d, 1, 41), vec![(format!("{e}.0.1.1"), 19), (format!("{d}.0.1.5"), 6), (format!("{d}.0.1.1"), 10), (format!("{d}.0.1.5"), 6)], "the premise");
+    let inputs = nesting_inputs(&e, &e1, &d, vec![run(&e, 1, 19), run(&d, 5, 6), run(&d, 1, 10), run(&d, 5, 6)]);
+    let mut request = confirmed_request(&p, &inputs);
+    assert_eq!(request.places, vec![None, Some(20), Some(26), Some(36)]);
+    let ack = acknowledged(&p, &inputs, &mut request);
+    assert_eq!(ack.member.to_string(), format!("{e}.2"));
+    let words = vec![(format!("{e}.0.1.1"), 29), (format!("{e}.0.1.20"), 6), (format!("{e}.0.1.20"), 6)];
+    assert_eq!(image(&board, &token, &ack.member.to_string(), 1, 41), words, "the member holds all three runs");
+    assert_eq!(image(&board, &bare_token, &d, 1, 41), words, "the draft re-windowed at every place");
+    assert_eq!(text_of(&board, &token, &ack.member.to_string(), 41), format!("{P}{}{W}{}", &W[4..], &W[4..]));
+
+    // `D` 1..10 at 20, `D` 1..4 at 30: nested at the enclosing run's start.
+    let (e, e1, d) = ground();
+    copy(&board, &bare_token, &d, 30, &d, 20, 4);
+    let inputs = nesting_inputs(&e, &e1, &d, vec![run(&e, 1, 19), run(&d, 1, 10), run(&d, 1, 4)]);
+    let mut request = confirmed_request(&p, &inputs);
+    assert_eq!(request.places, vec![None, Some(20), Some(30)]);
+    let ack = acknowledged(&p, &inputs, &mut request);
+    assert_eq!(ack.member.to_string(), format!("{e}.2"));
+    let words = vec![(format!("{e}.0.1.1"), 29), (format!("{e}.0.1.20"), 4)];
+    assert_eq!(image(&board, &token, &ack.member.to_string(), 1, 33), words, "the member holds both runs");
+    assert_eq!(image(&board, &bare_token, &d, 1, 33), words, "the draft re-windowed at both places");
+    assert_eq!(text_of(&board, &token, &ack.member.to_string(), 33), format!("{P}{W}{}", &W[..4]));
+
+    // `D` 1..10 at 20, `D` 5..10 at 30, the nested run first in the selection.
+    let (e, e1, d) = ground();
+    copy(&board, &bare_token, &d, 30, &d, 24, 6);
+    let inputs = nesting_inputs(&e, &e1, &d, vec![run(&e, 1, 19), run(&d, 5, 6), run(&d, 1, 10)]);
+    let mut request = confirmed_request(&p, &inputs);
+    assert_eq!(request.places, vec![None, Some(30), Some(20)], "the nested run clear of the enclosing one, whichever comes first");
+    let ack = acknowledged(&p, &inputs, &mut request);
+    assert_eq!(ack.member.to_string(), format!("{e}.2"));
+    assert_eq!(image(&board, &token, &ack.member.to_string(), 1, 35), vec![(format!("{e}.0.1.1"), 29), (format!("{e}.0.1.20"), 6)], "the member holds both runs");
+    assert_eq!(image(&board, &bare_token, &d, 1, 35), vec![(format!("{e}.0.1.1"), 19), (format!("{e}.0.1.26"), 4), (format!("{e}.0.1.20"), 6), (format!("{e}.0.1.20"), 6)], "the draft re-windowed at both places, reading as it did");
+    assert_eq!(text_of(&board, &bare_token, &d, 35), format!("{P}{W}{}", &W[4..]));
+    session.close().expect("close");
+}
+
+/// Checks against the daemon that a nested run with no place of its own
+/// lands, covered by the run enclosing it.
+///
+/// The draft arranges the nested run only inside the run enclosing it, so
+/// the request names no place for it. The board acknowledges, the member
+/// holds both runs and the draft is re-windowed at the one place, the
+/// enclosing run's re-window covering the nested run's words.
+#[test]
+fn a_nested_run_with_no_place_of_its_own_is_covered_by_the_run_enclosing_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session).expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+    let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
+    let (e, e1, d) = nesting_ground(&board, &session, &device, &bare_token);
+    let inputs = nesting_inputs(&e, &e1, &d, vec![run(&e, 1, 19), run(&d, 1, 10), run(&d, 5, 6)]);
+    let mut request = confirmed_request(&p, &inputs);
+    assert_eq!(request.places, vec![None, Some(20), None], "the enclosing run keeps its place, the nested run takes none");
+    let ack = acknowledged(&p, &inputs, &mut request);
+    assert_eq!(ack.member.to_string(), format!("{e}.2"));
+    assert_eq!(image(&board, &token, &ack.member.to_string(), 1, 35), vec![(format!("{e}.0.1.1"), 29), (format!("{e}.0.1.24"), 6)], "the member holds both runs");
+    assert_eq!(image(&board, &bare_token, &d, 1, 29), vec![(format!("{e}.0.1.1"), 29)], "the draft re-windowed at the one place");
+    assert_eq!(text_of(&board, &token, &ack.member.to_string(), 35), format!("{P}{W}{}", &W[4..]));
+    session.close().expect("close");
+}
+
+/// Checks against the daemon that an `also` draft's kept places keep to the
+/// same rule.
+///
+/// `A` renders the publication with `also: [D]`, arranging `D`'s ten words
+/// by identity at 20 and its 5..10 again at 30. Where `D` arranges them the
+/// same way, each draft's list places the nested run at 30; where `D`
+/// arranges only the ten, `D`'s list names no place for it. The board
+/// acknowledges each and re-windows every named draft at its own places.
+#[test]
+fn an_also_drafts_nested_runs_take_their_own_places() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session).expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+    let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
+    for (what, nested_in_d, d_places, d_after) in [("D arranges the nested run too", true, vec![None, Some(20), Some(30)], 35), ("D arranges the ten alone", false, vec![None, Some(20), None], 29)] {
+        let (e, e1, d) = nesting_ground(&board, &session, &device, &bare_token);
+        if nested_in_d {
+            copy(&board, &bare_token, &d, 30, &d, 24, 6);
+        }
+        let rendering = mint(&board, &bare_token, ACCOUNT, false);
+        copy(&board, &bare_token, &rendering, 1, &e1, 1, 19);
+        copy(&board, &bare_token, &rendering, 20, &d, 20, 10);
+        copy(&board, &bare_token, &rendering, 30, &d, 24, 6);
+        assert_eq!(image(&board, &bare_token, &rendering, 1, 35), vec![(format!("{e}.0.1.1"), 19), (format!("{d}.0.1.1"), 10), (format!("{d}.0.1.5"), 6)], "{what}: the premise");
+        let held = vec![run(&e, 1, 19), run(&d, 1, 10), run(&d, 5, 6)];
+        let inputs = Inputs { draft: addr(&rendering), also: vec![addr(&d)], readable_drafts: vec![addr(&rendering), addr(&d)], ..nesting_inputs(&e, &e1, &d, held) };
+        let mut request = confirmed_request(&p, &inputs);
+        assert_eq!(request.places, vec![None, Some(20), Some(30)], "{what}: the rendering draft's list");
+        assert_eq!(request.also_places, vec![AlsoPlaces { draft: addr(&d), places: d_places }], "{what}: D's own list, off D's image");
+        let ack = acknowledged(&p, &inputs, &mut request);
+        assert_eq!(ack.member.to_string(), format!("{e}.2"), "{what}");
+        let words = vec![(format!("{e}.0.1.1"), 29), (format!("{e}.0.1.24"), 6)];
+        assert_eq!(image(&board, &token, &ack.member.to_string(), 1, 35), words, "{what}: the member");
+        assert_eq!(image(&board, &bare_token, &rendering, 1, 35), words, "{what}: the rendering draft re-windowed at both places");
+        let d_words = if d_after == 35 { words } else { vec![(format!("{e}.0.1.1"), 29)] };
+        assert_eq!(image(&board, &bare_token, &d, 1, d_after), d_words, "{what}: D re-windowed at its own places");
+    }
+    session.close().expect("close");
+}
+
+/// Checks against the daemon that a piece of a split run takes no place
+/// inside another held run's.
+///
+/// The draft arranges `D` 1..10 at 20 and `D` 5..12 at 30, and `D`'s 11..12
+/// are deleted after the panel. The re-read states the run as its two
+/// pieces, one inside the enclosing run's place; the request places the
+/// piece standing at a place of its own and names none for the other, and
+/// the board acknowledges it.
+#[test]
+fn a_split_run_takes_no_place_inside_another_held_runs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session).expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+    let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
+    let e = published_document(&board, &session, &device);
+    let e1 = first_shot(&board, &session, &device, &bare_token, &e, P);
+    let d = mint(&board, &bare_token, ACCOUNT, false);
+    copy(&board, &bare_token, &d, 1, &e1, 1, 19);
+    insert_text(&board, &bare_token, &d, 20, "abcdefghijkl");
+    copy(&board, &bare_token, &d, 32, &d, 24, 8);
+    delete(&board, &bare_token, &d, 30, 2);
+    assert_eq!(image(&board, &bare_token, &d, 1, 37), vec![(format!("{e}.0.1.1"), 19), (format!("{d}.0.1.1"), 10), (format!("{d}.0.1.5"), 8)], "the premise");
+    let inputs = nesting_inputs(&e, &e1, &d, vec![run(&e, 1, 19), run(&d, 1, 10), run(&d, 5, 8)]);
+    let en = enumerate(&p, &inputs).expect("enumerated");
+    let pn = panel(&p, &inputs, &en).expect("the panel");
+    delete(&board, &bare_token, &d, 36, 2);
+    let rr = reread(&p, &inputs, &en, &pn).expect("re-read");
+    let restated = rr.restatement.expect("the run moved");
+    assert_eq!(restated.selection, vec![(2, publication::Placement::Split(vec![(24, 5, 6), (30, 5, 6)]))], "its two pieces, the first inside the enclosing run's place");
+    let again = reread(&p, &inputs, &rr.enumeration, &rr.panel).expect("re-read");
+    assert_eq!(again.restatement, None);
+    let Built::Request(mut request) = build(&p, &inputs, &again.enumeration, &again.panel, &Confirmed::default()).expect("built") else { panic!("inert") };
+    assert_eq!(request.runs, vec![run(&e, 1, 19), run(&d, 1, 10), run(&d, 5, 6), run(&d, 5, 6)]);
+    assert_eq!(request.places, vec![None, Some(20), None, Some(30)], "no place inside the enclosing run's");
+    let ack = acknowledged(&p, &inputs, &mut request);
+    assert_eq!(ack.member.to_string(), format!("{e}.2"));
+    assert_eq!(image(&board, &token, &ack.member.to_string(), 1, 41), vec![(format!("{e}.0.1.1"), 29), (format!("{e}.0.1.24"), 6), (format!("{e}.0.1.24"), 6)], "the member holds every piece");
+    assert_eq!(image(&board, &bare_token, &d, 1, 35), vec![(format!("{e}.0.1.1"), 29), (format!("{e}.0.1.24"), 6)], "the draft re-windowed at both places");
+    session.close().expect("close");
+}

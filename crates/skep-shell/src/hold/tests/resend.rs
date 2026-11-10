@@ -116,7 +116,21 @@
 //! past the person's own other write of its kind — which a read from the
 //! old base takes for its landing — sent, shifted and kept; and a first
 //! moved face naming every hand since the typed state though the line's
-//! base stands past it. And A BOARD'S STATE told once per change with no
+//! base stands past it. And A MOVED DOCUMENT'S SHIFT TEST (skep #867):
+//! `sendable` true or false as a `send` would shift the line or hold it moved
+//! again, and a `send` doing what it said; a moved hold's own shift the test,
+//! no second read; a row naming the document testing it once, however many,
+//! and telling nothing while the answer stands; an edit that restores the
+//! span flipping it to true with one `moved` event naming the hands; a read
+//! the board does not answer or refuses leaving it absent, an unanswered one
+//! read again and a refused one not, until a row names the document; a flip
+//! whose hands' read goes unanswered naming them `unread`; the death signal
+//! leaving the test owed; a `send` overtaking a test's read leaving it
+//! nothing to say, and taking the answer with it; a test a step of its turn;
+//! a relaunched line tested at its first probe; a line with no anchors or no
+//! span false with no read; and the document's first moved line alone
+//! carrying it, under a session that may write. And A BOARD'S STATE told once
+//! per change with no
 //! line held (skep #865): a quiet board's halt and its clearing, over the
 //! board's feed thread too, a head that will not read told with its reason
 //! before any write, each in turn where both hold, the probe's reads kept to
@@ -2784,6 +2798,492 @@ fn a_moved_face_whose_hands_read_goes_unanswered_says_hands_not_read_and_names_t
     assert_eq!(said.len(), 1, "the face said once more: {said:?}");
     assert_eq!((&said[0]["state"], &said[0]["hands"]), (&json!("moved"), &json!([{"key": "other", "fingerprint": ff}])), "the hand named: {said:?}");
     assert_eq!(g.fake.sends(), 1, "the line awaits the person's act");
+}
+
+/// The anchors of a point between the document's first and second units.
+fn between_one_and_two() -> Anchors {
+    anchors(Some(&i(1)), Some(&i(2)))
+}
+
+/// The image the anchors [`between_one_and_two`] stand adjacent in, an edit
+/// made before them.
+fn edited_elsewhere() -> Vec<Value> {
+    vec![run(&i(10), 2), run(&i(1), 3)]
+}
+
+/// The image the anchors [`between_one_and_two`] no longer stand adjacent in.
+fn span_cut() -> Vec<Value> {
+    vec![run(&i(1), 1), run(&i(10), 1), run(&i(2), 2)]
+}
+
+/// The documents a drafts read named, as the feed thread hands them over.
+fn rows_naming(docs: &[&str]) -> RowsNamed {
+    let mut named = RowsNamed::default();
+    named.note(&json!({"docs": docs}));
+    named
+}
+
+/// The `sendable` the ground's first row carries, where it carries one.
+fn row_sendable(g: &Ground) -> Option<bool> {
+    g.lines()[0].get("sendable").map(|sendable| sendable.as_bool().expect("a boolean"))
+}
+
+/// The `held` events since the last look, each held to its declaration.
+fn held_events(g: &Ground) -> Vec<Value> {
+    let said: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).collect();
+    said.iter().for_each(assert_held_event_declared);
+    said
+}
+
+/// The image reads the ground's board has served.
+fn image_reads(g: &Ground) -> usize {
+    g.fake.image_reads.load(Ordering::SeqCst)
+}
+
+/// Checks that `sendable` says what a `send` would do, and a `send` does it.
+///
+/// It is §3c.5's shift test (skep #867). A line held moved, tested at the
+/// probe: an edit elsewhere leaves its anchors adjacent, and it reads true,
+/// told on the `moved` event; a deleted span, a cut span or an anchor lost
+/// reads false, and tells nothing, the page's act inert on false as on
+/// absent. The test sends nothing and reads the image once. Then the
+/// person's `send`: where it read true the next probe shifts the line and
+/// keeps it, and where it read false it holds the line moved again (the
+/// mutant that answers true without running the shift lights an act that
+/// moves the line again; the one that answers false for a span still whole
+/// hides an act that would land).
+#[test]
+fn a_moved_lines_sendable_says_what_a_send_would_do_and_a_send_does_it() {
+    type Cell = (&'static str, Box<dyn Fn(u64) -> Value>, Anchors, Vec<Value>, bool);
+    let insert_between = || -> Box<dyn Fn(u64) -> Value> { Box::new(|typed| insert_at(DOC, 2, json!(["x"]), typed)) };
+    let delete_two = || -> Box<dyn Fn(u64) -> Value> { Box::new(|typed| delete_at(DOC, 2, 2, typed)) };
+    let cells: Vec<Cell> = vec![
+        ("an edit elsewhere", insert_between(), between_one_and_two(), edited_elsewhere(), true),
+        ("a deleted span", delete_two(), spanned(Some(&i(1)), None, &[(&i(2), 2)]), vec![run(&i(1), 1)], false),
+        ("a cut span", insert_between(), between_one_and_two(), span_cut(), false),
+        ("an anchor lost", insert_between(), between_one_and_two(), vec![run(&i(10), 2), run(&i(1), 1)], false),
+    ];
+    for (cell, frame, anchored, image, want) in cells {
+        let g = ground();
+        let typed = g.fake.head();
+        *g.fake.image.lock().unwrap() = image;
+        g.hold_anchored(&frame(typed), anchored, "moved", false);
+        assert_eq!(row_sendable(&g), None, "{cell}: nothing known before a test");
+        let _ = held_events(&g);
+        g.holds.probe("b-1");
+        assert_eq!((row_sendable(&g), image_reads(&g), g.fake.sends()), (Some(want), 1, 0), "{cell}: one read, nothing sent");
+        let said = held_events(&g);
+        assert_eq!(said.len(), usize::from(want), "{cell}: only true is told: {said:?}");
+        if want {
+            assert_eq!((said[0]["state"].as_str(), said[0]["sendable"].as_bool()), (Some("moved"), Some(true)), "{cell}: {said:?}");
+        }
+        g.fake.move_arrangement(DOC, 77);
+        assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Send).unwrap(), Resolved::HandedBack);
+        g.holds.probe("b-1");
+        if want {
+            assert!(g.lines().is_empty(), "{cell}: the send shifted the line and it landed: {:?}", g.lines());
+        } else {
+            assert_eq!(g.lines()[0]["cause"], "moved", "{cell}: the send held the line moved again");
+        }
+    }
+}
+
+/// Checks that a row naming a moved document tests it once, telling nothing
+/// while the answer stands.
+///
+/// A burst the board refuses as typed against an older state, its span cut:
+/// the moved hold's own shift is the test, its read the only one, the row and
+/// the event saying false. A probe owes nothing, and a row naming another
+/// document owes nothing; two rows naming the document cost one read at the
+/// next probe, and no event (the mutant that reads again per row dials the
+/// board for every commit on a busy document; the one that tells every test
+/// says a `moved` the page has nothing to do with).
+#[test]
+fn a_row_that_leaves_the_span_cut_costs_one_read_and_tells_nothing() {
+    let g = ground();
+    let typed = g.fake.head();
+    *g.fake.image.lock().unwrap() = span_cut();
+    g.fake.move_arrangement(DOC, 77);
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert_at(DOC, 2, json!(["x"]), typed), Some(between_one_and_two())) else { panic!("held") };
+    assert_eq!((held["cause"].as_str(), image_reads(&g)), (Some("moved"), 1), "the shift's own read, no second: {held}");
+    let said = held_events(&g);
+    assert_eq!((said.len(), said[0]["sendable"].as_bool(), row_sendable(&g)), (1, Some(false), Some(false)), "{said:?}");
+    g.holds.probe("b-1");
+    g.holds.note_rows("b-1", 1, &rows_naming(&[OTHER]));
+    g.holds.probe("b-1");
+    assert_eq!(image_reads(&g), 1, "nothing owed: no read at a probe, none for a row of another document");
+    g.holds.note_rows("b-1", 1, &rows_naming(&[DOC]));
+    g.holds.note_rows("b-1", 1, &rows_naming(&[DOC]));
+    g.holds.probe("b-1");
+    assert_eq!((image_reads(&g), held_events(&g).len(), row_sendable(&g)), (2, 0, Some(false)), "one read however many rows, no event");
+    g.holds.probe("b-1");
+    assert_eq!(image_reads(&g), 2, "the test made, nothing owed");
+}
+
+/// Checks that a resend's moved hold enters its shift's answer, no second read.
+///
+/// It is the moved hold at a resend, as a first dial's is tested above. A
+/// line held behind an outage, its span cut, is refused stale at the probe's
+/// send: the shift's own read answers false, and no further read is owed
+/// (the mutant that leaves the resend's hold unrecorded reads the image again
+/// at the next probe).
+#[test]
+fn a_resends_moved_hold_is_its_own_shift_test() {
+    let g = ground();
+    let typed = g.fake.head();
+    g.hold_anchored(&insert_at(DOC, 2, json!(["x"]), typed), between_one_and_two(), "unreachable", false);
+    *g.fake.image.lock().unwrap() = span_cut();
+    g.fake.move_arrangement(DOC, 77);
+    let _ = held_events(&g);
+    g.holds.probe("b-1");
+    let moved: Vec<Value> = held_events(&g).into_iter().filter(|e| e["state"] == "moved").collect();
+    assert_eq!((moved.len(), moved[0]["sendable"].as_bool(), row_sendable(&g), image_reads(&g)), (1, Some(false), Some(false), 1), "{moved:?}");
+    g.holds.probe("b-1");
+    assert_eq!(image_reads(&g), 1, "no test owed");
+}
+
+/// Checks that an edit restoring a span flips `sendable` with one event.
+///
+/// A line held moved on the board's verdict, its span cut, reads false, a
+/// writer's change named on its face. The span restored and a row naming the
+/// document: the next probe flips it to true with one `moved` event naming
+/// the hand, as every moved face does, and the row says true; a change that
+/// cuts it again flips it back with one event; a probe with nothing new says
+/// nothing (the mutant that tells the flip with no hands has the page erase
+/// the names on its face; the one that never tells it leaves the act inert
+/// on a line a send would land).
+#[test]
+fn an_edit_restoring_the_span_flips_sendable_with_one_event_naming_the_hands() {
+    let ff = "ff".repeat(32);
+    let g = ground();
+    let typed = g.fake.head();
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": ff, "docs": [DOC]})];
+    *g.fake.image.lock().unwrap() = span_cut();
+    g.fake.move_arrangement(DOC, 77);
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert_at(DOC, 2, json!(["x"]), typed), Some(between_one_and_two())) else { panic!("held") };
+    assert_eq!(held["cause"], "moved", "{held}");
+    let _ = held_events(&g);
+    let hands = json!([{"key": "other", "fingerprint": ff}]);
+    *g.fake.image.lock().unwrap() = vec![run(&i(1), 3)];
+    g.holds.note_rows("b-1", 1, &rows_naming(&[DOC]));
+    g.holds.probe("b-1");
+    let said = held_events(&g);
+    let [flip] = &said[..] else { panic!("one held event: {said:?}") };
+    assert_eq!((flip["state"].as_str(), flip["sendable"].as_bool(), &flip["hands"]), (Some("moved"), Some(true), &hands), "the flip names the hands: {flip}");
+    assert_eq!(row_sendable(&g), Some(true));
+    g.holds.probe("b-1");
+    assert!(held_events(&g).is_empty(), "nothing new, nothing said");
+    *g.fake.image.lock().unwrap() = span_cut();
+    g.holds.note_rows("b-1", 1, &rows_naming(&[DOC]));
+    g.holds.probe("b-1");
+    let said = held_events(&g);
+    let [back] = &said[..] else { panic!("one held event: {said:?}") };
+    assert_eq!((back["state"].as_str(), back["sendable"].as_bool(), &back["hands"]), (Some("moved"), Some(false), &hands), "{back}");
+    assert_eq!(row_sendable(&g), Some(false));
+}
+
+/// Checks that an unanswered shift test leaves `sendable` absent.
+///
+/// It is absent until a read answers (skep #863, #867). The image read goes
+/// unanswered: the pass ends there, the row carries no mark and nothing is
+/// said, and the test stays owed, read again while the board answers its
+/// `/health`. An answer tells true, once. A told answer that a later read
+/// goes unanswered over stands told: the row goes absent, nothing is said,
+/// and the read that answers tells only a change from true (the mutant that
+/// tells the unanswered read says a state no read saw; the one that forgets
+/// what was told after it leaves the page's act live on a line a send would
+/// hold moved).
+#[test]
+fn an_unanswered_shift_test_leaves_sendable_absent_until_a_read_answers() {
+    let g = ground();
+    let typed = g.fake.head();
+    *g.fake.image.lock().unwrap() = edited_elsewhere();
+    g.hold_anchored(&insert_at(DOC, 2, json!(["x"]), typed), between_one_and_two(), "moved", false);
+    let _ = held_events(&g);
+    g.fake.image_unread.store(true, Ordering::SeqCst);
+    assert_eq!(g.holds.probe("b-1"), Turn::Unanswered, "the pass ends at the read");
+    assert_eq!((row_sendable(&g), held_events(&g).len(), image_reads(&g)), (None, 0, 1), "absent, nothing said");
+    assert_eq!(g.holds.probe("b-1"), Turn::Unanswered, "the test still owed, the board answering its `/health`");
+    assert_eq!(image_reads(&g), 2);
+    g.fake.image_unread.store(false, Ordering::SeqCst);
+    assert_eq!(g.holds.probe("b-1"), Turn::Done);
+    let said = held_events(&g);
+    assert_eq!((said.len(), said[0]["sendable"].as_bool(), row_sendable(&g)), (1, Some(true), Some(true)), "{said:?}");
+    g.holds.note_rows("b-1", 1, &rows_naming(&[DOC]));
+    g.fake.image_unread.store(true, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    assert_eq!((row_sendable(&g), held_events(&g).len()), (None, 0), "absent again, nothing said");
+    g.fake.image_unread.store(false, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    assert_eq!((row_sendable(&g), held_events(&g).len()), (Some(true), 0), "the page was told true: no change to tell");
+    g.holds.note_rows("b-1", 1, &rows_naming(&[DOC]));
+    g.fake.image_unread.store(true, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    *g.fake.image.lock().unwrap() = span_cut();
+    g.fake.image_unread.store(false, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    let said = held_events(&g);
+    assert_eq!((said.len(), said[0]["sendable"].as_bool(), row_sendable(&g)), (1, Some(false), Some(false)), "the change from true told: {said:?}");
+}
+
+/// Checks that a refused shift test waits for a row naming the document.
+///
+/// A document past the board's image budget answers every read
+/// `image_too_large`: the row carries no mark, and the test is read once, not
+/// again at every pass, until a row names the document (the mutant that marks
+/// a refused read owed reads the image at every probe for as long as the line
+/// stands).
+#[test]
+fn a_refused_shift_test_is_not_read_again_until_a_row_names_the_document() {
+    let g = ground();
+    let typed = g.fake.head();
+    g.hold_anchored(&insert_at(DOC, 2, json!(["x"]), typed), between_one_and_two(), "moved", false);
+    let _ = held_events(&g);
+    g.fake.image_refused.store(true, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    g.holds.probe("b-1");
+    assert_eq!((image_reads(&g), row_sendable(&g), held_events(&g).len()), (1, None, 0), "refused once, read no more, absent");
+    g.holds.note_rows("b-1", 1, &rows_naming(&[DOC]));
+    g.holds.probe("b-1");
+    assert_eq!(image_reads(&g), 2, "a row naming the document owes the read again");
+    g.fake.image_refused.store(false, Ordering::SeqCst);
+    *g.fake.image.lock().unwrap() = edited_elsewhere();
+    g.holds.note_rows("b-1", 1, &rows_naming(&[DOC]));
+    g.holds.probe("b-1");
+    let said = held_events(&g);
+    assert_eq!((said.len(), said[0]["sendable"].as_bool(), row_sendable(&g)), (1, Some(true), Some(true)), "a read that answers says it: {said:?}");
+}
+
+/// Checks that a relaunched moved line is tested at its first probe.
+///
+/// The answer is in memory, so a relaunch owes a first test: the file read at
+/// the session's open says nothing and carries no mark, and the first probe
+/// tests the line and tells true (the mutant that keeps the debt to a row
+/// leaves a relaunched line's act inert until the document next changes).
+#[test]
+fn a_relaunched_moved_line_is_tested_at_its_first_probe() {
+    let g = ground();
+    let typed = g.fake.head();
+    *g.fake.image.lock().unwrap() = edited_elsewhere();
+    g.hold_anchored(&insert_at(DOC, 2, json!(["x"]), typed), between_one_and_two(), "moved", false);
+    g.holds.probe("b-1");
+    assert_eq!(row_sendable(&g), Some(true));
+    let Ground { holds, fake, session, store, .. } = g;
+    drop(holds);
+    let g = ground_over(fake, store, session.facts.clone(), 0);
+    assert_eq!((row_sendable(&g), held_events(&g).len()), (None, 0), "the open tests nothing and says nothing");
+    g.holds.probe("b-1");
+    let said = held_events(&g);
+    assert_eq!((said.len(), said[0]["sendable"].as_bool(), row_sendable(&g)), (1, Some(true), Some(true)), "{said:?}");
+}
+
+/// Checks that a line with no anchors or no span reads false with no read.
+///
+/// A burst of an agent's carries no anchors, so it never shifts: held moved
+/// at its first dial it reads false, on the row and on the event, and the
+/// tests it owes read no image. A delete whose anchors name no span is false
+/// the same way (the mutant that reads the image first dials the board for
+/// an answer no image can change).
+#[test]
+fn a_line_with_no_anchors_or_no_span_reads_false_with_no_read() {
+    let g = ground();
+    let typed = g.fake.head();
+    g.fake.op_rejected.next(1, arrangement_moved(typed, 77));
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["x"]), typed), None) else { panic!("held") };
+    assert_eq!(held["cause"], "moved", "{held}");
+    let said = held_events(&g);
+    assert_eq!((said.len(), said[0]["sendable"].as_bool(), row_sendable(&g)), (1, Some(false), Some(false)), "{said:?}");
+    g.holds.note_rows("b-1", 1, &rows_naming(&[DOC]));
+    g.holds.probe("b-1");
+    assert_eq!((image_reads(&g), held_events(&g).len(), row_sendable(&g)), (0, 0, Some(false)), "tested again, no read and no event");
+    let g = ground();
+    let typed = g.fake.head();
+    g.hold_anchored(&delete_at(DOC, 2, 2, typed), anchors(Some(&i(1)), None), "moved", false);
+    g.holds.probe("b-1");
+    assert_eq!((image_reads(&g), row_sendable(&g)), (0, Some(false)), "a delete with no span");
+}
+
+/// Checks that a moved document's first moved line alone carries the mark.
+///
+/// Three lines held moved on one document: the first carries `sendable`, the
+/// others none. The keyless session, whose `send` is refused, reads none on
+/// the row, and its discard of a later line says the moved face with none,
+/// where a discard under a session that may write says it; a line that is
+/// not moved carries none (the mutant that marks every moved line promises a
+/// shift of a line the walk never tested; the one that marks a keyless row
+/// lights an act that cannot run).
+#[test]
+fn only_a_moved_documents_first_line_carries_the_mark_and_the_keyless_session_none() {
+    let g = ground();
+    let typed = g.fake.head();
+    *g.fake.image.lock().unwrap() = edited_elsewhere();
+    let mut ks = Vec::new();
+    for word in ["x", "y", "z"] {
+        ks.push(g.hold_anchored(&insert_at(DOC, 2, json!([word]), typed), between_one_and_two(), "moved", false)["held"].as_u64().unwrap());
+    }
+    g.holds.probe("b-1");
+    let rows = |lines: &[Value]| lines.iter().map(|line| line.get("sendable").cloned()).collect::<Vec<_>>();
+    assert_eq!(rows(&g.lines()), [Some(json!(true)), None, None]);
+    let _ = held_events(&g);
+    let bare = g.holds.sessions.register(&BoardEntry { reference: "b-1".into(), board: Arc::clone(&g.session.board) }, Open { token: Token::parse(&"9e".repeat(16)).unwrap(), facts: bare_facts(), opened_at: 0 }, &mut NoSupplements);
+    let listed = g.holds.lines(&bare).unwrap();
+    assert_eq!(rows(listed.as_array().unwrap()), [None, None, None], "{listed}");
+    assert_eq!(g.holds.resolve(&bare, ks[2], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    let said = held_events(&g);
+    assert_eq!((said.len(), said[0]["state"].as_str(), said[0].get("sendable")), (1, Some("moved"), None), "the keyless session's discard: {said:?}");
+    assert_eq!(g.holds.resolve(&g.session, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    let said = held_events(&g);
+    assert_eq!((said.len(), said[0]["state"].as_str(), said[0]["sendable"].as_bool()), (1, Some("moved"), Some(true)), "a writer's discard: {said:?}");
+    assert_eq!(g.holds.resolve(&g.session, ks[0], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.shift_test_stale(&g.session, DOC), None, "the line leaving the queue takes its test");
+    let g = ground();
+    g.hold_anchored(&insert_at(DOC, 2, json!(["x"]), g.fake.head()), between_one_and_two(), "unreachable", false);
+    assert_eq!(row_sendable(&g), None, "a line that is not moved carries none");
+}
+
+/// Checks that a flip whose hands' read goes unanswered names them not read.
+///
+/// It is the moved hold's own face at a told change (skep #863, #867). The
+/// span restored and the read of the hands going unanswered: the flip is
+/// said, its hands `unread`, the pass ends there, and at the board's answer
+/// the walk names them, `sendable` still said (the mutant that drops the flip
+/// at the unanswered hands leaves the act inert on a line a send would land).
+#[test]
+fn a_flip_whose_hands_read_goes_unanswered_says_them_not_read_and_names_them_after() {
+    let ff = "ff".repeat(32);
+    let g = ground();
+    let typed = g.fake.head();
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": ff, "docs": [DOC]})];
+    *g.fake.image.lock().unwrap() = span_cut();
+    g.fake.move_arrangement(DOC, 77);
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert_at(DOC, 2, json!(["x"]), typed), Some(between_one_and_two())) else { panic!("held") };
+    assert_eq!(held["cause"], "moved", "{held}");
+    let _ = held_events(&g);
+    *g.fake.image.lock().unwrap() = vec![run(&i(1), 3)];
+    g.holds.note_rows("b-1", 1, &rows_naming(&[DOC]));
+    g.fake.changes_unanswered.store(true, Ordering::SeqCst);
+    assert_eq!(g.holds.probe("b-1"), Turn::Unanswered, "the pass ends at the hands' read");
+    let said = held_events(&g);
+    let [flip] = &said[..] else { panic!("one held event: {said:?}") };
+    assert_eq!((flip["sendable"].as_bool(), &flip["hands"]), (Some(true), &json!([{"key": "unread"}])), "{flip}");
+    assert_eq!(row_sendable(&g), Some(true));
+    g.fake.changes_unanswered.store(false, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    let said = held_events(&g);
+    let [named] = &said[..] else { panic!("the face said once more: {said:?}") };
+    assert_eq!((named["sendable"].as_bool(), &named["hands"]), (Some(true), &json!([{"key": "other", "fingerprint": ff}])), "{named}");
+}
+
+/// Checks that the death signal at a shift test leaves it owed.
+///
+/// It is the session's death and no verdict on the document (§3c.4; skep
+/// #867): met at the image read, or at the read of the hands a told change
+/// makes, nothing is entered and nothing said, and the next probe tests the
+/// line again (the mutant that enters an answer at the death never tests the
+/// line for the session that stands next).
+#[test]
+fn the_death_signal_at_a_shift_test_leaves_it_owed() {
+    for (cell, at_the_image) in [("the image read", true), ("the read of the hands", false)] {
+        let g = ground();
+        let typed = g.fake.head();
+        *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
+        *g.fake.image.lock().unwrap() = span_cut();
+        g.fake.move_arrangement(DOC, 77);
+        let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert_at(DOC, 2, json!(["x"]), typed), Some(between_one_and_two())) else { panic!("{cell}: held") };
+        assert_eq!(held["cause"], "moved", "{cell}: {held}");
+        let _ = held_events(&g);
+        *g.fake.image.lock().unwrap() = vec![run(&i(1), 3)];
+        g.holds.note_rows("b-1", 1, &rows_naming(&[DOC]));
+        let closed = if at_the_image { &g.fake.image_closed } else { &g.fake.changes_closed };
+        closed.store(true, Ordering::SeqCst);
+        g.holds.probe("b-1");
+        assert_eq!((row_sendable(&g), held_events(&g).len()), (Some(false), 0), "{cell}: nothing entered, nothing said");
+        closed.store(false, Ordering::SeqCst);
+        g.holds.probe("b-1");
+        assert_eq!(row_sendable(&g), Some(true), "{cell}: tested again at the next probe");
+    }
+}
+
+/// Checks that a shift test the person's `send` overtakes enters nothing.
+///
+/// The test's image read reaches the board and the person's `send` hands the
+/// line back before it answers, the read answered or going unanswered: under
+/// the lock again the line stands moved at the head no more, so the answer
+/// is dropped, no entry and no `moved` event (the mutant that enters it
+/// anyway says `sendable` of a line the person sent, and a `moved` the page
+/// has just been told is over).
+#[test]
+fn a_send_made_while_a_shift_test_reads_leaves_it_nothing_to_say() {
+    for (cell, unanswered) in [("the read answered", false), ("the read unanswered", true)] {
+        let g = ground();
+        let typed = g.fake.head();
+        *g.fake.image.lock().unwrap() = edited_elsewhere();
+        g.hold_anchored(&insert_at(DOC, 2, json!(["x"]), typed), between_one_and_two(), "moved", false);
+        let _ = held_events(&g);
+        g.fake.image_unread.store(unanswered, Ordering::SeqCst);
+        let (holds, session) = (Arc::downgrade(&g.holds), Arc::clone(&g.session));
+        *g.fake.at_image.lock().unwrap() = Some(Box::new(move || {
+            if let Some(holds) = holds.upgrade() {
+                let _ = holds.resolve(&session, 1, ResolveAct::Send);
+            }
+        }));
+        g.holds.probe("b-1");
+        *g.fake.at_image.lock().unwrap() = None;
+        assert_eq!(g.lines()[0]["cause"], "behind", "{cell}: the person's send stands");
+        assert_eq!(g.holds.shift_test_stale(&g.session, DOC), None, "{cell}: no answer entered");
+        assert!(held_events(&g).iter().all(|e| e["state"] != "moved"), "{cell}: no `moved` said");
+    }
+}
+
+/// Checks that the person's `send` takes the shift test with it.
+///
+/// A moved line tested true, handed back by the person's `send`, and held
+/// moved again at its deadline, which tests nothing: the answer was of the
+/// line before the send, so the row carries no mark until the next probe
+/// tests it (the mutant that keeps the entry across the `send` says what a
+/// send would have done before it, and owes the line no test).
+#[test]
+fn the_persons_send_takes_the_shift_test_with_it() {
+    let g = ground();
+    let typed = g.fake.head();
+    *g.fake.image.lock().unwrap() = vec![run(&i(1), 3)];
+    g.hold_anchored(&insert_at(DOC, 2, json!(["x"]), typed), between_one_and_two(), "moved", false);
+    g.holds.probe("b-1");
+    assert_eq!(row_sendable(&g), Some(true));
+    let (fake, holds) = (Arc::clone(&g.fake), Arc::downgrade(&g.holds));
+    *g.fake.at_send.lock().unwrap() = Some(Box::new(move || {
+        let at = fake.next_at.fetch_add(1, Ordering::SeqCst);
+        fake.move_arrangement(DOC, at);
+        if let Some(holds) = holds.upgrade() {
+            holds.advance(HAND_OVER_DEADLINE);
+        }
+    }));
+    g.fake.move_arrangement(DOC, 77);
+    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Send).unwrap(), Resolved::HandedBack);
+    g.holds.probe("b-1");
+    *g.fake.at_send.lock().unwrap() = None;
+    assert_eq!((g.lines()[0]["cause"].as_str(), row_sendable(&g)), (Some("moved"), None), "held at its deadline, nothing tested since the send");
+    g.holds.probe("b-1");
+    assert_eq!(row_sendable(&g), Some(true), "the next probe tests it");
+}
+
+/// Checks that a moved document's shift test is a step of its turn.
+///
+/// It is §3c.5's bound on a drain's turn (skep #817, #867). More moved
+/// documents than a turn takes steps: the first turn tests as many as it has
+/// steps for and stops at its bound, the next tests the rest (the mutant
+/// that spends no step reads the board for a whole queue of moved documents
+/// while the work queued behind the turn waits).
+#[test]
+fn a_shift_test_is_a_step_of_its_turn() {
+    let g = unclaimed_ground();
+    let typed = g.fake.head();
+    *g.fake.image.lock().unwrap() = edited_elsewhere();
+    for n in 0..=TURN_STEPS {
+        g.hold_anchored(&insert_at(&format!("1.0.1.0.{}", n + 1), 2, json!(["x"]), typed), between_one_and_two(), "moved", false);
+    }
+    assert_eq!((g.holds.probe("b-1"), image_reads(&g)), (Turn::Bounded, TURN_STEPS), "a turn's steps");
+    assert_eq!((g.holds.probe("b-1"), image_reads(&g)), (Turn::Done, TURN_STEPS + 1), "the next turn tests the rest");
 }
 
 /// Checks that a cut pass announces nothing while the `/health` answers.

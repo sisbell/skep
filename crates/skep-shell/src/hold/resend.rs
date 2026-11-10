@@ -68,6 +68,25 @@
 //! unanswered is said with them not read (`Hand::UNREAD`), and the walk reads
 //! them again, a step, as it meets the document (`Holds::reread_hands`).
 //!
+//! **A moved document's head is tested against its document** (§3c.5;
+//! skep #867), so the page knows what its "send again" would do: `sendable`,
+//! true where the shift a `send` would run is exact against the text as it
+//! now stands, false where the line would be held moved again, absent where
+//! no read answered (`Tested`; `Holds::test_shift`). The test is that shift —
+//! `shifted_frame` over the document's image, the line's deadline reset as a
+//! `send` resets it, a head with no anchors or no span false with no read —
+//! and it never changes what a `send` does. A moved hold that ran the shift
+//! enters its answer, no second read (`Holds::note_shift_refused`). The head
+//! owes the walk a test, one step of the turn right after the hands', where
+//! it has no answer of its own — held at its deadline, after a relaunch — or
+//! where its answer stands stale: a row has named the document since
+//! (`Holds::note_rows`, the feed thread's drafts read handing over what it
+//! named, dialing nothing) or the board gave the read no answer. One read per
+//! document per pass, then, however many rows land. A test tells the page
+//! only a change to or from true, which is all its act keys on, the `moved`
+//! event naming the hands as every moved face does; an unanswered read
+//! tells nothing and ends the pass, as every unanswered request does.
+//!
 //! The walk's read: one per document (`GET
 //! /changes`) before its first resend, which answers one question of the
 //! document's head — did its own write land? — and nothing more: (i)
@@ -144,10 +163,11 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use skep_client::board::{acked_at, frames, Answer, ChangesAnswer, ChangesQuery, Rejection};
+use skep_client::halt::Halt;
 
 use super::{
-    awaits_act, cause, line_state, millis, unanswered, AttestedWhereOwed, BoardHold, BoardSlot, CutSend, Dialed, Hand, HandsRead, HeldState, Holds, KeptShift, Turn, Verdict, HAND_OVER_DEADLINE,
-    TURN_STEPS,
+    awaits_act, cause, line_state, millis, unanswered, AttestedWhereOwed, BoardHold, BoardSlot, CutSend, Dialed, Hand, HandsRead, HeldState, Holds, KeptShift, MovedFace, Tested, Turn, Verdict,
+    HAND_OVER_DEADLINE, TURN_STEPS,
 };
 use crate::held::{i_address, Anchors, Done, HeldLine, Reason, SpanRun};
 use crate::refusal::{Name, Refusal};
@@ -224,6 +244,40 @@ impl fmt::Display for Unshiftable {
             Unshiftable::Malformed(why) => write!(f, "{why}"),
         }
     }
+}
+
+impl Unshiftable {
+    /// Returns what this refusal says of a `send` of the line now.
+    ///
+    /// It answers none where the shift was not tried against the document:
+    /// the line's deadline, which a `send` resets, or no line (skep #867). An
+    /// image read that answered no image knows nothing; every other refusal
+    /// is the shift's own, and a `send` would meet it.
+    pub(super) fn tested(&self) -> Option<Tested> {
+        match self {
+            Unshiftable::NoLine | Unshiftable::PastTheDeadline { .. } => None,
+            Unshiftable::Unread(_) => Some(Tested::Unknown),
+            Unshiftable::NoAnchors
+            | Unshiftable::NoSpan
+            | Unshiftable::AnchorLost(_)
+            | Unshiftable::AnchorTwice(_)
+            | Unshiftable::SpanCut { .. }
+            | Unshiftable::SpanRefilled
+            | Unshiftable::Malformed(_) => Some(Tested::Sendable(false)),
+        }
+    }
+}
+
+/// What stopped a shift before it had an exact frame (§3c.5).
+#[derive(Debug)]
+enum ShiftStop {
+    /// The shift cannot move the line exactly, or its image read answered no
+    /// image ([`Unshiftable`]).
+    Refused(Unshiftable),
+    /// The death signal on the session's token met the image read.
+    Died,
+    /// The board gave the image read no answer.
+    Unanswered(Halt),
 }
 
 /// Why a resend's shift was not made ([`Holds::send_line`]).
@@ -343,6 +397,9 @@ impl EditedSpan {
     }
 }
 
+/// A list of I-runs: each its I-prefix, its first position and its width.
+type RunList<'a> = Vec<(&'a str, u64, u64)>;
+
 /// Returns a natural as the wire spells it: a decimal string, or a number.
 fn nat(v: &Value) -> Option<u64> {
     v.as_str().map_or_else(|| v.as_u64(), |text| text.parse().ok())
@@ -365,7 +422,7 @@ fn ordinal(position: &Value) -> Option<u64> {
 #[derive(Debug)]
 struct Image<'a> {
     /// The runs, each its I-prefix, its first position and its width.
-    runs: Vec<(&'a str, u64, u64)>,
+    runs: RunList<'a>,
     /// The V-position past the last run's: the image's extent plus one.
     past_end: u64,
 }
@@ -417,7 +474,7 @@ impl<'a> Image<'a> {
     ///
     /// They are its runs clipped to those positions, and joined
     /// ([`joined`]).
-    fn runs_at(&self, from: u64, width: u64) -> Vec<(&'a str, u64, u64)> {
+    fn runs_at(&self, from: u64, width: u64) -> RunList<'a> {
         let to = from.saturating_add(width);
         let mut v = 1u64;
         let mut cut = Vec::new();
@@ -438,8 +495,8 @@ impl<'a> Image<'a> {
 /// first position the one past the other's last. The joined list is the one
 /// spelling two run lists compare in, however the board split a list's runs
 /// when each was read.
-fn joined<'a>(runs: impl IntoIterator<Item = (&'a str, u64, u64)>) -> Vec<(&'a str, u64, u64)> {
-    let mut out: Vec<(&'a str, u64, u64)> = Vec::new();
+fn joined<'a>(runs: impl IntoIterator<Item = (&'a str, u64, u64)>) -> RunList<'a> {
+    let mut out: RunList<'a> = Vec::new();
     for (prefix, first, width) in runs {
         match out.last_mut() {
             Some(last) if last.0 == prefix && last.1.checked_add(last.2) == Some(first) => last.2 = last.2.saturating_add(width),
@@ -478,21 +535,7 @@ fn joined<'a>(runs: impl IntoIterator<Item = (&'a str, u64, u64)>) -> Vec<(&'a s
 /// moves it by its width, one wholly after by nothing — applied to every
 /// position the frame names ([`EditedSpan::displaced`]).
 fn shifted_frame(frame: &Value, anchors: &Anchors, image: &Value, as_of: u64) -> Result<Value, Unshiftable> {
-    let span = EditedSpan::of(frame).ok_or_else(|| Unshiftable::Malformed("the frame names no content positions the anchors could bound".into()))?;
-    if anchors.before.is_none() != (span.first == 1) {
-        return Err(Unshiftable::Malformed("the anchors do not bound the span the frame names: a span at the document's start alone has no unit before it".into()));
-    }
-    let named = match (span.units, &anchors.span) {
-        (None, None) => Vec::new(),
-        (None, Some(_)) => return Err(Unshiftable::Malformed("the anchors name a span of units, and the frame places at a point".into())),
-        (Some(_), None) => return Err(Unshiftable::NoSpan),
-        (Some(units), Some(runs)) => {
-            if runs.iter().try_fold(0u64, |n, run| n.checked_add(run.extent().2)) != Some(units) {
-                return Err(Unshiftable::Malformed(format!("the anchors' span names other than the {units} units the frame's span holds")));
-            }
-            joined(runs.iter().map(SpanRun::extent))
-        }
-    };
+    let (span, named) = named_span(frame, anchors)?;
     let image = Image::of(image)?;
     let before = match &anchors.before {
         None => 0,
@@ -512,6 +555,70 @@ fn shifted_frame(frame: &Value, anchors: &Anchors, image: &Value, as_of: u64) ->
     }
     let displacement = i128::from(before) + 1 - i128::from(span.first);
     span.displaced(frame, displacement, as_of).ok_or_else(|| Unshiftable::Malformed("a position the frame names moves to no position".into()))
+}
+
+/// Returns the span `frame` edits and the runs `anchors` name of it.
+///
+/// They are the checks of the frame and the anchors alone
+/// ([`shifted_frame`]'s first): no image could make a shift exact where one
+/// of them refuses.
+fn named_span<'a>(frame: &Value, anchors: &'a Anchors) -> Result<(EditedSpan, RunList<'a>), Unshiftable> {
+    let span = EditedSpan::of(frame).ok_or_else(|| Unshiftable::Malformed("the frame names no content positions the anchors could bound".into()))?;
+    if anchors.before.is_none() != (span.first == 1) {
+        return Err(Unshiftable::Malformed("the anchors do not bound the span the frame names: a span at the document's start alone has no unit before it".into()));
+    }
+    let named = match (span.units, &anchors.span) {
+        (None, None) => Vec::new(),
+        (None, Some(_)) => return Err(Unshiftable::Malformed("the anchors name a span of units, and the frame places at a point".into())),
+        (Some(_), None) => return Err(Unshiftable::NoSpan),
+        (Some(units), Some(runs)) => {
+            if runs.iter().try_fold(0u64, |n, run| n.checked_add(run.extent().2)) != Some(units) {
+                return Err(Unshiftable::Malformed(format!("the anchors' span names other than the {units} units the frame's span holds")));
+            }
+            joined(runs.iter().map(SpanRun::extent))
+        }
+    };
+    Ok((span, named))
+}
+
+/// Reads the document's content image: the shift's one live read.
+///
+/// It is the read over the whole content window ([`IMAGE_WINDOW`]) under the
+/// session, made outside every lock as every dial is.
+///
+/// # Errors
+///
+/// Returns [`ShiftStop::Refused`], [`Unshiftable::Unread`] within it, where
+/// the read was refused or answered no document, [`ShiftStop::Died`] at the
+/// death signal on the session's token and [`ShiftStop::Unanswered`] where
+/// the board gave the read no answer.
+fn read_image(session: &SessionEntry, doc: &str) -> Result<Value, ShiftStop> {
+    match session.board.op(Some(&session.token), &frames::image(doc, 1, IMAGE_WINDOW)) {
+        Ok(Answer::Document(v)) => match Rejection::of(&v) {
+            None => Ok(v),
+            Some(r) => Err(ShiftStop::Refused(Unshiftable::Unread(format!("the image read was refused {}", r.token())))),
+        },
+        Ok(Answer::Closed) => Err(ShiftStop::Died),
+        Err(h) if unanswered(&h) => Err(ShiftStop::Unanswered(h)),
+        Err(h) => Err(ShiftStop::Refused(Unshiftable::Unread(h.to_string()))),
+    }
+}
+
+/// Runs the shift a `send` of `head` would run, against its document now.
+///
+/// It is [`shifted_frame`] over one live read, the shifted frame dropped: no
+/// read is made where the frame and its anchors alone refuse the shift. A
+/// `send` resets the line's deadline, so the deadline is not read.
+///
+/// # Errors
+///
+/// Returns what stopped the shift ([`ShiftStop`]).
+fn shift_as_a_send_would(session: &SessionEntry, head: &HeldLine) -> Result<(), ShiftStop> {
+    let anchors = head.anchors.as_ref().ok_or(ShiftStop::Refused(Unshiftable::NoAnchors))?;
+    named_span(&head.frame, anchors).map_err(ShiftStop::Refused)?;
+    let image = read_image(session, &head.doc)?;
+    let as_of = image["as_of"].as_u64().unwrap_or(0);
+    shifted_frame(&head.frame, anchors, &image, as_of).map(|_| ()).map_err(ShiftStop::Refused)
 }
 
 /// The outcome of the hold's one read for a line's landing (§3c.5).
@@ -798,7 +905,9 @@ impl Holds {
     /// ones, and in [`Round::Cut`] those alone are walked, the set taken out
     /// as the walk begins, the walk none where it holds none. A moved
     /// document whose hands went unread is read for them as the walk meets
-    /// it, a step ([`Holds::reread_hands`]). It answers [`Turn::Bounded`]
+    /// it, a step ([`Holds::reread_hands`]), and a moved head that owes its
+    /// shift test is tested, a step ([`Holds::test_shift`]). It answers
+    /// [`Turn::Bounded`]
     /// where a document's read or a line's send was owed a step and the turn
     /// had none left for it; [`Turn::Unanswered`] where the board gave a
     /// request of the walk's no answer, its document entered among those the
@@ -828,9 +937,10 @@ impl Holds {
                 let line = ph.queue.next_after(after, |doc| ph.stopped_in_pass.contains(doc) || ph.cut_in_pass.contains(doc))?;
                 let parked = ph.queue.parked(line.k);
                 let hands_owed = ph.hands_owed.contains_key(&line.doc);
-                Some((line, parked, hands_owed))
+                let test_owed = ph.shift_test_owed(&line);
+                Some((line, parked, hands_owed, test_owed))
             });
-            let Some((line, parked, hands_owed)) = next.flatten() else { return Turn::Done };
+            let Some((line, parked, hands_owed, test_owed)) = next.flatten() else { return Turn::Done };
             // A line parked on the pending file its queue's file took it from
             // waits for its copy to land (I5): its document stops at it.
             if parked {
@@ -846,6 +956,16 @@ impl Holds {
                     let Some(left) = steps.checked_sub(1) else { return Turn::Bounded };
                     *steps = left;
                     if self.reread_hands(session, &line.doc) == Step::Unanswered {
+                        self.cut_in_pass(board_reference, principal, &line.doc);
+                        return Turn::Unanswered;
+                    }
+                }
+                // A moved head tested against its document as it now stands,
+                // a step (skep #867).
+                if test_owed {
+                    let Some(left) = steps.checked_sub(1) else { return Turn::Bounded };
+                    *steps = left;
+                    if self.test_shift(session, &line) == Step::Unanswered {
                         self.cut_in_pass(board_reference, principal, &line.doc);
                         return Turn::Unanswered;
                     }
@@ -930,8 +1050,13 @@ impl Holds {
         let Some(judged) = owed.flatten() else { return Step::Goes };
         match self.hands_since_typed_state(session, doc, Some(judged.k), &judged.reason) {
             HandsRead::Named(hands) => {
-                self.with_principal(board_reference, principal, |ph| ph.hands_owed.remove(doc));
-                self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Moved, None, &hands);
+                let sendable = self
+                    .with_principal(board_reference, principal, |ph| {
+                        ph.hands_owed.remove(doc);
+                        ph.sendable_told(doc)
+                    })
+                    .flatten();
+                self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Moved, None, MovedFace { hands: &hands, sendable });
                 Step::Goes
             }
             HandsRead::Unanswered => {
@@ -940,6 +1065,85 @@ impl Holds {
             }
             HandsRead::Died => Step::Goes,
         }
+    }
+
+    /// Tests a moved document's head against the text as it now stands.
+    ///
+    /// It is §3c.5's `sendable` (skep #867): owed where
+    /// `PrincipalHold::shift_test_owed` says, and what a `send` would do
+    /// ([`shift_as_a_send_would`]), changing nothing a `send` does. Its
+    /// answer is entered under the lock again, and dropped where the line
+    /// stands moved at the head no more — the person's `send` having handed
+    /// it back while the read was out. A change to or from true, the one the
+    /// page's act keys on, is told on the `moved` event ([`Holds::emit_held`]),
+    /// its hands read first ([`Holds::hands_since_typed_state`]) as every
+    /// moved face names them; an answer that moves nothing the page acts on
+    /// tells nothing and reads no hands. A read the board gives no answer to
+    /// marks the answer unknown and owed and the board unanswered, tells
+    /// nothing and answers [`Step::Unanswered`]; a told change whose hands'
+    /// read goes so is said with them not read, as a moved hold's is, and
+    /// answers the same. The death signal leaves the test owed for the
+    /// session that stands next. It answers [`Step::Goes`] otherwise.
+    fn test_shift(&self, session: &SessionEntry, head: &HeldLine) -> Step {
+        let (board_reference, principal, doc, k) = (session.board_reference.as_str(), session.facts.principal, head.doc.as_str(), head.k);
+        let tested = match shift_as_a_send_would(session, head) {
+            Ok(()) => Tested::Sendable(true),
+            Err(ShiftStop::Refused(why)) => why.tested().unwrap_or(Tested::Unknown),
+            Err(ShiftStop::Died) => return Step::Goes,
+            Err(ShiftStop::Unanswered(_)) => {
+                self.with_principal(board_reference, principal, |ph| ph.note_tested(doc, k, Tested::Unknown, true));
+                self.note_unanswered(&mut self.lock(board_reference), None);
+                return Step::Unanswered;
+            }
+        };
+        let tells = self.with_principal(board_reference, principal, |ph| tested.live() != ph.told_live(doc, k)).unwrap_or(false);
+        let (hands, unread) = if tells {
+            match self.hands_since_typed_state(session, doc, Some(k), &head.reason) {
+                HandsRead::Named(hands) => (hands, false),
+                HandsRead::Unanswered => (vec![Hand::UNREAD], true),
+                HandsRead::Died => return Step::Goes,
+            }
+        } else {
+            (Vec::new(), false)
+        };
+        let told = self
+            .with_principal(board_reference, principal, |ph| {
+                ph.note_tested(doc, k, tested, false).then(|| {
+                    if unread {
+                        ph.hands_owed.insert(doc.to_string(), k);
+                    }
+                    (ph.count(doc), ph.sendable_told(doc))
+                })
+            })
+            .flatten();
+        let Some((held, sendable)) = told else { return Step::Goes };
+        if tells {
+            if unread {
+                self.note_unanswered(&mut self.lock(board_reference), None);
+            }
+            self.emit_held(session, doc, held, HeldState::Moved, None, MovedFace { hands: &hands, sendable });
+        }
+        if unread {
+            Step::Unanswered
+        } else {
+            Step::Goes
+        }
+    }
+
+    /// Enters what a shift that was not made tested of line `k`, its document
+    /// just held moved, and returns the `sendable` its `moved` event says.
+    ///
+    /// It is the moved hold's half of the shift test (§3c.5; skep #867): the
+    /// shift a moved hold ran is the test, no second read, and a hold that
+    /// tried no shift against the document enters nothing, the test owed.
+    pub(super) fn note_shift_refused(&self, board_reference: &str, principal: u64, doc: &str, k: u64, why: &Unshiftable) -> Option<bool> {
+        self.with_principal(board_reference, principal, |ph| {
+            if let Some(tested) = why.tested() {
+                ph.note_tested(doc, k, tested, false);
+            }
+            ph.sendable_told(doc)
+        })
+        .flatten()
     }
 
     /// Resumes one document by its read (resume-by-read, §3c.5).
@@ -984,11 +1188,11 @@ impl Holds {
                 self.keep_landing(&mut self.lock(board_reference), principal, doc, head.k, at);
                 match self.count(board_reference, principal, doc) {
                     0 => {
-                        self.emit_held(session, doc, 0, HeldState::Kept, None, &[]);
+                        self.emit_held(session, doc, 0, HeldState::Kept, None, MovedFace::default());
                         Step::Stops
                     }
                     rest => {
-                        self.emit_held(session, doc, rest, HeldState::Sending, None, &[]);
+                        self.emit_held(session, doc, rest, HeldState::Sending, None, MovedFace::default());
                         Step::Goes
                     }
                 }
@@ -1004,7 +1208,7 @@ impl Holds {
                         return Step::Stops;
                     }
                 }
-                self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Sending, None, &[]);
+                self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Sending, None, MovedFace::default());
                 Step::Goes
             }
         }
@@ -1281,7 +1485,7 @@ impl Holds {
                     self.note_ack(session, &frame, &ack);
                     self.done(board_reference, principal, line.k, Done::Kept { at: acked_at(&ack) });
                     let rest = self.count(board_reference, principal, &line.doc);
-                    self.emit_held(session, &line.doc, rest, if rest == 0 { HeldState::Kept } else { HeldState::Sending }, None, &[]);
+                    self.emit_held(session, &line.doc, rest, if rest == 0 { HeldState::Kept } else { HeldState::Sending }, None, MovedFace::default());
                     return Step::Goes;
                 }
                 Dialed::Held { reason, refusal } if reason.cause == cause::MOVED => {
@@ -1344,7 +1548,8 @@ impl Holds {
                                 self.with_principal(board_reference, principal, |ph| ph.hands_owed.insert(line.doc.clone(), line.k));
                                 self.note_unanswered(&mut self.lock(board_reference), None);
                             }
-                            self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Moved, None, &hands);
+                            let sendable = self.note_shift_refused(board_reference, principal, &line.doc, line.k, &why);
+                            self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Moved, None, MovedFace { hands: &hands, sendable });
                             return if unread { Step::Unanswered } else { Step::Stops };
                         }
                     }
@@ -1363,7 +1568,7 @@ impl Holds {
                         self.remark_line(principal, ph, line.k, Reason::of(cause::UNREACHABLE, reason.sent || sent));
                     });
                     self.note_unanswered(&mut self.lock(board_reference), cut);
-                    self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Holding, Some(cause::UNREACHABLE), &[]);
+                    self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Holding, Some(cause::UNREACHABLE), MovedFace::default());
                     return Step::Unanswered;
                 }
                 Dialed::Held { reason, refusal } => {
@@ -1382,7 +1587,7 @@ impl Holds {
                     if failed == Some(true) && state == HeldState::Holding {
                         self.say(format_args!("line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
                     }
-                    self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), state, Some(&said), &[]);
+                    self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), state, Some(&said), MovedFace::default());
                     return Step::Stops;
                 }
                 Dialed::Reissue { kind, refusal } => {
@@ -1407,7 +1612,7 @@ impl Holds {
                     let reason = Reason { sent, ..Reason::refused(&token, r.body.clone()) };
                     self.with_principal(board_reference, principal, |ph| self.remark_line(principal, ph, line.k, reason));
                     self.say(format_args!("line {} on {} was not taken ({r}), a code the shell holds no row for; it is handed to the person, who may send it again or drop it", line.k, line.doc));
-                    self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Refused, Some(&token), &[]);
+                    self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Refused, Some(&token), MovedFace::default());
                     return Step::Stops;
                 }
                 // A refusal of the shell's own, which dialed nothing the
@@ -1502,18 +1707,15 @@ impl Holds {
         // past every check that reads nothing.
         step()?;
         // The one live read, outside every lock as every dial is.
-        let image = match session.board.op(Some(&session.token), &frames::image(&line.doc, 1, IMAGE_WINDOW)) {
-            Ok(Answer::Document(v)) => match Rejection::of(&v) {
-                None => v,
-                Some(r) => return Err(Unshiftable::Unread(format!("the image read was refused {}", r.token())).into()),
-            },
+        let image = match read_image(session, &line.doc) {
+            Ok(image) => image,
+            Err(ShiftStop::Refused(why)) => return Err(why.into()),
             // The session's death, and no verdict on the document: no dial
             // leaves, and the caller meets the death as at its dial.
-            Ok(Answer::Closed) => return Ok(Shifted { dialed: Dialed::Died, frame: line.frame, left: false }),
+            Err(ShiftStop::Died) => return Ok(Shifted { dialed: Dialed::Died, frame: line.frame, left: false }),
             // The board's silence, and no verdict on the document either: the
             // shift is not tried and no dial leaves (skep #863).
-            Err(h) if unanswered(&h) => return Ok(Shifted { dialed: Dialed::unanswered(false, Refusal::from(h)), frame: line.frame, left: false }),
-            Err(h) => return Err(Unshiftable::Unread(h.to_string()).into()),
+            Err(ShiftStop::Unanswered(h)) => return Ok(Shifted { dialed: Dialed::unanswered(false, Refusal::from(h)), frame: line.frame, left: false }),
         };
         let as_of = image["as_of"].as_u64().unwrap_or(0).max(verdict["site"]["current"].as_u64().unwrap_or(0));
         let shifted = shifted_frame(&line.frame, anchors, &image, as_of)?;
@@ -1558,7 +1760,7 @@ impl Holds {
             head.doc,
             elapsed.as_secs()
         ));
-        self.emit_held(session, &head.doc, self.count(board_reference, principal, &head.doc), HeldState::Refused, Some(Name::ANSWERS_LOST.as_str()), &[]);
+        self.emit_held(session, &head.doc, self.count(board_reference, principal, &head.doc), HeldState::Refused, Some(Name::ANSWERS_LOST.as_str()), MovedFace::default());
     }
 
     /// Marks every line of a moved document `cause: moved`.

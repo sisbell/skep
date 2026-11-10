@@ -874,9 +874,12 @@ fn a_cut_span_a_lost_anchor_no_anchors_and_a_refused_read_each_fall_to_the_moved
         assert_eq!((lines[0]["cause"].as_str(), lines[0]["sent"].as_bool(), &lines[0]["refusal"]), (Some("moved"), Some(false), &verdict), "{cell}: the verdict on the line: {lines:?}");
         assert_eq!(lines[0]["frame"], page, "{cell}: the frame as the page composed it");
         assert_eq!(lines[0].get("anchors").cloned(), anchors.as_ref().map(Anchors::json), "{cell}: the anchors on the line");
+        let sendable = (!refused).then_some(json!(false));
+        assert_eq!(lines[0].get("sendable"), sendable.as_ref(), "{cell}: what a send would do, the shift's own read the test, none where it answered no image (skep #867): {lines:?}");
         let said: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).collect();
         let [moved] = &said[..] else { panic!("{cell}: one held event: {said:?}") };
         assert_held_event_declared(moved);
+        assert_eq!(moved.get("sendable"), sendable.as_ref(), "{cell}: the event says it as the row does: {moved}");
         assert_eq!((moved["state"].as_str(), moved.get("cause"), &moved["hands"]), (Some("moved"), None, &json!([{"key": "other", "fingerprint": "ff".repeat(32)}])), "{cell}: {moved}");
         let talk = g.said.lock().unwrap().clone();
         match why {
@@ -898,8 +901,10 @@ fn a_cut_span_a_lost_anchor_no_anchors_and_a_refused_read_each_fall_to_the_moved
 /// failed send stands less than two minutes past — four shifts, one image read
 /// each — then holds the line moved under the newest verdict, the frame as last
 /// shifted, `sent` for the dials that left, the deadline said once in the
-/// shell's own window; no probe sends it; and the person's `send` starts the
-/// clock afresh — the next probe sends it, shifts it once and keeps it (the
+/// shell's own window; no probe sends it, and the next tests it as a `send`
+/// would, its deadline reset, `sendable` true and told once (skep #867); and
+/// the person's `send` starts the clock afresh — the next probe sends it,
+/// shifts it once and keeps it (the
 /// mutant that bounds no shift loops the shell for as long as the other writer
 /// writes; the one that keeps the clock at the person's send hands the line
 /// straight back).
@@ -929,11 +934,17 @@ fn a_document_that_keeps_moving_stops_shifting_at_the_deadline_and_is_held_moved
     let talk = g.said.lock().unwrap().clone();
     assert_eq!(talk.iter().filter(|l| l.starts_with(&format!("held: line 1 on {DOC} was not shifted (its first failed send was ")) && l.contains(" s ago, past the two-minute deadline)")).count(), 1, "{talk:?}");
     *g.fake.at_send.lock().unwrap() = None;
+    assert_eq!(lines[0].get("sendable"), None, "the deadline tested nothing: {lines:?}");
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), shifts + 1, "the line awaits the person's act");
+    let lines = g.lines();
+    assert_eq!((lines[0]["sendable"].as_bool(), g.fake.image_reads.load(Ordering::SeqCst)), (Some(true), shifts + 1), "held past its deadline, the next probe tests the line as a send would, its deadline reset: {lines:?}");
+    let told: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).collect();
+    assert_eq!((told.len(), told[0]["state"].as_str(), told[0]["sendable"].as_bool()), (1, Some("moved"), Some(true)), "told once: {told:?}");
     assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Send).unwrap(), Resolved::HandedBack);
+    assert_eq!(g.lines()[0].get("sendable"), None, "a line that is not moved carries no mark");
     g.holds.probe("b-1");
-    assert_eq!((g.fake.sends(), g.fake.image_reads.load(Ordering::SeqCst)), (shifts + 3, shifts + 1), "the person's send starts the clock afresh: sent, refused once more, shifted and kept");
+    assert_eq!((g.fake.sends(), g.fake.image_reads.load(Ordering::SeqCst)), (shifts + 3, shifts + 2), "the person's send starts the clock afresh: sent, refused once more, shifted and kept");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
@@ -2697,13 +2708,14 @@ fn a_held_file_the_compaction_cannot_remove_is_said_on_talk_and_appended_on() {
 /// Checks that the `held` event's memory emits a state and count once until
 /// it changes or is cleared (skep #727).
 ///
-/// The same state and count for one board, session and document is emitted
-/// once; a changed count, or a changed state, is emitted; nothing bypasses
-/// the memory — the join's forced re-emit went with the renumbering it
-/// coped with (skep #856) — so the pair said again after the same pair is
-/// not emitted; a document kept with no line left clears its key, so the
-/// same pair after it is news again; and the memory is per session — a
-/// second session of the principal sees its own first emit (the mutant that
+/// The same state, count and `sendable` for one board, session and document
+/// is emitted once; a changed count, a changed state or a changed `sendable`
+/// is emitted; nothing bypasses the memory — the join's forced re-emit went
+/// with the renumbering it coped with (skep #856) — so the pair said again
+/// after the same pair is not emitted; a document kept with no line left
+/// clears its key, so the same pair after it is news again; and the memory
+/// is per session — a second session of the principal sees its own first
+/// emit (the mutant that
 /// forgets the memory floods the page with the same state at every probe;
 /// the one that never clears a key keeps a map entry per document ever
 /// held; the one that keys by document alone starves a second tab of its
@@ -2711,7 +2723,7 @@ fn a_held_file_the_compaction_cannot_remove_is_said_on_talk_and_appended_on() {
 #[test]
 fn the_held_events_memory_emits_a_pair_once_until_it_changes_or_is_cleared() {
     let g = ground();
-    let emit = |state: HeldState, held: u64| g.holds.emit_held(&g.session, DOC, held, state, Some("unreachable"), &[]);
+    let emit = |state: HeldState, held: u64| g.holds.emit_held(&g.session, DOC, held, state, Some("unreachable"), MovedFace::default());
     emit(HeldState::Holding, 1);
     emit(HeldState::Holding, 1);
     assert_eq!(g.states(), ["holding"], "the same pair once");
@@ -2726,8 +2738,14 @@ fn the_held_events_memory_emits_a_pair_once_until_it_changes_or_is_cleared() {
     assert_eq!(g.states(), ["kept", "holding"], "a document kept with no line clears its key: the pair after it is news");
     assert_eq!(g.holds.last_emitted.lock().unwrap().len(), 1, "one key per document still held, none for a document kept whole");
     let second = g.holds.sessions.register(&BoardEntry { reference: "b-1".into(), board: Arc::clone(&g.session.board) }, Open { token: Token::parse(&"9e".repeat(16)).unwrap(), facts: writer_facts(&g.store), opened_at: 0 }, &mut NoSupplements);
-    g.holds.emit_held(&second, DOC, 1, HeldState::Holding, Some("unreachable"), &[]);
+    g.holds.emit_held(&second, DOC, 1, HeldState::Holding, Some("unreachable"), MovedFace::default());
     assert_eq!(g.states(), ["holding"], "a second session of the principal sees its own first emit");
+    let moved = |sendable: Option<bool>| g.holds.emit_held(&g.session, OTHER, 1, HeldState::Moved, None, MovedFace { hands: &[], sendable });
+    moved(Some(false));
+    moved(Some(false));
+    moved(Some(true));
+    moved(None);
+    assert_eq!(g.states(), ["moved", "moved", "moved"], "`sendable` joins the memory: each change said once, a repeat none (skep #867)");
 }
 
 /// Checks that the compaction keeps the principal's counter: the next

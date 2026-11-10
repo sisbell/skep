@@ -588,6 +588,25 @@ fn the_probe_card_names_the_shells_board_states() {
     assert!(fields.iter().any(|field| field.name == "reason" && !field.required) && card.contains("reason?"), "the probe card names the optional `reason`: {card}");
 }
 
+/// The `held` card names `sendable`, an agent's line reading false.
+///
+/// The card lists every row member, and an agent reading a moved line's row
+/// meets `sendable`: what `resolve` `send` would do, and always false for a
+/// burst sent through these tools, which carries no anchors and so never
+/// shifts (skep #867). A card silent on it leaves an agent to guess what the
+/// member means, and to send a line it could tell would be held moved again.
+#[test]
+fn the_held_card_names_sendable_and_an_agents_line_reading_false() {
+    let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    let held = catalog.tools.iter().find(|t| t["name"] == "held").and_then(|t| t["description"].as_str()).expect("the held card");
+    assert!(
+        held.contains("sendable? (on a moved document's first moved line: true where resolve send would shift it into the text as it now stands, false where it would be held moved again, absent where the shell does not know; a burst sent through these tools carries no anchors, so it never shifts and reads false)"),
+        "the held card names sendable: {held}"
+    );
+    let declared: Vec<&str> = skep_shell::shapes::shape("HeldRow").expect("skep-shell declares a held line").fields.iter().map(|field| field.name).collect();
+    assert!(declared.contains(&"sendable"), "`sendable` is a member skep-shell declares for a held line: {declared:?}");
+}
+
 /// The held cards name the shell's hand-over, a burst kept in memory alone,
 /// and the line held on a head record that will not read.
 ///

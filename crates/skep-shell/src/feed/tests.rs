@@ -17,9 +17,10 @@
 //! It checks one read to the head meeting every answer as its paging rule
 //! says, a death answered with the position its finished pages reached; a
 //! drafts cursor the retention floor passed resumed at the floor, its rows
-//! still fed; a drafts row named under every session of its principal, a
-//! closing session's last read among them; a principal's drafts read on
-//! through the restart's re-open, one cursor per principal; a read that
+//! still fed; a drafts read owing the shift tests of the documents its rows
+//! named (skep #867); a drafts row named under every session of its
+//! principal, a closing session's last read among them; a principal's drafts
+//! read on through the restart's re-open, one cursor per principal; a read that
 //! dies between two pages sending none of their rows again, while a
 //! principal's last session dying mid-read leaves no cursor behind; a
 //! death a call thread meets swapped by the feed thread after the rows of
@@ -958,6 +959,35 @@ impl Dialer for Moving {
 
     fn stream(&self, _: &Origin, _: &RequestHead, _: &mut dyn Read, _: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
         Err(DialError::Connect("no stream here".into()))
+    }
+}
+
+/// Checks that a drafts read owes the shift tests of what its rows named.
+///
+/// It is §3c.5's trigger (skep #867). A drafts read hands the hold the
+/// documents its rows named, the test of each moved one among them going
+/// stale and the test of another document's standing; and a row of lost
+/// testimony, which names no document and may be the write that changed any
+/// of them, makes every test stale (the mutant that hands nothing leaves a
+/// moved line's mark what it was for as long as it stands; the one that
+/// reads only named documents misses a write whose testimony the board lost).
+#[test]
+fn a_drafts_read_owes_the_shift_tests_of_the_documents_its_rows_named() {
+    let (named, other) = ("1.0.1.0.1", "1.0.1.0.2");
+    for (cell, docs, other_stale) in [("a row naming its document", json!([named]), false), ("a row of lost testimony", Value::Null, true)] {
+        let script = move |since: u64, _: Option<u64>| if since < 6 { ok(json!({"changes": [{"at": 6, "op": "insert", "docs": docs.clone(), "key": "bare"}], "last": 6, "more": false})) } else { page(&[], since, false) };
+        let entry = entry_over(Paging { script: Box::new(script), asked: Mutex::new(Vec::new()) });
+        let store = TempDir::new().unwrap();
+        let (sessions, bus) = (Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), Arc::new(EventBus::new()));
+        let session = session_of(&sessions, &entry, 1, "9f", 0);
+        let shared = shared_over(&entry, &sessions, &bus, &store);
+        let holds = Arc::clone(&shared.holds);
+        holds.open_session(&session);
+        holds.seed_shift_test(&session, named, 1);
+        holds.seed_shift_test(&session, other, 2);
+        let mut feeder = Feeder::new(&entry, shared);
+        feeder.read_drafts(&session);
+        assert_eq!((holds.shift_test_stale(&session, named), holds.shift_test_stale(&session, other)), (Some(true), Some(other_stale)), "{cell}");
     }
 }
 

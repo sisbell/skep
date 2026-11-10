@@ -290,9 +290,10 @@ pub const PROBE_CADENCE: Duration = Duration::from_secs(2);
 /// The most steps one turn of a drain takes (§3c.5; skep #817, #862).
 ///
 /// A step is a document's read for its head's own landing, a line's send,
-/// or a shift of a line the board refused as typed against an older state,
-/// its image read and its shifted dial: each a dial of the board, the
-/// shift's two, in the order the walk meets them (`resend`'s turns). The
+/// a shift of a line the board refused as typed against an older state, its
+/// image read and its shifted dial, or a moved document's test of that shift
+/// (`resend`'s `test_shift`): each a dial of the board, the shift's two, in
+/// the order the walk meets them (`resend`'s turns). The
 /// bound is what lets the board's feed thread serve the work queued behind a
 /// drain — a `search`, a listing, a session's swap — before the drain goes
 /// on: 64 sends at some 13 ms each, a line's mark and its `done` synced
@@ -534,6 +535,97 @@ enum HandsRead {
     Unanswered,
     /// The death signal on the session's token.
     Died,
+}
+
+/// What a `moved` event says beside its state (§3c.5; §4b.2's `held` event).
+///
+/// It is the hands whose rows moved the document, and `sendable`, whether a
+/// `send` would now shift the document's first moved line, where the shell
+/// knows ([`Tested`]). The default says neither, as every other state's
+/// event does.
+#[derive(Debug, Clone, Copy, Default)]
+struct MovedFace<'h> {
+    hands: &'h [Hand],
+    sendable: Option<bool>,
+}
+
+/// What the shift test answered of a moved line's `send` (§3c.5; skep #867).
+///
+/// The test runs the shift a `send` would run against the document as it
+/// stands (`resend`'s `test_shift`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tested {
+    /// The test ran: a `send` would shift the line into the text as it now
+    /// stands (true), or hold it moved again (false).
+    Sendable(bool),
+    /// No read answered: the image read went unanswered or was refused.
+    Unknown,
+}
+
+impl Tested {
+    /// Returns the `sendable` member a row and an event carry, absent where
+    /// the shell does not know.
+    fn sendable(self) -> Option<bool> {
+        match self {
+            Tested::Sendable(sendable) => Some(sendable),
+            Tested::Unknown => None,
+        }
+    }
+
+    /// Returns whether the answer holds the page's "send again" live.
+    ///
+    /// The page holds the act inert on false and on absent alike (§3c.5).
+    fn live(self) -> bool {
+        self == Tested::Sendable(true)
+    }
+}
+
+/// A moved document's shift test as it stands.
+///
+/// It is its entry in `PrincipalHold::shift_tests`, of the document's head.
+#[derive(Debug, Clone, Copy)]
+struct ShiftTest {
+    /// The ordinal of the line tested, the document's head.
+    k: u64,
+    /// What the test last answered.
+    answer: Tested,
+    /// Whether another test is owed: a row has named the document since
+    /// ([`Holds::note_rows`]), or the board gave the read no answer.
+    stale: bool,
+    /// Whether the last `moved` event held the page's act live.
+    told: bool,
+}
+
+/// The documents a read of the drafts feed named (§3c.5; skep #867).
+///
+/// It is what a moved document's shift test goes stale by
+/// ([`Holds::note_rows`]). A row whose testimony the board lost names no
+/// document, and may be the write that changed any of them (wire.md
+/// §`/changes`), so it names them all.
+#[derive(Debug, Default)]
+pub(crate) struct RowsNamed {
+    docs: HashSet<String>,
+    every: bool,
+}
+
+impl RowsNamed {
+    /// Notes the documents a `/changes` row names.
+    pub(crate) fn note(&mut self, row: &Value) {
+        match row["docs"].as_array() {
+            Some(docs) => self.docs.extend(docs.iter().filter_map(Value::as_str).map(str::to_owned)),
+            None => self.every = true,
+        }
+    }
+
+    /// Returns whether a row named `doc`.
+    fn names(&self, doc: &str) -> bool {
+        self.every || self.docs.contains(doc)
+    }
+
+    /// Returns whether no row named any document.
+    fn is_empty(&self) -> bool {
+        !self.every && self.docs.is_empty()
+    }
 }
 
 /// What a write's dial answered that [`classify`] reads (§3c.4).
@@ -1528,6 +1620,11 @@ impl Directory {
 /// the board's reference, the session's and the document ([`Holds::last_emitted`]).
 type HeldKey = (String, String, String);
 
+/// What the `held` event last said of a document: its state, its count,
+/// whether it named the hands not read, and its `sendable`
+/// ([`Holds::last_emitted`]).
+type HeldSaid = (HeldState, u64, bool, Option<bool>);
+
 /// A board's state, as the `daemon` event and `probe()` say it (§4b.2; P37).
 ///
 /// It is the most severe that holds, in the order of its variants
@@ -1661,7 +1758,8 @@ enum Custody {
 /// silence cut it at ([`PrincipalHold::cut_in_pass`]), the shifts the
 /// board's silence left untried ([`PrincipalHold::shift_owed`]) and the
 /// moved documents whose hands it left unread
-/// ([`PrincipalHold::hands_owed`]), and whether the wait for the copies its
+/// ([`PrincipalHold::hands_owed`]), each moved document's shift test
+/// ([`PrincipalHold::shift_tests`]), and whether the wait for the copies its
 /// file owes was said ([`PrincipalHold::waiting_said`]). An ack touches no
 /// standing line's
 /// base: a line held keeps the base it was held at, raised only behind a
@@ -1789,6 +1887,14 @@ struct PrincipalHold {
     /// document is moved no more, and where its line leaves the queue. In
     /// memory.
     hands_owed: HashMap<String, u64>,
+    /// Each moved document's shift test, by the document (§3c.5; skep #867).
+    ///
+    /// It is what a `send` of the document's head would do now, the head's
+    /// `sendable`: entered as the moved hold tested the line, and by the walk
+    /// where the head owes a test ([`PrincipalHold::shift_test_owed`]). Taken
+    /// out where the person's `send` hands the document back and where its
+    /// line leaves the queue. In memory: a relaunch owes a first test.
+    shift_tests: HashMap<String, ShiftTest>,
     /// Whether the shell's own window was told the queue's file owes copies.
     ///
     /// It is set as the wait is said to begin, and cleared as its end is
@@ -1826,6 +1932,7 @@ impl PrincipalHold {
             cut_in_pass: HashSet::new(),
             shift_owed: HashMap::new(),
             hands_owed: HashMap::new(),
+            shift_tests: HashMap::new(),
             waiting_said: false,
             superseded_said: false,
         }
@@ -1933,6 +2040,58 @@ impl PrincipalHold {
     /// walking no line.
     fn count(&self, doc: &str) -> u64 {
         self.queue.count_on(doc) as u64
+    }
+
+    /// Returns whether line `k` stands moved at the head of `doc`.
+    fn heads_moved(&self, doc: &str, k: u64) -> bool {
+        self.queue.reasons_on(doc).next().is_some_and(|(head, reason)| head == k && reason.cause == cause::MOVED)
+    }
+
+    /// Returns whether `head`, its document's head, owes a shift test.
+    ///
+    /// A moved head owes one where it has no answer of its own — a line held
+    /// past its deadline, a relaunch — or where its answer stands stale.
+    fn shift_test_owed(&self, head: &HeldLine) -> bool {
+        head.reason.cause == cause::MOVED && self.shift_tests.get(&head.doc).is_none_or(|test| test.k != head.k || test.stale)
+    }
+
+    /// Enters what the shift test answered of `doc`'s head, line `k`.
+    ///
+    /// It answers whether it entered it: nothing is entered where that line
+    /// no longer stands moved at the head. What the page was last told
+    /// stands.
+    fn note_tested(&mut self, doc: &str, k: u64, answer: Tested, stale: bool) -> bool {
+        let entered = self.heads_moved(doc, k);
+        if entered {
+            let told = self.told_live(doc, k);
+            self.shift_tests.insert(doc.to_string(), ShiftTest { k, answer, stale, told });
+        }
+        entered
+    }
+
+    /// Returns whether the last `moved` event held the act live on line `k`.
+    fn told_live(&self, doc: &str, k: u64) -> bool {
+        self.shift_tests.get(doc).is_some_and(|test| test.k == k && test.told)
+    }
+
+    /// Returns the `sendable` a `moved` event of `doc` says now.
+    ///
+    /// The answer is told from here: what the page was last told follows it.
+    fn sendable_told(&mut self, doc: &str) -> Option<bool> {
+        let test = self.shift_tests.get_mut(doc)?;
+        test.told = test.answer.live();
+        test.answer.sendable()
+    }
+
+    /// Returns the `sendable` `line`'s row carries, where it carries one.
+    ///
+    /// It carries one where the line stands moved, the test's answer is its
+    /// own — the document's first moved line alone — and the shell knows.
+    fn sendable_of(&self, line: &HeldLine) -> Option<bool> {
+        if line.reason.cause != cause::MOVED {
+            return None;
+        }
+        self.shift_tests.get(&line.doc).filter(|test| test.k == line.k).and_then(|test| test.answer.sendable())
     }
 }
 
@@ -2269,7 +2428,8 @@ impl BoardSlot {
 /// `node_stopped`, `another_window`, `note_health`, `note_health_read`,
 /// `state`, `state_change`) take the board's
 /// reference, as `halted_file`, the native side's read of a principal's
-/// halted file, takes it beside the principal.
+/// halted file, and `note_rows`, the drafts read's hand-over of the rows it
+/// named, take it beside the principal.
 ///
 /// # Panics
 ///
@@ -2291,8 +2451,8 @@ pub struct Holds {
     boards: HashMap<String, BoardSlot>,
     /// The `held` event last emitted per (board, session, document).
     ///
-    /// It is its state, its count, and whether it named the hands not read
-    /// ([`Holds::emit_held`]).
+    /// It is its state, its count, whether it named the hands not read, and
+    /// its `sendable` ([`Holds::emit_held`]).
     ///
     /// The event goes out once per change of a document's state (skep #727):
     /// an emit of what was last emitted for its key is none, so a moved face
@@ -2301,7 +2461,7 @@ pub struct Holds {
     /// lock is taken — the emit is made under the board's lock from `resolve`
     /// and a hold among others, so the memory lives beside the boards' locks,
     /// not under one. A document kept with no line left clears its key.
-    last_emitted: Mutex<HashMap<HeldKey, (HeldState, u64, bool)>>,
+    last_emitted: Mutex<HashMap<HeldKey, HeldSaid>>,
     /// The milliseconds a suite moved the clock forward ([`Holds::now`]).
     ///
     /// It is zero in every shipped build, where nothing moves it.
@@ -3339,7 +3499,7 @@ impl Holds {
         let at_death = |sent: bool, mut answer: Value| {
             self.with_principal(board_reference, principal, |ph| self.remark_line(principal, ph, k, Reason::of(cause::SESSION_DIED, sent)));
             answer["cause"] = Value::from(cause::SESSION_DIED);
-            self.emit_held(session, &doc, self.count_of(board_reference, principal, &doc), HeldState::Holding, Some(cause::SESSION_DIED), &[]);
+            self.emit_held(session, &doc, self.count_of(board_reference, principal, &doc), HeldState::Holding, Some(cause::SESSION_DIED), MovedFace::default());
             OpAnswer::Died(AtDeath::Held(DeathHeld { k, answer }))
         };
         loop {
@@ -3362,7 +3522,8 @@ impl Holds {
                     };
                     self.say(format_args!("line {k} on {doc} was not shifted ({why}); the document is held as moved"));
                     self.mark_moved(board_reference, principal, &doc, Some((k, verdict)));
-                    self.emit_held(session, &doc, self.count_of(board_reference, principal, &doc), HeldState::Moved, None, &hands);
+                    let sendable = self.note_shift_refused(board_reference, principal, &doc, k, &why);
+                    self.emit_held(session, &doc, self.count_of(board_reference, principal, &doc), HeldState::Moved, None, MovedFace { hands: &hands, sendable });
                     return OpAnswer::Answered(Ok(answer));
                 }
             };
@@ -3394,7 +3555,7 @@ impl Holds {
                     });
                     self.note_unanswered(&mut self.lock(board_reference), cut);
                     answer["cause"] = Value::from(cause::UNREACHABLE);
-                    self.emit_held(session, &doc, self.count_of(board_reference, principal, &doc), HeldState::Holding, Some(cause::UNREACHABLE), &[]);
+                    self.emit_held(session, &doc, self.count_of(board_reference, principal, &doc), HeldState::Holding, Some(cause::UNREACHABLE), MovedFace::default());
                     return OpAnswer::Answered(Ok(answer));
                 }
                 Dialed::Held { reason, .. } => {
@@ -3402,7 +3563,7 @@ impl Holds {
                     let said = reason.cause.clone();
                     self.with_principal(board_reference, principal, |ph| self.remark_line(principal, ph, k, Reason { sent: reason.sent || sent, ..reason }));
                     answer["cause"] = Value::from(said.as_str());
-                    self.emit_held(session, &doc, self.count_of(board_reference, principal, &doc), state, Some(&said), &[]);
+                    self.emit_held(session, &doc, self.count_of(board_reference, principal, &doc), state, Some(&said), MovedFace::default());
                     return OpAnswer::Answered(Ok(answer));
                 }
                 Dialed::Reissue { refusal, .. } | Dialed::Faced(refusal) => {
@@ -3470,24 +3631,33 @@ impl Holds {
     /// the answer is [`OpAnswer::Died`] for the caller to end the session
     /// (§3c.4); where the board gives it no answer, the moved face stands on
     /// the verdict, its hands named not read ([`Hand::UNREAD`]), read again at
-    /// the board's answer, and the board marked unanswered (skep #863).
+    /// the board's answer, and the board marked unanswered (skep #863). A
+    /// burst with no anchors held `moved` never shifts, so it is entered
+    /// `sendable` false ([`Tested`]; skep #867).
     pub fn hold(&self, session: &SessionEntry, burst: Burst, reason: Reason, failed: Option<String>, base: u64) -> OpAnswer {
         let (hands, unread) = match self.hands_since_typed_state(session, &burst.doc, None, &reason) {
             HandsRead::Named(hands) => (hands, false),
             HandsRead::Unanswered => (vec![Hand::UNREAD], true),
             HandsRead::Died => return self.hold_at_death(session, burst, failed, base),
         };
+        let unanchored = burst.anchors.is_none();
         let mut board_hold = self.lock(&session.board_reference);
         if unread {
             self.note_unanswered(&mut board_hold, None);
         }
         OpAnswer::Answered(self.enter_line(&mut board_hold, session, burst, reason, failed, base).map(|entered| {
-            if unread {
-                if let Some(ph) = board_hold.principals.get_mut(&session.facts.principal) {
+            let mut face = MovedFace { hands: &hands, sendable: None };
+            if let Some(ph) = board_hold.principals.get_mut(&session.facts.principal) {
+                if unread {
                     ph.hands_owed.insert(entered.doc.clone(), entered.k);
                 }
+                // A burst with no anchors never shifts (skep #867).
+                if unanchored && entered.state == HeldState::Moved {
+                    ph.note_tested(&entered.doc, entered.k, Tested::Sendable(false), false);
+                    face.sendable = ph.sendable_told(&entered.doc);
+                }
             }
-            self.say_entered(session, &entered, &hands);
+            self.say_entered(session, &entered, face);
             entered.answer
         }))
     }
@@ -3513,7 +3683,7 @@ impl Holds {
         let cut = entered.as_ref().ok().filter(|_| sent).map(|entered| CutSend { principal, k: entered.k, doc: entered.doc.clone(), at: self.now(), refusal: refusal.to_string() });
         self.note_unanswered(&mut board_hold, cut);
         OpAnswer::Answered(entered.map(|entered| {
-            self.say_entered(session, &entered, &[]);
+            self.say_entered(session, &entered, MovedFace::default());
             entered.answer
         }))
     }
@@ -3533,7 +3703,7 @@ impl Holds {
         let mut board_hold = self.lock(&session.board_reference);
         OpAnswer::Died(match self.enter_line(&mut board_hold, session, burst, Reason::of(cause::SESSION_DIED, false), failed, base) {
             Ok(entered) => {
-                self.say_entered(session, &entered, &[]);
+                self.say_entered(session, &entered, MovedFace::default());
                 AtDeath::Held(DeathHeld { k: entered.k, answer: entered.answer })
             }
             Err(refusal) => AtDeath::Refused(refusal),
@@ -3552,19 +3722,19 @@ impl Holds {
     /// Returns what [`Holds::enter_line`] returns, nothing held.
     fn hold_line(&self, board_hold: &mut BoardHold, session: &SessionEntry, burst: Burst, reason: Reason, base: u64) -> Result<LineEntered, Refusal> {
         let entered = self.enter_line(board_hold, session, burst, reason, None, base)?;
-        self.say_entered(session, &entered, &[]);
+        self.say_entered(session, &entered, MovedFace::default());
         Ok(entered)
     }
 
     /// Emits the `held` event for a line just entered ([`LineEntered`]).
     ///
-    /// A moved line's names `hands`, the hands whose rows moved its
-    /// document, and no cause, as every moved document's face does; any
-    /// other line's names its cause. `emit_held` touches the bus alone, so
-    /// it is safe under the board's lock.
-    fn say_entered(&self, session: &SessionEntry, entered: &LineEntered, hands: &[Hand]) {
+    /// A moved line's says `face`, the hands whose rows moved its document
+    /// and its `sendable`, and no cause, as every moved document's face does;
+    /// any other line's names its cause. `emit_held` touches the bus alone,
+    /// so it is safe under the board's lock.
+    fn say_entered(&self, session: &SessionEntry, entered: &LineEntered, face: MovedFace<'_>) {
         let cause = (entered.state != HeldState::Moved).then_some(entered.cause.as_str());
-        self.emit_held(session, &entered.doc, entered.held, entered.state, cause, hands);
+        self.emit_held(session, &entered.doc, entered.held, entered.state, cause, face);
     }
 
     /// Enters one line in the principal's queue at the session's board.
@@ -3756,7 +3926,9 @@ impl Holds {
     pub fn lines(&self, session: &SessionEntry) -> Result<Value, Refusal> {
         let mut board_hold = self.lock(&session.board_reference);
         let ph = self.principal_hold(&mut board_hold, session)?;
-        Ok(Value::Array(ph.queue.lines().iter().map(line_json).collect()))
+        // The keyless session's `send` is refused (§4b.1): it reads no mark.
+        let may_write = session.may_write();
+        Ok(Value::Array(ph.queue.lines().iter().map(|line| line_json(line, may_write.then(|| ph.sendable_of(line)).flatten())).collect()))
     }
 
     /// Answers `held.show(session)`, the halt face's own act (§3c.3).
@@ -3930,14 +4102,13 @@ impl Holds {
                 // A pass under way walks the document again at its next turn.
                 ph.stopped_in_pass.remove(&read.doc);
                 ph.cut_in_pass.remove(&read.doc);
-                let (count, state) = standing_on(ph, &read.doc);
-                self.emit_held(session, &read.doc, count, state, None, &[]);
+                self.say_standing(session, ph, &read.doc);
                 return Ok(Resolved::Kept);
             }
             ReadOutcome::NoLanding => {
                 let ph = self.still_as_read(&mut board_hold, session, &read)?;
-                let (count, state) = self.drop_run(principal, ph, k, &read.doc);
-                self.emit_held(session, &read.doc, count, state, None, &[]);
+                self.drop_run(principal, ph, k, &read.doc);
+                self.say_standing(session, ph, &read.doc);
                 return Ok(Resolved::Dropped);
             }
         };
@@ -3971,10 +4142,8 @@ impl Holds {
     fn act_at_once(&self, session: &SessionEntry, ph: &mut PrincipalHold, k: u64, doc: &str, act: ResolveAct) -> Resolved {
         match act {
             ResolveAct::Drop => {
-                let (count, state) = self.drop_run(session.facts.principal, ph, k, doc);
-                // `emit_held` touches the bus alone, so it is safe under the
-                // board's lock.
-                self.emit_held(session, doc, count, state, None, &[]);
+                self.drop_run(session.facts.principal, ph, k, doc);
+                self.say_standing(session, ph, doc);
                 Resolved::Dropped
             }
             ResolveAct::Send => {
@@ -4008,10 +4177,11 @@ impl Holds {
                     }
                 }
                 // A pass under way walks the document again at its next turn,
-                // and its moved face, gone, owes no hands.
+                // and its moved face, gone, owes no hands and no shift test.
                 ph.stopped_in_pass.remove(doc);
                 ph.cut_in_pass.remove(doc);
                 ph.hands_owed.remove(doc);
+                ph.shift_tests.remove(doc);
                 Resolved::HandedBack
             }
         }
@@ -4022,13 +4192,61 @@ impl Holds {
     /// The `"drop"` marks them — a refused run's `behind` lines, a moved
     /// document's later lines — `done … dropped`, as one run, its `done`s one
     /// copy with one sync however many lines it drops ([`Holds::done_lines`];
-    /// skep #861), the file compacting where the queue empties, and answers
-    /// for the `held` event its caller emits under the session that acted
-    /// what stands on the document now ([`standing_on`]).
-    fn drop_run(&self, principal: u64, ph: &mut PrincipalHold, from: u64, doc: &str) -> (u64, HeldState) {
+    /// skep #861), the file compacting where the queue empties.
+    fn drop_run(&self, principal: u64, ph: &mut PrincipalHold, from: u64, doc: &str) {
         let ks: Vec<u64> = ph.queue.reasons_on(doc).map(|(k, _)| k).filter(|&k| k >= from).collect();
         self.done_lines(principal, ph, &ks, Done::Dropped);
-        standing_on(ph, doc)
+    }
+
+    /// Emits the `held` event for what stands on `doc` after a person's act.
+    ///
+    /// It says what stands ([`standing_on`]) under the session that acted,
+    /// a moved face its `sendable`, none under the keyless session, which is
+    /// offered no `send` (§4b.1). `emit_held` touches the bus alone, so it
+    /// is safe under the board's lock.
+    fn say_standing(&self, session: &SessionEntry, ph: &mut PrincipalHold, doc: &str) {
+        let (count, state) = standing_on(ph, doc);
+        let sendable = if state == HeldState::Moved && session.may_write() { ph.sendable_told(doc) } else { None };
+        self.emit_held(session, doc, count, state, None, MovedFace { hands: &[], sendable });
+    }
+
+    /// Marks owed the shift tests of the documents a drafts read named.
+    ///
+    /// `rows` are the documents a read of `principal`'s drafts feed named
+    /// (§3c.5; skep #867): the shift test of each moved document among them
+    /// goes stale, and the walk runs it again at the next probe, one read at
+    /// most per document per pass. It dials nothing, so the feed thread's
+    /// read waits on no board.
+    ///
+    /// # Panics
+    ///
+    /// Panics where `board_reference` names no board the holds were opened
+    /// over (the type's precondition).
+    pub(crate) fn note_rows(&self, board_reference: &str, principal: u64, rows: &RowsNamed) {
+        if rows.is_empty() {
+            return;
+        }
+        self.with_principal(board_reference, principal, |ph| {
+            ph.shift_tests.iter_mut().filter(|(doc, _)| rows.names(doc)).for_each(|(_, test)| test.stale = true);
+        });
+    }
+
+    /// Enters a current shift test of line `k` on `doc`, its document moved.
+    ///
+    /// It is the suites' seam where a feed is driven with no line held.
+    #[cfg(test)]
+    pub(crate) fn seed_shift_test(&self, session: &SessionEntry, doc: &str, k: u64) {
+        self.with_principal(&session.board_reference, session.facts.principal, |ph| {
+            ph.shift_tests.insert(doc.to_string(), ShiftTest { k, answer: Tested::Sendable(false), stale: false, told: false });
+        });
+    }
+
+    /// Returns whether `doc`'s shift test stands stale, where one stands.
+    ///
+    /// It is the suites' seam beside [`Holds::seed_shift_test`].
+    #[cfg(test)]
+    pub(crate) fn shift_test_stale(&self, session: &SessionEntry, doc: &str) -> Option<bool> {
+        self.with_principal(&session.board_reference, session.facts.principal, |ph| ph.shift_tests.get(doc).map(|test| test.stale)).flatten()
     }
 
     /// Notes and answers the `writes.halted` of the board's `/health`.
@@ -4267,7 +4485,8 @@ impl Holds {
     /// Forgets the lines `ks` once settled, and says what the settle did.
     ///
     /// Each line's reissues, the position its moved document was
-    /// acknowledged through, its untried shift and its unread hands go; a
+    /// acknowledged through, its untried shift, its unread hands and its
+    /// shift test go; a
     /// held file the volume would not remove once every line in it was
     /// settled is said on `Talk` — the store appends on to it — and a wait
     /// for the file's copies that begins or ends is said at its edges
@@ -4282,6 +4501,7 @@ impl Holds {
             ph.shift_owed.remove(k);
         }
         ph.hands_owed.retain(|_, judged| !ks.contains(judged));
+        ph.shift_tests.retain(|_, test| !ks.contains(&test.k));
         self.note_waiting(principal, ph);
     }
 
@@ -4339,20 +4559,22 @@ impl Holds {
     ///
     /// It goes out once per change of the document's state.
     ///
-    /// It is `{board, session, doc, held, state, cause?, hands?}`, under the
-    /// session the change was made for — `hands` with the `moved` state
-    /// alone, the hands whose rows moved the document (§3c.5), each once, or
-    /// the one hand `unread` where the board gave their read no answer. An
-    /// emit of the state, count and unread hands last emitted for the same
-    /// board, session and document is none (skep #727): a document's state is
+    /// It is `{board, session, doc, held, state, cause?, hands?, sendable?}`,
+    /// under the session the change was made for — `hands` with the `moved`
+    /// state alone, the hands whose rows moved the document (§3c.5), each
+    /// once, or the one hand `unread` where the board gave their read no
+    /// answer, and `sendable` with that state alone, where the shell knows
+    /// what a `send` would do ([`Tested`]; skep #867). An emit of the state,
+    /// count, unread hands and `sendable` last emitted for the same board,
+    /// session and document is none (skep #727): a document's state is
     /// said as it changes, never again per probe; the first emit for a key is
     /// always made, and a document kept with no line left clears its key
     /// ([`Holds::last_emitted`]). The memory's lock is a leaf, taken here
     /// alone and released before the bus is reached, so the emit is safe
     /// under the board's lock as it is without one.
-    fn emit_held(&self, session: &SessionEntry, doc: &str, held: u64, state: HeldState, cause: Option<&str>, hands: &[Hand]) {
+    fn emit_held(&self, session: &SessionEntry, doc: &str, held: u64, state: HeldState, cause: Option<&str>, face: MovedFace<'_>) {
         let key = (session.board_reference.clone(), session.reference.clone(), doc.to_string());
-        let said = (state, held, hands.contains(&Hand::UNREAD));
+        let said = (state, held, face.hands.contains(&Hand::UNREAD), face.sendable);
         {
             let mut last = self.last_emitted.lock().expect("the held events' memory");
             if last.get(&key) == Some(&said) {
@@ -4368,8 +4590,11 @@ impl Holds {
         if let Some(c) = cause {
             data["cause"] = Value::from(c);
         }
-        if !hands.is_empty() {
-            data["hands"] = Value::Array(hands.iter().map(Hand::json).collect());
+        if !face.hands.is_empty() {
+            data["hands"] = Value::Array(face.hands.iter().map(Hand::json).collect());
+        }
+        if let Some(sendable) = face.sendable {
+            data["sendable"] = Value::from(sendable);
         }
         self.bus.emit(EventName::Held, data);
     }
@@ -4629,14 +4854,19 @@ fn unrenumbered_cause(principal: u64, dir: &HeldDir, refused: &RenumberRefused) 
 /// Returns one held line as `held(session)` lists it (§4b.1).
 ///
 /// It holds the line's members save `id`, `anchors` beside a line whose
-/// burst carried them, `refusal` beside a refused run's or a moved line's.
-fn line_json(l: &HeldLine) -> Value {
+/// burst carried them, `refusal` beside a refused run's or a moved line's,
+/// and `sendable` beside a moved document's first moved line, where the
+/// shell knows what a `send` would do ([`PrincipalHold::sendable_of`]).
+fn line_json(l: &HeldLine, sendable: Option<bool>) -> Value {
     let mut line = json!({"held": l.k, "doc": l.doc, "base": l.base, "frame": l.frame, "cause": l.reason.cause, "sent": l.reason.sent, "time": l.time});
     if let Some(anchors) = &l.anchors {
         line["anchors"] = anchors.json();
     }
     if let Some(r) = &l.reason.refusal {
         line["refusal"] = r.clone();
+    }
+    if let Some(sendable) = sendable {
+        line["sendable"] = Value::from(sendable);
     }
     line
 }

@@ -104,8 +104,9 @@
 //!   board's answering time alone (skep #863); its child `resend` holds the
 //!   walk the feed thread's probe drains in bounded turns: each document read
 //!   once a pass as the walk reaches it, with §3c.5's three outcomes — a
-//!   moved document's hands named — the lines sent in `k` order across the
-//!   documents, the pass ending at the first request the board gives no
+//!   moved document's hands named and its head's shift tested against the
+//!   text as it now stands (skep #867) — the lines sent in `k` order across
+//!   the documents, the pass ending at the first request the board gives no
 //!   answer to.
 //! * `feed` — the feed thread per board, its state the feeder:
 //!   `search::Consumer` polled on the `/events` commits, coalesced into one

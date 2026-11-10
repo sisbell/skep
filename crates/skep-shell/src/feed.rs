@@ -36,7 +36,9 @@
 //! `session-died`, however far this thread trails the commits.
 //! The board's held bursts are watched here too: every `/health` this thread
 //! reads handed to the hold, which judges by it whether the board answers
-//! and reads its `writes.halted` (`Holds::note_health_read`), and the probe
+//! and reads its `writes.halted` (`Holds::note_health_read`), the documents
+//! a principal's drafts rows name handed to it too, a moved document's shift
+//! test made owed by a row naming it (`Holds::note_rows`), and the probe
 //! (`Holds::probe`) on this thread alone — every `PROBE_CADENCE`, measured
 //! from the last cadence's or hand-over's probe whatever woke the thread
 //! between, at the tick that ends an announced silence, and at a hand-over
@@ -134,7 +136,7 @@ use skep_client::Board;
 use skep_search::{GrantKind, Hit, Kind, Mark, MarkKind, Rung, Standing};
 
 use crate::events::{EventBus, EventName};
-use crate::hold::{BoardState, Holds, Turn, PROBE_CADENCE};
+use crate::hold::{BoardState, Holds, RowsNamed, Turn, PROBE_CADENCE};
 use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{Ended, SessionEntry, Sessions, Supplements};
@@ -807,10 +809,19 @@ impl<'b> Feeder<'b> {
     /// a session of the principal that reads on — another tab, or the
     /// restart's re-open — sends none of their rows again, and the narrow the
     /// end makes where no session of the principal stands still drops it.
+    /// The documents the read's rows named go to the hold
+    /// (`Holds::note_rows`; §3c.5, skep #867), which marks the shift test of
+    /// each moved one among them owed; no read is made on this thread.
     fn read_drafts(&mut self, session: &SessionEntry) {
         let principal = session.facts.principal;
         let since = *self.drafts_since.entry(principal).or_insert(session.opened_at);
-        match read_to_head(&session.board, UpdateClass::Drafts(session), since, |row| self.emit_drafts(row, session)) {
+        let mut named = RowsNamed::default();
+        let read = read_to_head(&session.board, UpdateClass::Drafts(session), since, |row| {
+            named.note(row);
+            self.emit_drafts(row, session);
+        });
+        self.holds.note_rows(&self.entry.reference, principal, &named);
+        match read {
             ReadTo::At(at) => {
                 self.drafts_since.insert(principal, at);
             }

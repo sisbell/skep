@@ -16,10 +16,12 @@
 //! window of M answered through the publication family's one core before
 //! anything is read first, the answered list checked against the cap
 //! again, and a part with no answer, or an answer that fits nothing,
-//! refused with nothing sent ([`Refusal::WindowPartsOwed`]). A journal
-//! named: checked after the read-first steps, before the first write. The
-//! shot: the trunk's next member, then the head's daughters, read for a
-//! member whose first `placed` positions already hold the answered list —
+//! refused with nothing sent ([`Refusal::WindowPartsOwed`]). The twins: a
+//! draft side's words a record names as published, read after the answers
+//! and sent by reference (the twin fence, below). A journal named: checked
+//! after the read-first steps, before the first write. The shot: the
+//! trunk's next member, then the head's daughters, read for a member whose
+//! first `placed` positions already hold the answered list —
 //! else one `publish` from the head, its body every copied run's bytes
 //! re-read through the side that holds them and every window signed by
 //! address, the records read again just before the send so a part a record
@@ -34,10 +36,11 @@
 //! naming no daughter signs today's body byte for byte through the one body
 //! builder. Beside the runs and outside the body (wire.md §Arrangement,
 //! `publish`), a shot that renders a draft side carries the draft's own
-//! place of each of its words the shot re-mints and of each part answered
-//! by its counterpart that the draft arranges, the list cut where the draft
-//! cuts it ([`windows::kept_places`]; the link-sets design §5.7 (viii)), so
-//! the one commit re-windows the draft onto the published words. The draft
+//! place of each of its words the shot re-mints or sends by reference and
+//! of each part answered by its counterpart that the draft arranges, the
+//! list cut where the draft cuts it ([`windows::kept_places`]; the link-sets
+//! design §5.7 (viii)), so the one commit re-windows the draft onto the
+//! published words. The draft
 //! keeps only the words it held; those M holds beyond it stay out of it,
 //! while its recorded base moves to the member, as at every shot rendering
 //! a draft. A part answered by its counterpart is the published words by
@@ -68,6 +71,23 @@
 //! composition saw, under the reader's currency, and never the landing's
 //! answer: a composition kept across a take-back, or one made before its
 //! own landing, lands by the board as it stands.
+//!
+//! **The twin fence, before and at the shot** (PUB-3.9; wire.md §The
+//! publish shot and head-float). A draft side's word a correspondence
+//! record names as published is sent by reference to the published words,
+//! with the draft's place beside it, never as new words: [`windows::step`]
+//! reads the records over M's draft-native runs and composes the list by
+//! them (the `windows` module's doc, the twins), so a board's
+//! `already_published` can only come of a publication of those words
+//! landing between that read and the send, nothing committed. The records
+//! are then read again and the list composed afresh
+//! ([`windows::retwin`]): a member found holding it is this landing; else
+//! the shot goes once more, signed again, under its own id. A second
+//! `already_published` is [`Refusal::AlreadyPublished`], naming the draft
+//! and the member the board names. Where the publication that landed moved
+//! the draft onto the published words, the one re-send is refused
+//! `kept_place_moved`, said as any change to the draft since the
+//! composition.
 //!
 //! **The head, before the shot.** The shot is the landing's one public
 //! write, and the one signed: it is preceded by the board's head
@@ -470,7 +490,8 @@ impl<'a> Landing<'a> {
 ///   answers leave;
 /// - at the shot, the window parts' reads' refusals, then
 ///   [`Refusal::WindowPartsOwed`] where a part stands unanswered or an
-///   answer fits nothing, nothing sent;
+///   answer fits nothing, nothing sent, then the draft side's records'
+///   read's refusals;
 /// - the reads' refusals, for a member already holding the answered list or
 ///   for the merger's newest record for the key at a draft landing;
 /// - a journal named that cannot take the record, before the landing's
@@ -495,7 +516,10 @@ impl<'a> Landing<'a> {
 ///   `supersede_refused` as [`Refusal::SupersedeRefused`] — at `head_moved`
 ///   the trunk's head named, the merge to compose again on it, nothing
 ///   committed and nothing re-sent —
-///   `already_published` and `publication_over_budget` verbatim as
+///   `already_published` met once as the draft's records read again, a
+///   member found holding the list they leave answered as the landing, else
+///   the shot sent once more, the board's second as
+///   [`Refusal::AlreadyPublished`], `publication_over_budget` verbatim as
 ///   [`Refusal::Halt`] (never the library's fault), `kept_place_moved` as
 ///   [`Refusal::Halt`] naming the draft that changed since the merge was
 ///   composed, nothing published,
@@ -686,7 +710,7 @@ fn walk(
     let check_journal = || writer.check_journal(landing.journal(), "the merge cannot land");
     match &landing {
         Landing::Shot { draft, answers, .. } => {
-            let shot = windows::step(&writer, merged, answers, draft.as_ref())?;
+            let mut shot = windows::step(&writer, merged, answers, draft.as_ref())?;
             if shot.runs.len() > cap {
                 return Err(Refusal::OverCap { runs: shot.runs.len(), cap });
             }
@@ -700,7 +724,7 @@ fn walk(
                         return Ok(None);
                     }
                     check_journal()?;
-                    let (address, position) = writer.publish(merged, draft.as_ref(), &shot)?;
+                    let (address, position) = writer.publish(merged, draft.as_ref(), &mut shot)?;
                     if !is_trunk_member(&merged.inputs.doc, &address) {
                         return Ok(Some(Landed::AsDaughter { address, position }));
                     }
@@ -715,7 +739,7 @@ fn walk(
                 None => {
                     let stem = Stem::of(&shot.text(merged));
                     let journal = landing.journal();
-                    writer.write_landing_record(merged, landed, &claims, &newest, &stem, journal, &shot.recorded)?
+                    writer.write_landing_record(merged, landed, &claims, &newest, &stem, journal, &shot.kept())?
                 }
             };
             Ok(Some(Landed::Member {
@@ -1027,135 +1051,52 @@ impl Writer<'_> {
 
     /// Sends the shot, answering the member minted and the ack's position.
     ///
-    /// The frame and its body go through the publication's request builder
-    /// with the daughters as its one deposit list — every copied run's values
-    /// re-read through the side that holds them, every window by address, the
-    /// base group the head and its extent as read, `supersede` the `Member`
-    /// sides with the skip read first ([`Writer::daughters`]) — and, where the
-    /// shot renders a draft side, the list cut where that draft cuts it with
-    /// its kept place beside each piece ([`windows::kept_places`]; none for
-    /// a draft named beside the sides, whose image no read made) — then the
-    /// frame with its `attest` and its id, the records read again first
-    /// ([`windows::recheck`]), one re-ask under the same id on a lost
-    /// acknowledgment, and the frame sent once more, signed, under the same
-    /// id where it went unsigned and a claim landed past the head's read
-    /// ([`Writer::attest_after_claim`]).
+    /// The frame is composed and sent by [`Writer::send_shot`]. Where the
+    /// board answers `already_published`, a publication of the draft's words
+    /// having landed since [`windows::step`] read the records (the module's
+    /// doc, the twin fence), nothing is committed: the records are read
+    /// again and `shot` recomposed ([`windows::retwin`]), a member found
+    /// holding the list it now states is answered as the landing, and else
+    /// the shot is sent once more, its new runs signed afresh under its own
+    /// id — a refusal leaves the id unmemoized (wire.md §Correlation and
+    /// idempotency).
     ///
     /// # Errors
     ///
-    /// [`Refusal::OverCap`] over the list the kept places cut, nothing sent;
-    /// then the head's refusal and halts ([`Writer::signing_term`]), read
-    /// before the values, nothing sent, and read again after a claim,
-    /// nothing sent past it; the skip reads' refusals at the daughters;
-    /// [`Refusal::WindowPartsOwed`] naming a part a record names since its
-    /// answer was given; [`Refusal::WindowWithheld`],
+    /// [`Writer::send_shot`]'s; the re-read's, [`windows::retwin`]'s and a
+    /// member's reads' ([`Writer::standing_member`]); a second
+    /// `already_published` as [`Refusal::AlreadyPublished`], naming the draft
+    /// and the member the board names; [`Refusal::WindowWithheld`],
     /// [`Refusal::NeedsSignedSession`] and [`Refusal::NoSuchDocument`] as the
     /// board answers them; `not_owner` naming the draft side as
     /// [`Refusal::UnownedDraft`], `supersede_refused` as
     /// [`Refusal::SupersedeRefused`] with its entry and cause,
-    /// `already_published` and
     /// `publication_over_budget` as the board's refusal verbatim, never this
     /// library's fault, `kept_place_moved` as the board's verdict in the
     /// person's words, naming the draft that changed since the merge was
     /// composed and that nothing was published, and
     /// `attestation_invalid:board_unavailable` faced as the head the board
-    /// owes; the value reads' refusals; the attest's fault; a body past
-    /// [`SHOT_BODY_BUDGET`], a run with no address, a window of width 0, and
-    /// the board's refusal of the frame's substance — the shot's own table,
-    /// a place the records do not name (`stray_place_unrecorded`), or another
-    /// deposit's token, which this frame never carries — as the library's own
-    /// faults; an answer of a shape this client does not know, faced; the
-    /// death signal,
-    /// [`Refusal::SessionEnded`]; a dial fault after the one re-ask; the
-    /// board's other refusals verbatim.
-    fn publish(&self, merged: &Merged, draft: Option<&Address>, shot: &ShotParts) -> Result<(Address, u64), Refusal> {
+    /// owes; the board's refusal of the frame's substance — the shot's own
+    /// table, a place the records do not name (`stray_place_unrecorded`), or
+    /// another deposit's token, which this frame never carries — as the
+    /// library's own faults; an answer of a shape this client does not know,
+    /// faced; the board's other refusals verbatim.
+    fn publish(&self, merged: &Merged, draft: Option<&Address>, shot: &mut ShotParts) -> Result<(Address, u64), Refusal> {
         let doc = &merged.inputs.doc;
-        let head = &merged.inputs.head;
         let draft_side = merged.inputs.sides.iter().find_map(|s| match s {
             Side::Draft { at, .. } => Some(at.clone()),
             _ => None,
         });
         let fresh = merged.families.contains(&Family::DraftNative);
-        let draft = draft.cloned().or(if fresh { draft_side.clone() } else { None });
-        // The list as sent: cut at the kept places of the draft side the shot
-        // renders, its image the one read at the composition's position.
-        let image = draft
-            .as_ref()
-            .filter(|d| Some(*d) == draft_side.as_ref())
-            .and_then(|d| merged.maps.iter().find(|m| m.doc == *d))
-            .map(|m| m.runs.as_slice());
-        let sent = windows::kept_places(&shot.runs, image);
-        if sent.len() > merged.cap {
-            return Err(Refusal::OverCap { runs: sent.len(), cap: merged.cap });
-        }
-        let term = self.signing_term()?;
-        let supersede = self.daughters(merged)?;
-        let mut runs = Vec::with_capacity(sent.len());
-        let mut pieces = Vec::with_capacity(sent.len());
-        let mut places = Vec::with_capacity(sent.len());
-        for (placed, place) in &sent {
-            places.push(*place);
-            let run = &placed.run;
-            let i_start = run
-                .address_at(0)
-                .ok_or_else(|| own_fault_face("a run of M names no address", format!("{run:?}")))?;
-            runs.push(publication::Run::new(run.origin.clone(), run.i_start, run.width));
-            match placed.family {
-                Family::Window => {
-                    if run.width == 0 {
-                        return Err(own_fault_face("a window of width 0", format!("{run:?}")));
-                    }
-                    pieces.push(Piece::Window { start: i_start, width: run.width });
-                }
-                Family::Own | Family::DraftNative => {
-                    let items = values_for(
-                        &self.reader,
-                        &merged.maps,
-                        placed.side.map(|s| s.0 as usize),
-                        &placed.through,
-                    )?;
-                    pieces.push(Piece::Values(items));
-                }
+        let draft = draft.cloned().or(if fresh { draft_side } else { None });
+        let mut v = self.send_shot(merged, draft.as_ref(), shot)?;
+        if Rejection::of(&v).is_some_and(|r| r.key() == "already_published") {
+            windows::retwin(self, merged, shot)?;
+            match self.standing_member(merged, shot)? {
+                Standing::Trunk(member, at) | Standing::Daughter(member, at) => return Ok((member, at)),
+                Standing::Absent => {}
             }
-        }
-        // THE REQUEST BUILDER, with the daughters alone: the merge's delta
-        // from a publication is no other deposit and no `also_places`.
-        let n = runs.len();
-        let request = publication::Request {
-            doc: Some(doc.clone()),
-            mint: None,
-            claim: false,
-            base: Some((head.clone(), merged.head_extent)),
-            draft: draft.clone(),
-            also: Vec::new(),
-            runs,
-            places,
-            also_places: Vec::new(),
-            stray_records: vec![0; n],
-            pieces,
-            entries: Vec::new(),
-            retract: Vec::new(),
-            originals: Vec::new(),
-            read_with: Vec::new(),
-            supersede,
-            unspellable: Vec::new(),
-            id: Stem::of(&shot.text(merged)).id("publish"),
-            count: publication::Count::default(),
-            price: publication::Price::default(),
-            as_of: self.reader.as_of(),
-        };
-        let body = request.body();
-        if body.as_bytes().len() > SHOT_BODY_BUDGET {
-            return Err(own_fault_face("the shot's body cannot be composed", format!("the merged list's values pass what one shot's body may carry ({SHOT_BODY_BUDGET} bytes)")));
-        }
-        // The records read again just before the send: a part a record names
-        // since its answer was given is refused again, nothing published.
-        windows::recheck(self, merged, shot, draft.as_ref())?;
-        let mut v = self.shoot(&request.frame(self.attest(term, doc, &body)?))?;
-        // A claim landed past the head's read: the shot once more, signed,
-        // under its own id (the module's doc).
-        if let Some(attest) = self.attest_after_claim(term, &v, doc, &body)? {
-            v = self.shoot(&request.frame(Some(attest)))?;
+            v = self.send_shot(merged, draft.as_ref(), shot)?;
         }
         if let (Some(addr), Some(at)) = (acked_addr(&v), acked_at(&v)) {
             let member = parse_address(addr).ok_or_else(|| shape_face("publish", &v))?;
@@ -1167,9 +1108,7 @@ impl Writer<'_> {
             "withheld" => Refusal::WindowWithheld(site.unwrap_or_else(|| doc.clone())),
             "signed_session_required" => Refusal::NeedsSignedSession,
             "doc_not_registered" => Refusal::NoSuchDocument(doc.clone()),
-            // The publication's own refusals of the shot: the unowned draft
-            // side named, the twin fence's member and the budget's detail
-            // verbatim.
+            // The draft side another account's, named.
             "not_owner" if site.is_some() && site == draft => match site.clone() {
                 Some(draft) => Refusal::UnownedDraft { draft },
                 None => own_fault("the shot", &r),
@@ -1183,7 +1122,14 @@ impl Writer<'_> {
                 }
                 None => Refusal::Halt(r.refused(&v)),
             },
-            "already_published" | "publication_over_budget" => Refusal::Halt(r.refused(&v)),
+            // The twin fence met again past the one re-read, or naming no
+            // draft and no member: a second race, typed, or an answer this
+            // client can only say verbatim.
+            "already_published" => match (draft.clone(), site.clone()) {
+                (Some(draft), Some(member)) => Refusal::AlreadyPublished { draft, member },
+                _ => Refusal::Halt(r.refused(&v)),
+            },
+            "publication_over_budget" => Refusal::Halt(r.refused(&v)),
             // The draft changed past the position its kept places were read
             // at: the board's verdict, nothing committed, never this client's
             // fault, in the person's words.
@@ -1227,6 +1173,116 @@ impl Writer<'_> {
             k if k.starts_with("attestation_") => own_fault("the shot's attest", &r),
             _ => Refusal::Halt(r.refused(&v)),
         })
+    }
+
+    /// Composes the shot and sends it, answering the board's document.
+    ///
+    /// The frame and its body go through the publication's request builder
+    /// with the daughters as its one deposit list — every copied run's values
+    /// re-read through the side that holds them, every window by address, the
+    /// base group the head and its extent as read, `supersede` the `Member`
+    /// sides with the skip read first ([`Writer::daughters`]) — and, where the
+    /// shot renders a draft side, the list cut where that draft cuts it with
+    /// its kept place beside each piece ([`windows::kept_places`]; none for
+    /// a draft named beside the sides, whose image no read made) — then the
+    /// frame with its `attest` and its id, the records read again first
+    /// ([`windows::recheck`]), one re-ask under the same id on a lost
+    /// acknowledgment, and the frame sent once more, signed, under the same
+    /// id where it went unsigned and a claim landed past the head's read
+    /// ([`Writer::attest_after_claim`]).
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::OverCap`] over the list the kept places cut, nothing sent;
+    /// then the head's refusal and halts ([`Writer::signing_term`]), read
+    /// before the values, nothing sent, and read again after a claim,
+    /// nothing sent past it; the skip reads' refusals at the daughters;
+    /// [`Refusal::WindowPartsOwed`] naming a part a record names since its
+    /// answer was given; the value reads' refusals; the attest's fault; a
+    /// body past [`SHOT_BODY_BUDGET`], a run with no address and a window of
+    /// width 0, as the library's own faults; the death signal,
+    /// [`Refusal::SessionEnded`]; a dial fault after the one re-ask.
+    fn send_shot(&self, merged: &Merged, draft: Option<&Address>, shot: &ShotParts) -> Result<Value, Refusal> {
+        let doc = &merged.inputs.doc;
+        let head = &merged.inputs.head;
+        // The list as sent: cut at the kept places of the draft side the shot
+        // renders, its image the one read at the composition's position.
+        let rendered = draft.filter(|d| merged.inputs.sides.iter().any(|s| matches!(s, Side::Draft { at, .. } if at == *d)));
+        let image = rendered.and_then(|d| merged.maps.iter().find(|m| m.doc == *d)).map(|m| m.runs.as_slice());
+        let sent = windows::kept_places(&shot.runs, image);
+        if sent.len() > merged.cap {
+            return Err(Refusal::OverCap { runs: sent.len(), cap: merged.cap });
+        }
+        let term = self.signing_term()?;
+        let supersede = self.daughters(merged)?;
+        let mut runs = Vec::with_capacity(sent.len());
+        let mut pieces = Vec::with_capacity(sent.len());
+        let mut places = Vec::with_capacity(sent.len());
+        for (placed, place) in &sent {
+            places.push(*place);
+            let run = &placed.run;
+            let i_start = run
+                .address_at(0)
+                .ok_or_else(|| own_fault_face("a run of M names no address", format!("{run:?}")))?;
+            runs.push(publication::Run::new(run.origin.clone(), run.i_start, run.width));
+            match placed.family {
+                Family::Window => {
+                    if run.width == 0 {
+                        return Err(own_fault_face("a window of width 0", format!("{run:?}")));
+                    }
+                    pieces.push(Piece::Window { start: i_start, width: run.width });
+                }
+                Family::Own | Family::DraftNative => {
+                    let items = values_for(
+                        &self.reader,
+                        &merged.maps,
+                        placed.side.map(|s| s.0 as usize),
+                        &placed.through,
+                    )?;
+                    pieces.push(Piece::Values(items));
+                }
+            }
+        }
+        // THE REQUEST BUILDER, with the daughters alone: the merge's delta
+        // from a publication is no other deposit and no `also_places`.
+        let n = runs.len();
+        let request = publication::Request {
+            doc: Some(doc.clone()),
+            mint: None,
+            claim: false,
+            base: Some((head.clone(), merged.head_extent)),
+            draft: draft.cloned(),
+            also: Vec::new(),
+            runs,
+            places,
+            also_places: Vec::new(),
+            stray_records: vec![0; n],
+            pieces,
+            entries: Vec::new(),
+            retract: Vec::new(),
+            originals: Vec::new(),
+            read_with: Vec::new(),
+            supersede,
+            unspellable: Vec::new(),
+            id: Stem::of(&shot.text(merged)).id("publish"),
+            count: publication::Count::default(),
+            price: publication::Price::default(),
+            as_of: self.reader.as_of(),
+        };
+        let body = request.body();
+        if body.as_bytes().len() > SHOT_BODY_BUDGET {
+            return Err(own_fault_face("the shot's body cannot be composed", format!("the merged list's values pass what one shot's body may carry ({SHOT_BODY_BUDGET} bytes)")));
+        }
+        // The records read again just before the send: a part a record names
+        // since its answer was given is refused again, nothing published.
+        windows::recheck(self, merged, shot, draft)?;
+        let mut v = self.shoot(&request.frame(self.attest(term, doc, &body)?))?;
+        // A claim landed past the head's read: the shot once more, signed,
+        // under its own id (the module's doc).
+        if let Some(attest) = self.attest_after_claim(term, &v, doc, &body)? {
+            v = self.shoot(&request.frame(Some(attest)))?;
+        }
+        Ok(v)
     }
 
     /// Sends the shot's frame, answering the board's document.

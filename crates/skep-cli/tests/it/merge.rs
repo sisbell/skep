@@ -130,6 +130,9 @@ enum Staged<'a> {
     /// `width` positions of the document `origin` from ordinal `from`, kept
     /// by reference as a window, signed by address.
     Window { origin: &'a Address, from: u64, width: u64 },
+    /// `text` of the draft `draft`, from its ordinal `from`, named by its
+    /// address: the shot re-mints the draft's own words and names it.
+    Draft { draft: &'a Address, from: u64, text: &'a str },
 }
 
 /// A claimed PERMISSIVE board (bare sessions mint the staging drafts), its
@@ -340,6 +343,12 @@ impl Rig {
                     let start = format!("{origin}.0.1.{from}");
                     runs.push(frames::shot_run(&origin.to_string(), &start, *width));
                     windows.push((values.len(), addr(&start), *width));
+                }
+                Staged::Draft { draft: named, from, text } => {
+                    runs.push(frames::shot_run(&named.to_string(), &format!("{named}.0.1.{from}"), text.len() as u64));
+                    values.extend_from_slice(text.as_bytes());
+                    assert!(draft.is_none(), "one staging draft a shot");
+                    draft = Some((*named).clone());
                 }
                 Staged::Fresh { text } => {
                     let d = self.draft();
@@ -913,6 +922,37 @@ fn a_draft_published_by_a_merge_reads_as_the_members_words_and_the_same_publish_
     assert_eq!(v["landed"]["member"].as_str(), Some(member.as_str()), "the same member, read first");
     assert_eq!(position(), before, "nothing landed twice");
     assert_eq!(rig.publishes_under(&token, &d), publishes, "no second publish");
+    session.close().expect("close");
+}
+
+/// Checks a draft's already-published words merge by reference (skep #939).
+///
+/// `--draft ⟨S⟩ --publish` over a draft whose words a shot left standing: the
+/// words a record names as published go by reference, so the merge lands,
+/// exit 0, its version the published words, and the draft reads them by
+/// identity where it read its own.
+#[test]
+fn a_draft_whose_words_are_already_published_merges_them_by_reference() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let kind = rig.draft().to_string();
+    let (d, _base, head, _daughter) = rig.race(&session);
+    let s = rig.stage(&head);
+    let as_of = rig.board.health().unwrap().log_position();
+    Rig::acked(rig.board.op(Some(&rig.bare), &json!({"op": "insert", "doc": s.to_string(), "at": {"subspace": "1", "ordinal": "16"}, "values": ["!!!"], "as_of": as_of})));
+    let raw = rig.shot(&session, &d, Some((&head, 15)), &[Staged::Own { from: 1, text: "the " }, Staged::Own { from: 12, text: "big " }, Staged::Own { from: 5, text: "cat sat" }, Staged::Draft { draft: &s, from: 1, text: "!!!" }]);
+    assert_eq!(raw.to_string(), format!("{d}.3"));
+    assert_eq!(rig.image(&token, &s, 18)[3], (format!("{s}.0.1.1"), "3".into()), "the premise: the draft still shows the published words as its own");
+    let (d_s, s_s) = (d.to_string(), s.to_string());
+    let r = rig.merge(&["--doc", &d_s, "--draft", &s_s, "--kind", &kind, "--publish"]);
+    let v = report(&r);
+    let member = v["landed"]["member"].as_str().expect("the member").to_string();
+    assert_eq!(member, format!("{d}.4"), "landed, nothing refused");
+    let published = rig.image(&token, &raw, 18);
+    assert_eq!(rig.image(&token, &addr(&member), 18), published, "the version holds the published words by reference");
+    assert_eq!(rig.image(&token, &s, 18), published, "the draft reads them by identity");
     session.close().expect("close");
 }
 

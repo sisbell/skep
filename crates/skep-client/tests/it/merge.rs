@@ -26,6 +26,10 @@
 //! written; a run of M the draft holds at two places sent as two, the
 //! draft re-windowed at both; and a draft changed after the composition
 //! refused `kept_place_moved` whole, the merge composed again landing.
+//! The twins (skep #939): a draft whose words a shot left standing, its
+//! words sent by reference and the draft healed, verifying Equal and landed
+//! again with nothing written; and words published into another edition,
+//! the merge's record keeping them, found by `resume` from a new session.
 //! And ONE DRAFT LANDING (the landing lane's brief B; skep #762, #764): the
 //! merge composed at one position, the draft edited after it and the
 //! landing refused `arrangement_moved` whole; composed again and landed in
@@ -199,6 +203,9 @@ pub(crate) enum Staged<'a> {
     /// `width` positions of the draft `origin` from ordinal `from`, kept by
     /// reference as a window — signed by address.
     Window { origin: &'a Address, from: u64, width: u64 },
+    /// `text` of the draft `draft`, from its ordinal `from`, named by its
+    /// address: the shot re-mints the draft's own words and names it.
+    Draft { draft: &'a Address, from: u64, text: &'a str },
 }
 
 /// THE SHOT by hand, as the daemon's own suite composes it: `runs` in V-order,
@@ -243,6 +250,12 @@ pub(crate) fn shot(
                 let start = format!("{origin}.0.1.{from}");
                 runs.push(frames::shot_run(&origin.to_string(), &start, *width));
                 windows.push((values.len(), addr(&start), *width));
+            }
+            Staged::Draft { draft: named, from, text } => {
+                runs.push(frames::shot_run(&named.to_string(), &format!("{named}.0.1.{from}"), text.len() as u64));
+                values.extend_from_slice(text.as_bytes());
+                assert!(draft.is_none(), "one staging draft a shot");
+                draft = Some((*named).clone());
             }
         }
     }
@@ -1038,6 +1051,96 @@ fn a_run_the_draft_holds_at_two_places_lands_and_re_windows_the_draft_at_both() 
         ],
         "the draft re-windowed at both places, its words where they stood"
     );
+}
+
+/// Checks a draft whose words a shot left standing merges them by reference.
+///
+/// `S` is staged from the head, "!!!" typed, and a shot of its words names it
+/// with no place — the state a shot that re-windowed nothing left, its words
+/// `S` still shows as its own though a record names them published (skep
+/// #939). The merge composes them as `S`'s fresh text; the shot sends them by
+/// reference and the board re-windows `S`, nothing refused. Member and draft
+/// hold the published words by identity, `verify` reads Equal, and the same
+/// `land` writes nothing.
+#[test]
+fn a_draft_whose_words_a_shot_left_standing_merges_them_by_reference() {
+    let rig = Rig::new();
+    let session = rig.session();
+    let token = session.token().clone();
+    let (d, _base, head) = rig.race(&session);
+    let draft = rig.staged(&head, 16, "!!!");
+    let raw = shot(&rig.board, &session, &rig.device, &rig.bare, &d, Some((&head, 15)), &[Staged::Own { from: 1, text: "the " }, Staged::Own { from: 12, text: "big " }, Staged::Own { from: 5, text: "cat sat" }, Staged::Draft { draft: &draft, from: 1, text: "!!!" }]);
+    assert_eq!(raw.to_string(), format!("{d}.3"));
+    assert_eq!(image(&rig.board, &token, &draft, 18).last().cloned(), Some((format!("{draft}.0.1.1"), 3)), "the premise: S still shows the published words as its own");
+    let kind = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    let inputs = Inputs { doc: d.clone(), head: raw.clone(), base: None, sides: vec![Side::Draft { at: draft.clone(), position: None }], options: Default::default(), kind: kind.clone() };
+    let merged = compose(&rig.board, Some(&token), &inputs).expect("composed");
+    assert_eq!(m_of(&merged).last(), Some(&rd(&draft, 1, 3)), "the premise: M carries them as S's fresh text");
+    let published = image(&rig.board, &token, &raw, 18);
+    let landing = || Landing::Shot { merger: merger(&rig, &session), draft: None, answers: Answers::default(), journal: None };
+    let landed = land(&rig.board, &merged, landing()).expect("landed");
+    let Landed::Member { address: member, .. } = &landed else { panic!("{landed:?}") };
+    assert_eq!(member.to_string(), format!("{d}.4"));
+    assert_eq!(image(&rig.board, &token, member, 18), published, "the member holds the published words by reference");
+    assert_eq!(image(&rig.board, &token, &draft, 18), published, "the draft healed: the published words by identity");
+    let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a record");
+    assert_eq!(verify(&rig.board, Some(&token), &record), Ok(Verdict::Equal), "the member as sent");
+    let at = rig.position();
+    assert_eq!(land(&rig.board, &merged, landing()).expect("landed again"), landed, "the same landing");
+    assert_eq!(rig.position(), at, "nothing written twice");
+    session.close().expect("closed");
+}
+
+/// Checks words published into another edition land by address and are found.
+///
+/// `S`'s words are shot into another edition `E`, named `also` and given no
+/// place, so `S` still holds them and its record's `to` lies in `E` (skep
+/// #939). The merge sends them by address onto `E`'s words, the draft's place
+/// beside them, and the commit re-windows `S`. The record keeps the answer,
+/// so `verify` reads Equal, and `resume` from a new session — which holds no
+/// memo and composes the list over the records it reads — finds the member:
+/// the twins are the step's, at every call.
+#[test]
+fn words_published_into_another_edition_land_by_reference_and_are_found_from_a_new_session() {
+    let rig = Rig::new();
+    let session = rig.session();
+    let token = session.token().clone();
+    let (d, _base, head) = rig.race(&session);
+    let draft = rig.staged(&head, 16, "!!!");
+    let e = published_document(&rig.board, &session, &rig.device);
+    let renderer = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    insert_text(&rig.board, &rig.bare, &renderer.to_string(), 1, "abc");
+    let (e_s, r_s, s_s) = (e.to_string(), renderer.to_string(), draft.to_string());
+    let runs = [frames::shot_run(&r_s, &format!("{renderer}.0.1.1"), 3), frames::shot_run(&s_s, &format!("{draft}.0.1.1"), 3)];
+    let places = [frames::place(1), Value::Null];
+    let also = [s_s.as_str()];
+    let values: Vec<[u8; 1]> = b"abc!!!".iter().map(|b| [*b]).collect();
+    let body = entry_body_publish(values.iter().map(|b| ShotSegmentPiece::Value(b)), None);
+    let mut frame = frames::publication(&frames::PublishFrame { doc: Some(&e_s), draft: Some(&r_s), also: &also, runs: &runs, places: &places, ..frames::PublishFrame::default() });
+    frame["attest"] = attest(&rig.board, &rig.device, &addr(ACCOUNT), &e, &body);
+    let e1 = addr(acked_addr(&acked(session.op(&frame))).expect("the member"));
+    assert_eq!(e1.to_string(), format!("{e}.1"));
+    assert_eq!(image(&rig.board, &token, &draft, 18).last().cloned(), Some((format!("{draft}.0.1.1"), 3)), "the premise: S left as it stood");
+    let kind = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    let inputs = Inputs { doc: d.clone(), head: head.clone(), base: None, sides: vec![Side::Draft { at: draft.clone(), position: None }], options: Default::default(), kind: kind.clone() };
+    let merged = compose(&rig.board, Some(&token), &inputs).expect("composed");
+    let landed = land(&rig.board, &merged, Landing::Shot { merger: merger(&rig, &session), draft: None, answers: Answers::default(), journal: None }).expect("landed");
+    let Landed::Member { address: member, .. } = &landed else { panic!("{landed:?}") };
+    assert_eq!(member.to_string(), format!("{d}.3"));
+    let on_e = (format!("{e}.0.1.4"), 3);
+    assert_eq!(image(&rig.board, &token, member, 18).last(), Some(&on_e), "the member windows E's words");
+    assert_eq!(image(&rig.board, &token, &draft, 18).last(), Some(&on_e), "the draft re-windowed onto them");
+    let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a record");
+    assert_eq!(record.answers.len(), 1, "the words kept: {record:?}");
+    assert_eq!(verify(&rig.board, Some(&token), &record), Ok(Verdict::Equal), "the member as sent");
+    session.close().expect("closed");
+
+    let fresh = rig.session();
+    let found = resume(&rig.board, &merged, Landing::Shot { merger: merger(&rig, &fresh), draft: None, answers: Answers::default(), journal: None }).expect("resumed");
+    let Some(Landed::Member { address, record: link, .. }) = found else { panic!("{found:?}") };
+    assert_eq!(&address, member, "the member found over the records it read");
+    assert_eq!(Some(link), record.link.clone(), "the standing record, nothing written again");
+    fresh.close().expect("closed");
 }
 
 /// THE DRAFT CHANGED AFTER THE COMPOSITION: a word typed at the draft's start

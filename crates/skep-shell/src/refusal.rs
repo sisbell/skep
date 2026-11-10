@@ -388,7 +388,9 @@ impl Name {
     /// `needs_signed_session`, `fork_base_named {fork, base}`,
     /// `supersede_refused {index, detail, head}`, `published_journal
     /// {journal}` (a published document named as the merge journal, which
-    /// keeps a record only private; nothing sent).
+    /// keeps a record only private; nothing sent), `already_published
+    /// {draft, member}` (the shot sent again met the twin fence again;
+    /// nothing published).
     pub const MERGE_REFUSED: Name = Name("merge_refused");
 
     // ── The halts' armed names: `Refusal::named`, `Refusal::of_named` ────

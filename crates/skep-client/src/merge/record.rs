@@ -41,10 +41,12 @@
 //! `rules` the rule set's, then `doc`, `base`, `sides`, `landed`, `claims`,
 //! `runs`, `retries`, `gaps`, `values`, `replaces` and `by` (§4, "Under
 //! D13"), with `answers` beside them only where a window part was answered
-//! (§1.5, THE SHOT's WINDOW PARTS): each is that part's words and its
-//! answer, the published words it was windowed from where it was — so the
-//! list `verify` recomputes is M as those answers left it, one function
-//! with the shot's own (`merge::windows`). The record is encoded as the one
+//! (§1.5, THE SHOT's WINDOW PARTS) or the shot sent a draft side's words by
+//! reference because a record named them as published (the twins, the
+//! `windows` module's doc): each is those words and their answer, the
+//! published words they were windowed from where they were — so the list
+//! `verify` recomputes is M as those answers left it, one function with the
+//! shot's own (`merge::windows`). The record is encoded as the one
 //! JSON object `serde_json` renders; a reader that does not know a member
 //! treats it as absent.
 
@@ -294,10 +296,11 @@ impl RecordedAnswer {
     }
 }
 
-/// One window part's answer as the record keeps it (§4, `answers`).
+/// One answer as the record keeps it (§4, `answers`).
 ///
-/// It is identified by its words, never by a position in a draft, so the
-/// answer can be applied to the merged list a verifier recomputes.
+/// It is a window part's, or a draft side's words the shot sent by
+/// reference, identified by its words, never by a position in a draft, so
+/// the answer can be applied to the merged list a verifier recomputes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PartAnswer {
     /// The part's words, on its origin.
@@ -373,8 +376,12 @@ pub struct Record {
     pub gaps: Vec<Gap>,
     /// The value rule's switches and where it fired.
     pub values: ValueLog,
-    /// The merger's answers at the window parts of the shot, where any was
-    /// given (§1.5, THE SHOT's WINDOW PARTS).
+    /// The answers the shot's list was composed under, where any stands.
+    ///
+    /// They are the merger's at the window parts (§1.5, THE SHOT's WINDOW
+    /// PARTS) and a draft side's words the shot sent by reference because a
+    /// record names them as published, each windowed to the record's `to`
+    /// (the `windows` module's doc, the twins).
     pub answers: Vec<PartAnswer>,
     /// The record this one supersedes under the key.
     ///

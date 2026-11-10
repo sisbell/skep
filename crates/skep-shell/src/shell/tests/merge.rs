@@ -299,6 +299,24 @@ fn a_published_journal_crosses_as_typed_data_naming_it() {
     shell.shutdown();
 }
 
+/// Checks that the twin fence met again past the shot's one re-read crosses
+/// as typed data naming the draft and the member.
+///
+/// The library's `AlreadyPublished` is `merge_refused` with the arm
+/// `already_published`, so a page words it from data, and the session stands.
+#[test]
+fn already_published_crosses_as_typed_data_naming_the_draft_and_the_member() {
+    let dir = TempDir::new().unwrap();
+    let (shell, _) = open_shell(&super::door::nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let standing = register(&shell, "8e", signed_facts(2));
+    let parse = |text: &str| skep_client::address::parse_address(text).expect("an address");
+    let crossed = shell.merge_refusal(&shell.sessions.get(&standing).unwrap(), Library::AlreadyPublished { draft: parse("1.0.1.0.2"), member: parse("1.0.1.0.3.1") });
+    let v = crossed.to_value();
+    assert_eq!((crossed.name(), v["arm"].as_str(), v["draft"].as_str(), v["member"].as_str()), ("merge_refused", Some("already_published"), Some("1.0.1.0.2"), Some("1.0.1.0.3.1")), "{v}");
+    assert_eq!(shell.call("merge.land", &json!({"session": standing})).unwrap_err().name(), "no_merge", "the session stands");
+    shell.shutdown();
+}
+
 /// Checks a daughter composed and landed, and taken back, against the
 /// daemon.
 ///

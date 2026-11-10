@@ -621,6 +621,21 @@ pub enum Refusal {
         /// The cause, the rejection's `detail`.
         cause: SupersedeCause,
     },
+    /// The shot's one re-send refused `already_published` (the twin fence).
+    ///
+    /// The shot sends a draft's words a correspondence record names as
+    /// published by reference, so the fence (PUB-3.9; wire.md §The publish
+    /// shot and head-float) is met only where a publication lands them after
+    /// the records' read: met once, the records are read again and the shot
+    /// sent once more; met again, it is this refusal, nothing committed,
+    /// never the library's fault, the merge to run again (the merge record's
+    /// §1.5).
+    AlreadyPublished {
+        /// The draft whose words the board found already published.
+        draft: Address,
+        /// The member the board names them published into (`site.addr`).
+        member: Address,
+    },
     /// A window part of the shot with no answer, or an answer that fits
     /// nothing: nothing is sent (the merge record's §1.5, THE SHOT's WINDOW
     /// PARTS; §7).
@@ -656,11 +671,10 @@ pub enum Refusal {
     /// shape it does not know; the board's other refusals ride here verbatim,
     /// every transport halt, and the death signal met by a read that
     /// presented no token, a fault of the board or the transport, never a
-    /// session's end. Two of the publication's own refusals of the shot ride
-    /// here VERBATIM too, never as the library's fault — `already_published`
-    /// naming the member the draft's words were published into,
-    /// `publication_over_budget` with the daemon's detail — each a
-    /// `Halt::Refused` whose `body` carries the `site`.
+    /// session's end. One of the publication's own refusals of the shot rides
+    /// here VERBATIM too, never as the library's fault:
+    /// `publication_over_budget` with the daemon's detail, a `Halt::Refused`
+    /// whose `body` carries the `site`.
     Halt(Halt),
 }
 
@@ -772,6 +786,7 @@ impl fmt::Display for Refusal {
                 SupersedeCause::Base => write!(f, "the board refused the supersession claim at entry {index} (supersede_refused, base): the side is the member the shot appends to — nothing was published"),
                 SupersedeCause::Duplicate => write!(f, "the board refused the supersession claim at entry {index} (supersede_refused, duplicate): the side is named twice — nothing was published"),
             },
+            Refusal::AlreadyPublished { draft, member } => write!(f, "the words of {draft} were published as {member} while this merge was being sent (already_published) — nothing was published; run the merge again, which sends words already published by reference"),
             Refusal::WindowPartsOwed { parts, misfits, .. } => {
                 write!(f, "nothing was published: {} window part{} of this merge need{} an answer", parts.len(), if parts.len() == 1 { "" } else { "s" }, if parts.len() == 1 { "s" } else { "" })?;
                 if !misfits.is_empty() {

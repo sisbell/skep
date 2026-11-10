@@ -1437,6 +1437,9 @@ mod scripted {
     }
 
     /// The board as the test writes it.
+    /// What lands in the world as a refused write is answered.
+    type OnRefused = Box<dyn FnOnce(&mut World) + Send>;
+
     #[derive(Default)]
     struct World {
         position: u64,
@@ -1515,6 +1518,12 @@ mod scripted {
         /// The next write carrying an `attest` is answered this document,
         /// applied not.
         refuse_signed: Option<Value>,
+        /// What lands as that refusal is answered: the board's state moved
+        /// under the refused write.
+        on_refused: Option<OnRefused>,
+        /// The next write of this op is lost at the transport before it is
+        /// applied: nothing committed and no acknowledgment.
+        lose_before: Option<&'static str>,
         /// The merger's enrolled key.
         key: Option<PublicKey>,
         /// The session dies before the N-th frame the dialer serves is
@@ -2028,6 +2037,10 @@ mod scripted {
         /// acknowledgment kept; the next `drop_acks` acknowledgments lost at
         /// the transport.
         fn write(&mut self, frame: &Value) -> Result<Response, DialError> {
+            if self.lose_before.is_some_and(|op| frame["op"] == op) {
+                self.lose_before = None;
+                return Err(DialError::Io("the write was lost".into()));
+            }
             let id = frame["id"].as_str().map(str::to_string);
             let ack = match id.as_ref().and_then(|id| self.memo.get(id)).cloned() {
                 Some(ack) => ack,
@@ -2048,6 +2061,9 @@ mod scripted {
                     }
                     if frame.get("attest").is_some() {
                         if let Some(rejection) = self.refuse_signed.take() {
+                            if let Some(then) = self.on_refused.take() {
+                                then(self);
+                            }
                             return Ok(reply(200, rejection));
                         }
                     }
@@ -5028,10 +5044,11 @@ mod scripted {
         );
         // The publication family's arms: `not_owner` naming the DRAFT side is
         // the unowned draft, named — never the library's own fault — while
-        // naming `doc` is the own fault; the twin fence's member and the
-        // budget's detail ride verbatim; `kept_place_moved`, the draft changed
-        // since the merge was composed, the board's verdict and no fault of
-        // the library's; a place the records do not name, which only the
+        // naming `doc` is the own fault; the twin fence met again past the
+        // one re-read is typed, naming the draft and the member; the budget's
+        // detail rides verbatim; `kept_place_moved`, the draft changed since
+        // the merge was composed, the board's verdict and no fault of the
+        // library's; a place the records do not name, which only the
         // library's own arithmetic sends, the library's own fault.
         let drafted = || Landing::Shot { merger: merger(&session, &signer), draft: Some(a(S)), answers: Answers::default(), journal: None };
         let verbatim = |err: Refusal, code: &str| -> crate::halt::Refused {
@@ -5047,8 +5064,9 @@ mod scripted {
         assert!(matches!(&err, Refusal::Halt(Halt::Halt(_))), "{err}");
         assert!(err.to_string().contains("not_owner"), "{err}");
         refuse("already_published", Some(&format!("{D}.3")));
-        let twin = verbatim(land(&board, &merged, drafted()).unwrap_err(), "already_published");
-        assert_eq!(twin.body["site"]["addr"].as_str(), Some(format!("{D}.3").as_str()));
+        let twin = land(&board, &merged, drafted()).unwrap_err();
+        assert_eq!(twin, Refusal::AlreadyPublished { draft: a(S), member: a(&format!("{D}.3")) }, "{twin}");
+        assert!(twin.to_string().contains("nothing was published") && twin.to_string().contains("run the merge again"), "{twin}");
         dialer.world().memo.insert(
             landing_id(&merged.key.text(), "publish"),
             json!({"resp": "rejected", "code": "publication_over_budget", "detail": "70000 in-lock reads priced over the budget of 65536", "disposition": "permanent", "op": "publish"}),
@@ -5099,6 +5117,191 @@ mod scripted {
         assert_eq!(dialer.frames("publish").len(), shots + 1, "one signed shot, never sent again");
     }
 
+    /// Returns the answer the record keeps for "!!!", by reference to `to`.
+    fn twin_answer(to: &str) -> Value {
+        json!([{"from": {"i_start": format!("{S}.0.1.1"), "width": "3"}, "answer": "window", "to": {"i_start": to, "width": "3"}}])
+    }
+
+    /// Returns the shot's fourth run, the draft's "!!!".
+    fn tail_of(shot: &Value) -> Value {
+        shot["runs"][3].clone()
+    }
+
+    /// Checks that a draft word a record names as published goes by reference.
+    ///
+    /// The word goes to the record's `to`, the draft's own place beside it and
+    /// the draft named, so the board has nothing to refuse (the `windows`
+    /// module's doc, the twins; skep #939); the id is the key's, the twins no
+    /// part of it. The member holds the words by reference, the record keeps
+    /// them among its answers so `verify` reads the member as sent, the
+    /// acknowledgment names no answer of the caller's, and a second `land`
+    /// writes nothing.
+    #[test]
+    fn a_draft_word_a_record_names_goes_by_reference_with_its_place_and_lands_once() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        assert_eq!(m_runs(&merged), draft_m(), "the premise: S's typed words are M's last run");
+        {
+            let mut w = dialer.world();
+            w.text(D, 19, "!!!");
+            plant_record(&mut w, 1, 19, 3);
+        }
+        dialer.clear();
+        let landed = land(&board, &merged, shot(&session, &signer)).expect("landed");
+        let Landed::Member { address, answers, .. } = &landed else { panic!("{landed:?}") };
+        assert_eq!(address.to_string(), format!("{D}.3"));
+        assert!(answers.is_empty(), "the caller answered nothing: {answers:?}");
+        let shots = dialer.frames("publish");
+        assert_eq!(shots.len(), 1, "{:?}", dialer.ops());
+        assert_eq!(shots[0]["id"].as_str(), Some(landing_id(&merged.key.text(), "publish").as_str()), "the id is the key's alone");
+        assert_eq!(shots[0]["draft"].as_str(), Some(S), "the draft named, so the commit re-windows it");
+        assert_eq!(tail_of(&shots[0]), frames::shot_run(D, &format!("{D}.0.1.19"), 3), "by reference");
+        assert_eq!(shots[0]["places"], json!([null, null, null, {"subspace": "1", "ordinal": "12"}]), "the draft's own place beside it: {:?}", shots[0]);
+        // The words by reference, in the trunk's own chain, are signed by
+        // value, read through the draft that holds them.
+        let values: Vec<[u8; 1]> = b"the big cat sat!!!".iter().map(|b| [*b]).collect();
+        let head = a(&format!("{D}.2"));
+        let body = entry_body_publish(values.iter().map(|v| ShotSegmentPiece::Value(v)), Some(ShotBase { member: &head, extent: 15 }));
+        let term = board.board_term().unwrap().unwrap();
+        let alg = Signer::public_key(&signer).alg();
+        let sig = crate::hex::decode(shots[0]["attest"]["sig"].as_str().unwrap()).unwrap();
+        let expected = entry_frame(alg, term, &a(ACCOUNT), DocTerm::One(&a(D)), &body);
+        assert_eq!(skep_signature::verify(Signer::tag(&signer), Signer::public_key(&signer), &expected, &sig), Ok(()), "the attest signs the body the pieces spell");
+        assert_eq!(dialer.world().docs.get(&format!("{D}.3")).unwrap().runs.last(), Some(&run(D, 19, 3)), "the member holds the published words");
+        assert_eq!(appended_record(&dialer)["answers"], twin_answer(&format!("{D}.0.1.19")), "the record keeps the words as sent");
+        let record = current(&board, Some(&token()), &a(K), &merged.key).expect("the lookup").expect("a record");
+        assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal));
+        dialer.clear();
+        assert_eq!(land(&board, &merged, shot(&session, &signer)).as_ref(), Ok(&landed), "the same landing");
+        assert!(dialer.frames("publish").is_empty() && dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(), "{:?}", dialer.ops());
+    }
+
+    /// Checks that a retry reading the shot's own records keeps its ids.
+    ///
+    /// The first call read no record, its shot and its atom landed, and the
+    /// link's send was lost; the retry over the one composition reads the
+    /// shot's own record and so sends by reference. The read-first finds the
+    /// member, and the record is written under the first call's ids — the
+    /// twins, which only this call read, no part of them, whether or not a
+    /// window part was answered beside them — so the journal keeps the one
+    /// atom.
+    #[test]
+    fn a_retry_that_reads_the_shots_own_records_keeps_its_ids_and_writes_no_second_atom() {
+        fn retry(world: World, answers: Answers) {
+            let (dialer, board, signer) = open(world);
+            let session = sign_in(&board, &signer);
+            let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+            let landing = || Landing::Shot { merger: merger(&session, &signer), draft: None, answers: answers.clone(), journal: None };
+            dialer.world().lose_before = Some("make_link");
+            let lost = land(&board, &merged, landing());
+            assert!(matches!(lost, Err(Refusal::Halt(Halt::Dial(_)))), "the link's send lost: {lost:?}");
+            let member = format!("{D}.3");
+            let minted = dialer.world().docs.get(&member).expect("the premise: the shot landed").runs.iter().find(|r| r.origin == a(D) && r.width == 3).expect("the premise: the words re-minted under the trunk").clone();
+            plant_record(&mut dialer.world(), 1, minted.i_start, 3);
+            dialer.clear();
+            let landed = land(&board, &merged, landing()).expect("the retry lands");
+            assert!(matches!(&landed, Landed::Member { address, .. } if address.to_string() == member), "{landed:?}");
+            assert!(dialer.frames("publish").is_empty(), "the member found, no second shot: {:?}", dialer.ops());
+            let links = dialer.frames("make_link");
+            assert_eq!(links.len(), 1, "{:?}", dialer.ops());
+            let journal = links[0]["home"].as_str().expect("the journal").to_string();
+            let held: u64 = dialer.world().docs.get(&journal).expect("the journal").runs.iter().map(|r| r.width).sum();
+            assert_eq!(held, 1, "one atom in the journal, under the first call's id");
+        }
+        retry(draft_landing_world(), Answers::default());
+        // A window part answered beside them: the answers name the ids, the
+        // twins never do.
+        let mut world = draft_landing_world();
+        world.text(O, 1, "hello");
+        world.doc(O, false, ACCOUNT, vec![run(O, 1, 5)]);
+        world.change(S, vec![run(D, 1, 11), run(S, 1, 3), run(O, 1, 5)]);
+        retry(world, Answers { keep_private: vec![a(O)], ..Answers::default() });
+    }
+
+    /// Checks that `already_published` at the shot reads again and re-sends.
+    ///
+    /// A publication of the draft's words lands between the records' read and
+    /// the send, the board refusing the shot, nothing committed (skep #939).
+    /// The records are read again, and the shot goes once more under its own
+    /// id, the words by address onto the member the record names with the
+    /// draft's place beside them, signed afresh over the body that makes; the
+    /// record keeps the list as sent.
+    #[test]
+    fn already_published_at_the_shot_reads_again_and_sends_once_by_reference() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        let to = format!("{E}.0.1.3");
+        {
+            let mut w = dialer.world();
+            w.refuse_signed = Some(permanent("publish", "already_published", json!({"addr": format!("{E}.2")})));
+            let to = to.clone();
+            w.on_refused = Some(Box::new(move |w| {
+                w.links.push(LinkRow { addr: format!("{S}.0.2.90"), home: S.into(), from: vec![format!("{S}.0.1.1")], to: vec![to], ty: frames::T_CORRESPONDENCE.into(), width: 3, at: None });
+            }));
+        }
+        dialer.clear();
+        let landed = land(&board, &merged, shot(&session, &signer)).expect("landed");
+        assert!(matches!(&landed, Landed::Member { address, .. } if address.to_string() == format!("{D}.3")), "{landed:?}");
+        let shots = dialer.frames("publish");
+        assert_eq!(shots.len(), 2, "one re-send: {:?}", dialer.ops());
+        assert_eq!(shots[0]["id"], shots[1]["id"], "under its own id");
+        assert_ne!(shots[0]["attest"]["sig"], shots[1]["attest"]["sig"], "signed afresh over the new body");
+        assert_eq!(tail_of(&shots[0]), frames::shot_run(S, &format!("{S}.0.1.1"), 3), "first sent as the draft's words");
+        assert_eq!(tail_of(&shots[1]), frames::shot_run(E, &to, 3), "then by address onto the published words");
+        assert_eq!(shots[1]["places"], json!([null, null, null, {"subspace": "1", "ordinal": "12"}]), "{:?}", shots[1]);
+        assert_eq!(appended_record(&dialer)["answers"], twin_answer(&to));
+    }
+
+    /// Checks that `already_published` past the one re-read is the typed arm.
+    ///
+    /// It names the draft and the member; nothing is sent a third time and
+    /// nothing of the record written.
+    #[test]
+    fn already_published_again_is_the_typed_refusal_and_no_third_frame() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        let member = format!("{D}.9");
+        dialer.world().memo.insert(landing_id(&merged.key.text(), "publish"), permanent("publish", "already_published", json!({"addr": member})));
+        dialer.clear();
+        assert_eq!(land(&board, &merged, shot(&session, &signer)), Err(Refusal::AlreadyPublished { draft: a(S), member: a(&member) }));
+        assert_eq!(dialer.frames("publish").len(), 2, "one re-send, never a third: {:?}", dialer.ops());
+        assert!(dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(), "{:?}", dialer.ops());
+    }
+
+    /// Checks that a member found after the refusal is this landing.
+    ///
+    /// Another process landed this merge between the records' read and the
+    /// send, so the list recomposed from the records is a member the head's
+    /// next already holds: no second frame, the record written beside it,
+    /// keeping the list as the member holds it.
+    #[test]
+    fn a_member_found_after_already_published_is_the_landing_with_no_second_shot() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        let member = format!("{D}.3");
+        {
+            let mut w = dialer.world();
+            w.refuse_signed = Some(permanent("publish", "already_published", json!({"addr": member})));
+            let (member, runs) = (member.clone(), vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7), run(D, 19, 3)]);
+            w.on_refused = Some(Box::new(move |w| {
+                w.text(D, 19, "!!!");
+                plant_record(w, 1, 19, 3);
+                w.member(&member, runs, Some(15));
+                w.trunk_head.insert(D.to_string(), member.clone());
+            }));
+        }
+        dialer.clear();
+        let landed = land(&board, &merged, shot(&session, &signer)).expect("landed");
+        assert!(matches!(&landed, Landed::Member { address, .. } if address.to_string() == member), "{landed:?}");
+        assert_eq!(dialer.frames("publish").len(), 1, "no second shot: {:?}", dialer.ops());
+        assert_eq!(appended_record(&dialer)["answers"], twin_answer(&format!("{D}.0.1.19")), "the record reads the member as it stands");
+    }
+
+    /// Every refusal the draft landing's one write can answer is mapped.
     /// Every refusal the draft landing's one write can answer is mapped.
     ///
     /// A draft staged from another document's member meets the board's own

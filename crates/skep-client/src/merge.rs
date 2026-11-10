@@ -27,7 +27,8 @@
 //! the one `publish` of the merged list from the head — every window part
 //! of the merge answered by its caller first and composed through the
 //! publication family's one core, a part unanswered refused with nothing
-//! sent ([`Refusal::WindowPartsOwed`]; the `windows` module's doc) — with
+//! sent ([`Refusal::WindowPartsOwed`]; the `windows` module's doc), a draft
+//! side's words a record names as published sent by reference to them — with
 //! its signed body carrying the supersession claims — one per daughter,
 //! each marking the daughter superseded by the member in the commit that
 //! mints it — the

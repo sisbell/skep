@@ -23,8 +23,9 @@
 //! onto another account's origin among them, none where the origin answers
 //! `withheld`, since a registered private document this merger may not read
 //! gives up no words and no records; the feed row of each record's commit
-//! for the version it names; and the first and last words of each part the
-//! refusal or the acknowledgment says.
+//! for the version it names; the first and last words of each part the
+//! refusal or the acknowledgment says; and the records of the draft side's
+//! own words, over M's draft-native runs (the twins, below).
 //!
 //! **Where a part stands.** A part's own place is its M-ordinal. The words
 //! it stands after are read off M, the merged text, since the shot lands in
@@ -59,6 +60,25 @@
 //! M the draft holds at two places goes out as two, each at its own place,
 //! and no place is named twice. What the draft does not arrange takes none.
 //!
+//! **The twins** (PUB-3.9, the twin fence; wire.md §The publish shot and
+//! head-float; the link-sets design §5.5, §5.7). A draft side's word a
+//! correspondence record already names as published would be refused
+//! `already_published` if sent as new, so it is not: after the window parts
+//! are answered the step reads the draft's records over M's draft-native
+//! runs — the fence's own read ([`records_of`]) — and cuts each run by
+//! them, as the publication family's pre-check does ([`recompose`]). A piece
+//! a record covers goes by reference to the record's `to`, the place of its
+//! words in the draft beside it, so the one commit re-windows the draft
+//! there through the record; a piece no record covers stays the draft's own
+//! words. Each twin is carried as an answer windowed to its counterpart, so
+//! the list [`applied`] gives and the list a record's verification
+//! recomputes agree, wherever the `to` lies. No caller answers it: it is
+//! read afresh at every call and is in neither the shot's text
+//! ([`ShotParts::text`]) nor its acknowledgment, since a retry after the
+//! shot landed finds the shot's own records and must still spell the ids
+//! its first call spelled. A publication landing between that read and the
+//! send is met by [`retwin`], which reads the records again.
+//!
 //! The merged list's words are the person's document's, and every word a
 //! refusal says comes back as data (SP-10); the program that embeds this
 //! library says them, rendered inert (SP-15).
@@ -70,12 +90,13 @@ use skep_address::Address;
 use crate::address::{account_of, parse_address};
 use crate::board::answers::IRun;
 use crate::halt::Halt;
+use crate::publication::landed::recompose;
 use crate::publication::parts::{composed_parts, origin_state, parts_of, window_records, OriginState};
 use crate::publication::{self, answers_onto, compose_part, owned_by, renamed, Door, Fault, ISpan, OriginAnswer as Answer, OwedAnswer, PartComposition, PartKey, Publisher, Window};
 
 use super::compose::{Item, PlacedRun, Run, SideIx};
 use super::land::{own_fault_face, Merger, Writer};
-use super::reads::{content_prefix, session_ended, values_for, Family, Merged, Refusal, Side};
+use super::reads::{content_prefix, records_of, session_ended, values_for, Family, Merged, Refusal, Side};
 use super::record::{PartAnswer, RecordedAnswer};
 
 /// The positions read for a part's first words, or for the words before it.
@@ -192,6 +213,9 @@ pub(super) struct ShotParts {
     pub(super) runs: Vec<AnsweredRun>,
     /// Each answer as the record keeps it.
     pub(super) recorded: Vec<PartAnswer>,
+    /// The draft side's words a record names as published, each carried as
+    /// an answer windowed to the record's `to` (the module's doc, the twins).
+    pub(super) twins: Vec<PartAnswer>,
     /// Each answer as the acknowledgment says it.
     pub(super) given: Vec<WindowPart>,
 }
@@ -200,7 +224,9 @@ impl ShotParts {
     /// Returns the text naming the shot's writes (the `land` module's doc).
     ///
     /// It is the key's text, and the answers' where any was given: a merge
-    /// composed again with other answers is a write of its own.
+    /// composed again with other answers is a write of its own. The twins
+    /// are no part of it: a retry after the shot landed reads the shot's own
+    /// records, and its ids are the first call's.
     pub(super) fn text(&self, merged: &Merged) -> String {
         let key = merged.key.text();
         if self.recorded.is_empty() {
@@ -208,6 +234,20 @@ impl ShotParts {
         }
         let answers: Vec<String> = self.recorded.iter().map(|a| format!("{}.{}+{}:{}", a.from.origin, a.from.i_start, a.from.width, a.answer.as_str())).collect();
         format!("{key}~{}", answers.join(","))
+    }
+
+    /// Returns every answer the list was composed under, the twins included.
+    ///
+    /// It is what the record keeps, so `verify` recomputes the list the shot
+    /// sent.
+    pub(super) fn kept(&self) -> Vec<PartAnswer> {
+        self.recorded.iter().chain(&self.twins).cloned().collect()
+    }
+
+    /// Sets the twins, and the list the shot places under them ([`applied`]).
+    fn set_twins(&mut self, merged: &Merged, twins: Vec<PartAnswer>) {
+        self.twins = twins;
+        self.runs = applied(&merged.composed.runs, &merged.families, &merged.inputs.doc, &self.kept());
     }
 }
 
@@ -340,8 +380,10 @@ pub(super) fn applied(runs: &[PlacedRun], families: &[Family], doc: &Address, an
     out
 }
 
-/// Returns the shot's window parts composed from `answers` — the merge
-/// record's §1.5, before the landing's first write.
+/// Returns the shot's window parts and the draft's words named as published.
+///
+/// The parts are composed from `answers` and the draft's words from its
+/// records (the merge record's §1.5), before the landing's first write.
 ///
 /// # Errors
 ///
@@ -349,7 +391,8 @@ pub(super) fn applied(runs: &[PlacedRun], families: &[Family], doc: &Address, an
 /// that answers `withheld`, [`Refusal::Unreadable`]; the death signal under
 /// the merger's token, [`Refusal::SessionEnded`]; a dial fault. Then
 /// [`Refusal::WindowPartsOwed`] where a part stands unanswered or an answer
-/// fits nothing, nothing sent.
+/// fits nothing, nothing sent. Then the draft's records' read's
+/// ([`twins_of`]).
 pub(super) fn step(writer: &Writer<'_>, merged: &Merged, answers: &Answers, draft: Option<&Address>) -> Result<ShotParts, Refusal> {
     let door = Door::new(writer.board, writer.merger.token);
     let windows = read_windows(&door, writer.merger.account, merged, draft).map_err(|f| refused(f, writer))?;
@@ -387,8 +430,53 @@ pub(super) fn step(writer: &Writer<'_>, merged: &Merged, answers: &Answers, draf
             .collect::<Result<Vec<_>, Refusal>>()?;
         return Err(Refusal::WindowPartsOwed { parts, misfits, given });
     }
-    let runs = applied(&merged.composed.runs, &merged.families, &merged.inputs.doc, &recorded);
-    Ok(ShotParts { windows, answered, runs, recorded, given })
+    let mut shot = ShotParts { windows, answered, runs: Vec::new(), recorded, twins: Vec::new(), given };
+    shot.set_twins(merged, twins_of(writer, merged)?);
+    Ok(shot)
+}
+
+/// Returns the draft-native pieces of M a record names as published.
+///
+/// Each is the answer windowed to the record's `to` that sends it by
+/// reference (the module's doc, the twins). The records are the twin fence's
+/// own read, of the merger's own draft, over those runs alone, so a merge
+/// with no draft side reads nothing here.
+///
+/// # Errors
+///
+/// [`records_of`]'s: `withheld` on the draft as [`Refusal::Unreadable`],
+/// `doc_not_registered` as [`Refusal::NoSuchDocument`], the death signal
+/// under the merger's token as [`Refusal::SessionEnded`], an answer of
+/// another shape faced, a dial fault.
+fn twins_of(writer: &Writer<'_>, merged: &Merged) -> Result<Vec<PartAnswer>, Refusal> {
+    let native: Vec<Run> = merged.composed.runs.iter().zip(&merged.families).filter(|(_, family)| **family == Family::DraftNative).map(|(placed, _)| placed.run.clone()).collect();
+    let records = records_of(&writer.reader, writer.merger.account, &native)?;
+    let mut twins = Vec::new();
+    for run in &native {
+        let whole = publication::Run::new(run.origin.clone(), run.i_start, run.width);
+        for (piece, offset, by_reference) in recompose(&whole, &records) {
+            if by_reference {
+                let from = Run::new(run.origin.clone(), run.i_start + offset, piece.width);
+                let to = Run::new(piece.origin.clone(), piece.i_start, piece.width);
+                twins.push(PartAnswer { from, answer: RecordedAnswer::Window, to: Some(to) });
+            }
+        }
+    }
+    Ok(twins)
+}
+
+/// Reads the draft side's records again and recomposes the list the shot sends.
+///
+/// The shot was refused `already_published`, a publication of the draft's
+/// words having landed since [`step`]'s read (the module's doc, the twins).
+///
+/// # Errors
+///
+/// [`twins_of`]'s.
+pub(super) fn retwin(writer: &Writer<'_>, merged: &Merged, shot: &mut ShotParts) -> Result<(), Refusal> {
+    let twins = twins_of(writer, merged)?;
+    shot.set_twins(merged, twins);
+    Ok(())
 }
 
 /// Reads the shot's window parts again just before the send (§1.5).

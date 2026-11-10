@@ -26,9 +26,17 @@
 //! of the person's it names never landed into — and the merged arm writing
 //! the person's own record where only another account's names the member;
 //! the `head_moved` race typed, nothing re-sent; the composition dying
-//! with its session; and a merge landed in a panel's draft since its open
+//! with its session; a merge landed in a panel's draft since its open
 //! re-stated at the confirm with the claim composed off the marker, landing
-//! at the next.
+//! at the next; and a landing over a panel read under another marker (skep
+//! #949): a panel opened before the compose landing the merge in the one
+//! call with its claim — the draft untouched, its words deleted, its base
+//! moved by the compose — the draft side named `also`, a selection the page
+//! passed held and re-stated, a moved base among what it states, a panel
+//! opened after the compose keeping its selection, a re-open and a second
+//! compose read under the marker the draft carries, links the merge brought
+//! onto a switched-on row re-stated with no run index beside them, and the
+//! window the merge brought asked, no earlier answer carried onto it.
 
 use skep_client::address::{account_of, document_of, parse_address};
 use skep_client::board::{frames, Opened, SessionBody};
@@ -680,6 +688,472 @@ fn a_merge_landed_in_a_panels_draft_since_its_open_is_re_stated_and_lands_with_i
     assert_eq!((acked["outcome"].as_str(), acked["member"].as_str(), acked["supersede"].clone()), (Some("acknowledged"), Some(e3.as_str()), json!([f.e11])), "the next confirm lands on the moved base with the merge's claim: {acked}");
     let text = g.text(&e3, 19);
     assert!(text.starts_with("the fox") && text.contains(" jumps") && text.contains(" today") && text.len() == 19, "the merged words, not the held old ones: {text:?}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Returns the page's panel over the whole of `draft`, before or after a
+/// merge lands in it.
+fn page_panel(g: &Ground, f: &Family, draft: &str) -> Value {
+    g.call("publication.open", json!({"session": g.session, "draft": draft, "doc": f.edition, "readable_drafts": [draft], "published": [f.edition]})).unwrap_or_else(|r| panic!("{r}"))
+}
+
+/// Lands the merge of the head with the daughter `side` in `draft`.
+fn merged_into(g: &Ground, f: &Family, side: &str, draft: &str) -> Value {
+    let landed = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": side, "into": draft})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((landed["outcome"].as_str(), landed["into"].as_str()), (Some("landed"), Some(draft)), "{landed}");
+    landed
+}
+
+/// Publishes another daughter of E.1, `words` at its end: answers the
+/// member.
+fn another_daughter(g: &Ground, f: &Family, words: &str) -> String {
+    let s = g.addr(frames::stage(&f.e1, None));
+    g.op(json!({"op": "insert", "doc": s, "at": {"subspace": "1", "ordinal": "8"}, "values": [words], "as_of": g.position()}));
+    page_panel(g, f, &s);
+    let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    acked["member"].as_str().unwrap_or_else(|| panic!("the daughter: {acked}")).to_string()
+}
+
+/// Asserts that `member` holds M's nineteen characters: the head's and the
+/// daughter's added words beside the base's.
+fn assert_holds_the_merge(g: &Ground, member: &str, label: &str) {
+    let text = g.text(member, 19);
+    assert!(text.starts_with("the fox") && text.contains(" jumps") && text.contains(" today") && text.len() == 19, "{label}: the merged words, not the held old ones: {text:?}");
+}
+
+/// Checks that a landing over a panel opened before the compose lands the
+/// merge in the one call, carrying its claim (skep #949; **The landing** of
+/// `shell/publication.rs`).
+///
+/// Three cells over the family's ground, the panel opened over the whole of
+/// L and reading no merge. L staged from the head E.2 and untouched: the
+/// held run stands whole inside M, and a request held to it with no claim
+/// changes nothing against the base (the mutant that keys neither answers
+/// `inert`). L with " jumps" deleted before the open: the base pair stands
+/// as the compose records it (the same mutant publishes "the fox", no
+/// claim). L staged from E.1: the compose moves its base to the head (the
+/// mutant that leaves the standing unwritten answers `restated`). Each
+/// lands E.3 holding M's nineteen characters with `supersede [E.1.1]` and
+/// the merge's record (the mutant that re-takes the words alone publishes
+/// no claim; the one that composes the claim alone publishes the old words
+/// under it).
+#[test]
+fn a_landing_over_a_panel_opened_before_the_compose_lands_the_merge_with_its_claim() {
+    let cell = |label: &str, from_head: bool, deleted: bool, standing: &str| {
+        let dir = TempDir::new().unwrap();
+        let sd = spawn(&dir.path().join("board"), true);
+        let g = ground(&dir, &sd);
+        let f = family(&g);
+        let l = g.addr(frames::stage(if from_head { &f.e2 } else { &f.e1 }, None));
+        if deleted {
+            g.op(json!({"op": "delete", "doc": l, "p": {"subspace": "1", "ordinal": "8"}, "width": "6", "as_of": g.position()}));
+        }
+        let panel = page_panel(&g, &f, &l);
+        assert_eq!((panel["count"]["supersede"].clone(), panel["standing"].as_str()), (json!([]), Some(standing)), "{label}: the panel reads no merge: {panel}");
+        merged_into(&g, &f, &f.e11, &l);
+        let landed = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+        crate::shapes::assert_declared("MergeLanded", &landed);
+        let e3 = format!("{}.3", f.edition);
+        assert_eq!((landed["outcome"].as_str(), landed["member"].as_str(), landed["supersede"].clone(), landed["daughter"].as_bool()), (Some("landed"), Some(e3.as_str()), json!([f.e11]), Some(false)), "{label}: {landed}");
+        assert!(landed["record"].is_string() && landed.get("unrecorded").is_none(), "{label}: the merge's record: {landed}");
+        assert_holds_the_merge(&g, &e3, label);
+        assert_eq!(g.call("merge.land", json!({"session": g.session})).unwrap_err().name(), "no_merge", "{label}: the composition went with the landing");
+        g.shell.shutdown();
+        sd.shutdown();
+    };
+    cell("level and untouched", true, false, "at_head");
+    cell("words deleted", true, true, "at_head");
+    cell("behind the head", false, false, "behind");
+}
+
+/// Checks the draft side of a landing over an earlier panel.
+///
+/// L's panel is opened before B, a draft behind the head, is composed as
+/// the merge's side into L. `merge.land` names B `also` as a panel it opened
+/// itself would, so B's words are the document's own, every run of E.3 in
+/// E's chain and no window asked of them, and lands E.3 holding both sides'
+/// words with no claim (the mutants that keep the selection, answering
+/// `inert`, or leave B out of `also`, refusing `window_parts_owed`).
+#[test]
+fn a_draft_side_landing_over_an_earlier_panel_names_the_side_also() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let b = g.addr(frames::stage(&f.e1, None));
+    g.op(json!({"op": "insert", "doc": b, "at": {"subspace": "1", "ordinal": "8"}, "values": [" quietly"], "as_of": g.position()}));
+    let l = g.addr(frames::stage(&f.e2, None));
+    page_panel(&g, &f, &l);
+    let landed = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "draft": b, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((landed["outcome"].as_str(), landed["form"].as_str()), (Some("landed"), Some("draft")), "{landed}");
+    let shot = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let e3 = format!("{}.3", f.edition);
+    assert_eq!((shot["outcome"].as_str(), shot["member"].as_str(), shot["supersede"].clone(), shot["daughter"].as_bool()), (Some("landed"), Some(e3.as_str()), json!([]), Some(false)), "{shot}");
+    let text = g.text(&e3, 21);
+    assert!(text.contains(" jumps") && text.contains(" quietly") && text.len() == 21, "both sides' words: {text:?}");
+    let image = g.op(frames::image(&e3, 1, 21));
+    let runs = image["runs"].as_array().unwrap_or_else(|| panic!("the image: {image}"));
+    assert!(runs.iter().all(|r| r["i_start"].as_str().and_then(document_of).as_deref() == Some(f.edition.as_str())), "B's words are the document's own: {image}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a selection the page passed is kept held at a landing over
+/// an earlier panel, and re-stated (PUB-3.108).
+///
+/// L, staged from the head, holds words of its own; the page's panel holds
+/// E's run and those words, or those words alone. The compose lands M as L's
+/// whole arrangement, so L's own words leave it. With E's run held, the first
+/// `merge.land` answers `restated`, run 1 absent, nothing sent, the event
+/// said and the panel keyed on the marker, its count naming the claim; the
+/// next lands E.3 holding the held run, `supersede [E.1.1]` (the mutant that
+/// re-takes the selection publishes the merge; the one that keeps the
+/// re-statement's silence publishes the held run in one call). With the
+/// words alone every run is absent: `restated` all the same, and the next
+/// call refused `selection_not_arranged`, nothing sent (the mutant that
+/// prices the panel without the guard refuses at the first call).
+#[test]
+fn a_selection_the_page_passed_is_kept_held_and_re_stated_at_the_landing() {
+    let cell = |own_alone: bool| {
+        let dir = TempDir::new().unwrap();
+        let sd = spawn(&dir.path().join("board"), true);
+        let g = ground(&dir, &sd);
+        let f = family(&g);
+        let l = g.addr(frames::stage(&f.e2, None));
+        g.op(json!({"op": "insert", "doc": l, "at": {"subspace": "1", "ordinal": "14"}, "values": [" quick"], "as_of": g.position()}));
+        let own = json!({"origin": l, "i_start": 1, "width": 6});
+        let selection = if own_alone { json!([own]) } else { json!([{"origin": f.edition, "i_start": 1, "width": 13}, own]) };
+        g.call("publication.open", json!({"session": g.session, "draft": l, "doc": f.edition, "selection": selection, "readable_drafts": [l], "published": [f.edition]})).unwrap_or_else(|r| panic!("{r}"));
+        merged_into(&g, &f, &f.e11, &l);
+        let said = g.states().len();
+        let before = g.position();
+        let restated = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+        crate::shapes::assert_declared("Restated", &restated);
+        let absent = if own_alone { 0 } else { 1 };
+        assert_eq!((restated["outcome"].as_str(), restated["selection"].clone()), (Some("restated"), json!([{"run": absent, "placement": "absent"}])), "L's own words left it: {restated}");
+        assert_eq!(g.position(), before, "nothing sent");
+        assert_eq!(g.states_once(said + 1).last().map(String::as_str), Some("restated"), "the landing's re-statement is said");
+        let counted = g.call("publication.count", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+        assert_eq!(counted["count"]["supersede"], json!([f.e11]), "the panel keyed on the marker: {counted}");
+        if own_alone {
+            let refused = g.call("merge.land", json!({"session": g.session})).unwrap_err();
+            assert_eq!((refused.name(), refused.to_value()["index"].as_u64()), ("selection_not_arranged", Some(0)), "{refused}");
+            assert_eq!(g.position(), before, "nothing sent");
+        } else {
+            let landed = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+            let e3 = format!("{}.3", f.edition);
+            assert_eq!((landed["outcome"].as_str(), landed["member"].as_str(), landed["supersede"].clone()), (Some("landed"), Some(e3.as_str()), json!([f.e11])), "{landed}");
+            assert_eq!(g.text(&e3, 13), "the fox jumps", "the held selection");
+        }
+        g.shell.shutdown();
+        sd.shutdown();
+    };
+    cell(false);
+    cell(true);
+}
+
+/// Checks that a selection the page passed re-states a base the compose
+/// moved, nothing sent (D4 (b′); PUB-3.108).
+///
+/// L, staged from E.1 and behind, holds one run the merge leaves standing:
+/// no placement differs, and the base and the standing moved are what the
+/// panel told the person (the mutant that drops the re-statement of a
+/// passed selection publishes in the one call). The next call lands E.3
+/// holding the selection, the claim composed off the marker.
+#[test]
+fn a_selection_the_page_passed_re_states_a_base_the_compose_moved() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let l = g.addr(frames::stage(&f.e1, None));
+    let panel = g.call("publication.open", json!({"session": g.session, "draft": l, "doc": f.edition, "selection": [{"origin": f.edition, "i_start": 1, "width": 7}], "readable_drafts": [l], "published": [f.edition]})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(panel["standing"], "behind", "{panel}");
+    merged_into(&g, &f, &f.e11, &l);
+    let before = g.position();
+    let restated = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("Restated", &restated);
+    assert_eq!((restated["outcome"].as_str(), restated["base"].as_str(), restated["standing"].as_str(), restated["selection"].clone()), (Some("restated"), Some(f.e2.as_str()), Some("at_head"), json!([])), "{restated}");
+    assert_eq!(g.position(), before, "nothing sent");
+    let landed = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let e3 = format!("{}.3", f.edition);
+    assert_eq!((landed["outcome"].as_str(), landed["member"].as_str(), landed["supersede"].clone()), (Some("landed"), Some(e3.as_str()), json!([f.e11])), "{landed}");
+    assert_eq!(g.text(&e3, 7), "the fox", "the selection");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a panel opened after the compose over a selection the page
+/// chose lands as the open read it: the selection, and the claim the open
+/// composed off the marker, nothing re-stated and nothing re-taken.
+#[test]
+fn a_panel_opened_after_the_compose_keeps_its_selection() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let l = g.addr(frames::stage(&f.e2, None));
+    merged_into(&g, &f, &f.e11, &l);
+    let panel = g.call("publication.open", json!({"session": g.session, "draft": l, "doc": f.edition, "selection": [{"origin": f.edition, "i_start": 1, "width": 7}], "readable_drafts": [l], "published": [f.edition]})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(panel["count"]["supersede"], json!([f.e11]), "{panel}");
+    let landed = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let e3 = format!("{}.3", f.edition);
+    assert_eq!((landed["outcome"].as_str(), landed["member"].as_str(), landed["supersede"].clone()), (Some("landed"), Some(e3.as_str()), json!([f.e11])), "{landed}");
+    assert_eq!(g.text(&e3, 7), "the fox", "the selection the page chose");
+    let extent = g.op(frames::span_set(&e3));
+    assert_eq!(extent["set"][0]["width"].as_str().and_then(|w| w.rsplit('.').next()), Some("7"), "the selection alone: {extent}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a panel of the whole draft opened after the compose is met
+/// by the confirm's re-read at the landing, and keyed by no one: the draft
+/// edited since the panel is re-stated, nothing sent (the mutant that keys
+/// every panel, or that reads no marker at the open, re-takes the draft
+/// behind the panel and lands an edit the person was never told of).
+#[test]
+fn a_panel_opened_after_the_compose_is_re_stated_at_the_landing_as_a_confirm_is() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let l = g.addr(frames::stage(&f.e2, None));
+    merged_into(&g, &f, &f.e11, &l);
+    page_panel(&g, &f, &l);
+    g.op(json!({"op": "delete", "doc": l, "p": {"subspace": "1", "ordinal": "14"}, "width": "6", "as_of": g.position()}));
+    let before = g.position();
+    let restated = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("Restated", &restated);
+    assert_eq!(restated["outcome"].as_str(), Some("restated"), "{restated}");
+    assert_eq!((restated["selection"][0]["run"].as_u64(), restated["selection"][0]["placement"]["split"].is_array()), (Some(0), true), "the held run, cut by the edit: {restated}");
+    assert_eq!(g.position(), before, "nothing sent");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a panel re-opened after the compose lands the merge, not the
+/// words the first open held.
+///
+/// The re-open composes the claim off the marker and keeps the selection
+/// read before the merge, so the panel's flag says a merge was asked (the
+/// mutant that tells an earlier panel by `merge_landing` alone publishes
+/// E.3 with " today" missing and E.1.1 marked superseded by it).
+#[test]
+fn a_panel_re_opened_after_the_compose_lands_the_merge_not_its_old_words() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let l = g.addr(frames::stage(&f.e2, None));
+    page_panel(&g, &f, &l);
+    merged_into(&g, &f, &f.e11, &l);
+    let reopened = page_panel(&g, &f, &l);
+    assert_eq!(reopened["count"]["supersede"], json!([f.e11]), "the re-open's claim off the marker: {reopened}");
+    let landed = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let e3 = format!("{}.3", f.edition);
+    assert_eq!((landed["outcome"].as_str(), landed["member"].as_str(), landed["supersede"].clone()), (Some("landed"), Some(e3.as_str()), json!([f.e11])), "{landed}");
+    assert_holds_the_merge(&g, &e3, "re-opened");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a second compose re-keys a panel read under the first.
+///
+/// The panel is opened over a draft already carrying the merge of E.1.1, its
+/// flag set and its selection M. A second compose lands the merge of E.1.2
+/// over it: the landing publishes the second merge's words and claims E.1.2
+/// alone (the mutant that re-keys only an unflagged panel holds the first
+/// merge's runs, re-stated as moved).
+#[test]
+fn a_second_compose_re_keys_a_panel_read_under_the_first() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let e12 = another_daughter(&g, &f, " later");
+    let l = g.addr(frames::stage(&f.e2, None));
+    merged_into(&g, &f, &f.e11, &l);
+    let panel = page_panel(&g, &f, &l);
+    assert_eq!(panel["count"]["supersede"], json!([f.e11]), "{panel}");
+    merged_into(&g, &f, &e12, &l);
+    let landed = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let e3 = format!("{}.3", f.edition);
+    assert_eq!((landed["outcome"].as_str(), landed["member"].as_str(), landed["supersede"].clone()), (Some("landed"), Some(e3.as_str()), json!([e12])), "the second merge's claim alone: {landed}");
+    let text = g.text(&e3, 19);
+    assert!(text.starts_with("the fox") && text.contains(" jumps") && text.contains(" later") && !text.contains(" today"), "the second merge's words: {text:?}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that links the merge brought onto a switched-on row are re-stated
+/// before they are published (PUB-3.108).
+///
+/// A note on words L holds makes the row; a second note lies on the
+/// daughter's words, which L holds only once the merge lands, so the row
+/// the page switched on before the compose never offered it. The landing
+/// answers `restated` with that link in `came`, `selection` empty and no
+/// `parts`, nothing sent; the panel then counts both, and the next call
+/// lands with neither left private (the mutant that drops the re-statement
+/// publishes a link the person never saw). With the row left off the
+/// landing is the one call and both notes stay private.
+#[test]
+fn a_row_switched_on_before_the_compose_re_states_the_links_the_merge_brought() {
+    let cell = |switched: bool| {
+        let dir = TempDir::new().unwrap();
+        let sd = spawn(&dir.path().join("board"), true);
+        let g = ground(&dir, &sd);
+        let f = family(&g);
+        let l = g.addr(frames::stage(&f.e2, None));
+        let citation = "1.1.0.1.0.1.0.3.13";
+        let notes = g.draft("notes here");
+        let held = g.addr(json!({"op": "make_link", "home": notes, "from": [{"source": f.e2, "span": {"start": "1.1", "width": "0.3"}}], "to": {"addrs": []}, "ty": {"addrs": [citation]}}));
+        let brought = g.addr(json!({"op": "make_link", "home": notes, "from": [{"source": f.e11, "span": {"start": "1.8", "width": "0.6"}}], "to": {"addrs": []}, "ty": {"addrs": [citation]}}));
+        let panel = g.call("publication.open", json!({"session": g.session, "draft": l, "doc": f.edition, "notes": [notes], "readable_drafts": [l, notes], "published": [f.edition]})).unwrap_or_else(|r| panic!("{r}"));
+        assert_eq!(panel["rows"][0]["links"], json!([held]), "the row offers the note on the words L holds: {panel}");
+        if switched {
+            g.call("publication.count", json!({"session": g.session, "switches": {"on": [notes]}})).unwrap_or_else(|r| panic!("{r}"));
+        }
+        merged_into(&g, &f, &f.e11, &l);
+        let e3 = format!("{}.3", f.edition);
+        let before = g.position();
+        let shot = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+        let landed = if switched {
+            crate::shapes::assert_declared("Restated", &shot);
+            assert_eq!((shot["outcome"].as_str(), shot["came"].clone(), shot["selection"].clone(), shot.get("parts")), (Some("restated"), json!([brought]), json!([]), None), "{shot}");
+            assert_eq!(g.position(), before, "nothing sent");
+            let counted = g.call("publication.count", json!({"session": g.session, "switches": {"on": [notes]}})).unwrap_or_else(|r| panic!("{r}"));
+            assert_eq!(counted["count"]["l"], 2, "the row now offers both: {counted}");
+            assert!([&held, &brought].iter().all(|link| counted["rows"][0]["links"].as_array().unwrap().iter().any(|l| l == *link)), "{counted}");
+            g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"))
+        } else {
+            shot
+        };
+        assert_eq!((landed["outcome"].as_str(), landed["member"].as_str(), landed["supersede"].clone()), (Some("landed"), Some(e3.as_str()), json!([f.e11])), "{landed}");
+        let private = if switched { json!([]) } else { json!([{"set": notes, "links": 2}]) };
+        assert_eq!(landed["left_private"], private, "{landed}");
+        assert_holds_the_merge(&g, &e3, "the landing");
+        g.shell.shutdown();
+        sd.shutdown();
+    };
+    cell(true);
+    cell(false);
+}
+
+/// Checks that a re-statement over a re-taken selection names no run
+/// index, and no window part, beside the links it states.
+///
+/// L's own words stand before E's run, and B, composed as the merge's side,
+/// windows `O`: the re-taken selection's runs are other runs at other
+/// places, so the re-read's run-by-index differences say nothing. The row
+/// switched on before the compose takes a note on B's words: the first call
+/// re-states that link alone, `selection` empty and no `parts` (the mutant
+/// that keeps them names a run and a part that are no such thing), and the
+/// next two ask the window and land.
+#[test]
+fn a_re_statement_over_a_re_taken_selection_names_no_run_and_no_part() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let o = g.draft("quote");
+    let b = g.addr(frames::stage(&f.e1, None));
+    g.op(json!({"op": "insert", "doc": b, "at": {"subspace": "1", "ordinal": "8"}, "values": [" quietly"], "as_of": g.position()}));
+    g.op(json!({"op": "copy", "doc": b, "at": {"subspace": "1", "ordinal": "16"}, "specs": [{"source": o, "span": {"start": "1.1", "width": "0.5"}}], "as_of": g.position()}));
+    let l = g.addr(frames::stage(&f.e2, None));
+    g.op(json!({"op": "insert", "doc": l, "at": {"subspace": "1", "ordinal": "1"}, "values": ["Very "], "as_of": g.position()}));
+    let citation = "1.1.0.1.0.1.0.3.13";
+    let notes = g.draft("notes here");
+    let held = g.addr(json!({"op": "make_link", "home": notes, "from": [{"source": f.e2, "span": {"start": "1.1", "width": "0.3"}}], "to": {"addrs": []}, "ty": {"addrs": [citation]}}));
+    let brought = g.addr(json!({"op": "make_link", "home": notes, "from": [{"source": b, "span": {"start": "1.8", "width": "0.8"}}], "to": {"addrs": []}, "ty": {"addrs": [citation]}}));
+    let panel = g.call("publication.open", json!({"session": g.session, "draft": l, "doc": f.edition, "notes": [notes], "readable_drafts": [l, notes], "published": [f.edition]})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(panel["rows"][0]["links"], json!([held]), "{panel}");
+    g.call("publication.count", json!({"session": g.session, "switches": {"on": [notes]}})).unwrap_or_else(|r| panic!("{r}"));
+    let landed = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "draft": b, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(landed["outcome"].as_str(), Some("landed"), "{landed}");
+    let before = g.position();
+    let restated = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("Restated", &restated);
+    assert_eq!((restated["outcome"].as_str(), restated["came"].clone(), restated["selection"].clone(), restated.get("parts")), (Some("restated"), json!([brought]), json!([]), None), "{restated}");
+    assert_eq!(g.position(), before, "nothing sent");
+    let refused = g.call("merge.land", json!({"session": g.session})).unwrap_err();
+    assert_eq!(refused.name(), "window_parts_owed", "{refused}");
+    let part = refused.to_value()["parts"][0].clone();
+    assert_eq!(part["words"].as_str(), Some("quote"), "{part}");
+    assert_eq!(g.position(), before, "nothing sent");
+    let answers = json!({ format!("{}.{}", part["run"], part["part"]): "keep_private" });
+    let shot = g.call("merge.land", json!({"session": g.session, "answers": answers})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((shot["outcome"].as_str(), shot["member"].as_str(), shot["left_private"].clone()), (Some("landed"), Some(format!("{}.3", f.edition).as_str()), json!([])), "{shot}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that an answer an earlier panel held is not carried onto another
+/// part the merge brought to its key.
+///
+/// L's panel windows `O` at run 1 and the page answers it. The compose lands
+/// B's window onto `O2` as the merge's run 1, the same key, other words: the
+/// landing asks it, naming "other", nothing sent (the mutant that keeps the
+/// panel's answers composes the part under the answer `O` was given and
+/// keeps `O2` private, asked nothing).
+#[test]
+fn an_answer_an_earlier_panel_held_is_not_carried_onto_another_part() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let (o, o2) = (g.draft("quote"), g.draft("other"));
+    let b = g.addr(frames::stage(&f.e1, None));
+    g.op(json!({"op": "copy", "doc": b, "at": {"subspace": "1", "ordinal": "8"}, "specs": [{"source": o2, "span": {"start": "1.1", "width": "0.5"}}], "as_of": g.position()}));
+    let l = g.addr(frames::stage(&f.e2, None));
+    g.op(json!({"op": "copy", "doc": l, "at": {"subspace": "1", "ordinal": "14"}, "specs": [{"source": o, "span": {"start": "1.1", "width": "0.5"}}], "as_of": g.position()}));
+    let panel = g.call("publication.open", json!({"session": g.session, "draft": l, "doc": f.edition, "readable_drafts": [l], "published": [f.edition]})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((panel["windows"][0]["run"].as_u64(), panel["windows"][0]["origin"].as_str()), (Some(1), Some(o.as_str())), "{panel}");
+    g.call("publication.count", json!({"session": g.session, "answers": {"1.0": "keep_private"}})).unwrap_or_else(|r| panic!("{r}"));
+    let landed = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "draft": b, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(landed["outcome"].as_str(), Some("landed"), "{landed}");
+    let before = g.position();
+    let refused = g.call("merge.land", json!({"session": g.session})).unwrap_err();
+    assert_eq!(refused.name(), "window_parts_owed", "{refused}");
+    let v = refused.to_value();
+    assert_eq!((v["parts"][0]["run"].as_u64(), v["parts"][0]["part"].as_u64(), v["parts"][0]["words"].as_str(), v["parts"][0]["origin"].as_str()), (Some(1), Some(0), Some("other"), Some(o2.as_str())), "the merge's part at the same key: {v}");
+    assert_eq!(g.position(), before, "nothing sent");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a landing over an earlier panel asks the window the merge
+/// brought as a panel opened over the merge would.
+///
+/// B windows `O`, a draft no record names, and is composed as the merge's
+/// side into L, whose panel was opened before: the landing refuses
+/// `window_parts_owed` naming the part and sends nothing, and given
+/// `keep_private` lands (the mutant that keeps the windows the open read
+/// composes no part to ask, its answer refused as no part the panel holds).
+#[test]
+fn a_landing_over_an_earlier_panel_asks_the_window_the_merge_brought() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let o = g.draft("quote");
+    let b = g.addr(frames::stage(&f.e1, None));
+    g.op(json!({"op": "insert", "doc": b, "at": {"subspace": "1", "ordinal": "8"}, "values": [" quietly"], "as_of": g.position()}));
+    g.op(json!({"op": "copy", "doc": b, "at": {"subspace": "1", "ordinal": "16"}, "specs": [{"source": o, "span": {"start": "1.1", "width": "0.5"}}], "as_of": g.position()}));
+    let l = g.addr(frames::stage(&f.e2, None));
+    page_panel(&g, &f, &l);
+    let landed = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "draft": b, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(landed["outcome"].as_str(), Some("landed"), "{landed}");
+    let before = g.position();
+    let refused = g.call("merge.land", json!({"session": g.session})).unwrap_err();
+    assert_eq!(refused.name(), "window_parts_owed", "{refused}");
+    let v = refused.to_value();
+    let part = v["parts"][0].clone();
+    assert_eq!((part["words"].as_str(), part["origin"].as_str()), (Some("quote"), Some(o.as_str())), "{v}");
+    assert_eq!(g.position(), before, "nothing sent");
+    let answers = json!({ format!("{}.{}", part["run"], part["part"]): "keep_private" });
+    let shot = g.call("merge.land", json!({"session": g.session, "answers": answers})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((shot["outcome"].as_str(), shot["member"].as_str()), (Some("landed"), Some(format!("{}.3", f.edition).as_str())), "{shot}");
     g.shell.shutdown();
     sd.shutdown();
 }

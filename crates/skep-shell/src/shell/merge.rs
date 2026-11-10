@@ -73,16 +73,21 @@
 //! named `also` so its words re-mint as the document's own), confirmed by
 //! the family's one composition, signature and send
 //! (`Shell::confirm_standing`), under the answers the call names, each
-//! keyed `⟨run⟩.⟨part⟩` as the panel keys them. The landing answers no
-//! window part for its caller: a part with no answer refuses the row
-//! `window_parts_owed` (the merge record's §1.5), nothing sent, every part
-//! named whole by the library's one refusal (`owed_parts`), the same the
-//! `skep merge --publish` refusal comes from. So the claim is composed in
-//! one place, the panel's read of the marker at the open or at a confirm
-//! that finds the draft's base moved (`shell/publication.rs`, **The claim**),
-//! and rides only where the marker's head is the trunk's head as read
-//! there; never at the draft side, whose side is a private draft. After
-//! the acknowledgment THE MERGE RECORD, the library's `record_published` —
+//! keyed `⟨run⟩.⟨part⟩` as the panel keys them. A panel the page opened
+//! under another merge marker than the draft now carries, before the
+//! compose or over an earlier merge, is first keyed on the draft as it
+//! stands (`Shell::landing_panel`; `shell/publication.rs`, **The landing**),
+//! so the landing answers as it would over a panel opened on this draft and
+//! marker. The landing answers no window part for its caller: a part with
+//! no answer refuses the row `window_parts_owed` (the merge record's §1.5),
+//! nothing sent, every part named whole by the library's one refusal
+//! (`owed_parts`), the same the `skep merge --publish` refusal comes from.
+//! So the claim is composed in one place, the panel's read of the marker at
+//! the open, at a confirm that finds the draft's base moved or at that
+//! keying (`shell/publication.rs`, **The claim**), and rides only where the
+//! marker's head is the trunk's head as read there; never at the draft
+//! side, whose side is a private draft. After the acknowledgment THE MERGE
+//! RECORD, the library's `record_published` —
 //! the member and position the board acknowledged, the claims read back at
 //! the daughter, the window parts' answers beside it, written once in the
 //! account's merge journal with its link beside it, or the standing one
@@ -758,9 +763,11 @@ impl Shell {
     /// composition landed in or the draft side and the lines of the
     /// principal's standing on it — nothing read at any; `store_unreadable`,
     /// `no_account`; the panel's open's where the shell opens one
-    /// (`publication.open`'s steps 4 to 6); `malformed_args` naming `answers`
-    /// where one is no `⟨run⟩.⟨part⟩` of a part the panel holds or one the
-    /// part does not admit; the words' reads of the window parts' refusal
+    /// (`publication.open`'s steps 4 to 6), or, where a panel stands, its
+    /// keying's on the draft as it stands (`Shell::landing_panel`);
+    /// `malformed_args` naming `answers` where one is no `⟨run⟩.⟨part⟩` of a
+    /// part the panel holds or one the part does not admit; the words' reads
+    /// of the window parts' refusal
     /// and acknowledgment; then `publication.confirm`'s from
     /// `write_in_bare_session` on — the door asked again over the panel's
     /// drafts, a draft the page's panel names `also` among them, nothing
@@ -790,16 +797,13 @@ impl Shell {
             Form::Daughter(_) => None,
         };
         let signed = self.signed(&session, Write::call("merge.land", "publish").over(std::iter::once(&into).chain(side.as_ref()).map(ToString::to_string)))?;
-        // The panel: the page's over the draft, its windows re-read where it
-        // was opened with no merge marked on the draft, or one opened here
-        // over the whole draft, the draft side named `also`.
+        // The panel: the page's over the draft, keyed on the draft as it
+        // stands where it was read under another merge marker, or one opened
+        // here over the whole draft, the draft side named `also`.
         let state = match self.publications.stood_for(&key, &into, &session.reference) {
             Some(mut state) => {
-                if !state.inputs.merge_landing {
-                    state.inputs.merge_landing = true;
-                    let p = signed.publisher(&session);
-                    Self::reread_windows(&p, &mut state, |f| self.fault(&session, "merge.land", f))?;
-                    self.publications.stand(key.clone(), state.clone());
+                if let Some(restated) = self.landing_panel(&session, &signed, &key, &mut state, side.as_ref())? {
+                    return Ok(restated);
                 }
                 state
             }

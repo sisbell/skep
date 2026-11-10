@@ -199,7 +199,7 @@ fn the_file_names_every_shape_call_and_event() {
         "  unrecorded?: Refusal;\n",
         "export type MergeChoice = 'keep_both' | 'omit' | { order: number[] } | { keep_only: number } | { after: string } | { before: string };\n",
         "  places(args: { session: string; board?: string; opts?: PlacesOpts } | { guest: true; board?: string; origin?: string; opts?: PlacesOpts }): Promise<Outcome<PlacesAnswer>>;\n",
-        "  changes(args: { session: string; since: number; limit?: number; class?: 'drafts' } | { guest: true; board?: string; origin?: string; since: number; limit?: number }): Promise<Outcome<ChangesAnswer>>;\n",
+        "  changes(args: { session: string; since: number; limit?: number; class?: 'drafts'; under?: string } | { guest: true; board?: string; origin?: string; since: number; limit?: number; under?: string }): Promise<Outcome<ChangesAnswer>>;\n",
         "  opened_at?: number;\n",
         "  reopened?: boolean;\n",
         "export interface PlacesOpts { under?: string }\n",

@@ -113,8 +113,11 @@
 //! session narrowed to the `drafts` class, the supplement's page alone — a
 //! page's read of the drafts rows a session's end cut off, from the position
 //! the session opened at (skep #740); and the guest form, the published feed
-//! alone, token-free (skep #749). The shell keeps no position: every form
-//! reads from the caller's `since`.
+//! alone, token-free (skep #749). Each form reads under an address where the
+//! call names one, its every read narrowed to the rows at or under it
+//! (PUB-7.31) — a draft's history (skep #652) — while this thread's own reads
+//! stay whole. The shell keeps no position: every form reads from the
+//! caller's `since`.
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap};
@@ -1060,16 +1063,22 @@ pub struct CaughtUp {
 /// supplement's page alone, under its token. With no session, the
 /// published feed alone, token-free — the guest form; `drafts_alone` names
 /// no page then, there being no token to read one under, and the shell
-/// refuses the pair before it is asked here. The board's head is read first
-/// (`/health`, as the feed thread takes it); each read is one page from
-/// `since`, re-asked at the limit that `fits` where it passes the page
-/// budget; and the page is cut at the lower `last` of a read whose `more`
-/// stands, then to `limit` entries, so no position is skipped — `next` is
-/// that cut, or the last entry kept, or, every read read to the head, the
-/// greater of their `last`s and the head read first, which a quiet board's
-/// next ask meets with the empty page at once (`since ≥ head`). A draft the
-/// session may not read never appears: the gating is the board's, at the
-/// token's class.
+/// refuses the pair before it is asked here. Where `under` names an
+/// address, every read is the board's `under=` narrowing of its feed
+/// (PUB-7.31): the rows whose reduced `docs` name a document at or under
+/// it, `limit`, `last` and `more` counted over them alone, so the page is
+/// the narrowed feed's and its `next` a position in it. The board's head is
+/// read first (`/health`, as the feed thread takes it); each read is one
+/// page from `since`, re-asked at the limit that `fits` where it passes the
+/// page budget. The page is cut at what every read is sure to have read
+/// to: a read whose `more` stands, its `last`; one read to the head, the
+/// latest of the head read first, its own `last` and the `last` of every
+/// read before it — its snapshot at least that late, a later commit
+/// perhaps on a later read's page alone — so no position is skipped; then
+/// to `limit` entries. `next` is that cut, or the last entry kept where
+/// `limit` cuts first, which a quiet board's next ask meets with the empty
+/// page at once (`since ≥ head`). A draft the session may not read never
+/// appears: the gating is the board's, at the token's class.
 ///
 /// # Errors
 ///
@@ -1078,17 +1087,18 @@ pub struct CaughtUp {
 /// (`malformed_changes` for a `limit` off the route's range,
 /// `feed_rebuilding`) and the unreachable board, as every read carries
 /// them; and a `/changes` answer the shell does not read, as a halt.
-pub fn changes_since(board: &Board, session: Option<&SessionEntry>, drafts_alone: bool, since: u64, limit: Option<u64>) -> Result<ChangesRead, Refusal> {
+pub fn changes_since(board: &Board, session: Option<&SessionEntry>, drafts_alone: bool, since: u64, limit: Option<u64>, under: Option<&Address>) -> Result<ChangesRead, Refusal> {
     let head = board.health()?.log_position();
+    let under = under.map(ToString::to_string);
     let mut pages: Vec<(ChangesPage, UpdateClass<'_>)> = Vec::new();
     if session.is_none() || !drafts_alone {
-        match page_from(board, UpdateClass::Published, since, limit)? {
+        match page_from(board, UpdateClass::Published, since, limit, under.as_deref())? {
             PageRead::Page(page) => pages.push((page, UpdateClass::Published)),
             PageRead::Died => return Ok(ChangesRead::Died),
         }
     }
     if let Some(session) = session {
-        match page_from(board, UpdateClass::Drafts(session), since, limit)? {
+        match page_from(board, UpdateClass::Drafts(session), since, limit, under.as_deref())? {
             PageRead::Page(page) => pages.push((page, UpdateClass::Drafts(session))),
             PageRead::Died => return Ok(ChangesRead::Died),
         }
@@ -1114,19 +1124,26 @@ pub fn changes_since(board: &Board, session: Option<&SessionEntry>, drafts_alone
             }
         }
     }
-    // The cut: where a read's `more` stands, nothing past its `last` is
-    // answered, since another read may hold a position between.
-    let covered = |page: &ChangesPage| if page.more { page.last } else { u64::MAX };
-    let cut = pages.iter().map(|(page, _)| covered(page)).min().unwrap_or(u64::MAX);
+    // The cut: nothing past what every read is sure to have read to is
+    // answered, since another read may hold a position between. A read
+    // whose `more` stands is sure of its `last`; one read to the head, of
+    // every position its snapshot is known to reach — the head read first
+    // and each `last` read up to its own, the reads in their order.
+    let cut = pages
+        .iter()
+        .scan(head, |seen, (page, _)| {
+            *seen = (*seen).max(page.last);
+            Some(if page.more { page.last } else { *seen })
+        })
+        .min()
+        .unwrap_or(since);
     let mut entries: Vec<Value> = by_position.into_iter().filter(|(at, _)| *at <= cut).map(|(_, update)| update).collect();
     let cap = limit.map_or(usize::MAX, |n| usize::try_from(n).unwrap_or(usize::MAX));
     let next = if entries.len() > cap {
         entries.truncate(cap);
         entries.last().and_then(|update| update["at"].as_u64()).unwrap_or(since)
-    } else if cut < u64::MAX {
-        cut
     } else {
-        pages.iter().map(|(page, _)| page.last).max().unwrap_or(since).max(head)
+        cut
     };
     Ok(ChangesRead::Page(CaughtUp { entries, next, head }))
 }
@@ -1140,23 +1157,24 @@ enum PageRead {
 /// Reads one page of `class`'s feed from `since` for the catch-up.
 ///
 /// It is the published feed token-free, or the session's drafts supplement
-/// under its token; a page past the page budget is re-asked at the limit
-/// that `fits` (wire.md §The change feed, Paging), and every answer but a
-/// page is the caller's to face: the retention floor as the board's own
-/// refusal, the death signal as [`PageRead::Died`].
+/// under its token, each narrowed to `under` where it names an address; a
+/// page past the page budget is re-asked at the limit that `fits`, narrowed
+/// alike (wire.md §The change feed, Paging), and every answer but a page is
+/// the caller's to face: the retention floor as the board's own refusal,
+/// the death signal as [`PageRead::Died`].
 ///
 /// # Errors
 ///
 /// `history_reclaimed` with its floor; the board's refusals and the
 /// unreachable board; an answer the shell does not read, as a halt.
-fn page_from(board: &Board, class: UpdateClass<'_>, since: u64, limit: Option<u64>) -> Result<PageRead, Refusal> {
+fn page_from(board: &Board, class: UpdateClass<'_>, since: u64, limit: Option<u64>, under: Option<&str>) -> Result<PageRead, Refusal> {
     let (token, drafts) = match class {
         UpdateClass::Published => (None, false),
         UpdateClass::Drafts(session) => (Some(&session.token), true),
     };
     let mut limit = limit;
     loop {
-        match board.changes(token, &ChangesQuery { since, under: None, drafts, limit })? {
+        match board.changes(token, &ChangesQuery { since, under, drafts, limit })? {
             ChangesAnswer::Page(page) => return Ok(PageRead::Page(page)),
             ChangesAnswer::TooLarge { fits } => limit = Some(fits),
             ChangesAnswer::HistoryReclaimed { floor } => return Err(history_reclaimed(floor)),

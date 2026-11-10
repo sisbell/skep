@@ -13,7 +13,8 @@
 //! the row's output or a [`Refusal`] under the row's armed name, the board's
 //! own refusals carried verbatim — and of `changes`, the change feed's page
 //! from a position at the session's class, or narrowed to its drafts, or as
-//! a guest the published feed's, read for a client that comes back to a
+//! a guest the published feed's, and each under an address where one is
+//! named — a draft's history — read for a client that comes back to a
 //! board. The row methods are this module's alone behind one door,
 //! [`Shell::call`], which dispatches on the bridge's spelling — one arm per
 //! call, the compiler holding the match exhaustive — and logs every call, so
@@ -144,7 +145,7 @@ use crate::refs::{session_run, BoardEntry};
 use crate::refusal::{Name, Refusal};
 use crate::script;
 use crate::sessions::{self, SessionEntry, Sessions};
-use crate::wire::{bounded_address, json_len};
+use crate::wire::json_len;
 use crate::Talk;
 
 mod ceremony;
@@ -155,7 +156,7 @@ mod merge;
 
 use follow::{Followed, Follower, Followers, FOLLOW_AT_STOP};
 use merge::Merges;
-use publication::Publications;
+use publication::{address_arg, Publications};
 
 /// The session mode a run names, both arms selectable per run.
 ///
@@ -749,9 +750,9 @@ fn search_opts(args: &Value) -> Result<BridgeSearchOpts, Refusal> {
 
 /// Returns a `places` call's prefix, its `opts.under`, where it names one.
 ///
-/// The prefix is an address in its one spelling (`is_address_text`), within
-/// the component budget (`wire::bounded_address`); absent, the call lists
-/// the whole index.
+/// The prefix is an address in its one spelling, within the component
+/// budget (`publication::address_arg`, as `changes` reads its `under`);
+/// absent, the call lists the whole index.
 ///
 /// # Errors
 ///
@@ -760,8 +761,7 @@ fn search_opts(args: &Value) -> Result<BridgeSearchOpts, Refusal> {
 /// address.
 fn places_under(args: &Value) -> Result<Option<Address>, Refusal> {
     optional(args, "opts", |v| v.is_object().then_some(()))?;
-    let address = |v: &Value| v.as_str().filter(|text| is_address_text(text)).and_then(bounded_address);
-    optional(&args["opts"], "under", address).map_err(|_| Refusal::malformed("opts.under"))
+    optional(&args["opts"], "under", address_arg).map_err(|_| Refusal::malformed("opts.under"))
 }
 
 /// Where a guest form reads (§4b.1).
@@ -1892,10 +1892,11 @@ impl Shell {
         }
     }
 
-    /// Answers `changes(session, since, limit?, class?)`, and its guest form,
-    /// with `{entries, next, head}`.
+    /// Answers `changes` in its two forms with `{entries, next, head}`.
     ///
-    /// It is the board's change feed from the position `since`
+    /// The session form is `{session, since, limit?, class?, under?}`, the
+    /// guest form `{guest: true, board?, origin?, since, limit?, under?}`.
+    /// Either is the board's change feed from the position `since`
     /// (`feed::changes_since`) — what a client that comes back to a board
     /// missed: each entry in the `feed` event's update shape, oldest first,
     /// bounded by `limit` and the wire's page budget; `next` the position to
@@ -1908,23 +1909,32 @@ impl Shell {
     /// member takes, the drafts supplement alone: the page's read, from the
     /// position its session opened at (`opened_at` on the `session` answer),
     /// of the drafts rows a session's end cut off before it regained one
-    /// (skep #740). The guest form `{guest: true, board?, origin?, since,
-    /// limit?}` reads the published feed alone, token-free, at the board its
-    /// reference or its canonical origin names ([`Shell::guest_target`], as
-    /// `search` and `places` take it; skep #749). A draft the session may
-    /// not read never appears: the gating is the board's, at the token's
-    /// class. The read is one call's, on the caller's thread: the board's
-    /// feed thread keeps its own cursors and is not asked, and the shell
-    /// keeps no position of the page's — every form reads from `since`.
+    /// (skep #740). The guest form reads the published feed alone,
+    /// token-free, at the board its reference or its canonical origin names
+    /// ([`Shell::guest_target`], as `search` and `places` take it;
+    /// skep #749). `under`, an address of any level in its one spelling
+    /// (`publication::address_arg`, as `places` reads its prefix), narrows
+    /// every read either form makes to the rows whose reduced `docs` name a
+    /// document at or under it (PUB-7.31; wire.md §The change feed,
+    /// Narrowings): one draft's history, a row per change with its hand and
+    /// its time (skep #652). `next` is then a position of the narrowed feed —
+    /// asked again with the same `under`, it misses no row under the address,
+    /// and it read no row outside it — and `head` and the retention floor
+    /// stay the board's. A draft the session may not read never appears: the
+    /// gating is the board's, at the token's class. The read is one call's,
+    /// on the caller's thread: the board's feed thread keeps its own cursors
+    /// and is not asked, and the shell keeps no position of the page's —
+    /// every form reads from `since`.
     ///
     /// # Errors
     ///
     /// In this order: `malformed_args` naming `since` where it is no
-    /// non-negative integer, then `limit` where one is given in another
-    /// form, then `class` where one is given and is not the string
-    /// `"drafts"`; the form's (`guest_form`); in the guest form,
-    /// `malformed_args` naming `class` where one is given — no token to read
-    /// a drafts page under — then the target's (`unknown_board`,
+    /// non-negative integer, then `limit` where one is given in another form,
+    /// then `class` where one is given and is not the string `"drafts"`, then
+    /// `under` where one is given and is no address in its one spelling within
+    /// the component budget; the form's (`guest_form`); in the guest form,
+    /// `malformed_args` naming `class` where one is given — no token to read a
+    /// drafts page under — then the target's (`unknown_board`,
     /// `not_canonical`, `malformed_args`); in the session form
     /// `malformed_args` naming `session`, then `session_died` or
     /// `session_ended` ([`Shell::session`]); the board's own —
@@ -1936,6 +1946,7 @@ impl Shell {
         let since = args["since"].as_u64().ok_or_else(|| Refusal::malformed("since"))?;
         let limit = optional(args, "limit", Value::as_u64)?;
         let drafts_alone = optional(args, "class", |v| v.as_str().filter(|class| *class == "drafts"))?.is_some();
+        let under = optional(args, "under", address_arg)?;
         let (board, session) = if guest_form(args)? {
             if drafts_alone {
                 return Err(Refusal::malformed("class"));
@@ -1945,7 +1956,7 @@ impl Shell {
             let session = self.session(&args["session"])?;
             (Arc::clone(&session.board), Some(session))
         };
-        match changes_since(&board, session.as_deref(), drafts_alone, since, limit)? {
+        match changes_since(&board, session.as_deref(), drafts_alone, since, limit, under.as_ref())? {
             ChangesRead::Page(page) => Ok(json!({"entries": page.entries, "next": page.next, "head": page.head})),
             ChangesRead::Died => Err(match &session {
                 Some(session) => self.died(session),

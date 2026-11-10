@@ -124,7 +124,7 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "ChangesAnswer",
         open: false,
-        doc: "`changes(session, since, limit?, class?)` and its guest form — what changed since the position `since`: the entries in the `feed` update's shape, oldest first, each `published` or `drafts` by the read that answered it — under a session two reads, the published feed as a guest and the session's drafts supplement under its token, merged by position; with `class: 'drafts'`, the one value the member takes, the drafts supplement's page alone (a page's read, from the session's `opened_at`, of the drafts rows an end cut off before it regained a session); as a guest, `{guest: true, board?, origin?, since, limit?}`, the published feed alone, token-free (no `class`); `next` the position to ask from next time, past every entry answered and never past one withheld; `head` the board's latest position, read before the page; the shell keeps no position — every form reads from `since`",
+        doc: "`changes(session, since, limit?, class?, under?)` and its guest form — what changed since the position `since`: the entries in the `feed` update's shape, oldest first, each `published` or `drafts` by the read that answered it — under a session two reads, the published feed as a guest and the session's drafts supplement under its token, merged by position; with `class: 'drafts'`, the one value the member takes, the drafts supplement's page alone (a page's read, from the session's `opened_at`, of the drafts rows an end cut off before it regained a session); as a guest, `{guest: true, board?, origin?, since, limit?, under?}`, the published feed alone, token-free (no `class`); with `under`, an address of any level in its one spelling — a draft, a document, an account — every read the form makes is the board's `under=` narrowing (PUB-7.31): the rows whose reduced `docs` name a document at or under it, masked as the plain feed is, so a draft the caller may not read answers no row, `next` at the head — one draft's history, a row per change with its `key` or `attest` and its `time` (skep #652), the wire's two residues of lost testimony standing (wire.md §The change feed, Narrowings); `next` the position to ask from next time, past every entry answered and never past one withheld — under `under`, a position of the narrowed feed: asked again with the same `under` it misses no row under the address, and it read no row outside it, so a page keeps it apart from the positions it holds for the whole feed (`feedAt`, `draftsAt`) and never moves those by it; `head` the board's latest position, read before the page, and the floor `history_reclaimed` names the board's, narrowed or not; the shell keeps no position — every form reads from `since`",
         fields: &[req("entries", "FeedUpdate[]"), req("next", "number"), req("head", "number")],
     },
     Shape {
@@ -585,8 +585,8 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
     CallRow {
         name: "changes",
         forms: &[
-            &[req("session", "string"), req("since", "number"), opt("limit", "number"), opt("class", "'drafts'")],
-            &[req("guest", "true"), opt("board", "string"), opt("origin", "string"), req("since", "number"), opt("limit", "number")],
+            &[req("session", "string"), req("since", "number"), opt("limit", "number"), opt("class", "'drafts'"), opt("under", "string")],
+            &[req("guest", "true"), opt("board", "string"), opt("origin", "string"), req("since", "number"), opt("limit", "number"), opt("under", "string")],
         ],
         result: "ChangesAnswer",
     },

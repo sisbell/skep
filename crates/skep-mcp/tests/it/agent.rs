@@ -430,7 +430,9 @@ fn a3_a_fetch_cut_short_is_an_error_in_plain_words_and_fetched_again_whole() {
 /// the next ask from `next` answers nothing new; a draft written by a second
 /// session of the claimant's appears of the `drafts` class; a sibling
 /// account's published home appears, and its draft — which the claimant's
-/// reader class never reads — never does.
+/// reader class never reads — never does; and `under` narrows the page, to
+/// the draft's rows under the draft and to the home's under the sibling's
+/// account (skep #652).
 #[test]
 fn a4_changes_since_answers_a_published_write_after_a_position_and_next_advances() {
     let fixture = Fixture::new("a4");
@@ -473,6 +475,12 @@ fn a4_changes_since_answers_a_published_write_after_a_position_and_next_advances
     assert!(entries.iter().any(|e| e["class"] == "published" && e["docs"] == json!([sibling_home])), "the sibling's published home is everyone's: {page}");
     assert!(entries.iter().all(|e| e["docs"].as_array().is_none_or(|docs| !docs.contains(&json!(foreign)))), "a draft the session cannot read never appears: {page}");
     assert!(entries.windows(2).all(|pair| pair[0]["at"].as_u64() < pair[1]["at"].as_u64()), "oldest first, each position once: {page}");
+    let narrowed = mcp.call_json("changes_since", json!({"since": next, "under": draft}));
+    let rows = narrowed["entries"].as_array().expect("entries");
+    assert!(!rows.is_empty() && rows.iter().all(|e| e["docs"] == json!([draft]) && e["class"] == "drafts"), "under the draft, its rows alone: {narrowed}");
+    let narrowed = mcp.call_json("changes_since", json!({"since": next, "under": sibling}));
+    let rows = narrowed["entries"].as_array().expect("entries");
+    assert!(!rows.is_empty() && rows.iter().all(|e| e["docs"] == json!([sibling_home]) && e["class"] == "published"), "under the sibling's account, its home's rows alone: {narrowed}");
     let limited = mcp.call_json("changes_since", json!({"since": next, "limit": 1}));
     assert_eq!(limited["entries"].as_array().map(Vec::len), Some(1), "{limited}");
     assert_eq!(limited["next"], limited["entries"][0]["at"], "`next` is the last entry kept: {limited}");

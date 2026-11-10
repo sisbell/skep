@@ -216,8 +216,9 @@ fn the_dispatchs_door_admits_a_call_or_refuses_it_naming_the_culprit() {
     assert!(err.contains("unknown tool 'frobnicate'"), "the name speaks first: {err}");
     let err = Tool::admit("session_info", &args(json!({"principal": 2}))).expect_err("a stranger");
     assert!(err.contains("session_info takes no arguments") && err.contains("'principal'"), "{err}");
-    let err = Tool::admit("changes_since", &args(json!({"since": 0, "under": "1"}))).expect_err("a stranger");
-    assert!(err.contains("'since', 'limit'") && err.contains("'under'"), "{err}");
+    assert_eq!(Tool::admit("changes_since", &args(json!({"since": 0, "under": "1.0.1"}))), Ok(Tool::ChangesSince), "the narrowing the row takes");
+    let err = Tool::admit("changes_since", &args(json!({"since": 0, "undr": "1"}))).expect_err("a stranger");
+    assert!(err.contains("'since', 'limit', 'class', 'under'") && err.contains("'undr'"), "{err}");
     let err = Tool::admit("publication_open", &args(json!({"draft": "1.0.1.0.2", "doc": "1.0.1.0.3", "base": "1.0.1.0.3.1"}))).expect_err("a base the shell reads itself");
     assert!(err.contains("publication_open takes") && err.contains("'base'"), "{err}");
     assert_eq!(Tool::admit("publication_open", &args(json!({"draft": "1.0.1.0.2", "doc": "1.0.1.0.3"}))), Ok(Tool::PublicationOpen));
@@ -272,12 +273,13 @@ fn each_adapter_tools_schema_names_exactly_the_members_its_row_takes() {
 /// its naming note names each of them; its `fetch` card and fetch paragraph
 /// name the cap `media` enforces, and the card the fetch's deadline in words;
 /// the `search` card and its query's schema name skep-client's query bound,
-/// `changes_since`'s limit the change feed's default page, and the
-/// publishing paragraph the staging act as the adapter dispatches it — the
-/// `stage` tool, its `from_` — the act whose record the shell reads a
-/// draft's base off, with no record of the agent's to write (SP-25): a fact
-/// changed in one place alone tells every agent what the adapter then does
-/// otherwise.
+/// `changes_since`'s limit the change feed's default page, its card an entry's
+/// members as the shell declares its `FeedUpdate`, each optional where the
+/// declaration has it so, and the publishing paragraph the staging act as the
+/// adapter dispatches it — the `stage` tool, its `from_` — the act whose
+/// record the shell reads a draft's base off, with no record of the agent's to
+/// write (SP-25): a fact changed in one place alone tells every agent what the
+/// adapter then does otherwise.
 #[test]
 fn the_embedded_catalog_states_the_adapters_own_facts_as_the_code_holds_them() {
     use skep_client::board::DEFAULT_CHANGES_LIMIT;
@@ -302,6 +304,23 @@ fn the_embedded_catalog_states_the_adapters_own_facts_as_the_code_holds_them() {
     assert!(query.contains(&format!("at most {QUERY_BOUND} bytes")), "the query's schema names its bound: {query}");
     let limit = entry("changes_since")["inputSchema"]["properties"]["limit"]["description"].as_str().expect("the limit's description");
     assert!(limit.contains(&format!("the board's default, {DEFAULT_CHANGES_LIMIT}, when absent")), "the limit names the default page: {limit}");
+    let card = entry("changes_since")["description"].as_str().expect("the changes_since card");
+    let members = card.split_once("you may read): {").and_then(|(_, rest)| rest.split_once("}, oldest first")).map(|(members, _)| members).expect("the card lists an entry's members");
+    let mut depth = 0;
+    let bare: String = members
+        .chars()
+        .filter(|c| {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            depth == 0 && *c != ')'
+        })
+        .collect();
+    let spelled: BTreeSet<(&str, bool)> = bare.split(',').map(str::trim).map(|member| member.strip_suffix('?').map_or((member, true), |member| (member, false))).collect();
+    let declared: BTreeSet<(&str, bool)> = skep_shell::shapes::shape("FeedUpdate").expect("the shell declares a feed update").fields.iter().map(|field| (field.name, field.required)).collect();
+    assert_eq!(spelled, declared, "the card's entry is the shell's FeedUpdate: {card}");
     let publishing = catalog.instructions().split("\n\n").find(|paragraph| paragraph.starts_with("PUBLISHING. ")).expect("the publishing paragraph");
     assert!(DISPATCH_OPS.contains(&"stage") && RENAMES_FROM.contains(&"stage"), "the staging act is a tool the adapter dispatches, its from_ renamed");
     assert!(publishing.contains("with stage(from_)"), "the act that records a draft's base is the stage tool: {publishing}");

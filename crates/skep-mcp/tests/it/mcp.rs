@@ -514,16 +514,16 @@ fn a_log_no_one_reads_fails_no_work() {
 /// or its `opts` (the adapter is the one party that refuses those: ignored, a
 /// `principal` of 2 to `session_info` would be answered with this adapter's own
 /// facts, as if they were 2's, and a misspelt `under` would list the whole
-/// index as though narrowed; an `under` to `changes_since` is a narrowing the
-/// tool does not take yet), `search`'s `reindex` among them, the refresh of
-/// every unit the index holds, which the door withholds from an agent; and a
-/// wire op's arguments of the shape the shell reads as its `/op-at` form, whose
-/// inner frame it would send to the board's history. A wire op's other
-/// arguments pass through unread: the board's verdict on a stranger member is
-/// data. A member of the wrong form, or missing, reaches the shell — `fetch`'s
-/// `i`, and an adapter tool's `opts` or an option in it, which the door passes
-/// on whole — which refuses it `malformed_args` naming it, `isError`; the
-/// adapter never crashes on it.
+/// index, or answer the whole feed, as though narrowed), `search`'s `reindex`
+/// among them, the refresh of every unit the index holds, which the door
+/// withholds from an agent; and a wire op's arguments of the shape the shell
+/// reads as its `/op-at` form, whose inner frame it would send to the board's
+/// history. A wire op's other arguments pass through unread: the board's
+/// verdict on a stranger member is data. A member of the wrong form, or
+/// missing, reaches the shell — `fetch`'s `i`, `changes_since`'s `under`, and
+/// an adapter tool's `opts` or an option in it, which the door passes on whole
+/// — which refuses it `malformed_args` naming it, `isError`; the adapter never
+/// crashes on it.
 #[test]
 fn a_call_the_adapter_will_not_run_is_invalid_params_and_one_of_the_wrong_form_the_shells_refusal() {
     let fixture = Fixture::new("refuse");
@@ -535,7 +535,7 @@ fn a_call_the_adapter_will_not_run_is_invalid_params_and_one_of_the_wrong_form_t
         (json!({"name": "keygen", "arguments": {"label": "x"}}), "'keygen'"),
         (json!({"name": "session_info", "arguments": {"principal": 2}}), "'principal'"),
         (json!({"name": "search", "arguments": {"query": "x", "board": "b-1"}}), "'board'"),
-        (json!({"name": "changes_since", "arguments": {"since": 0, "under": "1.0.1"}}), "'under'"),
+        (json!({"name": "changes_since", "arguments": {"since": 0, "undr": "1.0.1"}}), "'undr'"),
         (json!({"name": "fetch", "arguments": {"i": "1.0.1.0.1.0.1.1", "session": "s-1"}}), "'session'"),
         (json!({"name": "places", "arguments": {"opts": {"undr": "1.0.1"}}}), "'undr'"),
         (json!({"name": "search", "arguments": {"query": "x", "opts": {"reindex": true}}}), "'reindex'"),
@@ -555,6 +555,8 @@ fn a_call_the_adapter_will_not_run_is_invalid_params_and_one_of_the_wrong_form_t
         ("search", json!({"query": "x", "opts": {"limit": "three"}}), "opts.limit"),
         ("places", json!({"opts": {"under": 7}}), "opts.under"),
         ("places", json!({"opts": 3}), "opts"),
+        ("changes_since", json!({"since": 0, "under": 7}), "under"),
+        ("changes_since", json!({"since": 0, "under": "01.0.1"}), "under"),
     ] {
         let refused = mcp.call_error(tool, args.clone());
         assert_eq!((refused["kind"].as_str(), refused["name"].as_str(), refused["what"].as_str()), (Some("shell"), Some("malformed_args"), Some(what)), "{tool} {args}: {refused}");

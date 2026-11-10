@@ -149,7 +149,7 @@ pub enum Tool {
     PublicationStanding,
     /// The apparatus: who this adapter acts as, and its session's facts.
     SessionInfo,
-    /// `changes(session, since, limit?, class?)`, the shell's, as a pull tool.
+    /// `changes(session, since, limit?, class?, under?)`, the shell's, pulled.
     ChangesSince,
     /// `fetch(session, i)`, the shell's streamed call, as a content block.
     Fetch,
@@ -175,7 +175,7 @@ const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
     ("publication_cancel", Tool::PublicationCancel, &[]),
     ("publication_standing", Tool::PublicationStanding, &["draft", "doc", "also"]),
     ("session_info", Tool::SessionInfo, &[]),
-    ("changes_since", Tool::ChangesSince, &["since", "limit", "class"]),
+    ("changes_since", Tool::ChangesSince, &["since", "limit", "class", "under"]),
     ("fetch", Tool::Fetch, &["i"]),
 ];
 

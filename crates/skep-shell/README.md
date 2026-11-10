@@ -59,40 +59,53 @@ there.
 
 ## The `changes` call
 
-`changes(session, since, limit?, class?)` → `{entries, next, head}`, and
-its guest form `changes({guest: true, board?, origin?, since, limit?})`:
-what changed since the position `since` — the catch-up of a client that
-comes back to a board, whose `feed` events began at its connection. Under
-a session it is the board's change feed read TWICE from `since` and
-merged by position: the published feed as a guest, token-free, and the
-session's drafts supplement under its token (`drafts=true`), so each entry
-is a `FeedUpdate` with the `class` the `feed` event gives a row —
-`published` or `drafts`, the latter naming the `session` — which one plain
-read under the token could not tell apart; a position both reads answer (a
-straddle) is answered once, by the rendering naming more documents. With
+`changes(session, since, limit?, class?, under?)` →
+`{entries, next, head}`, and its guest form
+`changes({guest: true, board?, origin?, since, limit?, under?})`: what
+changed since the position `since` — the catch-up of a client that comes
+back to a board, whose `feed` events began at its connection. Under a
+session it is the board's change feed read TWICE from `since` and merged
+by position: the published feed as a guest, token-free, and the session's
+drafts supplement under its token (`drafts=true`), so each entry is a
+`FeedUpdate` with the `class` the `feed` event gives a row — `published`
+or `drafts`, the latter naming the `session` — which one plain read under
+the token could not tell apart; a position both reads answer (a straddle)
+is answered once, by the rendering naming more documents. With
 `class: "drafts"`, the member's one value, the session's drafts supplement
 is read ALONE under its token: the page's read, from the position its
-session opened at (`opened_at` on the `session` answer), of the drafts rows
-a session's end cut off before the page regained one — the published rows
-it took meanwhile are not read again. The guest form reads the published
-feed ALONE, token-free, at the board its reference or its canonical origin
-names (as `search` and `places` take it), so a page with no session reads
-the rows its event stream missed. The board's head is read first
-(`/health`), each read is one page bounded by `limit` and the wire's page
-budget (a page past it re-asked at the limit that fits), and the page is
-cut where a read's `more` stands, then to `limit`, so no position is
-skipped: `next` is the position to ask from next time — past every entry
-answered, never past one withheld, and at the head where every read was
+session opened at (`opened_at` on the `session` answer), of the drafts
+rows a session's end cut off before the page regained one — the published
+rows it took meanwhile are not read again. The guest form reads the
+published feed ALONE, token-free, at the board its reference or its
+canonical origin names (as `search` and `places` take it), so a page with
+no session reads the rows its event stream missed. With `under` — an
+address of any level in its one spelling, a draft, a document or an
+account — every read either form makes is the board's `under=` narrowing:
+the rows whose reduced `docs` name a document at or under it, one draft's
+history among them, a row per change with its hand and its time; `next` is
+then a position of the narrowed feed, which misses no row under the
+address asked again with it and read no row outside it, so a page keeps it
+apart from its positions for the whole feed; `head` and the retention
+floor stay the board's. The board's head is read first (`/health`), each
+read is one page bounded by `limit` and the wire's page budget (a page
+past it re-asked at the limit that fits), and the page is cut at what
+every read is sure to have read to — a read whose `more` stands, its
+`last`; one read to the head, the latest of the head read first and the
+`last`s of itself and every read before it, a later commit perhaps on a
+later read's page alone — then to `limit`, so no position is skipped:
+`next` is the position to ask from next time — past every entry answered,
+never past one withheld, and at the head at least where every read was
 complete, so a quiet board's next ask is the empty page at once. The shell
 keeps no position: every form reads from the caller's `since`. A draft the
 session may not read never appears: the gating is the board's. Its
-refusals: `malformed_args` naming `since`, `limit` or `class` — another
-value, another form, or any `class` in the guest form — then the form's
-and the target's; `session_died` with the reason where the reference's
-session ended or names an earlier run of the shell, `session_ended` where
-it names nothing; the board's own (`history_reclaimed` with its floor,
-`malformed_changes`, `feed_rebuilding`); and `session_died` where the read
-met the death signal.
+refusals: `malformed_args` naming `since`, `limit`, `class` or `under` —
+another value, another form, or any `class` in the guest form — then the
+form's and the target's; `session_died` with the reason where the
+reference's session ended or names an earlier run of the shell,
+`session_ended` where it names nothing; the board's own
+(`history_reclaimed` with its floor, `malformed_changes`,
+`feed_rebuilding`); and `session_died` where the read met the death
+signal.
 
 ## The refusing arm
 

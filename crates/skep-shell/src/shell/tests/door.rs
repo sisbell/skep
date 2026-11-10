@@ -136,11 +136,11 @@ pub(super) fn nowhere() -> String {
 /// It is refused `malformed_args` naming it, never read as absent and so
 /// never the row's default: a principal spelled as a string or past
 /// 2^53 − 1, a label, a select, a paper flag, a lost fingerprint, a search
-/// limit of another type, a listing's `opts` of no object and its `under` of
-/// no address or of another spelling, an `op` naming neither form or
-/// both, and an `op`'s `anchors` of no object, naming one anchor, carrying a
-/// member beside the three, an anchor that is no I-address, a span of no
-/// list, of a run whose start is no I-address or of a width spelled as a
+/// limit of another type, a listing's `opts` of no object, its `under` and a
+/// catch-up's of no address or of another spelling, an `op` naming neither
+/// form or both, and an `op`'s `anchors` of no object, naming one anchor,
+/// carrying a member beside the three, an anchor that is no I-address, a span
+/// of no list, of a run whose start is no I-address or of a width spelled as a
 /// number, or anchors one byte past their bound; and an `op`'s `after` of no
 /// string or past its bound, beside an `/op-at` frame or a frame that follows
 /// nothing, or in the guest form, and a piece of a follower's end in a
@@ -218,14 +218,18 @@ fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
         ("op", json!({"session": "s-x", "frame": mark(json!({"burst": "b-1", "offset": 0, "width": 1, "start": "1.0.1.0.1.0.1.1"})), "after": "b-1"}), "frame.to"),
         ("op", json!({"session": "s-x", "frame": mark(piece.clone())}), "after"),
         ("op", json!({"guest": true, "origin": listener, "frame": read, "after": "b-1"}), "after"),
-        // `changes`' two forms: `class` of another value or form, read before
-        // the session is looked up; `class` in the guest form and a guest
-        // `limit` of another form, each before the target is dialed; the
-        // guest form's `board` of another form.
+        // `changes`' two forms: `class` of another value or form, and `under`
+        // of no address or of another spelling, read before the session is
+        // looked up; `class` in the guest form, a guest `limit` of another
+        // form and a guest `under` of no address, each before the target is
+        // dialed; the guest form's `board` of another form.
         ("changes", json!({"session": "s-x", "since": 0, "class": "published"}), "class"),
         ("changes", json!({"session": "s-x", "since": 0, "class": 7}), "class"),
+        ("changes", json!({"session": "s-x", "since": 0, "under": 7}), "under"),
+        ("changes", json!({"session": "s-x", "since": 0, "under": "01.0.1"}), "under"),
         ("changes", json!({"guest": true, "origin": listener, "since": 0, "class": "drafts"}), "class"),
         ("changes", json!({"guest": true, "origin": listener, "since": 0, "limit": "5"}), "limit"),
+        ("changes", json!({"guest": true, "origin": listener, "since": 0, "under": "1..2"}), "under"),
         ("changes", json!({"guest": true, "board": 7, "since": 0}), "board"),
     ];
     for (call, args, member) in cases {

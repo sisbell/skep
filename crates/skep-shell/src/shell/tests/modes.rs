@@ -34,9 +34,13 @@
 //! shell's close, and the stop's close of one said on `Talk` as `close` says
 //! it; every event held to its declaration; and the codec's private budgets,
 //! each the shell's. The `session` answer saying whether its session writes,
-//! under either mode. And the refusing arm, the setting of a client with no
-//! person present: every secret and consent moment a walk reaches refused
+//! and with which key, under either mode; and with two keys bound for one
+//! principal, the answer and the restart arm naming the key each session
+//! holds. And the refusing arm, the setting of a client with no person
+//! present: every secret and consent moment a walk reaches refused
 //! `person_required` and answered by nothing.
+
+use skep_client::store::{Binding, KeyStore};
 
 use super::*;
 
@@ -504,9 +508,10 @@ fn a_sessions_open_position_is_the_boards_position_read_before_it_opened() {
 /// acked under it; every event naming the re-opened session follows the
 /// death on the stream (skep #703); and a call on the old reference is
 /// answered `session_died` with the reason kept, `reason.session` the
-/// re-opened reference, never a bare `session_ended` (skep #532; the mutant
-/// that drops an ended reference with its reason answers `session_ended`,
-/// and every client has to watch the stream to learn the new reference).
+/// re-opened reference and `reason.fingerprint` the key it holds, never a
+/// bare `session_ended` (skep #532, #579; the mutant that drops an ended
+/// reference with its reason answers `session_ended`, and every client has
+/// to watch the stream to learn the new reference).
 #[test]
 fn a_session_the_restart_ended_is_reopened_under_a_fresh_reference() {
     let dir = TempDir::new().unwrap();
@@ -528,7 +533,8 @@ fn a_session_the_restart_ended_is_reopened_under_a_fresh_reference() {
     assert_eq!((reason["arm"].as_str(), reason["reopened"].as_bool()), (Some("restart"), Some(true)), "{reason}\n{}", lines.lock().unwrap().join("\n"));
     let reopened = reason["session"].as_str().expect("the arm names the re-opened session").to_string();
     assert!(reopened.starts_with("s-") && reopened != session, "{reopened}");
-    assert!(signed.sessions.get(&reopened).is_some(), "the re-opened session is registered");
+    let key = signed.sessions.get(&reopened).expect("the re-opened session is registered").key().map(|key| key.to_hex()).expect("a re-opened session holds a key");
+    assert_eq!(reason["fingerprint"].as_str(), Some(key.as_str()), "the arm names the key the re-opened session holds: {reason}");
     wait_for(&seen, |e| e.name == EventName::Index && e.data["session"] == reopened);
     let edition = signed
         .call("op", &json!({"session": reopened, "frame": {"op": "create_new_document", "account": "1.0.1", "published": true}}))
@@ -536,8 +542,15 @@ fn a_session_the_restart_ended_is_reopened_under_a_fresh_reference() {
     assert_eq!(edition["resp"], "ack_addr", "{edition}");
     let stale = signed.call("op", &json!({"session": session, "frame": {"op": "key_set", "account": "1.0.1"}})).unwrap_err().to_value();
     assert_eq!(
-        (stale["name"].as_str(), stale["session"].as_str(), stale["reason"]["arm"].as_str(), stale["reason"]["reopened"].as_bool(), stale["reason"]["session"].as_str()),
-        (Some("session_died"), Some(session.as_str()), Some("restart"), Some(true), Some(reopened.as_str())),
+        (
+            stale["name"].as_str(),
+            stale["session"].as_str(),
+            stale["reason"]["arm"].as_str(),
+            stale["reason"]["reopened"].as_bool(),
+            stale["reason"]["session"].as_str(),
+            stale["reason"]["fingerprint"].as_str()
+        ),
+        (Some("session_died"), Some(session.as_str()), Some("restart"), Some(true), Some(reopened.as_str()), Some(key.as_str())),
         "a call on the old reference learns the re-opened one from its answer: {stale}"
     );
     let events = seen.lock().unwrap();
@@ -1275,17 +1288,21 @@ fn places_lists_the_boards_documents_at_the_calls_class() {
     sd.shutdown();
 }
 
-/// Checks that the session answer says whether the session writes.
+/// Checks that the session answer says whether the session writes, and with
+/// which key.
 ///
 /// Its `writes` is `false` under the bare mode — the keyless session, which
 /// reads alone, its mint refused `write_in_bare_session` — and `true` under
-/// the signed mode, the same mint acked; each answer held to its
-/// declaration, and the shell's own verdict on the write agreeing with what
-/// the answer said before it was offered (the mutant that answers `true` for
-/// every session has the page offer a keyless reader an edit the shell
-/// refuses at the save).
+/// the signed mode, the same mint acked; its `fingerprint` `null` under the
+/// bare mode, which holds no key, and under the signed mode the store's one
+/// key, the key the session's own entry holds (skep #579; the mutant that
+/// leaves the member out of a bare session's answer fails its declaration);
+/// each answer held to its declaration, and the shell's own verdict on the
+/// write agreeing with what the answer said before it was offered (the
+/// mutant that answers `true` for every session has the page offer a keyless
+/// reader an edit the shell refuses at the save).
 #[test]
-fn the_session_answer_says_whether_the_session_writes() {
+fn the_session_answer_says_whether_the_session_writes_and_with_which_key() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let origin = format!("http://127.0.0.1:{}", sd.port());
@@ -1294,10 +1311,15 @@ fn the_session_answer_says_whether_the_session_writes() {
     for (mode, writes) in [(SessionMode::Bare { principal: 1 }, false), (SessionMode::Signed { principal: 1 }, true)] {
         let (shell, lines) = open_shell(&origin, &store, mode);
         let board = shell.board_references().remove(0);
+        let rows = shell.call("fingerprint", &json!({})).unwrap();
+        let [key]: [&Value; 1] = rows.as_array().unwrap().iter().map(|row| &row["fingerprint"]).collect::<Vec<_>>().try_into().expect("the claim's key, the store's only one");
         let opened = shell.call("session", &json!({"board": board})).unwrap();
         crate::shapes::assert_declared("SessionOpened", &opened);
         assert_eq!(opened["writes"], json!(writes), "{}: {opened}", mode.name());
         let session = opened["session"].as_str().unwrap();
+        let named = if writes { key.clone() } else { Value::Null };
+        let held = shell.sessions.get(session).unwrap().key().map(|key| key.to_hex());
+        assert_eq!((&opened["fingerprint"], held.map(Value::from).unwrap_or_default()), (&named, named.clone()), "{}: the key the session holds, or null: {opened}", mode.name());
         match shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})) {
             Ok(acked) => assert!(writes && acked["resp"] == "ack_addr", "{}: a write under a session whose answer said `writes: {writes}` was acked: {acked}", mode.name()),
             Err(refused) => assert!(
@@ -1309,6 +1331,76 @@ fn the_session_answer_says_whether_the_session_writes() {
         }
         shell.shutdown();
     }
+    sd.shutdown();
+}
+
+/// Checks that the answer and the restart arm name the key a session holds.
+///
+/// With two keys bound for one principal at the board — the claim's key A,
+/// then a key B enrolled into the account from this device and bound after
+/// A, as a `skep bind` of B binds it — both of the store's `fingerprint`
+/// rows hold principal 1's binding, which cannot say which key signs; the
+/// session opened before B's binding answers A, and the one opened after it
+/// answers B, each the key its own entry holds (`client.md` §4b.1; skep
+/// #579). The daemon's restart ends both, and the re-open selects the key
+/// afresh: the first session's `session-died` names its re-opened session
+/// and B, the key that session holds, and never A, the dead session's own —
+/// and so does the answer to a call on the dead reference (the mutants that
+/// answer the store's oldest binding, or pair the re-opened reference with
+/// the dying session's key, each name A where the session signs with B).
+#[test]
+fn the_answer_and_the_restart_arm_name_the_key_a_session_holds() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let port = sd.port();
+    let origin = format!("http://127.0.0.1:{port}");
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (shell, lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    let talked = || lines.lock().unwrap().join("\n");
+    let board = shell.board_references().remove(0);
+    let rows = || shell.call("fingerprint", &json!({})).unwrap().as_array().unwrap().clone();
+    let [a]: [String; 1] = rows().iter().map(|row| row["fingerprint"].as_str().unwrap().to_string()).collect::<Vec<_>>().try_into().expect("the claim's key, the store's only one");
+    let open = || shell.call("session", &json!({"board": board})).unwrap_or_else(|r| panic!("{r}\n{}", talked()));
+    let held = |session: &str| shell.sessions.get(session).expect("the session stands").key().map(|key| key.to_hex());
+    let first = open();
+    let s1 = first["session"].as_str().unwrap().to_string();
+    assert_eq!((first["fingerprint"].as_str(), held(&s1).as_deref()), (Some(a.as_str()), Some(a.as_str())), "{first}");
+    // B, enrolled into the account under A and bound after A's line.
+    let generated = shell.call("keygen", &json!({"label": "second"})).unwrap();
+    let b = generated["fingerprint"].as_str().unwrap().to_string();
+    let enrolled = shell.call("enroll", &json!({"board": board, "payload": generated["payload"]})).unwrap_or_else(|r| panic!("{r}\n{}", talked()));
+    assert_eq!(enrolled["fingerprints"], json!([b]), "{enrolled}");
+    let line = Binding::Enrollment { origin: Origin::parse(&origin).unwrap(), principal: 1, account: "1.0.1".into(), fingerprint: skep_identity::Fingerprint::parse_hex(&b).unwrap() };
+    shell.store.bind(&line).unwrap();
+    let principal_1 = format!("{origin} principal 1 account 1.0.1");
+    let bound =
+        |fp: &str| rows().into_iter().find(|row| row["fingerprint"] == fp).expect("the key's row")["bindings"].as_array().unwrap().iter().any(|line| line.as_str() == Some(principal_1.as_str()));
+    assert!(bound(&a) && bound(&b), "the premise: both rows hold principal 1's binding, which cannot say which key signs: {:?}", rows());
+    let second = open();
+    let s2 = second["session"].as_str().unwrap().to_string();
+    assert_eq!((second["fingerprint"].as_str(), held(&s2).as_deref()), (Some(b.as_str()), Some(b.as_str())), "the newest binding's key: {second}");
+    assert_eq!(held(&s1).as_deref(), Some(a.as_str()), "the first session still holds the key it was opened with");
+    // The restart, whose re-open selects the key afresh.
+    sd.shutdown();
+    let sd = spawn_at(&dir.path().join("board"), true, port);
+    let died = wait_for(&seen, |e| e.name == EventName::SessionDied && e.data["session"] == s1);
+    let reason = &died.data["reason"];
+    let reopened = reason["session"].as_str().unwrap_or_else(|| panic!("the arm names the re-opened session: {reason}\n{}", talked())).to_string();
+    assert_eq!(
+        (reason["arm"].as_str(), reason["reopened"].as_bool(), reason["fingerprint"].as_str()),
+        (Some("restart"), Some(true), Some(b.as_str())),
+        "the re-opened session's key, not the dead one's: {reason}\n{}",
+        talked()
+    );
+    assert_eq!(held(&reopened).as_deref(), Some(b.as_str()), "the key the re-opened session holds");
+    let stale = shell.call("op", &json!({"session": s1, "frame": {"op": "key_set", "account": "1.0.1"}})).unwrap_err().to_value();
+    assert_eq!((stale["reason"]["session"].as_str(), stale["reason"]["fingerprint"].as_str()), (Some(reopened.as_str()), Some(b.as_str())), "a call on the dead reference learns the key too: {stale}");
+    shell.shutdown();
+    drop(shell);
+    answerer.join().unwrap();
     sd.shutdown();
 }
 

@@ -267,7 +267,7 @@ use super::{optional, Shell, Write, Writer};
 use crate::events::EventBus;
 use crate::feed::Searcher;
 use crate::refusal::{Name, Refusal};
-use crate::sessions::{self, SessionEntry, SessionKind};
+use crate::sessions::{self, SessionEntry};
 use crate::wire::bounded_address;
 use crate::EventName;
 
@@ -532,7 +532,7 @@ impl Shell {
     /// no key; `store_unreadable` where its key file cannot be read; and
     /// `no_account` where the board answered the session no account.
     pub(super) fn signed_within_call(&self, session: &SessionEntry, call: &str) -> Result<Signed, Refusal> {
-        let SessionKind::Signed { fingerprint, .. } = &session.facts.kind else {
+        let Some(fingerprint) = session.key() else {
             return Err(Refusal::shell(Name::WRITE_IN_BARE_SESSION, json!({"call": call})));
         };
         let signer = sessions::signer(&self.store, &self.store.key_path(fingerprint))?;

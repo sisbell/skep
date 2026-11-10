@@ -238,7 +238,7 @@ fn the_swap_moves_the_table_and_keeps_the_reason_before_the_death_is_said_then_w
         let reopened = reopens.then(|| sessions.fresh("b-1", Arc::clone(&board), signed_open(1, "1.0.1", "1.0.1")));
         assert!(reopened.as_ref().is_none_or(|r| sessions.get(&r.reference).is_none()), "built, not entered");
         log.lock().unwrap().clear();
-        let reason = restart_reason(reopened.as_ref().map(|r| r.reference.as_str()), None);
+        let reason = restart_reason(reopened.as_deref(), None);
         let (seen, watched) = (Arc::clone(&log), Arc::clone(&sessions));
         let at_emit = (dying.reference.clone(), reopened.as_ref().map(|r| r.reference.clone()), reason.clone());
         bus.watch(move |_, event| {
@@ -577,16 +577,17 @@ fn a_keys_diagnosis_is_named_by_the_list_it_stands_in() {
     assert_eq!((refused.name(), refused.to_value()["kind"].as_str()), ("not_enrolled", Some("halt")), "{refused}");
 }
 
-/// A SESSION's KEY ATTESTS the ten kinds that have an entry frame and no
-/// other: a signed session names the key that opened it for an `insert`
-/// and none for a `delete`, and a bare session names none for either —
-/// what `attest` signs with and the burst's door keeps an attest's room for
-/// (the mutants that attest a bare session's write, or every kind, leave
-/// the burst's door keeping room no send takes, or none where a send does).
-/// And a WRITE goes out under the signed session alone: the bare one, the
-/// keyless session for reading, may write nothing (foundations §3.3 state
-/// 3; the mutant that lets a bare session write commits a `bare` write no
-/// key signed).
+/// Checks that a session's key attests the ten kinds with an entry frame.
+///
+/// A signed session names the key that opened it, its own key
+/// (`SessionEntry::key`), for an `insert` and none for a `delete`; a bare
+/// session holds no key and names none for either — what `attest` signs
+/// with and the burst's door keeps an attest's room for (the mutants that
+/// attest a bare session's write, or every kind, leave the burst's door
+/// keeping room no send takes, or none where a send does). And a write goes
+/// out under the signed session alone: the bare one, the keyless session for
+/// reading, may write nothing (foundations §3.3 state 3; the mutant that
+/// lets a bare session write commits a `bare` write no key signed).
 #[test]
 fn a_sessions_key_attests_the_checked_kinds_alone() {
     let sessions = Sessions::new(None, Arc::new(|_: &str| {}));
@@ -596,6 +597,7 @@ fn a_sessions_key_attests_the_checked_kinds_alone() {
     let facts = Facts { principal: 2, account: Some("1.0.2".into()), kind: SessionKind::Bare };
     let bare = sessions.register(&at("b-1", nowhere()), Open { token: Token::parse(&"8e".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut Recorded::default());
     assert_eq!((bare.attesting_key("insert"), bare.attesting_key("delete")), (None, None));
+    assert_eq!((signed.key(), bare.key()), (Some(fingerprint), None), "the session's own key is the signed session's alone");
     assert_eq!((signed.may_write(), bare.may_write()), (true, false), "a write goes out under the signed session alone");
 }
 

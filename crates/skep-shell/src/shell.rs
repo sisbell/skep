@@ -1071,12 +1071,13 @@ impl Shell {
     /// is no string; then, where this shell holds no live session under it,
     /// `session_died` `{session, reason}` where this run ended it — the
     /// death's reason as derived, `reason.session` the re-opened reference
-    /// where the restart arm re-opened one, or the `closed` arm for the
-    /// page's own close (skep #532); `session_died` with the restart arm, not
-    /// re-opened, for a well-formed reference of another run of the shell —
-    /// one from before its restart (skep #625); and the pin's "session
-    /// ended", `session_ended`, for any other: a reference this run dropped
-    /// from its ring of ended ones, or never issued.
+    /// and `reason.fingerprint` its key where the restart arm re-opened one,
+    /// or the `closed` arm for the page's own close (skep #532, #579);
+    /// `session_died` with the restart arm, not re-opened, for a well-formed
+    /// reference of another run of the shell — one from before its restart
+    /// (skep #625); and the pin's "session ended", `session_ended`, for any
+    /// other: a reference this run dropped from its ring of ended ones, or
+    /// never issued.
     fn session(&self, session_reference: &Value) -> Result<Arc<SessionEntry>, Refusal> {
         let Some(session_reference) = session_reference.as_str() else { return Err(Refusal::malformed("session")) };
         self.sessions.get(session_reference).ok_or_else(|| self.session_gone(session_reference))
@@ -1197,25 +1198,31 @@ impl Shell {
 
     /// Answers `session(board, principal)`: the mode's opening as `principal`.
     ///
-    /// It answers `{session, principal, account, writes, opened_at}`, with
-    /// `another_window` beside them while another shell holds the board's
-    /// held store: the reference issued in the token's place; `writes` —
-    /// whether the session itself may write ([`SessionEntry::may_write`]):
-    /// the signed mode's session writes, the bare mode's keyless one reads
-    /// alone and has every write refused `write_in_bare_session`, which the
-    /// page learns here, before it offers one; the board's own state can
-    /// refuse a write beside it — the own node stopped, its writes halted or
-    /// its write path poisoned (§3c.4), which this answer does not report, or
-    /// another shell holding its held store (§3c.3), every write at the board
-    /// refused `another_window`, which it reports: `another_window: true`,
-    /// present only while that state stands as the session opens, read after
-    /// the open, which tries the store again, so an open that takes the store
-    /// answers none, and every later edge of the state emitted as
-    /// `another-window` ([`Holds::another_window`]; skep #827); and
-    /// `opened_at`, the board's position read before the session opened
-    /// ([`SessionEntry::opened_at`]), where the session's drafts feed starts
-    /// — the position a page's drafts-only `changes` read starts from after
-    /// the session's end (skep #740).
+    /// It answers `{session, principal, account, writes, fingerprint,
+    /// opened_at}`, with `another_window` beside them while another shell holds
+    /// the board's held store: the reference issued in the token's place;
+    /// `writes` — whether the session itself may write
+    /// ([`SessionEntry::may_write`]): the signed mode's session writes, the
+    /// bare mode's keyless one reads alone and has every write refused
+    /// `write_in_bare_session`, which the page learns here, before it offers
+    /// one; the board's own state can refuse a write beside it — the own node
+    /// stopped, its writes halted or its write path poisoned (§3c.4), which
+    /// this answer does not report, or another shell holding its held store
+    /// (§3c.3), every write at the board refused `another_window`, which it
+    /// reports: `another_window: true`, present only while that state stands as
+    /// the session opens, read after the open, which tries the store again, so
+    /// an open that takes the store answers none, and every later edge of the
+    /// state emitted as `another-window` ([`Holds::another_window`];
+    /// skep #827); `fingerprint`, the key the session was opened with, as the
+    /// store's `fingerprint` rows spell it — read off the session itself
+    /// ([`SessionEntry::key`]), never from a second selection of the store's,
+    /// which a later binding moves, so the page names the key its session signs
+    /// with and never works it out from the rows' bindings — and `null` for a
+    /// bare session, which holds none (skep #579); and `opened_at`, the board's
+    /// position read before the session opened ([`SessionEntry::opened_at`]),
+    /// where the session's drafts feed starts — the position a page's
+    /// drafts-only `changes` read starts from after the session's end
+    /// (skep #740).
     ///
     /// # Errors
     ///
@@ -1238,7 +1245,9 @@ impl Shell {
         // and its daemon-running tick drive it once a session that may write
         // stands (§3c.5).
         self.holds.open_session(&session);
-        let mut opened = json!({"session": session.reference, "principal": principal, "account": session.facts.account, "writes": session.may_write(), "opened_at": session.opened_at});
+        let fingerprint = session.key().map(|key| key.to_hex());
+        let mut opened =
+            json!({"session": session.reference, "principal": principal, "account": session.facts.account, "writes": session.may_write(), "fingerprint": fingerprint, "opened_at": session.opened_at});
         // Read after the open, which tries another shell's store again.
         if self.holds.another_window(&entry.reference) {
             opened["another_window"] = Value::Bool(true);

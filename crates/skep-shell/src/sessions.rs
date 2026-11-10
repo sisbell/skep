@@ -43,8 +43,9 @@
 //! release picks it, since [`Sessions::on_board`] leaves an ending entry out
 //! — a resend under a dead token (skep #530) and a drafts read under one are
 //! never made. On the restart arm the re-opened session is built there —
-//! its reference minted, named in the reason as `session` — and NOT
-//! entered. What the initializer leaves is the swap it owes ([`Ended`]).
+//! its reference minted, named in the reason as `session` beside the key it
+//! was opened with as `fingerprint` — and NOT entered. What the initializer
+//! leaves is the swap it owes ([`Ended`]).
 //!
 //! **The swap, on the feed thread** ([`Supplements::ended`],
 //! [`Sessions::swap`]). The caller that ended the session hands the swap to
@@ -214,18 +215,31 @@ impl SessionEntry {
         matches!(self.facts.kind, SessionKind::Signed { .. })
     }
 
+    /// Returns the fingerprint of the key the session was opened with.
+    ///
+    /// It is a signed session's, the key its handshake signed with; a bare
+    /// session holds none. It is the one source of the session's key: every
+    /// attest under the session signs with it
+    /// ([`SessionEntry::attesting_key`]), and the `session` answer and the
+    /// restart arm's reason name it (`client.md` §4b.1, §4b.2; skep #579),
+    /// so the page names the key its session signs with and never works it
+    /// out from the store's bindings.
+    pub fn key(&self) -> Option<&Fingerprint> {
+        match &self.facts.kind {
+            SessionKind::Signed { fingerprint, .. } => Some(fingerprint),
+            SessionKind::Bare => None,
+        }
+    }
+
     /// Returns the key a write of `op` under this session is attested with.
     ///
-    /// It is the key that opened it, where the session holds one and `op` is
-    /// one of the ten kinds that have an entry frame
-    /// (`attest::in_checked_set`); none otherwise. It is what
+    /// It is the key that opened it ([`SessionEntry::key`]), where the
+    /// session holds one and `op` is one of the ten kinds that have an entry
+    /// frame (`attest::in_checked_set`); none otherwise. It is what
     /// [`SessionEntry::attest`] signs with, and what the burst's door keeps
     /// an attest's room for (`Burst::admit`).
     pub fn attesting_key(&self, op: &str) -> Option<&Fingerprint> {
-        match &self.facts.kind {
-            SessionKind::Signed { fingerprint, .. } if in_checked_set(op) => Some(fingerprint),
-            _ => None,
-        }
+        self.key().filter(|_| in_checked_set(op))
     }
 
     /// Returns the board term a signed write under this session signs over.
@@ -441,7 +455,8 @@ pub trait Supplements {
 /// It is what [`Sessions::end`]'s initializer leaves for the supplements to
 /// run: the dying entry, still in the table; the session re-opened in its
 /// place on the restart arm, built and not yet entered; and the reason,
-/// which names the re-opened reference as `session` where one is.
+/// which names the re-opened reference as `session`, and its key as
+/// `fingerprint`, where one is.
 #[derive(Debug, Clone)]
 pub struct Ended {
     pub dying: Arc<SessionEntry>,
@@ -592,14 +607,15 @@ impl Sessions {
     /// `OnceLock`, the entry still in the table and marked ending first, its
     /// reason is derived from public reads at its board; on the restart arm
     /// the re-opened session is built under a fresh reference at the same
-    /// board, named in the reason as `session`, and not yet entered. Then the
-    /// swap is handed to `supplements` ([`Supplements::ended`]): the table's
-    /// two moves, the reason kept, `session-died`, and the re-opened token
-    /// widened or the supplement released ([`Sessions::release`]) — narrow
-    /// "at `session-died` in every arm but the shell's own restart"
-    /// (`client.md` §4e.3) where no other session of the principal stands at
-    /// the board, the supplement handed to one that does. A caller that finds
-    /// the reason already derived answers it and does nothing else.
+    /// board, named in the reason as `session` and its key as `fingerprint`
+    /// (`restart_reason`), and not yet entered. Then the swap is handed to
+    /// `supplements` ([`Supplements::ended`]): the table's two moves, the
+    /// reason kept, `session-died`, and the re-opened token widened or the
+    /// supplement released ([`Sessions::release`]) — narrow "at
+    /// `session-died` in every arm but the shell's own restart" (`client.md`
+    /// §4e.3) where no other session of the principal stands at the board,
+    /// the supplement handed to one that does. A caller that finds the reason
+    /// already derived answers it and does nothing else.
     ///
     /// # Panics
     ///
@@ -617,7 +633,7 @@ impl Sessions {
                     Death::Reason(reason) => (reason, None),
                     Death::Reopened(open) => {
                         let reopened = self.fresh(&entry.board_reference, Arc::clone(&entry.board), open);
-                        (restart_reason(Some(&reopened.reference), None), Some(reopened))
+                        (restart_reason(Some(&reopened), None), Some(reopened))
                     }
                 };
                 owed = Some(Ended { dying, reopened, reason: reason.clone() });
@@ -873,13 +889,22 @@ pub(crate) fn mode_reason(mode: Mode) -> Value {
     json!({"arm": "mode", "mode": mode.name()})
 }
 
-/// Returns the `restart` arm: `reopened` where `session` names the session
+/// Returns the `restart` arm: `reopened` where `reopened` is the session
 /// re-opened silently in the dying one's place, and `refused` the name of
 /// the re-open's refusal where one was tried and refused.
-pub(crate) fn restart_reason(session: Option<&str>, refused: Option<&str>) -> Value {
-    let mut reason = json!({"arm": "restart", "reopened": session.is_some()});
-    if let Some(session) = session {
-        reason["session"] = Value::from(session);
+///
+/// A re-opened session is named by its reference, `session`, and by the key
+/// it was opened with, `fingerprint` (`client.md` §4b.2; skep #579), both
+/// read off the one entry, so the reference is never paired with another
+/// session's key. The re-open is the signed handshake (`open_signed`), so
+/// every re-opened session holds a key.
+pub(crate) fn restart_reason(reopened: Option<&SessionEntry>, refused: Option<&str>) -> Value {
+    let mut reason = json!({"arm": "restart", "reopened": reopened.is_some()});
+    if let Some(reopened) = reopened {
+        reason["session"] = Value::from(reopened.reference.as_str());
+        if let Some(key) = reopened.key() {
+            reason["fingerprint"] = Value::from(key.to_hex());
+        }
     }
     if let Some(refused) = refused {
         reason["refused"] = Value::from(refused);

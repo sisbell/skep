@@ -269,7 +269,7 @@ use crate::events::{EventBus, EventName};
 use crate::held::{Anchors, CopiesOwed, Done, Entered, HaltWhy, HeldDir, HeldLine, HeldQueue, Joined, Joining, Opened, Owed, Reason, RenumberRefused, Settled, Torn, Unheld, MAX_HELD_BYTES, MAX_HELD_LINES};
 use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
-use crate::sessions::{board_head, HeadRead, SessionEntry, SessionKind, Sessions};
+use crate::sessions::{board_head, HeadRead, SessionEntry, Sessions};
 use crate::wire::{document_address, json_len, MAX_FRAME_BYTES};
 use crate::Talk;
 
@@ -4811,10 +4811,7 @@ impl Holds {
     /// be listed gives no label of its own, said on `Talk` once per read
     /// (SP-12, SP-14), its keys looked up as keys it does not hold.
     fn hands_of(&self, session: &SessionEntry, rows: &[Value]) -> Vec<Hand> {
-        let own_fingerprint = match &session.facts.kind {
-            SessionKind::Signed { fingerprint, .. } => Some(fingerprint.to_hex()),
-            SessionKind::Bare => None,
-        };
+        let own_fingerprint = session.key().map(|key| key.to_hex());
         let mut labels: Option<Vec<KeyFacts>> = None;
         let mut read_made = false;
         let mut hands: Vec<Hand> = Vec::new();

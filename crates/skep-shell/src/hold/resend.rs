@@ -171,7 +171,7 @@ use super::{
 };
 use crate::held::{i_address, Anchors, Done, HeldLine, Reason, SpanRun};
 use crate::refusal::{Name, Refusal};
-use crate::sessions::{board_head, SessionEntry, SessionKind};
+use crate::sessions::{board_head, SessionEntry};
 use crate::wire::{delivered_values, values_of};
 
 /// The window the shift's one read images: every arranged content position
@@ -1868,7 +1868,7 @@ fn delivers(delivery: &Value, want: &[Cow<'_, [u8]>]) -> bool {
 /// (`SessionEntry::may_write`) and the resend reads under no bare session,
 /// so every row is another's to one.
 fn own_row(session: &SessionEntry, row: &Value) -> bool {
-    let SessionKind::Signed { fingerprint, .. } = &session.facts.kind else { return false };
+    let Some(fingerprint) = session.key() else { return false };
     row["key"].as_str() == Some(fingerprint.to_hex().as_str()) || (row.get("key").is_none() && row.get("attest").is_some())
 }
 

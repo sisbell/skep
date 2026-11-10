@@ -128,9 +128,10 @@
 //! * `shell` — [`Shell`]: the boards, the sessions, the session mode (bare
 //!   as the run's principal, which reads alone — every write in it refused
 //!   before any dial — or signed with a dev key; the `session` answer says
-//!   which, `writes`), every write at a board whose held store another shell
-//!   holds refused `another_window` before any dial (§3c.3) at the write
-//!   door the bare refusal shares — the `session` answer saying so,
+//!   which, `writes`, and under which key, `fingerprint`; skep #579), every
+//!   write at a board whose held store another shell holds refused
+//!   `another_window` before any dial (§3c.3) at the write door the bare
+//!   refusal shares — the `session` answer saying so,
 //!   `another_window`, and each later edge of that state an `another-window`
 //!   event (skep #827) — and one private method per §4b.1 row, per
 //!   `places` and per `changes`, behind [`Shell::call`], whose dispatch the

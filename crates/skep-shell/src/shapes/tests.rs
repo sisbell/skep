@@ -7,16 +7,19 @@
 //! refusals whole beside the shell's open one.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use serde_json::{json, Value};
 use skep_client::halt::{Blocked, Face, Refused};
 use skep_client::search::{Range, State};
-use skep_client::DialError;
+use skep_client::{Board, DialError, Origin, PlainHttp, Token};
+use skep_identity::Fingerprint;
 
 use super::*;
 use crate::feed::{answer_without_index, places_without_index, state_json};
+use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
-use crate::sessions;
+use crate::sessions::{self, Facts, Open, SessionEntry, SessionKind, Sessions, Supplements};
 
 /// One sample per declared type: the value the crate's code answers or
 /// emits for it — the refusals through `Refusal::to_value`, the search
@@ -31,7 +34,7 @@ fn samples() -> Vec<(&'static str, Value)> {
     let facts = json!({"principal": 1, "account": "1.0.1", "origin": "http://127.0.0.1:8642"});
     vec![
         ("BoardRow", json!({"board": "b-0", "name": "http://127.0.0.1:8642", "origin": "http://127.0.0.1:8642"})),
-        ("SessionOpened", json!({"session": "s-0", "principal": 1, "account": "1.0.1", "writes": true, "opened_at": 5, "another_window": true})),
+        ("SessionOpened", json!({"session": "s-0", "principal": 1, "account": "1.0.1", "writes": true, "fingerprint": "5a".repeat(32), "opened_at": 5, "another_window": true})),
         ("Keygen", json!({"fingerprint": "ab", "payload": "{}", "outstanding": "x"})),
         ("FingerprintRow", json!({"fingerprint": "ab", "label": "phone", "bindings": [], "unbound": true, "payload": null})),
         ("Claimed", json!({"account": "1.0.1", "principal": 1, "fingerprint": "ab", "agent_space": "1.0.1.1", "display_name": null, "warnings": []})),
@@ -211,7 +214,7 @@ fn the_file_names_every_shape_call_and_event() {
         "export interface PlacesOpts { under?: string }\n",
         "export type OriginAnswer = 'publish_first' | 'drop' | 'keep_private' | 'counterpart';\n",
         "export type RowKind = 'own' | 'notes' | 'private' | { public: { read_with: boolean } };\n",
-        "  writes: boolean;\n",
+        "  writes: boolean;\n  fingerprint: string | null;\n",
         "  entries: FeedUpdate[];\n",
         "  hands?: Hand[];\n",
         "  anchors?: Anchors;\n",
@@ -249,27 +252,52 @@ fn the_file_names_every_shape_call_and_event() {
     assert!(text.starts_with("// skep-shell — the bridge's declarations"));
 }
 
-/// The death's members are declared (skep #571): `session_died`'s `session`
-/// and `reason`, required; and every member each arm of the reason is built
-/// with — the restart arm's `reopened`, `session` and `refused` among them
-/// — a declared optional member of `DeathReason`, every declared member
+/// Supplements that mount nothing: a session registered for its reason alone.
+struct Unmounted;
+
+impl Supplements for Unmounted {
+    fn widen(&mut self, _: &Arc<SessionEntry>) {}
+
+    fn narrow(&mut self, _: u64) {}
+}
+
+/// Returns a signed session under the key `fp`, registered in a table of its
+/// own at a board nothing is dialed at: the session a restart re-opens.
+fn reopened_under(fp: Fingerprint) -> Arc<SessionEntry> {
+    let board = BoardEntry { reference: "b-0".into(), board: Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), PlainHttp::new())) };
+    let facts = Facts { principal: 1, account: Some("1.0.1".into()), kind: SessionKind::Signed { fingerprint: fp, set_account: "1.0.1".into() } };
+    let open = Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 };
+    Sessions::new(None, Arc::new(|_: &str| {})).register(&board, open, &mut Unmounted)
+}
+
+/// Checks that the death's members and the `session` answer's are declared.
+///
+/// `session_died`'s `session` and `reason` are required (skep #571); every
+/// member each arm of the reason is built with — the restart arm's
+/// `reopened`, `session`, `fingerprint` and `refused` among them — is a
+/// declared optional member of `DeathReason`, and every declared member is
 /// built by some arm, so a rename or a removal in the code alone, or in the
-/// table alone, fails here. And the `session` answer's `opened_at` is
-/// declared optional, a number.
+/// table alone, fails here. The re-opened arm names the re-opened session's
+/// reference and its key, both read off its one entry, and an arm that
+/// re-opens nothing names neither (skep #579). The `session` answer's
+/// `fingerprint` is declared required, a string or null, and its
+/// `opened_at` optional, a number.
 #[test]
-fn the_deaths_members_and_the_sessions_open_position_are_declared() {
+fn the_deaths_members_and_the_session_answers_members_are_declared() {
     let event = shape("SessionDiedEvent").unwrap();
     assert_eq!(event.fields.iter().map(|f| (f.name, f.required)).collect::<Vec<_>>(), [("session", true), ("reason", true)]);
     let reason = shape("DeathReason").unwrap();
     assert_eq!(reason.fields.iter().filter(|f| f.required).map(|f| f.name).collect::<Vec<_>>(), ["arm"], "the arm alone is required");
     let declared: BTreeSet<&str> = reason.fields.iter().filter(|f| !f.required).map(|f| f.name).collect();
-    let fp = skep_identity::Fingerprint::parse_hex(&"5a".repeat(32)).unwrap();
+    let fp = Fingerprint::parse_hex(&"5a".repeat(32)).unwrap();
+    let key = Fingerprint::parse_hex(&"6b".repeat(32)).unwrap();
+    let entry = reopened_under(key);
     let arms = [
         sessions::closed(),
         sessions::unreachable_reason("connect: refused"),
         sessions::mode_reason(skep_client::derive::Mode::Enforcing),
         sessions::restart_reason(None, None),
-        sessions::restart_reason(Some("s-1"), None),
+        sessions::restart_reason(Some(&entry), None),
         sessions::restart_reason(None, Some("busy")),
         sessions::retired_reason(&fp, None, None),
         sessions::seeded_reason("1.0.1.1", 9, Some("ab")),
@@ -282,15 +310,22 @@ fn the_deaths_members_and_the_sessions_open_position_are_declared() {
     }
     let built: BTreeSet<&str> = built.iter().map(String::as_str).collect();
     assert_eq!(built, declared, "every member an arm is built with is declared, and none is declared that no arm builds");
-    for member in ["reopened", "session", "refused"] {
+    for member in ["reopened", "session", "fingerprint", "refused"] {
         assert!(declared.contains(member), "the restart arm's `{member}` is declared");
     }
-    let reopened = sessions::restart_reason(Some("s-1"), None);
-    assert_eq!((reopened["reopened"].as_bool(), reopened["session"].as_str(), reopened.get("refused")), (Some(true), Some("s-1"), None), "{reopened}");
+    let reopened = sessions::restart_reason(Some(&entry), None);
+    assert_eq!(
+        (reopened["reopened"].as_bool(), reopened["session"].as_str(), reopened["fingerprint"].as_str(), reopened.get("refused")),
+        (Some(true), Some(entry.reference.as_str()), Some(key.to_hex().as_str()), None),
+        "the re-opened session's reference and its key: {reopened}"
+    );
     let refused = sessions::restart_reason(None, Some("busy"));
-    assert_eq!((refused["reopened"].as_bool(), refused.get("session"), refused["refused"].as_str()), (Some(false), None, Some("busy")), "{refused}");
-    let opened_at = shape("SessionOpened").unwrap().fields.iter().find(|f| f.name == "opened_at").expect("`opened_at` is declared");
-    assert_eq!((opened_at.required, opened_at.ty), (false, "number"));
+    assert_eq!((refused["reopened"].as_bool(), refused.get("session"), refused.get("fingerprint"), refused["refused"].as_str()), (Some(false), None, None, Some("busy")), "{refused}");
+    let not_reopened = sessions::restart_reason(None, None);
+    assert_eq!(not_reopened, json!({"arm": "restart", "reopened": false}), "an arm that re-opens nothing names no session and no key");
+    let member = |name: &str| shape("SessionOpened").unwrap().fields.iter().find(|f| f.name == name).map(|f| (f.required, f.ty));
+    assert_eq!(member("fingerprint"), Some((true, "string | null")), "every `session` answer names its key, or null");
+    assert_eq!(member("opened_at"), Some((false, "number")));
 }
 
 /// The board's `site` crosses with every member the wire names (skep #713).

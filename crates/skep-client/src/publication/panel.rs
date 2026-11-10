@@ -44,7 +44,11 @@
 //! the enumeration decides against the member the request's `base` names
 //! ([`Candidate::unchanged`]) — and not, so a private row whose every link
 //! passes is drawn compact and one with any that fails whole, folded by
-//! change (E4 1.2, 1.3). THE FORMATTING LINE, in the draft's own set
+//! change (E4 1.2, 1.3), and each side folded by TYPE again, its counts
+//! and far documents its own ([`Row::changed_types`],
+//! [`Row::unchanged_types`]): the head of a row folded by change names
+//! the failing links' types and far documents alone, the line under it
+//! the passing links' (E4 1.3). THE FORMATTING LINE, in the draft's own set
 //! alone, holds the offered links the line's TEST keeps: exactly one of
 //! `from` and `to` non-empty, the type slot exactly one unit span in the
 //! formatting types' own subtrees — `3.20` heading, `3.21` paragraph and its
@@ -136,12 +140,12 @@ pub enum RowKind {
     },
 }
 
-/// The links of one type in a row.
+/// The links of one type among those a row's fold by type takes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeFold {
     /// The type slot's address.
     pub ty: String,
-    /// How many of the row's links carry it.
+    /// How many of those links carry it.
     pub n: usize,
     /// Each far document the links of this type point into, in address
     /// order.
@@ -187,7 +191,7 @@ pub struct Row {
     /// The offered links on the row: indices into the enumeration's
     /// candidates, the formatting line's left out.
     pub links: Vec<usize>,
-    /// The links folded by type.
+    /// The links folded by type, both sides of the fold together.
     pub types: Vec<TypeFold>,
     /// The line's counts.
     pub line: LineCounts,
@@ -198,6 +202,16 @@ pub struct Row {
     /// every link is unchanged since version ⟨k⟩ is drawn compact (E4 1.2),
     /// one with any link changed whole, folded by change (E4 1.3).
     pub fold: FoldCounts,
+    /// The links [`Row::fold`] counts changed, folded by type.
+    ///
+    /// The head of a row folded by change names these types and far
+    /// documents alone (E4 1.3). Empty where no link is changed.
+    pub changed_types: Vec<TypeFold>,
+    /// The links [`Row::fold`] counts unchanged, folded by type.
+    ///
+    /// The line under that head, whole on its act (E4 1.3). Empty where no
+    /// link is unchanged.
+    pub unchanged_types: Vec<TypeFold>,
 }
 
 /// The private original a held removal's mark stands for, which the commit
@@ -786,7 +800,7 @@ fn compose(inputs: &Inputs, e: &Enumeration, reads: &PanelReads, frames: Vec<(&'
         let label = reads.labels.get(home).cloned().unwrap_or_default();
         let unchanged = links.iter().filter(|i| e.candidates[**i].unchanged).count();
         let fold = FoldCounts { unchanged, changed: links.len() - unchanged };
-        rows.push(Row { home: home.clone(), kind, label, links, types: Vec::new(), line: LineCounts { u, ..LineCounts::default() }, read_through: 0, fold });
+        rows.push(Row { home: home.clone(), kind, label, links, types: Vec::new(), line: LineCounts { u, ..LineCounts::default() }, read_through: 0, fold, changed_types: Vec::new(), unchanged_types: Vec::new() });
     }
     rows.sort_by_key(|r| match r.kind {
         RowKind::Own => (0, 0, r.home.to_string()),
@@ -796,7 +810,7 @@ fn compose(inputs: &Inputs, e: &Enumeration, reads: &PanelReads, frames: Vec<(&'
     });
 
     for row in &mut rows {
-        let mut folds: BTreeMap<String, (usize, BTreeSet<String>)> = BTreeMap::new();
+        let (mut changed, mut unchanged) = (Vec::new(), Vec::new());
         let mut line = row.line;
         for &i in &row.links {
             let c: &Candidate = &e.candidates[i];
@@ -847,12 +861,13 @@ fn compose(inputs: &Inputs, e: &Enumeration, reads: &PanelReads, frames: Vec<(&'
             line.p += usize::from(p_hit);
             line.d += usize::from(d_hit);
             line.c += usize::from(c_hit);
-            let entry = folds.entry(ty).or_insert((0, BTreeSet::new()));
-            entry.0 += 1;
-            entry.1.extend(far);
+            let side = if c.unchanged { &mut unchanged } else { &mut changed };
+            side.push((ty, far));
         }
         row.line = line;
-        row.types = folds.into_iter().map(|(ty, (n, far))| TypeFold { ty, n, far: far.into_iter().collect() }).collect();
+        row.types = type_folds(changed.iter().chain(&unchanged));
+        row.changed_types = type_folds(changed.iter());
+        row.unchanged_types = type_folds(unchanged.iter());
     }
 
     // What each part's answer brings: at the counterpart, the line's marks
@@ -904,6 +919,27 @@ fn compose(inputs: &Inputs, e: &Enumeration, reads: &PanelReads, frames: Vec<(&'
         frames,
         reads: reads.clone(),
     }
+}
+
+/// Returns the folds by type of `links`, each a type and far documents.
+///
+/// Each fold holds how many links carry its type and their far documents
+/// in address order.
+fn type_folds<'l>(links: impl Iterator<Item = &'l (String, BTreeSet<String>)>) -> Vec<TypeFold> {
+    let mut folds: BTreeMap<&str, (usize, BTreeSet<&str>)> = BTreeMap::new();
+    for (ty, far) in links {
+        let entry = folds.entry(ty).or_default();
+        entry.0 += 1;
+        entry.1.extend(far.iter().map(String::as_str));
+    }
+    folds
+        .into_iter()
+        .map(|(ty, (n, far))| {
+            let mut far: Vec<String> = far.into_iter().map(String::from).collect();
+            far.sort_by_key(|doc| address_key(doc));
+            TypeFold { ty: ty.to_string(), n, far }
+        })
+        .collect()
 }
 
 /// Returns an address's components as numbers, the address order's key.

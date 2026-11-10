@@ -65,8 +65,9 @@
 //! 2. [`panel`](mod@panel) — THE PANEL's DATA (§5.2): the rows by home in the design's
 //!    order with each set's state and label, the links folded by type with
 //!    their far documents, the line counts, each row's FOLD — its links
-//!    unchanged since version ⟨k⟩ and not (E4 1.8) — and whether P3 stands
-//!    (E4 1.4), the formatting line by its test,
+//!    unchanged since version ⟨k⟩ and not, counted (E4 1.8) and folded by
+//!    type (E4 1.3) — and whether P3 stands (E4 1.4), the formatting line
+//!    by its test,
 //!    the held removals as its job list with the re-makes split out, the
 //!    public row's read-with state, and THE STATEMENT's count per `also`
 //!    draft, the passages first written in it (B3-S11 P2 (i)); the merge

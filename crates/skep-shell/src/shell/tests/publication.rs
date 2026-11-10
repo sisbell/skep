@@ -503,6 +503,7 @@ fn the_family_publishes_a_drafts_links_and_answers_as_data() {
     assert_eq!(rows[0]["links"], json!([link]));
     assert_eq!(rows[0]["types"][0]["ty"], citation);
     assert_eq!((rows[0]["unchanged"].clone(), rows[0]["fold"].clone()), (json!([]), json!({"unchanged": 0, "changed": 1})), "the base is the bare document: nothing folds");
+    assert_eq!((rows[0]["changed_types"].clone(), rows[0]["unchanged_types"].clone()), (rows[0]["types"].clone(), json!([])), "every link changed: the changed fold is the whole, the unchanged one empty: {panel}");
     assert_eq!(panel["p3_stands"], true, "a whole private row: {panel}");
     assert_eq!(panel["count"], json!({"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": [], "supersede": []}), "the counts at the default: every private row OFF, and no merge marker to claim from");
     assert_eq!(panel["windows"], json!([]), "no run windows an unpublished origin of the person's");
@@ -602,7 +603,9 @@ fn the_family_publishes_a_drafts_links_and_answers_as_data() {
 /// through the draft's record onto the words version 1 arranges — so
 /// `unchanged` names it, `fold` counts one and none, and with nothing else
 /// to decide P3 does not stand; the count answers the same, nothing dialed.
-/// A note made since joins the row changed, and P3 stands.
+/// A note made since joins the row changed, of a type of its own, and P3
+/// stands: the row's two folds by type (E4 1.3) answer each side alone, at
+/// the open and at the count.
 #[test]
 fn the_open_and_the_count_answer_the_fold_and_whether_p3_stands() {
     let dir = TempDir::new().unwrap();
@@ -624,20 +627,30 @@ fn the_open_and_the_count_answer_the_fold_and_whether_p3_stands() {
     crate::shapes::assert_declared("PublicationRow", &rows[0]);
     crate::shapes::assert_declared("RowFold", &rows[0]["fold"]);
     assert_eq!((rows[0]["links"].clone(), rows[0]["unchanged"].clone(), rows[0]["fold"].clone()), (json!([link]), json!([link]), json!({"unchanged": 1, "changed": 0})), "the note stayed private when version 1 was published: {panel}");
+    let citations = json!([{"ty": citation, "n": 1, "far": []}]);
+    crate::shapes::assert_declared("TypeFold", &rows[0]["unchanged_types"][0]);
+    assert_eq!((rows[0]["changed_types"].clone(), rows[0]["unchanged_types"].clone()), (json!([]), citations.clone()), "a compact row: no changed link to fold: {panel}");
     assert_eq!(panel["p3_stands"], false, "a compact row alone: nothing to decide");
     let dials = g.shell.log().entries().len();
     let counted = g.call("publication.count", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!((counted["rows"][0]["fold"].clone(), counted["p3_stands"].clone()), (json!({"unchanged": 1, "changed": 0}), json!(false)), "{counted}");
+    assert_eq!((counted["rows"][0]["changed_types"].clone(), counted["rows"][0]["unchanged_types"].clone()), (json!([]), citations.clone()), "{counted}");
     assert_eq!(g.shell.log().entries().len(), dials + 1, "the count is pure local");
     g.call("publication.cancel", json!({"session": g.session})).unwrap();
-    // A note made since version 1, on the words it holds.
-    let since = g.addr(json!({"op": "make_link", "home": notes, "from": [{"source": draft, "span": {"start": "1.1", "width": "0.3"}}], "to": {"addrs": []}, "ty": {"addrs": [citation]}}));
+    // A note made since version 1, on the words it holds, of its own type.
+    let mark = "1.1.0.1.0.1.0.3.23.4";
+    let since = g.addr(json!({"op": "make_link", "home": notes, "from": [{"source": draft, "span": {"start": "1.1", "width": "0.3"}}], "to": {"addrs": []}, "ty": {"addrs": [mark]}}));
     let panel = g.call("publication.open", inputs).unwrap_or_else(|r| panic!("{r}"));
     let row = &panel["rows"][0];
     let links: Vec<&str> = row["links"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
     assert!(links.contains(&link.as_str()) && links.contains(&since.as_str()), "{panel}");
     assert_eq!((row["unchanged"].clone(), row["fold"].clone()), (json!([link]), json!({"unchanged": 1, "changed": 1})), "the new note is news: {panel}");
+    let marks = json!([{"ty": mark, "n": 1, "far": []}]);
+    assert_eq!((row["changed_types"].clone(), row["unchanged_types"].clone()), (marks.clone(), citations.clone()), "a row folded by change: each side's types alone: {panel}");
+    assert_eq!(row["types"].as_array().unwrap().len(), 2, "the whole row's fold keeps both: {panel}");
     assert_eq!(panel["p3_stands"], true, "a row folded by change");
+    let counted = g.call("publication.count", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((counted["rows"][0]["changed_types"].clone(), counted["rows"][0]["unchanged_types"].clone()), (marks, citations), "the count answers the two folds as the open does: {counted}");
     g.shell.shutdown();
     sd.shutdown();
 }

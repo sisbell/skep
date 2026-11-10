@@ -15,14 +15,16 @@
 //! `{rows, formatting, read_with, count, price, windows, parts, inherited,
 //! merge_records, edition_links, p3_stands, standing?, left_behind, hold?}`
 //! — each row with THE FOLD (E4 1.8): `unchanged` its links unchanged since
-//! the recorded base by the fold's test, by address, and `fold` the two
-//! counts, links unchanged and not, decided against the image of the
-//! member the request's `base` names, read once at the open and kept for
-//! the confirm's re-read; `edition_links` how many of the document's own
-//! links lie on the words the shot re-inserts, read once at the open — the
-//! count of the link-sets design §5.2's line for them, the shot leaving each
-//! on the draft's earlier words; `p3_stands` whether P3 stands (E4 1.4),
-//! that count above zero among what it stands on;
+//! the recorded base by the fold's test, by address, `fold` the two counts,
+//! links unchanged and not, and `changed_types` and `unchanged_types` the
+//! links of each side folded by type with their far documents (E4 1.3), all
+//! decided against the image of the member the request's `base` names, read
+//! once at the open and kept for the confirm's re-read; `edition_links` how
+//! many of the document's own links lie on the words the shot re-inserts,
+//! read once at the open — the count of the link-sets design §5.2's line
+//! for them, the shot leaving each on the draft's earlier words;
+//! `p3_stands` whether P3 stands (E4 1.4), that count above zero among what
+//! it stands on;
 //! `windows` each
 //! own-origin window in its PARTS, each part with the answers it admits
 //! (B3-S11 P2 (i)), a window awaiting its answer counting toward nothing;
@@ -983,10 +985,11 @@ impl Shell {
     /// It answers `{count, price, rows, formatting, windows, parts,
     /// edition_links, p3_stands}` off the standing panel, pure local: the
     /// panel re-keyed by the answers at the windows' parts from the open's
-    /// reads alone — the rows and their candidates with each row's fold, the
-    /// formatting line, the windows, what each part's answer brings, whether
-    /// P3 stands — the four numbers as the switches and the answers stand
-    /// now, and the price re-run over the rows as switched (the module doc).
+    /// reads alone — the rows and their candidates with each row's fold and
+    /// its two folds by type, the formatting line, the windows, what each
+    /// part's answer brings, whether P3 stands — the four numbers as the
+    /// switches and the answers stand now, and the price re-run over the
+    /// rows as switched (the module doc).
     ///
     /// # Errors
     ///
@@ -1479,17 +1482,24 @@ fn kind_json(kind: &RowKind) -> Value {
     }
 }
 
+/// Returns a row's fold by type as the row answers it.
+fn type_folds_json(folds: &[lib::TypeFold]) -> Vec<Value> {
+    folds.iter().map(|t| json!({"ty": t.ty, "n": t.n, "far": t.far})).collect()
+}
+
 fn row_json(e: &lib::Enumeration, row: &lib::Row) -> Value {
     json!({
         "home": row.home.to_string(),
         "kind": kind_json(&row.kind),
         "label": render_inert(&String::from_utf8_lossy(&row.label)),
         "links": row.links.iter().map(|i| e.candidates[*i].link.to_string()).collect::<Vec<_>>(),
-        "types": row.types.iter().map(|t| json!({"ty": t.ty, "n": t.n, "far": t.far})).collect::<Vec<_>>(),
+        "types": type_folds_json(&row.types),
         "line": {"p": row.line.p, "d": row.line.d, "c": row.line.c, "t": row.line.t, "u": row.line.u},
         "read_through": row.read_through,
         "unchanged": row.links.iter().filter(|i| e.candidates[**i].unchanged).map(|i| e.candidates[*i].link.to_string()).collect::<Vec<_>>(),
         "fold": {"unchanged": row.fold.unchanged, "changed": row.fold.changed},
+        "changed_types": type_folds_json(&row.changed_types),
+        "unchanged_types": type_folds_json(&row.unchanged_types),
     })
 }
 

@@ -500,7 +500,7 @@ fn the_publication_cards_state_the_shells_shapes() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
     let entry = |name: &str| catalog.tools.iter().find(|t| t["name"] == name).unwrap_or_else(|| panic!("the {name} card"));
     for (name, row, nested) in [
-        ("publication_open", "publication.open", &["PublicationRow", "RowFold", "Formatting", "Count", "Price", "Window", "Part", "PartCounts", "Hold"][..]),
+        ("publication_open", "publication.open", &["PublicationRow", "TypeFold", "RowFold", "Formatting", "Count", "Price", "Window", "Part", "PartCounts", "Hold"][..]),
         ("publication_count", "publication.count", &["Count"][..]),
         ("publication_confirm", "publication.confirm", &[][..]),
         ("publication_cancel", "publication.cancel", &[][..]),
@@ -522,6 +522,8 @@ fn the_publication_cards_state_the_shells_shapes() {
             assert!(card.contains(&said), "the {name} card spells {shape} as {said}: {card}");
         }
     }
+    let count = entry("publication_count")["description"].as_str().expect("the count card");
+    assert!(["changed_types", "unchanged_types"].iter().all(|fold| count.contains(fold)), "the count card names the row's two folds by type: {count}");
     let open = entry("publication_open")["description"].as_str().expect("the open card");
     for standing in alias("BaseStanding") {
         let standing = standing.trim_matches('\'');

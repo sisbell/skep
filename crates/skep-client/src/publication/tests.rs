@@ -4974,9 +4974,122 @@ fn a_link_made_before_the_base_on_words_it_holds_is_unchanged_and_one_made_since
     let homes: Vec<String> = pn.rows.iter().map(|r| r.home.to_string()).collect();
     assert_eq!(homes, [D, S, S2], "the draft's own row and the two public sets");
     assert_eq!(pn.rows[0].fold, FoldCounts { unchanged: 1, changed: 0 }, "compact: every link stayed private when E.1 was published");
+    assert!(pn.rows[0].changed_types.is_empty() && !pn.rows[0].types.is_empty() && pn.rows[0].unchanged_types == pn.rows[0].types, "a compact row: no fold of changed links, its whole fold the unchanged one: {:?}", pn.rows[0]);
     assert!(pn.formatting.marks.is_empty() && pn.formatting.job_list().is_empty(), "no mark and no removal on E's 1..3");
     assert_eq!(pn.edition_links, 0, "no re-inserted word for a link of E's to lie on");
     assert!(!pn.p3_stands, "compact rows and public rows on kept words: nothing to decide");
+}
+
+/// Asserts that a row's two folds by type split its whole fold.
+///
+/// Each type's two counts sum to its whole count, each far document of the
+/// whole stands on at least one side and neither side names any other, and
+/// each side's counts sum to what [`Row::fold`] counts on that side.
+fn assert_the_two_folds_split_the_whole(row: &Row) {
+    let of = |folds: &[TypeFold], ty: &str| folds.iter().find(|t| t.ty == ty).cloned();
+    for whole in &row.types {
+        let (changed, unchanged) = (of(&row.changed_types, &whole.ty), of(&row.unchanged_types, &whole.ty));
+        let sides = changed.iter().chain(&unchanged);
+        assert_eq!(sides.clone().map(|t| t.n).sum::<usize>(), whole.n, "{} counted on its two sides: {row:?}", whole.ty);
+        let far: BTreeSet<&String> = sides.flat_map(|t| &t.far).collect();
+        assert_eq!(far, whole.far.iter().collect(), "{} far documents on its two sides: {row:?}", whole.ty);
+    }
+    let sum = |folds: &[TypeFold]| folds.iter().map(|t| t.n).sum::<usize>();
+    assert_eq!(FoldCounts { unchanged: sum(&row.unchanged_types), changed: sum(&row.changed_types) }, row.fold, "the two folds count what the row's fold counts: {row:?}");
+    assert!(row.changed_types.iter().chain(&row.unchanged_types).all(|t| t.n > 0 && of(&row.types, &t.ty).is_some()), "a side names a type of the whole: {row:?}");
+}
+
+/// Checks that a mixed row folds its changed links apart from the rest.
+///
+/// E4 1.3, over the notes' row. The two notes that stayed private are
+/// citations with a far end in `N`. Two more were made since the base: a
+/// citation, its far end in `N` as well, and a note of a type of its own
+/// with a far end on `Z`. The changed fold names both new notes alone, with
+/// `Z` and without the two that stayed private; the unchanged fold names
+/// those two alone; `N` stands in each, a link of each kind reaching it;
+/// the whole fold is both.
+#[test]
+fn a_mixed_row_folds_its_changed_links_apart_from_its_unchanged_ones() {
+    let (mut world, _) = World::base();
+    base_minted_after_the_links(&mut world);
+    world.typed(N, vec![ispan(E, 5, 2)], vec![ispan(N, 6, 2)], T_CITATION);
+    world.typed(N, vec![ispan(E, 7, 2)], vec![ispan(Z, 1, 3)], T_MARK);
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let e = enumerate(&p, &inputs()).unwrap();
+    let pn = panel(&p, &inputs(), &e).unwrap();
+    let notes = pn.rows.iter().find(|r| r.home == a(N)).expect("the notes' row");
+    let fold = |ty: &str, n: usize, far: &str| TypeFold { ty: ty.into(), n, far: vec![far.into()] };
+    assert_eq!(notes.fold, FoldCounts { unchanged: 2, changed: 2 }, "the premise: a mixed row");
+    assert_eq!(notes.changed_types, vec![fold(T_CITATION, 1, N), fold(T_MARK, 1, Z)], "the head: the links made since alone");
+    assert_eq!(notes.unchanged_types, vec![fold(T_CITATION, 2, N)], "the folded line: the links that stayed private alone");
+    assert_eq!(notes.types, vec![fold(T_CITATION, 3, N), fold(T_MARK, 1, Z)], "the whole row");
+    assert!(pn.rows.len() > 1, "the premise: the draft's own and the public rows besides");
+    pn.rows.iter().for_each(assert_the_two_folds_split_the_whole);
+}
+
+/// Checks that a window's answer moves a link between the row's two folds.
+///
+/// A note from `O`'s 1..2 to `E`'s 5..6, made before the base, of a type no
+/// other link of the notes' row carries. Kept private, `O`'s words stand in
+/// the selection and the base never held them, so the note is changed.
+/// Left out, it touches `E`'s words alone, which the base holds, so it is
+/// unchanged and `O` becomes its far document. The panel read once answers
+/// each composition, no frame sent.
+#[test]
+fn a_window_answer_moves_a_links_type_between_the_rows_two_folds_and_reads_nothing() {
+    let (mut world, _) = World::base();
+    let across = world.typed(N, vec![ispan(O, 1, 2)], vec![ispan(E, 5, 2)], T_MARK);
+    base_minted_after_the_links(&mut world);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let selected = Inputs { readable_drafts: vec![a(D), a(N), a(O)], ..inputs() };
+    let e = enumerate(&p, &selected).unwrap();
+    let pn = panel(&p, &selected, &e).unwrap();
+    dialer.clear();
+    let row_under = |answer: OriginAnswer| {
+        let composed = e.composed(&selected, &BTreeMap::from([(part(2, 0), answer)]), &BTreeSet::new());
+        assert!(candidate_at(&composed, &across).offered(), "the premise: offered under {answer:?}");
+        let re_keyed = pn.composed(&selected, &composed);
+        re_keyed.rows.into_iter().find(|r| r.home == a(N)).expect("the notes' row")
+    };
+    let citations = TypeFold { ty: T_CITATION.into(), n: 2, far: vec![N.into()] };
+    let kept = row_under(OriginAnswer::KeepPrivate);
+    assert_eq!(kept.changed_types, vec![TypeFold { ty: T_MARK.into(), n: 1, far: vec![] }], "kept private: on words the base never held");
+    assert_eq!(kept.unchanged_types, vec![citations.clone()], "kept private");
+    assert_the_two_folds_split_the_whole(&kept);
+    let left_out = row_under(OriginAnswer::Drop);
+    assert_eq!(left_out.changed_types, vec![], "left out: nothing of the row is news");
+    assert_eq!(left_out.unchanged_types, vec![citations, TypeFold { ty: T_MARK.into(), n: 1, far: vec![O.into()] }], "left out: on `E`'s words alone, `O` far");
+    assert_the_two_folds_split_the_whole(&left_out);
+    assert!(dialer.ops().is_empty(), "no frame: {:?}", dialer.ops());
+}
+
+/// Checks that a fold's far documents stand in address order.
+///
+/// A citation with far ends in the documents numbered 10 and 9, beside the
+/// notes' own 6: the fold over the row and the fold over its changed links
+/// (at this base, every link) answer 6, 9, 10, the order of the addresses
+/// and not of their spellings, in which `1.0.1.0.10` stands first.
+#[test]
+fn a_folds_far_documents_stand_in_address_order() {
+    let (mut world, _) = World::base();
+    with_f(&mut world);
+    world.text(A, 1, A_TEXT);
+    world.doc(A, false, ACCOUNT, vec![run(A, 1, 5)]);
+    world.typed(N, vec![ispan(E, 1, 2)], vec![ispan(F_ORIGIN, 1, 2), ispan(A, 1, 2)], T_CITATION);
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let e = enumerate(&p, &inputs()).unwrap();
+    let pn = panel(&p, &inputs(), &e).unwrap();
+    let notes = pn.rows.iter().find(|r| r.home == a(N)).expect("the notes' row");
+    let far = vec![N.to_string(), A.to_string(), F_ORIGIN.to_string()];
+    assert_eq!(notes.types[0].far, far, "the whole fold");
+    assert_eq!(notes.changed_types[0].far, far, "the changed fold");
+    assert!(notes.unchanged_types.is_empty(), "the base older than every link: nothing unchanged");
 }
 
 /// Checks that a note on a passage first quoted at this version is news.

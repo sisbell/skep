@@ -84,7 +84,7 @@ fn samples() -> Vec<(&'static str, Value)> {
             "PublicationPanel",
             json!({"rows": [], "formatting": {"marks": [], "cut": 0, "removals": []}, "read_with": {"1.0.1.0.3": true}, "count": {"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": []}, "price": {"lists": [0, 0, 0, 0, 0, 0], "body": 0, "values": 0, "reads": 0, "bytes": 0, "over": []}, "windows": [], "parts": [], "inherited": [{"draft": "1.0.1.0.9", "passages": 2}], "merge_records": [{"draft": "1.0.1.0.11", "n": 2}], "edition_links": 1, "p3_stands": true, "standing": "at_head", "left_behind": ["1.0.1.0.9"], "hold": {"since": 1}}),
         ),
-        ("PublicationRow", json!({"home": "1.0.1.0.5", "kind": {"public": {"read_with": false}}, "label": "notes here", "links": ["1.0.1.0.5.0.2.1"], "types": [], "line": {"p": 0, "d": 0, "c": 0, "t": 0, "u": 0}, "read_through": 0, "unchanged": ["1.0.1.0.5.0.2.1"], "fold": {"unchanged": 1, "changed": 0}})),
+        ("PublicationRow", json!({"home": "1.0.1.0.5", "kind": {"public": {"read_with": false}}, "label": "notes here", "links": ["1.0.1.0.5.0.2.1"], "types": [], "line": {"p": 0, "d": 0, "c": 0, "t": 0, "u": 0}, "read_through": 0, "unchanged": ["1.0.1.0.5.0.2.1"], "fold": {"unchanged": 1, "changed": 0}, "changed_types": [], "unchanged_types": []})),
         ("TypeFold", json!({"ty": "1.1.0.1.0.1.0.3.13", "n": 1, "far": ["1.0.1.0.8"]})),
         ("RowFold", json!({"unchanged": 40, "changed": 1})),
         ("RowLine", json!({"p": 1, "d": 0, "c": 0, "t": 0, "u": 0})),

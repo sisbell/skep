@@ -199,8 +199,10 @@ impl Name {
     /// A held run of the selection the draft no longer arranges whole.
     ///
     /// Brief 1's `Fault::SelectionNotArranged`, at the first enumeration —
-    /// before any re-read can re-state it; the detail names the run's
-    /// `index` in the selection.
+    /// before any re-read can re-state it — or at a confirm over a
+    /// selection the draft has wholly left, each run already re-stated
+    /// absent, no empty version composed (PUB-3.108); the detail names the
+    /// run's `index` in the selection.
     pub const SELECTION_NOT_ARRANGED: Name = Name("selection_not_arranged");
     /// A selection holding nothing but merge records, which no publication
     /// publishes: nothing in it to publish.

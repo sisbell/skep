@@ -21,8 +21,12 @@
 //! ⟨k⟩'s image is the first read's ([`Enumeration::base`]): a published
 //! member's positions never change, so key (iii) and the fold are decided
 //! at the re-read against the member the request's `base` names, read
-//! once. The base's standing is the caller's to read again beside it
-//! ([`super::standing`]), a moved one riding the same re-statement.
+//! once. The draft's recorded base and its standing are the caller's to
+//! read again beside it ([`super::draft_base`], [`super::standing`]): a
+//! base moved since the panel is handed to the re-read in
+//! [`Inputs::base`], which images that member once, the first read's
+//! image serving no other, and a moved base or standing rides the same
+//! re-statement (D4 (b′)).
 //!
 //! **The request.** From the confirmed rows, the enumeration and the panel
 //! composed under the answers at the windows' parts before anything is
@@ -84,7 +88,11 @@
 //! neither in the signed body; the signed body through the one body
 //! builder, `entry_body_publication`, from the request AS BUILT; a fresh
 //! `id`. INERT where the request changes nothing against its base — a place
-//! in either list is a change, and so is a daughter claimed. The price is
+//! in either list is a change, and so is a daughter claimed. A selection
+//! the draft has wholly left builds nothing: every run of it placed absent
+//! is the fault [`Fault::SelectionNotArranged`], the re-read having
+//! re-stated it, so no request of an empty member is built over words the
+//! person chose and the draft no longer arranges (PUB-3.108). The price is
 //! computed on the request as built.
 //!
 //! THE CLIENT DOES NOT DECIDE whether the edition is empty: it sends the
@@ -175,6 +183,13 @@ pub struct Restatement {
     /// re-read with the record naming it now: an answer there other than
     /// DROP is asked again.
     pub parts: Vec<(PartKey, Option<Address>)>,
+    /// The draft's recorded base where it moved since the panel, as read.
+    ///
+    /// It differs from the one the panel tested against in member or extent
+    /// — another publication of the draft, or a merge landed in it. `None`
+    /// where it stands as it stood, and from [`restate`], which diffs the
+    /// enumeration and the panel alone.
+    pub base: Option<Address>,
     /// The base's standing where it moved since the panel — a sibling's shot
     /// landing while the panel stood — as the caller typed it again; `None`
     /// where it stands as it stood, and from [`restate`], which diffs the
@@ -184,7 +199,7 @@ pub struct Restatement {
 
 impl Restatement {
     fn is_empty(&self) -> bool {
-        self.left.is_empty() && self.superseded.is_empty() && self.came.is_empty() && self.removals_undone.is_empty() && self.removals_came.is_empty() && self.selection.is_empty() && self.parts.is_empty() && self.standing.is_none()
+        self.left.is_empty() && self.superseded.is_empty() && self.came.is_empty() && self.removals_undone.is_empty() && self.removals_came.is_empty() && self.selection.is_empty() && self.parts.is_empty() && self.base.is_none() && self.standing.is_none()
     }
 }
 
@@ -207,6 +222,13 @@ pub struct Reread {
 /// out, so the two are diffed over one composition, against the base
 /// `first` imaged ([`Enumeration::base`]), never imaged again; the caller
 /// composes `first` under the answers it confirms before the re-read.
+/// Where the caller moved [`Inputs::base`] off the member `first` imaged —
+/// the draft's recorded base read again — the re-read images the moved
+/// member once, `first`'s image being no longer the request's; where it
+/// re-took the selection the answers and the placements are read by run
+/// index over the new runs, so a run the new selection keeps elsewhere
+/// carries no answer and is asked again, and the re-statement's `selection`
+/// compares nothing and is the caller's to discard.
 ///
 /// # Errors
 ///
@@ -833,7 +855,11 @@ pub enum Built {
 ///
 /// # Errors
 ///
-/// The reads' faults: the twin pre-check, the values, the base's image.
+/// In this order, [`Fault::SelectionNotArranged`] with `index` 0 where the
+/// selection held runs and the draft arranges nothing of any of them
+/// (PUB-3.108): the re-read has re-stated each absent, and no request of an
+/// empty member is built, no read sent; then the reads' faults, the twin
+/// pre-check, the values, the base's image.
 pub fn build(p: &Publisher<'_>, inputs: &Inputs, e: &Enumeration, panel: &Panel, confirmed: &Confirmed) -> Result<Built, Fault> {
     let door = Door::new(p.board, p.token);
     build_with(&door, p, inputs, e, panel, confirmed)
@@ -846,6 +872,9 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
     // is composed (B3-S11 P2 (i)).
     let e = &confirmed.compose(inputs, e);
     let panel = &panel.composed(inputs, e);
+    if !e.placed.is_empty() && e.placed.iter().all(|placement| *placement == Placement::Absent) {
+        return Err(Fault::SelectionNotArranged { index: 0 });
+    }
     let trunk = inputs.doc.clone();
     // The runs as placed, each with its kept place and its place in the draft.
     let mut runs: Vec<Run> = Vec::new();

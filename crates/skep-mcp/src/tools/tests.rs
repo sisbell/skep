@@ -536,6 +536,8 @@ fn the_publication_cards_state_the_shells_shapes() {
     let confirm = entry("publication_confirm")["description"].as_str().expect("the confirm card");
     assert!(confirm.contains(&format!("{superseded} {{first}}")), "the confirm card names the library's base_superseded arm: {confirm}");
     assert!(confirm.contains("superseded_first where version 1 was"), "the confirm card re-states a first draft's standing moved: {confirm}");
+    assert!(confirm.contains("or its base did, base then the base as read") && confirm.contains("a base or a standing that moved is the restated outcome"), "the confirm card says a moved base is re-stated, never a refusal: {confirm}");
+    assert!(confirm.contains(&format!("{} {{index}}", skep_shell::Name::SELECTION_NOT_ARRANGED.as_str())), "the confirm card names the refusal of a selection the draft has wholly left: {confirm}");
     assert!(confirm.contains("kept_place_moved {index, draft, race}"), "the confirm card names kept_place_moved's members, the draft that moved among them: {confirm}");
     assert!(confirm.contains("each of also — is re-windowed") && confirm.contains("stray_place {index, draft}"), "the confirm card says every named draft is re-windowed in the one write, and names the own fault's draft: {confirm}");
     // The held-lines gate (client.md §3c.4; skep #849): the confirm card

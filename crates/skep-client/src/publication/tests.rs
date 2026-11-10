@@ -4382,6 +4382,41 @@ fn a_reread_over_merge_records_alone_is_refused() {
     assert!(dialer.frames("find_links_v").is_empty() && dialer.frames("publish").is_empty(), "nothing read past the atoms, nothing sent: {:?}", dialer.ops());
 }
 
+/// A selection the draft has wholly left is re-stated at the re-read and
+/// refused at the build, an empty member never composed (PUB-3.108): the
+/// base has words, so `runs` empty is no inert request; the reread lists
+/// each held run `Absent`, and `build` answers `SelectionNotArranged` at
+/// the first with no read sent past the composition. A run the draft still
+/// arranges keeps the request, a selection held empty is no absence.
+#[test]
+fn a_selection_the_draft_has_wholly_left_builds_no_empty_member() {
+    let (world, _) = World::base();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = inputs();
+    let e = enumerate(&p, &inputs).unwrap();
+    let first = panel(&p, &inputs, &e).unwrap();
+    // Every held run leaves the draft, which now holds other words alone.
+    dialer.world().docs.get_mut(D).unwrap().runs = vec![run(S, 1, 2)];
+    let again = reread(&p, &inputs, &e, &first).unwrap();
+    assert_eq!(again.restatement.clone().expect("a difference").selection, vec![(0, Placement::Absent), (1, Placement::Absent), (2, Placement::Absent)], "each held run re-stated absent");
+    dialer.clear();
+    assert_eq!(build(&p, &inputs, &again.enumeration, &again.panel, &Confirmed::default()).unwrap_err(), Fault::SelectionNotArranged { index: 0 });
+    assert!(dialer.frames("publish").is_empty() && dialer.ops().is_empty(), "nothing read or sent: {:?}", dialer.ops());
+    // One held run still arranged: the request stands, the rest left out.
+    dialer.world().docs.get_mut(D).unwrap().runs = vec![run(D, 1, 10), run(S, 1, 2)];
+    let partly = reread(&p, &inputs, &e, &first).unwrap();
+    let Built::Request(request) = build(&p, &inputs, &partly.enumeration, &partly.panel, &Confirmed::default()).unwrap() else { panic!("the held run still stands: a request") };
+    assert_eq!(request.runs, vec![run(D, 1, 10)]);
+    // A selection held empty is no absence: `runs` empty stands as any
+    // empty shot does, the base's image differing.
+    let empty = Inputs { selection: vec![], ..inputs.clone() };
+    let e = enumerate(&p, &empty).unwrap();
+    let held = panel(&p, &empty, &e).unwrap();
+    assert!(matches!(build(&p, &empty, &e, &held, &Confirmed::default()).unwrap(), Built::Request(_)), "an empty selection is no selection left behind");
+}
+
 /// A merge record of a draft `also` names is left out of both lists: `D`
 /// arranges its own ten words and `J`'s seven positions by identity, `J`
 /// named `also`. The records are cut out of `J`'s held run and counted

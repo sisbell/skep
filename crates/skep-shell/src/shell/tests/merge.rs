@@ -25,8 +25,10 @@
 //! merge lands — its own draft carrying the merge never re-opened, a draft
 //! of the person's it names never landed into — and the merged arm writing
 //! the person's own record where only another account's names the member;
-//! the `head_moved` race typed, nothing re-sent; and the composition dying
-//! with its session.
+//! the `head_moved` race typed, nothing re-sent; the composition dying
+//! with its session; and a merge landed in a panel's draft since its open
+//! re-stated at the confirm with the claim composed off the marker, landing
+//! at the next.
 
 use skep_client::address::{account_of, document_of, parse_address};
 use skep_client::board::{frames, Opened, SessionBody};
@@ -635,6 +637,49 @@ fn the_re_open_lands_nothing_and_a_checked_resolution_lands_on_the_trunk_with_th
     assert_eq!((record_gap["resolved_by"].as_str(), record_gap["placed"].as_str()), (Some("person"), Some("omitted")), "the person's resolution in the record: {merged}");
     assert_eq!(g.position(), before, "nothing landed, nothing written");
     assert_eq!(g.call("merge.land", json!({"session": g.session})).unwrap_err().name(), "no_merge", "a merged daughter composes nothing to land");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a merge landed in a panel's draft since its open is
+/// re-stated and carries its claim into the next confirm (D4 (b′); skep
+/// #934).
+///
+/// L, staged from E.1 and behind, opens its panel over the whole draft. A
+/// SECOND DEVICE lands the merge of E.2 with E.1.1 in L — the draft's
+/// recorded base moving to the head E.2 and its marker set beside it. The
+/// confirm is `restated`, naming `base` E.2 and `standing: at_head`, the
+/// panel re-keyed on it, `selection` empty as the panel re-took what L now
+/// arranges, nothing sent; `publication.count` answers the claim composed
+/// off the marker; the next confirm lands E.3 with `supersede [E.1.1]`,
+/// holding the merged words (the mutant that re-keys the base alone
+/// publishes no claim; the one that keeps the held runs publishes the old
+/// words and no merge).
+#[test]
+fn a_merge_landed_in_a_panels_draft_since_its_open_is_re_stated_and_lands_with_its_claim() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let l = g.addr(frames::stage(&f.e1, None));
+    let panel = g.call("publication.open", json!({"session": g.session, "draft": l, "doc": f.edition, "readable_drafts": [l], "published": [f.edition]})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(panel["standing"], "behind", "L stands behind the head E.2: {panel}");
+    let second = second_device(&dir, &sd);
+    let landed = second.call("merge.compose", json!({"session": second.session, "doc": f.edition, "alternative": f.e11, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((landed["outcome"].as_str(), landed["into"].as_str()), (Some("landed"), Some(l.as_str())), "{landed}");
+    second.shell.shutdown();
+    let before = g.position();
+    let restated = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("Restated", &restated);
+    assert_eq!((restated["outcome"].as_str(), restated["base"].as_str(), restated["standing"].as_str(), restated["selection"].clone()), (Some("restated"), Some(f.e2.as_str()), Some("at_head"), json!([])), "the merge moved L's base to the head: {restated}");
+    assert_eq!(g.position(), before, "nothing sent");
+    let counted = g.call("publication.count", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(counted["count"]["supersede"], json!([f.e11]), "the claim composed off the marker the re-read found: {counted}");
+    let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let e3 = format!("{}.3", f.edition);
+    assert_eq!((acked["outcome"].as_str(), acked["member"].as_str(), acked["supersede"].clone()), (Some("acknowledged"), Some(e3.as_str()), json!([f.e11])), "the next confirm lands on the moved base with the merge's claim: {acked}");
+    let text = g.text(&e3, 19);
+    assert!(text.starts_with("the fox") && text.contains(" jumps") && text.contains(" today") && text.len() == 19, "the merged words, not the held old ones: {text:?}");
     g.shell.shutdown();
     sd.shutdown();
 }

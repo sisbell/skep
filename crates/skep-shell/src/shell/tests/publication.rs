@@ -31,9 +31,14 @@
 //! `superseded_first` once version 1 stands and landing beside it as its
 //! daughter, a sibling's shot landing while a panel stands re-stated at the
 //! confirm, nothing sent, and version 1 landing while a first draft's panel
-//! stands re-stated `superseded_first`, the daughter landing next. Every
-//! draft a cell publishes into a document is staged through `stage`, the
-//! one frame that copies its source and records its base.
+//! stands re-stated `superseded_first`, the daughter landing next; and THE
+//! MOVED BASE (D4 (b′); skep #934) — a base another publication of the draft
+//! moved re-stated `base` at an unmoved standing and the next confirm
+//! sending against it, a base moved by its extent alone re-stated, a panel
+//! of the whole draft re-taking the draft, a held selection the draft has
+//! wholly left refused `selection_not_arranged`, nothing sent. Every draft
+//! a cell publishes into a document is staged through `stage`, the one
+//! frame that copies its source and records its base.
 
 use skep_client::board::Health;
 use skep_client::store::{FileStore, KeyId, KeyStore};
@@ -1268,6 +1273,266 @@ fn a_siblings_shot_between_the_open_and_the_confirm_is_restated_and_nothing_land
     assert_eq!(g.states_once(3), ["sent", "acknowledged", "restated"], "{:?}", g.states());
     let daughter = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!((daughter["outcome"].as_str(), daughter["member"].as_str()), (Some("acknowledged"), Some(format!("{e1}.1").as_str())), "behind is told, never refused: {daughter}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a base moved since the panel at an unmoved standing is
+/// re-stated, nothing sent, and that the next confirm sends against it
+/// (D4 (b′); skep #934).
+///
+/// S, staged from E.1 — the head — holds twelve words of its own. Its panel
+/// holds the last six by a selection the page passes and opens `at_head`;
+/// while it stands a SECOND DEVICE's shell publishes the first six as E.2,
+/// which moves S's recorded base to E.2: the head moved and the standing
+/// `at_head` both times. S's confirm reads the base again and answers
+/// `restated` with `base` E.2 and every other difference empty, its event
+/// `restated`, nothing sent — the board's position unmoved; the next confirm
+/// lands E.3 holding the held words, the request naming the member the
+/// panel tested against (the mutant that reads the standing alone sends
+/// against E.1 and lands the daughter E.1.1, the issue's own report; the one
+/// that sets `base` without re-keying the panel re-states at every confirm
+/// and never lands).
+#[test]
+fn a_moved_base_at_an_unmoved_standing_is_restated_and_the_next_confirm_sends_against_it() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let d = g.staged(&edition, "the quick brown fox");
+    g.call("publication.open", json!({"session": g.session, "draft": d, "doc": edition, "readable_drafts": [d], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let e1 = format!("{edition}.1");
+    assert_eq!(g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"))["member"].as_str(), Some(e1.as_str()));
+    let s = g.staged(&e1, "abcdefghijkl");
+    let open = |g: &Ground, first_word: u64| g.call("publication.open", json!({"session": g.session, "draft": s, "doc": edition, "selection": [{"origin": s, "i_start": first_word, "width": 6}], "readable_drafts": [s], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(open(&g, 7)["standing"], "at_head", "S's base E.1 heads the chain");
+    // The second device publishes S's first six words while this panel stands.
+    let second = second_device(&dir, &sd);
+    open(&second, 1);
+    let e2 = format!("{edition}.2");
+    let sibling = second.call("publication.confirm", json!({"session": second.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(sibling["member"].as_str(), Some(e2.as_str()), "{sibling}");
+    second.shell.shutdown();
+    let before = g.position();
+    let confirm = || g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let restated = confirm();
+    crate::shapes::assert_declared("Restated", &restated);
+    assert_eq!(restated, json!({"outcome": "restated", "left": [], "superseded": [], "came": [], "removals_undone": [], "removals_came": [], "selection": [], "base": e2}), "the base moved alone, at_head both times");
+    assert_eq!(g.position(), before, "nothing sent");
+    assert_eq!(g.states_once(3), ["sent", "acknowledged", "restated"], "{:?}", g.states());
+    // Confirmed again: sent against the base the re-read named.
+    let acked = confirm();
+    let e3 = format!("{edition}.3");
+    assert_eq!((acked["outcome"].as_str(), acked["member"].as_str()), (Some("acknowledged"), Some(e3.as_str())), "the next member after the moved base, never E.1's daughter: {acked}");
+    assert_eq!(g.text(&e3, 6), "ghijkl", "the held words are what the member holds");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a base differing from the panel's by its extent alone is
+/// re-stated, nothing sent, and that the extent re-read is what the next
+/// confirm sends (skep #934's catch-all: a base that differs in any way).
+///
+/// S, staged from E.1 — E.1's nineteen positions by identity — and written
+/// on, opens its panel with base E.1 at extent nineteen. A `set_arrangement`
+/// of S's own runs, naming E.1 as THE BASE TO RECORD at a smaller extent,
+/// moves the record's extent alone; the member and the standing stay. The
+/// confirm is `restated`, naming `base` E.1, nothing sent; the next confirm's
+/// `publish` row carries extent five (the mutant that compares the member
+/// alone reads the extent of E.1 as no difference, and the request goes out
+/// at nineteen).
+#[test]
+fn a_base_moved_by_its_extent_alone_is_re_stated() {
+    use skep_client::board::frames::{image, set_arrangement, shot_run};
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let d = g.staged(&edition, "the quick brown fox");
+    g.call("publication.open", json!({"session": g.session, "draft": d, "doc": edition, "readable_drafts": [d], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let e1 = format!("{edition}.1");
+    assert_eq!(g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"))["member"].as_str(), Some(e1.as_str()));
+    let s = g.staged(&e1, "abcd");
+    let panel = g.call("publication.open", json!({"session": g.session, "draft": s, "doc": edition, "readable_drafts": [s], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(panel["standing"], "at_head", "{panel}");
+    let answer = g.op(image(&s, 1, 23));
+    let runs: Vec<Value> = answer["runs"].as_array().expect("the draft's image").iter().map(|r| {
+        let i_start = r["i_start"].as_str().expect("an I-address");
+        shot_run(&skep_client::address::document_of(i_start).expect("a document"), i_start, r["width"].as_str().expect("a width").parse().expect("a natural"))
+    }).collect();
+    g.op(set_arrangement(&s, &runs, g.position(), None, Some((e1.as_str(), 5)), None, None));
+    let before = g.position();
+    let restated = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("Restated", &restated);
+    assert_eq!(restated, json!({"outcome": "restated", "left": [], "superseded": [], "came": [], "removals_undone": [], "removals_came": [], "selection": [], "base": e1}), "the extent moved alone: the same member, the record's new count");
+    assert_eq!(g.position(), before, "nothing sent");
+    let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let e2 = format!("{edition}.2");
+    assert_eq!((acked["outcome"].as_str(), acked["member"].as_str()), (Some("acknowledged"), Some(e2.as_str())), "{acked}");
+    let at = acked["at"].as_u64().unwrap();
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let rows = changes_under(&entry.board, &entry.token, &edition, at - 1);
+    let row = rows.iter().find(|r| r["at"] == at && r["op"] == "publish").unwrap_or_else(|| panic!("the publish row at {at}: {rows:?}"));
+    assert_eq!(row["base_extent"].as_str(), Some("5"), "the extent the re-read named: {row}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a panel of the whole draft re-takes the draft on a moved base
+/// (skep #934; P4's "publish all of this draft", PUB-3.108's "what the draft
+/// now arranges"), at a first version and at a later one.
+///
+/// D, staged from the memberless edition, opens its whole-draft panel here;
+/// a SECOND DEVICE publishes the whole draft as E.1, moving D's base. The
+/// confirm is `restated` naming `base` E.1 and `standing: at_head`,
+/// `selection` empty though the held runs' words went to the board by
+/// identity; the panel holds the draft as it now stands, so the next confirm
+/// is `inert: unchanged`, nothing sent — never the empty version the held
+/// runs would compose over a base with words. D writes on; a fresh
+/// panel here, the second device publishing the whole draft again as E.2,
+/// and the confirm is `restated` naming `base` E.2 alone, the standing
+/// `at_head` both times, then `inert: unchanged`, nothing sent: at a later
+/// version too the panel follows the draft the board rewrote. Published in
+/// part, the panel re-takes what the draft now holds, the runs' indices the
+/// new list's, and the next confirm publishes the whole draft against the
+/// new base (the mutant that leaves the whole panel's held runs in place
+/// publishes an empty version; the one that keeps the misaligned `selection`
+/// difference says runs moved that the panel re-took).
+#[test]
+fn a_whole_draft_panel_re_takes_the_draft_when_its_base_moves() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let d = g.staged(&edition, "the quick brown fox");
+    let open = |g: &Ground, draft: &str| g.call("publication.open", json!({"session": g.session, "draft": draft, "doc": edition, "readable_drafts": [draft], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let confirm = |g: &Ground| g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let restated = |base: &str, standing: Option<&str>| {
+        let mut v = json!({"outcome": "restated", "left": [], "superseded": [], "came": [], "removals_undone": [], "removals_came": [], "selection": [], "base": base});
+        if let Some(standing) = standing {
+            v["standing"] = json!(standing);
+        }
+        v
+    };
+    let unchanged = |refused: Value| assert_eq!((refused["outcome"].as_str(), refused["arm"].as_str(), refused["inert"].as_str()), (Some("refused"), Some("inert"), Some("unchanged")), "{refused}");
+    assert_eq!(open(&g, &d)["standing"], "first", "the panel of the whole draft, the bare document's chain empty");
+    let second = second_device(&dir, &sd);
+    open(&second, &d);
+    let e1 = format!("{edition}.1");
+    assert_eq!(confirm(&second)["member"].as_str(), Some(e1.as_str()), "the whole draft published from the second device");
+    let before = g.position();
+    let first = confirm(&g);
+    crate::shapes::assert_declared("Restated", &first);
+    assert_eq!(first, restated(&e1, Some("at_head")), "the base moved, the standing typed against it");
+    assert_eq!(g.position(), before, "nothing sent");
+    unchanged(confirm(&g));
+    assert_eq!(g.position(), before, "nothing sent");
+    // A later version: D writes on, this device opens afresh, the second
+    // device publishes what D now holds.
+    g.call("publication.cancel", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    g.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "20"}, "values": [" jumps"], "as_of": g.position()}));
+    assert_eq!(open(&g, &d)["standing"], "at_head", "D's base is E.1, the head");
+    open(&second, &d);
+    let e2 = format!("{edition}.2");
+    assert_eq!(confirm(&second)["member"].as_str(), Some(e2.as_str()), "the second device publishes D's whole draft again");
+    let before = g.position();
+    let later = confirm(&g);
+    assert_eq!(later, restated(&e2, None), "the standing at_head both times, the base moved alone");
+    assert_eq!(g.position(), before, "nothing sent");
+    unchanged(confirm(&g));
+    assert_eq!(g.position(), before, "nothing sent");
+    // Published in part: S holds twelve words of its own and E.2's words —
+    // two runs, the second at position thirteen. The second device publishes
+    // S's first six as E.3, and S's whole-draft panel here re-takes what S
+    // now holds, three runs: the second at position seven, so no held run
+    // is compared with a new one at its index (the empty `selection`), and
+    // the next confirm publishes the whole draft against E.3, as E.4.
+    g.call("publication.cancel", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let s = g.staged(&e2, "abcdefghijkl");
+    assert_eq!(open(&g, &s)["standing"], "at_head", "S's base E.2 heads the chain");
+    second.call("publication.open", json!({"session": second.session, "draft": s, "doc": edition, "selection": [{"origin": s, "i_start": 1, "width": 6}], "readable_drafts": [s], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let e3 = format!("{edition}.3");
+    assert_eq!(confirm(&second)["member"].as_str(), Some(e3.as_str()), "the first six of S published from the second device");
+    second.shell.shutdown();
+    let before = g.position();
+    let part = confirm(&g);
+    assert_eq!(part, restated(&e3, None), "at_head both times; the re-take's runs read as no placement difference");
+    assert_eq!(g.position(), before, "nothing sent");
+    let acked = confirm(&g);
+    let e4 = format!("{edition}.4");
+    assert_eq!((acked["outcome"].as_str(), acked["member"].as_str()), (Some("acknowledged"), Some(e4.as_str())), "the whole of S as it now stands, against E.3: {acked}");
+    assert_eq!(g.text(&e4, 12), "abcdefghijkl", "the words a whole-draft command publishes, the published six among them");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a held selection the draft has wholly left is re-stated and
+/// then refused, nothing sent (PUB-3.108; skep #934): no empty version lands
+/// on a moved base.
+///
+/// A selection the page passes holds D's fresh words at a later version; a
+/// SECOND DEVICE publishes the whole draft as E.2, re-windowing them at
+/// their kept place, so the held run stands absent. The confirm is
+/// `restated` naming `base` E.2 with the run placed `absent`, nothing sent;
+/// the next confirm is refused `selection_not_arranged`, nothing sent. A
+/// panel of the whole draft over a draft EMPTIED while its base moved keeps
+/// the held runs, each re-stated absent, and is refused the same at the next
+/// confirm (the mutant that lets the selection through publishes an empty
+/// head; the one that takes the emptied draft whole publishes an empty
+/// member too).
+#[test]
+fn a_held_selection_the_draft_has_wholly_left_is_re_stated_and_then_refused() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let d = g.staged(&edition, "the quick brown fox");
+    let open = |g: &Ground, draft: &str, selection: Option<Value>| {
+        let mut args = json!({"session": g.session, "draft": draft, "doc": edition, "readable_drafts": [draft], "published": [edition]});
+        if let Some(selection) = selection {
+            args["selection"] = selection;
+        }
+        g.call("publication.open", args).unwrap_or_else(|r| panic!("{r}"))
+    };
+    let confirm = |g: &Ground| g.call("publication.confirm", json!({"session": g.session}));
+    open(&g, &d, None);
+    let e1 = format!("{edition}.1");
+    assert_eq!(confirm(&g).unwrap_or_else(|r| panic!("{r}"))["member"].as_str(), Some(e1.as_str()));
+    g.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "20"}, "values": [" jumps"], "as_of": g.position()}));
+    // D's fresh words are the draft's own run past E.1's nineteen: the open's
+    // strict read is the premise that it stands whole there.
+    open(&g, &d, Some(json!([{"origin": d, "i_start": 20, "width": 6}])));
+    let second = second_device(&dir, &sd);
+    open(&second, &d, None);
+    let e2 = format!("{edition}.2");
+    assert_eq!(confirm(&second).unwrap_or_else(|r| panic!("{r}"))["member"].as_str(), Some(e2.as_str()), "the second device publishes the whole draft, the held run re-windowed");
+    let before = g.position();
+    let restated = confirm(&g).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("Restated", &restated);
+    assert_eq!(restated, json!({"outcome": "restated", "left": [], "superseded": [], "came": [], "removals_undone": [], "removals_came": [], "selection": [{"run": 0, "placement": "absent"}], "base": e2}), "the held run gone, its base moved, the standing at_head both times");
+    assert_eq!(g.position(), before, "nothing sent");
+    let refused = confirm(&g).unwrap_err();
+    assert_eq!((refused.name(), refused.to_value()["index"].as_u64()), ("selection_not_arranged", Some(0)), "{refused}");
+    assert_eq!(g.position(), before, "nothing sent: no empty version");
+    // The whole panel over a draft emptied while its base moves: the second
+    // device publishes D whole again, then deletes every word.
+    g.call("publication.cancel", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    g.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "26"}, "values": ["!"], "as_of": g.position()}));
+    open(&g, &d, None);
+    open(&second, &d, None);
+    let e3 = format!("{edition}.3");
+    assert_eq!(confirm(&second).unwrap_or_else(|r| panic!("{r}"))["member"].as_str(), Some(e3.as_str()));
+    second.op(json!({"op": "delete", "doc": d, "p": {"subspace": "1", "ordinal": "1"}, "width": "26", "as_of": second.position()}));
+    second.shell.shutdown();
+    let before = g.position();
+    let held = confirm(&g).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((held["outcome"].as_str(), held["base"].as_str()), (Some("restated"), Some(e3.as_str())), "{held}");
+    let placed = held["selection"].as_array().expect("the held runs, re-stated");
+    assert!(!placed.is_empty() && placed.iter().all(|p| p["placement"] == "absent"), "the emptied draft keeps the held runs, each absent: {held}");
+    assert_eq!(g.position(), before, "nothing sent");
+    let refused = confirm(&g).unwrap_err();
+    assert_eq!(refused.name(), "selection_not_arranged", "{refused}");
+    assert_eq!(g.position(), before, "nothing sent: no empty version");
     g.shell.shutdown();
     sd.shutdown();
 }

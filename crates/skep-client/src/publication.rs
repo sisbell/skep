@@ -469,8 +469,11 @@ pub enum Fault {
     /// `scan_busy` or `history_busy` past the bounded reissues on a read;
     /// nothing written.
     Busy,
-    /// A held run the draft no longer arranges whole at one place, at the
-    /// FIRST enumeration — before any re-read can re-state it.
+    /// A held run the draft no longer arranges whole at one place.
+    ///
+    /// At the FIRST enumeration — before any re-read can re-state it — or,
+    /// `index` 0, at the build over a selection the draft has wholly left,
+    /// every run absent and re-stated so by the re-read.
     SelectionNotArranged {
         /// The run's index in the selection.
         index: usize,

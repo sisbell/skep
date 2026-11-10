@@ -77,10 +77,11 @@
 //! window part for its caller: a part with no answer refuses the row
 //! `window_parts_owed` (the merge record's §1.5), nothing sent, every part
 //! named whole by the library's one refusal (`owed_parts`), the same the
-//! `skep merge --publish` refusal comes from. So the claim is composed in one place,
-//! the open's read of the marker (`shell/publication.rs`, **The claim**),
-//! and rides only where the marker's head is the trunk's head as read at
-//! the open; never at the draft side, whose side is a private draft. After
+//! `skep merge --publish` refusal comes from. So the claim is composed in
+//! one place, the panel's read of the marker at the open or at a confirm
+//! that finds the draft's base moved (`shell/publication.rs`, **The claim**),
+//! and rides only where the marker's head is the trunk's head as read
+//! there; never at the draft side, whose side is a private draft. After
 //! the acknowledgment THE MERGE RECORD, the library's `record_published` —
 //! the member and position the board acknowledged, the claims read back at
 //! the daughter, the window parts' answers beside it, written once in the

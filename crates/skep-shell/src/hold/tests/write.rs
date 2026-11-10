@@ -3151,3 +3151,42 @@ fn an_earlier_runs_halted_pending_file_halts_the_principal_at_the_first_touch_be
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 0, "nothing is sent");
 }
+
+/// Checks that the burst's door refuses a piece that names no place, nothing
+/// held or dialed (skep #969).
+///
+/// The own node stopped, an insert of three positions under the `id` `b-1`,
+/// a delete under `d-1` and an insert on another document under `o-1` stand
+/// held. A burst naming by a piece a burst never sent, the other document's
+/// insert, the delete's words, or the insert's words at an offset at its
+/// positions is refused at the act — `no_such_burst` naming the anchor and
+/// the burst, or `malformed_args` naming the anchor — no line held for it and
+/// nothing dialed; one naming the insert's last position is held behind it
+/// (the mutant that binds a piece to a line of its `id` on any document
+/// places it in words its burst does not edit; the one that takes any offset
+/// places it past the insert's words, at units the page never named).
+#[test]
+fn the_bursts_door_refuses_a_piece_that_names_no_place_nothing_held_or_dialed() {
+    let g = ground();
+    let typed = g.fake.head();
+    g.holds.set_node_stopped("b-1", true);
+    for frame in [with_id(insert_at(DOC, 4, json!(["XYZ"]), typed), "b-1"), with_id(delete_at(DOC, 2, 1, typed), "d-1"), with_id(insert(OTHER, json!(["q"]), typed), "o-1")] {
+        let held = g.holds.send(&g.session, frame, None).answered().unwrap();
+        assert_eq!(held["cause"], "stopped", "{held}");
+    }
+    let named = |before: Value, after: Value| g.holds.send(&g.session, with_id(insert_at(DOC, 5, json!(["!"]), typed), "b-2"), Some(pieced(before, after))).answered();
+    let no_such = |anchor: &str, burst: &str| json!({"kind": "shell", "name": "no_such_burst", "anchor": anchor, "burst": burst});
+    let malformed = |what: &str| Refusal::malformed(what).to_value();
+    let cells = [
+        ("a burst never sent", piece("b-9", 0), Value::Null, no_such("before", "b-9")),
+        ("another document's insert", Value::String(i(3)), piece("o-1", 0), no_such("after", "o-1")),
+        ("a delete's words", piece("d-1", 0), Value::Null, malformed("anchors.before")),
+        ("an offset at the insert's positions", Value::String(i(3)), piece("b-1", 3), malformed("anchors.after")),
+    ];
+    for (cell, before, after, refused) in cells {
+        assert_eq!(named(before, after).unwrap_err().to_value(), refused, "{cell}");
+    }
+    assert_eq!((g.lines().len(), g.fake.sends()), (3, 0), "nothing held for them, nothing dialed");
+    let held = named(Value::String(i(3)), piece("b-1", 2)).unwrap();
+    assert_eq!((held["resp"].as_str(), g.lines().len()), (Some("held"), 4), "the insert's last position is a place: {held}");
+}

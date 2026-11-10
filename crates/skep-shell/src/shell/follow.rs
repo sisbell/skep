@@ -64,16 +64,11 @@ use skep_client::address::is_address_text;
 use skep_client::dial::{CONNECT_TIMEOUT, IO_TIMEOUT};
 use skep_client::sheet::render_inert;
 
+use crate::held::MAX_BURST_ID_BYTES;
 use crate::hold::is_burst;
 use crate::refusal::{Name, Refusal};
 use crate::wire::values_of;
 use crate::Talk;
-
-/// The longest burst `id` a session's table keeps, and the longest `after`.
-///
-/// In bytes. A burst whose `id` is longer is sent as any burst is and kept
-/// nowhere, and an `after` past it is refused at the row's door.
-pub(super) const MAX_BURST_ID_BYTES: usize = 128;
 
 /// The answered bursts a session's table keeps, the newest.
 ///

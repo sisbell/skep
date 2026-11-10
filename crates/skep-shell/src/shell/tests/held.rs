@@ -400,6 +400,98 @@ fn a_burst_that_committed_then_panicked_is_kept_and_sent_once() {
     sd.shutdown();
 }
 
+/// Checks that a burst typed next to held words names them, and lands at
+/// them once the own node runs (skep #969).
+///
+/// It is the issue's own case, against the real daemon. The draft reads
+/// `a`; the own node stopped, the page types `XYZ` after it — held
+/// `stopped`, its `id` `b-1` — then `!` between its `X` and its `Y`, its
+/// anchors two pieces of `b-1`'s unminted words, held behind it and listed
+/// with its pieces. The node running, `XYZ` is sent, the board minting its
+/// words, the pieces placed at them; `!`, typed before `XYZ` landed, is
+/// refused as typed against an older state, shifted by the anchors found
+/// adjacent in the draft's image, and lands between them, the draft reading
+/// `aX!YZ` and no line left (the mutant that keeps the anchors to
+/// I-addresses refuses the second burst at the `op` row; the one that leaves
+/// the pieces unplaced holds it moved for good).
+#[test]
+fn a_burst_typed_next_to_held_words_names_them_and_lands_at_them_once_the_node_runs() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (talk, lines) = talk();
+    let mut opts = ShellOptions::new(vec![Origin::parse(&origin).unwrap()], store, SessionMode::Signed { principal: 1 }, talk);
+    opts.own_node = Some(Origin::parse(&origin).unwrap());
+    let shell = Shell::open(opts);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    let board = shell.board_references().remove(0);
+    let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let minted = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
+    let draft = minted["addr"].as_str().unwrap().to_string();
+    let acked = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"], "as_of": minted["at"]}})).unwrap();
+    let typed = acked["at"].as_u64().unwrap_or_else(|| panic!("the draft's `a` is acked: {acked}"));
+    let image = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::image(&draft, 1, 1)})).unwrap();
+    let a = image["runs"][0]["i_start"].as_str().unwrap_or_else(|| panic!("the identity of `a`: {image}")).to_string();
+    shell.set_node_state(NodeState::Stopped);
+    let insert = |ordinal: &str, values: &str, id: &str| json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": ordinal}, "values": [values], "as_of": typed, "id": id});
+    let held = shell.call("op", &json!({"session": session, "frame": insert("2", "XYZ", "b-1"), "anchors": {"before": a, "after": null}})).unwrap();
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("stopped")), "{held}");
+    let pieces = json!({"before": {"burst": "b-1", "offset": 0}, "after": {"burst": "b-1", "offset": 1}});
+    let named = shell.call("op", &json!({"session": session, "frame": insert("3", "!", "b-2"), "anchors": pieces})).unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
+    assert_eq!(named["resp"], "held", "{named}");
+    let rows = shell.call("held", &json!({"session": session})).unwrap();
+    assert_eq!((rows.as_array().map(Vec::len), &rows[1]["anchors"]), (Some(2), &pieces), "the row lists the pieces: {rows}");
+    shell.set_node_state(NodeState::Running);
+    wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept");
+    let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 5)})).unwrap();
+    assert_eq!(text_of(&read), "aX!YZ", "{read}\n{}", lines.lock().unwrap().join("\n"));
+    assert!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty(), "no line stands");
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a burst naming the words of a poisoned burst lands at them
+/// once the restart lands that burst (§3c.2, §3c.5; skep #969).
+///
+/// The kernel poisoned, a burst of `bc` after the draft's `a` is held
+/// `poisoned`, its `id` `b-1`, its line `sent`; `!` between its `b` and its
+/// `c`, its anchors two pieces of `b-1`'s words, is held behind it, no dial
+/// made. The restart replays the journal, `bc` landing with its testimony
+/// lost: the resend's read keeps it by its site and — its words named —
+/// reads their address through `/op-at` at the position the site read
+/// answered at; the pieces placed there, `!` is shifted through the landing
+/// and lands between `b` and `c`, the draft reading `ab!c` (the mutant that
+/// keeps a found landing with no address holds `!` moved; the one that reads
+/// the address at no position the site read gave reads another state).
+#[test]
+fn a_burst_naming_the_words_of_a_poisoned_burst_lands_at_them_once_the_restart_lands_it() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let port = sd.port();
+    let HeldGround { shell, seen, board, session, draft, at } = held_ground(&dir, &sd);
+    let insert = |ordinal: &str, value: &str, id: &str| json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": ordinal}, "values": [value], "as_of": at, "id": id});
+    sd.daemon().fail_the_next_checkpoint_step(Step::JournalBarrier, std::io::ErrorKind::Other);
+    sd.daemon().fail_the_next_checkpoint_step(Step::JournalRepair, std::io::ErrorKind::Other);
+    let held = shell.call("op", &json!({"session": session, "frame": insert("2", "bc", "b-1")})).unwrap();
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("poisoned")), "{held}");
+    let pieces = json!({"before": {"burst": "b-1", "offset": 0}, "after": {"burst": "b-1", "offset": 1}});
+    let named = shell.call("op", &json!({"session": session, "frame": insert("3", "!", "b-2"), "anchors": pieces})).unwrap();
+    assert_eq!(named["resp"], "held", "{named}");
+    sd.shutdown();
+    let sd = spawn_at(&dir.path().join("board"), true, port);
+    wait_for(&seen, |e| e.name == EventName::SessionDied && e.data["session"] == session);
+    let session2 = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept");
+    let read = shell.call("op", &json!({"session": session2, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 4)})).unwrap();
+    assert_eq!(text_of(&read), "ab!c", "{read}");
+    assert!(shell.call("held", &json!({"session": session2})).unwrap().as_array().unwrap().is_empty(), "no line stands");
+    shell.shutdown();
+    sd.shutdown();
+}
+
 /// Checks that a signed session's landed burst is kept by the resend.
 ///
 /// It is the signed mode's own row: a held burst whose line says

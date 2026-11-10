@@ -77,7 +77,13 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("Cancel", json!({"id": "m-0"})),
         ("HeldAnswer", json!({"resp": "held", "held": 1, "cause": "unreachable", "unwritable": "No space left on device (os error 28)", "unwritable_class": "full"})),
         ("HeldRow", json!({"held": 1, "doc": "1.0.1.0.1", "base": 5, "frame": {"op": "delete"}, "anchors": {"before": "1.0.1.0.1.0.1.3", "after": null, "span": [{"start": "1.0.1.0.1.0.1.4", "width": "2"}]}, "cause": "moved", "sent": false, "time": 1, "sendable": true, "unwritable": "No space left on device (os error 28)", "unwritable_class": "full"})),
-        ("Anchors", crate::held::Anchors::of(&json!({"before": "1.0.1.0.1.0.1.3", "after": null, "span": [{"start": "1.0.1.0.1.0.1.4", "width": "2"}]})).expect("the anchors' form").json()),
+        (
+            "Anchors",
+            crate::held::Anchors::of(&json!({"before": "1.0.1.0.1.0.1.3", "after": {"burst": "b-1", "offset": 2}, "span": [{"start": "1.0.1.0.1.0.1.4", "width": "2"}]}))
+                .expect("the anchors' form")
+                .json(),
+        ),
+        ("AnchorPiece", json!({"burst": "b-1", "offset": 2})),
         ("BurstPiece", json!({"burst": "b-1", "offset": 6, "width": 5})),
         (
             "HeldEvent",
@@ -230,6 +236,8 @@ fn the_file_names_every_shape_call_and_event() {
         "  left_behind: string[];\n",
         "export type BaseStanding = 'at_head' | 'behind' | 'first' | 'superseded_first';\n",
         "  before: string | null;\n",
+        "  before: string | AnchorPiece | null;\n  after: string | AnchorPiece | null;\n",
+        "export interface AnchorPiece {\n  burst: string;\n  offset: number;\n}\n",
         "  span?: { start: string; width: string }[];\n",
         "  site: { addr?: string; index?: number; operand?: 'first' | 'second'; region?: number; slot?: number; fault?: string; as_of?: number; current?: number };\n",
         "  unwritable?: string;\n  unwritable_class?: 'full' | 'read_only' | 'other';\n",

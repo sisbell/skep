@@ -325,12 +325,17 @@ impl Name {
     pub const ANSWERS_LOST: Name = Name("answers_lost");
     /// `answer(id, …)` or `cancel(id)` where no moment of that id waits.
     pub const NO_SUCH_MOMENT: Name = Name("no_such_moment");
-    /// A follower write whose `after` names no burst its session keeps.
+    /// A burst named by its `id` that the shell holds or keeps nowhere.
     ///
-    /// No burst of that `id` reached the session's table within a second of
-    /// the follower: the session sent none under it, or its table let it go,
-    /// keeping its newest answered bursts (`shell/follow.rs`; §3c.6). The
-    /// detail names the `after`.
+    /// It is a follower write's `after`, or an anchor's piece (skep #969).
+    /// No burst of a follower's `after` reached the session's table within
+    /// a second of the follower: the session sent none under it, or its
+    /// table let it go, keeping its newest answered bursts
+    /// (`shell/follow.rs`; §3c.6); the detail names the `after`. No burst of
+    /// a piece's `burst` stands held on the burst's document, nor is kept
+    /// there among the principal's newest inserts the hold remembers
+    /// (`Holds::place_anchors`); the detail names the `anchor`, `before` or
+    /// `after`, and the `burst`.
     pub const NO_SUCH_BURST: Name = Name("no_such_burst");
     /// A follower write not sent: its burst, or the shell's stop, stood in
     /// its way (§3c.6).

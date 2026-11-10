@@ -37,8 +37,11 @@
 //! refused `arrangement_moved`, the fake's own acks moving nothing, so every
 //! frame typed at the fake's head meets no refusal — the frames POSTed to
 //! `/op` recorded, a look taken as each is recorded, and a refusal or the
-//! death signal armed for a send — the holds over it with a session opened
-//! as the shell opens one and every line the hold says on `Talk` recorded
+//! death signal armed for a send, an insert's ack naming the address it
+//! minted where a cell arms it, and an `/op-at` image of the draft, no
+//! answer or a refusal where a cell arms it — the holds over it with a
+//! session opened as the shell opens one and every line the hold says on
+//! `Talk` recorded
 //! (`Ground`), the clock a line's deadline reads moved forward by a cell
 //! where it waits past one (`Holds::advance`), a burst held through the
 //! hold's own door at the base a hold takes now, and each `held` event,
@@ -577,7 +580,11 @@ impl<T: Clone> Armed<T> {
 /// recorded, a look the cell takes as each is recorded, the n-th one's answer
 /// lost on the way where one is armed lost, and the death signal, a scripted
 /// rejection or a non-200 answered where one is armed — to every send, or to
-/// the next few alone, the death first and the non-200 next; the `/health`
+/// the next few alone, the death first and the non-200 next — and an insert's
+/// ack naming the address its words were minted at where a cell arms the fake
+/// to mint; an `/op-at` `image` answering the draft's image at the position
+/// asked, each asked position recorded, or no answer, a refusal or the runs a
+/// cell arms in its place; the `/health`
 /// reads counted, one armed to panic once, and each held at a gate while it is
 /// shut; and its `/events` stream, none, a commit a millisecond without end
 /// where a cell arms one, or a live stream that says nothing where a cell arms
@@ -688,6 +695,22 @@ struct Fake {
     /// How long each `/changes` read takes, in milliseconds, as across a
     /// network.
     changes_delay_ms: AtomicU64,
+    /// Whether an insert's ack names the first I-address its words were
+    /// minted at (`ack_addr`, A-63), as the board's does, the fake minting
+    /// in the document's own content I-space from `next_i` on.
+    minting: AtomicBool,
+    /// The I-ordinal the next insert the fake mints takes its first.
+    next_i: AtomicU64,
+    /// The position each `/op-at` read asked, in order.
+    at_reads: Mutex<Vec<u64>>,
+    /// Every `/op-at` read goes unanswered (`DialError::Timeout`).
+    at_unanswered: AtomicBool,
+    /// A refusal armed for every `/op-at` read, in its answer's place: a
+    /// status and its body.
+    at_refused: Mutex<Option<(u16, Value)>>,
+    /// The runs every `/op-at` `image` answers, as armed, in the image's
+    /// place.
+    at_runs: Mutex<Option<Vec<Value>>>,
 }
 
 impl Fake {
@@ -745,6 +768,12 @@ impl Fake {
             commits: AtomicBool::new(false),
             quiet_stream: AtomicBool::new(false),
             changes_delay_ms: AtomicU64::new(0),
+            minting: AtomicBool::new(false),
+            next_i: AtomicU64::new(100),
+            at_reads: Mutex::new(Vec::new()),
+            at_unanswered: AtomicBool::new(false),
+            at_refused: Mutex::new(None),
+            at_runs: Mutex::new(None),
         })
     }
 
@@ -951,7 +980,7 @@ impl Dialer for Fake {
                 let (from, width) = span(&body["specs"][0]).unwrap_or((0, 0));
                 let width = width + usize::from(self.over_deliver.load(Ordering::SeqCst));
                 return Ok(match text.get(from.saturating_sub(1)..from.saturating_sub(1) + width) {
-                    Some(cut) if from > 0 => ok(json!({"resp": "delivery", "items": [{"content": cut}]})),
+                    Some(cut) if from > 0 => ok(json!({"resp": "delivery", "items": [{"content": cut}], "as_of": self.read_as_of()})),
                     _ => ok(json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent", "op": "retrieve_v"})),
                 });
             }
@@ -993,7 +1022,28 @@ impl Dialer for Fake {
                 }
             }
             let at = self.next_at.fetch_add(1, Ordering::SeqCst);
+            if body["op"] == "insert" && self.minting.load(Ordering::SeqCst) {
+                let positions = crate::wire::values_of(&body["values"]).map_or(1, |values| values.len() as u64);
+                let first = self.next_i.fetch_add(positions, Ordering::SeqCst);
+                return Ok(ok(json!({"resp": "ack_addr", "addr": format!("{}.0.1.{first}", body["doc"].as_str().unwrap_or("?")), "at": at})));
+            }
             return Ok(ok(json!({"resp": "ack", "at": at})));
+        }
+        if req.method == Method::Post && req.path == "/op-at" {
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+            let at = body["at"].as_u64().unwrap_or(0);
+            self.at_reads.lock().unwrap().push(at);
+            if self.at_unanswered.load(Ordering::SeqCst) {
+                return Err(DialError::Timeout("the board takes the read and sends nothing".into()));
+            }
+            if let Some((status, refusal)) = self.at_refused.lock().unwrap().clone() {
+                return Ok(respond(status, refusal));
+            }
+            let region = &body["frame"]["region"][0];
+            let from = region["start"].as_str().and_then(|s| s.strip_prefix("1.")).and_then(|s| s.parse().ok()).unwrap_or(1);
+            let width = region["width"].as_str().and_then(|s| s.strip_prefix("0.")).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let runs = self.at_runs.lock().unwrap().clone().unwrap_or_else(|| self.image_runs(from, width));
+            return Ok(ok(json!({"resp": "runs", "runs": runs, "as_of": at})));
         }
         Ok(ok(json!({})))
     }
@@ -1335,6 +1385,27 @@ fn anchors(before: Option<&str>, after: Option<&str>) -> Anchors {
 fn spanned(before: Option<&str>, after: Option<&str>, runs: &[(&str, u64)]) -> Anchors {
     let span: Vec<Value> = runs.iter().map(|(start, width)| json!({"start": start, "width": width.to_string()})).collect();
     Anchors::of(&json!({"before": before, "after": after, "span": span})).expect("the anchors' form")
+}
+
+/// A piece of an edge, as a page sends it (skep #969).
+///
+/// It names the unit `offset` positions into the words of the burst the
+/// page sent with the envelope `id` `burst`.
+fn piece(burst: &str, offset: u64) -> Value {
+    json!({"burst": burst, "offset": offset})
+}
+
+/// The anchors a page sends whose edges are `before` and `after`.
+///
+/// Each is an I-address, a [`piece`] or `null`, read through their one door.
+fn pieced(before: Value, after: Value) -> Anchors {
+    Anchors::of(&json!({"before": before, "after": after})).expect("the anchors' form")
+}
+
+/// `frame` carrying the page's envelope `id` (A-60).
+fn with_id(mut frame: Value, id: &str) -> Value {
+    frame["id"] = Value::from(id);
+    frame
 }
 
 /// The anchors of their form whose spelling is exactly `bytes` long, read

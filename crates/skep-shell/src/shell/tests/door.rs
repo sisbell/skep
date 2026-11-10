@@ -146,7 +146,9 @@ pub(super) fn nowhere() -> String {
 /// form or both, and an `op`'s `anchors` of no object, naming one anchor,
 /// carrying a member beside the three, an anchor that is no I-address, a span
 /// of no list, of a run whose start is no I-address or of a width spelled as a
-/// number, or anchors one byte past their bound; and an `op`'s `after` of no
+/// number, or anchors one byte past their bound, or an anchor's piece of a
+/// `burst` of no string or past its bound, of no natural `offset`, or with a
+/// member beside its two (skep #969); and an `op`'s `after` of no
 /// string or past its bound, beside an `/op-at` frame or a frame that follows
 /// nothing, or in the guest form, and a piece of a follower's end in a
 /// `make_link`'s `ty`, outside the I-span form of its `to`, in a `nullify`'s
@@ -202,6 +204,15 @@ fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
         ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": null, "after": null, "span": [{"start": "x", "width": "1"}]}}), "anchors"),
         ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": null, "after": null, "span": [{"start": "1.0.1.0.1.0.1.2", "width": 2}]}}), "anchors"),
         ("op", json!({"session": "s-x", "frame": read, "anchors": anchors_spelled(MAX_ANCHOR_BYTES + 1)}), "anchors"),
+        // An anchor's piece (skep #969), read in its form there too: a
+        // `burst` of no string or past its bound, an `offset` negative, spelled
+        // or absent, and a member beside the two.
+        ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": {"burst": 7, "offset": 0}, "after": null}}), "anchors"),
+        ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": {"burst": "b".repeat(crate::held::MAX_BURST_ID_BYTES + 1), "offset": 0}, "after": null}}), "anchors"),
+        ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": null, "after": {"burst": "b-1", "offset": -1}}}), "anchors"),
+        ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": null, "after": {"burst": "b-1", "offset": "0"}}}), "anchors"),
+        ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": null, "after": {"burst": "b-1"}}}), "anchors"),
+        ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": {"burst": "b-1", "offset": 0, "width": 1}, "after": null}}), "anchors"),
         // The session form's `after`, read with its frame before the session
         // is looked up: no string, past its bound, beside an `/op-at` frame
         // and beside a read, which follows nothing; then a follower's piece
@@ -210,7 +221,7 @@ fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
         // with a member beside its three, and a piece with no `after`; and
         // `after` in the guest form, before its target is dialed.
         ("op", json!({"session": "s-x", "frame": mark(piece.clone()), "after": 7}), "after"),
-        ("op", json!({"session": "s-x", "frame": mark(piece.clone()), "after": "b".repeat(crate::shell::follow::MAX_BURST_ID_BYTES + 1)}), "after"),
+        ("op", json!({"session": "s-x", "frame": mark(piece.clone()), "after": "b".repeat(crate::held::MAX_BURST_ID_BYTES + 1)}), "after"),
         ("op", json!({"session": "s-x", "frame": {"at": 3, "frame": mark(piece.clone())}, "after": "b-1"}), "after"),
         ("op", json!({"session": "s-x", "frame": read, "after": "b-1"}), "after"),
         ("op", json!({"session": "s-x", "frame": {"op": "make_link", "home": "1.0.1.0.1", "from": {"spans": []}, "to": {"spans": []}, "ty": {"spans": [piece.clone()]}}, "after": "b-1"}), "frame.ty"),
@@ -243,6 +254,9 @@ fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
         assert_eq!((refused.name(), v["what"].as_str()), ("malformed_args", Some(member)), "{call} {args}: {v}");
     }
     assert_eq!(dials.load(Ordering::SeqCst), 0, "no dial for a refused argument");
+    let pieces = json!({"before": {"burst": "b".repeat(crate::held::MAX_BURST_ID_BYTES), "offset": 0}, "after": {"burst": "b-1", "offset": 3}});
+    let admitted = shell.call("op", &json!({"session": "s-x", "frame": read, "anchors": pieces})).unwrap_err();
+    assert_eq!(admitted.name(), "session_ended", "anchors of pieces at their bound are of the form, and the call goes on to the session");
     let defaulted = shell.call("session", &json!({"board": board, "principal": null})).unwrap_err();
     assert_eq!(defaulted.name(), "unreachable", "a null is the row's default, and the call goes on to the board");
 }

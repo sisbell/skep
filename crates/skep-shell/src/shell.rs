@@ -1435,39 +1435,47 @@ impl Shell {
     /// (`write_in_guest_form`), then the board's verdict or `unreachable`. In
     /// the session form, `malformed_args` naming `anchors` where the member is
     /// present and not of its declared form — `{before, after, span?}`, each
-    /// anchor an I-address or `null`, `span` a non-empty list of `{start,
-    /// width}` runs, `start` an I-address and `width` a natural of 1 or more
-    /// in its decimal string, the whole within the board's frame cap as
-    /// compact JSON (`held::MAX_ANCHOR_BYTES`) — never read as absent; then
-    /// naming `after` or a slot of the frame where the follower is not of its
-    /// form (`Follower::of`); then naming `session`, then `session_ended`; a
-    /// write refused at the shell's one write door ([`Shell::write_door`]) —
-    /// `write_in_bare_session` under a bare session, then `another_window` at
-    /// a board whose held store another shell holds, then `stopped`,
-    /// `poisoned` or `halted` for a write of a kind the hold never holds
-    /// while a hold stands at the board — a follower excepted, whose burst's
-    /// hold answers for it (`not_followed`), the standing hold asked of it
-    /// where it dials; a `publish`
-    /// frame refused `publish_is_a_call` without a dial — a publication crosses
-    /// as `publication.confirm`, composed by the shell from the panel it holds,
-    /// never as a frame the page composed (§4b.1's `op` row, decision 1 (b));
-    /// for a follower, the follow's answer ([`Shell::follow`]) — `not_followed`,
-    /// `no_such_burst`, `malformed_args` naming a slot whose piece its burst
-    /// cannot name, or its own answer; else the hold's answer ([`Holds::send`]),
-    /// the anchors handed to it for a burst's line — the identities on either
-    /// side of the span the burst edits and, for a delete or a rearrange, of
-    /// the units it holds, by which the shell shifts the burst where the board
-    /// refuses it as typed against an older state (skep #442, #751); absent,
-    /// the burst is admitted as one the shell cannot shift, held as a moved
-    /// document there — an unholdable write under a standing hold refused
-    /// `stopped`, `poisoned` or `halted` (§3c.4) — or for an `/op-at` frame the
-    /// board's verdict or `unreachable`; and `session_died` where a death
-    /// signal met at the dial or at a read the attest needed ends the session
-    /// — save for a burst, which the hold holds `session_died` before the end
-    /// (§3c.4), the signal met at its dial or at the read its shift or its
-    /// moved hold makes, the call answering `held` once its line carries the
-    /// death's reason, or the hold's own refusal (`held_full`, `store_halted`)
-    /// where it could not hold it.
+    /// anchor an I-address, a piece `{burst, offset}` naming `offset` positions
+    /// into the words of a burst the session sent with the `id` `burst`, a
+    /// string of at most `held::MAX_BURST_ID_BYTES` bytes (skep #969), or
+    /// `null`, `span` a non-empty list of `{start, width}` runs, `start` an
+    /// I-address and `width` a natural of 1 or more in its decimal string, the
+    /// whole within the board's frame cap as compact JSON
+    /// (`held::MAX_ANCHOR_BYTES`) — never read as absent; then naming `after`
+    /// or a slot of the frame where the follower is not of its form
+    /// (`Follower::of`); then naming `session`, then `session_ended`; a write
+    /// refused at the shell's one write door ([`Shell::write_door`]) —
+    /// `write_in_bare_session` under a bare session, then `another_window` at a
+    /// board whose held store another shell holds, then `stopped`, `poisoned`
+    /// or `halted` for a write of a kind the hold never holds while a hold
+    /// stands at the board — a follower excepted, whose burst's hold answers
+    /// for it (`not_followed`), the standing hold asked of it where it dials; a
+    /// `publish` frame refused `publish_is_a_call` without a dial — a
+    /// publication crosses as `publication.confirm`, composed by the shell from
+    /// the panel it holds, never as a frame the page composed (§4b.1's `op`
+    /// row, decision 1 (b)); for a follower, the follow's answer
+    /// ([`Shell::follow`]) — `not_followed`, `no_such_burst`, `malformed_args`
+    /// naming a slot whose piece its burst cannot name, or its own answer; else
+    /// the hold's answer ([`Holds::send`]), the anchors handed to it for a
+    /// burst's line — the identities on either side of the span the burst edits
+    /// and, for a delete or a rearrange, of the units it holds, by which the
+    /// shell shifts the burst where the board refuses it as typed against an
+    /// older state (skep #442, #751); absent, the burst is admitted as one the
+    /// shell cannot shift, held as a moved document there; a piece placed by
+    /// the burst it names, held on the document or kept there
+    /// (`Holds::place_anchors`; skep #969), and refused, nothing held or
+    /// dialed, `malformed_args` naming `anchors.before` or `anchors.after`
+    /// where that burst is no insert or `offset` is not below its positions,
+    /// else `no_such_burst` `{anchor, burst}` where no such burst is held or
+    /// kept — an unholdable write under a standing hold refused `stopped`,
+    /// `poisoned` or `halted` (§3c.4) — or for an `/op-at` frame the board's
+    /// verdict or `unreachable`; and `session_died` where a death signal met at
+    /// the dial or at a read the attest needed ends the session — save for a
+    /// burst, which the hold holds `session_died` before the end (§3c.4), the
+    /// signal met at its dial or at the read its shift or its moved hold makes,
+    /// the call answering `held` once its line carries the death's reason, or
+    /// the hold's own refusal (`held_full`, `store_halted`) where it could not
+    /// hold it.
     fn op(&self, args: &Value) -> Result<Value, Refusal> {
         let (frame, at) = Self::frame_of(args)?;
         let op = frame["op"].as_str().unwrap_or("");

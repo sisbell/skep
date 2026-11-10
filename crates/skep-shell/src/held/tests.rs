@@ -1133,13 +1133,17 @@ fn a_raised_remark_reads_back_with_its_base_and_no_later_done_lowers_it() {
 /// page's string this file keeps — each under a hold `sent: false`, one that
 /// *may* have landed, and a refused run's with the board's verdict beside it,
 /// over a frame of a multi-byte value, each without anchors, with both, with
-/// an edge on either side, and with a span of two runs, each form's anchors
-/// counting the bytes of their spelling; reopened, the queue is the queue
-/// that was held (the mutant reader that drops `refusal` reads a refused run
-/// back as holding, and the resend then sends what awaits the person's act;
-/// the one that drops the anchors, or their span, holds a burst the shift
-/// cannot move; the door that counts other bytes than the anchors' spelling
-/// lets their budget drift from the file's lines).
+/// an edge on either side, with a span of two runs, and with a piece naming
+/// the words of a line of the quoting `id` (skep #969) — which binds where
+/// such a line stands before it, and is dropped where none does — each
+/// form's anchors counting the bytes of their spelling; reopened, the queue
+/// is the queue that was held (the mutant reader that drops `refusal` reads
+/// a refused run back as holding, and the resend then sends what awaits the
+/// person's act; the one that drops the anchors, or their span, holds a
+/// burst the shift cannot move; the one that escapes a piece's `burst` other
+/// than the bridge does binds it to no line; the door that counts other
+/// bytes than the anchors' spelling lets their budget drift from the file's
+/// lines).
 #[test]
 fn every_line_form_reads_back_as_it_was_held() {
     let tmp = TempDir::new().unwrap();
@@ -1153,6 +1157,7 @@ fn every_line_form_reads_back_as_it_was_held() {
         Some(anchors(None, Some("1.0.1.0.1.0.1.1"))),
         Some(anchors(Some("1.0.1.0.1.0.1.5"), None)),
         Some(spanned(Some("1.0.1.0.1.0.1.1"), None, &[("1.0.1.0.1.0.1.2", 3), ("1.0.1.0.2.0.1.18446744073709551615", 1)])),
+        Some(Anchors::of(&json!({"before": {"burst": "a \"quote\", a\nnewline, a \\ backslash", "offset": 1}, "after": "1.0.1.0.1.0.1.9"})).expect("the anchors' form")),
     ];
     for anchors in anchored.iter().flatten() {
         assert_eq!(anchors.bytes(), json_len(&anchors.json()), "the anchors' bytes are their spelling's: {}", anchors.json());
@@ -1165,9 +1170,61 @@ fn every_line_form_reads_back_as_it_was_held() {
             }
         }
     }
+    let pieces = queue.lines().iter().filter(|line| line.anchors.as_ref().is_some_and(Anchors::names_pieces)).count();
+    assert_eq!(pieces, 3, "a piece binds under the quoting `id` alone, one line a reason");
     let reopened = live(d.open_file(1, "1.0.1").unwrap());
-    assert_eq!(reopened.lines().len(), 45);
+    assert_eq!(reopened.lines().len(), 54);
     assert_eq!(reopened.lines(), queue.lines(), "the reopened queue is the queue that was held");
+}
+
+/// Checks that a piece binds to the line whose words it names, is placed as
+/// that line is kept, and a reopen binds and places it as the queue did
+/// (skep #969).
+///
+/// Four lines on one document: A under an `id` holding a quote and a
+/// backslash, B naming A's third unit by a piece, C a second burst under the
+/// same `id`, and D naming C's first unit. B's copy spells its piece in the
+/// form the bridge reads, each piece binds to the newest line standing before
+/// it with that `id` — B to A, D to C — and a reopen binds them alike. A kept
+/// at a position with the address its words were minted at places B's piece
+/// there advanced by its offset, D's untouched, the `done` carrying the
+/// address in its member order; C dropped drops D's anchors, the settle
+/// naming D; and at each step a reopen reads the queue as it stands, its
+/// bytes counted alike (the mutant that binds a piece to the oldest line of
+/// its `id` places D in A's words; the one that writes no `addr` places
+/// nothing at a reopen, which drops the pieces; the one that counts no
+/// placed anchors lets the queue's budget drift from its file's lines).
+#[test]
+fn a_piece_binds_to_the_line_it_names_and_a_reopen_places_it_as_the_queue_did() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let id = "b-\"1\"\\";
+    let frame = |n: u64| json!({"op": "insert", "values": ["XYZ"], "n": n});
+    let named = |offset: u64| Anchors::of(&json!({"before": {"burst": id, "offset": offset}, "after": "1.0.1.0.1.0.1.9"})).expect("the anchors' form");
+    let mut hold = |id: Option<&str>, n: u64, anchors: Option<Anchors>| queue.hold_next("1.0.1.0.1", id, 0, frame(n), anchors, Reason::of("behind", false)).unwrap().k;
+    let (a, b, c, last) = (hold(Some(id), 1, None), hold(None, 2, Some(named(2))), hold(Some(id), 3, None), hold(None, 4, Some(named(0))));
+    let text = fs::read_to_string(file_path(&tmp)).unwrap();
+    assert!(text.contains(r#","anchors":{"before":{"burst":"b-\"1\"\\","offset":2},"after":"1.0.1.0.1.0.1.9"},"#), "the piece in the bridge's form: {text}");
+    assert!(queue.is_named(a) && queue.is_named(c) && !queue.is_named(b) && !queue.is_named(last), "B names A, and D names C");
+    let reopens_as_held = |queue: &HeldQueue, step: &str| {
+        let reopened = live(d.open_file(1, "1.0.1").unwrap());
+        assert_eq!((reopened.lines(), reopened.held_bytes), (queue.lines(), queue.held_bytes), "{step}: a reopen reads the queue as it stands");
+        assert_eq!(ks(&reopened).iter().map(|&k| reopened.is_named(k)).collect::<Vec<_>>(), ks(queue).iter().map(|&k| queue.is_named(k)).collect::<Vec<_>>(), "{step}: and binds alike");
+    };
+    reopens_as_held(&queue, "held");
+    let anchors_of = |queue: &HeldQueue, k: u64| queue.line(k).and_then(|line| line.anchors).map(|anchors| anchors.json());
+    let settled = queue.keep(a, Some(42), Some("1.0.1.0.1.0.1.100")).unwrap();
+    assert!(settled.unplaced.is_empty(), "{settled:?}");
+    assert_eq!(anchors_of(&queue, b), Some(json!({"before": "1.0.1.0.1.0.1.102", "after": "1.0.1.0.1.0.1.9"})), "B placed at A's words");
+    assert_eq!(anchors_of(&queue, last), Some(json!({"before": {"burst": id, "offset": 0}, "after": "1.0.1.0.1.0.1.9"})), "D names C still");
+    let text = fs::read_to_string(file_path(&tmp)).unwrap();
+    let done = text.lines().find(|line| line.starts_with(&format!("{{\"done\":{a},"))).unwrap_or_else(|| panic!("A's `done`: {text}"));
+    assert!(done.starts_with(&format!("{{\"done\":{a},\"as\":\"kept\",\"at\":42,\"addr\":\"1.0.1.0.1.0.1.100\",\"time\":")), "{done}");
+    reopens_as_held(&queue, "A kept");
+    let settled = queue.done(c, Done::Dropped).unwrap();
+    assert_eq!((settled.unplaced, anchors_of(&queue, last)), (vec![last], None), "C dropped, D's anchors dropped and named");
+    reopens_as_held(&queue, "C dropped");
 }
 
 /// The anchors a line carries: `before` and `after`, each an I-address or
@@ -1562,11 +1619,15 @@ fn line_with(member: &str, value: Option<Value>) -> Vec<u8> {
 /// that is no document address, a frame that is no object, a `sent` that is
 /// no boolean, anchors of no object, naming one anchor, a member beside the
 /// three, an anchor that is no I-address, anchors one byte past their bound,
-/// or a span of no list, of no run, or holding a run that is not one
-/// I-extent in its spelling — an ordinal past the page's (the largest a
-/// `u64` holds among them, read without a panic), and a `done` line of
-/// another form; the same file with the line whole reads live, its anchors
-/// of their form read, at their bound and a span among them (the mutants
+/// a piece of no string `burst` or past its bound, of no natural `offset` or
+/// with a member beside its two (skep #969), or a span of no list, of no
+/// run, or holding a run that is not one I-extent in its spelling — an
+/// ordinal past the page's (the largest a `u64` holds among them, read
+/// without a panic), and a `done` line of another form, a `kept` one naming
+/// an `addr` that is no I-address and a `dropped` one naming any among them;
+/// the same file with the line whole reads live, its anchors of their form
+/// read, at their bound and a span among them, a piece naming no line before
+/// it dropped, and a `kept` `done` naming an address (the mutants
 /// that default a missing member, read text lossily, or take any ordinal,
 /// rebuild the person's text out of a file no writer of this format wrote;
 /// the one that reads anchors of another form as none shifts nothing a
@@ -1589,6 +1650,13 @@ fn a_line_the_reader_cannot_read_whole_halts_the_file() {
     let tmp = TempDir::new().unwrap();
     let bounded = live(opened_over(&tmp, &line_with("anchors", Some(anchors_spelled(MAX_ANCHOR_BYTES)))));
     assert_eq!(bounded.lines()[0].anchors.as_ref().map(Anchors::bytes), Some(MAX_ANCHOR_BYTES), "anchors at their bound read, their bytes counted");
+    let tmp = TempDir::new().unwrap();
+    let unbound = live(opened_over(&tmp, &line_with("anchors", Some(json!({"before": {"burst": "b-1", "offset": 2}, "after": null})))));
+    assert_eq!((unbound.lines().len(), unbound.lines()[0].anchors.clone()), (1, None), "a piece naming no line before it: the line read, its anchors dropped");
+    let tmp = TempDir::new().unwrap();
+    let mut kept = b"{\"done\":9,\"as\":\"kept\",\"at\":4,\"addr\":\"1.0.1.0.1.0.1.4\",\"time\":1}\n".to_vec();
+    kept.extend_from_slice(&valid);
+    assert_eq!(live(opened_over(&tmp, &kept)).lines().len(), 1, "a kept `done` naming an address reads live");
     let with_span = |span: Value| line_with("anchors", Some(json!({"before": null, "after": null, "span": span})));
     let run = |start: &str, width: Value| json!({"start": start, "width": width});
     // The bytes no UTF-8 holds sit inside a string member, so a lossy read
@@ -1612,6 +1680,11 @@ fn a_line_the_reader_cannot_read_whole_halts_the_file() {
         ("an anchor of no I-address", line_with("anchors", Some(json!({"before": "x.1", "after": null})))),
         ("an anchor with a leading zero", line_with("anchors", Some(json!({"before": null, "after": "1.0.1.0.1.0.1.03"})))),
         ("an anchor of one component", line_with("anchors", Some(json!({"before": "7", "after": null})))),
+        ("a piece of no string burst", line_with("anchors", Some(json!({"before": {"burst": 7, "offset": 0}, "after": null})))),
+        ("a piece past its burst's bound", line_with("anchors", Some(json!({"before": {"burst": "b".repeat(MAX_BURST_ID_BYTES + 1), "offset": 0}, "after": null})))),
+        ("a piece of a negative offset", line_with("anchors", Some(json!({"before": null, "after": {"burst": "b-1", "offset": -1}})))),
+        ("a piece with no offset", line_with("anchors", Some(json!({"before": null, "after": {"burst": "b-1"}})))),
+        ("a piece with a member beside its two", line_with("anchors", Some(json!({"before": {"burst": "b-1", "offset": 0, "width": 1}, "after": null})))),
         ("a span of no list", with_span(json!(2))),
         ("a span of null", with_span(Value::Null)),
         ("a span of no run", with_span(json!([]))),
@@ -1633,6 +1706,9 @@ fn a_line_the_reader_cannot_read_whole_halts_the_file() {
         ("a done of another resolution", b"{\"done\":1,\"as\":\"lost\",\"time\":1}\n".to_vec()),
         ("a dropped done naming a position", b"{\"done\":1,\"as\":\"dropped\",\"at\":4,\"time\":1}\n".to_vec()),
         ("a done with no time", b"{\"done\":1,\"as\":\"kept\"}\n".to_vec()),
+        ("a kept done naming no I-address", b"{\"done\":1,\"as\":\"kept\",\"addr\":\"x.1\",\"time\":1}\n".to_vec()),
+        ("a kept done naming an address of no string", b"{\"done\":1,\"as\":\"kept\",\"addr\":7,\"time\":1}\n".to_vec()),
+        ("a dropped done naming an address", b"{\"done\":1,\"as\":\"dropped\",\"addr\":\"1.0.1.0.1.0.1.4\",\"time\":1}\n".to_vec()),
         ("a done past the page's ordinals", format!("{{\"done\":{},\"as\":\"kept\",\"time\":1}}\n", MAX_ORDINAL + 1).into_bytes()),
     ];
     for (cell, line) in damaged {
@@ -2970,7 +3046,7 @@ fn drained_file(n: u64, frame: &Value) -> Vec<u8> {
     for k in 1..n {
         let base = if k == 1 { 0 } else { kept_at(k - 1) };
         body.extend(line(k, base, Reason::of("unreachable", true)));
-        body.extend(done_line_bytes(k, Done::Kept { at: Some(kept_at(k)) }));
+        body.extend(done_line_bytes(k, Done::Kept { at: Some(kept_at(k)) }, None));
     }
     let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent"});
     body.extend(line(n, kept_at(n - 1), Reason::of("unreachable", true)));
@@ -3021,4 +3097,50 @@ fn a_drained_file_at_both_budgets_reopens_within_the_ceiling() {
     let n = MAX_HELD_LINES as u64;
     let full = drained_store(n, &sized_frame(MAX_HELD_BYTES / MAX_HELD_LINES - edges.bytes()));
     assert_within_the_ceiling("a drained held file's reopen", reopened_in(&full, n));
+}
+
+/// Checks that a file whose lines each name the one before reopens in time
+/// in proportion to its lines (skep #816, #969).
+///
+/// Line `k` carries the `id` `b-k` and a piece naming the first unit of line
+/// `k - 1`'s words, and every line but the last is kept at an address, each
+/// `done` placing the next line's piece: the reopen binds each piece as its
+/// line is read and places it at the `done`, at a quarter of
+/// [`MAX_HELD_LINES`] and at all of it, each line's frame its least, held to
+/// [`LINEAR_GROWTH`] (the mutant reader that finds a piece's line by walking
+/// the lines standing grows as the square of the lines).
+#[test]
+#[ignore = "timing test - gate-full only"]
+fn a_file_whose_lines_each_name_the_one_before_reopens_in_time_in_proportion_to_its_lines() {
+    let stores: Vec<(usize, TempDir)> = [MAX_HELD_LINES / 4, MAX_HELD_LINES]
+        .into_iter()
+        .map(|n| {
+            let tmp = TempDir::new().unwrap();
+            dir(&tmp);
+            let mut body = header_bytes(&Named::Chain(chain()), 1, "1.0.1");
+            for k in 1..=n as u64 {
+                let anchors = (k > 1).then(|| Anchors::of(&json!({"before": {"burst": format!("b-{}", k - 1), "offset": 0}, "after": null})).expect("the anchors' form"));
+                let line = HeldLine { k, doc: "1.0.1.0.1".into(), id: Some(format!("b-{k}")), base: 0, frame: json!({"op": "insert"}), anchors, reason: Reason::of("unreachable", false), time: 1 };
+                body.extend(held_line_bytes(&line, 0));
+            }
+            for k in 1..n as u64 {
+                body.extend(done_line_bytes(k, Done::Kept { at: Some(100 + k) }, Some(&format!("1.0.1.0.1.0.1.{}", 1000 + k))));
+            }
+            fs::write(file_path(&tmp), body).unwrap();
+            (n, tmp)
+        })
+        .collect();
+    assert_linear("a held file whose lines each name the one before, reopened", |n| {
+        let store = &stores.iter().find(|(lines, _)| *lines == n).expect("a store of each count").1;
+        let started = Instant::now();
+        let reopened = live(dir(store).open_file(1, "1.0.1").unwrap());
+        let took = started.elapsed();
+        let last = reopened.lines().pop().expect("the last line stands");
+        assert_eq!(
+            (reopened.lines().len(), last.anchors.map(|anchors| anchors.json())),
+            (1, Some(json!({"before": format!("1.0.1.0.1.0.1.{}", 1000 + n - 1), "after": null}))),
+            "the last line's piece placed"
+        );
+        took
+    });
 }

@@ -72,6 +72,26 @@
 //! frame is dialed where the device takes it, so a relaunch reads the
 //! positions the shell last sent, never the page's.
 //!
+//! **Anchors that name held words** (skep #969). An edge of a burst's
+//! anchors names a unit by its I-address or, where the unit is one of a held
+//! insert's own words, which the board has not minted, by a piece of them
+//! ([`AnchorPiece`]): the insert's envelope `id` and the unit's offset. A
+//! piece binds once, as its line enters the queue, to the newest line
+//! standing before it on its document that carries that `id` — the reader
+//! binding in the file's order, a re-mark keeping its line's binding, a join
+//! and a renumbering binding as they enter, in `k` order — and is placed as
+//! that line leaves: kept with the first I-address its words were minted at
+//! ([`HeldQueue::keep`]), every piece bound to it becomes that address
+//! advanced by its offset; dropped, or kept with no address the shell could
+//! read, the anchors of every line naming it are dropped whole
+//! ([`Settled::unplaced`]), such a line held as moved where the board refuses
+//! it as typed against an older state. The kept line's `done` carries the
+//! address as its `addr`, so a reopen places the pieces from it as it derives
+//! a raise, and no line is rewritten to carry it. A line naming the words of
+//! a line before it is never sent while that line stands — each document's
+//! lines go out in `k` order, a line only once the one before it is kept —
+//! so no piece reaches the board or the shift.
+//!
 //! **THE ORDINALS** (skep #856; the record `2026-11-06-held-store-investigation`
 //! §1.4, re-said). One ordinal space per (board, principal) for the shell's
 //! life: the hold's counter (`PrincipalHold::next_k`), which every queue the
@@ -512,35 +532,123 @@ impl Reason {
     }
 }
 
-/// The identities a burst's edit is placed by (skep #442, #751).
+/// The longest envelope `id` the shell names a burst by, in bytes.
+///
+/// It bounds the `id` a session's table keeps a burst under and a follower's
+/// `after` (`shell/follow.rs`), and the `burst` an anchor's piece names
+/// ([`AnchorPiece`]): a burst whose `id` is longer is sent and held as any
+/// burst is, and no follower or piece can name it; an `after` or a piece past
+/// it is refused at the `op` row's door.
+pub(crate) const MAX_BURST_ID_BYTES: usize = 128;
+
+/// One edge of the span a burst edits, as its anchors name it.
+///
+/// It is the I-address of a unit the board minted (skep #442), or, for a unit
+/// of a held insert's own words, which the board has not minted, a piece of
+/// those words (skep #969): bound to the insert's line as its own line enters
+/// the queue, and placed at the address the words were minted at as that line
+/// is kept (`Lines`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Anchor {
+    /// The I-address of a unit, in the tumbler-string form the shift splits
+    /// ([`i_address`]).
+    Address(String),
+    /// A unit of a held insert's words, not minted yet.
+    Piece(AnchorPiece),
+}
+
+impl Anchor {
+    /// Returns the edge `v` spells, where it is of its form.
+    ///
+    /// The form is `null`, the document's edge, answered `None`; an I-address
+    /// ([`i_address`]); or a piece `{burst, offset}`, both present and nothing
+    /// beside them, `burst` a string of at most [`MAX_BURST_ID_BYTES`] bytes
+    /// and `offset` a natural number. Any other value is of no form.
+    fn of(v: &Value) -> Option<Option<Anchor>> {
+        match v {
+            Value::Null => Some(None),
+            Value::String(text) if i_address(text).is_some() => Some(Some(Anchor::Address(text.clone()))),
+            Value::Object(m) if m.len() == 2 => {
+                let burst = m.get("burst")?.as_str().filter(|burst| burst.len() <= MAX_BURST_ID_BYTES)?;
+                let offset = m.get("offset")?.as_u64()?;
+                Some(Some(Anchor::Piece(AnchorPiece { burst: burst.to_string(), offset })))
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns the edge as the bridge and the held file spell it.
+    fn json(&self) -> Value {
+        match self {
+            Anchor::Address(addr) => Value::from(addr.as_str()),
+            Anchor::Piece(piece) => json!({"burst": piece.burst, "offset": piece.offset}),
+        }
+    }
+
+    /// Returns the edge's I-address, where the board minted its unit.
+    pub fn address(&self) -> Option<&str> {
+        match self {
+            Anchor::Address(addr) => Some(addr),
+            Anchor::Piece(_) => None,
+        }
+    }
+}
+
+/// A unit of a held insert's words, named before the board mints them.
+///
+/// It is the unit `offset` positions into the words of the insert whose
+/// envelope `id` is `burst`, counted from 0 in positions as the board seats
+/// them — a byte of a string, one an atom — as a follower's piece counts them
+/// (`shell/follow.rs`; skep #969). Made by [`Anchor::of`] alone (SP-18).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnchorPiece {
+    burst: String,
+    offset: u64,
+}
+
+impl AnchorPiece {
+    /// Returns the envelope `id` of the insert whose words the piece names.
+    pub fn burst(&self) -> &str {
+        &self.burst
+    }
+
+    /// Returns the unit's position among the insert's words, from 0.
+    pub fn offset(&self) -> u64 {
+        self.offset
+    }
+}
+
+/// The identities a burst's edit is placed by (skep #442, #751, #969).
 ///
 /// They are the page's, sent over the bridge beside the frame and kept with
-/// the held line, never on the wire: `before` the I-address of the unit just
-/// before the span the burst edits, `after` the I-address of the unit just
-/// after it, each `None` at the document's edge — an insert at the first
-/// position has no unit before it, one at the end none after — and `span`
-/// the I-runs of the units the span holds, in V-order, as the page's `image`
-/// read gave them: present for a delete and a rearrange, whose span holds
-/// units, and absent for an insert, a copy and a reinstate, which place at a
-/// point. Where the board refuses the burst as typed against an older state
-/// of its document, the shell finds `before` and `after` in the document's
-/// current image and, where the units between them are the span's own —
-/// none for a placement, so the two stand adjacent — moves every position
-/// the burst names by their one displacement and sends it again
+/// the held line, never on the wire: `before` the unit just before the span
+/// the burst edits, `after` the unit just after it, each `None` at the
+/// document's edge — an insert at the first position has no unit before it,
+/// one at the end none after — and each named by its I-address or, where it
+/// is one of a held insert's own words, by a piece of them ([`Anchor`]); and
+/// `span` the I-runs of the units the span holds, in V-order, as the page's
+/// `image` read gave them: present for a delete and a rearrange, whose span
+/// holds units, and absent for an insert, a copy and a reinstate, which place
+/// at a point. Where the board refuses the burst as typed against an older
+/// state of its document, the shell finds `before` and `after` in the
+/// document's current image and, where the units between them are the span's
+/// own — none for a placement, so the two stand adjacent — moves every
+/// position the burst names by their one displacement and sends it again
 /// (`hold::resend`); a burst that carries none — an agent's through the MCP
 /// tools — is held as a moved document, and so is a delete or a rearrange
-/// that carries no `span`. Made by [`Anchors::of`] alone, from the bridge's
-/// argument and from the held file's member alike, so every anchor kept is
-/// an I-address in the tumbler-string form the shift splits ([`i_address`])
-/// and every run of a span one [`SpanRun`] admits (SP-18), and the whole
-/// spells no more than [`MAX_ANCHOR_BYTES`] (SP-17), its bytes counted there
-/// once for the queue's budget ([`Anchors::bytes`]).
+/// that carries no `span`. A piece never reaches the shift: its line is sent
+/// only after the line it names leaves the queue, which places it (the module
+/// doc). Made by [`Anchors::of`] alone, from the bridge's argument and from
+/// the held file's member alike, so every edge kept is one [`Anchor::of`]
+/// admits and every run of a span one [`SpanRun`] admits (SP-18), and the
+/// whole spells no more than [`MAX_ANCHOR_BYTES`] (SP-17), its bytes counted
+/// there once for the queue's budget ([`Anchors::bytes`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anchors {
-    /// The I-address of the unit just before the span; `None` at the start.
-    pub before: Option<String>,
-    /// The I-address of the unit just after the span; `None` at the end.
-    pub after: Option<String>,
+    /// The unit just before the span; `None` at the start.
+    pub before: Option<Anchor>,
+    /// The unit just after the span; `None` at the end.
+    pub after: Option<Anchor>,
     /// The I-runs of the units the span holds, in V-order.
     ///
     /// It is `None` where the page names none, as it names none for a
@@ -554,34 +662,31 @@ impl Anchors {
     /// Returns the anchors `v` spells, where it is of their form.
     ///
     /// The form is `{before, after, span?}`, `before` and `after` present,
-    /// each `null` or an I-address ([`i_address`]), `span` absent or a
-    /// non-empty list of runs of [`SpanRun`]'s form, and nothing beside the
-    /// three, the whole spelling no more than [`MAX_ANCHOR_BYTES`] as compact
-    /// JSON — measured first, before any member is read; any other value is
-    /// of no form, which the bridge refuses `malformed_args` naming `anchors`
-    /// and the held file's reader halts on.
+    /// each an edge of [`Anchor::of`]'s form — `null`, an I-address or a
+    /// piece — `span` absent or a non-empty list of runs of [`SpanRun`]'s
+    /// form, and nothing beside the three, the whole spelling no more than
+    /// [`MAX_ANCHOR_BYTES`] as compact JSON — measured first, before any
+    /// member is read; any other value is of no form, which the bridge
+    /// refuses `malformed_args` naming `anchors` and the held file's reader
+    /// halts on.
     pub fn of(v: &Value) -> Option<Anchors> {
         let bytes = json_len(v);
         if bytes > MAX_ANCHOR_BYTES {
             return None;
         }
         let m = v.as_object().filter(|m| m.keys().all(|k| matches!(k.as_str(), "before" | "after" | "span")))?;
-        let anchor = |name: &str| match m.get(name)? {
-            Value::Null => Some(None),
-            Value::String(text) if i_address(text).is_some() => Some(Some(text.clone())),
-            _ => None,
-        };
         let span = match m.get("span") {
             None => None,
             Some(Value::Array(runs)) if !runs.is_empty() => Some(runs.iter().map(SpanRun::of).collect::<Option<Vec<_>>>()?),
             Some(_) => return None,
         };
-        Some(Anchors { before: anchor("before")?, after: anchor("after")?, span, bytes })
+        Some(Anchors { before: Anchor::of(m.get("before")?)?, after: Anchor::of(m.get("after")?)?, span, bytes })
     }
 
     /// Returns the anchors as the bridge and the held file spell them.
     pub fn json(&self) -> Value {
-        let mut v = json!({"before": self.before, "after": self.after});
+        let edge = |anchor: &Option<Anchor>| anchor.as_ref().map_or(Value::Null, Anchor::json);
+        let mut v = json!({"before": edge(&self.before), "after": edge(&self.after)});
         if let Some(span) = &self.span {
             v["span"] = span.iter().map(SpanRun::json).collect();
         }
@@ -592,12 +697,37 @@ impl Anchors {
     ///
     /// It is the length of their compact JSON as [`Anchors::of`] measured
     /// it, which is the length of their spelling on the bridge and in the
-    /// held file ([`Anchors::json`]): the form's members are `null`, strings
-    /// of digits and dots and its own names, none escaped, so two spellings
-    /// of the one value differ in their members' order alone. It is what a
-    /// line's anchors spend of the queue's budget ([`MAX_HELD_BYTES`]).
+    /// held file ([`Anchors::json`]): the form's members are `null`, numbers,
+    /// strings of digits and dots, a piece's `burst` escaped by the one
+    /// escaper every spelling of it takes, and its own names, so two
+    /// spellings of the one value differ in their members' order alone. It is
+    /// what a line's anchors spend of the queue's budget ([`MAX_HELD_BYTES`]).
     pub fn bytes(&self) -> usize {
         self.bytes
+    }
+
+    /// Returns whether an edge is a piece of a held insert's words.
+    pub fn names_pieces(&self) -> bool {
+        [&self.before, &self.after].into_iter().any(|edge| matches!(edge, Some(Anchor::Piece(_))))
+    }
+
+    /// Returns the anchors with each piece of `burst`'s words placed.
+    ///
+    /// `minted` is the first I-address the words of the insert whose
+    /// envelope `id` is `burst` were minted at, and each piece naming them
+    /// becomes that address advanced by its offset (skep #969); every other
+    /// edge stands. It answers `None` where an advanced address passes a
+    /// `u64` or the anchors would spell past [`MAX_ANCHOR_BYTES`], which no
+    /// reader reads.
+    pub fn placed(&self, burst: &str, minted: &str) -> Option<Anchors> {
+        let (prefix, first) = i_address(minted)?;
+        let place = |edge: &Option<Anchor>| match edge {
+            Some(Anchor::Piece(piece)) if piece.burst == burst => Some(Some(Anchor::Address(format!("{prefix}.{}", first.checked_add(piece.offset)?)))),
+            other => Some(other.clone()),
+        };
+        let mut anchors = Anchors { before: place(&self.before)?, after: place(&self.after)?, span: self.span.clone(), bytes: 0 };
+        anchors.bytes = json_len(&anchors.json());
+        (anchors.bytes <= MAX_ANCHOR_BYTES).then_some(anchors)
     }
 }
 
@@ -737,7 +867,10 @@ pub struct HeldLine {
     /// They bound the span the frame edits by identity, and name the units a
     /// delete's or a rearrange's span holds, for the shift; a burst that
     /// carried none is held as a moved document where the board refuses it
-    /// as typed against an older state.
+    /// as typed against an older state. A piece among them stands until the
+    /// line whose words it names leaves the queue, and is then placed at
+    /// their address, or the anchors are dropped where none names them
+    /// (skep #969; the module doc).
     pub anchors: Option<Anchors>,
     /// Why the line is held.
     pub reason: Reason,
@@ -779,6 +912,14 @@ impl HeldLine {
 /// after. Where a line stands before it — two first dials racing at one
 /// document (`Holds::shift_at_first_dial`), or a file that so reads — the
 /// lines after it are raised one by one, each its own base.
+///
+/// **The pieces a line's anchors name** (skep #969). A piece binds once, as its
+/// line enters, to the newest line standing before it on its document whose
+/// envelope `id` is the piece's `burst` ([`Lines::enter`]), each document
+/// keeping its lines by `id` and the queue the lines naming each line, so a
+/// binding and a placing read the lines involved alone; anchors a piece of
+/// which binds to no line place nothing, and are dropped as the line enters. A
+/// line leaving places the pieces bound to it ([`Lines::leave`]).
 #[derive(Debug, Default)]
 struct Lines {
     /// The standing lines by ordinal.
@@ -787,6 +928,8 @@ struct Lines {
     docs: HashMap<String, DocLines>,
     /// The last stamp given: to a line as it entered, or to a floor.
     stamp: u64,
+    /// The lines whose anchors' pieces name each line's words, by its ordinal.
+    named_by: HashMap<u64, BTreeSet<u64>>,
 }
 
 /// One standing line as its queue keeps it ([`Lines`]).
@@ -798,6 +941,10 @@ struct Standing {
     line: HeldLine,
     /// The stamp it entered under: each floor given after it raises it.
     stamp: u64,
+    /// The ordinals of the lines its anchors' pieces are bound to.
+    ///
+    /// They are `before`'s and `after`'s, `None` where the edge is no piece.
+    names: [Option<u64>; 2],
 }
 
 /// One document's entry among a queue's lines ([`Lines`]).
@@ -812,6 +959,23 @@ struct DocLines {
     /// given after it raises no line that one does not raise as far, so it
     /// is dropped as that one is given ([`DocLines::give`]).
     floors: Vec<(u64, u64)>,
+    /// The ordinals standing on the document by the envelope `id` each line
+    /// carries.
+    ids: HashMap<String, BTreeSet<u64>>,
+}
+
+/// What a line's leaving did to the lines whose pieces named its words.
+///
+/// It is [`Lines::leave`]'s account, for the queue's budget and the shell's
+/// window.
+#[derive(Debug, Default)]
+struct Placing {
+    /// The bytes those lines' anchors spent of the queue's budget before.
+    spent: usize,
+    /// The bytes they spend now.
+    spends: usize,
+    /// The lines whose anchors were dropped, no address naming the words.
+    unplaced: Vec<u64>,
 }
 
 impl DocLines {
@@ -937,19 +1101,73 @@ impl Lines {
         self.by_k.values().map(|standing| standing.line.held_bytes()).sum()
     }
 
-    /// Enters `line` under a stamp past every one given.
+    /// Returns the newest line standing on `doc` before the ordinal `k`
+    /// whose envelope `id` is `id`.
+    fn newest_with_id(&self, doc: &str, id: &str, k: u64) -> Option<&HeldLine> {
+        let &newest = self.docs.get(doc)?.ids.get(id)?.range(..k).next_back()?;
+        self.by_k.get(&newest).map(|standing| &standing.line)
+    }
+
+    /// Returns whether a standing line's anchors name line `k`'s words.
+    fn is_named(&self, k: u64) -> bool {
+        self.named_by.contains_key(&k)
+    }
+
+    /// Returns the lines `line`'s pieces bind to, `before`'s and `after`'s.
     ///
-    /// No floor given before it raises it.
+    /// A piece binds to the newest line standing before `line` on its
+    /// document whose envelope `id` is the piece's `burst` (skep #969); it
+    /// answers `None` where a piece binds to no line.
+    fn binding(&self, line: &HeldLine) -> Option<[Option<u64>; 2]> {
+        let mut names = [None, None];
+        let Some(anchors) = &line.anchors else { return Some(names) };
+        for (name, edge) in names.iter_mut().zip([&anchors.before, &anchors.after]) {
+            if let Some(Anchor::Piece(piece)) = edge {
+                *name = Some(self.newest_with_id(&line.doc, &piece.burst, line.k)?.k);
+            }
+        }
+        Some(names)
+    }
+
+    /// Takes `namer` off the lines that name line `named`'s words.
+    fn unname(&mut self, named: u64, namer: u64) {
+        if let Some(namers) = self.named_by.get_mut(&named) {
+            namers.remove(&namer);
+            if namers.is_empty() {
+                self.named_by.remove(&named);
+            }
+        }
+    }
+
+    /// Enters `line` under a stamp past every one given, and returns the
+    /// bytes it spends of the queue's budget.
+    ///
+    /// No floor given before it raises it. Each piece of its anchors binds
+    /// to the line whose words it names ([`Lines::binding`]), and anchors a
+    /// piece of which binds to no line name no place, and are dropped.
     ///
     /// # Panics
     ///
     /// Panics, in a debug build, where a line of its ordinal stands (the
     /// caller's precondition).
-    fn enter(&mut self, line: HeldLine) {
+    fn enter(&mut self, mut line: HeldLine) -> usize {
         debug_assert!(!self.by_k.contains_key(&line.k), "PRECONDITION of `Lines::enter`: no line of the ordinal {} stands", line.k);
+        let names = self.binding(&line).unwrap_or_else(|| {
+            line.anchors = None;
+            [None, None]
+        });
+        for named in names.into_iter().flatten() {
+            self.named_by.entry(named).or_default().insert(line.k);
+        }
         self.stamp += 1;
-        self.docs.entry(line.doc.clone()).or_default().ks.insert(line.k);
-        self.by_k.insert(line.k, Standing { line, stamp: self.stamp });
+        let entry = self.docs.entry(line.doc.clone()).or_default();
+        entry.ks.insert(line.k);
+        if let Some(id) = &line.id {
+            entry.ids.entry(id.clone()).or_default().insert(line.k);
+        }
+        let bytes = line.held_bytes();
+        self.by_k.insert(line.k, Standing { line, stamp: self.stamp, names });
+        bytes
     }
 
     /// Puts `line` in its ordinal's place, or enters it where none stands.
@@ -957,10 +1175,48 @@ impl Lines {
     /// It is a `held` line read under an ordinal that stands, the line's
     /// re-mark ([`HeldDir::open_file`]): taken whole, its base the one it
     /// spells, under a stamp past every floor given, as the writer spelled it
-    /// raised by each.
+    /// raised by each, its pieces bound again and the lines naming its words
+    /// naming it still.
     fn put(&mut self, line: HeldLine) {
         self.take(line.k, None);
         self.enter(line);
+    }
+
+    /// Takes line `k` out as it leaves the queue, and places the pieces that
+    /// name its words (skep #969).
+    ///
+    /// The lines standing after it on its document are raised to `raise`
+    /// where it names one, as [`Lines::take`] raises them (§3c.2). Each line
+    /// whose pieces are bound to it is placed: where `minted` names the first
+    /// I-address its words were minted at, every piece naming its `id`
+    /// becomes that address advanced by its offset ([`Anchors::placed`]);
+    /// where it names none — the line dropped, or kept with no address the
+    /// shell could read — or the placed anchors could not be spelled, the
+    /// naming line's anchors are dropped whole, a piece being no place the
+    /// shift can find. It answers the line and what its leaving did.
+    fn leave(&mut self, k: u64, raise: Option<u64>, minted: Option<&str>) -> Option<(HeldLine, Placing)> {
+        let line = self.take(k, raise)?;
+        let mut placing = Placing::default();
+        for namer in self.named_by.remove(&k).into_iter().flatten() {
+            let Some(standing) = self.by_k.get_mut(&namer) else { continue };
+            let Some(anchors) = standing.line.anchors.take() else { continue };
+            placing.spent += anchors.bytes();
+            match minted.zip(line.id.as_deref()).and_then(|(minted, id)| anchors.placed(id, minted)) {
+                Some(placed) => {
+                    placing.spends += placed.bytes();
+                    standing.names.iter_mut().filter(|name| **name == Some(k)).for_each(|name| *name = None);
+                    standing.line.anchors = Some(placed);
+                }
+                None => {
+                    let names = std::mem::take(&mut standing.names);
+                    placing.unplaced.push(namer);
+                    for named in names.into_iter().flatten().filter(|&named| named != k) {
+                        self.unname(named, namer);
+                    }
+                }
+            }
+        }
+        Some((line, placing))
     }
 
     /// Takes line `k` out, where it stands: the line, its base its own.
@@ -968,11 +1224,24 @@ impl Lines {
     /// Where `raise` names a position — the line kept there — the lines
     /// standing after it on its document are raised to it (§3c.2): by one
     /// floor where the line was the document's first, else one by one
-    /// ([`Lines`]).
+    /// ([`Lines`]). Its own pieces are unbound; the lines naming its words
+    /// are [`Lines::leave`]'s to place, and a re-mark's ([`Lines::put`])
+    /// name it still.
     fn take(&mut self, k: u64, raise: Option<u64>) -> Option<HeldLine> {
-        let Standing { line, .. } = self.by_k.remove(&k)?;
+        let Standing { line, names, .. } = self.by_k.remove(&k)?;
+        for named in names.into_iter().flatten() {
+            self.unname(named, k);
+        }
         let entry = self.docs.get_mut(&line.doc).expect("a standing line's document has its entry");
         entry.ks.remove(&k);
+        if let Some(id) = &line.id {
+            if let Some(ks) = entry.ids.get_mut(id) {
+                ks.remove(&k);
+                if ks.is_empty() {
+                    entry.ids.remove(id);
+                }
+            }
+        }
         let first = entry.ks.first().copied();
         match (raise, first) {
             (Some(at), Some(first)) if first > k => {
@@ -1216,13 +1485,14 @@ fn parse_held_line(k: u64, mut m: Map<String, Value>) -> Option<HeldLine> {
 
 /// Returns whether a `done` line's members are each of its type.
 ///
-/// `as` is `kept` with an optional `at`, or `dropped` with none, and a
-/// `time` stands.
+/// `as` is `kept` with an optional `at` and an optional `addr`, an I-address
+/// ([`i_address`]; skep #969), or `dropped` with neither, and a `time`
+/// stands.
 fn is_done_line(m: &Map<String, Value>) -> bool {
-    let at = m.get("at");
+    let (at, addr) = (m.get("at"), m.get("addr"));
     let resolved = match m.get("as").and_then(Value::as_str) {
-        Some("kept") => at.is_none_or(Value::is_u64),
-        Some("dropped") => at.is_none(),
+        Some("kept") => at.is_none_or(Value::is_u64) && addr.is_none_or(|addr| addr.as_str().and_then(i_address).is_some()),
+        Some("dropped") => at.is_none() && addr.is_none(),
         _ => false,
     };
     resolved && m.get("time").is_some_and(Value::is_u64)
@@ -1457,9 +1727,10 @@ impl HeldDir {
                 let Some(k) = ordinal(done).filter(|_| is_done_line(&m)) else { return halted(HaltWhy::Damaged) };
                 max_k = max_k.max(k);
                 // A `kept` line at a position raises the lines standing after
-                // it on its document, as `HeldQueue::done` raised them; a
-                // `done` of no standing line raises none.
-                lines.take(k, m.get("at").and_then(Value::as_u64));
+                // it on its document, and places the pieces naming its words
+                // at its `addr`, as `HeldQueue::done` and `HeldQueue::keep`
+                // did; a `done` of no standing line raises none.
+                lines.leave(k, m.get("at").and_then(Value::as_u64), m.get("addr").and_then(Value::as_str));
             } else {
                 return halted(HaltWhy::Damaged);
             }
@@ -1812,7 +2083,7 @@ pub enum Owed {
 }
 
 /// A copy the file owes a line on disk ([`Owing::owed`]).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Due {
     /// The line's state now, written whole.
     Mark,
@@ -1820,13 +2091,15 @@ enum Due {
     ///
     /// `bytes` are its frame's and its anchors', which the queue's budget
     /// counts until the `done` lands ([`MAX_HELD_BYTES`]), as a reopen reads
-    /// the line standing until then.
-    Done { done: Done, bytes: usize },
+    /// the line standing until then; `addr` the first I-address a kept
+    /// insert's words were minted at, where the shell knows it, which the
+    /// `done` carries so a reopen places the pieces naming them (skep #969).
+    Done { done: Done, bytes: usize, addr: Option<String> },
 }
 
 impl Due {
     /// Returns which copy it is, as [`Waiting::owed`] names it.
-    fn owed(self) -> Owed {
+    fn owed(&self) -> Owed {
         match self {
             Due::Mark => Owed::Mark,
             Due::Done { .. } => Owed::Done,
@@ -1893,10 +2166,10 @@ pub enum DoneError {
 
 /// What settling lines did beyond the queue, for the caller to say.
 ///
-/// Each line settled — one by [`HeldQueue::done`], or a run by
-/// [`HeldQueue::done_all`] — has left the queue whatever the disk did: a
-/// `done` the device refuses is owed, and waits as every copy owed does
-/// ([`HeldQueue::waiting`]).
+/// Each line settled — one by [`HeldQueue::done`] or [`HeldQueue::keep`], or
+/// a run by [`HeldQueue::done_all`] — has left the queue whatever the disk
+/// did: a `done` the device refuses is owed, and waits as every copy owed
+/// does ([`HeldQueue::waiting`]).
 #[derive(Debug, Default)]
 pub struct Settled {
     /// The queue emptied and its file could not be removed.
@@ -1904,6 +2177,13 @@ pub struct Settled {
     /// The file stands, every line in it `done` or owed its `done`, and the
     /// store appends on to it, its ordinals running on; named by its path.
     pub unremoved: Option<(PathBuf, io::Error)>,
+    /// The standing lines whose anchors the settle dropped (skep #969).
+    ///
+    /// Each named words of a line that left with no address to name them by
+    /// — dropped, or kept with none the shell could read — so its anchors
+    /// place nothing, and it is held as moved where the board refuses it as
+    /// typed against an older state.
+    pub unplaced: Vec<u64>,
 }
 
 impl HeldQueue {
@@ -1999,6 +2279,17 @@ impl HeldQueue {
         self.lines.count_on(doc)
     }
 
+    /// Returns the frame of the newest line standing on `doc` whose envelope
+    /// `id` is `id`: the line a piece naming that `id` binds to (skep #969).
+    pub fn frame_named(&self, doc: &str, id: &str) -> Option<&Value> {
+        self.lines.newest_with_id(doc, id, u64::MAX).map(|line| &line.frame)
+    }
+
+    /// Returns whether a standing line's anchors name line `k`'s words.
+    pub fn is_named(&self, k: u64) -> bool {
+        self.lines.is_named(k)
+    }
+
     /// Returns the least ordinal a standing line holds, where one stands.
     pub fn first_k(&self) -> Option<u64> {
         self.lines.first_k()
@@ -2048,8 +2339,10 @@ impl HeldQueue {
     /// written once first where the file is new ([`HeldQueue::retry`]); a
     /// copy refused, its own or one before it, leaves the line waiting for its
     /// first copy. `anchors` are the page's, kept with the line for the shift
-    /// (skep #442), none where the burst carried none; their bytes spend the
-    /// queue's budget beside the frame's. It answers the ordinal the line took
+    /// (skep #442), none where the burst carried none, each piece among them
+    /// bound to the line whose words it names (`Lines`; skep #969); their
+    /// bytes spend the queue's budget beside the frame's. It answers the
+    /// ordinal the line took
     /// and, where no copy of it stands, the refusal that keeps it off the disk
     /// — of its own copy, or of the copy owed before it that it waits behind —
     /// for the caller's answer to say (§3c.3).
@@ -2087,8 +2380,7 @@ impl HeldQueue {
         }
         let line = HeldLine { k, doc: doc.to_string(), id: id.map(str::to_string), base, frame, anchors, reason, time: now_ms() };
         self.greatest_k = self.greatest_k.max(k);
-        self.held_bytes += line_bytes;
-        self.lines.enter(line);
+        self.held_bytes += self.lines.enter(line);
         // The line's first copy is owed behind every copy owed before it.
         self.disk.owing.get_or_insert_with(Box::default).first.insert(k);
         self.retry();
@@ -2162,11 +2454,11 @@ impl HeldQueue {
         };
         // The copies in the order they are written, up to the first the
         // writer refuses, which stops the retry there.
-        let on_disk = owing.owed.iter().filter_map(|(&k, &due)| {
+        let on_disk = owing.owed.iter().filter_map(|(&k, due)| {
             let bytes = match due {
                 // A line no longer standing owes no copy of its state.
                 Due::Mark => self.lines.copy(k)?,
-                Due::Done { done, .. } => done_line_bytes(k, done),
+                Due::Done { done, addr, .. } => done_line_bytes(k, *done, addr.as_deref()),
             };
             Some(OwedCopy { k, owed: due.owed(), bytes })
         });
@@ -2375,6 +2667,12 @@ impl HeldQueue {
     /// nothing on disk to resolve, and leaves with no `done` owed. A run of
     /// `done`s is [`HeldQueue::done_all`]'s, one copy for the run.
     ///
+    /// **The pieces naming its words** (skep #969). A line that leaves here
+    /// names no address its words were minted at, so the anchors of every
+    /// line whose pieces name its words are dropped ([`Settled::unplaced`]):
+    /// a kept insert whose address the shell knows leaves by
+    /// [`HeldQueue::keep`], which places them.
+    ///
     /// **The base behind a kept line.** A line kept at a position raises to
     /// it the `base` of every line held after it on its document, a base
     /// already past it standing (§3c.2): that position is the person's own
@@ -2399,8 +2697,29 @@ impl HeldQueue {
     /// Returns [`DoneError::NoSuchLine`] for an ordinal with no `held` line:
     /// the `done` is refused.
     pub fn done(&mut self, k: u64, done: Done) -> Result<Settled, DoneError> {
-        self.leave(k, done)?;
-        Ok(self.settle())
+        let unplaced = self.leave(k, done, None)?;
+        Ok(self.settle(unplaced))
+    }
+
+    /// Resolves line `k` kept at `at`, its words minted from `minted`.
+    ///
+    /// It is [`HeldQueue::done`] with [`Done::Kept`] (§3c.2), save that
+    /// `minted` — the first I-address the board minted a kept insert's words
+    /// at, where the shell knows it — places every piece naming the line's
+    /// words at that address advanced by its offset (skep #969), and rides
+    /// the line's `done` as its `addr`, so a reopen places them from it as it
+    /// derives a raise and no line is rewritten to carry it. A line naming
+    /// the words whose placed anchors could not be spelled has its anchors
+    /// dropped, as at a line that leaves with no address
+    /// ([`Settled::unplaced`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DoneError::NoSuchLine`] for an ordinal with no `held` line:
+    /// the `done` is refused.
+    pub fn keep(&mut self, k: u64, at: Option<u64>, minted: Option<&str>) -> Result<Settled, DoneError> {
+        let unplaced = self.leave(k, Done::Kept { at }, minted)?;
+        Ok(self.settle(unplaced))
     }
 
     /// Resolves a run of lines with `done` lines, as one copy.
@@ -2420,11 +2739,15 @@ impl HeldQueue {
     /// settles no line writes nothing.
     pub fn done_all(&mut self, ks: &[u64], done: Done) -> Settled {
         let mut left = false;
+        let mut unplaced = Vec::new();
         for &k in ks {
-            left |= self.leave(k, done).is_ok();
+            if let Ok(lines) = self.leave(k, done, None) {
+                left = true;
+                unplaced.extend(lines);
+            }
         }
         if left {
-            self.settle()
+            self.settle(unplaced)
         } else {
             Settled::default()
         }
@@ -2433,26 +2756,32 @@ impl HeldQueue {
     /// Takes line `k` out of the queue, owing its `done` where it is on disk.
     ///
     /// It is the change every `done` makes ([`HeldQueue::done`],
-    /// [`HeldQueue::done_all`]), before the retry that writes it.
+    /// [`HeldQueue::keep`], [`HeldQueue::done_all`]), before the retry that
+    /// writes it: the pieces naming the line's words placed at `minted`, a
+    /// kept line's, or their lines' anchors dropped where it names none
+    /// ([`Lines::leave`]), and the queue's bytes recounted by them. It
+    /// answers the lines whose anchors were dropped.
     ///
     /// # Errors
     ///
     /// Returns [`DoneError::NoSuchLine`] for an ordinal with no `held` line,
     /// the queue as it stood.
-    fn leave(&mut self, k: u64, done: Done) -> Result<(), DoneError> {
+    fn leave(&mut self, k: u64, done: Done, minted: Option<&str>) -> Result<Vec<u64>, DoneError> {
         // A line kept at a position raises the lines standing after it on its
         // document to it.
         let kept_at = match done {
             Done::Kept { at } => at,
             Done::Dropped => None,
         };
-        let line = self.lines.take(k, kept_at).ok_or(DoneError::NoSuchLine)?;
+        let minted = minted.filter(|_| matches!(done, Done::Kept { .. }));
+        let (line, placing) = self.lines.leave(k, kept_at, minted).ok_or(DoneError::NoSuchLine)?;
+        self.held_bytes = self.held_bytes.saturating_sub(placing.spent).saturating_add(placing.spends);
         // A file never created, or a line waiting for its first copy, holds
         // nothing on disk to resolve; a line on disk owes its `done`, counted
         // until it lands.
         let bytes = line.held_bytes();
         if self.disk.created && self.disk.holds(k) {
-            self.disk.owing.get_or_insert_with(Box::default).owed.insert(k, Due::Done { done, bytes });
+            self.disk.owing.get_or_insert_with(Box::default).owed.insert(k, Due::Done { done, bytes, addr: minted.map(str::to_owned) });
         } else {
             self.held_bytes = self.held_bytes.saturating_sub(bytes);
             if let Some(owing) = self.disk.owing.as_mut() {
@@ -2466,18 +2795,21 @@ impl HeldQueue {
                 }
             }
         }
-        Ok(())
+        Ok(placing.unplaced)
     }
 
     /// Writes the `done`s owed, and compacts the file where no line stands.
     ///
     /// It is the end of every `done` ([`HeldQueue::done`],
-    /// [`HeldQueue::done_all`]): the retry, then the compaction once the
-    /// queue holds no line ([`HeldQueue::compact`]).
-    fn settle(&mut self) -> Settled {
+    /// [`HeldQueue::keep`], [`HeldQueue::done_all`]): the retry, then the
+    /// compaction once the queue holds no line ([`HeldQueue::compact`]).
+    /// `unplaced` are the lines whose anchors the leaving dropped, answered
+    /// where they stand still.
+    fn settle(&mut self, mut unplaced: Vec<u64>) -> Settled {
         self.retry();
+        unplaced.retain(|&k| self.lines.contains(k));
         let unremoved = if self.lines.is_empty() { self.compact() } else { None };
-        Settled { unremoved }
+        Settled { unremoved, unplaced }
     }
 
     /// Removes the file of a queue that holds no line: the compaction.
@@ -2596,8 +2928,8 @@ impl HeldQueue {
     /// They are the `done`s this queue's file owes, and those of the pending
     /// file it took its lines from, while that file stands.
     pub fn dones_owed(&self) -> Vec<Done> {
-        let owed = self.disk.owing.iter().flat_map(|owing| owing.owed.values()).filter_map(|due| match *due {
-            Due::Done { done, .. } => Some(done),
+        let owed = self.disk.owing.iter().flat_map(|owing| owing.owed.values()).filter_map(|due| match due {
+            Due::Done { done, .. } => Some(*done),
             Due::Mark => None,
         });
         owed.chain(self.disk.superseded.iter().flat_map(|superseded| superseded.left.iter().copied())).collect()
@@ -2714,17 +3046,17 @@ impl HeldQueue {
     ///
     /// It is the ordered insert, the queue kept in `k` order. None of `lines`
     /// is under an ordinal a standing line holds; each enters after every floor
-    /// given here, so no line kept before it raises it (`Lines`). The queue's
-    /// bytes count each, and the greatest ordinal named moves past them.
+    /// given here, so no line kept before it raises it, and its pieces bind
+    /// as it enters, in `k` order (`Lines`). The queue's bytes count each,
+    /// and the greatest ordinal named moves past them.
     fn enter(&mut self, lines: Vec<HeldLine>) {
         if lines.is_empty() {
             return;
         }
         self.greatest_k = lines.iter().fold(self.greatest_k, |greatest, line| greatest.max(line.k));
-        self.held_bytes = lines.iter().fold(self.held_bytes, |bytes, line| bytes.saturating_add(line.held_bytes()));
         self.disk.owing.get_or_insert_with(Box::default).first.extend(lines.iter().map(|line| line.k));
         for line in lines {
-            self.lines.enter(line);
+            self.held_bytes = self.held_bytes.saturating_add(self.lines.enter(line));
         }
     }
 
@@ -2771,7 +3103,7 @@ impl HeldQueue {
         let mut renumbered = Lines::default();
         let mut copy = Vec::new();
         for old in self.lines.ordinals() {
-            copy.extend(done_line_bytes(old, Done::Dropped));
+            copy.extend(done_line_bytes(old, Done::Dropped, None));
         }
         for line in self.lines.handouts() {
             let old = line.k;
@@ -3206,10 +3538,10 @@ fn header_bytes(named: &Named, principal: u64, account: &str) -> Vec<u8> {
 /// own base where its document's floor raised it (`Lines::copy`). Its
 /// members are `held, doc, id?, base, frame, anchors?, cause,
 /// refusal?, sent, time`, in that order — `anchors` as
-/// `{"before":<I-address or null>,"after":<I-address or null>}`, on a line
-/// whose burst carried them alone, a span they name spelled before its
-/// closing brace as `,"span":[{"start":<I-address>,"width":"<natural>"}]`,
-/// one object per run.
+/// `{"before":<edge>,"after":<edge>}`, each edge an I-address, `null` or a
+/// piece `{"burst":<string>,"offset":<natural>}`, on a line whose burst
+/// carried them alone, a span they name spelled before its closing brace as
+/// `,"span":[{"start":<I-address>,"width":"<natural>"}]`, one object per run.
 fn held_line_bytes(l: &HeldLine, base: u64) -> Vec<u8> {
     let mut s = format!("{{\"held\":{},\"doc\":{}", l.k, json_str(&l.doc));
     if let Some(id) = &l.id {
@@ -3217,7 +3549,11 @@ fn held_line_bytes(l: &HeldLine, base: u64) -> Vec<u8> {
     }
     let _ = write!(s, ",\"base\":{base},\"frame\":{}", l.frame);
     if let Some(anchors) = &l.anchors {
-        let anchor = |a: &Option<String>| a.as_deref().map_or_else(|| "null".to_string(), json_str);
+        let anchor = |a: &Option<Anchor>| match a {
+            None => "null".to_string(),
+            Some(Anchor::Address(addr)) => json_str(addr),
+            Some(Anchor::Piece(piece)) => format!("{{\"burst\":{},\"offset\":{}}}", json_str(&piece.burst), piece.offset),
+        };
         let _ = write!(s, ",\"anchors\":{{\"before\":{},\"after\":{}", anchor(&anchors.before), anchor(&anchors.after));
         if let Some(span) = &anchors.span {
             let runs: Vec<String> = span.iter().map(|run| format!("{{\"start\":{},\"width\":\"{}\"}}", json_str(&run.start()), run.width)).collect();
@@ -3235,16 +3571,20 @@ fn held_line_bytes(l: &HeldLine, base: u64) -> Vec<u8> {
 
 /// Returns a `done` line's exact bytes (§3c.2).
 ///
-/// Its members are `done, as, at?, time`, in that order — `at` on a `kept`
-/// line alone.
-fn done_line_bytes(k: u64, done: Done) -> Vec<u8> {
-    let (resolved, at) = match done {
-        Done::Kept { at } => ("kept", at),
-        Done::Dropped => ("dropped", None),
+/// Its members are `done, as, at?, addr?, time`, in that order — `at` and
+/// `addr`, the first I-address a kept insert's words were minted at
+/// (skep #969), on a `kept` line alone.
+fn done_line_bytes(k: u64, done: Done, addr: Option<&str>) -> Vec<u8> {
+    let (resolved, at, addr) = match done {
+        Done::Kept { at } => ("kept", at, addr),
+        Done::Dropped => ("dropped", None, None),
     };
     let mut s = format!("{{\"done\":{k},\"as\":\"{resolved}\"");
     if let Some(at) = at {
         let _ = write!(s, ",\"at\":{at}");
+    }
+    if let Some(addr) = addr {
+        let _ = write!(s, ",\"addr\":{}", json_str(addr));
     }
     let _ = writeln!(s, ",\"time\":{}}}", now_ms());
     s.into_bytes()

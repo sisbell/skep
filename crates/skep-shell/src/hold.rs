@@ -90,7 +90,15 @@
 //! node stopped, the board silent, the board halted, a line of the
 //! principal's already held, a request of the hold's at the board unanswered
 //! — and, where its own first dial is a request the board gives no answer
-//! to, held `unreachable`, no clock started.
+//! to, held `unreachable`, no clock started. Its anchors' pieces, each
+//! naming the words of a burst of the page's by its `id` (skep #969), are
+//! asked under the board's lock past the hold's own door
+//! ([`Holds::place_anchors`]): one naming a burst held on the document binds
+//! to that line, the burst held `behind` it, and is placed at the address
+//! the line's words are minted at as it is kept — its ack's ([`minted_by`]),
+//! or the one the resend's read finds — one naming a burst kept there is
+//! placed from the principal's newest landed inserts
+//! ([`PrincipalHold::landed_inserts`]), and any other is refused at the act.
 //! The resend sends each held line through the same reader of an answer, a
 //! reissue-class answer there reissued at the next probe; a line no landing
 //! of which is found [`HAND_OVER_DEADLINE`] after its first failed send,
@@ -245,7 +253,7 @@
 //! wait is another's.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::fs::File;
 use std::io;
@@ -256,7 +264,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use skep_client::board::{acked_at, Answer, Board, ChangesAnswer, ChangesQuery, Health, Rejection};
+use skep_client::board::{acked_addr, acked_at, Answer, Board, ChangesAnswer, ChangesQuery, Health, Rejection};
 use skep_client::halt::Halt;
 use skep_client::history::Restored;
 use skep_client::sheet::render_inert;
@@ -266,11 +274,14 @@ use skep_search::Chain;
 
 use crate::attest::{attest_room, insert_terms, Unattested};
 use crate::events::{EventBus, EventName};
-use crate::held::{Anchors, CopiesOwed, Done, Entered, HaltWhy, HeldDir, HeldLine, HeldQueue, Joined, Joining, Opened, Owed, Reason, RenumberRefused, Settled, Torn, Unheld, MAX_HELD_BYTES, MAX_HELD_LINES};
+use crate::held::{
+    i_address, Anchor, Anchors, CopiesOwed, Done, Entered, HaltWhy, HeldDir, HeldLine, HeldQueue, Joined, Joining, Opened, Owed, Reason, RenumberRefused, Settled, Torn, Unheld, MAX_BURST_ID_BYTES,
+    MAX_HELD_BYTES, MAX_HELD_LINES,
+};
 use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{board_head, HeadRead, SessionEntry, Sessions};
-use crate::wire::{document_address, json_len, MAX_FRAME_BYTES};
+use crate::wire::{document_address, json_len, values_of, MAX_FRAME_BYTES};
 use crate::Talk;
 
 mod labels;
@@ -1833,6 +1844,31 @@ enum Custody {
     Halted { path: PathBuf, why: HaltWhy },
 }
 
+/// The most inserts a principal's landed-insert record keeps at one board.
+///
+/// It is the newest kept, as the follower table keeps a session's newest
+/// answered bursts (`shell::follow`'s `BURSTS_KEPT`, the same figure): an
+/// anchor names a burst of the page's last few, the board committing one at
+/// a time (§7b), so a burst whose words a page still names is among them
+/// (SP-17).
+const LANDED_INSERTS_KEPT: usize = 64;
+
+/// An insert of the principal's kept at the board, as an anchor names it.
+///
+/// It is its document, the `id` its frame carried, the first I-address its
+/// words were minted at — its ack's, or the one the resend's read found
+/// (`Holds::minted_at`) — and the positions its values seat
+/// (`wire::values_of`): what a piece of a later burst's anchors resolves
+/// against once the burst is no longer held ([`Holds::place_anchors`];
+/// skep #969).
+#[derive(Debug)]
+struct LandedInsert {
+    doc: String,
+    id: String,
+    addr: String,
+    positions: u64,
+}
+
 /// One principal's hold at one board.
 ///
 /// It holds where its lines are kept, the queue, the principal's ONE
@@ -1856,9 +1892,10 @@ enum Custody {
 /// board's silence left untried ([`PrincipalHold::shift_owed`]) and the
 /// moved documents whose hands it left unread
 /// ([`PrincipalHold::hands_owed`]), each moved document's shift test
-/// ([`PrincipalHold::shift_tests`]), and whether the wait for the copies its
-/// file owes was said ([`PrincipalHold::waiting_said`]). An ack touches no
-/// standing line's
+/// ([`PrincipalHold::shift_tests`]), its newest inserts kept with an `id`
+/// whose words a burst's anchors may name ([`PrincipalHold::landed_inserts`];
+/// skep #969), and whether the wait for the copies its file owes was said
+/// ([`PrincipalHold::waiting_said`]). An ack touches no standing line's
 /// base: a line held keeps the base it was held at, raised only behind a
 /// line kept on its document (`HeldQueue::done`) and by the person's `send`
 /// on a moved document (`HeldQueue::remark_all`, [`Holds::resolve`]).
@@ -1999,6 +2036,18 @@ struct PrincipalHold {
     /// first copy, the document said again ([`Holds::say_landed`]). In
     /// memory, as every line it names is.
     unwritable_docs: HashSet<String>,
+    /// The principal's newest inserts kept with an `id`, oldest first
+    /// ([`LandedInsert`]; skep #969).
+    ///
+    /// Each is entered as its ack is noted ([`Holds::note_ack`]) or its
+    /// landing found with the address its words were minted at
+    /// (`resend`'s `keep_landing`), a later one of the same document and `id`
+    /// taking the earlier one's place, and the record keeps the newest
+    /// [`LANDED_INSERTS_KEPT`]. A burst's anchors that name the words of a
+    /// burst no longer held are placed from it at the burst's door
+    /// ([`Holds::place_anchors`]). In memory, as the follower table is: a
+    /// relaunch forgets it.
+    landed_inserts: VecDeque<LandedInsert>,
     /// Whether the shell's own window was told the queue's file owes copies.
     ///
     /// It is set as the wait is said to begin, and cleared as its end is
@@ -2038,9 +2087,34 @@ impl PrincipalHold {
             hands_owed: HashMap::new(),
             shift_tests: HashMap::new(),
             unwritable_docs: HashSet::new(),
+            landed_inserts: VecDeque::new(),
             waiting_said: false,
             superseded_said: false,
         }
+    }
+
+    /// Notes an insert of the principal's kept at the board, its words
+    /// minted from `minted` ([`PrincipalHold::landed_inserts`]; skep #969).
+    ///
+    /// `frame` is the insert as it was sent. An insert with no `id`, or one
+    /// past [`MAX_BURST_ID_BYTES`], or whose values are not the wire's forms,
+    /// is no burst a page's anchors can name, and nothing is noted; an earlier
+    /// insert of the same document and `id` is let go, the newest the one a
+    /// piece names.
+    fn note_landed_insert(&mut self, frame: &Value, minted: &str) {
+        let (Some(doc), Some(id)) = (frame["doc"].as_str(), frame["id"].as_str().filter(|id| id.len() <= MAX_BURST_ID_BYTES)) else { return };
+        let Ok(values) = values_of(&frame["values"]) else { return };
+        self.landed_inserts.retain(|landed| landed.doc != doc || landed.id != id);
+        if self.landed_inserts.len() == LANDED_INSERTS_KEPT {
+            self.landed_inserts.pop_front();
+        }
+        self.landed_inserts.push_back(LandedInsert { doc: doc.to_string(), id: id.to_string(), addr: minted.to_string(), positions: values.len() as u64 });
+    }
+
+    /// Returns the newest insert of the principal's kept on `doc` with `id`,
+    /// where the record keeps one ([`PrincipalHold::landed_inserts`]).
+    fn landed_insert(&self, doc: &str, id: &str) -> Option<&LandedInsert> {
+        self.landed_inserts.iter().rev().find(|landed| landed.doc == doc && landed.id == id)
     }
 
     /// Returns whether the resend walks the hold's lines: some stand, and
@@ -3545,12 +3619,21 @@ impl Holds {
     /// the person's on another connection — raises the base of the next hold
     /// alone, never this line's, so the read of a line whose answer was lost
     /// starts below its own landing (skep #737).
+    ///
+    /// **Anchors that name held words** (skep #969). Past the hold's own
+    /// door, and before any hold or dial, the pieces the burst's anchors
+    /// name are asked of the principal's hold ([`Holds::place_anchors`]):
+    /// a piece naming a burst held on the document binds to its line as the
+    /// burst's line enters, the burst holding `behind` it — a line of the
+    /// principal's stands — and one naming a burst kept there is placed at
+    /// its minted address now; a refusal there is faced at the act, nothing
+    /// held and nothing dialed.
     fn send_burst(&self, session: &SessionEntry, frame: Value, anchors: Option<Anchors>) -> OpAnswer {
         let burst = match Burst::admit(frame, session) {
             Ok(burst) => burst.with_anchors(anchors),
             Err(refusal) => return OpAnswer::Answered(Err(refusal)),
         };
-        let base = {
+        let (burst, base) = {
             let mut board_hold = self.lock(&session.board_reference);
             // A burst's hold before any dial is the own node stopped, else the
             // board silent, else the writes halted (§3c.4's for a burst; a
@@ -3577,11 +3660,19 @@ impl Holds {
             if let Some(refusal) = another_window(&board_hold, &burst) {
                 return OpAnswer::Answered(Err(refusal));
             }
+            // The words the anchors name (skep #969): a burst held on the
+            // document, which a line of the principal's standing holds this
+            // one behind, or one kept there, which places them now.
+            let ph = board_hold.principals.get(&session.facts.principal).expect("the principal's hold, entered by its door");
+            let burst = match Holds::place_anchors(ph, burst) {
+                Ok(burst) => burst,
+                Err(refusal) => return OpAnswer::Answered(Err(refusal)),
+            };
             let hold_cause = standing.or(line_stands.then_some(cause::BEHIND)).or(pending.then_some(cause::UNREACHABLE));
             if let Some(cause) = hold_cause {
                 return OpAnswer::Answered(self.hold_line(&mut board_hold, session, burst, Reason::of(cause, false), base).map(|entered| entered.answer));
             }
-            base
+            (burst, base)
         };
         match self.dial_within_call(session, burst.frame()) {
             Dialed::Acked(ack) => {
@@ -3605,6 +3696,58 @@ impl Holds {
             // nothing and its dial no failed send.
             Dialed::Died => self.hold_at_death(session, burst, None, base),
         }
+    }
+
+    /// Places the pieces a burst's anchors name, at the burst's door.
+    ///
+    /// A piece names `offset` positions into the words of a burst of the
+    /// page's on the burst's own document, by the `id` that burst's frame
+    /// carried (skep #969). Each edge that is a piece — `before`, then
+    /// `after` — is asked of `ph`, the principal's hold at the board: the
+    /// newest line standing on the document with that `id`, which the piece
+    /// binds to as the burst's line enters (`held`'s anchors that name held
+    /// words) and the burst holds behind; else the newest insert of the
+    /// principal's kept there with that `id`
+    /// ([`PrincipalHold::landed_insert`]), whose minted address places the
+    /// piece now ([`Anchors::placed`]). The burst is answered with its
+    /// anchors so placed; one with no piece passes as it came.
+    ///
+    /// # Errors
+    ///
+    /// Returns, at the first edge whose piece is not of its place, nothing
+    /// held and nothing dialed:
+    ///
+    /// * `malformed_args` naming `anchors.before` or `anchors.after` where
+    ///   the burst it names is no insert, where its `offset` is not below the
+    ///   positions that insert's values seat (`wire::values_of`), or where
+    ///   the address it would place is past what an I-address spells;
+    /// * `no_such_burst` `{anchor, burst}` — `anchor` the edge, `burst` the
+    ///   `id` — where no burst of that `id` stands held on the document or
+    ///   is kept there in the record's memory.
+    fn place_anchors(ph: &PrincipalHold, mut burst: Burst) -> Result<Burst, Refusal> {
+        let Some(mut anchors) = burst.anchors.take() else { return Ok(burst) };
+        let positions = |frame: &Value| (frame["op"] == "insert").then(|| values_of(&frame["values"]).ok()).flatten().map(|values| values.len() as u64);
+        for edge in ["before", "after"] {
+            let anchor = if edge == "before" { &anchors.before } else { &anchors.after };
+            let Some(Anchor::Piece(piece)) = anchor else { continue };
+            let (id, offset) = (piece.burst().to_string(), piece.offset());
+            let malformed = || Refusal::malformed(format!("anchors.{edge}"));
+            if let Some(frame) = ph.queue.frame_named(&burst.doc, &id) {
+                if positions(frame).is_none_or(|positions| offset >= positions) {
+                    return Err(malformed());
+                }
+                continue;
+            }
+            let Some(landed) = ph.landed_insert(&burst.doc, &id) else {
+                return Err(Refusal::shell(Name::NO_SUCH_BURST, json!({"anchor": edge, "burst": id})));
+            };
+            if offset >= landed.positions {
+                return Err(malformed());
+            }
+            anchors = anchors.placed(&id, &landed.addr).ok_or_else(malformed)?;
+        }
+        burst.anchors = Some(anchors);
+        Ok(burst)
     }
 
     /// Shifts a burst refused stale at its first dial, and resends it.
@@ -3715,7 +3858,8 @@ impl Holds {
             match shifted.dialed {
                 Dialed::Acked(ack) => {
                     self.note_ack(session, &shifted.frame, &ack);
-                    self.with_principal(board_reference, principal, |ph| self.done_line(principal, ph, k, Done::Kept { at: acked_at(&ack) }));
+                    let minted = minted_by(&shifted.frame, &ack);
+                    self.with_principal(board_reference, principal, |ph| self.keep_line(principal, ph, k, acked_at(&ack), minted));
                     return OpAnswer::Answered(Ok(ack));
                 }
                 Dialed::Held { reason, refusal } if reason.cause == cause::MOVED => {
@@ -4013,12 +4157,16 @@ impl Holds {
     /// arrangement write's — a burst's or a `set_arrangement`'s — is the
     /// position of the principal's latest arrangement write on its `doc`
     /// too, where it is past the one noted there
-    /// ([`PrincipalHold::note_arranged`]). No standing line is touched: a
-    /// line held keeps the base it was held at. A read, or a refusal, notes
-    /// nothing.
+    /// ([`PrincipalHold::note_arranged`]). An insert's carrying an `id` is
+    /// entered among the principal's landed inserts with the address its ack
+    /// minted ([`PrincipalHold::note_landed_insert`], [`minted_by`]), so a
+    /// later burst's anchors can name its words (skep #969). No standing line
+    /// is touched: a line held keeps the base it was held at. A read, or a
+    /// refusal, notes nothing.
     fn note_ack(&self, session: &SessionEntry, frame: &Value, ack: &Value) {
         let Some(at) = acked_at(ack) else { return };
-        self.note_written(session, at, &written_docs(frame, ack), arranged_doc(frame));
+        let landed = minted_by(frame, ack).map(|minted| (frame, minted));
+        self.note_written(session, at, &written_docs(frame, ack), arranged_doc(frame), landed);
     }
 
     /// Notes a restore `session` made: the `history.restore` row's write
@@ -4042,7 +4190,7 @@ impl Holds {
     /// (the type's precondition).
     pub fn note_restored(&self, session: &SessionEntry, restored: &Restored) {
         let draft = restored.draft.to_string();
-        self.note_written(session, restored.position, &[draft.as_str()], Some(draft.as_str()));
+        self.note_written(session, restored.position, &[draft.as_str()], Some(draft.as_str()), None);
     }
 
     /// Notes `at`, the position of a write of the session's principal's.
@@ -4050,8 +4198,10 @@ impl Holds {
     /// It enters the board's acked positions, raises the `base` on each of
     /// `docs`, the documents its row names, and, where the write set
     /// `arranged`'s arrangement, the principal's latest arrangement write
-    /// there ([`Holds::note_ack`]'s and [`Holds::note_restored`]'s one body).
-    fn note_written(&self, session: &SessionEntry, at: u64, docs: &[&str], arranged: Option<&str>) {
+    /// there, and where `landed` names an insert's frame and the address its
+    /// ack minted, the insert among the principal's landed inserts
+    /// ([`Holds::note_ack`]'s and [`Holds::note_restored`]'s one body).
+    fn note_written(&self, session: &SessionEntry, at: u64, docs: &[&str], arranged: Option<&str>, landed: Option<(&Value, &str)>) {
         let mut board_hold = self.lock(&session.board_reference);
         board_hold.acked.insert(at);
         if docs.is_empty() {
@@ -4064,6 +4214,9 @@ impl Holds {
         }
         if let Some(doc) = arranged {
             ph.note_arranged(doc, at);
+        }
+        if let Some((frame, minted)) = landed {
+            ph.note_landed_insert(frame, minted);
         }
     }
 
@@ -4278,9 +4431,9 @@ impl Holds {
             }
             ReadOutcome::Unread => LandingUnread::Unread,
             ReadOutcome::Undecided => LandingUnread::Undecided,
-            ReadOutcome::Landed { at } => {
+            ReadOutcome::Landed { at, minted } => {
                 self.still_as_read(&mut board_hold, session, &read)?;
-                self.keep_landing(&mut board_hold, principal, &read.doc, k, at);
+                self.keep_landing(&mut board_hold, principal, &read, at, minted.as_deref());
                 let ph = board_hold.principals.get_mut(&principal).expect("the principal's hold, entered by its door");
                 // A pass under way walks the document again at its next turn.
                 ph.stopped_in_pass.remove(&read.doc);
@@ -4663,9 +4816,24 @@ impl Holds {
     /// its edges; a held file the volume would not remove once every line in
     /// it was settled is said on `Talk` — the store appends on to it — and
     /// the line's reissues and the position its moved document was
-    /// acknowledged through go with it ([`Holds::forget_settled`]).
+    /// acknowledged through go with it ([`Holds::forget_settled`]). The lines
+    /// whose anchors named its words keep anchors no more, no address of the
+    /// words known (skep #969).
     fn done_line(&self, principal: u64, ph: &mut PrincipalHold, k: u64, done: Done) {
         let settled = ph.queue.done(k, done).unwrap_or_default();
+        self.forget_settled(principal, ph, &[k], settled);
+    }
+
+    /// Keeps one line of `principal`'s at `at`, whatever the disk did.
+    ///
+    /// It is [`Holds::done_line`]'s keep, `minted` the first I-address a
+    /// kept insert's words were minted at where its ack or the resend's
+    /// read names one ([`minted_by`], `resend`'s `minted_at`): the pieces
+    /// later lines' anchors name of its words are placed there, its `done`
+    /// carrying the address (`HeldQueue::keep`), and where it names none the
+    /// lines naming them keep anchors no more (skep #969).
+    fn keep_line(&self, principal: u64, ph: &mut PrincipalHold, k: u64, at: Option<u64>, minted: Option<&str>) {
+        let settled = ph.queue.keep(k, at, minted).unwrap_or_default();
         self.forget_settled(principal, ph, &[k], settled);
     }
 
@@ -4689,10 +4857,22 @@ impl Holds {
     /// held file the volume would not remove once every line in it was
     /// settled is said on `Talk` — the store appends on to it — and a wait
     /// for the file's copies that begins or ends is said at its edges
-    /// ([`Holds::note_waiting`]).
+    /// ([`Holds::note_waiting`]). The standing lines whose anchors named the
+    /// words of a line settled with no address of them known, and keep
+    /// anchors no more, are said once, as the settle drops them (SP-11; skep
+    /// #969): such a line the board refuses as typed against an older state
+    /// is held as moved, no shift able to place it.
     fn forget_settled(&self, principal: u64, ph: &mut PrincipalHold, ks: &[u64], settled: Settled) {
         if let Some((path, e)) = settled.unremoved {
             self.say(format_args!("every held line is done, and the held file {} could not be removed ({e}); it stands, and the next line is appended to it", path.display()));
+        }
+        if !settled.unplaced.is_empty() {
+            let ordinals = |ks: &[u64]| ks.iter().map(u64::to_string).collect::<Vec<_>>().join(", ");
+            self.say(format_args!(
+                "held line(s) {} named words of line(s) {} that left the queue with no address of them known; their anchors are dropped, and a send of them the board refuses as typed against an older state is held as moved",
+                ordinals(&settled.unplaced),
+                ordinals(ks)
+            ));
         }
         for k in ks {
             ph.reissues.remove(k);
@@ -5110,6 +5290,18 @@ fn line_json(l: &HeldLine, sendable: Option<bool>, unwritable: Option<&Unwritabl
 fn arranged_doc(frame: &Value) -> Option<&str> {
     let op = frame["op"].as_str()?;
     (BURST_KINDS.contains(&op) || op == "set_arrangement").then(|| frame["doc"].as_str()).flatten()
+}
+
+/// Returns the first I-address an insert's ack minted its words at.
+///
+/// It is the ack's `addr` (A-63) where `frame` is an insert and the address
+/// lies in the frame's document's own content I-space (`<doc>.0.1`), which
+/// an insert mints into; none for another write's ack, or for an address of
+/// another place (SP-19). It is what the pieces naming the insert's words
+/// are placed at, and what its landed-insert entry keeps (skep #969).
+fn minted_by<'a>(frame: &Value, ack: &'a Value) -> Option<&'a str> {
+    let doc = frame["doc"].as_str().filter(|_| frame["op"] == "insert")?;
+    acked_addr(ack).filter(|addr| i_address(addr).is_some_and(|(prefix, _)| prefix.strip_suffix(".0.1") == Some(doc)))
 }
 
 /// Returns the documents an acked write's `/changes` row names.

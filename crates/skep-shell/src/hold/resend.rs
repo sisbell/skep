@@ -151,7 +151,12 @@
 //! at its ack or found landed by the read, is named on its document's `held`
 //! event — its ordinal, its frame's `id`, the position the board took it at
 //! and, at an insert's ack, the I-address it minted (`LandedLine`;
-//! skep #968).
+//! skep #968). A line kept whose words a later line's anchors name places
+//! them at that I-address (skep #969): its ack's, or, for a landing the read
+//! found, the one an `image` of its confirmed site through `/op-at` at the
+//! site read's position answers (`Holds::minted_at`) — a read that decides
+//! nothing deciding nothing of the line either, and one that names no single
+//! run of the words keeping the line with the naming lines' anchors dropped.
 //! A resend marks its line as one that may have landed before it dials, synced,
 //! and the line stays so through every resend short of its ack and through a
 //! move, so its next read takes a landing it finds as the line's own — after a
@@ -166,14 +171,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use skep_client::board::{acked_addr, acked_at, frames, Answer, ChangesAnswer, ChangesQuery, Rejection};
+use skep_client::board::{acked_addr, acked_at, frames, Answer, AtAnswer, ChangesAnswer, ChangesQuery, Rejection};
 use skep_client::halt::Halt;
 
 use super::{
-    awaits_act, cause, line_state, millis, unanswered, AttestedWhereOwed, BoardHold, BoardSlot, CutSend, Dialed, Hand, HandsRead, HeldState, Holds, KeptShift, LandedLine, MovedFace, Tested, Turn,
-    Verdict, HAND_OVER_DEADLINE, TURN_STEPS,
+    awaits_act, cause, line_state, millis, minted_by, unanswered, AttestedWhereOwed, BoardHold, BoardSlot, CutSend, Dialed, Hand, HandsRead, HeldState, Holds, KeptShift, LandedLine, MovedFace,
+    Tested, Turn, Verdict, HAND_OVER_DEADLINE, TURN_STEPS,
 };
-use crate::held::{i_address, Anchors, Done, HeldLine, Reason, SpanRun};
+use crate::held::{i_address, Anchor, Anchors, HeldLine, Reason, SpanRun};
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{board_head, SessionEntry};
 use crate::wire::{delivered_values, values_of};
@@ -457,8 +462,10 @@ impl<'a> Image<'a> {
     ///
     /// It is found in a run of the anchor's prefix holding its position, at
     /// the V-position the run gives it — in every run, so an anchor found
-    /// at two places is refused, as one found nowhere is lost.
-    fn position_of(&self, anchor: &str, which: &'static str) -> Result<u64, Unshiftable> {
+    /// at two places is refused, as one found nowhere is lost. A piece of a
+    /// held insert's words names no unit an image holds, and places nothing.
+    fn position_of(&self, anchor: &Anchor, which: &'static str) -> Result<u64, Unshiftable> {
+        let anchor = anchor.address().ok_or(Unshiftable::NoAnchors)?;
         let (prefix, n) = i_address(anchor).ok_or_else(|| Unshiftable::Malformed(format!("the {which} anchor is no I-address")))?;
         let mut found = None;
         let mut v = 1u64;
@@ -561,6 +568,16 @@ fn shifted_frame(frame: &Value, anchors: &Anchors, image: &Value, as_of: u64) ->
     span.displaced(frame, displacement, as_of).ok_or_else(|| Unshiftable::Malformed("a position the frame names moves to no position".into()))
 }
 
+/// Returns the anchors a shift of `line` places it by.
+///
+/// It answers [`Unshiftable::NoAnchors`] where the burst carried none, and
+/// where an edge is a piece of a held insert's words (skep #969): a line
+/// naming such words is sent only once the line it names has left the queue
+/// and placed it (`held`'s module doc), so a piece here places nothing.
+fn shifting_anchors(line: &HeldLine) -> Result<&Anchors, Unshiftable> {
+    line.anchors.as_ref().filter(|anchors| !anchors.names_pieces()).ok_or(Unshiftable::NoAnchors)
+}
+
 /// Returns the span `frame` edits and the runs `anchors` name of it.
 ///
 /// They are the checks of the frame and the anchors alone
@@ -618,7 +635,7 @@ fn read_image(session: &SessionEntry, doc: &str) -> Result<Value, ShiftStop> {
 ///
 /// Returns what stopped the shift ([`ShiftStop`]).
 fn shift_as_a_send_would(session: &SessionEntry, head: &HeldLine) -> Result<(), ShiftStop> {
-    let anchors = head.anchors.as_ref().ok_or(ShiftStop::Refused(Unshiftable::NoAnchors))?;
+    let anchors = shifting_anchors(head).map_err(ShiftStop::Refused)?;
     named_span(&head.frame, anchors).map_err(ShiftStop::Refused)?;
     let image = read_image(session, &head.doc)?;
     let as_of = image["as_of"].as_u64().unwrap_or(0);
@@ -654,7 +671,9 @@ pub(super) enum ReadOutcome {
     ///
     /// The position, where the read names one, becomes the document's base,
     /// as an ack's does (§3c.2), and joins the board's acked positions.
-    Landed { at: Option<u64> },
+    /// `minted` is the first I-address the head's words stand at, read where
+    /// a line's anchors name them ([`Holds::minted_at`]; skep #969).
+    Landed { at: Option<u64>, minted: Option<String> },
     /// The board answered no page: nothing is decided.
     ///
     /// It answered a refusal (`feed_rebuilding`) or an answer no read takes
@@ -712,7 +731,10 @@ enum Round {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Site {
     /// The values read back equal: the burst stands there.
-    Equal,
+    ///
+    /// `as_of` is the position the read answered at, where it names one: the
+    /// state the address of the burst's words is read at (skep #969).
+    Equal { as_of: Option<u64> },
     /// Other values, or none (the site out of the document's bounds).
     Differs,
     /// No read can decide.
@@ -1194,8 +1216,8 @@ impl Holds {
                 self.note_unanswered(&mut self.lock(board_reference), None);
                 Step::Unanswered
             }
-            ReadOutcome::Landed { at } => {
-                self.keep_landing(&mut self.lock(board_reference), principal, doc, head.k, at);
+            ReadOutcome::Landed { at, minted } => {
+                self.keep_landing(&mut self.lock(board_reference), principal, head, at, minted.as_deref());
                 let lines = self.lines_on(board_reference, principal, doc);
                 let goes = lines.held > 0;
                 self.say_kept(session, doc, lines, &LandedLine::of(head, at, None));
@@ -1295,11 +1317,11 @@ impl Holds {
                 if !own && !testimony_lost(row) {
                     continue;
                 }
-                let landed = match *site.get_or_insert_with(|| self.site(session, doc, head)) {
-                    Site::Equal => true,
+                let (landed, as_of) = match *site.get_or_insert_with(|| self.site(session, doc, head)) {
+                    Site::Equal { as_of } => (true, as_of),
                     // A kind the site read cannot confirm trusts the op-and-hand
                     // match; a row whose hand the board lost has none to trust.
-                    Site::Unconfirmable => own,
+                    Site::Unconfirmable => (own, None),
                     // The head's values do not stand at its site: the row is no
                     // landing the read can confirm, nor any row after it.
                     Site::Differs => return ReadOutcome::Undecided,
@@ -1308,7 +1330,7 @@ impl Holds {
                     Site::Died => return ReadOutcome::Died,
                 };
                 if landed {
-                    return ReadOutcome::Landed { at };
+                    return self.landed(session, doc, head, at, as_of);
                 }
                 undecided = true;
             }
@@ -1333,7 +1355,7 @@ impl Holds {
     /// ends the pass.
     fn reclaimed_outcome(&self, session: &SessionEntry, doc: &str, head: &HeldLine) -> ReadOutcome {
         match self.site(session, doc, head) {
-            Site::Equal => ReadOutcome::Landed { at: None },
+            Site::Equal { as_of } => self.landed(session, doc, head, None, as_of),
             Site::Differs | Site::Unconfirmable => ReadOutcome::Undecided,
             Site::Unread => ReadOutcome::Unread,
             Site::Unanswered => ReadOutcome::Unanswered,
@@ -1341,10 +1363,72 @@ impl Holds {
         }
     }
 
+    /// Returns the outcome of a head the read found landed at `at`.
+    ///
+    /// Where a line's anchors name the head's words (skep #969), the address
+    /// they were minted at is read first, at `as_of`, the position the site
+    /// read answered at ([`Holds::minted_at`]): a read that decides nothing
+    /// is the outcome, so the head stands and is read again — the pieces
+    /// naming its words never dropped for a read the board left unanswered —
+    /// and a read that names no address keeps the head with none.
+    fn landed(&self, session: &SessionEntry, doc: &str, head: &HeldLine, at: Option<u64>, as_of: Option<u64>) -> ReadOutcome {
+        let named = self.with_principal(&session.board_reference, session.facts.principal, |ph| ph.queue.is_named(head.k)).unwrap_or(false);
+        if !named {
+            return ReadOutcome::Landed { at, minted: None };
+        }
+        match self.minted_at(session, doc, head, as_of) {
+            Ok(minted) => ReadOutcome::Landed { at, minted },
+            Err(decides_nothing) => decides_nothing,
+        }
+    }
+
+    /// Reads the first I-address a landed insert's words stand at.
+    ///
+    /// It is one `image` of the head's site — its frame's `at`, as wide as its
+    /// values — through `/op-at` at `as_of`, the position the site read
+    /// confirmed its values at, so a write since names no other unit there
+    /// (wire.md §Reading history). The address is taken where the answer is one
+    /// run of that width in the document's own content I-space, which an insert
+    /// mints into; any other answer — a refusal, a reclaimed position, other
+    /// runs, a site read that named no position — names none (`Ok(None)`). It
+    /// is made only where a line's anchors name the head's words (skep #969).
+    ///
+    /// # Errors
+    ///
+    /// Returns the outcome that decides nothing: [`ReadOutcome::Unanswered`]
+    /// where the board gave the read no answer, [`ReadOutcome::Died`] at the
+    /// death signal on the session's token, and [`ReadOutcome::Unread`] where
+    /// every reconstruction permit was in use (`history_busy`) or the answer
+    /// could not be read, the next probe reading again.
+    fn minted_at(&self, session: &SessionEntry, doc: &str, head: &HeldLine, as_of: Option<u64>) -> Result<Option<String>, ReadOutcome> {
+        let from = head.frame["at"]["ordinal"].as_str().and_then(|o| o.parse::<u64>().ok());
+        let (Some(as_of), Some(from), Ok(values)) = (as_of, from, values_of(&head.frame["values"])) else { return Ok(None) };
+        let width = values.len() as u64;
+        match session.board.op_at(Some(&session.token), as_of, &frames::image(doc, from, width)) {
+            Ok(AtAnswer::Document(v)) if Rejection::of(&v).is_none() => {
+                let own = format!("{doc}.0.1");
+                let runs = v["runs"].as_array().map(Vec::as_slice).unwrap_or_default();
+                let minted = match runs {
+                    [run] if nat(&run["width"]) == Some(width) => run["i_start"].as_str().filter(|i| i_address(i).is_some_and(|(prefix, _)| prefix == own)),
+                    _ => None,
+                };
+                Ok(minted.map(str::to_owned))
+            }
+            Ok(AtAnswer::Closed) => Err(ReadOutcome::Died),
+            Ok(AtAnswer::Busy) => Err(ReadOutcome::Unread),
+            // The board answered, and named no address: a refusal of the
+            // read, the position reclaimed or none of its giving.
+            Ok(_) | Err(Halt::Refused(_)) => Ok(None),
+            Err(h) if unanswered(&h) => Err(ReadOutcome::Unanswered),
+            Err(_) => Err(ReadOutcome::Unread),
+        }
+    }
+
     /// Confirms an `insert`'s site by its content (§3c.5).
     ///
     /// It makes one `retrieve_v` at the site, as wide as the values its frame
-    /// spells, the delivery read back as values and held to them.
+    /// spells, the delivery read back as values and held to them, and the
+    /// position it answered at kept beside an equal one (skep #969).
     fn site(&self, session: &SessionEntry, doc: &str, head: &HeldLine) -> Site {
         if head.frame["op"].as_str() != Some("insert") {
             return Site::Unconfirmable;
@@ -1354,7 +1438,7 @@ impl Holds {
         match session.board.op(Some(&session.token), &frames::retrieve_v(doc, from, want.len() as u64)) {
             Ok(Answer::Document(v)) if Rejection::of(&v).is_none() => {
                 if delivers(&v, &want) {
-                    Site::Equal
+                    Site::Equal { as_of: v["as_of"].as_u64() }
                 } else {
                     Site::Differs
                 }
@@ -1366,59 +1450,66 @@ impl Holds {
         }
     }
 
-    /// Keeps line `k`, whose write the read found landed at `at` (§3c.5).
+    /// Keeps `line`, whose write the read found landed at `at` (§3c.5).
     ///
     /// `board_hold` is the board's hold, under its lock. The landing is noted
     /// as the session's ack is (§3c.2): `at` joins the board's acked
     /// positions, so no read takes its row for another line's landing, and
-    /// becomes the base of the next hold on `doc` and the principal's latest
-    /// arrangement write there — a held line is a burst — each where it is
-    /// past the position noted, a later write noted since the read standing;
-    /// the line is `done kept` with `at`. It is the resend's keep of a head
+    /// becomes the base of the next hold on its document and the principal's
+    /// latest arrangement write there — a held line is a burst — each where
+    /// it is past the position noted, a later write noted since the read
+    /// standing; the line is `done kept` with `at`. `minted` is the first
+    /// I-address its words stand at, where the read found one
+    /// ([`Holds::minted_at`]): the pieces naming the words are placed there,
+    /// and the insert is noted among the principal's landed inserts, as an
+    /// ack is (skep #969). It is the resend's keep of a head
     /// ([`Holds::resume_doc`]) and the drop's, where the read the drop makes
     /// first finds the line landed (`Holds::resolve`; skep #866), each caller
     /// saying the `held` event that names the line kept at `at`
     /// ([`LandedLine`]; skep #968).
-    pub(super) fn keep_landing(&self, board_hold: &mut BoardHold, principal: u64, doc: &str, k: u64, at: Option<u64>) {
+    pub(super) fn keep_landing(&self, board_hold: &mut BoardHold, principal: u64, line: &HeldLine, at: Option<u64>, minted: Option<&str>) {
         if let Some(at) = at {
             board_hold.acked.insert(at);
         }
         if let Some(ph) = board_hold.principals.get_mut(&principal) {
             if let Some(at) = at {
-                ph.note_position(doc, at);
-                ph.note_arranged(doc, at);
+                ph.note_position(&line.doc, at);
+                ph.note_arranged(&line.doc, at);
             }
-            self.done_line(principal, ph, k, Done::Kept { at });
+            if let Some(minted) = minted {
+                ph.note_landed_insert(&line.frame, minted);
+            }
+            self.keep_line(principal, ph, line.k, at, minted);
         }
     }
 
     /// Sends one held line as the `op` it is, under the session that stands.
     ///
-    /// Its attest is composed now (§3c.2), the line marked as one that may
-    /// have landed before the dial leaves, and the line settled by what the
-    /// dial answered: an ack `done kept`; the line refused as typed against
-    /// an older state of its document shifted through the change and dialed
-    /// again ([`Holds::shift_and_send`]), each shift one of the turn's
+    /// Its attest is composed now (§3c.2), the line marked as one that may have
+    /// landed before the dial leaves, and the line settled by what the dial
+    /// answered: an ack `done kept`, the pieces naming an insert's words placed
+    /// at the address its ack minted (skep #969); the line refused as typed
+    /// against an older state of its document shifted through the change and
+    /// dialed again ([`Holds::shift_and_send`]), each shift one of the turn's
     /// `steps` — its answer settled here as any dial's is, the verdict again
-    /// shifting it again as far as the turn's steps and the line's deadline
-    /// let it, and a turn with no step left for the next shift leaving the
-    /// line as its last dial left it, the cause it was held with, its `sent`
-    /// and the frame its last shift wrote, for the drain's next pass, no
-    /// `held` event emitted — or, where the shift is not exact, the document
-    /// faced `moved` ([`Holds::mark_moved`]) — the one route to that face —
-    /// the board's verdict kept on the line and the hands whose rows moved it
-    /// named; a hold-class answer or a refused run re-marked and faced, the
-    /// line keeping its `sent` — a resend that never left, or one the board
-    /// refused, says nothing of an earlier dial's write (§3c.2); a
-    /// reissue-class answer counted against the line and reissued at the
-    /// next probe, so its second `write_busy` and its third `durability`
-    /// hold it, as hold-class answers of the table's; any other
-    /// code of the board's the table holds nowhere handed to the person at
-    /// once, a refused run under the board's token with its verdict verbatim
-    /// and its `sent` kept, through the door a `permanent` refusal takes,
-    /// since it cannot resolve (§3c.4; skep #720); a refusal of the shell's
-    /// own — a request refused before any connection, or an attest that
-    /// could not be composed — left standing for the next probe, never
+    /// shifting it again as far as the turn's steps and the line's deadline let
+    /// it, and a turn with no step left for the next shift leaving the line as
+    /// its last dial left it, the cause it was held with, its `sent` and the
+    /// frame its last shift wrote, for the drain's next pass, no `held` event
+    /// emitted — or, where the shift is not exact, the document faced `moved`
+    /// ([`Holds::mark_moved`]) — the one route to that face — the board's
+    /// verdict kept on the line and the hands whose rows moved it named; a
+    /// hold-class answer or a refused run re-marked and faced, the line keeping
+    /// its `sent` — a resend that never left, or one the board refused, says
+    /// nothing of an earlier dial's write (§3c.2); a reissue-class answer
+    /// counted against the line and reissued at the next probe, so its second
+    /// `write_busy` and its third `durability` hold it, as hold-class answers
+    /// of the table's; any other code of the board's the table holds nowhere
+    /// handed to the person at once, a refused run under the board's token with
+    /// its verdict verbatim and its `sent` kept, through the door a `permanent`
+    /// refusal takes, since it cannot resolve (§3c.4; skep #720); a refusal of
+    /// the shell's own — a request refused before any connection, or an attest
+    /// that could not be composed — left standing for the next probe, never
     /// `done`; the death signal — at the dial, at the shift's read, or at the
     /// read of the hands, before anything is marked — left to the caller that
     /// ends the session, the line standing as its dial left it: the session
@@ -1429,17 +1520,17 @@ impl Holds {
     /// back to `holding`, nothing said and no failure noted, the board marked
     /// unanswered and the send owed to the next probe's verdict where its
     /// request may have left (`Holds::note_unanswered`); a shift whose read
-    /// went so is untried, its verdict kept (`PrincipalHold::shift_owed`),
-    /// and the line's next send starts at it, the shift run and no stale
-    /// frame dialed first. A moved face whose hands' read the board gives no
-    /// answer to stands on the verdict, its hands named not read
-    /// ([`Hand::UNREAD`]), owed (`PrincipalHold::hands_owed`), and ends the
-    /// pass too. Every failed send of the line ([`Dialed::failure`]) is noted
-    /// on its clock ([`HAND_OVER_DEADLINE`]), and a line left standing — for
-    /// the next probe, or for the drain's next pass — says so where a
-    /// failure this send met changed the last failure's token, so once per
-    /// change (SP-11). [`Step::Goes`] where the line is settled and sending
-    /// goes on, [`Step::Stops`] where the line's document stops at it.
+    /// went so is untried, its verdict kept (`PrincipalHold::shift_owed`), and
+    /// the line's next send starts at it, the shift run and no stale frame
+    /// dialed first. A moved face whose hands' read the board gives no answer
+    /// to stands on the verdict, its hands named not read ([`Hand::UNREAD`]),
+    /// owed (`PrincipalHold::hands_owed`), and ends the pass too. Every failed
+    /// send of the line ([`Dialed::failure`]) is noted on its clock
+    /// ([`HAND_OVER_DEADLINE`]), and a line left standing — for the next probe,
+    /// or for the drain's next pass — says so where a failure this send met
+    /// changed the last failure's token, so once per change (SP-11).
+    /// [`Step::Goes`] where the line is settled and sending goes on,
+    /// [`Step::Stops`] where the line's document stops at it.
     ///
     /// **The landed test comes first.** This runs for a line
     /// [`Holds::resume_doc`] let go alone — a `sent` head read for its own
@@ -1499,7 +1590,7 @@ impl Holds {
                 Dialed::Acked(ack) => {
                     self.note_ack(session, &frame, &ack);
                     let at = acked_at(&ack);
-                    self.done(board_reference, principal, line.k, Done::Kept { at });
+                    self.keep(board_reference, principal, line.k, at, minted_by(&frame, &ack));
                     let rest = self.lines_on(board_reference, principal, &line.doc);
                     self.say_kept(session, &line.doc, rest, &LandedLine::of(line, at, acked_addr(&ack)));
                     return Step::Goes;
@@ -1712,7 +1803,7 @@ impl Holds {
     ) -> Result<Shifted, E> {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let line = self.line_of(board_reference, principal, k).ok_or(Unshiftable::NoLine)?;
-        let anchors = line.anchors.as_ref().ok_or(Unshiftable::NoAnchors)?;
+        let anchors = shifting_anchors(&line)?;
         // The line's deadline (HAND_OVER_DEADLINE), read before the shift's
         // read: past it the line falls to the moved hold, the person's act,
         // the refusal naming the wall time since its first failed send.
@@ -1824,13 +1915,14 @@ impl Holds {
         });
     }
 
-    /// Resolves one line `done`, the file compacting where the queue empties.
+    /// Keeps one line at `at`, the file compacting where the queue empties.
     ///
-    /// The `done` is [`Done::Kept`] or [`Done::Dropped`].
-    fn done(&self, board_reference: &str, principal: u64, k: u64, done: Done) {
-        self.with_principal(board_reference, principal, |ph| self.done_line(principal, ph, k, done));
+    /// `minted` is the first I-address a kept insert's words were minted at,
+    /// where its ack names one, which places the pieces naming them
+    /// ([`Holds::keep_line`]; skep #969).
+    fn keep(&self, board_reference: &str, principal: u64, k: u64, at: Option<u64>, minted: Option<&str>) {
+        self.with_principal(board_reference, principal, |ph| self.keep_line(principal, ph, k, at, minted));
     }
-
 }
 
 /// Returns whether the walk passes a document over at `head`, its head,

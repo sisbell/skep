@@ -96,7 +96,9 @@
 //!   store another shell holds, by either of its two locks, read alone, no
 //!   file opened under the other shell's lock (`Holds::another_window`, the
 //!   shell's write door's question), each edge of that state emitted as
-//!   `another-window`; whether each board answers, by its `/health` verdict
+//!   `another-window`; the board's state, the most severe that holds, each
+//!   change taken once for the `daemon` event (`Holds::state_change`; skep
+//!   #865); whether each board answers, by its `/health` verdict
 //!   — a request the board gives no answer to holding every burst there at
 //!   once until that verdict, and a line's two minutes counted across the
 //!   board's answering time alone (skep #863); its child `resend` holds the
@@ -110,7 +112,7 @@
 //!   waiting read, the published feed read from the head the board first
 //!   answers with, the `/changes` pages re-read to the head by one reader
 //!   for the `feed` events, the `index` and `mode` events as the state
-//!   moves, the `daemon` event as the board's `/health` verdict moves, and
+//!   moves, the `daemon` event as the board's state moves, and
 //!   the bridge's two calls over the index — `search` and the listing
 //!   `places` — answered off it; it also hands every `/health` it reads to
 //!   the hold, which judges by it whether the board answers and reads its

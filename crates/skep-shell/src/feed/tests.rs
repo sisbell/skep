@@ -7,7 +7,10 @@
 //! no index stands dialing nothing; the outage's three states, said once and
 //! announced where no deliberate stop stands; the `daemon` event the board's
 //! `/health` verdict alone, never one request's failure, its edges each said
-//! once and the owner's start the one `running`; and the commit stream
+//! once and the owner's start the one `running`; the board's state said once
+//! per change with its reason, a stop over a told state leaving no memory of
+//! it after the start, and a tick ending a told silence naming the state it
+//! returned to; and the commit stream
 //! coalesced — the waiting tick's mark, and a board committing far faster
 //! than the feed thread reads costing it a read per turn, never a read per
 //! commit, with a search queued behind them answered after one read at most.
@@ -242,7 +245,8 @@ fn the_ticks_owe_one_read_while_one_waits() {
 /// body, or a live stream that says nothing where it is `hushed`: the
 /// `/changes` reads it is asked counted, each made `delay` long, as a board
 /// across a network makes them, and the `/health` reads counted, as many
-/// answered as `health_left` holds and every one after them given no answer;
+/// answered as `health_left` holds and every one after them given no answer,
+/// each answered `writes.halted` as `halted` stands;
 /// `/health` and `/op` answered as a board with no `H.1` answers them.
 struct Committing {
     events: Mutex<Option<Vec<u8>>>,
@@ -251,6 +255,8 @@ struct Committing {
     health_reads: AtomicUsize,
     /// The `/health` reads still to answer: `usize::MAX` for every one.
     health_left: Mutex<usize>,
+    /// Whether `/health` says the board's writes are halted.
+    halted: AtomicBool,
     /// Whether `/events` serves a live stream that says nothing ([`Hush`])
     /// once its commits are served, never failing to connect.
     hushed: AtomicBool,
@@ -268,6 +274,7 @@ impl Committing {
             changes_reads: AtomicUsize::new(0),
             health_reads: AtomicUsize::new(0),
             health_left: Mutex::new(usize::MAX),
+            halted: AtomicBool::new(false),
             hushed: AtomicBool::new(false),
             delay,
         })
@@ -334,7 +341,9 @@ impl Dialer for Committing {
                 usize::MAX => {}
                 n => *left = n - 1,
             }
-            return Ok(ok(json!({"ok": true, "log_position": 10, "auth": {"claimant": null, "local_trust": true, "origins": [], "signed_origins": []}, "writes": {"halted": false}})));
+            return Ok(ok(
+                json!({"ok": true, "log_position": 10, "auth": {"claimant": null, "local_trust": true, "origins": [], "signed_origins": []}, "writes": {"halted": self.halted.load(Ordering::SeqCst)}}),
+            ));
         }
         if req.method == Method::Get && req.path.starts_with("/changes") {
             self.changes_reads.fetch_add(1, Ordering::SeqCst);
@@ -500,6 +509,126 @@ fn the_daemon_event_follows_the_boards_verdict_and_never_one_requests_failure() 
     fake.answers_health(true);
     feeder.tick(10);
     assert!(daemon().is_empty(), "the start's `running` is the shell's: the feed says none");
+}
+
+/// Returns a feeder's `daemon` states in order, and what each carried beside.
+///
+/// It reads `rx` to its end, each event held to its declaration.
+fn daemon_said(rx: &Receiver<crate::events::Event>) -> Vec<(String, Option<String>)> {
+    rx.try_iter()
+        .filter(|e| e.name == EventName::Daemon)
+        .map(|e| {
+            crate::shapes::assert_declared("DaemonEvent", &e.data);
+            (e.data["state"].as_str().unwrap_or("?").to_string(), e.data["reason"].as_str().map(str::to_string))
+        })
+        .collect()
+}
+
+/// Checks that the board's state is said once per change, its reason beside.
+///
+/// A halt read is `halted` once and a steady halt nothing; its clearing
+/// `running`; a head the hold finds unreadable `head_unreadable` with its
+/// reason, told at the next read whichever thread read the head, and nothing
+/// on a read that finds the same state with another cause; and its reading
+/// `running` (§4b.2; P37; skep #865; the mutant that keys the telling on the
+/// cause says a garbled head again at each tick, and the one that drops
+/// `reason` tells the page a head it cannot explain).
+#[test]
+fn the_boards_state_is_said_once_per_change_with_its_reason() {
+    let fake = Committing::new(None, &Arc::new(AtomicBool::new(false)), Duration::ZERO);
+    let entry = entry_over(Arc::clone(&fake));
+    let store = TempDir::new().unwrap();
+    let bus = Arc::new(EventBus::new());
+    let rx = bus.subscribe();
+    let shared = shared_over(&entry, &Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), &bus, &store);
+    let holds = Arc::clone(&shared.holds);
+    let mut feeder = Feeder::new(&entry, shared);
+    let said = |state: &str, reason: Option<&str>| vec![(state.to_string(), reason.map(str::to_string))];
+    let unreadable =
+        |cause: &str| -> crate::sessions::HeadRead { Err(Refusal::named(Name::HEAD_UNREADABLE, skep_client::halt::Face { state: "s".into(), cause: cause.into(), act: "a".into(), path: None })) };
+    feeder.read_health();
+    assert_eq!(daemon_said(&rx), vec![], "a board that answers and holds nothing is announced nothing");
+    fake.halted.store(true, Ordering::SeqCst);
+    feeder.read_health();
+    assert_eq!(daemon_said(&rx), said("halted", None));
+    feeder.read_health();
+    assert_eq!(daemon_said(&rx), vec![], "a steady halt says nothing");
+    fake.halted.store(false, Ordering::SeqCst);
+    feeder.read_health();
+    assert_eq!(daemon_said(&rx), said("running", None));
+    holds.note_head("b-1", &unreadable("the first cause"));
+    feeder.read_health();
+    assert_eq!(daemon_said(&rx), said("head_unreadable", Some("the first cause")));
+    holds.note_head("b-1", &unreadable("another cause"));
+    feeder.read_health();
+    assert_eq!(daemon_said(&rx), vec![], "another cause is no change of state");
+    assert_eq!(holds.state("b-1").reason(), Some("another cause"), "the state keeps the cause last read");
+    holds.note_head("b-1", &Ok(None));
+    feeder.read_health();
+    assert_eq!(daemon_said(&rx), said("running", None));
+}
+
+/// Checks that a stop over a told halt leaves no memory of it after the start.
+///
+/// The halt told, the owner stops the node: the feed says nothing under the
+/// stop, the shell having said `stopped` (`Shell::set_node_state`); and once
+/// the node is started and its `/health` says writes go, the feed says
+/// nothing either, the start's `running` being the shell's (§4b.2; skep #865;
+/// the mutant that leaves the state told at the halt says `running` a second
+/// time after the start, and the one that leaves it unmarked at the stop says
+/// `stopped` from the feed beside the shell's).
+#[test]
+fn a_stop_over_a_told_halt_leaves_no_memory_of_it_after_the_start() {
+    let fake = Committing::new(None, &Arc::new(AtomicBool::new(false)), Duration::ZERO);
+    let entry = entry_over(Arc::clone(&fake));
+    let store = TempDir::new().unwrap();
+    let bus = Arc::new(EventBus::new());
+    let rx = bus.subscribe();
+    let shared = shared_over(&entry, &Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), &bus, &store);
+    let holds = Arc::clone(&shared.holds);
+    let mut feeder = Feeder::new(&entry, shared);
+    fake.halted.store(true, Ordering::SeqCst);
+    feeder.read_health();
+    assert_eq!(daemon_said(&rx), vec![("halted".to_string(), None)]);
+    holds.set_node_stopped("b-1", true);
+    feeder.read_health();
+    assert_eq!(daemon_said(&rx), vec![], "under the stop the feed says nothing");
+    fake.halted.store(false, Ordering::SeqCst);
+    holds.set_node_stopped("b-1", false);
+    feeder.read_health();
+    assert_eq!(daemon_said(&rx), vec![], "the start's `running` is the shell's");
+    assert_eq!(holds.state("b-1"), BoardState::Running, "and the node runs");
+}
+
+/// Checks that a tick ending a told silence probes at once, in any state.
+///
+/// The board silent and told so, a tick whose `/health` answers with its
+/// writes halted ends the silence: `tick` answers true, the state told is
+/// `halted`, and the shell's own window names the state returned to; a tick
+/// with no silence to end answers false (§4b.2; §3c.4; skep #865; the mutant
+/// that ends a silence on `running` alone leaves a board back at a halt
+/// announced `unreachable` for good).
+#[test]
+fn a_tick_ending_a_told_silence_names_the_state_it_returned_to() {
+    let fake = Committing::new(None, &Arc::new(AtomicBool::new(false)), Duration::ZERO);
+    let entry = entry_over(Arc::clone(&fake));
+    let store = TempDir::new().unwrap();
+    let bus = Arc::new(EventBus::new());
+    let rx = bus.subscribe();
+    let shared = shared_over(&entry, &Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), &bus, &store);
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let kept = Arc::clone(&lines);
+    let talk: Talk = Arc::new(move |l: &str| kept.lock().unwrap().push(l.to_string()));
+    let mut feeder = Feeder::new(&entry, Shared { talk, ..shared });
+    fake.answers_health(false);
+    feeder.read_health();
+    assert_eq!(daemon_said(&rx), vec![("unreachable".to_string(), None)]);
+    fake.answers_health(true);
+    fake.halted.store(true, Ordering::SeqCst);
+    assert!(feeder.tick(10), "the tick ended a told silence");
+    assert_eq!(daemon_said(&rx), vec![("halted".to_string(), None)]);
+    assert!(lines.lock().unwrap().iter().any(|l| l.contains("answers again: board halted")), "{:?}", lines.lock().unwrap());
+    assert!(!feeder.tick(10), "no silence to end");
 }
 
 /// A board whose index cannot open: every `/op` dial — the consumer's read

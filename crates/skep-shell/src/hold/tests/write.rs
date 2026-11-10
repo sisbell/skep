@@ -96,8 +96,9 @@
 //! the device refused written at the probe and a relaunch sending none of
 //! what was dropped (skep #821); a write the hold
 //! never holds refused so; the head read halting, or its answer lost, holding
-//! the burst unsent; and an unclaimed board serving no record the one board a
-//! signed write goes out unsigned at.
+//! the burst unsent; a signed write's own head read deciding the board's
+//! state (skep #865); and an unclaimed board serving no record the one board
+//! a signed write goes out unsigned at.
 
 use super::*;
 use crate::held::MAX_ANCHOR_BYTES;
@@ -2153,6 +2154,33 @@ fn a_head_read_that_halts_holds_the_burst_unsent() {
     assert_eq!((lines[0]["sent"].as_bool(), refusal["name"].as_str()), (Some(false), Some("head_unreadable")), "{lines:?}");
     assert!(refusal["cause"].as_str().is_some_and(|cause| cause.contains("met the death signal")), "the refusal names the halt: {refusal}");
     assert_eq!(g.fake.sends(), 0, "nothing dialed");
+}
+
+/// Checks that a signed write's head read decides the board's state.
+///
+/// A board unclaimed at the open owes no head, and the state is `running`;
+/// where it then names a claimant and serves no head record, the burst's own
+/// signing term finds the head owed — no probe has read it — and the board's
+/// state is `head_unreadable` with that reason, once (§3c.3; skep #865; the
+/// mutant that leaves the attest's read out of the head's state tells the
+/// page nothing until the next probe, and nothing at all with no signed
+/// session left to probe for).
+#[test]
+fn a_signed_writes_head_read_decides_the_boards_state() {
+    let fake = Fake::new();
+    fake.no_head.store(true, Ordering::SeqCst);
+    fake.unclaimed.store(true, Ordering::SeqCst);
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    assert_eq!(g.holds.state("b-1"), BoardState::Running, "an unclaimed board owes no head");
+    g.fake.unclaimed.store(false, Ordering::SeqCst);
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["a"]), g.fake.head()), None) else { panic!("held, nothing sent") };
+    assert_eq!(held["cause"], "head_unreadable", "{held}");
+    let edge = g.holds.state_change("b-1").expect("the write's read decided it");
+    assert_eq!((edge.from, edge.to.as_str()), (BoardState::Running, "head_unreadable"));
+    assert!(edge.to.reason().is_some_and(|reason| reason.contains("serves no head record")), "{:?}", edge.to.reason());
+    assert_eq!(g.holds.state_change("b-1"), None, "told once");
 }
 
 /// Checks that a signed burst over an unreadable head record is held unsent,

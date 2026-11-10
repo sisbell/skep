@@ -17,7 +17,9 @@
 //! `resolve` the declared words and no other spelling; the whys a drop that
 //! reads first refuses by the declared words; and the class of why a line
 //! stands off disk is its refusal's kind's row, every kind of no row
-//! `other`, the three classes the declared words, set with the words.
+//! `other`, the three classes the declared words, set with the words; and a
+//! board's state is the most severe that holds, its five words the declared
+//! ones.
 //!
 //! The ground is a fake board (`Fake`) — its `H.1`, or an answer armed in the
 //! record's place, whether it names a claimant, and its `/health` unanswered
@@ -439,6 +441,58 @@ fn the_two_acts_are_the_declared_words_and_no_other() {
     }
 }
 
+/// Checks that a board's state is the most severe that holds (§4b.2; P37).
+///
+/// Every combination of the own node stopped, the board silent, its writes
+/// halted and its head unreadable reads as the first of those that holds,
+/// else `running`, `reason` beside `head_unreadable` alone; a request of the
+/// hold's unanswered, its verdict pending, is no silence yet (skep #865; the
+/// mutant that orders the halt below the head says `head_unreadable` while
+/// the head is not even read, and the one that reads a pending request as
+/// silence flickers `unreachable` over a board that answers).
+#[test]
+fn a_boards_state_is_the_most_severe_that_holds() {
+    let g = ground();
+    let mut hold = g.holds.lock("b-1");
+    for cell in 0..16u8 {
+        let (stopped, silent, halted, unreadable) = (cell & 1 != 0, cell & 2 != 0, cell & 4 != 0, cell & 8 != 0);
+        hold.node_stopped = stopped;
+        hold.answering = if silent { Answering::Silent { since: Instant::now() } } else { Answering::Answers };
+        hold.writes_halted = halted;
+        hold.head = if unreadable { HeadState::Unreadable("why".into()) } else { HeadState::Reads };
+        let want = if stopped {
+            "stopped"
+        } else if silent {
+            "unreachable"
+        } else if halted {
+            "halted"
+        } else if unreadable {
+            "head_unreadable"
+        } else {
+            "running"
+        };
+        let state = hold.state();
+        assert_eq!((state.as_str(), state.reason()), (want, (want == "head_unreadable").then_some("why")), "stopped {stopped}, silent {silent}, halted {halted}, unreadable {unreadable}");
+    }
+    (hold.node_stopped, hold.writes_halted, hold.head) = (false, false, HeadState::Reads);
+    hold.answering = Answering::Unanswered { since: Instant::now(), cut: Vec::new() };
+    assert_eq!(hold.state(), BoardState::Running, "a request unanswered, its verdict pending, is no silence yet");
+}
+
+/// The five board states are the declared unions' words, each spelled as the
+/// `daemon` event and `probe()` carry it (the mutant that misspells one tells
+/// the page a state it cannot draw).
+#[test]
+fn the_board_states_are_the_declared_five() {
+    let states = [BoardState::Stopped, BoardState::Unreachable, BoardState::Halted, BoardState::HeadUnreadable("why".into()), BoardState::Running];
+    let spelled: std::collections::BTreeSet<String> = states.iter().map(|s| format!("'{}'", s.as_str())).collect();
+    for (shape, member) in [("DaemonEvent", "state"), ("Probe", "daemon")] {
+        let declared = crate::shapes::shape(shape).unwrap().fields.iter().find(|f| f.name == member).unwrap().ty;
+        let words: std::collections::BTreeSet<String> = declared.split(" | ").map(str::to_string).collect();
+        assert_eq!((spelled.len(), spelled.clone()), (5, words), "{shape}.{member}: {declared}");
+    }
+}
+
 /// A lost answer the fake's `/op` gives a send it recorded.
 #[derive(Debug, Clone, Copy)]
 enum Lost {
@@ -517,8 +571,9 @@ impl<T: Clone> Armed<T> {
 /// rejection or a non-200 answered where one is armed — to every send, or to
 /// the next few alone, the death first and the non-200 next; the `/health`
 /// reads counted, one armed to panic once, and each held at a gate while it is
-/// shut; and its `/events` stream, none, or a commit a millisecond without end
-/// where a cell arms one.
+/// shut; and its `/events` stream, none, a commit a millisecond without end
+/// where a cell arms one, or a live stream that says nothing where a cell arms
+/// that.
 struct Fake {
     chain: String,
     no_head: AtomicBool,
@@ -613,6 +668,9 @@ struct Fake {
     /// Whether `/events` serves a commit a millisecond, endlessly, as a
     /// board another writer keeps busy does; it serves no stream otherwise.
     commits: AtomicBool,
+    /// Whether `/events` serves a live stream that says nothing, as a board
+    /// no one writes to does.
+    quiet_stream: AtomicBool,
     /// How long each `/changes` read takes, in milliseconds, as across a
     /// network.
     changes_delay_ms: AtomicU64,
@@ -668,6 +726,7 @@ impl Fake {
             health_reads: AtomicUsize::new(0),
             health_gate: (Mutex::new(false), Condvar::new()),
             commits: AtomicBool::new(false),
+            quiet_stream: AtomicBool::new(false),
             changes_delay_ms: AtomicU64::new(0),
         })
     }
@@ -921,6 +980,9 @@ impl Dialer for Fake {
         if self.commits.load(Ordering::SeqCst) {
             return Ok(StreamedResponse { status: 200, headers: Headers::default(), body: Box::new(EndlessCommits { at: 10 }) });
         }
+        if self.quiet_stream.load(Ordering::SeqCst) {
+            return Ok(StreamedResponse { status: 200, headers: Headers::default(), body: Box::new(QuietStream) });
+        }
         Err(DialError::Connect("no stream here".into()))
     }
 }
@@ -939,6 +1001,17 @@ impl Read for EndlessCommits {
         let n = event.len().min(buf.len());
         buf[..n].copy_from_slice(&event.as_bytes()[..n]);
         Ok(n)
+    }
+}
+
+/// A live stream that says nothing: each read waits a moment and times out,
+/// as a stream with no commit does, its reader neither ticking nor failing.
+struct QuietStream;
+
+impl Read for QuietStream {
+    fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+        thread::sleep(Duration::from_millis(20));
+        Err(std::io::Error::from(std::io::ErrorKind::TimedOut))
     }
 }
 

@@ -54,8 +54,9 @@
 //! death of it is emitted unheard, and drained on a thread of its own for the
 //! shell's life: an undrained subscriber's channel grows without bound
 //! (`EventBus::emit` clones every event to every subscriber). The events this
-//! adapter acts on are `session-died`; `daemon`, whose outage's end is said
-//! with how long it lasted; `mode`, a move of the board's pair; `index`,
+//! adapter acts on are `session-died`; `daemon`, whose outage's end — the
+//! board answering in whatever state it returned to — is said with how long
+//! it lasted and that state; `mode`, a move of the board's pair; `index`,
 //! whose states that ask an act of whoever runs the adapter, and each face's
 //! build's end, are said in the log; and `another-window`, another shell's
 //! hold on the board's held store at each edge (client.md §3c.3; skep #827),
@@ -622,9 +623,11 @@ impl Backend {
     /// re-open, to a lapse where the adapter serves on — each said, naming the
     /// session that died and, at a re-open, the one in its place — and to the
     /// stop on every other arm, its plain line handed to the stop. A `daemon`
-    /// event's `running` after its `unreachable` says the board's commit
-    /// stream answers again and how long it did not, the outage's start being
-    /// the shell's own line; a `mode` event says the board's pair moved. An
+    /// event of a state in which the board answers — `running`, `halted` or
+    /// `head_unreadable` (skep #865) — after its `unreachable` closes the
+    /// outage, saying how long the board did not answer and the state it
+    /// returned to, the outage's start being the shell's own line; a `mode`
+    /// event says the board's pair moved. An
     /// `index` event is said as `IndexSaid` hears it, naming `index_dir`: a
     /// state that asks an act of whoever runs the adapter — busy, a newer
     /// skep's file, past the ceiling (`index_line`) — and a face's build's end.
@@ -668,9 +671,9 @@ impl Backend {
                         Some("unreachable") => {
                             outage.get_or_insert_with(Instant::now);
                         }
-                        Some("running") => {
+                        Some(state @ ("running" | "halted" | "head_unreadable")) => {
                             if let Some(began) = outage.take() {
-                                talk(&format!("the board's commit stream answers again, {:.1} s after it stopped answering", began.elapsed().as_secs_f64()));
+                                talk(&format!("the board answers again, {:.1} s after it stopped answering: its state is `{state}`", began.elapsed().as_secs_f64()));
                             }
                         }
                         _ => {}
@@ -828,9 +831,10 @@ impl Backend {
         self.shell.call("health", &json!({"board": self.board}))
     }
 
-    /// Returns the shell's `probe()`: whether the board answers.
+    /// Returns the shell's `probe()`: the board's state.
     ///
-    /// The answer names the board's state and the origins it is dialed and
+    /// The answer names the board's state — the one the `daemon` event says,
+    /// `reason` beside `head_unreadable` — and the origins it is dialed and
     /// signed at; the row takes no member.
     ///
     /// # Errors

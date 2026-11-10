@@ -386,6 +386,14 @@ pub(super) fn second_device(dir: &TempDir, sd: &Skepd) -> Ground {
     open_ground(sd, &device)
 }
 
+/// Returns `shell`'s log beside the feed thread's `/health` reads.
+///
+/// A signed session's probe reads `/health` on a clock of its own (skep
+/// #865), so a window that holds its dials to account leaves those out.
+fn but_health(shell: &Shell) -> Vec<Value> {
+    shell.log().entries().into_iter().filter(|e| e["path"] != "/health").collect()
+}
+
 /// A fresh signed shell over the board `ground` claimed, over the data
 /// directory `store`, its own node the board.
 fn open_ground(sd: &Skepd, store: &Path) -> Ground {
@@ -538,13 +546,13 @@ fn the_family_publishes_a_drafts_links_and_answers_as_data() {
     assert_eq!(panel["price"]["over"], json!([]), "under every cap: {}", panel["price"]);
     assert!(panel["price"]["bytes"].as_u64().unwrap() > 0 && panel.get("hold").is_none(), "{panel}");
     // The count with the notes ON: ⟨l⟩ up by one, nothing dialed.
-    let dials = g.shell.log().entries().len();
+    let entries = but_health(&g.shell).len();
     let counted = g.call("publication.count", json!({"session": g.session, "switches": {"on": [notes]}})).unwrap();
     assert_eq!(counted["count"], json!({"l": 1, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": [], "supersede": []}), "{counted}");
     assert_eq!((counted["rows"][0]["fold"].clone(), counted["p3_stands"].clone()), (json!({"unchanged": 0, "changed": 1}), json!(true)), "the fold and P3's standing re-keyed by the count: {counted}");
     crate::shapes::assert_declared("Price", &counted["price"]);
     assert!(counted["price"]["bytes"].as_u64().unwrap() > panel["price"]["bytes"].as_u64().unwrap(), "the price moves with the switches: {counted}");
-    assert_eq!(g.shell.log().entries().len(), dials + 1, "the count is pure local: its own call logged and no dial");
+    assert_eq!(but_health(&g.shell).len(), entries + 1, "the count is pure local: its own call logged and no dial");
     let bad_home = g.call("publication.count", json!({"session": g.session, "switches": {"on": [edition]}})).unwrap_err();
     assert_eq!((bad_home.name(), bad_home.to_value()["what"].as_str()), ("malformed_args", Some("switches.on")), "a home no private row holds");
     let bad_answer = g.call("publication.count", json!({"session": g.session, "answers": {"0": "drop"}})).unwrap_err();
@@ -658,11 +666,11 @@ fn the_open_and_the_count_answer_the_fold_and_whether_p3_stands() {
     crate::shapes::assert_declared("TypeFold", &rows[0]["unchanged_types"][0]);
     assert_eq!((rows[0]["changed_types"].clone(), rows[0]["unchanged_types"].clone()), (json!([]), citations.clone()), "a compact row: no changed link to fold: {panel}");
     assert_eq!(panel["p3_stands"], false, "a compact row alone: nothing to decide");
-    let dials = g.shell.log().entries().len();
+    let entries = but_health(&g.shell).len();
     let counted = g.call("publication.count", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!((counted["rows"][0]["fold"].clone(), counted["p3_stands"].clone()), (json!({"unchanged": 1, "changed": 0}), json!(false)), "{counted}");
     assert_eq!((counted["rows"][0]["changed_types"].clone(), counted["rows"][0]["unchanged_types"].clone()), (json!([]), citations.clone()), "{counted}");
-    assert_eq!(g.shell.log().entries().len(), dials + 1, "the count is pure local");
+    assert_eq!(but_health(&g.shell).len(), entries + 1, "the count is pure local");
     g.call("publication.cancel", json!({"session": g.session})).unwrap();
     // A note made since version 1, on the words it holds, of its own type.
     let mark = "1.1.0.1.0.1.0.3.23.4";
@@ -706,10 +714,10 @@ fn the_open_and_the_count_answer_the_documents_own_links() {
     let panel = g.call("publication.open", inputs).unwrap_or_else(|r| panic!("{r}"));
     crate::shapes::assert_declared("PublicationPanel", &panel);
     assert_eq!((panel["rows"].clone(), panel["edition_links"].clone(), panel["p3_stands"].clone()), (json!([]), json!(1), json!(true)), "its own line alone: {panel}");
-    let dials = g.shell.log().entries().len();
+    let entries = but_health(&g.shell).len();
     let counted = g.call("publication.count", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!((counted["edition_links"].clone(), counted["p3_stands"].clone()), (json!(1), json!(true)), "{counted}");
-    assert_eq!(g.shell.log().entries().len(), dials + 1, "the count is pure local");
+    assert_eq!(but_health(&g.shell).len(), entries + 1, "the count is pure local");
     g.shell.shutdown();
     sd.shutdown();
 }
@@ -985,7 +993,7 @@ fn a_windows_parts_take_their_own_answers_and_each_answer_re_keys_the_panel() {
     assert!(panel["rows"].as_array().unwrap().iter().all(|row| row["home"] != notes), "the note counts toward nothing while the part awaits its answer: {panel}");
     let refused = g.call("publication.count", json!({"session": g.session, "answers": {"1.0": "keep_private"}})).unwrap_err();
     assert_eq!((refused.name(), refused.to_value()["what"].as_str()), ("malformed_args", Some("answers")), "no placeholder over published words");
-    let dials = g.shell.log().entries().iter().filter(|e| e["kind"] == "dial").count();
+    let dials = but_health(&g.shell).iter().filter(|e| e["kind"] == "dial").count();
     let taken = g.call("publication.count", json!({"session": g.session, "switches": {"on": [notes]}, "answers": {"1.0": "counterpart"}})).unwrap_or_else(|r| panic!("{r}"));
     let notes_row = taken["rows"].as_array().unwrap().iter().find(|row| row["home"] == notes).unwrap_or_else(|| panic!("the notes' row: {taken}")).clone();
     assert_eq!((notes_row["links"].clone(), taken["count"]["l"].as_u64()), (json!([note]), Some(1)), "the counterpart offers the note: {taken}");
@@ -996,7 +1004,7 @@ fn a_windows_parts_take_their_own_answers_and_each_answer_re_keys_the_panel() {
     assert!(left["rows"].as_array().unwrap().iter().all(|row| row["home"] != notes) && left["count"]["l"] == 0, "the words left out take the note's row with them: {left}");
     let stale = g.call("publication.count", json!({"session": g.session, "switches": {"on": [notes]}, "answers": {"1.0": "drop"}})).unwrap_err();
     assert_eq!((stale.name(), stale.to_value()["what"].as_str()), ("malformed_args", Some("switches.on")), "a switch names a row the panel holds as answered");
-    assert_eq!(g.shell.log().entries().iter().filter(|e| e["kind"] == "dial").count(), dials, "each answer re-keys with no dial");
+    assert_eq!(but_health(&g.shell).iter().filter(|e| e["kind"] == "dial").count(), dials, "each answer re-keys with no dial");
     let acked = g.call("publication.confirm", json!({"session": g.session, "switches": {"on": [notes]}, "answers": {"1.0": "counterpart"}})).unwrap_or_else(|r| panic!("{r}"));
     crate::shapes::assert_declared("Acknowledged", &acked);
     assert_eq!(acked["member"], format!("{edition}.1"), "{acked}");

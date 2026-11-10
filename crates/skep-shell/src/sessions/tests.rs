@@ -617,7 +617,7 @@ fn a_frame_no_attest_is_owed_for_is_borrowed_as_it_stands() {
     let delete = json!({"op": "delete", "doc": "1.0.1.0.1", "p": {"subspace": "1", "ordinal": "1"}, "width": "1"});
     let supplied = json!({"op": "insert", "doc": "1.0.1.0.1", "values": ["a"], "attest": {"alg": "x", "sig": "00"}});
     for (session, frame) in [(&bare, &insert), (&signed, &delete), (&signed, &supplied)] {
-        assert!(matches!(session.attest(&store, frame), Ok(Cow::Borrowed(as_it_stands)) if std::ptr::eq(as_it_stands, frame)), "{frame}");
+        assert!(matches!(session.attest(&store, frame, || session.signing_term()), Ok(Cow::Borrowed(as_it_stands)) if std::ptr::eq(as_it_stands, frame)), "{frame}");
     }
 }
 

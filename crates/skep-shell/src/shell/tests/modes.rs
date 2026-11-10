@@ -391,7 +391,7 @@ fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session()
     // the daemon's to judge.
     let entry = signed.sessions.get(&signed_session).unwrap();
     let shot = |frame: Value| -> Value {
-        let attested = entry.attest(&signed.store, &frame).unwrap_or_else(|e| panic!("{e}\n{}", talk())).into_owned();
+        let attested = entry.attest(&signed.store, &frame, || entry.signing_term()).unwrap_or_else(|e| panic!("{e}\n{}", talk())).into_owned();
         match signed.holds.send(&entry, attested, None) {
             crate::hold::OpAnswer::Answered(Ok(v)) => v,
             other => panic!("the shot: {other:?}\n{}", talk()),
@@ -618,7 +618,9 @@ fn the_real_answers_carry_the_declared_fields() {
     let unstaged: std::collections::BTreeSet<String> = ["another_window".to_string()].into();
     assert_eq!(keys(&opened), &fields("SessionOpened") - &unstaged, "{opened}");
     assert_eq!(keys(&shell.call("health", &json!({"board": board})).unwrap()), fields("Health"));
-    assert_eq!(keys(&shell.call("probe", &json!({})).unwrap()), fields("Probe"));
+    // `reason` rides `head_unreadable` alone, which no board here stands at.
+    let unstaged: std::collections::BTreeSet<String> = ["reason".to_string()].into();
+    assert_eq!(keys(&shell.call("probe", &json!({})).unwrap()), &fields("Probe") - &unstaged);
     assert_eq!(keys(&shell.call("keygen", &json!({"label": "k"})).unwrap()), fields("Keygen"));
     assert_eq!(keys(&shell.call("fingerprint", &json!({})).unwrap()[0]), fields("FingerprintRow"));
     shell.shutdown();
@@ -647,7 +649,10 @@ fn a_write_busy_is_reissued_once_within_the_call() {
     let frame = json!({"op": "create_new_document", "account": "1.0.1"});
     // Every attest of one frame under one key is one size: the signature's
     // width is the algorithm's.
-    let attested = json_len(&shell.sessions.get(&session).unwrap().attest(&shell.store, &frame).unwrap());
+    let attested = json_len(&{
+        let entry = shell.sessions.get(&session).unwrap();
+        entry.attest(&shell.store, &frame, || entry.signing_term()).unwrap().into_owned()
+    });
     let busy_dials = || shell.log().entries().iter().filter(|e| e["kind"] == "dial" && e["path"] == "/op" && e["status"] == 503 && e["bytes_in"] == attested).count();
     let mut permits = Vec::new();
     while let Some(permit) = sd.daemon().try_hold_write_permit() {

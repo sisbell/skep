@@ -2,11 +2,12 @@
 //!
 //! They are the hold's walk that drains a board's queue once the board
 //! returns. The probe ([`Holds::probe`]) runs on the board's feed thread
-//! every [`PROBE_CADENCE`](super::PROBE_CADENCE) while a line stands or the
-//! board's silence awaits a verdict, and
-//! there too at its daemon-running tick and at the hand-overs of
-//! `resolve(send)`, of a `resolve(drop)` that kept its line (skep #866) and
-//! of `set_node_state(Running)`, because `Cmd::Tick` is
+//! every [`PROBE_CADENCE`](super::PROBE_CADENCE) while a session that may
+//! write stands at the board, a line stands, its writes stand halted or its
+//! head unreadable, or its silence awaits a verdict, and there too at its
+//! daemon-running tick and at the hand-overs of `resolve(send)`, of a
+//! `resolve(drop)` that kept its line (skep #866) and of
+//! `set_node_state(Running)`, because `Cmd::Tick` is
 //! driven by committed writes and a poisoned, halted, stopped or
 //! unreachable board commits nothing. Each probe first runs the store's
 //! retry (`Holds::retry_store`, §3c.1, §3c.3; skep #813, #821, #857, #859,
@@ -145,8 +146,8 @@ use serde_json::{json, Value};
 use skep_client::board::{acked_at, frames, Answer, ChangesAnswer, ChangesQuery, Rejection};
 
 use super::{
-    awaits_act, cause, line_state, millis, unanswered, AttestedWhereOwed, BoardHold, BoardSlot, CutSend, Dialed, Hand, HandsRead, HeldState, Holds, KeptShift, PrincipalHold, Turn, Verdict,
-    HAND_OVER_DEADLINE, TURN_STEPS,
+    awaits_act, cause, line_state, millis, unanswered, AttestedWhereOwed, BoardHold, BoardSlot, CutSend, Dialed, Hand, HandsRead, HeldState, Holds, KeptShift, Turn, Verdict, HAND_OVER_DEADLINE,
+    TURN_STEPS,
 };
 use crate::held::{i_address, Anchors, Done, HeldLine, Reason, SpanRun};
 use crate::refusal::{Name, Refusal};
@@ -655,11 +656,13 @@ impl Holds {
     /// this shell's now — and the copies each held file owes — a line's, a
     /// re-mark's or a `done`'s — are written where the device takes them
     /// (`HeldQueue::retry`), a wait that ends said ([`Holds::note_waiting`]):
-    /// none needs a dial. Then, while a line stands at a board whose own node
-    /// is not stopped — or the board is silent, or a request of the hold's
-    /// there pends its verdict, a line standing or none (skep #863) — one turn
-    /// of the drain runs ([`Holds::drain`]), one drain per board at a time — a
-    /// halted principal's lines never among them (P38; skep #858).
+    /// none needs a dial. Then, at a board whose own node is not stopped, one
+    /// turn of the drain runs ([`Holds::drain`]), one drain per board at a
+    /// time, a halted principal's lines never among them (P38; skep #858),
+    /// where a session that may write stands — so a board that halts or whose
+    /// head will not read is found with no line held, before any write meets
+    /// it (§3c.3; P37; skep #865) — or a read is owed it with none
+    /// ([`BoardHold::probe_owed`](super::BoardHold::probe_owed); skep #863).
     ///
     /// It answers [`Turn::Bounded`] where the turn stopped at its bound with
     /// a line still to send, the pass going on at the next turn;
@@ -672,12 +675,14 @@ impl Holds {
     /// stands.
     pub fn probe(&self, board_reference: &str) -> Turn {
         // Gathered under the lock and dialed outside it, so `op` never waits
-        // on a dead board's connect timeout.
+        // on a dead board's connect timeout; the sessions' own lock is taken
+        // before the board's and let go.
         let slot = self.slot(board_reference);
+        let writer = self.sessions.on_board(board_reference).iter().any(|session| session.may_write());
         let due = {
             let mut board_hold = slot.lock();
             self.retry_store(board_reference, &mut board_hold, slot.board.dialed());
-            !board_hold.node_stopped && (!board_hold.answers() || board_hold.principals.values().any(PrincipalHold::drains))
+            !board_hold.node_stopped && (writer || board_hold.probe_owed())
         };
         // One drain per board at a time, its mark cleared however it ends;
         // the drain that holds the mark alone ends the pass.
@@ -698,12 +703,15 @@ impl Holds {
     /// gives no answer to is its silence, the turn answering
     /// [`Turn::Unanswered`] with nothing walked, and one that answers with
     /// the board's writes halted, or refused — or one refused before any
-    /// connection opened, which reached no board — holds every line. Then
-    /// ONE read of the board's head (`sessions::board_head`) before any
-    /// document (skep #727): the same answer establishes the directory
-    /// ([`Holds::establish`]) and decides which documents the resend skips —
-    /// never two reads in one probe for the hold's sake — and the board's
-    /// head state is said once per change ([`Holds::note_head`]). A head read
+    /// connection opened, which reached no board — holds every line, the head
+    /// not read (skep #865). Then ONE read of the board's head
+    /// (`sessions::board_head`) before any document (skep #727), with no line
+    /// held too, bounded as every dial of the hold's is and outside the
+    /// board's lock, a pair once read costing no dial (skep #865): the same
+    /// answer establishes the directory ([`Holds::establish`]) and decides
+    /// which documents the resend skips — never two reads in one probe for
+    /// the hold's sake — and the board's head state is said once per change
+    /// ([`Holds::note_head`]). A head read
     /// the board gives no answer to is its silence, never `head_unreadable`:
     /// the board marked unanswered, nothing walked. While the head answers
     /// `head_unreadable`, every document whose head line is held so is

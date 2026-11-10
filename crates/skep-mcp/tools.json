@@ -2458,7 +2458,7 @@
     },
     {
       "name": "probe",
-      "description": "The shell's probe call: {daemon, dialed, signed} — whether the board answers (running, else unreachable; stopped where the shell runs the node, which this adapter never does), the origin it is dialed at and the origin it is signed for.",
+      "description": "The shell's probe call: {daemon, reason?, dialed, signed} — the board's state, the most severe that holds: stopped where the shell runs the node, which this adapter never does; unreachable where the board does not answer; halted where its writes are halted until it restarts (health's writes.halted: a burst is held and sent by the shell once the board takes writes again, HELD BURSTS); head_unreadable where its head record will not read, reason saying why (no signed write can be made until it reads, and a burst is held head_unreadable); else running — the origin it is dialed at and the origin it is signed for.",
       "inputSchema": {
         "type": "object",
         "properties": {},

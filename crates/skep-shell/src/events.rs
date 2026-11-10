@@ -46,10 +46,12 @@ pub enum EventName {
     Mode,
     /// A session ended, and the arm its end carried: `session-died`.
     SessionDied,
-    /// A board's node started, stopped, or stopped answering: `daemon`.
+    /// A board's state as it moves: `daemon`.
     ///
-    /// Its `unreachable` and the `running` after it are the board's `/health`
-    /// verdict alone, never one request's failure (§4b.2; P37; skep #863).
+    /// It names the most severe state that holds, once per change (§4b.2;
+    /// P37; skep #865): `stopped`, `unreachable`, `halted`, `head_unreadable`
+    /// with its `reason`, else `running`. `unreachable` is the board's
+    /// `/health` verdict alone, never one request's failure (skep #863).
     Daemon,
     /// A row of a board's change feed: `feed`.
     Feed,

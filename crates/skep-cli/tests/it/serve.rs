@@ -1040,7 +1040,8 @@ fn f5b_the_publication_family_over_the_bridge() {
     assert_eq!(counted["count"]["l"], 1, "{counted}");
     let (_, _, log) = signed.get("/bridge/log");
     let log: Value = serde_json::from_slice(&log).unwrap();
-    let dials_after_count = log.as_array().unwrap().iter().rev().take_while(|e| e["call"] != "publication.open").filter(|e| e["kind"] == "dial").count();
+    // A signed session's probe reads `/health` on a clock of its own.
+    let dials_after_count = log.as_array().unwrap().iter().rev().take_while(|e| e["call"] != "publication.open").filter(|e| e["kind"] == "dial" && e["path"] != "/health").count();
     assert_eq!(dials_after_count, 0, "the count is pure local: {} bytes of log before, no dial after the open", log_before);
     // THE CONFIRM: acknowledged, the two events, the feed row.
     let before = position();
@@ -1465,8 +1466,10 @@ fn f8_the_shapes_route_serves_the_declarations() {
     // held store, which no shell beside this provider's does.
     let unstaged: std::collections::BTreeSet<String> = ["another_window".to_string()].into();
     assert_eq!(keys(&provider.result("session", json!({"board": board, "principal": 1}))), &declared("SessionOpened") - &unstaged);
+    // `reason` rides `head_unreadable` alone, which this board does not stand at.
+    let unstaged: std::collections::BTreeSet<String> = ["reason".to_string()].into();
     assert_eq!(keys(&provider.result("health", json!({"board": board}))), declared("Health"));
-    assert_eq!(keys(&provider.result("probe", json!({}))), declared("Probe"));
+    assert_eq!(keys(&provider.result("probe", json!({}))), &declared("Probe") - &unstaged);
     let refused = provider.refused("op", json!({"guest": true, "board": board, "frame": {"op": "insert", "doc": "1.0.1.0.1"}}));
     assert_eq!(keys(&refused), declared("ShellRefusal").into_iter().chain(["op".to_string()]).collect());
     assert_eq!(provider.stop(), 0);

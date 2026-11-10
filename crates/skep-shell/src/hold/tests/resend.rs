@@ -116,7 +116,12 @@
 //! past the person's own other write of its kind — which a read from the
 //! old base takes for its landing — sent, shifted and kept; and a first
 //! moved face naming every hand since the typed state though the line's
-//! base stands past it. And THE HEAD THAT WILL NOT READ (skep #725, #727):
+//! base stands past it. And A BOARD'S STATE told once per change with no
+//! line held (skep #865): a quiet board's halt and its clearing, over the
+//! board's feed thread too, a head that will not read told with its reason
+//! before any write, each in turn where both hold, the probe's reads kept to
+//! a session that may write or a state told to clear. And THE HEAD THAT WILL
+//! NOT READ (skep #725, #727):
 //! one head read per probe before any document, the documents held
 //! `head_unreadable` skipped unread while it fails; the `held` event and the
 //! head's `Talk` line said once per change of state, not per probe; at the
@@ -2125,25 +2130,192 @@ fn the_next_line_after_a_settled_one_starts_its_reissues_afresh() {
     assert_eq!((g.fake.sends(), g.lines()[0]["cause"].as_str()), (4, Some("unreachable")), "the new line's first `durability` is reissued");
 }
 
-/// Checks that a probe with no line standing dials nothing (§3c.4).
+/// Checks that a probe owes no read where no session that may write stands.
 ///
-/// The probe reads `/health` only while a line stands: a probe over an
-/// empty queue dials nothing; a line held is sent and kept by the next
-/// probe, its one `/health` read the probe's own; and the probe after it,
-/// the queue empty again, reads nothing more (the mutant that probes every
-/// board at every cadence reads `/health` for the shell's life).
+/// A bare session reads alone: a probe over an empty queue dials nothing, and
+/// a halt once told is read on only until it clears (§3c.4; skep #865; the
+/// mutant that probes every board at every cadence reads `/health` for the
+/// shell's life).
 #[test]
-fn a_probe_with_no_line_standing_dials_nothing() {
-    let g = ground();
+fn a_probe_with_no_session_that_may_write_and_no_line_dials_nothing() {
+    let g = bare_ground();
     let reads = || g.fake.health_reads.load(Ordering::SeqCst);
     g.holds.probe("b-1");
     assert_eq!((reads(), g.fake.sends()), (0, 0), "an empty queue is probed for nothing");
+    g.fake.writes_halted.store(true, Ordering::SeqCst);
+    g.holds.note_health("b-1", &g.session.board.health().unwrap());
+    let reads_at_the_halt = reads();
+    g.holds.probe("b-1");
+    assert_eq!(reads(), reads_at_the_halt + 1, "a halt told is read until it clears");
+    g.fake.writes_halted.store(false, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    let reads_at_the_clearing = reads();
+    g.holds.probe("b-1");
+    assert_eq!(reads(), reads_at_the_clearing, "cleared, the probe reads nothing more");
+}
+
+/// Checks that a signed session's probe reads the board with no line held.
+///
+/// Each probe reads `/health` once and, once the pair is read and kept,
+/// dials nothing more for the head; a line held is sent by the probe that
+/// reads it (§3c.3; P37; skep #865; the mutant that keeps the probe to the
+/// held lines finds no halt on a board that commits nothing, and the one
+/// that reads the head past the kept pair dials it at every tick for good).
+#[test]
+fn a_signed_sessions_probe_reads_the_board_with_no_line_held_and_no_kept_head_again() {
+    let g = ground();
+    let (health, head) = (|| g.fake.health_reads.load(Ordering::SeqCst), || g.fake.head_reads.load(Ordering::SeqCst));
+    let head_at_the_open = head();
+    assert_eq!(head_at_the_open, 1, "premise: the open read the head and kept the pair");
+    for probe in 1..=3 {
+        g.holds.probe("b-1");
+        assert_eq!((health(), g.fake.sends()), (probe, 0), "one `/health` a probe, nothing sent");
+    }
+    assert_eq!(head(), head_at_the_open, "a pair once read costs no dial");
     g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
     g.holds.probe("b-1");
-    assert_eq!((reads(), g.fake.sends()), (1, 1), "a standing line is probed and sent");
+    assert_eq!((health(), g.fake.sends()), (4, 1), "a standing line is sent by the probe that reads");
     assert!(g.lines().is_empty(), "and kept");
+}
+
+/// Checks that a quiet board's halt and its clearing are told once each.
+///
+/// With no line held and nothing committing, the probe alone can read the
+/// halt: `halted` is the one change as the halt is read, a steady halt
+/// answers none however many probes read it, and `running` is the one change
+/// as it clears (§4b.2; skep #865; the mutant that takes no change at the
+/// halt tells the page nothing until a write meets it, and the one that keeps
+/// no told state says it at every tick).
+#[test]
+fn a_quiet_boards_halt_and_its_clearing_are_told_once_each() {
+    let g = ground();
+    g.fake.writes_halted.store(true, Ordering::SeqCst);
+    assert_eq!(g.holds.state_change("b-1"), None, "premise: nothing told before a probe reads the halt");
     g.holds.probe("b-1");
-    assert_eq!(reads(), 1, "the queue empty again, the probe reads nothing more");
+    let edge = g.holds.state_change("b-1").expect("the halt told");
+    assert_eq!((edge.from, edge.to), (BoardState::Running, BoardState::Halted));
+    for _ in 0..3 {
+        g.holds.probe("b-1");
+        assert_eq!(g.holds.state_change("b-1"), None, "a steady halt is told no more");
+    }
+    g.fake.writes_halted.store(false, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    let edge = g.holds.state_change("b-1").expect("the clearing told");
+    assert_eq!((edge.from, edge.to), (BoardState::Halted, BoardState::Running));
+    g.holds.probe("b-1");
+    assert_eq!(g.holds.state_change("b-1"), None, "and the state told holds");
+}
+
+/// Checks that a head that will not read is told before any write meets it.
+///
+/// With no line held and nothing written, a head answered garbled from the
+/// session's open, and a board unclaimed at the open that then names a
+/// claimant and serves no head record, are each told `head_unreadable` with
+/// their reason by the probe alone; a steady unreadable head is told no more;
+/// and once the head reads the one change is `running`, the pair kept (§3c.3;
+/// §4b.2; skep #865; the mutant that reads the head only behind a held line
+/// finds a head its board stopped serving only when a write is held for it).
+#[test]
+fn a_head_that_will_not_read_is_told_with_its_reason_before_any_write() {
+    let garbled = |fake: &Fake| fake.head_garbled.store(true, Ordering::SeqCst);
+    let unclaimed = |fake: &Fake| {
+        fake.no_head.store(true, Ordering::SeqCst);
+        fake.unclaimed.store(true, Ordering::SeqCst);
+    };
+    type Arm<'a> = &'a dyn Fn(&Fake);
+    let cells: [(&str, Arm<'_>, bool, &str); 2] =
+        [("garbled from the open", &garbled, false, "served garbled"), ("unclaimed at the open, a claimant named after", &unclaimed, true, "serves no head record")];
+    for (cell, arm, named_after, why) in cells {
+        let fake = Fake::new();
+        arm(&fake);
+        let store = TempDir::new().unwrap();
+        let facts = writer_facts(&store);
+        let g = ground_over(fake, store, facts, 0);
+        if named_after {
+            assert_eq!(g.holds.state_change("b-1"), None, "{cell}: an unclaimed board owes no head");
+            g.fake.unclaimed.store(false, Ordering::SeqCst);
+            g.holds.probe("b-1");
+        }
+        let edge = g.holds.state_change("b-1").unwrap_or_else(|| panic!("{cell}: told"));
+        assert_eq!((edge.from, edge.to.as_str()), (BoardState::Running, "head_unreadable"), "{cell}");
+        assert!(edge.to.reason().is_some_and(|reason| reason.contains(why)), "{cell}: {:?}", edge.to.reason());
+        assert_eq!(g.fake.sends(), 0, "{cell}: no write");
+        for _ in 0..2 {
+            g.holds.probe("b-1");
+            assert_eq!(g.holds.state_change("b-1"), None, "{cell}: a steady state is told no more");
+        }
+        g.fake.head_garbled.store(false, Ordering::SeqCst);
+        g.fake.no_head.store(false, Ordering::SeqCst);
+        g.holds.probe("b-1");
+        let edge = g.holds.state_change("b-1").unwrap_or_else(|| panic!("{cell}: told"));
+        assert_eq!((edge.from.as_str(), edge.to), ("head_unreadable", BoardState::Running), "{cell}");
+    }
+}
+
+/// Checks that a board halted whose head will not read says each in turn.
+///
+/// The halt is the more severe, so it alone is told while it stands, the
+/// head not read meanwhile, then `head_unreadable` as it clears, then
+/// `running` as the head reads (§4b.2; skep #865; the mutant that clears the
+/// head's state at the halt says `running` over a head that will not read,
+/// and the one that reads the head under the halt dials a board that says it
+/// takes no write at every tick).
+#[test]
+fn a_board_halted_whose_head_will_not_read_says_halted_then_head_unreadable_then_running() {
+    let fake = Fake::new();
+    fake.head_garbled.store(true, Ordering::SeqCst);
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    g.fake.writes_halted.store(true, Ordering::SeqCst);
+    let head_reads = g.fake.head_reads.load(Ordering::SeqCst);
+    g.holds.probe("b-1");
+    let edge = g.holds.state_change("b-1").expect("the halt told");
+    assert_eq!((edge.from, edge.to), (BoardState::Running, BoardState::Halted), "the more severe is told first");
+    g.holds.probe("b-1");
+    assert_eq!((g.holds.state_change("b-1"), g.fake.head_reads.load(Ordering::SeqCst)), (None, head_reads), "while the halt stands nothing more is told, and the head is not read");
+    g.fake.writes_halted.store(false, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    let edge = g.holds.state_change("b-1").expect("the head told as the halt clears");
+    assert_eq!((edge.from, edge.to.as_str()), (BoardState::Halted, "head_unreadable"));
+    g.fake.head_garbled.store(false, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    let edge = g.holds.state_change("b-1").expect("the head reads");
+    assert_eq!((edge.from.as_str(), edge.to), ("head_unreadable", BoardState::Running));
+}
+
+/// Checks that a live feed thread says a quiet board's halt once each way.
+///
+/// Over the board's real feed thread, its commit stream live and silent, no
+/// line held and nothing committing, `daemon` says `halted` and then
+/// `running` as the probe reads each, and nothing more across further probes
+/// (§4b.2; skep #865; the mutant that leaves the probe to held lines never
+/// says the halt).
+#[test]
+fn the_feed_thread_says_a_quiet_boards_halt_and_its_clearing_once_each() {
+    let g = ground();
+    g.fake.quiet_stream.store(true, Ordering::SeqCst);
+    let threads = feed_threads(&g);
+    let next_daemon = || loop {
+        let event = g.rx.recv_timeout(Duration::from_secs(20)).expect("a `daemon` event within the deadline");
+        if event.name == EventName::Daemon {
+            crate::shapes::assert_declared("DaemonEvent", &event.data);
+            break event.data;
+        }
+    };
+    g.fake.writes_halted.store(true, Ordering::SeqCst);
+    assert_eq!(next_daemon(), json!({"board": "b-1", "state": "halted"}));
+    g.fake.writes_halted.store(false, Ordering::SeqCst);
+    assert_eq!(next_daemon(), json!({"board": "b-1", "state": "running"}));
+    let reads = g.fake.health_reads.load(Ordering::SeqCst);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while g.fake.health_reads.load(Ordering::SeqCst) < reads + 2 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+    threads.stop();
+    assert!(g.fake.health_reads.load(Ordering::SeqCst) >= reads + 2, "two probes more read the board");
+    let said: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Daemon).map(|e| e.data).collect();
+    assert!(said.is_empty(), "a steady state says nothing at each tick: {said:?}");
 }
 
 /// Checks that a line held behind a landing reads past it at its next resend.

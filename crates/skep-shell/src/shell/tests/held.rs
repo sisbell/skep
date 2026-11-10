@@ -1,7 +1,9 @@
 //! The held-burst store against the real daemon in-process.
 //!
 //! Its bursts are a signed session's — a bare session reads alone. The suite
-//! checks a burst held while the daemon is stopped and resent `kept` after a
+//! checks `probe()` answering the halt and the head's state as the `daemon`
+//! event said them, the head's told before any write (skep #865), a burst held
+//! while the daemon is stopped and resent `kept` after a
 //! restart, a burst whose dial meets the death signal held `session_died`
 //! and kept under the session the restart arm re-opened, a burst whose
 //! reissue meets `write_busy` again held `unreachable` unsent and kept once
@@ -422,7 +424,7 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
     let entry = signed.sessions.get(&session).unwrap();
     let SessionKind::Signed { fingerprint: fp, .. } = entry.facts.kind.clone() else { panic!("a signed session holds a key") };
     let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["bc"], "as_of": base});
-    let attested = entry.attest(&signed.store, &frame).unwrap();
+    let attested = entry.attest(&signed.store, &frame, || entry.signing_term()).unwrap();
     assert!(attested.get("attest").is_some(), "the shell attests every insert");
     let Answer::Document(landed) = entry.board.op(Some(&entry.token), &attested).unwrap() else { panic!("the dial closed") };
     assert!(landed["resp"].as_str().is_some_and(|r| r.starts_with("ack")), "the burst landed by the own hand: {landed}");
@@ -531,7 +533,7 @@ fn a_drop_of_a_handed_over_line_whose_write_landed_answers_kept() {
     let HeldGround { shell, session, draft, at, .. } = held_ground(&dir, &sd);
     let entry = shell.sessions.get(&session).unwrap();
     let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["bc"], "as_of": at});
-    let attested = entry.attest(&shell.store, &frame).unwrap();
+    let attested = entry.attest(&shell.store, &frame, || entry.signing_term()).unwrap();
     let Answer::Document(landed) = entry.board.op(Some(&entry.token), &attested).unwrap() else { panic!("the dial closed") };
     assert!(landed["at"].as_u64().is_some_and(|landed_at| landed_at > at), "the write lands, its answer the hold's never: {landed}");
     let lost = Refusal::shell(Name::ANSWERS_LOST, json!({"last": "unreachable", "elapsed_ms": 120_000})).to_value();
@@ -1182,7 +1184,7 @@ fn the_persons_send_on_a_moved_document_names_only_the_changes_since_it() {
     };
     // The person's own other write, past the shell's hold: the draft moves.
     let other_write = insert(2, "b", at);
-    let attested = entry.attest(&shell.store, &other_write).unwrap();
+    let attested = entry.attest(&shell.store, &other_write, || entry.signing_term()).unwrap();
     let Answer::Document(own) = entry.board.op(Some(&entry.token), &attested).unwrap() else { panic!("the dial closed") };
     let moved_at = own["at"].as_u64().unwrap_or_else(|| panic!("the own write is acked: {own}"));
     // The stale burst, without anchors: held moved, its face naming the own
@@ -1215,6 +1217,75 @@ fn the_persons_send_on_a_moved_document_names_only_the_changes_since_it() {
     assert_eq!(text_of(&read), "abc", "{read}");
     shell.shutdown();
     sd.shutdown();
+}
+
+/// Checks that `probe()` answers the halt the `daemon` event said.
+///
+/// The kernel poisoned as the poison cell above poisons it, the feed's probe
+/// reads `writes.halted` and `daemon` says `halted`, and `probe()` answers the
+/// same (§4b.2; P37; skep #865; the mutant whose `probe` keeps to the board
+/// answering tells the page `running` over a board the event just said takes
+/// no write).
+#[test]
+fn probe_answers_the_halt_the_daemon_event_said() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let HeldGround { shell, session, draft, at, .. } = held_ground(&dir, &sd);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    sd.daemon().fail_the_next_checkpoint_step(Step::JournalBarrier, std::io::ErrorKind::Other);
+    sd.daemon().fail_the_next_checkpoint_step(Step::JournalRepair, std::io::ErrorKind::Other);
+    let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"], "as_of": at}})).unwrap();
+    assert_eq!(held["cause"], "poisoned", "premise: {held}");
+    wait_for(&seen, |e| e.name == EventName::Daemon && e.data["state"] == "halted");
+    let probed = shell.call("probe", &json!({})).unwrap();
+    crate::shapes::assert_declared("Probe", &probed);
+    assert_eq!((probed["daemon"].as_str(), probed.get("reason")), (Some("halted"), None), "{probed}");
+    shell.shutdown();
+    sd.shutdown();
+    assert_events_declared(&seen.lock().unwrap());
+}
+
+/// Checks that a head that will not read is told before any write, and asked.
+///
+/// A claimed board whose `H.1` is owed, a signed session open and no line
+/// held, nothing written: `daemon` says `head_unreadable` with its reason,
+/// `probe()` answers the same state and reason, and once the head lands
+/// `daemon` says `running` and `probe()` answers it, no write of the shell's
+/// made (§3c.3; §4b.2; P37; skep #865; the mutant that reads the head only
+/// behind a held line says nothing until a write is held for it).
+#[test]
+fn a_head_that_will_not_read_is_told_before_any_write_and_probe_answers_it() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    let (library, bare) = claim_with_the_head_refused(&sd, &origin, &store);
+    assert!(library.board_term().unwrap().is_none(), "premise: the claim stands, its H.1 refused");
+    let (shell, _) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
+    let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let said = wait_for(&seen, |e| e.name == EventName::Daemon && e.data["state"] == "head_unreadable");
+    let reason = said.data["reason"].as_str().unwrap_or_else(|| panic!("the reason: {}", said.data)).to_string();
+    assert!(reason.contains("serves no head record"), "{reason}");
+    let probed = shell.call("probe", &json!({})).unwrap();
+    crate::shapes::assert_declared("Probe", &probed);
+    assert_eq!((probed["daemon"].as_str(), probed["reason"].as_str()), (Some("head_unreadable"), Some(reason.as_str())), "{probed}");
+    assert!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty(), "no line held");
+    // The head lands: a bare write's turn pays it.
+    let Answer::Document(_) = library.op(Some(&bare), &skep_client::board::frames::create_document("1.0.1", false, None)).unwrap() else { panic!("the bare session stands") };
+    assert!(library.board_term().unwrap().is_some(), "premise: H.1 landed at the write's turn");
+    wait_for(&seen, |e| e.name == EventName::Daemon && e.data["state"] == "running");
+    let probed = shell.call("probe", &json!({})).unwrap();
+    assert_eq!((probed["daemon"].as_str(), probed.get("reason")), (Some("running"), None), "{probed}");
+    shell.shutdown();
+    sd.shutdown();
+    let seen = seen.lock().unwrap();
+    assert_events_declared(&seen);
+    let states: Vec<&str> = seen.iter().filter(|e| e.name == EventName::Daemon).filter_map(|e| e.data["state"].as_str()).collect();
+    assert_eq!(states, ["head_unreadable", "running"], "each said once");
 }
 
 /// Claims the board at `origin` with the store at `store` by hand, the claim's

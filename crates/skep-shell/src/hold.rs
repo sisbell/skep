@@ -123,6 +123,16 @@
 //! shift untried, its verdict kept, and a moved face whose hands' read goes
 //! unanswered names them not read (`Hand`), read again at the board's answer.
 //!
+//! **The board's state** (§3c.3, §4b.2; P37; skep #865). The page is told what
+//! stands at a board before a write meets it: one state, the most severe that
+//! holds — the own node stopped, the board silent, its writes halted, its
+//! head record not reading, in that order, else running ([`BoardState`]) —
+//! derived from what the hold already keeps ([`BoardHold::state`]). Each
+//! change since the state last told is taken once ([`Holds::state_change`]),
+//! by the board's feed thread alone, which says it on the `daemon` event, and
+//! `probe()` answers the state as it stands ([`Holds::state`]). Every read of
+//! the board's head feeds it, wherever it is made ([`Holds::note_head`]).
+//!
 //! **The store, from the first touch** (§3c.1, §3c.3; skep #857, #858,
 //! #859, #873, #880). A board's held store is taken at its first touch: a
 //! session's open or a ceremony's door, each the store's touch
@@ -244,7 +254,6 @@ use skep_client::history::Restored;
 use skep_client::sheet::render_inert;
 use skep_client::store::{FileStore, KeyFacts};
 use skep_client::{DialError, Origin};
-use skep_identity::BoardTerm;
 use skep_search::Chain;
 
 use crate::attest::{attest_room, insert_terms, Unattested};
@@ -252,7 +261,7 @@ use crate::events::{EventBus, EventName};
 use crate::held::{Anchors, Done, Entered, HaltWhy, HeldDir, HeldLine, HeldQueue, Joined, Joining, Opened, Owed, Reason, RenumberRefused, Settled, Torn, Unheld, MAX_HELD_BYTES, MAX_HELD_LINES};
 use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
-use crate::sessions::{board_head, SessionEntry, SessionKind, Sessions};
+use crate::sessions::{board_head, HeadRead, SessionEntry, SessionKind, Sessions};
 use crate::wire::{document_address, json_len, MAX_FRAME_BYTES};
 use crate::Talk;
 
@@ -262,17 +271,20 @@ use resend::ReadOutcome;
 
 /// The interim probe cadence (§3c.4): `GET /health` at this interval.
 ///
-/// The probe reads it while a burst is held at a board, or while the board
-/// is silent or a request of the hold's there unanswered, so the verdict
-/// that ends the silence comes with no line standing; the value is open to
-/// tuning. It is the retry's clock too (§3c.3), whatever the board's
-/// state, so space freed while no one types is enough: a store the device
-/// refused is made and locked again, a file it refused read, and a copy it
-/// refused — a line's, a re-mark's or a `done`'s — written again at every
-/// probe while it is owed ([`Holds::retry_store`]); and the locks another
-/// shell held are tried again. A drain whose turn stops at its bound is no
-/// cadence's: the feed thread runs its next turn once the work queued behind
-/// it is served ([`Turn::Bounded`]).
+/// The probe reads it while a session that may write stands at a board, so
+/// a board whose writes halt or whose head record will not read is found with
+/// no line held (skep #865); while a burst is held there; while its writes
+/// stand halted or its head unreadable, so a state told clears with no
+/// session left; and while the board is silent or a request of the hold's
+/// there unanswered, so the verdict that ends the silence comes with no line
+/// standing; the value is open to tuning. It is the retry's clock too
+/// (§3c.3), whatever the board's state, so space freed while no one types is
+/// enough: a store the device refused is made and locked again, a file it
+/// refused read, and a copy it refused — a line's, a re-mark's or a `done`'s
+/// — written again at every probe while it is owed ([`Holds::retry_store`]);
+/// and the locks another shell held are tried again. A drain whose turn stops
+/// at its bound is no cadence's: the feed thread runs its next turn once the
+/// work queued behind it is served ([`Turn::Bounded`]).
 pub const PROBE_CADENCE: Duration = Duration::from_secs(2);
 
 /// The most steps one turn of a drain takes (§3c.5; skep #817, #862).
@@ -308,10 +320,10 @@ pub enum Turn {
     Unanswered,
     /// No turn stopped at its bound, and the next probe comes at the cadence.
     ///
-    /// The pass walked every line it could send, or no drain ran — no line
-    /// standing, the own node stopped, the board's `/health` refused, refused
-    /// before any connection or read with its writes halted, or another drain
-    /// of the board running.
+    /// The pass walked every line it could send, or no drain ran — no probe
+    /// owed the board ([`BoardHold::probe_owed`]), the own node stopped, the
+    /// board's `/health` refused, refused before any connection or read with
+    /// its writes halted, or another drain of the board running.
     Done,
 }
 
@@ -1516,8 +1528,65 @@ impl Directory {
 /// the board's reference, the session's and the document ([`Holds::last_emitted`]).
 type HeldKey = (String, String, String);
 
+/// A board's state, as the `daemon` event and `probe()` say it (§4b.2; P37).
+///
+/// It is the most severe that holds, in the order of its variants
+/// ([`BoardHold::state`]; skep #865).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoardState {
+    /// The own node stands stopped by its owner's act.
+    Stopped,
+    /// The board's last `/health` verdict was silence.
+    Unreachable,
+    /// The board's last `/health` read said its writes are halted.
+    Halted,
+    /// The board's head record will not read, the cause beside it.
+    ///
+    /// A signed write owes a signature naming the record, so none can be
+    /// made while this holds (§3c.3; SP-14). A pair once read is the client's
+    /// for the run (`Board::board_term`), so it holds only for a head no read
+    /// of this run has had whole.
+    HeadUnreadable(String),
+    /// None of the others holds.
+    Running,
+}
+
+impl BoardState {
+    /// Returns the state as the `daemon` event and `probe()` spell it.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BoardState::Stopped => "stopped",
+            BoardState::Unreachable => "unreachable",
+            BoardState::Halted => "halted",
+            BoardState::HeadUnreadable(_) => "head_unreadable",
+            BoardState::Running => "running",
+        }
+    }
+
+    /// Returns why the state holds, where it names why: `head_unreadable`'s
+    /// cause.
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            BoardState::HeadUnreadable(cause) => Some(cause),
+            BoardState::Stopped | BoardState::Unreachable | BoardState::Halted | BoardState::Running => None,
+        }
+    }
+}
+
+/// One change of a board's state since it was last told.
+///
+/// It is [`Holds::state_change`]'s answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoardEdge {
+    /// The state last told.
+    pub from: BoardState,
+    /// The state that holds now.
+    pub to: BoardState,
+}
+
 /// The board's head as the hold last read it, for the one `Talk` line at
-/// each change of its state (skep #727; SP-11).
+/// each change of its state (skep #727; SP-11) and the board's state
+/// ([`BoardHold::state`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum HeadState {
     /// No read of the head has decided yet.
@@ -1988,6 +2057,11 @@ struct BoardHold {
     node_stopped: bool,
     /// The board's head as the hold last read it ([`Holds::note_head`]).
     head: HeadState,
+    /// The board's state as it was last told ([`Holds::state_change`]).
+    ///
+    /// It is `Running` until a change is told: a board that answers and
+    /// holds nothing is announced nothing.
+    told: BoardState,
     /// Whether the board answers ([`Answering`]).
     ///
     /// It is the last `/health` verdict and the requests of the hold's since.
@@ -2015,6 +2089,37 @@ struct BoardHold {
 }
 
 impl BoardHold {
+    /// Returns the board's state: the most severe that holds (skep #865).
+    ///
+    /// The order is the own node stopped, the board's silence, its writes
+    /// halted, its head record not reading, else running (§4b.2; P37). A
+    /// request of the hold's unanswered, its verdict pending, is no silence
+    /// yet, and a `poisoned` answer is a halt from the `/health` read after
+    /// it.
+    fn state(&self) -> BoardState {
+        if self.node_stopped {
+            BoardState::Stopped
+        } else if self.silent() {
+            BoardState::Unreachable
+        } else if self.writes_halted {
+            BoardState::Halted
+        } else if let HeadState::Unreadable(cause) = &self.head {
+            BoardState::HeadUnreadable(cause.clone())
+        } else {
+            BoardState::Running
+        }
+    }
+
+    /// Returns whether a probe owes the board a read with no signed session.
+    ///
+    /// It does while a line stands to drain, while the board is silent or a
+    /// request of the hold's there pends its verdict, and while its writes
+    /// stand halted or its head unreadable, so a state told can clear with
+    /// no session left to ask.
+    fn probe_owed(&self) -> bool {
+        !self.answers() || self.writes_halted || matches!(self.head, HeadState::Unreadable(_)) || self.principals.values().any(PrincipalHold::drains)
+    }
+
     /// Returns the cause of the hold that stands at the board, where one does.
     ///
     /// It is §3c.4's order — the own node stopped, else the write path
@@ -2162,7 +2267,7 @@ impl BoardSlot {
 /// `board_reference` the hold's key, its `board` the board dialed — and the
 /// board-wide ones (`probe`, `touch_store`, `set_node_stopped`,
 /// `node_stopped`, `another_window`, `note_health`, `note_health_read`,
-/// `silent`) take the board's
+/// `state`, `state_change`) take the board's
 /// reference, as `halted_file`, the native side's read of a principal's
 /// halted file, takes it beside the principal.
 ///
@@ -2222,6 +2327,7 @@ impl Holds {
                     poisoned: false,
                     node_stopped: false,
                     head: HeadState::Unknown,
+                    told: BoardState::Running,
                     answering: Answering::Answers,
                     clock_zero: Instant::now(),
                     silences: Duration::ZERO,
@@ -2401,18 +2507,20 @@ impl Holds {
     /// Sets the own node's stopped state as its owner reports it (§3c.4).
     ///
     /// While it stands, every burst holds `stopped`, and the probe waits for
-    /// `Running` to resend.
+    /// `Running` to resend. Each edge's `daemon` event is its caller's to say
+    /// (`Shell::set_node_state`), so it is marked told here: the feed thread
+    /// says neither again, and a state left told before the stop owes nothing
+    /// after the start (§4b.2; skep #865).
     pub fn set_node_stopped(&self, board_reference: &str, stopped: bool) {
-        self.lock(board_reference).node_stopped = stopped;
+        let mut board_hold = self.lock(board_reference);
+        board_hold.node_stopped = stopped;
+        board_hold.told = if stopped { BoardState::Stopped } else { BoardState::Running };
     }
 
     /// Returns whether the board's node stands stopped by its owner's act.
     ///
-    /// The act is [`Holds::set_node_stopped`]'s. It is what `probe` answers
-    /// for the own node, and what the feed reads before it announces the
-    /// board's `/health` verdict, so a deliberate stop is announced `stopped`
-    /// once and never `unreachable` beside it. A board that is not the own
-    /// node answers false.
+    /// The act is [`Holds::set_node_stopped`]'s, and `probe` dials nothing
+    /// while it stands. A board that is not the own node answers false.
     pub fn node_stopped(&self, board_reference: &str) -> bool {
         self.lock(board_reference).node_stopped
     }
@@ -2512,7 +2620,7 @@ impl Holds {
     /// it stands ([`Holds::settle_queues`]). The store is made and locked
     /// under the board's lock, as the files are read under it. A hold never
     /// comes here: it never dials to learn where to write.
-    fn establish(&self, board_reference: &str, slot: &BoardSlot, head: &Result<Option<BoardTerm>, Refusal>) {
+    fn establish(&self, board_reference: &str, slot: &BoardSlot, head: &HeadRead) {
         let mut board_hold = slot.lock();
         if let Ok(Some(term)) = head {
             board_hold.chain = Some(Chain::from_bytes(term.chain));
@@ -2878,15 +2986,20 @@ impl Holds {
     }
 
     /// Notes the board's head as a read of it answered, saying each change
-    /// of its state once (skep #727; SP-11).
+    /// of its state once (skep #727, #865; SP-11).
     ///
-    /// The state is `head_unreadable` — the record standing and not reading,
-    /// served garbled, or owed by a claimed board and not served — or the
-    /// head reading, an unclaimed board that owes none among them; a board
-    /// away says nothing of its head and moves it not. One `Talk` line as
-    /// the head becomes unreadable, with its cause, and one as it reads
-    /// again; nothing per probe, and nothing on a healthy board.
-    fn note_head(&self, board_reference: &str, head: &Result<Option<BoardTerm>, Refusal>) {
+    /// Every read of the head feeds it: the probe's ([`Holds::probe`]), the
+    /// store's touch ([`Holds::touch_store`]) and each signed write's signing
+    /// term ([`Holds::signing_term`]). The state is
+    /// `head_unreadable` — the record standing and not reading, served
+    /// garbled, or owed by a claimed board and not served — or the head
+    /// reading, an unclaimed board that owes none among them; a board away
+    /// says nothing of its head and moves it not. One `Talk` line as the head
+    /// becomes unreadable, with its cause, and one as it reads again; nothing
+    /// per probe, and nothing on a healthy board. It decides the board's
+    /// state, and the board's feed thread tells it within one
+    /// [`PROBE_CADENCE`] ([`Holds::state_change`]).
+    pub(crate) fn note_head(&self, board_reference: &str, head: &HeadRead) {
         let now = match head {
             Ok(_) => HeadState::Reads,
             Err(Refusal::Halt { name: Name::HEAD_UNREADABLE, face }) => HeadState::Unreadable(face.cause.clone()),
@@ -3974,16 +4087,57 @@ impl Holds {
 
     /// Returns whether the board's last `/health` verdict was silence (§3c.4).
     ///
-    /// It is the one source of the board's `unreachable` on the `daemon`
-    /// event (§4b.2; P37): a request of the hold's the board gave no answer
-    /// to, its verdict pending, is no silence yet.
+    /// A request of the hold's the board gave no answer to, its verdict
+    /// pending, is no silence yet. It is the suites' seam where a stop
+    /// outranks the silence in the board's state.
+    #[cfg(test)]
+    pub(crate) fn silent(&self, board_reference: &str) -> bool {
+        self.lock(board_reference).silent()
+    }
+
+    /// Returns the board's state as it stands (§4b.2; P37; skep #865).
+    ///
+    /// It is what `probe()` answers, read after its own `/health` note.
     ///
     /// # Panics
     ///
     /// Panics where `board_reference` names no board the holds were opened
     /// over (the type's precondition).
-    pub fn silent(&self, board_reference: &str) -> bool {
-        self.lock(board_reference).silent()
+    pub fn state(&self, board_reference: &str) -> BoardState {
+        self.lock(board_reference).state()
+    }
+
+    /// Takes the change of the board's state since it was last told, if any.
+    ///
+    /// The change is taken under the board's lock, so each is answered once
+    /// and a steady state answers none (§4b.2; P37; SP-11; skep #865). Its
+    /// one reader is the board's feed thread (`Feeder::announce`), which says
+    /// it on the `daemon` event. A state keeps its one telling whatever its
+    /// cause reads as since: only another state is a change.
+    ///
+    /// # Panics
+    ///
+    /// Panics where `board_reference` names no board the holds were opened
+    /// over (the type's precondition).
+    pub fn state_change(&self, board_reference: &str) -> Option<BoardEdge> {
+        let mut board_hold = self.lock(board_reference);
+        let to = board_hold.state();
+        if to.as_str() == board_hold.told.as_str() {
+            return None;
+        }
+        let from = std::mem::replace(&mut board_hold.told, to.clone());
+        Some(BoardEdge { from, to })
+    }
+
+    /// Reads the board term a signed write under `session` signs over.
+    ///
+    /// It is `SessionEntry::signing_term`'s read, noted as every read of the
+    /// board's head is ([`Holds::note_head`]; skep #865): the one way a
+    /// write reads its head.
+    pub(crate) fn signing_term(&self, session: &SessionEntry) -> HeadRead {
+        let head = session.signing_term();
+        self.note_head(&session.board_reference, &head);
+        head
     }
 
     /// Returns the frame a send under `session` dials ([`AttestedWhereOwed`]).
@@ -3995,7 +4149,7 @@ impl Holds {
     /// Returns why none could be composed, nothing dialed, which the send
     /// answers as `Dialed`'s `From<Unattested>` reads it.
     fn attest_where_owed<'f>(&self, session: &SessionEntry, frame: &'f Value) -> Result<AttestedWhereOwed<'f>, Unattested> {
-        Ok(AttestedWhereOwed(session.attest(&self.key_store, frame)?))
+        Ok(AttestedWhereOwed(session.attest(&self.key_store, frame, || self.signing_term(session))?))
     }
 
     /// Dials an [`AttestedWhereOwed`] frame once under `session`.

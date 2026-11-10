@@ -573,6 +573,21 @@ fn the_publication_cards_state_the_shells_shapes() {
     }
 }
 
+/// The `probe` card names every state the shell's `probe()` answers and its
+/// `reason`, read off the shell's own declaration (skep #865), so a state the
+/// shell adds is named before an agent meets it.
+#[test]
+fn the_probe_card_names_the_shells_board_states() {
+    let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    let card = catalog.tools.iter().find(|t| t["name"] == "probe").and_then(|t| t["description"].as_str()).expect("the probe card");
+    let fields = skep_shell::shapes::shape("Probe").expect("skep-shell declares Probe").fields;
+    let daemon = fields.iter().find(|field| field.name == "daemon").expect("the probe's daemon member").ty;
+    for state in daemon.split(" | ").map(|word| word.trim_matches('\'')) {
+        assert!(card.contains(state), "the probe card names `{state}`: {card}");
+    }
+    assert!(fields.iter().any(|field| field.name == "reason" && !field.required) && card.contains("reason?"), "the probe card names the optional `reason`: {card}");
+}
+
 /// The held cards name the shell's hand-over, a burst kept in memory alone,
 /// and the line held on a head record that will not read.
 ///

@@ -1471,7 +1471,7 @@ impl Shell {
         // Never unsigned where a signature is owed (SP-14): the library
         // refuses it too, but the check here keeps `sent` from being said of
         // a frame that never leaves.
-        match session.signing_term() {
+        match self.holds.signing_term(session) {
             Ok(_) => {}
             Err(refusal @ Refusal::Halt { name: Name::HEAD_UNREADABLE, .. }) => {
                 self.publication_event(session, &draft, "refused", json!({"arm": "head_unreadable"}));

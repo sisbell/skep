@@ -410,8 +410,10 @@ fn the_drain_settles_each_death_of_the_session_once_and_drops_every_other_event(
 /// The drain says an outage's end, and a move of the board's pair.
 ///
 /// Fed by hand in the bus's place: a `daemon` `running` with no outage before
-/// it says nothing; the outage's `unreachable`, heard twice, and its
-/// `running` say the stream answers again and how long it did not, once; a
+/// it says nothing, nor does `halted` or `head_unreadable`; the outage's
+/// `unreachable`, heard twice, and the state it returns to — `running`,
+/// `halted` or `head_unreadable`, each the board answering (skep #865) — say
+/// the board answers again, how long it did not and that state, once; a
 /// `mode` event says the pair it moved to. The members and the states read
 /// are ones skep-shell declares for the two events (`DaemonEvent`,
 /// `ModeEvent`).
@@ -425,20 +427,28 @@ fn the_drain_says_an_outages_end_and_a_move_of_the_boards_pair() {
     let daemon = |state: &str| Event { name: EventName::Daemon, data: json!({"board": "b-1", "state": state}) };
     for event in [
         daemon("running"),
+        daemon("halted"),
+        daemon("head_unreadable"),
         daemon("unreachable"),
         daemon("unreachable"),
         daemon("running"),
         daemon("running"),
+        daemon("unreachable"),
+        daemon("halted"),
+        daemon("unreachable"),
+        daemon("head_unreadable"),
         Event { name: EventName::Mode, data: json!({"board": "b-1", "mode": "CLAIMED-ENFORCING", "claimant": "1.0.1", "local_trust": false}) },
     ] {
         bus.send(event).expect("the drain listens");
     }
-    let said = said_within(&lines, 2);
-    assert!(said[0].starts_with("the board's commit stream answers again, ") && said[0].ends_with(" s after it stopped answering"), "{said:?}");
-    assert_eq!(said[1], "the board's mode moved to CLAIMED-ENFORCING (claimant 1.0.1, local_trust false)", "{said:?}");
+    let said = said_within(&lines, 4);
+    for (line, state) in said.iter().zip(["running", "halted", "head_unreadable"]) {
+        assert!(line.starts_with("the board answers again, ") && line.ends_with(&format!(" s after it stopped answering: its state is `{state}`")), "{said:?}");
+    }
+    assert_eq!(said[3], "the board's mode moved to CLAIMED-ENFORCING (claimant 1.0.1, local_trust false)", "{said:?}");
     let fields = |event: &str| skep_shell::shapes::shape(event).unwrap_or_else(|| panic!("skep-shell declares {event}")).fields;
     let daemon_state = fields("DaemonEvent").iter().find(|field| field.name == "state").expect("the daemon event's state").ty;
-    for state in ["unreachable", "running"] {
+    for state in ["unreachable", "running", "halted", "head_unreadable"] {
         assert!(daemon_state.contains(&format!("'{state}'")), "`{state}` is a state skep-shell declares: {daemon_state}");
     }
     let mode: BTreeSet<&str> = fields("ModeEvent").iter().map(|field| field.name).collect();

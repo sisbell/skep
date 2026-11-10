@@ -242,7 +242,7 @@ impl SessionEntry {
     /// [`board_head`]'s: `unreachable` where a read it makes goes
     /// unanswered, and `head_unreadable` where the head record stands and
     /// cannot be read, was served garbled, or is owed and not served.
-    pub fn signing_term(&self) -> Result<Option<BoardTerm>, Refusal> {
+    pub fn signing_term(&self) -> HeadRead {
         board_head(&self.board)
     }
 
@@ -255,7 +255,10 @@ impl SessionEntry {
     /// place the composer's precondition is discharged — and attached to a
     /// copy of the frame, the one copy made; the frame is borrowed as it
     /// stands otherwise, and at a board no one has claimed that serves no
-    /// head record, which takes the write unsigned.
+    /// head record, which takes the write unsigned. `read_head` reads that
+    /// term where one is owed, the hold's door passed in so every read of a
+    /// board's head feeds the board's state (`Holds::signing_term`; skep
+    /// #865).
     ///
     /// # Errors
     ///
@@ -263,19 +266,19 @@ impl SessionEntry {
     /// that holds answering:
     ///
     /// 1. `head_unreadable` and `unreachable` where the board term cannot be
-    ///    had ([`SessionEntry::signing_term`]);
+    ///    had (`read_head`, [`SessionEntry::signing_term`]'s);
     /// 2. `store_unreadable` where the session's key file cannot be read;
     /// 3. `no_account` where the board answered the session no account;
     /// 4. the composer's: `attest_not_composed` where it halted, the board's
     ///    refusal or `unreachable` where a read it made was refused or not
     ///    answered, and [`Unattested::Died`] where a read it made met the
     ///    session's death signal, whose end is the caller's to run.
-    pub fn attest<'f>(&self, store: &FileStore, frame: &'f Value) -> Result<Cow<'f, Value>, Unattested> {
+    pub fn attest<'f>(&self, store: &FileStore, frame: &'f Value, read_head: impl FnOnce() -> HeadRead) -> Result<Cow<'f, Value>, Unattested> {
         let Some(fp) = frame["op"].as_str().and_then(|op| self.attesting_key(op)) else { return Ok(Cow::Borrowed(frame)) };
         if !wants_attest(frame) {
             return Ok(Cow::Borrowed(frame));
         }
-        let Some(board_term) = self.signing_term()? else { return Ok(Cow::Borrowed(frame)) };
+        let Some(board_term) = read_head()? else { return Ok(Cow::Borrowed(frame)) };
         let signer = signer(store, &store.key_path(fp))?;
         let account = self.facts.account.as_deref().ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
         let composer = Composer { board: &self.board, token: &self.token, signer: &*signer, account, board_term };
@@ -295,6 +298,9 @@ impl SessionEntry {
         SessionRef { token: &self.token, principal: self.facts.principal, account: self.facts.account.as_deref().unwrap_or("") }
     }
 }
+
+/// What one read of a board's head answered ([`board_head`]).
+pub(crate) type HeadRead = Result<Option<BoardTerm>, Refusal>;
 
 /// Classifies the board's head: a term, none, `head_unreadable` or unreachable.
 ///
@@ -329,7 +335,7 @@ impl SessionEntry {
 /// naming why, where the head record stands and cannot be read, was served
 /// garbled, the board refuses its read, or the board serves none and names
 /// a claimant or cannot say through `/health` whether it does.
-pub(crate) fn board_head(board: &Board) -> Result<Option<BoardTerm>, Refusal> {
+pub(crate) fn board_head(board: &Board) -> HeadRead {
     #[cfg(test)]
     if GARBLE_THE_NEXT_HEAD_READ.with(std::cell::Cell::take) {
         return Err(head_unreadable("the board's head record (`H.1`) served garbled: the suites' seam".to_string()));

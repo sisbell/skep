@@ -195,7 +195,11 @@ board answers or is gone, up to about a minute and a half where it accepts
 the connection and then stops answering — the close and the feed's last
 read each held to skep-client's exchange deadline — and longer as the index
 grows, its save rewriting the index whole. The log says how long each stop
-took: the figure to set the harness's grace before a signal by. A signal
+took: the figure to set the harness's grace before a signal by. The stop
+says what it leaves: the bursts held, those the shell could not write to
+its held file (answered `unwritable`, kept in memory alone and gone with
+the process), and any burst settled at this run whose `done` the device
+refused, which the next start lists as held again. A signal
 ends the process at once: its held bursts are already on disk — save one
 the shell answered `unwritable`, kept in memory alone and lost with the
 process — the session lives on at the board until the board restarts, and

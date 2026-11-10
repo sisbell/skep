@@ -70,7 +70,10 @@
 //! its two edges; each such answer carrying its refusal's class beside the
 //! words — a full disk's, a read-only volume's, a file this shell may not
 //! read, or another cause — the line waiting behind it the same (skep #820);
-//! no
+//! a line no file holds listed so and its landing said, under each session
+//! of its principal and for each document it wrote alone, the event's state,
+//! cause, hands and `sendable` as last told (skep #860), a line settled
+//! whose `done` is owed off the rows and counted; no
 //! `held` event when a session's open reads its file, and a misplaced file
 //! set aside and said on `Talk` alone; the first touch with a term taking
 //! both locks and keeping the pending one with no pending file (skep #873),
@@ -373,9 +376,10 @@ fn a_refused_run_drops_its_behind_lines() {
 /// refusing its head's resend as typed against an older state, every line of
 /// it faced `moved` — the person drops a later line, and the line held
 /// before it stands moved still — the `held` event says `moved` with the one
-/// line left, never `kept` over text still held (the mutant that says
-/// `kept` at every drop lifts the page's marks); the drop of the last line
-/// says `kept` with none.
+/// line left, never `kept` over text still held, with the hands the face
+/// last named (the mutant that says `kept` at every drop lifts the page's
+/// marks; the one that says it with no hands erases them); the drop of the
+/// last line says `kept` with none.
 #[test]
 fn a_drop_says_the_state_of_the_line_that_stands_first() {
     let g = writer_at(80);
@@ -385,12 +389,13 @@ fn a_drop_says_the_state_of_the_line_that_stands_first() {
     g.fake.op_rejected.next(1, arrangement_moved(70, 77));
     g.holds.probe("b-1");
     assert!(g.lines().iter().all(|l| l["cause"] == "moved"), "the board's verdict faces every line moved: {:?}", g.lines());
-    let _ = g.rx.try_iter().count();
+    let faced: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held && e.data["state"] == "moved").map(|e| e.data).collect();
+    let hands = faced.last().expect("the document faced moved")["hands"].clone();
     assert_eq!(g.holds.resolve(&g.session, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
     let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
     assert_eq!(said.len(), 1, "{said:?}");
     assert_held_event_declared(&said[0].data);
-    assert_eq!((said[0].data["state"].as_str(), said[0].data["held"].as_u64()), (Some("moved"), Some(1)), "{said:?}");
+    assert_eq!((said[0].data["state"].as_str(), said[0].data["held"].as_u64(), &said[0].data["hands"]), (Some("moved"), Some(1), &hands), "the face keeps the hands it named: {said:?}");
     let left: Vec<u64> = g.lines().iter().map(|l| l["held"].as_u64().unwrap()).collect();
     assert_eq!(left, [ks[0]], "the dropped line and the one after it are gone");
     assert_eq!(g.holds.resolve(&g.session, ks[0], ResolveAct::Drop).unwrap(), Resolved::Dropped);
@@ -1996,6 +2001,191 @@ fn a_refusal_at_the_writer_reaches_the_page_with_its_class() {
     }
 }
 
+/// The `held` events since the last look, each held to its declaration.
+fn told_events(g: &Ground) -> Vec<Value> {
+    let said: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).collect();
+    said.iter().for_each(assert_held_event_declared);
+    said
+}
+
+/// Checks that a line no file holds is listed so and its landing is said.
+///
+/// It is §3c.3's face and its lift (skep #860). Every copy refused, a burst
+/// is held: `held(session)` lists it with the refusal its answer named, in
+/// its words and its class, and the `held` event carries the same. The
+/// device takes copies again, the node stopped so the resend sends nothing:
+/// the next probe writes the line, the row carries neither member, and a
+/// `held` event follows with neither, its state, count and cause as the
+/// event last told them; a second probe says nothing (the mutant that leaves
+/// the members off the rows tells a launched page nothing; the one that
+/// never says the landing keeps up a face saying a close loses words the
+/// file now holds; the one that says it at each probe floods the page).
+#[test]
+fn a_line_no_file_holds_is_listed_so_and_its_landing_is_said() {
+    let g = ground();
+    crate::held::tests::refuse_copies_as(std::io::ErrorKind::StorageFull);
+    let held = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    crate::held::tests::take_copies();
+    let why = held["unwritable"].as_str().unwrap_or_else(|| panic!("the device's refusal rides the answer: {held}")).to_string();
+    let rows = g.lines();
+    let row = |rows: &[Value]| (rows[0].get("unwritable").cloned(), rows[0].get("unwritable_class").cloned());
+    assert_eq!(row(&rows), (Some(json!(why)), Some(json!("full"))), "the row carries the answer's two members: {rows:?}");
+    let told = told_events(&g);
+    assert_eq!(told.len(), 1, "{told:?}");
+    let said = |event: &Value| (event["state"].clone(), event["held"].clone(), event["cause"].clone());
+    assert_eq!(said(&told[0]), (json!("holding"), json!(1), json!("unreachable")), "{told:?}");
+    assert_eq!((told[0]["unwritable"].as_str(), told[0]["unwritable_class"].as_str()), (Some(why.as_str()), Some("full")), "the event carries them too: {told:?}");
+    g.holds.set_node_stopped("b-1", true);
+    g.holds.probe("b-1");
+    assert_eq!(row(&g.lines()), (None, None), "the row carries neither once the retry has written the line");
+    let lifted = told_events(&g);
+    assert_eq!(lifted.len(), 1, "one event says the landing: {lifted:?}");
+    assert_eq!(said(&lifted[0]), said(&told[0]), "its state, count and cause as last told: {lifted:?}");
+    assert!(lifted[0].get("unwritable").is_none() && lifted[0].get("unwritable_class").is_none(), "and neither member: {lifted:?}");
+    g.holds.probe("b-1");
+    assert_eq!(told_events(&g), Vec::<Value>::new(), "a second probe says nothing");
+}
+
+/// Checks that a landing lifts each document it wrote, and no other.
+///
+/// It is the retry's partial landing (§3c.3; skep #860). Two documents' lines
+/// wait for their first copies, and the device has room for the first alone:
+/// the probe writes it, and the `held` event lifts its document alone, the
+/// other's row and event keeping the refusal; once the device takes copies
+/// the next probe lifts the other (the mutant that lifts at the wait's end
+/// alone keeps the first document's face up while a copy it does not wait for
+/// is owed; the one that lifts every waiting document says a copy on disk
+/// that is not).
+#[test]
+fn a_landing_lifts_each_document_it_wrote_and_no_other() {
+    let g = ground();
+    // The file stands, so the retry's one copy is the lines' own.
+    g.hold(&insert("1.0.1.0.3", json!(["x"]), g.fake.head()), "unreachable", false);
+    let _ = told_events(&g);
+    crate::held::tests::refuse_copies_as(std::io::ErrorKind::StorageFull);
+    g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    g.hold(&insert(OTHER, json!(["b"]), g.fake.head()), "unreachable", false);
+    crate::held::tests::take_copies();
+    let told = told_events(&g);
+    assert_eq!((told.len(), told[0]["unwritable_class"].as_str(), told[1]["unwritable_class"].as_str()), (2, Some("full"), Some("full")), "{told:?}");
+    g.holds.set_node_stopped("b-1", true);
+    // The one copy is cut short, and the device takes the first line alone.
+    crate::held::tests::cut_the_next_write_short(10);
+    crate::held::tests::refuse_copies_after(1);
+    g.holds.probe("b-1");
+    crate::held::tests::take_copies();
+    let lifted = told_events(&g);
+    assert_eq!((lifted.len(), lifted[0]["doc"].as_str(), lifted[0].get("unwritable")), (1, Some(DOC), None), "the first document alone is lifted: {lifted:?}");
+    let rows = g.lines();
+    let waits: Vec<bool> = rows.iter().map(|row| row.get("unwritable").is_some()).collect();
+    assert_eq!(waits, [false, false, true], "the second document's line waits still: {rows:?}");
+    g.holds.probe("b-1");
+    let lifted = told_events(&g);
+    assert_eq!((lifted.len(), lifted[0]["doc"].as_str(), lifted[0].get("unwritable")), (1, Some(OTHER), None), "the next probe lifts the other: {lifted:?}");
+}
+
+/// Checks that a landing repeats what the event last told, moved or sending.
+///
+/// The lift changes the two members and nothing else (§3c.3; skep #860). A
+/// burst the board refused as typed against an older state, no anchors
+/// beside it, its copy refused, is told `moved`, its hands and `sendable`
+/// false; and a burst the walk has marked `sending`, its dial answered a
+/// reissue, its copy refused — each lifted by the probe that writes it with
+/// its state, its hands and its `sendable` as told (the mutant that derives
+/// the lifting event's state flips a document mid-resend to `holding`; the
+/// one that says a moved document's lift with no hands erases them).
+#[test]
+fn a_landing_repeats_what_the_event_last_told_moved_or_sending() {
+    // A moved document.
+    let g = ground();
+    let row = json!({"at": g.fake.head() + 1, "key": "bare", "docs": [DOC], "op": "insert"});
+    *g.fake.rows.lock().unwrap() = vec![row];
+    g.fake.op_rejected.next(1, arrangement_moved(g.fake.head(), 78));
+    crate::held::tests::refuse_copies_as(std::io::ErrorKind::StorageFull);
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]), g.fake.head()), None) else { panic!("held, not faced") };
+    crate::held::tests::take_copies();
+    assert_eq!((held["cause"].as_str(), held["unwritable_class"].as_str()), (Some("moved"), Some("full")), "{held}");
+    let told = told_events(&g);
+    assert_eq!((told.len(), told[0]["state"].as_str(), told[0]["unwritable_class"].as_str()), (1, Some("moved"), Some("full")), "{told:?}");
+    assert_eq!(told[0]["hands"], json!([{"key": "bare"}]), "{told:?}");
+    assert_eq!(told[0]["sendable"], json!(false), "a burst with no anchors never shifts: {told:?}");
+    g.holds.set_node_stopped("b-1", true);
+    g.holds.probe("b-1");
+    let lifted = told_events(&g);
+    assert_eq!(lifted.len(), 1, "{lifted:?}");
+    assert_eq!((&lifted[0]["state"], &lifted[0]["hands"], &lifted[0]["sendable"], lifted[0].get("cause")), (&told[0]["state"], &told[0]["hands"], &told[0]["sendable"], None), "the moved face as told, its hands among it: {lifted:?}");
+    assert!(lifted[0].get("unwritable").is_none(), "{lifted:?}");
+
+    // A document mid-resend.
+    let g = ground();
+    crate::held::tests::refuse_copies_as(std::io::ErrorKind::StorageFull);
+    g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    g.fake.op_rejected.next(1, retry("durability"));
+    g.holds.probe("b-1");
+    crate::held::tests::take_copies();
+    let told = told_events(&g);
+    let last = told.last().expect("the walk's event");
+    assert_eq!((last["state"].as_str(), last["unwritable_class"].as_str()), (Some("sending"), Some("full")), "premise: the walk marked it sending, its copy still refused: {told:?}");
+    g.holds.set_node_stopped("b-1", true);
+    g.holds.probe("b-1");
+    let lifted = told_events(&g);
+    assert_eq!((lifted.len(), lifted[0]["state"].as_str(), lifted[0].get("unwritable")), (1, Some("sending"), None), "still sending, the copy landed: {lifted:?}");
+}
+
+/// Checks that a landing is said under each session of the line's principal.
+///
+/// A second session of the principal's, told nothing of the document, hears
+/// its landing as the queue gives it, and another principal's session hears
+/// nothing (the mutant that says the landing under the session told alone
+/// leaves another window's rows, which read the two members, unlifted; the
+/// one that says it to every session on the board tells another principal
+/// of a draft it cannot read, P39).
+#[test]
+fn a_landing_is_said_under_each_session_of_the_lines_principal() {
+    let g = ground();
+    let register = |principal: u64, account: &str, n: u8| g.holds.sessions.register(&BoardEntry { reference: "b-1".into(), board: Arc::clone(&g.session.board) }, Open { token: Token::parse(&format!("{n:02x}").repeat(16)).unwrap(), facts: writer_facts_as(&g.store, principal, account), opened_at: 0 }, &mut NoSupplements);
+    let second = register(1, "1.0.1", 0x9e);
+    let other = register(2, "1.0.2", 0x9d);
+    crate::held::tests::refuse_copies_as(std::io::ErrorKind::StorageFull);
+    g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    crate::held::tests::take_copies();
+    let _ = told_events(&g);
+    g.holds.set_node_stopped("b-1", true);
+    g.holds.probe("b-1");
+    let lifted = told_events(&g);
+    let by = |session: &SessionEntry| lifted.iter().filter(|event| event["session"] == session.reference.as_str()).count();
+    assert_eq!((by(&g.session), by(&second), by(&other)), (1, 1, 0), "{lifted:?}");
+    let derived = lifted.iter().find(|event| event["session"] == second.reference.as_str()).expect("the second session's event");
+    assert_eq!((derived["state"].as_str(), derived["held"].as_u64(), derived["cause"].as_str()), (Some("holding"), Some(1), Some("unreachable")), "derived from the queue: {derived}");
+}
+
+/// Checks that a settled line whose `done` is owed stays counted (§3c.3).
+///
+/// It is the owed `done` the stop must count (skep #860). A held line is
+/// resent and acked while the device refuses every copy, a refused run
+/// standing on another document so the file stays: the line has left
+/// `held(session)` and is counted `kept` by `copies_owed`, and a reopen before
+/// the retry would read it as held; the device takes copies again and the
+/// next probe writes the `done`, the count falling to zero (the mutant that
+/// reads the rows alone says nothing of a line the next start lists).
+#[test]
+fn a_settled_line_whose_done_is_owed_stays_off_the_rows_and_counted() {
+    let g = ground();
+    g.hold_for(&insert(OTHER, json!(["r"]), g.fake.head()), Reason::refused("out_of_bounds", json!({"code": "out_of_bounds"}))).unwrap();
+    g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    assert_eq!(g.holds.copies_owed("b-1", 1), CopiesOwed::default(), "premise: both lines on disk");
+    crate::held::tests::refuse_copies_as(std::io::ErrorKind::StorageFull);
+    g.holds.probe("b-1");
+    crate::held::tests::take_copies();
+    assert_eq!(g.fake.sends(), 1, "the line is sent, and acked");
+    let rows = g.lines();
+    assert_eq!((rows.len(), rows[0]["doc"].as_str()), (1, Some(OTHER)), "the settled line is off the rows: {rows:?}");
+    assert_eq!(g.holds.copies_owed("b-1", 1), CopiesOwed { lines: 0, kept: 1, dropped: 0 }, "and counted");
+    g.holds.probe("b-1");
+    assert_eq!(g.holds.copies_owed("b-1", 1), CopiesOwed::default(), "the retry has written the `done`");
+    assert_eq!(g.holds.copies_owed("b-1", 2), CopiesOwed::default(), "another principal owes nothing here");
+}
+
 /// Checks that no `held` event goes out when a session's open reads its file.
 ///
 /// The open reads its principal's file (§4b.2; `EventName::Held`): the line
@@ -2723,7 +2913,8 @@ fn a_held_file_the_compaction_cannot_remove_is_said_on_talk_and_appended_on() {
 #[test]
 fn the_held_events_memory_emits_a_pair_once_until_it_changes_or_is_cleared() {
     let g = ground();
-    let emit = |state: HeldState, held: u64| g.holds.emit_held(&g.session, DOC, held, state, Some("unreachable"), MovedFace::default());
+    let lines = |held: u64| LinesOn { held, unwritable: None };
+    let emit = |state: HeldState, held: u64| g.holds.emit_held(&g.session, DOC, lines(held), state, Some("unreachable"), MovedFace::default());
     emit(HeldState::Holding, 1);
     emit(HeldState::Holding, 1);
     assert_eq!(g.states(), ["holding"], "the same pair once");
@@ -2738,14 +2929,20 @@ fn the_held_events_memory_emits_a_pair_once_until_it_changes_or_is_cleared() {
     assert_eq!(g.states(), ["kept", "holding"], "a document kept with no line clears its key: the pair after it is news");
     assert_eq!(g.holds.last_emitted.lock().unwrap().len(), 1, "one key per document still held, none for a document kept whole");
     let second = g.holds.sessions.register(&BoardEntry { reference: "b-1".into(), board: Arc::clone(&g.session.board) }, Open { token: Token::parse(&"9e".repeat(16)).unwrap(), facts: writer_facts(&g.store), opened_at: 0 }, &mut NoSupplements);
-    g.holds.emit_held(&second, DOC, 1, HeldState::Holding, Some("unreachable"), MovedFace::default());
+    g.holds.emit_held(&second, DOC, lines(1), HeldState::Holding, Some("unreachable"), MovedFace::default());
     assert_eq!(g.states(), ["holding"], "a second session of the principal sees its own first emit");
-    let moved = |sendable: Option<bool>| g.holds.emit_held(&g.session, OTHER, 1, HeldState::Moved, None, MovedFace { hands: &[], sendable });
+    let moved = |sendable: Option<bool>| g.holds.emit_held(&g.session, OTHER, lines(1), HeldState::Moved, None, MovedFace { hands: &[], sendable });
     moved(Some(false));
     moved(Some(false));
     moved(Some(true));
     moved(None);
     assert_eq!(g.states(), ["moved", "moved", "moved"], "`sendable` joins the memory: each change said once, a repeat none (skep #867)");
+    let waits = |why: &str, class: UnwritableClass| g.holds.emit_held(&g.session, DOC, LinesOn { held: 1, unwritable: Some(Unwritable { why: why.to_string(), class }) }, HeldState::Holding, Some("unreachable"), MovedFace::default());
+    waits("no room", UnwritableClass::Full);
+    waits("no room", UnwritableClass::Full);
+    waits("read only", UnwritableClass::ReadOnly);
+    emit(HeldState::Holding, 1);
+    assert_eq!(g.states(), ["holding", "holding", "holding"], "why a line is off disk joins the memory: each change said once, a repeat none (skep #860)");
 }
 
 /// Checks that the compaction keeps the principal's counter: the next

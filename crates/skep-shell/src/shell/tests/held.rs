@@ -746,6 +746,8 @@ fn a_halted_files_path_crosses_the_bridge_never_and_the_page_asks_to_show_it() {
     assert_eq!(shell.call("held.show", &json!({"session": second.reference})).unwrap(), json!({"shown": false}));
     assert!(lines.lock().unwrap()[said_before..].iter().all(|line| !line.contains("is halted")), "nothing is shown: {:?}", lines.lock().unwrap());
     assert_eq!(shell.halted_file(&board, 2).unwrap(), None, "no halted file of principal 2's stands");
+    assert_eq!(shell.copies_owed(&board, 2).unwrap(), crate::held::CopiesOwed::default(), "a file that owes nothing");
+    assert_eq!(shell.copies_owed("b-nowhere", 2).unwrap_err().name(), "unknown_board", "and a board this shell did not issue is refused");
     assert_eq!(shell.call("held.show", &json!({})).unwrap_err().to_value()["what"], "session", "a call naming no session is refused naming it");
     let crossed: Vec<String> = refusals.iter().chain(&answers).map(Value::to_string).chain(rx.try_iter().map(|e| e.data.to_string())).collect();
     let store_dir = store.display().to_string();

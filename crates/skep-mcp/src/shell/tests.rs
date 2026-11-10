@@ -666,14 +666,14 @@ fn the_backends_debug_names_its_stop_and_shows_no_closure() {
 ///
 /// A session the calls run under is said closed at the board; a lapsed one
 /// and a stopped one ended there already, and the line says so, and that a
-/// burst still held stays in its file save one kept in memory alone: the
+/// burst still held stays in its file, the file owing nothing here: the
 /// backend's line, said before the shell's stop runs, naming the session and
 /// carrying what the loop served, as the loop words it; then, the stop
 /// returned, its time.
 #[test]
 fn the_clean_stop_says_what_it_closes_as_the_session_state_has_it() {
     let closing = "stopping: closing the session at the board, saving the index (session s-1) — what the loop served";
-    let ended = "stopping: the session already ended at the board; saving the index (session s-1) — what the loop served; any burst held at this board stays in its held file for the next start to count, save one the shell kept in memory alone, which goes with this process";
+    let ended = "stopping: the session already ended at the board; saving the index (session s-1) — what the loop served; any burst held at this board stays in its held file for the next start to count";
     for (k, death, said) in [(0, None, closing), (1, Some(Death::ServeOn), ended), (2, Some(Death::Stop("stopped".into())), ended)] {
         let scratch = Scratch::new(&format!("clean-stop-{k}"));
         let mut backend = backend_at(&scratch.0, Origin::parse("http://127.0.0.1:1").expect("a canonical origin"), SessionMode::Bare { principal: 1 });
@@ -693,13 +693,48 @@ fn the_clean_stop_says_what_it_closes_as_the_session_state_has_it() {
 /// What the clean stop leaves held is counted as it stands.
 ///
 /// No tail where no burst stands; else the bursts counted, and those sent and
-/// so perhaps landed, and what becomes of them: the held file's the next start
-/// counts again, and one kept in memory alone goes with the process.
+/// so perhaps landed, and what becomes of them, read off what the file owes:
+/// the file's the next start counts again, and one kept in memory alone goes
+/// with the process (the mutant that reads the rows alone cannot tell a
+/// burst the process takes with it from one the next start counts).
 #[test]
 fn what_the_clean_stop_leaves_held_is_counted_as_it_stands() {
-    assert_eq!(left_held(&json!([])), None, "no tail where no burst stands");
+    let none = CopiesOwed::default();
+    assert_eq!(left_held(&json!([]), none), None, "no tail where no burst stands");
     let line = |k: u64, sent: bool| json!({"held": k, "doc": "1.0.1.0.2", "base": 0, "frame": {}, "cause": "unreachable", "sent": sent, "time": k});
-    let fate = "the next start counts those the held file holds, and any the shell answered `unwritable` was kept in memory alone and goes with this process";
-    assert_eq!(left_held(&json!([line(1, true), line(2, false)])), Some(format!("; it leaves 2 bursts held at this board (1 sent and so perhaps landed): {fate}")));
-    assert_eq!(left_held(&json!([line(1, false)])), Some(format!("; it leaves 1 burst held at this board (0 sent and so perhaps landed): {fate}")));
+    assert_eq!(left_held(&json!([line(1, true), line(2, false)]), none), Some("; it leaves 2 bursts held at this board (1 sent and so perhaps landed): the next start counts the 2 its held file holds".to_string()));
+    assert_eq!(left_held(&json!([line(1, false)]), none), Some("; it leaves 1 burst held at this board (0 sent and so perhaps landed): the next start counts the 1 its held file holds".to_string()));
+    let alone = CopiesOwed { lines: 1, ..none };
+    assert_eq!(left_held(&json!([line(1, true), line(2, false)]), alone), Some("; it leaves 2 bursts held at this board (1 sent and so perhaps landed): the next start counts the 1 its held file holds, and the 1 the shell answered `unwritable` was kept in memory alone and goes with this process".to_string()));
+    assert_eq!(left_held(&json!([line(1, false), line(2, false)]), CopiesOwed { lines: 2, ..none }), Some("; it leaves 2 bursts held at this board (0 sent and so perhaps landed): the 2 the shell answered `unwritable` were kept in memory alone and go with this process".to_string()));
+}
+
+/// An ended session's stop counts the bursts no file holds, where any is.
+///
+/// No session stands to list them, so the count is the shell's (the mutant
+/// that keeps the singular for every count tells the operator one burst is
+/// lost where three are).
+#[test]
+fn an_ended_sessions_stop_counts_the_bursts_no_file_holds() {
+    assert_eq!(kept_alone(0), "", "nothing is said where nothing is owed");
+    assert_eq!(kept_alone(1), ", save 1 the shell kept in memory alone, which goes with this process");
+    assert_eq!(kept_alone(3), ", save 3 the shell kept in memory alone, which go with this process");
+}
+
+/// The clean stop names the settled bursts the held file still lists.
+///
+/// Each is off the `held` row, and the next start lists it as held again: the
+/// board's own, a kept one read for its landing where the file marks it sent;
+/// a dropped one as it stood. Where the file owes nothing, the stop says
+/// nothing of them (the mutant that reads the rows alone says nothing of a
+/// burst the next start lists; the one that says a dropped burst was taken
+/// tells the agent a write it gave up stands on the board).
+#[test]
+fn the_clean_stop_names_the_settled_bursts_the_held_file_still_lists() {
+    assert_eq!(settled_left(CopiesOwed::default()), "", "nothing where the file owes nothing");
+    let took = "; 1 burst the board took stands in the held file unsettled, the device having refused the copy: the next start lists each as held again, reads one the file marks sent for its landing and keeps it where it landed, and sends any other again, which comes back moved";
+    assert_eq!(settled_left(CopiesOwed { kept: 1, ..CopiesOwed::default() }), took);
+    let dropped = "; 2 bursts dropped here stand in the held file unsettled, the device having refused the copy: the next start lists each as held again, as it stood before the drop";
+    assert_eq!(settled_left(CopiesOwed { dropped: 2, ..CopiesOwed::default() }), dropped);
+    assert_eq!(settled_left(CopiesOwed { lines: 3, kept: 1, dropped: 2 }), format!("{took}{dropped}"), "a burst in memory alone is the rows' to say");
 }

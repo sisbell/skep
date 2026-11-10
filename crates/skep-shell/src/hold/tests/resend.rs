@@ -51,11 +51,13 @@
 //! until the retry makes the directory, takes its lock and writes them; a
 //! held store this shell may not make answering `read_only`; the change's
 //! copy the device refuses parking the lines on the pending file until it
-//! lands, part-way keeping what landed, and with its cut-back refused
-//! leaving nothing a relaunch reads twice (skep #817, #821); the board's
-//! file found halted at the change halting the principal, a relaunch
-//! listing every line once the file is moved aside (skep #858); and a crash
-//! between the change's copy and the pending file's removal doubling no
+//! lands, a parked line listed with no refusal and counted by no read of
+//! what the file owes, and a `done` the pending file owed counted across
+//! the change (skep #860), part-way keeping what landed, and with its
+//! cut-back refused leaving nothing a relaunch reads twice (skep #817, #821);
+//! the board's file found halted at the change halting the principal, a
+//! relaunch listing every line once the file is moved aside (skep #858); and
+//! a crash between the change's copy and the pending file's removal doubling no
 //! line; every principal's lines resent by one probe, a bare session's line
 //! resent by none until a session of its principal's that may write stands,
 //! the keyless session's discard dropping a line in any state and that
@@ -4584,7 +4586,9 @@ fn the_changes_copy_the_device_refuses_parks_the_lines_on_the_pending_file_until
     assert!(!held_file(&g).exists(), "the copy is refused at the board's file's create");
     let said = said_containing(&g, "could not be copied to its held file");
     assert!(said.len() == 1 && said[0].contains(&refused), "the wait said once: {said:?}");
-    assert_eq!((g.fake.sends(), g.lines().len()), (0, 1), "the line stands, parked: sent by no walk while its copy is owed");
+    let rows = g.lines();
+    assert_eq!((g.fake.sends(), rows.len(), rows[0].get("unwritable")), (0, 1, None), "the line stands, parked: sent by no walk while its copy is owed, and listed with no refusal, its copy on the pending file");
+    assert_eq!(g.holds.copies_owed("b-1", 1), CopiesOwed::default(), "a close keeps a parked line: nothing is counted");
     assert!(std::fs::read_to_string(&pending).unwrap().contains("\"values\":[\"a\"]"), "on the pending file");
     let pending_store = HeldDir::pending(g.store.path(), g.session.board.dialed());
     assert!(pending_store.try_lock().unwrap().is_none(), "the pending directory stays under this shell's lock");
@@ -4597,6 +4601,43 @@ fn the_changes_copy_the_device_refuses_parks_the_lines_on_the_pending_file_until
     assert_eq!((g.fake.sends(), g.lines().len()), (1, 1), "the line sent once its copy landed, and refused, still standing");
     assert!(pending_store.try_lock().unwrap().is_none() && own.try_lock().unwrap().is_none(), "both locks kept for the shell's life");
     assert_eq!(said_containing(&g, "wait in memory no more").len(), 1, "the wait's end said once: {:?}", g.said.lock().unwrap());
+}
+
+/// Checks that a `done` the pending file owed is counted across the change.
+///
+/// It is the owed `done` the stop must count (§3c.3; skep #860). The board
+/// unclaimed, a line resent and acked with its `done` refused by the device
+/// beside a line awaiting `resolve`; the board then names a chain, and the
+/// change's copies are refused too. The settled line is off `held(session)`,
+/// the pending file holds it standing and `copies_owed` counts it; the device
+/// taking copies again, the copies land, the pending file goes and nothing is
+/// counted (the mutant that lets the replaced queue's `done`s go with it says
+/// nothing of a line that returns from the pending file).
+#[test]
+fn a_done_the_pending_file_owed_is_counted_across_the_change() {
+    let fake = Fake::new();
+    fake.no_head.store(true, Ordering::SeqCst);
+    fake.unclaimed.store(true, Ordering::SeqCst);
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent", "op": "insert"});
+    g.hold_for(&insert(OTHER, json!(["r"]), g.fake.head()), Reason::refused("out_of_bounds", verdict)).unwrap();
+    g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    crate::held::tests::refuse_copies_as(std::io::ErrorKind::StorageFull);
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.sends(), 1, "premise: the line is sent, and acked");
+    g.fake.no_head.store(false, Ordering::SeqCst);
+    g.fake.unclaimed.store(false, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    crate::held::tests::take_copies();
+    let rows = g.lines();
+    assert_eq!((rows.len(), rows[0]["doc"].as_str(), rows[0].get("unwritable")), (1, Some(OTHER), None), "the settled line is off the rows, the other parked: {rows:?}");
+    assert!(std::fs::read_to_string(pending_file(&g)).unwrap().contains("\"values\":[\"a\"]"), "premise: the pending file still lists the settled line");
+    assert_eq!(g.holds.copies_owed("b-1", 1), CopiesOwed { lines: 0, kept: 1, dropped: 0 }, "the `done` the pending file never wrote is counted");
+    g.holds.probe("b-1");
+    assert!(!pending_file(&g).exists(), "premise: the pending file goes once nothing is owed");
+    assert_eq!(g.holds.copies_owed("b-1", 1), CopiesOwed::default(), "and nothing is counted");
 }
 
 /// Checks that the change's copy the device refuses, its cut-back refused

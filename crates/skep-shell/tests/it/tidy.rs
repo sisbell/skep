@@ -50,7 +50,8 @@ const PUBLIC_MODULES: &[&str] = &["script", "shapes"];
 /// `Shell`'s public methods, in their order in `src/shell.rs`, the first of
 /// the files that hold an `impl Shell` block: the open,
 /// the stream and the log a transport serves, the run's facts, the halted
-/// held file the native side shows, the one door and the stream beside it,
+/// held file the native side shows and what a held file still owes, the one
+/// door and the stream beside it,
 /// the page's two answers, and the stop.
 const SHELL_PUBLIC_METHODS: &[&str] = &[
     "open",
@@ -62,6 +63,7 @@ const SHELL_PUBLIC_METHODS: &[&str] = &[
     "set_node_state",
     "check_signed_key",
     "halted_file",
+    "copies_owed",
     "call",
     "fetch",
     "answer",

@@ -682,7 +682,7 @@ fn an_earlier_runs_held_bursts_and_a_halted_held_file_are_said_at_the_start() {
     assert_eq!(refused["resp"], "held", "premise: a refused run is held: {refused}");
     let (status, log) = mcp.finish_logged();
     assert!(status.success(), "{status:?}\n{log}");
-    assert!(log.contains("; it leaves 1 burst held at this board (0 sent and so perhaps landed): the next start counts those the held file holds"), "the stop says what it leaves held:\n{log}");
+    assert!(log.contains("; it leaves 1 burst held at this board (0 sent and so perhaps landed): the next start counts the 1 its held file holds"), "the stop says what it leaves held:\n{log}");
     let mut again = Launch::over(&fixture, 1).logged().spawn();
     again.initialize();
     again.log_holding(&["held: an earlier run left 1 burst held at this board (0 sent and so perhaps landed, 1 waiting on the agent's `resolve`"], Duration::from_secs(10));
@@ -796,6 +796,47 @@ fn a_burst_kept_in_memory_alone_is_said_to_go_with_the_process() {
     again.initialize();
     let log = again.log_holding(&["serving "], Duration::from_secs(10));
     assert!(!log.contains("an earlier run left"), "the burst kept in memory alone is gone:\n{log}");
+    assert!(again.finish().success());
+}
+
+/// A settled burst the held file still lists is named at the stop.
+///
+/// The held file is made one this process cannot append to once two bursts
+/// stand in it, so the drop of one leaves its `done` owed: the burst leaves
+/// the `held` list, and the clean stop says the next start lists it again,
+/// which it does, the file writable again (skep #860). A process every mode
+/// lets write — one run as root — proves nothing here, and the case passes.
+#[cfg(unix)]
+#[test]
+fn a_settled_burst_the_held_file_still_lists_is_named_at_the_stop() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new("held-done-owed");
+    let mut mcp = Launch::over(&fixture, 1).logged().spawn();
+    mcp.initialize();
+    let (first, second) = (draft_of(&mut mcp, CLAIMANT_ACCOUNT), draft_of(&mut mcp, CLAIMANT_ACCOUNT));
+    let typed = mcp.position();
+    let at_end = |doc: &str| json!({"as_of": typed, "doc": doc, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"]});
+    let held = mcp.call_json("insert", at_end(&first));
+    let other = mcp.call_json("insert", at_end(&second));
+    assert!(held["resp"] == "held" && other["resp"] == "held", "premise: both are held: {held} {other}");
+    let file = the_boards_held_directory(&fixture.store).join("principal-1.held");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o400)).expect("the held file made read-only");
+    let writes_anyway = std::fs::OpenOptions::new().append(true).open(&file).is_ok();
+    if writes_anyway {
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).expect("the held file's mode restored");
+        return;
+    }
+    let dropped = mcp.call_json("resolve", json!({"held": held["held"], "act": "drop"}));
+    assert_eq!(dropped, json!({}), "the drop is answered: {dropped}");
+    assert_eq!(mcp.call_json("held", json!({})).as_array().map(Vec::len), Some(1), "the dropped burst has left the list");
+    let (status, log) = mcp.finish_logged();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).expect("the held file's mode restored");
+    assert!(status.success(), "{status:?}\n{log}");
+    assert!(log.contains("1 burst dropped here stands in the held file unsettled") && log.contains("as it stood before the drop"), "the stop names the burst the file still lists:\n{log}");
+    let mut again = Launch::over(&fixture, 1).logged().spawn();
+    again.initialize();
+    let log = again.log_holding(&["serving "], Duration::from_secs(10));
+    assert!(log.contains("an earlier run left 2 bursts held at this board"), "the next start lists it again:\n{log}");
     assert!(again.finish().success());
 }
 

@@ -182,6 +182,7 @@ mod shell;
 pub mod shapes;
 
 pub use events::{Event, EventBus, EventName, UnknownEventName};
+pub use held::CopiesOwed;
 pub use log::{CallOutcome, Log};
 pub use refusal::{Name, Refusal};
 pub use shell::{ArmConfig, Fetched, NodeState, SessionMode, Shell, ShellOptions, CALLS};

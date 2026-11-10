@@ -136,7 +136,7 @@ use skep_client::Origin;
 use crate::dev_arm::DevArm;
 use crate::events::{Event, EventBus, EventName};
 use crate::feed::{answer_without_index, changes_since, places_without_index, query_too_long, BridgeSearchOpts, ChangesRead, Feed, FeedThreads, Searcher, Shared};
-use crate::held::Anchors;
+use crate::held::{Anchors, CopiesOwed};
 use crate::hold::{AtDeath, BoardState, Holds, OpAnswer, ResolveAct, Resolved, Verdict};
 use crate::log::{CallOutcome, Log, ShellDialer};
 use crate::person::{Answerer, Pending};
@@ -1005,6 +1005,26 @@ impl Shell {
     pub fn halted_file(&self, board_reference: &str, principal: u64) -> Result<Option<PathBuf>, Refusal> {
         let entry = self.board_entry(&Value::from(board_reference))?;
         Ok(self.holds.halted_file(&entry.reference, principal))
+    }
+
+    /// Returns what `principal`'s held file at a board still owes its lines.
+    ///
+    /// It is the native side's read of what a close leaves behind
+    /// (`client.md` §3c.3; skep #860), for an embedder's stop to say: the
+    /// lines no file holds, and those settled whose `done` no file holds,
+    /// which `held(session)` no longer lists and a relaunch lists as held
+    /// again. It crosses no bridge, and takes the board and the principal
+    /// so an embedder whose session has ended reads it too. It reads what
+    /// the shell holds, zero for a principal it has opened no session for
+    /// there, since nothing is opened here (P39).
+    ///
+    /// # Errors
+    ///
+    /// Returns `unknown_board` where this shell issued no board under
+    /// `board_reference`.
+    pub fn copies_owed(&self, board_reference: &str, principal: u64) -> Result<CopiesOwed, Refusal> {
+        let entry = self.board_entry(&Value::from(board_reference))?;
+        Ok(self.holds.copies_owed(&entry.reference, principal))
     }
 
     fn say(&self, line: impl AsRef<str>) {

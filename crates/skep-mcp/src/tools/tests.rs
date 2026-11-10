@@ -607,6 +607,27 @@ fn the_held_card_names_sendable_and_an_agents_line_reading_false() {
     assert!(declared.contains(&"sendable"), "`sendable` is a member skep-shell declares for a held line: {declared:?}");
 }
 
+/// The held card names why a line stands off disk.
+///
+/// The card names `unwritable` and `unwritable_class` as skep-shell declares
+/// them for a held line, and says what the agent can do with them: a line it
+/// lists so is lost if the process ends before the shell writes it (skep
+/// #860). A card silent on them leaves an agent to stop a process holding a
+/// write it could have waited for.
+#[test]
+fn the_held_card_names_why_a_line_stands_off_disk() {
+    let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    let held = catalog.tools.iter().find(|t| t["name"] == "held").and_then(|t| t["description"].as_str()).expect("the held card");
+    assert!(
+        held.contains("unwritable? (the shell could not write this line to disk, and says why: the line stands in memory alone until the shell writes it, trying again on its own, and is lost if the process ends first; absent once it is on disk), unwritable_class? (beside unwritable, always with it: full, read_only or other)"),
+        "the held card names the two members: {held}"
+    );
+    let declared: Vec<&str> = skep_shell::shapes::shape("HeldRow").expect("skep-shell declares a held line").fields.iter().map(|field| field.name).collect();
+    for member in ["unwritable", "unwritable_class"] {
+        assert!(declared.contains(&member), "`{member}` is a member skep-shell declares for a held line: {declared:?}");
+    }
+}
+
 /// The held cards name the shell's hand-over, a burst kept in memory alone,
 /// and the line held on a head record that will not read.
 ///
@@ -678,7 +699,7 @@ fn the_held_cards_name_the_shells_hand_over_and_a_burst_kept_in_memory_alone() {
     );
     let paragraph = |head: &str| catalog.instructions().split("\n\n").find(|paragraph| paragraph.starts_with(head)).unwrap_or_else(|| panic!("the {head} paragraph"));
     let held_bursts = paragraph("HELD BURSTS. ");
-    assert!(held_bursts.contains("A burst whose held answer carries unwritable — why the shell could not write its line to disk — is kept in memory alone, and is lost if the process ends before it is resent."), "{held_bursts}");
+    assert!(held_bursts.contains("A burst whose held answer carries unwritable — why the shell could not write its line to disk — is kept in memory alone until the shell writes it, and is lost if the process ends first; held() lists it with unwritable beside it until its line is on disk."), "{held_bursts}");
     assert!(
         held_bursts.contains(&format!(
             "none of which the shell then sends, save a line handed back as {lost} with sent true, whose drop reads first: kept where its write landed, nothing discarded and the lines behind it sent (answering {{\"kept\": true}}), and refused {unread} where the read cannot tell, nothing discarded"

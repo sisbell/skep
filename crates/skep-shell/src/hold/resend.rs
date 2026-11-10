@@ -762,14 +762,16 @@ impl Holds {
     /// the pending → chain change made where the board's own directory is
     /// this shell's now — and the copies each held file owes — a line's, a
     /// re-mark's or a `done`'s — are written where the device takes them
-    /// (`HeldQueue::retry`), a wait that ends said ([`Holds::note_waiting`]):
-    /// none needs a dial. Then, at a board whose own node is not stopped, one
-    /// turn of the drain runs ([`Holds::drain`]), one drain per board at a
-    /// time, a halted principal's lines never among them (P38; skep #858),
-    /// where a session that may write stands — so a board that halts or whose
-    /// head will not read is found with no line held, before any write meets
-    /// it (§3c.3; P37; skep #865) — or a read is owed it with none
-    /// ([`BoardHold::probe_owed`](super::BoardHold::probe_owed); skep #863).
+    /// (`HeldQueue::retry`), a wait that ends said ([`Holds::note_waiting`])
+    /// and each document whose lines were written told so
+    /// ([`Holds::say_landed`]): none needs a dial. Then, at a board whose own
+    /// node is not stopped, one turn of the drain runs ([`Holds::drain`]), one
+    /// drain per board at a time, a halted principal's lines never among them
+    /// (P38; skep #858), where a session that may write stands — so a board
+    /// that halts or whose head will not read is found with no line held,
+    /// before any write meets it (§3c.3; P37; skep #865) — or a read is owed
+    /// it with none ([`BoardHold::probe_owed`](super::BoardHold::probe_owed);
+    /// skep #863).
     ///
     /// It answers [`Turn::Bounded`] where the turn stopped at its bound with
     /// a line still to send, the pass going on at the next turn;
@@ -785,10 +787,11 @@ impl Holds {
         // on a dead board's connect timeout; the sessions' own lock is taken
         // before the board's and let go.
         let slot = self.slot(board_reference);
-        let writer = self.sessions.on_board(board_reference).iter().any(|session| session.may_write());
+        let sessions = self.sessions.on_board(board_reference);
+        let writer = sessions.iter().any(|session| session.may_write());
         let due = {
             let mut board_hold = slot.lock();
-            self.retry_store(board_reference, &mut board_hold, slot.board.dialed());
+            self.retry_store(board_reference, &mut board_hold, slot.board.dialed(), &sessions);
             !board_hold.node_stopped && (writer || board_hold.probe_owed())
         };
         // One drain per board at a time, its mark cleared however it ends;
@@ -1056,7 +1059,7 @@ impl Holds {
                         ph.sendable_told(doc)
                     })
                     .flatten();
-                self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Moved, None, MovedFace { hands: &hands, sendable });
+                self.emit_held(session, doc, self.lines_on(board_reference, principal, doc), HeldState::Moved, None, MovedFace { hands: &hands, sendable });
                 Step::Goes
             }
             HandsRead::Unanswered => {
@@ -1112,16 +1115,16 @@ impl Holds {
                     if unread {
                         ph.hands_owed.insert(doc.to_string(), k);
                     }
-                    (ph.count(doc), ph.sendable_told(doc))
+                    (ph.lines_on(doc), ph.sendable_told(doc))
                 })
             })
             .flatten();
-        let Some((held, sendable)) = told else { return Step::Goes };
+        let Some((lines, sendable)) = told else { return Step::Goes };
         if tells {
             if unread {
                 self.note_unanswered(&mut self.lock(board_reference), None);
             }
-            self.emit_held(session, doc, held, HeldState::Moved, None, MovedFace { hands: &hands, sendable });
+            self.emit_held(session, doc, lines, HeldState::Moved, None, MovedFace { hands: &hands, sendable });
         }
         if unread {
             Step::Unanswered
@@ -1186,15 +1189,13 @@ impl Holds {
             }
             ReadOutcome::Landed { at } => {
                 self.keep_landing(&mut self.lock(board_reference), principal, doc, head.k, at);
-                match self.count(board_reference, principal, doc) {
-                    0 => {
-                        self.emit_held(session, doc, 0, HeldState::Kept, None, MovedFace::default());
-                        Step::Stops
-                    }
-                    rest => {
-                        self.emit_held(session, doc, rest, HeldState::Sending, None, MovedFace::default());
-                        Step::Goes
-                    }
+                let lines = self.lines_on(board_reference, principal, doc);
+                if lines.held == 0 {
+                    self.emit_held(session, doc, lines, HeldState::Kept, None, MovedFace::default());
+                    Step::Stops
+                } else {
+                    self.emit_held(session, doc, lines, HeldState::Sending, None, MovedFace::default());
+                    Step::Goes
                 }
             }
             ReadOutcome::NoLanding | ReadOutcome::Undecided => {
@@ -1208,7 +1209,7 @@ impl Holds {
                         return Step::Stops;
                     }
                 }
-                self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Sending, None, MovedFace::default());
+                self.emit_held(session, doc, self.lines_on(board_reference, principal, doc), HeldState::Sending, None, MovedFace::default());
                 Step::Goes
             }
         }
@@ -1484,8 +1485,9 @@ impl Holds {
                 Dialed::Acked(ack) => {
                     self.note_ack(session, &frame, &ack);
                     self.done(board_reference, principal, line.k, Done::Kept { at: acked_at(&ack) });
-                    let rest = self.count(board_reference, principal, &line.doc);
-                    self.emit_held(session, &line.doc, rest, if rest == 0 { HeldState::Kept } else { HeldState::Sending }, None, MovedFace::default());
+                    let rest = self.lines_on(board_reference, principal, &line.doc);
+                    let state = if rest.held == 0 { HeldState::Kept } else { HeldState::Sending };
+                    self.emit_held(session, &line.doc, rest, state, None, MovedFace::default());
                     return Step::Goes;
                 }
                 Dialed::Held { reason, refusal } if reason.cause == cause::MOVED => {
@@ -1549,7 +1551,7 @@ impl Holds {
                                 self.note_unanswered(&mut self.lock(board_reference), None);
                             }
                             let sendable = self.note_shift_refused(board_reference, principal, &line.doc, line.k, &why);
-                            self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Moved, None, MovedFace { hands: &hands, sendable });
+                            self.emit_held(session, &line.doc, self.lines_on(board_reference, principal, &line.doc), HeldState::Moved, None, MovedFace { hands: &hands, sendable });
                             return if unread { Step::Unanswered } else { Step::Stops };
                         }
                     }
@@ -1568,7 +1570,7 @@ impl Holds {
                         self.remark_line(principal, ph, line.k, Reason::of(cause::UNREACHABLE, reason.sent || sent));
                     });
                     self.note_unanswered(&mut self.lock(board_reference), cut);
-                    self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Holding, Some(cause::UNREACHABLE), MovedFace::default());
+                    self.emit_held(session, &line.doc, self.lines_on(board_reference, principal, &line.doc), HeldState::Holding, Some(cause::UNREACHABLE), MovedFace::default());
                     return Step::Unanswered;
                 }
                 Dialed::Held { reason, refusal } => {
@@ -1587,7 +1589,7 @@ impl Holds {
                     if failed == Some(true) && state == HeldState::Holding {
                         self.say(format_args!("line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
                     }
-                    self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), state, Some(&said), MovedFace::default());
+                    self.emit_held(session, &line.doc, self.lines_on(board_reference, principal, &line.doc), state, Some(&said), MovedFace::default());
                     return Step::Stops;
                 }
                 Dialed::Reissue { kind, refusal } => {
@@ -1612,7 +1614,7 @@ impl Holds {
                     let reason = Reason { sent, ..Reason::refused(&token, r.body.clone()) };
                     self.with_principal(board_reference, principal, |ph| self.remark_line(principal, ph, line.k, reason));
                     self.say(format_args!("line {} on {} was not taken ({r}), a code the shell holds no row for; it is handed to the person, who may send it again or drop it", line.k, line.doc));
-                    self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Refused, Some(&token), MovedFace::default());
+                    self.emit_held(session, &line.doc, self.lines_on(board_reference, principal, &line.doc), HeldState::Refused, Some(&token), MovedFace::default());
                     return Step::Stops;
                 }
                 // A refusal of the shell's own, which dialed nothing the
@@ -1760,7 +1762,7 @@ impl Holds {
             head.doc,
             elapsed.as_secs()
         ));
-        self.emit_held(session, &head.doc, self.count(board_reference, principal, &head.doc), HeldState::Refused, Some(Name::ANSWERS_LOST.as_str()), MovedFace::default());
+        self.emit_held(session, &head.doc, self.lines_on(board_reference, principal, &head.doc), HeldState::Refused, Some(Name::ANSWERS_LOST.as_str()), MovedFace::default());
     }
 
     /// Marks every line of a moved document `cause: moved`.
@@ -1815,10 +1817,6 @@ impl Holds {
         self.with_principal(board_reference, principal, |ph| self.done_line(principal, ph, k, done));
     }
 
-    /// Returns how many lines stand on the document.
-    fn count(&self, board_reference: &str, principal: u64, doc: &str) -> u64 {
-        self.with_principal(board_reference, principal, |ph| ph.count(doc)).unwrap_or(0)
-    }
 }
 
 /// Returns whether the walk passes a document over at `head`, its head,

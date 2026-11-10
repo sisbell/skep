@@ -86,7 +86,7 @@ use skep_client::search::SearchDir;
 use skep_client::sheet::render_inert;
 use skep_client::store::KeyFacts;
 use skep_client::{DialError, Origin};
-use skep_shell::{ArmConfig, Event, EventName, Fetched, Name, Refusal, SessionMode, Shell, ShellOptions, Talk};
+use skep_shell::{ArmConfig, CopiesOwed, Event, EventName, Fetched, Name, Refusal, SessionMode, Shell, ShellOptions, Talk};
 
 use self::watch::{classify, lapse_cause, refused_afresh, Death, SessionState, SessionWatch};
 
@@ -192,29 +192,75 @@ fn carried_line(lines: &Value) -> Option<String> {
     let lines = lines.as_array().filter(|lines| !lines.is_empty())?;
     let sent = lines.iter().filter(|line| line["sent"] == true).count();
     let waiting = lines.iter().filter(|line| awaits_resolve(line)).count();
-    let bursts = if lines.len() == 1 { "1 burst".to_string() } else { format!("{} bursts", lines.len()) };
+    let bursts = bursts(lines.len());
     Some(format!(
         "held: an earlier run left {bursts} held at this board ({sent} sent and so perhaps landed, {waiting} waiting on the agent's `resolve`, refused or moved): the shell resends held bursts in order as the board takes writes, save a waiting one and every burst behind it on its document"
     ))
 }
 
+/// Returns `n` bursts as the log spells them.
+fn bursts(n: usize) -> String {
+    if n == 1 {
+        "1 burst".to_string()
+    } else {
+        format!("{n} bursts")
+    }
+}
+
 /// Returns what the clean stop says of the bursts it leaves held, if any.
 ///
 /// `lines` is the `held` row's answer as the session stands at the stop: the
-/// principal's queue. A line its held file holds is read whole and counted at
-/// the next start (`carried_line`); a line the shell kept in memory alone —
-/// answered `unwritable` when it was held, the reason beside it: its copy
-/// refused, or its file out of reach (client.md §3c.3) — goes with the
-/// process. The row does not tell the two apart, so the line says both. It
-/// counts the bursts, and those `sent` and so perhaps landed (client.md
-/// §3c.2). `None` where none stands.
-fn left_held(lines: &Value) -> Option<String> {
+/// principal's queue. `owed` is what the held file still owes it, read beside
+/// it (`Shell::copies_owed`): its `lines` are those no file holds, kept in
+/// memory alone, which go with the process (client.md §3c.3), each answered
+/// `unwritable` when it was held; every other line is read whole and counted
+/// at the next start (`carried_line`). The line counts the bursts, and those
+/// `sent` and so perhaps landed (client.md §3c.2). `None` where none stands.
+fn left_held(lines: &Value, owed: CopiesOwed) -> Option<String> {
     let lines = lines.as_array().filter(|lines| !lines.is_empty())?;
     let sent = lines.iter().filter(|line| line["sent"] == true).count();
-    let bursts = if lines.len() == 1 { "1 burst".to_string() } else { format!("{} bursts", lines.len()) };
-    Some(format!(
-        "; it leaves {bursts} held at this board ({sent} sent and so perhaps landed): the next start counts those the held file holds, and any the shell answered `unwritable` was kept in memory alone and goes with this process"
-    ))
+    let alone = owed.lines.min(lines.len());
+    let filed = lines.len() - alone;
+    let counted = (filed > 0).then(|| format!("the next start counts the {filed} its held file holds"));
+    let gone = (alone > 0).then(|| {
+        let (was, goes) = if alone == 1 { ("was", "goes") } else { ("were", "go") };
+        format!("the {alone} the shell answered `unwritable` {was} kept in memory alone and {goes} with this process")
+    });
+    let fate: Vec<String> = counted.into_iter().chain(gone).collect();
+    Some(format!("; it leaves {} held at this board ({sent} sent and so perhaps landed): {}", bursts(lines.len()), fate.join(", and ")))
+}
+
+/// Returns what the clean stop says of the settled bursts the file still
+/// lists, where there are any.
+///
+/// `owed` is what the held file still owes (`Shell::copies_owed`; client.md
+/// §3c.3): each burst it counts was settled at this run, the board having
+/// taken it or the agent having dropped it, and the device refused the copy
+/// that says so, a stop taking the copy with it (skep #860). The `held` row
+/// lists none of them, and the next start lists each as held again. One the
+/// board took is read for its landing and kept where it landed where the file
+/// marks it sent; any other goes out again and comes back moved. One dropped
+/// comes back as it stood before the drop. The empty string where none is.
+fn settled_left(owed: CopiesOwed) -> String {
+    let settled = |n: usize, how: &str, then: &str| {
+        let stand = if n == 1 { "stands" } else { "stand" };
+        (n > 0).then(|| format!("; {} {how} {stand} in the held file unsettled, the device having refused the copy: the next start lists each as held again, {then}", bursts(n)))
+    };
+    let kept = settled(owed.kept, "the board took", "reads one the file marks sent for its landing and keeps it where it landed, and sends any other again, which comes back moved");
+    let dropped = settled(owed.dropped, "dropped here", "as it stood before the drop");
+    kept.into_iter().chain(dropped).collect()
+}
+
+/// Returns what an ended session's stop says of the bursts no file holds.
+///
+/// `n` is the count the shell holds (`Shell::copies_owed`), since no session
+/// stands to list them. The empty string where none stands.
+fn kept_alone(n: usize) -> String {
+    match n {
+        0 => String::new(),
+        1 => ", save 1 the shell kept in memory alone, which goes with this process".to_string(),
+        n => format!(", save {n} the shell kept in memory alone, which go with this process"),
+    }
 }
 
 /// Returns the line that says a held file the shell halted (client.md §3c.3).
@@ -950,6 +996,14 @@ impl Backend {
         Ok(info)
     }
 
+    /// Returns what the held file still owes (`Shell::copies_owed`).
+    ///
+    /// The reference is the one the shell issued at the open, so its
+    /// `unknown_board` never stands, and a read that cannot fail owes nothing.
+    fn copies_owed(&self) -> CopiesOwed {
+        self.shell.copies_owed(&self.board, self.principal).unwrap_or_default()
+    }
+
     /// Runs the clean stop, said first as the session's state has it.
     ///
     /// The stop is the shell's: every session in its table closed at the
@@ -960,9 +1014,12 @@ impl Backend {
     /// a death of another arm that serves on lapsed it — the session already
     /// ended there, its end having left the shell's table, and the line says
     /// so, and that a burst still held stays in its held file for the next
-    /// start, save one the shell kept in memory alone: no session stands to
-    /// read the held lines under, so none is counted. Either way the line names
-    /// the session, and carries `served`, what the loop answered over the run.
+    /// start, save those the shell kept in memory alone: no session stands to
+    /// read the held lines under, so the held bursts go uncounted, what the
+    /// file owes being read off the shell (`Shell::copies_owed`). Either way
+    /// the line names the session, carries `served`, what the loop answered
+    /// over the run, and names the settled bursts the file still lists
+    /// (`settled_left`).
     ///
     /// The stop's time is said once it returns. Its closing save rewrites
     /// every face of the index whole, clean or not, and each session's close
@@ -975,14 +1032,21 @@ impl Backend {
     /// for a death the stop never announces, and meet a dialer that dials no
     /// more.
     pub fn shutdown(self, served: &str) {
-        let said = match self.session.current() {
+        let state = self.session.current();
+        let lines = match &state {
+            SessionState::Open(reference) => self.shell.call("held", &json!({"session": reference})).ok(),
+            SessionState::Lapsed(_) | SessionState::Stopped(_) => None,
+        };
+        let owed = self.copies_owed();
+        let settled = settled_left(owed);
+        let said = match state {
             SessionState::Open(reference) => {
-                let left = self.shell.call("held", &json!({"session": reference})).ok().and_then(|lines| left_held(&lines)).unwrap_or_default();
-                format!("stopping: closing the session at the board, saving the index (session {reference}) — {served}{left}")
+                let left = lines.and_then(|lines| left_held(&lines, owed)).unwrap_or_default();
+                format!("stopping: closing the session at the board, saving the index (session {reference}) — {served}{left}{settled}")
             }
-            SessionState::Lapsed(reference) | SessionState::Stopped(reference) => format!(
-                "stopping: the session already ended at the board; saving the index (session {reference}) — {served}; any burst held at this board stays in its held file for the next start to count, save one the shell kept in memory alone, which goes with this process"
-            ),
+            SessionState::Lapsed(reference) | SessionState::Stopped(reference) => {
+                format!("stopping: the session already ended at the board; saving the index (session {reference}) — {served}; any burst held at this board stays in its held file for the next start to count{}{settled}", kept_alone(owed.lines))
+            }
         };
         self.say(&said);
         let stopping = Instant::now();

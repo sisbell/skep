@@ -146,6 +146,18 @@
 //! leaves, the copies before it written. A close loses every copy still
 //! owed: a relaunch reads each line as the file last held it.
 //!
+//! **What the file owes, read** (§3c.3; skep #860). A line waiting for its
+//! first copy on no file ([`HeldQueue::off_disk`]) is in memory alone, and a
+//! close loses it; a line parked on the pending file is not, its copy
+//! standing there. The `held` rows read the one line by line and the `held`
+//! events the other by document ([`HeldQueue::waits_on`]). A line that has
+//! left the queue while a `done` of it is owed is on no row, yet a relaunch
+//! lists it as held again, as the file last held it. A native reader counts
+//! both ([`HeldQueue::copies_owed`]): the lines in memory alone, and the
+//! `done`s owed — this file's, those the pending file it took its lines from
+//! never wrote, and the lines that left while parked on that file
+//! ([`HeldQueue::supersede`]), counted while it stands.
+//!
 //! **The pending directory** (§3c.1; skep #725, #857, #873). A board whose
 //! head has not named its chain — the head record standing and not reading,
 //! a claimed board serving none (the shell's `head_unreadable` hold, SP-14),
@@ -850,6 +862,11 @@ impl Lines {
     /// Returns the ordinals standing, in `k` order.
     fn ordinals(&self) -> impl Iterator<Item = u64> + '_ {
         self.by_k.keys().copied()
+    }
+
+    /// Returns the ordinals standing on `doc`, where a line stands on it.
+    fn ordinals_on(&self, doc: &str) -> Option<&BTreeSet<u64>> {
+        self.docs.get(doc).map(|entry| &entry.ks)
     }
 
     /// Returns how many lines stand on `doc`.
@@ -1668,6 +1685,13 @@ struct Superseded {
     /// ([`HeldQueue::parked`]), since a send of it would leave the one copy
     /// on disk reading it as never sent.
     standing: BTreeSet<u64>,
+    /// How each line left that the file holds standing and this queue does
+    /// not: a `done` the file never wrote.
+    ///
+    /// The queue this one replaced owed it, or the line left while parked. A
+    /// close before the file's removal leaves each line standing there, for
+    /// the next launch's join to read as held.
+    left: Vec<Done>,
 }
 
 /// The copies a file owes its queue's lines, while it owes any (§3c.3;
@@ -1747,6 +1771,31 @@ impl Waiting {
     pub fn refusal(&self) -> io::Error {
         io::Error::new(self.error.kind(), self.error.to_string())
     }
+}
+
+/// What a principal's held file owes its lines, read at one moment (§3c.3).
+///
+/// It is the native side's count of what a close leaves behind (skep #860),
+/// read by `Shell::copies_owed` and crossing no bridge. A re-mark's copy is
+/// no part of it: it changes no line's standing, and a relaunch reads such a
+/// line as the file last held it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CopiesOwed {
+    /// The standing lines no file holds a copy of.
+    ///
+    /// They wait in memory alone, and a close loses each.
+    pub lines: usize,
+    /// The lines the board took whose `done` no file holds.
+    ///
+    /// Each has left the queue and stands in a file, so a relaunch lists it
+    /// as held again: one the file marks `sent` is read for its landing and
+    /// kept where it landed, and any other goes out again, for the board to
+    /// judge as typed against an older state.
+    pub kept: usize,
+    /// The lines dropped whose `done` no file holds.
+    ///
+    /// A relaunch lists each as held again, as it stood before the drop.
+    pub dropped: usize,
 }
 
 /// Which of a line's copies the file owes ([`Waiting::owed`]).
@@ -2409,6 +2458,13 @@ impl HeldQueue {
             if let Some(owing) = self.disk.owing.as_mut() {
                 owing.first.remove(&k);
             }
+            // A parked line's only copy stands on the pending file, which no
+            // `done` reaches.
+            if let Some(superseded) = self.disk.superseded.as_mut() {
+                if superseded.standing.remove(&k) {
+                    superseded.left.push(done);
+                }
+            }
         }
         Ok(())
     }
@@ -2471,13 +2527,16 @@ impl HeldQueue {
     ///
     /// `standing` are the lines the file holds standing, by the ordinal each
     /// has here: each is parked while its copy here is owed
-    /// ([`HeldQueue::parked`]). The retry removes the file once no copy is
-    /// owed ([`HeldQueue::retry`]), so a crash before then leaves both files
-    /// for the next launch's join, which enters no line twice; a removal the
-    /// device refuses is kept for the next retry and answered
+    /// ([`HeldQueue::parked`]). `left` is how each line left that the file
+    /// holds standing and this queue does not, the `done`s the replaced queue
+    /// owed it ([`HeldQueue::dones_owed`]), counted until the file goes
+    /// ([`HeldQueue::copies_owed`]). The retry removes the file once no copy
+    /// is owed ([`HeldQueue::retry`]), so a crash before then leaves both
+    /// files for the next launch's join, which enters no line twice; a
+    /// removal the device refuses is kept for the next retry and answered
     /// ([`HeldQueue::superseded`]).
-    pub fn supersede(&mut self, pending: PathBuf, standing: BTreeSet<u64>) {
-        self.disk.superseded = Some(Superseded { path: pending, refused: None, standing });
+    pub fn supersede(&mut self, pending: PathBuf, standing: BTreeSet<u64>, left: Vec<Done>) {
+        self.disk.superseded = Some(Superseded { path: pending, refused: None, standing, left });
         self.retry();
     }
 
@@ -2492,6 +2551,56 @@ impl HeldQueue {
     /// a close loses it, and doubles nothing.
     pub fn parked(&self, k: u64) -> bool {
         self.disk.superseded.as_ref().is_some_and(|superseded| superseded.standing.contains(&k)) && !self.disk.holds(k)
+    }
+
+    /// Returns whether line `k` has no copy on any file: a close loses it.
+    ///
+    /// A parked line has one, on the pending file ([`HeldQueue::parked`]).
+    pub fn off_disk(&self, k: u64) -> bool {
+        !self.disk.holds(k) && !self.parked(k)
+    }
+
+    /// Returns whether a line standing on `doc` has no copy on any file.
+    ///
+    /// Every `held` event asks it, so it walks the first copies owed and
+    /// `doc`'s ordinals together, each step past an ordinal of either: a
+    /// document's cost is its own lines' where they lie among those owed, and
+    /// a lookup's where they do not (`Lines`; skep #816).
+    pub fn waits_on(&self, doc: &str) -> bool {
+        let (Some(owing), Some(on_doc)) = (self.disk.owing.as_deref(), self.lines.ordinals_on(doc)) else { return false };
+        let mut from = 0;
+        while let Some(&owed) = owing.first.range(from..).next() {
+            let Some(&stands) = on_doc.range(owed..).next() else { return false };
+            if stands == owed && !self.parked(owed) {
+                return true;
+            }
+            // Ordinals are within `MAX_ORDINAL`, so a successor is a `u64`.
+            from = if stands == owed { owed + 1 } else { stands };
+        }
+        false
+    }
+
+    /// Returns what the queue's file still owes its lines ([`CopiesOwed`]).
+    ///
+    /// A first copy owed a parked line counts nothing, its copy standing on
+    /// the pending file; the `done`s are [`HeldQueue::dones_owed`]'s.
+    pub fn copies_owed(&self) -> CopiesOwed {
+        let lines = self.disk.owing.as_ref().map_or(0, |owing| owing.first.iter().filter(|&&k| !self.parked(k)).count());
+        let dones = self.dones_owed();
+        let kept = dones.iter().filter(|done| matches!(done, Done::Kept { .. })).count();
+        CopiesOwed { lines, kept, dropped: dones.len() - kept }
+    }
+
+    /// Returns how each line left whose `done` no file holds.
+    ///
+    /// They are the `done`s this queue's file owes, and those of the pending
+    /// file it took its lines from, while that file stands.
+    pub fn dones_owed(&self) -> Vec<Done> {
+        let owed = self.disk.owing.iter().flat_map(|owing| owing.owed.values()).filter_map(|due| match *due {
+            Due::Done { done, .. } => Some(done),
+            Due::Mark => None,
+        });
+        owed.chain(self.disk.superseded.iter().flat_map(|superseded| superseded.left.iter().copied())).collect()
     }
 
     /// Returns the ordinals of the standing lines whose first copy is in the

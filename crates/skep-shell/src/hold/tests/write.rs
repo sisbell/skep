@@ -10,9 +10,12 @@
 //! run's `resolve(drop)`
 //! dropping it and every line held behind it on its own document alone,
 //! and a drop's `held` event saying the state of the line that stands
-//! first after it; a burst the board refuses as typed against an older
-//! state held moved at its first dial where it carries no anchors, the
-//! board's verdict on its line and the hand that moved the document named,
+//! first after it, a moved face naming the hands the session was told or,
+//! where no face told it them, the hands read once the act's locks are let
+//! go — named not read where the board does not give them, and named by the
+//! walk once it does (skep #960); a burst the board refuses as typed against
+//! an older state held moved at its first dial where it carries no anchors,
+//! the board's verdict on its line and the hand that moved the document named,
 //! and a moved line with the verdict reading `moved` and taking a moved
 //! document's acts; the person's `send` on a moved document raising each
 //! waiting line's base to the verdict's `site.current`, in the queue and on
@@ -370,18 +373,13 @@ fn a_refused_run_drops_its_behind_lines() {
     assert_eq!((said["session"].as_str(), said["held"].as_u64(), said["state"].as_str()), (Some(g.session.reference.as_str()), Some(0), Some("kept")), "the drop is said under the session that acted");
 }
 
-/// Checks that a drop says the state of the line that stands first.
+/// Returns a writer's ground whose document's three held lines stand moved.
 ///
-/// On a moved document (§4b.1's `resolve`, §4b.2's `held`) — the board
-/// refusing its head's resend as typed against an older state, every line of
-/// it faced `moved` — the person drops a later line, and the line held
-/// before it stands moved still — the `held` event says `moved` with the one
-/// line left, never `kept` over text still held, with the hands the face
-/// last named (the mutant that says `kept` at every drop lifts the page's
-/// marks; the one that says it with no hands erases them); the drop of the
-/// last line says `kept` with none.
-#[test]
-fn a_drop_says_the_state_of_the_line_that_stands_first() {
+/// The board refused the first line's resend as typed against an older
+/// state, another key's row at 77 having moved the document, and the face
+/// said under the ground's session named that hand. It answers the ground,
+/// the lines' ordinals and the hands the face named.
+fn moved_document() -> (Ground, Vec<u64>, Value) {
     let g = writer_at(80);
     g.fake.next_at.store(81, Ordering::SeqCst);
     *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
@@ -391,16 +389,177 @@ fn a_drop_says_the_state_of_the_line_that_stands_first() {
     assert!(g.lines().iter().all(|l| l["cause"] == "moved"), "the board's verdict faces every line moved: {:?}", g.lines());
     let faced: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held && e.data["state"] == "moved").map(|e| e.data).collect();
     let hands = faced.last().expect("the document faced moved")["hands"].clone();
+    assert_eq!(hands, json!([{"key": "other", "fingerprint": "ff".repeat(32)}]), "the face names the other key's hand");
+    (g, ks, hands)
+}
+
+/// Returns the session a restart re-opens in place of the ground's.
+///
+/// The ground's session is closed, and one of its principal's under its key
+/// stands at its board under a fresh reference, told nothing.
+fn reopened_session(g: &Ground) -> Arc<SessionEntry> {
+    g.sessions.close(&g.session.reference).expect("the ground's session stands");
+    let open = Open { token: Token::parse(&"8d".repeat(16)).unwrap(), facts: g.session.facts.clone(), opened_at: 80 };
+    let session = g.sessions.register(&g.entry, open, &mut NoSupplements);
+    g.holds.open_session(&session);
+    session
+}
+
+/// Returns the `/changes` reads the ground's board has served.
+fn changes_reads(g: &Ground) -> usize {
+    g.fake.changes_reads.load(Ordering::SeqCst)
+}
+
+/// Checks that a drop says the state of the line that stands first.
+///
+/// On a moved document (§4b.1's `resolve`, §4b.2's `held`) — the board
+/// refusing its head's resend as typed against an older state, every line of
+/// it faced `moved` — the person drops a later line, and the line held
+/// before it stands moved still — the `held` event says `moved` with the one
+/// line left, never `kept` over text still held, with the hands the face
+/// told the session named, no read made for them (the mutant that says
+/// `kept` at every drop lifts the page's marks; the one that says it with no
+/// hands erases them; the one that reads them again dials the board at every
+/// drop); the drop of the last line says `kept` with none.
+#[test]
+fn a_drop_says_the_state_of_the_line_that_stands_first() {
+    let (g, ks, hands) = moved_document();
+    let reads = changes_reads(&g);
     assert_eq!(g.holds.resolve(&g.session, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
     let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
     assert_eq!(said.len(), 1, "{said:?}");
     assert_held_event_declared(&said[0].data);
     assert_eq!((said[0].data["state"].as_str(), said[0].data["held"].as_u64(), &said[0].data["hands"]), (Some("moved"), Some(1), &hands), "the face keeps the hands it named: {said:?}");
+    assert_eq!(changes_reads(&g), reads, "the hands as told, no read made");
     let left: Vec<u64> = g.lines().iter().map(|l| l["held"].as_u64().unwrap()).collect();
     assert_eq!(left, [ks[0]], "the dropped line and the one after it are gone");
     assert_eq!(g.holds.resolve(&g.session, ks[0], ResolveAct::Drop).unwrap(), Resolved::Dropped);
     let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
     assert_eq!((said[0].data["state"].as_str(), said[0].data["held"].as_u64()), (Some("kept"), Some(0)), "{said:?}");
+}
+
+/// Checks that a drop reads the hands where no face told the session them.
+///
+/// It is §4b.2's `held` event (skep #960). Three cells, each a document
+/// moved on the board's verdict whose drop leaves its first line standing:
+/// the face told the session was a burst held `behind` the lines, since
+/// dropped with them; the session is the one a restart re-opened, told
+/// nothing; and the keyless session's discard, another bare session told
+/// the face. Each drop's event says the document `moved` with its one line
+/// under the session that acted, naming the other key's hand read once more
+/// under it, the keyless session's with no `sendable` (the mutant that
+/// repeats what the session was told says the document moved with no hand,
+/// a false picture of who changed it).
+#[test]
+fn a_drop_under_a_session_told_no_moved_face_names_the_hands_it_reads() {
+    let one_line = |said: &[Value], session: &SessionEntry, hands: &Value, cell: &str| {
+        let [event] = said else { panic!("{cell}: one event: {said:?}") };
+        let face = (event["session"].as_str(), event["state"].as_str(), event["held"].as_u64(), &event["hands"]);
+        assert_eq!(face, (Some(session.reference.as_str()), Some("moved"), Some(1), hands), "{cell}: {event}");
+    };
+    // A burst held behind the moved lines is the last face the session was
+    // told, and the drop takes it with the lines after the first.
+    let (g, ks, hands) = moved_document();
+    let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["d"]), g.fake.head()), None) else { panic!("held behind the moved lines") };
+    assert_eq!((behind["cause"].as_str(), told_events(&g).len()), (Some("behind"), 1), "said `holding` to the session: {behind}");
+    let reads = changes_reads(&g);
+    assert_eq!(g.holds.resolve(&g.session, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    one_line(&told_events(&g), &g.session, &hands, "a burst held behind");
+    assert_eq!(changes_reads(&g), reads + 1, "the hands read once");
+    let left: Vec<u64> = g.lines().iter().map(|l| l["held"].as_u64().unwrap()).collect();
+    assert_eq!(left, [ks[0]], "the burst held behind dropped with the lines");
+    // The session re-opened in the dead one's place, told nothing.
+    let (g, ks, hands) = moved_document();
+    let session = reopened_session(&g);
+    let reads = changes_reads(&g);
+    assert_eq!(g.holds.resolve(&session, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    one_line(&told_events(&g), &session, &hands, "a re-opened session");
+    assert_eq!(changes_reads(&g), reads + 1, "the hands read once");
+    // The keyless session's discard.
+    let g = bare_ground();
+    let moved = Reason { cause: "moved".to_string(), refusal: Some(arrangement_moved(70, 77)), sent: false };
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
+    let ks: Vec<u64> = ["a", "b"].iter().map(|v| g.hold_for(&insert(DOC, json!([v]), 70), moved.clone()).unwrap()["held"].as_u64().unwrap()).collect();
+    let hands = told_events(&g).last().expect("the document faced moved")["hands"].clone();
+    assert_eq!(hands, json!([{"key": "other", "fingerprint": "ff".repeat(32)}]), "the face names the other key's hand");
+    let open = Open { token: Token::parse(&"7c".repeat(16)).unwrap(), facts: bare_facts(), opened_at: 0 };
+    let session = g.sessions.register(&g.entry, open, &mut NoSupplements);
+    let reads = changes_reads(&g);
+    assert_eq!(g.holds.resolve(&session, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    let said = told_events(&g);
+    one_line(&said, &session, &hands, "the keyless session's discard");
+    assert_eq!((said[0].get("sendable"), changes_reads(&g)), (None, reads + 1), "no `sendable` under it, the hands read once: {said:?}");
+}
+
+/// Checks that a drop's hands the board does not give are named not read.
+///
+/// It is §4b.2's `held` event under §3c.5's silence (skep #960, #863). The
+/// moved document's second line is dropped under a re-opened session told
+/// nothing, in four cells: the read of the hands goes unanswered, the board
+/// then marked unanswered; it meets the death signal, the board answering
+/// still; the board's last `/health` went unanswered; and the own node
+/// stands stopped — no read made in the last two. Each drop is made, and its
+/// event says the document `moved` with the hands not read (SP-14); once
+/// the board answers, the walk reads them under the re-opened session and
+/// names them (the mutant that dials a board not answering waits out its
+/// bound on every drop; the ones that owe the walk nothing leave the face
+/// unread for good).
+#[test]
+fn a_drops_hands_the_board_does_not_give_are_named_not_read_and_the_walk_names_them() {
+    let unread = json!([{"key": "unread"}]);
+    for cell in ["unanswered", "died", "silent", "stopped"] {
+        let (g, ks, hands) = moved_document();
+        let session = reopened_session(&g);
+        match cell {
+            "unanswered" => g.fake.changes_unanswered.store(true, Ordering::SeqCst),
+            "died" => g.fake.changes_closed.store(true, Ordering::SeqCst),
+            "silent" => {
+                g.fake.health_unanswered.store(true, Ordering::SeqCst);
+                assert_eq!(g.holds.probe("b-1"), Turn::Unanswered, "{cell}: the probe finds the board silent");
+            }
+            _ => g.holds.set_node_stopped("b-1", true),
+        }
+        let reads = changes_reads(&g);
+        assert_eq!(g.holds.resolve(&session, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped, "{cell}");
+        let said = told_events(&g);
+        let [event] = &said[..] else { panic!("{cell}: one event: {said:?}") };
+        assert_eq!((event["state"].as_str(), event["held"].as_u64(), &event["hands"]), (Some("moved"), Some(1), &unread), "{cell}: {event}");
+        let read = matches!(cell, "unanswered" | "died");
+        assert_eq!(changes_reads(&g), reads + usize::from(read), "{cell}: a read made only where the board answers and the node runs");
+        assert_eq!(g.holds.lock("b-1").answers(), matches!(cell, "died" | "stopped"), "{cell}: the board marked unanswered by the read alone, a silent board standing so");
+        g.fake.changes_unanswered.store(false, Ordering::SeqCst);
+        g.fake.changes_closed.store(false, Ordering::SeqCst);
+        g.fake.health_unanswered.store(false, Ordering::SeqCst);
+        g.holds.set_node_stopped("b-1", false);
+        g.holds.probe("b-1");
+        let named: Vec<Value> = told_events(&g).into_iter().filter(|e| e["state"] == "moved").collect();
+        let [event] = &named[..] else { panic!("{cell}: the face said once more: {named:?}") };
+        assert_eq!((event["session"].as_str(), &event["hands"]), (Some(session.reference.as_str()), &hands), "{cell}: the walk names the hands under the re-opened session: {event}");
+    }
+}
+
+/// Checks that a drop says what stands where its document moves on meanwhile.
+///
+/// It is §4b.2's `held` event (skep #960). The moved document's second line
+/// is dropped under a re-opened session told nothing, and while the hands
+/// are read the person hands the document back by `send`: the event says
+/// the document `holding` with its one line, naming no hand (the mutant that
+/// says the face it read faces the person a move their own act cleared).
+#[test]
+fn a_drop_whose_document_moves_on_while_its_hands_are_read_says_what_stands() {
+    let (g, ks, _) = moved_document();
+    let session = reopened_session(&g);
+    let (holds, sent, head) = (Arc::downgrade(&g.holds), Arc::clone(&session), ks[0]);
+    *g.fake.at_changes.lock().unwrap() = Some(Box::new(move || {
+        if let Some(holds) = holds.upgrade() {
+            assert_eq!(holds.resolve(&sent, head, ResolveAct::Send).unwrap(), Resolved::HandedBack, "the send while the read is out");
+        }
+    }));
+    assert_eq!(g.holds.resolve(&session, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    let said = told_events(&g);
+    let [event] = &said[..] else { panic!("one event: {said:?}") };
+    assert_eq!((event["state"].as_str(), event["held"].as_u64(), event.get("hands")), (Some("holding"), Some(1), None), "{event}");
+    assert_eq!(g.lines()[0]["cause"], "behind", "the line handed back");
 }
 
 /// Checks that a burst refused as typed against an older state is held moved.

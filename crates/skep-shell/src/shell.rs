@@ -1875,7 +1875,7 @@ impl Shell {
     /// (`Feed::probe`). Under a bare session, which reads alone
     /// ([`SessionEntry::may_write`]), `"drop"` stands on every line, a
     /// holding one among them — the keyless session's discard, a local act
-    /// that commits nothing to the board and reads nothing
+    /// that commits nothing to the board and reads for no landing
     /// (`Holds::resolve`) — and `"send"` does not, since no resend sends
     /// under it. At a board whose held store another shell holds (§3c.3)
     /// both stand: the write door refuses every new write there, and the

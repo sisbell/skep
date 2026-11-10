@@ -12,8 +12,9 @@
 //! which the adapter sends as `op(session, frame)` through the shell — every
 //! op of wire.md §Operations but `publish`, which the shell runs as its
 //! `publication` call family; and the *adapter tools* — the shell's calls
-//! (`boards`, `health`, `probe`, `search`, `places`, `held`, `resolve`, and the
-//! `publication` family's four, `publication_open`, `publication_count`,
+//! (`boards`, `health`, `probe`, `search`, `places`, `held`, `resolve`, the
+//! read of a draft's standing, `publication_standing`, and the `publication`
+//! family's four, `publication_open`, `publication_count`,
 //! `publication_confirm` and `publication_cancel`) and the apparatus
 //! (`session_info`, `changes_since`, `fetch`) — whose arguments are the
 //! bridge's row minus the session and the board, the adapter supplying each
@@ -141,6 +142,11 @@ pub enum Tool {
     PublicationConfirm,
     /// `publication.cancel(session)`, the shell's: the session supplied.
     PublicationCancel,
+    /// `publication.standing(session, draft, doc, also?)`, the shell's.
+    ///
+    /// The session is supplied; the shell reads where the draft stands and
+    /// holds nothing.
+    PublicationStanding,
     /// The apparatus: who this adapter acts as, and its session's facts.
     SessionInfo,
     /// `changes(session, since, limit?, class?)`, the shell's, as a pull tool.
@@ -167,6 +173,7 @@ const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
     ("publication_count", Tool::PublicationCount, &["switches", "answers"]),
     ("publication_confirm", Tool::PublicationConfirm, &["switches", "answers"]),
     ("publication_cancel", Tool::PublicationCancel, &[]),
+    ("publication_standing", Tool::PublicationStanding, &["draft", "doc", "also"]),
     ("session_info", Tool::SessionInfo, &[]),
     ("changes_since", Tool::ChangesSince, &["since", "limit", "class"]),
     ("fetch", Tool::Fetch, &["i"]),

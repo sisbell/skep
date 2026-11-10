@@ -288,8 +288,9 @@ foundation and on the stores above it.
 - `skep-shell` — the SHELL's CORE, written once for the dev provider and
   the desktop shell (the design's `client.md` §4b; the dev provider
   record): the bridge's calls — §4b.1's, the publication family's four
-  and the merge family's four among them, the document index's listing
-  and the change feed's page — and its events
+  and the merge family's four among them, the read of a draft's standing,
+  the document index's listing and the change feed's page — and its
+  events
   over
   `skep-client`, the board and session references the page is
   handed in a credential's place, the person seam that forwards PUBLIC
@@ -795,8 +796,9 @@ SP-17, SP-18, SP-20, SP-24, SP-28.
 
 `skep-shell` is the bridge of `client.md` §4b as a library — one method
 per call of §4b.1 (the `publication` family's four among them), of the
-document index's listing `places` (A-255) and of the change feed's page
-`changes`, every event of §4b.2 on one stream — and
+read of a draft's standing `publication.standing`, of the document
+index's listing `places` (A-255) and of the change feed's page `changes`,
+every event of §4b.2 on one stream — and
 the three things `skep-client` does not hold and every shell needs,
 written once so the dev provider (`skep-dev serve`) and the desktop shell
 share them and rewrite the transport alone. A transport reaches it
@@ -867,8 +869,9 @@ re-exports counted as the module it is brought from (held by
   `op` row enters and waits on and `shutdown` drains before any session
   closes, each session's table going with it through the bus's watcher.
 - `shell/publication.rs` the four `publication` rows — `open`, `count`,
-  `confirm`, `cancel` over `skep_client::publication` — `pub(super)` to
-  `call`, and `Publications`, the panels they stand on: one family per
+  `confirm`, `cancel` over `skep_client::publication` — and
+  `publication.standing` beside them, `pub(super)` to `call`, and
+  `Publications`, the panels the four stand on: one family per
   (board, principal), the standing panel and the held ones, each dying with
   its session through the bus's watcher; the open's read of the draft's
   merge marker, from which the request's supersession claim is composed.

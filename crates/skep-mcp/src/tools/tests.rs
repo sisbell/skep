@@ -163,8 +163,9 @@ fn wire_frame_makes_the_name_the_op_and_the_arguments_the_frame() {
 ///
 /// Forty-nine wire ops — every op of wire.md §Operations but `publish`, the
 /// six the first catalog lacked among them, the count by home, the
-/// retracted-links read and the landing — and fourteen adapter tools, the
-/// `publication` family's four among them; no name twice across the two,
+/// retracted-links read and the landing — and fifteen adapter tools, the
+/// `publication` family's four among them and the read of a draft's
+/// standing beside them; no name twice across the two,
 /// each wire op a `Tool::Op` of its own name with no members list, each
 /// adapter tool its row's members; and a ceremony, `upload`, `restore`,
 /// `op`, `publish` or a row's dotted name no tool at all.
@@ -174,7 +175,7 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
     let set: std::collections::BTreeSet<_> = names.iter().collect();
     assert_eq!(set.len(), names.len(), "no name twice");
     assert_eq!(DISPATCH_OPS.len(), 50);
-    assert_eq!(names.len(), 64);
+    assert_eq!(names.len(), 65);
     for added in ["effective_owner", "key_set", "retrieve_i", "content_frontier", "edition_claims", "universal_grants", "count_v_by_home", "find_links_v_history", "set_arrangement"] {
         assert_eq!(Tool::named(added), Some(Tool::Op(added)), "{added} is a wire op of the dispatch");
     }
@@ -184,6 +185,7 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
     assert_eq!(Tool::named("fetch"), Some(Tool::Fetch));
     assert_eq!(Tool::named("publication_open").and_then(Tool::members), Some(&["draft", "also", "doc", "mint", "claim", "selection", "notes", "readable_drafts", "published"][..]));
     assert_eq!(Tool::named("publication_cancel").and_then(Tool::members), Some(&[][..]));
+    assert_eq!(Tool::named("publication_standing").and_then(Tool::members), Some(&["draft", "doc", "also"][..]));
     for not_a_tool in ["keygen", "fingerprint", "claim", "enroll", "bind", "recover", "rotate", "retire", "handoff", "accept", "upload", "restore", "op", "session", "close", "frobnicate"] {
         assert_eq!(Tool::named(not_a_tool), None, "{not_a_tool} is no tool");
     }
@@ -411,6 +413,7 @@ fn each_adapter_tool_takes_its_shell_rows_members_bar_the_session_and_board() {
             Tool::PublicationCount => "publication.count",
             Tool::PublicationConfirm => "publication.confirm",
             Tool::PublicationCancel => "publication.cancel",
+            Tool::PublicationStanding => "publication.standing",
             _ => *name,
         };
         // The declarations quote a dotted row's name, a method of the
@@ -504,6 +507,7 @@ fn the_publication_cards_state_the_shells_shapes() {
         ("publication_count", "publication.count", &["Count"][..]),
         ("publication_confirm", "publication.confirm", &[][..]),
         ("publication_cancel", "publication.cancel", &[][..]),
+        ("publication_standing", "publication.standing", &[][..]),
     ] {
         let head = format!("  '{row}'(args: ");
         let line = declarations.lines().find(|line| line.starts_with(head.as_str())).unwrap_or_else(|| panic!("skep-shell declares the row {row}"));

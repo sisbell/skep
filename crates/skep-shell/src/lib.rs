@@ -130,7 +130,8 @@
 //!   event (skep #827) — and one private method per §4b.1 row, per
 //!   `places` and per `changes`, behind [`Shell::call`], whose dispatch the
 //!   compiler holds to one arm per call — the ten ceremonial rows in its child
-//!   `ceremony`, the four `publication` rows and the panels they stand on in
+//!   `ceremony`, the four `publication` rows, the panels they stand on and
+//!   the read of a draft's standing, `publication.standing`, beside them in
 //!   its child `publication`, the four `merge` rows and the compositions
 //!   they stand on in its child `merge`, and the restore, `history.restore`,
 //!   a draft's past state made current by one write typed against the

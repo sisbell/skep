@@ -1,4 +1,5 @@
-//! The publication family (`client.md` §4b.1's four rows, §4b.2's event).
+//! The publication family (`client.md` §4b.1's four rows, §4b.2's event),
+//! and the read of a draft's standing beside it.
 //!
 //! The suite checks the rules the shell alone keeps, with no daemon behind
 //! it — a `publish` frame through `op` refused as a call before any dial,
@@ -36,9 +37,12 @@
 //! moved re-stated `base` at an unmoved standing and the next confirm
 //! sending against it, a base moved by its extent alone re-stated, a panel
 //! of the whole draft re-taking the draft, a held selection the draft has
-//! wholly left refused `selection_not_arranged`, nothing sent. Every draft
-//! a cell publishes into a document is staged through `stage`, the one
-//! frame that copies its source and records its base.
+//! wholly left refused `selection_not_arranged`, nothing sent; and the
+//! standing read alone (skep #864) — a draft's base, standing, head and
+//! family told with no panel composed or disturbed, its head moved and
+//! re-stated, its read at a second window. Every draft a cell publishes
+//! into a document is staged through `stage`, the one frame that copies its
+//! source and records its base.
 
 use skep_client::board::Health;
 use skep_client::store::{FileStore, KeyId, KeyStore};
@@ -328,6 +332,24 @@ fn no_panel_cancel_is_idempotent_and_the_rows_read_their_members_first() {
     assert_eq!(stale.name(), "session_ended");
     let keyless = shell.call("publication.open", &json!({"session": bare, "draft": "1.0.1.0.2", "doc": "1.0.1.0.1"})).unwrap_err();
     assert_eq!((keyless.name(), keyless.to_value()["call"].as_str()), ("write_in_bare_session", Some("publication.open")), "{keyless}");
+    // The standing read's own members, before the session, and its bare
+    // session refused by name before any dial — the page keys the keyless
+    // line to that name (skep #864).
+    let what = |args: Value| {
+        let refused = shell.call("publication.standing", &args).unwrap_err();
+        let v = refused.to_value();
+        assert_eq!(refused.name(), "malformed_args", "{args}: {v}");
+        v["what"].as_str().unwrap().to_string()
+    };
+    assert_eq!(what(json!({"session": signed, "doc": "1.0.2.0.1"})), "draft");
+    assert_eq!(what(json!({"session": signed, "draft": "1.0.2.0.2"})), "doc", "doc is required: a draft's base does not say which chain it joins");
+    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.2", "doc": "1.0.2.0.1", "also": ["1.0.2.0.2"]})), "also", "the draft named among also, before the session");
+    assert_eq!(what(json!({"session": signed, "draft": "1.0.2.0.2", "doc": "1.0.2.0.1", "also": ["1.0.2.0.3", "1.0.2.0.3"]})), "also", "a repeat");
+    let stale = shell.call("publication.standing", &json!({"session": "s-gone", "draft": "1.0.2.0.2", "doc": "1.0.2.0.1"})).unwrap_err();
+    assert_eq!(stale.name(), "session_ended");
+    let keyless = shell.call("publication.standing", &json!({"session": bare, "draft": "1.0.1.0.2", "doc": "1.0.1.0.1"})).unwrap_err();
+    assert_eq!((keyless.name(), keyless.to_value()["call"].as_str()), ("write_in_bare_session", Some("publication.standing")), "{keyless}");
+    assert!(rx.try_iter().all(|e| e.name != EventName::Publication), "a refused standing read says nothing");
 }
 
 /// The signed shell over a claimed board, its own node the board: the
@@ -1268,11 +1290,114 @@ fn a_siblings_shot_between_the_open_and_the_confirm_is_restated_and_nothing_land
     let before = g.position();
     let restated = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     crate::shapes::assert_declared("Restated", &restated);
-    assert_eq!(restated, json!({"outcome": "restated", "left": [], "superseded": [], "came": [], "removals_undone": [], "removals_came": [], "selection": [], "standing": "behind"}), "the standing moved alone");
+    assert_eq!(restated, json!({"outcome": "restated", "left": [], "superseded": [], "came": [], "removals_undone": [], "removals_came": [], "selection": [], "standing": "behind", "head": format!("{edition}.2")}), "the standing moved alone, the head it stands behind named");
     assert_eq!(g.position(), before, "nothing sent");
     assert_eq!(g.states_once(3), ["sent", "acknowledged", "restated"], "{:?}", g.states());
     let daughter = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!((daughter["outcome"].as_str(), daughter["member"].as_str()), (Some("acknowledged"), Some(format!("{e1}.1").as_str())), "behind is told, never refused: {daughter}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a draft's standing is read alone, names the head, and holds
+/// nothing (skep #864).
+///
+/// D publishes E.1 and S and T are staged on it. `publication.standing` of S
+/// answers its base E.1, `at_head` with no `head`, and the family left
+/// behind — `also`'s first, then D off the shell's own list. With a panel
+/// standing on T, a standing read of S leaves it standing: nothing said, and
+/// T's re-open reads no `hold`, so no panel was composed in its place. A
+/// second device publishes T as E.2: S answers `behind` naming E.2, its
+/// panel too; publishing U as E.3 while S's panel stands, S answers `behind`
+/// naming E.3, and S's confirm re-states `behind` with that `head` and
+/// every other difference empty, nothing sent — the head moved under a
+/// standing that did not change; the next confirm lands the daughter, and
+/// S's base, moved to it, answers `behind` still, naming E.3. A draft never
+/// staged answers `base_unrecorded` with `no_record`, a `doc` of another
+/// chain with `other_chain`; and a second window over the store, which
+/// writes nothing, reads it where `publication.open` is refused
+/// `another_window` (the mutant that asks the write door refuses it; the one
+/// that stands a panel disturbs T's; the one that drops `head` tells a
+/// corner no version; the one that skips the head's re-statement while the
+/// standing's name holds sends over a newer head unsaid).
+#[test]
+fn the_standing_is_read_alone_and_names_the_head() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let standing = |draft: &str, also: &[&str]| g.call("publication.standing", json!({"session": g.session, "draft": draft, "doc": edition, "also": also})).unwrap_or_else(|r| panic!("{draft}: {r}"));
+    let open = |g: &Ground, draft: &str| g.call("publication.open", json!({"session": g.session, "draft": draft, "doc": edition, "readable_drafts": [draft], "published": [edition]})).unwrap_or_else(|r| panic!("{draft}: {r}"));
+    let confirm = |g: &Ground| g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let publish = |g: &Ground, draft: &str| {
+        open(g, draft);
+        confirm(g)
+    };
+    let d = g.staged(&edition, "the quick brown fox");
+    let e1 = format!("{edition}.1");
+    assert_eq!(publish(&g, &d)["member"].as_str(), Some(e1.as_str()));
+    let s = g.staged(&e1, "one sibling ");
+    let t = g.staged(&e1, "another sibling ");
+    g.listed(&[d.as_str(), s.as_str(), t.as_str()]);
+    let at_head = standing(&s, &[t.as_str()]);
+    crate::shapes::assert_declared("PublicationStanding", &at_head);
+    assert_eq!(at_head, json!({"base": e1, "standing": "at_head", "left_behind": [t, d]}), "the base the board records, the head its own, `also` first and the drafts on E.1 after it");
+    // A panel standing on T: the standing read of S composes nothing,
+    // disturbs nothing and says nothing.
+    open(&g, &t);
+    let said = g.states().len();
+    let beside = standing(&s, &[]);
+    assert_eq!(beside["standing"], "at_head", "{beside}");
+    assert_eq!(g.states().len(), said, "no publication event: {:?}", g.states());
+    g.call("publication.count", json!({"session": g.session})).unwrap_or_else(|r| panic!("T's panel still stands: {r}"));
+    let again = open(&g, &t);
+    assert!(again.get("hold").is_none(), "nothing put in front of T's panel: {again}");
+    g.call("publication.cancel", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    // T lands E.2 from a second device: S is behind, E.2 named.
+    let second = second_device(&dir, &sd);
+    let e2 = format!("{edition}.2");
+    assert_eq!(publish(&second, &t)["member"].as_str(), Some(e2.as_str()));
+    let behind = standing(&s, &[]);
+    crate::shapes::assert_declared("PublicationStanding", &behind);
+    assert_eq!(behind, json!({"base": e1, "standing": "behind", "head": e2, "left_behind": []}), "the newest version named, and a daughter leaves no draft behind");
+    let panel = open(&g, &s);
+    crate::shapes::assert_declared("PublicationPanel", &panel);
+    assert_eq!((panel["standing"].as_str(), panel["head"].as_str()), (Some("behind"), Some(e2.as_str())), "the panel names the head beside its standing: {panel}");
+    // U lands E.3 while S's panel stands: the standing name unchanged, the
+    // head moved under it.
+    let u = second.staged(&e2, "a third hand ");
+    let e3 = format!("{edition}.3");
+    assert_eq!(publish(&second, &u)["member"].as_str(), Some(e3.as_str()));
+    second.shell.shutdown();
+    let further = standing(&s, &[]);
+    assert_eq!((further["standing"].as_str(), further["head"].as_str()), (Some("behind"), Some(e3.as_str())), "{further}");
+    let before = g.position();
+    let restated = confirm(&g);
+    crate::shapes::assert_declared("Restated", &restated);
+    assert_eq!(restated, json!({"outcome": "restated", "left": [], "superseded": [], "came": [], "removals_undone": [], "removals_came": [], "selection": [], "standing": "behind", "head": e3}), "the head moved alone, re-stated");
+    assert_eq!(g.position(), before, "nothing sent");
+    let daughter = confirm(&g);
+    let e11 = format!("{e1}.1");
+    assert_eq!((daughter["outcome"].as_str(), daughter["member"].as_str()), (Some("acknowledged"), Some(e11.as_str())), "the daughter lands at the next confirm: {daughter}");
+    assert_eq!(standing(&s, &[]), json!({"base": e11, "standing": "behind", "head": e3, "left_behind": []}), "the board moved S's base to the daughter, never the head");
+    // The refusals of a base.
+    let f = g.draft("a draft never staged");
+    let never = g.call("publication.standing", json!({"session": g.session, "draft": f, "doc": edition})).unwrap_err();
+    let v = never.to_value();
+    assert_eq!((never.name(), v["draft"].as_str(), v["doc"].as_str(), v["reason"].as_str()), ("base_unrecorded", Some(f.as_str()), Some(edition.as_str()), Some("no_record")), "{v}");
+    let other = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let elsewhere = g.call("publication.standing", json!({"session": g.session, "draft": s, "doc": other})).unwrap_err();
+    assert_eq!((elsewhere.name(), elsewhere.to_value()["reason"].as_str()), ("base_unrecorded", Some("other_chain")), "{elsewhere}");
+    // A second window over the store reads alone: the standing is a read.
+    let (window, _) = open_shell(&format!("http://127.0.0.1:{}", sd.port()), &dir.path().join("store"), SessionMode::Signed { principal: 1 });
+    let board = window.board_references().remove(0);
+    let opened = window.call("session", &json!({"board": board})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(opened["another_window"], true, "premise: another shell holds the store: {opened}");
+    let there = window.call("publication.standing", &json!({"session": opened["session"], "draft": s, "doc": edition})).unwrap_or_else(|r| panic!("a read at a second window: {r}"));
+    assert_eq!((there["standing"].as_str(), there["head"].as_str()), (Some("behind"), Some(e3.as_str())), "{there}");
+    let refused = window.call("publication.open", &json!({"session": opened["session"], "draft": s, "doc": edition})).unwrap_err();
+    assert_eq!(refused.name(), "another_window", "the panel's open meets the door, the read does not: {refused}");
+    window.shutdown();
     g.shell.shutdown();
     sd.shutdown();
 }

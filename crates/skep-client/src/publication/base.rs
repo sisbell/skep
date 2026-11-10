@@ -32,24 +32,35 @@
 //! an answer this client cannot read, never read as no base (SP-14).
 //!
 //! **The standing** ([`standing`]) is typed off the base's place in `doc`'s
-//! chain and at most one probe. The head a shot's base is judged against is
-//! a trunk member `⟨doc⟩.k`, never a daughter (PUB-2.53), so a base under a
-//! trunk member — `⟨doc⟩.k.…`, where a daughter's publication moves its
-//! draft's base, or a member a draft was staged from — is never the head:
-//! its shot lands as the base's own daughter, the head unmoved (PUB-2.37,
-//! PUB-2.55), and it stands [`Standing::Behind`] off its address alone, no
-//! read sent. The bare document and a trunk member are typed by one probe,
-//! read by `doc_metadata`: `doc`'s first member for the bare document, the
-//! member after `⟨doc⟩.k` for a base `⟨doc⟩.k`. Its answer says the trunk
-//! moved past the base; `doc_not_registered` says it did not. No read
-//! answers a document's head member, and a walk of the feed for it fails
-//! where the history is reclaimed; the probe needs neither, and names no
-//! head member. The successor rule is the merge's (`merge::reads`), a trunk
-//! member's one version component plus one, copied here, since this module
-//! stands outside the merge's feature. Every standing is told, none
-//! refused: a draft begun from the bare document whose first member now
-//! stands ([`Standing::SupersededFirst`]) publishes beside that member as
-//! its daughter, as a draft behind the head publishes beside its base.
+//! chain and `doc_metadata` reads of the trunk members past it. The head a
+//! shot's base is judged against is a trunk member `⟨doc⟩.k`, never a
+//! daughter (PUB-2.53), so a base under a trunk member — `⟨doc⟩.k.…`, where
+//! a daughter's publication moves its draft's base, or a member a draft was
+//! staged from — is never the head: its shot lands as the base's own
+//! daughter, the head unmoved (PUB-2.37, PUB-2.55), and it stands
+//! [`Standing::Behind`] by its address, whatever the reads find (skep #807).
+//! The bare document is typed by one read of `doc`'s first member, a trunk
+//! member by a read of the member after it: an answer says the trunk moved
+//! past the base, `doc_not_registered` says it did not. The successor rule
+//! is the merge's (`merge::reads`), a trunk member's one version component
+//! plus one, copied here, since this module stands outside the merge's
+//! feature. Every standing is told, none refused: a draft begun from the
+//! bare document whose first member now stands
+//! ([`Standing::SupersededFirst`]) publishes beside that member as its
+//! daughter, as a draft behind the head publishes beside its base.
+//!
+//! **The head** a behind base names is the trunk's newest member. No read
+//! answers it, and a walk of the feed for it fails where the history is
+//! reclaimed, so it is found from the trunk member the base stands on or
+//! under: the members `k+1`, `k+2`, `k+4`, … read until one is not
+//! registered, then a binary search between the last that was and that one,
+//! as a home's frontier is found (`landed`'s `deposits_at`). Trunk members
+//! are minted one after another off one frontier, so none stands past one
+//! that does not and the search's test is monotonic: a base at the head
+//! takes one read, a base one version behind two, a base a hundred behind
+//! fourteen. The doubling ends with `u64`: a board answering every member
+//! read is refused [`Fault::Shape`] after 64 reads, not walked without end
+//! (SP-17).
 //!
 //! **The family left behind** ([`left_behind`]) is every draft `also` names,
 //! then — where this publication becomes the head — every other draft of
@@ -62,7 +73,7 @@ use skep_address::{validate, Address, Nat, Tumbler};
 use crate::address::parse_address;
 use crate::board::{answers, frames};
 
-use super::{shape, Door, Fault, Inputs, Publisher};
+use super::{shape, Door, Fault, Publisher};
 
 /// A draft's base as the board records it, asked of `doc`'s chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,7 +111,11 @@ pub enum Standing {
     /// The base is a trunk member a later one follows, or a member under a
     /// trunk member: the next publication lands as the base's daughter, and
     /// the head does not move.
-    Behind,
+    Behind {
+        /// The trunk's newest member. Under a trunk member no later one
+        /// follows, that member itself.
+        head: Address,
+    },
     /// The base is the bare document and its chain is empty: the next
     /// publication is its first member.
     First,
@@ -154,67 +169,109 @@ fn recorded(door: &Door<'_>, doc: &str, draft: &Address) -> Result<Base, Fault> 
 
 /// Returns where `base` stands against `doc`'s newest version.
 ///
-/// A base under a trunk member is [`Standing::Behind`] off its address, no
-/// read sent (the module doc). The bare document and a trunk member are
-/// typed off one probe, `doc_metadata` of the trunk member after the base:
-/// for the bare document an answer is [`Standing::SupersededFirst`] and
-/// `doc_not_registered` is [`Standing::First`]; for a trunk member an answer
-/// is [`Standing::Behind`] and `doc_not_registered` is [`Standing::AtHead`].
+/// The bare document is typed by `doc_metadata` of its first member: an
+/// answer is [`Standing::SupersededFirst`] and `doc_not_registered` is
+/// [`Standing::First`]. A trunk member is typed by the head read: a later
+/// member standing is [`Standing::Behind`] naming the newest, and none is
+/// [`Standing::AtHead`]. A base under a trunk member is
+/// [`Standing::Behind`] by its address, the head read from the trunk
+/// member above it, which names that member where no later one stands
+/// (the module doc).
 ///
 /// # Errors
 ///
-/// The probe's other faults, as [`draft_base`]'s reads answer them:
+/// The reads' other faults, as [`draft_base`]'s reads answer them:
 /// `Fault::Unreadable`, `Fault::Shape`, `Fault::SessionEnded`, `Fault::Busy`
-/// and a `Fault::Halt` — never read as the member's absence (SP-14).
+/// and a `Fault::Halt` — never read as the member's absence (SP-14); and
+/// `Fault::Shape` where the board answers every member the head read asks,
+/// its doubling spent.
 ///
 /// # Panics
 ///
 /// Panics where `base` is neither `doc` nor a member of its chain: the
 /// caller owes the base [`draft_base`] answers, which is.
 pub fn standing(p: &Publisher<'_>, doc: &Address, base: &Address) -> Result<Standing, Fault> {
-    let stands = |member: &Address| -> Result<bool, Fault> {
-        let door = Door::new(p.board, p.token);
-        door.step("standing");
-        match door.metadata(&member.to_string()) {
-            Ok(_) => Ok(true),
-            Err(Fault::NoSuchDocument(_)) => Ok(false),
-            Err(e) => Err(e),
-        }
-    };
+    let door = Door::new(p.board, p.token);
+    door.step("standing");
     Ok(match place(doc, base).expect("a base in doc's chain") {
-        Place::Bare { first } => if stands(&first)? { Standing::SupersededFirst { first } } else { Standing::First },
-        Place::Trunk { next } => if stands(&next)? { Standing::Behind } else { Standing::AtHead },
-        Place::Under => Standing::Behind,
+        Place::Bare { first } => if stands(&door, &first)? { Standing::SupersededFirst { first } } else { Standing::First },
+        Place::Trunk => head_past(&door, base)?.map_or(Standing::AtHead, |head| Standing::Behind { head }),
+        Place::Under { trunk } => Standing::Behind { head: head_past(&door, &trunk)?.unwrap_or(trunk) },
     })
 }
 
-/// Returns the drafts a publication of `inputs.draft` leaves behind.
+/// Returns whether `member` is registered, off one `doc_metadata` of it.
 ///
-/// Every draft `inputs.also` names, in its order; then, where the
-/// publication becomes the head — `standing` [`Standing::AtHead`] or
+/// # Errors
+///
+/// The read's faults but `Fault::NoSuchDocument`, which is its answer.
+fn stands(door: &Door<'_>, member: &Address) -> Result<bool, Fault> {
+    match door.metadata(&member.to_string()) {
+        Ok(_) => Ok(true),
+        Err(Fault::NoSuchDocument(_)) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// Returns the newest trunk member past `member`, a registered trunk member:
+/// the trunk's head, or `None` where the member after `member` is not
+/// registered, `member` then being the head itself.
+///
+/// The read is the module doc's: doubling, then a binary search.
+///
+/// # Errors
+///
+/// [`stands`]'s; and `Fault::Shape` where every member the doubling asks is
+/// registered, up to the last offset a `u64` holds.
+fn head_past(door: &Door<'_>, member: &Address) -> Result<Option<Address>, Fault> {
+    let past = |by: u64| -> Address {
+        let mut comps: Vec<Nat> = member.tumbler().iter().cloned().collect();
+        *comps.last_mut().expect("an address has a component") += by;
+        validate(Tumbler::new(comps).expect("an address has a component")).expect("a trunk member's version component, raised, spells a trunk member")
+    };
+    let (mut found, mut probe) = (0u64, 1u64);
+    while stands(door, &past(probe))? {
+        found = probe;
+        probe = probe.checked_mul(2).ok_or_else(|| Fault::Shape { op: "doc_metadata".to_string(), body: format!("every trunk member asked past {member} answered, to {}", past(found)) })?;
+    }
+    let mut missing = probe;
+    while missing - found > 1 {
+        let mid = found + (missing - found) / 2;
+        if stands(door, &past(mid))? {
+            found = mid;
+        } else {
+            missing = mid;
+        }
+    }
+    Ok((found > 0).then(|| past(found)))
+}
+
+/// Returns the drafts a publication of `draft`, based on `base` in `doc`'s
+/// chain, leaves behind.
+///
+/// Every draft `also` names, in its order; then, where the publication
+/// becomes the head — `standing` [`Standing::AtHead`] or
 /// [`Standing::First`] — every other draft of `own`, the person's own in the
-/// caller's order, whose recorded base is the rendering draft's
-/// (`inputs.base`): one `doc_metadata` of each, read as [`draft_base`] reads
-/// the draft's, the rendering draft and those `also` names read never. At
-/// [`Standing::Behind`] and [`Standing::SupersededFirst`] the publication
-/// lands as a daughter and leaves no other draft behind. None at the mint
-/// form, which has no base.
+/// caller's order, whose recorded base is `base`: one `doc_metadata` of
+/// each, read as [`draft_base`] reads the draft's, `draft` and those `also`
+/// names read never. At [`Standing::Behind`] and
+/// [`Standing::SupersededFirst`] the publication lands as a daughter and
+/// leaves no other draft behind.
 ///
 /// # Errors
 ///
 /// A read's faults as [`draft_base`]'s draft read answers them, but
 /// `Fault::NoSuchDocument`: a draft the board no longer holds is passed
 /// over, since the caller's list can lag a removal.
-pub fn left_behind(p: &Publisher<'_>, inputs: &Inputs, standing: &Standing, own: &[Address]) -> Result<Vec<Address>, Fault> {
-    let (Some(doc), Some((base, _))) = (&inputs.doc, &inputs.base) else { return Ok(Vec::new()) };
-    let mut out = inputs.also.clone();
+pub fn left_behind(p: &Publisher<'_>, doc: &Address, base: &Address, draft: &Address, also: &[Address], standing: &Standing, own: &[Address]) -> Result<Vec<Address>, Fault> {
+    let mut out = also.to_vec();
     if !matches!(standing, Standing::AtHead | Standing::First) {
         return Ok(out);
     }
     let door = Door::new(p.board, p.token);
     door.step("left_behind");
     let doc = doc.to_string();
-    for other in own.iter().filter(|o| !inputs.is_named_draft(o)) {
+    for other in own.iter().filter(|o| *o != draft && !also.contains(o)) {
         match recorded(&door, &doc, other) {
             Ok(Base::Recorded { base: theirs, .. }) if theirs == *base => out.push(other.clone()),
             Ok(_) | Err(Fault::NoSuchDocument(_)) => {}
@@ -231,27 +288,22 @@ fn in_chain(addr: &str, doc: &str) -> bool {
 }
 
 /// Where a base lies in `doc`'s version chain.
-///
-/// A place whose standing a read decides names the trunk member it is
-/// probed at; a member under a trunk member, whose standing its address
-/// decides, names none.
 enum Place {
-    /// `doc` itself, probed at its first member, `⟨doc⟩.1`.
+    /// `doc` itself, read at its first member, `⟨doc⟩.1`.
     Bare { first: Address },
-    /// A trunk member `⟨doc⟩.k`, probed at the one after it, `⟨doc⟩.(k+1)`.
-    Trunk { next: Address },
+    /// A trunk member `⟨doc⟩.k`, the head read from it.
+    Trunk,
     /// A member under a trunk member, `⟨doc⟩.k.…`: never the head
-    /// (PUB-2.53), so never probed.
-    Under,
+    /// (PUB-2.53), the head read from `trunk`, that member.
+    Under { trunk: Address },
 }
 
 /// Returns where `base` lies in `doc`'s version chain.
 ///
 /// That is `doc` itself, a trunk member — `doc` and one version component —
-/// or a member under one, the first two naming the member their standing is
-/// probed at by the merge's successor rule: `⟨doc⟩.1` for the bare
-/// document, a trunk member's one version component plus one. `None` where
-/// `base` is neither `doc` nor a member of its chain.
+/// or a member under one, the first naming `⟨doc⟩.1` and the last its trunk
+/// member by the version component it opens with. `None` where `base` is
+/// neither `doc` nor a member of its chain.
 fn place(doc: &Address, base: &Address) -> Option<Place> {
     let doc: Vec<Nat> = doc.tumbler().iter().cloned().collect();
     let comps: Vec<Nat> = base.tumbler().iter().cloned().collect();
@@ -259,11 +311,10 @@ fn place(doc: &Address, base: &Address) -> Option<Place> {
     if version.contains(&Nat::from(0u32)) {
         return None;
     }
-    let member = |k: Nat| -> Option<Address> { validate(Tumbler::new(doc.iter().cloned().chain(std::iter::once(k))).ok()?).ok() };
-    let one = Nat::from(1u32);
+    let member = |k: &Nat| -> Option<Address> { validate(Tumbler::new(doc.iter().cloned().chain(std::iter::once(k.clone()))).ok()?).ok() };
     match version {
-        [] => Some(Place::Bare { first: member(one)? }),
-        [k] => Some(Place::Trunk { next: member(k + &one)? }),
-        _ => Some(Place::Under),
+        [] => Some(Place::Bare { first: member(&Nat::from(1u32))? }),
+        [_] => Some(Place::Trunk),
+        [k, ..] => Some(Place::Under { trunk: member(k)? }),
     }
 }

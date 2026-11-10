@@ -8,7 +8,8 @@
 //! reads alone, or signed content-scoped with a dev key in the store, which
 //! writes too (both selectable per run); and one method per row of
 //! `client.md` §4b.1 — and of `places`, the document index's listing beside
-//! `search` (A-255) — each taking the row's input as a value and answering
+//! `search` (A-255), and of `publication.standing`, the read of a draft's
+//! standing (skep #864) — each taking the row's input as a value and answering
 //! the row's output or a [`Refusal`] under the row's armed name, the board's
 //! own refusals carried verbatim — and of `changes`, the change feed's page
 //! from a position at the session's class, or narrowed to its drafts, or as
@@ -39,7 +40,9 @@
 //! ([`Shell::session`]).
 //! The four `publication` rows — the panel, the four numbers, the one
 //! request composed, signed and sent, the cancel — are the child module
-//! `publication`'s, `pub(super)` to the door, with the panels they stand on.
+//! `publication`'s, `pub(super)` to the door, with the panels they stand on,
+//! and `publication.standing` beside them, the read of a draft's standing
+//! that stands on no panel.
 //! The four `merge` rows — the composition landed in a draft, the shot
 //! carrying the supersession claim with the record after it, the undo, the
 //! withdrawal — are the child module `merge`'s, `pub(super)` to the door,
@@ -402,11 +405,12 @@ impl<'a> Write<'a> {
 /// It is a call of §4b.1 — the `publication` family's four, the `merge`
 /// family's four, `history.restore`, the past state the merge row draws
 /// beside them, and `held.show`, the `held` row's call for the halt face's
-/// own act, among them — the document index's listing `places` (A-255), or
-/// the change feed's page `changes`: one arm per call, which the compiler
-/// holds exhaustive, and the list a transport admits a call by, [`CALLS`],
-/// spelled from `Call::ALL` — so no call is listed that the dispatch does
-/// not answer.
+/// own act, among them — the read of a draft's standing beside the
+/// publication family, `publication.standing` (skep #864), the document
+/// index's listing `places` (A-255), or the change feed's page `changes`:
+/// one arm per call, which the compiler holds exhaustive, and the list a
+/// transport admits a call by, [`CALLS`], spelled from `Call::ALL` — so no
+/// call is listed that the dispatch does not answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Call {
     Boards,
@@ -429,6 +433,7 @@ enum Call {
     PublicationCount,
     PublicationConfirm,
     PublicationCancel,
+    PublicationStanding,
     MergeCompose,
     MergeLand,
     MergeUndo,
@@ -449,11 +454,12 @@ impl Call {
     /// Every call, in §4b.1's order.
     ///
     /// The `publication` family stands after `op`, whose publish arm it
-    /// carries, and the `merge` family after it, whose shot its landing
-    /// rides, `history.restore` closing the merge row that draws it;
+    /// carries, its read of a draft's standing closing it, and the `merge`
+    /// family after it, whose shot its landing rides, `history.restore`
+    /// closing the merge row that draws it;
     /// `places` stands beside `search`, `held.show` after `held`, whose row
     /// owes it, and the change feed's `changes` last.
-    const ALL: [Call; 34] = [
+    const ALL: [Call; 35] = [
         Call::Boards,
         Call::Session,
         Call::Close,
@@ -474,6 +480,7 @@ impl Call {
         Call::PublicationCount,
         Call::PublicationConfirm,
         Call::PublicationCancel,
+        Call::PublicationStanding,
         Call::MergeCompose,
         Call::MergeLand,
         Call::MergeUndo,
@@ -513,6 +520,7 @@ impl Call {
             Call::PublicationCount => "publication.count",
             Call::PublicationConfirm => "publication.confirm",
             Call::PublicationCancel => "publication.cancel",
+            Call::PublicationStanding => "publication.standing",
             Call::MergeCompose => "merge.compose",
             Call::MergeLand => "merge.land",
             Call::MergeUndo => "merge.undo",
@@ -536,13 +544,14 @@ impl Call {
     }
 }
 
-/// The bridge's thirty-four calls, as it spells them, in its order.
+/// The bridge's thirty-five calls, as it spells them, in its order.
 ///
 /// They are §4b.1's thirty-two — the `publication` family's four, the
 /// `merge` family's four, `history.restore` and `held.show` among them —
-/// the document index's listing, `places` (A-255), and the change feed's
-/// page, `changes`: the list a transport admits a call by, every name of it
-/// one [`Shell::call`] answers.
+/// the read of a draft's standing, `publication.standing` (skep #864), the
+/// document index's listing, `places` (A-255), and the change feed's page,
+/// `changes`: the list a transport admits a call by, every name of it one
+/// [`Shell::call`] answers.
 pub const CALLS: [&str; Call::ALL.len()] = {
     let mut names = [""; Call::ALL.len()];
     let mut i = 0;
@@ -1115,6 +1124,7 @@ impl Shell {
             Some(Call::PublicationCount) => self.publication_count(args),
             Some(Call::PublicationConfirm) => self.publication_confirm(args),
             Some(Call::PublicationCancel) => self.publication_cancel(args),
+            Some(Call::PublicationStanding) => self.publication_standing(args),
             Some(Call::MergeCompose) => self.merge_compose(args),
             Some(Call::MergeLand) => self.merge_land(args),
             Some(Call::MergeUndo) => self.merge_undo(args),

@@ -18,8 +18,9 @@
 //! by [`draft_base`] for the caller's [`Inputs::base`] and never taken from
 //! the caller's own index, or why the board records none; its STANDING
 //! against the document's newest version, typed by [`standing`] off the
-//! base's place in the chain and at most one probe; and the drafts of the
-//! family the publication leaves behind, [`left_behind`]. The order:
+//! base's place in the chain and a read of the trunk past it, the newest
+//! member named where the base is behind it; and the drafts of the family
+//! the publication leaves behind, [`left_behind`]. The order:
 //!
 //! 1. [`enumerate`](mod@enumerate) — THE ENUMERATION (§5.1): one `image` of the draft
 //!    inverted over the held selection, one of each draft `also` names for

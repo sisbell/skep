@@ -1,6 +1,7 @@
 //! The publication rows of `client.md` §4b.1 — `publication.open`,
-//! `publication.count`, `publication.confirm`, `publication.cancel` — and
-//! the panels they stand on, each reached from [`Shell::call`] alone.
+//! `publication.count`, `publication.confirm`, `publication.cancel` — the
+//! panels they stand on, and `publication.standing`, the read of a draft's
+//! standing beside them, each reached from [`Shell::call`] alone.
 //!
 //! THE FAMILY runs skep-client's publication composition for the page
 //! (decision 1 (b)): the page composes no write (S-35 (a)); the shell
@@ -13,7 +14,8 @@
 //! a record names taken by its counterpart and every other kept private —
 //! the widest request the default switches make — and answers the panel
 //! `{rows, formatting, read_with, count, price, windows, parts, inherited,
-//! merge_records, edition_links, p3_stands, standing?, left_behind, hold?}`
+//! merge_records, edition_links, p3_stands, standing?, head?, left_behind,
+//! hold?}`
 //! — each row with THE FOLD (E4 1.8): `unchanged` its links unchanged since
 //! the recorded base by the fold's test, by address, `fold` the two counts,
 //! links unchanged and not, and `changed_types` and `unchanged_types` the
@@ -142,10 +144,11 @@
 //! records no base for) — and never takes the chain's head in its place.
 //! THE STANDING (D4 (a)+(b′), (d)) is that base typed against the chain's
 //! head by the library's `standing` — a base under a trunk member `behind`
-//! by its address alone, no read sent (skep #807); the bare document and a
-//! trunk member by one probe of the member after it — and told before any
-//! act, never refused: `at_head`; `behind`, the shot landing the base's
-//! daughter; `first`, the bare document while its chain is empty; or
+//! by its address (skep #807), the bare document by a read of its first
+//! member and a trunk member by a read of the members past it — and told
+//! before any act, never refused: `at_head`; `behind`, the shot landing the
+//! base's daughter, with `head` the trunk's newest member, the one the
+//! corner names; `first`, the bare document while its chain is empty; or
 //! `superseded_first`, a draft begun from the bare document whose first
 //! member now stands — the shot lands beside that member, as its daughter,
 //! and the head does not move. `confirm` reads the base and types the
@@ -164,9 +167,10 @@
 //! refuses `selection_not_arranged` and no empty version lands. A selection
 //! the page passed stays held and re-stated over what is left of it. A
 //! standing moved since the panel — a sibling's shot landing while it
-//! stood, `at_head` → `behind` or `first` → `superseded_first` — is
-//! re-stated with the new `standing`, nothing sent, and a base the board no
-//! longer records is refused as at `open`. The request's `base` is the
+//! stood, `at_head` → `behind`, `first` → `superseded_first`, or a newer
+//! head named while the draft stays `behind` — is re-stated with the new
+//! `standing` and its `head`, nothing sent, and a base the board no longer
+//! records is refused as at `open`. The request's `base` is the
 //! member the panel was last read and tested against, the open's or the
 //! moved one a re-statement named — the panel's fold and key (iii) decided
 //! against its image — so the panel and the board's validation (3) test
@@ -234,6 +238,16 @@
 //! session's account, read for it even where the page passes
 //! `readable_drafts`). It is read at a fresh open alone: a re-opened panel
 //! keeps the family it first left behind, and `confirm` reads it never.
+//!
+//! **The standing read** (`publication.standing`; skep #864) answers the
+//! base, the standing and the family left behind apart from any panel, for
+//! a corner that says where a draft stands before the person starts
+//! publishing: it runs the reads above for the `draft`, `doc` and `also`
+//! the page names, reads no image or link and composes nothing, holds
+//! nothing — no panel stands after it and one standing is untouched — and
+//! says no event. It is a read, so it asks the write door nothing and a
+//! second window answers it; a session with no key is refused, since the
+//! reads go through the same publisher's hand.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -509,6 +523,8 @@ impl Shell {
     /// It is the session the door admitted ([`Shell::signed`]), or the
     /// restart arm's re-open of it: a write that met the door is followed to
     /// its end — its landed test, its record — and not refused at it again.
+    /// A read that asks no door takes it too, `publication.standing`, whose
+    /// library reads stand on the publisher's hand.
     ///
     /// # Errors
     ///
@@ -798,8 +814,9 @@ impl Shell {
     ///
     /// The panel is `{rows, formatting, read_with, count, price, windows,
     /// parts, inherited, merge_records, edition_links, p3_stands, standing?,
-    /// left_behind, hold?}` (the module doc): a held or standing panel of the
-    /// draft re-opened as it stands where the selection is none or the same,
+    /// head?, left_behind, hold?}` (the module doc): a held or standing panel
+    /// of the draft re-opened as it stands where the selection is none or the
+    /// same,
     /// its base's standing typed again and its windows re-read (`also`, the
     /// base and the family left behind as it held them); else the draft's
     /// base read off the board and its standing
@@ -857,11 +874,7 @@ impl Shell {
         let published = optional(args, "published", addresses_arg)?;
         let also = optional(args, "also", addresses_arg)?.unwrap_or_default();
         let draft = address_arg(&args["draft"]).ok_or_else(|| Refusal::malformed("draft"))?;
-        // The family's other drafts: each named once, none the rendering
-        // draft itself.
-        if also.iter().enumerate().any(|(k, a)| *a == draft || also[..k].contains(a)) {
-            return Err(Refusal::malformed("also"));
-        }
+        admit_also(&draft, &also)?;
         match (&doc, &mint) {
             (None, None) => return Err(Refusal::malformed("doc or mint")),
             (Some(_), Some(_)) => return Err(Refusal::malformed("mint")),
@@ -948,9 +961,9 @@ impl Shell {
             readable.push(draft.clone());
         }
         let inputs = lib::Inputs { doc, mint, claim, base, draft: draft.clone(), also, selection, notes: notes.unwrap_or_default(), readable_drafts: readable, published: published.unwrap_or(own_published), supersede, merge_landing };
-        let left_behind = match &standing {
-            Some(standing) => lib::left_behind(&p, &inputs, standing, &own_drafts).map_err(fault)?,
-            None => Vec::new(),
+        let left_behind = match (&inputs.doc, &inputs.base, &standing) {
+            (Some(trunk), Some((base, _)), Some(standing)) => lib::left_behind(&p, trunk, base, &inputs.draft, &inputs.also, standing, &own_drafts).map_err(fault)?,
+            _ => Vec::new(),
         };
         let enumeration = lib::enumerate(&p, &inputs).map_err(fault)?;
         let panel = lib::panel(&p, &inputs, &enumeration).map_err(fault)?;
@@ -1138,6 +1151,53 @@ impl Shell {
             self.publication_event(&session, state.draft(), "cancelled", json!({}));
         }
         Ok(json!({}))
+    }
+
+    /// Answers `publication.standing(session, {draft, doc, also?})` with
+    /// `{base, standing, head?, left_behind}`.
+    ///
+    /// `base` is the draft's recorded base in `doc`'s chain, `standing` where
+    /// it stands against `doc`'s newest version, `head` that newest version
+    /// where the standing is `behind`, and `left_behind` the family the
+    /// draft's publication would leave behind: `also`, then the drafts on
+    /// its base where it would become the head (the module doc).
+    ///
+    /// # Errors
+    ///
+    /// In this order:
+    ///
+    /// 1. `malformed_args` naming `also` where it is no list of addresses,
+    ///    then naming `draft`, then `doc`, then `also` for a repeated entry
+    ///    or the `draft` among them;
+    /// 2. `malformed_args` naming `session`, then `session_died` or
+    ///    `session_ended` ([`Shell::session`]);
+    /// 3. [`Shell::signed_within_call`]'s — `write_in_bare_session` naming
+    ///    the call under a session with no key, then `store_unreadable`,
+    ///    `no_account`;
+    /// 4. the base read and the standing's, as `publication.open`'s step 4
+    ///    names them: `no_such_document` or `unreadable` naming `doc` or
+    ///    the draft, `busy`, `session_died`, `shape`, the board's own
+    ///    verdicts verbatim, `unreachable`, and `base_unrecorded` naming the
+    ///    draft, `doc` and the `reason` — a `doc` whose chain the draft's
+    ///    base is not in among them;
+    /// 5. `feed_stopped` where the standing is `at_head` or `first` and the
+    ///    shell's own list of drafts is owed;
+    /// 6. the family's reads, as the base read's.
+    pub(super) fn publication_standing(&self, args: &Value) -> Result<Value, Refusal> {
+        const CALL: &str = "publication.standing";
+        let also = optional(args, "also", addresses_arg)?.unwrap_or_default();
+        let draft = address_arg(&args["draft"]).ok_or_else(|| Refusal::malformed("draft"))?;
+        let doc = address_arg(&args["doc"]).ok_or_else(|| Refusal::malformed("doc"))?;
+        admit_also(&draft, &also)?;
+        let session = self.session(&args["session"])?;
+        let signed = self.signed_within_call(&session, CALL)?;
+        let p = signed.publisher(&session);
+        let ((base, _), standing) = self.typed_base(&session, &p, CALL, &doc, &draft)?;
+        let own_drafts = if matches!(standing, Standing::AtHead | Standing::First) { self.own_lists(&session)?.0 } else { Vec::new() };
+        let left_behind = lib::left_behind(&p, &doc, &base, &draft, &also, &standing, &own_drafts).map_err(|f| self.fault(&session, CALL, f))?;
+        let mut answer = json!({"base": base.to_string(), "left_behind": addresses_json(&left_behind)});
+        put_standing(&mut answer, &standing);
+        Ok(answer)
     }
 
     /// Answers `publication.confirm(session, {switches, answers})` with the
@@ -1591,6 +1651,19 @@ fn widest(p: &Publisher<'_>, inputs: &lib::Inputs, e: &lib::Enumeration, panel: 
     })
 }
 
+/// Refuses an `also` that does not name the family's other drafts.
+///
+/// # Errors
+///
+/// `malformed_args` naming `also` where it repeats a draft or names `draft`,
+/// the rendering draft.
+fn admit_also(draft: &Address, also: &[Address]) -> Result<(), Refusal> {
+    if also.iter().enumerate().any(|(k, a)| a == draft || also[..k].contains(a)) {
+        return Err(Refusal::malformed("also"));
+    }
+    Ok(())
+}
+
 /// Returns an answer's key, `⟨run⟩.⟨part⟩`, as the part it names.
 fn part_key(text: &str) -> Option<PartKey> {
     let (run, part) = text.split_once('.')?;
@@ -1806,9 +1879,19 @@ fn merge_records_json(m: &lib::MergeRecords) -> Value {
 fn standing_json(s: &Standing) -> &'static str {
     match s {
         Standing::AtHead => "at_head",
-        Standing::Behind => "behind",
+        Standing::Behind { .. } => "behind",
         Standing::First => "first",
         Standing::SupersededFirst { .. } => "superseded_first",
+    }
+}
+
+/// Sets a base's standing on an answer that carries it, the panel, the
+/// re-statement or the standing read: `standing`, and at `behind` `head`,
+/// the trunk's newest member.
+fn put_standing(answer: &mut Value, s: &Standing) {
+    answer["standing"] = json!(standing_json(s));
+    if let Standing::Behind { head } = s {
+        answer["head"] = json!(head.to_string());
     }
 }
 
@@ -1842,7 +1925,7 @@ fn panel_json(state: &PanelState, hold: Option<Value>) -> Value {
         "left_behind": addresses_json(&state.left_behind),
     });
     if let Some(standing) = &state.standing {
-        v["standing"] = json!(standing_json(standing));
+        put_standing(&mut v, standing);
     }
     if let Some(hold) = hold {
         v["hold"] = hold;
@@ -1910,7 +1993,7 @@ pub(super) fn restated_json(r: &Restatement, race: Option<&RaceKey>, lineage: Op
         v["base"] = json!(base.to_string());
     }
     if let Some(standing) = &r.standing {
-        v["standing"] = json!(standing_json(standing));
+        put_standing(&mut v, standing);
     }
     v
 }

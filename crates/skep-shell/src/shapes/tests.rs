@@ -81,9 +81,10 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("Resolve", json!({"session": "s-0", "held": 1, "act": "drop"})),
         ("AnotherWindowEvent", json!({"board": "b-0", "another_window": true})),
         ("Run", json!({"origin": "1.0.1.0.5", "i_start": 1, "width": 10})),
+        ("PublicationStanding", json!({"base": "1.0.1.0.2.1", "standing": "behind", "head": "1.0.1.0.2.3", "left_behind": ["1.0.1.0.9"]})),
         (
             "PublicationPanel",
-            json!({"rows": [], "formatting": {"marks": [], "cut": 0, "removals": []}, "read_with": {"1.0.1.0.3": true}, "count": {"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": []}, "price": {"lists": [0, 0, 0, 0, 0, 0], "body": 0, "values": 0, "reads": 0, "bytes": 0, "over": []}, "windows": [], "parts": [], "inherited": [{"draft": "1.0.1.0.9", "passages": 2}], "merge_records": [{"draft": "1.0.1.0.11", "n": 2}], "edition_links": 1, "p3_stands": true, "standing": "at_head", "left_behind": ["1.0.1.0.9"], "hold": {"since": 1}}),
+            json!({"rows": [], "formatting": {"marks": [], "cut": 0, "removals": []}, "read_with": {"1.0.1.0.3": true}, "count": {"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": []}, "price": {"lists": [0, 0, 0, 0, 0, 0], "body": 0, "values": 0, "reads": 0, "bytes": 0, "over": []}, "windows": [], "parts": [], "inherited": [{"draft": "1.0.1.0.9", "passages": 2}], "merge_records": [{"draft": "1.0.1.0.11", "n": 2}], "edition_links": 1, "p3_stands": true, "standing": "behind", "head": "1.0.1.0.2.3", "left_behind": ["1.0.1.0.9"], "hold": {"since": 1}}),
         ),
         ("PublicationRow", json!({"home": "1.0.1.0.5", "kind": {"public": {"read_with": false}}, "label": "notes here", "links": ["1.0.1.0.5.0.2.1"], "types": [], "line": {"p": 0, "d": 0, "c": 0, "t": 0, "u": 0}, "read_through": 0, "unchanged": ["1.0.1.0.5.0.2.1"], "fold": {"unchanged": 1, "changed": 0}, "changed_types": [], "unchanged_types": []})),
         ("TypeFold", json!({"ty": "1.1.0.1.0.1.0.3.13", "n": 1, "far": ["1.0.1.0.8"]})),
@@ -105,7 +106,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("Hold", json!({"since": 1_761_696_000_000u64})),
         ("Switches", json!({"on": ["1.0.1.0.6"], "destinations": {"1.0.1.0.6": {"set": "1.0.1.0.4"}}})),
         ("Acknowledged", json!({"outcome": "acknowledged", "member": "1.0.1.0.2.2", "edition": null, "claim": false, "supersede": ["1.0.1.0.2.1.1"], "at": 412, "via": "answer"})),
-        ("Restated", json!({"outcome": "restated", "left": [], "superseded": [], "came": ["1.0.1.0.6.0.2.3"], "removals_undone": [], "removals_came": [], "selection": [{"run": 1, "placement": {"split": [[1, 2, 1], [3, 3, 1]]}}], "parts": [{"run": 2, "part": 0, "record": "1.0.1.0.7.0.2.1"}], "left_out": [{"entry": 3, "original": "1.0.1.0.6.0.2.1", "cause": "superseded"}], "race": {"at": 999, "key": "bare", "signed": false}, "base": "1.0.1.0.2.3", "standing": "behind"})),
+        ("Restated", json!({"outcome": "restated", "left": [], "superseded": [], "came": ["1.0.1.0.6.0.2.3"], "removals_undone": [], "removals_came": [], "selection": [{"run": 1, "placement": {"split": [[1, 2, 1], [3, 3, 1]]}}], "parts": [{"run": 2, "part": 0, "record": "1.0.1.0.7.0.2.1"}], "left_out": [{"entry": 3, "original": "1.0.1.0.6.0.2.1", "cause": "superseded"}], "race": {"at": 999, "key": "bare", "signed": false}, "base": "1.0.1.0.2.3", "standing": "behind", "head": "1.0.1.0.2.5"})),
         ("RaceKey", json!({"at": 999, "key": "bare", "signed": false})),
         ("PublicationRefused", json!({"outcome": "refused", "arm": "claim_refused", "edition": "1.0.1.0.2"})),
         ("PublicationEvent", json!({"board": "b-0", "session": "s-0", "draft": "1.0.1.0.5", "state": "acknowledged", "member": "1.0.1.0.2.2", "edition": null, "at": 412})),
@@ -173,7 +174,7 @@ fn the_file_names_every_shape_call_and_event() {
     for row in CALL_ROWS {
         assert!(text.contains(&format!("  {}(args: ", method_name(row.name))), "{}", row.name);
     }
-    assert_eq!(CALL_ROWS.len(), 34, "the thirty-four calls: §4b.1's with the publication family's four, the merge family's four, `history.restore` and `held.show`, the document index's listing and the change feed's page");
+    assert_eq!(CALL_ROWS.len(), 35, "the thirty-five calls: §4b.1's with the publication family's four, the merge family's four, `history.restore` and `held.show`, the read of a draft's standing, the document index's listing and the change feed's page");
     assert_eq!(CALL_ROWS.iter().map(|row| row.name).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
     for line in [
         "  boards(args: {}): Promise<Outcome<BoardRow[]>>;\n",
@@ -183,6 +184,8 @@ fn the_file_names_every_shape_call_and_event() {
         "  'publication.count'(args: { session: string; switches?: Switches; answers?: Record<string, OriginAnswer> }): Promise<Outcome<{ count: Count; price: Price; rows: PublicationRow[]; formatting: Formatting; windows: Window[]; parts: PartCounts[]; edition_links: number; p3_stands: boolean }>>;\n",
         "  'publication.confirm'(args: { session: string; switches?: Switches; answers?: Record<string, OriginAnswer> }): Promise<Outcome<Acknowledged | Restated | PublicationRefused>>;\n",
         "  'publication.cancel'(args: { session: string }): Promise<Outcome<Empty>>;\n",
+        "  'publication.standing'(args: { session: string; draft: string; doc: string; also?: string[] }): Promise<Outcome<PublicationStanding>>;\n",
+        "export interface PublicationStanding {\n  base: string;\n  standing: BaseStanding;\n  head?: string;\n  left_behind: string[];\n}\n",
         "  'merge.compose'(args: { session: string; doc: string; alternative?: string; draft?: string; into?: string }): Promise<Outcome<MergeReport>>;\n",
         "  'merge.land'(args: { session: string; resolutions?: Record<string, MergeChoice>; answers?: Record<string, OriginAnswer> }): Promise<Outcome<MergeLanded | Restated | PublicationRefused>>;\n",
         "  'merge.undo'(args: { session: string }): Promise<Outcome<Undone>>;\n",

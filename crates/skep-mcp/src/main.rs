@@ -19,8 +19,9 @@
 //!   through `op` (`publish_is_a_call`), and composes, signs and sends the
 //!   one request itself from the panel it holds (`client.md` §4b.1's `op`
 //!   row). The shell's own calls — `boards`, `health`, `probe`, `search`,
-//!   `places`, `held`, `resolve`, and that family's four, each named as its
-//!   row with `_` for `.` (`publication_open`, `publication_count`,
+//!   `places`, `held`, `resolve`, `publication_standing`, the read of a
+//!   draft's standing, and that family's four, each named as its row with
+//!   `_` for `.` (`publication_open`, `publication_count`,
 //!   `publication_confirm`, `publication_cancel`) — are tools of those names,
 //!   their arguments the bridge's row minus the session and the board, the
 //!   adapter supplying each where the row requires it; and three are the

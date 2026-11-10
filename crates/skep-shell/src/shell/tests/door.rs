@@ -72,12 +72,12 @@ fn every_call_is_named_by_its_own_spelling() {
         assert_eq!(Call::named(call.as_str()), Some(call));
     }
     assert_eq!(CALLS.map(Call::named), Call::ALL.map(Some));
-    assert_eq!((CALLS.len(), CALLS[0], CALLS[33]), (34, "boards", "changes"));
-    assert_eq!((CALLS[28], CALLS[29]), ("search", "places"));
-    assert_eq!(&CALLS[30..33], ["held", "held.show", "resolve"], "`held.show` stands after `held`, whose row owes it");
-    assert_eq!(&CALLS[16..20], ["publication.open", "publication.count", "publication.confirm", "publication.cancel"], "the publication family stands after `op`, whose publish arm it carries");
-    assert_eq!(&CALLS[20..24], ["merge.compose", "merge.land", "merge.undo", "merge.withdraw"], "the merge family stands after the publication family, whose shot its landing rides");
-    assert_eq!(&CALLS[24..28], ["history.restore", "upload", "fetch", "restore"], "the past state's restore closes the merge row, apart from the media rows' `restore`");
+    assert_eq!((CALLS.len(), CALLS[0], CALLS[34]), (35, "boards", "changes"));
+    assert_eq!((CALLS[29], CALLS[30]), ("search", "places"));
+    assert_eq!(&CALLS[31..34], ["held", "held.show", "resolve"], "`held.show` stands after `held`, whose row owes it");
+    assert_eq!(&CALLS[16..21], ["publication.open", "publication.count", "publication.confirm", "publication.cancel", "publication.standing"], "the publication family stands after `op`, whose publish arm it carries, its read of a draft's standing closing it");
+    assert_eq!(&CALLS[21..25], ["merge.compose", "merge.land", "merge.undo", "merge.withdraw"], "the merge family stands after the publication family, whose shot its landing rides");
+    assert_eq!(&CALLS[25..29], ["history.restore", "upload", "fetch", "restore"], "the past state's restore closes the merge row, apart from the media rows' `restore`");
     assert_eq!(Call::named("verify"), None);
     let (dir, (talk, _)) = (TempDir::new().unwrap(), talk());
     let shell = Shell::open(ShellOptions::new(Vec::new(), dir.path().join("store"), SessionMode::Bare { principal: 1 }, talk));
@@ -280,7 +280,7 @@ fn every_declared_optional_argument_is_read_in_its_form() {
             asked += 1;
         }
     }
-    assert_eq!(asked, 38, "the optional members of the fifteen rows of one form that declare any: the publication family's twelve and the merge family's five among them, `publication.open`'s `also`, `merge.compose`'s `into` and `merge.land`'s `answers` included");
+    assert_eq!(asked, 39, "the optional members of the sixteen rows of one form that declare any: the publication family's thirteen and the merge family's five among them, `publication.open`'s and `publication.standing`'s `also`, `merge.compose`'s `into` and `merge.land`'s `answers` included");
 }
 
 /// Checks that an ended or another run's reference is answered its reason,

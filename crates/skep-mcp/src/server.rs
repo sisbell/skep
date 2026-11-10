@@ -368,6 +368,7 @@ impl Server {
             Tool::PublicationCount => self.backend.session_call("publication.count", args),
             Tool::PublicationConfirm => self.backend.session_call("publication.confirm", args),
             Tool::PublicationCancel => self.backend.session_call("publication.cancel", args),
+            Tool::PublicationStanding => self.backend.session_call("publication.standing", args),
             Tool::ChangesSince => self.backend.session_call("changes", args),
             Tool::SessionInfo => self.backend.session_info(),
             Tool::Fetch => return Ok(self.fetch(args.get("i").unwrap_or(&Value::Null))),

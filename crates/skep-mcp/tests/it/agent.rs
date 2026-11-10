@@ -40,8 +40,9 @@ const ADDED_OPS: [&str; 6] = ["effective_owner", "key_set", "retrieve_i", "conte
 
 /// The shell's calls and the apparatus, as tools.
 ///
-/// The shell's calls take the publication family's four among them.
-const ADAPTER_TOOLS: [&str; 14] = [
+/// The shell's calls take the publication family's four among them, and the
+/// read of a draft's standing beside them.
+const ADAPTER_TOOLS: [&str; 15] = [
     "boards",
     "health",
     "probe",
@@ -53,6 +54,7 @@ const ADAPTER_TOOLS: [&str; 14] = [
     "publication_count",
     "publication_confirm",
     "publication_cancel",
+    "publication_standing",
     "session_info",
     "changes_since",
     "fetch",
@@ -197,7 +199,9 @@ fn a2_the_startup_line_names_the_refusing_seam_and_no_ceremony_tool_is_listed() 
 /// `publication_open` refused `base_unrecorded` naming it and the reason
 /// `no_record`, the board recording no base for it — then a draft staged
 /// from the bare edition through `stage`, as the instructions' PUBLISHING
-/// says, and written: `publication_open` holding its panel — no row, no
+/// says, and written: `publication_standing` telling where it stands with no
+/// panel composed, `first`, and `at_head` once it has published;
+/// `publication_open` holding its panel — no row, no
 /// window, under every cap, `standing: first` and no draft left behind —
 /// `publication_count` its four numbers
 /// with nothing switched on, and `publication_confirm` acknowledging the
@@ -247,6 +251,7 @@ fn a3_every_tool_is_listed_and_a_publish_lands_a_version() {
     let image = mcp.call_json("image", json!({"d": draft, "region": [{"start": "1.1", "width": "0.3"}]}));
     assert_eq!(image["resp"], "runs", "{image}");
     let run = &image["runs"][0];
+    assert_eq!(mcp.call_json("publication_standing", json!({"draft": draft, "doc": edition})), json!({"base": edition, "standing": "first", "left_behind": []}), "the standing read alone: the base the board records, no panel composed");
     let panel = mcp.call_json("publication_open", json!({"draft": draft, "doc": edition}));
     assert_eq!((&panel["rows"], &panel["windows"], &panel["price"]["over"]), (&json!([]), &json!([]), &json!([])), "no link, no window, under every cap: {panel}");
     assert_eq!((&panel["standing"], &panel["left_behind"]), (&json!("first"), &json!([])), "the bare edition's chain is empty, and no other draft stands on it: {panel}");
@@ -263,6 +268,7 @@ fn a3_every_tool_is_listed_and_a_publish_lands_a_version() {
     let gone = mcp.call_error("publication_count", json!({}));
     assert_eq!(gone["name"], "no_panel", "the panel went with the acknowledgment: {gone}");
     assert_eq!(mcp.call_json("publication_cancel", json!({})), json!({}), "a cancel with no panel standing answers {{}}");
+    assert_eq!(mcp.call_json("publication_standing", json!({"draft": draft, "doc": edition})), json!({"base": member, "standing": "at_head", "left_behind": []}), "the board moved the draft's base to the member it made, the head");
     let frontier = mcp.call_json("content_frontier", json!({"doc": draft}));
     assert_eq!(frontier["resp"], "frontier", "{frontier}");
     let by_identity = mcp.call_json("retrieve_i", json!({"spans": [{"start": run["i_start"], "width": "3"}]}));

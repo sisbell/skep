@@ -177,6 +177,8 @@ struct World {
     busy: usize,
     /// The next N `doc_metadata` answer `503 history_busy`.
     history_busy: usize,
+    /// `doc_metadata` answers every trunk member of `E`, registered or not.
+    endless_trunk: bool,
     /// `image` refuses `image_too_large` past this many runs.
     image_cap: usize,
     /// `/health` names a claimant.
@@ -501,7 +503,8 @@ impl World {
                     return Ok(reply(503, json!({"error": "history_busy", "detail": "the reconstruction pool is full; retry shortly", "op": "doc_metadata"})));
                 }
                 let doc = frame["doc"].as_str().unwrap();
-                let Some(d) = self.docs.get(doc).cloned() else { return Ok(rejected("doc_not_registered", json!({}))) };
+                let read = if self.endless_trunk && doc.strip_prefix(&format!("{E}.")).is_some_and(|k| !k.contains('.')) { format!("{E}.1") } else { doc.to_string() };
+                let Some(d) = self.docs.get(&read).cloned() else { return Ok(rejected("doc_not_registered", json!({}))) };
                 if !self.readable(doc) {
                     return Ok(rejected("withheld", json!({"site": {"addr": doc}})));
                 }
@@ -4993,16 +4996,18 @@ fn a_drafts_base_moves_to_the_member_each_publication_makes() {
 
 // ── THE BASE's STANDING AND THE FAMILY LEFT BEHIND ───────────────────────
 
-/// Checks that a trunk base's standing is typed off one probe (D4 (a)+(b′)).
+/// Checks that a trunk base's standing is typed off the trunk past it
+/// (D4 (a)+(b′); skep #864).
 ///
-/// The probe is `doc_metadata` of the trunk member after the base, and no
-/// `/changes` read: a draft staged from the head `E.1` stands `AtHead`,
-/// `E.2` absent; once a later publication lands `E.2` it stands `Behind`; a
-/// draft staged from the memberless `X` stands `First`, its probe `X.1`, and
-/// once `X.1` stands `SupersededFirst` naming it. A probe refused otherwise
-/// is that fault, never the member's absence (SP-14).
+/// The reads are `doc_metadata` of the trunk members past the base, and no
+/// `/changes` read: a draft staged from the head `E.1` stands `AtHead`, one
+/// read of `E.2`, absent; once a later publication lands `E.2` it stands
+/// `Behind` naming `E.2`, two reads, `E.2` and the `E.3` that ends the
+/// doubling; a draft staged from the memberless `X` stands `First`, its one
+/// read `X.1`, and once `X.1` stands `SupersededFirst` naming it. A read
+/// refused otherwise is that fault, never the member's absence (SP-14).
 #[test]
-fn each_standing_is_typed_off_one_probe_of_the_next_trunk_member() {
+fn each_standing_is_typed_off_the_trunk_members_past_the_base() {
     let (e1, e2) = (format!("{E}.1"), format!("{E}.2"));
     let (mut world, _) = World::base();
     world.stage(D, &e1);
@@ -5011,13 +5016,13 @@ fn each_standing_is_typed_off_one_probe_of_the_next_trunk_member() {
     let p = publisher(&board, &tok, &signer);
     let probed = |dialer: &Arc<Scripted>| -> Vec<Value> { dialer.frames("doc_metadata").iter().map(|f| f["doc"].clone()).collect() };
     assert_eq!(standing(&p, &a(E), &a(&e1)), Ok(Standing::AtHead), "E.2 is not registered: E.1 is the head");
-    assert_eq!((dialer.ops(), probed(&dialer)), (vec!["doc_metadata".to_string()], vec![json!(e2)]), "ONE probe, the trunk member after the base's, and no feed read");
+    assert_eq!((dialer.ops(), probed(&dialer)), (vec!["doc_metadata".to_string()], vec![json!(e2)]), "ONE read, the trunk member after the base's, and no feed read");
     let (_, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(Some(S2)));
     let Sent::Acknowledged(ack) = send(&p, &inputs(), &mut request).unwrap() else { panic!("acknowledged") };
     assert_eq!(ack.member.to_string(), e2, "a later publication lands E.2");
     dialer.clear();
-    assert_eq!(standing(&p, &a(E), &a(&e1)), Ok(Standing::Behind), "a trunk member follows E.1");
-    assert_eq!((dialer.ops(), probed(&dialer)), (vec!["doc_metadata".to_string()], vec![json!(e2)]));
+    assert_eq!(standing(&p, &a(E), &a(&e1)), Ok(Standing::Behind { head: a(&e2) }), "a trunk member follows E.1: E.2 the head");
+    assert_eq!((dialer.ops(), probed(&dialer)), (vec!["doc_metadata".to_string(); 2], vec![json!(e2), json!(format!("{E}.3"))]), "the member after the base, then the doubling's next, absent");
     // The bare document: the first while its chain is empty, superseded
     // once its first member stands.
     let (mut world, _) = World::base();
@@ -5031,7 +5036,48 @@ fn each_standing_is_typed_off_one_probe_of_the_next_trunk_member() {
     assert_eq!(standing(&p, &a(X), &a(X)), Ok(Standing::SupersededFirst { first: a(&x1) }), "version 1 published since");
     assert!(dialer.ops().iter().all(|op| op == "doc_metadata"), "no feed read: {:?}", dialer.ops());
     dialer.world().history_busy = SCAN_BUSY_REISSUES as usize + 1;
-    assert_eq!(standing(&p, &a(X), &a(X)), Err(Fault::Busy), "a refused probe is that fault, never an absent member");
+    assert_eq!(standing(&p, &a(X), &a(X)), Err(Fault::Busy), "a refused read is that fault, never an absent member");
+}
+
+/// Checks that the head a behind base names is found by doubling and a
+/// binary search over the trunk, never by reading every version past the
+/// base (skep #864).
+///
+/// `E.1` the base and a hundred trunk members past it, `E.101` the newest:
+/// the doubling asks `E.2`, `E.3`, `E.5`, … `E.65`, `E.129` — absent — and
+/// the search narrows between the last two to `E.101` in fourteen reads (the
+/// mutant that walks one member at a time asks a hundred and one, and the
+/// one that takes the doubling's last registered member answers `E.65`).
+#[test]
+fn the_head_a_behind_base_names_is_found_by_doubling_and_a_binary_search() {
+    let (mut world, _) = World::base();
+    for k in 2..=101 {
+        world.doc(&format!("{E}.{k}"), true, ACCOUNT, Vec::new());
+    }
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    assert_eq!(standing(&p, &a(E), &a(&format!("{E}.1"))), Ok(Standing::Behind { head: a(&format!("{E}.101")) }), "the newest of the hundred past the base");
+    let asked: Vec<String> = dialer.frames("doc_metadata").iter().filter_map(|f| f["doc"].as_str().map(str::to_string)).collect();
+    let trunk = |ks: &[u64]| -> Vec<String> { ks.iter().map(|k| format!("{E}.{k}")).collect() };
+    assert_eq!(asked, trunk(&[2, 3, 5, 9, 17, 33, 65, 129, 97, 113, 105, 101, 103, 102]), "the doubling, then the search, each member read once");
+    assert!(dialer.ops().iter().all(|op| op == "doc_metadata"), "no feed read: {:?}", dialer.ops());
+}
+
+/// Checks that a board answering every trunk member ends the head read in a
+/// fault, within the doubling's sixty-four reads, and is not walked without
+/// end (SP-17; skep #864): the mutant that lets the doubling saturate spins
+/// on the same last member for ever.
+#[test]
+fn a_board_answering_every_trunk_member_is_refused_within_the_doublings_reads() {
+    let (mut world, _) = World::base();
+    world.endless_trunk = true;
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let refused = standing(&p, &a(E), &a(&format!("{E}.1"))).expect_err("no trunk ends where every member answers");
+    assert!(matches!(refused, Fault::Shape { ref op, .. } if op == "doc_metadata"), "{refused:?}");
+    assert_eq!(dialer.frames("doc_metadata").len(), 64, "one read a doubling, the last at the last offset a u64 holds");
 }
 
 /// THE LANDED WALK FROM THE BARE DOCUMENT (B3-S10's draft begun before
@@ -5101,13 +5147,13 @@ fn the_landed_walk_from_a_bare_base_finds_the_first_member_then_its_daughters_an
 /// Two drafts are staged from the memberless `X` (skep #807; PUB-2.37,
 /// PUB-2.53). The first's shot births `X.1`; the second's lands `X.1.1`,
 /// version 1's daughter, and the board moves the second draft's recorded
-/// base there, `X.2` absent. That base stands `Behind` with no frame sent,
-/// never `AtHead` off a probe of `X.2`, and so does a deeper base,
-/// `X.1.1.1`. The draft's next shot, a word of its own added, lands
-/// `X.1.1.1`, the base's own daughter, as its standing told, and mints no
-/// `X.2`; the landed walk from that base finds it among the base's
-/// daughters, the trunk's next member never read. Once a trunk member `X.2`
-/// stands, the base still stands `Behind` off its address alone.
+/// base there, `X.2` absent. That base stands `Behind` naming `X.1`, never
+/// `AtHead` off the read of `X.2` that finds the head (skep #864), and so
+/// does a deeper base, `X.1.1.1`. The draft's next shot, a word of its own
+/// added, lands `X.1.1.1`, the base's own daughter, as its standing told,
+/// and mints no `X.2`; the landed walk from that base finds it among the
+/// base's daughters, the trunk's next member never read. Once a trunk
+/// member `X.2` stands, the base still stands `Behind`, now naming it.
 #[test]
 fn a_base_under_a_trunk_member_stands_behind_off_its_address_and_its_shot_lands_its_daughter() {
     let (first_draft, second_draft) = ("1.0.1.0.37", "1.0.1.0.38");
@@ -5140,9 +5186,10 @@ fn a_base_under_a_trunk_member_stands_behind_off_its_address_and_its_shot_lands_
     assert_eq!(shot(second_draft, (a(X), 3)).2.member.to_string(), x11, "beside version 1, as its daughter");
     assert_eq!(draft_base(&p, &a(X), &a(second_draft)), recorded(&x11, 7), "the board moved the second draft's base to the daughter it made");
     dialer.clear();
-    assert_eq!(standing(&p, &a(X), &a(&x11)), Ok(Standing::Behind), "a daughter is never the head, X.2 absent or not");
-    assert_eq!(standing(&p, &a(X), &a(&x111)), Ok(Standing::Behind), "nor is a member under a daughter");
-    assert!(dialer.ops().is_empty(), "typed off the address, no frame sent: {:?}", dialer.ops());
+    let behind_x1 = Ok(Standing::Behind { head: a(&x1) });
+    assert_eq!(standing(&p, &a(X), &a(&x11)), behind_x1, "a daughter is never the head: X.1 the head while X.2 is absent");
+    assert_eq!(standing(&p, &a(X), &a(&x111)), behind_x1, "nor is a member under a daughter");
+    assert_eq!(dialer.frames("doc_metadata").iter().map(|f| f["doc"].clone()).collect::<Vec<_>>(), [json!(x2), json!(x2)], "the head read from the trunk member above, one read each: the base itself never read as the head");
     // The next shot off the daughter: a word of the draft's own added.
     {
         let mut w = dialer.world();
@@ -5159,11 +5206,11 @@ fn a_base_under_a_trunk_member_stands_behind_off_its_address_and_its_shot_lands_
     let probed: Vec<String> = dialer.frames("doc_metadata").iter().filter_map(|f| f["doc"].as_str().map(str::to_string)).collect();
     assert_eq!(probed.first(), Some(&x111), "the base's first daughter first: {probed:?}");
     assert!(!probed.contains(&x2) && dialer.frames("image").iter().all(|f| f["d"].as_str() != Some(x2.as_str())), "never the trunk's next member: {probed:?}");
-    // A later trunk member standing moves nothing: still behind, unread.
+    // A later trunk member standing: still behind, now naming it.
     dialer.world().doc(&x2, true, ACCOUNT, Vec::new());
     dialer.clear();
-    assert_eq!(standing(&p, &a(X), &a(&x11)), Ok(Standing::Behind), "a daughter, and X.2 stands");
-    assert!(dialer.ops().is_empty(), "no frame sent: {:?}", dialer.ops());
+    assert_eq!(standing(&p, &a(X), &a(&x11)), Ok(Standing::Behind { head: a(&x2) }), "a daughter, and X.2 stands");
+    assert_eq!(dialer.frames("doc_metadata").iter().map(|f| f["doc"].clone()).collect::<Vec<_>>(), [json!(x2), json!(format!("{X}.3"))]);
 }
 
 /// THE FAMILY LEFT BEHIND (skep #744): every draft `also` names, in its
@@ -5175,8 +5222,7 @@ fn a_base_under_a_trunk_member_stands_behind_off_its_address_and_its_shot_lands_
 /// over, and the rendering draft and `A`, which `also` names, are never
 /// read; at `Behind` the publication lands a daughter and `also` alone is
 /// answered, nothing read; at the bare document, `First`, a draft staged
-/// from it is left behind; at the mint form nothing is. A read refused
-/// otherwise is that fault.
+/// from it is left behind. A read refused otherwise is that fault.
 #[test]
 fn the_family_left_behind_is_also_then_the_drafts_on_this_base_where_the_publication_heads() {
     let e1 = format!("{E}.1");
@@ -5191,18 +5237,16 @@ fn the_family_left_behind_is_also_then_the_drafts_on_this_base_where_the_publica
     let (dialer, board, signer) = open(world);
     let tok = token();
     let p = publisher(&board, &tok, &signer);
-    let inputs = family_inputs();
     let own = [a(D), a(N), a(q), a(A), a(r), a(g)];
-    assert_eq!(left_behind(&p, &inputs, &Standing::AtHead, &own), Ok(vec![a(A), a(q)]), "`also` first, then the drafts on E.1 in the list's order");
+    let of_e1 = |standing: &Standing, own: &[Address]| left_behind(&p, &a(E), &a(&e1), &a(D), &[a(A)], standing, own);
+    assert_eq!(of_e1(&Standing::AtHead, &own), Ok(vec![a(A), a(q)]), "`also` first, then the drafts on E.1 in the list's order");
     let asked: Vec<Value> = dialer.frames("doc_metadata").iter().map(|f| f["doc"].clone()).collect();
     assert_eq!(asked, [json!(N), json!(q), json!(r), json!(g)], "one read per other draft, never the rendering draft's or one `also` names");
     assert_eq!(dialer.ops().len(), 4, "the reads alone: {:?}", dialer.ops());
     dialer.clear();
-    assert_eq!(left_behind(&p, &inputs, &Standing::Behind, &own), Ok(vec![a(A)]), "the head does not move: `also` alone");
+    assert_eq!(of_e1(&Standing::Behind { head: a(&e1) }, &own), Ok(vec![a(A)]), "the head does not move: `also` alone");
     assert!(dialer.ops().is_empty(), "nothing read at Behind: {:?}", dialer.ops());
-    let minting = Inputs { doc: None, mint: Some(a(ACCOUNT)), base: None, ..family_inputs() };
-    assert_eq!(left_behind(&p, &minting, &Standing::AtHead, &own), Ok(Vec::new()), "the mint form has no base to leave a draft on");
-    assert_eq!(left_behind(&p, &inputs, &Standing::AtHead, &[a(OTHER)]), Err(Fault::Unreadable(a(OTHER))), "a refused read is that fault, never a draft passed over");
+    assert_eq!(of_e1(&Standing::AtHead, &[a(OTHER)]), Err(Fault::Unreadable(a(OTHER))), "a refused read is that fault, never a draft passed over");
     // The bare document: its first member leaves the drafts staged from it.
     let (first, second) = ("1.0.1.0.35", "1.0.1.0.36");
     let (mut world, _) = World::base();
@@ -5213,8 +5257,7 @@ fn the_family_left_behind_is_also_then_the_drafts_on_this_base_where_the_publica
     }
     let (_, board, signer) = open(world);
     let p = publisher(&board, &tok, &signer);
-    let bare = Inputs { doc: Some(a(X)), base: Some((a(X), 0)), draft: a(first), also: Vec::new(), ..inputs };
-    assert_eq!(left_behind(&p, &bare, &Standing::First, &[a(first), a(second)]), Ok(vec![a(second)]), "the first version leaves the bare document's other drafts behind");
+    assert_eq!(left_behind(&p, &a(X), &a(X), &a(first), &[], &Standing::First, &[a(first), a(second)]), Ok(vec![a(second)]), "the first version leaves the bare document's other drafts behind");
 }
 
 // ── THE PRIVATE RIDER (the link-sets design §5.7 (vi′); skep #894) ───────

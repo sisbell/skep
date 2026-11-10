@@ -31,9 +31,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `docs/wire.md` §Operations are tools of their own names — the name is the
   frame's `op`, the arguments are the frame — save `publish`, which the
   shell refuses as a frame and composes itself; the shell's own calls
-  (`boards`, `health`, `probe`, `search`, `places`, `held`, `resolve`, and
-  the four of its `publication` family, `publication_open`,
-  `publication_count`, `publication_confirm` and `publication_cancel`) are
+  (`boards`, `health`, `probe`, `search`, `places`, `held`, `resolve`,
+  `publication_standing`, the read of a draft's standing, and the four of
+  its `publication` family, `publication_open`, `publication_count`,
+  `publication_confirm` and `publication_cancel`) are
   tools of theirs; and three are the adapter's apparatus: `session_info`,
   `changes_since` and `fetch`. The catalog an agent reads, `tools.json`
   beside `Cargo.toml`, is embedded and checked against that dispatch at

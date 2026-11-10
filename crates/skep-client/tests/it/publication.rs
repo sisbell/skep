@@ -1358,7 +1358,7 @@ fn a_base_under_a_trunk_member_stands_behind_and_its_next_shot_lands_its_daughte
     assert_eq!(shot(&c, (addr(&x), 0), 4).2.member.to_string(), x11, "beside version 1, as its daughter");
     let moved = publication::draft_base(&p, &addr(&x), &addr(&c));
     assert_eq!(moved, Ok(publication::base::Base::Recorded { base: addr(&x11), copied: 4 }), "the board moved C's base to the daughter it made");
-    assert_eq!(publication::standing(&p, &addr(&x), &addr(&x11)), Ok(publication::Standing::Behind), "a daughter is never the head, X.2 absent");
+    assert_eq!(publication::standing(&p, &addr(&x), &addr(&x11)), Ok(publication::Standing::Behind { head: addr(&x1) }), "a daughter is never the head: X.1 the head, X.2 absent");
     insert_text(&board, &bare_token, &c, 5, " now");
     let (inputs, request, ack) = shot(&c, (addr(&x11), 4), 8);
     assert_eq!(ack.member.to_string(), x111, "the base's own daughter, as its standing told");

@@ -26,9 +26,10 @@
 //! fallback: where the caller cannot derive it, the entry reads
 //! [`Verdict::Undeterminable`] here, never judged against the served
 //! `key_set`. Below the retention floor the records are still read,
-//! position-free, and the table builds in record order; what the floor
-//! loses is the entry and its base, and [`Verdict::Undeterminable`] here is
-//! that entry's verdict.
+//! position-free, and the table builds in record order under the claim the
+//! floor stands in for ([`filtered_table`]); what the floor loses is the
+//! entry and its base, and [`Verdict::Undeterminable`] here is that entry's
+//! verdict.
 //!
 //! **A pure function of its caller's reads.** The entry, the frame its
 //! caller composed through `skep_identity::entry_frame`, the table, `H.1`'s
@@ -50,17 +51,23 @@ mod tests;
 /// It is the shared table ([`FilteredTable`]) built under the board's claim
 /// — `records`' claim entry and `claimant`, the account `/health` names as
 /// the board's — so the claimant's own genesis at or below the claim is
-/// host-trusted and no other record is (AUTH-4.55 (3)); with either absent
-/// the table is built under no claim and trusts nothing, every record judged
-/// by its `sig`. Each record is handed to the table in the read's order —
-/// genesis-first, position order where positions are known, link-address
-/// order below the floor (AUTH-5.69) — with `board`, `H.1`'s pair, as the
-/// record frame's term, and this crate's signature check. A record whose
-/// board-served addresses do not parse cannot be framed: it is a gap in its
-/// account's table from its position on, never a record admitted or passed
-/// over in silence.
+/// host-trusted and no other record is (AUTH-4.55 (3)). Where the claim link
+/// lies below the retention floor its position is lost, and the claim stands
+/// at the floor instead, which decides every record alike: a record read at
+/// a position stands above the floor, and the table counts a position-free
+/// record below the claim (the signed-ops design record's §5.5: the table
+/// reads the claim off the claimant's permanent credential records). With no
+/// claimant, or neither the claim entry nor a floor, the table is built
+/// under no claim and trusts nothing, every record judged by its `sig`. Each
+/// record is handed to the table in the read's order — genesis-first,
+/// position order where positions are known, link-address order below the
+/// floor (AUTH-5.69) — with `board`, `H.1`'s pair, as the record frame's
+/// term, and this crate's signature check. A record whose board-served
+/// addresses do not parse cannot be framed: it is a gap in its account's
+/// table from its position on, never a record admitted or passed over in
+/// silence.
 pub fn filtered_table(records: &Records, claimant: Option<&str>, board: Option<BoardTerm>) -> FilteredTable {
-    let claim = match (records.claim_entry, claimant.and_then(parse_address)) {
+    let claim = match (records.claim_entry.or(records.floor), claimant.and_then(parse_address)) {
         (Some(at), Some(claimant)) => Some((at, claimant)),
         _ => None,
     };

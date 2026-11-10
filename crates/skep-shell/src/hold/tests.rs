@@ -22,8 +22,11 @@
 //! ones.
 //!
 //! The ground is a fake board (`Fake`) — its `H.1`, or an answer armed in the
-//! record's place, whether it names a claimant, and its `/health` unanswered
-//! where a cell arms it; its `/changes` rows, or no answer to them, and
+//! record's place, whether it names a claimant, the position its `/health`
+//! names and that `/health` unanswered where a cell arms it; the
+//! `find_links_ftt` reads of a label read, none of which finds a link, each
+//! counted, and an answer armed in their place; its `/changes` rows, or no
+//! answer to them, and
 //! the reads of them counted, each read slowed where a cell asks, and a look
 //! taken once as the next reaches the board; its commit
 //! stream, none or endless; a draft's text, its content image and the
@@ -50,9 +53,10 @@
 //! synced; a cell runs the board's feed thread over the ground's holds
 //! where it asks (`feed_threads`). `write` holds the one path of a session's
 //! `op` — a burst's door and its hold, and a write the hold never holds;
-//! `resend` the probe and the resend walk; `classes` the held store's defect
-//! classes, each pinned as an expected failure until the brief that closes
-//! it lands, and the measure of the syncs each act makes. The store's two
+//! `resend` the probe and the resend walk; `labels` the label another
+//! device's key goes by; `classes` the held store's defect classes, each
+//! pinned as an expected failure until the brief that closes it lands, and
+//! the measure of the syncs each act makes. The store's two
 //! enums are held to their variants here: `Directory`'s three standings
 //! and `Custody`'s three, a state added later a red before it is a pen.
 
@@ -76,6 +80,7 @@ use crate::events::Event;
 use crate::sessions::{Facts, Open, SessionKind, Supplements};
 
 mod classes;
+mod labels;
 mod resend;
 mod write;
 
@@ -551,7 +556,10 @@ impl<T: Clone> Armed<T> {
 /// past the cap, where it is armed so; or the answer armed in its place, a
 /// record that cannot be read among them — the reads of it counted — and
 /// whether `/health` names a claimant, as it does unless armed unclaimed, and
-/// answers at all, as it does unless armed unanswered. It holds the `/changes`
+/// answers at all, as it does unless armed unanswered, and the position it
+/// names, as a cell sets it. It answers the `find_links_ftt` reads of a label
+/// read, counted, with no link, or with the answer armed in its place. It
+/// holds the `/changes`
 /// rows the read sees, each served only past the query's `since` and at or
 /// under its `under`, or a refusal armed in the page's place — the page
 /// budget's for the next few reads among them — or the death signal where every
@@ -661,7 +669,13 @@ struct Fake {
     op_rejected: Armed<Value>,
     op_refused: Armed<(u16, Value)>,
     next_at: AtomicU64,
+    /// The `find_links_ftt` reads made: a label read's, the fake's only.
+    links_reads: AtomicUsize,
+    /// The answer armed for a `find_links_ftt` read, in the empty one's place.
+    links_answer: Armed<Response>,
     writes_halted: AtomicBool,
+    /// The position `/health` names.
+    log_position: AtomicU64,
     panic_next_health: AtomicBool,
     health_reads: AtomicUsize,
     health_gate: (Mutex<bool>, Condvar),
@@ -721,7 +735,10 @@ impl Fake {
             op_rejected: Armed::none(),
             op_refused: Armed::none(),
             next_at: AtomicU64::new(50),
+            links_reads: AtomicUsize::new(0),
+            links_answer: Armed::none(),
             writes_halted: AtomicBool::new(false),
+            log_position: AtomicU64::new(10),
             panic_next_health: AtomicBool::new(false),
             health_reads: AtomicUsize::new(0),
             health_gate: (Mutex::new(false), Condvar::new()),
@@ -843,8 +860,9 @@ impl Dialer for Fake {
             }
             let halted = self.writes_halted.load(Ordering::SeqCst);
             let claimant = if self.unclaimed.load(Ordering::SeqCst) { Value::Null } else { Value::from("1.0.1") };
+            let log_position = self.log_position.load(Ordering::SeqCst);
             return Ok(ok(
-                json!({"ok": true, "log_position": 10, "chain_head": self.chain, "auth": {"claimant": claimant, "local_trust": true, "origins": [], "signed_origins": []}, "media": {"uploads": true}, "head_time": 1, "writes": {"halted": halted}}),
+                json!({"ok": true, "log_position": log_position, "chain_head": self.chain, "auth": {"claimant": claimant, "local_trust": true, "origins": [], "signed_origins": []}, "media": {"uploads": true}, "head_time": 1, "writes": {"halted": halted}}),
             ));
         }
         if req.method == Method::Get && req.path.starts_with("/changes") {
@@ -876,6 +894,10 @@ impl Dialer for Fake {
         }
         if req.method == Method::Post && req.path == "/op" {
             let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+            if body["op"].as_str() == Some("find_links_ftt") {
+                self.links_reads.fetch_add(1, Ordering::SeqCst);
+                return Ok(self.links_answer.take().unwrap_or_else(|| ok(json!({"resp": "addrs", "addrs": [], "as_of": 10}))));
+            }
             if body["op"].as_str() == Some("image") {
                 self.image_reads.fetch_add(1, Ordering::SeqCst);
                 if let Some(look) = self.at_image.lock().unwrap().as_ref() {

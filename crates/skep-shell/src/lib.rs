@@ -107,7 +107,9 @@
 //!   moved document's hands named and its head's shift tested against the
 //!   text as it now stands (skep #867) — the lines sent in `k` order across
 //!   the documents, the pass ending at the first request the board gives no
-//!   answer to.
+//!   answer to; its child `labels` the label a key this store does not hold
+//!   goes by, read off the account's signature-filtered credential records
+//!   and kept (skep #869).
 //! * `feed` — the feed thread per board, its state the feeder:
 //!   `search::Consumer` polled on the `/events` commits, coalesced into one
 //!   waiting read, the published feed read from the head the board first

@@ -278,20 +278,42 @@ fn a_sig_of_no_rows_width_is_no_hybrid_blob() {
     assert!(!table.current(&account()).any(|a| a.fingerprint == fp(&x)), "nothing it names is admitted");
 }
 
-/// Below the retention floor the records read POSITION-FREE and the filter
-/// builds in RECORD ORDER: a retirement read there takes its key out of the
-/// set for every record after it and every entry judged, and a key it
-/// retired admits nothing after it.
+/// Checks the claim the table is built under: the entry, else the floor.
+///
+/// Where the claim link's position is lost below the retention floor the
+/// claim stands at the floor, and none is built with neither known or no
+/// claimant named (the mutant that drops the floor builds no claim at a
+/// reclaimed board, so nothing is admitted there; the one that prefers the
+/// floor to a claim entry it holds moves the claim off its own position).
+#[test]
+fn the_claim_is_the_claim_entry_else_the_floor() {
+    let read = |claim_entry: Option<u64>, floor: Option<u64>| Records { claim_entry, floor, ..records(Vec::new()) };
+    let cells = [(Some(12), Some(20), Some(12)), (Some(12), None, Some(12)), (None, Some(20), Some(20)), (None, None, None)];
+    for (claim_entry, floor, at) in cells {
+        let table = filtered_table(&read(claim_entry, floor), Some(ACCOUNT), Some(board()));
+        assert_eq!(table.claim().map(|(claim_at, _)| claim_at), at, "claim entry {claim_entry:?}, floor {floor:?}");
+    }
+    assert_eq!(filtered_table(&read(Some(12), Some(20)), None, Some(board())).claim(), None, "no claimant named: no claim");
+}
+
+/// Checks that below the retention floor the filter builds in record order.
+///
+/// The records read position-free, the claim link among them, so the claim
+/// stands at the floor: the claimant's position-free genesis is
+/// host-trusted, a retirement read there takes its key out of the set for
+/// every record after it and every entry judged, and a key it retired
+/// admits nothing after it.
 #[test]
 fn below_the_floor_the_filter_builds_in_record_order() {
     let (anchor, device, e, f) = (signer(2), signer(1), signer(8), signer(9));
     let genesis = record(Kind::Enroll, "1.0.1.0.1.0.2.1", &[enroll(&anchor, true, "paper-a"), enroll(&device, false, "notebook")], &[], None, None);
-    let table = table_of(&records(vec![
+    let below_the_floor = records(vec![
         genesis,
         signed_retirement(&anchor, "1.0.1.0.1.0.2.2", &[fp(&device)], None),
         signed_enrollment(&anchor, "1.0.1.0.1.0.2.3", &[enroll(&e, false, "laptop")], None),
         signed_enrollment(&device, "1.0.1.0.1.0.2.4", &[enroll(&f, false, "after")], None),
-    ]));
+    ]);
+    let table = table_of(&Records { floor: Some(20), claim_entry: None, ..below_the_floor });
     let device_admission = table.admissions(&account()).iter().find(|a| a.fingerprint == fp(&device)).expect("the genesis admits it");
     assert_eq!(device_admission.until, Until::RetiredPositionFree);
     let mut expected = vec![fp(&anchor), fp(&e)];

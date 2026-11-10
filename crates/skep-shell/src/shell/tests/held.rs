@@ -14,7 +14,8 @@
 //! kept off the read, sent once, the signed session's own attested row kept
 //! by the resend, a refused run with its `behind` lines and `resolve`'s two
 //! acts, a burst typed against an older state held moved with the board's
-//! verdict and nothing of it landing where it carries no anchors, and one
+//! verdict and nothing of it landing where it carries no anchors, a second
+//! device's hand on it named by its recorded label, and one
 //! carrying them shifted through another writer's change and landing once
 //! at the displaced place — a delete and a rearrange by their span's own
 //! units, and a delete whose span another writer refilled held moved, the
@@ -957,6 +958,52 @@ fn a_burst_typed_against_an_older_state_is_held_moved_and_nothing_lands() {
     let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 3)})).unwrap();
     assert_eq!(text_of(&read), "axb", "{read}");
     shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a document moved by a second device names its recorded label.
+///
+/// A second device's key is enrolled from the first device (`enroll`) and
+/// bound on the second (`bind`), which then writes on the first device's
+/// draft: the first device's stale burst is held moved, and the `held` event
+/// names that hand by its fingerprint and the label its enrollment record
+/// carried, though the first device's store does not hold that key (skep
+/// #869; the mutant that keeps the key store's label alone names the second
+/// device by hex).
+#[test]
+fn a_document_moved_by_a_second_device_names_its_recorded_label() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let (store_a, store_b) = (dir.path().join("store-a"), dir.path().join("store-b"));
+    claim_board(&origin, &store_a);
+    let (first, first_said) = open_shell(&origin, &store_a, SessionMode::Signed { principal: 1 });
+    let (second, second_said) = open_shell(&origin, &store_b, SessionMode::Signed { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let first_answerer = answer_moments(first.subscribe(), Arc::clone(&first.pending), Arc::clone(&seen));
+    let second_answerer = answer_moments(second.subscribe(), Arc::clone(&second.pending), Arc::new(Mutex::new(Vec::new())));
+    let talked = || format!("{}\n{}", first_said.lock().unwrap().join("\n"), second_said.lock().unwrap().join("\n"));
+    let (board, second_board) = (first.board_references().remove(0), second.board_references().remove(0));
+    let kb = second.call("keygen", &json!({"label": "second"})).unwrap();
+    let session = first.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    first.call("enroll", &json!({"board": board, "payload": kb["payload"]})).unwrap_or_else(|r| panic!("{r}\n{}", talked()));
+    second.call("bind", &json!({"board": second_board, "principal": 1, "account": "1.0.1", "origin": origin})).unwrap_or_else(|r| panic!("{r}\n{}", talked()));
+    let second_session = second.call("session", &json!({"board": second_board})).unwrap()["session"].as_str().unwrap().to_string();
+    let minted = first.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
+    let draft = minted["addr"].as_str().unwrap().to_string();
+    let acked = first.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"], "as_of": minted["at"]}})).unwrap();
+    let at = acked["at"].as_u64().unwrap_or_else(|| panic!("the ground's insert is acked: {acked}"));
+    let moved = second.call("op", &json!({"session": second_session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"], "as_of": at}})).unwrap();
+    assert!(moved["at"].as_u64().is_some_and(|current| current > at), "the second device's write is acked: {moved}");
+    let stale = first.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"], "as_of": at}})).unwrap();
+    assert_eq!((stale["resp"].as_str(), stale["cause"].as_str()), (Some("held"), Some("moved")), "{stale}");
+    let faced = wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "moved");
+    assert_eq!(faced.data["hands"], json!([{"key": "other", "fingerprint": kb["fingerprint"], "label": "second"}]), "the second device, named by its enrollment: {}\n{}", faced.data, talked());
+    first.shutdown();
+    second.shutdown();
+    drop((first, second));
+    first_answerer.join().unwrap();
+    second_answerer.join().unwrap();
     sd.shutdown();
 }
 

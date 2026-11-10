@@ -851,6 +851,9 @@ re-exports counted as the module it is brought from (held by
   draws from, one shell per data directory.
 - `hold/resend.rs` THE PROBE (`Holds::probe`) and THE RESEND, a moved
   document's hands named.
+- `hold/labels.rs` the label a key this store does not hold goes by, read
+  off the account's signature-filtered credential records and kept by
+  board and account (`Holds::recorded_label`).
 - `feed.rs` `FeedThreads` and `Feed`: per board, the `/events` reader and
   the feed thread, its state the `Feeder`; and `changes_since`, the read
   behind the `changes` call, on the caller's thread.
@@ -913,7 +916,7 @@ Its suites are unit modules beside the code they test. `shell/tests.rs` and
 its children run the shell: `door` the shell alone, with no daemon behind
 it; `modes`, `ceremonies`, `boards`, `held`, `publication`, `merge`,
 `follow` and `classes` against a daemon spawned in-process over a temp data dir. `hold/tests.rs` and its children `write`,
-`resend` and `classes` drive the hold over a fake board; the other modules test
+`resend`, `labels` and `classes` drive the hold over a fake board; the other modules test
 themselves over fakes and temp dirs; and `tests/it/tidy.rs` holds the
 arrangement — the declaration order, every file under `src/` declared by
 its parent's `mod` line, an inline test module as its file's last item,

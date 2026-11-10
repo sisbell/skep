@@ -240,7 +240,7 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "Hand",
         open: false,
-        doc: "one hand whose row moved a held document (§3c.5): `own` this store's own key with its fingerprint, `other` another key with its fingerprint and the label the shell's key store holds for it (rendered inert), `bare` an unsigned hand under local trust, `lost` a row whose testimony the board lost — the data of the three forms the moved face draws, the strings `ux/copy.md`'s; `unread`, the one hand, where the board gave the read of the rows no answer after a real verdict — the hands not read yet, never `lost`, read again when the board answers and the `moved` state said once more with them (skep #863)",
+        doc: "one hand whose row moved a held document (§3c.5): `own` this store's own key with its fingerprint, `other` another key with its fingerprint and its label rendered inert — the one the shell's key store holds for it, else the one the account's verified credential records give it, another device's key thus named by its enrolled label, and absent where neither names one (skep #869) — `bare` an unsigned hand under local trust, `lost` a row whose testimony the board lost — the data of the three forms the moved face draws, the strings `ux/copy.md`'s; `unread`, the one hand, where the board gave the read of the rows no answer after a real verdict — the hands not read yet, never `lost`, read again when the board answers and the `moved` state said once more with them (skep #863)",
         fields: &[req("key", "HandKey"), opt("fingerprint", "string"), opt("label", "string")],
     },
     Shape {

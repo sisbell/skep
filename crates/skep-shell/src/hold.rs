@@ -265,8 +265,10 @@ use crate::sessions::{board_head, HeadRead, SessionEntry, SessionKind, Sessions}
 use crate::wire::{document_address, json_len, MAX_FRAME_BYTES};
 use crate::Talk;
 
+mod labels;
 mod resend;
 
+use labels::AccountLabels;
 use resend::ReadOutcome;
 
 /// The interim probe cadence (§3c.4): `GET /health` at this interval.
@@ -481,21 +483,25 @@ mod cause {
 /// the position the person's last `send` on the document acknowledged the
 /// rows through where that is later, where the board refused it as typed
 /// against an older state — the one route to a moved document; the resend's
-/// read judges no move: this store's own key, another key with the label
-/// this shell's key store holds for it, an unsigned hand under local trust,
-/// or a row whose testimony the board lost — the data of the three forms the
-/// moved face draws, the strings the copy's. Where the board gave the read of
-/// the rows no answer, the one hand is `unread`: the hands not read yet,
-/// apart from a hand lost, read again at the board's answer (§3c.5's THE
-/// SHIFT (6); skep #863).
+/// read judges no move: this store's own key, another key with its label —
+/// this shell's key store's where it holds that key, else the one the
+/// account's verified records give it (`labels`; skep #869) — an unsigned
+/// hand under local trust, or a row whose testimony the board lost — the
+/// data of the three forms the moved face draws, the strings the copy's.
+/// Where the board gave the read of the rows no answer, the one hand is
+/// `unread`: the hands not read yet, apart from a hand lost, read again at
+/// the board's answer (§3c.5's THE SHIFT (6); skep #863).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hand {
     /// `own`, `other`, `bare`, `lost` or `unread`.
     pub key: &'static str,
     /// The key's fingerprint, for `own` and `other`.
     pub fingerprint: Option<String>,
-    /// The label this shell's key store holds for an `other` key, rendered
-    /// inert; absent where the store holds none.
+    /// The label of an `other` key, rendered inert.
+    ///
+    /// It is this shell's key store's where the store holds the key, else
+    /// the one the account's verified records give it; absent where neither
+    /// names one.
     pub label: Option<String>,
 }
 
@@ -2159,8 +2165,8 @@ struct KeptShift {
 /// It holds its directory, the three states that hold every burst before
 /// any dial — and refuse the unholdable writes at once — whether the board
 /// answers and its answering clock, the positions this shell acked at the
-/// board, the causes last said of lines kept from their files, and each
-/// principal's queue.
+/// board, the causes last said of lines kept from their files, the key
+/// labels read for each account, and each principal's queue.
 #[derive(Debug)]
 struct BoardHold {
     directory: Directory,
@@ -2244,6 +2250,10 @@ struct BoardHold {
     /// said once per change, and gone once the store is this shell's
     /// ([`Holds::say_store`]).
     store_said: Option<String>,
+    /// The key labels read for each account (`labels`; skep #869).
+    ///
+    /// It is kept for the shell's life, by the account the read was made for.
+    labels: HashMap<String, AccountLabels>,
     principals: HashMap<u64, PrincipalHold>,
 }
 
@@ -2493,6 +2503,7 @@ impl Holds {
                     silences: Duration::ZERO,
                     kept_said: HashMap::new(),
                     store_said: None,
+                    labels: HashMap::new(),
                     principals: HashMap::new(),
                 };
                 (entry.reference.clone(), BoardSlot { board: Arc::clone(&entry.board), hold: Mutex::new(hold), draining: AtomicBool::new(false) })
@@ -3349,13 +3360,14 @@ impl Holds {
     /// refusal — else, or where the shift is not exact, held as a moved
     /// document and answered `held`, its line carrying the board's verdict and
     /// the `held` event naming the hands whose rows moved the document — one
-    /// more read the call waits on ([`Holds::hands_since_typed_state`]); the
-    /// death signal — at the dial, or at that read of the hands — held
-    /// `session_died`, `sent: false`, before the caller ends the session
-    /// ([`Holds::hold_at_death`]; [`AtDeath`]), so the line stands through the
-    /// end's reads with every later burst of the principal's behind it, its
-    /// clock started where the dial was a failed send; anything else faced at
-    /// the act.
+    /// more read the call waits on ([`Holds::hands_since_typed_state`]), and
+    /// for another device's key the read of its account's labels
+    /// ([`Holds::recorded_label`]); the death signal — at the dial, or at
+    /// that read of the hands — held `session_died`, `sent: false`, before
+    /// the caller ends the session ([`Holds::hold_at_death`]; [`AtDeath`]),
+    /// so the line stands through the end's reads with every later burst of
+    /// the principal's behind it, its clock started where the dial was a
+    /// failed send; anything else faced at the act.
     ///
     /// The `base` a held line takes — the position the resend's read of it
     /// starts from (§3c.2) — is read under the board's lock BEFORE the dial,
@@ -4351,7 +4363,8 @@ impl Holds {
     ///
     /// It is `SessionEntry::signing_term`'s read, noted as every read of the
     /// board's head is ([`Holds::note_head`]; skep #865): the one way a
-    /// write reads its head.
+    /// write reads its head, and the way a read of an account's labels reads
+    /// the term its records' frames were signed over (`labels`).
     pub(crate) fn signing_term(&self, session: &SessionEntry) -> HeadRead {
         let head = session.signing_term();
         self.note_head(&session.board_reference, &head);
@@ -4659,16 +4672,20 @@ impl Holds {
     /// (wire.md §`/changes`), which the resend's own-row test reads as the
     /// session's (`resend::own_row`); `bare` where its `key` says so;
     /// `lost` where its testimony is the reserved null; and `other` for any
-    /// other key, its fingerprint carried and the label this shell's key
-    /// store holds for it rendered inert where the store holds that key — a
-    /// store that cannot be listed gives no label, said on `Talk` once per
-    /// read (SP-12, SP-14) and never read as a store holding no keys.
+    /// other key, its fingerprint carried and its label rendered inert: the
+    /// one this shell's key store holds for it where the store holds that
+    /// key, else the one the account's verified records give it
+    /// ([`Holds::recorded_label`], whose read's cost `labels`' module doc
+    /// states, SP-23), and none where neither names it. A store that cannot
+    /// be listed gives no label of its own, said on `Talk` once per read
+    /// (SP-12, SP-14), its keys looked up as keys it does not hold.
     fn hands_of(&self, session: &SessionEntry, rows: &[Value]) -> Vec<Hand> {
         let own_fingerprint = match &session.facts.kind {
             SessionKind::Signed { fingerprint, .. } => Some(fingerprint.to_hex()),
             SessionKind::Bare => None,
         };
         let mut labels: Option<Vec<KeyFacts>> = None;
+        let mut read_made = false;
         let mut hands: Vec<Hand> = Vec::new();
         for row in rows {
             let hand = if row["docs"].is_null() && row["key"].is_null() && row["op"].is_null() {
@@ -4681,11 +4698,14 @@ impl Holds {
                         let keys = labels.get_or_insert_with(|| match self.key_store.list() {
                             Ok(keys) => keys,
                             Err(e) => {
-                                self.say(format_args!("the key store could not be listed to label another hand's key ({e}); the hand is named by its fingerprint alone"));
+                                self.say(format_args!("the key store could not be listed to label another hand's key ({e}); the hand takes no label of this store's"));
                                 Vec::new()
                             }
                         });
-                        let label = keys.iter().find(|k| k.fingerprint.to_hex() == key).and_then(|k| k.label.as_deref()).map(render_inert);
+                        let label = match keys.iter().find(|k| k.fingerprint.to_hex() == key) {
+                            Some(held) => held.label.as_deref().map(render_inert),
+                            None => self.recorded_label(session, key, row["at"].as_u64(), keys, &mut read_made),
+                        };
                         Hand { key: "other", fingerprint: Some(key.to_string()), label }
                     }
                     None if row.get("attest").is_some() => Hand { key: "own", fingerprint: own_fingerprint.clone(), label: None },

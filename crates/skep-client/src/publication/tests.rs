@@ -48,7 +48,7 @@ use crate::sign::Signer;
 
 use super::base::Base as DraftBase;
 use super::enumerate::RecordWalk;
-use super::panel::Destination;
+use super::panel::{region_reads, Destination};
 use super::request::{Confirmed, Inert, OwnedRow, Piece};
 use super::send::{AckVia, OwnFault, Refusal, Sent};
 use super::*;
@@ -1879,7 +1879,9 @@ fn the_panel_orders_the_rows_and_counts_each_line() {
     assert_eq!(panel.formatting.job_list().len(), 2);
     assert_eq!(panel.read_with, BTreeMap::from([(a(S), true), (a(S2), false)]));
     let steps: Vec<&str> = panel.frames.iter().map(|(s, _)| *s).collect();
-    assert_eq!(steps, ["removals", "homes", "far", "labels", "read_with"], "the formatting line's test sends no frame; the windows are the enumeration's");
+    assert_eq!(steps, ["removals", "homes", "far", "labels", "read_with", "edition_links"], "the formatting line's test sends no frame; the windows are the enumeration's");
+    assert_eq!(panel.frames.last(), Some(&("edition_links", 1)), "one region read over the draft's new words, and no address homed in E's chain to read");
+    assert_eq!(panel.edition_links, 0, "no link of E's on the draft's new words");
 }
 
 /// Checks that an end over words before a record reads both.
@@ -4973,6 +4975,7 @@ fn a_link_made_before_the_base_on_words_it_holds_is_unchanged_and_one_made_since
     assert_eq!(homes, [D, S, S2], "the draft's own row and the two public sets");
     assert_eq!(pn.rows[0].fold, FoldCounts { unchanged: 1, changed: 0 }, "compact: every link stayed private when E.1 was published");
     assert!(pn.formatting.marks.is_empty() && pn.formatting.job_list().is_empty(), "no mark and no removal on E's 1..3");
+    assert_eq!(pn.edition_links, 0, "no re-inserted word for a link of E's to lie on");
     assert!(!pn.p3_stands, "compact rows and public rows on kept words: nothing to decide");
 }
 
@@ -5134,4 +5137,208 @@ fn the_base_image_is_read_once_per_open_and_kept_for_the_reread_and_the_inert_ch
     dialer.clear();
     let e = enumerate(&p, &bare).unwrap();
     assert_eq!((e.base.clone(), images_of(E)), (None, 0), "the bare document keys nothing");
+}
+
+// ── `E`'S OWN LINKS ON THE RE-INSERTED WORDS (§5.2; E4 1.4) ──────────────
+
+/// Types a word at the draft's ordinal 30, arranged last, and returns inputs.
+///
+/// They select `E`'s 1..3, which the own row folds over, and that word, the
+/// one word the shot re-inserts.
+fn typed_word(world: &mut World) -> Inputs {
+    world.text(D, 30, "!");
+    world.docs.get_mut(D).unwrap().runs.push(run(D, 30, 1));
+    Inputs { selection: vec![run(E, 1, 3), run(D, 30, 1)], ..inputs() }
+}
+
+/// Checks that `E`'s own line alone stands P3 and reaches the panel.
+///
+/// The link-sets design §5.2; E4 1.4. Over the compact selection of the
+/// fold's cell, every other input of P3 silent: with no link of `E`'s on the
+/// word the draft typed the count is zero and P3 does not stand; with one
+/// homed in `E.1` on it the count is one, read by one region read over that
+/// word's V-span and the link's own `read_link`, and P3 stands on it alone.
+/// The re-read counts it again and re-states nothing: the line writes
+/// nothing.
+#[test]
+fn a_documents_own_link_on_re_inserted_words_alone_stands_p3() {
+    let (mut world, _) = World::base();
+    let selected = typed_word(&mut world);
+    base_minted_after_the_links(&mut world);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let e = enumerate(&p, &selected).unwrap();
+    let pn = panel(&p, &selected, &e).unwrap();
+    assert_eq!((pn.edition_links, pn.p3_stands), (0, false), "no link of E's on the word, and nothing else to decide");
+    dialer.world().typed(&format!("{E}.1"), vec![ispan(D, 30, 1)], vec![], T_CITATION);
+    dialer.clear();
+    let pn = panel(&p, &selected, &e).unwrap();
+    assert_eq!((pn.edition_links, pn.p3_stands), (1, true), "its own line alone: {:?}", pn.frames);
+    assert_eq!(pn.frames.last(), Some(&("edition_links", 2)), "one region read and the link's own read");
+    assert_eq!(dialer.frames("find_links_v"), [json!({"op": "find_links_v", "d": D, "region": [{"start": "1.35", "width": "0.1"}]})], "the typed word's V-span and no other");
+    let rr = reread(&p, &selected, &e, &pn).unwrap();
+    assert_eq!((rr.restatement, rr.panel.edition_links), (None, 1), "counted again at the confirm, and no difference to restate");
+}
+
+/// Checks that the count reads a link before it counts it.
+///
+/// Each of these is homed in `E`'s chain and answered by the region read
+/// over the typed word, the first two through a whole-work end on the
+/// draft: the edition claim, `to` the draft; a link whose only content end
+/// lies on kept words; and an edition record on the word itself, a record
+/// class. None is a link on these words, so the count is zero.
+#[test]
+fn an_edition_claim_or_whole_work_link_is_not_counted() {
+    let (mut world, _) = World::base();
+    let selected = typed_word(&mut world);
+    let e1 = format!("{E}.1");
+    let answered =
+        [world.typed(E, vec![unit(E)], vec![unit(D)], T_EDITION), world.typed(&e1, vec![unit(D)], vec![ispan(E, 1, 3)], T_CITATION), world.typed(&e1, vec![], vec![ispan(D, 30, 1)], T_EDITION)];
+    base_minted_after_the_links(&mut world);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let e = enumerate(&p, &selected).unwrap();
+    dialer.clear();
+    let pn = panel(&p, &selected, &e).unwrap();
+    let read: Vec<String> = dialer.frames("read_link").iter().filter_map(|f| f["a"].as_str().map(str::to_string)).collect();
+    assert!(answered.iter().all(|link| read.contains(link)), "the premise: the region read answered each, homed in E's chain: {read:?}");
+    assert_eq!((pn.edition_links, pn.p3_stands), (0, false), "none is a link on the typed word");
+}
+
+/// Checks that the count takes `E`'s links on re-inserted words and no other.
+///
+/// The draft's own link on the typed word is a row's, homed in no document
+/// of `E`'s chain; a link of `E.1` on kept words lies outside the region; and
+/// one on words a twin names lies on words this shot sends by reference,
+/// the earlier shot having stranded it.
+#[test]
+fn a_draft_homed_link_or_a_link_on_kept_or_twin_words_is_not_counted() {
+    let (mut world, _) = World::base();
+    let e1 = format!("{E}.1");
+    world.text(D, 20, "abcd");
+    world.docs.get_mut(D).unwrap().runs.push(run(D, 20, 4));
+    let selected = Inputs { selection: vec![run(E, 1, 3), run(D, 20, 4), run(D, 30, 1)], ..typed_word(&mut world) };
+    world.typed(D, vec![ispan(D, 30, 1)], vec![], T_CITATION);
+    world.typed(&e1, vec![ispan(E, 1, 3)], vec![], T_CITATION);
+    world.typed(&e1, vec![ispan(D, 20, 4)], vec![], T_CITATION);
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let e = enumerate(&p, &selected).unwrap();
+    assert!(e.twins.iter().any(|r| r.from.first == 20), "the premise: the record names the draft's 20..23");
+    let pn = panel(&p, &selected, &e).unwrap();
+    assert_eq!(pn.frames.last(), Some(&("edition_links", 1)), "one region read, over the typed word alone");
+    assert_eq!(pn.edition_links, 0);
+}
+
+/// Checks that the stretch a twin leaves of a held run is read at its place.
+///
+/// A held run of the draft whose first four words a record names: only its
+/// rest is re-inserted, at the run's place past the words the twin takes,
+/// and a link of `E.1` on that rest is counted.
+#[test]
+fn the_stretch_past_a_twin_is_read_at_its_own_place() {
+    let (mut world, _) = World::base();
+    world.text(D, 20, "abcdefgh");
+    world.docs.get_mut(D).unwrap().runs.push(run(D, 20, 8));
+    world.typed(&format!("{E}.1"), vec![ispan(D, 26, 1)], vec![], T_CITATION);
+    let selected = Inputs { selection: vec![run(E, 1, 3), run(D, 20, 8)], ..inputs() };
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let e = enumerate(&p, &selected).unwrap();
+    dialer.clear();
+    let pn = panel(&p, &selected, &e).unwrap();
+    assert_eq!(pn.edition_links, 1, "the link on the rest of the run");
+    assert_eq!(dialer.frames("find_links_v"), [json!({"op": "find_links_v", "d": D, "region": [{"start": "1.39", "width": "0.4"}]})], "the run's place, 35, past the twin's four words");
+}
+
+/// Checks that a link two frames of the region read answer counts once.
+///
+/// One draft run holds 4,097 selected single words, each between two words
+/// left out, so the region is one span past the wire's list cap and is read
+/// in two frames; one link of `E.1` has an end on the first selected word
+/// and an end on the last.
+#[test]
+fn a_link_two_region_frames_answer_counts_once() {
+    let (mut world, _) = World::base();
+    let words = MAX_WIRE_LIST as u64 + 1;
+    world.text(D, 1000, &"x".repeat(2 * words as usize));
+    world.docs.get_mut(D).unwrap().runs.push(run(D, 1000, 2 * words));
+    world.typed(&format!("{E}.1"), vec![ispan(D, 1000, 1), ispan(D, 1000 + 2 * (words - 1), 1)], vec![], T_CITATION);
+    let selection: Vec<Run> = (0..words).map(|k| run(D, 1000 + 2 * k, 1)).collect();
+    let selected = Inputs { selection, ..inputs() };
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let e = enumerate(&p, &selected).unwrap();
+    dialer.clear();
+    let pn = panel(&p, &selected, &e).unwrap();
+    let regions: Vec<usize> = dialer.frames("find_links_v").iter().map(|f| f["region"].as_array().unwrap().len()).collect();
+    assert_eq!(regions, [MAX_WIRE_LIST, 1], "the premise: two frames, one end in each");
+    assert_eq!(pn.edition_links, 1, "one link, whichever frames answer it");
+}
+
+/// Checks that a window's answer moves neither the count nor the board.
+///
+/// The count is the open's: an answer composes a window's words and never
+/// a named draft's, so the panel re-decided under any answer holds it, and
+/// P3 with it, with no frame.
+#[test]
+fn a_window_answer_leaves_the_count_and_reads_nothing() {
+    let (mut world, _) = World::base();
+    let selected = Inputs { selection: vec![run(E, 1, 3), run(O, 1, 5), run(D, 30, 1)], ..typed_word(&mut world) };
+    world.typed(&format!("{E}.1"), vec![ispan(D, 30, 1)], vec![], T_CITATION);
+    base_minted_after_the_links(&mut world);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let e = enumerate(&p, &selected).unwrap();
+    let pn = panel(&p, &selected, &e).unwrap();
+    assert_eq!(pn.edition_links, 1, "awaiting the answer");
+    dialer.clear();
+    for answer in [OriginAnswer::KeepPrivate, OriginAnswer::Drop] {
+        let composed = e.composed(&selected, &BTreeMap::from([(part(1, 0), answer)]), &BTreeSet::new());
+        let re_keyed = pn.composed(&selected, &composed);
+        assert_eq!((re_keyed.edition_links, re_keyed.p3_stands), (1, true), "under {answer:?}");
+    }
+    assert!(dialer.ops().is_empty(), "no frame: {:?}", dialer.ops());
+}
+
+/// Checks that the count sends nothing where no line can stand.
+///
+/// At the mint form no `E` stands yet; a selection of `E`'s words holds no
+/// named draft's; and a selection of the words a twin names sends them all
+/// by reference. Each counts zero with no region read of its own.
+#[test]
+fn no_frame_at_the_mint_form_or_with_no_re_inserted_words() {
+    let (mut world, _) = World::base();
+    world.text(D, 20, "abcd");
+    world.docs.get_mut(D).unwrap().runs.push(run(D, 20, 4));
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let minting = Inputs { doc: None, mint: Some(a(ACCOUNT)), claim: true, base: None, selection: vec![run(D, 1, 10)], published: vec![a(S), a(S2)], ..inputs() };
+    let kept = Inputs { selection: vec![run(E, 1, 3)], ..inputs() };
+    let twin_named = Inputs { selection: vec![run(D, 20, 4)], ..inputs() };
+    for (cell, inputs) in [("the mint form", minting), ("E's words alone", kept), ("the twin's words alone", twin_named)] {
+        let e = enumerate(&p, &inputs).unwrap();
+        let pn = panel(&p, &inputs, &e).unwrap();
+        assert!(pn.edition_links == 0 && pn.frames.iter().all(|(step, _)| *step != "edition_links"), "{cell}: {:?}", pn.frames);
+    }
+}
+
+/// Checks that a region past the wire's list cap is read in chunks of it.
+///
+/// Its spans are merged where adjacent first.
+#[test]
+fn a_region_past_the_wire_list_cap_is_read_in_chunks_of_it() {
+    let cap = MAX_WIRE_LIST as u64;
+    let widths = |places: Vec<(u64, u64)>| -> Vec<usize> { region_reads(D, places).iter().map(|f| f["region"].as_array().unwrap().len()).collect() };
+    assert_eq!(widths((0..=cap).map(|k| (1 + 2 * k, 1)).collect()), [MAX_WIRE_LIST, 1], "one span past the cap is a second read");
+    assert_eq!(widths((0..cap).map(|k| (1 + 2 * k, 1)).collect()), [MAX_WIRE_LIST], "at the cap, one");
+    assert_eq!(widths((0..=cap).map(|k| (1 + k, 1)).collect()), [1], "adjacent spans are one");
+    assert!(widths(Vec::new()).is_empty(), "no span, no read");
 }

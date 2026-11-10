@@ -13,6 +13,8 @@
 //! and the feed row naming the member and the homes, the second open inert,
 //! the fold — a note left off at version 1 unchanged since it at the next
 //! open, P3 not standing over its compact row, a note made since news —
+//! the document's own links on the words a shot re-inserts, one standing P3
+//! alone and an edition claim counted never,
 //! the stopped node refusing the confirm before it composes, a held line of
 //! the rendering draft or of a draft `also` names refusing it `held_lines`
 //! until the line clears, the mint form with its claim, and
@@ -636,6 +638,65 @@ fn the_open_and_the_count_answer_the_fold_and_whether_p3_stands() {
     assert!(links.contains(&link.as_str()) && links.contains(&since.as_str()), "{panel}");
     assert_eq!((row["unchanged"].clone(), row["fold"].clone()), (json!([link]), json!({"unchanged": 1, "changed": 1})), "the new note is news: {panel}");
     assert_eq!(panel["p3_stands"], true, "a row folded by change");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that the open and the count answer the document's own links.
+///
+/// The link-sets design §5.2; E4 1.4. Version 1 published, a word typed in
+/// the draft and a link on it homed in that member: the link is no row's, so
+/// the open answers no row, one in `edition_links` and P3 standing on it
+/// alone, and the count answers the same, nothing dialed.
+#[test]
+fn the_open_and_the_count_answer_the_documents_own_links() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let draft = g.staged(&edition, "the quick brown fox");
+    let inputs = json!({"session": g.session, "draft": draft, "doc": edition, "readable_drafts": [draft], "published": [edition]});
+    let first = g.call("publication.open", inputs.clone()).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((first["edition_links"].clone(), first["p3_stands"].clone()), (json!(0), json!(false)), "no link of the document's on the first version's words: {first}");
+    let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(acked["outcome"].as_str(), Some("acknowledged"), "version 1: {acked}");
+    let member = format!("{edition}.1");
+    g.op(json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "20"}, "values": [" jumps"], "as_of": g.position()}));
+    g.addr(json!({"op": "make_link", "home": member, "from": [{"source": draft, "span": {"start": "1.20", "width": "0.6"}}], "to": {"addrs": []}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}}));
+    let panel = g.call("publication.open", inputs).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("PublicationPanel", &panel);
+    assert_eq!((panel["rows"].clone(), panel["edition_links"].clone(), panel["p3_stands"].clone()), (json!([]), json!(1), json!(true)), "its own line alone: {panel}");
+    let dials = g.shell.log().entries().len();
+    let counted = g.call("publication.count", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((counted["edition_links"].clone(), counted["p3_stands"].clone()), (json!(1), json!(true)), "{counted}");
+    assert_eq!(g.shell.log().entries().len(), dials + 1, "the count is pure local");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a claimed draft's next version counts no own link.
+///
+/// The edition claim is homed in the edition with its `to` the draft whole,
+/// so the region read over the words the next version re-inserts answers
+/// it: read, it is no link on those words, the count is zero and P3 does
+/// not stand.
+#[test]
+fn a_claimed_drafts_next_version_counts_no_own_link() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let free = g.draft("a free-standing draft");
+    let minting =
+        g.call("publication.open", json!({"session": g.session, "draft": free, "mint": "1.0.1", "claim": true, "readable_drafts": [free], "published": []})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(minting["edition_links"], 0, "no document stands yet: {minting}");
+    let minted = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let edition = minted["edition"].as_str().unwrap_or_else(|| panic!("the edition minted: {minted}")).to_string();
+    g.op(json!({"op": "insert", "doc": free, "at": {"subspace": "1", "ordinal": "22"}, "values": [" more"], "as_of": g.position()}));
+    let region = g.op(skep_client::board::frames::find_links_v(&free, &[(22, 5)]));
+    let homed_in_edition = region["addrs"].as_array().unwrap().iter().filter_map(Value::as_str).filter(|a| a.starts_with(&format!("{edition}.0.2."))).count();
+    assert_eq!(homed_in_edition, 1, "the premise: the region read answers the edition claim through its whole-work end: {region}");
+    let panel = g.call("publication.open", json!({"session": g.session, "draft": free, "doc": edition, "readable_drafts": [free], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((panel["edition_links"].clone(), panel["p3_stands"].clone()), (json!(0), json!(false)), "the claim is no link on the new words: {panel}");
     g.shell.shutdown();
     sd.shutdown();
 }

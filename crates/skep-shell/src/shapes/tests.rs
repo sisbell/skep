@@ -82,7 +82,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("Run", json!({"origin": "1.0.1.0.5", "i_start": 1, "width": 10})),
         (
             "PublicationPanel",
-            json!({"rows": [], "formatting": {"marks": [], "cut": 0, "removals": []}, "read_with": {"1.0.1.0.3": true}, "count": {"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": []}, "price": {"lists": [0, 0, 0, 0, 0, 0], "body": 0, "values": 0, "reads": 0, "bytes": 0, "over": []}, "windows": [], "parts": [], "inherited": [{"draft": "1.0.1.0.9", "passages": 2}], "merge_records": [{"draft": "1.0.1.0.11", "n": 2}], "p3_stands": true, "standing": "at_head", "left_behind": ["1.0.1.0.9"], "hold": {"since": 1}}),
+            json!({"rows": [], "formatting": {"marks": [], "cut": 0, "removals": []}, "read_with": {"1.0.1.0.3": true}, "count": {"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": []}, "price": {"lists": [0, 0, 0, 0, 0, 0], "body": 0, "values": 0, "reads": 0, "bytes": 0, "over": []}, "windows": [], "parts": [], "inherited": [{"draft": "1.0.1.0.9", "passages": 2}], "merge_records": [{"draft": "1.0.1.0.11", "n": 2}], "edition_links": 1, "p3_stands": true, "standing": "at_head", "left_behind": ["1.0.1.0.9"], "hold": {"since": 1}}),
         ),
         ("PublicationRow", json!({"home": "1.0.1.0.5", "kind": {"public": {"read_with": false}}, "label": "notes here", "links": ["1.0.1.0.5.0.2.1"], "types": [], "line": {"p": 0, "d": 0, "c": 0, "t": 0, "u": 0}, "read_through": 0, "unchanged": ["1.0.1.0.5.0.2.1"], "fold": {"unchanged": 1, "changed": 0}})),
         ("TypeFold", json!({"ty": "1.1.0.1.0.1.0.3.13", "n": 1, "far": ["1.0.1.0.8"]})),
@@ -179,7 +179,7 @@ fn the_file_names_every_shape_call_and_event() {
         "  session(args: { board: string; principal?: number }): Promise<Outcome<SessionOpened>>;\n",
         "  op(args: { session: string; frame: unknown; anchors?: Anchors; after?: string } | { guest: true; board?: string; origin?: string; frame: unknown }): Promise<Outcome<unknown>>;\n",
         "  'publication.open'(args: { session: string; draft: string; also?: string[]; doc?: string; mint?: string; claim?: boolean; selection?: Run[]; notes?: string[]; readable_drafts?: string[]; published?: string[] }): Promise<Outcome<PublicationPanel>>;\n",
-        "  'publication.count'(args: { session: string; switches?: Switches; answers?: Record<string, OriginAnswer> }): Promise<Outcome<{ count: Count; price: Price; rows: PublicationRow[]; formatting: Formatting; windows: Window[]; parts: PartCounts[]; p3_stands: boolean }>>;\n",
+        "  'publication.count'(args: { session: string; switches?: Switches; answers?: Record<string, OriginAnswer> }): Promise<Outcome<{ count: Count; price: Price; rows: PublicationRow[]; formatting: Formatting; windows: Window[]; parts: PartCounts[]; edition_links: number; p3_stands: boolean }>>;\n",
         "  'publication.confirm'(args: { session: string; switches?: Switches; answers?: Record<string, OriginAnswer> }): Promise<Outcome<Acknowledged | Restated | PublicationRefused>>;\n",
         "  'publication.cancel'(args: { session: string }): Promise<Outcome<Empty>>;\n",
         "  'merge.compose'(args: { session: string; doc: string; alternative?: string; draft?: string; into?: string }): Promise<Outcome<MergeReport>>;\n",

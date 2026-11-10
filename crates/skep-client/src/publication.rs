@@ -70,10 +70,12 @@
 //!    the held removals as its job list with the re-makes split out, the
 //!    public row's read-with state, and THE STATEMENT's count per `also`
 //!    draft, the passages first written in it (B3-S11 P2 (i)); the merge
-//!    records left out, per named draft; and THE COUNT's four numbers from
-//!    the rows as switched (PUB-3.8). Its reads are made once, at the open,
-//!    over every candidate of every identity, and the panel is re-decided
-//!    at each answer from them alone (`Panel::composed`).
+//!    records left out, per named draft; `E`'s own links on the words the
+//!    shot re-inserts, §5.2's line for them and an input of whether P3
+//!    stands; and THE COUNT's four numbers from the rows as switched
+//!    (PUB-3.8). Its reads are made once, at the open, over every candidate
+//!    of every identity, and the panel is re-decided at each answer from
+//!    them alone (`Panel::composed`).
 //! 3. [`price`](mod@price) — THE PRICE (§5.6): the lists, the body, the staged bytes,
 //!    the in-lock reads, each against its cap, from the worst-case table the
 //!    daemon prices by, pinned equal to it.

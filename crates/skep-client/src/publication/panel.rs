@@ -13,11 +13,21 @@
 //! `doc_metadata`, one read per home; the state of every document a
 //! candidate's ends or a record's `to` can name as a far document, and of a
 //! type's own document, one read each; each home's label, its first line,
-//! read by one `retrieve_doc_v_span_set` and one `retrieve_v` per home; and
+//! read by one `retrieve_doc_v_span_set` and one `retrieve_v` per home;
 //! the read-with presence over the person's published homes (W1 (a)),
 //! for every published document of the person's, the possible
 //! destinations, so the count knows which read-with a destination still
-//! needs.
+//! needs; and `E`'s own links on the re-inserted runs (§5.2's line for
+//! them, [`Panel::edition_links`]): the rendering draft's `find_links_v`
+//! over the V-spans of the words this publication re-inserts
+//! (`Enumeration::reinserted`), in chunks of the wire list cap, no frame
+//! at the mint form, where no `E` stands yet, or where it re-inserts
+//! nothing — each answered address homed in `E`'s chain read once, and
+//! counted where its type is no record class and its stored endset touches
+//! those words through a content span, so the edition claim, homed in `E`
+//! with a whole-work `to` on the draft that the region read answers at
+//! every later version, is no link on them. No answer moves the count: an
+//! answer composes a window's words, never a named draft's.
 //!
 //! **The composition**, from the enumeration as the answers compose it
 //! ([`Enumeration::composed`]) and those reads alone. The rows, one per
@@ -75,8 +85,9 @@
 //! say before the act — a private row with a link not unchanged since
 //! version ⟨k⟩, the formatting line's marks or listed removals, a
 //! re-offered original (an offered candidate a public successor of the
-//! person's names), or a public row's link on words this version publishes
-//! as new — and not where it would draw compact rows and public rows alone.
+//! person's names), a public row's link on words this version publishes as
+//! new, or `E`'s own line holding a link — and not where it would draw
+//! compact rows and public rows alone.
 //! Every test of the selection here — the line's ⟨c⟩ and ⟨d⟩, the
 //! formatting line's cut, the job list, the statement's passages, P3's
 //! new words — reads the selection as published
@@ -93,6 +104,7 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde_json::Value;
 use skep_address::Address;
 
 use crate::address::{document_of, parse_address};
@@ -100,9 +112,9 @@ use crate::board::answers::{self, LinkValue};
 use crate::board::frames::{self, Slot, REGISTRY_DOCUMENT, T_HELD_REMOVAL, T_READ_WITH};
 use crate::board::T_RETRACTION;
 
-use super::enumerate::{is_formatting, is_formatting_type, selected_ranges, touches, Candidate, EndPiece, Enumeration, Record, RecordWalk, Via};
+use super::enumerate::{is_formatting, is_formatting_type, is_record_class, merged, selected_ranges, touches, Candidate, EndPiece, Enumeration, Record, RecordWalk, Via, MAX_WIRE_LIST};
 use super::parts::{Answer, PartKey};
-use super::{home_of_link, owned_by, Door, Fault, ISpan, Inputs, Publisher, Run};
+use super::{home_of_link, owned_by, trunk_of, Door, Fault, ISpan, Inputs, Publisher, Run};
 
 /// How many positions of a home the label read takes at most: the first
 /// line is cut at the first newline within them.
@@ -325,6 +337,8 @@ struct PanelReads {
     removals: Vec<Removal>,
     /// Per published document of the person's, whether `E` is read with it.
     read_with: BTreeMap<Address, bool>,
+    /// `E`'s own links on the re-inserted runs.
+    edition_links: usize,
 }
 
 /// The panel's data.
@@ -346,12 +360,22 @@ pub struct Panel {
     /// The merge records left out, per named draft holding any, in the
     /// selection's order: never published, so the page says so.
     pub merge_records: Vec<MergeRecords>,
-    /// Whether P3 stands (E4 1.4): it holds something to decide or to say
-    /// before the act — a private row holding a link changed since version
-    /// ⟨k⟩, the formatting line's marks or listed removals, a re-offered
-    /// original, or a public row's link on words this version publishes as
-    /// new. Where it does not stand, P2's own line says the links stayed
-    /// private.
+    /// How many of `E`'s own links lie on the words this shot re-inserts.
+    ///
+    /// It is the ⟨n⟩ of "⟨n⟩ of ⟨E⟩'s own links on these words stay on this
+    /// draft's earlier words" (the link-sets design §5.2), as data, the
+    /// sentence the page's and nothing written for them: the shot strands
+    /// each, re-minting the words while the link keeps naming the draft's.
+    /// Zero at the mint form, where no `E` stands yet.
+    pub edition_links: usize,
+    /// Whether P3 stands (E4 1.4).
+    ///
+    /// It stands where it holds something to decide or to say before the
+    /// act: a private row holding a link changed since version ⟨k⟩, the
+    /// formatting line's marks or listed removals, a re-offered original, a
+    /// public row's link on words this version publishes as new, or `E`'s
+    /// own line holding a link ([`Panel::edition_links`]). Where it does not
+    /// stand, P2's own line says the links stayed private.
     pub p3_stands: bool,
     /// The frames sent, per step.
     pub frames: Vec<(&'static str, usize)>,
@@ -623,8 +647,48 @@ pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         }
     }
 
-    let reads = PanelReads { published, labels, removals, read_with };
+    door.step("edition_links");
+    let edition_links = edition_links(door, inputs, e)?;
+
+    let reads = PanelReads { published, labels, removals, read_with, edition_links };
     Ok(compose(inputs, e, &reads, door.counts()))
+}
+
+/// Returns the `find_links_v` reads over `places`, V-spans of `draft`.
+///
+/// The spans are merged where adjacent, and each frame carries one chunk of
+/// them up to the wire list cap: a region can pass the cap where the
+/// selection's own stays under it, a stretch the twins name cutting a span
+/// of the selection in two.
+pub(super) fn region_reads(draft: &str, places: Vec<(u64, u64)>) -> Vec<Value> {
+    merged(places).chunks(MAX_WIRE_LIST).map(|chunk| frames::find_links_v(draft, chunk)).collect()
+}
+
+/// Returns how many of `E`'s own links lie on the words this shot re-inserts.
+///
+/// The reads and the test are the module's doc's, **The reads, once, at the
+/// open**.
+///
+/// # Errors
+///
+/// The reads' faults, as `enumerate`'s.
+fn edition_links(door: &Door<'_>, inputs: &Inputs, e: &Enumeration) -> Result<usize, Fault> {
+    let Some(trunk) = inputs.doc.as_ref().map(ToString::to_string) else { return Ok(0) };
+    let reinserted = e.reinserted(inputs);
+    let places = reinserted.iter().map(|(run, ordinal)| (*ordinal, run.width)).collect();
+    let runs: Vec<Run> = reinserted.into_iter().map(|(run, _)| run).collect();
+    let draft = inputs.draft.to_string();
+    let mut hits: BTreeSet<String> = BTreeSet::new();
+    for frame in region_reads(&draft, places) {
+        hits.extend(door.addrs(&draft, &frame)?);
+    }
+    let mut n = 0;
+    for hit in hits.iter().filter(|hit| home_of_link(hit).and_then(trunk_of).as_deref() == Some(trunk.as_str())) {
+        if door.link(hit)?.is_some_and(|value| !is_record_class(&value) && touches(&value, &runs)) {
+            n += 1;
+        }
+    }
+    Ok(n)
 }
 
 /// Returns every document a composition can name as a far document of a
@@ -818,13 +882,15 @@ fn compose(inputs: &Inputs, e: &Enumeration, reads: &PanelReads, frames: Vec<(&'
     // Whether P3 stands (E4 1.4): a private row holding a link changed since
     // version ⟨k⟩, the formatting line holding a mark or a listed removal, a
     // re-offered original — one a public successor of the person's does not
-    // drop — or a public row's link on words this version publishes as new.
+    // drop — a public row's link on words this version publishes as new, or
+    // `E`'s own line holding a link.
     let on_new_words = |c: &Candidate| selected_ranges(&walk.spans(c), e.judged(c)).iter().any(|(chain, ..)| walk.is_named_chain(chain));
     let p3_stands = rows.iter().any(|r| !matches!(r.kind, RowKind::Public { .. }) && r.fold.changed > 0)
         || !marks.is_empty()
         || removals.iter().any(Removal::listed)
         || e.candidates.iter().any(|c| c.offered() && c.successors.iter().any(|s| s.published_home))
-        || rows.iter().filter(|r| matches!(r.kind, RowKind::Public { .. })).flat_map(|r| &r.links).any(|&i| on_new_words(&e.candidates[i]));
+        || rows.iter().filter(|r| matches!(r.kind, RowKind::Public { .. })).flat_map(|r| &r.links).any(|&i| on_new_words(&e.candidates[i]))
+        || reads.edition_links > 0;
 
     Panel {
         rows,
@@ -833,6 +899,7 @@ fn compose(inputs: &Inputs, e: &Enumeration, reads: &PanelReads, frames: Vec<(&'
         parts,
         inherited: inherited(&inputs.also, &e.selection),
         merge_records: merge_records(inputs, e),
+        edition_links: reads.edition_links,
         p3_stands,
         frames,
         reads: reads.clone(),

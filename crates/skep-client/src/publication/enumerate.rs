@@ -189,7 +189,9 @@
 //!
 //! What it does not read: other people's links, left out by the owned-homes
 //! rule and no refusal; links of the person's touching no word any answer
-//! can publish; the edition's own links (its home projects to `E`).
+//! can publish; the edition's own links (its home projects to `E`), which
+//! are no row's — the panel reads those on the words the shot re-inserts
+//! and counts them (`Panel::edition_links`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -728,6 +730,25 @@ impl Enumeration {
         publishable_of(pieces, &stray, &self.windows)
     }
 
+    /// Returns the runs this publication re-inserts as fresh identity.
+    ///
+    /// Each comes with the V-ordinal the rendering draft arranges it at. They
+    /// are every named draft's carried pieces, each cut by the twins as the
+    /// twin pre-check cuts it (`landed`'s `recompose`), less the stretches a
+    /// twin names, which go by reference onto the published words (§5.1, the
+    /// stray words). They depend on no answer: an answer composes a window's
+    /// words, and a run of a named draft is never a window.
+    pub(crate) fn reinserted(&self, inputs: &Inputs) -> Vec<(Run, u64)> {
+        inputs
+            .selection
+            .iter()
+            .enumerate()
+            .filter(|(_, run)| inputs.is_named_draft(&run.origin))
+            .flat_map(|(i, run)| self.pieces(i, run))
+            .flat_map(|(piece, ordinal)| recompose(&piece, &self.twins).into_iter().filter(|(.., by_reference)| !by_reference).map(move |(stretch, offset, _)| (stretch, ordinal + offset)))
+            .collect()
+    }
+
     /// Returns the answer `window`'s `k`-th part stands under: the one given,
     /// where the part admits it.
     pub fn answer_at(&self, window: &Window, k: usize) -> Option<Answer> {
@@ -939,7 +960,7 @@ pub fn region_of(placed: &[Placement], selection: &[Run]) -> Vec<(u64, u64)> {
 }
 
 /// Returns `spans` sorted and merged where adjacent or overlapping.
-fn merged(mut spans: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
+pub(crate) fn merged(mut spans: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
     spans.sort_unstable();
     let mut out: Vec<(u64, u64)> = Vec::new();
     for (from, width) in spans {

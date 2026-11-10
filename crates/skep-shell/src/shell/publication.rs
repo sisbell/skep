@@ -13,12 +13,16 @@
 //! a record names taken by its counterpart and every other kept private —
 //! the widest request the default switches make — and answers the panel
 //! `{rows, formatting, read_with, count, price, windows, parts, inherited,
-//! merge_records, p3_stands, standing?, left_behind, hold?}` — each row
-//! with THE FOLD (E4 1.8): `unchanged` its links unchanged since the
-//! recorded base by the fold's test, by address, and `fold` the two
+//! merge_records, edition_links, p3_stands, standing?, left_behind, hold?}`
+//! — each row with THE FOLD (E4 1.8): `unchanged` its links unchanged since
+//! the recorded base by the fold's test, by address, and `fold` the two
 //! counts, links unchanged and not, decided against the image of the
 //! member the request's `base` names, read once at the open and kept for
-//! the confirm's re-read; `p3_stands` whether P3 stands (E4 1.4);
+//! the confirm's re-read; `edition_links` how many of the document's own
+//! links lie on the words the shot re-inserts, read once at the open — the
+//! count of the link-sets design §5.2's line for them, the shot leaving each
+//! on the draft's earlier words; `p3_stands` whether P3 stands (E4 1.4),
+//! that count above zero among what it stands on;
 //! `windows` each
 //! own-origin window in its PARTS, each part with the answers it admits
 //! (B3-S11 P2 (i)), a window awaiting its answer counting toward nothing;
@@ -30,8 +34,8 @@
 //! answers at the windows' parts — the rows and their candidates, the
 //! formatting line, the windows, what each part's answer brings, each
 //! row's fold and whether P3 stands — from the open's reads alone, and
-//! answers `{count, price, rows, formatting, windows, parts, p3_stands}`
-//! with the four numbers and
+//! answers `{count, price, rows, formatting, windows, parts, edition_links,
+//! p3_stands}` with the four numbers and
 //! the price over the rows as switched, PURE LOCAL — no frame sent, the
 //! price the open's request re-priced with the entries the switches add,
 //! each end spelled by its stored slot's shape (an address form, an I-span
@@ -700,12 +704,12 @@ impl Shell {
     /// selection?, notes?, readable_drafts?, published?})` with the panel.
     ///
     /// The panel is `{rows, formatting, read_with, count, price, windows,
-    /// parts, inherited, merge_records, standing?, left_behind, hold?}` (the module
-    /// doc): a held or
-    /// standing panel of the draft re-opened as it stands where the selection
-    /// is none or the same, its base's standing typed again and its windows
-    /// re-read (`also`, the base and the family left behind as it held
-    /// them); else the draft's base read off the board and its standing
+    /// parts, inherited, merge_records, edition_links, p3_stands, standing?,
+    /// left_behind, hold?}` (the module doc): a held or standing panel of the
+    /// draft re-opened as it stands where the selection is none or the same,
+    /// its base's standing typed again and its windows re-read (`also`, the
+    /// base and the family left behind as it held them); else the draft's
+    /// base read off the board and its standing
     /// typed (**The base**), the family it leaves behind read (**The family
     /// left behind**) and the composition's first steps run afresh over the
     /// session's board, the shell's own lists where the page passes none,
@@ -977,13 +981,12 @@ impl Shell {
     /// Answers `publication.count(session, {switches, answers})`.
     ///
     /// It answers `{count, price, rows, formatting, windows, parts,
-    /// p3_stands}` off the standing panel, pure local: the panel re-keyed by
-    /// the answers at the windows' parts from the open's reads alone — the
-    /// rows and their candidates with each row's fold, the formatting line,
-    /// the windows, what each part's answer brings, whether P3 stands — the
-    /// four numbers as
-    /// the switches and the answers stand now, and the price re-run over
-    /// the rows as switched (the module doc).
+    /// edition_links, p3_stands}` off the standing panel, pure local: the
+    /// panel re-keyed by the answers at the windows' parts from the open's
+    /// reads alone — the rows and their candidates with each row's fold, the
+    /// formatting line, the windows, what each part's answer brings, whether
+    /// P3 stands — the four numbers as the switches and the answers stand
+    /// now, and the price re-run over the rows as switched (the module doc).
     ///
     /// # Errors
     ///
@@ -1009,6 +1012,7 @@ impl Shell {
             "formatting": formatting_json(&state.enumeration, &state.panel.formatting),
             "windows": state.enumeration.windows.iter().map(window_json).collect::<Vec<_>>(),
             "parts": state.panel.parts.iter().map(part_counts_json).collect::<Vec<_>>(),
+            "edition_links": state.panel.edition_links,
             "p3_stands": state.panel.p3_stands,
         });
         let reference = session.reference.clone();
@@ -1620,6 +1624,7 @@ fn panel_json(state: &PanelState, hold: Option<Value>) -> Value {
         "parts": panel.parts.iter().map(part_counts_json).collect::<Vec<_>>(),
         "inherited": panel.inherited.iter().map(inherited_json).collect::<Vec<_>>(),
         "merge_records": panel.merge_records.iter().map(merge_records_json).collect::<Vec<_>>(),
+        "edition_links": panel.edition_links,
         "p3_stands": panel.p3_stands,
         "left_behind": addresses_json(&state.left_behind),
     });

@@ -22,25 +22,27 @@
 //! `--data-dir` and `--port`, the daemon run in-process with its test hooks
 //! in a `dev-hooks` build under its keeper (`serve/node.rs`), which the
 //! shell starts and stops through as its node's control (L1): `--own`
-//! starts it at launch, a claimed notebook's launch, and `--own
-//! --unstarted` leaves it unstarted for the notebook door's act, the
+//! starts it at launch, a claimed notebook's launch, and
+//! `--own --unstarted` leaves it unstarted for the notebook door's act, the
 //! bridge's `node.start`, its board named at the port `--port` names and
-//! out of `boards()` until then. Every usage refusal is judged before
-//! anything is made. The checks before serving, each a halt (exit 3): the
-//! board must answer `/health`; the store must hold the principal's key
-//! under `signed`; the port must bind — the first two skipped under
-//! `--unstarted`, whose node is not yet running and whose store holds no
-//! key until the notebook door's `keygen`. The serve: one thread per
-//! connection over a loopback listener, the routes `serve/routes.rs` spells
-//! — each refusal of the admission or of a request's read counted, and said
-//! on talk the first time its kind is met — until stdin closes: the clean
-//! stop, its cause and the run's figures said (the connections accepted, the
-//! refusals by kind), every pending moment cancelled — before the
-//! connections are joined, so a call parked on a moment answers `abandoned`
-//! and its connection ends — every session closed, every consumer saved —
-//! the stop's seconds said as it completes — the in-process daemon stopped
-//! where it runs and said so once, the throwaway removed — exit 0. An
-//! interrupt ends the process with none of it, which the serving line says.
+//! out of `boards()` until then; the bridge's `node.stop` stops it, and
+//! `node.restart` stops it and starts it again at that port. Every usage
+//! refusal is judged before anything is made. The checks before serving,
+//! each a halt (exit 3): the board must answer `/health`; the store must
+//! hold the principal's key under `signed`; the port must bind — the first
+//! two skipped under `--unstarted`, whose node is not yet running and whose
+//! store holds no key until the notebook door's `keygen`. The serve: one
+//! thread per connection over a loopback listener, the routes
+//! `serve/routes.rs` spells — each refusal of the admission or of a
+//! request's read counted, and said on talk the first time its kind is met
+//! — until stdin closes: the clean stop, its cause and the run's figures
+//! said (the connections accepted, the refusals by kind), every pending
+//! moment cancelled — before the connections are joined, so a call parked
+//! on a moment answers `abandoned` and its connection ends — every session
+//! closed, every consumer saved — the stop's seconds said as it completes —
+//! the in-process daemon stopped where it runs and said so once, the
+//! throwaway removed — exit 0. An interrupt ends the process with none of
+//! it, which the serving line says.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::{ErrorKind, Read};

@@ -86,7 +86,7 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "BoardRow",
         open: false,
-        doc: "`boards()` — one entry per board in the shell's list; `board` the opaque reference every board-touching call takes; this machine's notebook absent from the list while the shell holds it unstarted — before `node.start`, the notebook door's act, has started it, and again once a claim's cancel or close has stopped it unclaimed (L1)",
+        doc: "`boards()` — one entry per board in the shell's list; `board` the opaque reference every board-touching call takes; this machine's notebook absent from the list while the shell holds it unstarted — before `node.start`, the notebook door's act, or `node.restart` has started it, and again once a stop whose `/health` read found it unclaimed has stopped it, `node.stop`'s or a claim's cancel or close (L1)",
         fields: &[req("board", "string"), req("name", "string"), req("origin", "string")],
     },
     Shape {
@@ -109,7 +109,7 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "Probe",
         open: false,
-        doc: "`probe()` — the state the `daemon` event says of the own node or, where the shell runs none, the first board, taken after the call's own `/health` read: the most severe that holds, `stopped`, `unreachable`, `halted`, `head_unreadable` with its `reason`, else `running`; `node.start`, the notebook door's act, answers it once the node is started, a node already running started no second time (L1)",
+        doc: "`probe()` — the state the `daemon` event says of the own node or, where the shell runs none, the first board, taken after the call's own `/health` read: the most severe that holds, `stopped`, `unreachable`, `halted`, `head_unreadable` with its `reason`, else `running`; `node.start`, the notebook door's act, answers it once the node is started, a node already running started no second time; `node.stop` once the node is stopped, a node already stopped asked nothing; and `node.restart` once the node is stopped and started again — the act that clears a halt, a poison or a silence, the start's door asked before anything stops — a stopped notebook's restart its start (L1)",
         fields: &[req("daemon", "'running' | 'stopped' | 'unreachable' | 'halted' | 'head_unreadable'"), opt("reason", "string"), req("dialed", "string | null"), req("signed", "string | null")],
     },
     Shape { name: "SearchAnswer", open: false, doc: "`search(…)` — the hits, the places, the pair's state", fields: &[req("hits", "Hit[]"), req("places", "Place[]"), req("state", "IndexState"), req("total", "number"), req("truncated", "boolean"), req("more_terms", "boolean"), req("fuzzy_bounded", "boolean"), req("positions_bounded", "boolean")] },
@@ -171,7 +171,7 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "NoOwnNodeRefusal",
         open: false,
-        doc: "a refusal: the shell's own `no_own_node` (L1) — `node.start` at a shell that runs no node on this machine, the verb that opened it having handed it no start and stop of one, as a shell over boards elsewhere hands none; `call` the call refused; nothing is started, and `boards()` lists what it listed",
+        doc: "a refusal: the shell's own `no_own_node` (L1) — `node.start`, `node.stop` or `node.restart` at a shell that runs no node on this machine, the verb that opened it having handed it no start and stop of one, as a shell over boards elsewhere hands none; `call` the call refused; nothing is started or stopped, and `boards()` lists what it listed",
         fields: &[req("kind", "'shell'"), req("name", "'no_own_node'"), req("call", "string")],
     },
     Shape {
@@ -208,7 +208,7 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "DaemonEvent",
         open: false,
-        doc: "`daemon(board, state)` — the board's state, the most severe that holds, once per change, never repeated at a tick: `stopped` and `running` as the own node's owner stops and starts it, nothing else said while the stop stands — a notebook the shell starts itself says nothing before `node.start`, `running` at that start, and `stopped` at a claim's cancel or close that stops it unclaimed (L1); else `unreachable` where a `/health` read of the board goes unanswered, the probe's verdict alone, never one request's failure, the commit stream's among them (P37; skep #863); else `halted` where a `/health` read says the board's writes are halted; else `head_unreadable` where the board's head record will not read, `reason` saying why, told before any write meets it (§3c.3; skep #865); else `running`. A board halted whose head record will not read says `halted`, then `head_unreadable` when the halt clears, then `running`",
+        doc: "`daemon(board, state)` — the board's state, the most severe that holds, once per change, never repeated at a tick: `stopped` and `running` as the own node's owner stops and starts it, nothing else said while the stop stands — a notebook the shell starts itself says nothing before `node.start`, `running` at that start and at `node.restart`'s, and `stopped` at `node.stop`, at `node.restart` before its start, and at a claim's cancel or close that stops it unclaimed (L1); else `unreachable` where a `/health` read of the board goes unanswered, the probe's verdict alone, never one request's failure, the commit stream's among them (P37; skep #863); else `halted` where a `/health` read says the board's writes are halted; else `head_unreadable` where the board's head record will not read, `reason` saying why, told before any write meets it (§3c.3; skep #865); else `running`. A board halted whose head record will not read says `halted`, then `head_unreadable` when the halt clears, then `running`",
         fields: &[req("board", "string"), req("state", "'running' | 'stopped' | 'unreachable' | 'halted' | 'head_unreadable'"), opt("reason", "string")],
     },
     Shape { name: "FeedEvent", open: false, doc: "`feed(board, update)`", fields: &[req("board", "string"), req("update", "FeedUpdate")] },
@@ -552,6 +552,8 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
     CallRow { name: "health", forms: &[&[req("board", "string")]], result: "Health" },
     CallRow { name: "probe", forms: &[&[]], result: "Probe" },
     CallRow { name: "node.start", forms: &[&[]], result: "Probe" },
+    CallRow { name: "node.stop", forms: &[&[]], result: "Probe" },
+    CallRow { name: "node.restart", forms: &[&[]], result: "Probe" },
     CallRow {
         name: "op",
         forms: &[
@@ -698,7 +700,7 @@ pub fn declarations() -> String {
         }
         out.push_str("}\n\n");
     }
-    out.push_str("/** The calls (client.md §4b.1 — the `publication` family's four, the `merge` family's four and `history.restore` among them — the notebook door's act `node.start`, the read of a draft's standing `publication.standing`, the read of a draft's past state `history.past`, the document index's listing `places`, and the change feed's page `changes`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
+    out.push_str("/** The calls (client.md §4b.1 — the `publication` family's four, the `merge` family's four and `history.restore` among them — this machine's notebook's three acts `node.start`, `node.stop` and `node.restart`, the read of a draft's standing `publication.standing`, the read of a draft's past state `history.past`, the document index's listing `places`, and the change feed's page `changes`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
     out.push_str("export interface Bridge {\n");
     for row in CALL_ROWS {
         let forms: Vec<String> = row.forms.iter().map(|form| argument_object(form)).collect();

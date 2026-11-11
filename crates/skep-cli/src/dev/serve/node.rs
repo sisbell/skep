@@ -13,19 +13,21 @@
 //! local trust; each start and each stop is said on talk, and a stop drops
 //! the permits before the daemon's orderly shutdown. The shell starts and
 //! stops the daemon through the keeper, its `NodeControl` (L1): the
-//! notebook door's act, `node.start`, and a claim's cancel or close while
-//! the board is unclaimed. `POST /bridge/fault/<door>` reaches the running
-//! daemon's doors: the three permit pools held full (`write_busy`,
-//! `scan_busy`, `fetch_busy`), the held permits released, the head writer's
-//! next refusal, the feed walk's hold and release, the media floor's free
-//! space, the checkpoint thread's next panic, `halt_writes` — the attest
-//! store's next write failed, so a signed commit below the reclaim floor
-//! halts the write path and every write after answers `poisoned` (the shell
-//! then holds the burst; §3c.4) — and `poison`, the kernel's own halt: the
-//! next commit's barrier fails and so does the truncation that would repair
-//! it, so the kernel is poisoned and that write answers `poisoned` — the
-//! burst held `sent: true`, since its frames stay in the journal and land at
-//! the restart (§3c.2). The door arms the daemon's
+//! notebook door's act, `node.start`, a claim's cancel or close while the
+//! board is unclaimed, the person's `node.stop`, and `node.restart`'s stop
+//! and start, which brings a halted or poisoned daemon back.
+//! `POST /bridge/fault/<door>` reaches the running daemon's doors: the
+//! three permit pools held full (`write_busy`, `scan_busy`, `fetch_busy`),
+//! the held permits released, the head writer's next refusal, the feed
+//! walk's hold and release, the media floor's free space, the checkpoint
+//! thread's next panic, `halt_writes` — the attest store's next write
+//! failed, so a signed commit below the reclaim floor halts the write path
+//! and every write after answers `poisoned` (the shell then holds the
+//! burst; §3c.4) — and `poison`, the kernel's own halt: the next commit's
+//! barrier fails and so does the truncation that would repair it, so the
+//! kernel is poisoned and that write answers `poisoned` — the burst held
+//! `sent: true`, since its frames stay in the journal and land at the
+//! restart (§3c.2). The door arms the daemon's
 //! `fail_the_next_checkpoint_step` at `JournalBarrier` and `JournalRepair`,
 //! naming the steps by `skep_kernel::Step` as `skepd` re-exports it under
 //! `test-hooks`; eleven doors in all. Without the feature no keeper is

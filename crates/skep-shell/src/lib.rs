@@ -135,14 +135,16 @@
 //!   refusal shares — the `session` answer saying so,
 //!   `another_window`, and each later edge of that state an `another-window`
 //!   event (skep #827) — this machine's notebook, started by `node.start`
-//!   through the [`NodeControl`] the verb hands it and stopped at the claim
-//!   ceremony's cancel or close where its board reads unclaimed, its board
-//!   listed by `boards()` while it runs (L1) — and one private method per
-//!   §4b.1 row, per `places` and per `changes`, behind [`Shell::call`],
-//!   whose dispatch the compiler holds to one arm per call — the ten
-//!   ceremonial rows in its child
-//!   `ceremony`, the four `publication` rows, the panels they stand on and
-//!   the read of a draft's standing, `publication.standing`, beside them in
+//!   through the [`NodeControl`] the verb hands it, stopped by `node.stop`
+//!   and at the claim ceremony's cancel or close where its board reads
+//!   unclaimed, and stopped then started again by `node.restart`, the act
+//!   that clears a halt, a poison or a silence, its board listed by
+//!   `boards()` from its start until a stop finds it unclaimed (L1) — and
+//!   one private method per §4b.1 row, per `places` and per `changes`,
+//!   behind [`Shell::call`], whose dispatch the compiler holds to one arm
+//!   per call — the ten ceremonial rows in its child `ceremony`, the four
+//!   `publication` rows, the panels they stand on and the read of a
+//!   draft's standing, `publication.standing`, beside them in
 //!   its child `publication`, the four `merge` rows and the compositions
 //!   they stand on in its child `merge`, and a draft's past state read and
 //!   mapped with nothing written, `history.past`, and made current by one write

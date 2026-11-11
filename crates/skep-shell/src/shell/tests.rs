@@ -5,18 +5,20 @@
 //! as a transport opens one (`open_shell`), the board claimed through the
 //! shell's own `claim` call (`claim_board`), the page's side of a walk —
 //! every answerable moment answered in its own form (`page_answer`,
-//! `answer_moments`) — this machine's notebook started and stopped by the
-//! shell through a control over an in-process daemon (`Control`,
-//! `notebook_shell`), the wait for an event, a drafts page read under a
-//! token (`changes_under`), every seed a walk made (`seeds_of`), and every
-//! event held to its declaration (`assert_events_declared`).
+//! `answer_moments`) — this machine's notebook started, stopped and
+//! restarted by the shell through a control over an in-process daemon, and
+//! lost or poisoned behind it (`Control`, `notebook_shell`), the wait for
+//! an event, a drafts page read under a token (`changes_under`), every seed
+//! a walk made (`seeds_of`), and every event held to its declaration
+//! (`assert_events_declared`).
 //!
 //! `door` holds the shell alone, with no daemon behind it; `modes` the bare
 //! and the signed session modes end to end, and the refusing arm;
 //! `ceremonies` the ceremonial rows end to end, each death they cause read
 //! for its hand; `boards` each board's own node, wait and stop beside
-//! another's, and this machine's notebook started at the door's act and
-//! stopped at its claim's cancel; `held` the held-burst store against the
+//! another's, and this machine's notebook started at the door's act,
+//! stopped at its claim's cancel and at the person's stop, and restarted
+//! out of a silence or a halt; `held` the held-burst store against the
 //! real daemon; `changes` the catch-up call, against the daemon and over a
 //! scripted board; `publication` the publication family — the rules the
 //! shell alone keeps, and the panel, the count, the confirm and the cancel
@@ -133,11 +135,11 @@ fn answer_moments(rx: std::sync::mpsc::Receiver<Event>, pending: Arc<crate::pers
 ///
 /// It starts the daemon in-process over `dir` at `port`, local trust on,
 /// and shuts it down at the stop, which returns `stop_pause` after the
-/// daemon is down — or, given a refusal, refuses every start with it.
+/// daemon is down — or, once given a refusal, refuses every start with it.
 struct Control {
     dir: PathBuf,
     port: u16,
-    refusal: Option<Halt>,
+    refusal: Mutex<Option<Halt>>,
     stop_pause: Duration,
     node: Mutex<Option<Skepd>>,
     starts: AtomicUsize,
@@ -170,7 +172,36 @@ impl Control {
     /// Returns a control over `dir` at a port reserved and let go.
     fn at(dir: &Path, refusal: Option<Halt>, stop_pause: Duration) -> Arc<Control> {
         let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
-        Arc::new(Control { dir: dir.to_path_buf(), port, refusal, stop_pause, node: Mutex::new(None), starts: AtomicUsize::new(0), stops: AtomicUsize::new(0) })
+        Arc::new(Control { dir: dir.to_path_buf(), port, refusal: Mutex::new(refusal), stop_pause, node: Mutex::new(None), starts: AtomicUsize::new(0), stops: AtomicUsize::new(0) })
+    }
+
+    /// Refuses every start from now on with `refusal`.
+    fn refuse(&self, refusal: Halt) {
+        *self.refusal.lock().unwrap_or_else(PoisonError::into_inner) = Some(refusal);
+    }
+
+    /// Shuts the running daemon down behind the shell, no stop asked.
+    ///
+    /// The node stops answering, as a crash leaves it.
+    fn lose_node(&self) {
+        if let Some(sd) = self.node.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            sd.shutdown();
+        }
+    }
+
+    /// Poisons the running daemon's kernel at its next commit (§3c.2).
+    ///
+    /// The commit's barrier fails, then the repair that would undo it, so
+    /// that write answers `poisoned`, its frames landing at the next start.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the daemon is not running.
+    fn poison(&self) {
+        let node = self.node.lock().unwrap_or_else(PoisonError::into_inner);
+        let daemon = node.as_ref().expect("the daemon runs").daemon();
+        daemon.fail_the_next_checkpoint_step(Step::JournalBarrier, std::io::ErrorKind::Other);
+        daemon.fail_the_next_checkpoint_step(Step::JournalRepair, std::io::ErrorKind::Other);
     }
 
     /// Returns the origin the control starts its daemon at.
@@ -187,8 +218,8 @@ impl Control {
 impl NodeControl for Control {
     fn start(&self) -> Result<(), Halt> {
         self.starts.fetch_add(1, Ordering::SeqCst);
-        if let Some(refusal) = &self.refusal {
-            return Err(refusal.clone());
+        if let Some(refusal) = self.refusal.lock().unwrap_or_else(PoisonError::into_inner).clone() {
+            return Err(refusal);
         }
         let mut node = self.node.lock().unwrap_or_else(PoisonError::into_inner);
         if node.is_none() {
@@ -220,9 +251,16 @@ impl Drop for Control {
 /// Its node is `control`'s and its key store at `store`, and its TALK lines
 /// stand beside it.
 fn notebook_shell(control: &Arc<Control>, store: &Path) -> (Shell, Arc<Mutex<Vec<String>>>) {
+    notebook_shell_in(control, store, SessionMode::Bare { principal: 1 })
+}
+
+/// Returns a shell over this machine's notebook alone, in `session_mode`.
+///
+/// It is [`notebook_shell`]'s, its sessions opened in the mode named.
+fn notebook_shell_in(control: &Arc<Control>, store: &Path, session_mode: SessionMode) -> (Shell, Arc<Mutex<Vec<String>>>) {
     let (talk, lines) = talk();
     let origin = Origin::parse(&control.origin()).unwrap();
-    let mut opts = ShellOptions::new(vec![origin.clone()], store.to_path_buf(), SessionMode::Bare { principal: 1 }, talk);
+    let mut opts = ShellOptions::new(vec![origin.clone()], store.to_path_buf(), session_mode, talk);
     opts.own_node = Some(origin);
     opts.node_control = Some(Arc::clone(control) as Arc<dyn NodeControl>);
     (Shell::open(opts), lines)

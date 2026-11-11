@@ -7,9 +7,13 @@
 //! the door's act alone, listed once started and said `running` once, stopped
 //! and taken out of the list by its claim's cancel while unclaimed, `stopped`
 //! said before the node goes down, and left running by a cancel at a claimed
-//! notebook; the page's `health(board)` read the
-//! board's verdict, ending its silence; a search held at one board holding back
-//! no call at another; a shell dropped unstopped closing its sessions and
+//! notebook; the person's stop said once, a claimed notebook kept listed
+//! and an unclaimed one taken out; the restart bringing back a notebook
+//! that stopped answering, clearing a halted one and landing its held
+//! burst, starting a stopped one, and leaving one stopped whose start is
+//! refused; the page's `health(board)` read the board's verdict, ending its
+//! silence; a search held at one board holding back no call at another; a
+//! shell dropped unstopped closing its sessions and
 //! freeing its board's held lock; a board paging without end holding no stop;
 //! and a board down at the open fed from its first answer, never replaying the
 //! history before it.
@@ -254,6 +258,214 @@ fn a_cancel_at_a_claimed_notebook_stops_nothing() {
     assert_eq!(control.counts(), (1, 0), "a claimed notebook is not stopped");
     assert_eq!(shell.call("boards", &json!({})).unwrap().as_array().map(Vec::len), Some(1), "the board stays listed");
     assert_eq!(shell.call("probe", &json!({})).unwrap()["daemon"], "running");
+    shell.shutdown();
+}
+
+/// Returns the `daemon` states said at `board`, drained until one is `state`.
+///
+/// It waits at most thirty seconds for that state, and panics past them.
+fn daemon_states_until(rx: &Receiver<Event>, board: &str, state: &str) -> Vec<String> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut said = Vec::new();
+    while said.last().map(String::as_str) != Some(state) {
+        let left = deadline.saturating_duration_since(Instant::now());
+        assert!(!left.is_zero(), "no `{state}` said at {board}: {said:?}");
+        let Ok(event) = rx.recv_timeout(left) else { continue };
+        if event.name == EventName::Daemon && event.data["board"] == board {
+            said.push(event.data["state"].as_str().unwrap_or("?").to_string());
+        }
+    }
+    said
+}
+
+/// Checks that the notebook's stop is said once and keeps a claimed one listed.
+///
+/// The notebook started and claimed, `node.stop` answers the declared probe,
+/// `stopped`, the control's stop asked once and the board left listed: its
+/// `/health`, read first, finds it claimed, the person's notebook stopped or
+/// not (L1). Over two probe cadences the board's one `daemon` event since
+/// the stop is `stopped`, though the orderly stop runs past a cadence (the
+/// mutant that runs the control's stop first lets the probe in that stop
+/// find the board silent and say so); and a second `node.stop` asks the
+/// control nothing and says nothing.
+#[test]
+fn the_notebooks_stop_is_said_once_and_keeps_a_claimed_notebook_listed() {
+    let dir = TempDir::new().unwrap();
+    let control = Control::stopping_slowly(&dir.path().join("notebook"), PROBE_CADENCE + Duration::from_millis(500));
+    let (shell, lines) = notebook_shell(&control, &dir.path().join("store"));
+    let board = shell.board_references().remove(0);
+    shell.call("keygen", &json!({"label": "notebook"})).unwrap();
+    shell.call("node.start", &json!({})).unwrap();
+    let claimed = claim_with(&shell, &board, |moment| Some(page_answer(moment))).unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
+    assert_eq!(claimed["account"], "1.0.1", "{claimed}");
+    let rx = shell.subscribe();
+    let stopped = shell.call("node.stop", &json!({})).unwrap();
+    let at = Instant::now();
+    crate::shapes::assert_declared("Probe", &stopped);
+    assert_eq!(stopped["daemon"], "stopped", "{stopped}");
+    assert_eq!(control.counts(), (1, 1), "the stop asks the control once");
+    assert_eq!(shell.call("boards", &json!({})).unwrap().as_array().map(Vec::len), Some(1), "a claimed notebook stays listed");
+    thread::sleep((at + PROBE_CADENCE * 2).saturating_duration_since(Instant::now()));
+    assert_eq!(daemon_states(&rx, &board), ["stopped"], "no `unreachable` beside the stop:\n{}", lines.lock().unwrap().join("\n"));
+    assert_eq!(shell.call("node.stop", &json!({})).unwrap()["daemon"], "stopped");
+    assert_eq!(control.counts(), (1, 1), "a second stop asks the control nothing");
+    assert!(daemon_states(&rx, &board).is_empty(), "and says nothing");
+    shell.shutdown();
+}
+
+/// Checks that the notebook's stop takes an unclaimed notebook out of the list.
+///
+/// The notebook started and never claimed, `node.stop` stops it, and its
+/// `/health`, read first, finding it unclaimed takes its board out of
+/// `boards()`: an unbegun notebook's end, as at the cancel on the claim's
+/// panel, where no `claim` call runs (L1 part 1; F-C4; the mutant that keeps
+/// every stopped board listed leaves the doors over a notebook nobody
+/// began). The door's act starts it again and lists it once more.
+#[test]
+fn the_notebooks_stop_takes_an_unclaimed_notebook_out_of_the_list() {
+    let dir = TempDir::new().unwrap();
+    let control = Control::over(&dir.path().join("notebook"));
+    let (shell, _) = notebook_shell(&control, &dir.path().join("store"));
+    shell.call("node.start", &json!({})).unwrap();
+    assert_eq!(shell.call("node.stop", &json!({})).unwrap()["daemon"], "stopped");
+    assert_eq!(control.counts(), (1, 1));
+    assert_eq!(shell.call("boards", &json!({})).unwrap(), json!([]), "the board leaves the list");
+    assert_eq!(shell.call("node.start", &json!({})).unwrap()["daemon"], "running");
+    assert_eq!(shell.call("boards", &json!({})).unwrap().as_array().map(Vec::len), Some(1), "the door's act lists it again");
+    assert_eq!(control.counts(), (2, 1));
+    shell.shutdown();
+}
+
+/// Checks that a restart brings back a notebook that stopped answering.
+///
+/// The notebook's daemon lost behind the shell, the board's `daemon` event
+/// says `unreachable`; `node.restart` stops the node and starts it again at
+/// its origin, answering the declared probe, `running`, the control's stop
+/// asked once and its start once more, the board listed as it stood, and the
+/// board's events are `running`, `unreachable`, `stopped`, `running` and no
+/// more over two probe cadences (foundations §3.1's daemon segment: "if it
+/// stays so, stop it and start it again here").
+#[test]
+fn a_restart_brings_back_a_notebook_that_stopped_answering() {
+    let dir = TempDir::new().unwrap();
+    let control = Control::over(&dir.path().join("notebook"));
+    let (shell, lines) = notebook_shell(&control, &dir.path().join("store"));
+    let rx = shell.subscribe();
+    let board = shell.board_references().remove(0);
+    shell.call("node.start", &json!({})).unwrap();
+    control.lose_node();
+    let mut said = daemon_states_until(&rx, &board, "unreachable");
+    let restarted = shell.call("node.restart", &json!({})).unwrap();
+    crate::shapes::assert_declared("Probe", &restarted);
+    assert_eq!(restarted["daemon"], "running", "{restarted}");
+    assert_eq!(control.counts(), (2, 1), "the restart stops the node once and starts it again");
+    assert_eq!(shell.call("boards", &json!({})).unwrap().as_array().map(Vec::len), Some(1), "the board stays listed");
+    thread::sleep(PROBE_CADENCE * 2);
+    said.extend(daemon_states(&rx, &board));
+    assert_eq!(said, ["running", "unreachable", "stopped", "running"], "{}", lines.lock().unwrap().join("\n"));
+    shell.shutdown();
+}
+
+/// Checks that a restart clears a halted notebook and its held burst lands.
+///
+/// The notebook claimed and its kernel poisoned, a signed session's burst is
+/// held `poisoned` and the board's `daemon` event says `halted`, as `probe`
+/// answers. `node.restart`, under an orderly stop that runs past a probe's
+/// cadence, answers `running`, the control's stop asked once and its start
+/// once more; the board's events are `running`, `halted`, `stopped`,
+/// `running`, `stopped` said before the node goes down (the mutant that runs
+/// the control's stop first lets the probe in that stop find the board
+/// silent and say so); the session ends with the restart arm, re-opened
+/// under its key, and the held line, its frames replayed by the start, is
+/// kept, the draft holding the burst once (§3c.4: a restart alone clears
+/// `poisoned` and `halted`; foundations §3.1's daemon segment).
+#[test]
+fn a_restart_clears_a_halted_notebook_and_its_held_burst_lands() {
+    let dir = TempDir::new().unwrap();
+    let control = Control::stopping_slowly(&dir.path().join("notebook"), PROBE_CADENCE + Duration::from_millis(500));
+    let (shell, lines) = notebook_shell_in(&control, &dir.path().join("store"), SessionMode::Signed { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    let board = shell.board_references().remove(0);
+    shell.call("keygen", &json!({"label": "notebook"})).unwrap();
+    shell.call("node.start", &json!({})).unwrap();
+    shell.call("claim", &json!({"board": board})).unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
+    let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let minted = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
+    let draft = minted["addr"].as_str().unwrap().to_string();
+    let acked = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"], "as_of": minted["at"]}})).unwrap();
+    control.poison();
+    let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["bc"], "as_of": acked["at"]}})).unwrap();
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("poisoned")), "{held}");
+    wait_for(&seen, |e| e.name == EventName::Daemon && e.data["board"] == board && e.data["state"] == "halted");
+    assert_eq!(shell.call("probe", &json!({})).unwrap()["daemon"], "halted");
+    let restarted = shell.call("node.restart", &json!({})).unwrap();
+    assert_eq!(restarted["daemon"], "running", "{restarted}");
+    assert_eq!(control.counts(), (2, 1), "the restart stops the node once and starts it again");
+    let died = wait_for(&seen, |e| e.name == EventName::SessionDied && e.data["session"] == session);
+    assert_eq!((died.data["reason"]["arm"].as_str(), died.data["reason"]["reopened"].as_bool()), (Some("restart"), Some(true)), "{}", died.data);
+    wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept");
+    let reopened = died.data["reason"]["session"].as_str().unwrap().to_string();
+    let read = shell.call("op", &json!({"session": reopened, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 3)})).unwrap();
+    let text: String = read["items"].as_array().unwrap().iter().map(|item| item["content"].as_str().unwrap_or("")).collect();
+    assert_eq!(text, "abc", "the burst is on the board: {read}");
+    let token = shell.sessions.get(&reopened).unwrap().token.clone();
+    assert_eq!(changes_under(&shell.boards[0].board, &token, &draft, 0).len(), 3, "the mint, the first insert, the burst once");
+    let said: Vec<String> = seen.lock().unwrap().iter().filter(|e| e.name == EventName::Daemon && e.data["board"] == board).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect();
+    assert_eq!(said, ["running", "halted", "stopped", "running"], "{}", lines.lock().unwrap().join("\n"));
+    shell.shutdown();
+    assert_events_declared(&seen.lock().unwrap());
+}
+
+/// Checks that a restart of a stopped notebook is its start.
+///
+/// At the open, the notebook unstarted, `node.restart` asks the control's
+/// start alone, lists the board at its origin and says `running` once, no
+/// `stopped` said of a node that never ran (L1).
+#[test]
+fn a_restart_of_a_stopped_notebook_is_its_start() {
+    let dir = TempDir::new().unwrap();
+    let control = Control::over(&dir.path().join("notebook"));
+    let (shell, lines) = notebook_shell(&control, &dir.path().join("store"));
+    let rx = shell.subscribe();
+    let board = shell.board_references().remove(0);
+    assert_eq!(shell.call("node.restart", &json!({})).unwrap()["daemon"], "running");
+    assert_eq!(control.counts(), (1, 0), "nothing is stopped");
+    let origin = control.origin();
+    assert_eq!(shell.call("boards", &json!({})).unwrap(), json!([{"board": board, "name": origin, "origin": origin}]));
+    thread::sleep(PROBE_CADENCE * 2);
+    assert_eq!(daemon_states(&rx, &board), ["running"], "`running` said once:\n{}", lines.lock().unwrap().join("\n"));
+    shell.shutdown();
+}
+
+/// Checks that a restart whose start is refused leaves the notebook stopped.
+///
+/// The notebook started, its control then refusing every start with a face
+/// about the node's data directory: `node.restart` stops the node and its
+/// start is refused, the call's refusal the face's three words, the path in
+/// none of them and said on `Talk` beside the call (§4b.3; SP-15); `probe`
+/// answers `stopped`, the board stays listed as it stood, and the board's
+/// events are `running` and `stopped` alone.
+#[test]
+fn a_restart_whose_start_is_refused_leaves_the_notebook_stopped() {
+    let dir = TempDir::new().unwrap();
+    let control = Control::over(&dir.path().join("notebook"));
+    let (shell, lines) = notebook_shell(&control, &dir.path().join("store"));
+    let rx = shell.subscribe();
+    let board = shell.board_references().remove(0);
+    shell.call("node.start", &json!({})).unwrap();
+    control.refuse(Halt::face_at("/a/notebook", "the daemon could not open its data directory", "another daemon holds its lock", "stop the daemon that holds it"));
+    let refused = shell.call("node.restart", &json!({})).unwrap_err().to_value();
+    assert_eq!(
+        refused,
+        json!({"kind": "halt", "name": "halt", "state": "the daemon could not open its data directory", "cause": "another daemon holds its lock", "act": "stop the daemon that holds it"}),
+        "the face's three words, the path in none of them"
+    );
+    assert!(lines.lock().unwrap().iter().any(|l| l.starts_with("node.restart: ") && l.contains("/a/notebook")), "the path said in the shell's own window: {:?}", lines.lock().unwrap());
+    assert_eq!(shell.call("probe", &json!({})).unwrap()["daemon"], "stopped");
+    assert_eq!(control.counts(), (2, 1));
+    assert_eq!(shell.call("boards", &json!({})).unwrap().as_array().map(Vec::len), Some(1), "the board stays listed as it stood");
+    assert_eq!(daemon_states(&rx, &board), ["running", "stopped"]);
     shell.shutdown();
 }
 

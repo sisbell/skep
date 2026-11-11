@@ -180,7 +180,7 @@ fn every_declared_type_round_trips_its_sample_against_the_table() {
 
 /// Checks that the file names every shape, every call and every event.
 ///
-/// The calls are §4b.1's, the notebook door's act, the document index's
+/// The calls are §4b.1's, the notebook's three acts, the document index's
 /// listing and the change feed's page — its rows the dispatch's calls, in
 /// the dispatch's order, each form of a row's argument object its members
 /// in their order, the forms joined as a union and a form of no member `{}`
@@ -196,12 +196,12 @@ fn the_file_names_every_shape_call_and_event() {
     for row in CALL_ROWS {
         assert!(text.contains(&format!("  {}(args: ", method_name(row.name))), "{}", row.name);
     }
-    assert_eq!(CALL_ROWS.len(), 37, "the thirty-seven calls: §4b.1's with the publication family's four, the merge family's four, `history.restore` and `held.show`, the notebook door's act, the read of a draft's standing, the read of a draft's past state, the document index's listing and the change feed's page");
+    assert_eq!(CALL_ROWS.len(), 39, "the thirty-nine calls: §4b.1's with the publication family's four, the merge family's four, `history.restore` and `held.show`, the notebook's three acts, the read of a draft's standing, the read of a draft's past state, the document index's listing and the change feed's page");
     assert_eq!(CALL_ROWS.iter().map(|row| row.name).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
     for line in [
         "  boards(args: {}): Promise<Outcome<BoardRow[]>>;\n",
         "  session(args: { board: string; principal?: number }): Promise<Outcome<SessionOpened>>;\n",
-        "  probe(args: {}): Promise<Outcome<Probe>>;\n  'node.start'(args: {}): Promise<Outcome<Probe>>;\n",
+        "  probe(args: {}): Promise<Outcome<Probe>>;\n  'node.start'(args: {}): Promise<Outcome<Probe>>;\n  'node.stop'(args: {}): Promise<Outcome<Probe>>;\n  'node.restart'(args: {}): Promise<Outcome<Probe>>;\n",
         "  op(args: { session: string; frame: unknown; anchors?: Anchors; after?: string } | { guest: true; board?: string; origin?: string; frame: unknown }): Promise<Outcome<unknown>>;\n",
         "  'publication.open'(args: { session: string; draft: string; also?: string[]; doc?: string; mint?: string; claim?: boolean; selection?: Run[]; notes?: string[]; readable_drafts?: string[]; published?: string[] }): Promise<Outcome<PublicationPanel>>;\n",
         "  'publication.count'(args: { session: string; switches?: Switches; answers?: Record<string, OriginAnswer> }): Promise<Outcome<{ count: Count; price: Price; rows: PublicationRow[]; formatting: Formatting; windows: Window[]; parts: PartCounts[]; edition_links: number; p3_stands: boolean }>>;\n",

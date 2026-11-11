@@ -91,10 +91,11 @@ recorded.
 
 `skep-dev serve` is THE DEV PROVIDER: the shell's core (`skep-shell`)
 served to a page in a browser over loopback HTTP and server-sent events —
-`POST /bridge/<call>` for the thirty-seven calls of `skep-shell`'s
+`POST /bridge/<call>` for the thirty-nine calls of `skep-shell`'s
 `CALLS`, `client.md` §4b.1's thirty-two — the publication family's four,
 the merge family's four, `history.restore` and `held.show` among them —
-`node.start`, the notebook door's act, `publication.standing`, the read
+the notebook's three acts, `node.start` (the door's act), `node.stop` and
+`node.restart`, `publication.standing`, the read
 of a draft's standing, `history.past`,
 the read of a draft's past state, `places`, the document index's listing,
 and `changes`, the change feed's page
@@ -139,9 +140,11 @@ run in-process with its test hooks and its fault doors at `POST
 `--own` starts the daemon at launch, a claimed notebook's launch;
 `--own --unstarted` leaves it unstarted for the notebook door's act, the
 bridge's `node.start`, and a claim's cancel or close stops it again while
-its board is unclaimed. Either way the shell starts and stops it through
-one keeper, every start at the port the first one bound, so the board's
-origin stands, and each start and stop said on stderr.
+its board is unclaimed. Either way the bridge's `node.stop` stops it and
+`node.restart` stops it and starts it again — the act that clears a
+halted, poisoned or silent notebook — and the shell starts and stops it
+through one keeper, every start at the port the first one bound, so the
+board's origin stands, and each start and stop said on stderr.
 The provider stops cleanly when stdin closes — Ctrl-D at a terminal —
 saying why it stopped and what the run came to (the connections accepted,
 the refusals by kind; every pending moment cancelled, so a call still

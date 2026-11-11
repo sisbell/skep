@@ -34,7 +34,8 @@
 //! fault doors under `dev-hooks` with `--own` in the
 //! signed mode, and `not_built_in` without, and `--own --unstarted` serving
 //! a notebook the door's act starts, a claim's cancel stops and a second
-//! start brings back at its origin; F7 the isolation, `cargo tree`
+//! start brings back at its origin, and `node.restart` bringing a poisoned
+//! notebook back with its held burst kept; F7 the isolation, `cargo tree`
 //! naming no `skepd` without the
 //! feature and one with it; F8 the declarations served equal to the
 //! crate's; F9 the conformance — one sequence on the crate and through the
@@ -1423,6 +1424,60 @@ fn own_unstarted_serves_a_notebook_the_doors_act_starts() {
     assert_eq!(Arc::try_unwrap(provider).ok().expect("the one holder").stop(), 0);
     let said = said_holding(&talk, &[&format!("the in-process daemon at {notebook} is stopped")]);
     assert_eq!(said.matches(&format!("the in-process daemon at {notebook} is stopped")).count(), 2, "each stop said once — the cancel's and the clean stop's:\n{said}");
+}
+
+/// Checks that the bridge's `node.restart` brings a poisoned notebook back.
+///
+/// Under `--own` in the signed mode, the board claimed under the provider's
+/// key, the `poison` door poisons the kernel: a burst answers `held` with
+/// `cause: poisoned`, and the `daemon` event says `halted`. `node.restart`
+/// stops the in-process daemon and starts it again at its origin, answering
+/// `running`; the session ends, and the held burst, its frames replayed by
+/// the start, is kept and read back; and each stop is said once on stderr,
+/// the restart's and the clean stop's (§3c.4: a restart alone clears
+/// `poisoned` and `halted`; L1).
+#[cfg(feature = "dev-hooks")]
+#[test]
+fn own_restart_brings_a_poisoned_notebook_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let node_port = free_port().to_string();
+    let store = dir.path().join("store");
+    let keys = FileStore::open(&store);
+    keys.generate(Some(Label::new("notebook").unwrap())).unwrap();
+    let provider = Provider::start(&["--own", "--data-dir", s(&dir.path().join("own")), "--port", &node_port, "--session", "signed", "--principal", "1", "--dir", s(&store)]);
+    let rx = provider.events();
+    let boards = provider.result("boards", json!({}));
+    let (board, board_origin) = (boards[0]["board"].as_str().unwrap().to_string(), boards[0]["origin"].as_str().unwrap().to_string());
+    claim_with(&board_origin, &keys, &dir.path().join("anchors"));
+    next_event(&rx, "mode", |v| v["board"] == board);
+    let session = provider.result("session", json!({"board": board, "principal": 1}))["session"].as_str().unwrap().to_string();
+    let minted = provider.result("op", json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}}));
+    let draft = minted["addr"].as_str().unwrap().to_string();
+    assert_eq!(provider.result("fault/poison", json!({}))["door"], "poison");
+    let held = provider.result("op", json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["p"], "as_of": minted["at"]}}));
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("poisoned")), "{held}");
+    next_event(&rx, "daemon", |v| v["board"] == board && v["state"] == "halted");
+    assert_eq!(provider.result("node.restart", json!({}))["daemon"], "running", "{}", provider.talk());
+    assert_eq!(provider.result("boards", json!({}))[0]["origin"], board_origin, "the restart comes back at the same origin");
+    next_event(&rx, "session-died", |v| v["session"] == session);
+    next_event(&rx, "held", |v| v["doc"] == draft && v["state"] == "kept");
+    let session2 = provider.result("session", json!({"board": board}))["session"].as_str().unwrap().to_string();
+    let read = provider.result("op", json!({"session": session2, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 1)}));
+    assert_eq!(read["items"][0]["content"], "p", "the held burst is on the board: {read}");
+    let talk = Arc::clone(&provider.talk);
+    drop(rx);
+    assert_eq!(provider.stop(), 0);
+    // The stderr reader trails the exit: the clean stop's line is waited for.
+    let stopped = format!("the in-process daemon at {board_origin} is stopped");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let said = loop {
+        let said = talk.lock().unwrap().clone();
+        if said.matches(&stopped).count() >= 2 || Instant::now() >= deadline {
+            break said;
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(said.matches(&stopped).count(), 2, "each stop said once — the restart's and the clean stop's:\n{said}");
 }
 
 /// Checks that `--own --no-local-trust` names the flag on the `auth:` line.

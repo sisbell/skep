@@ -2235,17 +2235,19 @@ enum RowTerms {
     ///
     /// Both come from the request: `base` the base the frame named, which
     /// the store recorded or refused the whole write; `merge` the sides the
-    /// frame named and the head beside them, whether or not a `base` rides
-    /// them. The store records the marker only beside a base (the owner's
-    /// ruling N3), and a landing into a document with no recorded base
-    /// moves no record at all, so its row is where that landing's position
-    /// is found (N4). Each `None` where the frame named none, which the row
-    /// renders `null`, so a reader tells a landing (`merge` present) from an
-    /// undo or a withdrawal on a draft with a recorded base (`merge` null,
-    /// `base` present) from a plain re-arrangement (both null); an undo on a
-    /// document with no recorded base names neither, as a plain
-    /// re-arrangement does.
-    SetArrangement { base: Option<Address>, merge: Option<(Vec<Address>, Address)> },
+    /// frame named, the head beside them and the position of the marker the
+    /// frame puts back where it names one (skep #870), whether or not a
+    /// `base` rides them. The store records the marker only beside a base
+    /// (the owner's ruling N3), and a landing into a document with no
+    /// recorded base moves no record at all, so its row is where that
+    /// landing's position is found (N4). Each `None` where the frame named
+    /// none, which the row renders `null`, so a reader tells a landing
+    /// (`merge` present, no position in it) from a merge put back (`merge`
+    /// naming the position it restored) from an undo or a withdrawal on a
+    /// draft with a recorded base (`merge` null, `base` present) from a
+    /// plain re-arrangement (both null); an undo on a document with no
+    /// recorded base names neither, as a plain re-arrangement does.
+    SetArrangement { base: Option<Address>, merge: Option<(Vec<Address>, Address, Option<Seq>)> },
 }
 
 impl RowTerms {
@@ -2280,9 +2282,10 @@ impl RowTerms {
             // table: nothing of the ack or the world completes them.
             RowTerms::SetArrangement { base, merge } => Some(OpTerms::SetArrangement {
                 base: base.as_ref().map(ToString::to_string),
-                merge: merge.as_ref().map(|(sides, head)| MergeTerms {
+                merge: merge.as_ref().map(|(sides, head, at)| MergeTerms {
                     sides: sides.iter().map(ToString::to_string).collect(),
                     head: head.to_string(),
+                    at: at.map(|at| at.0),
                 }),
             }),
         };
@@ -2407,8 +2410,10 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
         // skep #764): REINSTATE's runs placed by identity, so no cell is
         // minted; its row names the draft and never a run's origin, as
         // `reinstate`'s does, and carries the request's base and merge as
-        // its terms. The merge is the request's beside its head whether or
-        // not a base rides it: the store records the marker only beside a
+        // its terms. The merge is the request's beside its head, with the
+        // position of a marker put back where the frame names one (skep
+        // #870), whether or not a base rides it: the store records the
+        // marker only beside a
         // base (the owner's ruling N3), and the row is what a landing into a
         // document with no recorded base leaves of its position, which the
         // undo of that landing finds it by (N4).
@@ -2421,7 +2426,7 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
                     .head
                     .as_ref()
                     .zip(arrangement.merge.as_ref())
-                    .map(|(head, sides)| (sides.clone(), head.member.clone())),
+                    .map(|(head, merge)| (merge.sides.clone(), head.member.clone(), merge.at)),
             },
             no_cell,
         ),

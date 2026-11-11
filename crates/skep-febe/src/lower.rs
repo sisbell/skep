@@ -339,9 +339,9 @@ impl Lower for SetArrangementError {
     /// base checks (`source_not_registered`, `base_not_in_chain`,
     /// `base_extent_too_large`), the base to record answering all three
     /// too; the per-run four are the shot's and REINSTATE's,
-    /// `source_not_registered` among them. Its own two: `fork_base_moved`,
+    /// `source_not_registered` among them. Its own three: `fork_base_moved`,
     /// the fork's source riding `site.addr` as a withheld document does,
-    /// and `no_base_to_record`.
+    /// `no_base_to_record` and `marker_not_restorable` (skep #870).
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
         match self {
             SetArrangementError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
@@ -357,6 +357,7 @@ impl Lower for SetArrangementError {
                 Some(FaultSite { addr: Some(source), ..FaultSite::default() }),
             ),
             SetArrangementError::NoBaseToRecord => (RejectCode::NoBaseToRecord, None),
+            SetArrangementError::MarkerNotRestorable => (RejectCode::MarkerNotRestorable, None),
             SetArrangementError::BadRun => (RejectCode::BadRun, None),
             SetArrangementError::SourceNotRegistered => (RejectCode::SourceNotRegistered, None),
             SetArrangementError::DanglingSource => (RejectCode::DanglingSource, None),

@@ -363,8 +363,11 @@ impl Name {
     /// landed or taken back, or it went with its session (the family's one
     /// session rule; `client.md` §4b.1's merge row, "`no_merge` at `land`
     /// with nothing composed"); at the withdrawal the draft carries no marker
-    /// (`skep_client::merge::Refusal::NoMerge`). The detail names the
-    /// `session`, or the `draft`.
+    /// (`skep_client::merge::Refusal::NoMerge`); at a withdrawal's undo the
+    /// position names no withdrawal of the draft
+    /// (`skep_client::merge::Refusal::NoWithdrawal`; skep #870). The detail
+    /// names the `session`, or the `draft`, with the `withdrawal` named
+    /// beside it at a withdrawal's undo.
     pub const NO_MERGE: Name = Name("no_merge");
     /// A `merge.land` over a panel of the draft in another form or document.
     ///
@@ -425,7 +428,9 @@ impl Name {
     /// detail names the `draft` and `why`: `inherited` (the marker came with
     /// the draft's staging), `published` with the `version` (the merge was
     /// published from the draft; the way back is the revert), `taken_back`
-    /// (an undo or a withdrawal already took it out).
+    /// (an undo or a withdrawal already took it out), `remarked` (at a
+    /// withdrawal's undo: the draft carries a merge again, put back already
+    /// or landed since, or one landed and was taken out since; skep #870).
     pub const NOTHING_TO_UNDO: Name = Name("nothing_to_undo");
     /// A refusal of the merge library with no name of its own here.
     ///

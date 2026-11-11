@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde_json::Value;
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
-use skep_arrangement::{Base, Marker, Run, RunError, SetArrangement, Shot, ShotRun, VPos, VSpec};
+use skep_arrangement::{Base, Marker, Run, RunError, SetArrangement, SetMerge, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, LinkRow, OrphanReport, SlotSpec, SupClaim, Window};
 use skep_febe::{
@@ -186,9 +186,23 @@ fn all_requests() -> Vec<Request> {
                     ],
                     head: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }),
                     base: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }),
-                    merge: Some(vec![a(&[1, 0, 1, 0, 1, 1, 1])]),
+                    merge: Some(SetMerge { sides: vec![a(&[1, 0, 1, 0, 1, 1, 1])], at: None }),
                 },
                 as_of: Seq(7),
+            },
+        ),
+        // A merge put back (skep #870): its position beside its sides.
+        rq(
+            None,
+            Op::SetArrangement {
+                doc: d3(),
+                arrangement: SetArrangement {
+                    runs: vec![shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 4)],
+                    head: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }),
+                    base: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }),
+                    merge: Some(SetMerge { sides: vec![a(&[1, 0, 1, 0, 1, 1, 1])], at: Some(Seq(5)) }),
+                },
+                as_of: Seq(8),
             },
         ),
         rq(
@@ -212,7 +226,7 @@ fn all_requests() -> Vec<Request> {
                     runs: vec![],
                     head: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }),
                     base: None,
-                    merge: Some(vec![]),
+                    merge: Some(SetMerge { sides: vec![], at: None }),
                 },
                 as_of: Seq(9),
             },
@@ -2032,9 +2046,11 @@ fn doc_metadata_marshals_its_source_as_an_address_or_null() {
 /// The landing's frame (wire.md §Arrangement, `set_arrangement`; skep #764):
 /// `runs` and `as_of` required, the head pair, the base pair and the
 /// merge's sides each optional and each read as an object of its own
-/// members alone, `null` reading as absent; a `merge` without a `head` is
-/// refused, the marker's head being the frame's; and `attest` is an unknown
-/// field, the op lying outside the checked set as `stage` does.
+/// members alone, `null` reading as absent; a merge's position optional
+/// beside its sides (skep #870); a `merge` without a `head` is refused, the
+/// marker's head being the frame's, and a position without a `base`; and
+/// `attest` is an unknown field, the op lying outside the checked set as
+/// `stage` does.
 #[test]
 fn a_set_arrangement_takes_its_three_optional_members_and_refuses_a_merge_without_a_head() {
     let codec = JsonCodec;
@@ -2059,15 +2075,33 @@ fn a_set_arrangement_takes_its_three_optional_members_and_refuses_a_merge_withou
     let Op::SetArrangement { arrangement, .. } = &landing.op else { panic!("{landing:?}") };
     assert_eq!(arrangement.head, Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }));
     assert_eq!(arrangement.base, Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }));
-    assert_eq!(arrangement.merge, Some(vec![a(&[1, 0, 1, 0, 1, 1, 1])]));
+    assert_eq!(arrangement.merge, Some(SetMerge { sides: vec![a(&[1, 0, 1, 0, 1, 1, 1])], at: None }));
     assert_eq!(parse_ok(&codec, &codec.marshal_request(&landing)), landing, "parse ∘ marshal is a fixpoint");
+    // A merge put back (skep #870): `at` beside the sides, read as the
+    // position it names and marshaled back in place; `null` reads absent.
+    let put_back = parse_ok(
+        &codec,
+        &frame(r#","head":{"at":"1.0.1.0.1.2","extent":"4"},"base":{"at":"1.0.1.0.1.2","extent":"4"},"merge":{"sides":["1.0.1.0.1.1.1"],"at":5}"#),
+    );
+    let Op::SetArrangement { arrangement, .. } = &put_back.op else { panic!("{put_back:?}") };
+    assert_eq!(arrangement.merge, Some(SetMerge { sides: vec![a(&[1, 0, 1, 0, 1, 1, 1])], at: Some(Seq(5)) }));
+    assert!(
+        String::from_utf8(codec.marshal_request(&put_back)).expect("utf-8").contains(r#""merge":{"at":5,"sides":["1.0.1.0.1.1.1"]}"#),
+        "the position rides inside the merge"
+    );
+    assert_eq!(parse_ok(&codec, &codec.marshal_request(&put_back)), put_back, "parse ∘ marshal is a fixpoint");
+    let unpositioned = parse_ok(
+        &codec,
+        &frame(r#","head":{"at":"1.0.1.0.1.2","extent":"4"},"base":{"at":"1.0.1.0.1.2","extent":"4"},"merge":{"sides":["1.0.1.0.1.1.1"],"at":null}"#),
+    );
+    assert_eq!(unpositioned, landing, "a `null` position is a landing's");
     // `null` reads as absent on each of the three; an empty `sides` is a
     // marker with no side, the draft-side shape.
     let nulls = parse_ok(&codec, &frame(r#","head":null,"base":null,"merge":null"#));
     assert_eq!(nulls, plain);
     let sideless = parse_ok(&codec, &frame(r#","head":{"at":"1.0.1.0.1.2","extent":"4"},"merge":{"sides":[]}"#));
     let Op::SetArrangement { arrangement, .. } = &sideless.op else { panic!("{sideless:?}") };
-    assert_eq!(arrangement.merge, Some(vec![]));
+    assert_eq!(arrangement.merge, Some(SetMerge { sides: vec![], at: None }));
     for (bad, detail) in [
         (r#","merge":{"sides":[]}"#, "carried without 'head'"),
         (r#","head":{"at":"1.0.1.0.1.2"}"#, "missing field 'extent'"),
@@ -2075,6 +2109,9 @@ fn a_set_arrangement_takes_its_three_optional_members_and_refuses_a_merge_withou
         (r#","base":{"at":"1.0.1.0.1.2","extent":"four"}"#, "'base'"),
         (r#","merge":{"sides":"1.0.1.0.1.1.1"}"#, "expected a JSON array"),
         (r#","merge":{"head":"1.0.1.0.1.2","sides":[]}"#, "unknown field 'head'"),
+        (r#","head":{"at":"1.0.1.0.1.2","extent":"4"},"merge":{"sides":[],"at":5}"#, "'at' carried without 'base'"),
+        (r#","head":{"at":"1.0.1.0.1.2","extent":"4"},"base":{"at":"1.0.1.0.1.2","extent":"4"},"merge":{"sides":[],"at":"5"}"#, "at: expected a non-negative JSON integer"),
+        (r#","head":{"at":"1.0.1.0.1.2","extent":"4"},"base":{"at":"1.0.1.0.1.2","extent":"4"},"merge":{"sides":[],"at":-1}"#, "at: expected a non-negative JSON integer"),
         (r#","attest":{"alg":"x","sig":"00"}"#, "unknown field 'attest'"),
     ] {
         let e = codec.parse(&frame(bad)).err().unwrap_or_else(|| panic!("{bad} must not parse"));
@@ -2157,7 +2194,7 @@ fn documented_reject_codes() -> Vec<String> {
 /// the document lists save the one the daemon originates itself.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 95] = [
+    let table: [(RejectCode, &str); 96] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
@@ -2217,6 +2254,7 @@ fn reject_code_names_are_pinned() {
         (RejectCode::BaseExtentTooLarge, "base_extent_too_large"),
         (RejectCode::ForkBaseMoved, "fork_base_moved"),
         (RejectCode::NoBaseToRecord, "no_base_to_record"),
+        (RejectCode::MarkerNotRestorable, "marker_not_restorable"),
         (RejectCode::AlreadyPublished, "already_published"),
         (RejectCode::KeptPlaceMoved, "kept_place_moved"),
         (RejectCode::StrayPlaceUnrecorded, "stray_place_unrecorded"),

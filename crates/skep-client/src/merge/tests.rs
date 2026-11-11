@@ -1394,6 +1394,13 @@ mod scripted {
         /// marked draft (wire.md §The response envelope, `doc_metadata`'s
         /// `merge`); `None` at a position is no marker.
         markers: BTreeMap<u64, Option<Marker>>,
+        /// The markers the board stamped on the draft, in stamp order.
+        ///
+        /// They are those since a `publish` last moved its base — a
+        /// landing's, a `stage`'s inherited one —
+        /// which a `set_arrangement` naming `merge.at` may put back (wire.md
+        /// §Arrangement, `merge`; skep #870).
+        stamped: Vec<Marker>,
         /// The arrangement as of each position it changed at, for `/op-at`.
         history: BTreeMap<u64, Vec<Run>>,
     }
@@ -1568,6 +1575,7 @@ mod scripted {
                     source: None,
                     staged: BTreeMap::new(),
                     markers: BTreeMap::new(),
+                    stamped: Vec::new(),
                     history,
                 },
             );
@@ -2268,6 +2276,7 @@ mod scripted {
                     if let Some(s) = draft.as_ref().filter(|_| moves).and_then(|s| self.docs.get_mut(s)) {
                         s.staged.insert(at, (member.clone(), placed));
                         s.markers.insert(at, None);
+                        s.stamped.clear();
                     }
                     json!({"resp": "ack_addr", "addr": member, "at": at})
                 }
@@ -2300,6 +2309,7 @@ mod scripted {
                         }
                         if let Some(Some(m)) = src.markers.values().next_back() {
                             d.markers.insert(at, Some(Marker { at, ..m.clone() }));
+                            d.stamped = vec![Marker { at, ..m.clone() }];
                         }
                     }
                     json!({"resp": "ack_addr", "addr": addr, "at": at})
@@ -2359,11 +2369,14 @@ mod scripted {
         /// chain — its recorded base's, else its fork source's; the fork
         /// gate; the base's `no_base_to_record`, then its registration, its
         /// chain and its extent; then each run's origin registered and a
-        /// value at every address it names. The whole arrangement is
-        /// replaced in one commit, the base re-recorded and the marker set
-        /// or cleared where a base is named, the row carrying the request's
-        /// merge whatever the base, and `head_moved` rides the ack where the
-        /// trunk has moved past the head named.
+        /// value at every address it names, a `merge.at` naming no marker
+        /// the board stamped on the draft refused `marker_not_restorable`
+        /// after the base's checks and ahead of the runs'. The whole
+        /// arrangement is replaced in one commit, the base re-recorded and
+        /// the marker set — stamped at the commit, or put back with the
+        /// position named — or cleared where a base is named, the row
+        /// carrying the request's merge whatever the base, and `head_moved`
+        /// rides the ack where the trunk has moved past the head named.
         ///
         /// It judges no `bad_run` or `too_many_runs`: the landing spells
         /// each run's start from its own origin and refuses a list past
@@ -2431,6 +2444,18 @@ mod scripted {
                     return reject(code, Value::Null);
                 }
             }
+            // The request's merge beside its head, with the position of a
+            // marker put back where it names one.
+            let merge = match (&head, frame["merge"].as_object()) {
+                (Some((h, e)), Some(m)) => Some((m["sides"].as_array().expect("`merge.sides`").iter().map(|s| s.as_str().unwrap().to_string()).collect::<Vec<_>>(), h.clone(), *e, m.get("at").and_then(Value::as_u64))),
+                _ => None,
+            };
+            if let Some((sides, head, head_copied, Some(put_back))) = &merge {
+                let marker = Marker { sides: sides.clone(), head: head.clone(), head_copied: *head_copied, at: *put_back };
+                if base.is_none() || !d.stamped.contains(&marker) {
+                    return reject("marker_not_restorable", Value::Null);
+                }
+            }
             let mut positions = Vec::new();
             for r in frame["runs"].as_array().expect("`runs`, a list") {
                 let origin = r["origin"].as_str().unwrap().to_string();
@@ -2459,19 +2484,27 @@ mod scripted {
             let d = self.docs.get_mut(&doc).unwrap();
             d.runs = runs.clone();
             d.history.insert(at, runs);
-            // The request's merge beside its head: the marker where a base
-            // is recorded, and the row's term whatever the base.
-            let merge = match (&head, frame["merge"].as_object()) {
-                (Some((h, e)), Some(m)) => Some((m["sides"].as_array().expect("`merge.sides`").iter().map(|s| s.as_str().unwrap().to_string()).collect::<Vec<_>>(), h.clone(), *e)),
-                _ => None,
-            };
+            // The marker where a base is recorded — stamped at this commit,
+            // or put back with the position named — and the row's term
+            // whatever the base.
             if let Some(b) = &recorded {
                 d.staged.insert(at, b.clone());
-                d.markers.insert(at, merge.clone().map(|(sides, head, head_copied)| Marker { sides, head, head_copied, at }));
+                let marker = merge.clone().map(|(sides, head, head_copied, put_back)| Marker { sides, head, head_copied, at: put_back.unwrap_or(at) });
+                if let Some(m) = marker.as_ref().filter(|m| m.at == at) {
+                    d.stamped.push(m.clone());
+                }
+                d.markers.insert(at, marker);
             }
             // The row's two terms: the base recorded, and the request's merge.
             let row = self.rows.last_mut().expect("the commit's row");
-            row.terms = Some((recorded.map(|(b, _)| b), merge.map(|(sides, head, _)| json!({"sides": sides, "head": head}))));
+            let term = |(sides, head, _, put_back): (Vec<String>, String, u64, Option<u64>)| {
+                let mut term = json!({"sides": sides, "head": head});
+                if let Some(put_back) = put_back {
+                    term["at"] = json!(put_back);
+                }
+                term
+            };
+            row.terms = Some((recorded.map(|(b, _)| b), merge.map(term)));
             let mut ack = json!({"resp": "ack", "at": at});
             if let Some(h) = head_moved {
                 ack["head_moved"] = json!(h);
@@ -6537,7 +6570,7 @@ mod scripted {
         // The landing by hand, over C.
         let head = format!("{D}.2");
         let typed = dialer.world().position;
-        let frame = frames::set_arrangement(S, &shot_runs(&draft_m()), typed, Some((&head, 15)), Some((&head, 15)), Some(&[]), None);
+        let frame = frames::set_arrangement(S, &shot_runs(&draft_m()), typed, Some((&head, 15)), Some((&head, 15)), Some((&[], None)), None);
         let Answer::Document(ack) = board.op(Some(session.token()), &frame).expect("the landing by hand") else { panic!("closed") };
         assert_eq!(ack["resp"], "ack", "{ack}");
         let rows = dialer.world().rows.len();
@@ -6574,7 +6607,7 @@ mod scripted {
         dialer.clear();
         let err = undo(&board, merger(&session, &signer), &a(S), &a(K), None, None).expect_err("nothing to undo");
         assert_eq!(err, Refusal::NothingToUndo { draft: a(S), why: NoUndo::Published { version: a(&format!("{D}.3")) } });
-        assert_eq!(err.to_string(), format!("nothing to undo; the merge is version {D}.3 — to take it back, publish the older text again"));
+        assert_eq!(err.to_string(), format!("nothing to undo: {S} was published as version {D}.3 since, and a version stands — the way back is to publish the older text again"));
         let ops = dialer.ops();
         assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty(), "nothing sent: {ops:?}");
         assert!(ops.iter().any(|o| o.starts_with("GET /changes?") && o.contains(&format!("under={S}")) && o.contains("drafts=true")), "the words off the draft's own rows, on the supplement: {ops:?}");
@@ -7151,7 +7184,7 @@ mod scripted {
         let head = format!("{D}.2");
         for (act, name) in [("undo", "the undo"), ("withdraw", "the withdrawal")] {
             let typed = dialer.world().position;
-            let frame = frames::set_arrangement(S, &shot_runs(&draft_m()), typed, Some((&head, 15)), Some((&head, 15)), Some(&[]), None);
+            let frame = frames::set_arrangement(S, &shot_runs(&draft_m()), typed, Some((&head, 15)), Some((&head, 15)), Some((&[], None)), None);
             let Answer::Document(ack) = board.op(Some(session.token()), &frame).expect("the landing by hand") else { panic!("closed") };
             assert_eq!(ack["resp"], "ack", "{name}: {ack}");
             assert!(dialer.world().standing(S).1.is_some(), "{name}: the premise, the marker stands");
@@ -7200,6 +7233,97 @@ mod scripted {
         assert_eq!(undo(&board, m, &a(S), &a(K), None, None), Err(Refusal::NothingToUndo { draft: a(S), why: NoUndo::TakenBack }), "an undo after a withdrawal: taken back");
         assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty(), "{:?}", dialer.ops());
         assert_eq!(dialer.world().rows.len(), rows, "nothing written twice");
+    }
+
+    /// A withdrawal taken back puts the marker back (skep #870).
+    ///
+    /// B3-S11, D6 BM-36: after a landing and its withdrawal, the landing's
+    /// position named as a
+    /// withdrawal is refused `NoWithdrawal`, nothing sent; the withdrawal's
+    /// position takes it back — ONE `set_arrangement` of the draft's words,
+    /// its base re-sent, the head pair and the marker's sides with the
+    /// landing's own `at`, typed against the withdrawal — and the draft's
+    /// base and marker stand as the landing left them, the landing's record
+    /// written again; a second run sends nothing; and the undo after it,
+    /// typed at the caller's own last ack, takes the landing back, the
+    /// draft's base as it stood before the merge and no marker.
+    #[test]
+    fn a_withdrawal_taken_back_puts_the_marker_back_and_the_next_undo_takes_the_landing_back() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let staged = dialer.world().standing(S);
+        landed_in_s(&board, &session, &signer);
+        let landed = dialer.world().standing(S);
+        let marker = landed.1.clone().expect("the premise: the landing's marker");
+        let withdrawn = withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn");
+        assert!(dialer.world().standing(S).1.is_none(), "the premise: the marker cleared");
+        dialer.clear();
+        assert_eq!(
+            unwithdraw(&board, m, &a(S), &a(K), marker.at, None, None),
+            Err(Refusal::NoWithdrawal { draft: a(S), at: marker.at }),
+            "the landing's position is no withdrawal"
+        );
+        assert!(dialer.frames("set_arrangement").is_empty(), "nothing sent: {:?}", dialer.ops());
+        let unwithdrawn = unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, None, None).expect("the withdrawal taken back");
+        let sent = dialer.frames("set_arrangement");
+        assert_eq!(sent.len(), 1, "one write: {:?}", dialer.ops());
+        assert_eq!(sent[0]["merge"], json!({"sides": [], "at": marker.at}), "the marker's sides and its own position: {}", sent[0]);
+        assert_eq!(sent[0]["head"], json!({"at": marker.head, "extent": marker.head_copied.to_string()}));
+        assert_eq!(sent[0]["as_of"], json!(withdrawn.position), "typed against the withdrawal");
+        assert_eq!(dialer.world().standing(S), landed, "the base and the marker as the landing left them");
+        assert!(unwithdrawn.record.is_some(), "the landing's record written again");
+        let atom = appended_record(&dialer);
+        assert_eq!(atom["landed"]["draft"], json!(S), "the record names the draft as landed in: {atom}");
+        dialer.clear();
+        assert_eq!(
+            unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, None, None),
+            Err(Refusal::NothingToUndo { draft: a(S), why: NoUndo::Remarked }),
+            "a second run finds the merge standing"
+        );
+        assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty(), "nothing sent: {:?}", dialer.ops());
+        undo(&board, m, &a(S), &a(K), Some(unwithdrawn.position), None).expect("the landing taken back");
+        assert_eq!(dialer.world().standing(S), staged, "the draft's base as before the merge, no marker");
+    }
+
+    /// A withdrawal's undo past a landing or a publication sends nothing.
+    ///
+    /// Skep #870, BM-37: the same merge landed again after the withdrawal
+    /// carries a
+    /// marker of its own, `Remarked`; a publication of the draft after the
+    /// withdrawal moved its base, `Published` naming the member the row
+    /// names first, with the publication's words; and a position the draft's
+    /// history no longer answers is `HistoryReclaimed`.
+    #[test]
+    fn a_withdrawals_undo_finds_nothing_to_undo_past_a_landing_or_a_publication() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        landed_in_s(&board, &session, &signer);
+        let withdrawn = withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn");
+        // The same merge landed again by hand, a marker of its own.
+        let head = format!("{D}.2");
+        let typed = dialer.world().position;
+        let frame = frames::set_arrangement(S, &shot_runs(&draft_m()), typed, Some((&head, 15)), Some((&head, 15)), Some((&[], None)), None);
+        let Answer::Document(ack) = board.op(Some(session.token()), &frame).expect("the landing by hand") else { panic!("closed") };
+        assert_eq!(ack["resp"], "ack", "{ack}");
+        dialer.clear();
+        assert_eq!(
+            unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, None, None),
+            Err(Refusal::NothingToUndo { draft: a(S), why: NoUndo::Remarked }),
+            "landed again since"
+        );
+        assert!(dialer.frames("set_arrangement").is_empty(), "nothing sent: {:?}", dialer.ops());
+        let again = withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn again");
+        let runs = shot_runs(&draft_m());
+        let frame = frames::publication(&frames::PublishFrame { doc: Some(D), base: Some((&head, 15)), draft: Some(S), runs: &runs, ..frames::PublishFrame::default() });
+        let ack = dialer.world().apply(&frame);
+        assert_eq!(acked_addr(&ack), Some(format!("{D}.3").as_str()), "{ack}");
+        dialer.clear();
+        let err = unwithdraw(&board, m, &a(S), &a(K), again.position, None, None).expect_err("published since");
+        assert_eq!(err, Refusal::NothingToUndo { draft: a(S), why: NoUndo::Published { version: a(&format!("{D}.3")) } });
+        assert_eq!(err.to_string(), format!("nothing to undo: {S} was published as version {D}.3 since, and a version stands — the way back is to publish the older text again"));
+        assert!(dialer.frames("set_arrangement").is_empty(), "nothing sent: {:?}", dialer.ops());
     }
 
     /// A LANDING AFTER A TAKE-BACK WRITES ITS OWN RECORD (the merge record's

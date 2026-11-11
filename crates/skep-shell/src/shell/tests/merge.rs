@@ -184,7 +184,7 @@ fn mark(g: &Ground, token: &Token, draft: &str, merged: &Merged, side: &str) -> 
     let runs: Vec<Value> = merged.composed.runs.iter().map(|p| frames::shot_run(&p.run.origin.to_string(), &p.run.address_at(0).unwrap().to_string(), p.run.width)).collect();
     let head = merged.inputs.head.to_string();
     let pair = (head.as_str(), merged.head_extent);
-    written(g, token, &frames::set_arrangement(draft, &runs, g.position(), Some(pair), Some(pair), Some(&[side]), None))["at"].as_u64().unwrap()
+    written(g, token, &frames::set_arrangement(draft, &runs, g.position(), Some(pair), Some(pair), Some((&[side], None)), None))["at"].as_u64().unwrap()
 }
 
 /// Writes `other`'s record of [`KIND`], answering its link's address.
@@ -485,7 +485,10 @@ fn the_head_read_is_refused_past_its_doubling_and_hands_the_composition_the_newe
 /// by ONE `set_arrangement`, L's text E.2's again and its base restored.
 /// Landed into L again, `merge.withdraw` takes the merge out of L by ONE
 /// `set_arrangement`, its words kept, its marker gone, the landing's record
-/// replaced, and the composition gone (the mutants that land by a second
+/// replaced, and the composition gone; `merge.undo` naming the withdrawal
+/// puts the marker back as the landing left it by ONE `set_arrangement`,
+/// and the plain `merge.undo` after it, the composition standing again,
+/// takes the landing back (skep #870) (the mutants that land by a second
 /// write, stage where a draft is named, drop the marker, keep a taken-back
 /// composition standing, or type the undo at the landing past the editor's
 /// own later acks).
@@ -555,6 +558,23 @@ fn the_family_lands_a_daughter_into_a_fresh_draft_and_into_a_named_one_and_takes
     assert_eq!(arrangement_rows(&g, &l, since), [(true, false)], "one arrangement row");
     assert_eq!(g.call("merge.land", json!({"session": g.session})).unwrap_err().name(), "no_merge", "the composition went with the withdrawal");
     assert_eq!(g.call("merge.withdraw", json!({"session": g.session, "draft": l})).unwrap_err().name(), "no_merge", "no merge to take out");
+    // The withdrawal taken back: one write, the marker as the landing left
+    // it, the composition standing again — so the next undo takes the
+    // landing back, typed at the editor's own last ack.
+    let relanded_at = report["position"].as_u64().expect("the landing's position");
+    let since = g.position();
+    let unwithdrawn = g.call("merge.undo", json!({"session": g.session, "draft": l, "withdrawal": withdrawn["position"]})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("Undone", &unwithdrawn);
+    assert_eq!((unwithdrawn["draft"].as_str(), unwithdrawn["restored"].is_null(), unwithdrawn["record"].is_string()), (Some(l.as_str()), true, true), "{unwithdrawn}");
+    let meta = g.op(doc_metadata(&l));
+    assert_eq!((meta["merge"]["sides"].clone(), meta["merge"]["at"].as_u64()), (json!([f.e11]), Some(relanded_at)), "the marker as the landing left it: {meta}");
+    assert_eq!(arrangement_rows(&g, &l, since), [(true, true)], "one arrangement row, a base and the merge put back");
+    let refused = g.call("merge.undo", json!({"session": g.session, "draft": l, "withdrawal": withdrawn["position"]})).unwrap_err();
+    assert_eq!((refused.name(), refused.to_value()["why"].as_str()), ("nothing_to_undo", Some("remarked")), "{refused}");
+    let undone = g.call("merge.undo", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((undone["draft"].as_str(), undone["restored"].clone()), (Some(l.as_str()), json!({"base": f.e2, "extent": 13})), "{undone}");
+    assert_eq!(g.text(&l, 13), "the fox jumps", "L as it stood before the landing");
+    assert!(g.op(doc_metadata(&l))["merge"].is_null(), "the marker gone");
     g.shell.shutdown();
     sd.shutdown();
 }

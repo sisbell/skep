@@ -345,7 +345,12 @@ pub enum StageError {
 /// head's three over the base to record, naming no registered document,
 /// off the recorded base's chain or its extent past its member's current
 /// count, so no record the landing writes names a member no mint made or
-/// claims more of its base than the base holds (N4). Then, per run and in
+/// claims more of its base than the base holds (N4). Then
+/// `MarkerNotRestorable` (skep #870): the frame's merge names a position
+/// and either stands without a `head` or a `base`, or names no marker the
+/// fold stamped on the draft — the same sides, head pair and position —
+/// since its base last moved at a shot, so the board would serve a
+/// landing's position where nothing landed. Then, per run and in
 /// the order given as REINSTATE judges them, `BadRun`,
 /// `SourceNotRegistered`, `DanglingSource` and `TooManyRuns` —
 /// [`ReinstateError`]'s, the placement being REINSTATE's own body. No
@@ -374,6 +379,10 @@ pub enum SetArrangementError {
     ForkBaseMoved(Address),
     /// The frame names a base to record and the board records none.
     NoBaseToRecord,
+    /// The merge names a position the fold stamped no such marker at.
+    ///
+    /// Or it names a position beside no head or no base.
+    MarkerNotRestorable,
     /// A supplied run is not a content run of its stated origin.
     BadRun,
     /// The head, the base to record, or a run's origin document is not a
@@ -756,6 +765,9 @@ impl fmt::Display for SetArrangementError {
             }
             SetArrangementError::NoBaseToRecord => {
                 "set_arrangement: the board records no base for the document, so there is none to move; send no base"
+            }
+            SetArrangementError::MarkerNotRestorable => {
+                "set_arrangement: the merge names a position at which no marker of those sides and that head was put on the document since its base last moved, or names it without a head and a base — nothing was changed; send the merge without `at` to land it anew"
             }
             SetArrangementError::BadRun => {
                 "set_arrangement: a supplied run is not a content run of its stated origin"

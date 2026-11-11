@@ -63,7 +63,11 @@ where
     ///   its content, and the fold stamps THIS commit's position as the
     ///   marker's `at`, the position the marker was put on the alternative,
     ///   so an undo of the alternative reads before its own mint and finds
-    ///   nothing to take back. A draft the board holds no base for yields no
+    ///   nothing to take back. The alternative's stamps
+    ///   ([`DraftBase::stamped`](crate::DraftBase::stamped)) hold that one
+    ///   marker and none of its source's, so a merge taken out of the
+    ///   alternative is put back at the alternative's own mint (skep #870).
+    ///   A draft the board holds no base for yields no
     ///   record: the alternative is a free-standing draft of its own,
     ///   whatever its source becomes.
     ///

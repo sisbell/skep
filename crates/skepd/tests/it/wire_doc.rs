@@ -990,6 +990,33 @@ fn doc_states_the_kept_base() {
     );
 }
 
+/// The contract states the marker put back (skep #870).
+///
+/// §Arrangement's `merge` names its optional `at`, the board's check of it
+/// and its refusal; §Rejection codes
+/// carries the token; the response envelope's `doc_metadata` keeps the
+/// position through a take-back's undo; and §The change feed's row names
+/// the position put back. The daemon's answers are pinned in
+/// `set_arrangement.rs` and the stores' suites; this pins that the contract
+/// says so.
+#[test]
+fn doc_states_the_marker_put_back() {
+    let arrangement = prose("\n### Arrangement (document editing)", &["\n### Media"]);
+    for fact in [
+        "`at`, optional, PUTS A MARKER BACK",
+        "`at` without a `base` is `malformed`, and any other `at` is `marker_not_restorable`, nothing written",
+        "the merge's position (`marker_not_restorable`), then per run",
+    ] {
+        assert!(arrangement.contains(fact), "§Arrangement says {fact:?}");
+    }
+    let codes = prose("\n### Rejection codes", &["\n### ", "\n## "]);
+    assert!(codes.contains("`marker_not_restorable` (set_arrangement whose merge names a position"), "§Rejection codes carries the token");
+    let envelope = prose("\n## The response envelope", &["\n## Rejections"]);
+    assert!(envelope.contains("PUT BACK as it stood by one whose `merge` names the marker's `at`"), "§The response envelope keeps the position");
+    let feed = prose("\n## The change feed", &["\n## The other endpoints"]);
+    assert!(feed.contains("from a merge PUT BACK (`merge.at` the landing's position)"), "§The change feed names the position put back");
+}
+
 /// THE STRAY PLACES (the link-sets design §5.7, "AND THE STRAY PLACES WITH
 /// THEM"; §5.5, the counterpart first; lane F4): §Arrangement's `places`
 /// names a run of either kind — the draft's, or a stray run of `doc`'s own

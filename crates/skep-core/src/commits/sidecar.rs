@@ -302,8 +302,10 @@ pub(super) enum OpTerms {
     ///
     /// `base` is the address the draft's recorded base moved to, `None`
     /// where the write moved none; `merge` the sides and head the request
-    /// named, `None` where it named no merge — so a reader tells a landing
-    /// from an undo from a plain re-arrangement. `merge` is present on every
+    /// named, with the position of the marker it put back where it named one
+    /// (skep #870), `None` where it named no merge — so a reader tells a
+    /// landing from a merge put back from an undo from a plain
+    /// re-arrangement. `merge` is present on every
     /// landing whether or not the store recorded a marker, which it records
     /// only beside a base (the owner's ruling N3), so the row is where a
     /// landing into a document with no recorded base is found (N4).
@@ -312,30 +314,43 @@ pub(super) enum OpTerms {
 }
 
 /// A `set_arrangement` row's merge term: the request's sides and head, as
-/// the row renders them (the landing lane; skep #764).
+/// the row renders them (the landing lane; skep #764), and the position of
+/// the marker the request put back where it named one (skep #870).
 ///
 /// They are the request's whether or not the store recorded a marker of
-/// them. The head's extent and the marker's position are `doc_metadata`'s
-/// to serve, where a marker stands; the row carries what tells the act
-/// apart and the sides it named.
+/// them. The head's extent and a landing's own position are
+/// `doc_metadata`'s to serve, where a marker stands; the row carries what
+/// tells the act apart — a landing, or the merge put back at `at` — and the
+/// sides it named.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct MergeTerms {
     /// The sides merged, by address; empty for the draft-side shape.
     pub sides: Vec<String>,
     /// The head the merge was composed on.
     pub head: String,
+    /// The position of the marker put back; `None` on a landing.
+    pub at: Option<u64>,
 }
 
 impl MergeTerms {
     /// Returns the term's object, `{"head": …, "sides": […]}`.
+    ///
+    /// It carries `at` beside them where the merge was put back.
     fn to_value(&self) -> Value {
-        obj(vec![
+        let mut members = vec![
             ("sides", Value::Array(self.sides.iter().cloned().map(Value::String).collect())),
             ("head", Value::String(self.head.clone())),
-        ])
+        ];
+        if let Some(at) = self.at {
+            members.push(("at", Value::from(at)));
+        }
+        obj(members)
     }
 
     /// Parses the term's object; `None` is the torn verdict.
+    ///
+    /// An absent `at` is a landing's term; a present one of any other shape
+    /// than a non-negative integer is torn.
     fn parse(v: &Value) -> Option<MergeTerms> {
         let m = v.as_object()?;
         let head = m.get("head")?.as_str()?.to_string();
@@ -345,7 +360,11 @@ impl MergeTerms {
             .iter()
             .map(|s| s.as_str().map(str::to_string))
             .collect::<Option<Vec<String>>>()?;
-        Some(MergeTerms { sides, head })
+        let at = match m.get("at") {
+            None => None,
+            Some(at) => Some(at.as_u64()?),
+        };
+        Some(MergeTerms { sides, head, at })
     }
 }
 

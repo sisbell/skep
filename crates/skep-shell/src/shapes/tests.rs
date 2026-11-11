@@ -212,7 +212,7 @@ fn the_file_names_every_shape_call_and_event() {
         "export interface PublicationStanding {\n  base: string;\n  standing: BaseStanding;\n  head?: string;\n  left_behind: string[];\n}\n",
         "  'merge.compose'(args: { session: string; doc: string; alternative?: string; draft?: string; into?: string }): Promise<Outcome<MergeReport>>;\n",
         "  'merge.land'(args: { session: string; resolutions?: Record<string, MergeChoice>; answers?: Record<string, OriginAnswer> }): Promise<Outcome<MergeLanded | Restated | PublicationRefused>>;\n",
-        "  'merge.undo'(args: { session: string }): Promise<Outcome<Undone>>;\n",
+        "  'merge.undo'(args: { session: string } | { session: string; draft: string; withdrawal: number }): Promise<Outcome<Undone>>;\n",
         "  'merge.withdraw'(args: { session: string; draft: string }): Promise<Outcome<Withdrawn>>;\n",
         "  'history.past'(args: { session: string; draft: string; at: number }): Promise<Outcome<Past>>;\n",
         "export interface Past {\n  draft: string;\n  at: number;\n  as_of: number;\n  state: Run[];\n  sent: Run[];\n  covered: number;\n  marker: MergeMarker | null;\n}\n",

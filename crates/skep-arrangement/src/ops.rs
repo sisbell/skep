@@ -124,7 +124,7 @@ pub use publish::{
     mint_admission, shot_admission, stage_publish, MintedRun, Pairing, PublishWorld,
 };
 pub use reinstate::stage_reinstate_at;
-pub use set_arrangement::SetArrangement;
+pub use set_arrangement::{SetArrangement, SetMerge};
 
 /// The most runs one COPY, one REINSTATE, one SET_ARRANGEMENT — REINSTATE's
 /// body placing its runs — or one publish shot may place.

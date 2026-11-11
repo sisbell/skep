@@ -1479,10 +1479,14 @@ object `{"sides": [addresses], "head": <address>, "head_copied": <nat>,
 (the draft itself was the side); `head` the version the merge was
 composed on and `head_copied` that version's content count AS READ at
 the compose, which is what the base beside it records; `at` the position
-of the commit that put the marker on THIS document — or `null` where the
-draft carries no merge. It TRAVELS WITH THE BASE: set or cleared by a
-`set_arrangement` that names a `base` (set where the frame carries
-`merge`, cleared where it does not — the undo's shape), INHERITED by a
+of the commit that first put the marker on THIS document — a landing's,
+or a stage's for an inherited marker — kept when a `set_arrangement`
+puts the marker back after a take-back (`merge.at`, §Arrangement) — or
+`null` where the draft carries no merge. It TRAVELS WITH THE BASE: set
+or cleared by a `set_arrangement` that names a `base` (set where the
+frame carries `merge`, cleared where it does not — the undo's shape),
+PUT BACK as it stood by one whose `merge` names the marker's `at`,
+INHERITED by a
 `stage` of a marked draft beside the base it inherits, with `at` the
 stage's own position — the position the marker was put on the
 alternative, so an undo of the alternative that reads before `at` (the
@@ -1802,6 +1806,12 @@ base and no marker; §The version-chain refusals' faces),
 document the board records no base for — a free-standing draft, an
 alternative of one, an admitted fork — so there is no record to move;
 permanent, the frame lands without the member and moves nothing),
+`marker_not_restorable` (set_arrangement whose merge names a position
+that is no marker the board put on the document since a publication of
+the document last moved its base — the same sides, the frame's head pair
+and that position — so the marker would name a position where nothing
+landed; permanent, the merge lands anew naming no position; nothing is
+written),
 `already_published` (the publication's
 twin fence: a draft-native run of the shot whose I-span overlaps a span
 a correspondence record homed in the run's own draft — the rendering
@@ -3669,17 +3679,32 @@ Three optional members, each absent or `null` alike absent:
   `publish`, naming `base` and carrying `base_copied` as its
   `base_extent`, meets neither code for it. Absent, NOTHING of the record
   moves, the marker included.
-* `merge` — `{"sides": [addresses]}`: the merge the draft is to carry,
-  its sides by address, possibly empty (the command's draft-side shape
-  names no daughter); its head is the frame's `head`, so a `merge`
-  carried without a `head` is `malformed`. Recorded ONLY where `base` is
-  recorded, as the marker beside it (`doc_metadata`'s `merge`, with the
-  head at its extent and the landing's position): present, the marker is
-  set; absent beside a `base`, the marker is CLEARED — the undo's shape;
-  beside no `base`, nothing is recorded and a marker that stood stands.
-  The write's feed row carries the `merge` whatever the board recorded
-  (§The change feed), so a landing into a document with no recorded base
-  is found by its row.
+* `merge` — `{"sides": [addresses], "at": <position>}`: the merge the
+  draft is to carry, its sides by address, possibly empty (the command's
+  draft-side shape names no daughter); its head is the frame's `head`,
+  so a `merge` carried without a `head` is `malformed`. Recorded ONLY
+  where `base` is recorded, as the marker beside it (`doc_metadata`'s
+  `merge`, with the head at its extent and the landing's position):
+  present, the marker is set; absent beside a `base`, the marker is
+  CLEARED — the undo's shape; beside no `base`, nothing is recorded and a
+  marker that stood stands. `at`, optional, PUTS A MARKER BACK: absent
+  (or `null`) the write is a landing and the board stamps the marker
+  with this commit's position; present, the board records the marker
+  with that position as it stood, only where the marker of these `sides`,
+  the frame's `head` pair and that `at` is one the board put on this
+  document — at a landing, or at the `stage` that minted it for an
+  inherited marker — since a publication of the document last moved its
+  base (a `publish` setting `keep_base` moves none), the one standing
+  included. So a take-back of a merge and its undo leave the draft's
+  marker exactly as it stood, its `at` the landing's, and no frame makes
+  a marker's `at` a position where nothing landed: `at` without a `base`
+  is `malformed`, and any other `at` is `marker_not_restorable`, nothing
+  written. The write's feed row carries the `merge` whatever the board
+  recorded, its `at` included (§The change feed), so a landing into a
+  document with no recorded base is found by its row, and a merge put
+  back reads as one, not as a new landing. Like every `set_arrangement`,
+  one putting a marker back moves the draft's typed state to its own
+  position.
 
 THE FORK GATE. A document the board records no base for is one of two
 things. A FORK — minted by `version` off a published surface, which
@@ -3704,7 +3729,7 @@ them: the destination's own refusals first (`doc_not_registered`,
 `base_extent_too_large` on a draft with a chain), the fork gate
 (`fork_base_moved`), the base's (`no_base_to_record`,
 `source_not_registered`, `base_not_in_chain`, `base_extent_too_large`),
-then per run in the
+the merge's position (`marker_not_restorable`), then per run in the
 order given the FIRST defective run deciding — `bad_run`,
 `source_not_registered`, `dangling_source` (every address probed),
 `too_many_runs` past `MAX_PLACED_RUNS`; the run list itself is one wire
@@ -3721,6 +3746,16 @@ one side — four of the edition's positions and two of the draft's own
 <!-- wire: request set_arrangement -->
 ```json
 {"as_of":12,"base":{"at":"1.0.1.0.1.2","extent":"6"},"doc":"1.0.1.0.2","head":{"at":"1.0.1.0.1.2","extent":"6"},"merge":{"sides":["1.0.1.0.1.1.1"]},"op":"set_arrangement","runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"4"},{"i_start":"1.0.1.0.2.0.1.1","origin":"1.0.1.0.2","width":"2"}]}
+```
+
+Say that landing committed at position 13 and the merge was taken out
+at 14 — the same runs and base, no `merge`. This frame puts it back: the
+same runs, base and head, and the marker's `sides` with the landing's
+position, so the draft's marker stands again with `at` 13:
+
+<!-- wire: request set_arrangement -->
+```json
+{"as_of":14,"base":{"at":"1.0.1.0.1.2","extent":"6"},"doc":"1.0.1.0.2","head":{"at":"1.0.1.0.1.2","extent":"6"},"merge":{"at":13,"sides":["1.0.1.0.1.1.1"]},"op":"set_arrangement","runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"4"},{"i_start":"1.0.1.0.2.0.1.1","origin":"1.0.1.0.2","width":"2"}]}
 ```
 
 **`version`** — the content-sharing, copy-on-write fork of `d_src`.
@@ -6155,11 +6190,14 @@ Each entry:
   the write recorded, an address, or `null` where it recorded none; and
   the request's `merge` beside its `head`, `{"sides": [addresses], "head":
   <address>}`, present on EVERY landing whether or not the board recorded
-  a marker of it, or `null` where the request named no `merge` — an undo,
-  a withdrawal, a plain re-arrangement. So a reader tells a merge's
-  LANDING (`merge` present) from an UNDO or a withdrawal on a draft with a
-  recorded base (`merge` null, `base` present) from a plain
-  re-arrangement (both null) without reading the draft, and finds the
+  a marker of it, with `"at": <position>` beside them where the write
+  put a marker back (§Arrangement, `merge.at`), or `null` where the
+  request named no `merge` — an undo, a withdrawal, a plain
+  re-arrangement. So a reader tells a merge's LANDING (`merge` present,
+  no `at` in it) from a merge PUT BACK (`merge.at` the landing's
+  position) from an UNDO or a withdrawal on a draft with a recorded base
+  (`merge` null, `base` present) from a plain re-arrangement (both null)
+  without reading the draft, and finds the
   latest landing on a document the board records no base for by its row,
   the one place the board keeps that landing's position; an undo on such
   a document names neither and reads as a plain re-arrangement does. Both

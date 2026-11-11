@@ -365,7 +365,9 @@ pub enum Response {
     /// was copied from. Both served to every reader of the draft, as `source`
     /// is. `merge` is the marker of the merge the draft carries (the landing
     /// lane; M5's [`Marker`]), beside the base it travels with — set by a
-    /// `set_arrangement` that recorded a base and a merge, inherited by a
+    /// `set_arrangement` that recorded a base and a merge, its `at` that
+    /// write's own, or put back by one naming the position of a marker the
+    /// board stamped on the draft, its `at` kept (skep #870), inherited by a
     /// `stage` of a marked draft at the stage's own position, cleared by the
     /// shot that moves the base — and `None` where the draft carries none or
     /// the board records no base at all; served as `base` is.

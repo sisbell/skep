@@ -1,14 +1,16 @@
 //! SET_ARRANGEMENT (the landing lane; skep #764): a draft's whole content
 //! arrangement set by identity in one commit, its recorded base moved and
-//! the merge it carries set or cleared where the frame names a base, and a
-//! newer head told in the answer.
+//! the merge it carries set, put back or cleared where the frame names a
+//! base, and a newer head told in the answer.
 //!
 //! The body composes the two staging functions the in-place edits offer —
 //! the whole content span removed by [`stage_delete_at`], the runs placed at
 //! content ordinal 1 by [`stage_reinstate_at`] — under the one transaction
-//! the public op opens, and pushes the base record beside them. It adds no
-//! rule of composition: what it places is what it is sent, as REINSTATE
-//! places what it is sent.
+//! the public op opens, and pushes the base record beside them: the record
+//! that stamps a landing's marker at the commit, or the one that puts a
+//! marker the fold stamped on the draft back as it stood (skep #870). It
+//! adds no rule of composition: what it places is what it is sent, as
+//! REINSTATE places what it is sent.
 
 use num_traits::{One, Zero};
 use skep_address::{Address, Nat};
@@ -21,7 +23,7 @@ use crate::chain::{published_target, trunk_head, trunk_of};
 use crate::error::{DeleteError, ReinstateError, SetArrangementError};
 use crate::ownership::{gate_write, Caller};
 use crate::shot::{Base, ShotRun};
-use crate::state::{M5Rec, M5State, Merge};
+use crate::state::{DraftBase, M5Rec, M5State, Marker, Merge};
 use crate::vspace::VPos;
 use crate::HasM5;
 
@@ -39,15 +41,16 @@ use crate::HasM5;
 /// landing sends the head pair, an undo the old base, a plain
 /// re-arrangement none; where present the draft must have a recorded base
 /// to move. `merge` is the marker's sides — the sides merged, by address,
-/// possibly empty — present only beside `head`, which is the marker's own
-/// head; the marker is recorded where `base` is recorded, and nowhere else
-/// (the owner's ruling N3: the marker travels with the base). The members a
-/// landing composes are the client's statement, as the shot's `base` is:
-/// the store checks the head and the base against the draft's chain, as
-/// registered members of it, each extent against its member's current
-/// count, and nothing against `runs`. A draft with no chain — no recorded
-/// base and no published source — has its head asked its registration
-/// alone, the extent unchecked, and no base to record.
+/// possibly empty — and, where the request puts a marker back, its
+/// position ([`SetMerge`]), present only beside `head`, which is the
+/// marker's own head; the marker is recorded where `base` is recorded, and
+/// nowhere else (the owner's ruling N3: the marker travels with the base).
+/// The members a landing composes are the client's statement, as the
+/// shot's `base` is: the store checks the head and the base against the
+/// draft's chain, as registered members of it, each extent against its
+/// member's current count, and nothing against `runs`. A draft with no
+/// chain — no recorded base and no published source — has its head asked
+/// its registration alone, the extent unchecked, and no base to record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SetArrangement {
     /// The runs the draft is set to, in order; empty for an empty arrangement.
@@ -57,9 +60,35 @@ pub struct SetArrangement {
     pub head: Option<Base>,
     /// The base to record, with its extent; `None` moves no record.
     pub base: Option<Base>,
-    /// The marker's sides, present only beside `head`; `None` records no
-    /// marker and, where `base` is present, clears one.
-    pub merge: Option<Vec<Address>>,
+    /// The marker's sides and position, present only beside `head`.
+    ///
+    /// `None` records no marker and, where `base` is present, clears one.
+    pub merge: Option<SetMerge>,
+}
+
+/// The merge a `set_arrangement` request carries (skep #870).
+///
+/// It is the marker's sides and, where the request puts a marker back, its
+/// position.
+/// A landing names the sides alone, and the fold stamps the marker at the
+/// landing's own commit. A take-back's undo names the position too: the
+/// marker the take-back cleared is put back as it stood, so the draft and
+/// its marker stand after the undo as they stood before the take-back,
+/// the marker's `at` still its landing's. The position is admitted only
+/// where it names a marker the fold stamped on the draft
+/// ([`DraftBase::stamped`]), so no request makes a marker's `at` a
+/// position where nothing landed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SetMerge {
+    /// The sides merged, by address; empty for the draft-side shape.
+    pub sides: Vec<Address>,
+    /// The position of the marker put back, or `None` for a landing.
+    ///
+    /// Where present, the marker of these sides, the request's head pair
+    /// and this position must be one of the draft's stamps, and the request
+    /// must name the base to record beside it
+    /// (`SetArrangementError::MarkerNotRestorable` otherwise).
+    pub at: Option<Seq>,
 }
 
 impl<W> Vstream<'_, W>
@@ -137,10 +166,22 @@ where
     /// **What moves and what stands** (N3). Where `base` is present the
     /// base record is replaced whole: `base` and `extent` the request's,
     /// `source` kept, the marker the request's `merge` beside its `head` or
-    /// cleared where the request carries none. Where `base` is absent the
-    /// record is untouched — base and marker alike — so a plain
-    /// re-arrangement of a marked draft ends no merge the base still
-    /// carries.
+    /// cleared where the request carries none, the draft's stamps kept.
+    /// Where `base` is absent the record is untouched — base and marker
+    /// alike — so a plain re-arrangement of a marked draft ends no merge the
+    /// base still carries.
+    ///
+    /// **The marker put back** (skep #870). A `merge` naming no position is
+    /// a landing: the fold stamps its marker at this commit and adds it to
+    /// the draft's stamps. A `merge` naming one ([`SetMerge::at`]) puts back
+    /// a marker the fold stamped on this draft since its base last moved at
+    /// a shot — the marker of its sides, the request's head pair and that
+    /// position, found among the draft's stamps ([`DraftBase::stamped`]) —
+    /// installed as it stood, its `at` the stamp's own, beside the base the
+    /// request names. So a merge taken out of a draft and put back leaves
+    /// the marker as it stood before it was taken out, and its `at` remains
+    /// a position where a landing or a stage stamped it; a marker already
+    /// standing is put back as itself, moving nothing of the record.
     ///
     /// **Locks.** `content_lock_key(doc)` alone, as REINSTATE's: no origin
     /// is locked, and the chain's head key is not taken — the head is read
@@ -149,9 +190,11 @@ where
     /// **Cost.** The removal's, one record; REINSTATE's probe over every
     /// address of every run; the content count of each pair judged — the
     /// head on a draft with a chain, the base to record — a sum over that
-    /// member's runs; and one base record. The wire caps the run
-    /// count at the parse; [`MAX_PLACED_RUNS`](super::MAX_PLACED_RUNS)
-    /// binds the placement as it binds REINSTATE's.
+    /// member's runs; where the merge names a position, one scan of the
+    /// draft's stamps, each compared whole; and one base record. The wire
+    /// caps the run count at the parse;
+    /// [`MAX_PLACED_RUNS`](super::MAX_PLACED_RUNS) binds the placement as it
+    /// binds REINSTATE's.
     ///
     /// Returns the commit position and, where the request named a head the
     /// trunk has moved past, the trunk's current head.
@@ -171,7 +214,10 @@ where
     /// `NoBaseToRecord` → `SourceNotRegistered` (the base to record names no
     /// registered document) → `BaseNotInChain` (the base off the recorded
     /// base's chain) → `BaseExtentTooLarge` (the base's extent past its
-    /// current count) → per run, in the order given, the first
+    /// current count) → where `merge` names a position,
+    /// `MarkerNotRestorable` (no `head` or no `base` beside it, or no stamp
+    /// of the draft's of those sides, that head pair and that position) →
+    /// per run, in the order given, the first
     /// defective run deciding: `BadRun` → `SourceNotRegistered` →
     /// `DanglingSource` → `TooManyRuns`. The removal is staged ahead of the
     /// runs' judgment, so a defective run is refused past one staged record
@@ -215,7 +261,7 @@ where
 {
     // Every judgment off one reading of the working world, ahead of the
     // first record staged.
-    let (count, standing, head_moved) = {
+    let (count, standing, restored, head_moved) = {
         let world = stg.working();
         let (m3, m5) = (world.m3(), world.m5());
         gate_write(
@@ -272,6 +318,15 @@ where
             // made or claims more of its base than the base holds (N4).
             judge_pair(m3, m5, base, &trunk_of(&standing.base))?;
         }
+        // The marker put back (skep #870): a position the merge names is a
+        // stamp of the draft's, so no marker's `at` is made a position where
+        // nothing stamped it.
+        let restored = match &request.merge {
+            Some(SetMerge { sides, at: Some(at) }) => {
+                Some(restorable(request, standing.as_ref(), sides, *at)?)
+            }
+            _ => None,
+        };
         // The tell (R5): the trunk's current head where it is not the one
         // named — asked of a head the checks above found registered, as
         // `trunk_head` requires, and read, never locked.
@@ -279,7 +334,7 @@ where
             .head
             .as_ref()
             .and_then(|head| trunk_head(m3, &head.member).filter(|current| *current != head.member));
-        (m5.content_count(doc), standing, head_moved)
+        (m5.content_count(doc), standing, restored, head_moved)
     };
     // The whole span removed, where there is one: DELETE's body at ordinal
     // 1 over the count read above, unchecked — the typed judgment was made.
@@ -301,28 +356,64 @@ where
         .map_err(of_reinstate)?;
     }
     // The record, where a base is to be recorded: the base told, the source
-    // kept, the marker the request's merge beside its head or none (N3).
+    // kept, and the marker put back as it stood, or the request's merge
+    // beside its head to be stamped, or none (N3; skep #870).
     if let (Some(base), Some(standing)) = (&request.base, &standing) {
-        let merge = match (&request.head, &request.merge) {
-            (Some(head), Some(sides)) => Some(Merge {
-                sides: sides.clone(),
-                head: head.member.clone(),
-                head_copied: head.extent.clone(),
-            }),
-            _ => None,
-        };
-        stg.push(
-            M5Rec::DraftBase {
-                draft: doc.clone(),
-                base: base.member.clone(),
-                extent: base.extent.clone(),
-                source: standing.source.clone(),
-                merge,
+        let (draft, member, extent) = (doc.clone(), base.member.clone(), base.extent.clone());
+        let source = standing.source.clone();
+        let record = match (restored, &request.head, &request.merge) {
+            (Some(marker), _, _) => {
+                M5Rec::MarkerRestore { draft, base: member, extent, source, marker }
             }
-            .into(),
-        );
+            (None, Some(head), Some(merge)) => M5Rec::DraftBase {
+                draft,
+                base: member,
+                extent,
+                source,
+                merge: Some(Merge {
+                    sides: merge.sides.clone(),
+                    head: head.member.clone(),
+                    head_copied: head.extent.clone(),
+                }),
+            },
+            (None, _, _) => M5Rec::DraftBase { draft, base: member, extent, source, merge: None },
+        };
+        stg.push(record.into());
     }
     Ok(head_moved)
+}
+
+/// Returns the stamped marker a request's merge puts back (skep #870).
+///
+/// It is the marker of `sides`, the request's head pair and `at`, which
+/// must be one of the draft's stamps ([`DraftBase::stamped`]) and stand
+/// beside a base to record: the commit installs it as it stood.
+///
+/// # Errors
+///
+/// `MarkerNotRestorable` where the request names no head or no base to
+/// record, where the draft has no recorded base, or where its stamps hold
+/// no such marker.
+fn restorable(
+    request: &SetArrangement,
+    standing: Option<&DraftBase>,
+    sides: &[Address],
+    at: Seq,
+) -> Result<Marker, SetArrangementError> {
+    let (Some(head), Some(_), Some(standing)) = (&request.head, &request.base, standing) else {
+        return Err(SetArrangementError::MarkerNotRestorable);
+    };
+    let marker = Marker {
+        sides: sides.to_vec(),
+        head: head.member.clone(),
+        head_copied: head.extent.clone(),
+        at,
+    };
+    if standing.stamped.contains(&marker) {
+        Ok(marker)
+    } else {
+        Err(SetArrangementError::MarkerNotRestorable)
+    }
 }
 
 /// Judges a pair the request names as the shot judges its base (PUB-2.37).

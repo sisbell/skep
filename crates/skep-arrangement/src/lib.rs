@@ -9,9 +9,10 @@
 //! `version`- or `stage`-minted document's **fork source** — the member or
 //! bare document it was born sharing (the fork-source design record) — and
 //! each staged draft's **base** — where its next publication lands, the
-//! extent the copy took, its source and the merge it carries, moved by each
-//! publication of the draft itself and each landing that names a base (the
-//! staging act, B3-S10; the landing lane, skep #764) — and it is the *only*
+//! extent the copy took, its source, the merge it carries and the markers
+//! stamped on it, moved by each publication of the draft itself and each
+//! landing that names a base (the staging act, B3-S10; the landing lane,
+//! skep #764, #870) — and it is the *only*
 //! place in the system where destructive change lives (ASN-0047 P3). It
 //! provides the editing/versioning operations (INSERT [ASN-0116], DELETE
 //! [ASN-0117], COPY [ASN-0118], REINSTATE [the write by identity, the
@@ -45,8 +46,9 @@
 //! every member it mints, an empty placement included, and an owned
 //! version's snapshot — the shot terms are journaled in the shot's own
 //! record, the fork sources are noted off the snapshot's `source`, and the
-//! draft bases are journaled in the staging record and the landing's and
-//! moved by the shot's record naming its draft; all four are carried by the
+//! draft bases are journaled in the staging record and the landing's — its
+//! base record or its restore record — and moved by the shot's record
+//! naming its draft; all four are carried by the
 //! checkpoint, never rebuilt, and [`M5State`] states why.
 //!
 //! ## Failure channels
@@ -269,8 +271,8 @@ pub use error::{
 };
 pub use ops::{
     head_lock_key, mint_admission, shot_admission, stage_delete_at, stage_publish,
-    stage_reinstate_at, AsOf, MintedRun, Pairing, PublishWorld, SetArrangement, Vstream,
-    MAX_COPY_RESOLVE_STEPS, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES,
+    stage_reinstate_at, AsOf, MintedRun, Pairing, PublishWorld, SetArrangement, SetMerge,
+    Vstream, MAX_COPY_RESOLVE_STEPS, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES,
 };
 pub use ownership::Caller;
 pub use run::{Run, RunError};

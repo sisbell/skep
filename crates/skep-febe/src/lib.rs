@@ -245,7 +245,8 @@ pub use skep_address::{
 // of the runs a shot carries. `Deposit` is the two-state deposit declaration
 // `Op::Insert` carries, so an insert is unbuildable without it.
 pub use skep_arrangement::{
-    Base, Deposit, Marker, Run, RunError, SetArrangement, Shot, ShotRun, ShotTerms, VPos, VSpec,
+    Base, Deposit, Marker, Run, RunError, SetArrangement, SetMerge, Shot, ShotRun, ShotTerms, VPos,
+    VSpec,
 };
 pub use skep_content::Val; // M4
                            // M8, `SlotSpec` included: every field of a

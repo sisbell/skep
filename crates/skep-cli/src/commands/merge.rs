@@ -120,9 +120,9 @@ use skep_client::ceremony::handshake::{handshake, Session, Site};
 use skep_client::dial::plaintext_non_loopback_warning;
 use skep_client::halt::{Halt, Refused};
 use skep_client::merge::{
-    compose, head_of, journal, land, undo, withdraw, Answers, Choice, Family, Flag, Gap, GapId,
+    compose, head_of, journal, land, undo, unwithdraw, withdraw, Answers, Choice, Family, Flag, Gap, GapId,
     GapKind, Inputs, Landed, Landing, Merged, Merger, Misfit, Options, Placement, Record, Refusal,
-    Resolution, ResolvedBy, Side, SideIx, Undone, WindowPart, Withdrawn,
+    Resolution, ResolvedBy, Side, SideIx, Undone, Unwithdrawn, WindowPart, Withdrawn,
 };
 use skep_client::publication::OriginAnswer;
 use skep_client::sheet::render_inert;
@@ -183,6 +183,11 @@ enum Act {
     },
     /// `--undo ⟨S⟩`: the draft back as it stood before the merge landed.
     Undo(Address),
+    /// `--undo ⟨S⟩ --withdrawal ⟨P⟩`: a withdrawal taken back (skep #870).
+    ///
+    /// The merge the withdrawal at P took out of the draft is put back as
+    /// it stood.
+    Unwithdraw(Address, u64),
     /// `--withdraw ⟨S⟩`: the merge taken out, the words kept.
     Withdraw(Address),
 }
@@ -252,6 +257,13 @@ fn run(
                     .map_err(|r| refused_taking_out(draft, r, Step::Undo))?;
                 say_undone(&undone);
                 undone_value(&undone)
+            }
+            Act::Unwithdraw(draft, withdrawal) => {
+                talk(format!("putting the merge back into {draft} at {}", board.dialed()));
+                let unwithdrawn = unwithdraw(board, merger, draft, &asked.kind, *withdrawal, None, asked.journal.as_ref())
+                    .map_err(|r| refused_unwithdrawing(draft, *withdrawal, r))?;
+                say_unwithdrawn(&unwithdrawn, *withdrawal);
+                unwithdrawn_value(&unwithdrawn, *withdrawal)
             }
             Act::Withdraw(draft) => {
                 talk(format!("taking the merge out of {draft} at {}", board.dialed()));
@@ -341,8 +353,15 @@ impl Asked {
     /// `--head` and each other are the grammar's forms, refused ahead of
     /// this.
     fn of(c: &CommandLine, by: &ResolvedBy) -> Result<Asked, Usage> {
+        let withdrawal = match c.value("--withdrawal") {
+            Some(p) => Some(p.parse::<u64>().map_err(|_| Usage(format!("--withdrawal takes a position, the `position` a withdrawal answered, not `{p}`")))?),
+            None => None,
+        };
         let taken_out = match (c.value("--undo"), c.value("--withdraw")) {
-            (Some(s), _) => Some(Act::Undo(address("--undo", s)?)),
+            (Some(s), _) => Some(match withdrawal {
+                Some(p) => Act::Unwithdraw(address("--undo", s)?, p),
+                None => Act::Undo(address("--undo", s)?),
+            }),
             (None, Some(s)) => Some(Act::Withdraw(address("--withdraw", s)?)),
             (None, None) => None,
         };
@@ -509,6 +528,60 @@ fn refused_taking_out(draft: &Address, r: Refusal, step: Step) -> Stop {
         })),
         other => refused(other, step),
     }
+}
+
+/// Returns the stop a withdrawal's undo's refusal comes to (§2.3's exit 1).
+///
+/// It is [`refused`]'s at [`Step::Undo`], but a position the board has
+/// reclaimed — `history_reclaimed` at the read of the draft at the
+/// withdrawal or before it — whose detail says what it means here: the
+/// state before the withdrawal is no longer on this board, and nothing was
+/// sent (skep #870).
+fn refused_unwithdrawing(draft: &Address, withdrawal: u64, r: Refusal) -> Stop {
+    match r {
+        Refusal::HistoryReclaimed { at, floor } => Stop::Halt(Halt::Refused(Refused {
+            status: 200,
+            code: "history_reclaimed".to_string(),
+            detail: Some(format!(
+                "the state before the withdrawal at position {withdrawal} is no longer on this board: {draft} as of position {at} is reclaimed{} — nothing was sent; the merge stays out of the draft, its words kept",
+                floor.map(|f| format!(" (the oldest position it answers is {f})")).unwrap_or_default()
+            )),
+            op: None,
+            body: Value::Null,
+        })),
+        other => refused(other, Step::Undo),
+    }
+}
+
+/// Says the talk after a withdrawal's undo.
+///
+/// The merge the withdrawal took out stands in the draft again, its marker
+/// as it stood, and the record's link is named where one was written.
+fn say_unwithdrawn(unwithdrawn: &Unwithdrawn, withdrawal: u64) {
+    let Unwithdrawn { draft, position, record } = unwithdrawn;
+    talk(format!(
+        "put the merge back into {draft} at position {position}: the withdrawal at position {withdrawal} is undone, and the draft carries the merge as it did before it{}",
+        match record {
+            Some(link) => format!("; the record's link is {link}"),
+            None => "; no record of the withdrawal stood, so none was written".to_string(),
+        }
+    ));
+}
+
+/// Returns a withdrawal's undo as the report carries it.
+///
+/// It is an undo, its case `withdrawal` with the withdrawal's position,
+/// nothing restored.
+fn unwithdrawn_value(unwithdrawn: &Unwithdrawn, withdrawal: u64) -> Value {
+    json!({
+        "act": "undo",
+        "draft": unwithdrawn.draft.to_string(),
+        "position": unwithdrawn.position,
+        "record": unwithdrawn.record.as_ref().map(ToString::to_string),
+        "case": "withdrawal",
+        "withdrawal": withdrawal,
+        "restored": Value::Null,
+    })
 }
 
 /// Says the talk after an undo: the draft is back to how it stood before

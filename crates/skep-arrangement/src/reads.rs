@@ -521,12 +521,16 @@ impl M5State {
     /// `extent` that member's whole count at the shot, or the extent the
     /// landing named, never past its member's count (B3-S10; the landing
     /// lane), and `merge` the marker the last landing set, `None` where it
-    /// set none or a shot cleared it — which the doc-metadata read serves as
-    /// `base`, `base_copied` and `merge` to every reader of the draft. A
+    /// set none or a shot cleared it — or the stamped marker a landing put
+    /// back as it stood, its `at` its own (skep #870) — which the
+    /// doc-metadata read serves as `base`, `base_copied` and `merge` to every
+    /// reader of the draft; `stamped` the markers the fold stamped on it
+    /// since its base last moved at a shot, read by the landing op alone. A
     /// shot that publishes the draft's words keeping its base moves neither.
     ///
     /// **The invariant** it answers under is BASE★, stated on [`M5State`]:
-    /// the entry is written by the staging record and the landing's, moved
+    /// the entry is written by the staging record and the landing's — its
+    /// base record or its restore record — moved
     /// by the placing record of every shot that is the draft's own
     /// publication, and by nothing
     /// else. So `Some` for every draft the operation made with a base to

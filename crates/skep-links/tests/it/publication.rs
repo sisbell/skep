@@ -475,7 +475,7 @@ fn a_shot_keeping_its_drafts_base_re_windows_the_draft_and_leaves_its_base_stand
         let s = k.snapshot();
         let homed = s.world().links().readlink(&a(&[1, 0, 1, 0, 4, 0, 2, 1])).cloned();
         assert_eq!(homed, Some(record(&named, &fresh)), "keep_base {keep_base}: the record homed in the draft");
-        let moved = DraftBase { base: member.clone(), extent: n(2), source: pdoc(), merge: None };
+        let moved = DraftBase { base: member.clone(), extent: n(2), source: pdoc(), merge: None, stamped: vec![] };
         assert_eq!(
             s.world().m5().draft_base(&d),
             Some(if keep_base { &recorded } else { &moved }),

@@ -4221,8 +4221,26 @@ impl Holds {
     /// Panics where the session's board is none the holds were opened over
     /// (the type's precondition).
     pub fn note_restored(&self, session: &SessionEntry, restored: &Restored) {
-        let draft = restored.draft.to_string();
-        self.note_written(session, restored.position, &[draft.as_str()], Some(draft.as_str()), None);
+        self.note_arranged(session, &restored.draft.to_string(), restored.position);
+    }
+
+    /// Notes a whole-draft write `session` made through the merge library.
+    ///
+    /// It is a draft landing's, an undo's, a withdrawal's or a withdrawal's
+    /// undo's one `set_arrangement` at `at` (skep #870; P3).
+    ///
+    /// Each is dialed outside [`Holds::send`], as the restore's is, and is
+    /// noted as [`Holds::note_restored`] notes the restore's: the editor's
+    /// own last ack on `draft` the next undo or withdrawal's undo is typed
+    /// against ([`Holds::last_arranged`]), so the family's own writes never
+    /// stand as another hand's change under it.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the session's board is none the holds were opened over
+    /// (the type's precondition).
+    pub fn note_arranged(&self, session: &SessionEntry, draft: &str, at: u64) {
+        self.note_written(session, at, &[draft], Some(draft), None);
     }
 
     /// Notes `at`, the position of a write of the session's principal's.

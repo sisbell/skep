@@ -12,9 +12,12 @@
 //! gate's two answers and the free-standing draft admitted with nothing
 //! moved, its head asked its registration alone — an extent past the
 //! count of another principal's draft admitted, a head no mint has made
-//! refused — and told a moved head as any draft is; and a pair judged
-//! against a private chain, a world no op builds, stopping a debug build
-//! before that chain's count is read.
+//! refused — and told a moved head as any draft is; a merge taken out and
+//! put back at its landing's position standing as the landing left it, an
+//! earlier landing's and an inherited marker put back at theirs, and a
+//! position naming no stamp of the draft's refused in its place with
+//! nothing written; and a pair judged against a private chain, a world no
+//! op builds, stopping a debug build before that chain's count is read.
 
 use serde::{Deserialize, Serialize};
 use skep_content::{stage_write, ContentStore, ContentStretch, ContentWrite, Val};
@@ -145,7 +148,12 @@ fn request(
     base: Option<Base>,
     merge: Option<Vec<Address>>,
 ) -> SetArrangement {
-    SetArrangement { runs, head, base, merge }
+    SetArrangement { runs, head, base, merge: merge.map(|sides| SetMerge { sides, at: None }) }
+}
+
+/// A frame putting back the marker of `sides` stamped at `at`.
+fn restore(runs: Vec<ShotRun>, head: Option<Base>, base: Option<Base>, sides: Vec<Address>, at: Seq) -> SetArrangement {
+    SetArrangement { runs, head, base, merge: Some(SetMerge { sides, at: Some(at) }) }
 }
 
 fn runs_of(k: &Kernel<LandWorld>, doc: &Address) -> Vec<Run> {
@@ -183,7 +191,7 @@ fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
     let unchanged = |what: &str| {
         assert_eq!(k.current_seq(), before, "{what}: a refusal commits nothing");
         assert_eq!(runs_of(&k, &draft), vec![run(&pca(1), 3)], "{what}: the draft's arrangement stands");
-        assert_eq!(base_of(&k, &draft), Some(DraftBase { base: member.clone(), extent: n(3), source: member.clone(), merge: None }), "{what}: the record stands");
+        assert_eq!(base_of(&k, &draft), Some(DraftBase { base: member.clone(), extent: n(3), source: member.clone(), merge: None, stamped: vec![] }), "{what}: the record stands");
         assert_eq!(runs_of(&k, &doc1()), vec![run(&ca(1), 2)], "{what}: the plain draft stands");
         assert_eq!(runs_of(&k, &fork), vec![run(&pca(1), 3)], "{what}: the fork stands");
     };
@@ -327,7 +335,7 @@ fn a_base_extent_past_its_members_count_is_refused_and_one_at_the_count_records(
     vs.insert(P1, &draft, vp(1, 4), vec![Val::new(&b"z"[..])], Deposit::Undeclared, now(&k)).expect("the draft's own word");
     assert_eq!(k.snapshot().world().m5().content_count(&draft), n(4), "the draft one past its base");
     let before = k.current_seq();
-    let recorded = Some(DraftBase { base: member.clone(), extent: n(3), source: member.clone(), merge: None });
+    let recorded = Some(DraftBase { base: member.clone(), extent: n(3), source: member.clone(), merge: None, stamped: vec![] });
     assert!(matches!(
         rejected(vs.set_arrangement(P1, &draft, &request(vec![of_edition(2, 2)], Some(pair(&member, 3)), Some(pair(&member, 4)), Some(vec![vca(1)])), now(&k))),
         E::BaseExtentTooLarge
@@ -349,6 +357,7 @@ fn a_base_extent_past_its_members_count_is_refused_and_one_at_the_count_records(
             extent: n(3),
             source: member.clone(),
             merge: Some(Marker { sides: vec![vca(1)], head: member.clone(), head_copied: n(3), at }),
+            stamped: vec![Marker { sides: vec![vca(1)], head: member.clone(), head_copied: n(3), at }],
         }),
         "recorded at the count, the marker beside it"
     );
@@ -369,7 +378,7 @@ fn a_head_or_base_naming_no_member_is_refused_and_one_minted_since_records() {
     let vs = Vstream::new(&k);
     let next = a(&[1, 0, 1, 0, 3, 2]);
     let daughter = a(&[1, 0, 1, 0, 3, 1, 1]);
-    let recorded = Some(DraftBase { base: member.clone(), extent: n(3), source: member.clone(), merge: None });
+    let recorded = Some(DraftBase { base: member.clone(), extent: n(3), source: member.clone(), merge: None, stamped: vec![] });
     let before = k.current_seq();
     for unminted in [&next, &daughter] {
         assert!(!k.snapshot().world().m3().is_registered_document(unminted), "{unminted:?}: no mint has made it");
@@ -393,7 +402,7 @@ fn a_head_or_base_naming_no_member_is_refused_and_one_minted_since_records() {
         .expect("the member a mint has made since");
     assert_eq!(
         base_of(&k, &draft),
-        Some(DraftBase { base: next, extent: n(0), source: member, merge: None }),
+        Some(DraftBase { base: next, extent: n(0), source: member, merge: None, stamped: vec![] }),
         "the base recorded, the source kept"
     );
 }
@@ -434,6 +443,7 @@ fn a_landing_sets_the_arrangement_moves_the_base_marks_the_merge_and_tells_a_mov
             extent: n(3),
             source: member.clone(),
             merge: Some(Marker { sides: vec![vca(1)], head: member.clone(), head_copied: n(3), at }),
+            stamped: vec![Marker { sides: vec![vca(1)], head: member.clone(), head_copied: n(3), at }],
         }),
         "the base as told, the source kept, the marker stamped at the commit"
     );
@@ -489,8 +499,14 @@ fn a_base_absent_moves_nothing_and_a_base_without_a_merge_clears_the_marker() {
         .expect("the undo");
     assert_eq!(
         base_of(&k, &draft),
-        Some(DraftBase { base: member.clone(), extent: n(3), source: member.clone(), merge: None }),
-        "the base as told, the marker cleared"
+        Some(DraftBase {
+            base: member.clone(),
+            extent: n(3),
+            source: member.clone(),
+            merge: None,
+            stamped: vec![Marker { sides: vec![vca(1)], head: member.clone(), head_copied: n(3), at: landed_at }],
+        }),
+        "the base as told, the marker cleared, its stamp kept"
     );
     assert_eq!(k.snapshot().world().m5().arranged_at(&draft), Some(undone_at));
     assert_eq!(runs_of(&k, &draft), vec![run(&pca(1), 3)]);
@@ -620,4 +636,147 @@ fn a_pair_judged_against_a_private_chain_is_the_stores_bug_and_stops() {
     let m5 = world.m5.apply_m5(Seq(0), &M5Rec::DraftBase { draft: doc2(), base: doc1(), extent: n(2), source: doc1(), merge: None });
     let k = mem_kernel_of(LandWorld { m5, ..world });
     let _ = Vstream::new(&k).set_arrangement(P1, &doc2(), &request(vec![], None, Some(pair(&doc1(), 1)), None), now(&k));
+}
+
+/// A merge taken out is put back as the landing left it (skep #870).
+///
+/// A landing, the merge taken out — the base re-sent, no merge — and the
+/// merge put back naming the landing's
+/// position leave the record exactly as the landing left it, the marker's
+/// `at` the landing's and the stamps one; the typed state moves to the
+/// restore, as at any `set_arrangement`; the same restore again is
+/// admitted, moving nothing of the record.
+#[test]
+fn a_merge_taken_out_is_put_back_as_the_landing_left_it_and_a_repeat_moves_nothing() {
+    let k = seeded();
+    let (member, draft) = staged(&k);
+    let vs = Vstream::new(&k);
+    let words = || vec![of_edition(2, 2)];
+    let (landed_at, _) = vs
+        .set_arrangement(P1, &draft, &request(words(), Some(pair(&member, 3)), Some(pair(&member, 3)), Some(vec![vca(1)])), now(&k))
+        .expect("the landing");
+    let landed = base_of(&k, &draft);
+    let marker = Marker { sides: vec![vca(1)], head: member.clone(), head_copied: n(3), at: landed_at };
+    assert_eq!(
+        landed,
+        Some(DraftBase { base: member.clone(), extent: n(3), source: member.clone(), merge: Some(marker.clone()), stamped: vec![marker] })
+    );
+    vs.set_arrangement(P1, &draft, &request(words(), None, Some(pair(&member, 3)), None), now(&k)).expect("the merge taken out");
+    assert_eq!(base_of(&k, &draft).and_then(|b| b.merge), None, "the marker cleared");
+    let put_back = restore(words(), Some(pair(&member, 3)), Some(pair(&member, 3)), vec![vca(1)], landed_at);
+    let (restored_at, head_moved) = vs.set_arrangement(P1, &draft, &put_back, now(&k)).expect("the merge put back");
+    assert_eq!(head_moved, None);
+    assert_eq!(base_of(&k, &draft), landed, "the marker, its position and the stamps as the landing left them");
+    assert_eq!(runs_of(&k, &draft), vec![run(&pca(2), 2)], "the words as sent");
+    assert_eq!(k.snapshot().world().m5().arranged_at(&draft), Some(restored_at), "the typed state moves to the restore");
+    vs.set_arrangement(P1, &draft, &put_back, now(&k)).expect("put back again");
+    assert_eq!(base_of(&k, &draft), landed, "a marker already standing is put back as itself");
+}
+
+/// A position naming no stamp of the draft's is refused (skep #870).
+///
+/// It is refused `MarkerNotRestorable` with nothing written: the
+/// withdrawal's own
+/// position, the landing's with other sides or another head extent, the
+/// draft's own mint where it inherited no marker, another draft's stamp,
+/// and a merge naming a position beside no base or no head. The refusal
+/// stands after the base's four — a free-standing draft's base answers
+/// `NoBaseToRecord`, a base past its count `BaseExtentTooLarge` — and
+/// ahead of the runs: an unstamped position beside a bad run answers it,
+/// a stamped one beside a bad run answers `BadRun`.
+#[test]
+fn a_position_naming_no_stamp_of_the_drafts_is_refused_in_its_place_and_writes_nothing() {
+    let k = seeded();
+    let (member, draft) = staged(&k);
+    let minted_at = k.snapshot().world().m5().arranged_at(&draft).expect("the stage's commit");
+    let vs = Vstream::new(&k);
+    let (other, _) = vs.stage(PrincipalId(1), &member).expect("a second staging draft");
+    let words = || vec![of_edition(2, 2)];
+    let landing = request(words(), Some(pair(&member, 3)), Some(pair(&member, 3)), Some(vec![vca(1)]));
+    let (landed_at, _) = vs.set_arrangement(P1, &draft, &landing, now(&k)).expect("the landing");
+    let (other_at, _) = vs.set_arrangement(P1, &other, &landing, now(&k)).expect("the other draft's landing");
+    let (withdrawn_at, _) =
+        vs.set_arrangement(P1, &draft, &request(words(), None, Some(pair(&member, 3)), None), now(&k)).expect("the withdrawal");
+    let put_back = |runs: Vec<ShotRun>, sides: Vec<Address>, extent: u32, at: Seq| {
+        restore(runs, Some(pair(&member, extent)), Some(pair(&member, 3)), sides, at)
+    };
+    let before = k.current_seq();
+    let recorded = base_of(&k, &draft);
+    for (what, frame) in [
+        ("the withdrawal's position", put_back(words(), vec![vca(1)], 3, withdrawn_at)),
+        ("other sides", put_back(words(), vec![vca(2)], 3, landed_at)),
+        ("another head extent", put_back(words(), vec![vca(1)], 2, landed_at)),
+        ("the draft's own mint, no marker inherited", put_back(words(), vec![vca(1)], 3, minted_at)),
+        ("another draft's stamp", put_back(words(), vec![vca(1)], 3, other_at)),
+        ("no base", SetArrangement { base: None, ..put_back(words(), vec![vca(1)], 3, landed_at) }),
+        ("no head", SetArrangement { head: None, ..put_back(words(), vec![vca(1)], 3, landed_at) }),
+    ] {
+        assert_eq!(rejected(vs.set_arrangement(P1, &draft, &frame, now(&k))), E::MarkerNotRestorable, "{what}");
+    }
+    // In its place: after the base's four, ahead of the runs'.
+    let bad_run = || vec![ShotRun { origin: doc1(), run: run(&pca(9), 1) }];
+    assert_eq!(
+        rejected(vs.set_arrangement(P1, &doc1(), &put_back(bad_run(), vec![vca(1)], 3, landed_at), now(&k))),
+        E::NoBaseToRecord,
+        "a free-standing draft records no base, ahead of the stamps"
+    );
+    assert_eq!(
+        rejected(vs.set_arrangement(P1, &draft, &restore(bad_run(), Some(pair(&member, 3)), Some(pair(&member, 4)), vec![vca(1)], landed_at), now(&k))),
+        E::BaseExtentTooLarge,
+        "the base's extent ahead of the stamps"
+    );
+    assert_eq!(
+        rejected(vs.set_arrangement(P1, &draft, &put_back(bad_run(), vec![vca(1)], 3, withdrawn_at), now(&k))),
+        E::MarkerNotRestorable,
+        "an unstamped position ahead of the runs"
+    );
+    assert_eq!(
+        rejected(vs.set_arrangement(P1, &draft, &put_back(bad_run(), vec![vca(1)], 3, landed_at), now(&k))),
+        E::BadRun,
+        "a stamped position, then the runs"
+    );
+    assert_eq!(k.current_seq(), before, "a refusal commits nothing");
+    assert_eq!(base_of(&k, &draft), recorded, "the record stands");
+    assert_eq!(runs_of(&k, &draft), vec![run(&pca(2), 2)], "the arrangement stands");
+}
+
+/// An earlier landing and an inherited marker are put back (skep #870).
+///
+/// The same merge landed twice leaves two stamps, and the first is put
+/// back over the
+/// second; an alternative of the draft inherits the standing marker
+/// stamped at its own mint, its stamps that one alone — the source's
+/// refused there — and, taken out, it is put back at the alternative's
+/// mint as the stage left it.
+#[test]
+fn an_earlier_landing_and_an_inherited_marker_are_each_put_back_at_their_own_positions() {
+    let k = seeded();
+    let (member, draft) = staged(&k);
+    let vs = Vstream::new(&k);
+    let words = || vec![of_edition(2, 2)];
+    let landing = request(words(), Some(pair(&member, 3)), Some(pair(&member, 3)), Some(vec![vca(1)]));
+    let (first, _) = vs.set_arrangement(P1, &draft, &landing, now(&k)).expect("the first landing");
+    let (second, _) = vs.set_arrangement(P1, &draft, &landing, now(&k)).expect("the same merge landed again");
+    let marker = |at| Marker { sides: vec![vca(1)], head: member.clone(), head_copied: n(3), at };
+    assert_eq!(base_of(&k, &draft).map(|b| b.stamped), Some(vec![marker(first), marker(second)]), "two stamps, in order");
+    let put_back = |at| restore(words(), Some(pair(&member, 3)), Some(pair(&member, 3)), vec![vca(1)], at);
+    vs.set_arrangement(P1, &draft, &put_back(first), now(&k)).expect("the first put back over the second");
+    assert_eq!(base_of(&k, &draft).and_then(|b| b.merge), Some(marker(first)));
+    let (alternative, minted_at) = vs.stage(PrincipalId(1), &draft).expect("an alternative of the marked draft");
+    let stood = Some(DraftBase {
+        base: member.clone(),
+        extent: n(3),
+        source: draft.clone(),
+        merge: Some(marker(minted_at)),
+        stamped: vec![marker(minted_at)],
+    });
+    assert_eq!(base_of(&k, &alternative), stood, "the inherited marker, stamped at the alternative's mint alone");
+    vs.set_arrangement(P1, &alternative, &request(words(), None, Some(pair(&member, 3)), None), now(&k)).expect("taken out");
+    assert_eq!(
+        rejected(vs.set_arrangement(P1, &alternative, &put_back(first), now(&k))),
+        E::MarkerNotRestorable,
+        "the source draft's stamp is not the alternative's"
+    );
+    vs.set_arrangement(P1, &alternative, &put_back(minted_at), now(&k)).expect("put back at its own mint");
+    assert_eq!(base_of(&k, &alternative), stood, "as the stage left it");
 }

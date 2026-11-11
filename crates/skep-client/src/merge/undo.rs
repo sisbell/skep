@@ -17,6 +17,34 @@
 //!   current arrangement sent back whole, its recorded base re-sent
 //!   unmoved, no `merge` — typed against the position it read the draft at.
 //!
+//! A third act takes a withdrawal back (skep #870; B3-S11, D6 BM-36):
+//! [`unwithdraw`] puts the marker the withdrawal cleared back as it stood —
+//! the draft's current words, mapped as the undo's are (**The mapping**),
+//! its recorded base re-sent unmoved, the marker's head pair, sides and
+//! position, `merge.at` the landing's own (wire.md §Arrangement) — typed
+//! against the withdrawal's position, or the caller's own last
+//! acknowledgment where later (P3). The board admits the position only
+//! where it names a marker it put on the draft since the draft's base last
+//! moved at a publication, so after the withdrawal's undo the draft and its
+//! marker stand exactly as they stood before the withdrawal, and [`undo`]
+//! reads them as it read them then. **What names a withdrawal**: no record
+//! names its act or its position, and an undo's feed row has a withdrawal's
+//! shape, so the state decides — the draft's feed row at the position is a
+//! `set_arrangement` naming a base and no merge, the state before it
+//! carries a marker, and the base pair and the words at it are those
+//! before it; anything else is [`Refusal::NoWithdrawal`], nothing sent.
+//! **Nothing to undo**, nothing sent, judged on the draft as it stands, the
+//! marker first: a draft carrying a marker — the one put back already, or a
+//! merge landed since — is [`NoUndo::Remarked`]; then a base moved since the
+//! withdrawal is [`NoUndo::Published`] where the draft's feed holds a
+//! `publish` row past it, naming the member that row names first, and
+//! [`NoUndo::Remarked`] where it holds none, a merge having landed and been
+//! taken out again. Its record is written only where the newest record of
+//! the kind on the draft is the withdrawal's take-back of a landing in it
+//! whose head and sides are the marker's: the landing's record composed
+//! again, `replaces` the take-back's link. The write's id names the draft,
+//! the withdrawal and the position the call read the draft at.
+//!
 //! **The dispatch (P4).** The undo reads the draft's `doc_metadata` live
 //! and dispatches on the base record first, then the marker:
 //!
@@ -169,9 +197,10 @@ use crate::halt::{Halt, Refused};
 use super::compose::Run;
 use super::land::{own_fault, own_fault_face, shape_face, Merger, Unwritten, Writer};
 use super::reads::{
-    feed_rows, mapped, records_of, runs_of, NoUndo, OnEnd, Reader, Refusal, SHOT_RUN_CAP,
+    feed_rows, mapped, records_of, runs_of, NoUndo, OnEnd, Reader, Refusal, Role, SHOT_RUN_CAP,
 };
-use super::record::{self, Record};
+use super::record::{self, read_record, Record, RecordLanding};
+use crate::board::answers::MergeMarker;
 
 /// What an undo answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,6 +228,21 @@ pub struct Withdrawn {
     pub position: u64,
     /// The replacing record's link, homed in its journal, where a record of
     /// the landing stood; `None` where none did, and none was written.
+    pub record: Option<Address>,
+}
+
+/// What a withdrawal's undo answered (skep #870).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unwithdrawn {
+    /// The draft the merge was put back into.
+    pub draft: Address,
+    /// The one write's commit position, its ack's `at`.
+    pub position: u64,
+    /// The record written putting the landing's back, homed in its journal.
+    ///
+    /// It is written where the newest record of the kind on the draft is
+    /// the withdrawal's take-back of a landing in it; `None` where none is,
+    /// and none was written.
     pub record: Option<Address>,
 }
 
@@ -306,7 +350,7 @@ pub fn undo(
                     format!("{draft}'s `doc_metadata` carries a merge with no `at`, which every marker the wire serves carries (wire.md §The response envelope)"),
                 )
             })?;
-            let (then, runs) = match before(reader, draft, at)? {
+            let (then, runs) = match before(reader, draft, at, "the position before the landing")? {
                 Before::Unregistered => {
                     return Err(Refusal::NothingToUndo {
                         draft: draft.clone(),
@@ -350,7 +394,7 @@ pub fn undo(
             let Some(LandingRows { at, rearranged }) = landing_rows(reader, draft)? else {
                 return Err(Refusal::NoMerge { draft: draft.clone() });
             };
-            let runs = match before(reader, draft, at)? {
+            let runs = match before(reader, draft, at, "the position before the landing")? {
                 Before::Stood { runs, .. } => runs,
                 Before::Unregistered => {
                     return Err(own_fault_face(
@@ -469,11 +513,198 @@ pub fn withdraw(
     Ok(Withdrawn { draft: draft.clone(), position, record })
 }
 
+/// Takes a withdrawal back (skep #870; B3-S11, D6 BM-36).
+///
+/// The merge it took out of a draft is put back as it stood.
+/// `withdrawal` is the position of the withdrawal's one write, its
+/// [`Withdrawn::position`]. The draft's `doc_metadata` is read live; the
+/// draft is read at `withdrawal` and before it through `/op-at` as the
+/// pre-landing read reads; what names a withdrawal, nothing to undo, the
+/// mapping, the one write, its typed position and its record are the
+/// module's doc. `own_ack` is the position of the caller's own last
+/// acknowledged write on the draft, the write typed against it where it is
+/// past `withdrawal` (P3's editor rule), as [`undo`] takes it; `journal` is
+/// as [`undo`]'s.
+///
+/// **Precondition.** `own_ack`, where given, is as [`undo`]'s.
+///
+/// # Errors
+///
+/// In this order:
+///
+/// - the draft's `doc_metadata` read's refusals — [`Refusal::Unreadable`],
+///   [`Refusal::NoSuchDocument`] — and [`Refusal::Published`] for a
+///   published document; a read naming no position;
+/// - `own_ack` past the position that read stood at, as [`undo`]'s;
+/// - the reads at `withdrawal` and before it: [`Refusal::HistoryReclaimed`]
+///   where the board no longer answers either, nothing sent; a position the
+///   board answers `beyond_head`, `not_a_position` or `doc_not_registered`
+///   at as [`Refusal::NoWithdrawal`]; the reads' other refusals;
+/// - [`Refusal::NoWithdrawal`] where the position names no withdrawal of
+///   the draft, after the feed walk's refusals, nothing sent;
+/// - [`Refusal::NothingToUndo`] with [`NoUndo::Remarked`] or
+///   [`NoUndo::Published`], nothing sent;
+/// - the records' reads' refusals at the head, then [`Refusal::OverCap`]
+///   where the words mapped are in more runs than one write may name,
+///   nothing sent;
+/// - a journal named that cannot take the record, as [`undo`]'s, nothing
+///   sent (P13);
+/// - the one write's, as [`undo`]'s — `arrangement_moved` saying the draft
+///   changed since the merge was taken out, or since the caller's last
+///   write past it — and `marker_not_restorable`, the draft published since
+///   it was read, as [`Refusal::Halt`] saying nothing was changed;
+/// - the record's reads' refusals; a journal the record's step finds unable
+///   to take it, as [`Refusal::Halt`] saying the merge is back in the draft
+///   and the record is not written; then the record's writes'.
+///
+/// The death signal under the merger's token is [`Refusal::SessionEnded`],
+/// faced as [`undo`]'s up to and at the one write, and at the record's
+/// saying the merge is back in the draft with its record unwritten.
+pub fn unwithdraw(
+    board: &Board,
+    merger: Merger<'_>,
+    draft: &Address,
+    kind: &Address,
+    withdrawal: u64,
+    own_ack: Option<u64>,
+    journal: Option<&Address>,
+) -> Result<Unwithdrawn, Refusal> {
+    let writer = Writer::new(board, merger, OnEnd::Rerun);
+    let reader = &writer.reader;
+    let (meta, read_at) = reader.metadata_read(draft, None)?;
+    if meta.published {
+        return Err(Refusal::Published { doc: draft.clone() });
+    }
+    let read_at = read_at.ok_or_else(|| unpositioned(draft))?;
+    if let Some(own) = own_ack.filter(|own| *own > read_at) {
+        return Err(Halt::face(
+            format!("the undo cannot be typed against position {own}"),
+            format!("the read of {draft} stood at position {read_at}, the board's head, and no acknowledgment of a write names a position past it"),
+            "pass the position of your own last acknowledged write on the draft, or none to type the undo against the withdrawal's position; nothing was written",
+        )
+        .into());
+    }
+    // WHAT NAMES A WITHDRAWAL: the state at it and the state before it.
+    let none = || Refusal::NoWithdrawal { draft: draft.clone(), at: withdrawal };
+    let after = match reader.metadata(draft, Some(withdrawal)) {
+        Ok(after) => after,
+        Err(Refusal::NoSuchDocument(_) | Refusal::BeyondHead { .. } | Refusal::NotAPosition { .. }) => return Err(none()),
+        Err(e) => return Err(e),
+    };
+    let left = arranged_at(reader, draft, withdrawal, "the withdrawal's position")?;
+    let Before::Stood { meta: then, runs: stood } = before(reader, draft, withdrawal, "the position before the withdrawal")? else {
+        return Err(none());
+    };
+    let pair = |m: &Metadata| m.base.as_deref().and_then(parse_address).zip(m.base_copied);
+    let (Some(cleared), Some(base)) = (then.merge.clone(), pair(&after)) else { return Err(none()) };
+    if pair(&then).as_ref() != Some(&base) || stood != left {
+        return Err(none());
+    }
+    let rows = withdrawal_rows(reader, draft, withdrawal)?;
+    if !rows.withdrew {
+        return Err(none());
+    }
+    // NOTHING TO UNDO: the marker first, then the base.
+    if meta.merge.is_some() {
+        return Err(Refusal::NothingToUndo { draft: draft.clone(), why: NoUndo::Remarked });
+    }
+    if pair(&meta).as_ref() != Some(&base) {
+        let why = match rows.published {
+            Some(member) => NoUndo::Published {
+                version: member.ok_or_else(|| {
+                    own_fault_face(
+                        "the draft's latest publication names no member",
+                        format!("{draft}'s latest `publish` row on the feed names no member first, which every `publish` row the wire serves names (wire.md §The change feed)"),
+                    )
+                })?,
+            },
+            None => NoUndo::Remarked,
+        };
+        return Err(Refusal::NothingToUndo { draft: draft.clone(), why });
+    }
+    let (marker_at, head_copied) = match (cleared.at, cleared.head_copied) {
+        (Some(at), Some(copied)) => (at, copied),
+        _ => {
+            return Err(own_fault_face(
+                "the marker names no position or no extent",
+                format!("{draft}'s `doc_metadata` before the withdrawal carries a merge with no `at` or no `head_copied`, which every marker the wire serves carries (wire.md §The response envelope)"),
+            ))
+        }
+    };
+    // THE MAPPING: the draft's words as they stand, through the records.
+    let runs = runs_of(&reader.imaged(draft, Some(read_at))?.runs)?;
+    let records = records_of(reader, merger.account, &runs)?;
+    let sent = mapped(&runs, &records);
+    if sent.len() > SHOT_RUN_CAP {
+        return Err(Refusal::OverCap { runs: sent.len(), cap: SHOT_RUN_CAP });
+    }
+    // THE TYPED POSITION (P3): the withdrawal's, or the caller's own last
+    // ack where it is later.
+    let as_of = own_ack.map_or(withdrawal, |own| own.max(withdrawal));
+    let stem = format!("unwithdraw:{draft}:{withdrawal}:{read_at}");
+    let base_text = base.0.to_string();
+    let sides: Vec<&str> = cleared.sides.iter().map(String::as_str).collect();
+    let frame = frames::set_arrangement(
+        &draft.to_string(),
+        &frame_runs(&sent)?,
+        as_of,
+        Some((cleared.head.as_str(), head_copied)),
+        Some((base_text.as_str(), base.1)),
+        Some((&sides, Some(marker_at))),
+        Some(&format!("{stem}.arrangement")),
+    );
+    writer.check_journal(journal, &format!("the merge cannot be put back into {draft}"))?;
+    let act = Act::Unwithdraw { withdrawal, own_ack: own_ack.is_some() };
+    let position = send(&writer, &frame, draft, as_of, act)?;
+    let record = restore_record(board, merger, kind, draft, &cleared, &stem, journal)?;
+    Ok(Unwithdrawn { draft: draft.clone(), position, record })
+}
+
+/// The draft's feed rows a withdrawal's undo reads (the module's doc).
+struct WithdrawalRows {
+    /// Whether the withdrawal's row names a base and no merge.
+    ///
+    /// The row is the `set_arrangement` row at the withdrawal's position.
+    withdrew: bool,
+    /// The member the latest `publish` row past that position names first.
+    ///
+    /// `None` where no such row stands; `Some(None)` where it names none
+    /// this client can read.
+    published: Option<Option<Address>>,
+}
+
+/// Returns the draft's feed rows at the withdrawal's position and past it.
+///
+/// It walks the supplement under the draft (`drafts=true`), as
+/// [`latest_ending_row`] does.
+///
+/// # Errors
+///
+/// The feed walk's (`feed_rows`), through `reader`.
+fn withdrawal_rows(reader: &Reader<'_>, draft: &Address, withdrawal: u64) -> Result<WithdrawalRows, Refusal> {
+    let mut rows = WithdrawalRows { withdrew: false, published: None };
+    feed_rows(reader, &draft.to_string(), true, |row| {
+        let Some(at) = row["at"].as_u64() else { return };
+        match row["op"].as_str() {
+            Some("set_arrangement") if at == withdrawal => {
+                rows.withdrew = row["base"].is_string() && row["merge"].is_null();
+            }
+            Some("publish") if at > withdrawal => {
+                let member = row["docs"].as_array().and_then(|d| d.first()).and_then(Value::as_str).and_then(parse_address);
+                rows.published = Some(member);
+            }
+            _ => {}
+        }
+    })?;
+    Ok(rows)
+}
+
 /// Which act a `set_arrangement` is, for its words.
 ///
-/// The three acts that send a draft one `set_arrangement` of a state the
-/// board already held: the two take-backs here, and the `history` module's
-/// restore, whose write is judged by [`judge`] as theirs are.
+/// The four acts that send a draft one `set_arrangement` of a state the
+/// board already held: the two take-backs here and the withdrawal's undo,
+/// and the `history` module's restore, whose write is judged by [`judge`]
+/// as theirs are.
 #[derive(Clone, Copy)]
 pub(crate) enum Act {
     /// An undo: its landing's position and whether `own_ack` was given.
@@ -486,6 +717,14 @@ pub(crate) enum Act {
         own_ack: bool,
     },
     Withdraw,
+    /// A withdrawal's undo, its words as an undo's are.
+    ///
+    /// It carries the withdrawal's position and whether `own_ack` was
+    /// given.
+    Unwithdraw {
+        withdrawal: u64,
+        own_ack: bool,
+    },
     Restore,
 }
 
@@ -495,6 +734,7 @@ impl Act {
         match self {
             Act::Undo { .. } => "the undo",
             Act::Withdraw => "the withdrawal",
+            Act::Unwithdraw { .. } => "the withdrawal's undo",
             Act::Restore => "the restore",
         }
     }
@@ -527,19 +767,19 @@ enum Before {
 ///
 /// It is the pre-landing read of the module's doc: `doc_metadata` asked at
 /// `at − 1`, re-asked at the `nearest` a `not_a_position` names, then the
-/// image at that one position.
+/// image at that one position; `what` names that position in a fault's
+/// face.
 ///
 /// # Errors
 ///
 /// [`Refusal::HistoryReclaimed`] at either read, with nothing read
 /// elsewhere; a position past the board's head, or a `not_a_position`
-/// naming no `nearest`, or a landing at position 0, as the library's own
+/// naming no `nearest`, or a write at position 0, as the library's own
 /// fault; the reads' other refusals.
-fn before(reader: &Reader<'_>, draft: &Address, at: u64) -> Result<Before, Refusal> {
+fn before(reader: &Reader<'_>, draft: &Address, at: u64, what: &str) -> Result<Before, Refusal> {
     let below = at.checked_sub(1).ok_or_else(|| {
-        own_fault_face("a landing at position 0", format!("{draft}'s landing is at the genesis position, before which nothing stood"))
+        own_fault_face("a write at position 0", format!("{what} names a write of {draft} at the genesis position, before which nothing stood"))
     })?;
-    let what = "the position before the landing";
     let own_fault = |e| position_fault(draft, what, e);
     let (position, meta) = match reader.metadata(draft, Some(below)) {
         Ok(meta) => (below, meta),
@@ -709,6 +949,7 @@ fn send(writer: &Writer<'_>, frame: &Value, draft: &Address, as_of: u64, act: Ac
         match act {
             Act::Undo { .. } => "taking the merge back out of the draft",
             Act::Withdraw => "taking the merge out of the draft",
+            Act::Unwithdraw { .. } => "putting the merge back into the draft",
             Act::Restore => "restoring the draft",
         },
     )?;
@@ -760,6 +1001,10 @@ pub(crate) fn judge(v: &Value, draft: &Address, as_of: u64, act: Act) -> Result<
                 // Typed at the caller's own last write past the landing: the
                 // change since it is another hand's.
                 Act::Undo { landing, .. } => format!("{draft} changed since your last write to it{} — the change is another hand's, made after the merge landed at position {landing}, and it stands; nothing was changed: edit the draft as it stands", since("your last write was")),
+                // A withdrawal's undo, typed as an undo is.
+                Act::Unwithdraw { own_ack: false, .. } => format!("{draft} changed since the merge was taken out{} — nothing was changed; an undo typed against the withdrawal can no longer land, since taking the later changes back changes the draft again: edit the draft as it stands", since("the merge was taken out")),
+                Act::Unwithdraw { withdrawal, .. } if withdrawal == as_of => format!("{draft} changed since the merge was taken out{} — nothing was changed; undo the later changes first, or edit", since("the merge was taken out")),
+                Act::Unwithdraw { withdrawal, .. } => format!("{draft} changed since your last write to it{} — the change is another hand's, made after the merge was taken out at position {withdrawal}, and it stands; nothing was changed: edit the draft as it stands", since("your last write was")),
                 Act::Withdraw | Act::Restore => format!("{draft} changed since it was read{} — nothing was changed; run this again, which reads the draft as it stands", since("read")),
             };
             Refusal::Halt(Halt::Refused(Refused {
@@ -770,6 +1015,16 @@ pub(crate) fn judge(v: &Value, draft: &Address, as_of: u64, act: Act) -> Result<
                 body: v.clone(),
             }))
         }
+        // A position the board stamped no marker at since the draft's base
+        // last moved: the withdrawal's undo read the draft unpublished and
+        // a publication of it landed before the write (skep #870).
+        "marker_not_restorable" if matches!(act, Act::Unwithdraw { .. }) => Refusal::Halt(Halt::Refused(Refused {
+            status: 200,
+            code: r.code().to_string(),
+            detail: Some(format!("{draft} was published since it was read, and a publication of the draft ends the merge it carried — nothing was changed; nothing to undo: a version stands, and the way back is to publish the older text again")),
+            op: r.op().map(str::to_string),
+            body: v.clone(),
+        })),
         "withheld" => Refusal::WindowWithheld(site.unwrap_or_else(|| draft.clone())),
         "signed_session_required" => Refusal::NeedsSignedSession,
         "doc_not_registered" => Refusal::NoSuchDocument(draft.clone()),
@@ -783,6 +1038,7 @@ pub(crate) fn judge(v: &Value, draft: &Address, as_of: u64, act: Act) -> Result<
         | "base_not_in_chain"
         | "base_extent_too_large"
         | "fork_base_moved"
+        | "marker_not_restorable"
         | "bad_run"
         | "dangling_source"
         | "too_many_runs"
@@ -832,4 +1088,66 @@ fn replace_record(
         )
     };
     writer.write_record(kind, &record, draft, stem, journal, &owed).map(Some)
+}
+
+/// Writes the record of a withdrawal's undo (skep #870; the module's doc).
+///
+/// It answers the record's link where one is written.
+/// The newest record of the kind on the draft (`Writer::newest_to`) must be
+/// a take-back — `landed` none — replacing a landing's record that names
+/// the draft as landed in, its head the `cleared` marker's and its sides,
+/// the draft's own excepted, the marker's; the record written is that
+/// landing's record again, `replaces` the take-back's link, under `stem`.
+/// `None` where the newest record is no such take-back, nothing written.
+/// It reads and writes through a writer of its own built for the step after
+/// the act's one write ([`OnEnd::PutBack`]).
+///
+/// # Errors
+///
+/// The records' reads' refusals, then the record's writes'
+/// (`Writer::write_record`).
+fn restore_record(
+    board: &Board,
+    merger: Merger<'_>,
+    kind: &Address,
+    draft: &Address,
+    cleared: &MergeMarker,
+    stem: &str,
+    journal: Option<&Address>,
+) -> Result<Option<Address>, Refusal> {
+    let writer = Writer::new(board, merger, OnEnd::PutBack);
+    let Some(newest) = writer.newest_to(kind, draft)? else { return Ok(None) };
+    let (None, Some(replaced)) = (&newest.record.landed, &newest.record.replaces) else { return Ok(None) };
+    let Some(landing) = read_record(&writer.reader, replaced)? else { return Ok(None) };
+    if !lands_the_marker(&landing.record, draft, cleared) {
+        return Ok(None);
+    }
+    let record = Record { replaces: Some(newest.link.clone()), by: record::by(), link: None, ..landing.record };
+    let owed = |why: Unwritten, cause: String| {
+        Halt::face(
+            format!("the merge is back in {draft}, and the record of the withdrawal's undo is not written: {}", why.reason()),
+            cause,
+            OnEnd::PutBack.act(),
+        )
+    };
+    writer.write_record(kind, &record, draft, stem, journal, &owed).map(Some)
+}
+
+/// Returns whether `record` is a landing in `draft` of `marker`'s merge.
+///
+/// It is landed in the draft, its head the marker's, and its sides, the
+/// draft's own excepted, the marker's sides.
+fn lands_the_marker(record: &Record, draft: &Address, marker: &MergeMarker) -> bool {
+    let landed_here = matches!(&record.landed, Some(RecordLanding::Draft { draft: d, .. }) if d == draft);
+    let head = record.head().map(|h| h.address().to_string());
+    let mut sides: Vec<String> = record
+        .sides
+        .iter()
+        .filter(|s| s.role() != Role::Head && s.address() != draft)
+        .map(|s| s.address().to_string())
+        .collect();
+    let mut marked = marker.sides.clone();
+    sides.sort();
+    marked.sort();
+    landed_here && head.as_deref() == Some(marker.head.as_str()) && sides == marked
 }

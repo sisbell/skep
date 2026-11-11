@@ -544,7 +544,7 @@ fn refused(r: Refusal, step: Step) -> Stop {
         Refusal::BaseNotInChain { .. } => "base_not_in_chain",
         Refusal::Published { .. } | Refusal::PublishedJournal { .. } => "published_target",
         Refusal::NothingToUndo { .. } => "nothing_to_undo",
-        Refusal::NoMerge { .. } => "no_merge",
+        Refusal::NoMerge { .. } | Refusal::NoWithdrawal { .. } => "no_merge",
         Refusal::NotPast { .. } => "not_past",
         Refusal::SupersedeRefused { .. } => "supersede_refused",
         Refusal::AlreadyPublished { .. } => "already_published",

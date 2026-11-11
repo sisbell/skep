@@ -791,7 +791,7 @@ impl<W: FebeWorld> OperationSurface<W> {
 #[cfg(test)]
 mod tests {
     use skep_address::{validate, Nat, Span, Tumbler};
-    use skep_arrangement::{Deposit, Run, ShotRun, VPos, VSpec};
+    use skep_arrangement::{Deposit, Run, SetMerge, ShotRun, VPos, VSpec};
     use skep_content::Val;
     use skep_kernel::Seq;
     use skep_links::SlotArg;
@@ -966,7 +966,7 @@ mod tests {
                 }],
                 head: Some(skep_arrangement::Base { member: addr(&[1, 0, 1, 0, 3, 1]), extent: Nat::from(1u32) }),
                 base: Some(skep_arrangement::Base { member: addr(&[1, 0, 1, 0, 3, 1]), extent: Nat::from(1u32) }),
-                merge: Some(vec![addr(&[1, 0, 1, 0, 4])]),
+                merge: Some(SetMerge { sides: vec![addr(&[1, 0, 1, 0, 4])], at: None }),
             },
             as_of: Seq(7),
         };

@@ -84,7 +84,7 @@ use skep_client::board::{
 use skep_client::ceremony::handshake::{handshake, Session, Site};
 use skep_client::halt::Halt;
 use skep_client::merge::{
-    compose, current, head_of, land, record_published, resume, undo, verify, withdraw, Answers, Inputs,
+    compose, current, head_of, land, record_published, resume, undo, unwithdraw, verify, withdraw, Answers, Inputs,
     Landed, Landing, Merger, NoUndo, RecordLanding, Refusal, Role, Run, RunCounts, Side, SideAt,
     SupersedeCause, Verdict,
 };
@@ -1807,6 +1807,55 @@ fn a_landed_merge_is_withdrawn_keeping_the_words_and_clearing_the_marker() {
     assert_eq!(rig.position(), standing, "nothing written");
     let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
     assert_eq!(record.link, Some(replacing), "the withdrawal's record current");
+    session.close().expect("close");
+}
+
+/// A withdrawal is taken back on the real daemon (skep #870).
+///
+/// A merge landed in the staged draft `T` and withdrawn is put back by the
+/// withdrawal's undo — `doc_metadata` serves the marker with the same sides,
+/// head and `at`, the base unmoved, `T` holding M — and the landing's record
+/// is current again, its `landed` the landing's, `replaces` the
+/// withdrawal's; a second run writes nothing; and the undo after it, typed
+/// at the withdrawal's undo, takes the landing back, the base as it stood
+/// before the merge and no marker.
+#[test]
+fn a_withdrawal_is_taken_back_and_the_undo_after_it_takes_the_landing_back() {
+    let rig = Rig::new();
+    let session = rig.session();
+    let token = session.token().clone();
+    let (d, base, head) = rig.race(&session);
+    let draft = rig.staged(&base, 12, "???");
+    let kind = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    let merger = merger(&rig, &session);
+    let inputs = Inputs { doc: d.clone(), head: head.clone(), base: None, sides: vec![Side::Draft { at: draft.clone(), position: None }], options: Default::default(), kind: kind.clone() };
+    let merged = compose(&rig.board, Some(&token), &inputs).expect("composed");
+    let staged = rig.metadata(&token, &draft);
+    let landed = land(&rig.board, &merged, Landing::Draft { merger, into: Some(draft.clone()), journal: None }).expect("landed");
+    let Landed::Draft { position: at, .. } = landed else { panic!("{landed:?}") };
+    let marker = rig.metadata(&token, &draft)["merge"].clone();
+    assert_eq!(marker["at"].as_u64(), Some(at), "the premise: the landing's marker");
+    let withdrawn = withdraw(&rig.board, merger, &draft, &kind, None).expect("withdrawn");
+    let unwithdrawn = unwithdraw(&rig.board, merger, &draft, &kind, withdrawn.position, None, None).expect("the withdrawal taken back");
+    assert!(unwithdrawn.position > withdrawn.position, "{unwithdrawn:?}");
+    let meta = rig.metadata(&token, &draft);
+    assert_eq!(meta["merge"], marker, "the marker as the landing left it: {meta}");
+    assert_eq!((meta["base"].as_str(), meta["base_copied"].as_str()), (Some(head.to_string().as_str()), Some("15")), "the base unmoved: {meta}");
+    assert_eq!(image(&rig.board, &token, &draft, 18), as_image(&m_of(&merged)), "the words: M");
+    let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
+    assert_eq!(record.landed, Some(RecordLanding::Draft { draft: draft.clone(), position: at }), "the landing's record again");
+    assert_eq!((record.replaces.clone(), record.link.clone()), (withdrawn.record.clone(), unwithdrawn.record.clone()));
+    let standing = rig.position();
+    assert_eq!(
+        unwithdraw(&rig.board, merger, &draft, &kind, withdrawn.position, None, None),
+        Err(Refusal::NothingToUndo { draft: draft.clone(), why: NoUndo::Remarked }),
+        "a second run finds the merge standing"
+    );
+    assert_eq!(rig.position(), standing, "nothing written");
+    undo(&rig.board, merger, &draft, &kind, Some(unwithdrawn.position), None).expect("the landing taken back");
+    let meta = rig.metadata(&token, &draft);
+    assert_eq!((&meta["base"], &meta["base_copied"]), (&staged["base"], &staged["base_copied"]), "the base before the merge: {meta}");
+    assert!(meta["merge"].is_null(), "no marker: {meta}");
     session.close().expect("close");
 }
 

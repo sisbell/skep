@@ -59,7 +59,7 @@ use std::str::FromStr;
 
 use serde_json::{Map, Value};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
-use skep_arrangement::{trunk_of, Base, Run, SetArrangement, Shot, ShotRun, VPos, VSpec};
+use skep_arrangement::{trunk_of, Base, Run, SetArrangement, SetMerge, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, SlotSpec};
 use skep_febe::{
@@ -1023,29 +1023,32 @@ impl Fields {
     /// Takes a `set_arrangement`'s members beside `doc` and `as_of` (wire.md
     /// §Arrangement, `set_arrangement`): the runs under the list cap in the
     /// shot's run form, the optional `head` and `base` pairs
-    /// ([`p_extent_pair`]) and the optional `merge` object, whose one member
-    /// `sides` is a list of addresses under the cap; absent and explicit
-    /// `null` read alike as absent on the three. A `merge` carried without a
-    /// `head` is refused: the marker's head is the frame's.
+    /// ([`p_extent_pair`]) and the optional `merge` object, whose member
+    /// `sides` is a list of addresses under the cap and whose optional
+    /// member `at` is the position of a marker put back (skep #870); absent
+    /// and explicit `null` read alike as absent on the three and on `at`. A
+    /// `merge` carried without a `head` is refused, the marker's head being
+    /// the frame's, and a `merge.at` without a `base`, the marker being
+    /// recorded only beside a base.
     ///
     /// # Errors
     ///
     /// A [`PErr`] where `runs` is missing or refused, where a present
-    /// `head`, `base` or `merge` is refused, or where `merge` stands without
-    /// `head`.
+    /// `head`, `base` or `merge` is refused, where `merge` stands without
+    /// `head`, or where `merge.at` stands without `base`.
     fn set_arrangement(&mut self) -> PResult<SetArrangement> {
         let runs = self.shot_runs("runs")?;
         let head = self.extent_pair_opt("head")?;
         let base = self.extent_pair_opt("base")?;
         let merge = match self.take_opt("merge") {
             None => None,
-            Some(v) => {
-                let m = p_obj(&v, &["sides"]).map_err(|e| PErr(format!("field 'merge': {e}")))?;
-                Some(field(m, "sides", |v| p_list(v, p_addr)).map_err(|e| PErr(format!("field 'merge': {e}")))?)
-            }
+            Some(v) => Some(p_set_merge(&v).map_err(|e| PErr(format!("field 'merge': {e}")))?),
         };
         if merge.is_some() && head.is_none() {
             return Err(PErr("field 'merge': carried without 'head', which is the marker's own".into()));
+        }
+        if merge.as_ref().is_some_and(|m| m.at.is_some()) && base.is_none() {
+            return Err(PErr("field 'merge': 'at' carried without 'base', beside which alone a marker is recorded".into()));
         }
         Ok(SetArrangement { runs, head, base, merge })
     }
@@ -1938,6 +1941,28 @@ fn p_tum(v: &Value) -> PResult<Tumbler> {
 fn p_addr(v: &Value) -> PResult<Address> {
     let s = v.as_str().ok_or_else(|| PErr("expected a dotted-decimal string".into()))?;
     wire_address(s).map_err(PErr)
+}
+
+/// Parses a `set_arrangement`'s `merge` object (skep #870).
+///
+/// It holds `sides` and the optional `at`.
+///
+/// `sides` is a list of addresses under the wire's cap; `at`, absent or
+/// `null` for a landing, is the position of the marker a take-back's undo
+/// puts back, a non-negative integer as every position is.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no object, carries another key, or where `sides`
+/// is missing or refused or a present `at` is no non-negative integer.
+fn p_set_merge(v: &Value) -> PResult<SetMerge> {
+    let m = p_obj(v, &["sides", "at"])?;
+    let sides = field(m, "sides", |v| p_list(v, p_addr))?;
+    let at = match m.get("at") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(Seq(p_u64(v).map_err(|e| PErr(format!("at: {e}")))?)),
+    };
+    Ok(SetMerge { sides, at })
 }
 
 /// Guards which keys a sub-object may carry.

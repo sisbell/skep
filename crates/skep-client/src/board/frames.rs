@@ -391,9 +391,13 @@ pub fn reinstate(doc: &str, at: u64, runs: &[Value], as_of: u64, id: Option<&str
 /// for `doc` (N4: a baseless document and a fork record none, and the
 /// board refuses one named for them `no_base_to_record`); `merge`, the
 /// sides the draft is to carry, `{"sides": [addresses]}`, possibly empty,
-/// recorded as the marker beside the base. Each is left out where `None`.
-/// The merge's one draft landing goes through this builder.
-pub fn set_arrangement(doc: &str, runs: &[Value], as_of: u64, head: Option<(&str, u64)>, base: Option<(&str, u64)>, merge: Option<&[&str]>, id: Option<&str>) -> Value {
+/// recorded as the marker beside the base, with `"at"` beside the sides
+/// where the second member of the pair names the position of a marker put
+/// back (skep #870; the board refuses any position that is no marker it put
+/// on the draft `marker_not_restorable`). Each is left out where `None`.
+/// The merge's one draft landing and a withdrawal's undo go through this
+/// builder.
+pub fn set_arrangement(doc: &str, runs: &[Value], as_of: u64, head: Option<(&str, u64)>, base: Option<(&str, u64)>, merge: Option<(&[&str], Option<u64>)>, id: Option<&str>) -> Value {
     let pair = |(at, extent): (&str, u64)| json!({"at": at, "extent": extent.to_string()});
     let mut frame = with_id(json!({"op": "set_arrangement", "doc": doc, "runs": runs, "as_of": as_of}), id);
     if let Some(head) = head {
@@ -402,8 +406,11 @@ pub fn set_arrangement(doc: &str, runs: &[Value], as_of: u64, head: Option<(&str
     if let Some(base) = base {
         frame["base"] = pair(base);
     }
-    if let Some(sides) = merge {
+    if let Some((sides, at)) = merge {
         frame["merge"] = json!({"sides": sides});
+        if let Some(at) = at {
+            frame["merge"]["at"] = json!(at);
+        }
     }
     frame
 }

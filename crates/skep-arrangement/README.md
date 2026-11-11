@@ -53,9 +53,14 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   carrying the request's MERGE as the marker the draft now carries
   (`DraftBase::merge`: the sides, the head at the extent read, and the
   position the marker was put on the document, stamped by the fold), or
-  clearing one. The marker travels with the base: copied by a stage of a
-  marked draft at the stage's own position, cleared by the shot that
-  moves the base, untouched by a write that leaves the base untouched. A
+  clearing one. A merge naming a position (`SetMerge::at`) puts back a
+  marker the fold stamped on the draft since its base last moved at a
+  shot (`DraftBase::stamped`) as it stood, its position kept, so a merge
+  taken out and put back stands as it did; any other position is refused
+  (`marker_not_restorable`). The marker travels with the base: copied by
+  a stage of a marked draft at the stage's own position, cleared by the
+  shot that moves the base, untouched by a write that leaves the base
+  untouched. A
   document with no recorded base gains none; a FORK whose source is not
   the request's head is refused by name (`fork_base_moved`), its
   recorded source never made false.

@@ -294,10 +294,13 @@ pub enum Op {
     /// arranged; the head the merge was composed on at the extent read,
     /// where the write is a merge's landing; the base to record, where the
     /// draft's recorded base is to move; and the merge's sides, where the
-    /// draft is to carry a marker beside that base. M5 decides everything of
-    /// them — the head and the base against the draft's chain, the fork
-    /// gate, what moves and what stands — and M10 hands them through; a
-    /// `merge` carried without a `head` is the codec's `malformed`. A
+    /// draft is to carry a marker beside that base, with the position of a
+    /// marker put back where the write is a take-back's undo (skep #870).
+    /// M5 decides everything of them — the head and the base against the
+    /// draft's chain, the fork gate, whether a position names a marker the
+    /// board stamped on the draft, what moves and what stands — and M10
+    /// hands them through; a `merge` carried without a `head`, or a
+    /// `merge.at` without a `base`, is the codec's `malformed`. A
     /// draft's write, owner-gated on `doc`, and never publish-class: no
     /// `attest` rides it, the codec refusing the member as on `stage`.
     ///

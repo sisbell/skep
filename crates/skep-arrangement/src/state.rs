@@ -143,26 +143,30 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// staging operation made ([`Vstream::stage`](crate::Vstream::stage)), the
 /// member or bare document its next publication lands after (`base`), the
 /// content count the copy took of it (`extent`), the surface the draft
-/// was copied from (`source`) and, where the draft carries a merge, the
+/// was copied from (`source`), where the draft carries a merge, the
 /// marker of it (`merge`, a [`Marker`]: the sides merged, the head the
 /// merge was composed on at the extent read, and the position the marker
-/// was put on this document) — a [`DraftBase`]. The op journals the record
+/// was put on this document), and every marker the fold stamped on the
+/// draft since its base last moved at a shot (`stamped`) — a
+/// [`DraftBase`]. The op journals the record
 /// ([`DraftBase`](M5Rec::DraftBase)) beside the snapshot that shares the
 /// source; the landing op
 /// ([`Vstream::set_arrangement`](crate::Vstream::set_arrangement)) journals
 /// the same record to move the base and set or clear the marker (the
-/// landing lane; skep #764); and the placing record of a shot that is the
+/// landing lane; skep #764), or the restore record
+/// ([`MarkerRestore`](M5Rec::MarkerRestore)) to put a stamped marker back
+/// as it stood (skep #870); and the placing record of a shot that is the
 /// draft's own publication names the draft it rendered
 /// ([`ShotPlace`](M5Rec::ShotPlace)'s `draft`,
 /// [`Shot::moves_base_of`](crate::Shot::moves_base_of)), at which the fold
 /// moves the draft's base to the member the shot minted and its extent to
-/// that member's whole count, clearing the marker — so a draft staged from
-/// version 3 that publishes version 4 publishes version 5 next, never a
-/// daughter of version 3. A shot that keeps its rendering draft's base
-/// (skep #944) names no draft there. It is what the doc-metadata read serves as
-/// `base`, `base_copied` and `merge` to every reader of the draft, and
-/// state the checkpoint must carry under the no-default rule, as the two
-/// fields before it are.
+/// that member's whole count, clearing the marker and the stamps — so a
+/// draft staged from version 3 that publishes version 4 publishes version
+/// 5 next, never a daughter of version 3. A shot that keeps its rendering
+/// draft's base (skep #944) names no draft there. It is what the
+/// doc-metadata read serves as `base`, `base_copied` and `merge` to every
+/// reader of the draft, the stamps served to none, and state the checkpoint
+/// must carry under the no-default rule, as the two fields before it are.
 ///
 /// **Class invariants**, relating the fields. The reads state what they
 /// answer; these are what makes those answers mean it.
@@ -260,7 +264,10 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   source included, since the fact is the record and not the content it
 ///   left — to the position the fold is handed for that record; and at no
 ///   other: a [`LinkSeat`](M5Rec::LinkSeat) moves no entry, so a link write
-///   homed in the draft never refuses the next edit typed before it. The
+///   homed in the draft never refuses the next edit typed before it, and
+///   neither base record ([`DraftBase`](M5Rec::DraftBase),
+///   [`MarkerRestore`](M5Rec::MarkerRestore)) moves one, the placement
+///   pushed before it having done so. The
 ///   position handed is the record's commit position, every record of a
 ///   transaction folded at the transaction's own (M2's `Staging::sealed`,
 ///   its replay at the marker's `committed_at`), so an entry equals the `at`
@@ -280,7 +287,11 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   `base`, `extent` and `source`, and its `merge` with THIS commit's
 ///   position stamped as the marker's `at` (the fold's, never a member a
 ///   record carries: the position the marker was put on this document, a
-///   landing's own or the stage's that copied it); and moves it at every
+///   landing's own or the stage's that copied it); replaces it at every
+///   [`MarkerRestore`](M5Rec::MarkerRestore) — the landing op's where the
+///   request puts a stamped marker back (skep #870) — with the record's
+///   `base`, `extent` and `source` and its marker as carried, the one
+///   marker the fold does not stamp; and moves it at every
 ///   [`ShotPlace`](M5Rec::ShotPlace) whose `draft` names it: `base` to the
 ///   member the record mints, `extent` to the count the record leaves that
 ///   member holding, `source` kept, the marker CLEARED (the shot folds the
@@ -290,17 +301,26 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   its base (skep #944). A shot naming a draft the map holds no entry for
 ///   makes one — the member it rendered as its base and its source — so a
 ///   draft whose own first publication minted its edition stands on that
-///   edition's first member. Two records move the map and no other: a
+///   edition's first member. Three records move the map and no other: a
 ///   `version`'s snapshot notes a source and no base, a placement and a
 ///   removal mint nothing and touch no entry — so the publication's
 ///   re-window of an `also` draft, and of a rendering draft whose shot
 ///   keeps its base, leaves that draft's base and marker standing — and a
-///   `fork` reaches this slice with no record. On the decode path, as
-///   SOURCE★: carried whole, re-established by no door, and a checkpoint
+///   `fork` reaches this slice with no record. **The stamps** travel with
+///   the entry: a `DraftBase` record keeps the standing entry's and appends
+///   the marker it stamps, so an entry the staging record makes holds the
+///   inherited marker alone and never its source's stamps; a
+///   `MarkerRestore` keeps them; the `ShotPlace` that makes or moves the
+///   entry empties them, the merge being the member's then. So every
+///   marker a draft's entry has carried since its base last moved at a
+///   shot is among its stamps, each at the position the fold stamped it,
+///   and a restored marker is one of them, which is what keeps every
+///   marker's `at` a position the fold stamped it at. On the decode path,
+///   as SOURCE★: carried whole, re-established by no door, and a checkpoint
 ///   written without the field fails to decode rather than answering
 ///   `None` for every staged draft, the map carrying no default — and so
-///   does a checkpoint holding an entry written before the marker, the
-///   entry carrying no default for it either.
+///   does a checkpoint holding an entry written before the marker or the
+///   stamps, the entry carrying no default for either.
 ///
 /// Two public reads mean what they say only under P4★:
 /// [`deletions`](M5State::deletions) is the deleted set rather than an
@@ -400,12 +420,15 @@ pub struct M5State {
 /// [`M5State::draft_base`]: `base` the member — or the memberless document
 /// — the draft's next publication lands after, `extent` the content count
 /// the copy took of it, `source` the surface the draft was copied from,
-/// `merge` the marker of the merge the draft carries or `None`. Journaled by
-/// the op's own record ([`M5Rec::DraftBase`]) at the staging and at each
-/// landing that records a base
-/// ([`Vstream::set_arrangement`](crate::Vstream::set_arrangement)), and
-/// moved by the shot's placing record ([`M5Rec::ShotPlace`]) at each
-/// publication of the draft itself, as [`M5State`] states.
+/// `merge` the marker of the merge the draft carries or `None`, `stamped`
+/// the markers stamped on the draft since its base last moved at a shot.
+/// Journaled by the op's own record ([`M5Rec::DraftBase`]) at the staging
+/// and at each landing that records a base
+/// ([`Vstream::set_arrangement`](crate::Vstream::set_arrangement)), by the
+/// restore record ([`M5Rec::MarkerRestore`]) at each landing that puts a
+/// stamped marker back, and moved by the shot's placing record
+/// ([`M5Rec::ShotPlace`]) at each publication of the draft itself, as
+/// [`M5State`] states.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DraftBase {
     /// The member or memberless document the draft's next publication lands
@@ -439,14 +462,31 @@ pub struct DraftBase {
     /// The merge the draft carries, or `None` (the landing lane; skep #764).
     ///
     /// It travels with the base (the owner's ruling N3): set or cleared by
-    /// the landing op's record where that record moves the base, copied by
-    /// a stage of a marked draft beside the base it inherits — its `at` the
-    /// stage's own commit, the position the marker was put on THIS document
-    /// — cleared by the shot that moves the base, and untouched by every
-    /// record that leaves the base untouched: the publication's re-window of
-    /// an `also` draft among them, and a shot keeping the rendering draft's
-    /// base. Served as `doc_metadata`'s `merge`.
+    /// the landing op's record where that record moves the base — a
+    /// landing's stamped at its own commit, or one of `stamped` put back as
+    /// it stood, its own position kept (skep #870) — copied by a stage of a
+    /// marked draft beside the base it inherits — its `at` the stage's own
+    /// commit, the position the marker was put on THIS document — cleared by
+    /// the shot that moves the base, and untouched by every record that
+    /// leaves the base untouched: the publication's re-window of an `also`
+    /// draft among them, and a shot keeping the rendering draft's base.
+    /// Served as `doc_metadata`'s `merge`.
     pub merge: Option<Marker>,
+    /// The markers the fold stamped on this draft, in stamp order.
+    ///
+    /// They are those stamped since its base last moved at a shot (skep
+    /// #870).
+    ///
+    /// Each is a marker the fold stamped here: a landing's at its own commit,
+    /// or the marker a stage of a marked draft inherited at the stage's.
+    /// They are the markers a landing may put back with their own positions
+    /// ([`SetMerge::at`](crate::SetMerge::at)), so a merge taken out of the
+    /// draft and put back stands as it stood, its `at` the landing's. A
+    /// record moving the base keeps them and appends the marker it stamps, a
+    /// restore keeps them, the shot that moves the base empties them, and a
+    /// stage copies none of its source's (BASE★ on [`M5State`]). Read by the
+    /// landing op alone, and served to no reader.
+    pub stamped: Vec<Marker>,
 }
 
 /// The merge a draft carries: the marker the landing op puts beside the base
@@ -460,10 +500,13 @@ pub struct DraftBase {
 /// composed on and `head_copied` that head's content count AS READ at the
 /// compose, which is the extent the record beside it carries; `at` the
 /// position of the commit that put the marker on this document, stamped by
-/// the fold off its own commit position and never read off a record — a
-/// landing's own, or the stage's for a marker inherited from a marked
-/// draft, so an undo that reads the document at `at − 1` reads before the
-/// landing, or before this document's mint.
+/// the fold off its own commit position — a landing's own, or the stage's
+/// for a marker inherited from a marked draft, so an undo that reads the
+/// document at `at − 1` reads before the landing, or before this document's
+/// mint. One record carries a marker whole, its `at` included: the restore
+/// ([`M5Rec::MarkerRestore`]), whose marker the landing op found among the
+/// markers the fold stamped on this document ([`DraftBase::stamped`]), so
+/// its `at` is still a position the fold stamped it at (skep #870).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Marker {
     /// The sides merged, by address; empty for the draft-side shape.
@@ -701,6 +744,21 @@ pub enum M5Rec {
     /// fold stamps the commit's own on the marker it installs.
     #[non_exhaustive]
     DraftBase { draft: Address, base: Address, extent: Nat, source: Address, merge: Option<Merge> },
+    /// The record of a stamped marker put back as it stood (skep #870).
+    ///
+    /// The landing op pushes it in place of [`DraftBase`](M5Rec::DraftBase)
+    /// where the request's merge names a position
+    /// ([`SetMerge::at`](crate::SetMerge::at)) and the draft's stamps
+    /// ([`DraftBase::stamped`]) hold the marker of those sides, that head
+    /// pair and that position — after the placement that set the draft's
+    /// arrangement, in the one commit the op makes. `draft` is the document
+    /// the record is about; `base`, `extent` and `source` are installed as
+    /// a `DraftBase` record's are, and `marker` as the merge the draft
+    /// carries as carried, its `at` the stamp's own and never this commit's:
+    /// the one record whose marker the fold does not stamp. The draft's
+    /// stamps stand (BASE★).
+    #[non_exhaustive]
+    MarkerRestore { draft: Address, base: Address, extent: Nat, source: Address, marker: Marker },
 }
 
 impl M5State {
@@ -947,8 +1005,9 @@ impl M5State {
             // own publication — now stands on the member it just made,
             // its extent that member's whole count — the spliced list's, the
             // same count the birth extent reads — its source kept and its
-            // marker CLEARED, the merge it carried folded into the member
-            // (the owner's ruling N3); a draft the map holds no entry for
+            // marker and stamps cleared, the merge it carried folded into the
+            // member (the owner's ruling N3), so no marker of it is put back
+            // past the shot (skep #870); a draft the map holds no entry for
             // gains one naming the member as its source too. A record naming
             // no draft moves nothing.
             M5Rec::ShotPlace { doc, runs, terms, draft } => {
@@ -968,6 +1027,7 @@ impl M5State {
                                 extent: content.total_width(),
                                 source,
                                 merge: None,
+                                stamped: Vec::new(),
                             },
                         )
                     }
@@ -1145,12 +1205,42 @@ impl M5State {
             // THIS commit's position stamped as the marker's `at`, the
             // position the marker was put on this document (a landing's own;
             // a stage's for the marker it inherited) — replacing any entry
-            // that stood. It touches no arrangement: the records pushed
-            // before it did that work, the snapshot that shared the source or
-            // the placement that set the draft's arrangement. No arranged-at
-            // entry moves for it, the fact being no change to any content
-            // arrangement (MOVED★).
-            M5Rec::DraftBase { draft, base, extent, source, merge } => M5State {
+            // that stood, its stamps kept and the marker stamped here
+            // appended to them (skep #870). It touches no arrangement: the
+            // records pushed before it did that work, the snapshot that
+            // shared the source or the placement that set the draft's
+            // arrangement. No arranged-at entry moves for it, the fact being
+            // no change to any content arrangement (MOVED★).
+            M5Rec::DraftBase { draft, base, extent, source, merge } => {
+                let marker = merge.as_ref().map(|m| m.stamped(at));
+                let mut stamped = self.stamped_on(draft);
+                stamped.extend(marker.clone());
+                M5State {
+                    arrangements: self.arrangements.clone(),
+                    provenance: self.provenance.clone(),
+                    birth_extents: self.birth_extents.clone(),
+                    shot_terms: self.shot_terms.clone(),
+                    fork_sources: self.fork_sources.clone(),
+                    arranged_at: self.arranged_at.clone(),
+                    draft_bases: self.draft_bases.update(
+                        draft.clone(),
+                        DraftBase {
+                            base: base.clone(),
+                            extent: extent.clone(),
+                            source: source.clone(),
+                            merge: marker,
+                            stamped,
+                        },
+                    ),
+                }
+            }
+            // The restore record (BASE★; skep #870): the draft's entry
+            // installed as the record carries it, its marker as carried —
+            // the stamp the landing op found among the draft's — and the
+            // standing entry's stamps kept, the marker being one of them. No
+            // arrangement and no arranged-at entry moves for it, as for the
+            // base record above.
+            M5Rec::MarkerRestore { draft, base, extent, source, marker } => M5State {
                 arrangements: self.arrangements.clone(),
                 provenance: self.provenance.clone(),
                 birth_extents: self.birth_extents.clone(),
@@ -1163,11 +1253,20 @@ impl M5State {
                         base: base.clone(),
                         extent: extent.clone(),
                         source: source.clone(),
-                        merge: merge.as_ref().map(|m| m.stamped(at)),
+                        merge: Some(marker.clone()),
+                        stamped: self.stamped_on(draft),
                     },
                 ),
             },
         }
+    }
+
+    /// Returns the markers stamped on `draft`'s standing entry.
+    ///
+    /// They are its [`DraftBase::stamped`], cloned for the entry a base
+    /// record installs; empty where the map holds no entry for `draft`.
+    fn stamped_on(&self, draft: &Address) -> Vec<Marker> {
+        self.draft_bases.get(draft).map(|b| b.stamped.clone()).unwrap_or_default()
     }
 
     /// Returns `self`: the identity, M5 having no skip-serialized hints (§10).

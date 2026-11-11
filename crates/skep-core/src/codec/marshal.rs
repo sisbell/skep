@@ -289,9 +289,10 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             op_name(OpKind::Rearrange),
             vec![("doc", j_addr(doc)), ("cuts", j_vposes(cuts)), ("as_of", j_seq(*as_of))],
         ),
-        // Canonical: the head pair, the base pair and the merge ride only
-        // where present, so a frame without them marshals to no member and
-        // `parse ∘ marshal` is a fixpoint; the typed state always rides.
+        // Canonical: the head pair, the base pair, the merge and its
+        // position ride only where present, so a frame without them
+        // marshals to no member and `parse ∘ marshal` is a fixpoint; the
+        // typed state always rides.
         Op::SetArrangement { doc, arrangement, as_of } => {
             let mut pairs = vec![
                 ("doc", j_addr(doc)),
@@ -304,8 +305,12 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             if let Some(base) = &arrangement.base {
                 pairs.push(("base", j_extent_pair(base)));
             }
-            if let Some(sides) = &arrangement.merge {
-                pairs.push(("merge", obj(vec![("sides", j_addrs(sides))])));
+            if let Some(merge) = &arrangement.merge {
+                let mut members = vec![("sides", j_addrs(&merge.sides))];
+                if let Some(at) = merge.at {
+                    members.push(("at", j_seq(at)));
+                }
+                pairs.push(("merge", obj(members)));
             }
             (op_name(OpKind::SetArrangement), pairs)
         }
@@ -1592,10 +1597,11 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::BaseNotInChain => "base_not_in_chain",
         RejectCode::BaseSuperseded => "base_superseded",
         RejectCode::BaseExtentTooLarge => "base_extent_too_large",
-        // The landing's two (the landing lane; skep #764), tabled with the
-        // version-chain family in §Rejection codes.
+        // The landing's three (the landing lane; skep #764, #870), tabled
+        // with the version-chain family in §Rejection codes.
         RejectCode::ForkBaseMoved => "fork_base_moved",
         RejectCode::NoBaseToRecord => "no_base_to_record",
+        RejectCode::MarkerNotRestorable => "marker_not_restorable",
         // The publication's twin fence and its re-window's check (the
         // link-sets design §5.7), tabled with the shot's codes in §The publish
         // shot and head-float.

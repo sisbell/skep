@@ -593,6 +593,21 @@ pub enum Refusal {
         /// The draft named.
         draft: Address,
     },
+    /// The position a withdrawal's undo named is no withdrawal (skep #870).
+    ///
+    /// It names no withdrawal of a merge from the draft named, and nothing
+    /// was sent.
+    /// A withdrawal is a `set_arrangement` of the draft naming a base and no
+    /// merge, before which the draft carried a marker and across which its
+    /// base and its words did not move; a position naming any other write,
+    /// a position inside a commit or past the board's head, or one before
+    /// the draft existed, names none.
+    NoWithdrawal {
+        /// The draft named.
+        draft: Address,
+        /// The position named.
+        at: u64,
+    },
     /// A restore named a position at or past the draft's current one: no
     /// past state lies there, and nothing is read at a position (the
     /// `history` module; B3-S7).
@@ -712,6 +727,17 @@ pub enum NoUndo {
     /// names no merge and left the draft as the undo's write would, mapped
     /// as it is (P4).
     TakenBack,
+    /// A withdrawal's undo found a merge in the draft since (skep #870).
+    ///
+    /// It found the draft carrying a merge again, or one landed in it since
+    /// the withdrawal.
+    /// The draft carries a marker — the one the withdrawal cleared, put
+    /// back already by this undo, or a merge landed since — or its base
+    /// moved with no publication since the withdrawal, a merge having
+    /// landed and been taken out again; the undo takes back the newest step
+    /// alone, so the merge standing, or the draft as it stands, is the one
+    /// to undo or edit.
+    Remarked,
 }
 
 impl From<Halt> for Refusal {
@@ -779,10 +805,12 @@ impl fmt::Display for Refusal {
             Refusal::PublishedJournal { journal } => write!(f, "{journal} is published, and a merge record is kept only in a private document — nothing was written"),
             Refusal::NothingToUndo { draft, why } => match why {
                 NoUndo::Inherited => write!(f, "nothing to undo: {draft} inherited the merge when it was staged; discard it or edit it"),
-                NoUndo::Published { version } => write!(f, "nothing to undo; the merge is version {version} — to take it back, publish the older text again"),
+                NoUndo::Published { version } => write!(f, "nothing to undo: {draft} was published as version {version} since, and a version stands — the way back is to publish the older text again"),
                 NoUndo::TakenBack => write!(f, "nothing to undo: the merge in {draft} was already taken back"),
+                NoUndo::Remarked => write!(f, "nothing to undo: {draft} carries a merge again, or a merge landed in it since the merge was taken out — undo that merge, or edit the draft as it stands"),
             },
             Refusal::NoMerge { draft } => write!(f, "{draft} carries no merge: nothing to undo, nothing to take out"),
+            Refusal::NoWithdrawal { draft, at } => write!(f, "position {at} names no withdrawal of a merge from {draft}: nothing to undo, and nothing was sent"),
             Refusal::NotPast { draft, at, current } => write!(f, "position {at} is not before the state {draft} stands at (position {current}): a restore names a position before the draft's current one, and nothing was read or sent"),
             Refusal::SupersedeRefused { index, cause } => match cause {
                 SupersedeCause::HeadMoved { head: Some(head) } => write!(f, "the head moved under the merge: the trunk's head is now {head}, so the shot would have landed as a daughter, and a shot claiming a daughter superseded is refused whole (supersede_refused, head_moved) — nothing was published; compose the merge again on {head}"),
@@ -1321,6 +1349,11 @@ pub(crate) enum OnEnd {
     /// A take-back's record, its one write standing: nothing more is
     /// written, a re-run finding no merge to take out and writing none.
     TakenOut,
+    /// A withdrawal's undo's record, its one write standing.
+    ///
+    /// Nothing more is written, a re-run finding the merge put back and
+    /// writing none.
+    PutBack,
 }
 
 impl OnEnd {
@@ -1331,6 +1364,9 @@ impl OnEnd {
             OnEnd::TakenOut => format!(
                 "the merge is out of the draft, and its record is not written: the session ended while {during}"
             ),
+            OnEnd::PutBack => format!(
+                "the merge is back in the draft, and its record is not written: the session ended while {during}"
+            ),
         }
     }
 
@@ -1340,6 +1376,7 @@ impl OnEnd {
             OnEnd::Rerun => "open a session again and run this again: it reads what stands before it writes",
             OnEnd::Resume => "open a session again and resume: every step of the landing resumes by reading",
             OnEnd::TakenOut => "nothing more is written: the draft stands as the act left it, and a re-run writes no record, finding no merge to take out; the landing's record stands alone in the journal",
+            OnEnd::PutBack => "nothing more is written: the draft stands as the act left it, and a re-run writes no record, finding the merge put back; the withdrawal's record stands alone in the journal",
         }
     }
 }

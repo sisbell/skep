@@ -11,8 +11,11 @@
 //! acked at any extent, and the runs naming that draft `withheld`; the
 //! head's three refusals and the base's; `doc_metadata` and `image` on
 //! `/op-at` at `at − 1` answering the pre-landing state; `write_at_history`
-//! on `/op-at`; the feed row and its two terms; the wire's example frame
-//! answered as the op. The door's consult is `source_gate.rs`'s pattern;
+//! on `/op-at`; the feed row and its two terms; a merge taken out and put
+//! back naming its landing's position (`merge.at`), a position naming no
+//! marker refused `marker_not_restorable` and one beside no `base`
+//! `malformed`; the wire's example frame answered as the op. The door's
+//! consult is `source_gate.rs`'s pattern;
 //! the marker's inheritance and the shot's clear are `stage.rs`'s.
 //!
 //! Every suite runs post-claim on a CLAIMED-PERMISSIVE board (`spawn`).
@@ -146,6 +149,53 @@ fn a_landing_sets_the_arrangement_records_the_base_and_the_marker_in_one_commit(
     assert_eq!(st, 400, "{body}");
     assert_eq!(body["error"].as_str(), Some("write_at_history"));
     assert_eq!(head_position(port), at);
+    sd.shutdown();
+}
+
+/// A merge taken out is put back with its landing's position (skep #870).
+///
+/// A landing, the merge taken out — the base re-sent, no merge — and the
+/// merge put back naming the landing's own
+/// position: `doc_metadata` serves the marker as the landing left it, its
+/// `at` the landing's, and the write's row carries the position put back in
+/// its `merge`; the withdrawal's position names no marker the board put on
+/// the draft and is refused `marker_not_restorable`, permanent, nothing
+/// written; and a position beside no `base` is `malformed` at the parse.
+#[test]
+fn a_merge_taken_out_is_put_back_with_its_landings_own_position() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let (edition, v1, draft) = family(port, &signed, &owner);
+    let side = format!("{v1}.1");
+    let runs = runs_of(port, &owner, &edition, 2, 2);
+    let landing = set_arrangement_frame(&draft, &borrowed(&runs), Some((&v1, 3)), Some((&v1, 3)), Some(&[&side]), None);
+    let landed = acked_at(&op(port, Some(&owner), &landing));
+    let marker = serde_json::json!({"at": landed, "head": v1, "head_copied": "3", "sides": [side]});
+    let withdrawn = acked_at(&op(port, Some(&owner), &set_arrangement_frame(&draft, &borrowed(&runs), None, Some((&v1, 3)), None, None)));
+    assert!(standing(port, &owner, &draft).2.is_null(), "the premise: the marker cleared");
+    let put_back = |at: u64| {
+        let mut frame: Value = serde_json::from_str(&landing).expect("the landing's frame");
+        frame["merge"]["at"] = serde_json::json!(at);
+        frame.to_string()
+    };
+    let before = head_position(port);
+    assert_permanent(&op(port, Some(&owner), &put_back(withdrawn)), "marker_not_restorable");
+    assert_eq!(head_position(port), before, "nothing committed");
+    let mut baseless: Value = serde_json::from_str(&put_back(landed)).expect("a frame");
+    baseless.as_object_mut().expect("an object").remove("base");
+    let rej = op(port, Some(&owner), &baseless.to_string());
+    assert_eq!(expect_resp(&rej, "rejected")["code"].as_str(), Some("malformed"), "{rej}");
+    assert_eq!(head_position(port), before, "nothing committed");
+    let restored = acked_at(&op(port, Some(&owner), &put_back(landed)));
+    assert_eq!(standing(port, &owner, &draft), (some(&v1), some("3"), marker), "the marker as the landing left it, its `at` the landing's");
+    assert_eq!(text_of(port, Some(&owner), &draft, 1, 2), "bc", "the words as sent");
+    let rows = changes_since(port, &owner, before);
+    let row = rows.iter().find(|r| r["at"].as_u64() == Some(restored)).expect("the write's row");
+    assert_eq!(row["merge"], serde_json::json!({"at": landed, "head": v1, "sides": [side]}), "the row names the position put back: {row}");
+    assert_eq!(row["base"].as_str(), Some(v1.as_str()), "{row}");
     sd.shutdown();
 }
 

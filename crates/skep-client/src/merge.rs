@@ -48,10 +48,13 @@
 //! records, typed against the landing's position or the caller's own last
 //! acknowledgment past it; the withdrawal taking the merge out and keeping
 //! the words, the base re-sent unmoved — with a replacing record of the
-//! kind (the `undo` module's doc); [`verify`], the record's testimony
+//! kind (the `undo` module's doc); [`unwithdraw`], a withdrawal's undo,
+//! one `set_arrangement` putting the marker the withdrawal cleared back as
+//! it stood, its position the landing's (skep #870); [`verify`], the
+//! record's testimony
 //! recomputed; the record kind and the journal under [`record`] and
 //! [`journal`]; and [`Refusal`], every refusal the reads, the landing, the
-//! undo and the withdrawal can meet. Absent, by name:
+//! undo, the withdrawal and its undo can meet. Absent, by name:
 //! every surface — the `skep merge` command, which skep-cli builds over
 //! this module, the attendant's call, skep-mcp's compose-and-report tool,
 //! the editor's scene and its copy.
@@ -114,4 +117,4 @@ pub use reads::{
 };
 pub use crate::publication::SupersedeCause;
 pub use record::{current, verify, PartAnswer, Record, RecordKey, RecordLanding, RecordedAnswer, SideAt, Verdict};
-pub use undo::{undo, withdraw, Undone, Withdrawn};
+pub use undo::{undo, unwithdraw, withdraw, Undone, Unwithdrawn, Withdrawn};

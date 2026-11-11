@@ -933,7 +933,7 @@ fn a_shot_judges_every_address_it_names_as_the_document_it_projects_to() {
     // gains its record at this, its own publication (BASE★).
     assert_eq!(
         m5.draft_base(&doc1()),
-        Some(&DraftBase { base: member.clone(), extent: m5.content_count(&member), source: member.clone(), merge: None }),
+        Some(&DraftBase { base: member.clone(), extent: m5.content_count(&member), source: member.clone(), merge: None, stamped: vec![] }),
         "the base is the document's"
     );
     assert_eq!(m5.draft_base(&a(&[1, 0, 1, 0, 1, 1])), None, "no record under the address as spelled");

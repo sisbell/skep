@@ -426,6 +426,20 @@ pub enum RejectCode {
     /// Permanent by the catch-all: no reissue of the same frame records a
     /// base. Nothing is committed.
     NoBaseToRecord,
+    /// A `set_arrangement` merge naming an unstamped position (skep #870).
+    ///
+    /// The board stamped no such marker on the document at it (the landing
+    /// lane).
+    /// A merge naming `at` puts back a marker the board stamped on the
+    /// draft since its base last moved at a publication of it — the same
+    /// sides, the frame's head pair and that position — as it stood. Any
+    /// other position, or one carried beside no `head` or no `base`, would
+    /// make the marker's `at` a position where nothing landed, so it is
+    /// refused. Permanent by the catch-all: a stamp is made by a landing or
+    /// a stage alone, and a publication of the draft ends them, so no
+    /// reissue of the same frame lands; the act that exists is the merge
+    /// landed anew, `at` absent. Nothing is committed.
+    MarkerNotRestorable,
     /// A draft-native run of the shot is already published (the link-sets
     /// design §5.7's twin fence).
     ///

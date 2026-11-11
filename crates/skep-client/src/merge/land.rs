@@ -255,7 +255,7 @@ use super::reads::{
     runs_of, session_ended, values_for, version_components, Family, Merged, OnEnd, Reader, Refusal,
     Role, Side,
 };
-use super::record::{newest, read_record, records_of, PartAnswer, Record, RecordLanding};
+use super::record::{newest, read_record, records_of, Found, PartAnswer, Record, RecordLanding};
 use super::windows::{self, Answers, ShotParts, WindowPart};
 
 /// The most bytes a shot's signed body may run to.
@@ -1647,6 +1647,30 @@ impl Writer<'_> {
         Ok(newest(landed_here).map(|found| found.record))
     }
 
+    /// Returns the newest merge record of `kind` linked to `draft`.
+    ///
+    /// It is found as [`Writer::landed_record`] finds the landing's — the
+    /// links of the kind to the draft, the newest by the order they were
+    /// minted — whatever its `landed` names: a landing's record, or a
+    /// take-back's, which names none (skep #870).
+    ///
+    /// # Errors
+    ///
+    /// The find's and the records' reads' refusals, through `reader`.
+    pub(super) fn newest_to(&self, kind: &Address, draft: &Address) -> Result<Option<Found>, Refusal> {
+        let v = self.reader.answered(
+            draft,
+            &frames::find_links_ftt(&kind.to_string(), &draft.to_string()),
+            None,
+        )?;
+        let mut found = Vec::new();
+        for link in answers::addrs(&v) {
+            let Some(link) = parse_address(link) else { continue };
+            found.extend(read_record(&self.reader, &link)?);
+        }
+        Ok(newest(found))
+    }
+
     /// Stages a fresh draft from the head, answering it and its position.
     ///
     /// It is `stage {from: the head the merge composed on}` (R3) under the
@@ -1797,7 +1821,7 @@ impl Writer<'_> {
             as_of,
             pair,
             base,
-            Some(&side_refs),
+            Some((&side_refs, None)),
             Some(&id),
         );
         let v = self.answered_write(&frame, "landing the merge in the draft")?;

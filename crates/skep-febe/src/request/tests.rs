@@ -1,6 +1,6 @@
 use super::*;
 use skep_address::{validate, Nat, Span, Tumbler};
-use skep_arrangement::{Base, Run};
+use skep_arrangement::{Base, Run, SetMerge};
 use skep_discovery::SlotSpec;
 
 fn tum(comps: &[u32]) -> Tumbler {
@@ -80,7 +80,7 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
                     runs: vec![run_of(&addr(&[1, 0, 1, 0, 2]), &[1, 0, 1, 0, 2, 0, 1, 1])],
                     head: Some(Base { member: addr(&[1, 0, 1, 0, 2, 1]), extent: Nat::from(1u32) }),
                     base: Some(Base { member: addr(&[1, 0, 1, 0, 2, 1]), extent: Nat::from(1u32) }),
-                    merge: Some(vec![addr(&[1, 0, 1, 0, 2, 1, 1])]),
+                    merge: Some(SetMerge { sides: vec![addr(&[1, 0, 1, 0, 2, 1, 1])], at: None }),
                 },
                 as_of: Seq(7),
             },
@@ -453,7 +453,7 @@ fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
             ],
             head: Some(Base { member: addr(&[1, 0, 1, 0, 9, 1]), extent: Nat::from(1u32) }),
             base: Some(Base { member: addr(&[1, 0, 1, 0, 9, 1]), extent: Nat::from(1u32) }),
-            merge: Some(vec![addr(&[1, 0, 1, 0, 8]), addr(&[1, 0, 1, 0, 7])]),
+            merge: Some(SetMerge { sides: vec![addr(&[1, 0, 1, 0, 8]), addr(&[1, 0, 1, 0, 7])], at: None }),
         },
         as_of: Seq(7),
     };

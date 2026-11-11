@@ -1589,3 +1589,55 @@ fn a_line_at_the_bound_replays_whole_and_one_past_it_is_damage() {
         "said as a damaged line's cut, the whole line after it counted"
     );
 }
+
+/// A `set_arrangement` line's merge term carries a restored position.
+///
+/// Skep #870: a landing's renders its sides and head alone, as every line
+/// written before the position was
+/// recorded does, and a merge put back renders the position it restored
+/// beside them; both replay as written, and a position of another shape is
+/// torn.
+#[test]
+fn a_set_arrangement_lines_merge_carries_a_restored_position_and_a_landings_none() {
+    let line = |time: u64, at: Option<u64>| CommitMeta::Recorded {
+        op: "set_arrangement".into(),
+        docs: vec!["1.0.1.0.5".into()],
+        time,
+        key: Some("bare".into()),
+        signed: None,
+        terms: Some(OpTerms::SetArrangement {
+            base: Some("1.0.1.0.1.2".into()),
+            merge: Some(MergeTerms { sides: vec!["1.0.1.0.1.1.1".into()], head: "1.0.1.0.1.2".into(), at }),
+        }),
+    };
+    let (landing, put_back) = (line(1_700_000_000_005, None), line(1_700_000_000_006, Some(5)));
+    assert_eq!(
+        String::from_utf8(entry_line(8, &landing)).expect("utf-8"),
+        "{\"at\":8,\"base\":\"1.0.1.0.1.2\",\"docs\":[\"1.0.1.0.5\"],\"key\":\"bare\",\"merge\":{\"head\":\"1.0.1.0.1.2\",\"sides\":[\"1.0.1.0.1.1.1\"]},\"op\":\"set_arrangement\",\"time\":1700000000005}\n",
+        "a landing's term names no position"
+    );
+    assert_eq!(
+        String::from_utf8(entry_line(9, &put_back)).expect("utf-8"),
+        "{\"at\":9,\"base\":\"1.0.1.0.1.2\",\"docs\":[\"1.0.1.0.5\"],\"key\":\"bare\",\"merge\":{\"at\":5,\"head\":\"1.0.1.0.1.2\",\"sides\":[\"1.0.1.0.1.1.1\"]},\"op\":\"set_arrangement\",\"time\":1700000000006}\n",
+        "the merge put back names the position it restored"
+    );
+    let mut file = entry_line(8, &landing);
+    file.extend_from_slice(&entry_line(9, &put_back));
+    let (records, valid_end) = parse_records(&file);
+    assert_eq!(valid_end, file.len(), "every whole line is trusted");
+    let terms = |i: usize| match &records[i] {
+        (_, Record::Entry(_, CommitMeta::Recorded { terms, .. })) => terms.clone(),
+        other => panic!("a recorded entry: {other:?}"),
+    };
+    assert_eq!((terms(0), terms(1)), (landing_terms(&landing), landing_terms(&put_back)), "each replays as written");
+    let torn = br#"{"at":9,"base":"1.0.1.0.1.2","docs":["1.0.1.0.5"],"key":"bare","merge":{"at":"5","head":"1.0.1.0.1.2","sides":[]},"op":"set_arrangement","time":1}"#;
+    assert!(parse_line(torn).is_none(), "a position of another shape is torn");
+}
+
+/// Returns a recorded entry's terms.
+fn landing_terms(meta: &CommitMeta) -> Option<OpTerms> {
+    match meta {
+        CommitMeta::Recorded { terms, .. } => terms.clone(),
+        CommitMeta::Bare { .. } => None,
+    }
+}

@@ -127,8 +127,16 @@
 //! `arrangement_moved`, nothing wiped — while the session that landed it
 //! stands; **`merge.withdraw`** — `{draft}` —
 //! takes the merge out of any marked draft and keeps its words, in any
-//! session, by the library's `withdraw`. Each replaces the landing's
-//! record where one stands.
+//! session, by the library's `withdraw`, the standing composition taken
+//! aside; **`merge.undo`** with `{draft, withdrawal}` takes that withdrawal
+//! back by the library's `unwithdraw`, typed as the undo is, the marker put
+//! back as it stood and the composition taken aside standing again, so the
+//! next `merge.undo` takes the landing back (skep #870). Each replaces the
+//! landing's record where one stands, the withdrawal's undo writing the
+//! landing's again. Every one of the family's whole-draft writes — a draft
+//! landing, an undo, a withdrawal and its undo — is noted as the principal's
+//! latest arrangement write on the draft (`Holds::note_arranged`), the
+//! editor's own last ack the next undo is typed against.
 //!
 //! **The compositions** ([`Merges`]): one per (board, principal), the
 //! latest composed standing — a second compose replaces it, there being no
@@ -244,10 +252,21 @@ struct Composition {
     into: Address,
 }
 
+/// The key of a composition a withdrawal took aside.
+///
+/// It is the family's key — board reference and principal — with the
+/// draft and the withdrawal's position.
+type SetAside = ((String, u64), String, u64);
+
 /// The compositions the shell holds, by (board reference, principal).
+///
+/// `withdrawn` holds the standing composition a withdrawal took aside, by
+/// the same key with the draft and the withdrawal's position, until that
+/// withdrawal's undo stands it again (skep #870).
 #[derive(Debug, Default)]
 pub(super) struct Merges {
     standing: Mutex<BTreeMap<(String, u64), Composition>>,
+    withdrawn: Mutex<BTreeMap<SetAside, Composition>>,
 }
 
 impl Merges {
@@ -263,10 +282,23 @@ impl Merges {
         self.standing.lock().expect("the compositions' lock").remove(key)
     }
 
-    /// Drops every composition that stood under `session_reference`: the
-    /// session died with it standing (the family's one session rule).
+    /// Takes `composition` aside at the withdrawal at `position` of `draft`.
+    fn set_aside(&self, key: (String, u64), draft: &Address, position: u64, composition: Composition) {
+        self.withdrawn.lock().expect("the compositions' lock").insert((key, draft.to_string(), position), composition);
+    }
+
+    /// Takes back the composition set aside at the withdrawal at `position`.
+    fn put_back(&self, key: &(String, u64), draft: &Address, position: u64) -> Option<Composition> {
+        self.withdrawn.lock().expect("the compositions' lock").remove(&(key.clone(), draft.to_string(), position))
+    }
+
+    /// Drops every composition that stood under `session_reference`.
+    ///
+    /// Set aside or not, the session died with it (the family's one session
+    /// rule).
     pub(super) fn ended(&self, session_reference: &str) {
         self.standing.lock().expect("the compositions' lock").retain(|_, c| c.session != session_reference);
+        self.withdrawn.lock().expect("the compositions' lock").retain(|_, c| c.session != session_reference);
     }
 }
 
@@ -496,10 +528,12 @@ impl Shell {
                         detail["version"] = json!(s(&version));
                     }
                     NoUndo::TakenBack => detail["why"] = json!("taken_back"),
+                    NoUndo::Remarked => detail["why"] = json!("remarked"),
                 }
                 Refusal::shell(Name::NOTHING_TO_UNDO, detail)
             }
             R::NoMerge { draft } => Refusal::shell(Name::NO_MERGE, json!({"draft": s(&draft)})),
+            R::NoWithdrawal { draft, at } => Refusal::shell(Name::NO_MERGE, json!({"draft": s(&draft), "withdrawal": at})),
             R::NotPast { draft, at, current } => other("not_past", json!({"draft": s(&draft), "at": at, "current": current})),
             R::TooFragmented { doc, runs_seen } => other("too_fragmented", json!({"doc": s(&doc), "runs_seen": runs_seen})),
             R::HistoryBusy => other("history_busy", json!({})),
@@ -703,6 +737,7 @@ impl Shell {
         let lib::Landed::Draft { into: landed_in, position, record, head_moved, staged } = landed else {
             return Err(Refusal::from(Halt::face("the draft landing answered no draft", "`skep_client::merge::land` with a draft landing answers `Landed::Draft` on every path", "report it: the shell's merge row is behind the library")));
         };
+        self.holds.note_arranged(&session, &landed_in.to_string(), position);
         let composition = Composition { session: session.reference.clone(), form, merged, into: landed_in.clone() };
         let answer = report_json(&composition.merged, &composition.form, "landed", json!({"into": landed_in.to_string(), "position": position, "fresh": staged, "head_moved": head_moved.map(|h| h.to_string()), "record_link": record.to_string()}));
         self.merges.stand(key, composition);
@@ -922,13 +957,17 @@ impl Shell {
     ///
     /// The undo is typed against the principal's latest arrangement write on
     /// the draft the hold noted, or the landing's position where that is
-    /// later, the library taking the later of the two.
+    /// later, the library taking the later of the two. With `{draft,
+    /// withdrawal}` it is the withdrawal's undo instead
+    /// ([`Shell::merge_unwithdraw`]).
     ///
     /// # Errors
     ///
     /// In this order: `malformed_args` naming `session`, then
-    /// `session_ended`; `no_merge` naming the session where no composition
-    /// stands; the write door's, in its order — `write_in_bare_session`,
+    /// `session_ended`; the withdrawal's undo's where `draft` or
+    /// `withdrawal` is named; `no_merge` naming the session where no
+    /// composition stands; the write door's, in its order —
+    /// `write_in_bare_session`,
     /// `another_window`, `stopped`, `poisoned` or `halted` naming
     /// `set_arrangement`, `held_lines` naming the draft the composition
     /// landed in and the lines of the principal's standing on it — nothing
@@ -941,6 +980,9 @@ impl Shell {
     /// `arrangement_moved` verbatim, a halt's face, and `session_died`.
     pub(super) fn merge_undo(&self, args: &Value) -> Result<Value, Refusal> {
         let session = self.session(&args["session"])?;
+        if !args["draft"].is_null() || !args["withdrawal"].is_null() {
+            return self.merge_unwithdraw(&session, args);
+        }
         let key = Self::family_key(&session);
         let Some(composition) = self.merges.standing(&key) else {
             return Err(Refusal::shell(Name::NO_MERGE, json!({"session": session.reference})));
@@ -952,6 +994,7 @@ impl Shell {
         // THE EDITOR's OWN LAST ACK on the draft (P3).
         let own_ack = self.holds.last_arranged(&session, &composition.into.to_string());
         let undone = lib::undo(&session.board, merger, &composition.into, &kind, own_ack, None).map_err(|r| self.merge_refusal(&session, r))?;
+        self.holds.note_arranged(&session, &undone.draft.to_string(), undone.position);
         self.merges.take(&key);
         Ok(json!({
             "draft": undone.draft.to_string(),
@@ -984,10 +1027,64 @@ impl Shell {
         let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
         let kind = merge_kind(&signed.account).ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
         let withdrawn = lib::withdraw(&session.board, merger, &draft, &kind, None).map_err(|r| self.merge_refusal(&session, r))?;
+        self.holds.note_arranged(&session, &draft.to_string(), withdrawn.position);
+        // The standing composition goes aside, for the withdrawal's undo to
+        // stand again (skep #870).
         if self.merges.standing(&key).is_some_and(|c| c.into == draft) {
-            self.merges.take(&key);
+            if let Some(composition) = self.merges.take(&key) {
+                self.merges.set_aside(key, &draft, withdrawn.position, composition);
+            }
         }
         Ok(json!({"draft": withdrawn.draft.to_string(), "position": withdrawn.position, "record": withdrawn.record.map(|r| r.to_string())}))
+    }
+
+    /// Answers `merge.undo(session, {draft, withdrawal})`, a withdrawal's undo.
+    ///
+    /// The answer is `{draft, position, record, restored}`, `restored` null
+    /// (skep #870; the module doc; `shapes`' `Undone`).
+    ///
+    /// `withdrawal` is the `position` a `merge.withdraw` answered. The undo
+    /// is the library's `unwithdraw`, typed against the principal's latest
+    /// arrangement write on the draft the hold noted, or the withdrawal's
+    /// position where that is later; the composition the withdrawal took
+    /// aside in this session stands again, so the next `merge.undo(session)`
+    /// takes the landing back.
+    ///
+    /// # Errors
+    ///
+    /// In this order: `malformed_args` naming `draft`, then `withdrawal`;
+    /// the write door's, in its order — `write_in_bare_session`,
+    /// `another_window`, `stopped`, `poisoned` or `halted` naming
+    /// `set_arrangement`, `held_lines` naming `draft` and the lines of the
+    /// principal's standing on it — nothing read at any;
+    /// `store_unreadable`, `no_account`; the library's
+    /// (`skep_client::merge::unwithdraw`): `unreadable`,
+    /// `no_such_document`, `not_owner`, `merge_refused` with
+    /// `history_reclaimed`, `no_merge` naming the draft and the withdrawal
+    /// where the position names no withdrawal of it, `nothing_to_undo` with
+    /// `remarked` or `published`, `over_cap`, the board's
+    /// `arrangement_moved` verbatim, a halt's face, and `session_died`.
+    pub(super) fn merge_unwithdraw(&self, session: &SessionEntry, args: &Value) -> Result<Value, Refusal> {
+        let draft = address_arg(&args["draft"]).ok_or_else(|| Refusal::malformed("draft"))?;
+        let withdrawal = args["withdrawal"].as_u64().ok_or_else(|| Refusal::malformed("withdrawal"))?;
+        let key = Self::family_key(session);
+        // The one write door, over the draft the undo sets whole.
+        let signed = self.signed(session, Write::call("merge.undo", "set_arrangement").over([draft.to_string()]))?;
+        let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
+        let kind = merge_kind(&signed.account).ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
+        // THE EDITOR's OWN LAST ACK on the draft (P3).
+        let own_ack = self.holds.last_arranged(session, &draft.to_string());
+        let undone = lib::unwithdraw(&session.board, merger, &draft, &kind, withdrawal, own_ack, None).map_err(|r| self.merge_refusal(session, r))?;
+        self.holds.note_arranged(session, &draft.to_string(), undone.position);
+        if let Some(composition) = self.merges.put_back(&key, &draft, withdrawal) {
+            self.merges.stand(key, composition);
+        }
+        Ok(json!({
+            "draft": undone.draft.to_string(),
+            "position": undone.position,
+            "record": undone.record.map(|r| r.to_string()),
+            "restored": Value::Null,
+        }))
     }
 }
 

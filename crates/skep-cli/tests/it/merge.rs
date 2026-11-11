@@ -510,10 +510,14 @@ fn the_usage_forms_are_refused_before_any_socket() {
     refused(&["--withdraw", draft], "--kind <address> (or SKEP_MERGE_KIND) is required");
     refused(&["--undo", "not-an-address", "--kind", kind], "--undo: 'not-an-address' is not an address");
     refused(&["--withdraw", "not-an-address", "--kind", kind], "--withdraw: 'not-an-address' is not an address");
+    // A withdrawal's undo (skep #870): `--withdrawal` inside `--undo`, a
+    // position.
+    refused(&["--withdraw", draft, "--withdrawal", "7", "--kind", kind], "`--withdrawal` belongs to `merge --undo` and is refused without `--undo`");
+    refused(&["--undo", draft, "--withdrawal", "seven", "--kind", kind], "--withdrawal takes a position, the `position` a withdrawal answered, not `seven`");
     // Every whole form reaches the dead board — `--draft` with and without
     // `--base`, the base being the board's to serve, each landing alone,
     // and each take-back with `--kind` alone or with `--journal`.
-    for form in [&["--doc", doc, "--alternative", alt, "--kind", kind][..], &["--doc", doc, "--draft", draft, "--base", base, "--kind", kind], &["--doc", doc, "--draft", draft, "--kind", kind], &["--doc", doc, "--fork", draft, "--kind", kind], &["--doc", doc, "--alternative", alt, "--kind", kind, "--new"], &["--doc", doc, "--alternative", alt, "--kind", kind, "--into", draft], &["--undo", draft, "--kind", kind], &["--withdraw", draft, "--kind", kind], &["--undo", draft, "--kind", kind, "--journal", kind]] {
+    for form in [&["--doc", doc, "--alternative", alt, "--kind", kind][..], &["--doc", doc, "--draft", draft, "--base", base, "--kind", kind], &["--doc", doc, "--draft", draft, "--kind", kind], &["--doc", doc, "--fork", draft, "--kind", kind], &["--doc", doc, "--alternative", alt, "--kind", kind, "--new"], &["--doc", doc, "--alternative", alt, "--kind", kind, "--into", draft], &["--undo", draft, "--kind", kind], &["--withdraw", draft, "--kind", kind], &["--undo", draft, "--kind", kind, "--journal", kind], &["--undo", draft, "--withdrawal", "7", "--kind", kind]] {
         let mut args = vec!["merge", "--board", DEAD, "--dir", s(&store), "--principal", "1"];
         args.extend_from_slice(form);
         let r = skep(&args, &[], None);
@@ -1139,7 +1143,8 @@ fn another_accounts_words_are_asked_naming_their_owner_and_a_published_origin_is
 /// merge landed in a second draft `T` is taken out by `--withdraw T`: its
 /// words stay M, its base stays `D.2` at fifteen, the marker is gone, the
 /// report and the talk say so; a second `--withdraw` finds no merge, exit 1,
-/// nothing written.
+/// nothing written; and `--undo T --withdrawal P` puts the merge back, the
+/// marker as the landing left it, a second run nothing to undo (skep #870).
 #[test]
 fn the_two_take_backs_walk_on_the_real_daemon() {
     let dir = tempfile::tempdir().unwrap();
@@ -1218,6 +1223,25 @@ fn the_two_take_backs_walk_on_the_real_daemon() {
     assert_eq!(r.code, 1, "{r:?}");
     assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
     assert!(r.err.contains(&format!("the board refused: no_merge:{t} carries no merge: nothing to undo, nothing to take out")), "{}", r.err);
+    assert_eq!(position(), before, "nothing written");
+
+    // THE WITHDRAWAL TAKEN BACK (skep #870): `--undo T --withdrawal P` puts
+    // the marker back as the landing left it, one write; again, nothing to
+    // undo, nothing written.
+    let r = rig.merge(&["--undo", &t_s, "--withdrawal", &withdrawn_at.to_string(), "--kind", &kind_s]);
+    let v = report(&r);
+    let unwithdrawn_at = v["position"].as_u64().expect("the write's position");
+    assert!(unwithdrawn_at > withdrawn_at, "{v}");
+    let landing_again = v["record"].as_str().expect("the landing's record again").to_string();
+    assert_eq!(v, json!({"act": "undo", "draft": t_s, "position": unwithdrawn_at, "record": landing_again, "case": "withdrawal", "withdrawal": withdrawn_at, "restored": null}), "the report");
+    let meta = rig.read(&token, &frames::doc_metadata(&t_s));
+    assert_eq!((meta["base"].as_str(), meta["base_copied"].as_str(), meta["merge"]["at"].as_u64()), (Some(head_s.as_str()), Some("15"), Some(at_t)), "the marker as the landing left it: {meta}");
+    assert_eq!(rig.image(&token, &t, 18), m_t, "the words stay");
+    assert!(r.err.contains(&format!("put the merge back into {t} at position {unwithdrawn_at}: the withdrawal at position {withdrawn_at} is undone, and the draft carries the merge as it did before it; the record's link is {landing_again}")), "{}", r.err);
+    let before = position();
+    let r = rig.merge(&["--undo", &t_s, "--withdrawal", &withdrawn_at.to_string(), "--kind", &kind_s]);
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.err.contains(&format!("the board refused: nothing_to_undo:nothing to undo: {t} carries a merge again")), "{}", r.err);
     assert_eq!(position(), before, "nothing written");
     session.close().expect("close");
 }

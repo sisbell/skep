@@ -255,7 +255,8 @@ impl Form {
 /// (`--alternative`, `--draft` with `--base` inside it, `--fork`), its
 /// three landings apart (`--publish`, `--into`, `--new`) and its two
 /// take-backs (`--undo`, `--withdraw`), each apart from the other and from
-/// every side, `--doc`, `--base`, `--head` and the landings, the merge
+/// every side, `--doc`, `--base`, `--head` and the landings, with
+/// `--withdrawal` inside `--undo` (skep #870), the merge
 /// record's §6 synopsis, and `share`'s four forms apart — a share (`--doc` or
 /// `--whole-account`, two apart, with `--to` or `--privash`, two apart),
 /// `--revoke` and `--list`, each apart from every flag of the others.
@@ -328,7 +329,7 @@ const GRAMMAR: [Row<Command>; 16] = [
     },
     Row {
         command: Command::Merge,
-        once: &["--doc", "--alternative", "--draft", "--base", "--fork", "--head", "--kind", "--journal", "--into", "--retries", "--undo", "--withdraw"],
+        once: &["--doc", "--alternative", "--draft", "--base", "--fork", "--head", "--kind", "--journal", "--into", "--retries", "--undo", "--withdraw", "--withdrawal"],
         repeated: &["--resolve", "--window", "--leave-out", "--keep-private"],
         switches: &["--publish", "--new", "--no-dedup", "--retype"],
         forms: &[
@@ -346,6 +347,8 @@ const GRAMMAR: [Row<Command>; 16] = [
             // The two take-backs: each apart from the composition's flags,
             // its landings and the other.
             Form::Apart("--undo", "--withdraw"),
+            // A withdrawal's undo names the withdrawal it takes back.
+            Form::Within("--withdrawal", "--undo"),
             Form::Apart("--undo", "--doc"),
             Form::Apart("--undo", "--alternative"),
             Form::Apart("--undo", "--draft"),
@@ -437,9 +440,10 @@ usage: skep <command> [flags]
                write (refused whole where the draft changed since), --new
                in a fresh draft staged from the head; a newer version
                published since is told; --undo puts a draft back as it
-               stood before a merge landed in it, --withdraw takes the
-               merge out of a draft and keeps the words; a side of another
-               account is refused; no person door
+               stood before a merge landed in it (with --withdrawal it
+               puts back the merge a withdrawal took out), --withdraw
+               takes the merge out of a draft and keeps the words; a side
+               of another account is refused; no person door
   share        share a draft (--doc <D>) or your whole account
                (--whole-account) with ONE account (--to <account>); or
                --privash one draft: open it to every account on this
@@ -526,6 +530,9 @@ flags (a flag beats its env variable; a variable set empty is unset):
             <address>  [--journal <J>] without them (the draft back as it
             stood before the merge landed, its base restored, the merge
             taken out — refused where the draft changed since); or
+            --undo <S>  --withdrawal <P>  --kind <address>  [--journal
+            <J>] (the merge the withdrawal at position P took out put back
+            as it stood — refused where the draft changed since); or
             --withdraw <S>  --kind <address>  [--journal <J>] without
             them (the merge taken out, the words kept, the draft's next
             version an ordinary one)

@@ -5430,14 +5430,18 @@ mod scripted {
         assert_eq!(verbatim.code, "txn_over_budget");
     }
 
-    /// A DRAFT THE MERGER MAY NOT READ is refused before any write, naming
-    /// it: `X`, another account's private draft, withheld. A landing into
-    /// `X` meets `withheld` at its one read of `X`'s metadata at the
+    /// A draft the merger may not read is refused before any write, naming it.
+    ///
+    /// `X` is another account's private draft, withheld. A landing into `X`
+    /// meets `withheld` at its one read of `X`'s metadata at the
     /// composition's position, after the merger's newest record for the
     /// key, the undo and the withdrawal of `X` at theirs at the head — each
     /// [`Refusal::Unreadable`] naming `X`, with no `stage`,
     /// `set_arrangement`, journal mint, `insert` or `make_link` sent and no
-    /// commit made.
+    /// commit made. A fresh landing whose standing record names a draft
+    /// withheld since, `S`, meets `withheld` at its read of `S` as it
+    /// stands, in a landing and a resume alike, never answered as standing
+    /// (SP-14), nothing staged or written.
     #[test]
     fn a_draft_the_merger_may_not_read_is_refused_unreadable_before_any_write() {
         let x = "1.0.2.0.8";
@@ -5474,6 +5478,23 @@ mod scripted {
         assert_eq!(withdraw(&board, m, &a(x), &a(K), None), Err(Refusal::Unreadable(a(x))));
         assert_eq!(dialer.ops(), ["doc_metadata"]);
         nothing_sent("the withdrawal");
+        // A fresh landing whose standing record names `S`, withheld since.
+        land(&board, &merged, draft_landing(&session, &signer, Some(a(S)))).expect("landed in S");
+        dialer.world().withheld.insert(S.to_string());
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        let fresh = || draft_landing(&session, &signer, None);
+        assert_eq!(land(&board, &merged, fresh()), Err(Refusal::Unreadable(a(S))));
+        assert_eq!(resume(&board, &merged, fresh()), Err(Refusal::Unreadable(a(S))));
+        let read: Vec<Value> =
+            dialer.frames("doc_metadata").iter().map(|f| f["doc"].clone()).collect();
+        assert_eq!(read, [json!(S), json!(S)], "S read as it stands, each: {:?}", dialer.ops());
+        assert!(
+            dialer.frames("stage").is_empty() && dialer.frames("set_arrangement").is_empty(),
+            "nothing staged or written: {:?}",
+            dialer.ops()
+        );
+        assert_eq!(dialer.world().rows.len(), rows, "no commit");
     }
 
     /// A CLAIMED BOARD WHOSE HEAD IS OWED LANDS NO SHOT (SP-14): `/health`
@@ -8425,28 +8446,34 @@ mod scripted {
         assert_eq!(atom["replaces"].as_str(), Some(in_u.to_string().as_str()), "U's record replaced");
     }
 
-    /// A SECOND LANDING OF ONE KEY INTO ONE DRAFT IS THE SAME LANDING (skep
-    /// #790): where the merger's newest record for the key names the draft,
-    /// a landing into it sends its one `set_arrangement` and writes no
-    /// record, the record keeping the first landing's position. (i) An edit
-    /// between: the race shape landed in `T`, `T` edited, the merge composed
-    /// again — the same key, the first record its prior — and landed in `T`.
-    /// The write lands after the edit with the marker at it, nothing is
-    /// appended or linked, and the answer is the write's position with the
-    /// first record, which stays current for the key naming the first
-    /// position and verifies equal there; a `resume` answers the same,
-    /// writing nothing; the undo is typed against the second write — the
-    /// marker's, never the record's — puts the edit back with the first
-    /// landing's marker, its own position kept (skep #964), and writes no
-    /// record, the first one standing for that marker; the undo after it,
-    /// the edit since the first landing standing in the words at that
-    /// put-back, is typed against the first landing and refused with no
-    /// `own_ack`, and typed at the first undo's write puts `T` back as
-    /// staged, replacing the first record. (ii) A take-back whose record
-    /// went unwritten, its link refused for a head owed: the merge composed
-    /// again and landed in `T` is the same landing, the first record
-    /// standing for it and current, and the next undo is typed against the
-    /// second write, its record replacing the first.
+    /// A second landing of one key into one draft is the same landing.
+    ///
+    /// Skep #790: where the merger's newest record for the key names the
+    /// draft, a landing into it sends its one `set_arrangement` and writes
+    /// no record, the record keeping the first landing's position. (i) An
+    /// edit between: the race shape landed in `T`, `T` edited, the merge
+    /// composed again — the same key, the first record its prior — and
+    /// landed in `T`. The write lands after the edit with the marker at it,
+    /// nothing is appended or linked, and the answer is the write's position
+    /// with the first record, which stays current for the key naming the
+    /// first position and verifies equal there; a `resume` answers the same,
+    /// writing nothing, and so does a fresh landing over either composition,
+    /// in a landing and a resume alike, the draft read as it stands (skep
+    /// #980); the undo is typed against the second write — the marker's,
+    /// never the record's — puts the edit back with the first landing's
+    /// marker, its own position kept (skep #964), and writes no record, the
+    /// first one standing for that marker; the undo after it, the edit since
+    /// the first landing standing in the words at that put-back, is typed
+    /// against the first landing and refused with no `own_ack`, and typed at
+    /// the first undo's write puts `T` back as staged, replacing the first
+    /// record. (ii) A take-back whose record went unwritten, the board too
+    /// busy to find the account's journal: the merge composed again and
+    /// landed in `T` is the same landing, the first record standing for it
+    /// and current, and the next undo is typed against the second write, its
+    /// record replacing the first. (iii) `T` with no recorded base, landed in
+    /// twice: a fresh landing finds it standing at the second write's
+    /// `set_arrangement` row, read off the supplement, beside the first
+    /// record.
     #[test]
     fn a_second_landing_of_one_key_into_one_draft_is_the_same_landing() {
         let t = "1.0.1.0.5";
@@ -8495,6 +8522,23 @@ mod scripted {
         dialer.clear();
         assert_eq!(resume(&board, &again, into_t()).expect("resumed"), Some(relanded.clone()), "the marker's position, the first record");
         assert!(wrote(&dialer).is_empty(), "a resume writes nothing: {:?}", dialer.ops());
+        // A fresh landing finds it standing where the marker names it, over
+        // either composition, in a landing and a resume alike.
+        let fresh = || draft_landing(&session, &signer, None);
+        for composed in [&again, &merged] {
+            dialer.clear();
+            assert_eq!(land(&board, composed, fresh()).expect("found standing"), relanded);
+            assert!(wrote(&dialer).is_empty(), "nothing staged or written: {:?}", dialer.ops());
+            let read: Vec<Value> =
+                dialer.frames("doc_metadata").iter().map(|f| f["doc"].clone()).collect();
+            assert_eq!(
+                (read, dialer.positions("doc_metadata")),
+                (vec![json!(t)], vec![]),
+                "the draft read as it stands: {:?}",
+                dialer.ops()
+            );
+        }
+        assert_eq!(resume(&board, &again, fresh()).expect("resumed"), Some(relanded.clone()));
         dialer.clear();
         let undone = undo(&board, m, &a(t), &a(K), None, None).expect("undone");
         let frame = dialer.frames("set_arrangement")[0].clone();
@@ -8627,6 +8671,40 @@ mod scripted {
         assert_eq!(dialer.frames("set_arrangement")[0]["as_of"].as_u64(), Some(at), "typed against the second write");
         assert_eq!(dialer.world().docs.get(t).unwrap().runs, vec![run(D, 1, 11)], "T as it stood before the second write");
         assert_eq!(appended_record(&dialer)["replaces"].as_str(), Some(first.to_string().as_str()), "the first landing's record replaced");
+
+        // (iii) `T` with no recorded base, landed in twice: a fresh landing
+        // finds it standing at the second write's row on the supplement.
+        let mut w = World::race();
+        w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let into_t = || draft_landing(&session, &signer, Some(a(t)));
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        let (first_at, first) = landing_of(&land(&board, &merged, into_t()).expect("landed"));
+        let again = compose(&board, Some(session.token()), &race_inputs()).expect("composed again");
+        let (at, record) = landing_of(&land(&board, &again, into_t()).expect("landed again"));
+        assert!(record == first && at > first_at, "the premise: the same landing");
+        assert_eq!(dialer.world().standing(t), (None, None), "the premise: no base, no marker");
+        dialer.clear();
+        assert_eq!(
+            land(&board, &again, draft_landing(&session, &signer, None)).expect("found standing"),
+            Landed::Draft {
+                into: a(t),
+                position: at,
+                record: first,
+                head_moved: None,
+                staged: false,
+            },
+            "the second write's row, the first landing's record"
+        );
+        assert!(wrote(&dialer).is_empty(), "nothing staged or written: {:?}", dialer.ops());
+        assert!(
+            dialer.ops().iter().any(|o| o.starts_with("GET /changes?")
+                && o.contains(&format!("under={t}"))
+                && o.contains("drafts=true")),
+            "the draft's own rows read on the supplement: {:?}",
+            dialer.ops()
+        );
     }
 
     /// One merge landed twice in a draft is taken back a landing at a time.
@@ -8817,8 +8895,10 @@ mod scripted {
     /// is written. The last undo, typed against the latest put-back, takes
     /// the first landing back and replaces its record. And where the second
     /// landing's undo left its record unwritten, the second's record, naming
-    /// a landing made since the first, is never the first landing's: the
-    /// undo of the first replaces the first's.
+    /// a landing made since the first, is never the first landing's: a fresh
+    /// landing of the second merge finds it standing at its own position,
+    /// never at the first merge's marker below it, and the undo of the first
+    /// replaces the first's.
     #[test]
     fn two_merges_of_one_head_and_sides_are_each_taken_back_by_their_own_record() {
         let t = "1.0.1.0.5";
@@ -8898,13 +8978,33 @@ mod scripted {
         let first = compose(&board, Some(session.token()), &inputs).expect("composed");
         let (_, first_record) = landing_of(&land(&board, &first, into_t()).expect("landed"));
         let second = compose(&board, Some(session.token()), &inputs).expect("composed again");
-        land(&board, &second, into_t()).expect("landed again");
+        let (second_at, second_record) =
+            landing_of(&land(&board, &second, into_t()).expect("landed again"));
         too_busy_for_the_find(&mut dialer.world());
         let err =
             undo(&board, m, &a(t), &a(K), None, None).expect_err("the undo's record unwritten");
         assert!(
             matches!(&err, Refusal::Halt(Halt::Halt(face)) if face.state.contains("the merge landed before it standing again")),
             "the premise, the earlier merge back: {err:?}"
+        );
+        // A fresh landing of the second merge finds its record standing while
+        // `T` marks the first merge's landing, below the record's position:
+        // the record's position, never the earlier merge's.
+        dialer.clear();
+        assert_eq!(
+            land(&board, &second, draft_landing(&session, &signer, None)).expect("found standing"),
+            Landed::Draft {
+                into: a(t),
+                position: second_at,
+                record: second_record,
+                head_moved: None,
+                staged: false,
+            }
+        );
+        assert!(
+            dialer.frames("stage").is_empty() && dialer.frames("set_arrangement").is_empty(),
+            "nothing staged or written: {:?}",
+            dialer.ops()
         );
         dialer.clear();
         undo(&board, m, &a(t), &a(K), None, None).expect("the first taken back");
@@ -10292,10 +10392,12 @@ mod scripted {
         landed_in_s(board, session, signer);
     }
 
-    /// THE SESSION'S END, TYPED, AT EVERY REQUEST UNDER THE TOKEN (skep
-    /// #812): the death signal staged at each request of each act —
+    /// A death at any request under the token is the typed session end.
+    ///
+    /// Skep #812: the death signal staged at each request of each act —
     /// `compose`, with no record and with one standing for the key; the
-    /// shot, a draft landing named and a fresh one; `resume` after a lost
+    /// shot, a draft landing named and a fresh one, and one found standing,
+    /// its draft read as it stands (skep #980); `resume` after a lost
     /// acknowledgment; `record_published`; the undo by its marker and by a
     /// baseless draft's feed row; the withdrawal; the undo over an earlier
     /// landing, its marker put back; `verify`; `current`; `head_of`;
@@ -10373,6 +10475,23 @@ mod scripted {
                 "{cell}: every request under the token, no head read"
             );
         }
+        let standing = deaths_of(
+            "a fresh landing found standing",
+            draft_landing_world,
+            |_: &Scripted, board: &Board, session: &Session<'_>, signer: &HybridSigner| {
+                landed_in_s(board, session, signer).0
+            },
+            |board, session, signer, merged| {
+                land(board, merged, draft_landing(session, signer, None)).map(|l| {
+                    assert!(matches!(l, Landed::Draft { staged: false, .. }), "the premise: {l:?}")
+                })
+            },
+            resume_on,
+        );
+        assert!(
+            standing.ended > 0 && standing.faulted == 0,
+            "a fresh landing found standing: the record's reads and its draft's, no head read"
+        );
         let lost =
             |dialer: &Scripted, board: &Board, session: &Session<'_>, signer: &HybridSigner| {
                 let merged = race_composed(dialer, board, session, signer);

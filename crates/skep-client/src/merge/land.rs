@@ -182,6 +182,16 @@
 //! own commit, the draft's mint (P2), so a marker whose `at` is the draft's
 //! own `at` in its `doc_metadata` marks no landing in it.
 //!
+//! **A fresh landing found standing** is answered where its draft marks
+//! it: the draft the merger's newest record for the key names is read as it
+//! stands, its `doc_metadata` and, with no recorded base, the feed walk's
+//! pages, and the position is that same marker's or row's. The record names
+//! the write that first landed the key in the draft, and a later landing of
+//! the key there, the same landing (skep #790), moves the mark past it; a
+//! mark below the record's position is an earlier merge's, its marker put
+//! back since, so where the draft marks none of this merge, or only such a
+//! one, the position the record names is answered.
+//!
 //! **The per-session ids.** Every write of a landing carries the id
 //! `<stem>.<frame>`, its stem `merge:` and the SHA-256, in lowercase hex,
 //! of the text naming the write — 70 bytes whatever the text, so a merge of
@@ -333,7 +343,8 @@ pub enum Landing<'a> {
         /// typed against the stage's position, the base the stage recorded
         /// re-recorded on the head — unless the merger's newest record for
         /// the key, read at the landing, names a draft landing, which is
-        /// reported with nothing staged, its `staged` false.
+        /// reported at the position its draft marks it with nothing staged,
+        /// its `staged` false.
         into: Option<Address>,
         /// The merge journal, or the account's default.
         ///
@@ -405,14 +416,16 @@ pub enum Landed {
         into: Address,
         /// The `set_arrangement`'s commit position, the write's `at`.
         ///
-        /// Where the landing was found standing, it is that landing's: for a
-        /// `resume`, the position the board marks it at — the draft's
-        /// marker, or on a draft with no recorded base its `set_arrangement`
-        /// row — the draft holding M; for a fresh landing the merger's
-        /// newest record for the key names, the position that record names.
-        /// A landing into the draft the standing record names is the same
-        /// landing (skep #790): `position` is this write's, and the
-        /// record's own is the first landing's.
+        /// Where the landing was found standing, it is the position the
+        /// board marks it at — the draft's marker, or on a draft with no
+        /// recorded base its `set_arrangement` row — for a `resume` naming
+        /// the draft, the draft holding M, and for a fresh landing the
+        /// merger's newest record for the key names; such a fresh landing,
+        /// its draft marking none of the merge at or past the position that
+        /// record names, answers the record's position. A landing into the
+        /// draft the standing record names is the same landing (skep #790):
+        /// `position` is this write's, and the record's own is the first
+        /// landing's.
         position: u64,
         /// The record's link, homed in the merger's journal.
         ///
@@ -480,10 +493,11 @@ impl<'a> Landing<'a> {
 /// board judges: typed against the position the merge was composed at,
 /// which the landing taken back moved the draft past, it is refused
 /// `arrangement_moved` with nothing written. With no draft named, a draft
-/// landing that record names is the answer, in any session, with nothing
-/// staged and [`Landed::Draft`]'s `staged` false; a take-back's record
-/// leaves the key open, so the same `merged` landed again stages a draft of
-/// its own, the stage's id naming that record, its `staged` true.
+/// landing that record names is the answer, in any session, at the position
+/// its draft marks it (the module's doc), with nothing staged and
+/// [`Landed::Draft`]'s `staged` false; a take-back's record leaves the key
+/// open, so the same `merged` landed again stages a draft of its own, the
+/// stage's id naming that record, its `staged` true.
 ///
 /// # Errors
 ///
@@ -496,7 +510,10 @@ impl<'a> Landing<'a> {
 ///   answer fits nothing, nothing sent, then the draft side's records'
 ///   read's refusals;
 /// - the reads' refusals, for a member already holding the answered list or
-///   for the merger's newest record for the key at a draft landing;
+///   for the merger's newest record for the key at a draft landing, and,
+///   with no draft named where that record names a draft landing, for that
+///   draft's `doc_metadata` and, on a draft with no recorded base, the feed
+///   walk's pages, each as itself (SP-14);
 /// - a journal named that cannot take the record, before the landing's
 ///   first write with nothing sent (P13): one this merger may not read, one
 ///   this board does not register or another account's, as
@@ -589,11 +606,12 @@ pub fn land(board: &Board, merged: &Merged, landing: Landing<'_>) -> Result<Land
 /// draft inherited when it was staged from a draft the merge landed in,
 /// whose `at` is the draft's own mint (P2). A draft landing
 /// reads the merger's newest record for the key first, as [`land`] does, so
-/// the record it completes goes under the landing's own ids; a fresh
-/// landing names no draft to read, and that record is its answer where it
-/// names a draft landing, else `None`. It stages nothing, so a draft landing
-/// it answers carries `staged` false. It reads no head: it sends no write
-/// but the record's, which a private journal takes unsigned.
+/// the record it completes goes under the landing's own ids; for a fresh
+/// landing, where that record names a draft landing, it is the answer at
+/// the position that draft marks it, read as [`land`] reads it, else
+/// `None`. It stages nothing, so a draft landing it answers carries
+/// `staged` false. It reads no head: it sends no write but the record's,
+/// which a private journal takes unsigned.
 ///
 /// # Errors
 ///
@@ -757,9 +775,9 @@ fn walk(
         Landing::Draft { into, .. } => {
             // The merger's newest record for the key, read from the board
             // before any write: the record a named draft's ids follow, and a
-            // fresh landing's answer where it names a draft landing. The
-            // stage and the one write write no record, so it is the record
-            // step's read too.
+            // fresh landing's answer where it names a draft landing, at the
+            // position that draft marks it. The stage and the one write
+            // write no record, so it is the record step's read too.
             let newest = writer.newest_record(merged)?;
             // The draft, the position the write is typed against, the text
             // the landing's per-session ids are spelled over (the module's
@@ -782,7 +800,11 @@ fn walk(
                     (into.clone(), merged.as_of, text, false)
                 }
                 None => {
-                    if let Some(standing) = newest.draft_landing() {
+                    let marked = |draft: &Address| {
+                        let meta = writer.reader.metadata(draft, None)?;
+                        writer.marked_landing(merged, draft, &meta)
+                    };
+                    if let Some(standing) = newest.draft_landing(marked)? {
                         return Ok(Some(standing));
                     }
                     if !shoot {
@@ -921,8 +943,10 @@ impl Newest {
     /// goes by the marker's `at` or the feed row, the withdrawal by its own
     /// read, and a take-back's record names this one by its link, carrying
     /// no landing. `verify` reads the draft at it, where the draft held the
-    /// first landing's M, and a fresh landing that finds the record standing
-    /// answers it ([`Newest::draft_landing`]).
+    /// first landing's M. A fresh landing that finds the record standing
+    /// answers the position the marker, else the feed row, names, and the
+    /// record's only where the draft marks no landing of the merge at or
+    /// past it ([`Newest::draft_landing`]).
     fn naming(&self, landed: &RecordLanding) -> Option<&Address> {
         let (link, record) = self.0.as_ref()?;
         let same = match (record.landed.as_ref()?, landed) {
@@ -940,21 +964,35 @@ impl Newest {
     /// Returns the draft landing the newest record names, found standing.
     ///
     /// It is a fresh landing's answer with nothing staged: the draft, the
-    /// position the record names and the record's link, with no newer head
-    /// told and `staged` false. `None` where the newest names no draft
-    /// landing or none stands.
-    fn draft_landing(&self) -> Option<Landed> {
-        let (link, record) = self.0.as_ref()?;
-        let Some(RecordLanding::Draft { draft, position }) = &record.landed else {
-            return None;
+    /// position its draft marks the landing at — `marked`'s answer for the
+    /// draft, the board's mark as [`Writer::marked_landing`] reads it — and
+    /// the record's link, with no newer head told and `staged` false. The
+    /// record names the write that first landed the key in the draft, and a
+    /// later landing of the key there moves the mark past it (skep #790), so
+    /// a mark below that position is an earlier merge's, its marker put back
+    /// since; where `marked` answers none, or only such a one, the position
+    /// the record names is answered. `None` where the newest names no draft
+    /// landing or none stands, `marked` then never called.
+    ///
+    /// # Errors
+    ///
+    /// `marked`'s, each as itself (SP-14).
+    fn draft_landing(
+        &self,
+        marked: impl FnOnce(&Address) -> Result<Option<u64>, Refusal>,
+    ) -> Result<Option<Landed>, Refusal> {
+        let Some((link, record)) = &self.0 else { return Ok(None) };
+        let Some(RecordLanding::Draft { draft, position: recorded }) = &record.landed else {
+            return Ok(None);
         };
-        Some(Landed::Draft {
+        let position = marked(draft)?.filter(|at| at >= recorded).unwrap_or(*recorded);
+        Ok(Some(Landed::Draft {
             into: draft.clone(),
-            position: *position,
+            position,
             record: link.clone(),
             head_moved: None,
             staged: false,
-        })
+        }))
     }
 }
 

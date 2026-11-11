@@ -1870,12 +1870,14 @@ fn a_withdrawal_is_taken_back_and_the_undo_after_it_takes_the_landing_back() {
 /// The race shape's daughter merged with `D.2` and landed in `T`, a draft
 /// staged from `D.1`, then composed again and landed again with nothing
 /// between — the same landing, its record the first's, the marker at the
-/// second write. The first undo, with no `own_ack`, puts the first
-/// landing's marker back as the board stamped it — the same sides, head
-/// and `at` — writing no record, the first landing's current for the key;
-/// the second, with no `own_ack`, is typed past the first, `T`'s words
-/// there those at the first landing, and puts `T` back as staged, its
-/// record replacing the first; a third has nothing to undo.
+/// second write, where a fresh landing finds it standing beside the first
+/// landing's record, writing nothing (skep #980). The first undo, with no
+/// `own_ack`, puts the first landing's marker back as the board stamped
+/// it — the same sides, head and `at` — writing no record, the first
+/// landing's current for the key; the second, with no `own_ack`, is typed
+/// past the first, `T`'s words there those at the first landing, and puts
+/// `T` back as staged, its record replacing the first; a third has nothing
+/// to undo.
 #[test]
 fn one_merge_landed_twice_is_taken_back_a_landing_at_a_time() {
     let rig = Rig::new();
@@ -1895,6 +1897,14 @@ fn one_merge_landed_twice_is_taken_back_a_landing_at_a_time() {
     let again = compose(&rig.board, Some(&token), &inputs).expect("composed again");
     let Landed::Draft { position: second_at, record, .. } = land(&rig.board, &again, into()).expect("landed again") else { panic!("a draft landing") };
     assert!(record == first && second_at > first_at, "the premise: the same landing, a write of its own");
+    // A fresh landing finds it standing where T's marker names it.
+    let standing = rig.position();
+    assert_eq!(
+        land(&rig.board, &again, Landing::Draft { merger, into: None, journal: None }).expect("found standing"),
+        Landed::Draft { into: t.clone(), position: second_at, record: first.clone(), head_moved: None, staged: false },
+        "the second write, the first landing's record"
+    );
+    assert_eq!(rig.position(), standing, "nothing written");
     // The first undo: the first landing's marker back, no record.
     let undone = undo(&rig.board, merger, &t, &kind, None, None).expect("the second landing taken back");
     assert_eq!((undone.record.clone(), undone.marker.as_ref().and_then(|m| m.at)), (None, Some(first_at)), "{undone:?}");

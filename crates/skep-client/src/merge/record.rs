@@ -246,15 +246,16 @@ pub enum RecordLanding {
         /// the key in the draft — the write's ack `at`.
         ///
         /// At that landing it is the position the merge marker on the draft
-        /// carries (`doc_metadata`'s `merge.at`), so a `resume` that finds
-        /// the draft holding M with the marker of this merge's head takes
-        /// the marker's `at`; where the draft carries no such marker — a
-        /// baseless draft, an admitted fork — it is the resume's own read's
-        /// `as_of`. The record keeps it: a later landing of the key into the
-        /// draft moves the marker and writes no record (skep #790), so the
-        /// marker, never this, names the draft's latest landing. `verify`
-        /// reads the draft at it, and a fresh landing that finds this record
-        /// standing answers it as `Landed::Draft`'s `position`.
+        /// carries (`doc_metadata`'s `merge.at`), or on a draft with no
+        /// recorded base — a baseless draft, an admitted fork — the
+        /// position of its `set_arrangement` row naming the merge, the mark
+        /// a `resume` finds the landing by. The record keeps it: a later
+        /// landing of the key into the draft moves the mark and writes no
+        /// record (skep #790), so the mark, never this, names the draft's
+        /// latest landing, and a fresh landing that finds this record
+        /// standing answers the mark's position as `Landed::Draft`'s
+        /// `position`, this one only where the draft marks no landing of
+        /// the merge at or past it. `verify` reads the draft at it.
         position: u64,
     },
 }

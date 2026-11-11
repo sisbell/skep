@@ -1267,7 +1267,8 @@ fn the_two_take_backs_walk_on_the_real_daemon() {
 ///
 /// Skep #964 with #790: the race shape's daughter merged into `S` by
 /// `--into S`, then again — the same landing, its record the first's, the
-/// marker at the second write. `--undo S` puts the first landing's marker
+/// marker at the second write, where `--new` finds it standing and says so,
+/// writing nothing (skep #980). `--undo S` puts the first landing's marker
 /// back as the board stamped it: the report carries it under `marker`, the
 /// talk says the merge stands in the draft again with that landing's
 /// position, and no record is written, the first landing's standing for it.
@@ -1288,6 +1289,11 @@ fn an_undo_of_a_merge_landed_twice_puts_the_first_landing_back_and_says_so() {
     let marker = rig.read(&token, &frames::doc_metadata(&s_s))["merge"].clone();
     let second = land();
     assert!(second["position"].as_u64() > first["position"].as_u64() && second["record"] == first["record"], "the premise: the same landing: {second}");
+    let before = rig.board.health().unwrap().log_position();
+    let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--new", "--kind", &kind_s]);
+    assert_eq!(report(&r)["landed"], json!({"draft": s_s, "position": second["position"], "record": first["record"], "head_moved": null, "fresh": false}), "found standing at the second write");
+    assert!(r.err.contains(&format!("landed in the draft {s} at position {}; the record's link is {}", second["position"], first["record"].as_str().unwrap())), "{}", r.err);
+    assert_eq!(rig.board.health().unwrap().log_position(), before, "nothing written");
     let r = rig.merge(&["--undo", &s_s, "--kind", &kind_s]);
     let v = report(&r);
     let at = marker["at"].as_u64().expect("the first landing's position");

@@ -3,7 +3,10 @@
 //! The suite checks the rules the shell alone keeps, with no daemon behind
 //! it — the rows' own members read before the session, `land` and `undo`
 //! with nothing composed `no_merge`, a bare session refused, the library's
-//! typed session's end alone ending the session — and, against
+//! typed session's end alone ending the session, and the compose's head
+//! read refused `shape` once its doubling is spent at a board on which
+//! every trunk member answers, the composition handed the newest member at
+//! one whose trunk ends — and, against
 //! the real daemon, the family end to end: a daughter composed and landed
 //! into a fresh draft staged from the head and into a named one, each by
 //! one write; the undo and the withdrawal each one write, the undo typed at
@@ -38,10 +41,13 @@
 //! onto a switched-on row re-stated with no run index beside them, and the
 //! window the merge brought asked, no earlier answer carried onto it.
 
+use std::io::{Read, Write};
+
 use skep_client::address::{account_of, document_of, parse_address};
 use skep_client::board::{frames, Opened, SessionBody};
 use skep_client::halt::Halt;
 use skep_client::merge::{Inputs, Merged, RecordLanding, Refusal as Library, Side};
+use skep_client::store::{FileStore, KeyId, KeyStore};
 
 use super::publication::{ground, register, second_device, signed_facts, Ground};
 use super::*;
@@ -325,6 +331,135 @@ fn already_published_crosses_as_typed_data_naming_the_draft_and_the_member() {
     assert_eq!((crossed.name(), v["arm"].as_str(), v["draft"].as_str(), v["member"].as_str()), ("merge_refused", Some("already_published"), Some("1.0.1.0.2"), Some("1.0.1.0.3.1")), "{v}");
     assert_eq!(shell.call("merge.land", &json!({"session": standing})).unwrap_err().name(), "no_merge", "the session stands");
     shell.shutdown();
+}
+
+/// Returns a board whose trunk `doc` holds `members`, and the frames sent it.
+///
+/// Every member answers where `members` is none. Its `/health` is a board
+/// that takes writes and its `in_claims` names no claim; its `doc_metadata`
+/// of `doc` and of each member the trunk holds is a published document's, of
+/// any other address `doc_not_registered`; its `retrieve_doc_v_span_set` at
+/// a position is `withheld`, so a composition stops at its read of the head
+/// it was handed, naming it. Every other `/op` is an empty delivery (no
+/// `H.1`, so no index opens) and every other path is answered nothing. Past
+/// its 64th read of a trunk member it answers nothing either, so a head read
+/// that walks on past the bound ends `unreachable` and never holds the
+/// suite. It keeps the frame of each `/op` and `/op-at` in the order sent.
+fn trunk_board(doc: &str, members: Option<u64>) -> (String, Arc<Mutex<Vec<Value>>>) {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let origin = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let frames = Arc::new(Mutex::new(Vec::new()));
+    let kept = Arc::clone(&frames);
+    let doc = doc.to_string();
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let (kept, doc) = (Arc::clone(&kept), doc.clone());
+            thread::spawn(move || answer_as_a_trunk(stream, &doc, members, &kept));
+        }
+    });
+    (origin, frames)
+}
+
+/// Returns the version of the trunk member a `doc_metadata` frame reads.
+///
+/// The trunk is `doc`'s; `None` for another frame, and for `doc` itself, a
+/// daughter or another document.
+fn trunk_member_read(doc: &str, frame: &Value) -> Option<u64> {
+    if frame["op"] != "doc_metadata" {
+        return None;
+    }
+    frame["doc"].as_str()?.strip_prefix(doc)?.strip_prefix('.')?.parse().ok()
+}
+
+/// Answers one request off `stream` as `trunk_board`'s board.
+///
+/// The request is its head through the blank line, its body as long as its
+/// `Content-Length` says.
+fn answer_as_a_trunk(mut stream: std::net::TcpStream, doc: &str, members: Option<u64>, frames: &Mutex<Vec<Value>>) {
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        match stream.read(&mut byte) {
+            Ok(1) => head.push(byte[0]),
+            _ => return,
+        }
+    }
+    let head = String::from_utf8_lossy(&head).into_owned();
+    let declared = head.lines().filter_map(|line| line.split_once(':')).find(|(name, _)| name.eq_ignore_ascii_case("content-length")).and_then(|(_, n)| n.trim().parse().ok()).unwrap_or(0);
+    let mut body = vec![0u8; declared];
+    if stream.read_exact(&mut body).is_err() {
+        return;
+    }
+    let path = head.split_whitespace().nth(1).unwrap_or("");
+    let answer = match path {
+        "/health" => json!({"ok": true, "log_position": 10, "auth": {"claimant": null, "local_trust": true, "origins": [], "signed_origins": []}, "writes": {"halted": false}}),
+        "/op" | "/op-at" => {
+            let sent: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            let frame = if path == "/op-at" { sent["frame"].clone() } else { sent };
+            let member = trunk_member_read(doc, &frame);
+            let trunk_reads = {
+                let mut kept = frames.lock().unwrap();
+                kept.push(frame.clone());
+                kept.iter().filter(|f| trunk_member_read(doc, f).is_some()).count()
+            };
+            let registered = frame["doc"] == doc || member.is_some_and(|k| members.is_none_or(|n| k <= n));
+            match frame["op"].as_str() {
+                _ if member.is_some() && trunk_reads > 64 => return,
+                Some("doc_metadata") if registered => json!({"resp": "doc_metadata", "as_of": 10, "published": true, "owner": "1.0.2"}),
+                Some("doc_metadata") => json!({"resp": "rejected", "code": "doc_not_registered", "op": "doc_metadata"}),
+                Some("in_claims") => json!({"resp": "claims", "as_of": 10, "claims": []}),
+                Some("retrieve_doc_v_span_set") if path == "/op-at" => json!({"resp": "rejected", "code": "withheld", "op": "retrieve_doc_v_span_set"}),
+                _ => json!({"resp": "delivery", "as_of": 10, "items": []}),
+            }
+        }
+        _ => return,
+    };
+    let body = answer.to_string();
+    let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+}
+
+/// Checks that the compose's head read is bounded and finds the newest member.
+///
+/// No daemon stands behind the shell (SP-17; skep #957). At a board on which
+/// every member of the trunk answers, `merge.compose` of a daughter under
+/// `⟨doc⟩.1` reads the members `⟨doc⟩.(1 + 2^i)`, `i` from 0 to 63, once
+/// each and in that order, and is refused `shape` naming `doc_metadata`:
+/// nothing composed, staged or set (the mutant that reads one member after
+/// another walks on past the 64th read, which the board answers nothing, and
+/// is refused `unreachable`). At a trunk ending five versions past
+/// `⟨doc⟩.1`, and at one ending at it, the composition is handed the newest
+/// member: its read of the head, which the board withholds, names `⟨doc⟩.6`
+/// and `⟨doc⟩.1` (the mutant that composes on the side's own member where
+/// the trunk has moved past it, and the one that composes on the member
+/// after the head).
+#[test]
+fn the_head_read_is_refused_past_its_doubling_and_hands_the_composition_the_newest_member() {
+    let doc = "1.0.2.0.2";
+    let compose = |members: Option<u64>| -> (Refusal, Vec<Value>) {
+        let dir = TempDir::new().unwrap();
+        let (origin, frames) = trunk_board(doc, members);
+        let store = dir.path().join("store");
+        let (shell, _) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
+        // A key in the store, so the hand is admitted and the head is read.
+        let KeyId(fingerprint) = FileStore::open(&store).generate(None).unwrap();
+        let session = register(&shell, "8e", Facts { principal: 2, account: Some("1.0.2".into()), kind: SessionKind::Signed { fingerprint, set_account: "1.0.2".into() } });
+        let refused = shell.call("merge.compose", &json!({"session": session, "doc": doc, "alternative": format!("{doc}.1.1")})).unwrap_err();
+        shell.shutdown();
+        let sent = frames.lock().unwrap().clone();
+        (refused, sent)
+    };
+    let (refused, sent) = compose(None);
+    let v = refused.to_value();
+    assert_eq!((refused.name(), v["op"].as_str()), ("shape", Some("doc_metadata")), "{v}");
+    let read: Vec<u64> = sent.iter().filter_map(|f| trunk_member_read(doc, f)).collect();
+    let doubling: Vec<u64> = (0..64).map(|i| 1 + (1u64 << i)).collect();
+    assert_eq!(read, doubling, "the doubling's reads, once each");
+    assert!(sent.iter().all(|f| f["doc"] != doc && f["op"] != "stage" && f["op"] != "set_arrangement"), "nothing composed, staged or set: {sent:?}");
+    for (members, head) in [(6, format!("{doc}.6")), (1, format!("{doc}.1"))] {
+        let (refused, _) = compose(Some(members));
+        let v = refused.to_value();
+        assert_eq!((refused.name(), v["doc"].as_str()), ("unreadable", Some(head.as_str())), "composed on the newest member: {v}");
+    }
 }
 
 /// Checks a daughter composed and landed, and taken back, against the

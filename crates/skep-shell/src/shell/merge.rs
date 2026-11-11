@@ -29,11 +29,14 @@
 //! commits (R3) — decided before the act off the feed rows the page holds
 //! and followed here, never decided afresh; read as UNTRUSTED input, its
 //! `doc_metadata` read before anything is composed and a published draft
-//! or another account's refused `not_owner` (skep #799). The head is THE
-//! TRUNK's HEAD as the board stands, found by probing up the trunk from the
-//! member the side lies under — a daughter's parent, a draft side's
-//! recorded base — one `doc_metadata` per member until `doc_not_registered`,
-//! which needs no feed walk and meets no retention floor. THE RE-OPEN: where
+//! or another account's refused `not_owner` (skep #799). The head is the
+//! trunk's head as the board stands, read up the trunk from the member the
+//! side lies under — a daughter's parent, a draft side's recorded base — by
+//! the library's head read (`skep_client::publication::standing`): the
+//! members past it by doubling, then a binary search, which needs no feed
+//! walk and meets no retention floor. A board answering every member the
+//! doubling asks refuses the row `shape` naming `doc_metadata` after 64
+//! reads, nothing composed or landed (SP-17). THE RE-OPEN: where
 //! the marker on `into` names this daughter — or, at the draft side, this
 //! draft — the draft already carries this merge: the report with NOTHING
 //! LANDED, composed on the marker's head, the side read as compose read it
@@ -156,8 +159,10 @@
 //! rest under `merge_refused {arm, …}`; the board's verdicts verbatim,
 //! `arrangement_moved` with its `site.as_of` and `site.current` among them;
 //! the death signal met at a read or a write under the session's token —
-//! the library's `SessionEnded` arm — ends the session, `session_died`;
-//! every other halt crosses as itself.
+//! the library's `SessionEnded` arm — ends the session, `session_died`; the
+//! compose's head read's faults cross as the publication family's do
+//! (`Shell::fault`), `busy` and `shape` among them; every other halt
+//! crosses as itself.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -168,7 +173,7 @@ use skep_client::address::{account_of, doc_1_of, document_of};
 use skep_client::board::{frames, merge_marker, ChangesAnswer, ChangesQuery, MergeMarker, Rejection};
 use skep_client::halt::Halt;
 use skep_client::merge::{self as lib, Family, Gap, GapKind, Misfit, NoUndo, Placement, ResolvedBy, Role, Run, SideAt, SideIx, WindowPart};
-use skep_client::publication::Run as SelectionRun;
+use skep_client::publication::{Run as SelectionRun, Standing};
 use skep_client::sheet::render_inert;
 
 use super::publication::{address_arg, answer_json, clipped, ispan_json, left_private_json, via_name, Confirmation, OpenArgs, Signed};
@@ -352,22 +357,34 @@ impl Shell {
         Ok(facts)
     }
 
-    /// Returns the trunk's head as the board stands, probing up from
-    /// `start`, a registered trunk member of `doc`: one `doc_metadata` per
-    /// member after it until one is not registered.
+    /// Returns the trunk's head as the board stands, read up from `start`.
+    ///
+    /// `start` is a trunk member of `doc`, the one the side lies under. The
+    /// read is the library's head read (`skep_client::publication::standing`
+    /// under the session's publisher): the members past `start` by doubling,
+    /// then a binary search between the last that answered and the first
+    /// that did not, `start` itself where the member after it is not
+    /// registered. A board answering every member the doubling asks is
+    /// refused after 64 reads and read no further (SP-17).
     ///
     /// # Errors
     ///
-    /// A probe's refusals but `no_such_document`, which is its answer.
-    fn trunk_head(&self, session: &SessionEntry, start: &Address) -> Result<Address, Refusal> {
-        let mut head = start.clone();
-        loop {
-            let Some(next) = next_trunk_member(&head) else { return Ok(head) };
-            match self.metadata_read(session, &next) {
-                Ok(_) => head = next,
-                Err(Refusal::Shell { name, .. }) if name == Name::NO_SUCH_DOCUMENT => return Ok(head),
-                Err(e) => return Err(e),
-            }
+    /// The read's faults as `Shell::fault` maps them for `merge.compose`:
+    /// `unreadable` naming the member read, `busy`, `session_died`, the
+    /// board's other verdicts verbatim, `unreachable`, and `shape` naming
+    /// `doc_metadata` for an answer that is no `doc_metadata` answer (SP-14)
+    /// or once the doubling is spent; and a face naming the shell behind the
+    /// library where the read answers the standing of the bare document,
+    /// which no read of a trunk member answers.
+    fn trunk_head(&self, session: &SessionEntry, signed: &Signed, doc: &Address, start: &Address) -> Result<Address, Refusal> {
+        match skep_client::publication::standing(&signed.publisher(session), doc, start).map_err(|f| self.fault(session, "merge.compose", f))? {
+            Standing::AtHead => Ok(start.clone()),
+            Standing::Behind { head } => Ok(head),
+            Standing::First | Standing::SupersededFirst { .. } => Err(Refusal::from(Halt::face(
+                "the head read answered a trunk member as the bare document",
+                "`skep_client::publication::standing` of a trunk member answers `AtHead` or `Behind` on every path",
+                "report it: the shell's merge row is behind the library",
+            ))),
         }
     }
 
@@ -528,7 +545,11 @@ impl Shell {
     /// 4. `into`'s read, as step 3's reads, and `not_owner` naming it where
     ///    it is published or another account's; at the draft side the
     ///    draft's read, and `base_unknown` where the board records no base
-    ///    for it in `doc`'s chain; the head's probe's;
+    ///    for it in `doc`'s chain; then, where no re-open stands, the head
+    ///    read's (`trunk_head`): `unreadable`, `busy`, `session_died`, the
+    ///    board's verdicts, `unreachable`, and `shape` naming `doc_metadata`
+    ///    for an answer it cannot read or where the board answers every
+    ///    member the read asks, nothing composed;
     /// 5. the composition's (`skep_client::merge::compose`): `base_unknown`
     ///    with its reason, `two_drafts`, `unreadable`, `no_such_document`,
     ///    `merge_refused` with its arm, the board's verdicts verbatim; then
@@ -610,7 +631,7 @@ impl Shell {
         let reopen = target.as_ref().and_then(|t| t.marker.clone()).filter(|m| m.sides.iter().any(|s| *s == side_text)).filter(|m| bounded_address(&m.head).is_some_and(|h| is_trunk_member(&doc, &h)));
         let head = match &reopen {
             Some(m) => bounded_address(&m.head).expect("filtered to a trunk member"),
-            None => self.trunk_head(&session, &start)?,
+            None => self.trunk_head(&session, &signed, &doc, &start)?,
         };
         let side = match &form {
             Form::Daughter(d) => lib::Side::Member(d.clone()),

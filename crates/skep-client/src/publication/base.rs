@@ -189,7 +189,8 @@ fn recorded(door: &Door<'_>, doc: &str, draft: &Address) -> Result<Base, Fault> 
 /// # Panics
 ///
 /// Panics where `base` is neither `doc` nor a member of its chain: the
-/// caller owes the base [`draft_base`] answers, which is.
+/// caller owes a base in that chain, the one [`draft_base`] answers or a
+/// trunk member of `doc`.
 pub fn standing(p: &Publisher<'_>, doc: &Address, base: &Address) -> Result<Standing, Fault> {
     let door = Door::new(p.board, p.token);
     door.step("standing");

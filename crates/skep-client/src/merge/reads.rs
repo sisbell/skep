@@ -692,11 +692,16 @@ pub enum NoUndo {
     /// `doc_not_registered` — there is nothing of the draft's to take back;
     /// discard it or edit it.
     Inherited,
-    /// The merge was published from the draft (P4): the base record stands
-    /// on the version the shot minted and the marker is gone, so the way
-    /// back is to publish the older text again, never a re-recorded base.
+    /// The merge was published (P4), so there is nothing to undo.
+    ///
+    /// It was published from the draft, its base record standing on the
+    /// version the shot minted, or by a merge's shot naming the draft, which
+    /// keeps its base (skep #944); no marker stands, so the way back is to
+    /// publish the older text again, never a re-recorded base.
     Published {
-        /// The version the merge is — the draft's recorded base.
+        /// The version the merge is.
+        ///
+        /// It is the member the draft's latest `publish` row names first.
         version: Address,
     },
     /// The merge was already taken back.
@@ -1836,14 +1841,16 @@ fn fork_source(
 ///
 /// It is the draft's `doc_metadata` `base` (wire.md §Namespace, `stage`;
 /// §The response envelope): the member the draft was staged from, moved to
-/// the member each publication the draft rendered minted — read as
-/// [`fork_source`] reads a fork's `source`, never the caller's to know — and
-/// it is the draft's anchor where it is a version member of `doc`: the
-/// three checks in order — recorded, of this document, a member. The read
-/// is at the one position `at`, as the draft's image is (wire.md §Reading
-/// history): the base that stood when the draft was read, which the
-/// publication that rendered the draft may have moved since, so a record's
-/// side composes against the base its merge composed against. The merge's
+/// the member each publication of the draft itself minted and never by a
+/// merge's shot that names the draft, which keeps it (`keep_base`;
+/// skep #944) — read as [`fork_source`] reads a fork's `source`, never the
+/// caller's to know — and it is the draft's anchor where it is a version
+/// member of `doc`: the three checks in order — recorded, of this
+/// document, a member. The read is at the one position `at`, as the
+/// draft's image is (wire.md §Reading history): the base that stood when
+/// the draft was read, which a publication of the draft may have moved
+/// since, so a record's side composes against the base its merge composed
+/// against. The merge's
 /// base is then derived from it along the anchors, so a draft staged from a
 /// daughter `D.k.m` merges with the head over `D.k`, not over the daughter.
 ///

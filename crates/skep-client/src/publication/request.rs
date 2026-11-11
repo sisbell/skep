@@ -458,6 +458,12 @@ pub struct Request {
     /// the rendering draft's (the wire's `also`), in the request's order;
     /// empty at the one-draft shot and at a bare shot.
     pub also: Vec<Address>,
+    /// Whether the shot keeps the rendering draft's recorded base.
+    ///
+    /// It is the wire's `keep_base` (skep #944): `true` at the merge's shot
+    /// from the head, which publishes the draft's words without being its
+    /// publication; `false` at every publication of the draft itself.
+    pub keep_base: bool,
     /// The runs, in V-order.
     pub runs: Vec<Run>,
     /// The RENDERING draft's kept places, parallel to the runs: at a run of
@@ -582,6 +588,7 @@ impl Request {
             base: base.as_ref().map(|(m, e)| (m.as_str(), *e)),
             draft: draft.as_deref(),
             also: &also.iter().map(String::as_str).collect::<Vec<_>>(),
+            keep_base: self.keep_base,
             runs: &runs,
             places: &places,
             also_places: &also_entries,
@@ -678,7 +685,9 @@ impl Request {
         price::price(&Shape {
             runs: &self.runs,
             drafts: &drafts,
-            draft: self.draft.as_ref(),
+            // The draft the placing record names: the rendering draft, where
+            // the shot moves its base (the board's `Shot::moves_base_of`).
+            draft: self.draft.as_ref().filter(|_| !self.keep_base),
             term: &term,
             mint: self.mint.is_some(),
             claim: self.claim,
@@ -1078,6 +1087,8 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         base: inputs.base.clone(),
         draft: Some(inputs.draft.clone()),
         also: inputs.also.clone(),
+        // A publication of the draft itself: its base moves to the member.
+        keep_base: false,
         runs,
         places,
         also_places,

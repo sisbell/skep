@@ -645,6 +645,7 @@ fn the_publish_shot_publishes_a_new_member_and_leaves_its_staging_draft_a_draft(
         base: None,
         draft: Some(draft_home.clone()),
         also: vec![],
+        keep_base: false,
         runs: vec![ShotRun {
             origin: draft_home.clone(),
             run: Run::new(start, nat(1)).expect("the draft's one value"),

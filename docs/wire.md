@@ -1454,11 +1454,14 @@ board records it, and `base_copied` the number of content positions the
 copy took of it, a decimal string. Recorded by the `stage` that minted
 the draft — the surface copied at its count, measured at the commit, or
 an alternative's inherited base — and MOVED by every `publish` naming the
-draft as its rendering `draft`: `base` to the member the shot minted and
-`base_copied` to that member's whole count, so the next publication
-lands after it and `base_copied` is the `base_extent` a shot off that
-base carries; and by every `set_arrangement` naming a `base` to record
-(§Arrangement): `base` and `base_copied` to the pair the frame named —
+draft as its rendering `draft` that is the draft's own publication: `base`
+to the member the shot minted and `base_copied` to that member's whole
+count, so the next publication lands after it and `base_copied` is the
+`base_extent` a shot off that base carries — a `publish` setting
+`keep_base` (§Arrangement, `publish`) moves neither, the draft standing
+behind the member it published; and by every `set_arrangement` naming
+a `base` to record (§Arrangement): `base` and `base_copied` to the pair
+the frame named —
 the head a merge was composed on at the extent read, or the old base an
 undo restores. Both `null` where the board records no base: a document
 `create_new_document` or `fork` minted and never published as a draft,
@@ -1488,7 +1491,8 @@ one commit) reads before the alternative's own mint — CLEARED by the
 `publish` that moves the base (the merge is the member's now), and
 untouched by every write
 that leaves the base untouched, a plain `set_arrangement` naming no
-`base` and the publication's re-window of an `also` draft among them.
+`base`, the publication's re-window of an `also` draft and a `publish`
+setting `keep_base` among them.
 Its content is the client's statement, as the shot's `base` is: the
 board checks that the head is a registered member of the draft's chain
 and nothing against the runs. Served as `base` is; a client that decodes neither `base` nor
@@ -2194,8 +2198,11 @@ own next shot by the stray path" (B3-S11 P5) — and no `also` draft's
 RECORDED BASE MOVES: the shot moves the rendering draft's base alone to
 the member it renders (§Namespace, `stage`; `doc_metadata`), so a
 re-windowed `also` draft stands behind the member it now windows, its
-next publication a daughter's. The check is by MEMBERSHIP of the named place: a
-draft arranging a run's identity twice is re-windowed at the place the
+next publication a daughter's. A shot setting `keep_base` (§Arrangement,
+`publish`) moves no base at all: its rendering draft is re-windowed at
+`places` as ever and stands behind the member as an `also` draft does.
+The check is by MEMBERSHIP of the named place: a draft arranging a
+run's identity twice is re-windowed at the place the
 request names and left standing at the other, which the twin fence
 meets at its own publication; a run named twice in `runs` with a place
 on each re-windows both onto the one fresh run the first entry minted.
@@ -3261,7 +3268,10 @@ draft carries inherited beside them with `at` THIS stage's position
 the position the marker was put on the alternative is its own mint's) —
 a draft the board records no base for leaves the alternative unrecorded,
 a free-standing draft of its own. THE BASE MOVES: at each `publish`
-naming the draft as its rendering `draft`, the board moves the draft's
+naming the draft as its rendering `draft` that is the draft's own
+publication — every such `publish` but one setting `keep_base`
+(§Arrangement, `publish`), which leaves the base and the marker standing
+— the board moves the draft's
 base to the member the shot minted and `base_copied` to that member's
 whole count, keeping the source and clearing the marker, so a draft
 staged from version 3 that publishes version 4 publishes version 5 next,
@@ -3340,7 +3350,9 @@ and `null` where neither minted it, served to whoever may read the
 address named; `base` and `base_copied` are the draft base the board
 records for it — the member its next publication lands after and the
 positions the copy took of it, recorded by `stage` and moved by every
-`publish` naming the draft — `null` together where it records none;
+`publish` naming the draft as its rendering `draft` without `keep_base`
+and by every `set_arrangement` naming a `base` — `null` together where
+it records none;
 `at`, `time` and `time_from` are the age of the address named — the
 position of the commit that minted it, kept in the board's state, and
 the daemon's testimony of when it committed (§The response envelope,
@@ -3791,8 +3803,21 @@ itself, a repeated entry, or an entry that is no address is `malformed`
 naming the member, `site.index` the entry where one is at fault. `also`
 lies OUTSIDE the signed frame, as `draft` does: the body spells every
 re-minted run by its values and names no draft, so a shot naming the
-family's other drafts signs as the same shot naming none. `places`, optional, is the draft's KEPT PLACES (§The
-publish shot and head-float, the kept places): a list parallel to `runs`
+family's other drafts signs as the same shot naming none. `keep_base`,
+optional, is a flag: `true` publishes the rendering draft's words
+without being that draft's own publication — the merge's shot from the
+head, whose member holds words the draft never had (skep #944) — and
+leaves the draft's RECORDED BASE and its merge marker standing
+(§Namespace, `stage`, THE BASE MOVES), as every `also` draft's stand;
+nothing else changes: the draft's runs are re-inserted, its
+correspondence records homed in it and its kept places re-windowed as at
+its own publication. Absent, `null` and `false` alike are the draft's own
+publication, and the canonical form writes the flag only where it is
+`true`. `keep_base` without `draft` is `malformed` naming the member, as
+`also` without `draft` is. It lies OUTSIDE the signed frame, as `draft`
+does: a shot keeping its draft's base signs as the same shot moving it.
+`places`, optional, is the draft's KEPT PLACES (§The publish shot and
+head-float, the kept places): a list parallel to `runs`
 by index, each entry a V-position as `reinstate`'s `at` is spelled —
 for a run of the `draft`, or of a draft `also` names which the `draft`
 holds by identity, the place it held in the `draft` when the client
@@ -6018,7 +6043,9 @@ Each entry:
   the shot minted a correspondence record in it, re-windowed it at a kept
   place the request sent, or wrote nothing in it — a shot that only removes
   or reorders published words names it too, so a draft's newest
-  publication row names the member it made (B3-S10) — then each other
+  publication row names the member it made (B3-S10), the draft's recorded
+  base where the shot moved it and not where the shot set `keep_base`
+  (§Arrangement, `publish`) — then each other
   draft `also` named that the commit WROTE: where the shot minted a
   correspondence record in it, or re-windowed it at a place its
   `also_places` entry carries (minting nothing in it), in the request's

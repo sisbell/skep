@@ -2441,10 +2441,11 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
         // `places`, each `also` draft's in its `also_places` entry (the
         // design's F4; §5.7 (viii)): the row names the rendering draft
         // beside the member ALWAYS, first among the drafts, whether or not
-        // the commit writes it — so a reader that reads a draft's base off
-        // its newest publication finds the member this one minted, a shot
-        // that only removes or reorders published words among them (B3-S10)
-        // — then each `also` draft the commit writes, in the request's
+        // the commit writes it — so a draft's newest publication row names
+        // the member the shot made, the draft's recorded base where the
+        // shot moved it and the merge's member where it kept it (skep #944),
+        // a shot that only removes or reorders published words among them
+        // (B3-S10) — then each `also` draft the commit writes, in the request's
         // order: a run of its identity re-inserted, or its `also_places`
         // entry carrying a place, the two writes the commit can make in it;
         // all of it request arithmetic (`Shot::named_drafts`, the rendering

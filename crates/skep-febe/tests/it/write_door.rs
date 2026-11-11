@@ -1000,6 +1000,7 @@ fn a_shot_windowing_an_unreadable_origin_is_withheld_naming_it() {
         base: None,
         draft: None,
         also: vec![],
+        keep_base: false,
         runs: vec![ShotRun {
             origin: unreadable_edition.clone(),
             run: Run::new(edition_start.clone(), nat(3)).expect("a content run"),

@@ -349,6 +349,11 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             if !shot.also.is_empty() {
                 pairs.push(("also", j_addrs(&shot.also)));
             }
+            // The rendering draft's base kept rides only where set: an unset
+            // flag is no field, as `claim`'s is.
+            if shot.keep_base {
+                pairs.push(("keep_base", Value::Bool(true)));
+            }
             if places.iter().any(Option::is_some) {
                 let places = places.iter().map(|p| p.as_ref().map_or(Value::Null, j_vpos));
                 pairs.push(("places", Value::Array(places.collect())));
@@ -679,8 +684,9 @@ pub(super) fn j_response(r: &Response) -> Value {
         // neither minted it. `base` and `base_copied` (the staging act,
         // B3-S10) are two payload options over the draft base of the address
         // named: the member or bare document the draft's next publication
-        // lands after, moved by each publication it renders and each landing
-        // that names a base, and the extent the copy took of it — both null
+        // lands after, moved by each publication of the draft itself — never
+        // by a shot keeping it (`keep_base`) — and each landing that names a
+        // base, and the extent the copy took of it — both null
         // where the board records no base, every address that is no staged
         // draft among them. `merge` (the landing lane) is a payload option
         // over the marker beside them: the sides, the head, the head's

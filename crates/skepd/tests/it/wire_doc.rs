@@ -943,6 +943,53 @@ fn doc_states_the_kept_places_and_their_refusal() {
     assert!(feed.contains("`create_new_document`/`fork`/`version`/`stage`"), "§The change feed names `stage` among the mints");
 }
 
+/// The kept base (skep #944) is stated wherever the base move is.
+///
+/// §Arrangement's `publish` names the `keep_base` member — a flag beside
+/// `draft`, outside the signed frame, written only where set, `malformed`
+/// without `draft`; §The publish shot and head-float states that a shot
+/// setting it moves no base and re-windows its draft as ever; §Namespace's
+/// `stage` and `doc_metadata` rows and the response envelope's
+/// `doc_metadata` state the base it leaves standing, the marker paragraph
+/// lists it among the writes that leave the marker untouched, and §The
+/// change feed says the row's member is the draft's base only where the
+/// shot moved it. The daemon's answers are pinned in `publish.rs` and
+/// skep-core's suite; this pins that the contract says so.
+#[test]
+fn doc_states_the_kept_base() {
+    let arrangement = prose("\n### Arrangement (document editing)", &["\n### Media"]);
+    for fact in [
+        "`keep_base`, optional, is a flag",
+        "leaves the draft's RECORDED BASE and its merge marker standing",
+        "the canonical form writes the flag only where it is `true`",
+        "`keep_base` without `draft` is `malformed` naming the member",
+        "a shot keeping its draft's base signs as the same shot moving it",
+    ] {
+        assert!(arrangement.contains(fact), "§Arrangement says {fact:?}");
+    }
+    let shot = prose("\n### The publish shot and head-float", &["\n### Credential refusals"]);
+    assert!(
+        shot.contains("A shot setting `keep_base` (§Arrangement, `publish`) moves no base at all"),
+        "§The publish shot and head-float states the kept base"
+    );
+    let stage = prose_after("\n### Namespace", "\n**`stage`** —", &["\n**`"]);
+    assert!(stage.contains("every such `publish` but one setting `keep_base`"), "§Namespace's `stage` row states the kept base: {stage}");
+    let metadata = prose_after("\n### Namespace", "\n**`doc_metadata`** —", &["\n**`"]);
+    assert!(metadata.contains("without `keep_base`"), "§Namespace's `doc_metadata` row states the kept base");
+    let envelope = prose("\n## The response envelope", &["\n## Rejections"]);
+    for fact in [
+        "a `publish` setting `keep_base` (§Arrangement, `publish`) moves neither",
+        "and a `publish` setting `keep_base` among them",
+    ] {
+        assert!(envelope.contains(fact), "§The response envelope says {fact:?}");
+    }
+    let feed = prose("\n## The change feed", &["\n## The other endpoints"]);
+    assert!(
+        feed.contains("the draft's recorded base where the shot moved it and not where the shot set `keep_base`"),
+        "§The change feed states which member is the draft's base"
+    );
+}
+
 /// THE STRAY PLACES (the link-sets design §5.7, "AND THE STRAY PLACES WITH
 /// THEM"; §5.5, the counterpart first; lane F4): §Arrangement's `places`
 /// names a run of either kind — the draft's, or a stray run of `doc`'s own

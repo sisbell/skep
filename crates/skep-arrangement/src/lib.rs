@@ -10,7 +10,7 @@
 //! bare document it was born sharing (the fork-source design record) — and
 //! each staged draft's **base** — where its next publication lands, the
 //! extent the copy took, its source and the merge it carries, moved by each
-//! publication it renders and by each landing that names a base (the
+//! publication of the draft itself and each landing that names a base (the
 //! staging act, B3-S10; the landing lane, skep #764) — and it is the *only*
 //! place in the system where destructive change lives (ASN-0047 P3). It
 //! provides the editing/versioning operations (INSERT [ASN-0116], DELETE
@@ -144,7 +144,7 @@
 //! placed draft piece with the fresh run it stands as, the named draft its
 //! identity was and its `runs` entry ([`Pairing`]) — so a composite in the
 //! link store stages the shot, its correspondence records in each named
-//! draft and the rendering draft's re-window at its kept places under one
+//! draft and each named draft's re-window at its kept places under one
 //! transaction. The
 //! birth version is minted by the same composite in either of two shapes:
 //! the birth shape, the base absent (PUB-2.34), with no tail to carry; or the

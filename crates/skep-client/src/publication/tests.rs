@@ -924,8 +924,10 @@ impl World {
         self.docs.insert(member.clone(), DocState { runs: member_runs.clone(), published: true, owner: ACCOUNT.to_string(), placed: Some(placed), base_extent: frame["base_extent"].as_str().and_then(|e| e.parse().ok()), source: None, base: None, base_copied: None, at });
         // The rendering draft's base moves to the member, at its whole
         // count, its source kept (wire.md §Namespace, THE BASE MOVES): a
-        // draft with none, its first publication's member.
-        if let Some(d) = draft.as_ref().and_then(|d| self.docs.get_mut(d)) {
+        // draft with none, its first publication's member — and none moves
+        // at a shot setting `keep_base` (§Arrangement, `publish`).
+        let moves = frame["keep_base"].as_bool() != Some(true);
+        if let Some(d) = draft.as_ref().filter(|_| moves).and_then(|d| self.docs.get_mut(d)) {
             d.base = Some(member.clone());
             d.base_copied = Some(placed);
         }

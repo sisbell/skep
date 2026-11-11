@@ -972,6 +972,7 @@ impl HeadWriter {
             base: Some(Base { member: base_member, extent }),
             draft: Some(draft.clone()),
             also: Vec::new(),
+            keep_base: false,
             runs: vec![ShotRun { origin: draft, run }],
         };
         self.commit_publish(wp, serial, h, shot, &refused).is_some()

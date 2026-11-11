@@ -384,6 +384,7 @@ fn every_birth_memo_key_is_a_version_member_whose_state_the_guest_reads() {
         base: None,
         draft: Some(draft.clone()),
         also: vec![],
+        keep_base: false,
         runs: vec![ShotRun {
             origin: draft.clone(),
             run: Run::new(start, Nat::from(1u32)).expect("the draft's one value"),

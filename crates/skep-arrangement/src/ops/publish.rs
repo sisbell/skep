@@ -315,13 +315,17 @@ where
     /// the shot's terms ([`ShotTerms`]; signed-ops D25): where the client's
     /// runs end — Σ width of its runs, the boundary the run-list erases
     /// whenever the last of them and the carried tail are I-adjacent — and the
-    /// base's extent, absent in the birth shape — and the rendering `draft`
-    /// the shot named, where it named one, at which the fold moves that
-    /// draft's recorded base to the member minted and its extent to the
-    /// member's whole count (the staging act, B3-S10; BASE★ on
-    /// [`M5State`](crate::M5State)), so the draft's next shot lands after the
-    /// member it just made; nothing here reads the record against the
-    /// request's own `base`, which stays the client's statement. The record
+    /// base's extent, absent in the birth shape — and the draft whose base
+    /// the shot moves ([`Shot::moves_base_of`]: the rendering `draft`'s
+    /// document, where the shot is that draft's own publication), at which
+    /// the fold moves that draft's recorded base to the member minted and
+    /// its extent to the member's whole count (the staging act, B3-S10;
+    /// BASE★ on [`M5State`](crate::M5State)), so the draft's next shot lands
+    /// after the member it just made. A shot setting `keep_base` names no
+    /// draft there and moves no base: the rendering draft stands behind the
+    /// member, as an `also` draft does (skep #944). Nothing here reads the
+    /// record against the request's own `base`, which stays the client's
+    /// statement. The record
     /// is pushed for every member the shot mints, an empty placement
     /// included, since the terms exist whatever the placement holds; an
     /// empty one leaves the member reading as the lazy empty arrangement —
@@ -709,9 +713,10 @@ pub fn stage_publish<W: PublishWorld>(
     stg.push(m3rec.into());
     // Its placing record, pushed whatever the placement holds: the
     // whole arrangement and the shot's terms, the base's extent absent
-    // in the birth shape (signed-ops D25) — and the rendering draft the
-    // shot named, so the fold moves that draft's recorded base to this
-    // member (B3-S10; BASE★ on `M5State`).
+    // in the birth shape (signed-ops D25) — and the draft whose base the
+    // shot moves, the rendering draft's document unless the shot keeps
+    // its base (`Shot::moves_base_of`), so the fold moves that draft's
+    // recorded base to this member (B3-S10; BASE★ on `M5State`).
     stg.push(
         M5Rec::ShotPlace {
             doc: member.clone(),
@@ -720,7 +725,7 @@ pub fn stage_publish<W: PublishWorld>(
                 placed,
                 base_extent: shot.base.as_ref().map(|base| base.extent.clone()),
             },
-            draft: shot.draft.clone(),
+            draft: shot.moves_base_of(),
         }
         .into(),
     );

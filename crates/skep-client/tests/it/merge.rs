@@ -16,11 +16,14 @@
 //! and landed. And ONE DRAFT SIDE (skep #743): a draft `stage` minted off
 //! the base version, its base the one the board records for it and never
 //! named — a named base the record does not derive refused — composed and
-//! landed as the shot, the draft's fresh text re-minted; its record naming
-//! the position the draft was read at and verifying Equal as of it once
-//! the shot has moved the draft's base and the draft is edited (skep #453),
-//! Unreadable to a guest the draft is withheld from, and refused as the
-//! record's where it names a position past the board's head (skep #761);
+//! landed as the shot, the draft's fresh text re-minted and its recorded
+//! base kept (skep #944), the merge run again from the draft finding the
+//! member it made or keeping the head's words; its record naming the
+//! position the draft was read at and verifying Equal as of it once a
+//! publication of the draft has moved its base and the draft is edited
+//! (skep #453), Unreadable to a guest the draft is withheld from, and
+//! refused as the record's where it names a position past the board's head
+//! (skep #761);
 //! THE KEPT PLACES (skep #938): the draft re-windowed onto the words the
 //! shot published and landed again over one composition with nothing
 //! written; a run of M the draft holds at two places sent as two, the
@@ -206,6 +209,10 @@ pub(crate) enum Staged<'a> {
     /// `text` of the draft `draft`, from its ordinal `from`, named by its
     /// address: the shot re-mints the draft's own words and names it.
     Draft { draft: &'a Address, from: u64, text: &'a str },
+    /// The draft `draft` named as the rendering draft, placing none of its
+    /// own identity: a publication of the draft itself whose runs the other
+    /// entries give, its recorded base moving to the member.
+    Names { draft: &'a Address },
 }
 
 /// THE SHOT by hand, as the daemon's own suite composes it: `runs` in V-order,
@@ -254,6 +261,10 @@ pub(crate) fn shot(
             Staged::Draft { draft: named, from, text } => {
                 runs.push(frames::shot_run(&named.to_string(), &format!("{named}.0.1.{from}"), text.len() as u64));
                 values.extend_from_slice(text.as_bytes());
+                assert!(draft.is_none(), "one staging draft a shot");
+                draft = Some((*named).clone());
+            }
+            Staged::Names { draft: named } => {
                 assert!(draft.is_none(), "one staging draft a shot");
                 draft = Some((*named).clone());
             }
@@ -680,11 +691,15 @@ fn a_cross_account_fork_of_a_published_version_merges_from_its_served_source() {
 /// beside the draft is checked against the one the record derives — the
 /// head refused by name, the base taken; the shot lands as the trunk's next
 /// member, the draft's text re-minted under the document, with its record
-/// found from the draft; and the board moves the draft's recorded base to
-/// the member the merge minted. The record verifies Equal as of the
-/// position it names for the draft, Unreadable naming the draft to a guest
-/// the board withholds it from, and one naming a position past the board's
-/// head is refused as the record's, the daemon's head carried.
+/// found from the draft; and the draft's recorded base stands at `D.1`, the
+/// shot keeping it (skep #944), so a merge run again from the draft over the
+/// head `D.2` finds the member it made, and one over the head the merge
+/// minted lands a member still holding "big ". Once a publication of the
+/// draft itself moves its base past the record's position, the record
+/// verifies Equal as of the position it names for the draft, Unreadable
+/// naming the draft to a guest the board withholds it from, and one naming
+/// a position past the board's head is refused as the record's, the
+/// daemon's head carried.
 #[test]
 fn a_draft_side_merges_from_the_base_the_board_records() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -834,22 +849,65 @@ fn a_draft_side_merges_from_the_base_the_board_records() {
         .expect("the lookup")
         .expect("a current record");
     assert_eq!((record.base.clone(), record.link.clone()), (base.clone(), Some(link)));
-    // THE BASE MOVES with the shot that rendered the draft (wire.md
-    // §Namespace, `stage`): the board now records the member the merge
-    // minted as the draft's base.
+    // The base stands (skep #944; wire.md §Arrangement, `publish`): the
+    // merge's shot named the draft for its fresh text and kept its base, so
+    // the board still records the version the draft was staged from, the
+    // draft standing behind the member the merge published.
     let meta = read(&board, Some(&token), &frames::doc_metadata(&draft.to_string()));
     assert_eq!(
-        meta["base"].as_str(),
-        Some(member.to_string().as_str()),
-        "the draft's recorded base moved to the merge's member: {meta}"
+        (meta["base"].as_str(), meta["base_copied"].as_str()),
+        (Some(base.to_string().as_str()), Some("11")),
+        "the draft's recorded base stands: {meta}"
     );
+    // The merge run again from the draft composes against its own base:
+    // over the head `D.2` the same M, which the read-first finds in the
+    // member the shot made, nothing written; over the head the merge minted
+    // the head's "big " kept, none of its words read as the draft's removal,
+    // and the shot lands the trunk's next member holding them.
+    let again = compose(&board, Some(&token), &inputs).expect("composed again");
+    assert_eq!(again.key.base, base, "the draft's own base");
+    assert_eq!(
+        as_image(&m_of(&again)),
+        image(&board, &token, &member, 18),
+        "M by identity: the member's words, the draft's text the published words it was re-windowed onto"
+    );
+    let at = board.health().unwrap().log_position();
+    let Landed::Member { address: found, .. } = land(&board, &again, Landing::Shot { merger, draft: None, answers: Answers::default(), journal: None }).expect("landed") else {
+        panic!("a member")
+    };
+    assert_eq!(found, member, "the member the first run made");
+    assert_eq!(board.health().unwrap().log_position(), at, "nothing written");
+    let over_member = compose(&board, Some(&token), &Inputs { head: member.clone(), ..inputs.clone() }).expect("composed over the merge's member");
+    assert_eq!(over_member.key.base, base, "the draft's own base, never the member");
+    let Landed::Member { address: rerun, .. } = land(&board, &over_member, Landing::Shot { merger, draft: None, answers: Answers::default(), journal: None }).expect("landed") else {
+        panic!("a member")
+    };
+    assert_eq!(rerun.to_string(), format!("{d}.4"), "the trunk's next member");
+    assert_eq!(
+        image(&board, &token, &rerun, 18),
+        vec![(format!("{d}.0.1.1"), 4), (format!("{d}.0.1.12"), 4), (format!("{d}.0.1.5"), 7), (format!("{d}.0.1.16"), 3)],
+        "the big cat sat!!! — the head's words kept"
+    );
+    // A publication of the draft itself moves its base (wire.md §Namespace,
+    // `stage`): the draft's words as it holds them, off the trunk's head.
+    let own = shot(
+        &board,
+        &session,
+        &device,
+        &bare_token,
+        &d,
+        Some((&rerun, 18)),
+        &[Staged::Names { draft: &draft }, Staged::Own { from: 1, text: "the cat sat" }, Staged::Own { from: 16, text: "!!!" }],
+    );
+    let meta = read(&board, Some(&token), &frames::doc_metadata(&draft.to_string()));
+    assert_eq!(meta["base"].as_str(), Some(own.to_string().as_str()), "the premise — the draft's base moved with its own publication: {meta}");
     // THE RECORD NAMES THE POSITION the draft was read at (skep #453) — the
     // board's position when `compose` imaged it — and `verify` reads the
     // draft and its recorded base as of it: the premise, `doc_metadata` on
     // `/op-at` at that position answers the base that stood; then Equal, and
-    // Equal still once the draft is edited past the shot, where a record
-    // naming no position reads the draft as it stands and is refused by name
-    // against the moved base.
+    // Equal still once the draft is edited past its publication, where a
+    // record naming no position reads the draft as it stands and is refused
+    // by name against the moved base.
     let SideAt::Draft { position: Some(at), .. } = &record.sides[1] else {
         panic!("the record's draft side names no position: {:?}", record.sides)
     };

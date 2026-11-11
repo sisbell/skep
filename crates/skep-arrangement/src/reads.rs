@@ -513,19 +513,22 @@ impl M5State {
     /// ([`Vstream::stage`](crate::Vstream::stage)) recorded when it minted
     /// `draft` — the member or memberless document copied from with the
     /// extent the copy took, or an alternative's inherited base with its
-    /// source draft and its inherited marker — as the shots the draft has
-    /// rendered and the landings that named a base since moved it: `base`
-    /// the member the draft last rendered, or the base a landing named — its
-    /// head, or the old base an undo restores — and `extent` that member's
-    /// whole count at the shot, or the extent the landing named, never past
-    /// its member's count (B3-S10; the landing lane), and `merge` the marker
-    /// the last landing set, `None` where it set none or a shot cleared it —
-    /// which the doc-metadata read serves as `base`, `base_copied` and
-    /// `merge` to every reader of the draft.
+    /// source draft and its inherited marker — as the draft's own
+    /// publications and the landings that named a base since moved it:
+    /// `base` the member the draft's last own publication minted
+    /// ([`Shot::moves_base_of`](crate::Shot::moves_base_of)), or the base a
+    /// landing named — its head, or the old base an undo restores — and
+    /// `extent` that member's whole count at the shot, or the extent the
+    /// landing named, never past its member's count (B3-S10; the landing
+    /// lane), and `merge` the marker the last landing set, `None` where it
+    /// set none or a shot cleared it — which the doc-metadata read serves as
+    /// `base`, `base_copied` and `merge` to every reader of the draft. A
+    /// shot that publishes the draft's words keeping its base moves neither.
     ///
     /// **The invariant** it answers under is BASE★, stated on [`M5State`]:
     /// the entry is written by the staging record and the landing's, moved
-    /// by the placing record of every shot naming the draft, and by nothing
+    /// by the placing record of every shot that is the draft's own
+    /// publication, and by nothing
     /// else. So `Some` for every draft the operation made with a base to
     /// record, and for a draft whose own publication the board recorded;
     /// `None` for every other address: a `create_new_document` or `fork`

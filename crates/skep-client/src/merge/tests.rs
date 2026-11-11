@@ -2262,8 +2262,10 @@ mod scripted {
                     // minted, `base_copied` its whole count, and the marker
                     // is cleared — the merge is the member's now (wire.md
                     // §Namespace, `stage`); a read as of an earlier position
-                    // answers the base that stood.
-                    if let Some(s) = draft.as_ref().and_then(|s| self.docs.get_mut(s)) {
+                    // answers the base that stood. A shot setting
+                    // `keep_base` moves neither (§Arrangement, `publish`).
+                    let moves = frame["keep_base"].as_bool() != Some(true);
+                    if let Some(s) = draft.as_ref().filter(|_| moves).and_then(|s| self.docs.get_mut(s)) {
                         s.staged.insert(at, (member.clone(), placed));
                         s.markers.insert(at, None);
                     }
@@ -3292,12 +3294,12 @@ mod scripted {
     /// it, the inputs as given. `verify` then reads the draft AND its
     /// recorded base as of that position — its `doc_metadata`, its extent,
     /// its image and the join's `compare` each through `/op-at` at it — so
-    /// once the shot that rendered the draft has moved its base to the
-    /// member minted, and once the draft is edited past the shot, the record
-    /// still verifies Equal; the premise, the board's `doc_metadata` as of
-    /// the position answering the base that stood. A record naming no
-    /// position reads the draft as it stands, and is refused by name against
-    /// the moved base.
+    /// once a publication of the draft itself has moved its base to the
+    /// member it minted, the merge's shot having kept it (skep #944), and
+    /// once the draft is edited past the shot, the record still verifies
+    /// Equal; the premise, the board's `doc_metadata` as of the position
+    /// answering the base that stood. A record naming no position reads the
+    /// draft as it stands, and is refused by name against the moved base.
     #[test]
     fn a_draft_sides_record_names_the_position_read_and_verifies_as_of_it() {
         let (dialer, board, signer) = open(World::window_and_draft());
@@ -3318,8 +3320,8 @@ mod scripted {
             ops[1..].iter().take_while(|o| *o != "find_links_ftt").all(|o| o.starts_with("at:")),
             "every read of the shape after the first at that position: {ops:?}"
         );
-        // The shot renders the draft, and the board moves its recorded base
-        // to the member minted; the record read back names the position.
+        // The shot renders the draft and keeps its recorded base; the record
+        // read back names the position.
         let landed = land(&board, &merged, shot(&session, &signer)).expect("landed");
         let Landed::Member { address, .. } = &landed else { panic!("{landed:?}") };
         assert_eq!(address.to_string(), format!("{D}.3"));
@@ -3341,7 +3343,15 @@ mod scripted {
             };
             v["base"].as_str().map(str::to_string)
         };
-        assert_eq!(base_as_of(None), Some(format!("{D}.3")), "the base moved with the shot");
+        assert_eq!(base_as_of(None), Some(format!("{D}.1")), "the merge's shot kept the draft's base");
+        // A publication of the draft itself, off the trunk's head, moves it:
+        // committed as the board commits one it admitted.
+        let runs = [frames::shot_run(D, &format!("{D}.0.1.1"), 11), frames::shot_run(S, &format!("{S}.0.1.1"), 3)];
+        let head = format!("{D}.3");
+        let own = frames::publication(&frames::PublishFrame { doc: Some(D), base: Some((&head, 18)), draft: Some(S), runs: &runs, ..frames::PublishFrame::default() });
+        let ack = dialer.world().apply(&own);
+        assert_eq!(acked_addr(&ack), Some(format!("{D}.4").as_str()), "{ack}");
+        assert_eq!(base_as_of(None), Some(format!("{D}.4")), "the base moved with the draft's own publication");
         assert_eq!(
             base_as_of(Some(read_at)),
             Some(format!("{D}.1")),
@@ -3527,7 +3537,8 @@ mod scripted {
     /// THE SHOT and its body, byte-checked: the three families — the
     /// document's own runs by reference, a window onto `Z`, a draft side's
     /// fresh text — in one frame from the head with `base`, `base_extent`,
-    /// the `draft` named without asking, the runs in V-order, the id; and
+    /// the `draft` named without asking and `keep_base` beside it, the
+    /// draft's recorded base standing, the runs in V-order, the id; and
     /// the `attest` verifying over the entry frame whose body is the one
     /// `entry_body_publish` spells from the same pieces.
     #[test]
@@ -3558,6 +3569,8 @@ mod scripted {
             (frame["base"].as_str(), frame["base_extent"].as_str(), frame["draft"].as_str()),
             (Some(format!("{D}.2").as_str()), Some("16"), Some(S))
         );
+        assert_eq!(frame["keep_base"], json!(true), "the merge's shot keeps the draft's base (skep #944)");
+        assert_eq!(dialer.world().standing(S).0, Some((format!("{D}.1"), 11)), "the draft's base stands at the version it was staged from");
         assert_eq!(frame["id"].as_str(), Some(landing_id(&merged.key.text(), "publish").as_str()));
         let runs: Vec<(String, String, String)> = frame["runs"]
             .as_array()
@@ -6537,12 +6550,13 @@ mod scripted {
     }
 
     /// A BASE RECORDED AND NO MARKER (P4's second case): the merge was
-    /// published from the draft — the shot moved its base to the member
-    /// minted and cleared the marker — so there is nothing to undo, and an
-    /// undo from the feed would re-record the base backward (N4). The words
-    /// come from the draft's own latest marker-ending feed row, read on the
-    /// supplement and never acted on: a `publish` row, P4's words with the
-    /// recorded base as the version. Nothing is sent and no history is read.
+    /// published from the draft — the draft's own publication moved its base
+    /// to the member minted and cleared the marker — so there is nothing to
+    /// undo, and an undo from the feed would re-record the base backward
+    /// (N4). The words come from the draft's own latest marker-ending feed
+    /// row, read on the supplement and never acted on: a `publish` row, P4's
+    /// words with the member the row names first as the version. Nothing is
+    /// sent and no history is read.
     #[test]
     fn undo_after_a_publication_answers_nothing_to_undo_with_p4s_words_and_sends_nothing() {
         let (dialer, board, signer) = open(draft_landing_world());
@@ -6565,6 +6579,31 @@ mod scripted {
         assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty(), "nothing sent: {ops:?}");
         assert!(ops.iter().any(|o| o.starts_with("GET /changes?") && o.contains(&format!("under={S}")) && o.contains("drafts=true")), "the words off the draft's own rows, on the supplement: {ops:?}");
         assert!(dialer.positions("doc_metadata").is_empty() && dialer.positions("image").is_empty(), "no read of history: {ops:?}");
+        assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
+    }
+
+    /// An undo after a merge's shot names its version, never the base kept.
+    ///
+    /// The shot keeps the draft's recorded base (skep #944): the draft,
+    /// staged at `D.1` and never landed into, carries no marker, so the undo
+    /// meets a base recorded and no marker, and its words name the member
+    /// the draft's latest `publish` row names first, the one the shot
+    /// minted. Nothing is sent.
+    #[test]
+    fn undo_after_a_merge_shot_naming_the_draft_names_the_merges_version_not_the_base_it_kept() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let runs = shot_runs(&draft_m());
+        let head = format!("{D}.2");
+        let frame = frames::publication(&frames::PublishFrame { doc: Some(D), base: Some((&head, 15)), draft: Some(S), keep_base: true, runs: &runs, ..frames::PublishFrame::default() });
+        let ack = dialer.world().apply(&frame);
+        assert_eq!(acked_addr(&ack), Some(format!("{D}.3").as_str()), "{ack}");
+        assert_eq!(dialer.world().standing(S), (Some((format!("{D}.1"), 11)), None), "the premise: the base kept, no marker");
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        let err = undo(&board, merger(&session, &signer), &a(S), &a(K), None, None).expect_err("nothing to undo");
+        assert_eq!(err, Refusal::NothingToUndo { draft: a(S), why: NoUndo::Published { version: a(&format!("{D}.3")) } });
+        assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty(), "nothing sent: {:?}", dialer.ops());
         assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
     }
 

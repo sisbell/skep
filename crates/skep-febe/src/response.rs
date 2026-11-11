@@ -355,7 +355,9 @@ pub enum Response {
     /// base of the address named (the staging act, B3-S10; M5's
     /// `draft_base`): the member or bare document the draft's next
     /// publication lands after — recorded by the `stage` that minted it and
-    /// moved by every shot the draft renders — and the extent the copy took
+    /// moved by every publication of the draft itself and every landing that
+    /// names a base, never by a shot keeping it (`keep_base`) — and the
+    /// extent the copy took
     /// of it, both absent where the board records no base: a document minted
     /// by `create_new_document` or `fork` and never published, an alternative
     /// of a draft the board held no base for, a member, a trunk. `source` is

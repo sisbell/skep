@@ -98,6 +98,7 @@ fn the_request_image_and_the_member_image_spell_one_canonical_row() {
         base: None,
         draft: Some(draft.clone()),
         also: vec![],
+        keep_base: false,
         runs: vec![
             ShotRun { origin: draft.clone(), run: run(&ca(1), 2) },
             ShotRun { origin: a(&[1, 0, 1, 0, 3]), run: run(&pca(1), 1) },
@@ -158,7 +159,7 @@ fn resolve_end_resolves_the_tags_and_the_member_positions_at_the_commit() {
 fn a_family_publication_takes_each_also_drafts_link_key_and_its_content_key_where_its_entry_carries_a_place() {
     let (edition, draft, other) = (a(&[1, 0, 1, 0, 3]), a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, 2]));
     let other_ca = |k: u32| a(&[1, 0, 1, 0, 2, 0, 1, k]);
-    let shot = |also: Vec<Address>, runs: Vec<ShotRun>| Shot { base: None, draft: Some(draft.clone()), also, runs };
+    let shot = |also: Vec<Address>, runs: Vec<ShotRun>| Shot { base: None, draft: Some(draft.clone()), also, keep_base: false, runs };
     let target = PublishTarget::Document(edition.clone());
     let none = PublishDeposits::default();
     let place = Some(VPos::content(Nat::from(1u32)));
@@ -216,7 +217,7 @@ fn a_bare_base_takes_the_first_members_version_key_and_a_member_base_its_own() {
     let (first, second) = (a(&[1, 0, 1, 0, 3, 1]), a(&[1, 0, 1, 0, 3, 2]));
     let target = PublishTarget::Document(edition.clone());
     let none = PublishDeposits::default();
-    let shot = |base: Option<Base>| Shot { base, draft: Some(draft.clone()), also: vec![], runs: vec![ShotRun { origin: draft.clone(), run: run(&ca(1), 2) }] };
+    let shot = |base: Option<Base>| Shot { base, draft: Some(draft.clone()), also: vec![], keep_base: false, runs: vec![ShotRun { origin: draft.clone(), run: run(&ca(1), 2) }] };
     let bare = publication_lock_keys(&target, &shot(Some(Base { member: edition.clone(), extent: Nat::from(0u32) })), &[None], &[], &none);
     assert!(bare.contains(&head_lock_key(&edition)) && bare.contains(&M3State::content_lock_key(&edition)), "the shot's own: {bare:?}");
     assert!(bare.contains(&M3State::version_lock_key(&first)), "the bare document's base takes the first member's version key: {bare:?}");
@@ -360,7 +361,7 @@ fn with_claim(world: World, home: &Address, k: u32, old: &Address, new: &Address
 
 /// A records-less shot off `base`, the whole arrangement empty.
 fn off(base: &Address) -> Shot {
-    Shot { base: Some(Base { member: base.clone(), extent: Nat::from(0u32) }), draft: None, also: vec![], runs: vec![] }
+    Shot { base: Some(Base { member: base.clone(), extent: Nat::from(0u32) }), draft: None, also: vec![], keep_base: false, runs: vec![] }
 }
 
 /// The deposits of `supersede` alone.
@@ -424,7 +425,7 @@ fn each_supersede_refusal_names_its_entry_and_its_cause() {
         "a repeat, at the second"
     );
     let mint = PublishTarget::Mint { account: a(&[1, 0, 1]) };
-    let birth = Shot { base: None, draft: None, also: vec![], runs: vec![] };
+    let birth = Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![] };
     assert_eq!(
         plan_deposits(&world, P1, &mint, &birth, &supersede(vec![daughter(1, 1)])).expect_err("refused"),
         not_member(0),
@@ -447,7 +448,7 @@ fn a_supersede_list_beside_a_base_the_trunk_moved_past_is_refused_whole_as_head_
     let world = chain_world();
     let target = PublishTarget::Document(trunk());
     let head_moved = PlanFault::Supersede { index: 0, cause: SupersedeCause::HeadMoved(member(2)) };
-    let unbased = Shot { base: None, draft: None, also: vec![], runs: vec![] };
+    let unbased = Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![] };
     for (shot, name) in [(off(&member(1)), "an older member"), (off(&trunk()), "the bare document"), (off(&daughter(1, 1)), "a daughter"), (unbased, "no base")] {
         let refused = |deposits: PublishDeposits| plan_deposits(&world, P1, &target, &shot, &deposits).expect_err("refused");
         assert_eq!(refused(supersede(vec![daughter(1, 1)])), head_moved, "{name}");
@@ -468,7 +469,7 @@ fn a_supersede_list_beside_a_base_the_trunk_moved_past_is_refused_whole_as_head_
     // check speaks.
     let memberless = PublishTarget::Document(set());
     let s1 = a(&[1, 0, 1, 0, 4, 1]);
-    let birth = Shot { base: None, draft: None, also: vec![], runs: vec![] };
+    let birth = Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![] };
     for shot in [off(&set()), birth] {
         let refused = plan_deposits(&world, P1, &memberless, &shot, &supersede(vec![s1.clone()])).expect_err("refused");
         assert_eq!(refused, PlanFault::Supersede { index: 0, cause: SupersedeCause::NotMember }, "no member stands: no head moved");

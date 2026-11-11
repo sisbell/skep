@@ -41,10 +41,13 @@
 //! list cut where the draft cuts it ([`windows::kept_places`]; the link-sets
 //! design §5.7 (viii)), so the one commit re-windows the draft onto the
 //! published words. The draft
-//! keeps only the words it held; those M holds beyond it stay out of it,
-//! while its recorded base moves to the member, as at every shot rendering
-//! a draft. A part answered by its counterpart is the published words by
-//! reference — signed by value where they lie in the document's own chain,
+//! keeps only the words it held — those M holds beyond it stay out of it —
+//! and the base it stood on: the shot sets `keep_base` wherever it names a
+//! draft (skep #944), so the draft's recorded base and marker stand, the
+//! draft stands behind the member, and a later merge from it composes
+//! against its own base. A part answered by its counterpart is the
+//! published words by reference — signed by value where they lie in the
+//! document's own chain,
 //! read through the window's own span, and by address elsewhere — a part
 //! kept private is a window with no place, a part left out sent nowhere. A
 //! daughter in the acknowledgment is reported at once
@@ -1253,6 +1256,10 @@ impl Writer<'_> {
             base: Some((head.clone(), merged.head_extent)),
             draft: draft.cloned(),
             also: Vec::new(),
+            // A merge shot is no publication of the draft it names: M holds
+            // the other sides' words, so the draft's recorded base stands
+            // (skep #944) wherever a draft rides.
+            keep_base: draft.is_some(),
             runs,
             places,
             also_places: Vec::new(),

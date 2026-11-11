@@ -1200,14 +1200,18 @@ impl Fields {
     /// distinct, none the `draft` itself, and carried only beside a `draft`,
     /// since a shot naming no rendering draft re-mints nothing; absent and
     /// the empty list alike are the one-draft shot, the form the marshal
-    /// writes back; `runs` is the client-rendered arrangement, each run its
-    /// origin, its start and its width.
+    /// writes back; `keep_base` is a flag, the rendering draft's recorded
+    /// base kept (skep #944), carried only beside a `draft` — absent, `null`
+    /// and `false` alike are the draft's own publication, the form the
+    /// marshal writes back; `runs` is the client-rendered arrangement, each
+    /// run its origin, its start and its width.
     ///
     /// # Errors
     ///
-    /// A [`Refusal`] where `base`, `base_extent`, `draft` or `also` is
-    /// present and refused, where one of `base` and `base_extent` comes
-    /// without the other, where `also` is carried without `draft`, or where
+    /// A [`Refusal`] where `base`, `base_extent`, `draft`, `also` or
+    /// `keep_base` is present and refused, where one of `base` and
+    /// `base_extent` comes without the other, where `also` or a set
+    /// `keep_base` is carried without `draft`, or where
     /// `runs` is missing or refused; the two shapes of `also` judged entry by
     /// entry — an entry that is the `draft` itself, an entry repeating an
     /// earlier one — name the entry at fault in the `malformed` rejection's
@@ -1271,8 +1275,17 @@ impl Fields {
                 ));
             }
         }
+        // The rendering draft's base kept (skep #944): a flag, read only
+        // beside the draft whose base it keeps.
+        let keep_base = self.flag("keep_base")?;
+        if keep_base && draft.is_none() {
+            return Err(PErr(
+                "field 'keep_base': the flag keeps the rendering draft's base, so 'draft' is required beside it".into(),
+            )
+            .into());
+        }
         let runs = self.field("runs", |v| p_list(v, p_shot_run))?;
-        Ok(Shot { base, draft, also, runs })
+        Ok(Shot { base, draft, also, keep_base, runs })
     }
 
     /// Takes the publish shot's kept places (the link-sets design §5.7).

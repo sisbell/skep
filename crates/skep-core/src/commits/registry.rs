@@ -231,6 +231,7 @@ impl Commits {
                 base: Some(Base { member: base_member, extent: Nat::from(0u32) }),
                 draft: Some(draft.clone()),
                 also: Vec::new(),
+                keep_base: false,
                 runs: vec![ShotRun { origin: draft, run }],
             };
             let Some(member) = seed.publish(registry.clone(), shot, &refused) else {

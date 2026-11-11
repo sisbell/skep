@@ -56,8 +56,10 @@
 //!   request and never minted here, so the frame stays position-free; the
 //!   kept places a `publish` carries beside its shot (`Op::Publish`'s
 //!   `places` and `also_places`, the link-sets design §5.7) are no part of
-//!   it, outside the preimage as `draft` and `also` are, so a shot with
-//!   places in either list verifies as the same shot without them; and,
+//!   it, outside the preimage as `draft`, `also` and `keep_base` are, so a
+//!   shot with places in either list verifies as the same shot without
+//!   them, and a shot keeping its draft's base as the same shot moving it;
+//!   and,
 //!   behind the shot's rows, THE DEPOSIT ROWS of a
 //!   publication that carries `links`, `retract`, `read_with` or
 //!   `supersede` entries
@@ -445,11 +447,12 @@ pub(super) fn compose(
         }
         // The kept places the request carries beside the shot — `places`,
         // the rendering draft's, and `also_places`, each `also` draft's (the
-        // link-sets design §5.7) — are outside the preimage, as `draft` and
-        // `also` are: the shot alone is read here — the body spells every
-        // re-minted run by its values and names no draft, so a shot naming
-        // the family's other drafts signs as the same shot naming none — and
-        // a shot with places in either list signs as the same shot without
+        // link-sets design §5.7) — are outside the preimage, as `draft`,
+        // `also` and `keep_base` are: the shot alone is read here — the body
+        // spells every re-minted run by its values and names no draft, so a
+        // shot naming the family's other drafts signs as the same shot
+        // naming none, and one keeping its draft's base as one moving it —
+        // and a shot with places in either list signs as the same shot without
         // them. The deposits beside it are IN the preimage, behind the shot's
         // rows (`publication_body`).
         Op::Publish { target, shot, deposits, .. } => {

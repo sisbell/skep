@@ -154,9 +154,11 @@ pub struct Shape<'a> {
     /// — whose runs the shot re-inserts, priced as values and records; empty
     /// at a bare shot naming none.
     pub drafts: &'a [Address],
-    /// The rendering draft the shot names, whose address the placing record
-    /// stores in its own slot — priced at `stored_tumbler_bytes` of it; `None`
-    /// at a shot naming none.
+    /// The rendering draft whose base the shot moves, if it moves one.
+    ///
+    /// The placing record stores its address in its own slot, priced at
+    /// `stored_tumbler_bytes` of it; `None` at a shot naming none, and at one
+    /// keeping the draft's base (`keep_base`), whose record names none.
     pub draft: Option<&'a Address>,
     /// The term the request's addresses are minted under — the trunk at the
     /// document form, the account at the mint form.

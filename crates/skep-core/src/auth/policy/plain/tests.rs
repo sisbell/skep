@@ -86,6 +86,7 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
         base: None,
         draft,
         also: vec![],
+        keep_base: false,
         runs: vec![ShotRun { origin: home.clone(), run: Run::new(addr_of(&[1, 0, 1, 0, 1, 0, 1, 1]), Nat::from(1u32)).expect("a run") }; runs],
     };
     let publish_at = |shot: Shot, places: Vec<Option<VPos>>, read_with: usize| Op::Publish {
@@ -209,7 +210,7 @@ fn a_publications_base_runs_are_set_ahead_of_the_lock_where_an_entry_names_an_or
     let home = crate::codec::wire_address(&board.home).expect("the home's address");
     let publish = |base: &Address, extent: u32, old: Option<Address>| Op::Publish {
         target: PublishTarget::Document(home.clone()),
-        shot: Shot { base: Some(Base { member: base.clone(), extent: Nat::from(extent) }), draft: None, also: Vec::new(), runs: Vec::new() },
+        shot: Shot { base: Some(Base { member: base.clone(), extent: Nat::from(extent) }), draft: None, also: Vec::new(), keep_base: false, runs: Vec::new() },
         places: Vec::new(),
         also_places: Vec::new(),
         deposits: PublishDeposits {
@@ -421,7 +422,7 @@ fn a_correspondence_records_nullify_is_refused_to_its_owner_and_falls_through_fo
     use skep_links::{OriginalEntry, PublishDeposits, PublishTarget};
     let publish = |retract: Vec<Address>, originals: Vec<Address>| Op::Publish {
         target: PublishTarget::Document(addr_of(&[1, 0, 1, 0, 1])),
-        shot: Shot { base: None, draft: None, also: vec![], runs: vec![] },
+        shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![] },
         places: vec![],
         also_places: vec![],
         deposits: PublishDeposits {

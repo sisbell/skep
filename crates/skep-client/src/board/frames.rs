@@ -434,8 +434,9 @@ pub fn shot_run(origin: &str, i_start: &str, width: u64) -> Value {
 /// members is the bare shot byte for byte — `{"op":"publish","doc":…,
 /// "runs":[…]}` with `base` and `base_extent` together where the shot is
 /// staged from a member, `draft` where one is named, `also` where the
-/// family's other drafts are named beside it, `attest` where the caller
-/// composed one and `id` the per-session idempotency key — and
+/// family's other drafts are named beside it, `keep_base` where the shot
+/// keeps the draft's base, `attest` where the caller composed one and `id`
+/// the per-session idempotency key — and
 /// [`publication`] is the one builder every shot goes through, the merge
 /// landing's and the dev board's included.
 #[derive(Debug, Clone, Default)]
@@ -457,6 +458,11 @@ pub struct PublishFrame<'a> {
     /// the rendering draft's (the Nelson way, B3-S10), in the request's
     /// order; sent only where non-empty.
     pub also: &'a [&'a str],
+    /// `keep_base: true`: the rendering draft's base and marker stand.
+    ///
+    /// It is the merge's shot from the head (wire.md §Arrangement,
+    /// `publish`; skep #944); sent only where true, beside `draft`.
+    pub keep_base: bool,
     /// The runs in V-order, each as [`shot_run`] spells it.
     pub runs: &'a [Value],
     /// The kept places, parallel to `runs` — each a [`place`] or `null`;
@@ -508,7 +514,8 @@ pub struct AlsoPlacesFrame<'a> {
 /// `also_places` only with the entries whose list carries a place, in
 /// `also`'s order, and only where one remains (the canonical form the codec
 /// writes), `also`, `links`, `retract`, `originals`, `read_with` and
-/// `supersede` only where non-empty, `mint` and `claim` only where true.
+/// `supersede` only where non-empty, `mint`, `claim` and `keep_base` only
+/// where true.
 pub fn publication(p: &PublishFrame<'_>) -> Value {
     let mut frame = with_id(json!({"op": "publish", "runs": p.runs}), p.id);
     if let Some(doc) = p.doc {
@@ -532,6 +539,9 @@ pub fn publication(p: &PublishFrame<'_>) -> Value {
     }
     if !p.also.is_empty() {
         frame["also"] = json!(p.also);
+    }
+    if p.keep_base {
+        frame["keep_base"] = Value::Bool(true);
     }
     if p.places.iter().any(|place| !place.is_null()) {
         frame["places"] = Value::Array(p.places.to_vec());

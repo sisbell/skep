@@ -151,12 +151,15 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// source; the landing op
 /// ([`Vstream::set_arrangement`](crate::Vstream::set_arrangement)) journals
 /// the same record to move the base and set or clear the marker (the
-/// landing lane; skep #764); and the shot's placing record names the draft
-/// it rendered ([`ShotPlace`](M5Rec::ShotPlace)'s `draft`), at which the
-/// fold moves the draft's base to the member the shot minted and its extent
-/// to that member's whole count, clearing the marker — so a draft staged
-/// from version 3 that publishes version 4 publishes version 5 next, never
-/// a daughter of version 3. It is what the doc-metadata read serves as
+/// landing lane; skep #764); and the placing record of a shot that is the
+/// draft's own publication names the draft it rendered
+/// ([`ShotPlace`](M5Rec::ShotPlace)'s `draft`,
+/// [`Shot::moves_base_of`](crate::Shot::moves_base_of)), at which the fold
+/// moves the draft's base to the member the shot minted and its extent to
+/// that member's whole count, clearing the marker — so a draft staged from
+/// version 3 that publishes version 4 publishes version 5 next, never a
+/// daughter of version 3. A shot that keeps its rendering draft's base
+/// (skep #944) names no draft there. It is what the doc-metadata read serves as
 /// `base`, `base_copied` and `merge` to every reader of the draft, and
 /// state the checkpoint must carry under the no-default rule, as the two
 /// fields before it are.
@@ -268,32 +271,36 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   answering `None` — which would admit every stale edit — the map
 ///   carrying no default.
 /// * **BASE★ — a draft's recorded base is the surface it was staged from,
-///   moved to each member it renders and to each base a landing names, and
-///   its marker travels with it.** `draft_bases` gains or replaces `draft`'s
-///   entry at every [`DraftBase`](M5Rec::DraftBase) record — the staging
-///   operation's, journaled beside the snapshot that shares the source, and
-///   the landing op's, journaled beside the placement that sets the draft's
-///   whole arrangement — the record's own `base`, `extent` and `source`,
-///   and its `merge` with THIS commit's position stamped as the marker's
-///   `at` (the fold's, never a member a record carries: the position the
-///   marker was put on this document, a landing's own or the stage's that
-///   copied it); and moves it at every [`ShotPlace`](M5Rec::ShotPlace)
-///   whose `draft` names it: `base` to the member the record mints,
-///   `extent` to the count the record leaves that member holding, `source`
-///   kept, the marker CLEARED (the shot folds the merge into the member).
-///   A shot naming a draft the map holds no entry for makes one — the
-///   member it rendered as its base and its source — so a draft whose own
-///   first publication minted its edition stands on that edition's first
-///   member. Two records move the map and no other: a `version`'s snapshot
-///   notes a source and no base, a placement and a removal mint nothing and
-///   touch no entry — so the publication's re-window of an `also` draft
-///   leaves that draft's base and marker standing — and a `fork` reaches
-///   this slice with no record. On the decode path, as SOURCE★: carried
-///   whole, re-established by no door, and a checkpoint written without the
-///   field fails to decode rather than answering `None` for every staged
-///   draft, the map carrying no default — and so does a checkpoint holding
-///   an entry written before the marker, the entry carrying no default for
-///   it either.
+///   moved to each member its own publications mint and to each base a
+///   landing names, and its marker travels with it.** `draft_bases` gains
+///   or replaces `draft`'s entry at every [`DraftBase`](M5Rec::DraftBase)
+///   record — the staging operation's, journaled beside the snapshot that
+///   shares the source, and the landing op's, journaled beside the
+///   placement that sets the draft's whole arrangement — the record's own
+///   `base`, `extent` and `source`, and its `merge` with THIS commit's
+///   position stamped as the marker's `at` (the fold's, never a member a
+///   record carries: the position the marker was put on this document, a
+///   landing's own or the stage's that copied it); and moves it at every
+///   [`ShotPlace`](M5Rec::ShotPlace) whose `draft` names it: `base` to the
+///   member the record mints, `extent` to the count the record leaves that
+///   member holding, `source` kept, the marker CLEARED (the shot folds the
+///   merge into the member). The shot names there the draft it is the
+///   publication of ([`Shot::moves_base_of`](crate::Shot::moves_base_of))
+///   and no other: no `also` draft, and no rendering draft whose shot keeps
+///   its base (skep #944). A shot naming a draft the map holds no entry for
+///   makes one — the member it rendered as its base and its source — so a
+///   draft whose own first publication minted its edition stands on that
+///   edition's first member. Two records move the map and no other: a
+///   `version`'s snapshot notes a source and no base, a placement and a
+///   removal mint nothing and touch no entry — so the publication's
+///   re-window of an `also` draft, and of a rendering draft whose shot
+///   keeps its base, leaves that draft's base and marker standing — and a
+///   `fork` reaches this slice with no record. On the decode path, as
+///   SOURCE★: carried whole, re-established by no door, and a checkpoint
+///   written without the field fails to decode rather than answering
+///   `None` for every staged draft, the map carrying no default — and so
+///   does a checkpoint holding an entry written before the marker, the
+///   entry carrying no default for it either.
 ///
 /// Two public reads mean what they say only under P4★:
 /// [`deletions`](M5State::deletions) is the deleted set rather than an
@@ -398,7 +405,7 @@ pub struct M5State {
 /// landing that records a base
 /// ([`Vstream::set_arrangement`](crate::Vstream::set_arrangement)), and
 /// moved by the shot's placing record ([`M5Rec::ShotPlace`]) at each
-/// publication the draft renders, as [`M5State`] states.
+/// publication of the draft itself, as [`M5State`] states.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DraftBase {
     /// The member or memberless document the draft's next publication lands
@@ -407,8 +414,9 @@ pub struct DraftBase {
     /// At the staging it is the surface copied from — a version member, the
     /// trunk head of a bare published document, or the memberless document
     /// itself — or, for an alternative of another draft, that draft's own
-    /// base, inherited; at each publication the draft renders it moves to
-    /// the member the shot minted.
+    /// base, inherited; at each publication of the draft itself it moves to
+    /// the member the shot minted, and a shot keeping the draft's base
+    /// leaves it standing.
     pub base: Address,
     /// How many content positions of `base` the copy took.
     ///
@@ -435,8 +443,9 @@ pub struct DraftBase {
     /// a stage of a marked draft beside the base it inherits — its `at` the
     /// stage's own commit, the position the marker was put on THIS document
     /// — cleared by the shot that moves the base, and untouched by every
-    /// record that leaves the base untouched, the publication's re-window of
-    /// an `also` draft among them. Served as `doc_metadata`'s `merge`.
+    /// record that leaves the base untouched: the publication's re-window of
+    /// an `also` draft among them, and a shot keeping the rendering draft's
+    /// base. Served as `doc_metadata`'s `merge`.
     pub merge: Option<Marker>,
 }
 
@@ -659,12 +668,15 @@ pub enum M5Rec {
     /// placement holds, and a birth version born empty is noted at its birth,
     /// zero, by this record (BIRTH★).
     ///
-    /// `draft` is the rendering draft the shot named, where it named one
-    /// (B3-S10): the fold moves that draft's recorded base to the member
-    /// this record mints and its extent to the count the record leaves the
-    /// member holding, or makes the entry where the draft had none (BASE★),
-    /// so the draft's next publication lands after the member it just made.
-    /// `None` is a shot naming no draft, which moves no base.
+    /// `draft` is the draft whose recorded base the shot moves
+    /// ([`Shot::moves_base_of`](crate::Shot::moves_base_of)): the document
+    /// the rendering draft projects to, where the shot is that draft's own
+    /// publication (B3-S10). The fold moves that draft's recorded base to the
+    /// member this record mints and its extent to the count the record
+    /// leaves the member holding, or makes the entry where the draft had none
+    /// (BASE★), so the draft's next publication lands after the member it
+    /// just made. `None` is a shot naming no draft, or one keeping its
+    /// rendering draft's base (skep #944), which moves no base.
     #[non_exhaustive]
     ShotPlace { doc: Address, runs: Vec<Run>, terms: ShotTerms, draft: Option<Address> },
     /// The record of where a draft stands: the staging operation's of where
@@ -930,8 +942,9 @@ impl M5State {
             // empty source's `new`, and appends no provenance. No fork source
             // is noted: the shot mints its member off no source (SOURCE★).
             //
-            // The rendering draft's base moves to the member (BASE★): the
-            // draft the record names now stands on the member it just made,
+            // The named draft's base moves to the member (BASE★): the draft
+            // the record names — the rendering draft of a shot that is its
+            // own publication — now stands on the member it just made,
             // its extent that member's whole count — the spliced list's, the
             // same count the birth extent reads — its source kept and its
             // marker CLEARED, the merge it carried folded into the member

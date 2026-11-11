@@ -236,6 +236,7 @@ fn all_requests() -> Vec<Request> {
                     base: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(3) }),
                     draft: Some(d3()),
                     also: vec![],
+                    keep_base: false,
                     runs: vec![
                         shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 3),
                         shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 2),
@@ -255,6 +256,7 @@ fn all_requests() -> Vec<Request> {
                     base: None,
                     draft: None,
                     also: vec![],
+                    keep_base: false,
                     runs: vec![shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 1]), 5)],
                 },
                 places: vec![],
@@ -276,6 +278,7 @@ fn all_requests() -> Vec<Request> {
                     base: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(3) }),
                     draft: Some(d3()),
                     also: vec![d2()],
+                    keep_base: false,
                     runs: vec![
                         shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 3),
                         shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 2),
@@ -300,6 +303,7 @@ fn all_requests() -> Vec<Request> {
                     base: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(3) }),
                     draft: Some(d3()),
                     also: vec![],
+                    keep_base: false,
                     runs: vec![
                         shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 3),
                         shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 2),
@@ -344,6 +348,7 @@ fn all_requests() -> Vec<Request> {
                     base: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(3) }),
                     draft: None,
                     also: vec![],
+                    keep_base: false,
                     runs: vec![shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 3)],
                 },
                 places: vec![],
@@ -364,6 +369,7 @@ fn all_requests() -> Vec<Request> {
                     base: None,
                     draft: Some(d3()),
                     also: vec![],
+                    keep_base: false,
                     runs: vec![shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 4)],
                 },
                 places: vec![],
@@ -389,7 +395,7 @@ fn all_requests() -> Vec<Request> {
             None,
             Op::Publish {
                 target: PublishTarget::Mint { account: a(&[1, 0, 1]) },
-                shot: Shot { base: None, draft: None, also: vec![], runs: vec![shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 1]), 1)] },
+                shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 1]), 1)] },
                 places: vec![],
                 also_places: vec![],
                 deposits: PublishDeposits::default(),
@@ -401,7 +407,7 @@ fn all_requests() -> Vec<Request> {
             None,
             Op::Publish {
                 target: PublishTarget::Document(d1()),
-                shot: Shot { base: None, draft: Some(d3()), also: vec![], runs: vec![shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 2)] },
+                shot: Shot { base: None, draft: Some(d3()), also: vec![], keep_base: false, runs: vec![shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 2)] },
                 places: vec![],
                 also_places: vec![],
                 deposits: PublishDeposits { claim: true, ..PublishDeposits::default() },
@@ -973,6 +979,43 @@ fn a_shots_also_names_the_familys_other_drafts_and_is_refused_by_entry() {
     assert_eq!(places_of(&parse_ok(&codec, minted_family)), vec![Some(vp(1, 1))], "at the mint form too");
     let req = parse_ok(&codec, &family(r#","places":[{"subspace":"1","ordinal":"1"},{"subspace":"1","ordinal":"4"},null]"#));
     assert_eq!(places_of(&req), vec![Some(vp(1, 1)), Some(vp(1, 4)), None]);
+}
+
+/// A shot's `keep_base` is a flag the codec reads beside `draft` alone.
+///
+/// It keeps the rendering draft's base (skep #944; wire.md §Arrangement,
+/// `publish`). `keep_base: true` rides the canonical form and parses back
+/// to the same request; absent, `null` and `false` alike are the draft's
+/// own publication, no member in the canonical form; the flag without
+/// `draft`, or one that is no boolean, is refused at the door as
+/// `malformed`, no entry at fault.
+#[test]
+fn a_shots_keep_base_rides_only_beside_its_draft() {
+    let codec = JsonCodec;
+    const RUNS: &str = r#"[{"origin":"1.0.1.0.7","i_start":"1.0.1.0.7.0.1.1","width":"2"}]"#;
+    let frame = |members: &str| format!(r#"{{"op":"publish","doc":"1.0.1.0.1"{members},"runs":{RUNS}}}"#).into_bytes();
+    let keep_base_of = |req: &Request| match &req.op {
+        Op::Publish { shot, .. } => (shot.keep_base, shot.moves_base_of()),
+        other => panic!("a publish, not {other:?}"),
+    };
+    let canonical = |req: &Request| String::from_utf8(codec.marshal_request(req)).expect("utf-8");
+    let req = parse_ok(&codec, &frame(r#","draft":"1.0.1.0.7","keep_base":true"#));
+    assert_eq!(keep_base_of(&req), (true, None), "the base kept: the shot moves none");
+    let text = canonical(&req);
+    assert!(text.contains(r#""keep_base":true"#), "{text}");
+    assert_eq!(parse_ok(&codec, text.as_bytes()), req, "the canonical form parses to the same request");
+    for unset in [r#","draft":"1.0.1.0.7""#, r#","draft":"1.0.1.0.7","keep_base":false"#, r#","draft":"1.0.1.0.7","keep_base":null"#] {
+        let req = parse_ok(&codec, &frame(unset));
+        assert_eq!(keep_base_of(&req), (false, Some(a(&[1, 0, 1, 0, 7]))), "{unset}: the draft's own publication");
+        assert!(!canonical(&req).contains("keep_base"), "{unset}: no member in the canonical form");
+    }
+    for (members, what) in [(r#","keep_base":true"#, "without draft"), (r#","draft":"1.0.1.0.7","keep_base":"yes""#, "no boolean")] {
+        let e = codec.parse(&frame(members)).expect_err("refused");
+        let (site, detail) = (e.site.clone(), e.detail.clone().unwrap_or_default());
+        let rej = Rejection::unparseable(e);
+        assert_eq!((rej.op, rej.code), (OpKind::Unparseable, RejectCode::Malformed), "{what}");
+        assert!(detail.contains("'keep_base'") && site.and_then(|s| s.index).is_none(), "{what}: {detail}");
+    }
 }
 
 /// EACH `also` DRAFT's OWN KEPT PLACES (the link-sets design §5.7 (viii);

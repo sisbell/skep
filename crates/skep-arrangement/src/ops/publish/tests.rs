@@ -139,6 +139,7 @@ fn shot_off_the_head(extent: u32, runs: Vec<ShotRun>) -> Shot {
         }),
         draft: None,
         also: vec![],
+        keep_base: false,
         runs,
     }
 }
@@ -240,6 +241,7 @@ fn the_shot_refuses_a_reinsert_past_its_budget_before_probing_an_address() {
         }),
         draft: Some(doc1()),
         also: vec![],
+        keep_base: false,
         runs,
     };
     // Runs of the draft, each `(first ordinal, width)`.
@@ -328,6 +330,7 @@ fn a_shot_reinserts_a_drafts_one_byte_values_as_one_stretch() {
         base: None,
         draft: Some(doc1()),
         also: vec![],
+        keep_base: false,
         runs: vec![ShotRun { origin: doc1(), run: run(&ca(1), 3) }],
     };
     let (member, _) = Vstream::new(&k)
@@ -407,6 +410,7 @@ fn a_shot_refused_after_its_reinsert_is_staged_leaves_no_mint_no_write_and_no_me
         }),
         draft: Some(doc1()),
         also: vec![],
+        keep_base: false,
         runs: vec![ShotRun {
             origin: doc1(),
             run: run(&ca(1), 1),

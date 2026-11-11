@@ -27,8 +27,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   from, or an alternative's inherited base), the extent the copy took,
   measured at the commit, and its source — in ONE commit, so the draft
   stands whole or not at all and no client-written record says where
-  it began. The base moves at every shot the draft renders: the shot's
-  placing record names its rendering draft, and the fold moves the
+  it began. The base moves at every publication of the draft itself:
+  the shot's placing record names its rendering draft — unless the shot
+  sets `keep_base`, as the merge's shot from the head does, leaving the
+  draft behind the member it published — and the fold moves the
   draft's base to the member minted (`M5State::draft_base`, which the
   doc-metadata read serves as `base` and `base_copied`). Always
   private, never publish-class, admitted whatever the source's state:

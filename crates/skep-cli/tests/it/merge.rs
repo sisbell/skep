@@ -31,8 +31,8 @@
 //! it, a `--base` that agrees taken, and one the board's record does not
 //! derive refused by name, exit 1, nothing on stdout; and `--draft` WITH
 //! `--publish` — the draft reading as the member's words by identity after
-//! the publish, its base the member, the same publish again landing
-//! nothing; and A STRANGER's
+//! the publish, its base the one it was staged from, the same publish again
+//! landing nothing; and A STRANGER's
 //! documents — a second top-level account's private draft and fork — each
 //! `withheld` refusal saying beside the document what the run did, and the
 //! draft named as the journal refused before the shot, exit 3, nothing
@@ -888,10 +888,10 @@ fn a_draft_is_merged_over_the_base_the_board_records_and_a_disagreeing_base_is_r
 
 /// `--draft ⟨S⟩ --publish` (skep #938): the words the shot publishes are
 /// taken from the draft in its one commit, so the draft reads as the
-/// member's words by identity, not as its own, and its recorded base is the
-/// member. The same `--publish` again — the draft staged from the head and
-/// the head named, so the merge composes what it composed — finds the member
-/// and lands nothing.
+/// member's words by identity, not as its own, and its recorded base stands
+/// at the head it was staged from, the shot keeping it (skep #944). The same
+/// `--publish` again — the draft staged from the head and the head named, so
+/// the merge composes what it composed — finds the member and lands nothing.
 #[test]
 fn a_draft_published_by_a_merge_reads_as_the_members_words_and_the_same_publish_lands_nothing() {
     let dir = tempfile::tempdir().unwrap();
@@ -913,7 +913,7 @@ fn a_draft_published_by_a_merge_reads_as_the_members_words_and_the_same_publish_
     assert_eq!(member, format!("{d}.3"), "the trunk's next member");
     assert_eq!(rig.image(&token, &s, 18), rig.image(&token, &addr(&member), 18), "the draft holds the member's words by identity");
     let meta = rig.read(&token, &frames::doc_metadata(&s_s));
-    assert_eq!(meta["base"].as_str(), Some(member.as_str()), "the draft's recorded base moved to the member: {meta}");
+    assert_eq!(meta["base"].as_str(), Some(head_s.as_str()), "the draft's recorded base stands where it was staged: {meta}");
 
     let before = position();
     let publishes = rig.publishes_under(&token, &d);

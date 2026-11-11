@@ -103,7 +103,7 @@ fn a_publish_rows_drafts_lead_with_the_rendering_draft_then_the_also_drafts_writ
     // with no run of its identity, not.
     assert_eq!(
         drafts_of(
-            Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone(), b.clone()], runs: vec![run_of("1.0.1.0.5", 1), run_of("1.0.1.0.6", 1)] },
+            Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone(), b.clone()], keep_base: false, runs: vec![run_of("1.0.1.0.5", 1), run_of("1.0.1.0.6", 1)] },
             vec![]
         ),
         vec![d.clone(), a1.clone()]
@@ -111,14 +111,14 @@ fn a_publish_rows_drafts_lead_with_the_rendering_draft_then_the_also_drafts_writ
     // A's run alone: the rendering draft first all the same, though nothing
     // is written in it, then A — never A where the rendering draft stands.
     assert_eq!(
-        drafts_of(Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone()], runs: vec![run_of("1.0.1.0.6", 1)] }, vec![]),
+        drafts_of(Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone()], keep_base: false, runs: vec![run_of("1.0.1.0.6", 1)] }, vec![]),
         vec![d.clone(), a1.clone()]
     );
     // A kept place beside a trunk run — a stray re-window — names the
     // rendering draft, and never an `also` draft.
     assert_eq!(
         drafts_of(
-            Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone()], runs: vec![run_of("1.0.1.0.1", 1)] },
+            Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone()], keep_base: false, runs: vec![run_of("1.0.1.0.1", 1)] },
             vec![Some(VPos::content(Nat::from(1u32)))]
         ),
         vec![d.clone()]
@@ -127,11 +127,11 @@ fn a_publish_rows_drafts_lead_with_the_rendering_draft_then_the_also_drafts_writ
     // reference, no kept place, as a publication that only removes words
     // sends — names the rendering draft alone.
     assert_eq!(
-        drafts_of(Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone()], runs: vec![run_of("1.0.1.0.1", 1)] }, vec![]),
+        drafts_of(Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone()], keep_base: false, runs: vec![run_of("1.0.1.0.1", 1)] }, vec![]),
         vec![d.clone()]
     );
     // No draft named: none.
-    assert!(drafts_of(Shot { base: None, draft: None, also: vec![], runs: vec![run_of("1.0.1.0.1", 1)] }, vec![]).is_empty());
+    assert!(drafts_of(Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![run_of("1.0.1.0.1", 1)] }, vec![]).is_empty());
 }
 
 /// A publication's row names an `also` draft the commit RE-WINDOWS though
@@ -157,7 +157,7 @@ fn a_publish_row_names_an_also_draft_re_windowed_without_a_run_of_its_own_after_
         let op = Op::Publish {
             target: PublishTarget::Document(edition.clone()),
             // The trunk's own run by reference: no draft's identity re-inserted.
-            shot: Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone(), b.clone()], runs: vec![trunk_run.clone()] },
+            shot: Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone(), b.clone()], keep_base: false, runs: vec![trunk_run.clone()] },
             places: vec![],
             also_places,
             deposits: PublishDeposits::default(),
@@ -243,7 +243,7 @@ fn each_write_states_which_addresses_may_hold_a_cell() {
     assert!(matches!(stage.docs, AffectedDocs::Minted), "the minted draft, off the ack");
     let publish = Op::Publish {
         target: PublishTarget::Document(doc),
-        shot: Shot { base: None, draft: None, also: vec![], runs: Vec::new() },
+        shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: Vec::new() },
         places: Vec::new(),
         also_places: Vec::new(),
         deposits: PublishDeposits::default(),
@@ -323,7 +323,7 @@ fn each_write_states_the_terms_its_row_carries() {
     assert!(matches!(terms(make_link), RowTerms::MakeLink));
     let publish = Op::Publish {
         target: PublishTarget::Document(doc.clone()),
-        shot: Shot { base: None, draft: None, also: vec![], runs: Vec::new() },
+        shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: Vec::new() },
         places: Vec::new(),
         also_places: Vec::new(),
         deposits: PublishDeposits::default(),

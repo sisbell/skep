@@ -1,9 +1,11 @@
-//! THE STAGING ACT over the wire (B3-S10; A-350): `stage {from}` mints a
-//! private draft of its source in one commit, copies the source's whole
-//! surface by identity and records where the draft began — its base, the
-//! extent the copy took and its source — which `doc_metadata` of the draft
-//! answers as `base`, `base_copied` and `source`; the base moves to the
-//! member each publication of the draft makes; an alternative inherits its
+//! The staging act over the wire (B3-S10; A-350).
+//!
+//! `stage {from}` mints a private draft of its source in one commit, copies
+//! the source's whole surface by identity and records where the draft
+//! began — its base, the extent the copy took and its source — which
+//! `doc_metadata` of the draft answers as `base`, `base_copied` and
+//! `source`; the base moves to the member each publication of the draft
+//! makes, and a shot keeping it moves none; an alternative inherits its
 //! source draft's base; the bare document is its own base; the three
 //! refusals; a bare session admitted; the ack's row and the bare row's
 //! class.
@@ -198,6 +200,48 @@ fn the_base_moves_to_the_member_the_draft_renders_at_each_publish() {
     let daughter = shot(port, &signed, &edition, Some((&v1, 3)), Some(&draft), &shot_runs(port, Some(&owner), &edition, 1, 3));
     assert_eq!(daughter, format!("{v1}.1"));
     assert_eq!(base_of(port, &owner, &draft), (some(&daughter), some("3"), some(&v1)));
+    sd.shutdown();
+}
+
+/// A shot keeping its draft's base (skep #944) moves no base on the wire.
+///
+/// A draft staged from version 1 types its own word; the head moves on to
+/// version 2; a `publish` naming the draft with `keep_base: true` lands as
+/// version 3, its member reading the draft's word, while `doc_metadata` of
+/// the draft answers the base, the count and the source the stage recorded.
+/// The flag without `draft` is refused `malformed` at the codec, nothing
+/// committed.
+#[test]
+fn a_shot_keeping_its_drafts_base_leaves_the_base_the_stage_recorded() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let edition = edition_with(port, &signed, "abc");
+    let v1 = acked_addr(&version_of(port, &signed, &edition, None));
+    let draft = stage_of(port, &owner, &v1);
+    let z = acked_addr(&insert_text(port, &owner, &draft, 4, "z"));
+    let v2 = acked_addr(&version_of(port, &signed, &edition, None));
+    assert_eq!(v2, format!("{edition}.2"), "the head moved on");
+    let mut runs = shot_runs(port, Some(&owner), &edition, 1, 3);
+    runs.push(run(&draft, &z, 1));
+    let kept = |frame: String| -> String {
+        let mut v: Value = serde_json::from_str(&frame).expect("a frame");
+        v["keep_base"] = Value::Bool(true);
+        v.to_string()
+    };
+    let v3 = acked_addr(&op(port, Some(&signed), &kept(publish_frame(&edition, Some((&v2, 3)), Some(&draft), &runs))));
+    assert_eq!(v3, format!("{edition}.3"), "the trunk's next member, off the head");
+    assert_eq!(text_of(port, None, &v3, 1, 4), "abcz", "the draft's word published");
+    assert_eq!(base_of(port, &owner, &draft), (some(&v1), some("3"), some(&v1)), "the base the stage recorded stands");
+    // Without `draft`, the flag is the codec's refusal.
+    let before = head_position(port);
+    let v = op_as_written(port, Some(&signed), &kept(publish_frame(&edition, Some((&v3, 4)), None, &shot_runs(port, Some(&owner), &edition, 1, 3))));
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!((rej["code"].as_str(), rej["op"].as_str()), (Some("malformed"), Some("unparseable")), "{v}");
+    assert!(rej["detail"].as_str().is_some_and(|d| d.contains("'keep_base'")), "{v}");
+    assert_eq!(head_position(port), before, "nothing committed");
     sd.shutdown();
 }
 

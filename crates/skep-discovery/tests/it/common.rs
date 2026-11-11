@@ -528,6 +528,7 @@ pub fn fragmented_head_world(run_count: usize) -> Kernel<World> {
         base: None,
         draft: None,
         also: vec![],
+        keep_base: false,
         runs: vec![
             ShotRun {
                 origin: pdoc(),

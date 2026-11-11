@@ -327,9 +327,10 @@ pub fn stored_span_bytes(span: &Span) -> u64 {
 ///
 /// The terms, each at the table's figure:
 ///
-/// * the shot's fixed records ([`SHOT_BYTES`]), the rendering draft's
-///   address where the shot names one ([`stored_tumbler_bytes`] of it, in
-///   the placing record's own slot), the edition's mint at the mint form,
+/// * the shot's fixed records ([`SHOT_BYTES`]), the address of the draft
+///   whose base the shot moves where it moves one ([`stored_tumbler_bytes`]
+///   of [`Shot::moves_base_of`], in the placing record's own slot), the
+///   edition's mint at the mint form,
 ///   and the edition claim where the deposits claim, at either form;
 /// * per draft-native run — of any named draft, the rendering `draft`'s or
 ///   an `also` draft's, a record costing the same in either home
@@ -390,7 +391,7 @@ pub fn price_staged_bytes<W: LinkWorld>(
     deposits: &PublishDeposits,
 ) -> u64 {
     let mut bytes = SHOT_BYTES;
-    if let Some(rendering) = &shot.draft {
+    if let Some(rendering) = shot.moves_base_of() {
         bytes = bytes.saturating_add(stored_tumbler_bytes(rendering.tumbler()));
     }
     if target.mints() {

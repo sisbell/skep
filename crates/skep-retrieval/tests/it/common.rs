@@ -391,6 +391,7 @@ pub fn fragmented_head(k: &Kernel<World>) -> Vstream<'_, World> {
         base: None,
         draft: None,
         also: vec![],
+        keep_base: false,
         runs: vec![pca1_run; 8192],
     };
     let (head, _) = vs
@@ -420,6 +421,7 @@ pub fn unheld_origin_head(k: &Kernel<World>) -> Vstream<'_, World> {
         base: None,
         draft: None,
         also: vec![],
+        keep_base: false,
         runs: vec![shot_run(pca(1), 1), shot_run(unheld_ca(1), 2)],
     };
     let (head, _) = vs

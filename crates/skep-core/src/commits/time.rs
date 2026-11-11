@@ -329,6 +329,7 @@ impl TimeWriter {
             base: Some(Base { member: base_member, extent }),
             draft: Some(draft.clone()),
             also: Vec::new(),
+            keep_base: false,
             runs: vec![ShotRun { origin: draft, run }],
         };
         wp.head_writer.commit_publish(wp, serial, doc, shot, &refused).is_some()

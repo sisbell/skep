@@ -67,8 +67,10 @@ where
     ///   record: the alternative is a free-standing draft of its own,
     ///   whatever its source becomes.
     ///
-    /// The base moves at every shot the draft renders: the shot's placing
-    /// record names its rendering draft ([`M5Rec::ShotPlace`]), and the fold
+    /// The base moves at every publication of the draft itself: the shot's
+    /// placing record names its rendering draft unless the shot keeps its
+    /// base ([`M5Rec::ShotPlace`];
+    /// [`Shot::moves_base_of`](crate::Shot::moves_base_of)), and the fold
     /// moves the draft's base to the member minted, clearing the marker
     /// (BASE★ on [`M5State`](crate::M5State)); and at every landing that
     /// names a base to record

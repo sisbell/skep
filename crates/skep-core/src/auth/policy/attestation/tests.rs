@@ -148,7 +148,7 @@ fn the_check_answers_the_store_s_own_admission_of_the_shot() {
     let h = head_document();
     let into_h = |base: Option<Base>| Op::Publish {
         target: PublishTarget::Document(h.clone()),
-        shot: Shot { base, draft: None, also: vec![], runs: Vec::new() },
+        shot: Shot { base, draft: None, also: vec![], keep_base: false, runs: Vec::new() },
         places: Vec::new(),
         also_places: Vec::new(),
         deposits: PublishDeposits::default(),
@@ -253,8 +253,9 @@ fn the_sessions_own_key_is_the_first_candidate() {
 ///
 /// Two requests differing in `also_places` alone — one carrying an `also`
 /// draft's place for a run, one carrying none — compose the same entry
-/// frame, byte for byte, as two differing in `places` alone do, and as one
-/// carrying both lists does against one carrying neither: the body spells
+/// frame, byte for byte, as two differing in `places` alone do, as one
+/// carrying both lists does against one carrying neither, and as a shot
+/// keeping its draft's base does against one moving it: the body spells
 /// the shot's runs by value and address and names no draft and no place
 /// (the design record §2.5; the link-sets design §5.7), so a signature made
 /// over the frame without either list verifies the frame with them, and the
@@ -280,7 +281,7 @@ fn a_shot_with_also_places_composes_the_same_entry_frame_as_the_same_shot_withou
     let (draft, other) = (addr_of(&[1, 1, 0, 1, 0, 3]), addr_of(&[1, 1, 0, 1, 0, 4]));
     let publish = |places: Vec<Option<VPos>>, also_places: Vec<AlsoPlaces>| Op::Publish {
         target: PublishTarget::Document(head_document()),
-        shot: Shot { base: None, draft: Some(draft.clone()), also: vec![other.clone()], runs: Vec::new() },
+        shot: Shot { base: None, draft: Some(draft.clone()), also: vec![other.clone()], keep_base: false, runs: Vec::new() },
         places,
         also_places,
         deposits: PublishDeposits::default(),
@@ -297,4 +298,13 @@ fn a_shot_with_also_places_composes_the_same_entry_frame_as_the_same_shot_withou
     assert_eq!(frame(publish(Vec::new(), others.clone())), bare, "`also_places` alone differing: the same bytes");
     assert_eq!(frame(publish(vec![place.clone()], Vec::new())), bare, "`places` alone differing: the same bytes");
     assert_eq!(frame(publish(vec![place], others)), bare, "both lists carried: the same bytes");
+    // The rendering draft's base kept (skep #944) lies outside the preimage
+    // as the draft does: a shot keeping it signs as the same shot moving it.
+    let kept = match publish(Vec::new(), Vec::new()) {
+        Op::Publish { target, shot, places, also_places, deposits } => {
+            Op::Publish { target, shot: Shot { keep_base: true, ..shot }, places, also_places, deposits }
+        }
+        other => unreachable!("a publish, not {other:?}"),
+    };
+    assert_eq!(frame(kept), bare, "`keep_base` alone differing: the same bytes");
 }

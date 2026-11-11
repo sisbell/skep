@@ -141,6 +141,16 @@ pub struct Base {
 /// `also` is empty (the codec refuses `also` without `draft`); `also` empty
 /// is the one-draft shot.
 ///
+/// The shot moves one recorded base at most, the rendering draft's, and
+/// only where it is that draft's own publication ([`Shot::moves_base_of`]):
+/// its placing record names the draft, and the fold moves the draft's base
+/// to the member minted and clears its merge marker (BASE★ on
+/// [`M5State`]). A shot that sets `keep_base` publishes the draft's words
+/// without being its publication — the merge's shot from the head, whose
+/// member holds words the draft never had (skep #944) — and leaves the
+/// rendering draft's base and marker standing, as every `also` draft's
+/// stand, so the draft stands behind the member it published.
+///
 /// **Precondition.** Every named draft lies outside the chain of the document
 /// the shot appends to ([`Vstream::publish`](crate::Vstream::publish)'s
 /// `doc`): each is a document the change was staged in, never that document,
@@ -168,9 +178,21 @@ pub struct Shot {
     /// the rendering draft's (the wire's `also`), in the request's order.
     ///
     /// Each is a document outside the shot's own chain, as the type's
-    /// precondition states; each keeps its own correspondence records, and
-    /// none is re-windowed by this shot. Empty is the one-draft shot.
+    /// precondition states; each keeps its own correspondence records, is
+    /// re-windowed at the kept places the link store's composite carries for
+    /// it (skep #739), and keeps its recorded base. Empty is the one-draft
+    /// shot.
     pub also: Vec<Address>,
+    /// Whether the rendering draft's recorded base stands (wire: `keep_base`).
+    ///
+    /// `false` is a publication of the draft itself, which moves the draft's
+    /// base to the member minted ([`moves_base_of`](Shot::moves_base_of)).
+    /// `true` publishes the draft's words without being its publication and
+    /// changes nothing else: the draft's native runs are re-inserted, its
+    /// records homed in it and its kept places re-windowed as at its own.
+    /// Inert without a `draft`, which the codec refuses, and outside the
+    /// signed body, as `draft` is.
+    pub keep_base: bool,
     /// The client-rendered arrangement, in order.
     pub runs: Vec<ShotRun>,
 }
@@ -301,10 +323,12 @@ impl Shot {
     /// Returns the document `draft` projects to (PUB-2.15), if one is named:
     /// THE RENDERING DRAFT.
     ///
-    /// It is the home of the kept places the request may carry — the one
-    /// draft the shot's one commit re-windows (the link-sets design §5.7;
-    /// B3-S11 P5: "THE RENDERING DRAFT ALONE") — and the origin the edition
-    /// claim names. The family rule [`Shot`] states is wider than it:
+    /// It is the home of the kept places in the request's `places` — the
+    /// draft the shot's one commit re-windows first, each `also` draft after
+    /// it at its own (the link-sets design §5.7; skep #739) — the origin the
+    /// edition claim names, and the draft whose recorded base a publication
+    /// of it moves ([`moves_base_of`](Shot::moves_base_of)). The family rule
+    /// [`Shot`] states is wider than it:
     /// [`named_drafts`](Shot::named_drafts) yields it first and the `also`
     /// drafts after it, and [`is_draft_native`](Shot::is_draft_native) is the
     /// test [`address_form`](Shot::address_form),
@@ -313,6 +337,22 @@ impl Shot {
     /// claim's origin, the kept-place test — asks this.
     pub fn draft_document(&self) -> Option<Address> {
         self.draft.as_ref().map(trunk_of)
+    }
+
+    /// Returns the draft whose recorded base this shot moves, if any.
+    ///
+    /// It is the document the rendering draft projects to (PUB-2.15), as
+    /// [`draft_document`](Shot::draft_document) answers it, where the shot
+    /// is that draft's own publication; `None` where the shot names no
+    /// draft or sets [`keep_base`](Shot::keep_base). It is the draft the
+    /// shot's placing record names
+    /// ([`M5Rec::ShotPlace`](crate::M5Rec::ShotPlace)'s `draft`), at which
+    /// the fold moves the draft's base to the member minted and clears
+    /// its merge marker (BASE★ on [`M5State`]), so a draft named by a member
+    /// of its chain moves its own document's base, and no `also` draft's
+    /// base moves at all. Request arithmetic, reading nothing.
+    pub fn moves_base_of(&self) -> Option<Address> {
+        self.draft_document().filter(|_| !self.keep_base)
     }
 
     /// Returns THE NAMED DRAFTS, each as the document it projects to

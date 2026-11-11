@@ -60,6 +60,7 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
                     base: Some(base(&pdoc(), 4)),
                     draft: Some(doc1()),
                     also: vec![],
+                    keep_base: false,
                     runs: vec![shot_run(&pdoc(), &pca(1), 4), shot_run(&doc1(), &ca(3), 1)],
                 },
                 &readable,

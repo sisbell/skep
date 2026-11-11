@@ -35,7 +35,7 @@ fn run(start: &Address, width: u32) -> Run {
 /// A family shot off the edition's three: the rendering draft doc1, `also`
 /// as given, the runs as given.
 fn family(also: Vec<Address>, runs: Vec<ShotRun>) -> Shot {
-    Shot { base: Some(base(&pdoc(), 3)), draft: Some(doc1()), also, runs }
+    Shot { base: Some(base(&pdoc(), 3)), draft: Some(doc1()), also, keep_base: false, runs }
 }
 
 /// One item of a shot's signed body as it spells the address form: a

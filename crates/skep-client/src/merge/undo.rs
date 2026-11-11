@@ -28,9 +28,11 @@
 //!   there — address and extent, P1's pair — and no `merge`, typed as
 //!   **The typed position** says, the marker's `at` the landing's position;
 //! * a base recorded, no marker — nothing to undo: the merge was published
-//!   from the draft, the base record stands on that version, and an undo
-//!   from the feed would re-record the base backward, the false fact N4
-//!   forbids ([`NoUndo::Published`]); the words alone come from the draft's
+//!   — from the draft, the base record standing on that version, or by a
+//!   merge's shot naming the draft, which keeps its base (skep #944) — and
+//!   an undo from the feed would re-record the base backward, the false
+//!   fact N4 forbids ([`NoUndo::Published`], naming the member the row
+//!   names first); the words alone come from the draft's
 //!   own latest feed row of the kinds that end a marker, read and never
 //!   acted on — a `publish` row P4's words, a `set_arrangement` row naming
 //!   a base and no merge an undo's or a withdrawal's already made
@@ -324,15 +326,18 @@ pub fn undo(
             };
             (at, Some(old), runs, None)
         }
-        (Some(base), None) => {
+        (Some(_), None) => {
             // Nothing to undo, never the feed (N4): the words alone are the
-            // feed's.
+            // feed's, the version the member the row names first (wire.md
+            // §The change feed) — the one a publication of the draft
+            // minted, or a merge's shot naming the draft, which keeps its
+            // base (skep #944).
             let why = match latest_ending_row(reader, draft)? {
-                Some(Ending::Publish) => NoUndo::Published {
-                    version: parse_address(base).ok_or_else(|| {
+                Some(Ending::Publish { member }) => NoUndo::Published {
+                    version: member.ok_or_else(|| {
                         own_fault_face(
-                            "the draft's recorded base cannot be spelled",
-                            format!("{draft}'s `doc_metadata` names the base `{base}`"),
+                            "the draft's latest publication names no member",
+                            format!("{draft}'s latest `publish` row on the feed names no member first, which every `publish` row the wire serves names (wire.md §The change feed)"),
                         )
                     })?,
                 },
@@ -597,7 +602,12 @@ fn position_fault(draft: &Address, what: &str, e: Refusal) -> Refusal {
 /// What the latest feed row that ends a marker under a draft is.
 enum Ending {
     /// A `publish` row: the merge was published from the draft.
-    Publish,
+    Publish {
+        /// The member the row names first: the one the shot minted.
+        ///
+        /// `None` where the row names none this client can read.
+        member: Option<Address>,
+    },
     /// A `set_arrangement` row naming a base and no merge: an undo's or a
     /// withdrawal's.
     TakenBack,
@@ -606,10 +616,10 @@ enum Ending {
 /// Returns the kind of the latest row under `draft` that ends a marker.
 ///
 /// It walks the supplement under the draft (`drafts=true`), keeping the
-/// last of the `publish` rows and the `set_arrangement` rows whose `base`
-/// is present and `merge` null (wire.md §The change feed); a bare row of
-/// either kind, carrying neither term, counts as neither. `None` where no
-/// such row stands.
+/// last of the `publish` rows — with the member each names first — and the
+/// `set_arrangement` rows whose `base` is present and `merge` null (wire.md
+/// §The change feed); a bare row of the second kind, carrying neither
+/// term, counts as neither. `None` where no such row stands.
 ///
 /// # Errors
 ///
@@ -617,7 +627,10 @@ enum Ending {
 fn latest_ending_row(reader: &Reader<'_>, draft: &Address) -> Result<Option<Ending>, Refusal> {
     let mut latest = None;
     feed_rows(reader, &draft.to_string(), true, |row| match row["op"].as_str() {
-        Some("publish") => latest = Some(Ending::Publish),
+        Some("publish") => {
+            let member = row["docs"].as_array().and_then(|d| d.first()).and_then(Value::as_str).and_then(parse_address);
+            latest = Some(Ending::Publish { member });
+        }
         Some("set_arrangement") if row["base"].is_string() && row["merge"].is_null() => {
             latest = Some(Ending::TakenBack);
         }

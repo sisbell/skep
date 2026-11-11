@@ -10,9 +10,10 @@
 //! draft records the surface it copied — the version staged from, the bare
 //! document while the chain is empty, or, for an alternative, the base its
 //! source draft stood on — with the count the copy took, and each
-//! publication the draft renders moves the record to the member it minted,
-//! at that member's whole count. The newest member a draft made is the
-//! board's to keep, so the read is two reads and no walk:
+//! publication of the draft itself moves the record to the member it
+//! minted, at that member's whole count; a merge's shot that names the
+//! draft keeps it (`keep_base`; skep #944). The newest member a draft
+//! made is the board's to keep, so the read is two reads and no walk:
 //!
 //! 1. **The trunk.** `doc_metadata(doc)` first — a trunk the board does not
 //!    hold, or one the reader may not read, is that fault, ahead of the

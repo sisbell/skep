@@ -61,6 +61,7 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
         base: None,
         draft: Some(doc1()),
         also: vec![],
+        keep_base: false,
         runs: vec![shot_run(&doc1(), &ca(1), 1), shot_run(&doc1(), &ca(3), 1)],
     };
     let readable = readable_by(PrincipalId(1));
@@ -115,6 +116,7 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
         base: None,
         draft: Some(doc1()),
         also: vec![],
+        keep_base: false,
         runs: vec![shot_run(&doc1(), &ca(1), 1), shot_run(&doc1(), &ca(3), 1)],
     };
     vs.publish(P1, &pdoc(), &shot, &readable_by(PrincipalId(1))).unwrap();

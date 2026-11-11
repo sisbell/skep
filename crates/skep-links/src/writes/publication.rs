@@ -485,9 +485,12 @@ impl From<EmitCoreError> for PublicationError {
 ///    stray path". A request with no place in any list is today's shot,
 ///    writing nothing of any draft. NO `also` DRAFT's RECORDED BASE MOVES:
 ///    the fold moves the rendering draft's base alone to the member it
-///    renders (M5's `ShotPlace`, its `draft`), as before — a re-windowed
-///    `also` draft stands behind the member it now windows, the designed
-///    outcome.
+///    renders (M5's `ShotPlace`, its `draft`) — a re-windowed `also` draft
+///    stands behind the member it now windows, the designed outcome — and
+///    only where the shot is that draft's own publication: a shot setting
+///    `keep_base` (skep #944) moves no base at all, so its rendering draft,
+///    re-windowed at `places` as ever, stands behind the member as an
+///    `also` draft does.
 ///
 /// `places` is parallel to `shot.runs` by index, each entry the run's place
 /// in the rendering draft or `None`; each `also_places` entry's list is

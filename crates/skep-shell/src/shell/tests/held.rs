@@ -629,13 +629,15 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
 ///
 /// A refused run — `out_of_bounds` (a `permanent` refusal) on a burst, two
 /// bursts behind it on the same document held `behind`, the `held` event
-/// `refused`; a `resolve` on a holding line is `not_resolvable`, an unknown
+/// `refused`; a `send` on a holding line is `not_resolvable`, an unknown
 /// ordinal `no_such_held`; an act the row does not spell is refused
 /// `malformed_args` naming `act` — the argument checked before the line, at
 /// an ordinal of the run and at one of no line alike, the run standing whole
 /// (the mutant that reads the act after the line answers the line's
-/// refusal); `resolve(drop)` drops the run and its two behind lines;
-/// `resolve(send)` re-faces the run where the refusal recurs.
+/// refusal); `resolve(send)` re-faces the run where the refusal recurs; the
+/// drop of the newest line behind the run, never sent, takes it alone at
+/// once (skep #983); and `resolve(drop)` drops the run and the behind line
+/// left.
 #[test]
 fn a_refused_run_holds_behind_it_and_resolve_acts_on_it() {
     let dir = TempDir::new().unwrap();
@@ -655,9 +657,9 @@ fn a_refused_run_holds_behind_it_and_resolve_acts_on_it() {
         assert_eq!(behind["cause"], "behind", "{behind}");
     }
     assert_eq!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().len(), 3);
-    // A `resolve` on a holding line, and an unknown ordinal.
+    // A `send` on a holding line, and an unknown ordinal.
     let behind_k = shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().iter().find(|r| r["cause"] == "behind").unwrap()["held"].as_u64().unwrap();
-    assert_eq!(shell.call("resolve", &json!({"session": session, "held": behind_k, "act": "drop"})).unwrap_err().name(), "not_resolvable");
+    assert_eq!(shell.call("resolve", &json!({"session": session, "held": behind_k, "act": "send"})).unwrap_err().name(), "not_resolvable");
     assert_eq!(shell.call("resolve", &json!({"session": session, "held": 9999, "act": "drop"})).unwrap_err().name(), "no_such_held");
     // An act the row does not spell is the argument it is, refused before
     // any line is asked; the run stands whole.
@@ -676,9 +678,14 @@ fn a_refused_run_holds_behind_it_and_resolve_acts_on_it() {
         thread::sleep(Duration::from_millis(20));
     }
     assert_eq!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().len(), 3, "the refusal recurs, the run still stands");
-    // `drop` the run: all three go.
+    // The newest line behind the run, holding and never sent, is dropped
+    // alone, at once.
+    let newest = shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().iter().rev().find(|r| r["cause"] == "behind").unwrap()["held"].as_u64().unwrap();
+    assert_eq!(shell.call("resolve", &json!({"session": session, "held": newest, "act": "drop"})).unwrap(), json!({}));
+    assert_eq!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().len(), 2, "the newest line behind the run dropped alone");
+    // `drop` the run: both left go.
     shell.call("resolve", &json!({"session": session, "held": k, "act": "drop"})).unwrap();
-    assert!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty(), "the run and its behind lines are dropped");
+    assert!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty(), "the run and its behind line are dropped");
     shell.shutdown();
     sd.shutdown();
 }
@@ -789,8 +796,9 @@ fn dir_signature(root: &Path) -> Vec<(String, u64)> {
 /// Checks that a second principal's file is untouched and unlisted.
 ///
 /// It is untouched and unlisted under the first's session — the first's own
-/// acts, a burst held beside its line and a `resolve` among them, leave its
-/// bytes as they were — and no answer and no event names a path, a
+/// acts, a burst held beside its line and the drop of its lines among them,
+/// written to its own file alone, leave its bytes as they were — and no
+/// answer and no event names a path, a
 /// directory or the other principal (the mutant that opens the first
 /// principal's acts on the second's file writes the person's text into
 /// another principal's store). The second principal's file holds the line
@@ -849,7 +857,8 @@ fn a_second_principals_file_is_untouched_and_unlisted() {
     }
     let later = shell.call("op", &json!({"session": s1, "frame": {"op": "insert", "doc": d1, "at": {"subspace": "1", "ordinal": "4"}, "values": ["three"], "as_of": typed}})).unwrap();
     assert_eq!(later["cause"], "unreachable", "{later}");
-    assert_eq!(shell.call("resolve", &json!({"session": s1, "held": 1, "act": "drop"})).unwrap_err().name(), "not_resolvable");
+    assert_eq!(shell.call("resolve", &json!({"session": s1, "held": h1["held"], "act": "drop"})).unwrap(), json!({}), "a line never sent is dropped at once");
+    assert!(shell.call("held", &json!({"session": s1})).unwrap().as_array().unwrap().is_empty(), "principal 1's lines dropped, the later one behind the first with it");
     assert_eq!(std::fs::read(&p2).unwrap(), p2_bytes, "principal 2's file is untouched by principal 1's acts");
     let said: Vec<String> = rx.try_iter().map(|e| e.data.to_string()).collect();
     assert!(said.iter().all(|data| !data.contains("principal-2") && !data.contains(&store.display().to_string())), "no event names the other principal's file: {said:?}");

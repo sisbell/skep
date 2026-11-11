@@ -106,10 +106,16 @@
 //! the board answered with no page, or with the death signal, decides
 //! nothing: the next probe reads again, as it does after a read the board
 //! gave no answer to, which ends the pass. The same read decides the
-//! person's drop of a `sent` line handed over as `answers_lost`, made first
-//! (`Holds::resolve`; skep #866): a landing found keeps the line, no row
-//! that could be its landing drops it, and a row that could be and is not
-//! confirmed, or a read that decides nothing, drops nothing.
+//! person's drop of a `sent` line that is holding or handed over as
+//! `answers_lost`, made first (`Holds::resolve`; skep #866, #983): a landing
+//! found keeps the line, no row that could be its landing drops it, and a
+//! row that could be and is not confirmed, or a read that decides nothing,
+//! drops nothing. A send takes its line for its dials as it begins
+//! ([`LineOut`]), so no act of the person's takes the line until the send
+//! ends, and a send none of whose dials may have left the device — every
+//! one a connection never made, a refusal, or another answer that committed
+//! nothing — leaves the line among those whose drop reads nothing
+//! (`PrincipalHold::never_left`; skep #983).
 //! Whether the *document moved* is the board's to say, (iii), by one route: a
 //! line it refuses as typed against an older state of its document
 //! (`arrangement_moved`, the frame's `as_of` below the arrangement's last
@@ -198,8 +204,8 @@ use skep_client::board::{acked_addr, acked_at, frames, Answer, AtAnswer, Changes
 use skep_client::halt::Halt;
 
 use super::{
-    awaits_act, cause, line_state, millis, minted_by, unanswered, AttestedWhereOwed, BoardHold, BoardSlot, CutSend, Dialed, Hand, HandsRead, HeldState, Holds, KeptShift, LandedLine, MovedFace,
-    Tested, Turn, Verdict, HAND_OVER_DEADLINE, TURN_STEPS,
+    awaits_act, cause, line_state, millis, minted_by, unanswered, AttestedWhereOwed, BoardHold, BoardSlot, CutSend, Dialed, Hand, HandsRead, HeldState, Holds, KeptShift, LandedLine, LineOut,
+    MovedFace, Tested, Turn, Verdict, HAND_OVER_DEADLINE, TURN_STEPS,
 };
 use crate::held::{i_address, Anchor, Anchors, HeldLine, Reason, SpanRun};
 use crate::refusal::{Name, Refusal};
@@ -1647,6 +1653,15 @@ impl Holds {
     /// landing and found unlanded — so no line is shifted before its read,
     /// and a landing the read keeps is shifted never.
     ///
+    /// **The send takes its line** (skep #983). The line is taken for this
+    /// send's dials under the board's lock before its first one leaves
+    /// ([`LineOut`]), and let go once the send has settled it, before its
+    /// face is told, whatever it answers: no person's act takes it meanwhile,
+    /// an act the face asks for takes it, and a send none of whose dials may
+    /// have left the device enters it among the lines whose drop reads no
+    /// landing (`PrincipalHold::never_left`). A line no longer standing as
+    /// the send would take it is sent nothing.
+    ///
     /// **The ack names the line.** An ack's `held` event names the line kept,
     /// the ack's position and an insert's minted I-address ([`LandedLine`];
     /// skep #968): the page's one word of a line's ack once its `op` answered
@@ -1664,23 +1679,29 @@ impl Holds {
     fn send_line(&self, session: &SessionEntry, line: &HeldLine, steps: &mut usize) -> Step {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let given = || self.with_principal(board_reference, principal, |ph| ph.reissues.get(&line.k).cloned()).flatten().unwrap_or_default();
-        // A shift the board's silence left untried runs first, from the
-        // verdict it kept: nothing dialed before it (`left` false).
-        let kept = self.with_principal(board_reference, principal, |ph| ph.shift_owed.remove(&line.k)).flatten();
+        // The line is taken for this send's dials, so no person's act takes
+        // it while a dial of it is out (skep #983), and a shift the board's
+        // silence left untried runs first, from the verdict it kept: nothing
+        // dialed before it (`left` false). A line that left the queue before
+        // the send took it — a person's drop the walk's read did not see — is
+        // sent nothing.
+        let taken = self.with_principal(board_reference, principal, |ph| LineOut::take(self, board_reference, principal, ph, line.k).map(|out| (out, ph.shift_owed.remove(&line.k))));
+        let Some((mut out, kept)) = taken.flatten() else { return Step::Goes };
         // The line is marked as one that may have landed before its dial
         // leaves (§3c.2's `sent`), synced, so a crash or a refused write
         // between the dial and its answer never leaves a write that may have
         // landed read as one never sent, and names its dial id in the same
         // copy where it names none, the `id` the dial goes out under (skep
         // #971); a line carrying both already writes nothing. The mark stands
-        // whatever the dial answers, a connection never made among them, and
-        // a copy the device refuses is owed, written by the retry, and the
-        // dial made all the same — a close while it is owed relaunches the
-        // line as one never sent. A line that left the queue as it was
-        // readied — a person's drop the walk's read did not see — is sent
-        // nothing. An attest that could not be composed dials nothing and
-        // marks nothing: the line keeps its own `sent`, and nothing left
-        // (`left` false).
+        // on disk whatever the dial answers; where no dial of the line may
+        // have left the device — a connection never made, a refusal, another
+        // answer that committed nothing — the send's end enters it in
+        // `PrincipalHold::never_left` instead, and a drop of it reads for no
+        // landing (skep #983). A copy the device refuses is owed, written by
+        // the retry, and the dial made all the same — a close while it is
+        // owed relaunches the line as one never sent. An attest that could
+        // not be composed dials nothing and marks nothing: the line keeps its
+        // own `sent`, and nothing left (`left` false).
         let (mut dialed, mut sent, mut left) = match kept {
             Some(KeptShift { reason, refusal }) => (Dialed::Held { reason, refusal }, line.reason.sent, false),
             None => match self.attest_where_owed(session, &line.frame) {
@@ -1707,7 +1728,11 @@ impl Holds {
             // it stood, a line's first failure among them; `Some(false)` where
             // it repeats it, said already; none where no send failed — an
             // ack, the death signal, a request the board gave no answer to, or
-            // a dial that never left.
+            // a dial that never left. A dial's answer is noted on the line
+            // taken for it, whether its write may have landed.
+            if left {
+                out.answered(&dialed);
+            }
             let failed = if left { dialed.failure().map(|token| self.note_failure(board_reference, principal, line.k, token)) } else { None };
             changed |= failed == Some(true);
             match dialed {
@@ -1715,6 +1740,9 @@ impl Holds {
                     self.note_ack(session, &frame, &ack);
                     let at = acked_at(&ack);
                     self.keep(board_reference, principal, line.k, at, minted_by(&frame, &ack));
+                    // The line settled, it is let go before its face is told,
+                    // so an act the face asks for takes it.
+                    drop(out);
                     let rest = self.lines_on(board_reference, principal, &line.doc);
                     self.say_kept(session, &line.doc, rest, &LandedLine::of(line, at, acked_addr(&ack)));
                     return Step::Goes;
@@ -1778,6 +1806,7 @@ impl Holds {
                                 self.note_unanswered(&mut self.lock(board_reference), None);
                             }
                             let sendable = self.note_shift_refused(board_reference, principal, &line.doc, line.k, &why);
+                            drop(out);
                             self.emit_held(session, &line.doc, self.lines_on(board_reference, principal, &line.doc), HeldState::Moved, None, MovedFace { hands: &hands, sendable });
                             return if unanswered { Step::Unanswered } else { Step::Stops };
                         }
@@ -1797,6 +1826,7 @@ impl Holds {
                         self.remark_line(principal, ph, line.k, Reason::of(cause::UNREACHABLE, reason.sent || sent));
                     });
                     self.note_unanswered(&mut self.lock(board_reference), cut);
+                    drop(out);
                     self.emit_held(session, &line.doc, self.lines_on(board_reference, principal, &line.doc), HeldState::Holding, Some(cause::UNREACHABLE), MovedFace::default());
                     return Step::Unanswered;
                 }
@@ -1816,6 +1846,7 @@ impl Holds {
                     if failed == Some(true) && state == HeldState::Holding {
                         self.say(format_args!("line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
                     }
+                    drop(out);
                     self.emit_held(session, &line.doc, self.lines_on(board_reference, principal, &line.doc), state, Some(&said), MovedFace::default());
                     return Step::Stops;
                 }
@@ -1841,6 +1872,7 @@ impl Holds {
                     let reason = Reason { sent, ..Reason::refused(&token, r.body.clone()) };
                     self.with_principal(board_reference, principal, |ph| self.remark_line(principal, ph, line.k, reason));
                     self.say(format_args!("line {} on {} was not taken ({r}), a code the shell holds no row for; it is handed to the person, who may send it again or drop it", line.k, line.doc));
+                    drop(out);
                     self.emit_held(session, &line.doc, self.lines_on(board_reference, principal, &line.doc), HeldState::Refused, Some(&token), MovedFace::default());
                     return Step::Stops;
                 }
@@ -1992,8 +2024,9 @@ impl Holds {
     /// last failure's token, and `elapsed_ms`, its `sent` kept — so the
     /// person's `send` reads before it dials, and a landing the read finds
     /// then is kept (§3c.5) — and the lines behind it wait with it, as behind
-    /// any refused run, until `resolve` sends or drops it, the drop of a
-    /// `sent` line read for its landing first (`Holds::resolve`; skep #866).
+    /// any refused run, until `resolve` sends or drops it, the drop of a line
+    /// that may have landed read for its landing first (`Holds::resolve`;
+    /// skep #866, #983).
     /// It is said once in the shell's own window, and on the `held` event as
     /// `refused` (skep #716).
     fn hand_over(&self, session: &SessionEntry, head: &HeldLine, last: &str, elapsed: Duration) {

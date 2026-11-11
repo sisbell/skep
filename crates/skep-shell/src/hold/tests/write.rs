@@ -347,8 +347,8 @@ fn a_restore_is_noted_as_an_acknowledged_set_arrangement_on_its_draft() {
 /// the face") and the lines `behind` it carry none; `drop` on the refused
 /// head drops it and every line held `behind` it on that document (the
 /// mutant that leaves them standing), the `held` event naming the session
-/// that acted; `resolve` on a holding line answers `not_resolvable` under
-/// the writer; an unknown ordinal answers `no_such_held`.
+/// that acted; `send` on a holding line answers `not_resolvable` under the
+/// writer, the probe its sender; an unknown ordinal answers `no_such_held`.
 #[test]
 fn a_refused_run_drops_its_behind_lines() {
     let g = ground();
@@ -367,8 +367,8 @@ fn a_refused_run_drops_its_behind_lines() {
     assert_eq!(lines.len(), 3, "the run and its two behind lines stand");
     assert_eq!(lines[0]["refusal"], verdict, "the refused run's line carries the board's verdict");
     assert!(lines[1..].iter().all(|l| l.get("refusal").is_none()), "a line behind the run carries no refusal: {lines:?}");
-    // A holding line is not resolvable; an unknown ordinal is no_such_held.
-    assert_eq!(g.holds.resolve(&g.session, k2, ResolveAct::Drop).unwrap_err().name(), "not_resolvable");
+    // A holding line takes no send; an unknown ordinal is no_such_held.
+    assert_eq!(g.holds.resolve(&g.session, k2, ResolveAct::Send).unwrap_err().name(), "not_resolvable");
     assert_eq!(g.holds.resolve(&g.session, 999, ResolveAct::Drop).unwrap_err().name(), "no_such_held");
     // Drop the refused head: the whole run goes.
     let _ = g.rx.try_iter().count();
@@ -1114,6 +1114,78 @@ fn a_stale_burst_whose_anchors_stand_with_the_span_whole_is_shifted_and_lands_wi
     }
 }
 
+/// Checks that no act takes a line while a first dial's shift of it is out.
+///
+/// A stale burst is shifted within its first dial's call, its line entered
+/// moved and said to no one (skep #442), and the person's acts on it, made as
+/// the shift's image read reaches the board, each answer `not_resolvable`
+/// (skep #983): the call's ack keeps the line, no `held` event said (the
+/// mutant that takes the line's `send` hands a line the call is shifting back
+/// to the walk; the one that takes its drop settles a line the shifted dial
+/// then lands).
+#[test]
+fn no_act_takes_a_line_while_a_first_dials_shift_of_it_is_out() {
+    let g = ground();
+    let typed = g.fake.head();
+    *g.fake.image.lock().unwrap() = vec![run(&i(10), 2), run(&i(1), 3)];
+    g.fake.move_arrangement(DOC, 77);
+    let acted = Arc::new(Mutex::new(Vec::new()));
+    let (holds, session, seen) = (Arc::downgrade(&g.holds), Arc::clone(&g.session), Arc::clone(&acted));
+    // The line the call enters is the ground's first, ordinal 1.
+    *g.fake.at_image.lock().unwrap() = Some(Box::new(move || {
+        let Some(holds) = holds.upgrade() else { return };
+        for act in [ResolveAct::Send, ResolveAct::Drop] {
+            seen.lock().unwrap().push(holds.resolve(&session, 1, act).map_err(|r| r.to_value()));
+        }
+    }));
+    let OpAnswer::Answered(Ok(ack)) = g.holds.send_burst(&g.session, insert_at(DOC, 2, json!(["x"]), typed), Some(anchors(Some(&i(1)), Some(&i(2))))) else {
+        panic!("the shifted burst is acked within the call")
+    };
+    *g.fake.at_image.lock().unwrap() = None;
+    assert_eq!(ack["resp"], "ack", "{ack}");
+    let refused: Result<Resolved, Value> = Err(json!({"kind": "shell", "name": "not_resolvable", "held": 1}));
+    assert_eq!(*acted.lock().unwrap(), vec![refused.clone(), refused], "each act refused while the shift is out");
+    assert_eq!(g.fake.sends(), 2, "the page's dial and the shifted one");
+    assert!(g.lines().is_empty() && g.states().is_empty(), "kept within the call, no `held` event said");
+}
+
+/// Checks that a first dial's shift lets its line go before its face is told.
+///
+/// A stale burst's shifted dial is refused under a `permanent` code, and the
+/// `refused` face reaches a watcher on the bus on the call's own thread,
+/// which drops the line as the face asks (skep #983): the drop takes it, and
+/// the call answers `held` under the board's token (the mutant that lets the
+/// line go as the call returns, after its face, answers the act the face
+/// asks for `not_resolvable`).
+#[test]
+fn a_first_dials_shift_lets_its_line_go_before_its_face_is_told() {
+    let g = ground();
+    let typed = g.fake.head();
+    *g.fake.image.lock().unwrap() = vec![run(&i(10), 2), run(&i(1), 3)];
+    g.fake.move_arrangement(DOC, 77);
+    // The shifted dial, the one after the image read, is refused.
+    let fake = Arc::downgrade(&g.fake);
+    *g.fake.at_image.lock().unwrap() = Some(Box::new(move || {
+        if let Some(fake) = fake.upgrade() {
+            fake.op_rejected.next(1, json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent", "op": "insert"}));
+        }
+    }));
+    let acted = Arc::new(Mutex::new(Vec::new()));
+    let (holds, session, seen) = (Arc::downgrade(&g.holds), Arc::clone(&g.session), Arc::clone(&acted));
+    g.bus.watch(move |_, event| {
+        if event.name == EventName::Held && event.data["state"] == "refused" {
+            if let Some(holds) = holds.upgrade() {
+                seen.lock().unwrap().push(holds.resolve(&session, 1, ResolveAct::Drop).map_err(|r| r.to_value()));
+            }
+        }
+    });
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert_at(DOC, 2, json!(["x"]), typed), Some(anchors(Some(&i(1)), Some(&i(2))))) else { panic!("the call answers") };
+    *g.fake.at_image.lock().unwrap() = None;
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("out_of_bounds")), "{held}");
+    assert_eq!((acted.lock().unwrap().clone(), g.fake.sends()), (vec![Ok(Resolved::Dropped)], 2), "the act the face asks for takes the line");
+    assert!(g.lines().is_empty(), "the line dropped");
+}
+
 /// Checks that the shifted frame is on the line before the shifted dial,
 /// and a relaunch reads the landed test at the shifted positions (skep
 /// #442).
@@ -1601,8 +1673,7 @@ fn died(g: &Ground) -> Refusal {
     Refusal::shell(Name::SESSION_DIED, json!({"session": g.session.reference, "reason": crate::sessions::restart_reason(None, None)}))
 }
 
-/// Checks that the death at a burst's dial holds the burst, and at any other
-/// write's holds nothing.
+/// Checks that the death at a dial holds a burst, and no other write.
 ///
 /// The death is neither held nor faced (§3c.4), and a burst that met it is
 /// held before its session ends (skep #786): the burst answers
@@ -1612,12 +1683,12 @@ fn died(g: &Ground) -> Refusal {
 /// `OpAnswer::Died` with nothing held. Once the end derives the death, the
 /// line takes its reason (`Holds::note_death`) — the `session_died` refusal,
 /// its arm — and the call's answer is the `held` answer; the line still
-/// holds: under the writer no act of the person's moves it
-/// (`not_resolvable`), no clock runs on it, and the probe sends it from the
-/// head with no read once the board takes the session's writes, two minutes
-/// on, and keeps it (the mutants that face the burst, hold it `unreachable`,
-/// start its clock and hand it over, read its refusal as a refused run's,
-/// admit the drop under any session, or hold a non-burst write).
+/// holds: under the writer the person's `send` takes it not
+/// (`not_resolvable`), the probe its sender, no clock runs on it, and the
+/// probe sends it from the head with no read once the board takes the
+/// session's writes, two minutes on, and keeps it (the mutants that face the
+/// burst, hold it `unreachable`, start its clock and hand it over, read its
+/// refusal as a refused run's, admit the send, or hold a non-burst write).
 #[test]
 fn a_death_at_a_bursts_dial_holds_it_and_at_another_writes_dial_holds_nothing() {
     let g = ground();
@@ -1643,9 +1714,7 @@ fn a_death_at_a_bursts_dial_holds_it_and_at_another_writes_dial_holds_nothing() 
         (Some("session_died"), Some(false), Some("session_died"), Some("restart")),
         "the line carries the death's arm: {lines:?}"
     );
-    for act in [ResolveAct::Send, ResolveAct::Drop] {
-        assert_eq!(g.holds.resolve(&g.session, k, act).map_err(|r| r.name().to_string()), Err("not_resolvable".to_string()), "{act:?}: no act of the person's moves it");
-    }
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).map_err(|r| r.name().to_string()), Err("not_resolvable".to_string()), "no send of the person's moves it");
     assert!(g.states().is_empty(), "nothing more is said");
     g.fake.op_closed.store(false, Ordering::SeqCst);
     g.holds.advance(HAND_OVER_DEADLINE);

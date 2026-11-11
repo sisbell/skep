@@ -277,30 +277,33 @@ impl Name {
     pub const STORE_HALTED: Name = Name("store_halted");
     /// `resolve(session, …)`: no held line of that ordinal stands.
     pub const NO_SUCH_HELD: Name = Name("no_such_held");
-    /// `resolve(session, …)`: the line is `holding` or `sending`.
+    /// `resolve(session, …)`: the act cannot take the line now.
     ///
-    /// It is not refused or moved — no act exists until the board answers,
-    /// its head record reads again where the line holds `head_unreadable`, or
-    /// the shell hands the line to the person under `answers_lost` (P10).
-    /// Two drops are admitted all the same: of a line held `head_unreadable`,
-    /// and of every line under a bare session, the keyless session's discard.
-    /// It answers too a drop whose line was re-marked while the drop's read
-    /// for its landing was out — a `send` of it — nothing dropped.
+    /// It is a `send` of a line that is not refused or moved — the probe
+    /// sends a holding line as the board takes it, and no act of the person's
+    /// moves it until the shell hands it over under `answers_lost` (P10) —
+    /// or either act on a line a send has out for its dials, the walk's
+    /// resend or a first dial's shift, whose answer keeps or re-marks it
+    /// (skep #983). The drop is admitted on every other line. It answers too a
+    /// drop whose line was re-marked, or taken for a send's dials, while the
+    /// drop's read for its landing was out, nothing dropped.
     pub const NOT_RESOLVABLE: Name = Name("not_resolvable");
-    /// `resolve(session, …)`'s drop of a line whose answer was lost, refused.
+    /// `resolve(session, …)`'s drop of a line that may have landed, refused.
     ///
-    /// The line is a `sent` one handed over as `answers_lost`, and the read
-    /// its drop makes first cannot tell whether its write landed (§3c.4; skep
-    /// #866): nothing is dropped, since a drop never removes words the board
-    /// may hold. The detail names `held`, the line's ordinal, and `why`:
-    /// `unanswered` where the board gave the read no answer, or is not
-    /// answering, so no read was made; `unread` where it answered the read
-    /// with no page; `undecided` where a row could be the line's landing and
-    /// the read could not confirm it; `stopped`, `poisoned` or `halted` where
-    /// that hold stands at the board, a restart of a halted board rebuilding
-    /// what its journal holds, so no read is made. The drop is asked again
-    /// once the board answers and takes writes, and a line `undecided` leaves
-    /// by `send`, whose dial the board judges by its typed state.
+    /// The line is a `sent` one, holding or handed over as `answers_lost`,
+    /// and the read its drop makes first cannot tell whether its write landed
+    /// (§3c.4; skep #866, #983): nothing is dropped, since a drop never
+    /// removes words the board may hold. The detail names `held`, the line's
+    /// ordinal, and `why`: `unanswered` where the board gave the read no
+    /// answer, or is not answering, so no read was made; `unread` where it
+    /// answered the read with no page; `undecided` where a row could be the
+    /// line's landing and the read could not confirm it; `stopped`,
+    /// `poisoned` or `halted` where that hold stands at the board, a restart
+    /// of a halted board rebuilding what its journal holds, so no read is
+    /// made. The drop is asked again once the board answers and takes writes;
+    /// a line handed over and `undecided` leaves by `send`, whose dial the
+    /// board judges by its typed state, and a holding one by the probe's
+    /// resend.
     pub const LANDING_UNREAD: Name = Name("landing_unread");
     /// A burst whose frame passes the board's frame cap, refused at the act.
     ///

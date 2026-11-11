@@ -2198,24 +2198,27 @@ impl Shell {
 
     /// Answers `resolve(session, {held, act})` with `{}`, or `{kept: true}`.
     ///
-    /// The answer is §4b.1's. `"drop"` on a `refused` or `moved` line marks
-    /// it, and every line held after it on that document — a refused run's
-    /// `behind` lines, a moved document's later lines — dropped, and answers
-    /// `{}`; on a `sent` line handed over as `answers_lost` it reads for the
-    /// line's landing first (§3c.4; skep #866): a landing found keeps the
-    /// line, nothing dropped, and answers `{kept: true}`, the lines behind it
-    /// handed to the board's feed thread's probe as a `"send"`'s are; a read
-    /// that cannot tell drops nothing and is refused; and a read that meets
-    /// the death signal ends the session by the one sequence. `"send"`
+    /// The answer is §4b.1's. `"drop"` on a line in any state — refused,
+    /// moved, or holding, the person's discard of words the probe would send
+    /// (skep #726, #983) — marks it, and every line held after it on that
+    /// document, dropped, and answers `{}`; on a `sent` line, holding or
+    /// handed over as `answers_lost`, it reads for the line's landing first,
+    /// save where no dial of the line may have left this device (§3c.4;
+    /// skep #866, #983): a landing found keeps the line, nothing dropped,
+    /// and answers `{kept: true}`, the lines behind it handed to the board's
+    /// feed thread's probe as a `"send"`'s are; a read that cannot tell drops
+    /// nothing and is refused; and a read that meets the death signal ends
+    /// the session by the one sequence. `"send"` on a refused or moved line
     /// re-enters the automatic machine for that document, the call answering
     /// "once the line is handed to the machine, never after its ack": the
     /// probe that resends it is handed to the board's feed thread
-    /// (`Feed::probe`). Under a bare session, which reads alone
-    /// ([`SessionEntry::may_write`]), `"drop"` stands on every line, a
-    /// holding one among them — the keyless session's discard, a local act
-    /// that commits nothing to the board and reads for no landing
-    /// (`Holds::resolve`) — and `"send"` does not, since no resend sends
-    /// under it. At a board whose held store another shell holds (§3c.3)
+    /// (`Feed::probe`). Neither act takes a line a send has out for its
+    /// dials, whose answer keeps or re-marks it (skep #983). Under a bare
+    /// session, which reads alone ([`SessionEntry::may_write`]), `"drop"` is
+    /// the keyless session's discard, a local act that commits nothing to the
+    /// board and reads for no landing (`Holds::resolve`), and `"send"` does
+    /// not stand, since no resend sends under it. At a board whose held store
+    /// another shell holds (§3c.3)
     /// both stand: the write door refuses every new write there, and the
     /// lines `"send"` hands back were held before that state was found, sent
     /// from memory as the board takes them.

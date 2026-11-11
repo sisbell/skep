@@ -522,8 +522,12 @@ pub struct Reason {
     /// refused, says nothing of an earlier dial's write. A moved document's
     /// lines keep theirs, a line handed to the person keeps it too, and
     /// `resolve(send)` keeps every line's own, so a line that may have landed
-    /// reads before it is sent again (§3c.5), and a line handed over reads
-    /// before the person's drop drops it (§3c.4; skep #866).
+    /// reads before it is sent again (§3c.5), and a line holding, or handed
+    /// over, reads before the person's drop drops it (§3c.4; skep #866,
+    /// #983). The mark stands on disk where no dial of the line may have left
+    /// the device, a connection never made among them: the hold knows that
+    /// line in memory alone (`PrincipalHold::never_left`), and its drop reads
+    /// nothing until a relaunch forgets it.
     pub sent: bool,
 }
 
@@ -2304,6 +2308,11 @@ impl HeldQueue {
     /// Returns a copy of line `k`, where it stands.
     pub fn line(&self, k: u64) -> Option<HeldLine> {
         self.lines.line(k)
+    }
+
+    /// Returns line `k`'s reason, where it stands, read in place.
+    pub fn reason(&self, k: u64) -> Option<&Reason> {
+        self.lines.reason(k)
     }
 
     /// Returns each line's ordinal and reason on `doc`, in `k` order.

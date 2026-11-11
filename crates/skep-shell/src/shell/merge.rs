@@ -70,13 +70,22 @@
 //! **`merge.land`** — `{resolutions?, answers?}` — publishes the merge from
 //! the draft the standing composition landed in, THE SHOT CARRYING THE
 //! SUPERSESSION CLAIM, then the record: ONE PATH for the shot, the
-//! publication family's — the panel standing for the draft, which the page
-//! opened over it with the switches and answers it last sent, or one this
-//! row opens over the whole draft (every private row OFF, the draft side
-//! named `also` so its words re-mint as the document's own), confirmed by
-//! the family's one composition, signature and send
-//! (`Shell::confirm_standing`), under the answers the call names, each
-//! keyed `⟨run⟩.⟨part⟩` as the panel keys them. A panel the page opened
+//! publication family's — the panel the page opened over the draft at the
+//! composition's document, standing or held, with the switches and answers
+//! it last sent, or one this row opens over the whole draft (every private
+//! row OFF, the draft side named `also` so its words re-mint as the
+//! document's own), confirmed by the family's one composition, signature
+//! and send (`Shell::confirm_standing`), under the answers the call names,
+//! each keyed `⟨run⟩.⟨part⟩` as the panel keys them. A panel of the draft
+//! that mints an edition or publishes into another document is no landing's
+//! panel (`shell/publication.rs`, **The landing**): the row is refused
+//! `other_panel`, nothing composed or sent, that panel, the family's
+//! standing one and the composition, with any `resolutions` the call named,
+//! as they stood. The way on is `publication.cancel` of that panel, a held
+//! one re-opened first, then `merge.land` again; confirming it instead
+//! publishes the draft as a document of its own, whose base no longer lies
+//! in the trunk's chain, and the row is then refused `base_unrecorded`. A
+//! panel the page opened
 //! under another merge marker than the draft now carries, before the
 //! compose or over an earlier merge, is first keyed on the draft as it
 //! stands (`Shell::landing_panel`; `shell/publication.rs`, **The landing**),
@@ -783,9 +792,15 @@ impl Shell {
     /// `halted` naming `publish`, `held_lines` naming the draft the
     /// composition landed in or the draft side and the lines of the
     /// principal's standing on it — nothing read at any; `store_unreadable`,
-    /// `no_account`; the panel's open's where the shell opens one
-    /// (`publication.open`'s steps 4 to 6), or, where a panel stands, its
-    /// keying's on the draft as it stands (`Shell::landing_panel`);
+    /// `no_account`; `other_panel` naming the draft the composition landed
+    /// in and the panel's `doc` or `mint` where the family's panel of that
+    /// draft, standing or held, publishes into another document than the
+    /// composition's or mints an edition — nothing read, every panel and the
+    /// composition as they stood, the panel to be cancelled before the row
+    /// lands (`publication.cancel`, a held panel re-opened first); the
+    /// panel's open's where the shell opens one (`publication.open`'s steps
+    /// 4 to 6), or, where a panel stands or is held, its keying's on the
+    /// draft as it stands (`Shell::landing_panel`);
     /// `malformed_args` naming `answers` where one is no `⟨run⟩.⟨part⟩` of a
     /// part the panel holds or one the part does not admit; the words' reads
     /// of the window parts' refusal
@@ -818,12 +833,14 @@ impl Shell {
             Form::Daughter(_) => None,
         };
         let signed = self.signed(&session, Write::call("merge.land", "publish").over(std::iter::once(&into).chain(side.as_ref()).map(ToString::to_string)))?;
-        // The panel: the page's over the draft, keyed on the draft as it
-        // stands where it was read under another merge marker, or one opened
-        // here over the whole draft, the draft side named `also`.
-        let state = match self.publications.stood_for(&key, &into, &session.reference) {
+        // The panel: the page's over the draft at the composition's document,
+        // keyed on the draft as it stands where it was read under another
+        // merge marker, or one opened here over the whole draft, the draft
+        // side named `also`; a panel of the draft in another form refuses.
+        let doc = &composition.merged.inputs.doc;
+        let state = match self.publications.stood_for(&key, &into, doc, &session.reference)? {
             Some(mut state) => {
-                if let Some(restated) = self.landing_panel(&session, &signed, &key, &mut state, side.as_ref())? {
+                if let Some(restated) = self.landing_panel(&session, &signed, &key, &mut state, doc, side.as_ref())? {
                     return Ok(restated);
                 }
                 state
@@ -833,7 +850,7 @@ impl Shell {
                     Form::Draft(d) => vec![d.clone()],
                     Form::Daughter(_) => Vec::new(),
                 };
-                let (state, _) = self.open_panel(&session, &signed, OpenArgs { draft: into.clone(), also, doc: Some(composition.merged.inputs.doc.clone()), mint: None, claim: false, selection: None, notes: None, readable_drafts: None, published: None, merge_landing: true })?;
+                let (state, _) = self.open_panel(&session, &signed, OpenArgs { draft: into.clone(), also, doc: Some(doc.clone()), mint: None, claim: false, selection: None, notes: None, readable_drafts: None, published: None, merge_landing: true })?;
                 self.publications.stand(key.clone(), state.clone());
                 state
             }

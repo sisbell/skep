@@ -209,10 +209,17 @@
 //! that finds the draft's base moved (**The base**) and at a `merge.land`
 //! over a panel read under another marker (**The landing**).
 //!
-//! **The landing** (`merge.land`, B3-S11's THE MERGE SCENE; skep #949). The
-//! panel the page left standing over the draft a composition landed in was
-//! read under one merge marker: none where it was opened before the compose,
-//! an earlier merge's where it was opened over one, and a re-open keeps the
+//! **The landing** (`merge.land`, B3-S11's THE MERGE SCENE; skep #949, #956).
+//! The row lands through the family's panel of the draft a composition landed
+//! in, standing or held, where that panel publishes into the composition's
+//! document, tested and stood under one hold of the panels' lock
+//! (`Publications::stood_for`). A panel of the draft that mints an edition or
+//! publishes into another document is no landing's panel: a shot through it
+//! would publish the merge outside the document merged, so the row is refused
+//! `other_panel` naming the draft and the panel's `doc` or `mint`, every panel
+//! of the family as it stood. The panel the page left over the draft was read
+//! under one merge marker: none where it was opened before the compose, an
+//! earlier merge's where it was opened over one, and a re-open keeps the
 //! marker with the selection it read. Where the draft now carries another,
 //! the row keys the panel on the draft as it stands before the shot
 //! (`Shell::landing_panel`), as a confirm on a moved base keys it: the base
@@ -322,6 +329,22 @@ impl PanelState {
     fn draft(&self) -> &Address {
         &self.inputs.draft
     }
+
+    /// Returns the refusal of a landing through this panel, `other_panel`.
+    ///
+    /// The panel publishes into another document than the composition's or
+    /// mints an edition. The detail names the draft and whichever of `doc`
+    /// and `mint` the open took, never both: `publication.open` admits one.
+    fn other_panel(&self) -> Refusal {
+        let mut detail = json!({"draft": self.draft().to_string()});
+        if let Some(doc) = &self.inputs.doc {
+            detail["doc"] = json!(doc.to_string());
+        }
+        if let Some(mint) = &self.inputs.mint {
+            detail["mint"] = json!(mint.to_string());
+        }
+        Refusal::shell(Name::OTHER_PANEL, detail)
+    }
 }
 
 /// One (board, principal)'s family: the standing panel and the held ones.
@@ -329,6 +352,28 @@ impl PanelState {
 struct Family {
     standing: Option<PanelState>,
     held: Vec<PanelState>,
+}
+
+impl Family {
+    /// Returns the panel of `draft`, standing or held.
+    fn of_draft(&self, draft: &Address) -> Option<&PanelState> {
+        self.standing.iter().chain(&self.held).find(|s| s.draft() == draft)
+    }
+
+    /// Makes `state` the standing panel.
+    ///
+    /// A standing panel of another draft is put behind it, held from now;
+    /// a held panel of `state`'s draft is replaced.
+    fn stand(&mut self, state: PanelState) {
+        self.held.retain(|s| s.draft() != state.draft());
+        if let Some(mut standing) = self.standing.take() {
+            if standing.draft() != state.draft() {
+                standing.since = Some(now_ms());
+                self.held.push(standing);
+            }
+        }
+        self.standing = Some(state);
+    }
 }
 
 /// The panels the shell holds, by (board reference, principal).
@@ -351,24 +396,37 @@ impl Publications {
     /// Returns the panel of `draft` in `key`'s family — standing or held —
     /// cloned.
     fn of_draft(&self, key: &(String, u64), draft: &Address) -> Option<PanelState> {
-        let families = self.families.lock().expect("the panels' lock");
-        let family = families.get(key)?;
-        family.standing.iter().chain(&family.held).find(|s| s.draft() == draft).cloned()
+        self.families.lock().expect("the panels' lock").get(key)?.of_draft(draft).cloned()
     }
 
-    /// Makes the panel of `draft` in `key`'s family the standing one, where
-    /// one stands or is held, and returns it cloned — `merge.land`'s read of
-    /// the panel the page opened over the draft its composition landed in.
+    /// Stands `key`'s panel of `draft` where it publishes into `doc`.
     ///
-    /// A held one is re-stood as it was put behind, its switches and answers
-    /// kept and its session re-marked `session`; `None` where the family
-    /// holds no panel of the draft.
-    pub(super) fn stood_for(&self, key: &(String, u64), draft: &Address, session: &str) -> Option<PanelState> {
-        let mut state = self.of_draft(key, draft)?;
+    /// It is `merge.land`'s read of the panel the page opened over the draft
+    /// its composition landed in, `doc` the composition's document: that
+    /// panel, standing or held, made the standing one and returned cloned —
+    /// a held one re-stood as it was put behind, its switches and answers
+    /// kept and its session re-marked `session` — or `None` where the family
+    /// holds no panel of the draft. The panel is tested and stood under one
+    /// hold of the panels' lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns `other_panel` naming `draft` and the panel's `doc` or `mint`
+    /// where the family's panel of the draft publishes into another document
+    /// than `doc` or mints an edition, every panel of the family left as it
+    /// stands.
+    pub(super) fn stood_for(&self, key: &(String, u64), draft: &Address, doc: &Address, session: &str) -> Result<Option<PanelState>, Refusal> {
+        let mut families = self.families.lock().expect("the panels' lock");
+        let Some(family) = families.get_mut(key) else { return Ok(None) };
+        let Some(found) = family.of_draft(draft) else { return Ok(None) };
+        if found.inputs.doc.as_ref() != Some(doc) {
+            return Err(found.other_panel());
+        }
+        let mut state = found.clone();
         state.session = session.to_string();
         state.since = None;
-        self.stand(key.clone(), state.clone());
-        Some(state)
+        family.stand(state.clone());
+        Ok(Some(state))
     }
 
     /// Makes `state` the standing panel of its family.
@@ -376,16 +434,7 @@ impl Publications {
     /// A standing panel of another draft is put behind it, held from now;
     /// a held panel of `state`'s draft is replaced.
     pub(super) fn stand(&self, key: (String, u64), state: PanelState) {
-        let mut families = self.families.lock().expect("the panels' lock");
-        let family = families.entry(key).or_default();
-        family.held.retain(|s| s.draft() != state.draft());
-        if let Some(mut standing) = family.standing.take() {
-            if standing.draft() != state.draft() {
-                standing.since = Some(now_ms());
-                family.held.push(standing);
-            }
-        }
-        family.standing = Some(state);
+        self.families.lock().expect("the panels' lock").entry(key).or_default().stand(state);
     }
 
     /// Drops the panel of `draft` in `key`'s family, standing or held.
@@ -1265,49 +1314,60 @@ impl Shell {
         }
     }
 
-    /// Keys `state`, the page's panel over the draft a composition landed
-    /// in, for `merge.land`, answering the re-statement the row answers in
-    /// its place, where one is owed (the module doc, **The landing**).
+    /// Keys the landing's panel on the draft, answering any re-statement owed.
     ///
-    /// `side` is the composition's draft side, where it has one. A panel
-    /// read under the merge marker the draft carries, and a mint-form panel,
-    /// which stands in no chain and reads no marker, are left as they stand,
-    /// the windows re-read where no merge was marked at the open. A panel
-    /// read under another is keyed on the draft as it stands and read again
-    /// whole, its answers carried onto what it reads now, and stood for the
-    /// row to confirm. Its re-statement, the difference between the panel
-    /// the page last held and this one, is owed where the page passed the
-    /// selection, and at a panel of the whole draft only where the merge
-    /// brought a link onto a private row the page switched on (PUB-3.108).
-    /// Nothing is sent here.
+    /// `state` is the page's panel over the draft a composition landed in, as
+    /// `Publications::stood_for` stood it over `trunk`, the composition's
+    /// document, for `merge.land`; `side` is the composition's draft side,
+    /// where it has one; and the re-statement is the one the row answers in the
+    /// panel's place (the module doc, **The landing**). A panel read under the
+    /// merge marker the draft carries is left as it stands, the windows re-read
+    /// where no merge was marked at the open. A panel read under another is
+    /// keyed on the draft as it stands and read again whole, its answers
+    /// carried onto what it reads now, and stood for the row to confirm. Its
+    /// re-statement, the difference between the panel the page last held and
+    /// this one, is owed where the page passed the selection, and at a panel of
+    /// the whole draft only where the merge brought a link onto a private row
+    /// the page switched on (PUB-3.108). Nothing is sent here.
     ///
     /// # Errors
     ///
     /// In this order, each naming `merge.land`, the composition's reads
-    /// refused as `publication.open` refuses them: where the panel stands in
-    /// a chain, the marker's read (`draft_marker`); then the windows' reads
-    /// (`reread_windows`), or the keying's — the base's and the standing's
-    /// (`typed_base`), `base_unrecorded` with the `publication` event's
-    /// `refused` naming it, the head probe's (`marker_claim`), `whole_draft`'s,
-    /// the re-read's and the pricing's.
-    pub(super) fn landing_panel(&self, session: &SessionEntry, signed: &Signed, key: &(String, u64), state: &mut PanelState, side: Option<&Address>) -> Result<Option<Value>, Refusal> {
+    /// refused as `publication.open` refuses them: the marker's read
+    /// (`draft_marker`); then the windows' reads (`reread_windows`), or the
+    /// keying's — the base's and the standing's (`typed_base`),
+    /// `base_unrecorded` with the `publication` event's `refused` naming it,
+    /// the head probe's (`marker_claim`), `whole_draft`'s, the re-read's and
+    /// the pricing's.
+    ///
+    /// # Panics
+    ///
+    /// In a debug build, where `state` publishes into no document or another
+    /// than `trunk`: a panel `Publications::stood_for` did not stand for it.
+    pub(super) fn landing_panel(
+        &self,
+        session: &SessionEntry,
+        signed: &Signed,
+        key: &(String, u64),
+        state: &mut PanelState,
+        trunk: &Address,
+        side: Option<&Address>,
+    ) -> Result<Option<Value>, Refusal> {
+        debug_assert_eq!(state.inputs.doc.as_ref(), Some(trunk), "a landing's panel publishes into the composition's document");
         let p = signed.publisher(session);
         let fault = |f: Fault| self.fault(session, "merge.land", f);
         let draft = state.draft().clone();
-        let read = match state.inputs.doc.clone() {
-            Some(trunk) => Some((trunk, self.draft_marker(session, &draft)?)),
-            None => None,
-        };
-        let Some((trunk, marker)) = read.filter(|(_, marker)| *marker != state.marker) else {
+        let marker = self.draft_marker(session, &draft)?;
+        if marker == state.marker {
             if !state.inputs.merge_landing {
                 state.inputs.merge_landing = true;
                 Self::reread_windows(&p, state, fault)?;
                 self.publications.stand(key.clone(), state.clone());
             }
             return Ok(None);
-        };
-        let (base, standing) = self.typed_base_again(session, &p, "merge.land", &trunk, &draft)?;
-        let mut inputs = self.inputs_keyed(session, state, &trunk, base, marker.as_ref())?;
+        }
+        let (base, standing) = self.typed_base_again(session, &p, "merge.land", trunk, &draft)?;
+        let mut inputs = self.inputs_keyed(session, state, trunk, base, marker.as_ref())?;
         inputs.merge_landing = true;
         if let Some(side) = side.filter(|side| !inputs.also.contains(side)) {
             inputs.also.push(side.clone());

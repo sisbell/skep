@@ -5,8 +5,8 @@
 //! table's — every required field present, no field outside the table — so
 //! a field renamed in the declaration alone, or in the code alone, fails
 //! here; and the file names every shape, every call and every event, the
-//! refusal union naming the held-lines, landing-unread and no-own-node
-//! refusals whole beside the shell's open one.
+//! refusal union naming the held-lines, window-parts-owed, landing-unread,
+//! no-own-node and other-panel refusals whole beside the shell's open one.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -66,6 +66,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("HeldLinesRefusal", Refusal::shell(Name::HELD_LINES, json!({"doc": "1.0.1.0.5", "held": 2})).to_value()),
         ("LandingUnreadRefusal", Refusal::shell(Name::LANDING_UNREAD, json!({"held": 1, "why": "undecided"})).to_value()),
         ("NoOwnNodeRefusal", Refusal::shell(Name::NO_OWN_NODE, json!({"call": "node.start"})).to_value()),
+        ("OtherPanelRefusal", Refusal::shell(Name::OTHER_PANEL, json!({"draft": "1.0.1.0.5", "mint": "1.0.1"})).to_value()),
         ("ShellRefusal", Refusal::shell(Name::SESSION_ENDED, json!({})).to_value()),
         ("ModeEvent", json!({"board": "b-0", "mode": "ENFORCING", "claimant": "1.0.1", "local_trust": false})),
         ("SessionDiedEvent", json!({"session": "s-0", "reason": sessions::closed()})),
@@ -249,8 +250,9 @@ fn the_file_names_every_shape_call_and_event() {
         "  unwritable?: string;\n  unwritable_class?: 'full' | 'read_only' | 'other';\n",
         "  opened_at?: number;\n  another_window?: true;\n",
         "export interface AnotherWindowEvent {\n  board: string;\n  another_window: boolean;\n}\n",
-        "export type Refusal = RefusedByBoard | HaltFace | BlockedFace | Unreachable | HeldLinesRefusal | WindowPartsOwedRefusal | LandingUnreadRefusal | NoOwnNodeRefusal | ShellRefusal;\n",
+        "export type Refusal = RefusedByBoard | HaltFace | BlockedFace | Unreachable | HeldLinesRefusal | WindowPartsOwedRefusal | LandingUnreadRefusal | NoOwnNodeRefusal | OtherPanelRefusal | ShellRefusal;\n",
         "export interface NoOwnNodeRefusal {\n  kind: 'shell';\n  name: 'no_own_node';\n  call: string;\n}\n",
+        "export interface OtherPanelRefusal {\n  kind: 'shell';\n  name: 'other_panel';\n  draft: string;\n  doc?: string;\n  mint?: string;\n}\n",
         "export interface HeldLinesRefusal {\n  kind: 'shell';\n  name: 'held_lines';\n  doc: string;\n  held: number;\n}\n",
         "export interface LandingUnreadRefusal {\n  kind: 'shell';\n  name: 'landing_unread';\n  held: number;\n  why: 'unanswered' | 'unread' | 'undecided' | 'stopped' | 'poisoned' | 'halted';\n}\n",
         "  resolve(args: { session: string; held: number; act: 'drop' | 'send' }): Promise<Outcome<{ kept?: true }>>;\n",

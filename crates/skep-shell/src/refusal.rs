@@ -366,6 +366,20 @@ impl Name {
     /// (`skep_client::merge::Refusal::NoMerge`). The detail names the
     /// `session`, or the `draft`.
     pub const NO_MERGE: Name = Name("no_merge");
+    /// A `merge.land` over a panel of the draft in another form or document.
+    ///
+    /// The family's panel of the draft the composition landed in, standing
+    /// or held, publishes into another document than the composition's or
+    /// mints an edition, and a shot through it would publish the merge
+    /// outside the document merged. So nothing is composed or sent, and
+    /// that panel, the family's standing panel and the composition stand as
+    /// they were. The detail names the `draft` and exactly one of the
+    /// panel's `doc` and `mint`, as `publication.open` took them. The way on
+    /// is `publication.cancel` of that panel, a held one re-opened first,
+    /// then `merge.land` again: confirming the panel instead publishes the
+    /// draft as a document of its own, and the next `merge.land` is refused
+    /// `base_unrecorded`.
+    pub const OTHER_PANEL: Name = Name("other_panel");
     /// A side whose base the merge library cannot read (`client.md` §4b.1's
     /// merge row, `BaseUnknown{side}`).
     ///

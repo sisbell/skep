@@ -39,7 +39,12 @@
 //! opened after the compose keeping its selection, a re-open and a second
 //! compose read under the marker the draft carries, links the merge brought
 //! onto a switched-on row re-stated with no run index beside them, and the
-//! window the merge brought asked, no earlier answer carried onto it.
+//! window the merge brought asked, no earlier answer carried onto it; and a
+//! landing over a panel of the draft that mints an edition or publishes
+//! into another document, standing or held, refused `other_panel`
+//! (skep #956) with nothing sent and every panel as it stood, landing once
+//! that panel is cancelled, and refused `base_unrecorded` once the draft
+//! was published as a document of its own.
 
 use std::io::{Read, Write};
 
@@ -1289,6 +1294,144 @@ fn a_landing_over_an_earlier_panel_asks_the_window_the_merge_brought() {
     let answers = json!({ format!("{}.{}", part["run"], part["part"]): "keep_private" });
     let shot = g.call("merge.land", json!({"session": g.session, "answers": answers})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!((shot["outcome"].as_str(), shot["member"].as_str()), (Some("landed"), Some(format!("{}.3", f.edition).as_str())), "{shot}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Returns the `publication` events seen once one of them says `state`.
+///
+/// Each is its draft and its state. The events are copied in order on the
+/// answerer's thread, so every one said before it has arrived by then.
+fn said_once(g: &Ground, state: &str) -> Vec<(String, String)> {
+    let text = |v: &Value| v.as_str().unwrap_or("?").to_string();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let said: Vec<(String, String)> = g.seen.lock().unwrap().iter().filter(|e| e.name == EventName::Publication).map(|e| (text(&e.data["draft"]), text(&e.data["state"]))).collect();
+        if said.iter().any(|(_, s)| s == state) {
+            return said;
+        }
+        assert!(Instant::now() < deadline, "no `{state}` was said: {said:?}");
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Checks a landing over a mint-form panel of the draft, refused by name.
+///
+/// L is staged from the head, and a notes draft holds a note on E.2's
+/// words: a mint-form panel over L with the notes row switched on stands
+/// when the merge of E.2 with E.1.1 lands in L. `merge.land` is refused
+/// exactly `other_panel` naming L and the account the panel mints under,
+/// nothing sent and no event said; the panel re-opens standing, its row
+/// still switched on. Cancelled, the next `merge.land` opens its own panel
+/// at E and lands E.3 with the claim and the merge's record (the mutants
+/// that take the panel, minting an edition answered `landed` as a daughter
+/// with no record; that drop it and open their own, landing in one call;
+/// and that refuse another document alone, letting the mint form through).
+#[test]
+fn a_landing_over_a_mint_form_panel_of_the_draft_is_refused_and_lands_once_the_panel_is_cancelled() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let l = g.addr(frames::stage(&f.e2, None));
+    let notes = g.draft("notes here");
+    let note = g.addr(json!({"op": "make_link", "home": notes, "from": [{"source": f.e2, "span": {"start": "1.1", "width": "0.3"}}], "to": {"addrs": []}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}}));
+    let open = json!({"session": g.session, "draft": l, "mint": "1.0.1", "notes": [notes], "readable_drafts": [l, notes], "published": [f.edition]});
+    let panel = g.call("publication.open", open.clone()).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((panel.get("standing"), panel["rows"][0]["links"].clone()), (None, json!([note])), "the premise: a mint-form panel offering the note: {panel}");
+    g.call("publication.count", json!({"session": g.session, "switches": {"on": [notes]}})).unwrap_or_else(|r| panic!("{r}"));
+    merged_into(&g, &f, &f.e11, &l);
+    let before = g.position();
+    let refused = g.call("merge.land", json!({"session": g.session})).unwrap_err().to_value();
+    crate::shapes::assert_declared("OtherPanelRefusal", &refused);
+    assert_eq!(refused, json!({"kind": "shell", "name": "other_panel", "draft": l, "mint": "1.0.1"}), "{refused}");
+    assert_eq!(g.position(), before, "nothing sent");
+    let reopened = g.call("publication.open", open).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((reopened.get("hold"), reopened["count"]["l"].as_u64()), (None, Some(1)), "the panel standing as it stood, its row switched on: {reopened}");
+    g.call("publication.cancel", json!({"session": g.session})).unwrap();
+    let said: Vec<String> = said_once(&g, "cancelled").into_iter().filter(|(d, _)| *d == l).map(|(_, s)| s).collect();
+    assert_eq!(said, ["cancelled"], "no event of L's but the cancel's");
+    let landed = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("MergeLanded", &landed);
+    let e3 = format!("{}.3", f.edition);
+    assert_eq!((landed["member"].as_str(), landed["daughter"].as_bool(), landed["supersede"].clone()), (Some(e3.as_str()), Some(false), json!([f.e11])), "{landed}");
+    assert!(landed["record"].is_string() && landed.get("unrecorded").is_none(), "the merge's record: {landed}");
+    assert_holds_the_merge(&g, &e3, "landed once the panel was cancelled");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks a landing over a panel of the draft over another document.
+///
+/// The merge of E.2 with E.1.1 lands in L, and L is then published at the
+/// mint form, minting E′ and moving L's base to E′.1. With a word written
+/// in L, L's panel over E′ stands when `merge.land` is called: refused
+/// exactly `other_panel` naming L and E′, nothing sent (the mutant that
+/// refuses the mint form alone publishes E′.2, answered `landed` as a
+/// daughter with its record `unrecorded`). The panel cancelled, the row
+/// opens its own over E and is refused `base_unrecorded` naming L, E and
+/// `other_chain`, nothing sent.
+#[test]
+fn a_landing_over_a_panel_of_the_draft_over_another_document_is_refused_naming_it() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let l = g.addr(frames::stage(&f.e2, None));
+    merged_into(&g, &f, &f.e11, &l);
+    g.call("publication.open", json!({"session": g.session, "draft": l, "mint": "1.0.1", "readable_drafts": [l], "published": [f.edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let minted = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let other = minted["edition"].as_str().unwrap_or_else(|| panic!("L published at the mint form: {minted}")).to_string();
+    g.op(json!({"op": "insert", "doc": l, "at": {"subspace": "1", "ordinal": "20"}, "values": [" now"], "as_of": g.position()}));
+    let panel = g.call("publication.open", json!({"session": g.session, "draft": l, "doc": other, "readable_drafts": [l], "published": [f.edition, other]})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(panel["standing"], "at_head", "the premise: L's panel over E′, at its head: {panel}");
+    let before = g.position();
+    let refused = g.call("merge.land", json!({"session": g.session})).unwrap_err().to_value();
+    crate::shapes::assert_declared("OtherPanelRefusal", &refused);
+    assert_eq!(refused, json!({"kind": "shell", "name": "other_panel", "draft": l, "doc": other}), "{refused}");
+    assert_eq!(g.position(), before, "nothing sent");
+    g.call("publication.cancel", json!({"session": g.session})).unwrap();
+    let unrecorded = g.call("merge.land", json!({"session": g.session})).unwrap_err().to_value();
+    assert_eq!(
+        (unrecorded["name"].as_str(), unrecorded["draft"].as_str(), unrecorded["doc"].as_str(), unrecorded["reason"].as_str()),
+        (Some("base_unrecorded"), Some(l.as_str()), Some(f.edition.as_str()), Some("other_chain")),
+        "the draft left the trunk's chain: {unrecorded}"
+    );
+    assert_eq!(g.position(), before, "nothing sent");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks a landing over a held mint-form panel, every panel as it stood.
+///
+/// A mint-form panel over L is put behind one over another draft X, and the
+/// merge of E.2 with E.1.1 then lands in L: `merge.land` is refused
+/// `other_panel` naming L, nothing sent. X's panel still stands,
+/// `publication.cancel` saying `cancelled` of X and no event of L's, and
+/// L's re-opens with its hold's `since` (the mutant that stands the panel
+/// before testing it puts X behind and cancels L's).
+#[test]
+fn a_landing_over_a_held_mint_form_panel_is_refused_and_every_panel_stands_as_it_stood() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let l = g.addr(frames::stage(&f.e2, None));
+    let x = g.draft("elsewhere");
+    let mint = |draft: &str| json!({"session": g.session, "draft": draft, "mint": "1.0.1", "readable_drafts": [draft], "published": [f.edition]});
+    g.call("publication.open", mint(&l)).unwrap_or_else(|r| panic!("{r}"));
+    g.call("publication.open", mint(&x)).unwrap_or_else(|r| panic!("{r}"));
+    merged_into(&g, &f, &f.e11, &l);
+    let before = g.position();
+    let refused = g.call("merge.land", json!({"session": g.session})).unwrap_err().to_value();
+    assert_eq!(refused, json!({"kind": "shell", "name": "other_panel", "draft": l, "mint": "1.0.1"}), "{refused}");
+    assert_eq!(g.position(), before, "nothing sent");
+    g.call("publication.cancel", json!({"session": g.session})).unwrap();
+    let said = said_once(&g, "cancelled");
+    let of_the_two: Vec<(&str, &str)> = said.iter().filter(|(d, _)| *d == x || *d == l).map(|(d, s)| (d.as_str(), s.as_str())).collect();
+    assert_eq!(of_the_two, [(x.as_str(), "cancelled")], "X's panel stood and was cancelled, L's untouched");
+    let reopened = g.call("publication.open", mint(&l)).unwrap_or_else(|r| panic!("{r}"));
+    assert!(reopened["hold"]["since"].is_u64(), "L's panel held as it stood: {reopened}");
     g.shell.shutdown();
     sd.shutdown();
 }

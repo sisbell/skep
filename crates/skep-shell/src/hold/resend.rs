@@ -65,8 +65,11 @@
 //! no answer to is not tried: its verdict is kept
 //! (`PrincipalHold::shift_owed`), and the line's next send runs the shift
 //! from it, no stale frame dialed first; a moved face whose hands' read goes
-//! unanswered is said with them not read (`Hand::UNREAD`), and the walk reads
-//! them again, a step, as it meets the document (`Holds::reread_hands`).
+//! unanswered, or is answered with no page, is said with them not read
+//! (`Hand::UNREAD`), and the walk reads them again, a step, as it meets the
+//! document, under its own session and every other session told them not
+//! read (`Holds::reread_hands`; skep #972) — a principal no session of which
+//! may write having them read so at each pass (`Holds::pay_hands_owed`).
 //!
 //! **A moved document's head is tested against its document** (§3c.5;
 //! skep #867), so the page knows what its "send again" would do: `sendable`,
@@ -187,6 +190,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -818,14 +822,19 @@ impl Holds {
     /// re-mark's or a `done`'s — are written where the device takes them
     /// (`HeldQueue::retry`), a wait that ends said ([`Holds::note_waiting`])
     /// and each document whose lines were written told so
-    /// ([`Holds::say_landed`]): none needs a dial. Then, at a board whose own
-    /// node is not stopped, one turn of the drain runs ([`Holds::drain`]), one
-    /// drain per board at a time, a halted principal's lines never among them
-    /// (P38; skep #858), where a session that may write stands — so a board
-    /// that halts or whose head will not read is found with no line held,
-    /// before any write meets it (§3c.3; P37; skep #865) — or a read is owed
-    /// it with none ([`BoardHold::probe_owed`](super::BoardHold::probe_owed);
-    /// skep #863).
+    /// ([`Holds::say_landed`]): the retry needs no dial. A session told no
+    /// face of such a document that stands moved is told it once the board's
+    /// lock is let go, its hands read first where the board answers and the
+    /// own node runs, and named not read otherwise
+    /// ([`Holds::say_with_hands`]; skep #972) — before the drain's mark is
+    /// asked, so a probe that finds another drain running says them too.
+    /// Then, at a board whose own node is not stopped, one turn of the drain
+    /// runs ([`Holds::drain`]), one drain per board at a time, a halted
+    /// principal's lines never among them (P38; skep #858), where a session
+    /// that may write stands — so a board that halts or whose head will not
+    /// read is found with no line held, before any write meets it (§3c.3;
+    /// P37; skep #865) — or a read is owed it with none
+    /// ([`BoardHold::probe_owed`](super::BoardHold::probe_owed); skep #863).
     ///
     /// It answers [`Turn::Bounded`] where the turn stopped at its bound with
     /// a line still to send, the pass going on at the next turn;
@@ -843,11 +852,16 @@ impl Holds {
         let slot = self.slot(board_reference);
         let sessions = self.sessions.on_board(board_reference);
         let writer = sessions.iter().any(|session| session.may_write());
-        let due = {
+        let (due, owed) = {
             let mut board_hold = slot.lock();
-            self.retry_store(board_reference, &mut board_hold, slot.board.dialed(), &sessions);
-            !board_hold.node_stopped && (writer || board_hold.probe_owed())
+            let owed = self.retry_store(board_reference, &mut board_hold, slot.board.dialed(), &sessions);
+            (!board_hold.node_stopped && (writer || board_hold.probe_owed()), owed)
         };
+        // The moved faces the landings owe their hands, each read outside the
+        // lock as every dial is.
+        for (session, owed) in owed {
+            self.say_with_hands(&session, owed);
+        }
         // One drain per board at a time, its mark cleared however it ends;
         // the drain that holds the mark alone ends the pass.
         let Some(_draining) = Draining::begin(&slot.draining) else { return Turn::Done };
@@ -885,8 +899,12 @@ impl Holds {
     /// (`SessionEntry::may_write`) — under no bare session — sharing the
     /// turn's [`TURN_STEPS`] steps ([`Holds::walk`]), every principal's
     /// documents the pass has not reached before any the board's silence cut
-    /// it at ([`Round`]); it answers [`Turn::Bounded`] where they ran out
-    /// with a line still to send, [`Turn::Unanswered`] where the board gave a
+    /// it at ([`Round`]); a principal no session of which may write sends
+    /// nothing, and the hands its moved faces were told not read are read in
+    /// the pass's first round for the sessions told so, from the same steps
+    /// ([`Holds::pay_hands_owed`]; skep #972). It answers [`Turn::Bounded`]
+    /// where they ran out with a line still to send, or a hands read still
+    /// owed, [`Turn::Unanswered`] where the board gave a
     /// request of a walk's no answer, no later walk made, and
     /// [`Turn::Done`] where every principal's walk reached its end, or the
     /// board holds every line.
@@ -920,7 +938,18 @@ impl Holds {
         let mut steps = TURN_STEPS;
         for round in [Round::Unreached, Round::Cut] {
             for &principal in &principals {
-                let Some(session) = self.sessions.on_board(board_reference).into_iter().find(|s| s.facts.principal == principal && s.may_write()) else { continue };
+                let Some(session) = self.sessions.on_board(board_reference).into_iter().find(|s| s.facts.principal == principal && s.may_write()) else {
+                    // No walk meets the documents of a principal no session of
+                    // which may write: the hands its faces were told not read
+                    // are read for the sessions told so.
+                    if round == Round::Unreached {
+                        match self.pay_hands_owed(board_reference, principal, &mut steps) {
+                            Turn::Done => {}
+                            stopped => return stopped,
+                        }
+                    }
+                    continue;
+                };
                 match self.walk(&session, head_unreadable, &mut steps, round) {
                     Turn::Done => {}
                     stopped => return stopped,
@@ -962,7 +991,8 @@ impl Holds {
     /// ones, and in [`Round::Cut`] those alone are walked, the set taken out
     /// as the walk begins, the walk none where it holds none. A moved
     /// document whose hands went unread is read for them as the walk meets
-    /// it, a step ([`Holds::reread_hands`]), and a moved head that owes its
+    /// it, under the walk's session and every other session told them not
+    /// read, a step ([`Holds::reread_hands`]), and a moved head that owes its
     /// shift test is tested, a step ([`Holds::test_shift`]). It answers
     /// [`Turn::Bounded`]
     /// where a document's read or a line's send was owed a step and the turn
@@ -1012,7 +1042,7 @@ impl Holds {
                 if hands_owed {
                     let Some(left) = steps.checked_sub(1) else { return Turn::Bounded };
                     *steps = left;
-                    if self.reread_hands(session, &line.doc) == Step::Unanswered {
+                    if self.reread_hands(Some(session), board_reference, principal, &line.doc) == Step::Unanswered {
                         self.cut_in_pass(board_reference, principal, &line.doc);
                         return Turn::Unanswered;
                     }
@@ -1081,22 +1111,57 @@ impl Holds {
         self.with_principal(board_reference, principal, |ph| ph.cut_in_pass.insert(doc.to_string()));
     }
 
+    /// Reads the hands owed a principal no session of which may write.
+    ///
+    /// No walk meets `principal`'s documents at the board (§3c.5), so each
+    /// document owed its hands (`PrincipalHold::hands_owed`) that the pass
+    /// has not met (`PrincipalHold::stopped_in_pass`) is entered among those
+    /// it met and read for the sessions told its hands not read
+    /// ([`Holds::reread_hands`]; skep #972), a step of the turn's `steps`
+    /// each. It answers [`Turn::Bounded`] where a document is owed its read
+    /// and the turn has no step left, [`Turn::Unanswered`] where the board
+    /// gave a read no answer — or a request of the hold's elsewhere went
+    /// unanswered since the probe's verdict — and [`Turn::Done`] where the
+    /// pass has met every document owed.
+    fn pay_hands_owed(&self, board_reference: &str, principal: u64, steps: &mut usize) -> Turn {
+        loop {
+            if !self.lock(board_reference).answers() {
+                return Turn::Unanswered;
+            }
+            let next = self.with_principal(board_reference, principal, |ph| ph.hands_owed.keys().find(|doc| !ph.stopped_in_pass.contains(*doc)).cloned()).flatten();
+            let Some(doc) = next else { return Turn::Done };
+            let Some(left) = steps.checked_sub(1) else { return Turn::Bounded };
+            *steps = left;
+            self.stop_in_pass(board_reference, principal, &doc);
+            if self.reread_hands(None, board_reference, principal, &doc) == Step::Unanswered {
+                return Turn::Unanswered;
+            }
+        }
+    }
+
     /// Reads the unread hands of a moved document, and says them (§3c.5).
     ///
-    /// The board gave their read no answer before.
+    /// A face of it named them not read before: their read went unanswered
+    /// or was answered with no page, met the death signal or was not made.
     ///
     /// `doc` is owed its hands (`PrincipalHold::hands_owed`), the line the
     /// board's verdict rides named beside it. Where that line stands moved
     /// still, the hands are read as the moved hold reads them
-    /// ([`Holds::hands_since_typed_state`]) and, read, the `held` event says
-    /// the document `moved` again with them, the debt paid; a read the board
-    /// gives no answer to marks the board unanswered and answers
-    /// [`Step::Unanswered`], the debt standing; the death signal leaves it
-    /// standing for the session that stands next. A line moved no more owes
+    /// ([`Holds::hands_since_typed_state`]) under each session owed them: the
+    /// walk's own, `walking`, where a walk reads them, and every other
+    /// standing session of `principal`'s at the board whose last face of
+    /// `doc` names them not read ([`Hand::UNREAD`]; skep #972), each
+    /// session's own key deciding which hand is `own`. Each read that names
+    /// them has the `held` event say the document `moved` again with them
+    /// under its session, where the line still stands at the head as it was
+    /// read; the debt is paid once every read has named them. A read the
+    /// board gives no answer to marks the board unanswered and answers
+    /// [`Step::Unanswered`], the debt standing; one it answers with no page,
+    /// or the death signal, leaves the session's face as it stood and the
+    /// debt standing, read again at the next pass. A line moved no more owes
     /// no hands. It answers [`Step::Goes`] otherwise, the walk going on to
     /// the document's head.
-    fn reread_hands(&self, session: &SessionEntry, doc: &str) -> Step {
-        let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
+    fn reread_hands(&self, walking: Option<&SessionEntry>, board_reference: &str, principal: u64, doc: &str) -> Step {
         let owed = self.with_principal(board_reference, principal, |ph| {
             let judged = ph.hands_owed.get(doc).and_then(|&k| ph.queue.line(k)).filter(|line| line.reason.cause == cause::MOVED);
             if judged.is_none() {
@@ -1105,23 +1170,39 @@ impl Holds {
             judged
         });
         let Some(judged) = owed.flatten() else { return Step::Goes };
-        match self.hands_since_typed_state(session, doc, Some(judged.k), &judged.reason) {
-            HandsRead::Named(hands) => {
-                let sendable = self
-                    .with_principal(board_reference, principal, |ph| {
-                        ph.hands_owed.remove(doc);
-                        ph.sendable_told(doc)
-                    })
-                    .flatten();
-                self.emit_held(session, doc, self.lines_on(board_reference, principal, doc), HeldState::Moved, None, MovedFace { hands: &hands, sendable });
-                Step::Goes
+        let standing = self.sessions.on_board(board_reference);
+        let told_unread = |session: &SessionEntry| self.told(session, doc).is_some_and(|told| told.state == HeldState::Moved && told.hands.contains(&Hand::UNREAD));
+        let others = standing.iter().filter(|s| s.facts.principal == principal && walking.is_none_or(|w| w.reference != s.reference) && told_unread(s));
+        let mut paid = true;
+        for session in walking.into_iter().chain(others.map(Arc::as_ref)) {
+            match self.hands_since_typed_state(session, doc, Some(judged.k), &judged.reason) {
+                HandsRead::Named(hands) => {
+                    let face = self
+                        .with_principal(board_reference, principal, |ph| {
+                            let stands = ph.queue.reasons_on(doc).next().is_some_and(|(head, reason)| head == judged.k && *reason == judged.reason);
+                            stands.then(|| (ph.lines_on(doc), if session.may_write() { ph.sendable_told(doc) } else { None }))
+                        })
+                        .flatten();
+                    // A person's act moved the document on while the read was
+                    // out: no session is told the face the read made.
+                    let Some((lines, sendable)) = face else { return Step::Goes };
+                    self.emit_held(session, doc, lines, HeldState::Moved, None, MovedFace { hands: &hands, sendable });
+                }
+                HandsRead::Unanswered => {
+                    self.note_unanswered(&mut self.lock(board_reference), None);
+                    return Step::Unanswered;
+                }
+                HandsRead::Unread | HandsRead::Died => paid = false,
             }
-            HandsRead::Unanswered => {
-                self.note_unanswered(&mut self.lock(board_reference), None);
-                Step::Unanswered
-            }
-            HandsRead::Died => Step::Goes,
         }
+        if paid {
+            self.with_principal(board_reference, principal, |ph| {
+                if ph.hands_owed.get(doc) == Some(&judged.k) {
+                    ph.hands_owed.remove(doc);
+                }
+            });
+        }
+        Step::Goes
     }
 
     /// Tests a moved document's head against the text as it now stands.
@@ -1139,8 +1220,10 @@ impl Holds {
     /// marks the answer unknown and owed and the board unanswered, tells
     /// nothing and answers [`Step::Unanswered`]; a told change whose hands'
     /// read goes so is said with them not read, as a moved hold's is, and
-    /// answers the same. The death signal leaves the test owed for the
-    /// session that stands next. It answers [`Step::Goes`] otherwise.
+    /// answers the same, and one whose hands' read the board answers with no
+    /// page is said with them not read too, owed to the walk (skep #972). The
+    /// death signal leaves the test owed for the session that stands next. It
+    /// answers [`Step::Goes`] otherwise.
     fn test_shift(&self, session: &SessionEntry, head: &HeldLine) -> Step {
         let (board_reference, principal, doc, k) = (session.board_reference.as_str(), session.facts.principal, head.doc.as_str(), head.k);
         let tested = match shift_as_a_send_would(session, head) {
@@ -1154,19 +1237,16 @@ impl Holds {
             }
         };
         let tells = self.with_principal(board_reference, principal, |ph| tested.live() != ph.told_live(doc, k)).unwrap_or(false);
-        let (hands, unread) = if tells {
-            match self.hands_since_typed_state(session, doc, Some(k), &head.reason) {
-                HandsRead::Named(hands) => (hands, false),
-                HandsRead::Unanswered => (vec![Hand::UNREAD], true),
-                HandsRead::Died => return Step::Goes,
-            }
+        let (hands, unanswered) = if tells {
+            let Some(face) = self.hands_since_typed_state(session, doc, Some(k), &head.reason).face() else { return Step::Goes };
+            face
         } else {
             (Vec::new(), false)
         };
         let told = self
             .with_principal(board_reference, principal, |ph| {
                 ph.note_tested(doc, k, tested, false).then(|| {
-                    if unread {
+                    if hands.contains(&Hand::UNREAD) {
                         ph.hands_owed.insert(doc.to_string(), k);
                     }
                     (ph.lines_on(doc), ph.sendable_told(doc))
@@ -1175,12 +1255,12 @@ impl Holds {
             .flatten();
         let Some((lines, sendable)) = told else { return Step::Goes };
         if tells {
-            if unread {
+            if unanswered {
                 self.note_unanswered(&mut self.lock(board_reference), None);
             }
             self.emit_held(session, doc, lines, HeldState::Moved, None, MovedFace { hands: &hands, sendable });
         }
-        if unread {
+        if unanswered {
             Step::Unanswered
         } else {
             Step::Goes
@@ -1552,7 +1632,9 @@ impl Holds {
     /// the line's next send starts at it, the shift run and no stale frame
     /// dialed first. A moved face whose hands' read the board gives no answer
     /// to stands on the verdict, its hands named not read ([`Hand::UNREAD`]),
-    /// owed (`PrincipalHold::hands_owed`), and ends the pass too. Every failed
+    /// owed (`PrincipalHold::hands_owed`), and ends the pass too; one whose
+    /// hands' read the board answers with no page names them so, owed, the
+    /// line's document stopping as any moved one does (skep #972). Every failed
     /// send of the line ([`Dialed::failure`]) is noted on its clock
     /// ([`HAND_OVER_DEADLINE`]), and a line left standing — for the next probe,
     /// or for the drain's next pass — says so where a failure this send met
@@ -1684,22 +1766,20 @@ impl Holds {
                             // The hands are read before anything is marked:
                             // the death at the read leaves the line standing,
                             // as the death at its dial does; the board's
-                            // silence at it faces the document moved, its
-                            // hands not read.
-                            let (hands, unread) = match self.hands_since_typed_state(session, &line.doc, Some(line.k), &reason) {
-                                HandsRead::Named(hands) => (hands, false),
-                                HandsRead::Unanswered => (vec![Hand::UNREAD], true),
-                                HandsRead::Died => return Step::Stops,
-                            };
+                            // silence at it, or an answer with no page, faces
+                            // the document moved, its hands not read.
+                            let Some((hands, unanswered)) = self.hands_since_typed_state(session, &line.doc, Some(line.k), &reason).face() else { return Step::Stops };
                             self.say(format_args!("line {} on {} was not shifted ({why}); the document is held as moved", line.k, line.doc));
                             self.mark_moved(board_reference, principal, &line.doc, reason.refusal.map(|verdict| (line.k, verdict)));
-                            if unread {
+                            if hands.contains(&Hand::UNREAD) {
                                 self.with_principal(board_reference, principal, |ph| ph.hands_owed.insert(line.doc.clone(), line.k));
+                            }
+                            if unanswered {
                                 self.note_unanswered(&mut self.lock(board_reference), None);
                             }
                             let sendable = self.note_shift_refused(board_reference, principal, &line.doc, line.k, &why);
                             self.emit_held(session, &line.doc, self.lines_on(board_reference, principal, &line.doc), HeldState::Moved, None, MovedFace { hands: &hands, sendable });
-                            return if unread { Step::Unanswered } else { Step::Stops };
+                            return if unanswered { Step::Unanswered } else { Step::Stops };
                         }
                     }
                 }

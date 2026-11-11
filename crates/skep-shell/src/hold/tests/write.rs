@@ -13,9 +13,16 @@
 //! first after it, a moved face naming the hands the session was told or,
 //! where no face told it them, the hands read once the act's locks are let
 //! go — named not read where the board does not give them, and named by the
-//! walk once it does (skep #960); a burst the board refuses as typed against
-//! an older state held moved at its first dial where it carries no anchors,
-//! the board's verdict on its line and the hand that moved the document named,
+//! walk once it does (skep #960), named not read too where the document is
+//! moved again while they are read; hands named not read to a session the
+//! walk does not run under named to it, and at a principal no session of
+//! which may write named at the board's answer, the walk saying no face of a
+//! document handed back while it reads them (skep #972); a burst the board
+//! refuses as typed against an older state held moved at its first dial where
+//! it carries no anchors, the board's verdict on its line and the hand that
+//! moved the document named — its hands read again at the limit that fits
+//! where their page is past the budget, and named not read where the board
+//! answers no page, read again at each pass until it does (skep #972) —
 //! and a moved line with the verdict reading `moved` and taking a moved
 //! document's acts; the person's `send` on a moved document raising each
 //! waiting line's base to the verdict's `site.current`, in the queue and on
@@ -75,8 +82,10 @@
 //! read, or another cause — the line waiting behind it the same (skep #820);
 //! a line no file holds listed so and its landing said, under each session
 //! of its principal and for each document it wrote alone, the event's state,
-//! cause, hands and `sendable` as last told (skep #860), a line settled
-//! whose `done` is owed off the rows and counted; no
+//! cause, hands and `sendable` as last told (skep #860), a session told
+//! nothing of a moved document hearing it with the hands read for it, or
+//! named not read at a stopped node and named by the walk (skep #972), a line
+//! settled whose `done` is owed off the rows and counted; no
 //! `held` event when a session's open reads its file, and a misplaced file
 //! set aside and said on `Talk` alone; the first touch with a term taking
 //! both locks and keeping the pending one with no pending file (skep #873),
@@ -562,6 +571,144 @@ fn a_drop_whose_document_moves_on_while_its_hands_are_read_says_what_stands() {
     assert_eq!(g.lines()[0]["cause"], "behind", "the line handed back");
 }
 
+/// Returns a session of `facts` registered beside the ground's, under a token
+/// of `byte`, and opened as the shell opens one.
+fn beside(g: &Ground, facts: Facts, byte: u8) -> Arc<SessionEntry> {
+    let open = Open { token: Token::parse(&format!("{byte:02x}").repeat(16)).unwrap(), facts, opened_at: 0 };
+    let session = g.sessions.register(&g.entry, open, &mut NoSupplements);
+    g.holds.open_session(&session);
+    session
+}
+
+/// Returns the `held` events of `said` under `session`.
+fn under(said: &[Value], session: &SessionEntry) -> Vec<Value> {
+    said.iter().filter(|e| e["session"] == session.reference.as_str()).cloned().collect()
+}
+
+/// Checks that a drop whose document is moved again while its hands are read
+/// names them not read (§4b.2; skep #960, #972).
+///
+/// The moved document's second line is dropped under a keyless session of
+/// the principal's told nothing of it, and while the hands are read the
+/// person hands the document back by `send` under the writer, another key's
+/// row lands at 79, and the walk's resend of the head is refused under a new
+/// verdict. The drop's event says the document `moved` under the keyless
+/// session with its hands not read, the document owing them, and the next
+/// probe's walk names the hand since the person's `send` to it (the mutant
+/// that says what stands with the hands as told says the document moved by
+/// no one).
+#[test]
+fn a_drop_whose_document_is_moved_again_while_its_hands_are_read_names_them_not_read() {
+    let (g, ks, _) = moved_document();
+    let keyless = beside(&g, bare_facts(), 0x7c);
+    let (holds, writer, head, fake) = (Arc::downgrade(&g.holds), Arc::clone(&g.session), ks[0], Arc::clone(&g.fake));
+    *g.fake.at_changes.lock().unwrap() = Some(Box::new(move || {
+        let Some(holds) = holds.upgrade() else { return };
+        assert_eq!(holds.resolve(&writer, head, ResolveAct::Send).unwrap(), Resolved::HandedBack, "the send while the read is out");
+        fake.rows.lock().unwrap().push(json!({"at": 79, "op": "insert", "key": "ee".repeat(32), "docs": [DOC]}));
+        fake.op_rejected.next(1, arrangement_moved(70, 79));
+        holds.probe("b-1");
+    }));
+    assert_eq!(g.holds.resolve(&keyless, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    let said = under(&told_events(&g), &keyless);
+    let [event] = &said[..] else { panic!("one event under the keyless session: {said:?}") };
+    assert_eq!((event["state"].as_str(), event["held"].as_u64(), &event["hands"]), (Some("moved"), Some(1), &json!([{"key": "unread"}])), "{event}");
+    assert_eq!(g.lines()[0]["refusal"], arrangement_moved(70, 79), "the head moved again under the new verdict");
+    g.holds.probe("b-1");
+    let named = under(&told_events(&g), &keyless);
+    let [event] = &named[..] else { panic!("the walk names the hands to the keyless session: {named:?}") };
+    assert_eq!((event["state"].as_str(), &event["hands"]), (Some("moved"), &json!([{"key": "other", "fingerprint": "ee".repeat(32)}])), "{event}");
+}
+
+/// Checks that hands named not read to a session the walk does not run under
+/// are named to it (§3c.5; §4b.2; skep #972).
+///
+/// The moved document's second line is dropped under a keyless session of
+/// the principal's, beside the writer the walk runs under, with the own node
+/// stopped: its event names the hands not read. The node running, the next
+/// probe's walk reads them for its own session and for the keyless one, and
+/// names them to it, no `sendable` beside them (the mutant that says the
+/// walk's read under its own session alone leaves the keyless session's face
+/// not read for good).
+#[test]
+fn hands_named_not_read_to_a_session_the_walk_does_not_run_under_are_named_to_it() {
+    let (g, ks, hands) = moved_document();
+    let keyless = beside(&g, bare_facts(), 0x7c);
+    g.holds.set_node_stopped("b-1", true);
+    assert_eq!(g.holds.resolve(&keyless, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    let said = under(&told_events(&g), &keyless);
+    let [event] = &said[..] else { panic!("one event under the keyless session: {said:?}") };
+    assert_eq!((event["state"].as_str(), event["held"].as_u64(), &event["hands"], event.get("sendable")), (Some("moved"), Some(1), &json!([{"key": "unread"}]), None), "{event}");
+    g.holds.set_node_stopped("b-1", false);
+    g.holds.probe("b-1");
+    let named = under(&told_events(&g), &keyless);
+    let [event] = &named[..] else { panic!("the walk names the hands to the keyless session: {named:?}") };
+    assert_eq!((event["state"].as_str(), event["held"].as_u64(), &event["hands"], event.get("sendable")), (Some("moved"), Some(1), &hands, None), "{event}");
+    assert_eq!(g.holds.with_principal("b-1", 1, |ph| ph.hands_owed.contains_key(DOC)), Some(false), "the debt paid");
+}
+
+/// Checks that the walk says no moved face of a document handed back while
+/// its hands are read (§3c.5; skep #972).
+///
+/// The hands are owed a keyless session, and as the walk's read of them
+/// reaches the board the person hands the document back by `send` under the
+/// writer: no session is told the document `moved` (the mutant that says
+/// the face it read faces the person a move their own act cleared).
+#[test]
+fn the_walk_says_no_moved_face_of_a_document_handed_back_while_its_hands_are_read() {
+    let (g, ks, _) = moved_document();
+    let keyless = beside(&g, bare_facts(), 0x7c);
+    g.holds.set_node_stopped("b-1", true);
+    assert_eq!(g.holds.resolve(&keyless, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    let _ = told_events(&g);
+    g.holds.set_node_stopped("b-1", false);
+    let (holds, writer, head) = (Arc::downgrade(&g.holds), Arc::clone(&g.session), ks[0]);
+    *g.fake.at_changes.lock().unwrap() = Some(Box::new(move || {
+        if let Some(holds) = holds.upgrade() {
+            assert_eq!(holds.resolve(&writer, head, ResolveAct::Send).unwrap(), Resolved::HandedBack, "the send while the read is out");
+        }
+    }));
+    g.holds.probe("b-1");
+    let said = told_events(&g);
+    assert!(said.iter().all(|e| e["state"] != "moved"), "no moved face of a document handed back: {said:?}");
+    assert_eq!(g.lines()[0]["cause"], "behind", "the line handed back");
+}
+
+/// Checks that hands named not read where no session of the principal's may
+/// write are named at the board's answer (§3c.5; skep #972).
+///
+/// Lines stand moved at a keyless session's board, and a second keyless
+/// session's drop, the own node stopped, names the hands not read. No walk
+/// runs, no session of the principal's may write; the node running, the next
+/// probe reads the hands for the session told them not read alone — one
+/// read, the first session's face naming them already — and names them to
+/// it (the mutant that pays a principal's debts in its walk alone leaves the
+/// face not read for good).
+#[test]
+fn hands_named_not_read_where_no_session_may_write_are_named_at_the_boards_answer() {
+    let g = bare_ground();
+    let moved = Reason { cause: "moved".to_string(), refusal: Some(arrangement_moved(70, 77)), sent: false };
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
+    let ks: Vec<u64> = ["a", "b"].iter().map(|v| g.hold_for(&insert(DOC, json!([v]), 70), moved.clone()).unwrap()["held"].as_u64().unwrap()).collect();
+    let hands = told_events(&g).last().expect("the document faced moved")["hands"].clone();
+    assert_eq!(hands, json!([{"key": "other", "fingerprint": "ff".repeat(32)}]), "the face names the other key's hand");
+    let second = beside(&g, bare_facts(), 0x7c);
+    g.holds.set_node_stopped("b-1", true);
+    assert_eq!(g.holds.resolve(&second, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    let said = under(&told_events(&g), &second);
+    let [event] = &said[..] else { panic!("one event under the second session: {said:?}") };
+    assert_eq!(&event["hands"], &json!([{"key": "unread"}]), "{event}");
+    g.holds.set_node_stopped("b-1", false);
+    let reads = changes_reads(&g);
+    g.holds.probe("b-1");
+    let said = told_events(&g);
+    let named = under(&said, &second);
+    let [event] = &named[..] else { panic!("the hands named to the second session: {said:?}") };
+    assert_eq!((event["state"].as_str(), event["held"].as_u64(), &event["hands"], event.get("sendable")), (Some("moved"), Some(1), &hands, None), "{event}");
+    assert_eq!((under(&said, &g.session).len(), changes_reads(&g)), (0, reads + 1), "one read, for the session told the hands not read");
+    assert_eq!(g.holds.with_principal("b-1", 1, |ph| ph.hands_owed.contains_key(DOC)), Some(false), "the debt paid");
+}
+
 /// Checks that a burst refused as typed against an older state is held moved.
 ///
 /// At its first dial the board refuses it `arrangement_moved` (wire.md
@@ -593,6 +740,69 @@ fn a_burst_refused_as_typed_against_an_older_state_is_held_moved_at_its_first_di
     assert_eq!(moved["hands"], json!([{"key": "other", "fingerprint": "ff".repeat(32)}]), "the hand of the row under the document since its typed state: {moved}");
     g.holds.probe("b-1");
     assert_eq!((g.fake.sends(), g.lines().len()), (1, 1), "the line awaits the person's act: no probe sends it");
+}
+
+/// Checks that a hands read past the page budget is asked again at the limit
+/// that fits (§3c.5; skep #972).
+///
+/// A burst the board refuses as typed against an older state is held moved,
+/// and the read of the hands is refused `malformed_changes` naming the
+/// `fits` its page takes: asked again at that limit, it names the other
+/// key's hand, two reads made (the mutant that names no hand past the budget
+/// says the document moved by no one).
+#[test]
+fn a_hands_read_past_the_page_budget_is_asked_again_at_the_limit_that_fits() {
+    let g = ground();
+    let typed = g.fake.head();
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "delete", "key": "ff".repeat(32), "docs": [DOC]})];
+    g.fake.changes_too_large.next(1, 1);
+    g.fake.op_rejected.next(1, arrangement_moved(typed, 77));
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["x"]), typed), None) else { panic!("held, not faced") };
+    assert_eq!(held["cause"], "moved", "{held}");
+    let said = told_events(&g);
+    let [moved] = &said[..] else { panic!("one `held` event: {said:?}") };
+    assert_eq!((moved["state"].as_str(), &moved["hands"]), (Some("moved"), &json!([{"key": "other", "fingerprint": "ff".repeat(32)}])), "{moved}");
+    assert_eq!(changes_reads(&g), 2, "the page past the budget, then the page at the limit that fits");
+}
+
+/// Checks that a hands read the board answers with no page names them not
+/// read, and the walk reads them again (§3c.5; skep #972).
+///
+/// A burst the board refuses as typed against an older state is held moved,
+/// and the read of the hands is answered with no page, in two cells: a
+/// refusal (`503 feed_rebuilding`) and a reclaimed history (`410
+/// history_reclaimed`). The moved face names the hands not read, the board
+/// answering all the same and the document owing them; each probe's walk
+/// reads them again, saying nothing while no page answers, and names them
+/// once the board serves the page (the mutant that names no hand where the
+/// board answered no page says the document moved by no one; the one that
+/// marks the board unanswered holds every burst at a board that answers).
+#[test]
+fn a_hands_read_the_board_answers_with_no_page_names_them_not_read_and_the_walk_reads_them_again() {
+    let cells = [("a refusal", (503, json!({"error": "feed_rebuilding"}))), ("a reclaimed history", (410, json!({"error": "history_reclaimed", "floor": 90})))];
+    for (cell, refusal) in cells {
+        let g = ground();
+        let typed = g.fake.head();
+        *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
+        *g.fake.changes_refused.lock().unwrap() = Some(refusal);
+        g.fake.op_rejected.next(1, arrangement_moved(typed, 77));
+        let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["x"]), typed), None) else { panic!("{cell}: held, not faced") };
+        assert_eq!(held["cause"], "moved", "{cell}: {held}");
+        let said = told_events(&g);
+        let [moved] = &said[..] else { panic!("{cell}: one `held` event: {said:?}") };
+        assert_eq!((moved["state"].as_str(), &moved["hands"]), (Some("moved"), &json!([{"key": "unread"}])), "{cell}: {moved}");
+        assert!(g.holds.lock("b-1").answers(), "{cell}: the board answered: it is not marked unanswered");
+        assert_eq!(g.holds.with_principal("b-1", 1, |ph| ph.hands_owed.contains_key(DOC)), Some(true), "{cell}: the document owes its hands");
+        let reads = changes_reads(&g);
+        g.holds.probe("b-1");
+        assert_eq!((changes_reads(&g), told_events(&g).len()), (reads + 1, 0), "{cell}: read again, nothing said while no page answers");
+        *g.fake.changes_refused.lock().unwrap() = None;
+        g.holds.probe("b-1");
+        let said = told_events(&g);
+        let [moved] = &said[..] else { panic!("{cell}: the face said once more: {said:?}") };
+        assert_eq!((moved["state"].as_str(), &moved["hands"]), (Some("moved"), &json!([{"key": "other", "fingerprint": "ff".repeat(32)}])), "{cell}: {moved}");
+        assert_eq!(g.holds.with_principal("b-1", 1, |ph| ph.hands_owed.contains_key(DOC)), Some(false), "{cell}: the debt paid");
+    }
 }
 
 /// Checks that a moved line keeps the board's verdict and takes a moved
@@ -2316,6 +2526,95 @@ fn a_landing_is_said_under_each_session_of_the_lines_principal() {
     assert_eq!((by(&g.session), by(&second), by(&other)), (1, 1, 0), "{lifted:?}");
     let derived = lifted.iter().find(|event| event["session"] == second.reference.as_str()).expect("the second session's event");
     assert_eq!((derived["state"].as_str(), derived["held"].as_u64(), derived["cause"].as_str()), (Some("holding"), Some(1), Some("unreachable")), "derived from the queue: {derived}");
+}
+
+/// Returns a ground whose burst is held moved, its copy refused.
+///
+/// The board refused it as typed against an older state, another key's row
+/// having moved the document, and the face told the ground's session named
+/// that hand. It answers the ground and the hands the face named.
+fn moved_and_unwritten() -> (Ground, Value) {
+    let g = ground();
+    let typed = g.fake.head();
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": typed + 1, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
+    g.fake.op_rejected.next(1, arrangement_moved(typed, 78));
+    crate::held::tests::refuse_copies_as(std::io::ErrorKind::StorageFull);
+    let held = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]), typed), None);
+    crate::held::tests::take_copies();
+    let OpAnswer::Answered(Ok(held)) = held else { panic!("held, not faced") };
+    assert_eq!((held["cause"].as_str(), held["unwritable_class"].as_str()), (Some("moved"), Some("full")), "{held}");
+    let told = told_events(&g);
+    let [face] = &told[..] else { panic!("one face told the ground's session: {told:?}") };
+    assert_eq!(face["hands"], json!([{"key": "other", "fingerprint": "ff".repeat(32)}]), "{face}");
+    let hands = face["hands"].clone();
+    (g, hands)
+}
+
+/// Checks that a landing under a session told nothing of a moved document
+/// names the hands it reads (§3c.3, §4b.2; skep #972).
+///
+/// The burst is held moved, its copy refused, the face told the ground's
+/// session naming another key's hand. Two cells, each a session told
+/// nothing of the document: the one a restart re-opens in the ground's
+/// place, and a second writer of the principal's beside it. The device
+/// takes copies again, and the probe that writes the line says the document
+/// `moved` under that session with the hand it reads for it, its
+/// `sendable`, no `unwritable`, one `/changes` read made; the ground's
+/// session, in the second cell, repeats the face it was told with no read
+/// (the mutant that says an untold session's lift with no hands says the
+/// document moved by no one).
+#[test]
+fn a_landing_under_a_session_told_nothing_of_a_moved_document_names_the_hands_it_reads() {
+    for cell in ["a re-opened session", "a second session"] {
+        let (g, hands) = moved_and_unwritten();
+        let untold = if cell == "a re-opened session" { reopened_session(&g) } else { beside(&g, writer_facts(&g.store), 0x9e) };
+        let reads = changes_reads(&g);
+        g.holds.probe("b-1");
+        let said = told_events(&g);
+        let lifted = under(&said, &untold);
+        let [face] = &lifted[..] else { panic!("{cell}: one event under the untold session: {said:?}") };
+        assert_eq!((face["state"].as_str(), face["held"].as_u64(), &face["hands"], face["sendable"].as_bool()), (Some("moved"), Some(1), &hands, Some(false)), "{cell}: {face}");
+        assert!(face.get("unwritable").is_none() && face.get("unwritable_class").is_none(), "{cell}: the copy landed: {face}");
+        assert_eq!(changes_reads(&g), reads + 1, "{cell}: one read, for the untold session");
+        if cell == "a second session" {
+            let repeated = under(&said, &g.session);
+            let [face] = &repeated[..] else { panic!("{cell}: the ground's session's lift: {said:?}") };
+            assert_eq!((face["state"].as_str(), &face["hands"]), (Some("moved"), &hands), "{cell}: the face as told: {face}");
+        }
+    }
+}
+
+/// Checks that a landing whose hands the shell cannot read yet names them not
+/// read, and the walk names them (§3c.5; skep #972).
+///
+/// The burst is held moved, its copy refused, a second writer of the
+/// principal's told nothing of it, and the own node stopped: the probe that
+/// writes the line makes no read, and says the document `moved` under the
+/// second session with its hands not read, the document owing them. The
+/// node running, the next probe's walk — under either writer — reads them
+/// for the second session and names them to it, the debt paid (the mutant
+/// that reads at a stopped node dials a notebook its owner stopped; the one
+/// that names them to the walk's session alone leaves the second session's
+/// face not read whenever the walk runs under the ground's).
+#[test]
+fn a_landing_whose_hands_the_board_does_not_give_names_them_not_read_and_the_walk_names_them() {
+    let (g, hands) = moved_and_unwritten();
+    let second = beside(&g, writer_facts(&g.store), 0x9e);
+    g.holds.set_node_stopped("b-1", true);
+    let reads = changes_reads(&g);
+    g.holds.probe("b-1");
+    let said = told_events(&g);
+    let lifted = under(&said, &second);
+    let [face] = &lifted[..] else { panic!("one event under the second session: {said:?}") };
+    assert_eq!((face["state"].as_str(), face["held"].as_u64(), &face["hands"], face["sendable"].as_bool()), (Some("moved"), Some(1), &json!([{"key": "unread"}]), Some(false)), "{face}");
+    assert_eq!(changes_reads(&g), reads, "no read at a stopped node");
+    assert_eq!(g.holds.with_principal("b-1", 1, |ph| ph.hands_owed.contains_key(DOC)), Some(true), "the document owes its hands");
+    g.holds.set_node_stopped("b-1", false);
+    g.holds.probe("b-1");
+    let named = under(&told_events(&g), &second);
+    let [face] = &named[..] else { panic!("the walk names the hands to the second session: {named:?}") };
+    assert_eq!((face["state"].as_str(), &face["hands"]), (Some("moved"), &hands), "{face}");
+    assert_eq!(g.holds.with_principal("b-1", 1, |ph| ph.hands_owed.contains_key(DOC)), Some(false), "the debt paid");
 }
 
 /// Checks that a settled line whose `done` is owed stays counted (§3c.3).

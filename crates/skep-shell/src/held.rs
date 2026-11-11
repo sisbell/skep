@@ -92,6 +92,15 @@
 //! lines go out in `k` order, a line only once the one before it is kept —
 //! so no piece reaches the board or the shift.
 //!
+//! **The `id` a resend dials under** (skep #971). A line names its dial id
+//! (`refs::DialId`) as it is readied for its first resend
+//! ([`HeldQueue::ready_to_resend`]), a fresh one written with that resend's
+//! mark of `sent` as one copy, and keeps it for its life: every copy of the
+//! line carries it from then, a join's and a renumbering's among them, so
+//! every resend of the line, before a relaunch and after, dials under it.
+//! The frame the line keeps carries the page's own `id`, the one a piece
+//! binds by and the `held` event names the line by.
+//!
 //! **THE ORDINALS** (skep #856; the record `2026-11-06-held-store-investigation`
 //! §1.4, re-said). One ordinal space per (board, principal) for the shell's
 //! life: the hold's counter (`PrincipalHold::next_k`), which every queue the
@@ -108,7 +117,7 @@
 //! |---|---|---|---|
 //! | the first touch | — | past the greatest ordinal in every file the shell can name then and does not read ([`HeldDir::greatest_ordinal`]) | — |
 //! | hold ([`HeldQueue::hold`]) | the counter's | +1 | the `op` answer; the hold's clocks; a call's own local |
-//! | re-mark, raise, shift | kept; a `held` line of the same `k` appended | — | — |
+//! | re-mark, raise, shift, a resend's readying | kept; a `held` line of the same `k` appended | — | — |
 //! | `done`; the compaction | the line leaves; the file removed, the ordinals RUN ON | never wound back | the hold's memories dropped |
 //! | the file read at the first touch ([`HeldDir::open_file`]) | the file's | past them | — |
 //! | this run's lines moved to a file read later — the pending → chain change, or the file the store could not read at the first touch ([`Joining::ThisRun`]) | KEPT; an ordered insert | — | unchanged |
@@ -129,8 +138,9 @@
 //! **A refused copy waits, and every copy after it** (§3c.3; skep #813,
 //! #821, #822, #861). The file owes the queue each line's first copy and,
 //! for a line on disk, one copy of the changes made to it since — a re-mark,
-//! a raise or a shift ([`HeldQueue::remark`], [`HeldQueue::remark_all`],
-//! [`HeldQueue::rewrite`]) — or its `done` once it leaves the queue
+//! a raise, a shift or a resend's readying ([`HeldQueue::remark`],
+//! [`HeldQueue::remark_all`], [`HeldQueue::rewrite`],
+//! [`HeldQueue::ready_to_resend`]) — or its `done` once it leaves the queue
 //! ([`HeldQueue::done`], [`HeldQueue::done_all`]). Every such copy is
 //! written by the retry ([`HeldQueue::retry`]), which the queue runs once at
 //! the end of each act that owes copies — a hold, a join, a re-mark, a shift,
@@ -301,6 +311,7 @@ use skep_client::Origin;
 use skep_search::{aside_name, Chain};
 use skep_util::file::{self, Appender, Fsync, LineReader, Next, OnTail};
 
+use crate::refs::DialId;
 use crate::wire::{document_address, json_len, within_components, MAX_FRAME_BYTES};
 
 /// The lock file's name, the key store's idiom (`search.md` §5.6).
@@ -342,11 +353,11 @@ pub const MAX_HELD_BYTES: usize = 4 * MAX_FRAME_BYTES + MAX_ANCHOR_BYTES;
 /// A `held` line spells its frame (within [`MAX_FRAME_BYTES`], the burst's
 /// door's bound) and beside it the frame's own `doc` and `id` again, a
 /// second frame's worth at most, its anchors (within [`MAX_ANCHOR_BYTES`]),
-/// and room over for its cause and a board's verdict as a daemon answers one
-/// (a few hundred bytes). The writer copies no longer line — the queue keeps
-/// it, unwritten, as it keeps a line the device refused — and the reader
-/// halts on one as damaged, reading no more of it than one byte past the
-/// bound.
+/// and room over for its cause, its dial id and a board's verdict as a
+/// daemon answers one (a few hundred bytes). The writer copies no longer
+/// line — the queue keeps it, unwritten, as it keeps a line the device
+/// refused — and the reader halts on one as damaged, reading no more of it
+/// than one byte past the bound.
 const MAX_HELD_LINE_BYTES: usize = 2 * MAX_FRAME_BYTES + MAX_ANCHOR_BYTES + 64 * 1024;
 
 /// The most lines a hold lets a principal's queue come to at one board.
@@ -427,16 +438,17 @@ pub(crate) const TIMED_CEILING: std::time::Duration = std::time::Duration::from_
 /// every change that rides it, spend none, since together they add one line
 /// to the file (skep #821).
 ///
-/// **The mark of `sent` spends none of it** (`marks_sent`). A resend marks
-/// its line `sent` before it dials (§3c.2), and a drain of a full queue
-/// marks every line in it, copying up to [`MAX_HELD_BYTES`] of re-mark lines,
-/// past this budget; a mark refused would relaunch a line whose dial may have
+/// **A resend's mark spends none of it** (`spends_the_budget`). A resend
+/// marks its line `sent` before it dials (§3c.2), naming its dial id as it
+/// does so the first time (skep #971), and a drain of a full queue marks
+/// every line in it, copying up to [`MAX_HELD_BYTES`] of re-mark lines, past
+/// this budget; a mark refused would relaunch a line whose dial may have
 /// landed as one never sent, which the resend sends again without the read
 /// for its landing, and the person's text would land twice. A mark the device
 /// refuses is owed, and the retry writes it past a spent budget too. A line
-/// is marked once after its hold, and again only after a re-mark lowered its
-/// `sent` and spent the budget, so the marks one file copies are bounded by
-/// the lines it holds and by the budget.
+/// names its dial id once, and is marked once after its hold and again only
+/// after a re-mark lowered its `sent` and spent the budget, so the marks one
+/// file copies are bounded by the lines it holds and by the budget.
 const MAX_HELD_REMARK_BYTES: usize = MAX_HELD_LINE_BYTES;
 
 /// The largest ordinal a line may carry: `2^53 − 1`.
@@ -841,6 +853,13 @@ pub struct HeldLine {
     pub doc: String,
     /// The page's envelope `id`, where it sent one (A-60).
     pub id: Option<String>,
+    /// The `id` every resend of the line dials under (skep #971).
+    ///
+    /// It is none until the line is readied for its first resend
+    /// ([`HeldQueue::ready_to_resend`]), and the line's own from then: the
+    /// frame keeps the page's `id`, and the resend sets this one on the copy
+    /// it dials alone.
+    pub dial_id: Option<DialId>,
     /// The `since` of the resend's read (§3c.5): the position the read of
     /// the line's own landing starts from, its one job.
     ///
@@ -1041,6 +1060,11 @@ impl Lines {
     /// Returns the reason of line `k`, where it stands.
     fn reason(&self, k: u64) -> Option<&Reason> {
         self.by_k.get(&k).map(|standing| &standing.line.reason)
+    }
+
+    /// Returns line `k` where it stands, its base its own.
+    fn get(&self, k: u64) -> Option<&HeldLine> {
+        self.by_k.get(&k).map(|standing| &standing.line)
     }
 
     /// Returns a standing line's base, raised by its document's floor.
@@ -1268,9 +1292,10 @@ impl Lines {
     /// past it, and its `time` is the change's. It is the change every
     /// re-mark makes ([`HeldQueue::remark`],
     /// [`HeldQueue::remark_all`]). It answers whether the re-mark spends the
-    /// re-mark budget — one that marks the line `sent` (`marks_sent`) spends
-    /// none of it, and every other one is within it — and none where no line
-    /// of `k` stands or the line carries the reason and the base already.
+    /// re-mark budget — one that marks the line `sent` spends none of it
+    /// (`spends_the_budget`), and every other one is within it — and none
+    /// where no line of `k` stands or the line carries the reason and the
+    /// base already.
     fn restate(&mut self, k: u64, reason: Reason, raise: Option<u64>) -> Option<bool> {
         let standing = self.by_k.get(&k)?;
         let base = self.base(standing);
@@ -1279,11 +1304,32 @@ impl Lines {
             return None;
         }
         let line = &mut self.by_k.get_mut(&k)?.line;
-        let spends = !marks_sent(&line.reason, &reason);
+        let spends = spends_the_budget(line, &reason, line.dial_id.as_ref());
         line.reason = reason;
         line.base = raised;
         line.time = now_ms();
         Some(spends)
+    }
+
+    /// Readies line `k` for a resend's dial, where it stands (skep #971).
+    ///
+    /// The line names a fresh dial id where it names none ([`DialId::fresh`])
+    /// and is marked as one that may have landed (§3c.2's `sent`), its `time`
+    /// the change's where either moved. It answers the dial id the line is
+    /// dialed under and, where the line changed, whether the change spends the
+    /// re-mark budget (`spends_the_budget`): none where no line of `k` stands.
+    fn ready(&mut self, k: u64) -> Option<(DialId, Option<bool>)> {
+        let line = &mut self.by_k.get_mut(&k)?.line;
+        let dial_id = line.dial_id.clone().unwrap_or_else(DialId::fresh);
+        let reason = Reason { sent: true, ..line.reason.clone() };
+        let changed = line.dial_id.is_none() || line.reason != reason;
+        let spends = changed.then(|| spends_the_budget(line, &reason, Some(&dial_id)));
+        if changed {
+            line.dial_id = Some(dial_id.clone());
+            line.reason = reason;
+            line.time = now_ms();
+        }
+        Some((dial_id, spends))
     }
 
     /// Rewrites line `k`'s frame in place, where it stands and differs.
@@ -1459,16 +1505,22 @@ fn ordinal(v: &Value) -> Option<u64> {
 
 /// Returns a `held` line's members, every one of its type, or `None`.
 ///
-/// `doc` is a document address, `id` a string where present, `frame` an
-/// object, `anchors` of their form ([`Anchors::of`]) where present — absent
-/// on a line whose burst carried none, and their `span` absent where they
-/// name none — `refusal` any value where present, a `null` one read as none.
+/// `doc` is a document address, `id` a string where present, `dial` a dial
+/// id ([`DialId::parse`]) where present — absent on a line no resend has
+/// readied — `frame` an object, `anchors` of their form ([`Anchors::of`])
+/// where present — absent on a line whose burst carried none, and their
+/// `span` absent where they name none — `refusal` any value where present, a
+/// `null` one read as none.
 fn parse_held_line(k: u64, mut m: Map<String, Value>) -> Option<HeldLine> {
     let doc = m.get("doc")?.as_str().filter(|d| document_address(d).is_some())?.to_string();
     let id = match m.remove("id") {
         None => None,
         Some(Value::String(id)) => Some(id),
         Some(_) => return None,
+    };
+    let dial_id = match m.get("dial") {
+        None => None,
+        Some(v) => Some(DialId::parse(v.as_str()?)?),
     };
     let frame = m.remove("frame").filter(Value::is_object)?;
     let anchors = match m.remove("anchors") {
@@ -1480,7 +1532,7 @@ fn parse_held_line(k: u64, mut m: Map<String, Value>) -> Option<HeldLine> {
         refusal: m.remove("refusal").filter(|r| !r.is_null()),
         sent: m.get("sent")?.as_bool()?,
     };
-    Some(HeldLine { k, doc, id, base: m.get("base")?.as_u64()?, frame, anchors, reason, time: m.get("time")?.as_u64()? })
+    Some(HeldLine { k, doc, id, dial_id, base: m.get("base")?.as_u64()?, frame, anchors, reason, time: m.get("time")?.as_u64()? })
 }
 
 /// Returns whether a `done` line's members are each of its type.
@@ -1498,14 +1550,18 @@ fn is_done_line(m: &Map<String, Value>) -> bool {
     resolved && m.get("time").is_some_and(Value::is_u64)
 }
 
-/// Returns whether a re-mark from `was` to `now` marks its line `sent`.
+/// Returns whether a re-mark of `was` spends the re-mark budget.
 ///
-/// It is the one rule the writer ([`HeldQueue::remark`]) and the reader
-/// ([`HeldDir::open_file`]) count the re-mark budget by: a re-mark that turns
-/// the line's `sent` true spends none of [`MAX_HELD_REMARK_BYTES`], and every
-/// other re-mark spends its line.
-fn marks_sent(was: &Reason, now: &Reason) -> bool {
-    !was.sent && now.sent
+/// `reason` and `dial_id` are what the re-mark leaves the line carrying. It
+/// is the one rule the writer (`Lines::restate`, `Lines::ready`) and the
+/// reader ([`HeldDir::open_file`]) count the budget by: a re-mark that
+/// readies the line for a resend's dial — turning its `sent` true, or naming
+/// its dial id (skep #971) — spends none of [`MAX_HELD_REMARK_BYTES`], and
+/// every other re-mark spends its line.
+fn spends_the_budget(was: &HeldLine, reason: &Reason, dial_id: Option<&DialId>) -> bool {
+    let marks_sent = !was.reason.sent && reason.sent;
+    let names_its_dial_id = was.dial_id.is_none() && dial_id.is_some();
+    !marks_sent && !names_its_dial_id
 }
 
 impl HeldDir {
@@ -1607,11 +1663,12 @@ impl HeldDir {
     /// each `done` taking its line out — a `kept` one at a position raising
     /// the lines behind it on its document, as [`HeldQueue::done`] raised
     /// them — and the re-mark lines' bytes counted against
-    /// [`MAX_HELD_REMARK_BYTES`] as the writer counts them, a line's mark of
-    /// `sent` spending none, so a relaunch keeps the file's budget where its
-    /// writer left it. The lines are keyed by *ordinal* as the file is read
-    /// in its order, and the file may hold a lower ordinal's lines after a
-    /// higher one's (a join's ordered insert): a `held` line re-marks the
+    /// [`MAX_HELD_REMARK_BYTES`] as the writer counts them, a resend's mark of
+    /// a line — its `sent`, its dial id named — spending none, so a relaunch
+    /// keeps the file's budget where its writer left it. The lines are keyed
+    /// by *ordinal* as the file is read in its order, and the file may hold a
+    /// lower ordinal's lines after a higher one's (a join's ordered insert):
+    /// a `held` line re-marks the
     /// line standing under its ordinal when it is read, wherever that line
     /// lies in the file, and is a new line where none stands; a `done` takes
     /// out the line standing under its ordinal and raises the standing lines
@@ -1717,8 +1774,8 @@ impl HeldDir {
                 // A `held` line of a standing ordinal is its re-mark
                 // ([`HeldQueue::remark`]): it takes the earlier line's place,
                 // and its bytes count against the file's re-mark budget, save
-                // the mark of its line `sent`, as the writer counts them.
-                let spends = lines.reason(k).is_some_and(|was| !marks_sent(was, &line.reason));
+                // a resend's mark of its line, as the writer counts them.
+                let spends = lines.get(k).is_some_and(|was| spends_the_budget(was, &line.reason, line.dial_id.as_ref()));
                 lines.put(line);
                 if spends {
                     remark_bytes = remark_bytes.saturating_add(line_bytes);
@@ -2378,7 +2435,7 @@ impl HeldQueue {
         if k > MAX_ORDINAL || held_lines >= MAX_HELD_LINES || self.held_bytes.saturating_add(line_bytes) > MAX_HELD_BYTES {
             return Err(Unheld::Full { held_bytes: self.held_bytes, frame_bytes, anchor_bytes, held_lines });
         }
-        let line = HeldLine { k, doc: doc.to_string(), id: id.map(str::to_string), base, frame, anchors, reason, time: now_ms() };
+        let line = HeldLine { k, doc: doc.to_string(), id: id.map(str::to_string), dial_id: None, base, frame, anchors, reason, time: now_ms() };
         self.greatest_k = self.greatest_k.max(k);
         self.held_bytes += self.lines.enter(line);
         // The line's first copy is owed behind every copy owed before it.
@@ -2585,6 +2642,27 @@ impl HeldQueue {
             self.retry();
         }
         refused
+    }
+
+    /// Readies line `k` for a resend's dial (§3c.2; skep #971).
+    ///
+    /// The line names its dial id — a fresh one where it names none, the
+    /// `id` every resend of it dials under ([`DialId`]) — and is marked as
+    /// one that may have landed, both in one copy, synced before this returns
+    /// where the device takes it, so neither the mark nor the id a dial leaves
+    /// under trails it to disk. A line carrying both already writes nothing,
+    /// and a line waiting for its first copy takes both in the queue alone,
+    /// its first copy carrying them. The copy spends none of the re-mark
+    /// budget (`spends_the_budget`). A copy the device refuses is owed, as a
+    /// re-mark's is, and a close while it is owed relaunches the line as the
+    /// file last held it, its next resend naming a dial id afresh. It answers
+    /// the dial id, none where no line of `k` stands, beside the writer's
+    /// refusal of the copy where it refused one before any I/O — a line past
+    /// [`MAX_HELD_LINE_BYTES`] — owed never, for the caller to say.
+    pub fn ready_to_resend(&mut self, k: u64) -> Option<(DialId, Option<io::Error>)> {
+        let (dial_id, changed) = self.lines.ready(k)?;
+        let refused = changed.and_then(|spends| self.owe(k, spends).err());
+        Some((dial_id, refused))
     }
 
     /// Owes the copy of line `k`'s state now, and runs the retry.
@@ -3536,8 +3614,9 @@ fn header_bytes(named: &Named, principal: u64, account: &str) -> Vec<u8> {
 ///
 /// The base is the caller's to give, so no copy spells a standing line's
 /// own base where its document's floor raised it (`Lines::copy`). Its
-/// members are `held, doc, id?, base, frame, anchors?, cause,
-/// refusal?, sent, time`, in that order — `anchors` as
+/// members are `held, doc, id?, dial?, base, frame, anchors?, cause,
+/// refusal?, sent, time`, in that order — `dial` the line's dial id, on a
+/// line a resend has readied alone (skep #971); `anchors` as
 /// `{"before":<edge>,"after":<edge>}`, each edge an I-address, `null` or a
 /// piece `{"burst":<string>,"offset":<natural>}`, on a line whose burst
 /// carried them alone, a span they name spelled before its closing brace as
@@ -3546,6 +3625,9 @@ fn held_line_bytes(l: &HeldLine, base: u64) -> Vec<u8> {
     let mut s = format!("{{\"held\":{},\"doc\":{}", l.k, json_str(&l.doc));
     if let Some(id) = &l.id {
         let _ = write!(s, ",\"id\":{}", json_str(id));
+    }
+    if let Some(dial_id) = &l.dial_id {
+        let _ = write!(s, ",\"dial\":{}", json_str(dial_id.as_str()));
     }
     let _ = write!(s, ",\"base\":{base},\"frame\":{}", l.frame);
     if let Some(anchors) = &l.anchors {

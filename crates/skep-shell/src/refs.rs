@@ -23,6 +23,14 @@
 //! handed where a board's is expected matches nothing either. A board
 //! reference names one board, its [`BoardEntry`]: minted with the entry,
 //! and read beside its board whole.
+//!
+//! A fourth name never crosses the bridge: a held line's dial id
+//! ([`DialId`]), `shell:` and twenty-four hex, the envelope `id` the hold
+//! resends the line under (skep #971). Unlike the three it outlives the
+//! process, kept with its line in the held file, since a resend after a
+//! relaunch dials under the id the line's earlier resends did; and its
+//! prefix is the shell's alone, refused as a page burst's `id` at the
+//! burst's door, so no burst of a page's shares an `id` with a resend.
 
 use std::fmt;
 use std::sync::Arc;
@@ -105,6 +113,57 @@ pub fn moment_id() -> String {
     format!("m-{}", hex(&fresh_bytes(REFERENCE_BYTES)))
 }
 
+/// The prefix every dial id begins with, and no page burst's `id` may.
+const DIAL_ID_PREFIX: &str = "shell:";
+
+/// The most bytes a dial id adds to a frame as its `id` member.
+///
+/// It is the member `,"id":"…"` at a dial id's length: the room the burst's
+/// door keeps within the board's frame cap for the `id` a resend carries.
+pub const DIAL_ID_ROOM: usize = ",\"id\":\"\"".len() + DIAL_ID_PREFIX.len() + 2 * REFERENCE_BYTES;
+
+/// The envelope `id` the hold resends a held line under (skep #971).
+///
+/// It is `shell:` and twenty-four lowercase hex from OS entropy, drawn once,
+/// as the line is readied for its first resend, and kept with the line in
+/// its held file, so every resend of the line dials under it, across the
+/// shell's relaunches and a renumbering of the line alike. The board's
+/// retry memo takes a frame for a reissue by its session, its `id` and its
+/// kind (wire.md §Correlation and idempotency), so a resend under it is
+/// answered the line's own acknowledgment or judged afresh, never handed
+/// another line's. Made by [`DialId::fresh`] and, read back from a held
+/// file, by [`DialId::parse`] alone (SP-18).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DialId(String);
+
+impl DialId {
+    /// Returns a fresh dial id: `shell:` and twenty-four lowercase hex.
+    pub fn fresh() -> DialId {
+        DialId(format!("{DIAL_ID_PREFIX}{}", hex(&fresh_bytes(REFERENCE_BYTES))))
+    }
+
+    /// Returns the dial id `text` spells, where it is of the form one takes.
+    ///
+    /// The form is the prefix and twenty-four lowercase hex, as
+    /// [`DialId::fresh`] mints; any other text is no dial id.
+    pub fn parse(text: &str) -> Option<DialId> {
+        let own = text.strip_prefix(DIAL_ID_PREFIX)?;
+        (own.len() == 2 * REFERENCE_BYTES && is_hex(own)).then(|| DialId(text.to_string()))
+    }
+
+    /// Returns the id as the wire and the held file spell it.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Returns whether a page's envelope `id` takes the dial ids' prefix.
+    ///
+    /// The burst's door refuses such an `id` (`hold`'s `Burst::admit`).
+    pub fn reserves(id: &str) -> bool {
+        id.starts_with(DIAL_ID_PREFIX)
+    }
+}
+
 /// Returns the lowercase hex of `bytes`.
 ///
 /// It is the one spelling every reference and moment id takes.
@@ -146,6 +205,33 @@ mod tests {
         assert_ne!(session_reference(&run), s);
         assert_ne!(run_id(), run);
         assert_eq!(hex(&[0x00, 0xab, 0xff]), "00abff");
+    }
+
+    /// Checks that a dial id is its prefix and fresh hex, and reads back alone.
+    ///
+    /// A fresh one is `shell:` and twenty-four lowercase hex and reads back as
+    /// itself; two differ; text of any other form — the hex one short or one
+    /// long, uppercase, the prefix in another case, a moment id — reads as
+    /// none; the prefix is reserved whatever follows it, and nothing else is;
+    /// and the room is the bytes a dial id's member adds to a frame.
+    #[test]
+    fn a_dial_id_is_its_prefix_and_fresh_hex_and_reads_back_alone() {
+        let id = DialId::fresh();
+        let own = id.as_str().strip_prefix("shell:").unwrap_or_else(|| panic!("{id:?}"));
+        assert!(own.len() == 24 && is_hex(own), "{id:?}");
+        assert_eq!(DialId::parse(id.as_str()), Some(id.clone()));
+        assert_ne!(DialId::fresh(), id);
+        let zeros = "0".repeat(24);
+        let others =
+            [format!("shell:{}", "0".repeat(23)), format!("shell:{zeros}0"), format!("shell:{}", "A".repeat(24)), format!("Shell:{zeros}"), format!("m-{zeros}"), "shell:".to_string(), String::new()];
+        for text in others {
+            assert_eq!(DialId::parse(&text), None, "{text}");
+        }
+        for (text, reserved) in [("shell:", true), ("shell:b-1", true), ("shellx", false), ("Shell:x", false), ("b-1", false)] {
+            assert_eq!(DialId::reserves(text), reserved, "{text}");
+        }
+        let bytes = |frame: serde_json::Value| frame.to_string().len();
+        assert_eq!(bytes(serde_json::json!({"op": "insert", "id": id.as_str()})) - bytes(serde_json::json!({"op": "insert"})), DIAL_ID_ROOM);
     }
 
     /// Checks that a reference of another form names no run.

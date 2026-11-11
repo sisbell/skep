@@ -244,6 +244,149 @@ fn a_resent_lines_ack_names_the_line_on_its_held_event() {
     assert_eq!(named_kept(&held_events(&g)), [("holding", 1, None), ("sending", 1, None), ("kept", 0, Some(&landed))]);
 }
 
+/// Returns the envelope `id` of each frame the ground's board was sent.
+fn dialed_ids(g: &Ground) -> Vec<String> {
+    g.fake.sends.lock().unwrap().iter().map(|sent| sent["id"].as_str().unwrap_or("").to_string()).collect()
+}
+
+/// Checks that two held lines under one page `id` resend under two dial ids.
+///
+/// Each resends under a dial id of its own (skep #971). A page reload, or a
+/// second tab, gives two lines one `id`: two inserts
+/// held under `b-1`, on two documents, are resent in one pass, the board
+/// answering each a first `durability`, and again at the next, where it
+/// acks them. Each line dials under a dial id of its own — `shell:` and hex,
+/// neither the page's nor the other line's — the same at both its resends;
+/// the rows list each frame with the page's `id`; and each line's `kept`
+/// event names it `b-1` (the mutant that resends under the page's `id` dials
+/// both lines under one `id`, which the board's retry memo answers the second
+/// with the first's acknowledgment; the one that draws an id at each dial
+/// meets no memo entry of the line's own at a true reissue).
+#[test]
+fn two_held_lines_under_one_page_id_each_resend_under_a_dial_id_of_its_own() {
+    let g = ground();
+    for (doc, word) in [(DOC, "x"), (OTHER, "y")] {
+        g.hold(&with_id(insert(doc, json!([word]), g.fake.head()), "b-1"), "unreachable", false);
+    }
+    g.fake.op_rejected.next(2, retry("durability"));
+    g.holds.probe("b-1");
+    let rows = g.lines();
+    assert!(rows.len() == 2 && rows.iter().all(|row| row["frame"]["id"] == "b-1"), "each row lists its frame with the page's `id`: {rows:?}");
+    g.holds.probe("b-1");
+    let ids = dialed_ids(&g);
+    assert_eq!(ids.len(), 4, "each line dialed twice: {ids:?}");
+    assert!(ids.iter().all(|id| id.starts_with("shell:")), "every resend under a dial id: {ids:?}");
+    assert_ne!(ids[0], ids[1], "the two lines' dial ids differ");
+    assert_eq!((&ids[2], &ids[3]), (&ids[0], &ids[1]), "each line dials its one id at each resend");
+    let kept: Vec<Value> = held_events(&g).into_iter().filter(|event| event["state"] == "kept").collect();
+    let named: Vec<(&str, &str)> = kept.iter().map(|event| (event["doc"].as_str().unwrap_or("?"), event["landed"][0]["burst"].as_str().unwrap_or("?"))).collect();
+    assert_eq!(named, [(DOC, "b-1"), (OTHER, "b-1")], "each line kept, named by the page's `id`: {kept:?}");
+    assert!(g.lines().is_empty(), "both kept");
+}
+
+/// Checks that a line dials one dial id across its resends and a relaunch.
+///
+/// It is the `id` a true reissue of the line is recognised by (skep #971).
+/// A held line is resent twice, the board answering each a `durability`,
+/// and the shell relaunched over the same store; the line read back resends
+/// under the id its earlier resends dialed, the held file carrying it, and
+/// the board acks it (the mutant that keeps the id in memory alone dials
+/// under a new one after the relaunch).
+#[test]
+fn a_line_dials_one_dial_id_across_its_resends_and_a_relaunch() {
+    let g = ground();
+    g.hold(&with_id(insert(DOC, json!(["x"]), g.fake.head()), "b-1"), "unreachable", false);
+    g.fake.op_rejected.next(2, retry("durability"));
+    g.holds.probe("b-1");
+    g.holds.probe("b-1");
+    let text = std::fs::read_to_string(held_file(&g)).unwrap();
+    let carried = file_lines(&text).last().and_then(|line| line["dial"].as_str().map(str::to_owned)).unwrap_or_else(|| panic!("the held file carries the dial id: {text}"));
+    let Ground { holds, fake, session, store, .. } = g;
+    drop(holds);
+    let g = ground_over(fake, store, session.facts.clone(), 0);
+    g.holds.probe("b-1");
+    assert_eq!(dialed_ids(&g), [carried.clone(), carried.clone(), carried], "one id at each resend, before the relaunch and after");
+    assert!(g.lines().is_empty(), "kept");
+}
+
+/// Checks that a line renumbered at the join dials the dial id it carried.
+///
+/// It is an earlier run's line (skep #856, #971). That run's resend named its
+/// line's dial id in the board's own file,
+/// under ordinal 1; this run, the head unreadable at its first touch, holds a
+/// line under 1 on the pending file. The head read, the join renumbers the
+/// earlier line past this run's, and the walk sends this run's line under a
+/// dial id of its own and the earlier one under the id its file carried (the
+/// mutant whose renumbering drops the member sends the earlier line under an
+/// `id` no earlier resend of it dialed).
+#[test]
+fn an_earlier_runs_line_renumbered_at_the_join_dials_the_id_its_file_carried() {
+    let store = TempDir::new().unwrap();
+    let dir = HeldDir::new(store.path(), Chain::parse(&"ab".repeat(32)).unwrap());
+    dir.ensure().unwrap();
+    let Opened::Live { mut queue, .. } = dir.open_file(1, "1.0.1").unwrap() else { panic!("a fresh file") };
+    let k = queue.hold_next(OTHER, None, 0, insert(OTHER, json!(["earlier"]), 0), None, Reason::of("unreachable", false)).unwrap().k;
+    let (carried, refused) = queue.ready_to_resend(k).expect("the earlier run's line stands");
+    assert!(refused.is_none(), "{refused:?}");
+    drop(queue);
+    let fake = Fake::new();
+    fake.head_garbled.store(true, Ordering::SeqCst);
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["x"]), g.fake.head()), None) else { panic!("held") };
+    assert_eq!(held["held"], 1, "{held}");
+    g.fake.head_garbled.store(false, Ordering::SeqCst);
+    while g.holds.probe("b-1") == Turn::Bounded {}
+    let renumbered = said_containing(&g, "joined the board's held file");
+    assert!(renumbered.len() == 1 && renumbered[0].contains("renumbered past this run's ordinals"), "premise: the earlier line renumbered at the join: {renumbered:?}");
+    let sends = g.fake.sends.lock().unwrap().clone();
+    let under = |value: &str| sends.iter().find(|sent| sent["values"][0] == value).and_then(|sent| sent["id"].as_str().map(str::to_owned));
+    assert_eq!(under("earlier").as_deref(), Some(carried.as_str()), "the renumbered line dials the id its file carried");
+    let ours = under("x").unwrap_or_default();
+    assert!(ours.starts_with("shell:") && ours != carried.as_str(), "this run's line dials an id of its own: {ours}");
+    assert!(g.lines().is_empty(), "both kept");
+}
+
+/// Checks that a burst whose first dial landed unseen is held moved at resend.
+///
+/// It is never kept by another dial's answer (skep #971). A burst's first
+/// dial goes out under the page's `id`, and its answer is
+/// lost: it landed, its row the person's own, and another writer has put
+/// words before its site since, so the read finds the row, a site that
+/// differs, and decides nothing, and the line is resent. The resend dials
+/// under the line's dial id, which meets no memo entry of the first dial's;
+/// the board judges it by the state the burst was typed against and refuses
+/// it as typed against an older one, and the shift, finding the burst's own
+/// words between its anchors, holds the line moved — its `sent` kept, the
+/// board's verdict on it, nothing kept and nothing sent past the resend (the
+/// mutant that resends under the page's `id` dials what a board's retry memo
+/// answers with the first dial's acknowledgment; the one that shifts past a
+/// cut span writes the person's words a second time).
+#[test]
+fn a_burst_whose_first_dial_landed_unseen_is_held_moved_at_its_resend() {
+    let g = ground();
+    let typed = g.fake.head();
+    g.fake.op_lost_at.store(1, Ordering::SeqCst);
+    let frame = with_id(insert_at(DOC, 2, json!(["hello"]), typed), "b-1");
+    let OpAnswer::Answered(Ok(held)) = g.holds.send(&g.session, frame, Some(anchors(Some(&i(1)), Some(&i(2))))) else { panic!("held, its answer lost") };
+    assert_eq!((held["cause"].as_str(), g.lines()[0]["sent"].as_bool()), (Some("unreachable"), Some(true)), "{held}");
+    // It landed at 77, between `a` and `b`; another writer's `XY` at 78 went
+    // before it.
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": g.own_key(), "docs": [DOC]}), json!({"at": 78, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
+    *g.fake.text.lock().unwrap() = "XYahellob".into();
+    *g.fake.image.lock().unwrap() = vec![run(&i(50), 2), run(&i(1), 1), run(&i(100), 5), run(&i(2), 1)];
+    g.fake.move_arrangement(DOC, 78);
+    let _ = g.states();
+    g.holds.probe("b-1");
+    let ids = dialed_ids(&g);
+    assert!(ids.len() == 2 && ids[0] == "b-1" && ids[1].starts_with("shell:"), "the first dial under the page's `id`, the resend under the line's dial id: {ids:?}");
+    let lines = g.lines();
+    assert_eq!((lines.len(), lines[0]["cause"].as_str(), lines[0]["sent"].as_bool()), (1, Some("moved"), Some(true)), "{lines:?}");
+    assert_eq!(lines[0]["refusal"], arrangement_moved_on("insert", typed, 78), "the board's verdict on the line");
+    assert_eq!(g.states(), ["sending", "moved"], "never kept");
+    assert_eq!(said_containing(&g, "was not shifted (the span its anchors bound holds 5 positions now").len(), 1, "{:?}", g.said.lock().unwrap());
+}
+
 /// Checks that two lines kept in one pass are named each on its own event.
 ///
 /// They are named in order (skep #968). Two deletes on one document are
@@ -3667,15 +3810,18 @@ fn sent_again_is_said_once_per_change_of_the_failure() {
 
 /// Checks that a resend marks its line `sent` on disk before it dials.
 ///
-/// The mark is written ahead of the dial, synced (§3c.2's `sent`): the held
-/// file read as the resend's dial leaves holds the line re-marked `sent:
-/// true`, so a crash at the dial leaves a line that may have landed read as
-/// one; a line marked so already is written no line more. A resend whose
-/// attest cannot be composed — over a head record that cannot be read —
-/// dials nothing and marks nothing, the line `sent: false` still (the
-/// mutants that mark the line after its answer, or never; the one that marks
-/// it before the attest reads a write that never left as one that may have
-/// landed).
+/// The mark is written ahead of the dial, synced (§3c.2's `sent`), the
+/// line's dial id named in the same copy (skep #971): the held file read as
+/// the resend's dial leaves holds the line re-marked `sent: true`, naming the
+/// id the dial goes out under, so a crash at the dial leaves a line that may
+/// have landed read as one, and the id its next resend dials under; a line
+/// marked so already writes that one copy for its id, and a line carrying
+/// both is written no line more at its next resend. A resend whose attest
+/// cannot be composed — over a head record that cannot be read — dials
+/// nothing and marks nothing, the line `sent: false` still (the mutants that
+/// mark the line after its answer, or never; the one that marks it before
+/// the attest reads a write that never left as one that may have landed; the
+/// one that names the id in a copy of its own syncs twice before a dial).
 #[test]
 fn a_resend_marks_its_line_sent_on_disk_before_it_dials() {
     for sent in [false, true] {
@@ -3684,12 +3830,17 @@ fn a_resend_marks_its_line_sent_on_disk_before_it_dials() {
         let (file, at_the_dial) = (held_file(&g), Arc::new(Mutex::new(Vec::new())));
         let seen = Arc::clone(&at_the_dial);
         *g.fake.at_send.lock().unwrap() = Some(Box::new(move || seen.lock().unwrap().push(std::fs::read_to_string(&file).unwrap_or_default())));
+        g.fake.op_rejected.next(1, retry("durability"));
+        g.holds.probe("b-1");
         g.holds.probe("b-1");
         let files: Vec<String> = at_the_dial.lock().unwrap().clone();
-        let [text] = &files[..] else { panic!("sent {sent}: one dial: {files:?}") };
+        let [text, again] = &files[..] else { panic!("sent {sent}: two dials: {files:?}") };
         let marks: Vec<Value> = text.lines().skip(1).map(|line| serde_json::from_str::<Value>(line).unwrap()).filter(|line| line["held"] == 1).collect();
-        assert_eq!(marks.last().map(|line| &line["sent"]), Some(&json!(true)), "sent {sent}: the line is marked before its dial: {text}");
-        assert_eq!(marks.len(), if sent { 1 } else { 2 }, "sent {sent}: a line marked so already is written no line more: {text}");
+        let dialed = g.fake.sends.lock().unwrap()[0]["id"].clone();
+        let last = marks.last().unwrap_or_else(|| panic!("sent {sent}: {text}"));
+        assert_eq!((&last["sent"], &last["dial"]), (&json!(true), &dialed), "sent {sent}: the line is marked, naming the id its dial goes out under, before the dial: {text}");
+        assert_eq!(marks.len(), 2, "sent {sent}: the mark and the id in one copy beside the hold's: {text}");
+        assert_eq!(again, text, "sent {sent}: a line carrying both is written no line more");
         assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "sent {sent}: acked and kept");
     }
     let fake = Fake::new();
@@ -5195,7 +5346,11 @@ fn a_document_another_writer_keeps_moving_takes_one_turns_steps_and_the_lines_af
     assert_eq!(g.holds.probe("b-1"), Turn::Bounded, "the turn stops at its bound");
     assert_eq!((dials_on(&g, DOC), images(&g), dials_on(&g, OTHER)), (TURN_STEPS, TURN_STEPS - 1, 0), "the send, then a step a shift until none is left for the next");
     let lines = g.lines();
-    let last = g.fake.sends.lock().unwrap().last().cloned().unwrap();
+    // The last dial's frame, its `id` the line's dial id and no part of the
+    // frame the line keeps (skep #971).
+    let mut last = g.fake.sends.lock().unwrap().last().cloned().unwrap();
+    let dialed_under = last.as_object_mut().and_then(|members| members.remove("id"));
+    assert!(dialed_under.as_ref().and_then(Value::as_str).is_some_and(|id| id.starts_with("shell:")), "the shift dialed under the line's dial id: {dialed_under:?}");
     assert_eq!((lines[0]["cause"].as_str(), lines[0]["sent"].as_bool()), (Some("unreachable"), Some(true)), "the line as its last dial left it: {lines:?}");
     assert!(lines[0]["frame"] == last && last["as_of"].as_u64() > Some(typed), "the frame its last shift wrote, typed at the last read's state: {}", lines[0]);
     assert_eq!(g.states(), ["sending", "sending"], "both documents sending, never moved");
@@ -5468,9 +5623,12 @@ fn a_burst_naming_held_words_survives_a_relaunch_and_is_placed_at_their_ack_afte
 /// from the principal's landed inserts — an offset at the insert's
 /// positions refused `malformed_args` there first, nothing dialed — and the
 /// board's refusal of it as typed against an older state is shifted within
-/// the call by the anchors so placed, the page answered the ack (the mutant
-/// that keeps no landed insert refuses the second burst `no_such_burst`,
-/// though its words stand on the board).
+/// the call by the anchors so placed, the page answered the ack, each dial
+/// of the call — the first, and the shift within it — under the page's own
+/// `id` (skep #971; the mutant that keeps no landed insert refuses the second
+/// burst `no_such_burst`, though its words stand on the board; the one that
+/// dials a first dial under a dial id leaves the page's own reissue of its
+/// burst no memo entry to meet).
 #[test]
 fn a_burst_naming_the_words_of_an_insert_kept_before_it_arrives_is_placed_at_the_door() {
     let g = ground();
@@ -5487,6 +5645,8 @@ fn a_burst_naming_the_words_of_an_insert_kept_before_it_arrives_is_placed_at_the
     assert_eq!(landed["resp"], "ack_addr", "shifted through the insert's landing and acked within the call: {landed}");
     let sends = g.fake.sends.lock().unwrap().clone();
     assert_eq!((sends.len(), sends[2]["at"]["ordinal"].as_str()), (3, Some("5")), "{sends:?}");
+    let ids: Vec<&Value> = sends.iter().map(|sent| &sent["id"]).collect();
+    assert_eq!(ids, [&json!("b-1"), &json!("b-2"), &json!("b-2")], "a first dial and its shift go out under the page's `id`");
     assert!(g.lines().is_empty(), "nothing held");
 }
 

@@ -1789,7 +1789,10 @@ impl Shell {
     /// row, decision 1 (b)); for a follower, the follow's answer
     /// ([`Shell::follow`]) — `not_followed`, `no_such_burst`, `malformed_args`
     /// naming a slot whose piece its burst cannot name, or its own answer; else
-    /// the hold's answer ([`Holds::send`]), the anchors handed to it for a
+    /// the hold's answer ([`Holds::send`]) — a burst's door's refusals among
+    /// it (`Burst::admit`), `malformed_args` naming `frame.id` where the
+    /// burst's `id` begins `shell:`, the prefix of the `id`s the hold resends a
+    /// held line under (skep #971) — the anchors handed to it for a
     /// burst's line — the identities on either side of the span the burst edits
     /// and, for a delete or a rearrange, of the units it holds, by which the
     /// shell shifts the burst where the board refuses it as typed against an

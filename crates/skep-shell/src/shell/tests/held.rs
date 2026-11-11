@@ -5,7 +5,9 @@
 //! event said them, the head's told before any write (skep #865), a burst held
 //! while the daemon is stopped and resent `kept` after a
 //! restart, its `held` event naming the line as the board holds it
-//! (skep #968), a burst whose dial meets the death signal held `session_died`
+//! (skep #968), two lines two tabs held under one page `id` each landing its
+//! own words, each resent under a dial id of its own (skep #971), a burst
+//! whose dial meets the death signal held `session_died`
 //! and kept under the session the restart arm re-opened, a burst whose
 //! reissue meets `write_busy` again held `unreachable` unsent and kept once
 //! the board takes writes, the kernel poison
@@ -449,6 +451,65 @@ fn a_burst_typed_next_to_held_words_names_them_and_lands_at_them_once_the_node_r
     let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 5)})).unwrap();
     assert_eq!(text_of(&read), "aX!YZ", "{read}\n{}", lines.lock().unwrap().join("\n"));
     assert!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty(), "no line stands");
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that two held lines under one page `id` each land their own words.
+///
+/// It is the issue's own case (skep #971), against the real daemon and its
+/// retry memo.
+/// Two tabs of one principal — two sessions — each type a word into a draft
+/// of its own under the page's `id` `b-1`, held `stopped`; the own node
+/// running, the resend sends both lines under one session, each under a
+/// dial id of its own: each draft reads its own word, and each line's `kept`
+/// event names `b-1` at a position of its own (the mutant that resends under
+/// the page's `id` has the board answer the second line with the first's
+/// acknowledgment from its memo, the shell keeping that line, and the second
+/// draft never takes its word).
+#[test]
+fn two_held_lines_under_one_page_id_each_land_their_own_words() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (talk, lines) = talk();
+    let mut opts = ShellOptions::new(vec![Origin::parse(&origin).unwrap()], store, SessionMode::Signed { principal: 1 }, talk);
+    opts.own_node = Some(Origin::parse(&origin).unwrap());
+    let shell = Shell::open(opts);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    let board = shell.board_references().remove(0);
+    let open = || shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let tabs = [open(), open()];
+    // Each tab's draft, its `a` acked: the state its word is typed against.
+    let drafts: Vec<(String, u64)> = tabs
+        .iter()
+        .map(|session| {
+            let minted = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
+            let draft = minted["addr"].as_str().unwrap().to_string();
+            let acked =
+                shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"], "as_of": minted["at"]}})).unwrap();
+            (draft, acked["at"].as_u64().unwrap_or_else(|| panic!("the draft's `a` is acked: {acked}")))
+        })
+        .collect();
+    shell.set_node_state(NodeState::Stopped);
+    for ((session, (draft, typed)), word) in tabs.iter().zip(&drafts).zip(["x", "y"]) {
+        let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": [word], "as_of": typed, "id": "b-1"});
+        let held = shell.call("op", &json!({"session": session, "frame": frame})).unwrap();
+        assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("stopped")), "{held}");
+    }
+    shell.set_node_state(NodeState::Running);
+    let kept: Vec<Event> = drafts.iter().map(|(draft, _)| wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == *draft && e.data["state"] == "kept")).collect();
+    for ((draft, _), word) in drafts.iter().zip(["ax", "ay"]) {
+        let read = shell.call("op", &json!({"session": tabs[0], "frame": skep_client::board::frames::retrieve_v(draft, 1, 2)})).unwrap();
+        assert_eq!(text_of(&read), word, "{draft}: {read}\n{}", lines.lock().unwrap().join("\n"));
+    }
+    let landed: Vec<&Value> = kept.iter().map(|event| &event.data["landed"][0]).collect();
+    assert!(landed.iter().all(|line| line["burst"] == "b-1"), "each line named by the page's `id`: {landed:?}");
+    assert_ne!(landed[0]["at"], landed[1]["at"], "each line kept at a position of its own: {landed:?}");
+    assert!(tabs.iter().all(|session| shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty()), "no line stands");
     shell.shutdown();
     sd.shutdown();
 }

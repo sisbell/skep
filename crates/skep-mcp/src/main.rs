@@ -33,8 +33,10 @@
 //!   `at` beside an object `frame`, which no wire op takes. Before the board
 //!   sees a frame, the shell refuses one it cannot send or hold whole, nothing
 //!   sent, each refusal `isError`: a burst whose `doc` is no document address
-//!   in its one spelling (`malformed_args` naming `frame.doc`) or whose frame
-//!   would pass the board's cap (`frame_too_large`), and a write of the nine
+//!   in its one spelling (`malformed_args` naming `frame.doc`), whose `id`
+//!   begins `shell:`, the prefix of the ids the shell resends a held burst
+//!   under (`malformed_args` naming `frame.id`), or whose frame would pass
+//!   the board's cap (`frame_too_large`), and a write of the nine
 //!   kinds the session's key attests through `op` — the ten but `publish` —
 //!   whose attest it cannot compose from the frame (`attest_not_composed`, a
 //!   halt). Where the board refuses a read the shell makes to compose that

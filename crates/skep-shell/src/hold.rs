@@ -86,32 +86,37 @@
 //! send — one past the board's frame cap, one naming no document, an insert
 //! a signed session cannot attest — since a held line of it could be sent
 //! and resolved never, and would hold every later burst of its principal
-//! `behind` it; and it is held without a dial where a hold stands — the own
-//! node stopped, the board silent, the board halted, a line of the
-//! principal's already held, a request of the hold's at the board unanswered
-//! — and, where its own first dial is a request the board gives no answer
-//! to, held `unreachable`, no clock started. Its anchors' pieces, each
-//! naming the words of a burst of the page's by its `id` (skep #969), are
-//! asked under the board's lock past the hold's own door
-//! ([`Holds::place_anchors`]): one naming a burst held on the document binds
-//! to that line, the burst held `behind` it, and is placed at the address
-//! the line's words are minted at as it is kept — its ack's ([`minted_by`]),
-//! or the one the resend's read finds — one naming a burst kept there is
-//! placed from the principal's newest landed inserts
+//! `behind` it, and an `id` of the prefix the resend's own ids take
+//! (`refs::DialId`, `shell:`; skep #971); and it is held without a dial
+//! where a hold stands — the own node stopped, the board silent, the board
+//! halted, a line of the principal's already held, a request of the hold's
+//! at the board unanswered — and, where its own first dial is a request the
+//! board gives no answer to, held `unreachable`, no clock started. Its
+//! anchors' pieces, each naming the words of a burst of the page's by its
+//! `id` (skep #969), are asked under the board's lock past the hold's own
+//! door ([`Holds::place_anchors`]): one naming a burst held on the document
+//! binds to that line, the burst held `behind` it, and is placed at the
+//! address the line's words are minted at as it is kept — its ack's
+//! ([`minted_by`]), or the one the resend's read finds — one naming a burst
+//! kept there is placed from the principal's newest landed inserts
 //! ([`PrincipalHold::landed_inserts`]), and any other is refused at the act.
-//! The resend sends each held line through the same reader of an answer, a
-//! reissue-class answer there reissued at the next probe; a line no landing
-//! of which is found [`HAND_OVER_DEADLINE`] after its first failed send,
-//! whatever the failure, is handed to the person, a refused run under
-//! `answers_lost` — whose drop, where a dial of it may have landed, reads
-//! for its landing first and drops nothing the board is found to hold, nor
-//! anything where the read cannot tell ([`Holds::resolve`]; skep #866) —
-//! and one the board refuses at a resend under a code the table holds
-//! nowhere is handed over at once, a refused run under the board's token
-//! (§3c.4).
-//! The anchors a burst carries over the bridge (`held::Anchors`) ride with
-//! its line and never with its frame: the frame dialed is the wire's frame,
-//! as the attest is stripped at the hold and composed at every send.
+//! The resend sends each held line through the same reader of an answer,
+//! under the line's own dial id in the page's `id`'s place (skep #971): the
+//! walk resends every line of a principal's under one session, and the
+//! board's retry memo takes a frame for a reissue by its session, its `id`
+//! and its kind. A reissue-class answer there is reissued at the next probe;
+//! a line no landing of which is found [`HAND_OVER_DEADLINE`] after its
+//! first failed send, whatever the failure, is handed to the person, a
+//! refused run under `answers_lost` — whose drop, where a dial of it may
+//! have landed, reads for its landing first and drops nothing the board is
+//! found to hold, nor anything where the read cannot tell
+//! ([`Holds::resolve`]; skep #866) — and one the board refuses at a resend
+//! under a code the table holds nowhere is handed over at once, a refused
+//! run under the board's token (§3c.4). The anchors a burst carries over
+//! the bridge (`held::Anchors`) ride with its line and never with its frame:
+//! the frame dialed is the wire's frame, as the attest is stripped at the
+//! hold and composed at every send, and a resend's `id` is set on the copy
+//! it dials alone, the line's frame keeping the page's.
 //!
 //! **The board's silence** (§3c.4's THE END, §3c.5; skep #863). The probe is
 //! the one judge of whether a board answers: a `/health` it gives no answer to
@@ -279,7 +284,7 @@ use crate::held::{
     i_address, Anchor, Anchors, CopiesOwed, Done, Entered, HaltWhy, HeldDir, HeldLine, HeldQueue, Joined, Joining, Opened, Owed, Reason, RenumberRefused, Settled, Torn, Unheld, MAX_BURST_ID_BYTES,
     MAX_HELD_BYTES, MAX_HELD_LINES,
 };
-use crate::refs::BoardEntry;
+use crate::refs::{BoardEntry, DialId, DIAL_ID_ROOM};
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{board_head, HeadRead, SessionEntry, Sessions};
 use crate::wire::{document_address, json_len, values_of, MAX_FRAME_BYTES};
@@ -289,7 +294,7 @@ mod labels;
 mod resend;
 
 use labels::AccountLabels;
-use resend::ReadOutcome;
+use resend::{Dialing, ReadOutcome};
 
 /// The interim probe cadence (§3c.4): `GET /health` at this interval.
 ///
@@ -1221,8 +1226,13 @@ impl Burst {
     /// * its `doc` a document address in its one spelling
     ///   (`wire::document_address`) — what the resend's read names `under`
     ///   and a held line is keyed by — else `malformed_args`;
+    /// * its `id`, where it is a string, not of the prefix the hold's resends
+    ///   dial under (`refs::DialId`, `shell:`), so no burst of a page's shares
+    ///   an `id` with a resend (skep #971), else `malformed_args` naming
+    ///   `frame.id`;
     /// * its bytes as sent, and as every resend sends them — the attest
-    ///   stripped and, under a session whose key attests the kind
+    ///   stripped, a dial id in the page's `id`'s place ([`DIAL_ID_ROOM`])
+    ///   and, under a session whose key attests the kind
     ///   (`SessionEntry::attesting_key`), the most an attest adds
     ///   ([`attest_room`]) — within the board's frame cap
     ///   ([`MAX_FRAME_BYTES`], which the board answers `413` past, unread),
@@ -1235,12 +1245,17 @@ impl Burst {
             return Err(Refusal::malformed("frame.op"));
         }
         let doc = frame["doc"].as_str().filter(|d| document_address(d).is_some()).ok_or_else(|| Refusal::malformed("frame.doc"))?.to_string();
+        if frame["id"].as_str().is_some_and(DialId::reserves) {
+            return Err(Refusal::malformed("frame.id"));
+        }
         let attested = frame["op"].as_str().and_then(|op| session.attesting_key(op)).is_some();
         let sent_bytes = json_len(&frame);
-        // The attest a page supplied is never stored, so a resend's frame is
-        // the frame without its member — `,"attest":` and the value.
-        let stripped_bytes = sent_bytes.saturating_sub(frame.get("attest").map_or(0, |a| r#","attest":"#.len() + json_len(a)));
-        let resent_bytes = stripped_bytes + if attested { attest_room() } else { 0 };
+        // A resend dials the frame the line stores under the line's dial id:
+        // the attest a page supplied, which is never stored, and the page's
+        // `id` each give way — `,"<name>":` and the value — to the dial id's
+        // member and, where the session's key attests the kind, the shell's.
+        let member = |name: &str| frame.get(name).map_or(0, |v| ",\"\":".len() + name.len() + json_len(v));
+        let resent_bytes = sent_bytes.saturating_sub(member("attest") + member("id")) + DIAL_ID_ROOM + if attested { attest_room() } else { 0 };
         if sent_bytes.max(resent_bytes) > MAX_FRAME_BYTES {
             return Err(Refusal::shell(Name::FRAME_TOO_LARGE, json!({"bytes": sent_bytes.max(resent_bytes), "cap": MAX_FRAME_BYTES})));
         }
@@ -1410,9 +1425,27 @@ impl From<Unattested> for Dialed {
 /// checked set, an attest the page supplied, a board no one has claimed
 /// that serves no head record. Made by [`Holds::attest_where_owed`] alone,
 /// so [`Holds::dial`] sends no frame the session's attest did not see — and
-/// never the frame a held line keeps, which carries no attest (§3c.2).
+/// never the frame a held line keeps, which carries no attest (§3c.2). A
+/// resend's copy goes out under the line's dial id
+/// ([`AttestedWhereOwed::under`]): no attest signs the `id`.
 #[derive(Debug)]
 struct AttestedWhereOwed<'f>(Cow<'f, Value>);
+
+impl AttestedWhereOwed<'_> {
+    /// Returns the frame as a resend dials it, under the line's `dial_id`.
+    ///
+    /// It is a copy whose envelope `id` is the dial id, in the page's `id`'s
+    /// place where the page sent one (skep #971), so the board's retry memo
+    /// answers it with no acknowledgment but the line's own. The attest it
+    /// carries stands: the entry frame an attest signs holds no `id`.
+    fn under(self, dial_id: &DialId) -> AttestedWhereOwed<'static> {
+        let mut frame = self.0.into_owned();
+        if let Some(members) = frame.as_object_mut() {
+            members.insert("id".to_string(), Value::from(dial_id.as_str()));
+        }
+        AttestedWhereOwed(Cow::Owned(frame))
+    }
+}
 
 /// One line entered in a principal's queue ([`Holds::enter_line`]).
 ///
@@ -3858,7 +3891,7 @@ impl Holds {
         };
         loop {
             let verdict = moved.reason.refusal.clone().unwrap_or(Value::Null);
-            let shifted = match self.shift_and_send(session, k, &verdict, resend::no_step, |frame| self.dial_reissuing(session, frame)) {
+            let shifted = match self.shift_and_send(session, k, &verdict, Dialing::First, resend::no_step, |frame| self.dial_reissuing(session, frame)) {
                 Ok(shifted) => shifted,
                 Err(why) => {
                     // The hands are read before anything is marked, so the
@@ -4921,6 +4954,24 @@ impl Holds {
             self.say_remarks_refused(&[(k, e)]);
         }
         self.note_waiting(principal, ph);
+    }
+
+    /// Readies a line for a resend's dial, and returns its dial id.
+    ///
+    /// It is line `k` of `principal`'s (skep #971). The line names its dial id
+    /// where it names none, and is marked as one
+    /// that may have landed, as one copy (`HeldQueue::ready_to_resend`): a
+    /// copy the device refuses is owed, and the wait it begins is said at its
+    /// edges ([`Holds::note_waiting`]); one the writer refuses is owed never,
+    /// and said on `Talk` ([`Holds::say_remarks_refused`]). It answers none
+    /// where no line of `k` stands.
+    fn ready_to_resend(&self, principal: u64, ph: &mut PrincipalHold, k: u64) -> Option<DialId> {
+        let (dial_id, refused) = ph.queue.ready_to_resend(k)?;
+        if let Some(e) = refused {
+            self.say_remarks_refused(&[(k, e)]);
+        }
+        self.note_waiting(principal, ph);
+        Some(dial_id)
     }
 
     /// Re-marks a run of `principal`'s lines in place, as one copy.

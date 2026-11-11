@@ -813,7 +813,8 @@ re-exports counted as the module it is brought from (held by
 
 - `refs.rs` the reference registry's NAMES: board and session references
   minted per process, never a credential; `BoardEntry`, one board under
-  the reference minted for it.
+  the reference minted for it; and `DialId`, the `id` the hold resends a
+  held line under, the one of them `held.rs` keeps on disk.
 - `log.rs` `Log`, the call and dial log the page's gate reads, and
   `ShellDialer`, the one `PlainHttp` every board dials through.
 - `events.rs` `EventBus`: the events as values, each named by an

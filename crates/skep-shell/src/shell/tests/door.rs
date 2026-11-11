@@ -11,7 +11,9 @@
 //! reference or its origin names, the reference first and the target before
 //! the frame; a bare session refusing every write kind undialed, its
 //! `/op-at` form and its `resolve(send)` too, while its read is dialed and a
-//! signed session's write goes out; the shell's one write door asking its
+//! signed session's write goes out; a burst whose `id` takes the prefix of
+//! the ids the hold resends a line under refused undialed (skep #971); the
+//! shell's one write door asking its
 //! four questions in one order — the bare session, another window, the
 //! standing hold, the draft's held lines — over two shells on one store; a
 //! search's `opts` read as one value, and
@@ -802,6 +804,38 @@ fn a_bare_sessions_write_is_refused_before_any_dial() {
     let writes: Vec<&Value> = recorded.iter().filter(|f| f["op"].as_str().is_some_and(|op| WRITE_KINDS.contains(&op))).collect();
     assert_eq!(writes, [&set], "the signed session's write alone reached the board: {recorded:?}");
     assert!(recorded.contains(&read), "the bare session's read reached it: {recorded:?}");
+}
+
+/// Checks that a burst's `id` of the dial ids' prefix is refused undialed.
+///
+/// It is refused at the `op` row, before any dial (skep #971). The hold
+/// resends a held line under an `id` of its own, `shell:` and hex,
+/// so a session's burst whose `id` begins `shell:` is refused
+/// `malformed_args` naming `frame.id`, nothing held and no write frame
+/// reaching a listener at the board (the mutant that admits the prefix lets
+/// the page's burst and a resend share an `id`, the board's retry memo
+/// answering one with the other's acknowledgment).
+#[test]
+fn a_bursts_id_of_the_dial_ids_prefix_is_refused_before_any_dial() {
+    let dir = TempDir::new().unwrap();
+    let (origin, frames) = recording_listener();
+    let (shell, _) = open_shell(&origin, &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let board = shell.board_references().remove(0);
+    let fingerprint = skep_identity::Fingerprint::parse_hex(&"5a".repeat(32)).unwrap();
+    let facts = Facts { principal: 2, account: Some("1.0.2".into()), kind: SessionKind::Signed { fingerprint, set_account: "1.0.2".into() } };
+    let open = Open { token: Token::parse(&"8e".repeat(16)).unwrap(), facts, opened_at: 0 };
+    let session = shell.sessions.register(&shell.boards[0], open, &mut shell.feed(&board)).reference.clone();
+    let bursts = [
+        json!({"op": "insert", "doc": "1.0.2.0.1", "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"], "as_of": 0, "id": "shell:0a"}),
+        json!({"op": "delete", "doc": "1.0.2.0.1", "p": {"subspace": "1", "ordinal": "1"}, "width": "1", "as_of": 0, "id": "shell:"}),
+    ];
+    for frame in bursts {
+        let refused = shell.call("op", &json!({"session": session, "frame": frame})).unwrap_err().to_value();
+        assert_eq!((refused["name"].as_str(), refused["what"].as_str()), (Some("malformed_args"), Some("frame.id")), "{frame}: {refused}");
+    }
+    assert!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty(), "nothing held");
+    let recorded = frames.lock().unwrap().clone();
+    assert!(recorded.iter().all(|f| !f["op"].as_str().is_some_and(|op| WRITE_KINDS.contains(&op))), "no write frame reached the board: {recorded:?}");
 }
 
 /// Checks the order of the shell's one write door's four questions.

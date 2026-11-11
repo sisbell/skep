@@ -21,8 +21,10 @@
 //! * `refs` — the reference registry's names (§4b.1, the pin): a board
 //!   reference and a session reference are opaque names this process mints
 //!   from OS entropy, never a credential, never derived from an origin or a
-//!   token, valid in this process alone; and `BoardEntry`, one board under
-//!   the reference minted for it, the pair every reader takes whole.
+//!   token, valid in this process alone; `BoardEntry`, one board under the
+//!   reference minted for it, the pair every reader takes whole; and a held
+//!   line's dial id, the `id` the hold resends it under, which never crosses
+//!   the bridge and is kept with its line in the held file (skep #971).
 //! * `log` — [`Log`], the call log and the dial log the page's gate reads
 //!   (the structure record §6.3's class 5): every call the page made and
 //!   every dial the shell made, sizes and timing, never a token or a body,
@@ -61,7 +63,8 @@
 //!   bounded at their one door, a hold adding no line past
 //!   four frames' and one line's anchors' bounds in its bytes or past a line
 //!   budget in its lines, and its file's re-marks within a re-mark budget
-//!   that a line's mark of `sent` spends none of.
+//!   that a resend's mark of a line — its `sent`, its dial id named — spends
+//!   none of.
 //! * [`script`] — the dev arm's script: the grammar a script file's answers
 //!   are parsed by.
 //! * `dev_arm` — the dev arm for the secret and consent moments (§4b.3): a

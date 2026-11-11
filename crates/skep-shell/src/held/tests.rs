@@ -981,7 +981,7 @@ fn modeled_acts(queue: &mut HeldQueue, store: &HeldDir, acts: usize, seed: u64, 
                 let base = rng.below(100);
                 let frame = json!({"op": "insert", "n": act});
                 queue.hold(next_k, doc, None, base, frame.clone(), None, Reason::of("unreachable", false)).unwrap();
-                model.enter(HeldLine { k: next_k, doc: doc.to_string(), id: None, base, frame, anchors: None, reason: Reason::of("unreachable", false), time: 0 });
+                model.enter(HeldLine { k: next_k, doc: doc.to_string(), id: None, dial_id: None, base, frame, anchors: None, reason: Reason::of("unreachable", false), time: 0 });
                 next_k += 1;
             }
             (35..=59, Some(k)) => {
@@ -1025,7 +1025,17 @@ fn modeled_acts(queue: &mut HeldQueue, store: &HeldDir, acts: usize, seed: u64, 
                 for k in passed_over.drain(..) {
                     let (doc, base) = (docs[rng.below(3) as usize], rng.below(100));
                     from.hold(k, doc, None, base, json!({"op": "insert", "joined": k}), None, Reason::of("behind", false)).unwrap();
-                    model.enter(HeldLine { k, doc: doc.to_string(), id: None, base, frame: json!({"op": "insert", "joined": k}), anchors: None, reason: Reason::of("behind", false), time: 0 });
+                    model.enter(HeldLine {
+                        k,
+                        doc: doc.to_string(),
+                        id: None,
+                        dial_id: None,
+                        base,
+                        frame: json!({"op": "insert", "joined": k}),
+                        anchors: None,
+                        reason: Reason::of("behind", false),
+                        time: 0,
+                    });
                 }
                 queue.join(&from, Joining::ThisRun);
             }
@@ -1570,7 +1580,7 @@ fn a_lines_mark_of_sent_spends_none_of_the_remark_budget() {
     let refused = |n: u64| Reason { sent: true, ..Reason::refused("out_of_bounds", json!({"n": n})) };
     // The large line spells a quarter of the budget less ten bytes: its frame
     // sized by the rest of its spelling, its two reasons spelled at one length.
-    let spelled = HeldLine { k: 1, doc: "1.0.1.0.1".into(), id: None, base: 0, frame: json!({}), anchors: None, reason: refused(1), time: now_ms() };
+    let spelled = HeldLine { k: 1, doc: "1.0.1.0.1".into(), id: None, dial_id: None, base: 0, frame: json!({}), anchors: None, reason: refused(1), time: now_ms() };
     let rest = held_line_bytes(&spelled, spelled.base).len() - 1 - json_len(&spelled.frame);
     let large = queue.hold_next("1.0.1.0.1", None, 0, sized_frame(MAX_HELD_REMARK_BYTES / 4 - 10 - rest), None, refused(1)).unwrap().k;
     let small = queue.hold_next("1.0.1.0.2", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap().k;
@@ -1587,6 +1597,96 @@ fn a_lines_mark_of_sent_spends_none_of_the_remark_budget() {
     assert_eq!((marked, spent(&reopened)), (Some(Reason::of("unreachable", true)), spent(&queue)), "a reopen reads the mark, the budget spent as the writer spent it");
     assert!(queue.remark(small, Reason::of("durability", true)).is_err(), "a re-mark keeping `sent` spends the budget");
     assert!(queue.remark(small, Reason::of("unreachable", false)).is_err(), "and so does one lowering it");
+}
+
+/// Checks that a resend's readying names one dial id that every copy carries.
+///
+/// It is named in one copy (skep #971). A line held unsent and readied for its
+/// resend names a fresh dial id and
+/// is marked `sent` in one copy, the `dial` member spelled after the page's
+/// `id`; readied again it names the same id and writes nothing. A re-mark, a
+/// shift and a reopen carry it, and a line held after it names none; a
+/// renumbering moves the line under a fresh ordinal with its id, and a join
+/// enters a line readied while it waited in memory with the id it carries
+/// (the mutant that names a fresh id at each readying dials each resend of a
+/// line under another `id`, so a true reissue meets no memo entry of its
+/// own; the one whose copy drops the member relaunches the line under an
+/// `id` no earlier resend dialed).
+#[test]
+fn a_resends_readying_names_one_dial_id_in_one_copy_and_every_copy_after_carries_it() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let k = queue.hold_next("1.0.1.0.1", Some("b-1"), 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap().k;
+    let copies = count_copies();
+    let (dial_id, refused) = queue.ready_to_resend(k).expect("the line stands");
+    let written = file_len(&tmp);
+    let again = queue.ready_to_resend(k).expect("the line stands");
+    take_copies();
+    assert!(refused.is_none() && again.1.is_none(), "{refused:?} {:?}", again.1);
+    assert_eq!((&again.0, copies.get(), file_len(&tmp)), (&dial_id, 1, written), "one copy names the id and marks the line; readied again, the same id and nothing written");
+    let text = fs::read_to_string(file_path(&tmp)).unwrap();
+    let last = text.lines().last().unwrap();
+    let lead = format!("{{\"held\":{k},\"doc\":\"1.0.1.0.1\",\"id\":\"b-1\",\"dial\":\"{}\",\"base\":0,", dial_id.as_str());
+    assert!(last.starts_with(&lead) && last.contains(",\"sent\":true,"), "{last}");
+    queue.remark(k, Reason::of("durability", true)).unwrap();
+    queue.rewrite(k, json!({"op": "insert", "as_of": 9})).unwrap();
+    let behind = queue.hold_next("1.0.1.0.1", Some("b-1"), 0, json!({"op": "delete"}), None, Reason::of("behind", false)).unwrap().k;
+    let reopened = live(d.open_file(1, "1.0.1").unwrap());
+    let dials: Vec<Option<DialId>> = reopened.lines().iter().map(|line| line.dial_id.clone()).collect();
+    assert_eq!(dials, [Some(dial_id.clone()), None], "a re-mark and a shift carry it, a reopen reads it, and the line behind names none");
+    assert_eq!(reopened.lines(), queue.lines(), "the reopened queue is the queue that was held");
+    let mut renumbered = reopened;
+    let mut next_k = 10;
+    assert_eq!(renumbered.renumber(&mut next_k).unwrap(), [(k, 10), (behind, 11)]);
+    let read: Vec<(u64, Option<DialId>)> = live(d.open_file(1, "1.0.1").unwrap()).lines().iter().map(|line| (line.k, line.dial_id.clone())).collect();
+    assert_eq!(read, [(10, Some(dial_id)), (11, None)], "a renumbering moves the line with its id");
+    let other = TempDir::new().unwrap();
+    let mut from = HeldQueue::unopened(&dir(&other), 1, "1.0.1");
+    let waiting = from.hold_next("1.0.1.0.2", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap().k;
+    let (carried, _) = from.ready_to_resend(waiting).expect("the line stands in memory");
+    let mut into = live(dir(&other).open_file(1, "1.0.1").unwrap());
+    into.join(&from, Joining::ThisRun);
+    let read: Vec<Option<DialId>> = live(dir(&other).open_file(1, "1.0.1").unwrap()).lines().iter().map(|line| line.dial_id.clone()).collect();
+    assert_eq!(read, [Some(carried)], "a join enters the line with the id it carries");
+}
+
+/// Checks that naming a line's dial id spends none of the re-mark budget.
+///
+/// It is the copy a resend's readying writes (skep #971). With the budget
+/// spent to forty bytes short, as
+/// `a_lines_mark_of_sent_spends_none_of_the_remark_budget` spends it, a line
+/// held `sent` — a lost answer's — readied for its resend names its dial id
+/// in a copy written past the spent budget, and so does a line held unsent,
+/// its mark beside it; neither spends anything, and a reopen reads both ids
+/// and counts the budget as the writer did (the mutant reader that counts the
+/// naming leaves a relaunch less of the budget than its writer left it; the
+/// mutant writer that counts it refuses the copy, and a relaunch reads the
+/// line naming no id).
+#[test]
+fn naming_a_dial_id_spends_none_of_the_remark_budget() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let spent = |queue: &HeldQueue| queue.disk.remark_bytes;
+    let refused = |n: u64| Reason { sent: true, ..Reason::refused("out_of_bounds", json!({"n": n})) };
+    let spelled = HeldLine { k: 1, doc: "1.0.1.0.1".into(), id: None, dial_id: None, base: 0, frame: json!({}), anchors: None, reason: refused(1), time: now_ms() };
+    let rest = held_line_bytes(&spelled, spelled.base).len() - 1 - json_len(&spelled.frame);
+    let large = queue.hold_next("1.0.1.0.1", None, 0, sized_frame(MAX_HELD_REMARK_BYTES / 4 - 10 - rest), None, refused(1)).unwrap().k;
+    for n in [2, 1, 2, 1] {
+        queue.remark(large, refused(n)).unwrap();
+    }
+    assert_eq!(spent(&queue), MAX_HELD_REMARK_BYTES - 40, "premise: the budget spent to forty bytes short");
+    let lost = queue.hold_next("1.0.1.0.2", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", true)).unwrap().k;
+    let unsent = queue.hold_next("1.0.1.0.3", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap().k;
+    for k in [lost, unsent] {
+        let written = file_len(&tmp);
+        let (_, refused) = queue.ready_to_resend(k).expect("the line stands");
+        assert!(refused.is_none() && file_len(&tmp) > written && spent(&queue) == MAX_HELD_REMARK_BYTES - 40, "line {k}: the copy is on disk past the spent budget, and spends nothing: {refused:?}");
+    }
+    let reopened = live(d.open_file(1, "1.0.1").unwrap());
+    let named: Vec<bool> = reopened.lines().iter().filter(|l| l.k != large).map(|l| l.dial_id.is_some() && l.reason.sent).collect();
+    assert_eq!((named, spent(&reopened)), (vec![true, true], spent(&queue)), "a reopen reads both ids, the budget spent as the writer spent it");
 }
 
 /// The header T1 writes for principal 1, then `body`, as the principal's
@@ -1621,20 +1721,22 @@ fn line_with(member: &str, value: Option<Value>) -> Vec<u8> {
 /// three, an anchor that is no I-address, anchors one byte past their bound,
 /// a piece of no string `burst` or past its bound, of no natural `offset` or
 /// with a member beside its two (skep #969), or a span of no list, of no
-/// run, or holding a run that is not one I-extent in its spelling — an
-/// ordinal past the page's (the largest a `u64` holds among them, read
-/// without a panic), and a `done` line of another form, a `kept` one naming
-/// an `addr` that is no I-address and a `dropped` one naming any among them;
-/// the same file with the line whole reads live, its anchors of their form
-/// read, at their bound and a span among them, a piece naming no line before
-/// it dropped, and a `kept` `done` naming an address (the mutants
+/// run, or holding a run that is not one I-extent in its spelling, a `dial`
+/// that is no dial id (skep #971) — an ordinal past the page's (the largest a
+/// `u64` holds among them, read without a panic), and a `done` line of
+/// another form, a `kept` one naming an `addr` that is no I-address and a
+/// `dropped` one naming any among them; the same file with the line whole
+/// reads live, its anchors of their form read, at their bound and a span
+/// among them, a piece naming no line before it dropped, its dial id of its
+/// form read, and a `kept` `done` naming an address (the mutants
 /// that default a missing member, read text lossily, or take any ordinal,
 /// rebuild the person's text out of a file no writer of this format wrote;
 /// the one that reads anchors of another form as none shifts nothing a
 /// relaunch should; the one that takes a span run of another spelling — a
 /// width signed, of a leading zero, or past a `u64` — compares units the
 /// page never named; the one that reads anchors past their bound holds a
-/// stranger's bytes the bridge would have refused).
+/// stranger's bytes the bridge would have refused; the one that reads a
+/// `dial` of another form dials a resend under an `id` no resend drew).
 #[test]
 fn a_line_the_reader_cannot_read_whole_halts_the_file() {
     let valid = line_with("sent", Some(json!(false)));
@@ -1657,6 +1759,10 @@ fn a_line_the_reader_cannot_read_whole_halts_the_file() {
     let mut kept = b"{\"done\":9,\"as\":\"kept\",\"at\":4,\"addr\":\"1.0.1.0.1.0.1.4\",\"time\":1}\n".to_vec();
     kept.extend_from_slice(&valid);
     assert_eq!(live(opened_over(&tmp, &kept)).lines().len(), 1, "a kept `done` naming an address reads live");
+    let tmp = TempDir::new().unwrap();
+    let dial = format!("shell:{}", "0a".repeat(12));
+    let dialed = live(opened_over(&tmp, &line_with("dial", Some(json!(dial)))));
+    assert_eq!(dialed.lines()[0].dial_id.as_ref().map(DialId::as_str), Some(dial.as_str()), "a dial id of its form read");
     let with_span = |span: Value| line_with("anchors", Some(json!({"before": null, "after": null, "span": span})));
     let run = |start: &str, width: Value| json!({"start": start, "width": width});
     // The bytes no UTF-8 holds sit inside a string member, so a lossy read
@@ -1674,6 +1780,10 @@ fn a_line_the_reader_cannot_read_whole_halts_the_file() {
         ("anchors past their bound", line_with("anchors", Some(anchors_spelled(MAX_ANCHOR_BYTES + 1)))),
         ("no frame", line_with("frame", None)),
         ("a sent of no boolean", line_with("sent", Some(json!("no")))),
+        ("a dial of no dial id", line_with("dial", Some(json!("shell:0a")))),
+        ("a dial of another prefix", line_with("dial", Some(json!(format!("b-{}", "0a".repeat(12)))))),
+        ("a dial of no string", line_with("dial", Some(json!(7)))),
+        ("a dial of null", line_with("dial", Some(Value::Null))),
         ("anchors of no object", line_with("anchors", Some(json!("1.0.1.0.1.0.1.3")))),
         ("anchors naming one anchor", line_with("anchors", Some(json!({"before": null})))),
         ("anchors with a member beside the three", line_with("anchors", Some(json!({"before": null, "after": null, "edge": 2})))),
@@ -2020,7 +2130,7 @@ fn a_sent_mark_the_device_refused_is_written_by_the_retry_past_a_spent_budget() 
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
     let spent = |queue: &HeldQueue| queue.disk.remark_bytes;
     let refused = |n: u64| Reason { sent: true, ..Reason::refused("out_of_bounds", json!({"n": n})) };
-    let spelled = HeldLine { k: 1, doc: "1.0.1.0.1".into(), id: None, base: 0, frame: json!({}), anchors: None, reason: refused(1), time: now_ms() };
+    let spelled = HeldLine { k: 1, doc: "1.0.1.0.1".into(), id: None, dial_id: None, base: 0, frame: json!({}), anchors: None, reason: refused(1), time: now_ms() };
     let rest = held_line_bytes(&spelled, spelled.base).len() - 1 - json_len(&spelled.frame);
     let large = queue.hold_next("1.0.1.0.1", None, 0, sized_frame(MAX_HELD_REMARK_BYTES / 4 - 10 - rest), None, refused(1)).unwrap().k;
     let small = queue.hold_next("1.0.1.0.2", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap().k;
@@ -3033,7 +3143,7 @@ pub(crate) fn assert_within_the_ceiling(what: &str, took: Duration) {
 fn drained_file(n: u64, frame: &Value) -> Vec<u8> {
     let edges = anchors(Some("1.0.1.0.1.0.1.4"), Some("1.0.1.0.1.0.1.5"));
     let line = |k: u64, base: u64, reason: Reason| {
-        let line = HeldLine { k, doc: "1.0.1.0.1".into(), id: None, base, frame: frame.clone(), anchors: Some(edges.clone()), reason, time: now_ms() };
+        let line = HeldLine { k, doc: "1.0.1.0.1".into(), id: None, dial_id: None, base, frame: frame.clone(), anchors: Some(edges.clone()), reason, time: now_ms() };
         held_line_bytes(&line, base)
     };
     // The position line `k` is kept at, and the base it raises the lines after
@@ -3120,7 +3230,17 @@ fn a_file_whose_lines_each_name_the_one_before_reopens_in_time_in_proportion_to_
             let mut body = header_bytes(&Named::Chain(chain()), 1, "1.0.1");
             for k in 1..=n as u64 {
                 let anchors = (k > 1).then(|| Anchors::of(&json!({"before": {"burst": format!("b-{}", k - 1), "offset": 0}, "after": null})).expect("the anchors' form"));
-                let line = HeldLine { k, doc: "1.0.1.0.1".into(), id: Some(format!("b-{k}")), base: 0, frame: json!({"op": "insert"}), anchors, reason: Reason::of("unreachable", false), time: 1 };
+                let line = HeldLine {
+                    k,
+                    doc: "1.0.1.0.1".into(),
+                    id: Some(format!("b-{k}")),
+                    dial_id: None,
+                    base: 0,
+                    frame: json!({"op": "insert"}),
+                    anchors,
+                    reason: Reason::of("unreachable", false),
+                    time: 1,
+                };
                 body.extend(held_line_bytes(&line, 0));
             }
             for k in 1..n as u64 {

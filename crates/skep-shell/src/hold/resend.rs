@@ -163,6 +163,25 @@
 //! crash or a refused write between a dial and its answer too (§3c.2's `sent`);
 //! a mark the device refuses is owed and written by the retry, and a close
 //! while it is owed relaunches the line as one never sent.
+//!
+//! **Every resend dials under the line's dial id** (skep #971). A line names
+//! a dial id of its own (`refs::DialId`) as it is first readied, in the copy
+//! that marks it as one that may have landed, and every resend of it, a
+//! shift's dial among them, sets that id on the copy it dials in the page's
+//! `id`'s place (`AttestedWhereOwed::under`). The walk resends every line of
+//! a principal's under one session, whichever page held it, and the board's
+//! retry memo takes a frame for a reissue by its session, its `id` and its
+//! kind alone (wire.md §Correlation and idempotency): under the page's `id`,
+//! which two tabs or a reload give two lines alike, the board would answer
+//! one line with another's acknowledgment, and the shell keep a line the
+//! board never wrote. The frame the line keeps, the frame an ack is noted by
+//! and the `held` event's `burst` carry the page's own. A burst's first dial
+//! and the shifts its call makes go out under the page's `id`, so a resend of
+//! a burst whose first dial landed meets no memo entry of it: the board
+//! judges it by the state it was typed against (`as_of`), as it judges every
+//! frame, and refuses it as typed against an older state, and its shift,
+//! finding the words the burst landed between its anchors where they stand,
+//! holds it moved — the outcome of every landing the read cannot see.
 
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashSet};
@@ -305,6 +324,15 @@ impl From<Unshiftable> for NotShifted {
     fn from(why: Unshiftable) -> NotShifted {
         NotShifted::Unshiftable(why)
     }
+}
+
+/// Which `id` a held line's dial goes out under (skep #971).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Dialing {
+    /// A burst's first dial, and each shift its call makes: the page's `id`.
+    First,
+    /// A resend of the line: its dial id, readied before the dial leaves.
+    Resend,
 }
 
 /// Takes no step: a first dial's shift spends none.
@@ -1541,6 +1569,16 @@ impl Holds {
     /// the ack's position and an insert's minted I-address ([`LandedLine`];
     /// skep #968): the page's one word of a line's ack once its `op` answered
     /// `held`.
+    ///
+    /// **Under the line's dial id** (skep #971). Each dial this send makes,
+    /// its shifts' among them ([`Dialing::Resend`]), goes out under the line's
+    /// dial id, named as the line is first readied (`Holds::ready_to_resend`),
+    /// never the page's `id`, which another line of the principal's can carry
+    /// too: an ack is then the line's own. The page's first dial alone went
+    /// out under the page's `id`, so a resend of a burst that landed there is
+    /// never answered from that dial's memo entry: the board judges it by the
+    /// state it was typed against, and its shift holds it moved where the
+    /// words it landed stand between its anchors.
     fn send_line(&self, session: &SessionEntry, line: &HeldLine, steps: &mut usize) -> Step {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let given = || self.with_principal(board_reference, principal, |ph| ph.reissues.get(&line.k).cloned()).flatten().unwrap_or_default();
@@ -1550,19 +1588,23 @@ impl Holds {
         // The line is marked as one that may have landed before its dial
         // leaves (§3c.2's `sent`), synced, so a crash or a refused write
         // between the dial and its answer never leaves a write that may have
-        // landed read as one never sent; a line marked so already writes
-        // nothing. The mark stands whatever the dial answers, a connection
-        // never made among them, and a copy the device refuses is owed,
-        // written by the retry, and the dial made all the same — a close
-        // while it is owed relaunches the line as one never sent. An attest
-        // that could not be composed dials nothing and marks nothing: the
-        // line keeps its own `sent`, and nothing left (`left` false).
+        // landed read as one never sent, and names its dial id in the same
+        // copy where it names none, the `id` the dial goes out under (skep
+        // #971); a line carrying both already writes nothing. The mark stands
+        // whatever the dial answers, a connection never made among them, and
+        // a copy the device refuses is owed, written by the retry, and the
+        // dial made all the same — a close while it is owed relaunches the
+        // line as one never sent. A line that left the queue as it was
+        // readied — a person's drop the walk's read did not see — is sent
+        // nothing. An attest that could not be composed dials nothing and
+        // marks nothing: the line keeps its own `sent`, and nothing left
+        // (`left` false).
         let (mut dialed, mut sent, mut left) = match kept {
             Some(KeptShift { reason, refusal }) => (Dialed::Held { reason, refusal }, line.reason.sent, false),
             None => match self.attest_where_owed(session, &line.frame) {
                 Ok(frame) => {
-                    self.with_principal(board_reference, principal, |ph| self.remark_line(principal, ph, line.k, Reason { sent: true, ..line.reason.clone() }));
-                    (self.dial(session, &frame, &given()), true, true)
+                    let Some(dial_id) = self.with_principal(board_reference, principal, |ph| self.ready_to_resend(principal, ph, line.k)).flatten() else { return Step::Goes };
+                    (self.dial(session, &frame.under(&dial_id), &given()), true, true)
                 }
                 Err(why) => (Dialed::from(why), line.reason.sent, false),
             },
@@ -1611,7 +1653,7 @@ impl Holds {
                         *steps = steps.checked_sub(1).ok_or(NotShifted::NoStep)?;
                         Ok(())
                     };
-                    match self.shift_and_send(session, line.k, &verdict, step, |shifted| self.dial(session, shifted, &given())) {
+                    match self.shift_and_send(session, line.k, &verdict, Dialing::Resend, step, |shifted| self.dial(session, shifted, &given())) {
                         Ok(shifted) => {
                             shifting = Some(kept);
                             sent |= shifted.left;
@@ -1743,9 +1785,11 @@ impl Holds {
     /// as typed against an older state of its document (skep #442, #751), each
     /// spending its `step` and dialing as it does — a resend's shift one of
     /// its turn's [`TURN_STEPS`], refused where none is left
-    /// ([`NotShifted::NoStep`]), a first dial's none ([`no_step`]) — and each
-    /// answered in a refusal type of its own (`E`), which carries
-    /// [`Unshiftable`]'s reasons. `verdict` is the board's `arrangement_moved`,
+    /// ([`NotShifted::NoStep`]), a first dial's none ([`no_step`]) — under the
+    /// `id` `dialing` names, the page's at a first dial and the line's dial id
+    /// at a resend (skep #971), and each answered in a refusal type of its own
+    /// (`E`), which carries [`Unshiftable`]'s reasons. `verdict` is the
+    /// board's `arrangement_moved`,
     /// its `site.current` the floor the shifted frame is typed against. The
     /// line stands, with its anchors, its first failed send less than
     /// [`HAND_OVER_DEADLINE`] of the board's answering past — each refusal
@@ -1776,9 +1820,12 @@ impl Holds {
     /// `left` false, the line as it was), written to the line before it is
     /// dialed — `HeldQueue::rewrite`, synced, a copy the device refuses owed
     /// and one the writer refuses said on `Talk` — and the line marked as one
-    /// that may have landed where it is not so marked yet, so a relaunch after
-    /// the shifted answer is lost reads the landed test at the shifted
-    /// positions; then dialed by `dial`.
+    /// that may have landed where it is not so marked yet, a resend's in the
+    /// copy that names the line's dial id where it names none
+    /// (`Holds::ready_to_resend`), so a relaunch after the shifted answer is
+    /// lost reads the landed test at the shifted positions; then dialed by
+    /// `dial`, a resend's copy under the line's dial id
+    /// ([`AttestedWhereOwed::under`]).
     ///
     /// # Errors
     ///
@@ -1792,12 +1839,15 @@ impl Holds {
     /// 4. `step` refuses, nothing read: its refusal is answered;
     /// 5. the image read is refused, or answered with no image
     ///    ([`Unshiftable::Unread`]);
-    /// 6. the shift is not exact ([`shifted_frame`]'s refusal).
+    /// 6. the shift is not exact ([`shifted_frame`]'s refusal);
+    /// 7. at a resend, the line left the queue while the read was out, and
+    ///    stands no more to be readied ([`Unshiftable::NoLine`]).
     pub(super) fn shift_and_send<E: From<Unshiftable>>(
         &self,
         session: &SessionEntry,
         k: u64,
         verdict: &Value,
+        dialing: Dialing,
         step: impl FnOnce() -> Result<(), E>,
         dial: impl FnOnce(&AttestedWhereOwed<'_>) -> Dialed,
     ) -> Result<Shifted, E> {
@@ -1830,13 +1880,26 @@ impl Holds {
             Ok(frame) => frame,
             Err(why) => return Ok(Shifted { dialed: Dialed::from(why), frame: line.frame, left: false }),
         };
-        self.with_principal(board_reference, principal, |ph| {
-            if let Err(e) = ph.queue.rewrite(k, shifted.clone()) {
-                self.say(format_args!("line {k}'s shifted frame could not be written ({e}); a reopen reads the frame copied last, which the board judges as it judges every send"));
-            }
-            self.remark_line(principal, ph, k, Reason { sent: true, ..line.reason.clone() });
-        });
-        let dialed = dial(&attested);
+        let dial_id = self
+            .with_principal(board_reference, principal, |ph| {
+                if let Err(e) = ph.queue.rewrite(k, shifted.clone()) {
+                    self.say(format_args!("line {k}'s shifted frame could not be written ({e}); a reopen reads the frame copied last, which the board judges as it judges every send"));
+                }
+                match dialing {
+                    Dialing::First => {
+                        self.remark_line(principal, ph, k, Reason { sent: true, ..line.reason.clone() });
+                        None
+                    }
+                    Dialing::Resend => self.ready_to_resend(principal, ph, k),
+                }
+            })
+            .flatten();
+        let dialed = match (dialing, dial_id) {
+            (Dialing::First, _) => dial(&attested),
+            (Dialing::Resend, Some(dial_id)) => dial(&attested.under(&dial_id)),
+            // The line left the queue as its shift read: nothing is dialed.
+            (Dialing::Resend, None) => return Err(Unshiftable::NoLine.into()),
+        };
         Ok(Shifted { dialed, frame: shifted, left: true })
     }
 

@@ -32,6 +32,12 @@
 //! has. The bare session's refusal is not asked, a walk's session rules
 //! being its own; the standing hold and the held-lines gate judge none of
 //! them. `keygen` and `fingerprint`, which dial nothing, meet no door.
+//!
+//! **The claim's end at the own node** (L1 part 1). A `claim` at the own
+//! node's board that the person's cancel or close ends, answered
+//! `abandoned`, ends an unclaimed notebook with it: the shell reads the
+//! board's `/health` and, the board unclaimed, takes it out of `boards()`
+//! and stops its node (`Shell::end_unbegun_notebook`).
 
 use std::sync::Arc;
 
@@ -226,7 +232,10 @@ impl Shell {
     ///
     /// The shell runs it against the board, each anchor's destination asked
     /// of the dev arm — or refused where the run holds none — one per anchor
-    /// (§4b.3).
+    /// (§4b.3). At the own node's board, a walk ended by the person's cancel
+    /// or close ends the notebook with it: where the board then reads
+    /// unclaimed, its board leaves `boards()` and its node is stopped
+    /// (`Shell::end_unbegun_notebook`; L1 part 1).
     ///
     /// # Errors
     ///
@@ -238,7 +247,8 @@ impl Shell {
     /// at all — the notebook door is two calls, `keygen` then `claim` — or
     /// the `/health` read's refusal where the read its face needs fails;
     /// `already_claimed` where another store's claim stands; and the walk's
-    /// halt as the row's refusal.
+    /// halt as the row's refusal, `abandoned` at the person's cancel or
+    /// close.
     pub(super) fn claim(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let principal = optional(args, "principal", principal_arg)?;
@@ -268,7 +278,15 @@ impl Shell {
                 "warnings": c.warnings,
             })),
             Ok(ClaimOutcome::Stranger { claimant }) => Err(Refusal::shell(Name::ALREADY_CLAIMED, json!({"claimant": claimant}))),
-            Err(h) => Err(person.walk_refusal(h, None)),
+            Err(h) => {
+                let refusal = person.walk_refusal(h, None);
+                // The person's cancel or close ends an unclaimed notebook's
+                // ceremony, and its node with it (L1 part 1).
+                if refusal.name() == Name::ABANDONED.as_str() {
+                    self.end_unbegun_notebook(&entry);
+                }
+                Err(refusal)
+            }
         }
     }
 

@@ -82,6 +82,12 @@ impl Name {
     ///
     /// The detail says where it stops.
     pub const NOT_REACHED: Name = Name("not_reached");
+    /// `node.start` at a shell that runs no node on this machine.
+    ///
+    /// The verb that opened the shell handed it no start and stop of a node
+    /// (`ShellOptions::node_control`): nothing is started, and `boards()`
+    /// lists what it listed (L1). The detail names the `call`.
+    pub const NO_OWN_NODE: Name = Name("no_own_node");
     /// A write frame in the guest form, refused without a dial.
     pub const WRITE_IN_GUEST_FORM: Name = Name("write_in_guest_form");
     /// A write under a bare session, refused without a dial.

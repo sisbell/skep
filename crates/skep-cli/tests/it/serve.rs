@@ -1,7 +1,8 @@
-//! THE DEV PROVIDER's FENCE: `skep-dev serve` driven through argv against
-//! boards the suite spawns in-process, the suite standing in for the page
-//! over loopback HTTP with the admission headers. F1 every call of
-//! `client.md` §4b.1 and the document index's listing in the bare mode, the
+//! The dev provider's fence: `skep-dev serve` driven through argv.
+//!
+//! It runs against boards the suite spawns in-process, the suite standing in
+//! for the page over loopback HTTP with the admission headers. F1 every call
+//! of `client.md` §4b.1 and the document index's listing in the bare mode, the
 //! keyless session that reads alone — the reads answered, and a draft's
 //! mint, an insert and a publish-class write each refused
 //! `write_in_bare_session` with the board's position unmoved, the three
@@ -31,7 +32,9 @@
 //! seam's own refusals in their order, `fetch`'s armed refusal on its own
 //! route, a refusal's name clipped on talk, an event fired by hand; F6 the
 //! fault doors under `dev-hooks` with `--own` in the
-//! signed mode, and `not_built_in` without; F7 the isolation, `cargo tree`
+//! signed mode, and `not_built_in` without, and `--own --unstarted` serving
+//! a notebook the door's act starts, a claim's cancel stops and a second
+//! start brings back at its origin; F7 the isolation, `cargo tree`
 //! naming no `skepd` without the
 //! feature and one with it; F8 the declarations served equal to the
 //! crate's; F9 the conformance — one sequence on the crate and through the
@@ -1290,6 +1293,15 @@ fn f6_without_dev_hooks_the_fault_door_is_not_built_in() {
         .unwrap();
     assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stderr).contains("dev-hooks"));
+    // `--unstarted` starts nothing at launch, and halts before serving all
+    // the same: this build has no daemon for the door's act to start.
+    let out = Command::new(env!("CARGO_BIN_EXE_skep-dev"))
+        .args(["serve", "--page-origin", PAGE, "--own", "--unstarted", "--data-dir", s(&dir.path().join("own")), "--session", "bare"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("dev-hooks"), "{}", String::from_utf8_lossy(&out.stderr));
     sd.shutdown();
 }
 
@@ -1358,6 +1370,59 @@ fn f6_under_dev_hooks_the_fault_doors_force_the_daemons_states_live() {
     // The in-process daemon's orderly shutdown said once it completes, the
     // board named: its own stream marks no stop.
     said_holding(&talk, &[&format!("the in-process daemon at {board_origin} is stopped")]);
+}
+
+/// Checks that `--own --unstarted` serves a notebook the door's act starts.
+///
+/// Under the signed mode over an empty store — no key until the notebook
+/// door's `keygen` — the provider serves with no daemon running: the node's
+/// port refuses, `boards()` is `[]` and `probe` answers `stopped`. A start
+/// while another daemon holds the data directory is refused as the face it
+/// is, the directory's path in no member of the answer and said on the
+/// provider's stderr (SP-15). That daemon stopped, `node.start` runs the
+/// node at the port named, `boards()` listing its origin; a claim cancelled
+/// at its first moment answers `abandoned` and frees the port; a second
+/// start comes back at the same origin, the fault doors holding permits on
+/// the daemon it made; and the clean stop stops it, said once (L1).
+#[cfg(feature = "dev-hooks")]
+#[test]
+fn own_unstarted_serves_a_notebook_the_doors_act_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let own = dir.path().join("own");
+    let port = free_port();
+    let notebook = origin(port);
+    let holder = spawn(&own, true);
+    let provider = Provider::start(&["--own", "--unstarted", "--data-dir", s(&own), "--port", &port.to_string(), "--session", "signed", "--principal", "1", "--dir", s(&dir.path().join("store"))]);
+    let rx = provider.events();
+    let refuses = || TcpStream::connect(("127.0.0.1", port)).is_err();
+    assert!(refuses(), "nothing starts the node at launch");
+    assert_eq!(provider.result("boards", json!({})), json!([]), "no board of this machine's before the door's act");
+    assert_eq!(provider.result("probe", json!({}))["daemon"], "stopped");
+    let refused = provider.refused("node.start", json!({}));
+    assert_eq!((refused["kind"].as_str(), refused["state"].as_str()), (Some("halt"), Some("the daemon could not open its data directory")), "{refused}");
+    assert!(!refused.to_string().contains(s(&own)), "no path crosses the bridge: {refused}");
+    talk_holding(&provider, &["node.start: halt: the daemon could not open its data directory", &format!("  path: {}", own.display())]);
+    holder.shutdown();
+    assert_eq!(provider.result("node.start", json!({}))["daemon"], "running");
+    let boards = provider.result("boards", json!({}));
+    assert_eq!(boards[0]["origin"], notebook, "{boards}");
+    let board = boards[0]["board"].as_str().unwrap().to_string();
+    provider.result("keygen", json!({"label": "notebook"}));
+    let provider = Arc::new(provider);
+    let abandoned = first_refusal(&provider, &rx, "claim", json!({"board": board}));
+    assert_eq!(abandoned["name"], "abandoned", "{abandoned}");
+    assert!(refuses(), "the cancel stopped the node:\n{}", provider.talk());
+    assert_eq!(provider.result("boards", json!({})), json!([]), "the board leaves the list");
+    assert_eq!(provider.result("node.start", json!({}))["daemon"], "running");
+    assert_eq!(provider.result("boards", json!({}))[0]["origin"], notebook, "the second start comes back at the same origin");
+    let held = provider.result("fault/write_busy", json!({}));
+    assert!(held["held"].as_u64().unwrap() >= 1, "the doors hold permits on the new daemon: {held}");
+    provider.result("fault/release", json!({}));
+    let talk = Arc::clone(&provider.talk);
+    drop(rx);
+    assert_eq!(Arc::try_unwrap(provider).ok().expect("the one holder").stop(), 0);
+    let said = said_holding(&talk, &[&format!("the in-process daemon at {notebook} is stopped")]);
+    assert_eq!(said.matches(&format!("the in-process daemon at {notebook} is stopped")).count(), 2, "each stop said once — the cancel's and the clean stop's:\n{said}");
 }
 
 /// Checks that `--own --no-local-trust` names the flag on the `auth:` line.
@@ -1672,8 +1737,9 @@ fn a_listener_out_of_descriptors_says_so_once_and_when_it_accepts_again() {
 }
 
 /// The usage refusals: an unknown flag, a missing page origin, a missing
-/// session mode, `--own` beside `--board`, a key file the verb never reads,
-/// a missing board or board directory, a secret the page's URL cannot carry
+/// session mode, `--own` beside `--board`, `--unstarted` without `--own` or
+/// beside a port of `0`, a key file the verb never reads, a missing board
+/// or board directory, a secret the page's URL cannot carry
 /// (never echoed), a secret given empty, a listen port of `0`, a bad
 /// script — each exit 2 before anything is made, a socket or the throwaway
 /// store; and `--help` lists the verb. A halt past them — a board that does
@@ -1709,6 +1775,11 @@ fn the_verbs_usage_is_judged_before_any_socket() {
         ),
         (vec!["serve", "--page-origin", PAGE, "--session", "bare"], "--board (or SKEP_BOARD) is required"),
         (vec!["serve", "--page-origin", PAGE, "--session", "bare", "--own"], "--data-dir is required with --own"),
+        (vec!["serve", "--page-origin", PAGE, "--board", "http://127.0.0.1:1", "--session", "bare", "--unstarted"], "`--unstarted` belongs to `serve --own`"),
+        (
+            vec!["serve", "--page-origin", PAGE, "--session", "bare", "--own", "--unstarted", "--data-dir", "/tmp/x", "--port", "0"],
+            "--port: '0' names no origin, and under --unstarted the board is named before the node starts",
+        ),
         (vec!["serve", "--page-origin", PAGE, "--board", "http://127.0.0.1:1", "--session", "bare", "--secret", "a&b"], "--secret: a secret is one or more of A-Z a-z 0-9 - . _ ~"),
         (vec!["serve", "--page-origin", PAGE, "--board", "http://127.0.0.1:1", "--session", "bare", "--secret", ""], "--secret: an empty value names nothing"),
         (vec!["serve", "--page-origin", PAGE, "--board", "http://127.0.0.1:1", "--session", "bare", "--listen", "0"], "--listen: '0' is not a port the page can be pointed at"),

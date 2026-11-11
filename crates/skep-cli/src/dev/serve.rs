@@ -20,20 +20,27 @@
 //! read once, at start, and said so); and the board — `--board`, a daemon
 //! already running (the local record's recipe), or `--own` with
 //! `--data-dir` and `--port`, the daemon run in-process with its test hooks
-//! in a `dev-hooks` build. Every usage refusal is judged before anything is
-//! made. The checks before serving, each a halt (exit 3): the board must
-//! answer `/health`; the store must hold the principal's key under
-//! `signed`; the port must bind. The serve: one thread per connection over
-//! a loopback listener, the routes `serve/routes.rs` spells — each refusal
-//! of the admission or of a request's read counted, and said on talk the
-//! first time its kind is met — until stdin closes: the clean stop, its
-//! cause and the run's figures said (the connections accepted, the refusals
-//! by kind), every pending moment cancelled — before the connections are
-//! joined, so a call parked on a moment answers `abandoned` and its
-//! connection ends — every session closed, every consumer saved — the stop's
-//! seconds said as it completes — the own node stopped and said so, the
-//! throwaway removed — exit 0. An interrupt ends the process with none of
-//! it, which the serving line says.
+//! in a `dev-hooks` build under its keeper (`serve/node.rs`), which the
+//! shell starts and stops through as its node's control (L1): `--own`
+//! starts it at launch, a claimed notebook's launch, and `--own
+//! --unstarted` leaves it unstarted for the notebook door's act, the
+//! bridge's `node.start`, its board named at the port `--port` names and
+//! out of `boards()` until then. Every usage refusal is judged before
+//! anything is made. The checks before serving, each a halt (exit 3): the
+//! board must answer `/health`; the store must hold the principal's key
+//! under `signed`; the port must bind — the first two skipped under
+//! `--unstarted`, whose node is not yet running and whose store holds no
+//! key until the notebook door's `keygen`. The serve: one thread per
+//! connection over a loopback listener, the routes `serve/routes.rs` spells
+//! — each refusal of the admission or of a request's read counted, and said
+//! on talk the first time its kind is met — until stdin closes: the clean
+//! stop, its cause and the run's figures said (the connections accepted, the
+//! refusals by kind), every pending moment cancelled — before the
+//! connections are joined, so a call parked on a moment answers `abandoned`
+//! and its connection ends — every session closed, every consumer saved —
+//! the stop's seconds said as it completes — the in-process daemon stopped
+//! where it runs and said so once, the throwaway removed — exit 0. An
+//! interrupt ends the process with none of it, which the serving line says.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::{ErrorKind, Read};
@@ -47,7 +54,7 @@ use serde_json::{json, Value};
 use skep_client::halt::{Face, Halt};
 use skep_client::sign::fresh_bytes;
 use skep_client::Origin;
-use skep_shell::{script, ArmConfig, NodeState, Refusal, SessionMode, Shell, ShellOptions};
+use skep_shell::{script, ArmConfig, NodeControl, NodeState, Refusal, SessionMode, Shell, ShellOptions};
 
 use crate::args::dev::{DevLine, SessionArm, DEFAULT_PRINCIPAL};
 use crate::args::Usage;
@@ -61,7 +68,7 @@ mod http;
 // The admission: the peer, the host, the one origin, the secret.
 mod admission;
 // The daemon's two modes: a running board dialed, or the in-process daemon
-// with its fault doors under `dev-hooks`.
+// under its keeper, with its fault doors, under `dev-hooks`.
 mod node;
 // The routes over the shell's core.
 mod routes;
@@ -69,7 +76,7 @@ mod routes;
 pub use admission::{Admission, SECRET_HEADER, SECRET_QUERY};
 
 /// The provider's standing state, shared by every connection.
-pub struct Provider<'d> {
+pub struct Provider {
     pub shell: Shell,
     pub admission: Admission,
     /// The stop, once asked: why — stdin closed, or unreadable.
@@ -80,15 +87,16 @@ pub struct Provider<'d> {
     /// (`Canned`), served once; a call is keyed by the bridge's own spelling
     /// (`CALLS`), so no byte of a page's request is a key.
     canned: Mutex<HashMap<&'static str, Canned>>,
-    /// The in-process node, where the verb runs one.
-    pub node: Option<&'d node::Node>,
-    /// The permits the fault route holds.
-    pub doors: Mutex<node::Doors<'d>>,
+    /// The keeper of the in-process daemon, where the verb runs one.
+    ///
+    /// It holds the fault doors' permits, which the fault route asks it to
+    /// open.
+    pub node: Option<Arc<node::Keeper>>,
     /// The refusals of the admission and of a request's read, counted by kind.
     refusals: Mutex<BTreeMap<&'static str, u64>>,
 }
 
-impl Provider<'_> {
+impl Provider {
     /// Returns whether the stop was asked.
     pub fn stopped(&self) -> bool {
         self.stop.get().is_some()
@@ -220,10 +228,11 @@ const ACCEPT_PAUSE: Duration = Duration::from_millis(10);
 
 /// Where the provider's board runs.
 ///
-/// It is a daemon this verb starts in-process (`--own`, its board directory
-/// and port), or one already running at the origin `--board` names.
+/// It is a daemon this verb runs in-process (`--own`, its board directory
+/// and port, started at launch unless `--unstarted`), or one already running
+/// at the origin `--board` names.
 enum BoardAt {
-    Own { data_dir: PathBuf, port: u16 },
+    Own { data_dir: PathBuf, port: u16, unstarted: bool },
     Running(Origin),
 }
 
@@ -233,10 +242,11 @@ enum BoardAt {
 ///
 /// Returns a usage refusal for a line given badly, ahead of anything made
 /// — a key file named, a script that cannot be read or parsed, no `--dir`
-/// under `signed` and `--own` beside a board among them; a halt (exit 3)
-/// for the throwaway store or the in-process daemon that cannot be made,
-/// and for each check before serving — the board's `/health`, the signed
-/// key, the port; and the halt the secret's write to stdout comes to.
+/// under `signed`, `--own` beside a board and `--unstarted` with a port
+/// that names no origin among them; a halt (exit 3) for the throwaway store
+/// or the in-process daemon that cannot be made or started, and for each
+/// check before serving — the board's `/health`, the signed key, the port;
+/// and the halt the secret's write to stdout comes to.
 pub fn serve(c: &DevLine) -> Result<(), Stop> {
     // The inputs — every usage refusal ahead of anything made: a socket, the
     // in-process node, the throwaway store.
@@ -282,7 +292,7 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
     if own && c.origin_given()?.is_some() {
         return Err(Usage("--own and a board (--board or SKEP_BOARD): give one".into()).into());
     }
-    let board_at = if own { BoardAt::Own { data_dir: c.data_dir()?, port: c.node_port()? } } else { BoardAt::Running(c.origin()?) };
+    let board_at = if own { BoardAt::Own { data_dir: c.data_dir()?, port: c.node_port()?, unstarted: c.unstarted() } } else { BoardAt::Running(c.origin()?) };
     // The store: a `--dir` the person named is theirs, and never removed;
     // else the throwaway, its guard declared ahead of the node and the shell,
     // so it drops after both on every way out of the verb.
@@ -293,18 +303,27 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
             (throwaway.path().to_path_buf(), Some(throwaway))
         }
     };
-    let (own_node, board_origin) = match board_at {
-        BoardAt::Own { data_dir, port } => {
-            let node = node::start(&data_dir, port, !c.no_local_trust())?;
-            let origin = node::origin_of(&node).clone();
-            talk(format!(
-                "the daemon runs in-process at {origin} over {} (local trust {}); its lines are this stream's",
-                data_dir.display(),
-                if c.no_local_trust() { "off" } else { "on" }
-            ));
-            (Some(node), origin)
+    // The in-process daemon under its keeper, which says each start and
+    // stop: started here unless `--unstarted`, whose board is named at the
+    // port the first start binds — one that names an origin, `node_port`'s
+    // check.
+    let (keeper, board_origin, unstarted) = match board_at {
+        BoardAt::Own { data_dir, port, unstarted } => {
+            let keeper = node::Keeper::spawn(&data_dir, port, !c.no_local_trust())?;
+            let origin = if unstarted {
+                let origin = Origin::parse(&format!("http://127.0.0.1:{port}")).expect("a port `node_port` admits under --unstarted names an origin");
+                talk(format!(
+                    "the daemon waits for the notebook door's act, the bridge's `node.start`, to run it in-process at {origin} over {} (local trust {})",
+                    data_dir.display(),
+                    if c.no_local_trust() { "off" } else { "on" }
+                ));
+                origin
+            } else {
+                keeper.start_node()?
+            };
+            (Some(keeper), origin, unstarted)
         }
-        BoardAt::Running(origin) => (None, origin),
+        BoardAt::Running(origin) => (None, origin, false),
     };
     let session_mode = match arm {
         SessionArm::Bare => SessionMode::Bare { principal },
@@ -318,28 +337,16 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
     let mut options = ShellOptions::new(vec![board_origin.clone()], store_dir.clone(), session_mode, talk_sink);
     options.arm = arm_config;
     options.own_node = own.then(|| board_origin.clone());
+    options.node_control = keeper.as_ref().map(|keeper| Arc::clone(keeper) as Arc<dyn NodeControl>);
     let shell = Shell::open(options);
-    // The checks: the board answers; the key under `signed`; the port binds.
+    // The checks: the board answers; the key under `signed`; the port binds
+    // — the first two where the board runs, an unstarted node's waiting for
+    // the notebook door's act, its store's key for that door's `keygen`.
     let board = shell.board_references().into_iter().next().expect("one board");
-    let health = shell.call("health", &json!({"board": board})).map_err(halt_of)?;
-    // The board by its origin and by the reference the shell's own lines
-    // name it by (`feed b-…:`), so the two join; and its write path's halt
-    // where `/health` answers one, since every write the page makes is then
-    // refused `poisoned` until the board restarts (wire.md §Rejection codes).
-    let halted = if health["health"]["writes"]["halted"].as_bool() == Some(true) { "; writes HALTED: every write is refused `poisoned` until the board restarts" } else { "" };
-    talk(format!(
-        "board {board_origin} (reference {board}): mode {} (claimant {}, local_trust {}){halted}",
-        health["mode"].as_str().unwrap_or("?"),
-        health["health"]["auth"]["claimant"].as_str().unwrap_or("null"),
-        health["health"]["auth"]["local_trust"]
-    ));
-    if let SessionMode::Signed { .. } = session_mode {
-        let keys = shell.check_signed_key().map_err(halt_of)?;
-        for k in keys {
-            talk(format!("signed: the store {} holds the key {} for principal {principal}", store_dir.display(), k.fingerprint));
-        }
+    if unstarted {
+        talk(format!("board {board_origin} (reference {board}): unstarted, out of the bridge's `boards()` until `node.start` starts it; the store is {}", store_dir.display()));
     } else {
-        talk(format!("bare: sessions bind as principal {principal} from this loopback peer and read alone, every write in them refused; the store is {}", store_dir.display()));
+        check_board(&shell, &board, &board_origin, session_mode, principal, &store_dir)?;
     }
     talk(arm_said);
     let listener = TcpListener::bind(("127.0.0.1", listen)).map_err(|e| Halt::face(format!("the provider's port {listen} could not be bound"), e.to_string(), "stop what holds it, or pass --listen"))?;
@@ -350,7 +357,7 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
     data(&secret)?;
     // What an interrupt leaves, said beside the clean stop: the process
     // handles no signal, so Ctrl-C ends it where it stands.
-    let mut left = vec![if own_node.is_some() { "the in-process daemon ends without its orderly shutdown" } else { "its sessions live on at the board until it restarts" }];
+    let mut left = vec![if keeper.is_some() { "the in-process daemon ends without its orderly shutdown" } else { "its sessions live on at the board until it restarts" }];
     if throwaway.is_some() {
         left.push("the throwaway store stays in place");
     }
@@ -358,19 +365,11 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
         "serving the bridge for {page_origin} at http://127.0.0.1:{listen}: the page carries ?{SECRET_QUERY}=<the secret, this run's one line on stdout> in its URL and echoes it in the {SECRET_HEADER} header on every call, and on the event stream's URL; the provider stops cleanly when stdin closes (Ctrl-D at a terminal) — an interrupt (Ctrl-C) ends it with none of the clean stop: {}",
         left.join(", and ")
     ));
-    if own {
+    if own && !unstarted {
         shell.set_node_state(NodeState::Running);
     }
     {
-        let provider = Provider {
-            shell,
-            admission,
-            stop: OnceLock::new(),
-            canned: Mutex::new(HashMap::new()),
-            node: own_node.as_ref(),
-            doors: Mutex::new(node::Doors::default()),
-            refusals: Mutex::new(BTreeMap::new()),
-        };
+        let provider = Provider { shell, admission, stop: OnceLock::new(), canned: Mutex::new(HashMap::new()), node: keeper.clone(), refusals: Mutex::new(BTreeMap::new()) };
         // The serve: a thread per connection, the stdin watcher beside them,
         // every thread joined at the scope's end; the connections accepted
         // counted. An accept the listener refuses is said once per edge —
@@ -429,12 +428,46 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
             talk(format!("stopped: the shell's stop took {:.1} s", stopping.elapsed().as_secs_f64()));
         });
     }
-    if let Some(node) = own_node {
-        node.shutdown();
-        talk(format!("the in-process daemon at {board_origin} is stopped"));
+    // The in-process daemon stopped where it runs, its keeper saying so.
+    if let Some(keeper) = keeper {
+        keeper.end();
     }
     // The throwaway store, removed as its guard drops, once nothing writes it.
     drop(throwaway);
+    Ok(())
+}
+
+/// Checks the running board before serving, and says what it found.
+///
+/// The board answers `/health`, said on talk with its mode and its write
+/// path's halt; and under `signed` the store holds the principal's key,
+/// said with it, or under `bare` the sessions' rule.
+///
+/// # Errors
+///
+/// Returns the `/health` read's refusal, or the signed key's, as the halt
+/// it is (exit 3).
+fn check_board(shell: &Shell, board: &str, board_origin: &Origin, session_mode: SessionMode, principal: u64, store_dir: &Path) -> Result<(), Halt> {
+    let health = shell.call("health", &json!({"board": board})).map_err(halt_of)?;
+    // The board by its origin and by the reference the shell's own lines
+    // name it by (`feed b-…:`), so the two join; and its write path's halt
+    // where `/health` answers one, since every write the page makes is then
+    // refused `poisoned` until the board restarts (wire.md §Rejection codes).
+    let halted = if health["health"]["writes"]["halted"].as_bool() == Some(true) { "; writes HALTED: every write is refused `poisoned` until the board restarts" } else { "" };
+    talk(format!(
+        "board {board_origin} (reference {board}): mode {} (claimant {}, local_trust {}){halted}",
+        health["mode"].as_str().unwrap_or("?"),
+        health["health"]["auth"]["claimant"].as_str().unwrap_or("null"),
+        health["health"]["auth"]["local_trust"]
+    ));
+    if let SessionMode::Signed { .. } = session_mode {
+        let keys = shell.check_signed_key().map_err(halt_of)?;
+        for k in keys {
+            talk(format!("signed: the store {} holds the key {} for principal {principal}", store_dir.display(), k.fingerprint));
+        }
+    } else {
+        talk(format!("bare: sessions bind as principal {principal} from this loopback peer and read alone, every write in them refused; the store is {}", store_dir.display()));
+    }
     Ok(())
 }
 
@@ -443,7 +476,7 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
 /// Stdin is read to its end — the parent closed it — or until it cannot be
 /// read; the stop line says the cause, and one connect wakes the accept
 /// loop.
-fn watch_stdin(provider: &Provider<'_>, port: u16) {
+fn watch_stdin(provider: &Provider, port: u16) {
     let mut sink = [0u8; 4096];
     let mut stdin = std::io::stdin().lock();
     let cause = loop {

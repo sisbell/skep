@@ -1,9 +1,11 @@
-//! THE PIN (F8): a sample of every declared type, built as the crate's code
-//! builds it, round-tripped through `serde_json` and its field names held
-//! equal to the table's — every required field present, no field outside
-//! the table — so a field renamed in the declaration alone, or in the code
-//! alone, fails here; and the file names every shape, every call and every
-//! event, the refusal union naming the held-lines and landing-unread
+//! The pin (F8): every declared type's sample held to its declaration.
+//!
+//! A sample of every declared type, built as the crate's code builds it, is
+//! round-tripped through `serde_json` and its field names held equal to the
+//! table's — every required field present, no field outside the table — so
+//! a field renamed in the declaration alone, or in the code alone, fails
+//! here; and the file names every shape, every call and every event, the
+//! refusal union naming the held-lines, landing-unread and no-own-node
 //! refusals whole beside the shell's open one.
 
 use std::collections::BTreeSet;
@@ -63,6 +65,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("Unreachable", Refusal::Unreachable(DialError::Connect("refused".into())).to_value()),
         ("HeldLinesRefusal", Refusal::shell(Name::HELD_LINES, json!({"doc": "1.0.1.0.5", "held": 2})).to_value()),
         ("LandingUnreadRefusal", Refusal::shell(Name::LANDING_UNREAD, json!({"held": 1, "why": "undecided"})).to_value()),
+        ("NoOwnNodeRefusal", Refusal::shell(Name::NO_OWN_NODE, json!({"call": "node.start"})).to_value()),
         ("ShellRefusal", Refusal::shell(Name::SESSION_ENDED, json!({})).to_value()),
         ("ModeEvent", json!({"board": "b-0", "mode": "ENFORCING", "claimant": "1.0.1", "local_trust": false})),
         ("SessionDiedEvent", json!({"session": "s-0", "reason": sessions::closed()})),
@@ -175,12 +178,14 @@ fn every_declared_type_round_trips_its_sample_against_the_table() {
     }
 }
 
-/// The file names every shape, every call of §4b.1, the document index's
+/// Checks that the file names every shape, every call and every event.
+///
+/// The calls are §4b.1's, the notebook door's act, the document index's
 /// listing and the change feed's page — its rows the dispatch's calls, in
 /// the dispatch's order, each form of a row's argument object its members
 /// in their order, the forms joined as a union and a form of no member `{}`
-/// — both answers and the nine events; a field's optionality renders as
-/// `?`, as the field spells itself.
+/// — with both answers and the nine events; a field's optionality renders
+/// as `?`, as the field spells itself.
 #[test]
 fn the_file_names_every_shape_call_and_event() {
     assert_eq!([req("position", "number").to_string(), opt("warning", "string").to_string()], ["position: number", "warning?: string"], "a field spells itself as the declarations spell it");
@@ -191,11 +196,12 @@ fn the_file_names_every_shape_call_and_event() {
     for row in CALL_ROWS {
         assert!(text.contains(&format!("  {}(args: ", method_name(row.name))), "{}", row.name);
     }
-    assert_eq!(CALL_ROWS.len(), 36, "the thirty-six calls: §4b.1's with the publication family's four, the merge family's four, `history.restore` and `held.show`, the read of a draft's standing, the read of a draft's past state, the document index's listing and the change feed's page");
+    assert_eq!(CALL_ROWS.len(), 37, "the thirty-seven calls: §4b.1's with the publication family's four, the merge family's four, `history.restore` and `held.show`, the notebook door's act, the read of a draft's standing, the read of a draft's past state, the document index's listing and the change feed's page");
     assert_eq!(CALL_ROWS.iter().map(|row| row.name).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
     for line in [
         "  boards(args: {}): Promise<Outcome<BoardRow[]>>;\n",
         "  session(args: { board: string; principal?: number }): Promise<Outcome<SessionOpened>>;\n",
+        "  probe(args: {}): Promise<Outcome<Probe>>;\n  'node.start'(args: {}): Promise<Outcome<Probe>>;\n",
         "  op(args: { session: string; frame: unknown; anchors?: Anchors; after?: string } | { guest: true; board?: string; origin?: string; frame: unknown }): Promise<Outcome<unknown>>;\n",
         "  'publication.open'(args: { session: string; draft: string; also?: string[]; doc?: string; mint?: string; claim?: boolean; selection?: Run[]; notes?: string[]; readable_drafts?: string[]; published?: string[] }): Promise<Outcome<PublicationPanel>>;\n",
         "  'publication.count'(args: { session: string; switches?: Switches; answers?: Record<string, OriginAnswer> }): Promise<Outcome<{ count: Count; price: Price; rows: PublicationRow[]; formatting: Formatting; windows: Window[]; parts: PartCounts[]; edition_links: number; p3_stands: boolean }>>;\n",
@@ -243,7 +249,8 @@ fn the_file_names_every_shape_call_and_event() {
         "  unwritable?: string;\n  unwritable_class?: 'full' | 'read_only' | 'other';\n",
         "  opened_at?: number;\n  another_window?: true;\n",
         "export interface AnotherWindowEvent {\n  board: string;\n  another_window: boolean;\n}\n",
-        "export type Refusal = RefusedByBoard | HaltFace | BlockedFace | Unreachable | HeldLinesRefusal | WindowPartsOwedRefusal | LandingUnreadRefusal | ShellRefusal;\n",
+        "export type Refusal = RefusedByBoard | HaltFace | BlockedFace | Unreachable | HeldLinesRefusal | WindowPartsOwedRefusal | LandingUnreadRefusal | NoOwnNodeRefusal | ShellRefusal;\n",
+        "export interface NoOwnNodeRefusal {\n  kind: 'shell';\n  name: 'no_own_node';\n  call: string;\n}\n",
         "export interface HeldLinesRefusal {\n  kind: 'shell';\n  name: 'held_lines';\n  doc: string;\n  held: number;\n}\n",
         "export interface LandingUnreadRefusal {\n  kind: 'shell';\n  name: 'landing_unread';\n  held: number;\n  why: 'unanswered' | 'unread' | 'undecided' | 'stopped' | 'poisoned' | 'halted';\n}\n",
         "  resolve(args: { session: string; held: number; act: 'drop' | 'send' }): Promise<Outcome<{ kept?: true }>>;\n",

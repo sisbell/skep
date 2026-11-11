@@ -59,6 +59,19 @@
 //! session closes (§3c.6) — are the child module `follow`'s table, which the
 //! `op` row enters and waits on.
 //!
+//! **This machine's notebook** (foundations §3.4 F-C1; L1). Where the verb
+//! that runs the own node hands the shell its start and its stop
+//! ([`NodeControl`], [`ShellOptions::node_control`]), the node stands
+//! stopped from the open, the stop set before the board's feed thread reads
+//! the board, so no `daemon` event is said before the person's act, and its
+//! board is out of `boards()`. `node.start`, the notebook door's act, asks
+//! the write door a ceremony asks, runs the control's start, and lists the
+//! board as `Running` is said. The claim ceremony's cancel or close at that
+//! board, the board read unclaimed, takes it out of the list and stops the
+//! node: `Stopped` said first, then the control's stop. A node read claimed,
+//! or not read, is the verb's to stop at quit. One lock holds every start
+//! and stop the shell makes of its node.
+//!
 //! **What the shell refuses without asking.** A write frame in the guest
 //! form ([`WRITE_KINDS`]; the board would answer `unauthenticated`, so no
 //! dial is made); and, at ONE WRITE DOOR every write the shell sends meets
@@ -71,15 +84,16 @@
 //! or merge family, the restore, and every ceremony that writes to the
 //! board — ONE SHELL PER DATA DIRECTORY (§3c.3): until a second launch
 //! hands its address to the running client and exits, the second window
-//! reads alone at the board and runs no ceremony there (skep #829), nothing
-//! held and nothing sent (`another_window`, `Holds::another_window`), a
-//! ceremony's door touching the board's store first, so a window that has
-//! opened no session there meets the board's locks as they stand
-//! (`Holds::touch_store`; skep #880); a write of a kind the hold never holds
-//! (`hold::UNHOLDABLE_WRITES` — the mint among them, skep #868 — the shot,
-//! the restore's and the merge rows' writes) while a hold stands at the
-//! board, refused at once with its cause (`stopped`, `poisoned`, `halted`),
-//! never held and never dialed (`Holds::unholdable_refusal`; skep #850);
+//! reads alone at the board, runs no ceremony there (skep #829) and starts
+//! no notebook there, nothing held and nothing sent (`another_window`,
+//! `Holds::another_window`), a ceremony's door touching the board's store
+//! first, so a window that has opened no session there meets the board's
+//! locks as they stand (`Holds::touch_store`; skep #880); a write of a kind
+//! the hold never holds (`hold::UNHOLDABLE_WRITES` — the mint among them,
+//! skep #868 — the shot, the restore's and the merge rows' writes) while a
+//! hold stands at the board, refused at once with its cause (`stopped`,
+//! `poisoned`, `halted`), never held and never dialed
+//! (`Holds::unholdable_refusal`; skep #850);
 //! and a whole-draft write — `history.restore`, `merge.land`, `merge.undo`,
 //! `merge.withdraw`, `publication.confirm` over the rendering draft and
 //! every draft `also` names — while a line of the acting principal's stands
@@ -121,8 +135,9 @@
 use std::fmt;
 use std::io::{self, Read};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
 use serde_json::{json, Value};
@@ -233,8 +248,9 @@ pub enum ArmConfig {
 
 /// What a shell is opened over.
 ///
-/// It holds [`ShellOptions::new`]'s four, and the two a run may set beside
-/// them. Its `Debug` leaves out the `Talk` sink, a closure.
+/// It holds [`ShellOptions::new`]'s four, and the three a run may set beside
+/// them. Its `Debug` leaves out the `Talk` sink, a closure, and the node's
+/// control.
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct ShellOptions {
@@ -258,15 +274,23 @@ pub struct ShellOptions {
     /// It is `probe()`'s subject, and one of `boards` ([`Shell::open`]'s
     /// precondition).
     pub own_node: Option<Origin>,
+    /// The own node's start and stop, where the verb hands the shell them.
+    ///
+    /// Given, the node stands stopped from the open and its board is out of
+    /// `boards()` until `node.start` starts it (L1); none, the verb starts
+    /// and stops the node itself and reports each by
+    /// [`Shell::set_node_state`], and `node.start` is refused `no_own_node`.
+    /// It is given beside `own_node` alone ([`Shell::open`]'s precondition).
+    pub node_control: Option<Arc<dyn NodeControl>>,
 }
 
 impl ShellOptions {
     /// Returns options for a shell over `boards`, its key store at `store_dir`.
     ///
     /// Its sessions open in `session_mode` and its talk lines go to `talk`;
-    /// the dev arm answers itself, and no own node is set.
+    /// the dev arm answers itself, and no own node or node control is set.
     pub fn new(boards: Vec<Origin>, store_dir: PathBuf, session_mode: SessionMode, talk: Talk) -> ShellOptions {
-        ShellOptions { boards, store_dir, session_mode, arm: ArmConfig::default(), talk, own_node: None }
+        ShellOptions { boards, store_dir, session_mode, arm: ArmConfig::default(), talk, own_node: None, node_control: None }
     }
 }
 
@@ -289,6 +313,32 @@ pub enum NodeState {
     Running,
     /// The node is stopped.
     Stopped,
+}
+
+/// The start and the stop of this machine's own node (L1).
+///
+/// The verb that runs the node hands it to the shell
+/// ([`ShellOptions::node_control`]). The shell starts the node at the
+/// notebook door's act, the `node.start` call, and stops it at the claim
+/// ceremony's cancel or close where the board reads unclaimed, each from
+/// the thread of the call that acts, the shell's stop's among them, and one
+/// at a time.
+pub trait NodeControl: Send + Sync {
+    /// Starts the node at the origin the shell holds for it.
+    ///
+    /// A node already running is left running, and the start answers `Ok`.
+    ///
+    /// # Errors
+    ///
+    /// Returns why the node did not start, the node then stopped: the
+    /// `node.start` call's refusal, a path its face names said in the
+    /// shell's own window and never sent to the page (§4b.3).
+    fn start(&self) -> Result<(), Halt>;
+
+    /// Stops the node: its orderly stop.
+    ///
+    /// A node already stopped is left stopped.
+    fn stop(&self);
 }
 
 /// The write kinds of the wire (`docs/wire.md` §Operations).
@@ -324,9 +374,11 @@ pub(super) enum Writer<'a> {
     /// A row under a session: a frame through `op`, a row of the publication
     /// or merge family, the restore.
     Session(&'a SessionEntry),
-    /// A ceremony, which runs the library's walk under no session of this
-    /// shell's: the board it writes to, whose held store the door touches
-    /// before it answers ([`Holds::touch_store`]).
+    /// A ceremony, or the notebook's start: the board it acts at.
+    ///
+    /// A ceremony runs the library's walk under no session of this shell's,
+    /// so the door touches the board's held store before it answers
+    /// ([`Holds::touch_store`]).
     Board(&'a BoardEntry),
 }
 
@@ -371,9 +423,11 @@ impl<'a> Write<'a> {
         Write { named: Named::Call(call), kind: Some(kind), drafts: Vec::new() }
     }
 
-    /// A row named `call` that writes nothing a standing hold judges: a
-    /// ceremony, whose walk's writes are the library's, or
-    /// `publication.open`, which reads.
+    /// A row named `call` that writes nothing a standing hold judges.
+    ///
+    /// It is a ceremony, whose walk's writes are the library's,
+    /// `publication.open`, which reads, or `node.start`, which starts the
+    /// node.
     pub(super) fn unjudged(call: &'a str) -> Write<'a> {
         Write { named: Named::Call(call), kind: None, drafts: Vec::new() }
     }
@@ -408,7 +462,8 @@ impl<'a> Write<'a> {
 /// It is a call of §4b.1 — the `publication` family's four, the `merge`
 /// family's four, `history.restore`, the past state the merge row draws
 /// beside them, and `held.show`, the `held` row's call for the halt face's
-/// own act, among them — the read of a draft's standing beside the
+/// own act, among them — the notebook door's act beside `probe`,
+/// `node.start` (L1), the read of a draft's standing beside the
 /// publication family, `publication.standing` (skep #864), the read of a
 /// past state before its restore, `history.past` (skep #853), the document
 /// index's listing `places` (A-255), or the change feed's page `changes`:
@@ -432,6 +487,7 @@ enum Call {
     Accept,
     Health,
     Probe,
+    NodeStart,
     Op,
     PublicationOpen,
     PublicationCount,
@@ -458,13 +514,14 @@ enum Call {
 impl Call {
     /// Every call, in §4b.1's order.
     ///
-    /// The `publication` family stands after `op`, whose publish arm it
-    /// carries, its read of a draft's standing closing it, and the `merge`
-    /// family after it, whose shot its landing rides, `history.past` and
+    /// `node.start` stands after `probe`, whose answer it gives; the
+    /// `publication` family after `op`, whose publish arm it carries, its
+    /// read of a draft's standing closing it, and the `merge` family after
+    /// it, whose shot its landing rides, `history.past` and
     /// `history.restore` closing the merge row that draws the restore, the
     /// read before the write; `places` stands beside `search`, `held.show`
     /// after `held`, whose row owes it, and the change feed's `changes` last.
-    const ALL: [Call; 36] = [
+    const ALL: [Call; 37] = [
         Call::Boards,
         Call::Session,
         Call::Close,
@@ -480,6 +537,7 @@ impl Call {
         Call::Accept,
         Call::Health,
         Call::Probe,
+        Call::NodeStart,
         Call::Op,
         Call::PublicationOpen,
         Call::PublicationCount,
@@ -521,6 +579,7 @@ impl Call {
             Call::Accept => "accept",
             Call::Health => "health",
             Call::Probe => "probe",
+            Call::NodeStart => "node.start",
             Call::Op => "op",
             Call::PublicationOpen => "publication.open",
             Call::PublicationCount => "publication.count",
@@ -551,15 +610,16 @@ impl Call {
     }
 }
 
-/// The bridge's thirty-six calls, as it spells them, in its order.
+/// The bridge's thirty-seven calls, as it spells them, in its order.
 ///
 /// They are §4b.1's thirty-two — the `publication` family's four, the
 /// `merge` family's four, `history.restore` and `held.show` among them —
-/// the read of a draft's standing, `publication.standing` (skep #864), the
-/// read of a past state before its restore, `history.past` (skep #853),
-/// the document index's listing, `places` (A-255), and the change feed's
-/// page, `changes`: the list a transport admits a call by, every name of it
-/// one [`Shell::call`] answers.
+/// the notebook door's act, `node.start` (L1), the read of a draft's
+/// standing, `publication.standing` (skep #864), the read of a past state
+/// before its restore, `history.past` (skep #853), the document index's
+/// listing, `places` (A-255), and the change feed's page, `changes`: the
+/// list a transport admits a call by, every name of it one [`Shell::call`]
+/// answers.
 pub const CALLS: [&str; Call::ALL.len()] = {
     let mut names = [""; Call::ALL.len()];
     let mut i = 0;
@@ -676,9 +736,48 @@ pub struct Shell {
     followers: Arc<Followers>,
     session_mode: SessionMode,
     talk: Talk,
-    /// The own node's board reference, where the shell runs one.
-    own_node_reference: Option<String>,
+    /// The own node, where the shell runs one.
+    own_node: Option<OwnNode>,
     host_name: String,
+}
+
+/// This machine's own node as the shell holds it.
+///
+/// It is the node's board, the verb's start and stop where the verb handed
+/// the shell them, whether `boards()` lists the board, and the one lock
+/// every start and stop the shell makes of the node holds (L1).
+struct OwnNode {
+    /// The node's board.
+    entry: Arc<BoardEntry>,
+    /// The start and the stop ([`ShellOptions::node_control`]).
+    control: Option<Arc<dyn NodeControl>>,
+    /// Whether `boards()` lists the node's board.
+    ///
+    /// It is set from the open where no control is given; with one, from the
+    /// node's `Running` ([`Shell::set_node_state`]) until a stop of the node
+    /// read unclaimed clears it ([`Shell::end_unbegun_notebook`]).
+    listed: AtomicBool,
+    /// The lock every start and stop the shell makes of the node holds.
+    ///
+    /// One of them stands at a time.
+    acting: Mutex<()>,
+}
+
+impl OwnNode {
+    /// Returns whether the node is `entry`'s board.
+    fn is(&self, entry: &BoardEntry) -> bool {
+        self.entry.reference == entry.reference
+    }
+
+    /// Returns the node's control, where the verb handed the shell one.
+    ///
+    /// The shell's start or stop of the node runs under the lock, held by
+    /// the guard answered beside the control.
+    fn act(&self) -> Option<(&dyn NodeControl, MutexGuard<'_, ()>)> {
+        let control = self.control.as_deref()?;
+        // The lock guards no value, so a poisoned one is taken as it stands.
+        Some((control, self.acting.lock().unwrap_or_else(PoisonError::into_inner)))
+    }
 }
 
 impl fmt::Debug for Shell {
@@ -826,18 +925,22 @@ impl Shell {
     /// The store is opened (nothing written until a key is made); nothing is
     /// dialed here, so nothing refuses — under the signed mode the key is
     /// checked at the first `session`, or before serving by
-    /// [`Shell::check_signed_key`].
+    /// [`Shell::check_signed_key`]. Where a node control is given, the own
+    /// node stands stopped from here and its board out of `boards()` until
+    /// `node.start` starts it (L1).
     ///
     /// # Panics
     ///
     /// Panics where the caller's precondition is broken, naming the one
     /// broken, before anything starts: `opts.boards` are distinct — one board
     /// twice would be two feeds and two held stores over one chain, the
-    /// second finding the first's lock held — and `opts.own_node`, where set,
-    /// is one of them.
+    /// second finding the first's lock held — `opts.own_node`, where set, is
+    /// one of them, and `opts.node_control` is set beside `opts.own_node`
+    /// alone.
     pub fn open(opts: ShellOptions) -> Shell {
         assert!(opts.boards.iter().enumerate().all(|(i, origin)| !opts.boards[..i].contains(origin)), "ShellOptions' precondition: the boards are distinct");
         assert!(opts.own_node.as_ref().is_none_or(|own| opts.boards.contains(own)), "ShellOptions' precondition: own_node, where set, is one of the boards");
+        assert!(opts.node_control.is_none() || opts.own_node.is_some(), "ShellOptions' precondition: node_control is set beside own_node alone");
         let log = Arc::new(Log::new());
         let dialer = ShellDialer::new(Arc::clone(&log));
         let bus = Arc::new(EventBus::new());
@@ -860,15 +963,24 @@ impl Shell {
             ArmConfig::Refuse => Answerer::Refuse(Arc::clone(&opts.talk)),
         });
         let mut boards = Vec::new();
-        let mut own_node_reference = None;
+        let mut own_entry = None;
         for origin in &opts.boards {
             let entry = Arc::new(BoardEntry::new(Board::new(origin.clone(), dialer.clone())));
             if opts.own_node.as_ref() == Some(origin) {
-                own_node_reference = Some(entry.reference.clone());
+                own_entry = Some(Arc::clone(&entry));
             }
             boards.push(entry);
         }
         let holds = Holds::new(Arc::clone(&sessions), Arc::clone(&bus), Arc::clone(&store), opts.store_dir.clone(), Arc::clone(&opts.talk), boards.iter().cloned());
+        let control = opts.node_control;
+        let own_node = own_entry.map(|entry| OwnNode { entry, listed: AtomicBool::new(control.is_none()), control, acting: Mutex::new(()) });
+        // A node the shell starts stands stopped from here, the stop set
+        // ahead of the board's feed thread, whose first `/health` read would
+        // find it silent and say so (L1); the stop is marked told, so nothing
+        // is said of it.
+        if let Some(own) = own_node.as_ref().filter(|own| own.control.is_some()) {
+            holds.set_node_stopped(&own.entry.reference, true);
+        }
         // The publication panels die with their session (§4b.1's one session
         // rule): the bus's watcher drops a dead session's at its
         // `session-died`, whichever thread — a call's, or a board's feed
@@ -911,7 +1023,7 @@ impl Shell {
             followers,
             session_mode: opts.session_mode,
             talk: opts.talk,
-            own_node_reference,
+            own_node,
             host_name: host_name(),
         }
     }
@@ -939,6 +1051,8 @@ impl Shell {
     }
 
     /// Returns the board references issued, in the list's order.
+    ///
+    /// The own node's is among them while `boards()` leaves its board out.
     pub fn board_references(&self) -> Vec<String> {
         self.boards.iter().map(|entry| entry.reference.clone()).collect()
     }
@@ -952,12 +1066,18 @@ impl Shell {
     /// nothing of its own, and `Running` here is the one `running`
     /// (`Holds::set_node_stopped`), what holds still after it — a silence, a
     /// halt, a head that will not read — told by the feed as it stands
-    /// (`feed.rs`'s `announce`; skep #865). `Running` ends the hold at the
-    /// node's board and hands the board's feed thread its probe, as
-    /// `resolve(send)` hands it: the caller waits on no dial.
+    /// (`feed.rs`'s `announce`; skep #865). `Running` lists the node's board
+    /// in `boards()` before it is said, a board the shell's own start runs
+    /// among them (L1), and `Stopped` changes no listing. `Running` ends the
+    /// hold at the node's board and hands the board's feed thread its probe,
+    /// as `resolve(send)` hands it: the caller waits on no dial.
     pub fn set_node_state(&self, state: NodeState) {
-        let Some(board_reference) = &self.own_node_reference else { return };
+        let Some(own) = &self.own_node else { return };
+        let board_reference = own.entry.reference.as_str();
         let running = matches!(state, NodeState::Running);
+        if running {
+            own.listed.store(true, Ordering::SeqCst);
+        }
         let state = match state {
             NodeState::Running => "running",
             NodeState::Stopped => "stopped",
@@ -1149,6 +1269,7 @@ impl Shell {
             Some(Call::Accept) => self.accept(args),
             Some(Call::Health) => self.health(args),
             Some(Call::Probe) => Ok(self.probe()),
+            Some(Call::NodeStart) => self.node_start(),
             Some(Call::Op) => self.op(args),
             Some(Call::PublicationOpen) => self.publication_open(args),
             Some(Call::PublicationCount) => self.publication_count(args),
@@ -1190,10 +1311,15 @@ impl Shell {
 
     /// Answers `boards()` with `[{board, name, origin}]`.
     ///
-    /// `name` is the origin, v1's fallback: every board takes it while no
-    /// board publishes a display name.
+    /// Every board the shell was opened over is listed, save the own node's
+    /// while the shell has not started it (L1): from the open where a node
+    /// control is given until `Running` is said, and again from a stop of the
+    /// node read unclaimed ([`Shell::end_unbegun_notebook`]). `name` is the
+    /// origin, v1's fallback: every board takes it while no board publishes a
+    /// display name.
     fn boards(&self) -> Value {
-        Value::Array(self.boards.iter().map(|entry| json!({"board": entry.reference, "name": entry.board.dialed().as_str(), "origin": entry.board.dialed().as_str()})).collect())
+        let listed = |entry: &&Arc<BoardEntry>| self.own_node.as_ref().is_none_or(|own| !own.is(entry) || own.listed.load(Ordering::SeqCst));
+        Value::Array(self.boards.iter().filter(listed).map(|entry| json!({"board": entry.reference, "name": entry.board.dialed().as_str(), "origin": entry.board.dialed().as_str()})).collect())
     }
 
     /// Answers `session(board, principal)`: the mode's opening as `principal`.
@@ -1315,8 +1441,8 @@ impl Shell {
     /// (`Holds::note_health_read`; skep #863, #865), so this answer and the
     /// `daemon` event agree.
     fn probe(&self) -> Value {
-        let entry = match &self.own_node_reference {
-            Some(board_reference) => self.boards.iter().find(|entry| &entry.reference == board_reference),
+        let entry = match &self.own_node {
+            Some(own) => Some(&own.entry),
             None => self.boards.first(),
         };
         let Some(entry) = entry else { return json!({"daemon": "unreachable", "dialed": null, "signed": null}) };
@@ -1327,6 +1453,72 @@ impl Shell {
             answer["reason"] = Value::from(reason);
         }
         answer
+    }
+
+    /// Answers `node.start()`, the notebook door's act: the own node started.
+    ///
+    /// It is foundations §3.4 F-C1's act under L1, and it answers `probe()`'s
+    /// answer once the act is done. A node already running is started no
+    /// second time and says no second `running`. Else the call asks the
+    /// write door a ceremony asks ([`Shell::write_door`]), then runs the
+    /// control's start; once started,
+    /// the board's `/health` is read and handed to the hold, ending the
+    /// silence the stopped node's reads left before the stop is lifted, so
+    /// the board's feed says no `unreachable` of a node that answers; and
+    /// `Running` lists the board and says `running` once
+    /// ([`Shell::set_node_state`]). A start the control refuses leaves the
+    /// node stopped and its board out of `boards()`.
+    ///
+    /// # Errors
+    ///
+    /// In this order: `no_own_node` naming the `call` where the shell holds
+    /// no node control ([`ShellOptions::node_control`]); `another_window`
+    /// naming the call where another shell holds the board's held store
+    /// (§3c.3), nothing started; and the control's refusal as the halt it
+    /// is, the path a face names said on `Talk` and never answered
+    /// ([`Shell::call`]).
+    fn node_start(&self) -> Result<Value, Refusal> {
+        let no_own_node = || Refusal::shell(Name::NO_OWN_NODE, json!({"call": Call::NodeStart.as_str()}));
+        let own = self.own_node.as_ref().ok_or_else(no_own_node)?;
+        let (control, _acting) = own.act().ok_or_else(no_own_node)?;
+        let entry = &own.entry;
+        if !self.holds.node_stopped(&entry.reference) {
+            return Ok(self.probe());
+        }
+        self.write_door(Writer::Board(entry), &Write::unjudged(Call::NodeStart.as_str()))?;
+        control.start()?;
+        self.holds.note_health_read(&entry.reference, &entry.board.health());
+        self.set_node_state(NodeState::Running);
+        Ok(self.probe())
+    }
+
+    /// Ends the notebook a claim left unbegun, its node stopped and unlisted.
+    ///
+    /// It is foundations §3.4 F-C4's end under L1 part 1: the claim
+    /// ceremony's end at the person's cancel or close at the own node's board
+    /// (`ceremony`'s `claim`). It acts only where the shell holds the node's
+    /// control and the board's `/health`, read once here and handed to the
+    /// hold, answers it unclaimed: a claim that landed leaves a claimed
+    /// notebook running, and a board the read does not reach — the shell's
+    /// stop may refuse every dial by then — is left as it stands, the verb's
+    /// to stop at quit. Where it acts, the board leaves the list, then
+    /// `Stopped` is said and the stop set ([`Shell::set_node_state`]), then
+    /// the control's stop runs: the board's feed says nothing of the node
+    /// going down, and a burst there meets the `stopped` hold, never a node
+    /// mid-stop.
+    pub(super) fn end_unbegun_notebook(&self, entry: &BoardEntry) {
+        let Some(own) = self.own_node.as_ref().filter(|own| own.is(entry)) else { return };
+        let Some((control, _acting)) = own.act() else { return };
+        let read = entry.board.health();
+        self.holds.note_health_read(&entry.reference, &read);
+        if !read.is_ok_and(|health| matches!(Mode::of(&health), Mode::Unclaimed)) {
+            return;
+        }
+        own.listed.store(false, Ordering::SeqCst);
+        if !self.holds.node_stopped(&entry.reference) {
+            self.set_node_state(NodeState::Stopped);
+        }
+        control.stop();
     }
 
     /// Returns the guest form's target (§4b.1's `op` and `search` rows).
@@ -1550,11 +1742,12 @@ impl Shell {
     /// `/op-at`'s too; every row of the publication and merge families and
     /// `history.restore`, through [`Shell::signed`]; and every ceremony that
     /// writes to the board, which runs under no session of this shell's and
-    /// asks as its board ([`Writer::Board`]). `write` is the write as the
-    /// door reads it ([`Write`]): what its refusal names — the `op`, or the
-    /// `call` — the wire op the standing hold judges it by, and the drafts
-    /// it sets whole. Nothing of the write is dialed here. A ceremony's door
-    /// first touches the board's held store where it is not yet whole
+    /// asks as its board ([`Writer::Board`]), as the notebook's start
+    /// (`node.start`) asks. `write` is the write as the door reads it
+    /// ([`Write`]): what its refusal names — the `op`, or the `call` — the
+    /// wire op the standing hold judges it by, and the drafts it sets whole.
+    /// Nothing of the write is dialed here. A ceremony's door first touches
+    /// the board's held store where it is not yet whole
     /// ([`Holds::touch_store`]): the board's head read once and the store's
     /// locks tried, as a session's open tries them, since no session of this
     /// shell's has touched the store for the ceremony (skep #880). A write
@@ -1572,9 +1765,9 @@ impl Shell {
     /// 2. `another_window` — another shell holds the held store of the board
     ///    ([`Holds::another_window`]): ONE SHELL PER DATA DIRECTORY (§3c.3),
     ///    the second window reading alone there, nothing held and nothing
-    ///    sent, and no ceremony run from it (skep #829) — from a shell that
-    ///    has opened no session at the board too, its door reading the
-    ///    board's locks as its touch found them (skep #880);
+    ///    sent, no ceremony run from it (skep #829) and no notebook started
+    ///    — from a shell that has opened no session at the board too, its
+    ///    door reading the board's locks as its touch found them (skep #880);
     /// 3. `stopped`, `poisoned` or `halted` — a hold stands at the board and
     ///    the write is of a kind the hold never holds
     ///    (`hold::UNHOLDABLE_WRITES`; [`Holds::unholdable_refusal`]), the

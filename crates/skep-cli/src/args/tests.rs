@@ -581,6 +581,37 @@ fn a_secret_is_of_the_url_safe_alphabet_and_a_listen_port_is_one_a_page_names() 
     );
 }
 
+/// Checks that `--unstarted` belongs to `--own` and names its board ahead.
+///
+/// It is refused without `--own`, read beside it and documented in the dev
+/// help; under it a `--port` that names no loopback origin — `0`, a port
+/// picked only as the node starts, and `80`, the scheme's default — is
+/// refused, the board being named before the node starts, while without it
+/// `0` stands.
+#[test]
+fn unstarted_belongs_to_own_and_its_port_names_the_board_ahead() {
+    let line = |a: &[&str]| match dev::parse(argv(a)) {
+        Ok(Parsed::CommandLine(c)) => c,
+        other => panic!("{a:?} parsed as {other:?}"),
+    };
+    match dev::parse(argv(&["serve", "--unstarted"])) {
+        Err(Usage(text)) => assert_eq!(text, "`--unstarted` belongs to `serve --own` and is refused without `--own`"),
+        Ok(parsed) => panic!("parsed: {parsed:?}"),
+    }
+    let unstarted = line(&["serve", "--own", "--unstarted", "--port", "8650"]);
+    assert_eq!((unstarted.unstarted(), unstarted.node_port().unwrap()), (true, 8650));
+    assert_eq!(line(&["serve", "--own", "--unstarted"]).node_port().unwrap(), dev::DEFAULT_NODE_PORT);
+    for port in ["0", "80"] {
+        assert_eq!(
+            line(&["serve", "--own", "--unstarted", "--port", port]).node_port().unwrap_err().0,
+            format!("--port: '{port}' names no origin, and under --unstarted the board is named before the node starts: name a port from 1 to 65535 other than 80")
+        );
+    }
+    let started = line(&["serve", "--own", "--port", "0"]);
+    assert_eq!((started.unstarted(), started.node_port().unwrap()), (false, 0), "without --unstarted, 0 picks a free port");
+    assert!(dev::HELP.contains("[--unstarted]"), "the dev help documents it");
+}
+
 /// THE SEED READS THE BUDGETS' CORPUS: `--pin`'s default and `--repo`'s
 /// variable are `skep-search`'s budgets' own `PIN` and `VAR`, read off that
 /// suite's source — a pin or a variable moved in one place and not the

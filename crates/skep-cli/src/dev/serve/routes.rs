@@ -46,7 +46,7 @@ use crate::terminal::talk;
 /// admission, the route. Every refusal of the read, the preflight or the
 /// admission is counted, and said on talk the first time its kind is met
 /// in the run, ahead of its answer.
-pub fn connection(provider: &Provider<'_>, mut stream: TcpStream) {
+pub fn connection(provider: &Provider, mut stream: TcpStream) {
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
@@ -123,9 +123,9 @@ fn args_of(req: &Request) -> Result<Value, String> {
 ///
 /// # Panics
 ///
-/// Panics if the doors' lock is poisoned — a fault door that panicked held
-/// it — or the script seam's armed answers' lock is.
-fn route(provider: &Provider<'_>, req: &Request, stream: &mut TcpStream, cors: &[(String, String)]) -> io::Result<()> {
+/// Panics if the script seam's armed answers' lock is poisoned: a thread
+/// that panicked held it.
+fn route(provider: &Provider, req: &Request, stream: &mut TcpStream, cors: &[(String, String)]) -> io::Result<()> {
     let shell = &provider.shell;
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/bridge/events") => events(provider, stream, cors),
@@ -190,8 +190,8 @@ fn route(provider: &Provider<'_>, req: &Request, stream: &mut TcpStream, cors: &
         ("POST", path) if path.starts_with("/bridge/fault/") => {
             let door = &path["/bridge/fault/".len()..];
             let args = args_of(req).unwrap_or_else(|_| json!({}));
-            let answer = match provider.node {
-                Some(n) => node::fault(n, &mut provider.doors.lock().expect("the doors' lock"), door, &args),
+            let answer = match &provider.node {
+                Some(keeper) => keeper.fault(door, &args),
                 None => Err(format!("the fault doors are the in-process daemon's: run with --own in a dev-hooks build; the doors are {}", node::DOORS.join(", "))),
             };
             match answer {
@@ -250,7 +250,7 @@ fn route(provider: &Provider<'_>, req: &Request, stream: &mut TcpStream, cors: &
 ///
 /// Panics if the armed answers' lock is poisoned: a thread that panicked
 /// held it.
-fn script(provider: &Provider<'_>, args: &Value, stream: &mut TcpStream, cors: &[(String, String)]) -> io::Result<()> {
+fn script(provider: &Provider, args: &Value, stream: &mut TcpStream, cors: &[(String, String)]) -> io::Result<()> {
     if let Some(named) = args["call"].as_str() {
         let Some(&call) = skep_shell::CALLS.iter().find(|c| **c == named) else {
             return json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "unknown_call", "call": named}}));
@@ -306,7 +306,7 @@ fn script(provider: &Provider<'_>, args: &Value, stream: &mut TcpStream, cors: &
 /// # Errors
 ///
 /// Returns the I/O error the answer's write meets.
-fn canned_answer(provider: &Provider<'_>, call: &'static str, args: &Value, canned: Canned, stream: &mut TcpStream, cors: &[(String, String)]) -> io::Result<()> {
+fn canned_answer(provider: &Provider, call: &'static str, args: &Value, canned: Canned, stream: &mut TcpStream, cors: &[(String, String)]) -> io::Result<()> {
     let (body, bytes_out) = match canned {
         Canned::Answer(v) => {
             talk(format!("script: `{call}` answers its canned result"));
@@ -331,7 +331,7 @@ fn canned_answer(provider: &Provider<'_>, call: &'static str, args: &Value, cann
 /// # Errors
 ///
 /// Returns the I/O error a write meets, the page's closing among them.
-fn events(provider: &Provider<'_>, stream: &mut TcpStream, cors: &[(String, String)]) -> io::Result<()> {
+fn events(provider: &Provider, stream: &mut TcpStream, cors: &[(String, String)]) -> io::Result<()> {
     let rx = provider.shell.subscribe();
     write_sse_head(stream, cors)?;
     let mut last = Instant::now();

@@ -10,10 +10,11 @@
 //! every shell needs are written here once, so the dev provider
 //! (`skep-dev serve`) and the desktop shell share them and rewrite the
 //! transport alone. A transport reaches the crate through this root —
-//! [`Shell`] and what opens it, [`Refusal`] and its [`Name`], [`Log`] and
-//! its [`CallOutcome`], [`Event`] and its [`EventName`] (an
-//! [`UnknownEventName`] where a spelling names none), [`Talk`], [`CALLS`] —
-//! and two public modules, [`script`] and [`shapes`]; the rest is private.
+//! [`Shell`] and what opens it, the own node's [`NodeControl`] among it,
+//! [`Refusal`] and its [`Name`], [`Log`] and its [`CallOutcome`], [`Event`]
+//! and its [`EventName`] (an [`UnknownEventName`] where a spelling names
+//! none), [`Talk`], [`CALLS`] — and two public modules, [`script`] and
+//! [`shapes`]; the rest is private.
 //! The modules, in the order they are declared, each naming only those
 //! above it:
 //!
@@ -133,9 +134,13 @@
 //!   `another_window` before any dial (§3c.3) at the write door the bare
 //!   refusal shares — the `session` answer saying so,
 //!   `another_window`, and each later edge of that state an `another-window`
-//!   event (skep #827) — and one private method per §4b.1 row, per
-//!   `places` and per `changes`, behind [`Shell::call`], whose dispatch the
-//!   compiler holds to one arm per call — the ten ceremonial rows in its child
+//!   event (skep #827) — this machine's notebook, started by `node.start`
+//!   through the [`NodeControl`] the verb hands it and stopped at the claim
+//!   ceremony's cancel or close where its board reads unclaimed, its board
+//!   listed by `boards()` while it runs (L1) — and one private method per
+//!   §4b.1 row, per `places` and per `changes`, behind [`Shell::call`],
+//!   whose dispatch the compiler holds to one arm per call — the ten
+//!   ceremonial rows in its child
 //!   `ceremony`, the four `publication` rows, the panels they stand on and
 //!   the read of a draft's standing, `publication.standing`, beside them in
 //!   its child `publication`, the four `merge` rows and the compositions
@@ -186,7 +191,7 @@ pub use events::{Event, EventBus, EventName, UnknownEventName};
 pub use held::CopiesOwed;
 pub use log::{CallOutcome, Log};
 pub use refusal::{Name, Refusal};
-pub use shell::{ArmConfig, Fetched, NodeState, SessionMode, Shell, ShellOptions, CALLS};
+pub use shell::{ArmConfig, Fetched, NodeControl, NodeState, SessionMode, Shell, ShellOptions, CALLS};
 
 /// Where the shell's talk lines go: the verb's stderr, a suite's vector.
 pub type Talk = Arc<dyn Fn(&str) + Send + Sync>;

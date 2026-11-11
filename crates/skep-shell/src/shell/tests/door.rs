@@ -22,6 +22,9 @@
 //! said on `Talk`, and the signed mode's check naming a keyless store; a
 //! probe of an own node that does not answer `unreachable`; the shell's
 //! options printing no seed and the open's preconditions stopped loudly;
+//! the notebook's start refused where the shell runs no node, a start the
+//! node's control refuses leaving the notebook unstarted, its path said on
+//! `Talk` alone, and a second window starting none;
 //! every day dated as the calendar counts it; and the stop abandoning a
 //! walk that waits on the page, a walk begun after it asking the page
 //! nothing, and a search or a listing after it answered `feed_stopped`.
@@ -59,27 +62,28 @@ fn an_op_at_refusal_is_the_boards_verdict_under_the_wires_status() {
 /// Checks that every call is named by its own spelling.
 ///
 /// Every call parses back from its own spelling, so no two calls share one;
-/// `CALLS` is those spellings in §4b.1's order — the publication family
-/// after `op`, the merge family after it, `history.past` and
-/// `history.restore` closing the merge row ahead of the media rows, the
-/// read before the write, `held.show` after `held` — the document index's
-/// listing `places` beside `search`; a name of no call
-/// names none, and `call` answers it `unknown_call`; and `fetch`, which
-/// streams on its transport's own route, is answered `streamed_call`
-/// through the door, whatever its arguments.
+/// `CALLS` is those spellings in §4b.1's order — `node.start` after
+/// `probe`, whose answer it gives, the publication family after `op`, the
+/// merge family after it, `history.past` and `history.restore` closing the
+/// merge row ahead of the media rows, the read before the write,
+/// `held.show` after `held` — the document index's listing `places` beside
+/// `search`; a name of no call names none, and `call` answers it
+/// `unknown_call`; and `fetch`, which streams on its transport's own route,
+/// is answered `streamed_call` through the door, whatever its arguments.
 #[test]
 fn every_call_is_named_by_its_own_spelling() {
     for call in Call::ALL {
         assert_eq!(Call::named(call.as_str()), Some(call));
     }
     assert_eq!(CALLS.map(Call::named), Call::ALL.map(Some));
-    assert_eq!((CALLS.len(), CALLS[0], CALLS[35]), (36, "boards", "changes"));
-    assert_eq!((CALLS[30], CALLS[31]), ("search", "places"));
-    assert_eq!(&CALLS[32..35], ["held", "held.show", "resolve"], "`held.show` stands after `held`, whose row owes it");
-    assert_eq!(&CALLS[16..21], ["publication.open", "publication.count", "publication.confirm", "publication.cancel", "publication.standing"], "the publication family stands after `op`, whose publish arm it carries, its read of a draft's standing closing it");
-    assert_eq!(&CALLS[21..25], ["merge.compose", "merge.land", "merge.undo", "merge.withdraw"], "the merge family stands after the publication family, whose shot its landing rides");
+    assert_eq!((CALLS.len(), CALLS[0], CALLS[36]), (37, "boards", "changes"));
+    assert_eq!(&CALLS[14..17], ["probe", "node.start", "op"], "the notebook door's act stands after `probe`, whose answer it gives");
+    assert_eq!((CALLS[31], CALLS[32]), ("search", "places"));
+    assert_eq!(&CALLS[33..36], ["held", "held.show", "resolve"], "`held.show` stands after `held`, whose row owes it");
+    assert_eq!(&CALLS[17..22], ["publication.open", "publication.count", "publication.confirm", "publication.cancel", "publication.standing"], "the publication family stands after `op`, whose publish arm it carries, its read of a draft's standing closing it");
+    assert_eq!(&CALLS[22..26], ["merge.compose", "merge.land", "merge.undo", "merge.withdraw"], "the merge family stands after the publication family, whose shot its landing rides");
     assert_eq!(
-        &CALLS[25..30],
+        &CALLS[26..31],
         ["history.past", "history.restore", "upload", "fetch", "restore"],
         "the past state's read and its restore close the merge row, the read first, apart from the media rows' `restore`"
     );
@@ -118,6 +122,20 @@ fn an_own_node_outside_the_boards_is_the_callers_bug() {
     let _ = Shell::open(opts);
 }
 
+/// Checks that a node control without an own node is the caller's bug.
+///
+/// A start and a stop handed to a shell that names no own node would start
+/// a node no board of the shell's is; the open refuses it loudly before
+/// anything starts.
+#[test]
+#[should_panic(expected = "node_control")]
+fn a_node_control_without_an_own_node_is_the_callers_bug() {
+    let (talk, _) = talk();
+    let mut opts = ShellOptions::new(vec![Origin::parse("http://127.0.0.1:9").unwrap()], PathBuf::from("/nonexistent/store"), SessionMode::Bare { principal: 1 }, talk);
+    opts.node_control = Some(Control::over(Path::new("/nonexistent/notebook")) as Arc<dyn NodeControl>);
+    let _ = Shell::open(opts);
+}
+
 /// Checks that a board listed twice is the caller's bug.
 ///
 /// A board listed twice — two feeds and two held stores over one chain —
@@ -128,6 +146,84 @@ fn a_board_listed_twice_is_the_callers_bug() {
     let (talk, _) = talk();
     let origin = Origin::parse("http://127.0.0.1:9").unwrap();
     let _ = Shell::open(ShellOptions::new(vec![origin.clone(), origin], PathBuf::from("/nonexistent/store"), SessionMode::Bare { principal: 1 }, talk));
+}
+
+/// Checks that the notebook's start is refused at a shell that runs none.
+///
+/// A shell opened with no node control — the verb starting and stopping
+/// its node itself, or running none — refuses `node.start` `no_own_node`
+/// naming the call, and its `boards()` stands as it stood, the own node's
+/// board listed (the mutant that answers the probe tells the page a
+/// notebook began that nothing started).
+#[test]
+fn the_notebooks_start_is_refused_at_a_shell_that_runs_none() {
+    let (dir, origin) = (TempDir::new().unwrap(), nowhere());
+    let (talk, _) = talk();
+    let mut opts = ShellOptions::new(vec![Origin::parse(&origin).unwrap()], dir.path().join("own-store"), SessionMode::Bare { principal: 1 }, talk);
+    opts.own_node = Some(Origin::parse(&origin).unwrap());
+    let own = Shell::open(opts);
+    let (other, _) = open_shell(&origin, &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    for shell in [&own, &other] {
+        let listed = shell.call("boards", &json!({})).unwrap();
+        assert_eq!(listed.as_array().map(Vec::len), Some(1), "{listed}");
+        let refused = shell.call("node.start", &json!({})).unwrap_err().to_value();
+        crate::shapes::assert_declared("NoOwnNodeRefusal", &refused);
+        assert_eq!((refused["name"].as_str(), refused["call"].as_str()), (Some("no_own_node"), Some("node.start")), "{refused}");
+        assert_eq!(shell.call("boards", &json!({})).unwrap(), listed, "the list stands as it stood");
+    }
+}
+
+/// Checks that a start the control refuses leaves the notebook unstarted.
+///
+/// The control's halt, a face about the node's data directory, is the
+/// call's refusal as its three words, the directory's path in no member
+/// and said on `Talk` beside the call (§4b.3; SP-15); the node stands
+/// `stopped`, no `daemon` event is said, and its board stays out of
+/// `boards()` (the mutant that says `Running` before the control's start
+/// answers lists a board whose node never ran).
+#[test]
+fn a_start_the_control_refuses_leaves_the_notebook_unstarted() {
+    let dir = TempDir::new().unwrap();
+    let control = Control::refusing(Halt::face_at("/a/notebook", "the daemon could not open its data directory", "another daemon holds its lock", "stop the daemon that holds it"));
+    let (shell, lines) = notebook_shell(&control, &dir.path().join("store"));
+    let rx = shell.subscribe();
+    let refused = shell.call("node.start", &json!({})).unwrap_err().to_value();
+    assert_eq!(
+        refused,
+        json!({"kind": "halt", "name": "halt", "state": "the daemon could not open its data directory", "cause": "another daemon holds its lock", "act": "stop the daemon that holds it"}),
+        "the face's three words, the path in none of them"
+    );
+    assert!(lines.lock().unwrap().iter().any(|l| l.starts_with("node.start: ") && l.contains("/a/notebook")), "the path said in the shell's own window: {:?}", lines.lock().unwrap());
+    assert_eq!(shell.call("probe", &json!({})).unwrap()["daemon"], "stopped");
+    assert_eq!(shell.call("boards", &json!({})).unwrap(), json!([]), "the board stays out of the list");
+    assert!(rx.try_iter().all(|e| e.name != EventName::Daemon), "nothing is said of a node that did not start");
+    assert_eq!(control.counts(), (1, 0));
+}
+
+/// Checks that a second window starts no notebook.
+///
+/// Two shells over one data directory: the first's start touches the
+/// notebook's held store at its door, taking its lock, and the second's is
+/// refused `another_window` naming the call, its control never asked — the
+/// door a ceremony asks, since the start is the claim ceremony's first act
+/// (§3c.3; skep #829). The first window's start goes on to its control.
+#[test]
+fn a_second_window_starts_no_notebook() {
+    let dir = TempDir::new().unwrap();
+    let refusal = Halt::face("the daemon could not start", "a test's control", "none");
+    let first = Control::refusing(refusal.clone());
+    let (shell, _) = notebook_shell(&first, &dir.path().join("store"));
+    assert_eq!(shell.call("node.start", &json!({})).unwrap_err().name(), "halt", "the first window's start reaches its control");
+    let second = Control::refusing(refusal);
+    let (talk, _) = talk();
+    let origin = Origin::parse(&first.origin()).unwrap();
+    let mut opts = ShellOptions::new(vec![origin.clone()], dir.path().join("store"), SessionMode::Bare { principal: 1 }, talk);
+    opts.own_node = Some(origin);
+    opts.node_control = Some(Arc::clone(&second) as Arc<dyn NodeControl>);
+    let window = Shell::open(opts);
+    let refused = window.call("node.start", &json!({})).unwrap_err().to_value();
+    assert_eq!((refused["name"].as_str(), refused["call"].as_str()), (Some("another_window"), Some("node.start")), "{refused}");
+    assert_eq!((first.counts(), second.counts()), ((1, 0), (0, 0)), "the second window's control is never asked");
 }
 
 /// Returns an origin nothing answers at: a port bound and let go.

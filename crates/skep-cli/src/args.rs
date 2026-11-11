@@ -976,9 +976,9 @@ pub mod dev {
     /// `seed`'s flags each take one value and are each read in the one form
     /// the verb has; `serve`'s are the one page origin admitted, the listen
     /// port, the per-run secret, the session mode, the script, and under
-    /// `--own` the in-process daemon's three (`--data-dir`, `--port`,
-    /// `--no-local-trust`), which belong to that form alone and stand apart
-    /// from `--board`, the running board's.
+    /// `--own` the in-process daemon's four (`--data-dir`, `--port`,
+    /// `--no-local-trust`, `--unstarted`), which belong to that form alone
+    /// and stand apart from `--board`, the running board's.
     pub(super) const GRAMMAR: [Row<DevCommand>; 2] = [
         Row {
             command: DevCommand::Seed,
@@ -991,11 +991,12 @@ pub mod dev {
             command: DevCommand::Serve,
             once: &["--page-origin", "--listen", "--secret", "--session", "--script", "--data-dir", "--port"],
             repeated: &[],
-            switches: &["--own", "--no-local-trust"],
+            switches: &["--own", "--no-local-trust", "--unstarted"],
             forms: &[
                 Form::Within("--data-dir", "--own"),
                 Form::Within("--port", "--own"),
                 Form::Within("--no-local-trust", "--own"),
+                Form::Within("--unstarted", "--own"),
                 Form::Apart("--own", "--board"),
             ],
         },
@@ -1085,8 +1086,11 @@ flags (a flag beats its env variable; a variable set empty is unset):
             and the board: --board <origin>, a running daemon; or, in a
             build with the dev-hooks feature, --own  [--data-dir <dir>]
             [--port <p>] (default 8642; 0 picks a free port, named on
-            stderr)  [--no-local-trust] — the daemon run in-process with
-            its test hooks, its fault doors at POST /bridge/fault/<door>
+            stderr)  [--no-local-trust]  [--unstarted] — the daemon run
+            in-process with its test hooks, its fault doors at POST
+            /bridge/fault/<door>; started at launch, or under --unstarted
+            left unstarted until the bridge's node.start, the notebook
+            door's act, a claim's cancel stopping it again unclaimed
 
 exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
 4 transport. stdout carries one JSON object (seed) or the secret
@@ -1224,16 +1228,26 @@ exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
         /// Returns `serve --port` (under `--own`), else [`DEFAULT_NODE_PORT`].
         ///
         /// `0` is a free port, which the in-process daemon's line names on
-        /// talk.
+        /// talk. Under `--unstarted` the board is named before the node
+        /// starts, so the port is one its loopback origin names: never `0`,
+        /// and never `80`, the scheme's default, which a canonical origin
+        /// leaves out.
         ///
         /// # Errors
         ///
-        /// Returns a usage refusal where the value is not a port.
+        /// Returns a usage refusal where the value is not a port, or, under
+        /// `--unstarted`, names no origin.
         pub fn node_port(&self) -> Result<u16, Usage> {
-            match self.value("--port") {
-                None => Ok(DEFAULT_NODE_PORT),
-                Some(v) => v.parse::<u16>().map_err(|_| Usage(format!("--port: '{v}' is not a port"))),
+            let port = match self.value("--port") {
+                None => DEFAULT_NODE_PORT,
+                Some(v) => v.parse::<u16>().map_err(|_| Usage(format!("--port: '{v}' is not a port")))?,
+            };
+            if self.unstarted() && Origin::parse(&format!("http://127.0.0.1:{port}")).is_none() {
+                return Err(Usage(format!(
+                    "--port: '{port}' names no origin, and under --unstarted the board is named before the node starts: name a port from 1 to 65535 other than 80"
+                )));
             }
+            Ok(port)
         }
 
         /// Returns a port a page is pointed at: 1–65535, never `0`.
@@ -1312,6 +1326,14 @@ exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
         /// Returns whether `serve --no-local-trust` (under `--own`) was given.
         pub fn no_local_trust(&self) -> bool {
             self.switch("--no-local-trust")
+        }
+
+        /// Returns whether `serve --unstarted` (under `--own`) was given.
+        ///
+        /// The in-process daemon is then left unstarted at launch, for the
+        /// bridge's `node.start`, the notebook door's act (L1).
+        pub fn unstarted(&self) -> bool {
+            self.switch("--unstarted")
         }
     }
 

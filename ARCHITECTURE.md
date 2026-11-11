@@ -860,9 +860,9 @@ re-exports counted as the module it is brought from (held by
   behind the `changes` call, on the caller's thread.
 - `shell.rs` `Shell`: the boards, the sessions, `SessionMode`, `ArmConfig`,
   the private row methods behind `call`, which logs each; `fetch`,
-  `answer`, `cancel`, `shutdown`; `ShellOptions` and `set_node_state`; and
-  `Shell::write_door`, the ONE WRITE DOOR every write the shell sends
-  meets before any dial — the `op` row's frames, and through
+  `answer`, `cancel`, `shutdown`; `ShellOptions`, `NodeControl` and
+  `set_node_state`; and `Shell::write_door`, the ONE WRITE DOOR every write
+  the shell sends meets before any dial — the `op` row's frames, and through
   `Shell::signed` every row of `shell/publication.rs`, `shell/merge.rs` and
   `shell/history.rs` that writes, and every ceremony of `shell/ceremony.rs`
   that writes to the board.
@@ -986,7 +986,9 @@ with its modules beneath it: `serve/http.rs`, the provider's own HTTP over
 the plain subset `skep-http` serves; `serve/admission.rs`, the check every
 request passes before any dial; `serve/node.rs`, the daemon's two modes —
 a running board dialed, or under the crate's `dev-hooks` feature the
-daemon in-process with its test hooks; and `serve/routes.rs`, the routes
+daemon in-process with its test hooks, owned by its keeper's thread with
+the fault doors' permits and started and stopped by the shell through it
+as `skep-shell`'s `NodeControl`; and `serve/routes.rs`, the routes
 over `skep-shell`'s core. `skep-dev seed` dials a RUNNING board the person
 started per `RUNBOOK.md` §3 and claimed with `skep claim`; it never
 claims, and it takes none of `tls`, `search` or `test-hooks`. `skep-dev

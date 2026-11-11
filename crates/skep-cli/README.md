@@ -91,10 +91,11 @@ recorded.
 
 `skep-dev serve` is THE DEV PROVIDER: the shell's core (`skep-shell`)
 served to a page in a browser over loopback HTTP and server-sent events —
-`POST /bridge/<call>` for the thirty-six calls of `skep-shell`'s
+`POST /bridge/<call>` for the thirty-seven calls of `skep-shell`'s
 `CALLS`, `client.md` §4b.1's thirty-two — the publication family's four,
 the merge family's four, `history.restore` and `held.show` among them —
-`publication.standing`, the read of a draft's standing, `history.past`,
+`node.start`, the notebook door's act, `publication.standing`, the read
+of a draft's standing, `history.past`,
 the read of a draft's past state, `places`, the document index's listing,
 and `changes`, the change feed's page
 (`{result}` or `{refused}` back, HTTP 200 either way;
@@ -135,6 +136,12 @@ run in-process with its test hooks and its fault doors at `POST
 /bridge/fault/<door>` (`write_busy`, `scan_busy`, `fetch_busy`,
 `release`, `refuse_next_head`, `hold_feed_walk`, `release_feed_walk`,
 `media_free_space`, `panic_checkpoint_thread`, `halt_writes`, `poison`).
+`--own` starts the daemon at launch, a claimed notebook's launch;
+`--own --unstarted` leaves it unstarted for the notebook door's act, the
+bridge's `node.start`, and a claim's cancel or close stops it again while
+its board is unclaimed. Either way the shell starts and stops it through
+one keeper, every start at the port the first one bound, so the board's
+origin stands, and each start and stop said on stderr.
 The provider stops cleanly when stdin closes — Ctrl-D at a terminal —
 saying why it stopped and what the run came to (the connections accepted,
 the refusals by kind; every pending moment cancelled, so a call still
@@ -211,6 +218,7 @@ the feature.
 | `--data-dir` | — | none: required with `--own` | — | `serve --own` | the in-process daemon's board directory |
 | `--port` | — | `8642`; `0` a free port, named on stderr | a port | `serve --own` | the in-process daemon's port |
 | `--no-local-trust` | — | local trust on | — | `serve --own` | local trust off |
+| `--unstarted` | — | off: the daemon starts at launch | beside `--own` alone, with a `--port` that names the board before it starts (never `0` or `80`) | `serve --own` | the in-process daemon left unstarted until the bridge's `node.start` |
 | — | `TMPDIR` | the system temp dir | — | `serve` without `--dir` | where the throwaway store is made |
 
 Not settings: the pins, carded constants a rebuild alone moves, each

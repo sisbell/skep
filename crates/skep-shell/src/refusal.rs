@@ -360,7 +360,9 @@ impl Name {
     /// `merge.withdraw` of a draft carrying no merge.
     ///
     /// None was composed under the session's board and principal, it was
-    /// landed or taken back, or it went with its session (the family's one
+    /// landed or taken back — an undo standing none again where the marker
+    /// it put back is no landing's whose composition the shell set aside
+    /// (skep #981) — or it went with its session (the family's one
     /// session rule; `client.md` §4b.1's merge row, "`no_merge` at `land`
     /// with nothing composed"); at the withdrawal the draft carries no marker
     /// (`skep_client::merge::Refusal::NoMerge`); at a withdrawal's undo the

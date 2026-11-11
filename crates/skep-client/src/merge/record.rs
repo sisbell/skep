@@ -727,6 +727,7 @@ pub(super) fn current_among(
 
 /// A record as a reader found it: the record, the link it was found
 /// through, and that link's age.
+#[derive(Clone)]
 pub(super) struct Found {
     /// The link of the kind, homed in the journal holding the record.
     pub(super) link: Address,

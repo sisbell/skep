@@ -44,9 +44,12 @@
 //! [`undo`](fn@undo) and [`withdraw`], the two ways a merge landed
 //! in a draft is taken back out, each one `set_arrangement` — the undo
 //! putting the draft back as it stood before the landing, its base
-//! restored and its words mapped through the publication's correspondence
-//! records, typed against the landing's position or the caller's own last
-//! acknowledgment past it; the withdrawal taking the merge out and keeping
+//! restored, the marker it carried then put back (skep #964) and its words
+//! mapped through the publication's correspondence records, typed against
+//! the landing's position, the latest write that put the landing's marker
+//! back where only the take-back and its undo moved the words since, or
+//! the caller's own last acknowledgment past both; the withdrawal taking
+//! the merge out and keeping
 //! the words, the base re-sent unmoved — with a replacing record of the
 //! kind (the `undo` module's doc); [`unwithdraw`], a withdrawal's undo,
 //! one `set_arrangement` putting the marker the withdrawal cleared back as

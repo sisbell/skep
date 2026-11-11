@@ -528,8 +528,10 @@ pub(crate) struct Metadata {
     pub(crate) base_copied: Option<u64>,
     /// The merge the draft carries, the marker beside its base (wire.md
     /// §The response envelope, `doc_metadata`'s `merge`): set by a
-    /// `set_arrangement` that names a base and a merge, cleared by the
-    /// `publish` that moves the base; `None` where the draft carries none.
+    /// `set_arrangement` that names a base and a merge — stamped at its
+    /// commit, or put back as it stood where the merge names its position —
+    /// cleared by one naming a base and no merge and by the `publish` that
+    /// moves the base; `None` where the draft carries none.
     pub(crate) merge: Option<MergeMarker>,
     /// The position of the commit that minted the address named — a version
     /// member its own mint (wire.md §The response envelope, `doc_metadata`,
@@ -545,12 +547,15 @@ pub(crate) struct Metadata {
 /// trunk's chain, or a private draft at the draft-side form — the version
 /// the merge was composed on and that version's content count as read at
 /// the compose — what the base beside it records — and the position of the
-/// commit that put the marker on the document. The board records it at a
-/// `set_arrangement` naming a base and a merge, copies it to a draft staged
-/// from the marked one — its `at` that stage's, the copy's own mint, which
-/// marks no landing in the copy — and clears it at the draft's own
-/// `publish` and at a `set_arrangement` naming no merge (the withdrawal,
-/// the undo). An embedder reads it off a `doc_metadata` answer through
+/// commit that stamped the marker on the document. The board records it at
+/// a `set_arrangement` naming a base and a merge, copies it to a draft
+/// staged from the marked one — its `at` that stage's, the copy's own mint,
+/// which marks no landing in the copy — puts one back as it stood, its `at`
+/// kept, at a `set_arrangement` whose merge names that position (a
+/// withdrawal's undo, the undo of a landing made over it; skep #870, #964),
+/// and clears it at the draft's own `publish` and at a `set_arrangement`
+/// naming a base and no merge (the withdrawal, an undo of a landing over no
+/// marker). An embedder reads it off a `doc_metadata` answer through
 /// [`merge_marker`]: the editor's shell, for the supersession claim its
 /// publication carries and the re-open of a merge the draft already carries
 /// (the merge bridge lane).
@@ -563,8 +568,9 @@ pub struct MergeMarker {
     /// The head's content count as read at the compose; `None` where the
     /// board serves none.
     pub head_copied: Option<u64>,
-    /// The position of the commit that put the marker on the draft; `None`
-    /// where the board serves none.
+    /// The position of the commit that stamped the marker on the draft — a
+    /// landing's, or the stage's that copied it — which a marker put back
+    /// keeps; `None` where the board serves none.
     pub at: Option<u64>,
 }
 

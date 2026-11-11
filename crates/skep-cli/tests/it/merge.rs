@@ -1143,8 +1143,10 @@ fn another_accounts_words_are_asked_naming_their_owner_and_a_published_origin_is
 /// merge landed in a second draft `T` is taken out by `--withdraw T`: its
 /// words stay M, its base stays `D.2` at fifteen, the marker is gone, the
 /// report and the talk say so; a second `--withdraw` finds no merge, exit 1,
-/// nothing written; and `--undo T --withdrawal P` puts the merge back, the
-/// marker as the landing left it, a second run nothing to undo (skep #870).
+/// nothing written; `--undo T --withdrawal P` puts the merge back, the
+/// marker as the landing left it, a second run nothing to undo (skep #870);
+/// and `--undo T` after it puts `T` back as it stood before the merge, typed
+/// past the withdrawal's undo (skep #964).
 #[test]
 fn the_two_take_backs_walk_on_the_real_daemon() {
     let dir = tempfile::tempdir().unwrap();
@@ -1181,7 +1183,7 @@ fn the_two_take_backs_walk_on_the_real_daemon() {
     assert!(undone_at > at, "{v}");
     let replacing = v["record"].as_str().expect("the replacing record's link").to_string();
     assert_ne!(replacing, link);
-    assert_eq!(v, json!({"act": "undo", "draft": s_s, "position": undone_at, "record": replacing, "case": "marker", "restored": {"at": base_s, "extent": "11"}}), "the report");
+    assert_eq!(v, json!({"act": "undo", "draft": s_s, "position": undone_at, "record": replacing, "case": "marker", "restored": {"at": base_s, "extent": "11"}, "marker": null}), "the report");
     assert_eq!(rig.image(&token, &s, 14), c, "C again");
     let meta = rig.read(&token, &frames::doc_metadata(&s_s));
     assert_eq!((meta["base"].as_str(), meta["base_copied"].as_str(), meta["merge"].is_null()), (Some(base_s.as_str()), Some("11"), true), "the base restored, the marker cleared: {meta}");
@@ -1200,6 +1202,7 @@ fn the_two_take_backs_walk_on_the_real_daemon() {
     let t = rig.stage(&base);
     typed_insert(&t, 12, "???");
     let t_s = t.to_string();
+    let c_t = rig.image(&token, &t, 14);
     let r = rig.merge(&["--doc", &d_s, "--draft", &t_s, "--into", &t_s, "--kind", &kind_s]);
     let v = report(&r);
     let m_t = runs_of(&v);
@@ -1243,6 +1246,63 @@ fn the_two_take_backs_walk_on_the_real_daemon() {
     assert_eq!(r.code, 1, "{r:?}");
     assert!(r.err.contains(&format!("the board refused: nothing_to_undo:nothing to undo: {t} carries a merge again")), "{}", r.err);
     assert_eq!(position(), before, "nothing written");
+
+    // THE LANDING TAKEN BACK after it (skep #964): `--undo T`, with no ack
+    // of its own, is typed past the withdrawal's undo — `T`'s words there
+    // those at the landing — and puts `T` back as it stood before the merge.
+    let r = rig.merge(&["--undo", &t_s, "--kind", &kind_s]);
+    let v = report(&r);
+    let undone_t = v["position"].as_u64().expect("the write's position");
+    assert!(undone_t > unwithdrawn_at, "{v}");
+    let replacing_again = v["record"].as_str().expect("the landing's record replaced").to_string();
+    assert_eq!(v, json!({"act": "undo", "draft": t_s, "position": undone_t, "record": replacing_again, "case": "marker", "restored": {"at": base_s, "extent": "11"}, "marker": null}), "the report");
+    assert_eq!(rig.image(&token, &t, 14), c_t, "T's words before the merge, the ??? kept");
+    let meta = rig.read(&token, &frames::doc_metadata(&t_s));
+    assert_eq!((meta["base"].as_str(), meta["base_copied"].as_str(), meta["merge"].is_null()), (Some(base_s.as_str()), Some("11"), true), "the base restored, the marker cleared: {meta}");
+    assert!(r.err.contains(&format!("took the merge back out of {t} at position {undone_t}: the draft is back to how it stood before the merge, its base is {base} at 11 positions again, and the merge is taken out; the record's link is {replacing_again}")), "{}", r.err);
+    session.close().expect("close");
+}
+
+/// An undo of a merge landed twice puts the first landing back and says so.
+///
+/// Skep #964 with #790: the race shape's daughter merged into `S` by
+/// `--into S`, then again — the same landing, its record the first's, the
+/// marker at the second write. `--undo S` puts the first landing's marker
+/// back as the board stamped it: the report carries it under `marker`, the
+/// talk says the merge stands in the draft again with that landing's
+/// position, and no record is written, the first landing's standing for it.
+/// A second `--undo S`, typed past the first, puts `S` back as staged.
+#[test]
+fn an_undo_of_a_merge_landed_twice_puts_the_first_landing_back_and_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let kind_s = rig.draft().to_string();
+    let (d, base, _head, daughter) = rig.race(&session);
+    let s = rig.stage(&base);
+    let (d_s, s_s, daughter_s) = (d.to_string(), s.to_string(), daughter.to_string());
+    let c = rig.image(&token, &s, 11);
+    let land = || report(&rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--into", &s_s, "--kind", &kind_s]))["landed"].clone();
+    let first = land();
+    let marker = rig.read(&token, &frames::doc_metadata(&s_s))["merge"].clone();
+    let second = land();
+    assert!(second["position"].as_u64() > first["position"].as_u64() && second["record"] == first["record"], "the premise: the same landing: {second}");
+    let r = rig.merge(&["--undo", &s_s, "--kind", &kind_s]);
+    let v = report(&r);
+    let at = marker["at"].as_u64().expect("the first landing's position");
+    assert_eq!(
+        (&v["marker"]["at"], &v["marker"]["head"], &v["marker"]["sides"], &v["record"]),
+        (&marker["at"], &marker["head"], &marker["sides"], &Value::Null),
+        "the first landing's marker, no record: {v}"
+    );
+    assert_eq!(rig.read(&token, &frames::doc_metadata(&s_s))["merge"], marker, "the first landing's marker standing again");
+    let undone_at = v["position"].as_u64().expect("the write's position");
+    assert!(r.err.contains(&format!("took the merge back out of {s} at position {undone_at}: the draft is back to how it stood before the merge, its base is {d}.2 at 15 positions again, and the merge it carried then stands in it again, marked at position {at}; no record was written")), "{}", r.err);
+    let r = rig.merge(&["--undo", &s_s, "--kind", &kind_s]);
+    let v = report(&r);
+    assert_eq!((&v["restored"], &v["marker"]), (&json!({"at": base.to_string(), "extent": "11"}), &Value::Null), "{v}");
+    assert_eq!(rig.image(&token, &s, 11), c, "S as staged");
     session.close().expect("close");
 }
 

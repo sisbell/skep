@@ -142,7 +142,10 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("WindowPartsOwedRefusal", json!({"kind": "shell", "name": "window_parts_owed", "parts": [], "answers": [], "misfits": [], "left_private": [], "defaults": []})),
         ("LeftPrivate", json!({"set": "1.0.1.0.6", "links": 2})),
         ("MergeDefault", json!({"id": 1, "kind": "order", "after": null, "before": null, "placed": [0]})),
-        ("Undone", json!({"draft": "1.0.1.0.5", "position": 14, "record": null, "restored": {"base": "1.0.1.0.2.1", "extent": 19}})),
+        (
+            "Undone",
+            json!({"draft": "1.0.1.0.5", "position": 14, "record": null, "restored": {"base": "1.0.1.0.2.1", "extent": 19}, "marker": {"sides": ["1.0.1.0.2.1.1"], "head": "1.0.1.0.2.2", "head_copied": "13", "at": 12}}),
+        ),
         ("Withdrawn", json!({"draft": "1.0.1.0.5", "position": 14, "record": "1.0.1.0.1.0.2.4"})),
         (
             "Past",

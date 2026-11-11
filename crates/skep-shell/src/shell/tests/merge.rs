@@ -521,6 +521,7 @@ fn the_family_lands_a_daughter_into_a_fresh_draft_and_into_a_named_one_and_takes
     let undone = g.call("merge.undo", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     crate::shapes::assert_declared("Undone", &undone);
     assert_eq!((undone["draft"].as_str(), undone["restored"].clone(), undone["record"].is_string()), (Some(fresh.as_str()), json!({"base": f.e2, "extent": 13}), true), "{undone}");
+    assert_eq!(undone.get("marker"), Some(&Value::Null), "no marker stood before the landing, none put back: {undone}");
     assert_eq!(g.text(&fresh, 13), "the fox jumps");
     assert!(g.op(doc_metadata(&fresh))["merge"].is_null(), "the marker gone");
     assert_eq!(arrangement_rows(&g, &fresh, since), [(true, false)], "one arrangement row, a base and no merge");

@@ -1816,9 +1816,11 @@ fn a_landed_merge_is_withdrawn_keeping_the_words_and_clearing_the_marker() {
 /// withdrawal's undo — `doc_metadata` serves the marker with the same sides,
 /// head and `at`, the base unmoved, `T` holding M — and the landing's record
 /// is current again, its `landed` the landing's, `replaces` the
-/// withdrawal's; a second run writes nothing; and the undo after it, typed
-/// at the withdrawal's undo, takes the landing back, the base as it stood
-/// before the merge and no marker.
+/// withdrawal's; a second run writes nothing; and the undo after it, with
+/// no `own_ack` as the command's, is typed past the withdrawal's undo, the
+/// draft's words there those at the landing (skep #964), and takes the
+/// landing back: the draft's words and base as they stood before the merge
+/// and no marker.
 #[test]
 fn a_withdrawal_is_taken_back_and_the_undo_after_it_takes_the_landing_back() {
     let rig = Rig::new();
@@ -1831,6 +1833,7 @@ fn a_withdrawal_is_taken_back_and_the_undo_after_it_takes_the_landing_back() {
     let inputs = Inputs { doc: d.clone(), head: head.clone(), base: None, sides: vec![Side::Draft { at: draft.clone(), position: None }], options: Default::default(), kind: kind.clone() };
     let merged = compose(&rig.board, Some(&token), &inputs).expect("composed");
     let staged = rig.metadata(&token, &draft);
+    let c = image(&rig.board, &token, &draft, 14);
     let landed = land(&rig.board, &merged, Landing::Draft { merger, into: Some(draft.clone()), journal: None }).expect("landed");
     let Landed::Draft { position: at, .. } = landed else { panic!("{landed:?}") };
     let marker = rig.metadata(&token, &draft)["merge"].clone();
@@ -1852,10 +1855,65 @@ fn a_withdrawal_is_taken_back_and_the_undo_after_it_takes_the_landing_back() {
         "a second run finds the merge standing"
     );
     assert_eq!(rig.position(), standing, "nothing written");
-    undo(&rig.board, merger, &draft, &kind, Some(unwithdrawn.position), None).expect("the landing taken back");
+    let undone = undo(&rig.board, merger, &draft, &kind, None, None).expect("the landing taken back");
+    assert_eq!(undone.marker, None, "no marker before the landing: {undone:?}");
+    assert_eq!(image(&rig.board, &token, &draft, 14), c, "the words before the merge");
     let meta = rig.metadata(&token, &draft);
     assert_eq!((&meta["base"], &meta["base_copied"]), (&staged["base"], &staged["base_copied"]), "the base before the merge: {meta}");
     assert!(meta["merge"].is_null(), "no marker: {meta}");
+    session.close().expect("close");
+}
+
+/// One merge landed twice in a draft is taken back a landing at a time on
+/// the real daemon (skep #964 with #790).
+///
+/// The race shape's daughter merged with `D.2` and landed in `T`, a draft
+/// staged from `D.1`, then composed again and landed again with nothing
+/// between — the same landing, its record the first's, the marker at the
+/// second write. The first undo, with no `own_ack`, puts the first
+/// landing's marker back as the board stamped it — the same sides, head
+/// and `at` — writing no record, the first landing's current for the key;
+/// the second, with no `own_ack`, is typed past the first, `T`'s words
+/// there those at the first landing, and puts `T` back as staged, its
+/// record replacing the first; a third has nothing to undo.
+#[test]
+fn one_merge_landed_twice_is_taken_back_a_landing_at_a_time() {
+    let rig = Rig::new();
+    let session = rig.session();
+    let token = session.token().clone();
+    let (d, base, head) = rig.race(&session);
+    let daughter = shot(&rig.board, &session, &rig.device, &rig.bare, &d, Some((&base, 11)), &[Staged::Own { from: 1, text: "the cat" }]);
+    let t = addr(acked_addr(&acked(rig.board.op(Some(&rig.bare), &frames::stage(&base.to_string(), None)))).expect("T"));
+    let staged = (image(&rig.board, &token, &t, 11), rig.metadata(&token, &t));
+    let kind = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    let merger = merger(&rig, &session);
+    let inputs = Inputs { doc: d.clone(), head: head.clone(), base: None, sides: vec![Side::Member(daughter.clone())], options: Default::default(), kind: kind.clone() };
+    let into = || Landing::Draft { merger, into: Some(t.clone()), journal: None };
+    let merged = compose(&rig.board, Some(&token), &inputs).expect("composed");
+    let Landed::Draft { position: first_at, record: first, .. } = land(&rig.board, &merged, into()).expect("landed") else { panic!("a draft landing") };
+    let marker = rig.metadata(&token, &t)["merge"].clone();
+    let again = compose(&rig.board, Some(&token), &inputs).expect("composed again");
+    let Landed::Draft { position: second_at, record, .. } = land(&rig.board, &again, into()).expect("landed again") else { panic!("a draft landing") };
+    assert!(record == first && second_at > first_at, "the premise: the same landing, a write of its own");
+    // The first undo: the first landing's marker back, no record.
+    let undone = undo(&rig.board, merger, &t, &kind, None, None).expect("the second landing taken back");
+    assert_eq!((undone.record.clone(), undone.marker.as_ref().and_then(|m| m.at)), (None, Some(first_at)), "{undone:?}");
+    assert_eq!(rig.metadata(&token, &t)["merge"], marker, "the first landing's marker, as the board stamped it");
+    assert_eq!(image(&rig.board, &token, &t, 11), as_image(&m_of(&merged)), "T holds M");
+    let found = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
+    assert_eq!((found.link, found.landed), (Some(first.clone()), Some(RecordLanding::Draft { draft: t.clone(), position: first_at })), "the first landing's record current");
+    // The second undo: typed past the first, T as staged.
+    let back = undo(&rig.board, merger, &t, &kind, None, None).expect("the first landing taken back");
+    assert!(back.position > undone.position && back.marker.is_none(), "{back:?}");
+    let meta = rig.metadata(&token, &t);
+    assert_eq!((image(&rig.board, &token, &t, 11), &meta["base"], &meta["base_copied"]), (staged.0, &staged.1["base"], &staged.1["base_copied"]), "T as staged: {meta}");
+    assert!(meta["merge"].is_null(), "no marker: {meta}");
+    let found = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
+    assert_eq!((found.landed, found.replaces, found.link), (None, Some(first), back.record), "the first landing's record replaced");
+    // A third: nothing to undo, nothing written.
+    let standing = rig.position();
+    assert_eq!(undo(&rig.board, merger, &t, &kind, None, None), Err(Refusal::NothingToUndo { draft: t.clone(), why: NoUndo::TakenBack }));
+    assert_eq!(rig.position(), standing, "nothing written");
     session.close().expect("close");
 }
 

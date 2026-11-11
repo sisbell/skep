@@ -209,6 +209,6 @@ fn runs_json(runs: &[Run]) -> Value {
 /// Returns a merge marker as the page reads it (`shapes`' `MergeMarker`).
 ///
 /// Its `head_copied` is the decimal string `doc_metadata` serves it as.
-fn marker_json(m: &MergeMarker) -> Value {
+pub(super) fn marker_json(m: &MergeMarker) -> Value {
     json!({"sides": m.sides, "head": m.head, "head_copied": m.head_copied.map(|n| n.to_string()), "at": m.at})
 }

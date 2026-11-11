@@ -1349,6 +1349,12 @@ pub(crate) enum OnEnd {
     /// A take-back's record, its one write standing: nothing more is
     /// written, a re-run finding no merge to take out and writing none.
     TakenOut,
+    /// An undo's record, its one write standing and an earlier landing's
+    /// marker put back (skep #964).
+    ///
+    /// Nothing more is written; a re-run takes that earlier merge back too,
+    /// as a step of its own.
+    EarlierBack,
     /// A withdrawal's undo's record, its one write standing.
     ///
     /// Nothing more is written, a re-run finding the merge put back and
@@ -1364,6 +1370,9 @@ impl OnEnd {
             OnEnd::TakenOut => format!(
                 "the merge is out of the draft, and its record is not written: the session ended while {during}"
             ),
+            OnEnd::EarlierBack => format!(
+                "the merge is out of the draft, the merge landed before it standing again, and its record is not written: the session ended while {during}"
+            ),
             OnEnd::PutBack => format!(
                 "the merge is back in the draft, and its record is not written: the session ended while {during}"
             ),
@@ -1376,6 +1385,7 @@ impl OnEnd {
             OnEnd::Rerun => "open a session again and run this again: it reads what stands before it writes",
             OnEnd::Resume => "open a session again and resume: every step of the landing resumes by reading",
             OnEnd::TakenOut => "nothing more is written: the draft stands as the act left it, and a re-run writes no record, finding no merge to take out; the landing's record stands alone in the journal",
+            OnEnd::EarlierBack => "nothing more is written: the draft stands as the act left it, carrying the merge landed in it before; a re-run takes that merge back too, as a step of its own, so run it only to take that merge out; the landing's record stands alone in the journal",
             OnEnd::PutBack => "nothing more is written: the draft stands as the act left it, and a re-run writes no record, finding the merge put back; the withdrawal's record stands alone in the journal",
         }
     }
@@ -2229,7 +2239,7 @@ pub fn head_of(
     doc: &Address,
 ) -> Result<Option<Address>, Refusal> {
     let mut head: Option<Address> = None;
-    feed_rows(&Reader::new(board, token, OnEnd::Rerun), &doc.to_string(), false, |row| {
+    feed_rows(&Reader::new(board, token, OnEnd::Rerun), &doc.to_string(), false, 0, |row| {
         if row["op"].as_str() != Some("publish") {
             return;
         }
@@ -2258,7 +2268,7 @@ pub fn head_of(
 pub(super) fn position_of(reader: &Reader<'_>, member: &Address) -> Result<Option<u64>, Refusal> {
     let mut at = None;
     let text = member.to_string();
-    feed_rows(reader, &text, false, |row| {
+    feed_rows(reader, &text, false, 0, |row| {
         if at.is_none()
             && row["op"].as_str() == Some("publish")
             && row["docs"].as_array().and_then(|d| d.first()).and_then(Value::as_str)
@@ -2270,16 +2280,16 @@ pub(super) fn position_of(reader: &Reader<'_>, member: &Address) -> Result<Optio
     Ok(at)
 }
 
-/// Walks every row of the feed under `under`, oldest first.
+/// Walks every row of the feed under `under` past `since`, oldest first.
 ///
-/// The walk runs from the floor to the head: the retention floor restarts
-/// the walk at the floor, a page past the byte budget is re-asked at the
-/// limit that fits. With `drafts` the walk is the supplement's,
-/// `drafts=true` — the rows naming a draft the token's class may read, which
-/// is where a draft's own `set_arrangement` rows are (wire.md §The change
-/// feed, Narrowings); without it the published stream's, the member rows a
-/// head or a mint position is read off. The pages are read through
-/// `reader`'s board under its token.
+/// The walk runs from `since` to the head, 0 walking from the floor: the
+/// retention floor restarts the walk at the floor, a page past the byte
+/// budget is re-asked at the limit that fits. With `drafts` the walk is the
+/// supplement's, `drafts=true` — the rows naming a draft the token's class
+/// may read, which is where a draft's own `set_arrangement` rows are
+/// (wire.md §The change feed, Narrowings); without it the published
+/// stream's, the member rows a head or a mint position is read off. The
+/// pages are read through `reader`'s board under its token.
 ///
 /// # Errors
 ///
@@ -2291,9 +2301,9 @@ pub(super) fn feed_rows(
     reader: &Reader<'_>,
     under: &str,
     drafts: bool,
+    mut since: u64,
     mut each: impl FnMut(&Value),
 ) -> Result<(), Refusal> {
-    let mut since = 0u64;
     let mut limit = None;
     loop {
         let query = ChangesQuery { since, under: Some(under), drafts, limit };

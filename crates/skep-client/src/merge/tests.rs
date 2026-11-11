@@ -6672,6 +6672,47 @@ mod scripted {
         assert_eq!(dialer.world().rows.len(), rows);
     }
 
+    /// An inherited marker withdrawn and put back is inherited still (P2).
+    ///
+    /// Skep #964: the withdrawal's undo puts the marker back with its own
+    /// `at`, the alternative's mint, so the undo after it reads the state
+    /// before that position and meets the alternative's own
+    /// `doc_not_registered`, as before the withdrawal: nothing to undo,
+    /// nothing sent.
+    #[test]
+    fn an_inherited_marker_withdrawn_and_put_back_still_answers_inherited() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        landed_in_s(&board, &session, &signer);
+        let Answer::Document(ack) =
+            board.op(Some(session.token()), &frames::stage(S, None)).expect("the stage")
+        else {
+            panic!("closed")
+        };
+        let t = acked_addr(&ack).expect("the alternative").to_string();
+        let staged_at = acked_at(&ack).expect("its position");
+        let withdrawn = withdraw(&board, m, &a(&t), &a(K), None).expect("withdrawn");
+        unwithdraw(&board, m, &a(&t), &a(K), withdrawn.position, None, None).expect("put back");
+        assert_eq!(
+            dialer.world().standing(&t).1.map(|m| m.at),
+            Some(staged_at),
+            "the premise: the marker back at the mint"
+        );
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        assert_eq!(
+            undo(&board, m, &a(&t), &a(K), None, None),
+            Err(Refusal::NothingToUndo { draft: a(&t), why: NoUndo::Inherited })
+        );
+        assert!(
+            dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty(),
+            "nothing sent: {:?}",
+            dialer.ops()
+        );
+        assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
+    }
+
     /// An undo of a baseless landing goes by its feed row, with no base sent.
     ///
     /// With no base record (N4's baseless case), the landing's position is
@@ -7245,8 +7286,11 @@ mod scripted {
     /// landing's own `at`, typed against the withdrawal — and the draft's
     /// base and marker stand as the landing left them, the landing's record
     /// written again; a second run sends nothing; and the undo after it,
-    /// typed at the caller's own last ack, takes the landing back, the
-    /// draft's base as it stood before the merge and no marker.
+    /// with no `own_ack` as the command's (skep #964), finds the put-back on
+    /// the draft's feed rows past the landing, reads the draft at the two
+    /// writes, and is typed against the put-back: ONE frame of C with the
+    /// old base and no merge, the draft holding C, its base as it stood
+    /// before the merge and no marker, the record replacing the landing's.
     #[test]
     fn a_withdrawal_taken_back_puts_the_marker_back_and_the_next_undo_takes_the_landing_back() {
         let (dialer, board, signer) = open(draft_landing_world());
@@ -7282,8 +7326,156 @@ mod scripted {
             "a second run finds the merge standing"
         );
         assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty(), "nothing sent: {:?}", dialer.ops());
-        undo(&board, m, &a(S), &a(K), Some(unwithdrawn.position), None).expect("the landing taken back");
+        dialer.clear();
+        let undone = undo(&board, m, &a(S), &a(K), None, None).expect("the landing taken back");
+        let ops = dialer.ops();
+        assert!(
+            ops.iter().any(|o| o.starts_with("GET /changes?")
+                && o.contains(&format!("?since={}&", marker.at))
+                && o.contains(&format!("under={S}"))),
+            "the put-back off the draft's own rows past the landing: {ops:?}"
+        );
+        assert_eq!(
+            dialer.positions("image"),
+            [marker.at - 3, marker.at, unwithdrawn.position],
+            "C, then the draft at the landing and at the put-back: {ops:?}"
+        );
+        let sent = dialer.frames("set_arrangement");
+        assert_eq!(sent.len(), 1, "one write: {ops:?}");
+        assert_eq!(
+            sent[0]["as_of"],
+            json!(unwithdrawn.position),
+            "typed against the put-back: {}",
+            sent[0]
+        );
+        assert_eq!(sent[0]["runs"], frame_runs(&draft_c()), "C, read before the landing");
+        assert!(
+            sent[0].get("head").is_none() && sent[0].get("merge").is_none(),
+            "no marker before the landing, none put back: {}",
+            sent[0]
+        );
+        assert_eq!(
+            (undone.position, undone.marker),
+            (
+                dialer.world().rows.iter().rev().find(|r| r.op == "set_arrangement").unwrap().at,
+                None
+            )
+        );
+        assert_eq!(dialer.world().docs.get(S).unwrap().runs, draft_c(), "C again");
         assert_eq!(dialer.world().standing(S), staged, "the draft's base as before the merge, no marker");
+        assert_eq!(
+            appended_record(&dialer)["replaces"].as_str(),
+            unwithdrawn.record.as_ref().map(|r| r.to_string()).as_deref(),
+            "the landing's record written again, replaced"
+        );
+    }
+
+    /// An undo after a withdrawal's undo meets another hand's edit past it.
+    ///
+    /// Skep #964: the undo, with no `own_ack`, is typed against the
+    /// put-back, so another hand's edit after it refuses the undo
+    /// `arrangement_moved` — its words naming the put-back, the edit's
+    /// position and the landing's — and nothing is changed, the edit, the
+    /// base and the marker standing, no record written.
+    #[test]
+    fn an_undo_typed_past_a_put_back_is_refused_where_another_hand_edited_after_it() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let (_, landed) = landed_in_s(&board, &session, &signer);
+        let (at, _) = landing_of(&landed);
+        let withdrawn = withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn");
+        let back = unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, None, None)
+            .expect("put back")
+            .position;
+        let edited = vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7)];
+        let edit_at = dialer.world().change(S, edited.clone());
+        let (rows, standing) = {
+            let w = dialer.world();
+            (w.rows.len(), w.standing(S))
+        };
+        dialer.clear();
+        let err = undo(&board, m, &a(S), &a(K), None, None)
+            .expect_err("another hand's edit past the put-back");
+        let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
+        assert_eq!(refused.code, "arrangement_moved");
+        assert_eq!(
+            dialer.frames("set_arrangement")[0]["as_of"],
+            json!(back),
+            "typed against the put-back"
+        );
+        let detail = refused.detail.as_deref().expect("the person's words");
+        assert!(detail.contains(&format!("{S} changed since the merge was put back (the merge was put back at position {back}, the draft changed at {edit_at}), after it landed at position {at}")), "{detail}");
+        assert!(
+            detail.contains("nothing was changed")
+                && detail.contains("an undo typed against the merge's put-back can no longer land")
+                && detail.contains("edit the draft as it stands"),
+            "{detail}"
+        );
+        let w = dialer.world();
+        assert_eq!(w.docs.get(S).unwrap().runs, edited, "the other hand's edit stands");
+        assert_eq!(
+            (w.rows.len(), w.standing(S)),
+            (rows, standing),
+            "nothing committed, the base and the marker as they stood"
+        );
+        drop(w);
+        assert!(
+            dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(),
+            "no record"
+        );
+    }
+
+    /// An undo after a withdrawal's undo stays typed at the landing where an
+    /// edit made before the withdrawal stands in the words.
+    ///
+    /// Skep #964, P3: another hand edits the landed draft, then the merge is
+    /// withdrawn and put back, the edit kept in the words. The draft's words
+    /// at the put-back are not those at the landing, so the undo, with no
+    /// `own_ack`, is typed against the landing and refused
+    /// `arrangement_moved`, its words naming the put-back — the edit is
+    /// never wiped. Typed at the caller's own last ack, the put-back, it
+    /// lands: the editor's rule.
+    #[test]
+    fn an_undo_after_a_put_back_is_typed_at_the_landing_where_an_earlier_edit_stands() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let (_, landed) = landed_in_s(&board, &session, &signer);
+        let (at, _) = landing_of(&landed);
+        let edited = vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7)];
+        dialer.world().change(S, edited.clone());
+        let withdrawn = withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn");
+        let back = unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, None, None)
+            .expect("put back")
+            .position;
+        assert_eq!(
+            dialer.world().docs.get(S).unwrap().runs,
+            edited,
+            "the premise: the edit kept in the words"
+        );
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        let err =
+            undo(&board, m, &a(S), &a(K), None, None).expect_err("the edit stands in the words");
+        let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
+        assert_eq!(refused.code, "arrangement_moved");
+        assert_eq!(
+            dialer.frames("set_arrangement")[0]["as_of"],
+            json!(at),
+            "typed against the landing, never the put-back"
+        );
+        let detail = refused.detail.as_deref().expect("the person's words");
+        assert!(detail.contains(&format!("{S} changed since the merge landed (the merge landed at position {at}, the draft changed at {back}): its words changed before the merge was put back at position {back}")), "{detail}");
+        assert!(
+            detail.contains("an undo typed against the landing can no longer land"),
+            "{detail}"
+        );
+        assert_eq!(dialer.world().docs.get(S).unwrap().runs, edited, "the edit stands");
+        assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
+        undo(&board, m, &a(S), &a(K), Some(back), None)
+            .expect("typed at the caller's own last ack");
+        assert_eq!(dialer.world().docs.get(S).unwrap().runs, draft_c(), "C again");
     }
 
     /// A withdrawal's undo past a landing or a publication sends nothing.
@@ -7855,6 +8047,10 @@ mod scripted {
     /// landing's row on the supplement names it, and `resume` writes the
     /// record at that row's position. (g) The same draft once the landing is
     /// undone: the undo's row names no merge, so the words are the race's.
+    /// (h) One key landed twice in a draft, the same landing (skep #790),
+    /// then a third time in a fresh session: the words name the record that
+    /// stands, the first landing's, at the marker's position, the second
+    /// write's (skep #964).
     #[test]
     fn a_composition_landed_again_in_a_fresh_session_names_its_own_landing() {
         let writes = ["stage", "set_arrangement", "create_new_document", "insert", "make_link"];
@@ -8142,6 +8338,34 @@ mod scripted {
             "(g): {detail}"
         );
         assert_eq!(wrote(&dialer), ["set_arrangement"], "(g): {:?}", dialer.ops());
+
+        // (h) One key landed twice in `T`, the same landing, then a third
+        // time in a fresh session.
+        let mut w = World::race();
+        w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
+        w.staged(t, &format!("{D}.1"), 11);
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let into_t = || draft_landing(&session, &signer, Some(a(t)));
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        let (_, first) = landing_of(&land(&board, &merged, into_t()).expect("landed"));
+        let again = compose(&board, Some(session.token()), &race_inputs()).expect("composed again");
+        let (second_at, record) =
+            landing_of(&land(&board, &again, into_t()).expect("landed again"));
+        assert_eq!(record, first, "(h): the premise, the same landing");
+        dialer.world().memo.clear();
+        dialer.clear();
+        let err = land(&board, &again, into_t()).expect_err("its own landing moved T");
+        let detail = refused_words(&err, "(h)");
+        assert!(
+            detail.contains(&format!(
+                "{t} already holds this merge: it landed there at position {second_at}"
+            )) && detail.contains(&format!("its record is {first}"))
+                && detail.contains("resume answers that landing"),
+            "(h): {detail}"
+        );
+        assert!(!detail.contains("not written"), "(h): {detail}");
+        assert_eq!(wrote(&dialer), ["set_arrangement"], "(h): {:?}", dialer.ops());
     }
 
     /// THE STANDING RECORD IS THE MERGER's OWN NEWEST FOR THE KEY. A newer
@@ -8212,12 +8436,17 @@ mod scripted {
     /// first record, which stays current for the key naming the first
     /// position and verifies equal there; a `resume` answers the same,
     /// writing nothing; the undo is typed against the second write — the
-    /// marker's, never the record's — puts the edit back and replaces the
-    /// first record. (ii) A take-back whose record went unwritten, its link
-    /// refused for a head owed: the merge composed again and landed in `T`
-    /// is the same landing, the first record standing for it and current,
-    /// and the next undo is typed against the second write, its record
-    /// replacing the first.
+    /// marker's, never the record's — puts the edit back with the first
+    /// landing's marker, its own position kept (skep #964), and writes no
+    /// record, the first one standing for that marker; the undo after it,
+    /// the edit since the first landing standing in the words at that
+    /// put-back, is typed against the first landing and refused with no
+    /// `own_ack`, and typed at the first undo's write puts `T` back as
+    /// staged, replacing the first record. (ii) A take-back whose record
+    /// went unwritten, its link refused for a head owed: the merge composed
+    /// again and landed in `T` is the same landing, the first record
+    /// standing for it and current, and the next undo is typed against the
+    /// second write, its record replacing the first.
     #[test]
     fn a_second_landing_of_one_key_into_one_draft_is_the_same_landing() {
         let t = "1.0.1.0.5";
@@ -8267,10 +8496,95 @@ mod scripted {
         assert_eq!(resume(&board, &again, into_t()).expect("resumed"), Some(relanded.clone()), "the marker's position, the first record");
         assert!(wrote(&dialer).is_empty(), "a resume writes nothing: {:?}", dialer.ops());
         dialer.clear();
-        undo(&board, m, &a(t), &a(K), None, None).expect("undone");
-        assert_eq!(dialer.frames("set_arrangement")[0]["as_of"].as_u64(), Some(at), "typed against the marker's position, never the record's");
-        assert_eq!(dialer.world().docs.get(t).unwrap().runs, edited, "T as it stood before the second write: the edit");
-        assert_eq!(appended_record(&dialer)["replaces"].as_str(), Some(first.to_string().as_str()), "the first landing's record replaced");
+        let undone = undo(&board, m, &a(t), &a(K), None, None).expect("undone");
+        let frame = dialer.frames("set_arrangement")[0].clone();
+        assert_eq!(
+            frame["as_of"].as_u64(),
+            Some(at),
+            "typed against the marker's position, never the record's"
+        );
+        assert_eq!(
+            (&frame["merge"], &frame["head"]),
+            (
+                &json!({"sides": [format!("{D}.1.1")], "at": first_at}),
+                &json!({"at": format!("{D}.2"), "extent": "15"})
+            ),
+            "the first landing's marker put back with its own position: {frame}"
+        );
+        let w = dialer.world();
+        assert_eq!(
+            w.docs.get(t).unwrap().runs,
+            edited,
+            "T as it stood before the second write: the edit"
+        );
+        assert_eq!(
+            w.standing(t).1.map(|m| m.at),
+            Some(first_at),
+            "the first landing's marker standing again"
+        );
+        drop(w);
+        assert_eq!(
+            (undone.record, undone.marker.and_then(|m| m.at)),
+            (None, Some(first_at)),
+            "no record written, the first landing's standing for the marker put back"
+        );
+        assert!(
+            dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(),
+            "nothing of a record: {:?}",
+            dialer.ops()
+        );
+        let found = current(&board, Some(session.token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("a record");
+        assert_eq!(
+            (found.link, found.landed),
+            (Some(first.clone()), Some(RecordLanding::Draft { draft: a(t), position: first_at })),
+            "the first landing's record current"
+        );
+        // The undo after it: the edit since the first landing stands in the
+        // words at the put-back, so with no `own_ack` it is typed against
+        // the first landing and refused, the edit kept.
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        let err = undo(&board, m, &a(t), &a(K), None, None)
+            .expect_err("the edit since the first landing");
+        let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
+        assert_eq!(
+            (refused.code.as_str(), dialer.frames("set_arrangement")[0]["as_of"].as_u64()),
+            ("arrangement_moved", Some(first_at)),
+            "typed against the first landing"
+        );
+        assert!(
+            refused
+                .detail
+                .as_deref()
+                .is_some_and(|d| d.contains(&format!("put back at position {}", undone.position))),
+            "{refused:?}"
+        );
+        let w = dialer.world();
+        assert_eq!(
+            (&w.docs.get(t).unwrap().runs, w.rows.len()),
+            (&edited, rows),
+            "the edit stands, nothing committed"
+        );
+        drop(w);
+        // Typed at the caller's own last ack, the first undo's write: T as
+        // staged, the first landing's record replaced.
+        dialer.clear();
+        let staged = undo(&board, m, &a(t), &a(K), Some(undone.position), None)
+            .expect("typed at the caller's own last ack");
+        assert_eq!(staged.marker, None, "no marker before the first landing");
+        assert_eq!(dialer.world().docs.get(t).unwrap().runs, vec![run(D, 1, 11)], "T as staged");
+        assert_eq!(
+            dialer.world().standing(t),
+            (Some((format!("{D}.1"), 11)), None),
+            "the base as staged, no marker"
+        );
+        assert_eq!(
+            appended_record(&dialer)["replaces"].as_str(),
+            Some(first.to_string().as_str()),
+            "the first landing's record replaced"
+        );
 
         // (ii) A take-back whose record went unwritten: the board too busy
         // to find the account's journal past the undo's write.
@@ -8313,6 +8627,381 @@ mod scripted {
         assert_eq!(dialer.frames("set_arrangement")[0]["as_of"].as_u64(), Some(at), "typed against the second write");
         assert_eq!(dialer.world().docs.get(t).unwrap().runs, vec![run(D, 1, 11)], "T as it stood before the second write");
         assert_eq!(appended_record(&dialer)["replaces"].as_str(), Some(first.to_string().as_str()), "the first landing's record replaced");
+    }
+
+    /// One merge landed twice in a draft is taken back a landing at a time.
+    ///
+    /// Skep #964 with #790: the race shape landed in `T`, composed again and
+    /// landed again with nothing between — the same landing, its record the
+    /// first's. A publication landing between the first undo's read and its
+    /// write, the board's `marker_not_restorable`, is said in the person's
+    /// words, nothing changed. The first undo, with no `own_ack`, puts the
+    /// first landing's marker back with its own position, writes no record
+    /// and answers that marker; the second, with no `own_ack`, finds that
+    /// put-back on `T`'s rows, `T`'s words there those at the first landing,
+    /// and is typed against it, putting `T` back as staged and replacing the
+    /// record; a third has nothing to undo.
+    #[test]
+    fn one_merge_landed_twice_is_taken_back_one_landing_at_a_time() {
+        let t = "1.0.1.0.5";
+        let mut w = World::race();
+        w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
+        w.staged(t, &format!("{D}.1"), 11);
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let into_t = || draft_landing(&session, &signer, Some(a(t)));
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        let (first_at, first) = landing_of(&land(&board, &merged, into_t()).expect("landed"));
+        let again = compose(&board, Some(session.token()), &race_inputs()).expect("composed again");
+        let (second_at, record) =
+            landing_of(&land(&board, &again, into_t()).expect("landed again"));
+        assert!(
+            record == first && second_at > first_at,
+            "the premise: the same landing, a write of its own"
+        );
+        // A publication raced past the read: the put-back refused.
+        let id = format!("undo:{t}:{second_at}.arrangement");
+        dialer
+            .world()
+            .memo
+            .insert(id.clone(), permanent("set_arrangement", "marker_not_restorable", Value::Null));
+        let err = undo(&board, m, &a(t), &a(K), None, None).expect_err("the put-back refused");
+        let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
+        let detail = refused.detail.as_deref().unwrap_or_default();
+        assert!(
+            refused.code == "marker_not_restorable"
+                && detail.contains("was published since it was read")
+                && detail.contains("nothing was changed"),
+            "{refused:?}"
+        );
+        dialer.world().memo.remove(&id);
+        // The first undo: the first landing's marker back, no record.
+        dialer.clear();
+        let undone =
+            undo(&board, m, &a(t), &a(K), None, None).expect("the second landing taken back");
+        let frame = dialer.frames("set_arrangement")[0].clone();
+        assert_eq!(
+            (frame["as_of"].as_u64(), &frame["merge"]),
+            (Some(second_at), &json!({"sides": [format!("{D}.1.1")], "at": first_at})),
+            "{frame}"
+        );
+        assert_eq!(
+            (undone.record.clone(), undone.marker.as_ref().and_then(|m| m.at)),
+            (None, Some(first_at))
+        );
+        assert!(dialer.frames("insert").is_empty(), "no record: {:?}", dialer.ops());
+        let w = dialer.world();
+        assert_eq!(w.standing(t).1.map(|m| m.at), Some(first_at), "the first landing's marker");
+        assert_eq!(
+            w.docs.get(t).unwrap().runs,
+            m_runs(&merged),
+            "T holds M, as the first landing left it"
+        );
+        drop(w);
+        // The second undo: typed against the first undo's write.
+        dialer.clear();
+        let staged =
+            undo(&board, m, &a(t), &a(K), None, None).expect("the first landing taken back");
+        assert_eq!(
+            dialer.frames("set_arrangement")[0]["as_of"],
+            json!(undone.position),
+            "typed against the put-back"
+        );
+        assert_eq!(staged.marker, None);
+        assert_eq!(dialer.world().docs.get(t).unwrap().runs, vec![run(D, 1, 11)], "T as staged");
+        assert_eq!(
+            dialer.world().standing(t),
+            (Some((format!("{D}.1"), 11)), None),
+            "the base as staged, no marker"
+        );
+        assert_eq!(
+            appended_record(&dialer)["replaces"].as_str(),
+            Some(first.to_string().as_str()),
+            "the first landing's record replaced"
+        );
+        // A third: nothing to undo.
+        assert_eq!(
+            undo(&board, m, &a(t), &a(K), None, None),
+            Err(Refusal::NothingToUndo { draft: a(t), why: NoUndo::TakenBack })
+        );
+    }
+
+    /// An undo of a merge landed over another puts that one's marker back.
+    ///
+    /// Skep #964: the race shape landed in `T` — merge A — then the
+    /// draft-side merge of `T` landed over it — merge B — its record left
+    /// unwritten, the board too busy to find the journal. The undo of B puts
+    /// A's marker back as it stood and answers it, and writes no record: A's
+    /// record names no landing of B's, and stays current for A's key. The
+    /// undo after it takes A back, typed against the first undo's write, and
+    /// replaces A's record.
+    #[test]
+    fn an_undo_of_a_merge_landed_over_another_puts_its_marker_back_and_leaves_its_record() {
+        let t = "1.0.1.0.5";
+        let mut w = World::race();
+        w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
+        w.staged(t, &format!("{D}.1"), 11);
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let into_t = || draft_landing(&session, &signer, Some(a(t)));
+        let merge_a = compose(&board, Some(session.token()), &race_inputs()).expect("A composed");
+        let (a_at, a_record) = landing_of(&land(&board, &merge_a, into_t()).expect("A landed"));
+        let b_inputs =
+            Inputs { sides: vec![Side::Draft { at: a(t), position: None }], ..race_inputs() };
+        let merge_b = compose(&board, Some(session.token()), &b_inputs).expect("B composed");
+        too_busy_for_the_find(&mut dialer.world());
+        let err = land(&board, &merge_b, into_t()).expect_err("B's record unwritten");
+        assert!(
+            matches!(&err, Refusal::Halt(Halt::Halt(face)) if face.state.contains(&format!("the merge stands at {t}"))),
+            "the premise: {err:?}"
+        );
+        let b_marker = dialer.world().standing(t).1.expect("the premise: B's marker");
+        assert!(b_marker.sides.is_empty() && b_marker.at > a_at, "the premise: {b_marker:?}");
+        dialer.clear();
+        let undone = undo(&board, m, &a(t), &a(K), None, None).expect("B taken back");
+        assert_eq!(
+            dialer.frames("set_arrangement")[0]["merge"],
+            json!({"sides": [format!("{D}.1.1")], "at": a_at}),
+            "A's marker put back"
+        );
+        assert_eq!(
+            (undone.record.clone(), undone.marker.as_ref().and_then(|m| m.at)),
+            (None, Some(a_at)),
+            "no record of B's landing stood"
+        );
+        assert!(
+            dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(),
+            "nothing of a record: {:?}",
+            dialer.ops()
+        );
+        assert_eq!(dialer.world().docs.get(t).unwrap().runs, m_runs(&merge_a), "T as A left it");
+        let found = current(&board, Some(session.token()), &a(K), &merge_a.key)
+            .expect("the lookup")
+            .expect("a record");
+        assert_eq!(
+            (found.link, found.landed),
+            (Some(a_record.clone()), Some(RecordLanding::Draft { draft: a(t), position: a_at })),
+            "A's record current"
+        );
+        dialer.clear();
+        undo(&board, m, &a(t), &a(K), None, None).expect("A taken back");
+        assert_eq!(
+            dialer.frames("set_arrangement")[0]["as_of"],
+            json!(undone.position),
+            "typed against the first undo's write"
+        );
+        assert_eq!(
+            dialer.world().standing(t),
+            (Some((format!("{D}.1"), 11)), None),
+            "T's base as staged, no marker"
+        );
+        assert_eq!(
+            appended_record(&dialer)["replaces"].as_str(),
+            Some(a_record.to_string().as_str()),
+            "A's record replaced"
+        );
+    }
+
+    /// Two merges of one head and sides in a draft are each taken back by
+    /// their own record.
+    ///
+    /// Skep #964: the draft-side merge of `T` landed in it, `T`'s base
+    /// moving to the head, then composed again — another key, the same head
+    /// and sides — and landed again, its record of its own. The undo takes
+    /// the second back and replaces its record, the first landing's marker
+    /// put back. Composed a third time and landed with its record unwritten,
+    /// then undone: the first landing's record stands for the marker put
+    /// back, and the second's, replaced, is never taken back again — nothing
+    /// is written. The last undo, typed against the latest put-back, takes
+    /// the first landing back and replaces its record. And where the second
+    /// landing's undo left its record unwritten, the second's record, naming
+    /// a landing made since the first, is never the first landing's: the
+    /// undo of the first replaces the first's.
+    #[test]
+    fn two_merges_of_one_head_and_sides_are_each_taken_back_by_their_own_record() {
+        let t = "1.0.1.0.5";
+        let mut w = World::race();
+        w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
+        w.staged(t, &format!("{D}.1"), 11);
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let into_t = || draft_landing(&session, &signer, Some(a(t)));
+        let inputs =
+            Inputs { sides: vec![Side::Draft { at: a(t), position: None }], ..race_inputs() };
+        let first = compose(&board, Some(session.token()), &inputs).expect("composed");
+        let (first_at, first_record) = landing_of(&land(&board, &first, into_t()).expect("landed"));
+        let second = compose(&board, Some(session.token()), &inputs).expect("composed again");
+        assert_ne!(second.key, first.key, "the premise: T's base moved, another key");
+        let (_, second_record) =
+            landing_of(&land(&board, &second, into_t()).expect("landed again"));
+        assert_ne!(second_record, first_record, "the premise: a record of its own");
+        dialer.clear();
+        let undone = undo(&board, m, &a(t), &a(K), None, None).expect("the second taken back");
+        assert_eq!(
+            undone.marker.as_ref().and_then(|m| m.at),
+            Some(first_at),
+            "the first landing's marker put back"
+        );
+        assert_eq!(
+            appended_record(&dialer)["replaces"].as_str(),
+            Some(second_record.to_string().as_str()),
+            "the second landing's record replaced"
+        );
+        let third = compose(&board, Some(session.token()), &inputs).expect("composed a third time");
+        too_busy_for_the_find(&mut dialer.world());
+        assert!(
+            matches!(land(&board, &third, into_t()), Err(Refusal::Halt(Halt::Halt(_)))),
+            "the premise: landed, its record unwritten"
+        );
+        dialer.clear();
+        let undone = undo(&board, m, &a(t), &a(K), None, None).expect("the third taken back");
+        assert_eq!(
+            (undone.record, undone.marker.and_then(|m| m.at)),
+            (None, Some(first_at)),
+            "the first landing's record stands for the marker put back"
+        );
+        assert!(
+            dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(),
+            "no record written: {:?}",
+            dialer.ops()
+        );
+        dialer.clear();
+        let staged = undo(&board, m, &a(t), &a(K), None, None).expect("the first taken back");
+        assert_eq!(
+            dialer.frames("set_arrangement")[0]["as_of"],
+            json!(undone.position),
+            "typed against the latest put-back"
+        );
+        assert_eq!(staged.marker, None);
+        assert_eq!(
+            dialer.world().standing(t),
+            (Some((format!("{D}.1"), 11)), None),
+            "T's base as staged, no marker"
+        );
+        assert_eq!(
+            appended_record(&dialer)["replaces"].as_str(),
+            Some(first_record.to_string().as_str()),
+            "the first landing's record replaced"
+        );
+
+        // The second landing's undo with its record unwritten.
+        let mut w = World::race();
+        w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
+        w.staged(t, &format!("{D}.1"), 11);
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let into_t = || draft_landing(&session, &signer, Some(a(t)));
+        let first = compose(&board, Some(session.token()), &inputs).expect("composed");
+        let (_, first_record) = landing_of(&land(&board, &first, into_t()).expect("landed"));
+        let second = compose(&board, Some(session.token()), &inputs).expect("composed again");
+        land(&board, &second, into_t()).expect("landed again");
+        too_busy_for_the_find(&mut dialer.world());
+        let err =
+            undo(&board, m, &a(t), &a(K), None, None).expect_err("the undo's record unwritten");
+        assert!(
+            matches!(&err, Refusal::Halt(Halt::Halt(face)) if face.state.contains("the merge landed before it standing again")),
+            "the premise, the earlier merge back: {err:?}"
+        );
+        dialer.clear();
+        undo(&board, m, &a(t), &a(K), None, None).expect("the first taken back");
+        assert_eq!(
+            appended_record(&dialer)["replaces"].as_str(),
+            Some(first_record.to_string().as_str()),
+            "the first landing's record replaced, never the second's"
+        );
+    }
+
+    /// An undo over the marker a stage copied puts it back, inherited still.
+    ///
+    /// Skep #964, P2: the race shape landed in `T0`, `T` staged from it — the
+    /// marker copied, stamped at `T`'s mint — and the same merge landed in
+    /// `T`, a landing of its own with a record of its own. The undo puts the
+    /// copied marker back with its mint position, the head and the sides the
+    /// landing's own, and replaces `T`'s record: a copied marker marks no
+    /// landing, so no record stands for it. The undo after it answers
+    /// `Inherited`, nothing sent. With the record left unwritten, the face
+    /// is a plain take-back's, a re-run finding no merge to take out, never
+    /// an earlier landing's merge standing again.
+    #[test]
+    fn an_undo_over_the_marker_a_stage_copied_puts_it_back_and_the_next_answers_inherited() {
+        let t0 = "1.0.1.0.5";
+        let world = || {
+            let mut w = World::race();
+            w.doc(t0, false, ACCOUNT, vec![run(D, 1, 11)]);
+            w.staged(t0, &format!("{D}.1"), 11);
+            w
+        };
+        let (dialer, board, signer) = open(world());
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let into = |draft: &str| draft_landing(&session, &signer, Some(a(draft)));
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        land(&board, &merged, into(t0)).expect("landed in T0");
+        let Answer::Document(ack) =
+            board.op(Some(session.token()), &frames::stage(t0, None)).expect("the stage")
+        else {
+            panic!("closed")
+        };
+        let t = acked_addr(&ack).expect("T").to_string();
+        let minted = acked_at(&ack).expect("its position");
+        let again = compose(&board, Some(session.token()), &race_inputs()).expect("composed again");
+        let (at, link) = landing_of(&land(&board, &again, into(&t)).expect("landed in T"));
+        assert!(at > minted, "the premise: a landing of its own");
+        dialer.clear();
+        let undone = undo(&board, m, &a(&t), &a(K), None, None).expect("T's landing taken back");
+        assert_eq!(
+            dialer.frames("set_arrangement")[0]["merge"],
+            json!({"sides": [format!("{D}.1.1")], "at": minted}),
+            "the copied marker put back at T's mint"
+        );
+        assert_eq!(undone.marker.as_ref().and_then(|m| m.at), Some(minted));
+        assert_eq!(
+            dialer.world().standing(&t).1.map(|m| m.at),
+            Some(minted),
+            "the copied marker standing"
+        );
+        assert!(undone.record.is_some(), "a copied marker marks no landing: T's record replaced");
+        assert_eq!(appended_record(&dialer)["replaces"].as_str(), Some(link.to_string().as_str()));
+        dialer.clear();
+        assert_eq!(
+            undo(&board, m, &a(&t), &a(K), None, None),
+            Err(Refusal::NothingToUndo { draft: a(&t), why: NoUndo::Inherited })
+        );
+        assert!(
+            dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty(),
+            "nothing sent: {:?}",
+            dialer.ops()
+        );
+
+        // The same undo, its record left unwritten.
+        let (dialer, board, signer) = open(world());
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let into = |draft: &str| draft_landing(&session, &signer, Some(a(draft)));
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        land(&board, &merged, into(t0)).expect("landed in T0");
+        let Answer::Document(ack) =
+            board.op(Some(session.token()), &frames::stage(t0, None)).expect("the stage")
+        else {
+            panic!("closed")
+        };
+        let t = acked_addr(&ack).expect("T").to_string();
+        let again = compose(&board, Some(session.token()), &race_inputs()).expect("composed again");
+        land(&board, &again, into(&t)).expect("landed in T");
+        too_busy_for_the_find(&mut dialer.world());
+        let err = undo(&board, m, &a(&t), &a(K), None, None).expect_err("the record unwritten");
+        let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{err:?}") };
+        assert!(
+            face.state.starts_with(&format!(
+                "the merge is out of {t}, and the record of the undo is not written"
+            )),
+            "{face}"
+        );
+        assert_eq!(face.act, OnEnd::TakenOut.act(), "a plain take-back's way on: {face}");
     }
 
     /// A fresh landing reads the standing record as it lands, never `prior`.
@@ -9484,8 +10173,8 @@ mod scripted {
         Alike(OnEnd),
         /// A take-back's: the act run again up to and at its one write,
         /// `set_arrangement`, and the act standing with its record unwritten
-        /// after it.
-        TakeBack,
+        /// after it, this way on.
+        TakeBack(OnEnd),
     }
 
     /// What the deaths staged over one act answered: how many ended the
@@ -9549,8 +10238,8 @@ mod scripted {
             }
             let on_end = match ends {
                 Ends::Alike(on_end) => on_end,
-                Ends::TakeBack if write.is_some_and(|w| k > w) => OnEnd::TakenOut,
-                Ends::TakeBack => OnEnd::Rerun,
+                Ends::TakeBack(after) if write.is_some_and(|w| k > w) => after,
+                Ends::TakeBack(_) => OnEnd::Rerun,
             };
             let Err(Refusal::SessionEnded(Halt::Halt(face))) = &answer else {
                 panic!("{cell}: the death signal at {line} (#{n}) answered {answer:?}");
@@ -9608,11 +10297,13 @@ mod scripted {
     /// `compose`, with no record and with one standing for the key; the
     /// shot, a draft landing named and a fresh one; `resume` after a lost
     /// acknowledgment; `record_published`; the undo by its marker and by a
-    /// baseless draft's feed row; the withdrawal; `verify`; `current`;
-    /// `head_of`; `journal::of` minting and finding — answers
-    /// `Refusal::SessionEnded` with the act's way on: a landing resumed,
-    /// every other act run again, a take-back past its one write standing
-    /// with its record unwritten. A record lookup's read is no absence: a
+    /// baseless draft's feed row; the withdrawal; the undo over an earlier
+    /// landing, its marker put back; `verify`; `current`; `head_of`;
+    /// `journal::of` minting and finding — answers `Refusal::SessionEnded`
+    /// with the act's way on: a landing resumed, every other act run again,
+    /// a take-back past its one write standing with its record unwritten,
+    /// the earlier landing's merge back in the draft where its marker was
+    /// put back (skep #964). A record lookup's read is no absence: a
     /// composition the signal meets at its prior records' journal reads
     /// ends, never composes with no record standing (SP-14). `H.1`'s
     /// token-free read, and every read of a composition made as a guest,
@@ -9747,7 +10438,7 @@ mod scripted {
             draft_landing_world,
             landed_in_draft,
             undo_s,
-            Ends::TakeBack,
+            Ends::TakeBack(OnEnd::TakenOut),
         );
         assert!(undoing.ended > 0 && undoing.faulted == 0, "no head read: the undo signs nothing");
         const PLAIN: &str = "1.0.1.0.5";
@@ -9769,7 +10460,7 @@ mod scripted {
             |board, session, signer, _| {
                 undo(board, merger(session, signer), &a(PLAIN), &a(K), None, None).map(drop)
             },
-            Ends::TakeBack,
+            Ends::TakeBack(OnEnd::TakenOut),
         );
         deaths_of(
             "the withdrawal",
@@ -9778,7 +10469,44 @@ mod scripted {
             |board, session, signer, _| {
                 withdraw(board, merger(session, signer), &a(S), &a(K), None).map(drop)
             },
-            Ends::TakeBack,
+            Ends::TakeBack(OnEnd::TakenOut),
+        );
+        // A merge landed over another, both recorded: the undo puts the
+        // first one's marker back and replaces the second's record.
+        const OVER: &str = "1.0.1.0.5";
+        let two_drafts = || {
+            let mut w = World::race();
+            w.doc(OVER, false, ACCOUNT, vec![run(D, 1, 11)]);
+            w.staged(OVER, &format!("{D}.1"), 11);
+            w
+        };
+        let landed_twice =
+            |_: &Scripted, board: &Board, session: &Session<'_>, signer: &HybridSigner| {
+                let into = || draft_landing(session, signer, Some(a(OVER)));
+                let first =
+                    compose(board, Some(session.token()), &race_inputs()).expect("composed");
+                land(board, &first, into()).expect("landed");
+                let over = Inputs {
+                    sides: vec![Side::Draft { at: a(OVER), position: None }],
+                    ..race_inputs()
+                };
+                let over = compose(board, Some(session.token()), &over).expect("composed over it");
+                land(board, &over, into()).expect("landed over it");
+            };
+        let earlier = deaths_of(
+            "the undo over an earlier landing",
+            two_drafts,
+            landed_twice,
+            |board, session, signer, _| {
+                undo(board, merger(session, signer), &a(OVER), &a(K), None, None).map(|u| {
+                    assert!(u.marker.is_some() && u.record.is_some(), "the premise: {u:?}")
+                })
+            },
+            Ends::TakeBack(OnEnd::EarlierBack),
+        );
+        assert!(
+            earlier.ended > undoing.ended,
+            "the feed walk and the record's writes past the plain undo's"
         );
         let recorded =
             |dialer: &Scripted, board: &Board, session: &Session<'_>, signer: &HybridSigner| {
@@ -9853,9 +10581,11 @@ mod scripted {
         );
     }
 
-    /// The three ways on say what each act leaves: a landing resumed, every
-    /// other act run again reading first, a take-back's write standing with
-    /// nothing more written — the words a take-back's owed record says too.
+    /// The ways on say what each act leaves: a landing resumed, every other
+    /// act run again reading first, a take-back's write standing with
+    /// nothing more written — the words a take-back's owed record says too —
+    /// and, where an undo put an earlier landing's marker back, that a re-run
+    /// takes that merge back too (skep #964).
     #[test]
     fn each_way_on_says_what_the_act_it_stopped_leaves() {
         let [rerun, resume, taken_out] =
@@ -9867,6 +10597,18 @@ mod scripted {
                 && taken_out.contains("a re-run writes no record"),
             "{taken_out}"
         );
+        let earlier_back = OnEnd::EarlierBack.act();
+        assert!(
+            earlier_back.starts_with("nothing more is written")
+                && earlier_back.contains("a re-run takes that merge back too"),
+            "{earlier_back}"
+        );
+        let Refusal::SessionEnded(Halt::Halt(face)) =
+            session_ended("linking the record", OnEnd::EarlierBack)
+        else {
+            panic!("the arm")
+        };
+        assert_eq!(face.state, "the merge is out of the draft, the merge landed before it standing again, and its record is not written: the session ended while linking the record");
         let Refusal::SessionEnded(Halt::Halt(face)) =
             session_ended("linking the record", OnEnd::TakenOut)
         else {

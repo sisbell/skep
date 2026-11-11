@@ -121,11 +121,14 @@
 //! P3's editor rule): the position of the principal's latest arrangement
 //! write on it that this shell acknowledged, a burst's or a
 //! `set_arrangement`'s, never a link's (`Holds::last_arranged`), or the
-//! landing's position where that is later — so the person's own later
-//! changes, taken back first on the editor's stack, never leave it
-//! refused, and a change since by another hand refuses it
-//! `arrangement_moved`, nothing wiped — while the session that landed it
-//! stands; **`merge.withdraw`** — `{draft}` —
+//! landing's position — or the latest write that put the landing's marker
+//! back, where only a take-back and its undo moved the words since — where
+//! that is later — so the person's own later changes, taken back first on
+//! the editor's stack, never leave it refused, and a change since by
+//! another hand refuses it `arrangement_moved`, nothing wiped — while the
+//! session that landed it stands, the marker the draft carried before the
+//! landing put back as it stood and answered as `marker` (skep #964);
+//! **`merge.withdraw`** — `{draft}` —
 //! takes the merge out of any marked draft and keeps its words, in any
 //! session, by the library's `withdraw`, the standing composition taken
 //! aside; **`merge.undo`** with `{draft, withdrawal}` takes that withdrawal
@@ -193,6 +196,7 @@ use skep_client::merge::{self as lib, Family, Gap, GapKind, Misfit, NoUndo, Plac
 use skep_client::publication::{Run as SelectionRun, Standing};
 use skep_client::sheet::render_inert;
 
+use super::history::marker_json;
 use super::publication::{address_arg, answer_json, clipped, ispan_json, left_private_json, via_name, Confirmation, OpenArgs, Signed};
 use super::{optional, Shell, Write, Writer};
 use crate::refusal::{Name, Refusal};
@@ -953,13 +957,15 @@ impl Shell {
     }
 
     /// Answers `merge.undo(session)` with `{draft, position, record,
-    /// restored}` (the module doc; `shapes`' `Undone`).
+    /// restored, marker}` (the module doc; `shapes`' `Undone`).
     ///
     /// The undo is typed against the principal's latest arrangement write on
-    /// the draft the hold noted, or the landing's position where that is
-    /// later, the library taking the later of the two. With `{draft,
-    /// withdrawal}` it is the withdrawal's undo instead
-    /// ([`Shell::merge_unwithdraw`]).
+    /// the draft the hold noted, or the landing's position — or the latest
+    /// write that put its marker back, where only a take-back and its undo
+    /// moved the words since — where that is later, the library taking the
+    /// latest. `marker` is the marker the draft carries again, the one it
+    /// carried before the landing, or null. With `{draft, withdrawal}` it is
+    /// the withdrawal's undo instead ([`Shell::merge_unwithdraw`]).
     ///
     /// # Errors
     ///
@@ -1001,6 +1007,7 @@ impl Shell {
             "position": undone.position,
             "record": undone.record.map(|r| r.to_string()),
             "restored": undone.restored.map(|(base, extent)| json!({"base": base.to_string(), "extent": extent})),
+            "marker": undone.marker.as_ref().map(marker_json),
         }))
     }
 

@@ -70,13 +70,17 @@
 //! **The two take-backs** (skep #783), each with `--kind` and nothing of
 //! the composition's: `--undo ⟨S⟩` puts the draft back as it stood before
 //! the merge landed in it — its words and its base restored, the merge
-//! taken out, in one write typed against the landing's position, so a
-//! draft changed since is refused with nothing changed — and `--withdraw
-//! ⟨S⟩` takes the merge out and keeps the words, the draft's next version
-//! then an ordinary one. Each prints one JSON document carrying the act,
-//! the draft, the write's position, the replacing record's link and the
-//! case; where there is nothing to undo or take out the library's reason
-//! is the refusal, exit 1, and nothing was sent.
+//! taken out and the merge it carried before put back where it carried one
+//! (skep #964), in one write typed against the landing's position, or the
+//! latest write that put the landing's marker back where only a take-back
+//! and its undo moved the words since, so a draft changed since is refused
+//! with nothing changed — and `--withdraw ⟨S⟩` takes the merge out and
+//! keeps the words, the draft's next version then an ordinary one. Each
+//! prints one JSON document carrying the act, the draft, the write's
+//! position, the replacing record's link and the case, the undo's with the
+//! base restored and the marker the draft carries again; where there is
+//! nothing to undo or take out the library's reason is the refusal, exit 1,
+//! and nothing was sent.
 //!
 //! The session is the command's own: the selected signing key (the file
 //! `--key` or `SKEP_KEY` names, else the store's), a content-scoped signed
@@ -585,18 +589,29 @@ fn unwithdrawn_value(unwithdrawn: &Unwithdrawn, withdrawal: u64) -> Value {
 }
 
 /// Says the talk after an undo: the draft is back to how it stood before
-/// the merge, its base — where the board records one — and the merge are
-/// taken back, and the record's link where one was written.
+/// the merge, its base — where the board records one — taken back.
+///
+/// The merge is taken out, or the one the draft carried before it stands
+/// again where the undo put its marker back (skep #964), and the record's
+/// link is named where one was written.
 fn say_undone(undone: &Undone) {
-    let Undone { draft, position, record, restored } = undone;
-    talk(format!(
-        "took the merge back out of {draft} at position {position}: the draft is back to how it stood before the merge{}, and the merge is taken out{}",
-        match restored {
-            Some((base, extent)) => format!(", its base is {base} at {extent} positions again"),
-            None => format!("; {draft} records no base, so none moved"),
-        },
-        record_said(record.as_ref())
-    ));
+    let Undone { draft, position, record, restored, marker } = undone;
+    let base = match restored {
+        Some((base, extent)) => format!(", its base is {base} at {extent} positions again"),
+        None => format!("; {draft} records no base, so none moved"),
+    };
+    let merge = match marker {
+        None => format!(", and the merge is taken out{}", record_said(record.as_ref())),
+        Some(earlier) => format!(
+            ", and the merge it carried then stands in it again{}{}",
+            earlier.at.map(|at| format!(", marked at position {at}")).unwrap_or_default(),
+            match record {
+                Some(link) => format!("; the record's link is {link}"),
+                None => "; no record was written: the merge standing again keeps the record that stood, where one stood".to_string(),
+            }
+        ),
+    };
+    talk(format!("took the merge back out of {draft} at position {position}: the draft is back to how it stood before the merge{base}{merge}"));
 }
 
 /// Says the talk after a withdrawal: the merge is taken out, the words
@@ -623,7 +638,9 @@ fn record_said(record: Option<&Address>) -> String {
 /// It is the act, the draft, the write's position, the replacing record's
 /// link (else null), the case — `marker` where the undo went by the
 /// draft's base record and marker, `feed` where by the draft's own feed
-/// row — and the base restored as `{at, extent}` (else null).
+/// row — the base restored as `{at, extent}` (else null), and the marker
+/// the draft carries again as `doc_metadata` serves it, `{sides, head,
+/// head_copied, at}`, where the undo put one back (else null; skep #964).
 fn undone_value(undone: &Undone) -> Value {
     json!({
         "act": "undo",
@@ -632,6 +649,7 @@ fn undone_value(undone: &Undone) -> Value {
         "record": undone.record.as_ref().map(ToString::to_string),
         "case": if undone.restored.is_some() { "marker" } else { "feed" },
         "restored": undone.restored.as_ref().map(|(base, extent)| json!({"at": base.to_string(), "extent": extent.to_string()})),
+        "marker": undone.marker.as_ref().map(|m| json!({"sides": m.sides, "head": m.head, "head_copied": m.head_copied.map(|n| n.to_string()), "at": m.at})),
     })
 }
 

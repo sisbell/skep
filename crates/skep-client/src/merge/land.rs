@@ -1612,52 +1612,25 @@ impl Writer<'_> {
         })
     }
 
-    /// Returns the current record naming `draft` as landed in.
+    /// Returns every merge record of `kind` linked to `draft`.
     ///
-    /// It is read through the links of `kind` to the draft, each record's
-    /// atom through its journal, keeping the records whose `landed` is the
-    /// draft, and answering the newest of them by the order their links
-    /// were minted, with that link; a record whose journal the merger may
-    /// not read is no candidate. `None` where none stands: the undo's and
-    /// the withdrawal's record is then not written (the `undo` module's
-    /// doc).
+    /// They are found through the links of the kind to the draft, each
+    /// record's atom read through its journal, whatever its `landed` names —
+    /// a landing's record, or a take-back's, which names none (skep #870) —
+    /// each with the link it was found through; a record whose journal the
+    /// merger may not read is no candidate. The undo and the withdrawal
+    /// replace the one their act takes back among them, a withdrawal's undo
+    /// writes the landing's again past the newest, and each writes none
+    /// where none stands (the `undo` module's doc).
     ///
     /// # Errors
     ///
     /// The link read's refusal at the draft; a halt reading a record.
-    pub(super) fn landed_record(
+    pub(super) fn records_to(
         &self,
         kind: &Address,
         draft: &Address,
-    ) -> Result<Option<Record>, Refusal> {
-        let v = self.reader.answered(
-            draft,
-            &frames::find_links_ftt(&kind.to_string(), &draft.to_string()),
-            None,
-        )?;
-        let mut landed_here = Vec::new();
-        for link in answers::addrs(&v) {
-            let Some(link) = parse_address(link) else { continue };
-            let Some(found) = read_record(&self.reader, &link)? else { continue };
-            let landed = &found.record.landed;
-            if matches!(landed, Some(RecordLanding::Draft { draft: d, .. }) if d == draft) {
-                landed_here.push(found);
-            }
-        }
-        Ok(newest(landed_here).map(|found| found.record))
-    }
-
-    /// Returns the newest merge record of `kind` linked to `draft`.
-    ///
-    /// It is found as [`Writer::landed_record`] finds the landing's — the
-    /// links of the kind to the draft, the newest by the order they were
-    /// minted — whatever its `landed` names: a landing's record, or a
-    /// take-back's, which names none (skep #870).
-    ///
-    /// # Errors
-    ///
-    /// The find's and the records' reads' refusals, through `reader`.
-    pub(super) fn newest_to(&self, kind: &Address, draft: &Address) -> Result<Option<Found>, Refusal> {
+    ) -> Result<Vec<Found>, Refusal> {
         let v = self.reader.answered(
             draft,
             &frames::find_links_ftt(&kind.to_string(), &draft.to_string()),
@@ -1668,7 +1641,7 @@ impl Writer<'_> {
             let Some(link) = parse_address(link) else { continue };
             found.extend(read_record(&self.reader, &link)?);
         }
-        Ok(newest(found))
+        Ok(found)
     }
 
     /// Stages a fresh draft from the head, answering it and its position.
@@ -1937,7 +1910,7 @@ impl Writer<'_> {
                 .filter(|at| meta.at != Some(*at)));
         }
         let mut latest = None;
-        feed_rows(&self.reader, &into.to_string(), true, |row| {
+        feed_rows(&self.reader, &into.to_string(), true, 0, |row| {
             if row["op"].as_str() == Some("set_arrangement") {
                 let merge = &row["merge"];
                 let marks = merge["head"].as_str() == Some(head.as_str())

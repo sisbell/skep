@@ -175,6 +175,22 @@
 //! `probe()` answers the state as it stands ([`Holds::state`]). Every read of
 //! the board's head feeds it, wherever it is made ([`Holds::note_head`]).
 //!
+//! **The writer a drafts row names** (§4b.2's `feed` event; skep #1000).
+//! Every answer of a session's write the hold notes — an ack at a first
+//! dial, a shift or a resend ([`Holds::note_ack`]), a restore's or a merge
+//! row's write ([`Holds::note_restored`], [`Holds::note_arranged`]), a
+//! publication's shot ([`Holds::note_shot`]) — records, for its principal at
+//! the board, the session that wrote it at the position the board took it
+//! at, and the page's `id` of the burst it carried, never the dial id a
+//! resend dials under ([`PrincipalHold::written`]); a landing the resend's
+//! read found records the burst alone, no answer naming the dial that landed
+//! it. The record is read for a drafts page the feed thread reads
+//! ([`Holds::writers`]) and for a `changes` page ([`Holds::written`]), and
+//! names no session of another principal's. A write under a session is out
+//! at its board from before its first dial until its answer is noted
+//! ([`WriteOut`]), so a drafts read that meets its row first waits for it,
+//! at most [`WRITER_WAIT`] a page.
+//!
 //! **The store, from the first touch** (§3c.1, §3c.3; skep #857, #858,
 //! #859, #873, #880). A board's held store is taken at its first touch: a
 //! session's open or a ceremony's door, each the store's touch
@@ -290,13 +306,13 @@
 //! wait is another's.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -318,7 +334,7 @@ use crate::held::{
 use crate::refs::{BoardEntry, DialId, DIAL_ID_ROOM};
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{board_head, HeadRead, SessionEntry, Sessions};
-use crate::wire::{document_address, json_len, values_of, MAX_FRAME_BYTES};
+use crate::wire::{document_address, json_len, values_of, MAX_FRAME_BYTES, WRITE_KINDS};
 use crate::Talk;
 
 mod labels;
@@ -455,6 +471,16 @@ pub(crate) const HAND_OVER_DEADLINE: Duration = Duration::from_secs(120);
 /// It is §3c.4's "a silent reissue after a short wait" — interim, open to
 /// tuning, as [`PROBE_CADENCE`] is.
 const WRITE_BUSY_WAIT: Duration = Duration::from_millis(50);
+
+/// The longest a drafts read waits for the writers of one page's rows.
+///
+/// A row of a session's write can reach the feed's read before the write's
+/// answer is noted ([`Holds::writers`]; skep #1000). The read waits for the
+/// answers of the principal's writes that were out as the page was answered,
+/// once a page and this long at most — the bound the followers' arrival wait
+/// keeps (`shell/follow.rs`'s `BURST_ARRIVAL_WAIT`) — so a search, a listing
+/// or a session's swap queued behind the read is held no longer.
+pub(crate) const WRITER_WAIT: Duration = Duration::from_secs(1);
 
 /// The burst machine's five kinds (§3c.4) — the ops the held store holds.
 const BURST_KINDS: [&str; 5] = ["insert", "delete", "copy", "reinstate", "rearrange"];
@@ -745,6 +771,37 @@ impl LandedLine {
             v["addr"] = Value::from(addr.as_str());
         }
         v
+    }
+}
+
+/// What this shell knows of the write a drafts row records (skep #1000).
+///
+/// It is recorded at the position the board took the write at, for the
+/// writing session's principal ([`PrincipalHold::written`]), and a `feed`
+/// update carries its two members as `by` and `burst` (§4b.2's `feed`
+/// event).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Written {
+    /// The reference of the session whose dial the board acknowledged.
+    ///
+    /// A held line the walk sent again names the session it went out under.
+    /// It is none for a landing the resend's read found: no answer names the
+    /// dial that landed it.
+    pub(crate) by: Option<String>,
+    /// The envelope `id` the page sent on the burst the write carried (A-60).
+    ///
+    /// It is the page's own, never the dial id a resend went out under, and
+    /// none for a write of another kind or a burst that carried none.
+    pub(crate) burst: Option<String>,
+}
+
+impl Written {
+    /// Returns the record of a write `by` dialed, `id` its burst's `id`.
+    ///
+    /// An `id` past [`MAX_BURST_ID_BYTES`] is no burst a row names, as no
+    /// follower or anchor piece names one.
+    fn of(by: Option<&SessionEntry>, id: Option<&str>) -> Written {
+        Written { by: by.map(|session| session.reference.clone()), burst: id.filter(|id| id.len() <= MAX_BURST_ID_BYTES).map(str::to_owned) }
     }
 }
 
@@ -2174,11 +2231,14 @@ struct Seen {
 /// ([`PrincipalHold::hands_owed`]), each moved document's shift test
 /// ([`PrincipalHold::shift_tests`]), its newest inserts kept with an `id`
 /// whose words a burst's anchors may name ([`PrincipalHold::landed_inserts`];
-/// skep #969), and whether the wait for the copies its file owes was said
-/// ([`PrincipalHold::waiting_said`]). An ack touches no standing line's
-/// base: a line held keeps the base it was held at, raised only behind a
-/// line kept on its document (`HeldQueue::done`) and by the person's `send`
-/// on a moved document (`HeldQueue::remark_all`, [`Holds::resolve`]).
+/// skep #969), the writer of each of its writes the shell recorded and the
+/// writes under its sessions out at the board ([`PrincipalHold::written`],
+/// [`PrincipalHold::writes_out`]; skep #1000), and whether the wait for the
+/// copies its file owes was said ([`PrincipalHold::waiting_said`]). An ack
+/// touches no standing line's base: a line held keeps the base it was held
+/// at, raised only behind a line kept on its document (`HeldQueue::done`)
+/// and by the person's `send` on a moved document (`HeldQueue::remark_all`,
+/// [`Holds::resolve`]).
 #[derive(Debug)]
 struct PrincipalHold {
     custody: Custody,
@@ -2364,6 +2424,33 @@ struct PrincipalHold {
     /// ([`Holds::place_anchors`]). In memory, as the follower table is: a
     /// relaunch forgets it.
     landed_inserts: VecDeque<LandedInsert>,
+    /// The writer of each write of the principal's the shell recorded at the
+    /// board, by the position the board took it at ([`Written`]; skep #1000).
+    ///
+    /// Each is entered as the write's answer is noted ([`Holds::note_ack`],
+    /// [`Holds::note_restored`], [`Holds::note_arranged`],
+    /// [`Holds::note_shot`]) or its landing is found (`resend`'s
+    /// `keep_landing`), and read for the drafts rows the feed thread sends
+    /// and the entries of a `changes` page ([`Holds::writers`],
+    /// [`Holds::written`]). No bound is kept, as none is on
+    /// [`BoardHold::acked`]: a `changes` read asks from any position the page
+    /// names, the rows a session's end cut off among them, read after the end
+    /// (skep #740), so a record is of use for the shell's life. It grows by a
+    /// position, a session's reference and a burst's `id` per write — a
+    /// hundred bytes or so, some ten megabytes over a day of a write a second
+    /// — and dies with the shell.
+    written: HashMap<u64, Written>,
+    /// The writes under the principal's sessions out at the board, by ticket
+    /// ([`WriteOut`]; skep #1000).
+    ///
+    /// Each holds the fingerprint of the key its session signs with — the
+    /// `key` a row of its write names (wire.md §`/changes`) — from before its
+    /// first dial until its answer is noted, and a drafts read waits on those
+    /// out as its page was answered ([`Holds::writers`]). In memory.
+    writes_out: BTreeMap<u64, Option<String>>,
+    /// The ticket the principal's next write out takes: every ticket given
+    /// out is below it.
+    next_write: u64,
     /// Whether the shell's own window was told the queue's file owes copies.
     ///
     /// It is set as the wait is said to begin, and cleared as its end is
@@ -2406,9 +2493,28 @@ impl PrincipalHold {
             shift_tests: HashMap::new(),
             unwritable_docs: HashSet::new(),
             landed_inserts: VecDeque::new(),
+            written: HashMap::new(),
+            writes_out: BTreeMap::new(),
+            next_write: 0,
             waiting_said: false,
             superseded_said: false,
         }
+    }
+
+    /// Returns whether `row` may yet learn its writer.
+    ///
+    /// The row is of a page answered while the writes ticketed below `answered`
+    /// were out or done. It may where no writer is recorded at its position and
+    /// one of those writes is out still whose row it could be: one under its
+    /// key's session, or any where the row is a signed entry, which names no
+    /// key (wire.md §`/changes`: `attest` in its place). A row of another key,
+    /// of lost testimony or of a bare hand learns none from this shell's
+    /// writes.
+    fn owes_writer(&self, row: &Value, answered: u64) -> bool {
+        let Some(at) = row["at"].as_u64() else { return false };
+        let signed = row.get("key").is_none() && row.get("attest").is_some();
+        let key = row["key"].as_str();
+        !self.written.contains_key(&at) && self.writes_out.range(..answered).any(|(_, out)| signed || (key.is_some() && out.as_deref() == key))
     }
 
     /// Returns how many sends have taken line `k` for their dials.
@@ -2973,6 +3079,11 @@ struct BoardSlot {
     /// the mark is held for one turn, and only the drain that holds it ends
     /// the pass ([`BoardHold::end_pass`]).
     draining: AtomicBool,
+    /// Woken where a write's writer is recorded or a write out is let go.
+    ///
+    /// A drafts read waits on it, over the hold's lock, for the writers of
+    /// its page's rows ([`Holds::writers`]; skep #1000).
+    written: Condvar,
 }
 
 impl BoardSlot {
@@ -3045,6 +3156,56 @@ impl Drop for LineOut<'_> {
         if self.quiet && !thread::panicking() && ph.queue.reason(self.k).is_some() {
             ph.never_left.insert(self.k);
         }
+    }
+}
+
+/// A write under a session out at its board (skep #1000).
+///
+/// It stands in its principal's [`PrincipalHold::writes_out`] from before the
+/// write's first dial — taken by [`Holds::write_out`] — until it is dropped,
+/// once the write's answer is noted, so a drafts read that meets the write's
+/// row before then waits for its writer ([`Holds::writers`]) and never finds
+/// the write answered and its writer unrecorded. Every holder drops it before
+/// it ends the session a death at the write leads to: the end's swap runs on
+/// the board's feed thread, which may be waiting on the write. [`Holds::send`]
+/// holds one over a session's write through it, and the shell's rows hold one
+/// over each write the library dials for them ([`WriteOut::noted`]); a resend
+/// holds none, made on the feed thread alone, its answer noted before that
+/// thread reads again.
+#[must_use = "a write stands out until its `WriteOut` is dropped"]
+pub(crate) struct WriteOut<'h> {
+    holds: &'h Holds,
+    board_reference: &'h str,
+    principal: u64,
+    ticket: u64,
+}
+
+impl WriteOut<'_> {
+    /// Notes what a write the library dialed answered, then lets it go.
+    ///
+    /// `note` records the position an answer `Ok` names before the write is
+    /// let go, and the answer is handed back as it came.
+    pub(crate) fn noted<T, E>(self, answer: Result<T, E>, note: impl FnOnce(&T)) -> Result<T, E> {
+        if let Ok(written) = &answer {
+            note(written);
+        }
+        answer
+    }
+}
+
+impl Drop for WriteOut<'_> {
+    /// Lets the write go, and wakes a drafts read waiting on it.
+    ///
+    /// It takes the board's lock poisoned or not, so an unwinding write never
+    /// panics here again.
+    fn drop(&mut self) {
+        let slot = self.holds.slot(self.board_reference);
+        let mut board_hold = slot.hold.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(ph) = board_hold.principals.get_mut(&self.principal) {
+            ph.writes_out.remove(&self.ticket);
+        }
+        drop(board_hold);
+        slot.written.notify_all();
     }
 }
 
@@ -3131,7 +3292,7 @@ impl Holds {
                     labels: HashMap::new(),
                     principals: HashMap::new(),
                 };
-                (entry.reference.clone(), BoardSlot { board: Arc::clone(&entry.board), hold: Mutex::new(hold), draining: AtomicBool::new(false) })
+                (entry.reference.clone(), BoardSlot { board: Arc::clone(&entry.board), hold: Mutex::new(hold), draining: AtomicBool::new(false), written: Condvar::new() })
             })
             .collect();
         Arc::new(Holds { sessions, bus, key_store, data_dir, talk, boards, last_emitted: Mutex::new(HashMap::new()), skew_ms: AtomicU64::new(0) })
@@ -3991,8 +4152,13 @@ impl Holds {
     /// door (`Shell::write_door`): under a session that may write alone
     /// (`SessionEntry::may_write`), at a board whose held store no other
     /// shell holds as it meets the door ([`Holds::another_window`]) — the
-    /// `op` row refuses the others before it.
+    /// `op` row refuses the others before it. A frame of one of the wire's
+    /// write kinds ([`WRITE_KINDS`]) stands out at the board from before its
+    /// first dial until this returns, its answer noted
+    /// ([`WriteOut`]; skep #1000), so the caller ends a session the send met
+    /// the death at with no drafts read waiting on it.
     pub fn send(&self, session: &SessionEntry, frame: Value, anchors: Option<Anchors>) -> OpAnswer {
+        let _out = frame["op"].as_str().is_some_and(|op| WRITE_KINDS.contains(&op)).then(|| self.write_out(session));
         if is_burst(&frame) {
             return self.send_burst(session, frame, anchors);
         }
@@ -4698,13 +4864,17 @@ impl Holds {
     /// ([`PrincipalHold::note_arranged`]). An insert's carrying an `id` is
     /// entered among the principal's landed inserts with the address its ack
     /// minted ([`PrincipalHold::note_landed_insert`], [`minted_by`]), so a
-    /// later burst's anchors can name its words (skep #969). No standing line
-    /// is touched: a line held keeps the base it was held at. A read, or a
-    /// refusal, notes nothing.
+    /// later burst's anchors can name its words (skep #969). Its writer is
+    /// recorded at `at` ([`PrincipalHold::written`]; skep #1000): `session`,
+    /// and the frame's `id` where the frame is a burst carrying one — the
+    /// page's, which the frame a resend notes keeps, never the dial id it went
+    /// out under. No standing line is touched: a line held keeps the base it
+    /// was held at. A read, or a refusal, notes nothing.
     fn note_ack(&self, session: &SessionEntry, frame: &Value, ack: &Value) {
         let Some(at) = acked_at(ack) else { return };
         let landed = minted_by(frame, ack).map(|minted| (frame, minted));
-        self.note_written(session, at, &written_docs(frame, ack), arranged_doc(frame), landed);
+        let written = Written::of(Some(session), frame["id"].as_str().filter(|_| is_burst(frame)));
+        self.note_written(session, at, written, &written_docs(frame, ack), arranged_doc(frame), landed);
     }
 
     /// Notes a restore `session` made: the `history.restore` row's write
@@ -4720,7 +4890,8 @@ impl Holds {
     /// arrangement write on the draft ([`PrincipalHold::note_arranged`]) —
     /// the editor's own last ack a merge's undo is typed against
     /// ([`Holds::last_arranged`]), so a restore of the person's never stands
-    /// as another hand's change under it.
+    /// as another hand's change under it — and `session` is its writer
+    /// there, no burst beside it ([`PrincipalHold::written`]; skep #1000).
     ///
     /// # Panics
     ///
@@ -4739,32 +4910,54 @@ impl Holds {
     /// noted as [`Holds::note_restored`] notes the restore's: the editor's
     /// own last ack on `draft` the next undo or withdrawal's undo is typed
     /// against ([`Holds::last_arranged`]), so the family's own writes never
-    /// stand as another hand's change under it.
+    /// stand as another hand's change under it, and `session` its writer.
     ///
     /// # Panics
     ///
     /// Panics where the session's board is none the holds were opened over
     /// (the type's precondition).
     pub fn note_arranged(&self, session: &SessionEntry, draft: &str, at: u64) {
-        self.note_written(session, at, &[draft], Some(draft), None);
+        self.note_written(session, at, Written::of(Some(session), None), &[draft], Some(draft), None);
+    }
+
+    /// Notes the shot `session` sent, its ack at `at` (skep #1000).
+    ///
+    /// The publication family's one write — `publication.confirm`'s and
+    /// `merge.land`'s — is the library's (`skep_client::publication::send`),
+    /// dialed outside [`Holds::send`], and its row names the rendering draft
+    /// (wire.md §The change feed), a drafts row of the principal's: `session`
+    /// is recorded as its writer, no burst beside it
+    /// ([`PrincipalHold::written`]). Nothing else is noted: the shot is no
+    /// write the hold's base or its landed test reads.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the session's board is none the holds were opened over
+    /// (the type's precondition).
+    pub fn note_shot(&self, session: &SessionEntry, at: u64) {
+        let slot = self.slot(&session.board_reference);
+        let mut board_hold = slot.lock();
+        self.principal_entry(&mut board_hold, session).written.insert(at, Written::of(Some(session), None));
+        drop(board_hold);
+        slot.written.notify_all();
     }
 
     /// Notes `at`, the position of a write of the session's principal's.
     ///
-    /// It enters the board's acked positions, raises the `base` on each of
+    /// It enters the board's acked positions, records `written` as the
+    /// write's ([`PrincipalHold::written`]), raises the `base` on each of
     /// `docs`, the documents its row names, and, where the write set
     /// `arranged`'s arrangement, the principal's latest arrangement write
     /// there, and where `landed` names an insert's frame and the address its
     /// ack minted, the insert among the principal's landed inserts
-    /// ([`Holds::note_ack`]'s and [`Holds::note_restored`]'s one body).
-    fn note_written(&self, session: &SessionEntry, at: u64, docs: &[&str], arranged: Option<&str>, landed: Option<(&Value, &str)>) {
-        let mut board_hold = self.lock(&session.board_reference);
+    /// ([`Holds::note_ack`]'s and [`Holds::note_restored`]'s one body). A
+    /// drafts read waiting on the write is woken ([`Holds::writers`]).
+    fn note_written(&self, session: &SessionEntry, at: u64, written: Written, docs: &[&str], arranged: Option<&str>, landed: Option<(&Value, &str)>) {
+        let slot = self.slot(&session.board_reference);
+        let mut board_hold = slot.lock();
         board_hold.acked.insert(at);
-        if docs.is_empty() {
-            return;
-        }
-        let pending = HeldDir::pending(&self.data_dir, session.board.dialed());
-        let ph = board_hold.principals.entry(session.facts.principal).or_insert_with(|| PrincipalHold::new(session.facts.account.as_deref().unwrap_or(""), &pending, session.facts.principal));
+        let ph = self.principal_entry(&mut board_hold, session);
+        ph.written.insert(at, written);
         for &doc in docs {
             ph.note_position(doc, at);
         }
@@ -4774,6 +4967,83 @@ impl Holds {
         if let Some((frame, minted)) = landed {
             ph.note_landed_insert(frame, minted);
         }
+        drop(board_hold);
+        slot.written.notify_all();
+    }
+
+    /// Returns the session's principal's hold, made where none stands.
+    ///
+    /// The hold is at `board_hold`'s board. A hold made here is not yet opened
+    /// (`PrincipalHold::new`): it is the principal's door
+    /// ([`Holds::principal_hold`]) that reads its file.
+    fn principal_entry<'b>(&self, board_hold: &'b mut BoardHold, session: &SessionEntry) -> &'b mut PrincipalHold {
+        let principal = session.facts.principal;
+        board_hold
+            .principals
+            .entry(principal)
+            .or_insert_with(|| PrincipalHold::new(session.facts.account.as_deref().unwrap_or(""), &HeldDir::pending(&self.data_dir, session.board.dialed()), principal))
+    }
+
+    /// Marks a write under `session` out at its board (skep #1000).
+    ///
+    /// The write stands out until the [`WriteOut`] answered is dropped, its
+    /// ticket the principal's next ([`PrincipalHold::writes_out`]) beside the
+    /// fingerprint of the key the session signs with.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the session's board is none the holds were opened over
+    /// (the type's precondition).
+    pub(crate) fn write_out<'h>(&'h self, session: &'h SessionEntry) -> WriteOut<'h> {
+        let mut board_hold = self.lock(&session.board_reference);
+        let ph = self.principal_entry(&mut board_hold, session);
+        let ticket = ph.next_write;
+        ph.next_write += 1;
+        ph.writes_out.insert(ticket, session.key().map(|key| key.to_hex()));
+        WriteOut { holds: self, board_reference: &session.board_reference, principal: session.facts.principal, ticket }
+    }
+
+    /// Returns the writer this shell recorded of each row of a drafts page.
+    ///
+    /// `rows` is a page of `principal`'s drafts feed at the board (§4b.2's
+    /// `feed` event; skep #1000). Each writer is the record at the row's `at`
+    /// ([`PrincipalHold::written`]), or none. A row of a write of the
+    /// principal's can be read before the write's answer is noted, so the read
+    /// waits first while a row may yet learn its writer — a write out as the
+    /// page was answered still out, whose row it could be
+    /// (`PrincipalHold::owes_writer`) — on the board's condvar, the hold's lock
+    /// let go meanwhile: once, and [`WRITER_WAIT`] at most. A page with no such
+    /// row waits not at all. The writes are the receiving principal's alone, so
+    /// no row names another principal's session.
+    ///
+    /// # Panics
+    ///
+    /// Panics where `board_reference` names no board the holds were opened
+    /// over (the type's precondition), or where the board's hold lock is
+    /// poisoned.
+    pub(crate) fn writers(&self, board_reference: &str, principal: u64, rows: &[Value]) -> Vec<Option<Written>> {
+        let slot = self.slot(board_reference);
+        let board_hold = slot.lock();
+        let answered = board_hold.principals.get(&principal).map_or(0, |ph| ph.next_write);
+        let owed = |board_hold: &mut BoardHold| board_hold.principals.get(&principal).is_some_and(|ph| rows.iter().any(|row| ph.owes_writer(row, answered)));
+        let (board_hold, _) = slot.written.wait_timeout_while(board_hold, WRITER_WAIT, owed).expect("a board's hold lock");
+        let ph = board_hold.principals.get(&principal);
+        rows.iter().map(|row| ph.and_then(|ph| ph.written.get(&row["at"].as_u64()?).cloned())).collect()
+    }
+
+    /// Returns the writer recorded at `at` for `session`'s principal.
+    ///
+    /// It is the record at the session's board a `changes` page's drafts
+    /// entry carries ([`PrincipalHold::written`]; skep #1000), read with no
+    /// wait: the caller's read is one call's, and an answer noted after it is
+    /// named by the next.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the session's board is none the holds were opened over
+    /// (the type's precondition).
+    pub(crate) fn written(&self, session: &SessionEntry, at: u64) -> Option<Written> {
+        self.with_principal(&session.board_reference, session.facts.principal, |ph| ph.written.get(&at).cloned()).flatten()
     }
 
     /// Returns the position of the principal's latest arrangement write on

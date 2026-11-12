@@ -141,7 +141,9 @@
 //! landing's again. Every one of the family's whole-draft writes — a draft
 //! landing, an undo, a withdrawal and its undo — is noted as the principal's
 //! latest arrangement write on the draft (`Holds::note_arranged`), the
-//! editor's own last ack the next undo is typed against.
+//! editor's own last ack the next undo is typed against, and the session as
+//! the writer of its row, the write standing out at the board until then
+//! (`hold::WriteOut`; skep #1000).
 //!
 //! **The compositions** ([`Merges`]): one per (board, principal), the
 //! latest composed standing — a second compose replaces it, there being no
@@ -803,11 +805,17 @@ impl Shell {
         if let Some(prior) = landing_into.as_ref().filter(|prior| into.as_ref() != Some(*prior)) {
             self.write_door(Writer::Session(&session), &Write::call("merge.compose", "set_arrangement").over([prior.to_string()]))?;
         }
-        let landed = lib::land(&session.board, &merged, lib::Landing::Draft { merger, into: landing_into, journal: None }).map_err(|r| self.merge_refusal(&session, r))?;
-        let lib::Landed::Draft { into: landed_in, position, record, head_moved, staged } = landed else {
+        // The write out until its position is noted, let go before a death
+        // at it ends the session (`hold::WriteOut`; skep #1000).
+        let out = self.holds.write_out(&session);
+        let landed = out.noted(lib::land(&session.board, &merged, lib::Landing::Draft { merger, into: landing_into, journal: None }), |landed| {
+            if let lib::Landed::Draft { into, position, .. } = landed {
+                self.holds.note_arranged(&session, &into.to_string(), *position);
+            }
+        });
+        let lib::Landed::Draft { into: landed_in, position, record, head_moved, staged } = landed.map_err(|r| self.merge_refusal(&session, r))? else {
             return Err(Refusal::from(Halt::face("the draft landing answered no draft", "`skep_client::merge::land` with a draft landing answers `Landed::Draft` on every path", "report it: the shell's merge row is behind the library")));
         };
-        self.holds.note_arranged(&session, &landed_in.to_string(), position);
         let composition = Composition { session: session.reference.clone(), form, merged, into: landed_in.clone() };
         let answer = report_json(&composition.merged, &composition.form, "landed", json!({"into": landed_in.to_string(), "position": position, "fresh": staged, "head_moved": head_moved.map(|h| h.to_string()), "record_link": record.to_string()}));
         self.merges.stand_over(key, composition, over.as_ref());
@@ -1068,8 +1076,9 @@ impl Shell {
         let kind = merge_kind(&signed.account).ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
         // THE EDITOR's OWN LAST ACK on the draft (P3).
         let own_ack = self.holds.last_arranged(&session, &composition.into.to_string());
-        let undone = lib::undo(&session.board, merger, &composition.into, &kind, own_ack, None).map_err(|r| self.merge_refusal(&session, r))?;
-        self.holds.note_arranged(&session, &undone.draft.to_string(), undone.position);
+        let out = self.holds.write_out(&session);
+        let undone = out.noted(lib::undo(&session.board, merger, &composition.into, &kind, own_ack, None), |undone| self.holds.note_arranged(&session, &undone.draft.to_string(), undone.position));
+        let undone = undone.map_err(|r| self.merge_refusal(&session, r))?;
         self.merges.take_undone(&key, &undone.draft, undone.marker.as_ref());
         Ok(json!({
             "draft": undone.draft.to_string(),
@@ -1102,8 +1111,9 @@ impl Shell {
         let signed = self.signed(&session, Write::call("merge.withdraw", "set_arrangement").over([draft.to_string()]))?;
         let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
         let kind = merge_kind(&signed.account).ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
-        let withdrawn = lib::withdraw(&session.board, merger, &draft, &kind, None).map_err(|r| self.merge_refusal(&session, r))?;
-        self.holds.note_arranged(&session, &draft.to_string(), withdrawn.position);
+        let out = self.holds.write_out(&session);
+        let withdrawn = out.noted(lib::withdraw(&session.board, merger, &draft, &kind, None), |withdrawn| self.holds.note_arranged(&session, &draft.to_string(), withdrawn.position));
+        let withdrawn = withdrawn.map_err(|r| self.merge_refusal(&session, r))?;
         // The standing composition goes aside, for the withdrawal's undo to
         // stand again (skep #870).
         if self.merges.standing(&key).is_some_and(|c| c.into == draft) {
@@ -1150,8 +1160,9 @@ impl Shell {
         let kind = merge_kind(&signed.account).ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
         // THE EDITOR's OWN LAST ACK on the draft (P3).
         let own_ack = self.holds.last_arranged(session, &draft.to_string());
-        let undone = lib::unwithdraw(&session.board, merger, &draft, &kind, withdrawal, own_ack, None).map_err(|r| self.merge_refusal(session, r))?;
-        self.holds.note_arranged(session, &draft.to_string(), undone.position);
+        let out = self.holds.write_out(session);
+        let undone = out.noted(lib::unwithdraw(&session.board, merger, &draft, &kind, withdrawal, own_ack, None), |undone| self.holds.note_arranged(session, &draft.to_string(), undone.position));
+        let undone = undone.map_err(|r| self.merge_refusal(session, r))?;
         if let Some(composition) = self.merges.put_back(&key, &draft, withdrawal) {
             self.merges.stand(key, composition);
         }

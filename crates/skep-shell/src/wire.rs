@@ -5,11 +5,11 @@
 //! (`shell`) each read of the board's wire and none of them owns — the
 //! board's frame cap and how a frame is measured against it, the tumbler
 //! component budget and an address read within it, a document address in its
-//! one spelling, and the wire's value forms both ways (wire.md §Value
-//! encodings) with the insert's value budget: a frame's `values` minted as
-//! the composer signs them, and a delivery read back as the composer's
-//! read-back and the resend's content confirm hold it. A leaf: it names no
-//! other module of the crate.
+//! one spelling, the wire's write kinds, and the wire's value forms both ways
+//! (wire.md §Value encodings) with the insert's value budget: a frame's
+//! `values` minted as the composer signs them, and a delivery read back as the
+//! composer's read-back and the resend's content confirm hold it. A leaf: it
+//! names no other module of the crate.
 
 use std::borrow::Cow;
 use std::io;
@@ -45,6 +45,35 @@ pub const MAX_TUMBLER_COMPONENTS: usize = 256;
 /// about to mint, a hex by its encoded length, as the codec counts it.
 /// Pinned by the board's behaviour, as [`MAX_TUMBLER_COMPONENTS`] is.
 pub const MAX_INSERT_VALUES: usize = 1 << 18;
+
+/// The write kinds of the wire (`docs/wire.md` §Operations).
+///
+/// A frame of one of these in the guest form, under a bare session, or at a
+/// board whose held store another shell holds (§3c.3), is refused by the
+/// shell without a dial (`shell`'s `op` row). One sent under a session is
+/// out at its board from before its first dial until its answer is noted
+/// (`hold`'s `Holds::write_out`), so a drafts read waits for the writer of a
+/// row it meets first (skep #1000).
+pub const WRITE_KINDS: [&str; 18] = [
+    "delegate",
+    "register_node",
+    "create_new_document",
+    "fork",
+    "version",
+    "stage",
+    "insert",
+    "delete",
+    "copy",
+    "reinstate",
+    "rearrange",
+    "set_arrangement",
+    "publish",
+    "make_link",
+    "emit",
+    "nullify",
+    "assert_sup",
+    "edit_link",
+];
 
 /// Returns whether `text` splits within the component budget.
 ///

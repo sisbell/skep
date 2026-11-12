@@ -74,7 +74,9 @@
 //! acknowledged arrangement write of the principal's on the draft
 //! (`Holds::note_restored`): `merge.undo`, typed against the editor's own
 //! last arrangement write on the draft (P3), takes a restore of the
-//! person's as their own, and the next hold on the draft reads from past it.
+//! person's as their own, and the next hold on the draft reads from past it;
+//! and the session is recorded as the writer of its row, the write standing
+//! out at the board until then (`hold::WriteOut`; skep #1000).
 //!
 //! **The refusals** of both rows cross as the merge family's
 //! (`Shell::merge_refusal`): at the reads, `not_owner` with `published` for
@@ -187,8 +189,11 @@ impl Shell {
         // The write typed against the page's state; the read's position
         // kept for the answer, the way back.
         let read_at = std::mem::replace(&mut past.as_of, as_of);
-        let restored = history::restore(&session.board, &session.token, &past).map_err(|r| self.merge_refusal(&session, r))?;
-        self.holds.note_restored(&session, &restored);
+        // The write out until its position is noted, let go before a death
+        // at it ends the session (`hold::WriteOut`; skep #1000).
+        let out = self.holds.write_out(&session);
+        let restored = out.noted(history::restore(&session.board, &session.token, &past), |restored| self.holds.note_restored(&session, restored));
+        let restored = restored.map_err(|r| self.merge_refusal(&session, r))?;
         Ok(json!({
             "draft": restored.draft.to_string(),
             "at": restored.at,

@@ -11,7 +11,8 @@
 //! among them read by nothing — and, against the real daemon, the family
 //! end to end: the panel over a draft with a notes link and a read-with set,
 //! the count as a row flips, the confirm acknowledged with its two events
-//! and the feed row naming the member and the homes, the second open inert,
+//! and the feed row naming the member and the homes, its drafts copy the
+//! session that confirmed it, the second open inert,
 //! the fold — a note left off at version 1 unchanged since it at the next
 //! open, P3 not standing over its compact row, a note made since news —
 //! the document's own links on the words a shot re-inserts, one standing P3
@@ -501,7 +502,9 @@ impl Ground {
 /// counts ⟨l⟩ one up, pure local; `publication.confirm` is acknowledged —
 /// the member `E.1`, `via: answer`, `claim: false` — with the event's `sent`
 /// then `acknowledged`, the panel gone, and the feed's publish row naming
-/// the member, the draft and the notes; a second `open` finds no window and
+/// the member, the draft and the notes, its drafts copy and its `changes`
+/// entry naming the session that confirmed it as `by` and no `burst`
+/// (skep #1000); a second `open` finds no window and
 /// its `confirm` is `inert: unchanged`; `cancel` says `cancelled` once and
 /// answers `{}` twice; a `publish` frame through `op` is `publish_is_a_call`;
 /// the node stopped, `confirm` and a `make_link` are refused `stopped`
@@ -574,6 +577,13 @@ fn the_family_publishes_a_drafts_links_and_answers_as_data() {
     let row = rows.iter().find(|r| r["at"] == at && r["op"] == "publish").unwrap_or_else(|| panic!("the publish row at {at}: {rows:?}"));
     let docs: Vec<&str> = row["docs"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
     assert!(docs[0] == member && docs.contains(&draft.as_str()) && docs.contains(&notes.as_str()), "the row names the member, the draft and the notes: {docs:?}");
+    // The shot's drafts row names the session that confirmed it, no burst
+    // beside it (skep #1000): on its `feed` event and its `changes` entry.
+    let fed = wait_for(&g.seen, |e| e.name == EventName::Feed && e.data["update"]["class"] == "drafts" && e.data["update"]["at"] == at);
+    assert_eq!((fed.data["update"]["by"].as_str(), fed.data["update"].get("burst")), (Some(g.session.as_str()), None), "{:?}", fed.data);
+    let caught = g.call("changes", json!({"session": g.session, "since": at - 1, "class": "drafts"})).unwrap();
+    let shot = caught["entries"].as_array().unwrap().iter().find(|e| e["at"] == at).unwrap_or_else(|| panic!("the shot's drafts entry: {caught}"));
+    assert_eq!((shot["by"].as_str(), shot.get("burst")), (Some(g.session.as_str()), None), "{shot}");
     let read = g.call("op", json!({"guest": true, "board": g.board, "frame": skep_client::board::frames::retrieve_v(&member, 1, 19)})).unwrap();
     assert_eq!(read["items"][0]["content"], "the quick brown fox");
     // The panel is gone with the acknowledgment; a second open finds the

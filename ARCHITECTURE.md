@@ -824,7 +824,8 @@ re-exports counted as the module it is brought from (held by
   with ONE name from `Name`, the closed list of every name the shell spells.
 - `wire.rs` the wire's shared facts: the frame cap (`MAX_FRAME_BYTES`) and
   a frame's compact bytes (`json_len`), the tumbler component budget,
-  `document_address`, and the value forms both ways (`values_of`,
+  `document_address`, the write kinds (`WRITE_KINDS`) `shell.rs` and
+  `hold.rs` both read, and the value forms both ways (`values_of`,
   `delivered_values`).
 - `attest.rs` `Composer`: the entry frame for the ten kinds, every axis
   from the shell's own reads, through `skep-identity`'s builders.
@@ -920,7 +921,7 @@ Its suites are unit modules beside the code they test. `shell/tests.rs` and
 its children run the shell: `door` the shell alone, with no daemon behind
 it; `modes`, `ceremonies`, `boards`, `held`, `publication`, `merge`,
 `follow` and `classes` against a daemon spawned in-process over a temp data dir. `hold/tests.rs` and its children `write`,
-`resend`, `labels` and `classes` drive the hold over a fake board; the other modules test
+`resend`, `labels`, `writers` and `classes` drive the hold over a fake board; the other modules test
 themselves over fakes and temp dirs; and `tests/it/tidy.rs` holds the
 arrangement — the declaration order, every file under `src/` declared by
 its parent's `mod` line, an inline test module as its file's last item,

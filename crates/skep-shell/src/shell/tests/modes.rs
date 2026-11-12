@@ -24,7 +24,8 @@
 //! session's drafts rows ahead of its `session-died`, a released supplement
 //! keeping its drafts cursor, a session opened after its principal's narrow
 //! fed from its own open, every session of a principal hearing its face and
-//! its drafts rows, and the document index listed at the call's class; the
+//! its drafts rows, each row naming the tab that wrote it, and the document
+//! index listed at the call's class; the
 //! daemon's restart: the session it ended, ended once, re-opened
 //! under a fresh reference its arm names, and written under; a `write_busy`
 //! reissued once within the call; and a death signal met at a read the
@@ -1182,6 +1183,11 @@ fn a_session_opened_after_its_principals_narrow_is_fed_from_its_own_open() {
 /// `complete` at or past the draft's position (the mutants that name a
 /// principal's row under the session that read it alone, or its face under
 /// the session widened last, leave one tab's page stale with nothing said).
+/// A row names its writer on every copy (skep #1000): the second tab writes
+/// a burst with the `id` `b-1` on the draft, and both tabs hear the mint's
+/// row naming the first as `by` and no `burst`, and the burst's naming the
+/// second and `b-1` (the mutant that names no writer leaves each tab unable
+/// to tell its own write from the other's, every row carrying one key).
 #[test]
 fn every_session_of_a_principal_hears_its_face_and_its_drafts_rows() {
     let dir = TempDir::new().unwrap();
@@ -1195,8 +1201,9 @@ fn every_session_of_a_principal_hears_its_face_and_its_drafts_rows() {
     let board = shell.board_references().remove(0);
     let open = || shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
     let (first, second) = (open(), open());
-    let at = shell.call("op", &json!({"session": first, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["at"].as_u64().unwrap();
-    let row_to = |session: &str| {
+    let minted = shell.call("op", &json!({"session": first, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
+    let at = minted["at"].as_u64().unwrap();
+    let row_to = |at: u64, session: &str| {
         let session = session.to_string();
         move |e: &Event| e.name == EventName::Feed && e.data["update"]["class"] == "drafts" && e.data["update"]["at"] == at && e.data["update"]["session"] == session
     };
@@ -1205,11 +1212,20 @@ fn every_session_of_a_principal_hears_its_face_and_its_drafts_rows() {
         move |e: &Event| e.name == EventName::Index && e.data["session"] == session && e.data["state"]["arm"] == "complete" && e.data["state"]["as_of"].as_u64().is_some_and(|as_of| as_of >= at)
     };
     for session in [&first, &second] {
-        wait_for(&seen, row_to(session));
+        wait_for(&seen, row_to(at, session));
         wait_for(&seen, face_to(session));
     }
-    let rows = |session: &str| seen.lock().unwrap().iter().filter(|e| row_to(session)(e)).count();
-    assert_eq!((rows(&first), rows(&second)), (1, 1), "the draft's row reaches each session once");
+    let rows = |at: u64, session: &str| seen.lock().unwrap().iter().filter(|e| row_to(at, session)(e)).count();
+    assert_eq!((rows(at, &first), rows(at, &second)), (1, 1), "the draft's row reaches each session once");
+    let burst = json!({"op": "insert", "doc": minted["addr"], "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"], "as_of": at, "id": "b-1"});
+    let inserted = shell.call("op", &json!({"session": second, "frame": burst})).unwrap()["at"].as_u64().unwrap();
+    for (row, by, burst) in [(at, &first, None), (inserted, &second, Some("b-1"))] {
+        for session in [&first, &second] {
+            let fed = wait_for(&seen, row_to(row, session));
+            let update = &fed.data["update"];
+            assert_eq!((update["by"].as_str(), update["burst"].as_str()), (Some(by.as_str()), burst), "the row at {row} under {session}: {update}");
+        }
+    }
     assert_events_declared(&seen.lock().unwrap());
     shell.shutdown();
     sd.shutdown();

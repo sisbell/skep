@@ -57,7 +57,8 @@
 //! where it asks (`feed_threads`). `write` holds the one path of a session's
 //! `op` — a burst's door and its hold, and a write the hold never holds;
 //! `resend` the probe and the resend walk; `labels` the label another
-//! device's key goes by; `classes` the held store's defect classes, each
+//! device's key goes by; `writers` the writer a drafts row names, as each
+//! write's answer records it; `classes` the held store's defect classes, each
 //! pinned as an expected failure until the brief that closes it lands, and
 //! the measure of the syncs each act makes. The store's two
 //! enums are held to their variants here: `Directory`'s three standings
@@ -86,6 +87,7 @@ mod classes;
 mod labels;
 mod resend;
 mod write;
+mod writers;
 
 /// The five burst kinds are bursts; the thirteen other write kinds are not.
 #[test]
@@ -93,7 +95,7 @@ fn the_five_kinds_are_bursts_and_no_other_write_kind_is() {
     for op in BURST_KINDS {
         assert!(is_burst(&json!({"op": op})), "{op}");
     }
-    for op in crate::shell::WRITE_KINDS {
+    for op in crate::wire::WRITE_KINDS {
         let burst = BURST_KINDS.contains(&op);
         assert_eq!(is_burst(&json!({"op": op})), burst, "{op}");
     }

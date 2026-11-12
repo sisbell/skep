@@ -9,17 +9,20 @@
 //! bounds the page, and the refusals by name; that the drafts-only read
 //! from the session's `opened_at` answers the drafts rows an end cut off,
 //! the guest form the published rows alone, and `class` is refused by name
-//! in its other values and in the guest form; and that `under` narrows each
-//! form to the rows under an address, a draft's or an account's. Over a
-//! scripted board it checks the two reads merged by position — a straddle
-//! answered once, by the wider rendering — the published read token-free
-//! and the drafts read under the token, the cut where a read's `more`
-//! stands, and where a read to the head is sure of no more, `next` at the
-//! head read first on a quiet board, `limit` over the merged page, a page
+//! in its other values and in the guest form; that `under` narrows each
+//! form to the rows under an address, a draft's or an account's; and that a
+//! row a session of this shell wrote names that session and its burst, its
+//! end past, while every row the library's own sessions wrote names none.
+//! Over a scripted board it checks the two reads merged by position — a
+//! straddle answered once, by the wider rendering — the published read
+//! token-free and the drafts read under the token, the cut where a read's
+//! `more` stands, and where a read to the head is sure of no more, `next` at
+//! the head read first on a quiet board, `limit` over the merged page, a page
 //! past the budget re-asked at the limit that fits, the retention floor as
 //! the board's own 410, the death signal as the death, the drafts class read
-//! alone with its own `next`, the guest form's one token-free read, and
-//! `under` on every ask of every form.
+//! alone with its own `next`, the guest form's one token-free read, `under`
+//! on every ask of every form, and the writer the hold recorded named on a
+//! drafts entry alone.
 
 use std::io::Read;
 
@@ -27,7 +30,8 @@ use skep_client::board::{frames, Opened, SessionBody};
 use skep_client::dial::{DialError, Dialer, Headers, Method, Request, RequestHead, Response, StreamedResponse};
 
 use super::*;
-use crate::feed::{changes_since, ChangesRead};
+use crate::feed::{changes_since, CaughtUp, ChangesRead};
+use crate::hold::Written;
 use crate::refs::BoardEntry;
 use crate::sessions::{Facts, Open, Sessions, Supplements};
 
@@ -95,6 +99,7 @@ fn changes_answers_what_changed_since_a_position_at_the_sessions_class() {
     entries.iter().for_each(|entry| crate::shapes::assert_declared("FeedUpdate", entry));
     let row = entries.iter().find(|entry| entry["at"] == at).unwrap_or_else(|| panic!("the insert at {at}, after {n}: {page}"));
     assert_eq!((row["position"].as_u64(), row["class"].as_str(), row["session"].as_str(), &row["docs"]), (Some(at), Some("drafts"), Some(session.as_str()), &json!([draft])), "{row}");
+    assert!(entries.iter().all(|entry| entry.get("by").is_none() && entry.get("burst").is_none()), "the library's sessions wrote each row, none of this shell's: no writer named: {page}");
     assert!(entries.iter().all(|entry| entry["at"].as_u64().unwrap() > n), "every entry is past N: {page}");
     let next = page["next"].as_u64().unwrap();
     assert!(next >= at && page["head"].as_u64().unwrap() >= n, "`next` advances past the write and `head` is the board's: {page}");
@@ -197,6 +202,7 @@ fn the_drafts_read_from_opened_at_answers_what_an_end_cut_off_and_the_guest_form
     entries.iter().for_each(|entry| crate::shapes::assert_declared("FeedUpdate", entry));
     assert!(entries.iter().all(|e| e["class"] == "drafts" && e["session"] == regained && e["at"].as_u64().unwrap() > opened_at), "the drafts class alone, naming the regained session, past the open: {drafts}");
     assert!(entries.iter().any(|e| e["at"] == inserted && e["docs"] == json!([draft])), "the draft's row the end cut off: {drafts}");
+    assert!(entries.iter().all(|e| e.get("by").is_none() && e.get("burst").is_none()), "the library's sessions wrote each row, none of this shell's: no writer named: {drafts}");
     assert!(entries.iter().all(|e| e["docs"] != json!([sibling_home])), "no published row: {drafts}");
     assert!(drafts["next"].as_u64().unwrap() >= inserted, "`next` is past the last drafts row: {drafts}");
     // The guest form: the published rows alone, token-free, at the board's
@@ -277,6 +283,7 @@ fn under_narrows_the_page_to_the_rows_under_an_address() {
     entries.iter().for_each(|entry| crate::shapes::assert_declared("FeedUpdate", entry));
     assert_eq!(entries.iter().map(|e| e["at"].as_u64().unwrap()).collect::<Vec<_>>(), [d_minted, d_inserted], "D's rows alone, oldest first: {page}");
     assert!(entries.iter().all(|e| e["docs"] == json!([d]) && e["class"] == "drafts" && e["session"] == session), "each names D, of the drafts class under the session: {page}");
+    assert!(entries.iter().all(|e| e.get("by").is_none() && e.get("burst").is_none()), "the library's session wrote D's rows, none of this shell's: no writer named: {page}");
     let next = page["next"].as_u64().unwrap();
     assert!(next >= d_inserted, "`next` is past D's rows: {page}");
     let again = shell.call("changes", &json!({"session": session, "since": next, "under": d})).unwrap();
@@ -393,12 +400,10 @@ fn catch_up_over(head: u64, script: impl Fn(u64, bool, Option<u64>) -> Response 
     catch_up_in(Form::Session, head, script, since, limit, None)
 }
 
-/// Reads the catch-up in `form` at a scripted board.
+/// Reads the catch-up in `form` at a scripted board, no writer recorded.
 ///
-/// It reads from `since` under `limit`, narrowed to `under` where it names
-/// an address; the session is a bare one of principal 1, the board scripted
-/// by `script`, its head at `head`; it returns the read and the asks the
-/// board saw.
+/// It is [`catch_up_with`]'s read where the hold recorded the writer of no
+/// row.
 fn catch_up_in(
     form: Form,
     head: u64,
@@ -407,15 +412,34 @@ fn catch_up_in(
     limit: Option<u64>,
     under: Option<&str>,
 ) -> (Result<ChangesRead, Refusal>, Asked) {
+    catch_up_with(form, head, script, since, limit, under, |_| None)
+}
+
+/// Reads the catch-up in `form` at a scripted board.
+///
+/// It reads from `since` under `limit`, narrowed to `under` where it names
+/// an address; the session is a bare one of principal 1, the board scripted
+/// by `script`, its head at `head`, and `written` the writer the hold
+/// recorded at each position; it returns the read and the asks the board
+/// saw.
+fn catch_up_with(
+    form: Form,
+    head: u64,
+    script: impl Fn(u64, bool, Option<u64>) -> Response + Send + Sync + 'static,
+    since: u64,
+    limit: Option<u64>,
+    under: Option<&str>,
+    written: impl Fn(u64) -> Option<Written>,
+) -> (Result<ChangesRead, Refusal>, Asked) {
     let fake = Arc::new(Scripted { head, script: Box::new(script), asked: Mutex::new(Vec::new()) });
     let entry = Arc::new(BoardEntry { reference: "b-1".into(), board: Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), Arc::clone(&fake))) });
     let facts = Facts { principal: 1, account: Some("1.0.1".into()), kind: SessionKind::Bare };
     let session = Sessions::new(None, Arc::new(|_: &str| {})).register(&entry, Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut NoSupplements);
     let under = under.map(|text| skep_client::address::parse_address(text).expect("an address"));
     let read = match form {
-        Form::Session => changes_since(&entry.board, Some(&session), false, since, limit, under.as_ref()),
-        Form::Drafts => changes_since(&entry.board, Some(&session), true, since, limit, under.as_ref()),
-        Form::Guest => changes_since(&entry.board, None, false, since, limit, under.as_ref()),
+        Form::Session => changes_since(&entry.board, Some(&session), false, since, limit, under.as_ref(), written),
+        Form::Drafts => changes_since(&entry.board, Some(&session), true, since, limit, under.as_ref(), written),
+        Form::Guest => changes_since(&entry.board, None, false, since, limit, under.as_ref(), written),
     };
     let asked = fake.asked.lock().unwrap().clone();
     (read, asked)
@@ -645,4 +669,86 @@ fn under_rides_every_ask_of_every_form_and_meets_the_floor() {
     let reclaimed = read.expect_err("the floor is a refusal").to_value();
     assert_eq!((reclaimed["name"].as_str(), reclaimed["status"].as_u64(), reclaimed["body"]["floor"].as_u64()), (Some("history_reclaimed"), Some(410), Some(5)), "{reclaimed}");
     assert_eq!(asked, [(3, false, None, false, under())], "the narrowed ask met the floor");
+}
+
+/// Checks that a drafts entry names the hold's writer, a published one none.
+///
+/// It is skep #1000's catch-up. The lookup names a writer at every position but
+/// 28, and a burst at 24 alone. Under a session the drafts entries at 24 and 30
+/// — the straddle answered by the token's wider rendering — carry its `by`, 24
+/// its `burst` too, the drafts entry at 28 neither, and the published entries
+/// at 22 and 26 neither, whatever the lookup holds at their positions; the
+/// drafts class alone the same drafts entries; and the guest form, which reads
+/// no drafts page, names no writer (the mutant that names a writer by position
+/// whatever the class tells a guest's page this shell wrote a row; the one that
+/// names none leaves a page that comes back no way to know its own writes).
+#[test]
+fn a_drafts_entry_names_the_writer_the_hold_recorded_and_a_published_one_none() {
+    let script = |since: u64, drafts: bool, _: Option<u64>| match drafts {
+        false => page(vec![row(22, &["1.0.1.0.1"]), row(26, &["1.0.1.0.1"]), row(30, &["1.0.1.0.1"])], 30, false),
+        true => page(vec![row(24, &["1.0.1.0.2"]), row(28, &["1.0.1.0.2"]), row(30, &["1.0.1.0.2", "1.0.1.0.1"])], 30.max(since), false),
+    };
+    let written = |at: u64| (at != 28).then(|| Written { by: Some("s-writer".to_string()), burst: (at == 24).then(|| "b-7".to_string()) });
+    let named = |caught: &CaughtUp| -> Vec<(u64, String, Option<String>, Option<String>)> {
+        caught.entries.iter().map(|e| (e["at"].as_u64().unwrap(), e["class"].as_str().unwrap().to_string(), e["by"].as_str().map(str::to_string), e["burst"].as_str().map(str::to_string))).collect()
+    };
+    let (by, burst) = (|| Some("s-writer".to_string()), || Some("b-7".to_string()));
+    let drafts = |at: u64, by: Option<String>, burst: Option<String>| (at, "drafts".to_string(), by, burst);
+    let published = |at: u64| (at, "published".to_string(), None, None);
+    let caught = page_of(catch_up_with(Form::Session, 40, script, 20, None, None, written).0);
+    assert_eq!(named(&caught), [published(22), drafts(24, by(), burst()), published(26), drafts(28, None, None), drafts(30, by(), None)]);
+    let caught = page_of(catch_up_with(Form::Drafts, 40, script, 20, None, None, written).0);
+    assert_eq!(named(&caught), [drafts(24, by(), burst()), drafts(28, None, None), drafts(30, by(), None)]);
+    let caught = page_of(catch_up_with(Form::Guest, 40, script, 20, None, None, written).0);
+    assert_eq!(named(&caught), [published(22), published(26), published(30)]);
+}
+
+/// Checks that a drafts entry names its writing session past that one's end.
+///
+/// It is skep #1000's catch-up after a death. Against the real daemon, a signed
+/// session mints a draft through `op` and writes a burst with the `id` `b-1` on
+/// it: `changes(class: "drafts")` from the session's open names the session as
+/// `by` on both of the draft's rows and `b-1` as `burst` on the burst's alone.
+/// The session's token is then closed at the board and a call meets the death;
+/// a session the page regains reads the drafts class from the ended session's
+/// `opened_at`, and both rows still name the ended session and the burst (the
+/// mutant that drops a session's record at its `session-died` names no writer
+/// on the very read a page makes to learn what the end cut off).
+#[test]
+fn a_drafts_entry_names_the_session_that_wrote_it_past_that_sessions_end() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (shell, _) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    let board = shell.board_references().remove(0);
+    let opened = shell.call("session", &json!({"board": board})).unwrap();
+    let (session, opened_at) = (opened["session"].as_str().unwrap().to_string(), opened["opened_at"].as_u64().unwrap());
+    let minted = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
+    let draft = minted["addr"].as_str().unwrap().to_string();
+    let burst = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["mine"], "as_of": minted["at"], "id": "b-1"});
+    let inserted = shell.call("op", &json!({"session": session, "frame": burst})).unwrap();
+    let owed = [(minted["at"].as_u64().unwrap(), Some(session.as_str()), None), (inserted["at"].as_u64().unwrap(), Some(session.as_str()), Some("b-1"))];
+    let named = |page: &Value| -> Vec<(u64, Option<String>, Option<String>)> {
+        crate::shapes::assert_declared("ChangesAnswer", page);
+        let entries = page["entries"].as_array().unwrap();
+        entries.iter().for_each(|entry| crate::shapes::assert_declared("FeedUpdate", entry));
+        entries.iter().filter(|e| e["docs"] == json!([draft])).map(|e| (e["at"].as_u64().unwrap(), e["by"].as_str().map(str::to_string), e["burst"].as_str().map(str::to_string))).collect()
+    };
+    let owed: Vec<(u64, Option<String>, Option<String>)> = owed.iter().map(|(at, by, burst)| (*at, by.map(str::to_string), burst.map(str::to_string))).collect();
+    let before = shell.call("changes", &json!({"session": session, "since": opened_at, "class": "drafts"})).unwrap();
+    assert_eq!(named(&before), owed, "the writing session on both rows, the burst on its own: {before}");
+    // The end, met by a call: the token closed at the board.
+    let library = Board::new(Origin::parse(&origin).unwrap(), skep_client::PlainHttp::new());
+    library.session_close(&shell.sessions.get(&session).unwrap().token).unwrap();
+    let died = shell.call("changes", &json!({"session": session, "since": opened_at})).unwrap_err();
+    assert_eq!(died.name(), "session_died", "{died}");
+    let regained = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let after = shell.call("changes", &json!({"session": regained, "since": opened_at, "class": "drafts"})).unwrap();
+    assert_eq!(named(&after), owed, "the ended session and its burst still named: {after}");
+    shell.shutdown();
+    sd.shutdown();
 }

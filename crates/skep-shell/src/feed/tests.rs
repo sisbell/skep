@@ -25,11 +25,16 @@
 //! principal's last session dying mid-read leaves no cursor behind; a
 //! death a call thread meets swapped by the feed thread after the rows of
 //! the tick it fell in; and a death met once the feed thread has stopped
-//! still leaving the table and said once.
+//! still leaving the table and said once. And it checks the writer a drafts
+//! row names (skep #1000): a row read before its write's answer is noted
+//! naming that write's session and burst, the read waiting for the answer; a
+//! wait ended as soon as every row that may learn a writer has one, another
+//! key's row and a write still out elsewhere holding it never; and a write
+//! that never answers ending it at its bound, the row naming no writer.
 
 use std::io::{self, Read};
 use std::sync::atomic::AtomicUsize;
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
 use skep_client::board::Token;
@@ -830,7 +835,7 @@ fn read_over(script: impl Fn(u64, Option<u64>) -> Response + Send + Sync + 'stat
     std::thread::spawn(move || {
         let class = session.as_deref().map_or(UpdateClass::Published, UpdateClass::Drafts);
         let mut rows = Vec::new();
-        let to = read_to_head(&board, class, since, |row| rows.push(row["at"].as_u64().unwrap_or(0)));
+        let to = read_to_head(&board, class, since, |page| rows.extend(page.iter().map(|row| row["at"].as_u64().unwrap_or(0))));
         let _ = tx.send((rows, to));
     });
     let (rows, to) = rx.recv_timeout(Duration::from_secs(5)).expect("the read to the head ends");
@@ -1214,4 +1219,242 @@ fn a_principals_last_session_dying_mid_read_keeps_no_cursor() {
     Supplements::widen(&mut feeder, &later);
     feeder.read_drafts(&later);
     assert_eq!(drafts_named(&rx), [(6, dying.reference.clone())]);
+}
+
+/// Returns the fingerprint of the key every writer of the race signs with.
+fn race_key() -> String {
+    "5a".repeat(32)
+}
+
+/// Returns a signed session of principal 1 registered at `entry`.
+///
+/// It is registered in `sessions`, its token `token` sixteen times over: a
+/// session that may write, under a key no store holds, which a board no one
+/// has claimed asks for no signature.
+fn writer_of(sessions: &Sessions, entry: &BoardEntry, token: &str) -> Arc<SessionEntry> {
+    let fingerprint = skep_identity::Fingerprint::parse_hex(&race_key()).unwrap();
+    let facts = crate::sessions::Facts { principal: 1, account: Some("1.0.1".into()), kind: crate::sessions::SessionKind::Signed { fingerprint, set_account: "1.0.1".into() } };
+    let open = crate::sessions::Open { token: Token::parse(&token.repeat(16)).unwrap(), facts, opened_at: 0 };
+    sessions.register(entry, open, &mut NoSupplements)
+}
+
+/// Returns an insert on `doc` whose envelope `id` names its fate ([`Racing`]).
+fn racing_insert(id: &str, doc: &str) -> Value {
+    json!({"op": "insert", "doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"], "as_of": 10, "id": id})
+}
+
+/// A board that commits a write's row before it answers the write.
+///
+/// Its drafts feed serves `rows` past a read's `since`, each read counted
+/// and woken on. `/op` takes a burst by its `id`: `raced` enters its row at
+/// the position its ack names, under the writers' key, and answers once a
+/// read has reached the board since, a moment after, so the read answers
+/// first; `stuck` is answered only once `stuck` is opened. `/health` answers
+/// a board no one has claimed, and every other `/op` the empty delivery of a
+/// board with no head record, so no write owes a signature.
+struct Racing {
+    rows: Mutex<Vec<Value>>,
+    next_at: AtomicU64,
+    reads: (Mutex<usize>, Condvar),
+    stuck: (Mutex<bool>, Condvar),
+    stuck_arrived: AtomicBool,
+}
+
+impl Racing {
+    /// Waits until the board holds `n` rows.
+    fn committed(&self, n: usize) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while self.rows.lock().unwrap().len() < n {
+            assert!(Instant::now() < deadline, "the write's row never reached the board");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    /// Waits until the write `stuck` has reached the board.
+    fn reached_stuck(&self) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !self.stuck_arrived.load(Ordering::SeqCst) {
+            assert!(Instant::now() < deadline, "the stuck write never reached the board");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    /// Lets the write `stuck` be answered.
+    fn release_stuck(&self) {
+        *self.stuck.0.lock().unwrap() = false;
+        self.stuck.1.notify_all();
+    }
+}
+
+impl Dialer for Racing {
+    fn exchange(&self, _: &Origin, req: &Request) -> Result<Response, DialError> {
+        if req.method == Method::Get && req.path.starts_with("/health") {
+            return Ok(ok(json!({"ok": true, "log_position": 10, "auth": {"claimant": null, "local_trust": true, "origins": [], "signed_origins": []}, "writes": {"halted": false}})));
+        }
+        if req.method == Method::Get && req.path.starts_with("/changes") {
+            let since = since_of(&req.path);
+            let rows: Vec<Value> = {
+                let rows = self.rows.lock().unwrap();
+                *self.reads.0.lock().unwrap() += 1;
+                rows.iter().filter(|row| row["at"].as_u64().is_some_and(|at| at > since)).cloned().collect()
+            };
+            self.reads.1.notify_all();
+            let last = rows.last().and_then(|row| row["at"].as_u64()).unwrap_or(since);
+            return Ok(ok(json!({"changes": rows, "last": last, "more": false})));
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        match body["id"].as_str() {
+            Some("raced") => {
+                let at = self.next_at.fetch_add(1, Ordering::SeqCst);
+                let seen = {
+                    let mut rows = self.rows.lock().unwrap();
+                    rows.push(json!({"at": at, "op": "insert", "docs": [body["doc"]], "key": race_key()}));
+                    *self.reads.0.lock().unwrap()
+                };
+                let (reads, read) = &self.reads;
+                drop(read.wait_timeout_while(reads.lock().unwrap(), Duration::from_secs(10), |reads| *reads == seen).unwrap());
+                std::thread::sleep(Duration::from_millis(100));
+                Ok(ok(json!({"resp": "ack", "at": at})))
+            }
+            Some("stuck") => {
+                let at = self.next_at.fetch_add(1, Ordering::SeqCst);
+                self.stuck_arrived.store(true, Ordering::SeqCst);
+                let (shut, opened) = &self.stuck;
+                drop(opened.wait_while(shut.lock().unwrap(), |shut| *shut).unwrap());
+                Ok(ok(json!({"resp": "ack", "at": at})))
+            }
+            _ => Ok(ok(json!({"resp": "delivery", "items": []}))),
+        }
+    }
+
+    fn stream(&self, _: &Origin, _: &RequestHead, _: &mut dyn Read, _: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
+        Err(DialError::Connect("no stream here".into()))
+    }
+}
+
+/// Returns the racing board under test and the store its holds keep.
+///
+/// Its writes are acknowledged from 50 on, and the holds keep the held files
+/// under the store.
+fn racing() -> (Arc<Racing>, Arc<BoardEntry>, TempDir) {
+    let fake = Arc::new(Racing {
+        rows: Mutex::new(Vec::new()),
+        next_at: AtomicU64::new(50),
+        reads: (Mutex::new(0), Condvar::new()),
+        stuck: (Mutex::new(true), Condvar::new()),
+        stuck_arrived: AtomicBool::new(false),
+    });
+    (Arc::clone(&fake), entry_over(fake), TempDir::new().unwrap())
+}
+
+/// Returns the drafts rows `rx` has seen since the last look, in order.
+///
+/// Each is its position, its `by` and its `burst`, held to its declaration.
+fn drafts_fed(rx: &Receiver<Event>) -> Vec<(u64, Option<String>, Option<String>)> {
+    rx.try_iter()
+        .filter(|e| e.name == EventName::Feed && e.data["update"]["class"] == "drafts")
+        .map(|e| {
+            let update = &e.data["update"];
+            crate::shapes::assert_declared("FeedUpdate", update);
+            (update["at"].as_u64().unwrap_or(0), update["by"].as_str().map(str::to_string), update["burst"].as_str().map(str::to_string))
+        })
+        .collect()
+}
+
+/// Checks that a row read before its write's answer is noted names its writer.
+///
+/// It is skep #1000's race. A session's burst `raced` is out through the hold's
+/// one path; the board commits its row, then holds its answer until the
+/// feeder's drafts read has the row, and a moment more: the read waits for the
+/// answer, and the row's `feed` event names the session as `by` and `raced` as
+/// `burst` (the mutant that reads the writer with no wait sends the row naming
+/// none, and the page takes its own burst for another hand's).
+#[test]
+fn a_row_read_before_its_writes_answer_is_noted_names_its_writer() {
+    let (fake, entry, store) = racing();
+    let (sessions, bus) = (Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), Arc::new(EventBus::new()));
+    let rx = bus.subscribe();
+    let session = writer_of(&sessions, &entry, "9f");
+    let shared = shared_over(&entry, &sessions, &bus, &store);
+    let holds = Arc::clone(&shared.holds);
+    let mut feeder = Feeder::new(&entry, shared);
+    std::thread::scope(|s| {
+        let raced = s.spawn(|| holds.send(&session, racing_insert("raced", "1.0.1.0.1"), None).answered());
+        fake.committed(1);
+        feeder.read_drafts(&session);
+        let acked = raced.join().unwrap().expect("the burst is acked");
+        assert_eq!(acked["at"].as_u64(), Some(50), "{acked}");
+    });
+    assert_eq!(drafts_fed(&rx), [(50, Some(session.reference.clone()), Some("raced".to_string()))], "the row names its writer and its burst");
+}
+
+/// Checks that a drafts read stops waiting once every owed row has a writer.
+///
+/// A row is owed where it may yet learn one (skep #1000). Two bursts of the
+/// session's are out: `stuck`, whose answer the board holds past the read, and
+/// `raced`, whose row the board commits and whose answer it gives just after
+/// the read; another key's row stands beside. The read sends both rows well
+/// inside the wait's bound — `raced`'s naming its writer, the other key's
+/// naming none — the write still out holding it no longer, nor the row no write
+/// of the session's could be (the mutant that waits while any write of the
+/// principal's is out waits out the bound on every row read beside a slow
+/// write).
+#[test]
+fn a_drafts_read_stops_waiting_once_every_row_that_may_learn_a_writer_has_one() {
+    let (fake, entry, store) = racing();
+    let (sessions, bus) = (Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), Arc::new(EventBus::new()));
+    let rx = bus.subscribe();
+    let session = writer_of(&sessions, &entry, "9f");
+    let shared = shared_over(&entry, &sessions, &bus, &store);
+    let holds = Arc::clone(&shared.holds);
+    let mut feeder = Feeder::new(&entry, shared);
+    let waited = std::thread::scope(|s| {
+        let stuck = s.spawn(|| holds.send(&session, racing_insert("stuck", "1.0.1.0.2"), None).answered());
+        fake.reached_stuck();
+        let raced = s.spawn(|| holds.send(&session, racing_insert("raced", "1.0.1.0.1"), None).answered());
+        fake.committed(1);
+        fake.rows.lock().unwrap().push(json!({"at": 99, "op": "insert", "docs": ["1.0.1.0.3"], "key": "ff".repeat(32)}));
+        let started = Instant::now();
+        feeder.read_drafts(&session);
+        let waited = started.elapsed();
+        fake.release_stuck();
+        assert!(raced.join().unwrap().is_ok() && stuck.join().unwrap().is_ok(), "both bursts acked");
+        waited
+    });
+    assert!(waited < crate::hold::WRITER_WAIT / 2, "the read waited {waited:?}, not out its bound");
+    assert_eq!(drafts_fed(&rx), [(51, Some(session.reference.clone()), Some("raced".to_string())), (99, None, None)], "the session's row names its writer, the other key's none");
+}
+
+/// Checks that a write that never answers ends a read's wait at its bound.
+///
+/// It is skep #1000's wait. The session's burst `stuck` is out and its row
+/// stands on the board, its answer held past the read: the read waits the
+/// wait's bound and no longer, and sends the row naming no writer; once the
+/// answer comes, the hold's record names it, for a `changes` read to carry (the
+/// mutant whose wait has no bound holds the feed thread, and every command
+/// queued behind it, for as long as a dial is out).
+#[test]
+fn a_write_that_never_answers_ends_the_wait_at_its_bound() {
+    let (fake, entry, store) = racing();
+    let (sessions, bus) = (Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), Arc::new(EventBus::new()));
+    let rx = bus.subscribe();
+    let session = writer_of(&sessions, &entry, "9f");
+    let shared = shared_over(&entry, &sessions, &bus, &store);
+    let holds = Arc::clone(&shared.holds);
+    let mut feeder = Feeder::new(&entry, shared);
+    let waited = std::thread::scope(|s| {
+        let stuck = s.spawn(|| holds.send(&session, racing_insert("stuck", "1.0.1.0.1"), None).answered());
+        fake.reached_stuck();
+        fake.rows.lock().unwrap().push(json!({"at": 50, "op": "insert", "docs": ["1.0.1.0.1"], "key": race_key()}));
+        let started = Instant::now();
+        feeder.read_drafts(&session);
+        let waited = started.elapsed();
+        fake.release_stuck();
+        assert!(stuck.join().unwrap().is_ok(), "the burst acked once released");
+        waited
+    });
+    let bound = crate::hold::WRITER_WAIT;
+    assert!(waited >= bound && waited < bound * 3, "the read waited {waited:?}, its bound {bound:?}");
+    assert_eq!(drafts_fed(&rx), [(50, None, None)], "the row names no writer past the bound");
+    assert_eq!(holds.written(&session, 50), Some(Written { by: Some(session.reference.clone()), burst: Some("stuck".into()) }), "the answer, once come, recorded");
 }

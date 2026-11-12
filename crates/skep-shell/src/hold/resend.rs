@@ -208,7 +208,7 @@ use skep_client::halt::Halt;
 
 use super::{
     awaits_act, cause, line_state, millis, minted_by, unanswered, AttestedWhereOwed, BoardHold, BoardSlot, CutSend, Dialed, Hand, HandsFace, HandsRead, HeldState, Holds, Judged, KeptShift,
-    LandedLine, LineOut, MovedFace, Tested, Turn, Verdict, HAND_OVER_DEADLINE, TURN_STEPS,
+    LandedLine, LineOut, MovedFace, Tested, Turn, Verdict, Written, HAND_OVER_DEADLINE, TURN_STEPS,
 };
 use crate::held::{i_address, Anchor, Anchors, HeldLine, Reason, SpanRun};
 use crate::refusal::{Name, Refusal};
@@ -1585,11 +1585,13 @@ impl Holds {
     /// becomes the base of the next hold on its document and the principal's
     /// latest arrangement write there — a held line is a burst — each where
     /// it is past the position noted, a later write noted since the read
-    /// standing; the line is `done kept` with `at`. `minted` is the first
-    /// I-address its words stand at, where the read found one
-    /// ([`Holds::minted_at`]): the pieces naming the words are placed there,
-    /// and the insert is noted among the principal's landed inserts, as an
-    /// ack is (skep #969). It is the resend's keep of a head
+    /// standing; the line is `done kept` with `at`, and the line's `id` the
+    /// burst a row at `at` carries, its writer none, since no answer names
+    /// the dial that landed it (`PrincipalHold::written`; skep #1000).
+    /// `minted` is the first I-address its words stand at, where the read
+    /// found one ([`Holds::minted_at`]): the pieces naming the words are
+    /// placed there, and the insert is noted among the principal's landed
+    /// inserts, as an ack is (skep #969). It is the resend's keep of a head
     /// ([`Holds::resume_doc`]) and the drop's, where the read the drop makes
     /// first finds the line landed (`Holds::resolve`; skep #866), each caller
     /// saying the `held` event that names the line kept at `at`
@@ -1602,6 +1604,7 @@ impl Holds {
             if let Some(at) = at {
                 ph.note_position(&line.doc, at);
                 ph.note_arranged(&line.doc, at);
+                ph.written.insert(at, Written::of(None, line.id.as_deref()));
             }
             if let Some(minted) = minted {
                 ph.note_landed_insert(&line.frame, minted);

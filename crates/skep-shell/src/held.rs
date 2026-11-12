@@ -553,10 +553,11 @@ impl Reason {
 /// The longest envelope `id` the shell names a burst by, in bytes.
 ///
 /// It bounds the `id` a session's table keeps a burst under and a follower's
-/// `after` (`shell/follow.rs`), and the `burst` an anchor's piece names
-/// ([`AnchorPiece`]): a burst whose `id` is longer is sent and held as any
-/// burst is, and no follower or piece can name it; an `after` or a piece past
-/// it is refused at the `op` row's door.
+/// `after` (`shell/follow.rs`), the `burst` an anchor's piece names
+/// ([`AnchorPiece`]), and the `burst` a drafts row names (`hold`'s
+/// `Written`; skep #1000): a burst whose `id` is longer is sent and held as
+/// any burst is, and no follower, piece or row can name it; an `after` or a
+/// piece past it is refused at the `op` row's door.
 pub(crate) const MAX_BURST_ID_BYTES: usize = 128;
 
 /// One edge of the span a burst edits, as its anchors name it.

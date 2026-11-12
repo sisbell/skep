@@ -521,15 +521,16 @@ fn f1_every_call_over_http_in_the_bare_mode() {
     assert_eq!((not_an_address["name"].as_str(), not_an_address["what"].as_str()), (Some("malformed_args"), Some("opts.under")), "{not_an_address}");
     // changes, the change feed's page at the session's class: `entries`,
     // `next` and `head` — the library's draft rows under the claimant's own
-    // class ride it as `drafts` under the session, the claim's rows as
-    // `published`, each with its position; a `since` of another form
-    // refused by name.
+    // class ride it as `drafts` under the session, naming no writer of the
+    // provider's, the claim's rows as `published`, each with its position; a
+    // `since` of another form refused by name.
     let caught_up = keep(provider.result("changes", json!({"session": session, "since": 0})));
     let members: std::collections::BTreeSet<&str> = caught_up.as_object().unwrap().keys().map(String::as_str).collect();
     assert_eq!(members, ["entries", "head", "next"].into(), "{caught_up}");
     let entries = caught_up["entries"].as_array().unwrap();
     assert!(entries.iter().all(|e| e["position"] == e["at"] && e["at"].is_u64() && (e["class"] == "published" || e["class"] == "drafts")), "{caught_up}");
     assert!(entries.iter().any(|e| e["class"] == "drafts" && e["docs"][0] == draft && e["session"] == session), "the draft's rows at the session's class: {caught_up}");
+    assert!(entries.iter().all(|e| e.get("by").is_none() && e.get("burst").is_none()), "the library and the claim wrote every row, no session of the provider's: none names a writer: {caught_up}");
     assert!(entries.iter().any(|e| e["class"] == "published" && e.get("session").is_none()), "the claim's published rows: {caught_up}");
     assert!(caught_up["next"].as_u64().unwrap() >= entries.last().unwrap()["at"].as_u64().unwrap() && caught_up["head"].is_u64(), "{caught_up}");
     let since_of_no_form = keep(provider.refused("changes", json!({"session": session, "since": "x"})));

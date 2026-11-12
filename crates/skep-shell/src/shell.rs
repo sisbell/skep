@@ -176,7 +176,7 @@ use crate::refs::{session_run, BoardEntry};
 use crate::refusal::{Name, Refusal};
 use crate::script;
 use crate::sessions::{self, SessionEntry, Sessions};
-use crate::wire::json_len;
+use crate::wire::{json_len, WRITE_KINDS};
 use crate::Talk;
 
 mod ceremony;
@@ -359,32 +359,6 @@ pub trait NodeControl: Send + Sync {
     /// it under the node's lock, however long the orderly stop takes.
     fn stop(&self);
 }
-
-/// The write kinds of the wire (`docs/wire.md` §Operations).
-///
-/// A frame of one of these in the guest form, under a bare session, or at a
-/// board whose held store another shell holds (§3c.3), is refused by the
-/// shell without a dial.
-pub const WRITE_KINDS: [&str; 18] = [
-    "delegate",
-    "register_node",
-    "create_new_document",
-    "fork",
-    "version",
-    "stage",
-    "insert",
-    "delete",
-    "copy",
-    "reinstate",
-    "rearrange",
-    "set_arrangement",
-    "publish",
-    "make_link",
-    "emit",
-    "nullify",
-    "assert_sup",
-    "edit_link",
-];
 
 /// Who sends a write through the shell's one write door
 /// ([`Shell::write_door`]).
@@ -2559,10 +2533,14 @@ impl Shell {
     /// asked again with the same `under`, it misses no row under the address,
     /// and it read no row outside it — and `head` and the retention floor
     /// stay the board's. A draft the session may not read never appears: the
-    /// gating is the board's, at the token's class. The read is one call's,
-    /// on the caller's thread: the board's feed thread keeps its own cursors
-    /// and is not asked, and the shell keeps no position of the page's —
-    /// every form reads from `since`.
+    /// gating is the board's, at the token's class. A drafts entry names its
+    /// writer — `by`, the session of this shell that wrote it, and `burst`,
+    /// the page's `id` of the burst it carries — from the hold's record of
+    /// the session's principal's writes (`Holds::written`; skep #1000), an
+    /// ended session's writes among them. The read is one call's, on the
+    /// caller's thread: the board's feed thread keeps its own cursors and is
+    /// not asked, and the shell keeps no position of the page's — every form
+    /// reads from `since`.
     ///
     /// # Errors
     ///
@@ -2594,7 +2572,8 @@ impl Shell {
             let session = self.session(&args["session"])?;
             (Arc::clone(&session.board), Some(session))
         };
-        match changes_since(&board, session.as_deref(), drafts_alone, since, limit, under.as_ref())? {
+        let written = |at| session.as_deref().and_then(|session| self.holds.written(session, at));
+        match changes_since(&board, session.as_deref(), drafts_alone, since, limit, under.as_ref(), written)? {
             ChangesRead::Page(page) => Ok(json!({"entries": page.entries, "next": page.next, "head": page.head})),
             ChangesRead::Died => Err(match &session {
                 Some(session) => self.died(session),

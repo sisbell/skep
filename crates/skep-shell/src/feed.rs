@@ -75,15 +75,35 @@
 //!
 //! **The `feed` update's shape**, this crate's definition, the shell's
 //! (S-24 (b)): the `/changes` row verbatim — every member the declared
-//! `FeedUpdate` (`shapes`) names beside the three below, and any later member
+//! `FeedUpdate` (`shapes`) names beside the five below, and any later member
 //! by the wire's forward rule — plus `position` (the row's `at`, named once
 //! more so a consumer reading the shell's shape need not know the wire's),
 //! and `class` — `published` for a row of the guest's feed, `drafts` for one
 //! of a principal's supplement, the latter with `session`, the session the
-//! event goes to. The event carries `board`, the reference, beside `update`.
-//! The published feed starts at the head the board first answers with — at
-//! the thread's start, or at its first `/health` after it, never at 0 for a
-//! board not yet up.
+//! event goes to, and `by` and `burst`, the row's writer, where the shell
+//! knows them (below). The event carries `board`, the reference, beside
+//! `update`. The published feed starts at the head the board first answers
+//! with — at the thread's start, or at its first `/health` after it, never
+//! at 0 for a board not yet up.
+//!
+//! **A drafts row names its writer** (skep #1000). A board's row names no
+//! session, and every tab of a device shares its `key`, so a page could not
+//! tell its own writes from another tab's or another hand's by the row
+//! alone. The hold records, for each write a session of this shell's made,
+//! the session whose dial the board acknowledged and the page's `id` of the
+//! burst it carried (the record `Holds::written` reads, kept for the shell's
+//! life); each copy of a drafts row carries them as `by` and `burst`, the
+//! same on every copy, and a `changes` entry the same. `by` is
+//! absent where no session of this shell's under the receiving principal
+//! wrote the row — another device, another shell, another principal, a
+//! write whose answer was lost, a landing the resend's read found (which
+//! names `burst` alone) — and a held line the walk sent again names the
+//! session it went out under. A row can reach a read before its write's
+//! answer is noted: the read waits for the principal's writes out as the
+//! page was answered, once a page and `hold::WRITER_WAIT` at most, where a
+//! row may yet learn its writer (`Holds::writers`) — a page of none waits
+//! not at all — and a row the wait does not resolve goes out naming none.
+//! The wait holds every command queued behind the read with it.
 //!
 //! **What is a principal's is said under each of its sessions.** The drafts
 //! supplement is one per principal, read under any of its sessions' tokens
@@ -107,13 +127,15 @@
 //! that comes back to a board missed — the same feed, read once from a
 //! position the client names rather than streamed from the head, on the
 //! caller's thread and not this one, each entry in the update's shape above
-//! with its class, bounded by the call's `limit` and the wire's page budget,
-//! and answered with the position to ask from next and the board's head.
-//! Three forms: under a session the two classes merged by position; under a
-//! session narrowed to the `drafts` class, the supplement's page alone — a
-//! page's read of the drafts rows a session's end cut off, from the position
-//! the session opened at (skep #740); and the guest form, the published feed
-//! alone, token-free (skep #749). Each form reads under an address where the
+//! with its class — a drafts entry naming its writer from the hold's record,
+//! with no wait, an ended session's writes among them — bounded by the call's
+//! `limit` and the wire's page budget, and answered with the position to ask
+//! from next and the board's head. Three forms: under a session the two
+//! classes merged by position; under a session narrowed to the `drafts`
+//! class, the supplement's page alone — a page's read of the drafts rows a
+//! session's end cut off, from the position the session opened at
+//! (skep #740); and the guest form, the published feed alone, token-free
+//! (skep #749). Each form reads under an address where the
 //! call names one, its every read narrowed to the rows at or under it
 //! (PUB-7.31) — a draft's history (skep #652) — while this thread's own reads
 //! stay whole. The shell keeps no position: every form reads from the
@@ -139,7 +161,7 @@ use skep_client::Board;
 use skep_search::{GrantKind, Hit, Kind, Mark, MarkKind, Rung, Standing};
 
 use crate::events::{EventBus, EventName};
-use crate::hold::{BoardState, Holds, RowsNamed, Turn, PROBE_CADENCE};
+use crate::hold::{BoardState, Holds, RowsNamed, Turn, Written, PROBE_CADENCE};
 use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{Ended, SessionEntry, Sessions, Supplements};
@@ -789,7 +811,7 @@ impl<'b> Feeder<'b> {
     fn read_feed(&mut self) {
         let entry: &'b BoardEntry = self.entry;
         if let Some(since) = self.published_since {
-            if let ReadTo::At(at) = read_to_head(&entry.board, UpdateClass::Published, since, |row| self.emit_feed(row, UpdateClass::Published)) {
+            if let ReadTo::At(at) = read_to_head(&entry.board, UpdateClass::Published, since, |rows| rows.iter().for_each(|row| self.emit_feed(row, UpdateClass::Published, None))) {
                 self.published_since = Some(at);
             }
         }
@@ -802,8 +824,9 @@ impl<'b> Feeder<'b> {
     ///
     /// The read goes to the head of the board it stands at ([`read_to_head`]),
     /// from where its principal's last read stopped — at first, the position
-    /// its first session opened at — each row a `feed` event of the `drafts`
-    /// class under every session of the principal ([`Feeder::emit_drafts`]); a
+    /// its first session opened at — each page's rows `feed` events of the
+    /// `drafts` class under every session of the principal, each naming its
+    /// writer where the shell recorded one ([`Feeder::emit_drafts`]); a
     /// cursor the board's retention floor passed, as a long-open session's
     /// with no drafts row of its own is, resumed at the floor. The death
     /// signal ends the session (`Sessions::end`, which answers a session the
@@ -819,9 +842,9 @@ impl<'b> Feeder<'b> {
         let principal = session.facts.principal;
         let since = *self.drafts_since.entry(principal).or_insert(session.opened_at);
         let mut named = RowsNamed::default();
-        let read = read_to_head(&session.board, UpdateClass::Drafts(session), since, |row| {
-            named.note(row);
-            self.emit_drafts(row, session);
+        let read = read_to_head(&session.board, UpdateClass::Drafts(session), since, |rows| {
+            rows.iter().for_each(|row| named.note(row));
+            self.emit_drafts(rows, session);
         });
         self.holds.note_rows(&self.entry.reference, principal, &named);
         match read {
@@ -838,20 +861,26 @@ impl<'b> Feeder<'b> {
         }
     }
 
-    /// Emits one drafts row under every session of its principal at the board.
+    /// Emits one page of drafts rows under every session of their principal.
     ///
-    /// The row goes out first under `read_under`, the session whose token read
-    /// it — out of the table already where it is closing — then once under
-    /// each other session of the same principal at the board, every event
-    /// naming its own session (the module doc). The table is read as each row
-    /// goes out, so a session that registers while a long read runs hears
-    /// every row said after it stands.
-    fn emit_drafts(&self, row: &Value, read_under: &SessionEntry) {
-        self.emit_feed(row, UpdateClass::Drafts(read_under));
+    /// The sessions are those at the board. Each row goes out first under
+    /// `read_under`, the session whose token read it — out of the table
+    /// already where it is closing — then once under each other session of
+    /// the same principal at the board, every event naming its own session
+    /// and each the one writer the shell recorded of the row (the module
+    /// doc): the page's writers are read once, after the wait a row read
+    /// before its write's answer was noted owes (`Holds::writers`). The table
+    /// is read as each row goes out, so a session that registers while a long
+    /// read runs hears every row said after it stands.
+    fn emit_drafts(&self, rows: &[Value], read_under: &SessionEntry) {
         let principal = read_under.facts.principal;
-        for other in self.sessions.on_board(&self.entry.reference) {
-            if other.facts.principal == principal && other.reference != read_under.reference {
-                self.emit_feed(row, UpdateClass::Drafts(&other));
+        let writers = self.holds.writers(&self.entry.reference, principal, rows);
+        for (row, written) in rows.iter().zip(&writers) {
+            self.emit_feed(row, UpdateClass::Drafts(read_under), written.as_ref());
+            for other in self.sessions.on_board(&self.entry.reference) {
+                if other.facts.principal == principal && other.reference != read_under.reference {
+                    self.emit_feed(row, UpdateClass::Drafts(&other), written.as_ref());
+                }
             }
         }
     }
@@ -859,9 +888,9 @@ impl<'b> Feeder<'b> {
     /// Emits one row as a `feed` event.
     ///
     /// The row is in the update's shape ([`update_of`]) under the event's
-    /// `board`.
-    fn emit_feed(&self, row: &Value, class: UpdateClass<'_>) {
-        self.bus.emit(EventName::Feed, json!({"board": self.entry.reference, "update": update_of(row, class)}));
+    /// `board`, `written` its writer where the class is `drafts`.
+    fn emit_feed(&self, row: &Value, class: UpdateClass<'_>, written: Option<&Written>) {
+        self.bus.emit(EventName::Feed, json!({"board": self.entry.reference, "update": update_of(row, class, written)}));
     }
 
     /// Reads `/health` once, the board's verdict.
@@ -1010,14 +1039,22 @@ impl UpdateClass<'_> {
 /// Returns one `/changes` row in the update's shape (the module doc).
 ///
 /// It is the row verbatim, plus `position` (its `at`), `class` — `class`'s
-/// word — and, a drafts row's, the `session` the class names: what a `feed`
-/// event carries as `update` and a `changes` entry is.
-fn update_of(row: &Value, class: UpdateClass<'_>) -> Value {
+/// word — and, a drafts row's, the `session` the class names and, where
+/// `written` names them, the `by` and the `burst` of the write the row
+/// records: what a `feed` event carries as `update` and a `changes` entry
+/// is. A published row names no writer, whatever `written` holds.
+fn update_of(row: &Value, class: UpdateClass<'_>, written: Option<&Written>) -> Value {
     let mut update = row.clone();
     update["position"] = row["at"].clone();
     update["class"] = Value::from(class.as_str());
     if let UpdateClass::Drafts(session) = class {
         update["session"] = Value::from(session.reference.as_str());
+        if let Some(by) = written.and_then(|w| w.by.as_deref()) {
+            update["by"] = Value::from(by);
+        }
+        if let Some(burst) = written.and_then(|w| w.burst.as_deref()) {
+            update["burst"] = Value::from(burst);
+        }
     }
     update
 }
@@ -1078,7 +1115,10 @@ pub struct CaughtUp {
 /// to `limit` entries. `next` is that cut, or the last entry kept where
 /// `limit` cuts first, which a quiet board's next ask meets with the empty
 /// page at once (`since ≥ head`). A draft the session may not read never
-/// appears: the gating is the board's, at the token's class.
+/// appears: the gating is the board's, at the token's class. Each `drafts`
+/// entry names the writer `written` answers for its position — the hold's
+/// record, read with no wait (`Holds::written`; skep #1000) — as a `feed`
+/// event names it, and a `published` one none.
 ///
 /// # Errors
 ///
@@ -1087,7 +1127,15 @@ pub struct CaughtUp {
 /// (`malformed_changes` for a `limit` off the route's range,
 /// `feed_rebuilding`) and the unreachable board, as every read carries
 /// them; and a `/changes` answer the shell does not read, as a halt.
-pub fn changes_since(board: &Board, session: Option<&SessionEntry>, drafts_alone: bool, since: u64, limit: Option<u64>, under: Option<&Address>) -> Result<ChangesRead, Refusal> {
+pub fn changes_since(
+    board: &Board,
+    session: Option<&SessionEntry>,
+    drafts_alone: bool,
+    since: u64,
+    limit: Option<u64>,
+    under: Option<&Address>,
+    written: impl Fn(u64) -> Option<Written>,
+) -> Result<ChangesRead, Refusal> {
     let head = board.health()?.log_position();
     let under = under.map(ToString::to_string);
     let mut pages: Vec<(ChangesPage, UpdateClass<'_>)> = Vec::new();
@@ -1111,7 +1159,7 @@ pub fn changes_since(board: &Board, session: Option<&SessionEntry>, drafts_alone
         for row in &page.changes {
             // A row with no `at` is no row of the wire's: nothing places it.
             let Some(at) = row["at"].as_u64() else { continue };
-            let update = update_of(row, *class);
+            let update = update_of(row, *class, written(at).as_ref());
             match by_position.entry(at) {
                 Entry::Vacant(v) => {
                     v.insert(update);
@@ -1204,8 +1252,9 @@ fn history_reclaimed(floor: Option<u64>) -> Refusal {
 ///
 /// The feed is the published feed's, token-free, or a session's drafts
 /// supplement under its token, at the board that token is valid at; each
-/// row is handed to `emit` in order (wire.md §The change feed, Paging): a
-/// page whose `more` stands read on from its `last`; a `history_reclaimed`
+/// page's rows are handed to `emit` together, in order, the pages in theirs
+/// (wire.md §The change feed, Paging): a page whose `more` stands read on
+/// from its `last`; a `history_reclaimed`
 /// resumed at the floor it names, where that floor passes the cursor — a
 /// reclaimed cursor is no read's to wait out; a page past the page budget
 /// re-asked at the limit that `fits`, every later page at the route's
@@ -1216,7 +1265,7 @@ fn history_reclaimed(floor: Option<u64>) -> Refusal {
 /// with the position its finished pages reached ([`ReadTo::Died`]); a
 /// published read, token-free, never meets it (`Board::changes` halts
 /// there).
-fn read_to_head(board: &Board, class: UpdateClass<'_>, since: u64, mut emit: impl FnMut(&Value)) -> ReadTo {
+fn read_to_head(board: &Board, class: UpdateClass<'_>, since: u64, mut emit: impl FnMut(&[Value])) -> ReadTo {
     let (token, drafts) = match class {
         UpdateClass::Published => (None, false),
         UpdateClass::Drafts(session) => (Some(&session.token), true),
@@ -1225,7 +1274,7 @@ fn read_to_head(board: &Board, class: UpdateClass<'_>, since: u64, mut emit: imp
     loop {
         match board.changes(token, &ChangesQuery { since, under: None, drafts, limit }) {
             Ok(ChangesAnswer::Page(page)) => {
-                page.changes.iter().for_each(&mut emit);
+                emit(&page.changes);
                 since = page.last;
                 limit = None;
                 if !page.more {

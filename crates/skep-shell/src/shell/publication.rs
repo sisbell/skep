@@ -1423,7 +1423,11 @@ impl Shell {
     /// updated with the switches, the answers and the session; the
     /// acknowledgment's panel drop and event are the caller's
     /// ([`Shell::acknowledged`]), since `merge.land` writes the merge record
-    /// between the two. `call` names the row for the refusals that name it.
+    /// between the two. Each send stands out at the board until its answer
+    /// is noted, and an acknowledged shot's writer is recorded at its `at`:
+    /// the session that dialed it, an ended one where the landed test after a
+    /// death at the write found it (`Holds::note_shot`; skep #1000). `call`
+    /// names the row for the refusals that name it.
     ///
     /// # Errors
     ///
@@ -1549,7 +1553,16 @@ impl Shell {
         loop {
             sends += 1;
             let p = signed.publisher(&current);
-            let sent = lib::send(&p, inputs, &mut request).map_err(|f| self.fault(&current, call, f))?;
+            // The shot out until its ack is noted, the session its row's
+            // writer, let go before a death at it ends the session
+            // (`hold::WriteOut`; skep #1000).
+            let out = self.holds.write_out(&current);
+            let sent = out.noted(lib::send(&p, inputs, &mut request), |sent| {
+                if let Sent::Acknowledged(ack) = sent {
+                    self.holds.note_shot(&current, ack.at);
+                }
+            });
+            let sent = sent.map_err(|f| self.fault(&current, call, f))?;
             match sent {
                 Sent::Acknowledged(ack) => return Ok(Confirmation::Acknowledged { session: current, ack }),
                 Sent::NotLanded if sends < 2 => continue,
@@ -1610,7 +1623,7 @@ impl Shell {
                     let Some(next) = died["reason"]["session"].as_str().and_then(|r| self.sessions.get(r)) else {
                         return Ok(Confirmation::Answered(refused_json("session_ended", json!({"reason": died["reason"]}))));
                     };
-                    current = next;
+                    let dialed = std::mem::replace(&mut current, next);
                     signed = self.signed_within_call(&current, call)?;
                     let p = signed.publisher(&current);
                     // The records base where any run is a named draft's —
@@ -1624,7 +1637,12 @@ impl Shell {
                         Base::Walk
                     };
                     match lib::landed(&p, inputs, &request, base).map_err(|f| self.fault(&current, call, f))? {
-                        Verdict::Passed(ack) => return Ok(Confirmation::Acknowledged { session: current, ack }),
+                        Verdict::Passed(ack) => {
+                            // The shot the ended session dialed landed: that
+                            // session is its row's writer.
+                            self.holds.note_shot(&dialed, ack.at);
+                            return Ok(Confirmation::Acknowledged { session: current, ack });
+                        }
                         Verdict::NotFound => continue,
                         Verdict::Anothers { member, missing } => return Ok(Confirmation::Answered(self.refused(&current, &draft, PubRefusal::Twin { member, missing: Some(missing) }))),
                         Verdict::MayAlreadyStand => return Ok(Confirmation::Answered(self.refused(&current, &draft, PubRefusal::MayAlreadyStand))),

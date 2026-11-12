@@ -124,9 +124,9 @@
 //! is its silence, and any answer to one, a refusal among them, is the board
 //! answering ([`Holds::note_health_read`]). A request of the hold's the board
 //! gives no answer to — a burst's first dial, a resend's read, send, shift read
-//! or read of the hands, a drop's, a landing's or the held list's read of the
-//! hands, the probe's read of the board's head — marks the board unanswered
-//! until that verdict:
+//! or read of the hands, a drop's, an entry's, a keep's, a landing's or the
+//! held list's read of the hands, the probe's read of the board's head — marks
+//! the board unanswered until that verdict:
 //! nothing more of the hold's is dialed there, a burst is held at once, and a
 //! send the request cut is owed to the verdict, a failed send of its line where
 //! the verdict finds the board answering — the line's own failure — and none
@@ -154,6 +154,16 @@
 //! are read again and never repeated. The held list reads the hands of each
 //! moved document its session's memory holds none for, once the board's lock
 //! is let go, and enters what its rows name in that memory, saying no event.
+//!
+//! **The state that stays in front** (§4b.2; skep #974). While a document's
+//! first line awaits the person's act — a refused run's or a moved
+//! document's, no send having it out for its dials
+//! ([`PrincipalHold::first_awaiting_act`]) — every `held` event for the
+//! document says that line's state, as a person's act says what stands
+//! ([`Holds::say_standing`]): a burst held behind it, a line kept or told
+//! behind it, and a landing all say it, the lines behind it changing the
+//! count alone, and the hands it owes are read once the board's lock is let
+//! go. The `held` answer names the burst's own cause.
 //!
 //! **The board's state** (§3c.3, §4b.2; P37; skep #865). The page is told what
 //! stands at a board before a write meets it: one state, the most severe that
@@ -743,13 +753,15 @@ impl LandedLine {
 /// It is owed where `doc` stands moved on the board's verdict and the last
 /// face told the session of it is no `moved` face for that verdict
 /// ([`Holds::hands_owed_to`]): the session re-opened since, another of the
-/// principal's, told a burst held behind, or told an earlier move's hands
-/// (skep #973). [`Holds::say_standing`] answers it, under the board's lock,
-/// for a person's act (skep #960), and [`Holds::say_landed`] for a landing
-/// the store's retry wrote (skep #972). `k` and `reason` are the head line
-/// the verdict rides as it stood, and `landed` the line the act kept, where
-/// it kept one. [`Holds::say_with_hands`] says it once the lock is let go,
-/// the hands read first.
+/// principal's, told the document's face before the walk under another
+/// session held it moved, or told an earlier move's hands (skep #973).
+/// [`Holds::say_standing`] answers it, under the board's lock, for a person's
+/// act (skep #960) and for a line entered or kept behind the line the
+/// verdict rides (skep #974), and [`Holds::say_landed`] for a landing the
+/// store's retry wrote (skep #972). `k` and `reason` are the head line the
+/// verdict rides as it stood, and `landed` the line the act kept, where it
+/// kept one. [`Holds::say_with_hands`] says it once the lock is let go, the
+/// hands read first.
 #[must_use = "an owed `held` event is said by `Holds::say_with_hands` once the board's lock is let go"]
 #[derive(Debug)]
 struct HandsOwed {
@@ -1600,15 +1612,15 @@ impl AttestedWhereOwed<'_> {
 
 /// One line entered in a principal's queue ([`Holds::enter_line`]).
 ///
-/// It is the ordinal the line took, the `held` answer for it, and what the
-/// `held` event says of its document as the line is entered: the document,
-/// the lines standing on it, the line's state and its cause.
+/// It is the ordinal the line took, the `held` answer for it, and the line's
+/// own face, which the `held` event says of its document as the line is
+/// entered save where a line ahead of it awaits the person's act
+/// ([`Holds::say_entered`]): the document, the line's state and its cause.
 #[derive(Debug)]
 struct LineEntered {
     k: u64,
     answer: Value,
     doc: String,
-    lines: LinesOn,
     state: HeldState,
     cause: String,
 }
@@ -2553,6 +2565,20 @@ impl PrincipalHold {
         Judged::of(k, reason)
     }
 
+    /// Returns `doc`'s first line's ordinal where it awaits the person's act.
+    ///
+    /// It is a refused run's line or a moved document's ([`awaits_act`]) that
+    /// no send has out for its dials ([`PrincipalHold::dialing`]): a first
+    /// dial's shift enters its line `moved`, tells no one of it while its call
+    /// settles it, and no act of the person's takes it meanwhile
+    /// ([`resolvable`]). While such a line stands, every `held` event of `doc`
+    /// says its state, the lines behind it changing the count alone (§3c.4,
+    /// §4b.2; skep #974).
+    fn first_awaiting_act(&self, doc: &str) -> Option<u64> {
+        let (k, reason) = self.queue.reasons_on(doc).next()?;
+        (awaits_act(reason) && !self.dialing.contains(&k)).then_some(k)
+    }
+
     /// Returns whether line `k` stands moved at the head of `doc`.
     fn heads_moved(&self, doc: &str, k: u64) -> bool {
         self.queue.reasons_on(doc).next().is_some_and(|(head, reason)| head == k && reason.cause == cause::MOVED)
@@ -3491,15 +3517,18 @@ impl Holds {
     /// `again` (skep #989), and its `sendable`, so a document mid-resend stays
     /// `sending` and a moved one keeps the hands read for the verdict it
     /// carries now — beside today's count. Where it told the session nothing,
-    /// no line stands, or the face it told is a `moved` one for another
-    /// verdict than the document stands on now, the queue gives the state
-    /// ([`state_on`]) and the head's cause; a session told nothing of a
-    /// document no line stands on hears nothing. A session told no `moved`
-    /// face for the verdict a document stands moved on hears nothing here
-    /// either, whatever it was told: its event is owed and answered, said with
-    /// the hands read once the board's lock is let go ([`HandsOwed`]; skep
-    /// #972, #973). The landing's copy may have been made by any act, so the
-    /// event follows it within one [`PROBE_CADENCE`].
+    /// no line stands, the face it told is a `moved` one for another verdict
+    /// than the document stands on now, or the document's first line awaits
+    /// the person's act and the face told another state — the walk, under
+    /// another session, having refused or moved it since — the queue gives
+    /// the state ([`state_on`]) and the head's cause, so that line's state
+    /// stays in front (skep #974); a session told nothing of a document no
+    /// line stands on hears nothing. A session told no `moved` face for the
+    /// verdict a document stands moved on hears nothing here either, whatever
+    /// it was told: its event is owed and answered, said with the hands read
+    /// once the board's lock is let go ([`HandsOwed`]; skep #972, #973). The
+    /// landing's copy may have been made by any act, so the event follows it
+    /// within one [`PROBE_CADENCE`].
     #[must_use = "a landing's owed `held` event is said by `Holds::say_with_hands` once the board's lock is let go"]
     fn say_landed(&self, principal: u64, ph: &mut PrincipalHold, sessions: &[Arc<SessionEntry>]) -> Vec<(Arc<SessionEntry>, HandsOwed)> {
         let mut owed = Vec::new();
@@ -3508,6 +3537,9 @@ impl Holds {
             ph.unwritable_docs.remove(&doc);
             let lines = ph.lines_on(&doc);
             let judged = ph.judged_on(&doc);
+            // The state a first line that awaits the person's act keeps in
+            // front, which a face told of another state is not repeated over.
+            let standing = ph.first_awaiting_act(&doc).map(|_| state_on(ph, &doc));
             for session in sessions.iter().filter(|session| session.facts.principal == principal) {
                 let told = self.told(session, &doc);
                 if told.is_none() && lines.held == 0 {
@@ -3517,7 +3549,7 @@ impl Holds {
                     owed.push((Arc::clone(session), HandsOwed { doc: doc.clone(), k, reason, landed: None }));
                     continue;
                 }
-                let repeats = told.filter(|told| lines.held > 0 && (told.state != HeldState::Moved || told.moved_for(judged.as_ref())));
+                let repeats = told.filter(|told| lines.held > 0 && standing.is_none_or(|state| told.state == state) && (told.state != HeldState::Moved || told.moved_for(judged.as_ref())));
                 let said = match repeats {
                     Some(told) => HeldSaid { held: lines.held, unwritable: lines.unwritable.clone(), ..told },
                     None => {
@@ -4036,6 +4068,17 @@ impl Holds {
     /// principal's stands — and one naming a burst kept there is placed at
     /// its minted address now; a refusal there is faced at the act, nothing
     /// held and nothing dialed.
+    ///
+    /// **A burst held behind an act owed** (skep #974). Where the burst is
+    /// held behind a line of its document that awaits the person's act — a
+    /// refused run's, or a moved document's — the `held` event says that
+    /// line's state, kept in front, its count counting the burst, while the
+    /// `held` answer names the burst's own cause ([`Holds::say_entered`]).
+    /// Where the document stands moved and no face told this session the
+    /// hands of its verdict, the call waits on one read of them more, made
+    /// once the board's lock is let go ([`Holds::hands_since_typed_state`]),
+    /// and for another device's key the read of its account's labels; none
+    /// is made at a board not answering or an own node stopped (SP-23).
     fn send_burst(&self, session: &SessionEntry, frame: Value, anchors: Option<Anchors>) -> OpAnswer {
         let burst = match Burst::admit(frame, session) {
             Ok(burst) => burst.with_anchors(anchors),
@@ -4078,7 +4121,7 @@ impl Holds {
             };
             let hold_cause = standing.or(line_stands.then_some(cause::BEHIND)).or(pending.then_some(cause::UNREACHABLE));
             if let Some(cause) = hold_cause {
-                return OpAnswer::Answered(self.hold_line(&mut board_hold, session, burst, Reason::of(cause, false), base).map(|entered| entered.answer));
+                return OpAnswer::Answered(self.hold_line(board_hold, session, burst, Reason::of(cause, false), base));
             }
             (burst, base)
         };
@@ -4198,9 +4241,12 @@ impl Holds {
     /// to the verdict where its dial left (skep #863): a shift whose read
     /// went unanswered is untried, never a reason it is not exact, and its
     /// verdict is kept (`PrincipalHold::shift_owed`) for the resend to run
-    /// it when the board answers. `refusal` is the board's refusal the
-    /// verdict rides. Where the shift is not exact — a delete or a
-    /// rearrange without its span, an anchor lost or at two places, the span
+    /// it when the board answers. Where a line ahead of this one on its
+    /// document awaits the person's act, the face each of those three ends
+    /// tells says that line's state instead ([`Holds::say_after_shift`];
+    /// skep #974). `refusal` is the board's refusal the verdict rides. Where
+    /// the shift is not exact — a delete or a rearrange without its span, an
+    /// anchor lost or at two places, the span
     /// between them cut or refilled, the read refused, the deadline passed —
     /// the line is the moved hold as a burst without anchors meets it: the
     /// hands read once ([`Holds::hands_since_typed_state`]) before anything is
@@ -4243,7 +4289,7 @@ impl Holds {
             self.with_principal(board_reference, principal, |ph| self.remark_line(principal, ph, k, Reason::of(cause::SESSION_DIED, sent)));
             drop(out);
             answer["cause"] = Value::from(cause::SESSION_DIED);
-            self.emit_held(session, &doc, self.lines_on(board_reference, principal, &doc), HeldState::Holding, Some(cause::SESSION_DIED), MovedFace::default());
+            self.say_after_shift(session, &doc, k, HeldState::Holding, cause::SESSION_DIED);
             OpAnswer::Died(AtDeath::Held(DeathHeld { k, answer }))
         };
         loop {
@@ -4305,7 +4351,7 @@ impl Holds {
                     self.note_unanswered(&mut self.lock(board_reference), cut);
                     drop(out);
                     answer["cause"] = Value::from(cause::UNREACHABLE);
-                    self.emit_held(session, &doc, self.lines_on(board_reference, principal, &doc), HeldState::Holding, Some(cause::UNREACHABLE), MovedFace::default());
+                    self.say_after_shift(session, &doc, k, HeldState::Holding, cause::UNREACHABLE);
                     return OpAnswer::Answered(Ok(answer));
                 }
                 Dialed::Held { reason, .. } => {
@@ -4314,7 +4360,7 @@ impl Holds {
                     self.with_principal(board_reference, principal, |ph| self.remark_line(principal, ph, k, Reason { sent: reason.sent || sent, ..reason }));
                     drop(out);
                     answer["cause"] = Value::from(said.as_str());
-                    self.emit_held(session, &doc, self.lines_on(board_reference, principal, &doc), state, Some(&said), MovedFace::default());
+                    self.say_after_shift(session, &doc, k, state, &said);
                     return OpAnswer::Answered(Ok(answer));
                 }
                 Dialed::Reissue { refusal, .. } | Dialed::Faced(refusal) => {
@@ -4366,10 +4412,13 @@ impl Holds {
     /// The burst is taken, its frame the held line's own: the answer is the
     /// `held` answer ([`Holds::enter_line`]), or the hold's refusal, nothing
     /// held — `store_halted` where P38 halted the file, `held_full` where the
-    /// principal's queue is full — and the `held` event is emitted under the
-    /// board's lock ([`Holds::say_entered`]). `failed` is the failed send the
-    /// dial was, which starts the line's clock ([`held_failure`];
-    /// [`HAND_OVER_DEADLINE`]), none where the dial failed no send. `base` is
+    /// principal's queue is full — and the `held` event is said under the
+    /// board's lock ([`Holds::say_entered`]): the line's own face, or, where a
+    /// line ahead of it on its document awaits the person's act, that line's
+    /// state, kept in front, the hands it owes read once the lock is let go
+    /// (skep #974). `failed` is the failed send the dial was, which starts
+    /// the line's clock ([`held_failure`]; [`HAND_OVER_DEADLINE`]), none
+    /// where the dial failed no send. `base` is
     /// the position the line's resend read starts from (§3c.2), the caller's
     /// to have read before its dial ([`Holds::send_burst`];
     /// [`PrincipalHold::base_of`]) — a hold made with no dial between reads
@@ -4399,22 +4448,21 @@ impl Holds {
         if unanswered {
             self.note_unanswered(&mut board_hold, None);
         }
-        OpAnswer::Answered(self.enter_line(&mut board_hold, session, burst, reason, failed, base).map(|entered| {
-            let judged = Judged::of(entered.k, &read_for);
-            let mut face = MovedFace { hands: &hands, again, sendable: None, judged: judged.as_ref() };
+        let entered = match self.enter_line(&mut board_hold, session, burst, reason, failed, base) {
+            Ok(entered) => entered,
+            Err(refusal) => return OpAnswer::Answered(Err(refusal)),
+        };
+        let judged = Judged::of(entered.k, &read_for);
+        let mut face = MovedFace { hands: &hands, again, sendable: None, judged: judged.as_ref() };
+        // A burst with no anchors never shifts (skep #867).
+        if unanchored && entered.state == HeldState::Moved {
             if let Some(ph) = board_hold.principals.get_mut(&session.facts.principal) {
-                if hands.contains(&Hand::UNREAD) {
-                    ph.hands_owed.insert(entered.doc.clone(), entered.k);
-                }
-                // A burst with no anchors never shifts (skep #867).
-                if unanchored && entered.state == HeldState::Moved {
-                    ph.note_tested(&entered.doc, entered.k, Tested::Sendable(false), false);
-                    face.sendable = ph.sendable_told(&entered.doc);
-                }
+                ph.note_tested(&entered.doc, entered.k, Tested::Sendable(false), false);
+                face.sendable = ph.sendable_told(&entered.doc);
             }
-            self.say_entered(session, &entered, face);
-            entered.answer
-        }))
+        }
+        self.say_entered(board_hold, session, &entered, face);
+        OpAnswer::Answered(Ok(entered.answer))
     }
 
     /// Holds an admitted burst whose first dial the board gave no answer to.
@@ -4427,9 +4475,10 @@ impl Holds {
     /// `/health` verdict's (`Answering::Unanswered`), the send owed to it
     /// where its request may have left. The board is marked unanswered
     /// whatever the hold answers, so every burst after it is held at once
-    /// until that verdict, and the `held` event says the line `holding`
-    /// ([`Holds::say_entered`]). The answer is the `held` answer, or the
-    /// hold's refusal, nothing held ([`Holds::enter_line`]).
+    /// until that verdict, and the `held` event says the line `holding`, or
+    /// the state of a line ahead of it that awaits the person's act
+    /// ([`Holds::say_entered`]; skep #974). The answer is the `held` answer,
+    /// or the hold's refusal, nothing held ([`Holds::enter_line`]).
     fn hold_unanswered(&self, session: &SessionEntry, burst: Burst, reason: Reason, refusal: &Refusal, base: u64) -> OpAnswer {
         let principal = session.facts.principal;
         let sent = reason.sent;
@@ -4437,10 +4486,12 @@ impl Holds {
         let entered = self.enter_line(&mut board_hold, session, burst, reason, None, base);
         let cut = entered.as_ref().ok().filter(|_| sent).map(|entered| CutSend { principal, k: entered.k, doc: entered.doc.clone(), at: self.now(), refusal: refusal.to_string() });
         self.note_unanswered(&mut board_hold, cut);
-        OpAnswer::Answered(entered.map(|entered| {
-            self.say_entered(session, &entered, MovedFace::default());
-            entered.answer
-        }))
+        let entered = match entered {
+            Ok(entered) => entered,
+            Err(refusal) => return OpAnswer::Answered(Err(refusal)),
+        };
+        self.say_entered(board_hold, session, &entered, MovedFace::default());
+        OpAnswer::Answered(Ok(entered.answer))
     }
 
     /// Holds an admitted burst at the death signal on its session's token.
@@ -4449,47 +4500,72 @@ impl Holds {
     /// read of the hands after it (§3c.4): the line is entered `session_died`,
     /// `sent: false` — a dead token's write, and a stale one, landed nothing
     /// — its clock started where `failed` names the failed send the dial was
-    /// ([`HAND_OVER_DEADLINE`]), and the `held` event says it `holding`
-    /// ([`Holds::say_entered`]). The answer is [`OpAnswer::Died`] for the
-    /// caller to end the session: the line's [`AtDeath::Held`], or
-    /// [`AtDeath::Refused`] with what [`Holds::enter_line`] refused, nothing
-    /// held.
+    /// ([`HAND_OVER_DEADLINE`]), and the `held` event says it `holding`, or
+    /// the state of a line ahead of it that awaits the person's act
+    /// ([`Holds::say_entered`]; skep #974), before the caller ends the
+    /// session. The answer is [`OpAnswer::Died`] for the caller to end the
+    /// session: the line's [`AtDeath::Held`], or [`AtDeath::Refused`] with
+    /// what [`Holds::enter_line`] refused, nothing held.
     fn hold_at_death(&self, session: &SessionEntry, burst: Burst, failed: Option<String>, base: u64) -> OpAnswer {
         let mut board_hold = self.lock(&session.board_reference);
         OpAnswer::Died(match self.enter_line(&mut board_hold, session, burst, Reason::of(cause::SESSION_DIED, false), failed, base) {
             Ok(entered) => {
-                self.say_entered(session, &entered, MovedFace::default());
+                self.say_entered(board_hold, session, &entered, MovedFace::default());
                 AtDeath::Held(DeathHeld { k: entered.k, answer: entered.answer })
             }
             Err(refusal) => AtDeath::Refused(refusal),
         })
     }
 
-    /// Holds one line before any dial, and says so.
+    /// Holds one line before any dial, says so, and answers the call.
     ///
     /// Its birth is no failed send, so its clock is not started:
-    /// `board_hold` is the session's board's hold, the line is entered
-    /// ([`Holds::enter_line`]), and the `held` event is emitted
-    /// ([`Holds::say_entered`]).
+    /// `board_hold` is the session's board's hold under its lock, the line is
+    /// entered ([`Holds::enter_line`]) and the `held` event said
+    /// ([`Holds::say_entered`]), which lets the lock go. The answer is the
+    /// `held` answer, its `cause` the line's own (skep #974).
     ///
     /// # Errors
     ///
     /// Returns what [`Holds::enter_line`] returns, nothing held.
-    fn hold_line(&self, board_hold: &mut BoardHold, session: &SessionEntry, burst: Burst, reason: Reason, base: u64) -> Result<LineEntered, Refusal> {
-        let entered = self.enter_line(board_hold, session, burst, reason, None, base)?;
-        self.say_entered(session, &entered, MovedFace::default());
-        Ok(entered)
+    fn hold_line(&self, mut board_hold: MutexGuard<'_, BoardHold>, session: &SessionEntry, burst: Burst, reason: Reason, base: u64) -> Result<Value, Refusal> {
+        let entered = self.enter_line(&mut board_hold, session, burst, reason, None, base)?;
+        self.say_entered(board_hold, session, &entered, MovedFace::default());
+        Ok(entered.answer)
     }
 
-    /// Emits the `held` event for a line just entered ([`LineEntered`]).
+    /// Says the `held` event for a line just entered, and lets the lock go.
     ///
-    /// A moved line's says `face`, the hands whose rows moved its document
-    /// and its `sendable`, and no cause, as every moved document's face does;
-    /// any other line's names its cause. `emit_held` touches the bus alone,
-    /// so it is safe under the board's lock.
-    fn say_entered(&self, session: &SessionEntry, entered: &LineEntered, face: MovedFace<'_>) {
-        let cause = (entered.state != HeldState::Moved).then_some(entered.cause.as_str());
-        self.emit_held(session, &entered.doc, entered.lines.clone(), entered.state, cause, face);
+    /// `entered` is the line ([`LineEntered`]). The event says the line's own
+    /// face — a moved line's `face`, the hands whose rows moved its document
+    /// and its `sendable`, and no cause, as every moved document's face does,
+    /// and any other line's cause — save
+    /// where a line ahead of it on its document awaits the person's act
+    /// ([`PrincipalHold::first_awaiting_act`]; skep #974): that line's state
+    /// stays in front, said as [`Holds::say_standing`] says what stands, its
+    /// count counting the new line. An own face naming the hands not read
+    /// owes them to the walk ([`PrincipalHold::hands_owed`]). `board_hold` is
+    /// the session's board's hold, its lock held since the line was entered,
+    /// so the event goes out before any probe sends the line — `emit_held`
+    /// touches the bus alone, so it is safe there — and let go before the
+    /// event a standing face owes is said, its hands read first
+    /// ([`Holds::say_with_hands`]).
+    fn say_entered(&self, mut board_hold: MutexGuard<'_, BoardHold>, session: &SessionEntry, entered: &LineEntered, face: MovedFace<'_>) {
+        let ph = board_hold.principals.get_mut(&session.facts.principal).expect("the principal's hold, entered by its door");
+        let owed = if ph.first_awaiting_act(&entered.doc).is_some_and(|first| first != entered.k) {
+            self.say_standing(session, ph, &entered.doc, None)
+        } else {
+            if face.hands.contains(&Hand::UNREAD) {
+                ph.hands_owed.insert(entered.doc.clone(), entered.k);
+            }
+            let cause = (entered.state != HeldState::Moved).then_some(entered.cause.as_str());
+            self.emit_held(session, &entered.doc, ph.lines_on(&entered.doc), entered.state, cause, face);
+            None
+        };
+        drop(board_hold);
+        if let Some(owed) = owed {
+            self.say_with_hands(session, owed);
+        }
     }
 
     /// Enters one line in the principal's queue at the session's board.
@@ -4552,8 +4628,7 @@ impl Holds {
             why.answer_in(&mut answer);
             ph.unwritable_docs.insert(doc.clone());
         }
-        let lines = ph.lines_on(&doc);
-        Ok(LineEntered { k: entered.k, answer, doc, lines, state, cause })
+        Ok(LineEntered { k: entered.k, answer, doc, state, cause })
     }
 
     /// Gives a burst held at the death signal the death's reason, and
@@ -5185,7 +5260,10 @@ impl Holds {
     /// session of it is no `moved` face for that verdict: no face it was told
     /// names the hands, so it says nothing and answers the event owed, said
     /// once the board's lock is let go with the hands read ([`HandsOwed`];
-    /// skep #960, #973).
+    /// skep #960, #973). It says the same where a line is entered, kept or
+    /// re-marked behind a first line that awaits the person's act, whose
+    /// state stays in front ([`Holds::say_entered`],
+    /// [`Holds::say_standing_ahead_of`]; skep #974).
     #[must_use = "an event owed is said by `Holds::say_with_hands` once the board's lock is let go"]
     fn say_standing(&self, session: &SessionEntry, ph: &mut PrincipalHold, doc: &str, landed: Option<&LandedLine>) -> Option<HandsOwed> {
         if let Some((k, reason)) = self.hands_owed_to(session, ph, doc) {
@@ -5219,10 +5297,11 @@ impl Holds {
     /// `sendable`, none under the keyless session, which is offered no
     /// `send` (§4b.1), the verdict it stands on and the hands the session's
     /// memory holds for that verdict, named `again` where they were so
-    /// (skep #989), never those an earlier move's face named (skep #973), and
-    /// names `landed`, the line the act kept, where it kept one (skep #968).
-    /// `emit_said` touches the bus alone, so it is safe under the board's
-    /// lock.
+    /// (skep #989), never those an earlier move's face named (skep #973), a
+    /// refused run's face its first line's cause, the board's token, as the
+    /// refused face is first said (skep #974), and names `landed`, the line
+    /// the act kept, where it kept one (skep #968). `emit_said` touches the
+    /// bus alone, so it is safe under the board's lock.
     fn say_as_told(&self, session: &SessionEntry, ph: &mut PrincipalHold, doc: &str, landed: Option<&LandedLine>) {
         let state = state_on(ph, doc);
         let moved = state == HeldState::Moved;
@@ -5231,14 +5310,16 @@ impl Holds {
         let told = if moved { self.told(session, doc).filter(|told| told.moved_for(judged.as_ref())) } else { None };
         let (hands, again) = told.map_or_else(|| (Vec::new(), false), |told| (told.hands, told.again));
         let face = MovedFace { hands: &hands, again, sendable, judged: judged.as_ref() };
-        self.emit_said(session, doc, HeldSaid::of(ph.lines_on(doc), state, None, face), landed);
+        let cause = ph.queue.reasons_on(doc).next().map(|(_, reason)| reason.cause.clone()).filter(|_| state == HeldState::Refused);
+        self.emit_said(session, doc, HeldSaid::of(ph.lines_on(doc), state, cause.as_deref(), face), landed);
     }
 
     /// Says the `held` event a moved face owes, its hands read first.
     ///
-    /// A person's act or a landing left `owed.doc` moved, and no face told
-    /// `session` named the hands of the verdict it stands on ([`HandsOwed`];
-    /// skep #960, #972, #973). It runs with no lock held. Where the board
+    /// A person's act, a landing, or a line entered or kept behind the line
+    /// the verdict rides left `owed.doc` moved (skep #960, #972, #973, #974),
+    /// and no face told `session` named the hands of the verdict it stands on
+    /// ([`HandsOwed`]). It runs with no lock held. Where the board
     /// answers and the own node runs, the hands are read for the line the
     /// board's verdict rides, as every moved face's are
     /// ([`Holds::hands_since_typed_state`]); elsewhere no read is made,
@@ -5291,13 +5372,55 @@ impl Holds {
         self.emit_said(session, &doc, HeldSaid::of(ph.lines_on(&doc), HeldState::Moved, None, face), landed.as_ref());
     }
 
+    /// Says what stands on `doc` where a line ahead of `k` awaits an act.
+    ///
+    /// It answers whether it said it (§4b.2; skep #974), and runs with no
+    /// lock held. Where the document's first line awaits the person's act
+    /// ([`PrincipalHold::first_awaiting_act`]) and is not line `k`, what
+    /// stands is said under the board's lock as a person's act says it
+    /// ([`Holds::say_standing`]) — that line's state kept in front, the count
+    /// counting every line behind it — naming `landed`, where a keep left the
+    /// line first, and the event its hands owe is said once the lock is let
+    /// go ([`Holds::say_with_hands`]). It says nothing otherwise, the caller
+    /// then saying its own face.
+    fn say_standing_ahead_of(&self, session: &SessionEntry, doc: &str, k: u64, landed: Option<&LandedLine>) -> bool {
+        let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
+        let said = self.with_principal(board_reference, principal, |ph| ph.first_awaiting_act(doc).filter(|&first| first != k).map(|_| self.say_standing(session, ph, doc, landed)));
+        let Some(owed) = said.flatten() else { return false };
+        if let Some(owed) = owed {
+            self.say_with_hands(session, owed);
+        }
+        true
+    }
+
+    /// Emits the `held` event an end of a first dial's shift owes its line.
+    ///
+    /// Line `k` of `doc` says `state` under `cause`, save where a line ahead
+    /// of it awaits the person's act, whose state stays in front
+    /// ([`Holds::say_standing_ahead_of`]; skep #974). It runs with no lock
+    /// held, the line let go ([`LineOut`]), so an act its face asks for takes
+    /// it ([`Holds::shift_at_first_dial`]).
+    fn say_after_shift(&self, session: &SessionEntry, doc: &str, k: u64, state: HeldState, cause: &str) {
+        if self.say_standing_ahead_of(session, doc, k, None) {
+            return;
+        }
+        let lines = self.lines_on(&session.board_reference, session.facts.principal, doc);
+        self.emit_held(session, doc, lines, state, Some(cause), MovedFace::default());
+    }
+
     /// Emits the `held` event for a line the resend kept.
     ///
     /// It names `landed` (skep #968), `lines` standing on `doc` after it: the
-    /// state `sending` where one stands, else `kept`. It is a resent line's
-    /// ack and a head the resend's read found landed (`resend`'s
-    /// `send_line` and `resume_doc`).
+    /// state `sending` where one stands, else `kept` — save where the line
+    /// that stands first now awaits the person's act, whose state stays in
+    /// front, the hands it owes read once the board's lock is let go
+    /// ([`Holds::say_standing_ahead_of`]; skep #974). It is a resent line's
+    /// ack and a head the resend's read found landed (`resend`'s `send_line`
+    /// and `resume_doc`), said with no lock held.
     fn say_kept(&self, session: &SessionEntry, doc: &str, lines: LinesOn, landed: &LandedLine) {
+        if self.say_standing_ahead_of(session, doc, landed.k, Some(landed)) {
+            return;
+        }
         let state = if lines.held == 0 { HeldState::Kept } else { HeldState::Sending };
         self.emit_said(session, doc, HeldSaid::of(lines, state, None, MovedFace::default()), Some(landed));
     }

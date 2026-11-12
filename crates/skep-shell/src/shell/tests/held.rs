@@ -629,7 +629,8 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
 ///
 /// A refused run — `out_of_bounds` (a `permanent` refusal) on a burst, two
 /// bursts behind it on the same document held `behind`, the `held` event
-/// `refused`; a `send` on a holding line is `not_resolvable`, an unknown
+/// `refused` at each, the run's state kept in front and its count counting
+/// them (skep #974); a `send` on a holding line is `not_resolvable`, an unknown
 /// ordinal `no_such_held`; an act the row does not spell is refused
 /// `malformed_args` naming `act` — the argument checked before the line, at
 /// an ordinal of the run and at one of no line alike, the run standing whole
@@ -656,6 +657,8 @@ fn a_refused_run_holds_behind_it_and_resolve_acts_on_it() {
         let behind = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "900001"}, "values": [v], "as_of": at}})).unwrap();
         assert_eq!(behind["cause"], "behind", "{behind}");
     }
+    let in_front = wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["held"] == 3);
+    assert_eq!((in_front.data["state"].as_str(), &in_front.data["cause"]), (Some("refused"), &refused["cause"]), "the run's state stays in front: {}", in_front.data);
     assert_eq!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().len(), 3);
     // A `send` on a holding line, and an unknown ordinal.
     let behind_k = shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().iter().find(|r| r["cause"] == "behind").unwrap()["held"].as_u64().unwrap();

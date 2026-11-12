@@ -4436,33 +4436,156 @@ fn a_moved_documents_lines_keep_each_its_own_sent() {
 /// base raised to 77; a third hand's change lands at 78, and the next
 /// probe's resend, refused again with no shift exact without anchors, is
 /// held moved: its face names the third hand alone, the change the person
-/// acknowledged named no more, the line standing at its raised base under
-/// the newest verdict (the mutant that reads the hands since the typed state
-/// at every face names the acknowledged hand again beside the new one, and
-/// the person meets the face they sent past).
+/// acknowledged named no more and the face not named `again`, the line
+/// standing at its raised base under the newest verdict (the mutant that
+/// reads the hands since the typed state at every face names the
+/// acknowledged hand again beside the new one, and the person meets the face
+/// they sent past; the one that marks every face after a `send` `again` says
+/// a new change is the old one).
 #[test]
 fn a_document_moved_again_after_the_persons_send_names_only_the_hands_since() {
     let g = ground();
     let typed = g.fake.head();
     let row = |at: u64, key: String| json!({"at": at, "op": "insert", "key": key, "docs": [DOC]});
     *g.fake.rows.lock().unwrap() = vec![row(77, "ff".repeat(32))];
-    let faces = || -> Vec<Value> {
+    let faces = || -> Vec<(Value, Option<Value>)> {
         let moved: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held && e.data["state"] == "moved").map(|e| e.data).collect();
         moved.iter().for_each(assert_held_event_declared);
-        moved.iter().map(|d| d["hands"].clone()).collect()
+        moved.iter().map(|d| (d["hands"].clone(), d.get("again").cloned())).collect()
     };
     g.fake.op_rejected.next(1, arrangement_moved(typed, 77));
     let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["x"]), typed), None) else { panic!("held, not faced") };
     let k = held["held"].as_u64().unwrap();
-    assert_eq!((held["cause"].as_str(), faces()), (Some("moved"), vec![json!([{"key": "other", "fingerprint": "ff".repeat(32)}])]), "the first face names the writer who moved it: {held}");
+    assert_eq!((held["cause"].as_str(), faces()), (Some("moved"), vec![(json!([{"key": "other", "fingerprint": "ff".repeat(32)}]), None)]), "the first face names the writer who moved it: {held}");
     assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap(), Resolved::HandedBack);
     assert_eq!(g.lines()[0]["base"], 77, "the base raised to the verdict's `site.current`");
     g.fake.rows.lock().unwrap().push(row(78, "ee".repeat(32)));
     g.fake.op_rejected.next(1, arrangement_moved(typed, 78));
     g.holds.probe("b-1");
-    assert_eq!(faces(), [json!([{"key": "other", "fingerprint": "ee".repeat(32)}])], "moved again: the hand since the person's send alone");
+    assert_eq!(faces(), [(json!([{"key": "other", "fingerprint": "ee".repeat(32)}]), None)], "moved again: the hand since the person's send alone, not named again");
     let lines = g.lines();
     assert_eq!((lines[0]["cause"].as_str(), lines[0]["base"].as_u64(), &lines[0]["refusal"]), (Some("moved"), Some(77), &arrangement_moved(typed, 78)), "{lines:?}");
+    assert!(lines[0].get("again").is_none(), "the row not named again: {lines:?}");
+}
+
+/// The hand of the other key whose change at 77 moves [`moved_and_sent`]'s
+/// document.
+fn hand_ff() -> Value {
+    json!([{"key": "other", "fingerprint": "ff".repeat(32)}])
+}
+
+/// Returns the `held` events said `moved` since the last look, each held to
+/// its declaration.
+fn moved_faces(g: &Ground) -> Vec<Value> {
+    let said: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).collect();
+    said.iter().for_each(assert_held_event_declared);
+    said.into_iter().filter(|e| e["state"] == "moved").collect()
+}
+
+/// Returns a writer's ground whose moved document the person has sent.
+///
+/// Three lines typed against the document at 70 stand on it; the board
+/// refused the first's resend as typed against an older state, another key's
+/// change at 77 having moved it, and the face named that hand
+/// ([`hand_ff`]); the person's `send` then handed the document back. It
+/// answers the ground and the lines' ordinals.
+fn moved_and_sent() -> (Ground, Vec<u64>) {
+    let g = writer_at(80);
+    g.fake.next_at.store(81, Ordering::SeqCst);
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
+    let ks: Vec<u64> = ["a", "b", "c"].iter().map(|v| g.hold(&insert(DOC, json!([v]), 70), "unreachable", false)["held"].as_u64().unwrap()).collect();
+    g.fake.op_rejected.next(1, arrangement_moved(70, 77));
+    g.holds.probe("b-1");
+    let faced = moved_faces(&g);
+    let [face] = &faced[..] else { panic!("premise: the document faced moved once: {faced:?}") };
+    assert_eq!((&face["hands"], face.get("again")), (&hand_ff(), None), "premise: the face names the change at 77: {face}");
+    assert_eq!(g.holds.resolve(&g.session, ks[0], ResolveAct::Send).unwrap(), Resolved::HandedBack);
+    (g, ks)
+}
+
+/// Checks that a burst refused again with no change since the person's
+/// `send` names again the hands named before, marked `again` (§3c.4, §3c.5;
+/// skep #989).
+///
+/// The person sent the moved document back ([`moved_and_sent`]), and the
+/// board refuses the resend as typed against an older state again, for the
+/// same change, no row having landed since: the face says `moved` with the
+/// hand of the change the person acknowledged, `again`, true, beside it;
+/// every moved row lists that hand with `again`; and a drop of the last line
+/// says the document `moved` with them, `again` still (the mutant that reads
+/// the hands since the person's `send` alone says no one moved words the
+/// board refused for an old change; the one that drops `again` from the
+/// memory's repeat says a drop's face as a first one).
+#[test]
+fn a_send_refused_again_with_no_change_since_names_again_the_hands_named_before() {
+    let (g, ks) = moved_and_sent();
+    g.fake.op_rejected.next(1, arrangement_moved(70, 77));
+    let reads = g.fake.changes_reads.load(Ordering::SeqCst);
+    g.holds.probe("b-1");
+    let faced = moved_faces(&g);
+    let [face] = &faced[..] else { panic!("the document faced moved once: {faced:?}") };
+    assert_eq!((face["held"].as_u64(), &face["hands"], &face["again"]), (Some(3), &hand_ff(), &json!(true)), "{face}");
+    assert_eq!(g.fake.changes_reads.load(Ordering::SeqCst), reads + 3, "the landing's read, then the hands since the send, then the hands from the acknowledged face");
+    let rows = g.lines();
+    assert!(rows.iter().all(|row| row["cause"] == "moved" && row["hands"] == hand_ff() && row["again"] == true), "every moved row names them again: {rows:?}");
+    assert_eq!(g.fake.changes_reads.load(Ordering::SeqCst), reads + 3, "the list reads nothing: the session was told");
+    assert_eq!(g.holds.resolve(&g.session, ks[2], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    let faced = moved_faces(&g);
+    let [face] = &faced[..] else { panic!("the drop says the document moved: {faced:?}") };
+    assert_eq!((face["held"].as_u64(), &face["hands"], &face["again"]), (Some(2), &hand_ff(), &json!(true)), "{face}");
+}
+
+/// Checks that a second `send` refused again with no change since still names
+/// the hands of the change the person first acknowledged (§3c.4; skep #989).
+///
+/// The person sent the moved document back ([`moved_and_sent`]), the board
+/// refused it again for the same change and the face named that change's hand
+/// `again`; the person sends again, and the board refuses it again, no row
+/// having landed since: the face names that hand `again` still (the mutant
+/// that takes the later of the acknowledged position and the typed state as
+/// where the acknowledged face read from, at every `send`, reads past the
+/// change at the second and names no one).
+#[test]
+fn a_second_send_refused_again_with_no_change_since_still_names_the_hands_named_before() {
+    let (g, ks) = moved_and_sent();
+    g.fake.op_rejected.next(1, arrangement_moved(70, 77));
+    g.holds.probe("b-1");
+    let faced = moved_faces(&g);
+    assert_eq!(faced.iter().map(|face| (&face["hands"], &face["again"])).collect::<Vec<_>>(), [(&hand_ff(), &json!(true))], "premise: refused again: {faced:?}");
+    assert_eq!(g.holds.resolve(&g.session, ks[0], ResolveAct::Send).unwrap(), Resolved::HandedBack);
+    g.fake.op_rejected.next(1, arrangement_moved(70, 77));
+    g.holds.probe("b-1");
+    let faced = moved_faces(&g);
+    let [face] = &faced[..] else { panic!("the document faced moved once more: {faced:?}") };
+    assert_eq!((&face["hands"], &face["again"]), (&hand_ff(), &json!(true)), "{face}");
+}
+
+/// Checks that a `send` refused again after a later change names that
+/// change's hands again, never the one an earlier `send` acknowledged
+/// (§3c.4; skep #757, #989).
+///
+/// The person sent the moved document back ([`moved_and_sent`]); a third
+/// hand's change lands at 80, and the board refuses the resend as typed
+/// against an older state, the face naming that hand alone, not `again`. The
+/// person sends again, and the board refuses it again, no row having landed
+/// since: the face names the change at 80 alone, `again` (the mutant that
+/// keeps the first acknowledged face's position at every `send` names the
+/// change the person acknowledged first beside it).
+#[test]
+fn a_send_refused_again_after_a_later_change_names_that_changes_hands_again() {
+    let (g, ks) = moved_and_sent();
+    let ee = json!([{"key": "other", "fingerprint": "ee".repeat(32)}]);
+    g.fake.rows.lock().unwrap().push(json!({"at": 80, "op": "insert", "key": "ee".repeat(32), "docs": [DOC]}));
+    g.fake.op_rejected.next(1, arrangement_moved(70, 80));
+    g.holds.probe("b-1");
+    let faced = moved_faces(&g);
+    assert_eq!(faced.iter().map(|face| (&face["hands"], face.get("again"))).collect::<Vec<_>>(), [(&ee, None)], "premise: moved again by the change at 80: {faced:?}");
+    assert_eq!(g.holds.resolve(&g.session, ks[0], ResolveAct::Send).unwrap(), Resolved::HandedBack);
+    g.fake.op_rejected.next(1, arrangement_moved(70, 80));
+    g.holds.probe("b-1");
+    let faced = moved_faces(&g);
+    let [face] = &faced[..] else { panic!("the document faced moved once more: {faced:?}") };
+    assert_eq!((&face["hands"], &face["again"]), (&ee, &json!(true)), "{face}");
 }
 
 /// Checks that a line leaving the queue takes the person's acknowledgment of

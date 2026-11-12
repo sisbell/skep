@@ -1375,7 +1375,7 @@ fn a_stale_burst_is_shifted_through_a_run_the_document_places_twice() {
 }
 
 /// Checks that the person's `send` on a moved document acknowledges the
-/// changes that moved it (§3c.4; skep #757).
+/// changes that moved it (§3c.4; skep #757, #989).
 ///
 /// The person's own other write — dialed under the session's token past the
 /// shell's hold, as the `skep` command dials — moves the draft after the
@@ -1383,14 +1383,17 @@ fn a_stale_burst_is_shifted_through_a_run_the_document_places_twice() {
 /// without anchors as an agent's is, is held moved, its face naming the own
 /// hand. The person's `send` raises the line's base to the position the
 /// board's verdict read through, that write's own, in the held file too; the
-/// next probe resends the line, the board refuses it again, and it is held
-/// moved again naming no hand — the change the person acknowledged named no
-/// more. A further change by another hand, a bare session's under local
-/// trust, and the person's `send` again: held moved once more, naming that
-/// hand alone; nothing of the burst lands (the mutant that reads the hands
-/// since the typed state at every face names the acknowledged change at each
-/// of them, and the person meets the face they sent past again; the one that
-/// leaves the base reads the acknowledged rows at every resend).
+/// next probe resends the line, the board refuses it again for the same
+/// change, no row having landed since, and it is held moved again naming that
+/// change's hand again, marked `again`. A further change by another hand, a
+/// bare session's under local trust, and the person's `send` again: held
+/// moved once more, naming that hand alone, not `again`; nothing of the burst
+/// lands (the mutant that reads the hands since the typed state at every
+/// face names the acknowledged change beside the further one, and the person
+/// meets the face they sent past again; the one that reads no further back
+/// than the person's `send` names no one where the board refused the burst
+/// again; the one that leaves the base reads the acknowledged rows at every
+/// resend).
 #[test]
 fn the_persons_send_on_a_moved_document_names_only_the_changes_since_it() {
     let dir = TempDir::new().unwrap();
@@ -1424,10 +1427,11 @@ fn the_persons_send_on_a_moved_document_names_only_the_changes_since_it() {
     assert_eq!(faces(1)[0]["hands"], json!([{"key": "own", "fingerprint": fingerprint.to_hex()}]), "the first face names the write that moved the draft");
     assert_eq!(shell.call("held", &json!({"session": session})).unwrap()[0]["base"].as_u64(), Some(at));
     // The person's send: the base raised through the own write, the resend
-    // refused again and held moved, naming no hand.
+    // refused again and held moved, naming the change it named before again.
     shell.call("resolve", &json!({"session": session, "held": k, "act": "send"})).unwrap();
     let second = faces(2)[1].clone();
-    assert!(second.get("hands").is_none(), "the change the person acknowledged is named no more: {second}");
+    let own_hand = json!([{"key": "own", "fingerprint": fingerprint.to_hex()}]);
+    assert_eq!((&second["hands"], &second["again"]), (&own_hand, &json!(true)), "refused again with no change since: the change the person acknowledged named again: {second}");
     let rows = shell.call("held", &json!({"session": session})).unwrap();
     assert_eq!((rows[0]["cause"].as_str(), rows[0]["base"].as_u64()), (Some("moved"), Some(moved_at)), "the base raised to the verdict's `site.current`: {rows}");
     let text = std::fs::read_to_string(held_path(&dir.path().join("store")).expect("the held file stands")).unwrap();
@@ -1440,7 +1444,7 @@ fn the_persons_send_on_a_moved_document_names_only_the_changes_since_it() {
     assert!(further["at"].as_u64().is_some_and(|f| f > moved_at), "the bare write is acked: {further}");
     shell.call("resolve", &json!({"session": session, "held": k, "act": "send"})).unwrap();
     let third = faces(3)[2].clone();
-    assert_eq!(third["hands"], json!([{"key": "bare"}]), "the change since the person's send alone: {third}");
+    assert_eq!((&third["hands"], third.get("again")), (&json!([{"key": "bare"}]), None), "the change since the person's send alone: {third}");
     // Nothing of the burst landed.
     let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 4)})).unwrap();
     assert_eq!(text_of(&read), "abc", "{read}");

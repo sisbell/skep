@@ -630,16 +630,17 @@ fn the_held_card_names_sendable_and_an_agents_line_reading_false() {
 ///
 /// The card lists every row member, and an agent's `held` is where it learns
 /// who moved a document its words wait on: the hands of the move the
-/// document stands on now, on the document's first line, each key a word
-/// skep-shell declares for a hand, `unread` among them where the shell has
-/// not read them yet (skep #973). A card silent on them leaves an agent to
-/// guess whose change it is placing its words against.
+/// document stands on now, on each moved line of the document, each key a
+/// word skep-shell declares for a hand, `unread` among them where the shell
+/// has not read them yet and `unknowable` where no read can (skep #973,
+/// #989). A card silent on them leaves an agent to guess whose change it is
+/// placing its words against.
 #[test]
 fn the_held_card_names_hands_and_each_key_a_hand_carries() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
     let held = catalog.tools.iter().find(|t| t["name"] == "held").and_then(|t| t["description"].as_str()).expect("the held card");
     assert!(
-        held.contains("hands? (on a moved document's first line: whose writes moved it, each once, for the move the document stands on now — each {key, fingerprint?, label?}"),
+        held.contains("hands? (on each moved line of a moved document: whose writes moved it, each once, for the move the document stands on now — each {key, fingerprint?, label?}"),
         "the held card names hands: {held}"
     );
     let declarations = skep_shell::shapes::declarations();
@@ -649,6 +650,28 @@ fn the_held_card_names_hands_and_each_key_a_hand_carries() {
     }
     let declared: Vec<&str> = skep_shell::shapes::shape("HeldRow").expect("skep-shell declares a held line").fields.iter().map(|field| field.name).collect();
     assert!(declared.contains(&"hands"), "`hands` is a member skep-shell declares for a held line: {declared:?}");
+}
+
+/// The `held` card names `again` and the hand no read can name.
+///
+/// An agent's burst carries no anchors, so the board refuses its send again
+/// for the change that moved it, and the row then names that change's hands
+/// again with `again` beside them; where the board no longer keeps the
+/// history, the row names the one hand `unknowable`, which no later list
+/// reads (skep #989). A card silent on `again` leaves an agent to read the
+/// same hands as a second change, and one silent on `unknowable` leaves it
+/// to list again for hands that never come.
+#[test]
+fn the_held_card_names_again_and_the_hand_no_read_can_name() {
+    let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    let held = catalog.tools.iter().find(|t| t["name"] == "held").and_then(|t| t["description"].as_str()).expect("the held card");
+    assert!(
+        held.contains("again? (beside hands, true: the board refused the line again with no change since your resolve send, and hands are the changes it named before)"),
+        "the held card names again: {held}"
+    );
+    assert!(held.contains("or the one hand unknowable (the board no longer keeps the history that would name them, so they can never be read)"), "the held card names unknowable: {held}");
+    let declared = skep_shell::shapes::shape("HeldRow").expect("skep-shell declares a held line").fields;
+    assert!(declared.iter().any(|field| field.name == "again" && !field.required), "`again` is an optional member skep-shell declares for a held line: {declared:?}");
 }
 
 /// The held card names why a line stands off disk.
@@ -684,12 +707,13 @@ fn the_held_card_names_why_a_line_stands_off_disk() {
 /// `arrangement_moved` (skep #826); the `resolve` card says what `send` and
 /// `drop` do with such a line, that `send` on a moved document records the
 /// changes that moved it as seen, so a document moved again names only the
-/// changes since (skep #757), that `drop` takes a line in any state, a
-/// holding one among them — one held on an unreadable head given up for good
-/// (skep #726, #983) — while `send` on a holding line and either act on a
-/// line the shell is sending are `not_resolvable` (skep #983), and that the
-/// drop of a `sent` line, holding or handed back, reads first, keeps a line
-/// whose write landed and answers `{"kept": true}`, and is refused
+/// changes since (skep #757) and one refused again with no change since names
+/// again the changes it named before (skep #989), that `drop` takes a line in
+/// any state, a holding one among them — one held on an unreadable head given
+/// up for good (skep #726, #983) — while `send` on a holding line and either
+/// act on a line the shell is sending are `not_resolvable` (skep #983), and
+/// that the drop of a `sent` line, holding or handed back, reads first, keeps
+/// a line whose write landed and answers `{"kept": true}`, and is refused
 /// `landing_unread` where the read cannot tell (skep #866, #983); HELD BURSTS
 /// says a burst answered `unwritable` is lost with the process
 /// (skep #733, #700), names the head's hold and the death's, at either of its
@@ -739,6 +763,7 @@ fn the_held_cards_name_the_shells_hand_over_and_a_burst_kept_in_memory_alone() {
         resolve.contains("on a moved document, it first records that the changes which moved it have been seen: a document moved again names only the changes since"),
         "the resolve card says what send records on a moved document: {resolve}"
     );
+    assert!(resolve.contains("; one refused again with no change since names again the changes it named before."), "the resolve card says what a send refused again names: {resolve}");
     let not_resolvable = skep_shell::Name::NOT_RESOLVABLE.as_str();
     assert!(
         resolve.contains(&format!("or one still holding, whatever its cause — {unreadable} among them (the board's head record cannot be read, so the shell cannot sign the write"))

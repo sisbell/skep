@@ -419,17 +419,18 @@ fn the_directory_has_three_states_and_the_custody_three() {
 /// Checks that every hand's key is a declared `HandKey` word (§4b.2).
 ///
 /// The keys a moved face's hands carry — this store's own, another key's, an
-/// unsigned hand, a testimony lost, and the hands not read — are exactly the
-/// declared union's words (the mutant that spells the unread hands `lost`
-/// tells the page the board lost what it never answered; one that spells a
-/// word the union lacks hands the page a hand it cannot draw).
+/// unsigned hand, a testimony lost, the hands not read and the hands no read
+/// can name — are exactly the declared union's words (the mutant that spells
+/// the unread hands `lost` tells the page the board lost what it never
+/// answered; one that spells a word the union lacks hands the page a hand it
+/// cannot draw).
 #[test]
 fn every_hand_key_is_a_declared_word() {
     let g = ground();
     let row = |at: u64, key: &str| json!({"at": at, "op": "insert", "key": key, "docs": [DOC]});
     let rows = [row(1, &g.own_key()), row(2, &"ff".repeat(32)), row(3, "bare"), lost_row()];
     let mut spelled: std::collections::BTreeSet<&str> = g.holds.hands_of(&g.session, &rows).iter().map(|hand| hand.key).collect();
-    spelled.insert(Hand::UNREAD.key);
+    spelled.extend([Hand::UNREAD.key, Hand::UNKNOWABLE.key]);
     let declarations = crate::shapes::declarations();
     let line = declarations.lines().find(|l| l.starts_with("export type HandKey")).expect("`HandKey` is declared");
     let declared: std::collections::BTreeSet<&str> = line.split('\'').skip(1).step_by(2).collect();

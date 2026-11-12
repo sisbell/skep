@@ -2160,14 +2160,16 @@ impl Shell {
     /// Answers `held(session)` with the acting principal's held bursts.
     ///
     /// They are the bursts at the session's board in resend order (§4b.1),
-    /// from this principal's file and no other (P39), a moved document's
-    /// first line naming the hands of the verdict it stands on now (skep
-    /// #973). The call may read the board: one `/changes` page under the
-    /// session's token for each moved document whose current verdict the
-    /// session was never told or listed the hands of, none at a board not
-    /// answering or with the own node stopped, the hands then named `unread`
-    /// and read again by the walk (`Holds::lines`, its cost stated there,
-    /// SP-23). It says no event.
+    /// from this principal's file and no other (P39), each moved line of a
+    /// moved document naming the hands of the verdict the document stands on
+    /// now, and whether they are named `again` (skep #973, #989). The call
+    /// may read the board: one `/changes` page under the session's token for
+    /// each moved document whose current verdict the session was never told
+    /// or listed the hands of, or two where the board refused its burst again
+    /// with no row since the person's `send`, none at a board not answering
+    /// or with the own node stopped, the hands then named `unread` and read
+    /// again by the walk (`Holds::lines`, its cost stated there, SP-23). It
+    /// says no event.
     ///
     /// # Errors
     ///

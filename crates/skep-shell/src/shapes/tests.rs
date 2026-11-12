@@ -80,7 +80,10 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("Answer", json!({"id": "m-0", "value": "phone"})),
         ("Cancel", json!({"id": "m-0"})),
         ("HeldAnswer", json!({"resp": "held", "held": 1, "cause": "unreachable", "unwritable": "No space left on device (os error 28)", "unwritable_class": "full"})),
-        ("HeldRow", json!({"held": 1, "doc": "1.0.1.0.1", "base": 5, "frame": {"op": "delete"}, "anchors": {"before": "1.0.1.0.1.0.1.3", "after": null, "span": [{"start": "1.0.1.0.1.0.1.4", "width": "2"}]}, "cause": "moved", "sent": false, "time": 1, "sendable": true, "hands": [{"key": "other", "fingerprint": "ab"}], "unwritable": "No space left on device (os error 28)", "unwritable_class": "full"})),
+        (
+            "HeldRow",
+            json!({"held": 1, "doc": "1.0.1.0.1", "base": 5, "frame": {"op": "delete"}, "anchors": {"before": "1.0.1.0.1.0.1.3", "after": null, "span": [{"start": "1.0.1.0.1.0.1.4", "width": "2"}]}, "cause": "moved", "sent": false, "time": 1, "sendable": true, "hands": [{"key": "other", "fingerprint": "ab"}], "again": true, "unwritable": "No space left on device (os error 28)", "unwritable_class": "full"}),
+        ),
         (
             "Anchors",
             crate::held::Anchors::of(&json!({"before": "1.0.1.0.1.0.1.3", "after": {"burst": "b-1", "offset": 2}, "span": [{"start": "1.0.1.0.1.0.1.4", "width": "2"}]}))
@@ -91,7 +94,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("BurstPiece", json!({"burst": "b-1", "offset": 6, "width": 5})),
         (
             "HeldEvent",
-            json!({"board": "b-0", "session": "s-0", "doc": "1.0.1.0.1", "held": 2, "state": "moved", "hands": [{"key": "bare"}], "sendable": false, "unwritable": "Read-only file system (os error 30)", "unwritable_class": "read_only", "landed": [{"held": 1, "burst": "b-1", "at": 50, "addr": "1.0.1.0.1.0.1.9"}]}),
+            json!({"board": "b-0", "session": "s-0", "doc": "1.0.1.0.1", "held": 2, "state": "moved", "hands": [{"key": "bare"}], "again": true, "sendable": false, "unwritable": "Read-only file system (os error 30)", "unwritable_class": "read_only", "landed": [{"held": 1, "burst": "b-1", "at": 50, "addr": "1.0.1.0.1.0.1.9"}]}),
         ),
         ("LandedLine", json!({"held": 1, "burst": "b-1", "at": 50, "addr": "1.0.1.0.1.0.1.9"})),
         ("Hand", json!({"key": "other", "fingerprint": "ab", "label": "phone"})),
@@ -241,7 +244,8 @@ fn the_file_names_every_shape_call_and_event() {
         "export interface LandedLine {\n  held: number;\n  burst?: string;\n  at?: number;\n  addr?: string;\n}\n",
         "  anchors?: Anchors;\n",
         "  sendable?: boolean;\n",
-        "  sendable?: boolean;\n  hands?: Hand[];\n  unwritable?: string;\n",
+        "  sendable?: boolean;\n  hands?: Hand[];\n  again?: true;\n  unwritable?: string;\n",
+        "  hands?: Hand[];\n  again?: true;\n  sendable?: boolean;\n",
         "  standing?: BaseStanding;\n",
         "  race?: RaceKey;\n  base?: string;\n  standing?: BaseStanding;\n",
         "  left_behind: string[];\n",

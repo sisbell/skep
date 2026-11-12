@@ -227,8 +227,10 @@ use crate::wire::{delivered_values, values_of};
 /// `image_too_large`, and the shift is not made.
 const IMAGE_WINDOW: u64 = u64::MAX;
 
-/// Why a line was not shifted ([`Holds::shift_and_send`]): the document is
-/// held as moved.
+/// Why a line was not shifted ([`Holds::shift_and_send`]).
+///
+/// The line is held as moved, with every line after it on its document
+/// ([`Holds::mark_moved`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Unshiftable {
     /// The burst carried no anchors: an agent's through the MCP tools.
@@ -2063,7 +2065,7 @@ impl Holds {
         self.emit_held(session, &head.doc, self.lines_on(board_reference, principal, &head.doc), HeldState::Refused, Some(Name::ANSWERS_LOST.as_str()), MovedFace::default());
     }
 
-    /// Marks every line of a moved document `cause: moved`.
+    /// Marks the line the board judged, and the lines after it, `cause: moved`.
     ///
     /// No line is rebased inexactly. It is reached from the board's verdict
     /// alone — a resend or a first dial refused as typed against an older state
@@ -2081,10 +2083,10 @@ impl Holds {
     /// where the page's anchors stand at one place each with the span's own
     /// units between them, and a burst it cannot carry so is held here, since a
     /// silent inexact rebase could put words where the person did not. No line
-    /// is sent. Each keeps its own `sent`, so a line that may have landed reads
-    /// before it is sent again (§3c.2). The marks are one run, written to the
-    /// held file as one copy with one sync however many lines the document
-    /// holds ([`Holds::remark_lines`]; skep #861). `judged` is the line the
+    /// marked is sent. Each keeps its own `sent`, so a line that may have
+    /// landed reads before it is sent again (§3c.2). The marks are one run,
+    /// written to the held file as one copy with one sync however many lines
+    /// it marks ([`Holds::remark_lines`]; skep #861). `judged` is the line the
     /// board refused, with the board's verdict, kept as its refusal — the state
     /// the line was typed against and the document's current one; a moved
     /// reason carries one (`Dialed::refused`). The hands whose rows moved it
@@ -2094,11 +2096,21 @@ impl Holds {
     /// document's face — is the frontend's and in neither repository at this
     /// pin (unverified here, the record §7 item 4; stated from
     /// assisted-frontend §7b).
+    ///
+    /// **No line ahead of the judged one is marked** (skep #1002). The resend
+    /// judges its document's first standing line, and so marks every line of
+    /// the document; a first dial's line can stand behind another call's,
+    /// entered while the dial was out — a refused run, a moved line, a holding
+    /// one — which keeps the state and the verdict it had, and is said in front
+    /// wherever it awaits the person's act ([`Holds::say_after_shift`]). With
+    /// no line judged, every line of the document is marked.
     pub(super) fn mark_moved(&self, board_reference: &str, principal: u64, doc: &str, judged: Option<(u64, Value)>) {
+        let from = judged.as_ref().map_or(0, |&(k, _)| k);
         self.with_principal(board_reference, principal, |ph| {
             let marks: Vec<(u64, Reason)> = ph
                 .queue
                 .reasons_on(doc)
+                .filter(|&(k, _)| k >= from)
                 .map(|(k, reason)| {
                     let refusal = judged.as_ref().filter(|(judged, _)| *judged == k).map(|(_, verdict)| verdict.clone());
                     (k, Reason { refusal, ..Reason::of(cause::MOVED, reason.sent) })

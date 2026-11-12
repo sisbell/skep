@@ -31,7 +31,7 @@
 //! (`arrangement_moved`): shifted through the change by the page's anchors
 //! and sent again within the call where the span they bound holds the
 //! burst's own units still (`resend`'s shift, skep #442, #751), else held
-//! as a moved document, the board's verdict kept on its line. The death
+//! moved with the lines after it, the board's verdict on its line. The death
 //! signal on the session's token, met at the dial, at a read the attest's
 //! composer made, or — for a burst refused as typed against an older state —
 //! at the shift's read or the moved hold's read of the hands, ends the
@@ -4102,12 +4102,13 @@ impl Holds {
     /// held behind a line of its document that awaits the person's act — a
     /// refused run's, or a moved document's — the `held` event says that
     /// line's state, kept in front, its count counting the burst, while the
-    /// `held` answer names the burst's own cause ([`Holds::say_entered`]).
-    /// Where the document stands moved and no face told this session the
-    /// hands of its verdict, the call waits on one read of them more, made
-    /// once the board's lock is let go ([`Holds::hands_since_typed_state`]),
-    /// and for another device's key the read of its account's labels; none
-    /// is made at a board not answering or an own node stopped (SP-23).
+    /// `held` answer names the burst's own cause ([`Holds::say_entered`],
+    /// [`Holds::say_after_shift`]). Where the document stands moved and no
+    /// face told this session the hands of its verdict, the call waits on one
+    /// read of them more, made once the board's lock is let go
+    /// ([`Holds::hands_since_typed_state`]), and for another device's key the
+    /// read of its account's labels; none is made at a board not answering or
+    /// an own node stopped (SP-23).
     fn send_burst(&self, session: &SessionEntry, frame: Value, anchors: Option<Anchors>) -> OpAnswer {
         let burst = match Burst::admit(frame, session) {
             Ok(burst) => burst.with_anchors(anchors),
@@ -4270,22 +4271,26 @@ impl Holds {
     /// to the verdict where its dial left (skep #863): a shift whose read
     /// went unanswered is untried, never a reason it is not exact, and its
     /// verdict is kept (`PrincipalHold::shift_owed`) for the resend to run
-    /// it when the board answers. Where a line ahead of this one on its
-    /// document awaits the person's act, the face each of those three ends
-    /// tells says that line's state instead ([`Holds::say_after_shift`];
-    /// skep #974). `refusal` is the board's refusal the verdict rides. Where
-    /// the shift is not exact — a delete or a rearrange without its span, an
-    /// anchor lost or at two places, the span
-    /// between them cut or refilled, the read refused, the deadline passed —
-    /// the line is the moved hold as a burst without anchors meets it: the
-    /// hands read once ([`Holds::hands_since_typed_state`]) before anything is
-    /// marked, then the newest verdict on the line, the `held` event `moved`,
-    /// the call answered `held`; a death at that read re-marks the line as
-    /// the death at a shifted dial does, and leaves a burst held behind it
-    /// unmarked; the board's silence at it, or an answer with no page, names
-    /// the hands not read ([`Hand::UNREAD`]), read again as the walk meets the
-    /// document (skep #972), and a history the board has reclaimed names them
-    /// `unknowable` ([`Hand::UNKNOWABLE`]), read again never (skep #989).
+    /// it when the board answers. `refusal` is the board's refusal the
+    /// verdict rides. Where the shift is not exact — a delete or a rearrange
+    /// without its span, an anchor lost or at two places, the span between
+    /// them cut or refilled, the read refused, the deadline passed — the line
+    /// is the moved hold as a burst without anchors meets it: the hands read
+    /// once ([`Holds::hands_since_typed_state`]) before anything is marked,
+    /// then the line and every line after it on its document marked `moved`,
+    /// the newest verdict on the line, a line ahead of it keeping its state
+    /// and its verdict ([`Holds::mark_moved`]; skep #1002), the `held` event
+    /// `moved`, the call answered `held`; a death at that read re-marks the
+    /// line as the death at a shifted dial does, and leaves a burst held
+    /// behind it unmarked; the board's silence at it, or an answer with no
+    /// page, names the hands not read ([`Hand::UNREAD`]), read again as the
+    /// walk meets the document (skep #972), and a history the board has
+    /// reclaimed names them `unknowable` ([`Hand::UNKNOWABLE`]), read again
+    /// never (skep #989). Where a line ahead of this one on its document
+    /// awaits the person's act, each face these ends tell — at the death, at
+    /// the board's silence, at a hold or a refused run, at the moved hold —
+    /// says that line's state instead, the moved hold owing the walk no hands
+    /// ([`Holds::say_after_shift`]; skep #974, #1002).
     fn shift_at_first_dial(&self, session: &SessionEntry, burst: Burst, reason: Reason, refusal: Refusal, failed: Option<String>, base: u64) -> OpAnswer {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let doc = burst.doc.clone();
@@ -4318,7 +4323,7 @@ impl Holds {
             self.with_principal(board_reference, principal, |ph| self.remark_line(principal, ph, k, Reason::of(cause::SESSION_DIED, sent)));
             drop(out);
             answer["cause"] = Value::from(cause::SESSION_DIED);
-            self.say_after_shift(session, &doc, k, HeldState::Holding, cause::SESSION_DIED);
+            self.say_after_shift(session, &doc, k, HeldState::Holding, Some(cause::SESSION_DIED), MovedFace::default());
             OpAnswer::Died(AtDeath::Held(DeathHeld { k, answer }))
         };
         loop {
@@ -4331,19 +4336,16 @@ impl Holds {
                     // as it stood.
                     let held_moved = Reason { cause: cause::MOVED.to_string(), refusal: Some(verdict.clone()), sent };
                     let Some(HandsFace { hands, again, unanswered }) = self.hands_since_typed_state(session, &doc, Some(k), &held_moved).face() else { return at_death(sent, answer, out) };
-                    if hands.contains(&Hand::UNREAD) {
-                        self.with_principal(board_reference, principal, |ph| ph.hands_owed.insert(doc.clone(), k));
-                    }
                     if unanswered {
                         self.note_unanswered(&mut self.lock(board_reference), None);
                     }
-                    self.say(format_args!("line {k} on {doc} was not shifted ({why}); the document is held as moved"));
+                    self.say(format_args!("line {k} on {doc} was not shifted ({why}); it and every line after it on the document are held as moved"));
                     let judged = Judged::of(k, &held_moved);
                     self.mark_moved(board_reference, principal, &doc, Some((k, verdict)));
                     let sendable = self.note_shift_refused(board_reference, principal, &doc, k, &why);
                     drop(out);
                     let face = MovedFace { hands: &hands, again, sendable, judged: judged.as_ref() };
-                    self.emit_held(session, &doc, self.lines_on(board_reference, principal, &doc), HeldState::Moved, None, face);
+                    self.say_after_shift(session, &doc, k, HeldState::Moved, None, face);
                     return OpAnswer::Answered(Ok(answer));
                 }
             };
@@ -4380,7 +4382,7 @@ impl Holds {
                     self.note_unanswered(&mut self.lock(board_reference), cut);
                     drop(out);
                     answer["cause"] = Value::from(cause::UNREACHABLE);
-                    self.say_after_shift(session, &doc, k, HeldState::Holding, cause::UNREACHABLE);
+                    self.say_after_shift(session, &doc, k, HeldState::Holding, Some(cause::UNREACHABLE), MovedFace::default());
                     return OpAnswer::Answered(Ok(answer));
                 }
                 Dialed::Held { reason, .. } => {
@@ -4389,7 +4391,7 @@ impl Holds {
                     self.with_principal(board_reference, principal, |ph| self.remark_line(principal, ph, k, Reason { sent: reason.sent || sent, ..reason }));
                     drop(out);
                     answer["cause"] = Value::from(said.as_str());
-                    self.say_after_shift(session, &doc, k, state, &said);
+                    self.say_after_shift(session, &doc, k, state, Some(&said), MovedFace::default());
                     return OpAnswer::Answered(Ok(answer));
                 }
                 Dialed::Reissue { refusal, .. } | Dialed::Faced(refusal) => {
@@ -5444,17 +5446,29 @@ impl Holds {
 
     /// Emits the `held` event an end of a first dial's shift owes its line.
     ///
-    /// Line `k` of `doc` says `state` under `cause`, save where a line ahead
-    /// of it awaits the person's act, whose state stays in front
-    /// ([`Holds::say_standing_ahead_of`]; skep #974). It runs with no lock
-    /// held, the line let go ([`LineOut`]), so an act its face asks for takes
-    /// it ([`Holds::shift_at_first_dial`]).
-    fn say_after_shift(&self, session: &SessionEntry, doc: &str, k: u64, state: HeldState, cause: &str) {
+    /// Line `k` of `doc` says `state` under `cause` and with `face` — the
+    /// moved hold's hands, `again`, `sendable` and the verdict they were read
+    /// for, or none — save where a line ahead of it awaits the person's act,
+    /// whose state stays in front ([`Holds::say_standing_ahead_of`]; skep
+    /// #974, #1002). A face of its own naming the hands not read owes them to
+    /// the walk ([`PrincipalHold::hands_owed`]), entered as that face is told
+    /// and never where a line ahead stays in front, whose face names no hand
+    /// of line `k`'s. It runs with no lock held, the line let go
+    /// ([`LineOut`]), so an act its face asks for takes it
+    /// ([`Holds::shift_at_first_dial`]).
+    fn say_after_shift(&self, session: &SessionEntry, doc: &str, k: u64, state: HeldState, cause: Option<&str>, face: MovedFace<'_>) {
         if self.say_standing_ahead_of(session, doc, k, None) {
             return;
         }
-        let lines = self.lines_on(&session.board_reference, session.facts.principal, doc);
-        self.emit_held(session, doc, lines, state, Some(cause), MovedFace::default());
+        let lines = self
+            .with_principal(&session.board_reference, session.facts.principal, |ph| {
+                if face.hands.contains(&Hand::UNREAD) {
+                    ph.hands_owed.insert(doc.to_string(), k);
+                }
+                ph.lines_on(doc)
+            })
+            .unwrap_or_default();
+        self.emit_held(session, doc, lines, state, cause, face);
     }
 
     /// Emits the `held` event for a line the resend kept.

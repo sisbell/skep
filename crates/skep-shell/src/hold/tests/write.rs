@@ -31,8 +31,11 @@
 //! its hands as told or read for a session told nothing, the answer naming
 //! the line's own cause and a moved line behind a refused run owing no hands,
 //! a keep or a landing that leaves such a line first saying it too, and a
-//! line behind one a first dial is shifting saying its own face; the
-//! person's `send` on a moved document raising each
+//! line behind one a first dial is shifting saying its own face; a first
+//! dial's shift that is not exact marking its line and the lines after it
+//! alone, a line ahead keeping its state and its verdict — a refused run's
+//! said in front and owed no hands, a holding one sent at the next probe
+//! (skep #1002); the person's `send` on a moved document raising each
 //! waiting line's base to the verdict's `site.current`, in the queue and on
 //! disk, a base past it standing, and raising none where no line carries a
 //! verdict naming a position (skep #757); a drop's `done`s, a moved
@@ -1403,6 +1406,109 @@ fn a_first_dials_shift_ends_behind_a_refused_run_with_the_runs_face_in_front() {
         let faces: Vec<(Option<&str>, Option<&str>, Option<u64>)> = said.iter().map(|e| (e["state"].as_str(), e["cause"].as_str(), e["held"].as_u64())).collect();
         assert_eq!(faces, [(Some("refused"), Some("out_of_bounds"), Some(1)), (Some("refused"), Some("out_of_bounds"), Some(2))], "{cell}: {said:?}");
     }
+}
+
+/// Checks that a first dial's not-exact shift keeps a refused run ahead.
+///
+/// It is §3c.5's moved hold and §4b.2's `held` event (skep #1002). While a
+/// stale burst's first dial is out, another call holds a refused run on its
+/// document, and a burst sent while the shift's image read is out is held
+/// behind them; another writer has cut the span the burst's anchors bound.
+/// The call answers `held` under `moved`. The run keeps its cause and the
+/// board's verdict, the burst's line and the line behind it read `moved`, the
+/// verdict on the burst's alone, and no event says `moved`, the run's state
+/// kept in front. Where the hands' read goes unanswered, the document owes no
+/// hands, and the next probe reads none (the mutant that marks every line of
+/// the document says the run moved and loses its verdict; the one that marks
+/// the judged line alone lists the line behind it as though no write moved
+/// it; the one that says the line's own face says `moved` over the run the
+/// person must act on; the one that owes the hands reads them at every pass
+/// for a line no face names).
+#[test]
+fn a_first_dials_shift_that_is_not_exact_keeps_a_refused_run_ahead_with_its_verdict_and_its_face() {
+    for unread in [false, true] {
+        let cell = if unread { "the hands' read unanswered" } else { "the hands read" };
+        let g = ground();
+        let typed = g.fake.head();
+        *g.fake.image.lock().unwrap() = vec![run(&i(1), 1), run(&i(10), 1), run(&i(2), 2)];
+        g.fake.move_arrangement(DOC, 77);
+        g.fake.changes_unanswered.store(unread, Ordering::SeqCst);
+        let (holds, session, entered) = (Arc::downgrade(&g.holds), Arc::clone(&g.session), AtomicBool::new(false));
+        *g.fake.at_send.lock().unwrap() = Some(Box::new(move || {
+            let Some(holds) = holds.upgrade().filter(|_| !entered.swap(true, Ordering::SeqCst)) else { return };
+            let burst = Burst::admit(insert(DOC, json!(["r"]), typed), &session).unwrap();
+            let held = holds.hold(&session, burst, Reason::refused("out_of_bounds", out_of_bounds()), None, session.opened_at).answered();
+            assert_eq!(held.unwrap()["cause"], "out_of_bounds", "the run held while the first dial is out");
+        }));
+        let (holds, session, sent) = (Arc::downgrade(&g.holds), Arc::clone(&g.session), AtomicBool::new(false));
+        *g.fake.at_image.lock().unwrap() = Some(Box::new(move || {
+            let Some(holds) = holds.upgrade().filter(|_| !sent.swap(true, Ordering::SeqCst)) else { return };
+            let held = holds.send_burst(&session, insert(DOC, json!(["y"]), typed), None).answered();
+            assert_eq!(held.unwrap()["cause"], "behind", "the burst held behind while the shift reads");
+        }));
+        let answer = g.holds.send_burst(&g.session, insert_at(DOC, 2, json!(["x"]), typed), Some(anchors(Some(&i(1)), Some(&i(2)))));
+        *g.fake.at_send.lock().unwrap() = None;
+        *g.fake.at_image.lock().unwrap() = None;
+        let OpAnswer::Answered(Ok(held)) = answer else { panic!("{cell}: held moved: {answer:?}") };
+        assert_eq!((held["held"].as_u64(), held["cause"].as_str()), (Some(2), Some("moved")), "{cell}: {held}");
+        assert_eq!(g.holds.lock("b-1").answers(), !unread, "{cell}: premise: the hands' read the board gave no answer to marks it unanswered");
+        let (refused, verdict) = (out_of_bounds(), arrangement_moved(typed, 77));
+        let lines = g.lines();
+        let rows: Vec<(Option<u64>, Option<&str>, Option<&Value>)> = lines.iter().map(|l| (l["held"].as_u64(), l["cause"].as_str(), l.get("refusal"))).collect();
+        assert_eq!(rows, [(Some(1), Some("out_of_bounds"), Some(&refused)), (Some(2), Some("moved"), Some(&verdict)), (Some(3), Some("moved"), None)], "{cell}: {lines:?}");
+        let said = told_events(&g);
+        let faces: Vec<(Option<&str>, Option<&str>, Option<u64>)> = said.iter().map(|e| (e["state"].as_str(), e["cause"].as_str(), e["held"].as_u64())).collect();
+        assert_eq!(faces, [(Some("refused"), Some("out_of_bounds"), Some(1)), (Some("refused"), Some("out_of_bounds"), Some(3))], "{cell}: no event says `moved`: {said:?}");
+        assert_eq!(g.holds.with_principal("b-1", 1, |ph| ph.hands_owed.contains_key(DOC)), Some(false), "{cell}: no hands owed for a line behind the run");
+        g.fake.changes_unanswered.store(false, Ordering::SeqCst);
+        let reads = changes_reads(&g);
+        g.holds.probe("b-1");
+        assert_eq!((changes_reads(&g), g.fake.sends()), (reads, 1), "{cell}: the probe reads no hands and sends nothing");
+    }
+}
+
+/// Checks that a first dial's not-exact shift leaves a holding line ahead.
+///
+/// It is §3c.5's moved hold (skep #1002). While a stale burst's first dial is
+/// out, another call holds a line on its document `unreachable`, typed
+/// against the document's current state, and the shift is not exact. The
+/// line ahead stays `unreachable`, the burst's line reads `moved` under the
+/// board's verdict, and the event says `moved` with both lines counted. The
+/// next probe sends the line ahead alone and keeps it, the event saying the
+/// document `moved` with the one line left and naming the line kept (the
+/// mutant that marks every line of the document holds the line ahead for an
+/// act no board asked for, and no probe sends it).
+#[test]
+fn a_first_dials_shift_that_is_not_exact_leaves_a_holding_line_ahead_to_be_sent() {
+    let g = ground();
+    let typed = g.fake.head();
+    *g.fake.image.lock().unwrap() = vec![run(&i(1), 1), run(&i(10), 1), run(&i(2), 2)];
+    g.fake.move_arrangement(DOC, 77);
+    let (holds, session, entered) = (Arc::downgrade(&g.holds), Arc::clone(&g.session), AtomicBool::new(false));
+    *g.fake.at_send.lock().unwrap() = Some(Box::new(move || {
+        let Some(holds) = holds.upgrade().filter(|_| !entered.swap(true, Ordering::SeqCst)) else { return };
+        let burst = Burst::admit(insert(DOC, json!(["h"]), 77), &session).unwrap();
+        let held = holds.hold(&session, burst, Reason::of("unreachable", false), None, session.opened_at).answered();
+        assert_eq!(held.unwrap()["cause"], "unreachable", "the line held while the first dial is out");
+    }));
+    let answer = g.holds.send_burst(&g.session, insert_at(DOC, 2, json!(["x"]), typed), Some(anchors(Some(&i(1)), Some(&i(2)))));
+    *g.fake.at_send.lock().unwrap() = None;
+    let OpAnswer::Answered(Ok(held)) = answer else { panic!("held moved: {answer:?}") };
+    assert_eq!((held["held"].as_u64(), held["cause"].as_str()), (Some(2), Some("moved")), "{held}");
+    let verdict = arrangement_moved(typed, 77);
+    let lines = g.lines();
+    let rows: Vec<(Option<u64>, Option<&str>, Option<&Value>)> = lines.iter().map(|l| (l["held"].as_u64(), l["cause"].as_str(), l.get("refusal"))).collect();
+    assert_eq!(rows, [(Some(1), Some("unreachable"), None), (Some(2), Some("moved"), Some(&verdict))], "the line ahead keeps its state: {lines:?}");
+    let said = told_events(&g);
+    let faces: Vec<(Option<&str>, Option<u64>)> = said.iter().map(|e| (e["state"].as_str(), e["held"].as_u64())).collect();
+    assert_eq!(faces, [(Some("holding"), Some(1)), (Some("moved"), Some(2))], "{said:?}");
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.sends(), 2, "the line ahead sent, the burst's line awaiting the person's act");
+    let said = told_events(&g);
+    let kept = said.last().expect("the keep's event");
+    assert_eq!((kept["state"].as_str(), kept["held"].as_u64(), &kept["landed"]), (Some("moved"), Some(1), &json!([{"held": 1, "at": 50}])), "{said:?}");
+    let left: Vec<Option<u64>> = g.lines().iter().map(|l| l["held"].as_u64()).collect();
+    assert_eq!(left, [Some(2)], "the burst's line stands moved");
 }
 
 /// Checks that a burst behind a line being shifted says its own face.

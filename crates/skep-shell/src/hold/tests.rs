@@ -1213,6 +1213,13 @@ impl Ground {
     }
 }
 
+impl Resolved {
+    /// Returns a drop's answer naming the lines `may_have_landed`.
+    fn dropped(may_have_landed: &[u64]) -> Resolved {
+        Resolved::Dropped { may_have_landed: may_have_landed.to_vec() }
+    }
+}
+
 /// The facts of a bare session as principal 1: the keyless session, which
 /// reads alone.
 fn bare_facts() -> Facts {

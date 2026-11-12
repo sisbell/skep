@@ -97,7 +97,10 @@
 //! a `send` made while the drop's read is out leaving the drop nothing to
 //! drop, a hold standing or a silent board refusing the drop unread, a read
 //! unanswered holding the board so, and the keyless session's discard read
-//! for nothing. And *the board's
+//! for nothing; and THE LINES A DROP NAMES (skep #993): a refused or moved
+//! line marked `sent`, the keyless session's discard of one and a `sent`
+//! line behind the one a drop read each named in its answer, a line no dial
+//! of which left the device named in none. And *the board's
 //! silence* (skep #863): a pass ending at the first request the board gives
 //! no answer to — a send timing out, a hang-up, a connection never made, a
 //! read, a site's read, the head's read — nothing more dialed, read or said
@@ -671,7 +674,7 @@ fn the_keyless_sessions_discard_drops_a_line_in_any_state_and_a_writer_resends_t
     assert_eq!(g.states(), ["holding", "holding", "holding"], "and nothing past each line's hold is said");
     assert_eq!(g.holds.resolve(&g.session, behind, ResolveAct::Send).map_err(|r| r.name().to_string()), Err("not_resolvable".to_string()), "the send stays refused");
     let dropped = |k: u64| -> Value {
-        assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).map_err(|r| r.name().to_string()), Ok(Resolved::Dropped), "line {k}: the discard");
+        assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).map_err(|r| r.name().to_string()), Ok(Resolved::dropped(&[])), "line {k}: the discard");
         let said: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).collect();
         assert_eq!(said.len(), 1, "{said:?}");
         assert_held_event_declared(&said[0]);
@@ -2056,12 +2059,15 @@ enum Drops {
 /// `history_reclaimed` on a kind no read confirms — `undecided`, a read or a
 /// site read the board does not answer `unanswered`, a read answered with no
 /// page `unread`; the death signal at either read drops nothing and answers
-/// the death. A line never sent is dropped unread, whatever its kind. The
-/// mutants the cells hold off: a drop made unread (2, 4, 8, 14, 15, 20,
-/// keeping nothing — a holding line's among them, the read kept to a line
-/// handed over), a row not confirmed taken for no landing (3, 9, 10, 16, 17,
-/// 25–27), a read that decided nothing taken for no landing (5, 11, 18, 21,
-/// 28), and the death taken for either (22–24, 29).
+/// the death. A line never sent is dropped unread, whatever its kind. A drop
+/// names no line that may have landed: each takes the line its read found
+/// unlanded, or one never sent (skep #993). The mutants the cells hold off:
+/// a drop made unread (2, 4, 8, 14, 15, 20, keeping nothing — a holding
+/// line's among them, the read kept to a line handed over), a row not
+/// confirmed taken for no landing (3, 9, 10, 16, 17, 25–27), a read that
+/// decided nothing taken for no landing (5, 11, 18, 21, 28), the death taken
+/// for either (22–24, 29), and the line a read ruled out named as one that
+/// may have landed (1, 7, 13).
 #[test]
 fn every_read_answer_meets_the_drop_of_a_line_that_may_have_landed_as_the_table_says() {
     use Drops::{Died, Dropped, Kept, Refused};
@@ -2108,7 +2114,10 @@ fn every_read_answer_meets_the_drop_of_a_line_that_may_have_landed_as_the_table_
             let row = format!("{kind:?}, row {}: {read:?}, a {head:?} line, its site {site:?}, sent {sent} — {drops:?}", n + 1);
             let answered = match g.holds.resolve(&g.session, k, ResolveAct::Drop) {
                 Ok(Resolved::Kept) => Kept,
-                Ok(Resolved::Dropped) => Dropped,
+                Ok(Resolved::Dropped { may_have_landed }) => {
+                    assert!(may_have_landed.is_empty(), "{row}: the drop read its line and took no other that may have landed: {may_have_landed:?}");
+                    Dropped
+                }
                 Ok(Resolved::Died) => Died,
                 Ok(other) => panic!("{row}: {other:?}"),
                 Err(refused) => {
@@ -2257,7 +2266,7 @@ fn a_drop_that_reads_first_makes_no_read_while_a_hold_stands_or_the_board_is_sil
             assert_eq!(refused, json!({"kind": "shell", "name": "landing_unread", "held": k, "why": why}), "{kind:?}, {why}");
             assert_eq!((g.fake.changes_reads.load(Ordering::SeqCst), g.lines().len()), (0, 1), "{kind:?}, {why}: no read made, nothing dropped");
             arm(&g, why, false);
-            assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Dropped, "{kind:?}, {why}: the hold cleared");
+            assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]), "{kind:?}, {why}: the hold cleared");
             assert_eq!((g.fake.changes_reads.load(Ordering::SeqCst), g.lines().len()), (1, 0), "{kind:?}, {why}: read, no landing found, dropped");
         }
     }
@@ -2283,7 +2292,7 @@ fn a_drop_whose_read_goes_unanswered_holds_the_board_unanswered() {
     g.fake.changes_unanswered.store(false, Ordering::SeqCst);
     g.holds.probe("b-1");
     assert!(g.holds.lock("b-1").answers(), "the probe's `/health` answers");
-    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     assert_eq!((g.fake.changes_reads.load(Ordering::SeqCst), g.lines().len()), (2, 0), "read again, and dropped");
 }
 
@@ -2292,8 +2301,10 @@ fn a_drop_whose_read_goes_unanswered_holds_the_board_unanswered() {
 /// It is §4b.1's `resolve` row (skep #866, #896, #983). Under the bare
 /// session the drop of a `sent` line, handed over as `answers_lost` or
 /// holding, is the discard as it stands: dropped with no read, though the
-/// board holds the write (the mutant that reads under the keyless session
-/// reads rows that are never its own).
+/// board holds the write, and named in the answer as a line that may have
+/// landed (skep #993). The mutant that reads under the keyless session reads
+/// rows that are never its own; the one that names no line answers the
+/// person that words the board holds are gone.
 #[test]
 fn the_keyless_sessions_discard_of_a_line_that_may_have_landed_reads_nothing() {
     for kind in [Held::HandedOver, Held::Holding("unreachable")] {
@@ -2301,7 +2312,7 @@ fn the_keyless_sessions_discard_of_a_line_that_may_have_landed_reads_nothing() {
         let k = held_as(&g, kind, &insert(DOC, json!(["hello"]), g.fake.head()), true);
         *g.fake.rows.lock().unwrap() = vec![lost_row()];
         *g.fake.text.lock().unwrap() = "hello".into();
-        assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Dropped, "{kind:?}");
+        assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::dropped(&[k]), "{kind:?}: the line named");
         assert_eq!((g.fake.changes_reads.load(Ordering::SeqCst), g.lines().len()), (0, 0), "{kind:?}: dropped, no read made");
     }
 }
@@ -2342,7 +2353,7 @@ fn a_line_no_dial_of_which_left_the_device_drops_with_no_read() {
         let lines = g.lines();
         assert_eq!(lines[0]["sent"].as_bool(), Some(true), "{cell}: resent, and marked `sent`: {lines:?}");
         let reads = g.fake.changes_reads.load(Ordering::SeqCst);
-        assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Dropped, "{cell}");
+        assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]), "{cell}");
         assert_eq!((g.fake.changes_reads.load(Ordering::SeqCst), g.lines().len()), (reads, 0), "{cell}: dropped, no read made");
     }
     // An answer lost first: the line may have landed, and its drop reads.
@@ -2354,7 +2365,7 @@ fn a_line_no_dial_of_which_left_the_device_drops_with_no_read() {
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 2, "premise: resent twice, the first answer lost");
     let reads = g.fake.changes_reads.load(Ordering::SeqCst);
-    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     assert_eq!((g.fake.changes_reads.load(Ordering::SeqCst), g.lines().len()), (reads + 1, 0), "read first, no landing found, dropped");
 }
 
@@ -2380,7 +2391,7 @@ fn a_holding_line_never_sent_drops_at_once_with_the_lines_after_it() {
         g.hold(&insert(OTHER, json!(["other"]), typed), "behind", false);
         g.hold(&insert(DOC, json!(["after"]), typed), "behind", false);
         let _ = g.states();
-        assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).map_err(|r| r.to_value()), Ok(Resolved::Dropped), "{cause}");
+        assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).map_err(|r| r.to_value()), Ok(Resolved::dropped(&[])), "{cause}");
         let standing: Vec<String> = g.lines().iter().map(|l| l["frame"]["values"][0].as_str().unwrap_or("?").to_string()).collect();
         assert_eq!(standing, ["before", "other"], "{cause}: the line and the one behind it on its document dropped");
         assert_eq!((g.fake.changes_reads.load(Ordering::SeqCst), g.fake.sends()), (0, 0), "{cause}: no read made, nothing dialed");
@@ -2395,11 +2406,12 @@ fn a_holding_line_never_sent_drops_at_once_with_the_lines_after_it() {
 /// testimony the board lost standing on its document, so its resend's read
 /// is undecided and the line is sent; the board refuses it as typed against
 /// an older state, and, carrying no anchors, it is held moved, its `sent`
-/// kept. Its drop takes it at once, no read made (the mutant that reads
-/// before every drop of a `sent` line meets the same undecided read and
-/// refuses the drop `landing_unread` at every try, leaving the moved face no
-/// discard, since its `send` is refused as typed against an older state
-/// again).
+/// kept. Its drop takes it at once, no read made, and names it as a line
+/// that may have landed (skep #993). The mutant that reads before every drop
+/// of a `sent` line meets the same undecided read and refuses the drop
+/// `landing_unread` at every try, leaving the moved face no discard, since
+/// its `send` is refused as typed against an older state again; the one that
+/// names no line answers the person that words the board may hold are gone.
 #[test]
 fn the_drop_of_a_moved_line_marked_sent_makes_no_read() {
     let g = ground();
@@ -2410,8 +2422,86 @@ fn the_drop_of_a_moved_line_marked_sent_makes_no_read() {
     let lines = g.lines();
     assert_eq!((lines[0]["cause"].as_str(), lines[0]["sent"].as_bool(), g.fake.sends()), (Some("moved"), Some(true), 1), "read undecided, sent, refused stale and held moved: {lines:?}");
     let reads = g.fake.changes_reads.load(Ordering::SeqCst);
-    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).map_err(|r| r.to_value()), Ok(Resolved::Dropped));
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).map_err(|r| r.to_value()), Ok(Resolved::dropped(&[k])), "the line named");
     assert_eq!((g.fake.changes_reads.load(Ordering::SeqCst), g.lines().len()), (reads, 0), "dropped, no read made");
+}
+
+/// Checks that the drop of a refused line marked `sent` names it alone.
+///
+/// The drop takes it with no read, and its words may stand (§3c.4; skep
+/// #993): a `delete` held `unreachable` with `sent: true`, a row whose
+/// testimony the board lost standing on its document, so its resend's read
+/// is undecided and the line is sent; the board refuses the resend under a
+/// `permanent` code, and the line stands a refused run, its `sent` kept. Its
+/// drop takes it and the line held behind it, never sent, no read made and
+/// nothing dialed, and names the refused line alone (the mutant that answers
+/// the drop bare tells the person words the board may hold are gone; the one
+/// that names every line it takes names a line never dialed).
+#[test]
+fn the_drop_of_a_refused_line_marked_sent_names_it_and_not_a_line_never_sent() {
+    let g = ground();
+    let k = g.hold(&delete(DOC, g.fake.head()), "unreachable", true)["held"].as_u64().unwrap();
+    g.hold(&delete(DOC, g.fake.head()), "behind", false);
+    *g.fake.rows.lock().unwrap() = vec![lost_row()];
+    g.fake.op_rejected.next(1, json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent", "op": "delete"}));
+    g.holds.probe("b-1");
+    let lines = g.lines();
+    let refused = (lines[0]["cause"].as_str(), lines[0]["sent"].as_bool(), lines[1]["sent"].as_bool(), g.fake.sends());
+    assert_eq!(refused, (Some("out_of_bounds"), Some(true), Some(false), 1), "read undecided, sent and refused, the line behind it unsent: {lines:?}");
+    let reads = g.fake.changes_reads.load(Ordering::SeqCst);
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).map_err(|r| r.to_value()), Ok(Resolved::dropped(&[k])), "the refused line alone named");
+    assert_eq!((g.fake.changes_reads.load(Ordering::SeqCst), g.fake.sends(), g.lines().len()), (reads, 1, 0), "both dropped, no read made, nothing dialed");
+}
+
+/// Checks that the drop of a moved line no dial of which left names none.
+///
+/// The shell knows no write of it landed (§3c.4; skep #983, #993): a line
+/// held before any dial is resent, marked `sent` before the dial, and the
+/// board refuses it as typed against an older state, a refusal that commits
+/// nothing (`PrincipalHold::never_left`); carrying no anchors, it is held
+/// moved, its row saying `sent`. Its drop takes it at once, no read made, and
+/// names no line (the mutant that names every `sent` line tells the person
+/// of a landing no dial could have made).
+#[test]
+fn the_drop_of_a_moved_line_no_dial_of_which_left_names_none() {
+    let g = ground();
+    let k = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false)["held"].as_u64().unwrap();
+    g.fake.move_arrangement(DOC, 77);
+    g.holds.probe("b-1");
+    let lines = g.lines();
+    assert_eq!((lines[0]["cause"].as_str(), lines[0]["sent"].as_bool(), g.fake.sends()), (Some("moved"), Some(true), 1), "resent, refused stale and held moved: {lines:?}");
+    assert_eq!(g.holds.with_principal("b-1", 1, |ph| ph.never_left.contains(&k)), Some(true), "premise: no dial of it left the device");
+    let reads = g.fake.changes_reads.load(Ordering::SeqCst);
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).map_err(|r| r.to_value()), Ok(Resolved::dropped(&[])), "no line named");
+    assert_eq!((g.fake.changes_reads.load(Ordering::SeqCst), g.lines().len()), (reads, 0), "dropped, no read made");
+}
+
+/// Checks that a drop that read first names a `sent` line behind its own.
+///
+/// Its read rules out the landing of the line it read alone (§3c.4; skep
+/// #993): three lines held `unreachable` with `sent: true` on one document,
+/// no row standing on it — as first dials of one document that went out
+/// together and lost their answers leave them, two tabs or a page and an
+/// agent — and a line never sent behind them. The drop of the second reads
+/// once, finds no landing, and drops it and the two behind it, nothing
+/// dialed, naming the `sent` line behind it alone, while the line before it
+/// stands, named nowhere (the mutant that names nothing after a read answers
+/// the person that words the board may hold are gone; the one that names the
+/// line read names a landing its read ruled out; the one that names every
+/// line of the document names one the drop left standing).
+#[test]
+fn a_drop_that_read_first_names_a_sent_line_behind_the_one_it_read() {
+    let g = ground();
+    let typed = g.fake.head();
+    let line = |ordinal: u64, value: &str, cause: &str, sent: bool| g.hold(&insert_at(DOC, ordinal, json!([value]), typed), cause, sent)["held"].as_u64().unwrap();
+    let before = line(1, "a", "unreachable", true);
+    let k = line(2, "b", "unreachable", true);
+    let behind = line(3, "c", "unreachable", true);
+    line(4, "d", "behind", false);
+    let reads = g.fake.changes_reads.load(Ordering::SeqCst);
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).map_err(|r| r.to_value()), Ok(Resolved::dropped(&[behind])), "the `sent` line behind alone named");
+    let standing: Vec<u64> = g.lines().iter().filter_map(|l| l["held"].as_u64()).collect();
+    assert_eq!((g.fake.changes_reads.load(Ordering::SeqCst), g.fake.sends(), standing), (reads + 1, 0, vec![before]), "read once, nothing dialed, the line before it standing");
 }
 
 /// Checks that an outage's resends write nothing past the first.
@@ -2447,7 +2537,7 @@ fn an_outages_resends_write_nothing_past_the_first_and_a_relaunch_reads_before_t
     let g = ground_over(fake, store, session.facts.clone(), 0);
     assert_eq!(g.lines()[0]["sent"].as_bool(), Some(true), "the relaunch reads the line `sent`");
     let reads = g.fake.changes_reads.load(Ordering::SeqCst);
-    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     assert_eq!((g.fake.changes_reads.load(Ordering::SeqCst), g.lines().len()), (reads + 1, 0), "read first, no landing found, dropped");
 }
 
@@ -2475,7 +2565,7 @@ fn a_drop_whose_read_is_out_as_a_send_takes_the_line_drops_nothing() {
     let lines = g.lines();
     assert_eq!((g.fake.sends(), lines.len(), lines[0]["cause"].as_str(), lines[0]["sent"].as_bool()), (1, 1, Some("unreachable"), Some(true)), "the line as its send left it: {lines:?}");
     let reads = g.fake.changes_reads.load(Ordering::SeqCst);
-    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Dropped, "the next drop reads again");
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]), "the next drop reads again");
     assert_eq!(g.fake.changes_reads.load(Ordering::SeqCst), reads + 1);
 }
 
@@ -2495,7 +2585,7 @@ fn a_send_that_panics_lets_its_line_go_and_its_drop_reads_first() {
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| g.holds.probe("b-1")));
     assert!(unwound.is_err() && g.fake.sends() == 1, "the dial left, and panicked");
     let reads = g.fake.changes_reads.load(Ordering::SeqCst);
-    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     assert_eq!((g.fake.changes_reads.load(Ordering::SeqCst), g.lines().len()), (reads + 1, 0), "read first: the dial's fate is unknown");
 }
 
@@ -2549,7 +2639,7 @@ fn a_resend_lets_its_line_go_before_the_lines_face_is_told() {
         }
     });
     g.holds.probe("b-1");
-    assert_eq!((acted.lock().unwrap().clone(), g.fake.sends()), (vec![Ok(Resolved::Dropped)], 1), "the act the face asks for takes the line");
+    assert_eq!((acted.lock().unwrap().clone(), g.fake.sends()), (vec![Ok(Resolved::dropped(&[]))], 1), "the act the face asks for takes the line");
     assert!(g.lines().is_empty(), "the line dropped");
 }
 
@@ -3671,13 +3761,13 @@ fn only_a_moved_documents_first_line_carries_the_mark_and_the_keyless_session_no
     let bare = g.holds.sessions.register(&BoardEntry { reference: "b-1".into(), board: Arc::clone(&g.session.board) }, Open { token: Token::parse(&"9e".repeat(16)).unwrap(), facts: bare_facts(), opened_at: 0 }, &mut NoSupplements);
     let listed = g.holds.lines(&bare).unwrap();
     assert_eq!(rows(listed.as_array().unwrap()), [None, None, None], "{listed}");
-    assert_eq!(g.holds.resolve(&bare, ks[2], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&bare, ks[2], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let said = held_events(&g);
     assert_eq!((said.len(), said[0]["state"].as_str(), said[0].get("sendable")), (1, Some("moved"), None), "the keyless session's discard: {said:?}");
-    assert_eq!(g.holds.resolve(&g.session, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, ks[1], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let said = held_events(&g);
     assert_eq!((said.len(), said[0]["state"].as_str(), said[0]["sendable"].as_bool()), (1, Some("moved"), Some(true)), "a writer's discard: {said:?}");
-    assert_eq!(g.holds.resolve(&g.session, ks[0], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, ks[0], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     assert_eq!(g.holds.shift_test_stale(&g.session, DOC), None, "the line leaving the queue takes its test");
     let g = ground();
     g.hold_anchored(&insert_at(DOC, 2, json!(["x"]), g.fake.head()), between_one_and_two(), "unreachable", false);
@@ -4529,7 +4619,7 @@ fn a_send_refused_again_with_no_change_since_names_again_the_hands_named_before(
     let rows = g.lines();
     assert!(rows.iter().all(|row| row["cause"] == "moved" && row["hands"] == hand_ff() && row["again"] == true), "every moved row names them again: {rows:?}");
     assert_eq!(g.fake.changes_reads.load(Ordering::SeqCst), reads + 3, "the list reads nothing: the session was told");
-    assert_eq!(g.holds.resolve(&g.session, ks[2], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, ks[2], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let faced = moved_faces(&g);
     let [face] = &faced[..] else { panic!("the drop says the document moved: {faced:?}") };
     assert_eq!((face["held"].as_u64(), &face["hands"], &face["again"]), (Some(2), &hand_ff(), &json!(true)), "{face}");
@@ -4902,7 +4992,7 @@ fn a_memory_queue_joined_behind_an_earlier_runs_line_keeps_its_ordinals_and_reso
     assert!(joined.len() == 1 && joined[0].contains("2 held lines joined") && joined[0].contains("the 1 line an earlier run left in it is renumbered past this run's ordinals"), "{joined:?}");
     let about_doc: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held && e.data["doc"] == DOC).map(|e| e.data).collect();
     assert!(about_doc.is_empty(), "no `held` event is said for the join of the page's lines: {about_doc:?}");
-    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     assert_eq!(listed(&g), [(3, "earlier".to_string())], "the page's run dropped, the earlier run's line standing");
     let on_disk: Vec<u64> = file_lines(&std::fs::read_to_string(held_file(&g)).unwrap()).iter().map(|l| l["held"].as_u64().unwrap()).collect();
     assert_eq!(&on_disk[..4], [1, 3, 1, 2], "the file: the earlier run's line, its copy under 3, then this run's two: {on_disk:?}");
@@ -5018,7 +5108,7 @@ fn an_ordinal_settled_before_the_join_names_no_earlier_runs_line_and_the_earlier
     let g = ground_over(fake, store, facts, 0);
     let settled = g.hold_for(&insert(DOC, json!(["x"]), g.fake.head()), Reason::refused("out_of_bounds", out_of_bounds())).unwrap();
     assert_eq!(settled["held"], 1, "{settled}");
-    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let standing = g.hold(&insert(DOC, json!(["y"]), g.fake.head()), "unreachable", false);
     assert_eq!(standing["held"], 2, "the ordinals run on past the settled one: {standing}");
     g.fake.no_head.store(false, Ordering::SeqCst);
@@ -5059,7 +5149,7 @@ fn a_pending_queue_emptied_before_the_head_reads_joins_a_file_renumbered_past_th
     let g = ground_over(fake, store, facts, 0);
     let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["x"]), g.fake.head()), None) else { panic!("held") };
     assert_eq!((held["held"].as_u64(), held["cause"].as_str()), (Some(1), Some("head_unreadable")), "{held}");
-    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     assert!(!pending_file(&g).exists(), "premise: the pending file compacted away");
     g.fake.head_garbled.store(false, Ordering::SeqCst);
     open_another_session(&g);
@@ -5100,7 +5190,7 @@ fn a_pending_file_read_at_the_first_touch_keeps_its_ordinals_and_the_boards_file
     assert_eq!(ordinals(&g), [(1, "pending".to_string())], "premise: the pending file read at the first touch, its line under its own ordinal");
     let settled = g.hold_for(&insert(DOC, json!(["x"]), g.fake.head()), Reason::refused("out_of_bounds", out_of_bounds())).unwrap();
     assert_eq!(settled["held"], 2, "premise: past the pending file's 1: {settled}");
-    assert_eq!(g.holds.resolve(&g.session, 2, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, 2, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     g.fake.head_unreachable.store(false, Ordering::SeqCst);
     open_another_session(&g);
     assert_eq!(ordinals(&g), [(1, "pending".to_string()), (3, "earlier".to_string())], "the pending file's line keeps its ordinal; the board's file renumbered past the counter");
@@ -5133,7 +5223,7 @@ fn the_doors_later_open_renumbers_the_boards_file_past_the_ordinal_this_run_sett
     let g = ground_over(fake, store, facts, 0);
     let settled = g.hold_for(&insert(DOC, json!(["x"]), g.fake.head()), Reason::refused("out_of_bounds", out_of_bounds())).unwrap();
     assert_eq!(settled["held"], 1, "{settled}");
-    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     g.fake.head_unreachable.store(false, Ordering::SeqCst);
     open_another_session(&g);
     assert!(said_containing(&g, "joined the board's held file").is_empty(), "premise: no join ran: {:?}", g.said.lock().unwrap());
@@ -5167,7 +5257,7 @@ fn a_renumbering_the_doors_later_open_could_not_write_is_said_once_and_lands_at_
     let g = ground_over(fake, store, facts, 0);
     let settled = g.hold_for(&insert(DOC, json!(["x"]), g.fake.head()), Reason::refused("out_of_bounds", out_of_bounds())).unwrap();
     assert_eq!(settled["held"], 1, "{settled}");
-    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     g.fake.head_unreachable.store(false, Ordering::SeqCst);
     crate::held::tests::refuse_copies_after(0);
     open_another_session(&g);
@@ -5208,7 +5298,7 @@ fn a_file_whose_lines_stand_at_or_past_the_counter_keeps_its_ordinals() {
     let g = ground_over(fake, store, facts, 0);
     let settled = g.hold_for(&insert(DOC, json!(["x"]), g.fake.head()), Reason::refused("out_of_bounds", out_of_bounds())).unwrap();
     assert_eq!(settled["held"], 1, "{settled}");
-    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     g.fake.head_unreachable.store(false, Ordering::SeqCst);
     open_another_session(&g);
     assert_eq!(ordinals(&g), [(2, "earlier".to_string())], "the file's own ordinal kept");
@@ -6345,7 +6435,7 @@ fn the_drop_of_a_refused_run_over_a_full_queue_is_within_the_ceiling() {
         let started = Instant::now();
         let dropped = g.holds.resolve(&g.session, 1, ResolveAct::Drop);
         let took = started.elapsed();
-        assert_eq!((dropped.ok(), g.lines().len()), (Some(Resolved::Dropped), 0), "the run dropped whole");
+        assert_eq!((dropped.ok(), g.lines().len()), (Some(Resolved::dropped(&[])), 0), "the run dropped whole");
         took
     };
     let what = "the drop of a refused run over a full held queue";

@@ -292,8 +292,8 @@ impl Name {
     ///
     /// The line is a `sent` one, holding or handed over as `answers_lost`,
     /// and the read its drop makes first cannot tell whether its write landed
-    /// (§3c.4; skep #866, #983): nothing is dropped, since a drop never
-    /// removes words the board may hold. The detail names `held`, the line's
+    /// (§3c.4; skep #866, #983): nothing is dropped, since the read has not
+    /// ruled the landing out. The detail names `held`, the line's
     /// ordinal, and `why`: `unanswered` where the board gave the read no
     /// answer, or is not answering, so no read was made; `unread` where it
     /// answered the read with no page; `undecided` where a row could be the

@@ -263,7 +263,7 @@ fn the_file_names_every_shape_call_and_event() {
         "export interface OtherPanelRefusal {\n  kind: 'shell';\n  name: 'other_panel';\n  draft: string;\n  doc?: string;\n  mint?: string;\n}\n",
         "export interface HeldLinesRefusal {\n  kind: 'shell';\n  name: 'held_lines';\n  doc: string;\n  held: number;\n}\n",
         "export interface LandingUnreadRefusal {\n  kind: 'shell';\n  name: 'landing_unread';\n  held: number;\n  why: 'unanswered' | 'unread' | 'undecided' | 'stopped' | 'poisoned' | 'halted';\n}\n",
-        "  resolve(args: { session: string; held: number; act: 'drop' | 'send' }): Promise<Outcome<{ kept?: true }>>;\n",
+        "  resolve(args: { session: string; held: number; act: 'drop' | 'send' }): Promise<Outcome<{ kept?: true; may_have_landed?: number[] }>>;\n",
     ] {
         assert!(text.contains(line), "the row renders as declared: {line}");
     }

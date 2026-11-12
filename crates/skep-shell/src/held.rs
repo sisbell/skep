@@ -522,11 +522,13 @@ pub struct Reason {
     /// refused, says nothing of an earlier dial's write. A moved document's
     /// lines keep theirs, a line handed to the person keeps it too, and
     /// `resolve(send)` keeps every line's own, so a line that may have landed
-    /// reads before it is sent again (§3c.5), and a line holding, or handed
-    /// over, reads before the person's drop drops it (§3c.4; skep #866,
-    /// #983). The mark stands on disk where no dial of the line may have left
-    /// the device, a connection never made among them: the hold knows that
-    /// line in memory alone (`PrincipalHold::never_left`), and its drop reads
+    /// reads before it is sent again (§3c.5), a line holding, or handed over,
+    /// reads before the person's drop under a session that may write drops
+    /// it, and every other drop names it among the lines that may have landed
+    /// (§3c.4; skep #866, #983, #993). The mark stands on disk where no dial
+    /// of the line may have left the device, a connection never made among
+    /// them: the hold knows that line in memory alone
+    /// (`PrincipalHold::never_left`), and its drop reads nothing and names
     /// nothing until a relaunch forgets it.
     pub sent: bool,
 }

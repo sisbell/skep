@@ -194,7 +194,7 @@ fn the_syncs_each_act_makes_under_the_board_lock() {
     };
     let g = refused_run();
     take_syncs();
-    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let c = take_syncs();
     assert!(g.lines().is_empty(), "the run dropped");
     let g = refused_run();

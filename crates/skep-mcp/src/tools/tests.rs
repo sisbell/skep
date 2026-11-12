@@ -714,7 +714,10 @@ fn the_held_card_names_why_a_line_stands_off_disk() {
 /// act on a line the shell is sending are `not_resolvable` (skep #983), and
 /// that the drop of a `sent` line, holding or handed back, reads first, keeps
 /// a line whose write landed and answers `{"kept": true}`, and is refused
-/// `landing_unread` where the read cannot tell (skep #866, #983); HELD BURSTS
+/// `landing_unread` where the read cannot tell (skep #866, #983), and that a
+/// drop taking lines that may already be on the board names them in
+/// `may_have_landed`, its `Response` naming each member of the answer
+/// skep-shell declares for the row (skep #993); HELD BURSTS
 /// says a burst answered `unwritable` is lost with the process
 /// (skep #733, #700), names the head's hold and the death's, at either of its
 /// two points, and says what a drop does; and REJECTIONS ARE DATA names
@@ -727,8 +730,10 @@ fn the_held_card_names_why_a_line_stands_off_disk() {
 /// to take back a run of writes the board has not kept, nor to give up one
 /// held for a repair that may never come; one that names the death at the
 /// dial alone leaves an agent to guess why a burst the board refused stale is
-/// held for the next session; and one that calls every drop final leaves an
-/// agent to write again words the board kept.
+/// held for the next session; one that calls every drop final leaves an
+/// agent to write again words the board kept; and one silent on
+/// `may_have_landed` leaves an agent to take a discarded line's words for
+/// gone and land them twice.
 #[test]
 fn the_held_cards_name_the_shells_hand_over_and_a_burst_kept_in_memory_alone() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
@@ -756,9 +761,23 @@ fn the_held_cards_name_the_shells_hand_over_and_a_burst_kept_in_memory_alone() {
         resolve.contains(&format!("save a line with sent true, holding or handed back as {lost}, which may have landed after all: its drop reads first, and where its write landed keeps the line, nothing dropped and the lines behind it sent in order, answering {{\"kept\": true}}"))
             && resolve.contains(&format!("where the read cannot tell whether it landed, nothing is dropped and the drop is refused {unread} {{held, why}}"))
             && resolve.contains("a line whose every dial the shell knows never left this device is dropped with no read, whatever its sent says")
-            && resolve.ends_with("Response: {}, or {\"kept\": true} where a drop kept the line."),
+            && resolve.ends_with("Response: {}, {\"kept\": true} where a drop kept the line, or {\"may_have_landed\": [<ordinal>, …]} where a drop took lines that may already be on the board."),
         "the resolve card says a drop of a line that may have landed reads first, may keep it, and names the refusal: {resolve}"
     );
+    assert!(
+        resolve.contains("A drop that takes lines which may already be on the board — sent true, with no read of the drop's own ruling that out: a refused run's or a moved document's line, or a line behind the one its read found unlanded — answers their ordinals in may_have_landed: they are dropped all the same, and their words may stand, so read the document before writing them again."),
+        "the resolve card says which lines a drop names as perhaps landed: {resolve}"
+    );
+    // The answer's members, as skep-shell declares the row's result.
+    let declarations = skep_shell::shapes::declarations();
+    let row = declarations.lines().find(|line| line.starts_with("  resolve(args: ")).expect("skep-shell declares the resolve row");
+    let result = row.rsplit_once("Promise<Outcome<{").and_then(|(_, rest)| rest.split_once('}')).map(|(members, _)| members).expect("the row answers an object");
+    let members: Vec<&str> = result.split(';').filter_map(|member| member.split(':').next()).map(|name| name.trim().trim_end_matches('?')).filter(|name| !name.is_empty()).collect();
+    assert!(!members.is_empty(), "the resolve row answers named members: {row}");
+    let response = resolve.rsplit_once("Response: ").map(|(_, response)| response).expect("the resolve card's Response");
+    for member in members {
+        assert!(response.contains(&format!("{{\"{member}\": ")), "the resolve card's Response names `{member}`: {response}");
+    }
     assert!(
         resolve.contains("on a moved document, it first records that the changes which moved it have been seen: a document moved again names only the changes since"),
         "the resolve card says what send records on a moved document: {resolve}"
@@ -776,9 +795,9 @@ fn the_held_cards_name_the_shells_hand_over_and_a_burst_kept_in_memory_alone() {
     assert!(held_bursts.contains("A burst whose held answer carries unwritable — why the shell could not write its line to disk — is kept in memory alone until the shell writes it, and is lost if the process ends first; held() lists it with unwritable beside it until its line is on disk."), "{held_bursts}");
     assert!(
         held_bursts.contains(&format!(
-            "\"drop\" discards a line in any state, one still holding among them, and the lines behind it on its document, none of which the shell then sends, save a line with sent true, holding or handed back as {lost}, whose drop reads first: kept where its write landed, nothing discarded and the lines behind it sent (answering {{\"kept\": true}}), and refused {unread} where the read cannot tell, nothing discarded. While the shell is sending a line, either act on it is not_resolvable until that send ends."
+            "\"drop\" discards a line in any state, one still holding among them, and the lines behind it on its document, none of which the shell then sends, save a line with sent true, holding or handed back as {lost}, whose drop reads first: kept where its write landed, nothing discarded and the lines behind it sent (answering {{\"kept\": true}}), and refused {unread} where the read cannot tell, nothing discarded. A drop that discards lines which may already have landed — sent true, refused or moved, or behind the line its read found unlanded — names their ordinals in may_have_landed: discarded all the same, their words perhaps on the board. While the shell is sending a line, either act on it is not_resolvable until that send ends."
         )),
-        "HELD BURSTS says what a drop does, and that no act takes a line being sent: {held_bursts}"
+        "HELD BURSTS says what a drop does, the lines it names as perhaps landed, and that no act takes a line being sent: {held_bursts}"
     );
     assert!(
         held_bursts.contains(&format!(

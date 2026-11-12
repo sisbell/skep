@@ -1225,8 +1225,10 @@ pub struct DeathHeld {
 /// off the call's arguments by [`ResolveAct::named`] alone, so no act
 /// reaches the hold that the row does not spell. The send takes a refused
 /// run's line or a moved document's (P10); the drop takes any line, under
-/// any session, and reads first where its line may have landed
-/// ([`Holds::resolve`]). Neither takes a line a send has out for its dials.
+/// any session, and where a dial of a line it takes may have left this
+/// device, reads for that line's landing first or names the line in its
+/// answer ([`Holds::resolve`]). Neither takes a line a send has out for its
+/// dials.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolveAct {
     /// `"drop"`: the line dropped, with the lines after it on its document.
@@ -1237,6 +1239,8 @@ pub enum ResolveAct {
     /// `sent` that is holding or was handed over as `answers_lost`, some dial
     /// of it possibly having left the device, is read for its landing first,
     /// and kept where it landed, its later lines standing (skep #866, #983).
+    /// Every other line it takes that may have landed is named in its answer
+    /// ([`Resolved::Dropped`]; skep #993).
     Drop,
     /// `"send"`: the document's waiting lines handed back.
     ///
@@ -1259,18 +1263,30 @@ impl ResolveAct {
 
 /// What a `resolve` act did (§4b.1's `resolve` row).
 ///
-/// The call answers `{}` where the lines were dropped or handed back,
-/// `{kept: true}` where a drop found its line landed, and the session's
-/// death where the drop's read met it (the shell's `resolve` row).
-#[must_use = "a `HandedBack` or `Kept` document's lines wait on the probe its caller hands the board's feed thread, and a `Died` session on the end its caller runs"]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The call answers `{}` where the lines were handed back or dropped,
+/// `{may_have_landed: [k, …]}` where a drop took lines that may have landed,
+/// `{kept: true}` where a drop found its line landed, and the session's death
+/// where the drop's read met it (the shell's `resolve` row).
+#[must_use = "a `HandedBack` or `Kept` document's lines wait on the probe its caller hands the board's feed thread, a `Died` session on the end its caller runs, and a `Dropped` act's lines that may have landed on the answer that names them"]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolved {
     /// `"drop"`: the line `done … dropped`, with the lines after it.
     ///
     /// The lines after it on its document — a refused run's `behind` lines,
     /// a moved document's later lines, the lines held behind a holding one —
     /// are dropped with it.
-    Dropped,
+    Dropped {
+        /// The lines dropped whose words may stand on the board, in `k` order.
+        ///
+        /// Each may have landed ([`PrincipalHold::may_have_landed`]), and no
+        /// read of the drop's own ruled its landing out: a refused run's or
+        /// a moved document's line marked `sent`, the keyless session's
+        /// discard of one, a `sent` line behind the one the drop read
+        /// (§3c.4; skep #993). They are dropped all the same, and a landing
+        /// that stands shows in the feed's next `drafts` row and the next
+        /// `image` read.
+        may_have_landed: Vec<u64>,
+    },
     /// `"send"`: the document's waiting lines re-marked `behind`.
     ///
     /// They are handed back to the automatic machine (§3c.4; §4b.1: "handed
@@ -2233,10 +2249,12 @@ struct PrincipalHold {
     /// write that committed nothing — a connection never made, a refusal, a
     /// reissue-class answer, the board's verdict on the typed state, the
     /// death signal (`Dialed::may_have_landed`); it leaves as the next send
-    /// takes it, and where it leaves the queue. A drop reads for no landing
-    /// of a line here ([`reads_first`]). In memory: the held file keeps the
-    /// line's `sent`, and no copy undoes it, so a relaunch forgets the set
-    /// and the line's drop reads for its landing first.
+    /// takes it, and where it leaves the queue. A line here has not landed
+    /// ([`PrincipalHold::may_have_landed`]): a drop reads for no landing of
+    /// it and names it among no lines that may have landed. In memory: the
+    /// held file keeps the line's `sent`, and no copy undoes it, so a
+    /// relaunch forgets the set and the line's drop counts it as one that
+    /// may have landed.
     never_left: HashSet<u64>,
     /// What the person's `send` acknowledged of each line's moved document,
     /// by the line's ordinal (§3c.4; skep #757, #989).
@@ -2398,6 +2416,17 @@ impl PrincipalHold {
     /// It is [`Reissues::outs`], 0 where no send has.
     fn outs(&self, k: u64) -> u64 {
         self.reissues.get(&k).map_or(0, |given| given.outs)
+    }
+
+    /// Returns whether line `k`, held for `reason`, may have landed.
+    ///
+    /// It may where a dial of it may have left this device: it is marked
+    /// `sent`, and is not among the lines no dial of which left
+    /// ([`PrincipalHold::never_left`]). It is the one test a drop reads first
+    /// by ([`reads_first`]) and names its lines by ([`Holds::drop_run`];
+    /// skep #983, #993).
+    fn may_have_landed(&self, k: u64, reason: &Reason) -> bool {
+        reason.sent && !self.never_left.contains(&k)
     }
 
     /// Returns what the person's `send` acknowledges of line `judged`'s
@@ -5053,6 +5082,17 @@ impl Holds {
     /// and the keyless session's discard, whose rows are never its own, make
     /// no read.
     ///
+    /// **The lines a drop names** (§3c.4; skep #993). Every drop answers the
+    /// lines it took that may have landed ([`PrincipalHold::may_have_landed`])
+    /// and that no read of its own ruled out, in `k` order
+    /// ([`Resolved::Dropped`]): a refused run's or a moved document's line
+    /// marked `sent` — a resend whose read could not decide its landing, then
+    /// refused — the keyless session's discard of a `sent` line, and a `sent`
+    /// line behind the one a drop that read first found unlanded. The lines
+    /// are dropped all the same, the discard the person's; the answer says
+    /// that their words may already stand on the board, which the feed's next
+    /// `drafts` row and the next `image` read show where they do.
+    ///
     /// **No act while a dial is out** (skep #983). A line a send has taken
     /// for its dials ([`PrincipalHold::dialing`]) — the walk's resend of it,
     /// or a first dial's shift within its call — takes neither act: the
@@ -5150,9 +5190,10 @@ impl Holds {
             }
             ReadOutcome::NoLanding => {
                 let ph = self.still_as_read(&mut board_hold, session, &read, outs)?;
-                self.drop_run(principal, ph, k, &read.doc);
+                // The read ruled out the line's own landing, and no other.
+                let may_have_landed = self.drop_run(principal, ph, k, &read.doc).into_iter().filter(|&landed| landed != k).collect();
                 let owed = self.say_standing(session, ph, &read.doc, None);
-                return Ok((Resolved::Dropped, owed));
+                return Ok((Resolved::Dropped { may_have_landed }, owed));
             }
         };
         Err(landing_unread(k, why))
@@ -5187,12 +5228,14 @@ impl Holds {
     /// Acts on line `k` at once, under the board's lock: the drop or the send.
     ///
     /// It is every act save the drop that reads first ([`Holds::resolve`]),
-    /// answered beside the `held` event a drop owes ([`Holds::say_standing`]).
+    /// answered beside the `held` event a drop owes ([`Holds::say_standing`]):
+    /// a drop that read nothing names every line it took that may have landed
+    /// (skep #993).
     fn act_at_once(&self, session: &SessionEntry, ph: &mut PrincipalHold, k: u64, doc: &str, act: ResolveAct) -> (Resolved, Option<HandsOwed>) {
         match act {
             ResolveAct::Drop => {
-                self.drop_run(session.facts.principal, ph, k, doc);
-                (Resolved::Dropped, self.say_standing(session, ph, doc, None))
+                let may_have_landed = self.drop_run(session.facts.principal, ph, k, doc);
+                (Resolved::Dropped { may_have_landed }, self.say_standing(session, ph, doc, None))
             }
             ResolveAct::Send => {
                 // Re-enter the automatic machine (§3c.4): the document's
@@ -5246,10 +5289,16 @@ impl Holds {
     /// The `"drop"` marks them — a refused run's `behind` lines, a moved
     /// document's later lines — `done … dropped`, as one run, its `done`s one
     /// copy with one sync however many lines it drops ([`Holds::done_lines`];
-    /// skep #861), the file compacting where the queue empties.
-    fn drop_run(&self, principal: u64, ph: &mut PrincipalHold, from: u64, doc: &str) {
+    /// skep #861), the file compacting where the queue empties. It answers
+    /// the lines of the run that may have landed, in `k` order
+    /// ([`PrincipalHold::may_have_landed`]; skep #993).
+    fn drop_run(&self, principal: u64, ph: &mut PrincipalHold, from: u64, doc: &str) -> Vec<u64> {
         let ks: Vec<u64> = ph.queue.reasons_on(doc).map(|(k, _)| k).filter(|&k| k >= from).collect();
+        // Read before the settle, which forgets each line's reason and its
+        // place among the lines no dial of which left.
+        let may_have_landed = ph.queue.reasons_on(doc).filter(|&(k, reason)| k >= from && ph.may_have_landed(k, reason)).map(|(k, _)| k).collect();
         self.done_lines(principal, ph, &ks, Done::Dropped);
+        may_have_landed
     }
 
     /// Emits the `held` event for what stands on `doc` after a person's act.
@@ -6087,16 +6136,17 @@ fn resolvable(ph: &PrincipalHold, k: u64, act: ResolveAct) -> Result<HeldLine, R
 
 /// Returns whether `act` on `line` reads for the line's landing first.
 ///
-/// It does for the drop, under a session that may write, of a line marked
-/// `sent` that is holding or was handed over as `answers_lost`, save one no
-/// dial of which may have left the device ([`PrincipalHold::never_left`]):
-/// the board may hold its words (§3c.4, §3c.5; skep #866, #983). A refused
-/// run's or a moved document's other drops are the face's own discard, at
-/// once; the keyless session's rows are never its own, so no read of its
-/// finds the line's landing, and its discard reads for none.
+/// It does for the drop, under a session that may write, of a line that may
+/// have landed ([`PrincipalHold::may_have_landed`]) and is holding or was
+/// handed over as `answers_lost`: the board may hold its words (§3c.4,
+/// §3c.5; skep #866, #983). A refused run's or a moved document's other
+/// drops are the face's own discard, at once; the keyless session's rows are
+/// never its own, so no read of its finds the line's landing, and its discard
+/// reads for none. Each of those names the lines it takes that may have
+/// landed in its answer instead ([`Holds::drop_run`]; skep #993).
 fn reads_first(ph: &PrincipalHold, line: &HeldLine, act: ResolveAct, session: &SessionEntry) -> bool {
     let read_for = line_state(&line.reason) == HeldState::Holding || line.reason.cause == Name::ANSWERS_LOST.as_str();
-    act == ResolveAct::Drop && session.may_write() && line.reason.sent && read_for && !ph.never_left.contains(&line.k)
+    act == ResolveAct::Drop && session.may_write() && read_for && ph.may_have_landed(line.k, &line.reason)
 }
 
 /// Returns the refusal of a drop that cannot tell whether line `k` landed.

@@ -16,7 +16,9 @@
 //! committed and then panicked — answered `500 internal_panic` — held and
 //! kept off the read, sent once, the signed session's own attested row kept
 //! by the resend, a refused run with its `behind` lines and `resolve`'s two
-//! acts, a burst typed against an older state held moved with the board's
+//! acts, the drop of a refused or moved line whose write landed unacked
+//! naming it in `may_have_landed` (skep #993), a burst typed against an
+//! older state held moved with the board's
 //! verdict and nothing of it landing where it carries no anchors, a second
 //! device's hand on it named by its recorded label, and one
 //! carrying them shifted through another writer's change and landing once
@@ -638,7 +640,8 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
 /// refusal); `resolve(send)` re-faces the run where the refusal recurs; the
 /// drop of the newest line behind the run, never sent, takes it alone at
 /// once (skep #983); and `resolve(drop)` drops the run and the behind line
-/// left.
+/// left, answering `{}`: the resend committed nothing, so the shell knows the
+/// run's line, though marked `sent`, has not landed (skep #993).
 #[test]
 fn a_refused_run_holds_behind_it_and_resolve_acts_on_it() {
     let dir = TempDir::new().unwrap();
@@ -686,9 +689,57 @@ fn a_refused_run_holds_behind_it_and_resolve_acts_on_it() {
     let newest = shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().iter().rev().find(|r| r["cause"] == "behind").unwrap()["held"].as_u64().unwrap();
     assert_eq!(shell.call("resolve", &json!({"session": session, "held": newest, "act": "drop"})).unwrap(), json!({}));
     assert_eq!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().len(), 2, "the newest line behind the run dropped alone");
-    // `drop` the run: both left go.
-    shell.call("resolve", &json!({"session": session, "held": k, "act": "drop"})).unwrap();
+    // `drop` the run: both left go, named nowhere, since the board committed
+    // nothing of the run's resend, though its row says `sent`.
+    let rows = shell.call("held", &json!({"session": session})).unwrap();
+    assert_eq!(rows[0]["sent"], true, "premise: the send marked the run's line `sent`: {rows}");
+    assert_eq!(shell.call("resolve", &json!({"session": session, "held": k, "act": "drop"})).unwrap(), json!({}));
     assert!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty(), "the run and its behind line are dropped");
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a drop of a refused or a moved line that landed names it.
+///
+/// It is against the real board (§3c.4; skep #993). A write of the session's,
+/// signed and dialed past the shell's hold, lands on the draft unacked, and
+/// the same burst is held marked `sent` as a refused run, then, a second
+/// write landed so, as a moved document: each `resolve(drop)` takes its line
+/// at once, writing nothing to the board, and answers
+/// `{may_have_landed: [k]}`, no line left held and the words standing on the
+/// board (the mutant that answers every drop `{}` tells the person words the
+/// board holds are gone).
+#[test]
+fn a_drop_of_a_refused_or_moved_line_that_landed_names_it() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let HeldGround { shell, session, draft, at, .. } = held_ground(&dir, &sd);
+    let entry = shell.sessions.get(&session).unwrap();
+    let (mut typed, mut text) = (at, String::from("a"));
+    for (cell, values, moved) in [("a refused run", "bc", false), ("a moved document", "de", true)] {
+        let ordinal = (text.len() + 1).to_string();
+        let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": ordinal}, "values": [values], "as_of": typed});
+        let attested = entry.attest(&shell.store, &frame, || entry.signing_term()).unwrap();
+        let Answer::Document(landed) = entry.board.op(Some(&entry.token), &attested).unwrap() else { panic!("{cell}: the dial closed") };
+        let landed_at = landed["at"].as_u64().unwrap_or_else(|| panic!("{cell}: the write lands, its answer the hold's never: {landed}"));
+        let reason = if moved {
+            let verdict = json!({"resp": "rejected", "op": "insert", "code": "arrangement_moved", "disposition": "permanent", "site": {"as_of": typed, "current": landed_at}});
+            Reason { cause: "moved".into(), refusal: Some(verdict), sent: true }
+        } else {
+            let verdict = json!({"resp": "rejected", "op": "insert", "code": "out_of_bounds", "disposition": "permanent"});
+            Reason { sent: true, ..Reason::refused("out_of_bounds", verdict) }
+        };
+        let held = shell.holds.hold(&entry, Burst::admit(frame, &entry).unwrap(), reason, None, typed).answered().unwrap();
+        let k = held["held"].as_u64().unwrap();
+        let rows = changes_under(&entry.board, &entry.token, &draft, 0).len();
+        assert_eq!(shell.call("resolve", &json!({"session": session, "held": k, "act": "drop"})).unwrap(), json!({"may_have_landed": [k]}), "{cell}");
+        assert!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty(), "{cell}: no line left held");
+        text.push_str(values);
+        let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, text.len() as u64)})).unwrap();
+        assert_eq!(text_of(&read), text, "{cell}: the words stand on the board: {read}");
+        assert_eq!(changes_under(&entry.board, &entry.token, &draft, 0).len(), rows, "{cell}: nothing written by the drop");
+        typed = landed_at;
+    }
     shell.shutdown();
     sd.shutdown();
 }
@@ -701,8 +752,8 @@ fn a_refused_run_holds_behind_it_and_resolve_acts_on_it() {
 /// `answers_lost`, `sent`, the person's `resolve(drop)` reads first, finds
 /// the row its own hand's and its values at its site, and answers `{kept:
 /// true}`: no line stands, and the draft holds the words once (the mutant
-/// that drops unread answers `{}` and leaves the page to remove words the
-/// board holds).
+/// that drops unread discards the line and leaves the page to remove words
+/// the board holds).
 #[test]
 fn a_drop_of_a_handed_over_line_whose_write_landed_answers_kept() {
     let dir = TempDir::new().unwrap();

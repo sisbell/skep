@@ -380,7 +380,7 @@ fn a_refused_run_drops_its_behind_lines() {
     assert_eq!(g.holds.resolve(&g.session, 999, ResolveAct::Drop).unwrap_err().name(), "no_such_held");
     // Drop the refused head: the whole run goes.
     let _ = g.rx.try_iter().count();
-    assert_eq!(g.holds.resolve(&g.session, k1, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, k1, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     assert!(g.lines().is_empty(), "the run and its behind lines are dropped");
     assert_eq!(g.fake.sends(), 0, "nothing is dialed on a drop");
     let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
@@ -442,7 +442,7 @@ fn changes_reads(g: &Ground) -> usize {
 fn a_drop_says_the_state_of_the_line_that_stands_first() {
     let (g, ks, hands) = moved_document();
     let reads = changes_reads(&g);
-    assert_eq!(g.holds.resolve(&g.session, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, ks[1], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
     assert_eq!(said.len(), 1, "{said:?}");
     assert_held_event_declared(&said[0].data);
@@ -450,7 +450,7 @@ fn a_drop_says_the_state_of_the_line_that_stands_first() {
     assert_eq!(changes_reads(&g), reads, "the hands as told, no read made");
     let left: Vec<u64> = g.lines().iter().map(|l| l["held"].as_u64().unwrap()).collect();
     assert_eq!(left, [ks[0]], "the dropped line and the one after it are gone");
-    assert_eq!(g.holds.resolve(&g.session, ks[0], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, ks[0], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
     assert_eq!((said[0].data["state"].as_str(), said[0].data["held"].as_u64()), (Some("kept"), Some(0)), "{said:?}");
 }
@@ -493,14 +493,14 @@ fn a_drop_under_a_session_told_no_moved_face_names_the_hands_it_reads() {
     let told_holding = under(&said, &keyless).iter().all(|e| e["state"] == "holding");
     assert!(told_holding && under(&said, &g.session).iter().any(|e| e["state"] == "moved" && e["hands"] == hands), "premise: the walk tells the writer alone: {said:?}");
     let reads = changes_reads(&g);
-    assert_eq!(g.holds.resolve(&keyless, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&keyless, ks[1], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     one_line(&told_events(&g), &keyless, &hands, "a session told `holding` before the walk moved the document");
     assert_eq!(changes_reads(&g), reads + 1, "the hands read once");
     // The session re-opened in the dead one's place, told nothing.
     let (g, ks, hands) = moved_document();
     let session = reopened_session(&g);
     let reads = changes_reads(&g);
-    assert_eq!(g.holds.resolve(&session, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&session, ks[1], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     one_line(&told_events(&g), &session, &hands, "a re-opened session");
     assert_eq!(changes_reads(&g), reads + 1, "the hands read once");
     // The keyless session's discard.
@@ -513,7 +513,7 @@ fn a_drop_under_a_session_told_no_moved_face_names_the_hands_it_reads() {
     let open = Open { token: Token::parse(&"7c".repeat(16)).unwrap(), facts: bare_facts(), opened_at: 0 };
     let session = g.sessions.register(&g.entry, open, &mut NoSupplements);
     let reads = changes_reads(&g);
-    assert_eq!(g.holds.resolve(&session, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&session, ks[1], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let said = told_events(&g);
     one_line(&said, &session, &hands, "the keyless session's discard");
     assert_eq!((said[0].get("sendable"), changes_reads(&g)), (None, reads + 1), "no `sendable` under it, the hands read once: {said:?}");
@@ -548,7 +548,7 @@ fn a_drops_hands_the_board_does_not_give_are_named_not_read_and_the_walk_names_t
             _ => g.holds.set_node_stopped("b-1", true),
         }
         let reads = changes_reads(&g);
-        assert_eq!(g.holds.resolve(&session, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped, "{cell}");
+        assert_eq!(g.holds.resolve(&session, ks[1], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]), "{cell}");
         let said = told_events(&g);
         let [event] = &said[..] else { panic!("{cell}: one event: {said:?}") };
         assert_eq!((event["state"].as_str(), event["held"].as_u64(), &event["hands"]), (Some("moved"), Some(1), &unread), "{cell}: {event}");
@@ -583,7 +583,7 @@ fn a_drop_whose_document_moves_on_while_its_hands_are_read_says_what_stands() {
             assert_eq!(holds.resolve(&sent, head, ResolveAct::Send).unwrap(), Resolved::HandedBack, "the send while the read is out");
         }
     }));
-    assert_eq!(g.holds.resolve(&session, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&session, ks[1], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let said = told_events(&g);
     let [event] = &said[..] else { panic!("one event: {said:?}") };
     assert_eq!((event["state"].as_str(), event["held"].as_u64(), event.get("hands")), (Some("holding"), Some(1), None), "{event}");
@@ -628,7 +628,7 @@ fn a_drop_whose_document_is_moved_again_while_its_hands_are_read_names_them_not_
         fake.op_rejected.next(1, arrangement_moved(70, 79));
         holds.probe("b-1");
     }));
-    assert_eq!(g.holds.resolve(&keyless, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&keyless, ks[1], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let said = under(&told_events(&g), &keyless);
     let [event] = &said[..] else { panic!("one event under the keyless session: {said:?}") };
     assert_eq!((event["state"].as_str(), event["held"].as_u64(), &event["hands"]), (Some("moved"), Some(1), &json!([{"key": "unread"}])), "{event}");
@@ -654,7 +654,7 @@ fn hands_named_not_read_to_a_session_the_walk_does_not_run_under_are_named_to_it
     let (g, ks, hands) = moved_document();
     let keyless = beside(&g, bare_facts(), 0x7c);
     g.holds.set_node_stopped("b-1", true);
-    assert_eq!(g.holds.resolve(&keyless, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&keyless, ks[1], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let said = under(&told_events(&g), &keyless);
     let [event] = &said[..] else { panic!("one event under the keyless session: {said:?}") };
     assert_eq!((event["state"].as_str(), event["held"].as_u64(), &event["hands"], event.get("sendable")), (Some("moved"), Some(1), &json!([{"key": "unread"}]), None), "{event}");
@@ -678,7 +678,7 @@ fn the_walk_says_no_moved_face_of_a_document_handed_back_while_its_hands_are_rea
     let (g, ks, _) = moved_document();
     let keyless = beside(&g, bare_facts(), 0x7c);
     g.holds.set_node_stopped("b-1", true);
-    assert_eq!(g.holds.resolve(&keyless, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&keyless, ks[1], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let _ = told_events(&g);
     g.holds.set_node_stopped("b-1", false);
     let (holds, writer, head) = (Arc::downgrade(&g.holds), Arc::clone(&g.session), ks[0]);
@@ -713,7 +713,7 @@ fn hands_named_not_read_where_no_session_may_write_are_named_at_the_boards_answe
     assert_eq!(hands, json!([{"key": "other", "fingerprint": "ff".repeat(32)}]), "the face names the other key's hand");
     let second = beside(&g, bare_facts(), 0x7c);
     g.holds.set_node_stopped("b-1", true);
-    assert_eq!(g.holds.resolve(&second, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&second, ks[1], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let said = under(&told_events(&g), &second);
     let [event] = &said[..] else { panic!("one event under the second session: {said:?}") };
     assert_eq!(&event["hands"], &json!([{"key": "unread"}]), "{event}");
@@ -744,7 +744,7 @@ fn hands_named_not_read_where_no_session_may_write_are_named_at_the_boards_answe
 fn a_drop_names_the_hands_of_the_verdict_its_document_stands_on_now_never_an_earlier_moves() {
     let (g, ks, hands) = moved_document();
     let keyless = beside(&g, bare_facts(), 0x7c);
-    assert_eq!(g.holds.resolve(&keyless, ks[2], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&keyless, ks[2], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let said = under(&told_events(&g), &keyless);
     let [event] = &said[..] else { panic!("one event under the keyless session: {said:?}") };
     assert_eq!(&event["hands"], &hands, "premise: told the earlier move's hand: {event}");
@@ -757,7 +757,7 @@ fn a_drop_names_the_hands_of_the_verdict_its_document_stands_on_now_never_an_ear
     let told_writer: Vec<Value> = under(&said, &g.session).into_iter().filter(|e| e["state"] == "moved").collect();
     assert_eq!(told_writer.last().map(|e| &e["hands"]), Some(&newer), "premise: the walk tells the writer the new move's hand: {said:?}");
     assert!(under(&said, &keyless).is_empty(), "premise: and the keyless session nothing: {said:?}");
-    assert_eq!(g.holds.resolve(&keyless, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&keyless, ks[1], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let said = under(&told_events(&g), &keyless);
     let [event] = &said[..] else { panic!("one event under the keyless session: {said:?}") };
     assert_eq!((event["state"].as_str(), event["held"].as_u64(), &event["hands"]), (Some("moved"), Some(1), &newer), "the new move's hand, never the earlier one: {event}");
@@ -775,7 +775,7 @@ fn a_drop_names_the_hands_of_the_verdict_its_document_stands_on_now_never_an_ear
 fn a_face_names_no_hand_read_for_a_verdict_no_line_carries() {
     let (g, ks, _) = moved_document();
     g.holds.mark_moved("b-1", 1, DOC, None);
-    assert_eq!(g.holds.resolve(&g.session, ks[2], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, ks[2], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let said = told_events(&g);
     let [event] = &said[..] else { panic!("one event: {said:?}") };
     assert_eq!((event["state"].as_str(), event["held"].as_u64(), event.get("hands")), (Some("moved"), Some(2), None), "{event}");
@@ -934,7 +934,7 @@ fn two_lists_of_one_verdict_read_its_hands_once() {
     let first = g.holds.lines(&keyless).unwrap();
     let again = g.holds.lines(&keyless).unwrap();
     assert_eq!((&first[0]["hands"], &again[0]["hands"], changes_reads(&g)), (&hands, &hands, reads + 1), "one read for two lists");
-    assert_eq!(g.holds.resolve(&keyless, ks[2], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&keyless, ks[2], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let said = under(&told_events(&g), &keyless);
     let [event] = &said[..] else { panic!("one event under the keyless session: {said:?}") };
     assert_eq!((&event["hands"], changes_reads(&g)), (&hands, reads + 1), "the drop names the listed hands with no read: {event}");
@@ -992,12 +992,12 @@ fn each_path_telling_a_moved_face_leaves_its_list_naming_the_hands_with_no_read(
     lists_with_no_read(&g, &g.session, &ff, "the walk's moved hold");
     let (g, ks, hands) = moved_document();
     let session = reopened_session(&g);
-    assert_eq!(g.holds.resolve(&session, ks[2], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&session, ks[2], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     lists_with_no_read(&g, &session, &hands, "a drop's owed face");
     let (g, ks, hands) = moved_document();
     let keyless = beside(&g, bare_facts(), 0x7c);
     g.holds.set_node_stopped("b-1", true);
-    assert_eq!(g.holds.resolve(&keyless, ks[2], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&keyless, ks[2], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     g.holds.set_node_stopped("b-1", false);
     g.holds.probe("b-1");
     lists_with_no_read(&g, &keyless, &hands, "the walk's read of hands told not read");
@@ -1205,7 +1205,7 @@ fn a_moved_line_with_the_boards_verdict_takes_a_moved_documents_acts() {
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "and kept");
     let k = g.hold_for(&insert(DOC, json!(["c"]), 40), moved).unwrap()["held"].as_u64().unwrap();
     assert_eq!(g.states(), ["moved"]);
-    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     assert_eq!((g.states(), g.lines().len()), (vec!["kept".to_string()], 0), "the drop of the document's one line says `kept`");
 }
 
@@ -1237,7 +1237,7 @@ fn a_burst_held_behind_a_moved_document_keeps_its_face_in_front() {
     let face = (event["state"].as_str(), event["held"].as_u64(), &event["hands"], event["sendable"].as_bool(), event.get("cause"));
     assert_eq!(face, (Some("moved"), Some(4), &hands, Some(false), None), "{event}");
     assert_eq!(changes_reads(&g), reads, "the hands as told, no read made");
-    assert_eq!(g.holds.resolve(&g.session, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, ks[1], ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let said = told_events(&g);
     let [event] = &said[..] else { panic!("one event: {said:?}") };
     assert_eq!((event["state"].as_str(), event["held"].as_u64(), &event["hands"]), (Some("moved"), Some(1), &hands), "{event}");
@@ -1553,7 +1553,7 @@ fn a_drop_writes_its_runs_dones_as_one_copy_with_one_sync() {
     }
     g.hold(&insert(OTHER, json!(["c"]), g.fake.head()), "behind", false);
     let copies = crate::held::tests::count_copies();
-    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     crate::held::tests::take_copies();
     assert_eq!(copies.get(), 1, "the run's sixteen `done`s, one copy with one sync");
     let standing: Vec<String> = g.lines().iter().map(|l| l["doc"].as_str().unwrap_or("?").to_string()).collect();
@@ -1805,7 +1805,7 @@ fn a_first_dials_shift_lets_its_line_go_before_its_face_is_told() {
     let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert_at(DOC, 2, json!(["x"]), typed), Some(anchors(Some(&i(1)), Some(&i(2))))) else { panic!("the call answers") };
     *g.fake.at_image.lock().unwrap() = None;
     assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("out_of_bounds")), "{held}");
-    assert_eq!((acted.lock().unwrap().clone(), g.fake.sends()), (vec![Ok(Resolved::Dropped)], 2), "the act the face asks for takes the line");
+    assert_eq!((acted.lock().unwrap().clone(), g.fake.sends()), (vec![Ok(Resolved::dropped(&[]))], 2), "the act the face asks for takes the line");
     assert!(g.lines().is_empty(), "the line dropped");
 }
 
@@ -2046,7 +2046,7 @@ fn a_drop_drops_its_own_documents_run_and_no_other() {
     let k1 = g.hold_for(&insert(DOC, json!(["a"]), g.fake.head()), Reason::refused("out_of_bounds", verdict)).unwrap()["held"].as_u64().unwrap();
     let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(OTHER, json!(["z"]), g.fake.head()), None) else { panic!("held behind the run") };
     assert_eq!(behind["cause"], "behind", "{behind}");
-    assert_eq!(g.holds.resolve(&g.session, k1, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, k1, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let docs: Vec<String> = g.lines().iter().map(|l| l["doc"].as_str().unwrap_or("?").to_string()).collect();
     assert_eq!(docs, [OTHER], "the run is dropped, the other document's line stands");
     g.holds.probe("b-1");
@@ -3720,7 +3720,7 @@ fn a_line_held_head_unreadable_is_dropped_by_resolve_drop_and_refused_resolve_se
     assert_eq!((behind["cause"].as_str(), other["cause"].as_str()), (Some("behind"), Some("behind")));
     let _ = g.states();
     assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap_err().name(), "not_resolvable", "no act of the person's makes the head read");
-    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Dropped, "the drop is admitted");
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]), "the drop is admitted");
     let docs: Vec<String> = g.lines().iter().map(|l| l["doc"].as_str().unwrap().to_string()).collect();
     assert_eq!(docs, [OTHER], "the line and every later line of its document dropped; the other document's stands");
     let events: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).collect();
@@ -3762,7 +3762,7 @@ fn a_dropped_lines_done_the_device_refused_is_written_at_the_probe_and_a_relaunc
     let aside = pending.with_extension("aside");
     std::fs::rename(&pending, &aside).unwrap();
     std::fs::create_dir(&pending).unwrap();
-    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::dropped(&[]));
     let docs: Vec<String> = g.lines().iter().map(|l| l["doc"].as_str().unwrap().to_string()).collect();
     assert_eq!(docs, [OTHER], "the line and the one behind it have left the queue");
     let begun = said_containing(&g, "could not be copied to its held file");
@@ -4091,7 +4091,7 @@ fn a_held_file_the_compaction_cannot_remove_is_said_on_talk_and_appended_on() {
     let held = board_dir.join("principal-1.held");
     std::fs::set_permissions(&board_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
     let resolved = g.holds.resolve(&g.session, k, ResolveAct::Drop);
-    assert_eq!(resolved.unwrap(), Resolved::Dropped);
+    assert_eq!(resolved.unwrap(), Resolved::dropped(&[]));
     let said = g.said.lock().unwrap().clone();
     let line = format!("held: every held line is done, and the held file {} could not be removed (", held.display());
     assert_eq!(said.iter().filter(|l| l.starts_with(&line)).count(), 1, "{said:?}");

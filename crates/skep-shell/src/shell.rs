@@ -2205,12 +2205,12 @@ impl Shell {
         Ok(json!({"shown": self.holds.show_halted(&session)}))
     }
 
-    /// Answers `resolve(session, {held, act})` with `{}`, or `{kept: true}`.
+    /// Answers `resolve(session, {held, act})` with the act's outcome.
     ///
     /// The answer is §4b.1's. `"drop"` on a line in any state — refused,
     /// moved, or holding, the person's discard of words the probe would send
     /// (skep #726, #983) — marks it, and every line held after it on that
-    /// document, dropped, and answers `{}`; on a `sent` line, holding or
+    /// document, dropped (its answer below); on a `sent` line, holding or
     /// handed over as `answers_lost`, it reads for the line's landing first,
     /// save where no dial of the line may have left this device (§3c.4;
     /// skep #866, #983): a landing found keeps the line, nothing dropped,
@@ -2231,6 +2231,15 @@ impl Shell {
     /// both stand: the write door refuses every new write there, and the
     /// lines `"send"` hands back were held before that state was found, sent
     /// from memory as the board takes them.
+    ///
+    /// **The lines a drop names** (§3c.4; skep #993). A drop that took lines
+    /// whose words may already stand on the board — each marked `sent`, a
+    /// dial of it possibly having left this device, and ruled out by no read
+    /// of the drop's own — answers `{may_have_landed: [k, …]}`, their
+    /// ordinals in `k` order, and `{}` where it took none (`Holds::resolve`):
+    /// the lines are dropped all the same, and the page and agents word what
+    /// the ordinals say, a landing that stands showing in the feed's next
+    /// `drafts` row and the next `image` read.
     ///
     /// # Errors
     ///
@@ -2254,7 +2263,8 @@ impl Shell {
             return Err(Refusal::shell(Name::WRITE_IN_BARE_SESSION, json!({"act": "send"})));
         }
         match self.holds.resolve(&session, k, act)? {
-            Resolved::Dropped => Ok(json!({})),
+            Resolved::Dropped { may_have_landed } if may_have_landed.is_empty() => Ok(json!({})),
+            Resolved::Dropped { may_have_landed } => Ok(json!({"may_have_landed": may_have_landed})),
             Resolved::HandedBack => {
                 self.feed(&session.board_reference).probe();
                 Ok(json!({}))

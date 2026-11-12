@@ -49,8 +49,9 @@ back — is this crate:
   the types carry: `prefix` and `replaces` are `Address`es and the origins
   an `Origins`, never empty, so every body a caller builds encodes to a
   record the parse admits, the cap aside. A body past
-  `MAX_REGISTRY_RECORD_BYTES` (16 KiB, interim, its `sig` counted inside it;
-  the constant's doc says what the cap is priced against) is refused before
+  `MAX_REGISTRY_RECORD_BYTES` (16 KiB, a term of the format, its `sig`
+  counted inside it; the constant's doc says what the cap is priced
+  against) is refused before
   any parse. The other five body-bearing rows, subtype rows all and none a
   kind, stand in the table with their `type` strings and no parser: their
   schemas are pinned where their own rules land (REG-1.86 (h)).

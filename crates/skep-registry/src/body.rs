@@ -45,8 +45,8 @@ use skep_address::{validate, Address, Nat, Tumbler};
 use crate::rows::Kind;
 
 /// The most bytes a registry record body may carry, `sig` included, a body
-/// past it refused ([`ParseRefusal::PastCap`]) before any parse — 16 KiB, an
-/// interim pin confirmed at the registry's review round: a `sig` under
+/// past it refused ([`ParseRefusal::PastCap`]) before any parse — 16 KiB, a
+/// term of the format, a wire constant (REG-1.86 (h)): a `sig` under
 /// `mldsa65-ed25519` is 6,746 bytes of hex on its own, so a signed binding
 /// is near seven kilobytes and a signed endpoint with a long list of
 /// origins stays under this with room. The cap counts every byte, `sig`

@@ -4854,8 +4854,11 @@ for an endpoint is none — else `registry_form`; THE RECORD VALUE — the
 atom's bytes parsed by the kind the slot names, else
 `malformed_record:<cause>` with the parser's cause joined (`wrong_type`,
 `number`, `unknown_member`, `empty_origins`, `not_an_address:prefix`,
-`not_canonical`, `past_cap` and the rest, as the vector set spells them);
-NO `sig` → `attestation_required`; and THE TRIAL —
+`not_canonical`, `past_cap` and the rest), the cause THE DAEMON's
+parser's own, so a client reads the daemon's causes: two conforming
+parsers agree on what they ADMIT, the cause another parser names for a
+refused body is its own, and the vector set's causes are the daemon's
+(REG-1.86 (h)); NO `sig` → `attestation_required`; and THE TRIAL —
 `attestation_invalid:<cause>` with the record grade's own causes
 (`malformed`, `not_enrolled_at_position`, `signature`,
 `board_unavailable`). Every refusal is the ordinary `rejected` shape
@@ -4902,12 +4905,14 @@ does not complete — the daemon does not open, naming the arm — so a served
 board never holds a registry row that collides with another row or a
 subtype without a row.
 
+**The body cap is a term of the format** (REG-1.86 (h)): 16 KiB, the
+`sig` member inside it, a wire constant frozen once a record is signed
+near it — a binding's members are under a hundred bytes and an endpoint's
+a few hundred, and the production row's `sig` is 6,746 bytes of hex on
+its own, so a signed body is near seven kilobytes.
+
 **INTERIM PINS** — confirmed at the registry's review round:
 
-* the body cap, 16 KiB, the `sig` member inside it — a binding's members
-  are under a hundred bytes and an endpoint's a few hundred, and the
-  production row's `sig` is 6,746 bytes of hex on its own, so a signed
-  body is near seven kilobytes;
 * the two tokens' spellings, `registry_form` and
   `malformed_record:<cause>`, and the family's code `registry_refused`.
 

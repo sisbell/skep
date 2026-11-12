@@ -167,6 +167,33 @@ pub fn bootstrap_delegate(port: u16, id: u64) -> (String, String) {
     delegate_under(port, &boot, "1", id)
 }
 
+/// Delegates a stranger under node 1 from principal 0's signed session.
+///
+/// [`bootstrap_delegate`]'s signed twin: the top-tier `delegate` as an
+/// ENFORCING board admits it (REG-4.110; AUTH-5.10, AUTH-4.30 (i)).
+/// Principal 0's subject is the claimant's set, so its session is opened
+/// with the ceremony's device key, signed over the origin dialed. It runs
+/// on a claimed board in either mode; on an ENFORCING one it is the one
+/// `delegate` from 0 there is, a bare bind being refused. No session is
+/// opened for the new principal: its account holds no key until a genesis
+/// is written for it ([`hire`]), and on an ENFORCING board a bare one
+/// binds nothing. Returns the account.
+///
+/// # Panics
+///
+/// Panics where the signed session is refused — an unclaimed board, or a
+/// claimant set that does not hold the ceremony's device key — and where
+/// the `delegate` is.
+pub fn signed_bootstrap_delegate(port: u16, id: u64) -> String {
+    let zero = open_signed_session(port, 0, &device_key());
+    let account = next_prefix_under(port, Some(&zero), "1");
+    expect_resp(
+        &op(port, Some(&zero), &format!(r#"{{"op":"delegate","new_prefix":"{account}","new_id":{id}}}"#)),
+        "ack_addr",
+    );
+    account
+}
+
 pub fn create_frame(account: &str, published: Option<bool>) -> String {
     let flag = match published {
         Some(b) => format!(r#","published":{b}"#),

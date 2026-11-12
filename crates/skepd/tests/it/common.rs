@@ -1120,10 +1120,61 @@ pub fn issue_blocked_list_bytes(path: &Path, bytes: &[u8]) {
 /// ([`claim_board`]; signed ops, s1) — the board term every attested write's
 /// frame names (D13) — so it admits an attested write at once; a suite that
 /// needs a LATER head drives the cadence through the daemon's clock seam.
+/// The registry's and the resolver's walks spawn [`spawn_enforcing`], where
+/// no bare session binds.
 pub fn spawn(dir: &Path) -> Skepd {
     let sd = spawn_configured(dir, true);
     claim_board(sd.port());
     sd
+}
+
+/// Spawns a daemon with local trust off and claims its board.
+///
+/// The board this returns is ENFORCING (wire.md §Identity): claimed, with
+/// `local_trust` false, so no bare session binds and only signed sessions
+/// write. The claim is this spawn's own last step, so no write of a
+/// caller's precedes it: until the claim the flag is not consulted and a
+/// bare session still binds, the state the ceremony's own steps run in
+/// and no write of a walk's. A board that is claimed already, reopened,
+/// skips the ceremony and is ENFORCING from its open. The
+/// registry's and the resolver's walks run on this board (REG-4.108,
+/// REG-4.110), their top-tier `delegate` the signed one
+/// ([`signed_bootstrap_delegate`]); a cell pins that its board is this one
+/// with [`assert_enforcing`].
+pub fn spawn_enforcing(dir: &Path) -> Skepd {
+    let sd = spawn_configured(dir, false);
+    claim_board(sd.port());
+    sd
+}
+
+/// Asserts that the board at `port` is ENFORCING (wire.md §Identity).
+///
+/// Both readings are a guest's. `/health` publishes the pair the mode
+/// derives from, a claimant and `local_trust` false; and a bare bind, as
+/// principal 0 here, is refused the one `401 session_rejected`. A cell
+/// whose walk runs where only signed sessions write calls this ahead of
+/// its first write, so the cell fails on a board left CLAIMED-PERMISSIVE
+/// or unclaimed.
+///
+/// # Panics
+///
+/// Panics where the board names no claimant, where its local trust is on,
+/// or where the bare bind binds.
+pub fn assert_enforcing(port: u16) {
+    let auth = json(&get(port, "/health").1)["auth"].clone();
+    assert!(!auth["claimant"].is_null(), "an ENFORCING board is claimed: {auth}");
+    assert_eq!(
+        auth["local_trust"].as_bool(),
+        Some(false),
+        "an ENFORCING board runs with local trust off: {auth}"
+    );
+    let (st, body) = http(port, "POST", "/session", None, br#"{"principal":0}"#);
+    assert_eq!(
+        (st, json(&body)["error"].as_str()),
+        (401, Some("session_rejected")),
+        "an ENFORCING board refuses a bare bind: {}",
+        String::from_utf8_lossy(&body)
+    );
 }
 
 /// [`spawn`] under the SEEDED salt source (`Daemon::open_seeded`, the test

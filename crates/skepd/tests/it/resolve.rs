@@ -14,6 +14,16 @@
 //! claimant, its console the claimant's signed session, its genesis set the
 //! ceremony's two keys — so one realm id names every board the suite spawns,
 //! and a board of another genesis is made by hand where a refusal needs one.
+//!
+//! And every one of them is ENFORCING ([`spawn_enforcing`]): local trust
+//! off and the claim ahead of the first write, so no bare session binds and
+//! only signed sessions write (wire.md §Identity; REG-1.32's "no permissive
+//! state"). An org's node account is `delegate`d from principal 0's signed
+//! session (REG-4.110), and the console asserts the mode as it opens
+//! ([`console`]), so a cell whose board is left permissive fails; the
+//! resolver reads as a guest, as on any board. The board of another genesis
+//! alone is no ENFORCING one: it is claimed by hand from an unclaimed start,
+//! and nothing is written on it past its claim.
 
 use crate::common;
 
@@ -61,8 +71,12 @@ fn hint_for(port: u16) -> RootHint {
         .expect("one origin")
 }
 
-/// The registrar's console: the claimant's signed session (REG-4.108).
+/// The registrar's console: the claimant's signed session (REG-4.108), on
+/// the ENFORCING board every walk of this suite runs on — the mode asserted
+/// here, ahead of the walk's first write ([`assert_enforcing`]), so a walk
+/// whose board is left permissive fails at its console.
 fn console(port: u16) -> String {
+    assert_enforcing(port);
     open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key())
 }
 
@@ -116,14 +130,15 @@ fn enroll_extra_key(port: u16, org: &Org, extra: &SigningKey) {
 }
 
 /// REGISTER one org as the registrar's console does (REG-1.1; the walk
-/// `registry.rs` drives): the node account delegated, keyed by a hire into
-/// the registrar's doc 1, bound at `prefix`, its doc 1 minted, its endpoint
-/// deposited where `origins` names one, then `key_acts` further keys
-/// enrolled.
+/// `registry.rs` drives): the node account delegated from principal 0's
+/// signed session (REG-4.110), keyed by a hire into the registrar's doc 1,
+/// bound at `prefix`, its doc 1 minted, its endpoint deposited where
+/// `origins` names one, then `key_acts` further keys enrolled — every write
+/// from a signed session.
 fn register_org(port: u16, console: &str, i: u64, prefix: &str, origins: Option<&[&str]>, key_acts: usize) -> Org {
     let principal = ORG_PRINCIPAL_BASE + i;
     let key = org_key(principal);
-    let (account, _bare) = bootstrap_delegate(port, principal);
+    let account = signed_bootstrap_delegate(port, principal);
     let node_signed = hire(port, console, CLAIMANT_DOC1, &account, principal, &key);
     let binding = deposit_binding(port, console, prefix, Some(&account), None);
     let doc1 = mint_doc_one(port, &node_signed, &account);
@@ -305,7 +320,7 @@ fn fixture_board(port: u16) -> BTreeMap<String, Org> {
     // binding naming the stale state (inert), the restoration naming the
     // current state (honored).
     let o6 = register_org(port, &console, 6, "1.6", Some(&["https://six.example"]), 0);
-    let (b6, _) = bootstrap_delegate(port, ORG_PRINCIPAL_BASE + 600);
+    let b6 = signed_bootstrap_delegate(port, ORG_PRINCIPAL_BASE + 600);
     let inert = deposit_binding(port, &console, "1.6", Some(&b6), None);
     deposit_binding(port, &console, "1.6", Some(&o6.account), Some(&inert));
     deposit_binding(port, &console, "1.6", Some(&o6.account), Some(&o6.binding));
@@ -372,7 +387,7 @@ const FIXTURE_PREFIXES: [&str; 16] = [
 #[test]
 fn the_fixture_board_resolves_live_and_is_recorded_on_demand() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_enforcing(dir.path());
     let port = sd.port();
     let orgs = fixture_board(port);
     let log = Rc::new(RefCell::new(Vec::new()));
@@ -498,7 +513,7 @@ fn registry_links(port: u16) -> Vec<(BodyKind, String)> {
 #[test]
 fn the_resolvers_verdict_equals_the_daemons_admission_on_every_row() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_enforcing(dir.path());
     let port = sd.port();
     let console = console(port);
     let orgs: Vec<Org> =
@@ -575,7 +590,7 @@ fn the_resolvers_verdict_equals_the_daemons_admission_on_every_row() {
 #[test]
 fn a_tampered_body_is_suppressed_by_the_verifying_resolver() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_enforcing(dir.path());
     let port = sd.port();
     let console = console(port);
     let o2 = register_org(port, &console, 2, "1.2", Some(&["https://org.example"]), 0);
@@ -601,7 +616,7 @@ fn a_tampered_body_is_suppressed_by_the_verifying_resolver() {
 #[test]
 fn a_couriers_image_that_omits_reorders_or_replays_rows_is_refused() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_enforcing(dir.path());
     let port = sd.port();
     let console = console(port);
     register_org(port, &console, 2, "1.2", Some(&["https://org.example"]), 0);
@@ -655,7 +670,7 @@ fn a_couriers_image_that_omits_reorders_or_replays_rows_is_refused() {
 #[test]
 fn a_root_move_under_the_same_lineage_resumes_and_its_refusals_are_named() {
     let dir_a = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir_a.path());
+    let sd = spawn_enforcing(dir_a.path());
     let port = sd.port();
     let console = console(port);
     register_org(port, &console, 2, "1.2", Some(&["https://org.example"]), 0);
@@ -663,7 +678,7 @@ fn a_root_move_under_the_same_lineage_resumes_and_its_refusals_are_named() {
     let early = tempfile::tempdir().expect("tempdir");
     copy_dir(dir_a.path(), early.path());
     // The lineage goes on at A: a second org.
-    let sd = spawn(dir_a.path());
+    let sd = spawn_enforcing(dir_a.path());
     let port = sd.port();
     let console_again = self::console(port);
     register_org(port, &console_again, 3, "1.3", Some(&["https://org.example"]), 0);
@@ -678,7 +693,7 @@ fn a_root_move_under_the_same_lineage_resumes_and_its_refusals_are_named() {
     // THE MOVE: the same journal at a new address.
     let dir_b = tempfile::tempdir().expect("tempdir");
     copy_dir(dir_a.path(), dir_b.path());
-    let sd_b = spawn(dir_b.path());
+    let sd_b = spawn_enforcing(dir_b.path());
     let mut moved = Mirror::open(&hint_for(sd_b.port()), mdir.path(), &skep_resolve::dial_http).expect("resumed");
     assert_eq!(*moved.opened(), Opened::Resumed { checked_rows: rows });
     assert_eq!(moved.head(), held);
@@ -694,7 +709,9 @@ fn a_root_move_under_the_same_lineage_resumes_and_its_refusals_are_named() {
     // SOURCE BEHIND: a root brought up from the early backup.
     let behind_dir = tempfile::tempdir().expect("tempdir");
     copy_dir(early.path(), behind_dir.path());
-    let sd_behind = spawn(behind_dir.path());
+    let sd_behind = spawn_enforcing(behind_dir.path());
+    // No console opens on this board, so the mode is asserted here.
+    assert_enforcing(sd_behind.port());
     let refused = Mirror::open(&hint_for(sd_behind.port()), mdir.path(), &skep_resolve::dial_http).err();
     assert!(matches!(refused, Some(MirrorError::Refused(Refusal::SourceBehind { .. }))), "{refused:?}");
     sd_behind.shutdown();
@@ -702,7 +719,7 @@ fn a_root_move_under_the_same_lineage_resumes_and_its_refusals_are_named() {
     // DIVERGED: the early backup, written past the fork with another act.
     let diverged_dir = tempfile::tempdir().expect("tempdir");
     copy_dir(early.path(), diverged_dir.path());
-    let sd_div = spawn(diverged_dir.path());
+    let sd_div = spawn_enforcing(diverged_dir.path());
     let console_d = self::console(sd_div.port());
     register_org(sd_div.port(), &console_d, 93, "1.3", Some(&["https://other.example"]), 0);
     let refused = Mirror::open(&hint_for(sd_div.port()), mdir.path(), &skep_resolve::dial_http).err();
@@ -710,7 +727,9 @@ fn a_root_move_under_the_same_lineage_resumes_and_its_refusals_are_named() {
     sd_div.shutdown();
 
     // A DIFFERENT GENESIS: a board claimed under other keys, read cold under
-    // this suite's realm.
+    // this suite's realm. Made by hand from an unclaimed start — the
+    // ceremony's own bare steps under keys of its own — so it is the one
+    // board here that is not ENFORCING; nothing is written past its claim.
     let other_dir = tempfile::tempdir().expect("tempdir");
     let sd_c = spawn_unclaimed(other_dir.path());
     let (other_anchor, other_device) = (distinct_key(60), distinct_key(61));
@@ -732,7 +751,7 @@ fn a_root_move_under_the_same_lineage_resumes_and_its_refusals_are_named() {
 #[test]
 fn a_missing_binding_is_re_asked_at_the_next_delta() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_enforcing(dir.path());
     let port = sd.port();
     let console = console(port);
     register_org(port, &console, 2, "1.2", Some(&["https://org.example"]), 0);
@@ -800,7 +819,7 @@ fn un_arrange_bindings(port: u16, console: &str, bindings: &[&str]) -> (String, 
 #[test]
 fn an_un_arranged_atom_is_recovered_by_the_homes_chain_walk() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_enforcing(dir.path());
     let port = sd.port();
     let console = console(port);
     let orgs: Vec<Org> =
@@ -838,7 +857,7 @@ fn an_un_arranged_atom_is_recovered_by_the_homes_chain_walk() {
 #[test]
 fn one_org_registered_by_the_console_resolves_from_the_hint_by_a_cold_resolver() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_enforcing(dir.path());
     let port = sd.port();
     let console = console(port);
     let org = register_org(port, &console, 5, "1.5", Some(&["https://acme.example", "https://acme.example.net"]), 0);
@@ -1021,18 +1040,21 @@ fn deposit_as_written(port: u16, token: &str, home: &str, ordinal: u64, ty: &str
 const GENERATOR_THREADS: usize = 8;
 
 /// A generated registry board of `n` orgs with `k` key acts each (the
-/// investigation §3.1's harness): each org a `delegate`, a genesis enroll, a
-/// binding atom + link, a doc-1 mint, an endpoint atom + link and `k` key
-/// acts — the same rows `register_org` writes, by a faster hand: the
-/// registrar's doc-1 writes serial in one phase, each org's own doc-1 writes
-/// in parallel in a second. Progress is printed per thousand so a run cut at
-/// a cap still reports how far it reached.
+/// investigation §3.1's harness): each org a `delegate` from principal 0's
+/// signed session, a genesis enroll, a binding atom + link, a doc-1 mint,
+/// an endpoint atom + link and `k` key acts — the same rows `register_org`
+/// writes, by a faster hand: the registrar's doc-1 writes serial in one
+/// phase, each org's own doc-1 writes in parallel in a second. Progress is
+/// printed per thousand so a run cut at a cap still reports how far it
+/// reached.
 fn generate_board(port: u16, console: &str, n: u64, k: usize) -> Vec<Org> {
     let t = Instant::now();
     let retries_before = WRITE_BUSY_RETRIES.load(Ordering::Relaxed);
     let signer = RecordSigner::at(port);
     let console_key = hybrid_signer(&device_key());
-    let boot = open_session(port, 0);
+    // Principal 0's signed session (REG-4.110), opened once for every org's
+    // `delegate`: 0's subject is the claimant's set, and no bare one binds.
+    let boot = open_signed_session(port, 0, &device_key());
     // PHASE ONE, serial: the account, its hire and its binding, every one a
     // write into the registrar's doc 1.
     let mut ordinal = content_extent(port, None, CLAIMANT_DOC1) + 1;
@@ -1152,7 +1174,7 @@ fn generate_board(port: u16, console: &str, n: u64, k: usize) -> Vec<Org> {
 /// this workspace, so §3.4's ratio is not measured.
 fn measure(n: u64, k: usize, chain_walk: bool) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_enforcing(dir.path());
     // The measure is a COLD mirror opened from genesis over `n` commits. The
     // feed is kept whole from genesis, so a mirror opens at any age; the
     // cadence is parked for the measure's life all the same, so the

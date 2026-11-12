@@ -2432,9 +2432,25 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    landing drops a line of them, so a page from position 0 serves the
    board's first commit on a board of any age, and a mirror begun
    today reads the rows a mirror begun on the board's first day read.
-   The journal's reclamation bounds `/op-at` alone, which the mirror
-   never reads; the landing line's `{bytes} journal bytes reclaimed`
-   marks nothing for a mirror.
+   The journal's reclamation bounds the reads of an earlier position
+   alone (`POST /op-at`, `GET /chain?at`, `GET /dump?at`), and the
+   feed's rows need none of them. The verifying resolver's mirror
+   makes two of them, each at one point. When it opens over a copy it
+   already holds, it asks `GET /chain?at` at every head position that
+   copy saved, one for each sync that moved its head. And where a
+   record's atom stands neither at its home's head nor in any version
+   of that home (the home was published again without it), it reads
+   the home as of the record's own position through `POST /op-at`,
+   its last recourse. Below the journal's reclaim floor both answer
+   `410 history_reclaimed`, and the mirror stops with `history
+   reclaimed below position {floor}`: a held copy at its open, where
+   a mirror begun again in an empty directory reads every row; and a
+   record's read at its row, past which only a mirror already holding
+   that record's bytes goes. A board run under `--reclaim-journal
+   never` answers both reads at every position (Start, step 2). So
+   the landing line's `{bytes} journal bytes reclaimed` marks nothing
+   for the rows a mirror copies; for those two reads it marks a
+   landing that raised the floor they are refused below.
 
 2. **The one board that refuses a mirror from genesis** is one whose
    change feed opened with a hole: a `commits.log` an earlier build

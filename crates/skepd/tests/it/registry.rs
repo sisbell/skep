@@ -17,6 +17,16 @@
 //! the registrar's set, the one hand a binding write takes (REG-4.108). The
 //! org's hand is its node account's own signed session, keyed by the
 //! genesis enroll the console wrote into the registrar's doc 1.
+//!
+//! Every walk here runs on an ENFORCING board ([`spawn_enforcing`]): local
+//! trust off and the claim ahead of the walk's first write, so no bare
+//! session binds and only signed sessions write (wire.md §Identity;
+//! REG-1.32's "no permissive state"). The node account is `delegate`d from
+//! principal 0's signed session (REG-4.110), and each cell asserts the mode
+//! ahead of its walk ([`assert_enforcing`]), so a cell whose board is left
+//! permissive fails. Two cells keep the board their subject is: the
+//! unclaimed board's `claim_first`, and the system account's doc 1, whose
+//! first half is the pre-claim gate's.
 
 use crate::common;
 
@@ -27,6 +37,7 @@ use serde_json::Value;
 use skep_address::{validate, Address, Nat, Tumbler};
 use skep_arrangement::deposit_class_types;
 use skep_engine::types::pins_outside_the_registry;
+use skep_identity::Fingerprint;
 use skep_registry::{
     row_at, rows, seeding_check, Body, BodyKind, Kind, Row, RowOf, SeedingRefusal, Subtype,
 };
@@ -40,10 +51,11 @@ const NESTED_PRINCIPAL: u64 = 932;
 
 /// The registrar's board with the org's node account minted and keyed: the
 /// console (the claimant's signed session), the node account — `delegate`d
-/// from principal 0, its genesis enroll written into the registrar's own
-/// doc 1 from the console, the credential record grade's cell as it stands
-/// (REG-1.1, REG-4.110; the `hire` shape) — and the node account's own
-/// signed session.
+/// from principal 0's signed session ([`signed_bootstrap_delegate`]), its
+/// genesis enroll written into the registrar's own doc 1 from the console,
+/// the credential record grade's cell as it stands (REG-1.1, REG-4.110; the
+/// `hire` shape) — and the node account's own signed session. No act here
+/// rides a bare session, so the walk runs on an ENFORCING board.
 struct Board {
     console: String,
     node_account: String,
@@ -52,7 +64,7 @@ struct Board {
 
 fn registrar_board(port: u16) -> Board {
     let console = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
-    let (node_account, _bare) = bootstrap_delegate(port, NODE_PRINCIPAL);
+    let node_account = signed_bootstrap_delegate(port, NODE_PRINCIPAL);
     let node_signed =
         hire(port, &console, CLAIMANT_DOC1, &node_account, NODE_PRINCIPAL, &distinct_key(NODE_SEED));
     Board { console, node_account, node_signed }
@@ -200,8 +212,9 @@ fn addr(s: &str) -> Address {
 #[test]
 fn the_registrar_binds_a_prefix_two_consoles_read_it_back_and_the_org_deposits_its_endpoint() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_enforcing(dir.path());
     let port = sd.port();
+    assert_enforcing(port);
     let board = registrar_board(port);
 
     // THE BINDING, at the next prefix off the console's own index.
@@ -262,6 +275,163 @@ fn the_registrar_binds_a_prefix_two_consoles_read_it_back_and_the_org_deposits_i
     sd.shutdown();
 }
 
+/// Tries the bare principal-0 `delegate` and answers what it met.
+///
+/// The two steps of [`bootstrap_delegate`], unjudged: the bare bind as
+/// principal 0, then `frame` under the session that bind opened. Returns
+/// the bind's status, its error, and the `delegate`'s verdict, which is
+/// `None` where no session opened for the `delegate` to ride.
+fn bare_principal_0_delegate(port: u16, frame: &str) -> (u16, Option<String>, Option<String>) {
+    let (st, body) = http(port, "POST", "/session", None, br#"{"principal":0}"#);
+    let answer = json(&body);
+    let error = answer["error"].as_str().map(str::to_owned);
+    let rode = answer["session"].as_str().map(|bare| verdict(&op_as_written(port, Some(bare), frame)));
+    (st, error, rode)
+}
+
+/// Checks that an ENFORCING board refuses the bare principal-0 `delegate`.
+///
+/// And that the signed one commits and opens the whole walk (REG-4.110,
+/// REG-4.108, REG-1.32; wire.md §Identity). The claim comes first: until
+/// it the flag is not consulted and a bare session still binds, so a walk
+/// that wrote ahead of its claim would pass through a permissive state.
+/// After it the bare principal-0 `delegate` is refused twice over and
+/// commits nothing. Its bind is the one `401 session_rejected`, so no
+/// `delegate` rides a session opened on this board. And a bare principal-0
+/// session bound before the claim, while the bind still bound, is dead at
+/// the flip: the `delegate` it presents is `unauthenticated`, permanent,
+/// its binding closed. The frontier and the head stand where they stood.
+/// The same frame from principal 0's signed session, whose subject is the
+/// claimant's set, commits: the account is seated and the frontier moves.
+/// The whole walk then runs on that board from that account: its genesis
+/// from the console, the binding, the read-back two consoles agree on, its
+/// doc 1 minted from its first signed session, its endpoint and a later
+/// one read back by a guest. Its ten rows on `/changes` testify the
+/// registrar's device key, the org's node key, an entry signature or a
+/// record's own, and none a bare session.
+#[test]
+fn the_enforcing_board_refuses_the_bare_principal_0_delegate_and_the_signed_one_opens_the_walk() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_configured(dir.path(), false);
+    let port = sd.port();
+    // Bound while the bind still binds (pre-claim the flag is not
+    // consulted), and written through by nothing.
+    let bound_before_the_claim = open_session(port, 0);
+    // The claim comes first, ahead of the walk's first write.
+    claim_board(port);
+
+    // The bare principal-0 `delegate`: refused, nothing committed.
+    let frontier = next_prefix_under(port, None, "1");
+    let before = head_position(port);
+    let frame = format!(r#"{{"op":"delegate","new_prefix":"{frontier}","new_id":{NODE_PRINCIPAL}}}"#);
+    assert_eq!(
+        bare_principal_0_delegate(port, &frame),
+        (401, Some("session_rejected".to_string()), None),
+        "the bare principal-0 delegate is refused at its bind: no bare session opens on an ENFORCING \
+         board, so no delegate rides one"
+    );
+    let (st, headers, body) = http_full(port, "POST", "/op", Some(&bound_before_the_claim), frame.as_bytes());
+    assert_eq!(st, 200);
+    let v = json(&body);
+    assert_eq!(
+        verdict(&v),
+        "unauthenticated",
+        "a bare principal-0 session bound before the claim delegates nothing after it: {v}"
+    );
+    assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");
+    assert_eq!(header(&headers, "Skepd-Session"), Some("closed"), "the flip killed the bare binding");
+    assert_eq!(next_prefix_under(port, None, "1"), frontier, "the frontier stands where it stood");
+    assert_eq!(head_position(port), before, "nothing committed");
+
+    // The signed principal-0 `delegate` (REG-4.110): the same frame commits.
+    let zero = open_signed_session(port, 0, &device_key());
+    let v = op(port, Some(&zero), &frame);
+    expect_resp(&v, "ack_addr");
+    assert!(acked_at(&v) > before, "the delegate committed past the head the refusals left: {v}");
+    let node_account = frontier;
+    assert_eq!(
+        effective_owner(port, None, &node_account),
+        Some((node_account.clone(), NODE_PRINCIPAL)),
+        "the node account seated, the id minted"
+    );
+    assert_ne!(next_prefix_under(port, None, "1"), node_account, "the frontier moved");
+
+    // The walk, whole, on the same board: the genesis and the binding from
+    // the console (REG-4.108), the read-back (REG-2.16), the node account's
+    // doc 1 and its endpoints from its own signed session (REG-1.51, REG-1.9).
+    let console = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let node_key = distinct_key(NODE_SEED);
+    let node_signed = hire(port, &console, CLAIMANT_DOC1, &node_account, NODE_PRINCIPAL, &node_key);
+    let prefix = next_prefix(&fold_bindings(port));
+    assert_eq!(prefix, "1.2");
+    let binding = deposit_binding(port, &console, &prefix, Some(&node_account), None);
+    let (one, two) = (fold_bindings(port), fold_bindings(port));
+    assert_eq!(one, two, "two consoles derive one index");
+    assert_eq!(
+        one.get(&prefix),
+        Some(&(binding, Some(node_account.clone()))),
+        "the read-back finds the account the signed delegate minted"
+    );
+    let doc1 = mint_doc_one_if_absent(port, &node_signed, &node_account);
+    let first = deposit_endpoint(port, &node_signed, &doc1, &["https://acme.example"], None);
+    let later = deposit_endpoint(port, &node_signed, &doc1, &["https://acme.example.net"], Some(&first));
+    let stored = read_link(port, None, &later);
+    assert_eq!(slot_addrs(&stored, 2), [T_ENDPOINT.to_string()]);
+    assert!(slot_addrs(&stored, 1).is_empty(), "targetless: {stored}");
+    let [atom] = &slot_addrs(&stored, 0)[..] else { panic!("the endpoint's link names one atom: {stored}") };
+    let ordinal: u64 = atom.rsplit('.').next().expect("an ordinal").parse().expect("a count");
+    let items = delivery(port, None, &doc1, ordinal, 1);
+    let text = items[0]["atom"].as_str().expect("the atom's text");
+    let record = skep_registry::parse(BodyKind::Endpoint, text.as_bytes())
+        .expect("a committed endpoint is an endpoint under the canonical rule");
+    assert_eq!(
+        record.canonical_sigless(),
+        endpoint_body(&["https://acme.example.net"], Some(&first)),
+        "a guest reads the later endpoint back"
+    );
+    assert!(record.sig.is_some(), "signed at the record grade: {text}");
+
+    // The walk's ten rows on /changes, read by a guest (wire.md §The change
+    // feed): each write testifies the signed session it rode — `key` the
+    // registrar's device key or the org's node key, the doc-1 mint its own
+    // entry signature (`attest`), a record deposit's link row neither, its
+    // record's `sig` being its signature — and no row says `bare`.
+    let (st, body) = http(port, "GET", &format!("/changes?since={before}"), None, b"");
+    assert_eq!(st, 200);
+    let page = json(&body);
+    let rows = page["changes"].as_array().expect("changes");
+    let ops: Vec<&str> = rows.iter().map(|row| row["op"].as_str().expect("an op")).collect();
+    assert_eq!(
+        ops,
+        [
+            "delegate", "insert", "make_link", "insert", "make_link", "create_new_document", "insert",
+            "make_link", "insert", "make_link",
+        ],
+        "the delegate, the genesis, the binding, the doc-1 mint and the two endpoints"
+    );
+    let registrar = Fingerprint::of(&public_key_of(&device_key())).to_hex();
+    let org = Fingerprint::of(&public_key_of(&node_key)).to_hex();
+    let (registrar, org) = (registrar.as_str(), org.as_str());
+    let testimony: Vec<&str> = rows
+        .iter()
+        .map(|row| match (row["key"].as_str(), row.get("attest")) {
+            (Some(key), None) => key,
+            (None, Some(_)) => "attest",
+            (None, None) => "its record's sig",
+            (Some(_), Some(_)) => "a key beside an attest",
+        })
+        .collect();
+    assert_eq!(
+        testimony,
+        [
+            registrar, registrar, "its record's sig", registrar, "its record's sig", "attest", org,
+            "its record's sig", org, "its record's sig",
+        ],
+        "every write of the walk rode a signed session, and none a bare one"
+    );
+    sd.shutdown();
+}
+
 /// REG-2.21 — THE TARGETLESS BINDING: a binding naming NO account is a
 /// binding-typed link with no target, the one spelling of expulsion and
 /// every retirement; it carries the same body and COMMITS, and the
@@ -269,8 +439,9 @@ fn the_registrar_binds_a_prefix_two_consoles_read_it_back_and_the_org_deposits_i
 #[test]
 fn a_targetless_binding_commits_and_reads_back_as_no_holder() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_enforcing(dir.path());
     let port = sd.port();
+    assert_enforcing(port);
     let board = registrar_board(port);
     let bound = deposit_binding(port, &board.console, "1.2", Some(&board.node_account), None);
     let retired = deposit_binding(port, &board.console, "1.2", None, Some(&bound));
@@ -291,8 +462,9 @@ fn a_targetless_binding_commits_and_reads_back_as_no_holder() {
 #[test]
 fn an_unsigned_binding_atom_above_the_claim_is_refused_at_its_insert() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_enforcing(dir.path());
     let port = sd.port();
+    assert_enforcing(port);
     let board = registrar_board(port);
     let before = head_position(port);
     let v = land(port, &board.console, CLAIMANT_DOC1, T_BINDING, &binding_body("1.2", None));
@@ -314,8 +486,9 @@ fn an_unsigned_binding_atom_above_the_claim_is_refused_at_its_insert() {
 #[test]
 fn a_binding_signed_by_a_foreign_key_or_a_malformed_sig_is_refused_at_its_link() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_enforcing(dir.path());
     let port = sd.port();
+    assert_enforcing(port);
     let board = registrar_board(port);
     let to = [board.node_account.as_str()];
     let body = binding_body("1.2", None);
@@ -348,8 +521,9 @@ fn a_binding_signed_by_a_foreign_key_or_a_malformed_sig_is_refused_at_its_link()
 #[test]
 fn a_binding_homed_outside_a_doc_1_is_refused_not_doc_one() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_enforcing(dir.path());
     let port = sd.port();
+    assert_enforcing(port);
     let board = registrar_board(port);
     let edition = published_edition(port, &board.console);
     let to = [board.node_account.as_str()];
@@ -429,8 +603,9 @@ fn the_system_accounts_doc_1_admits_no_registry_record() {
 #[test]
 fn a_form_fault_is_refused_registry_form() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_enforcing(dir.path());
     let port = sd.port();
+    assert_enforcing(port);
     let board = registrar_board(port);
     let node = board.node_account.as_str();
     let signed = |to: &[&str], ty: &str, body: &str| -> String {
@@ -489,8 +664,9 @@ fn a_form_fault_is_refused_registry_form() {
 #[test]
 fn a_body_that_is_no_record_of_the_slots_kind_is_refused_malformed_record() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_enforcing(dir.path());
     let port = sd.port();
+    assert_enforcing(port);
     let board = registrar_board(port);
     let node = board.node_account.as_str();
     let cases = [
@@ -519,8 +695,9 @@ fn a_body_that_is_no_record_of_the_slots_kind_is_refused_malformed_record() {
 #[test]
 fn a_declared_insert_under_an_unpinned_registry_row_is_refused_at_the_door() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_enforcing(dir.path());
     let port = sd.port();
+    assert_enforcing(port);
     let board = registrar_board(port);
     for row in ["1.1.0.1.0.1.0.3.58.2", "1.1.0.1.0.1.0.3.57.1", "1.1.0.1.0.1.0.3.58"] {
         let v = land(port, &board.console, CLAIMANT_DOC1, row, r#"{"type":"disavowal"}"#);
@@ -543,8 +720,9 @@ fn a_declared_insert_under_an_unpinned_registry_row_is_refused_at_the_door() {
 #[test]
 fn the_seeding_check_passes_the_shipped_lists_and_refuses_each_arm_on_a_mutated_list() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_enforcing(dir.path());
     assert!(claimed(sd.port()), "the open ran the check and the genesis completed");
+    assert_enforcing(sd.port());
     let domain: Vec<Address> = pins_outside_the_registry()
         .into_iter()
         .cloned()
@@ -595,8 +773,9 @@ fn the_seeding_check_passes_the_shipped_lists_and_refuses_each_arm_on_a_mutated_
 #[test]
 fn reg_5_47_a_nested_delegation_takes_an_endpoint_as_the_root_does() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_enforcing(dir.path());
     let port = sd.port();
+    assert_enforcing(port);
     let board = registrar_board(port);
     let v = op(
         port,

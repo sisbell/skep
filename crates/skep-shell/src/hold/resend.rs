@@ -67,9 +67,10 @@
 //! from it, no stale frame dialed first; a moved face whose hands' read goes
 //! unanswered, or is answered with no page, is said with them not read
 //! (`Hand::UNREAD`), and the walk reads them again, a step, as it meets the
-//! document, under its own session and every other session told them not
-//! read (`Holds::reread_hands`; skep #972) — a principal no session of which
-//! may write having them read so at each pass (`Holds::pay_hands_owed`).
+//! document, under its own session and every other session told or listed
+//! them not read (`Holds::reread_hands`; skep #972, #973) — a principal no
+//! session of which may write having them read so at each pass
+//! (`Holds::pay_hands_owed`).
 //!
 //! **A moved document's head is tested against its document** (§3c.5;
 //! skep #867), so the page knows what its "send again" would do: `sendable`,
@@ -204,7 +205,7 @@ use skep_client::board::{acked_addr, acked_at, frames, Answer, AtAnswer, Changes
 use skep_client::halt::Halt;
 
 use super::{
-    awaits_act, cause, line_state, millis, minted_by, unanswered, AttestedWhereOwed, BoardHold, BoardSlot, CutSend, Dialed, Hand, HandsRead, HeldState, Holds, KeptShift, LandedLine, LineOut,
+    awaits_act, cause, line_state, millis, minted_by, unanswered, AttestedWhereOwed, BoardHold, BoardSlot, CutSend, Dialed, Hand, HandsRead, HeldState, Holds, Judged, KeptShift, LandedLine, LineOut,
     MovedFace, Tested, Turn, Verdict, HAND_OVER_DEADLINE, TURN_STEPS,
 };
 use crate::held::{i_address, Anchor, Anchors, HeldLine, Reason, SpanRun};
@@ -1192,7 +1193,8 @@ impl Holds {
                     // A person's act moved the document on while the read was
                     // out: no session is told the face the read made.
                     let Some((lines, sendable)) = face else { return Step::Goes };
-                    self.emit_held(session, doc, lines, HeldState::Moved, None, MovedFace { hands: &hands, sendable });
+                    let read_for = Judged::of(judged.k, &judged.reason);
+                    self.emit_held(session, doc, lines, HeldState::Moved, None, MovedFace { hands: &hands, sendable, judged: read_for.as_ref() });
                 }
                 HandsRead::Unanswered => {
                     self.note_unanswered(&mut self.lock(board_reference), None);
@@ -1264,7 +1266,8 @@ impl Holds {
             if unanswered {
                 self.note_unanswered(&mut self.lock(board_reference), None);
             }
-            self.emit_held(session, doc, lines, HeldState::Moved, None, MovedFace { hands: &hands, sendable });
+            let read_for = Judged::of(k, &head.reason);
+            self.emit_held(session, doc, lines, HeldState::Moved, None, MovedFace { hands: &hands, sendable, judged: read_for.as_ref() });
         }
         if unanswered {
             Step::Unanswered
@@ -1798,6 +1801,7 @@ impl Holds {
                             // the document moved, its hands not read.
                             let Some((hands, unanswered)) = self.hands_since_typed_state(session, &line.doc, Some(line.k), &reason).face() else { return Step::Stops };
                             self.say(format_args!("line {} on {} was not shifted ({why}); the document is held as moved", line.k, line.doc));
+                            let read_for = Judged::of(line.k, &reason);
                             self.mark_moved(board_reference, principal, &line.doc, reason.refusal.map(|verdict| (line.k, verdict)));
                             if hands.contains(&Hand::UNREAD) {
                                 self.with_principal(board_reference, principal, |ph| ph.hands_owed.insert(line.doc.clone(), line.k));
@@ -1807,7 +1811,8 @@ impl Holds {
                             }
                             let sendable = self.note_shift_refused(board_reference, principal, &line.doc, line.k, &why);
                             drop(out);
-                            self.emit_held(session, &line.doc, self.lines_on(board_reference, principal, &line.doc), HeldState::Moved, None, MovedFace { hands: &hands, sendable });
+                            let face = MovedFace { hands: &hands, sendable, judged: read_for.as_ref() };
+                            self.emit_held(session, &line.doc, self.lines_on(board_reference, principal, &line.doc), HeldState::Moved, None, face);
                             return if unanswered { Step::Unanswered } else { Step::Stops };
                         }
                     }

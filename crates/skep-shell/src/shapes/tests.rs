@@ -80,7 +80,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("Answer", json!({"id": "m-0", "value": "phone"})),
         ("Cancel", json!({"id": "m-0"})),
         ("HeldAnswer", json!({"resp": "held", "held": 1, "cause": "unreachable", "unwritable": "No space left on device (os error 28)", "unwritable_class": "full"})),
-        ("HeldRow", json!({"held": 1, "doc": "1.0.1.0.1", "base": 5, "frame": {"op": "delete"}, "anchors": {"before": "1.0.1.0.1.0.1.3", "after": null, "span": [{"start": "1.0.1.0.1.0.1.4", "width": "2"}]}, "cause": "moved", "sent": false, "time": 1, "sendable": true, "unwritable": "No space left on device (os error 28)", "unwritable_class": "full"})),
+        ("HeldRow", json!({"held": 1, "doc": "1.0.1.0.1", "base": 5, "frame": {"op": "delete"}, "anchors": {"before": "1.0.1.0.1.0.1.3", "after": null, "span": [{"start": "1.0.1.0.1.0.1.4", "width": "2"}]}, "cause": "moved", "sent": false, "time": 1, "sendable": true, "hands": [{"key": "other", "fingerprint": "ab"}], "unwritable": "No space left on device (os error 28)", "unwritable_class": "full"})),
         (
             "Anchors",
             crate::held::Anchors::of(&json!({"before": "1.0.1.0.1.0.1.3", "after": {"burst": "b-1", "offset": 2}, "span": [{"start": "1.0.1.0.1.0.1.4", "width": "2"}]}))
@@ -241,6 +241,7 @@ fn the_file_names_every_shape_call_and_event() {
         "export interface LandedLine {\n  held: number;\n  burst?: string;\n  at?: number;\n  addr?: string;\n}\n",
         "  anchors?: Anchors;\n",
         "  sendable?: boolean;\n",
+        "  sendable?: boolean;\n  hands?: Hand[];\n  unwritable?: string;\n",
         "  standing?: BaseStanding;\n",
         "  race?: RaceKey;\n  base?: string;\n  standing?: BaseStanding;\n",
         "  left_behind: string[];\n",

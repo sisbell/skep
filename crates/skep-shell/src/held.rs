@@ -2345,6 +2345,13 @@ impl HeldQueue {
         self.lines.count_on(doc)
     }
 
+    /// Returns each document a line stands on, in no order.
+    ///
+    /// It reads the documents' entries alone, no line copied.
+    pub fn docs(&self) -> impl Iterator<Item = &str> + '_ {
+        self.lines.docs.keys().map(String::as_str)
+    }
+
     /// Returns the frame of the newest line standing on `doc` whose envelope
     /// `id` is `id`: the line a piece naming that `id` binds to (skep #969).
     pub fn frame_named(&self, doc: &str, id: &str) -> Option<&Value> {

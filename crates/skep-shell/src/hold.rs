@@ -124,8 +124,9 @@
 //! is its silence, and any answer to one, a refusal among them, is the board
 //! answering ([`Holds::note_health_read`]). A request of the hold's the board
 //! gives no answer to — a burst's first dial, a resend's read, send, shift read
-//! or read of the hands, a drop's or a landing's read of the hands, the probe's
-//! read of the board's head — marks the board unanswered until that verdict:
+//! or read of the hands, a drop's, a landing's or the held list's read of the
+//! hands, the probe's read of the board's head — marks the board unanswered
+//! until that verdict:
 //! nothing more of the hold's is dialed there, a burst is held at once, and a
 //! send the request cut is owed to the verdict, a failed send of its line where
 //! the verdict finds the board answering — the line's own failure — and none
@@ -136,7 +137,19 @@
 //! none where it goes unanswered: a shift's read leaves the shift untried, its
 //! verdict kept, and a moved face whose hands' read goes unanswered names them
 //! not read (`Hand`), read again at the board's answer for every session told
-//! so.
+//! or listed so.
+//!
+//! **The hands a moved face names** (§3c.5, §4b.2; skep #973). Every face that
+//! tells a session a document stands moved — a `held` event, or the first row
+//! of the document's lines in `held(session)` ([`Holds::lines`]) — names the
+//! hands of the verdict the document stands on now, read for that session, or
+//! the one hand `unread`, owed to the walk, which reads them again. The
+//! session's memory keeps beside each `moved` face the verdict its hands were
+//! read for ([`Judged`]): a face for another verdict is no face of the
+//! document as it stands, so the hands are read again and never repeated. The
+//! held list reads the hands of each moved document its session's memory holds
+//! none for, once the board's lock is let go, and enters what its rows name in
+//! that memory, saying no event.
 //!
 //! **The board's state** (§3c.3, §4b.2; P37; skep #865). The page is told what
 //! stands at a board before a write meets it: one state, the most severe that
@@ -251,9 +264,9 @@
 //! probe says each document whose lines the retry has written, the event
 //! repeating what it last told but for the two members
 //! ([`Holds::say_landed`]), so the page's face lifts as the copy lands; a
-//! session told no face of a document that stands moved hears it with its
-//! hands, read once the board's lock is let go, or named not read (skep
-//! #972). What
+//! session told no face of a document that stands moved, or another move's,
+//! hears it with the hands of the verdict it stands on, read once the board's
+//! lock is let go, or named not read (skep #972, #973). What
 //! a close leaves owed is the native side's read ([`Holds::copies_owed`]),
 //! a line whose `done` is owed staying off the rows, which list the queue.
 //!
@@ -522,8 +535,8 @@ mod cause {
 /// Where no page of the rows named them — the board gave the read no answer
 /// or answered it with no page, the read met the death signal, or none was
 /// made — the one hand is `unread`: the hands not read yet, apart from a
-/// hand lost, read again for every session told so (§3c.5's THE SHIFT (6);
-/// skep #863, #972).
+/// hand lost, read again for every session told or listed so (§3c.5's THE
+/// SHIFT (6); skep #863, #972, #973).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hand {
     /// `own`, `other`, `bare`, `lost` or `unread`.
@@ -602,14 +615,41 @@ impl HandsRead {
 
 /// What a `moved` event says beside its state (§3c.5; §4b.2's `held` event).
 ///
-/// It is the hands whose rows moved the document, and `sendable`, whether a
+/// It is the hands whose rows moved the document, `sendable`, whether a
 /// `send` would now shift the document's first moved line, where the shell
-/// knows ([`Tested`]). The default says neither, as every other state's
-/// event does.
+/// knows ([`Tested`]), and `judged`, the verdict the hands were read for,
+/// which the session's memory keeps beside them ([`HeldSaid`]; skep #973).
+/// The default says none of them, as every other state's event does.
 #[derive(Debug, Clone, Copy, Default)]
 struct MovedFace<'h> {
     hands: &'h [Hand],
     sendable: Option<bool>,
+    judged: Option<&'h Judged>,
+}
+
+/// The board's verdict a moved face's hands are read for (§3c.5; skep #973).
+///
+/// It is the line the board refused as typed against an older state of its
+/// document, by its ordinal, and the `arrangement_moved` the line carries,
+/// whose typed state the hands are read since ([`typed_state`]). A session's
+/// memory keeps it beside the `moved` face it was told ([`HeldSaid`]): a
+/// face told for another verdict names no hand of the document as it stands
+/// now, and its hands are read again ([`Holds::hands_owed_to`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Judged {
+    k: u64,
+    verdict: Value,
+}
+
+impl Judged {
+    /// Returns the verdict line `k`, held for `reason`, carries.
+    ///
+    /// It answers none where `reason` is no `moved` one carrying a verdict
+    /// whose typed state reads ([`typed_state`]): no read names hands for it.
+    fn of(k: u64, reason: &Reason) -> Option<Judged> {
+        typed_state(reason)?;
+        Some(Judged { k, verdict: reason.refusal.clone()? })
+    }
 }
 
 /// A held line that left the store kept, as the `held` event names it.
@@ -655,9 +695,10 @@ impl LandedLine {
 /// A `held` event a moved face owes, its hands not yet read.
 ///
 /// It is owed where `doc` stands moved on the board's verdict and the last
-/// face told the session of it is not `moved` ([`Holds::hands_owed_to`]):
-/// the session re-opened since, another of the principal's, or told a burst
-/// held behind. [`Holds::say_standing`] answers it, under the board's lock,
+/// face told the session of it is no `moved` face for that verdict
+/// ([`Holds::hands_owed_to`]): the session re-opened since, another of the
+/// principal's, told a burst held behind, or told an earlier move's hands
+/// (skep #973). [`Holds::say_standing`] answers it, under the board's lock,
 /// for a person's act (skep #960), and [`Holds::say_landed`] for a landing
 /// the store's retry wrote (skep #972). `k` and `reason` are the head line
 /// the verdict rides as it stood, and `landed` the line the act kept, where
@@ -1825,9 +1866,11 @@ type HeldKey = (String, String, String);
 ///
 /// It is the members the event repeats where a retry lands
 /// ([`Holds::say_landed`]) and those a repeat is judged by
-/// ([`HeldSaid::repeated_by`]). The line a keep names is none of them: it
-/// is said on the one event that keeps it ([`LandedLine`]), and no repeat
-/// says it again.
+/// ([`HeldSaid::repeated_by`]), a `moved` face's verdict among them, the one
+/// its hands were read for ([`Judged`]; skep #973), or what the held list
+/// named of the document, which tells no event ([`Holds::lines`]). The line
+/// a keep names is none of them: it is said on the one event that keeps it
+/// ([`LandedLine`]), and no repeat says it again.
 #[derive(Debug, Clone)]
 struct HeldSaid {
     state: HeldState,
@@ -1836,6 +1879,7 @@ struct HeldSaid {
     hands: Vec<Hand>,
     sendable: Option<bool>,
     unwritable: Option<Unwritable>,
+    judged: Option<Judged>,
 }
 
 impl HeldSaid {
@@ -1845,17 +1889,31 @@ impl HeldSaid {
     /// `face`.
     fn of(lines: LinesOn, state: HeldState, cause: Option<&str>, face: MovedFace<'_>) -> HeldSaid {
         let LinesOn { held, unwritable } = lines;
-        HeldSaid { state, held, cause: cause.map(str::to_owned), hands: face.hands.to_vec(), sendable: face.sendable, unwritable }
+        HeldSaid { state, held, cause: cause.map(str::to_owned), hands: face.hands.to_vec(), sendable: face.sendable, unwritable, judged: face.judged.cloned() }
     }
 
     /// Returns whether `now` would say nothing this has not said.
     ///
     /// It compares the state, the count, whether the hands are named not
-    /// read, the `sendable` and why a line stands off disk. The cause and the
-    /// hands named are not asked: a document's state is said as it changes
-    /// (skep #727).
+    /// read, the `sendable`, why a line stands off disk and the verdict a
+    /// moved face's hands were read for, so a face for another verdict is
+    /// said (skep #973). The cause and the hands named are not asked: a
+    /// document's state is said as it changes (skep #727).
     fn repeated_by(&self, now: &HeldSaid) -> bool {
-        self.state == now.state && self.held == now.held && self.hands.contains(&Hand::UNREAD) == now.hands.contains(&Hand::UNREAD) && self.sendable == now.sendable && self.unwritable == now.unwritable
+        self.state == now.state
+            && self.held == now.held
+            && self.hands.contains(&Hand::UNREAD) == now.hands.contains(&Hand::UNREAD)
+            && self.sendable == now.sendable
+            && self.unwritable == now.unwritable
+            && self.judged == now.judged
+    }
+
+    /// Returns whether this is a `moved` face told for `judged`.
+    ///
+    /// Its hands are then the ones read for that verdict; a face told for
+    /// another names no hand of the document as it stands (skep #973).
+    fn moved_for(&self, judged: Option<&Judged>) -> bool {
+        self.state == HeldState::Moved && self.judged.as_ref() == judged
     }
 }
 
@@ -2167,15 +2225,16 @@ struct PrincipalHold {
     ///
     /// The moved face stands on the verdict, its hands said not read
     /// ([`Hand::UNREAD`]): their read went unanswered or was answered with no
-    /// page, or, where a person's drop or a landing owed them
-    /// ([`Holds::say_with_hands`]; skep #960, #972), met the death signal or
-    /// was not made. The walk reads them again as it meets the document, and
-    /// says the moved face once more with the hands it reads under its own
-    /// session and under every other session of the principal's told them
-    /// not read; a principal no session of which may write has them read so
-    /// at each pass (`resend`'s `reread_hands`). Taken out once every such
-    /// read has named them, where the document is moved no more, and where
-    /// its line leaves the queue. In memory.
+    /// page, or, where a person's drop, a landing or the held list owed them
+    /// ([`Holds::say_with_hands`], [`Holds::lines`]; skep #960, #972, #973),
+    /// met the death signal or was not made. The walk reads them again as it
+    /// meets the document, and says the moved face once more with the hands
+    /// it reads under its own session and under every other session of the
+    /// principal's told or listed them not read; a principal no session of
+    /// which may write has them read so at each pass (`resend`'s
+    /// `reread_hands`). Taken out once every such read has named them, where
+    /// the document is moved no more, and where its line leaves the queue.
+    /// In memory.
     hands_owed: HashMap<String, u64>,
     /// Each moved document's shift test, by the document (§3c.5; skep #867).
     ///
@@ -2393,6 +2452,14 @@ impl PrincipalHold {
     fn lines_on(&self, doc: &str) -> LinesOn {
         let waiting = self.queue.waiting().filter(|_| self.queue.waits_on(doc));
         LinesOn { held: self.count(doc), unwritable: waiting.map(|waiting| Unwritable::from(&waiting.refusal())) }
+    }
+
+    /// Returns the verdict `doc` stands moved on now, where it stands on one.
+    ///
+    /// It is the one its first line carries ([`Judged::of`]; skep #973).
+    fn judged_on(&self, doc: &str) -> Option<Judged> {
+        let (k, reason) = self.queue.reasons_on(doc).next()?;
+        Judged::of(k, reason)
     }
 
     /// Returns whether line `k` stands moved at the head of `doc`.
@@ -2870,18 +2937,19 @@ pub struct Holds {
     boards: HashMap<String, BoardSlot>,
     /// The `held` event last emitted per (board, session, document).
     ///
-    /// It is its state, its count, whether it named the hands not read, and
-    /// its `sendable` ([`Holds::emit_said`]).
+    /// It is what the event said ([`HeldSaid`]; [`Holds::emit_said`]), a
+    /// `moved` face's verdict among it, or what the held list named of the
+    /// document, which tells no event ([`Holds::remember`]; skep #973).
     ///
     /// The event goes out once per change of a document's state (skep #727): an
     /// emit of what was last emitted for its key is none, so a moved face whose
-    /// hands are read at last is said again with them (skep #863), and one
-    /// naming a line kept is said whatever was last told (skep #968). A leaf
-    /// lock, taken inside `emit_said` and `told` alone and never held while
-    /// another lock is taken — the emit is made under the board's lock from
-    /// `resolve` and a hold among others, so the memory lives beside the
-    /// boards' locks, not under one. A document kept with no line left clears
-    /// its key.
+    /// hands are read at last is said again with them (skep #863), one for
+    /// another verdict is said (skep #973), and one naming a line kept is said
+    /// whatever was last told (skep #968). A leaf lock, taken inside
+    /// `emit_said`, `remember` and `told` alone and never held while another
+    /// lock is taken — the emit is made under the board's lock from `resolve`
+    /// and a hold among others, so the memory lives beside the boards' locks,
+    /// not under one. A document kept with no line left clears its key.
     last_emitted: Mutex<HashMap<HeldKey, HeldSaid>>,
     /// The milliseconds a suite moved the clock forward ([`Holds::now`]).
     ///
@@ -3329,15 +3397,17 @@ impl Holds {
     /// `sessions` of `principal`'s, without the two members, so the face the
     /// page drew from that answer lifts. The event repeats what it last told
     /// the session — its state, its cause, its hands and its `sendable`, so
-    /// a document mid-resend stays `sending` and a moved one keeps its hands
-    /// — beside today's count. Where it told the session nothing, or no line
-    /// stands, the queue gives the state ([`state_on`]) and the head's cause;
-    /// a session told nothing of a document no line stands on hears nothing.
-    /// A session told nothing of a document that stands moved on the board's
-    /// verdict hears nothing here either: its event is owed and answered,
-    /// said with the hands read once the board's lock is let go
-    /// ([`HandsOwed`]; skep #972). The landing's copy may have been made by
-    /// any act, so the event follows it within one [`PROBE_CADENCE`].
+    /// a document mid-resend stays `sending` and a moved one keeps the hands
+    /// read for the verdict it carries now — beside today's count. Where it
+    /// told the session nothing, no line stands, or the face it told is a
+    /// `moved` one for another verdict than the document stands on now, the
+    /// queue gives the state ([`state_on`]) and the head's cause; a session
+    /// told nothing of a document no line stands on hears nothing. A session
+    /// told no `moved` face for the verdict a document stands moved on hears
+    /// nothing here either, whatever it was told: its event is owed and
+    /// answered, said with the hands read once the board's lock is let go
+    /// ([`HandsOwed`]; skep #972, #973). The landing's copy may have been
+    /// made by any act, so the event follows it within one [`PROBE_CADENCE`].
     #[must_use = "a landing's owed `held` event is said by `Holds::say_with_hands` once the board's lock is let go"]
     fn say_landed(&self, principal: u64, ph: &mut PrincipalHold, sessions: &[Arc<SessionEntry>]) -> Vec<(Arc<SessionEntry>, HandsOwed)> {
         let mut owed = Vec::new();
@@ -3345,25 +3415,27 @@ impl Holds {
         for doc in landed {
             ph.unwritable_docs.remove(&doc);
             let lines = ph.lines_on(&doc);
+            let judged = ph.judged_on(&doc);
             for session in sessions.iter().filter(|session| session.facts.principal == principal) {
                 let told = self.told(session, &doc);
                 if told.is_none() && lines.held == 0 {
                     continue;
                 }
-                let (state, cause, hands, sendable) = match told.filter(|_| lines.held > 0) {
-                    Some(told) => (told.state, told.cause, told.hands, told.sendable),
+                if let Some((k, reason)) = self.hands_owed_to(session, ph, &doc) {
+                    owed.push((Arc::clone(session), HandsOwed { doc: doc.clone(), k, reason, landed: None }));
+                    continue;
+                }
+                let repeats = told.filter(|told| lines.held > 0 && (told.state != HeldState::Moved || told.moved_for(judged.as_ref())));
+                let (state, cause, hands, sendable, said_for) = match repeats {
+                    Some(told) => (told.state, told.cause, told.hands, told.sendable, told.judged),
                     None => {
-                        if let Some((k, reason)) = self.hands_owed_to(session, ph, &doc) {
-                            owed.push((Arc::clone(session), HandsOwed { doc: doc.clone(), k, reason, landed: None }));
-                            continue;
-                        }
                         let state = state_on(ph, &doc);
                         let cause = ph.queue.reasons_on(&doc).next().map(|(_, reason)| reason.cause.clone()).filter(|_| state != HeldState::Moved);
                         let sendable = if state == HeldState::Moved && session.may_write() { ph.sendable_told(&doc) } else { None };
-                        (state, cause, Vec::new(), sendable)
+                        (state, cause, Vec::new(), sendable, judged.clone().filter(|_| state == HeldState::Moved))
                     }
                 };
-                self.emit_held(session, &doc, lines.clone(), state, cause.as_deref(), MovedFace { hands: &hands, sendable });
+                self.emit_held(session, &doc, lines.clone(), state, cause.as_deref(), MovedFace { hands: &hands, sendable, judged: said_for.as_ref() });
             }
         }
         owed
@@ -4097,10 +4169,12 @@ impl Holds {
                         self.note_unanswered(&mut self.lock(board_reference), None);
                     }
                     self.say(format_args!("line {k} on {doc} was not shifted ({why}); the document is held as moved"));
+                    let judged = Judged::of(k, &held_moved);
                     self.mark_moved(board_reference, principal, &doc, Some((k, verdict)));
                     let sendable = self.note_shift_refused(board_reference, principal, &doc, k, &why);
                     drop(out);
-                    self.emit_held(session, &doc, self.lines_on(board_reference, principal, &doc), HeldState::Moved, None, MovedFace { hands: &hands, sendable });
+                    let face = MovedFace { hands: &hands, sendable, judged: judged.as_ref() };
+                    self.emit_held(session, &doc, self.lines_on(board_reference, principal, &doc), HeldState::Moved, None, face);
                     return OpAnswer::Answered(Ok(answer));
                 }
             };
@@ -4216,18 +4290,22 @@ impl Holds {
     /// the verdict, its hands named not read ([`Hand::UNREAD`]), read again at
     /// the board's answer, and the board marked unanswered (skep #863), and
     /// where the board answers it with no page they are named not read too,
-    /// read again as the walk meets the document (skep #972). A burst with no
+    /// read again as the walk meets the document (skep #972). The moved face
+    /// names the verdict its hands were read for, the line entered and the
+    /// board's refusal it carries ([`Judged`]; skep #973). A burst with no
     /// anchors held `moved` never shifts, so it is entered `sendable` false
     /// ([`Tested`]; skep #867).
     pub fn hold(&self, session: &SessionEntry, burst: Burst, reason: Reason, failed: Option<String>, base: u64) -> OpAnswer {
         let Some((hands, unanswered)) = self.hands_since_typed_state(session, &burst.doc, None, &reason).face() else { return self.hold_at_death(session, burst, failed, base) };
         let unanchored = burst.anchors.is_none();
+        let read_for = reason.clone();
         let mut board_hold = self.lock(&session.board_reference);
         if unanswered {
             self.note_unanswered(&mut board_hold, None);
         }
         OpAnswer::Answered(self.enter_line(&mut board_hold, session, burst, reason, failed, base).map(|entered| {
-            let mut face = MovedFace { hands: &hands, sendable: None };
+            let judged = Judged::of(entered.k, &read_for);
+            let mut face = MovedFace { hands: &hands, sendable: None, judged: judged.as_ref() };
             if let Some(ph) = board_hold.principals.get_mut(&session.facts.principal) {
                 if hands.contains(&Hand::UNREAD) {
                     ph.hands_owed.insert(entered.doc.clone(), entered.k);
@@ -4527,19 +4605,144 @@ impl Holds {
     /// Answers `held(session)`: the acting principal's held lines at its board.
     ///
     /// They come in resend order (§4b.1), from this principal's file and no
-    /// other (P39).
+    /// other (P39). The first line of a document that stands moved names the
+    /// hands of the verdict it stands on now (`hands`), as a `moved` event
+    /// names them (skep #973): those the session's memory holds for that
+    /// verdict, named with no read; else read for this session once the
+    /// board's lock is let go ([`Holds::read_listed_hands`]), the lock taken
+    /// again to build the rows. What the row names is entered in the
+    /// session's memory as a `moved` face for that verdict, saying no event
+    /// ([`Holds::remember`]). Where no page named the hands — the read went
+    /// unanswered, was answered with no page or met the death signal, or
+    /// none was made at a board not answering or an own node stopped, or the
+    /// document moved again while the read was out — the row names them
+    /// `unread`, and the document owes them to the walk
+    /// ([`PrincipalHold::hands_owed`]), which names them to the session as
+    /// the board answers.
+    ///
+    /// **Its cost** (SP-23): one `/changes` page for each document that
+    /// stands moved on a verdict the session's memory holds no face for, and
+    /// the key labels of an account a hand of another device's belongs to,
+    /// read once per account (`labels`); none at a board not answering or an
+    /// own node stopped, and none after a read the board gave no answer to.
+    /// The death signal a read meets is met again at the session's next
+    /// request.
     ///
     /// # Errors
     ///
-    /// Returns `store_halted` where P38 halted the file.
+    /// Returns `store_halted` where P38 halted the file, at the principal's
+    /// door before the reads or after them.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the session's board is none the holds were opened over
+    /// (the type's precondition).
     pub fn lines(&self, session: &SessionEntry) -> Result<Value, Refusal> {
-        let mut board_hold = self.lock(&session.board_reference);
+        let board_reference = session.board_reference.as_str();
+        // The moved documents whose hands the session's memory holds for no
+        // verdict they stand on now, read once the lock is let go.
+        let owed = {
+            let mut board_hold = self.lock(board_reference);
+            let ph: &PrincipalHold = self.principal_hold(&mut board_hold, session)?;
+            let mut owed: Vec<(String, u64, Reason)> = ph.queue.docs().filter_map(|doc| self.hands_owed_to(session, ph, doc).map(|(k, reason)| (doc.to_string(), k, reason))).collect();
+            owed.sort_by_key(|(_, k, _)| *k);
+            owed
+        };
+        let mut read = self.read_listed_hands(session, owed);
+        let mut board_hold = self.lock(board_reference);
         let ph = self.principal_hold(&mut board_hold, session)?;
+        let docs: Vec<String> = ph.queue.docs().map(str::to_owned).collect();
+        // The hands each moved document's first row names, by that line.
+        let mut named: HashMap<u64, Vec<Hand>> = HashMap::new();
+        for doc in docs {
+            let Some(judged) = ph.judged_on(&doc) else { continue };
+            let face = match self.told(session, &doc).filter(|told| told.moved_for(Some(&judged))) {
+                Some(face) => face,
+                None => {
+                    // The hands a read named for the line standing at the head
+                    // as it was read, else none read yet for its verdict.
+                    let stands = |(k, reason, _): &(u64, Reason, Vec<Hand>)| *k == judged.k && ph.queue.reason(*k) == Some(reason);
+                    let hands = read.remove(&doc).filter(stands).map_or_else(|| vec![Hand::UNREAD], |(_, _, hands)| hands);
+                    let sendable = if session.may_write() { ph.queue.line(judged.k).and_then(|line| ph.sendable_of(&line)) } else { None };
+                    self.remember(session, &doc, HeldSaid::of(ph.lines_on(&doc), HeldState::Moved, None, MovedFace { hands: &hands, sendable, judged: Some(&judged) }))
+                }
+            };
+            if face.hands.contains(&Hand::UNREAD) {
+                ph.hands_owed.insert(doc, judged.k);
+            }
+            named.insert(judged.k, face.hands);
+        }
         // The keyless session's `send` is refused (§4b.1): it reads no mark.
         let may_write = session.may_write();
         let unwritable = ph.queue.waiting().map(|waiting| Unwritable::from(&waiting.refusal()));
-        let row = |line: &HeldLine| line_json(line, may_write.then(|| ph.sendable_of(line)).flatten(), unwritable.as_ref().filter(|_| ph.queue.off_disk(line.k)));
+        let row = |line: &HeldLine| {
+            let sendable = may_write.then(|| ph.sendable_of(line)).flatten();
+            line_json(line, sendable, named.get(&line.k).map(Vec::as_slice), unwritable.as_ref().filter(|_| ph.queue.off_disk(line.k)))
+        };
         Ok(Value::Array(ph.queue.lines().iter().map(row).collect()))
+    }
+
+    /// Reads the hands of each moved document `owed` names, for `session`.
+    ///
+    /// It is the held list's reads ([`Holds::lines`]; skep #973), made with no
+    /// lock held, each as a moved face's is
+    /// ([`Holds::hands_since_typed_state`]) for the line the verdict rides and
+    /// its reason as the list's first pass found them, and only while the
+    /// board answers and the own node runs (§3c.5). A read the board gives no
+    /// answer to marks it unanswered, and no read is made after it, nor after
+    /// the death signal. Each document is answered beside the line read for,
+    /// its hands those a page named, else the one hand `unread`.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the session's board is none the holds were opened over
+    /// (the type's precondition).
+    fn read_listed_hands(&self, session: &SessionEntry, owed: Vec<(String, u64, Reason)>) -> HashMap<String, (u64, Reason, Vec<Hand>)> {
+        let board_reference = session.board_reference.as_str();
+        let mut reads = true;
+        let dials = || {
+            let board_hold = self.lock(board_reference);
+            board_hold.answers() && !board_hold.node_stopped
+        };
+        owed.into_iter()
+            .map(|(doc, k, reason)| {
+                let hands = match (reads && dials()).then(|| self.hands_since_typed_state(session, &doc, Some(k), &reason)) {
+                    Some(HandsRead::Named(hands)) => hands,
+                    Some(HandsRead::Unanswered) => {
+                        self.note_unanswered(&mut self.lock(board_reference), None);
+                        reads = false;
+                        vec![Hand::UNREAD]
+                    }
+                    Some(HandsRead::Died) => {
+                        reads = false;
+                        vec![Hand::UNREAD]
+                    }
+                    Some(HandsRead::Unread) | None => vec![Hand::UNREAD],
+                };
+                (doc, (k, reason, hands))
+            })
+            .collect()
+    }
+
+    /// Enters `said`, a `moved` face the held list named, in the memory.
+    ///
+    /// It is `session`'s memory of `doc` ([`Holds::last_emitted`]), and no
+    /// event is said: the list tells what it names on its rows (skep #973).
+    /// A `moved` face for the same verdict the memory holds — one an event
+    /// told the session while the list read — stands; else `said` is
+    /// entered. It answers the face that stands.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the memory's lock is poisoned.
+    fn remember(&self, session: &SessionEntry, doc: &str, said: HeldSaid) -> HeldSaid {
+        let key = (session.board_reference.clone(), session.reference.clone(), doc.to_string());
+        let mut last = self.last_emitted.lock().expect("the held events' memory");
+        if let Some(told) = last.get(&key).filter(|told| told.moved_for(said.judged.as_ref())) {
+            return told.clone();
+        }
+        last.insert(key, said.clone());
+        said
     }
 
     /// Answers `held.show(session)`, the halt face's own act (§3c.3).
@@ -4872,9 +5075,10 @@ impl Holds {
     /// It says what stands under the session that acted, the hands as the
     /// session was told them ([`Holds::say_as_told`]), save where the act
     /// left `doc` moved on the board's verdict and the last face told the
-    /// session of it is not `moved`: no face it was told names the hands, so
-    /// it says nothing and answers the event owed, said once the board's
-    /// lock is let go with the hands read ([`HandsOwed`]; skep #960).
+    /// session of it is no `moved` face for that verdict: no face it was told
+    /// names the hands, so it says nothing and answers the event owed, said
+    /// once the board's lock is let go with the hands read ([`HandsOwed`];
+    /// skep #960, #973).
     #[must_use = "an event owed is said by `Holds::say_with_hands` once the board's lock is let go"]
     fn say_standing(&self, session: &SessionEntry, ph: &mut PrincipalHold, doc: &str, landed: Option<&LandedLine>) -> Option<HandsOwed> {
         if let Some((k, reason)) = self.hands_owed_to(session, ph, doc) {
@@ -4884,59 +5088,67 @@ impl Holds {
         None
     }
 
-    /// Returns the head line whose verdict a moved face of `doc` owes
-    /// `session` its hands by (skep #960, #972).
+    /// Returns the head line a moved face of `doc` owes `session` its hands by.
     ///
-    /// It is the document's first line, with its reason, where `doc` stands
-    /// moved, that line carries the board's verdict ([`typed_state`]), and the
-    /// last face told `session` of `doc` is not `moved`: no face it was told
-    /// names the hands. It answers none otherwise — a face told the session
+    /// It is skep #960's, #972's and #973's debt: the document's first line,
+    /// with its reason, where that line
+    /// carries the board's verdict ([`Judged::of`]) and the session's memory
+    /// of `doc` holds no `moved` face for it: no face it was told, or the
+    /// held list named, names that verdict's hands, an earlier move's among
+    /// those it does not. It answers none otherwise — a face of the session's
     /// names them, or no read could.
     fn hands_owed_to(&self, session: &SessionEntry, ph: &PrincipalHold, doc: &str) -> Option<(u64, Reason)> {
-        if state_on(ph, doc) != HeldState::Moved || self.told(session, doc).is_some_and(|told| told.state == HeldState::Moved) {
+        let (k, reason) = ph.queue.reasons_on(doc).next()?;
+        let judged = Judged::of(k, reason)?;
+        if self.told(session, doc).is_some_and(|told| told.moved_for(Some(&judged))) {
             return None;
         }
-        ph.queue.reasons_on(doc).next().filter(|(_, reason)| typed_state(reason).is_some()).map(|(k, reason)| (k, reason.clone()))
+        Some((k, reason.clone()))
     }
 
     /// Emits the `held` event for what stands on `doc`, its hands as told.
     ///
     /// It says what stands ([`state_on`]) under `session`, a moved face its
-    /// `sendable` and the hands the face last told the session of `doc`
-    /// named, none under the keyless session, which is offered no `send`
-    /// (§4b.1), and names `landed`, the line the act kept, where it kept one
-    /// (skep #968). `emit_said` touches the bus alone, so it is safe under
-    /// the board's lock.
+    /// `sendable`, none under the keyless session, which is offered no
+    /// `send` (§4b.1), the verdict it stands on and the hands the session's
+    /// memory holds for that verdict, never those an earlier move's face
+    /// named (skep #973), and names `landed`, the line the act kept, where it
+    /// kept one (skep #968). `emit_said` touches the bus alone, so it is safe
+    /// under the board's lock.
     fn say_as_told(&self, session: &SessionEntry, ph: &mut PrincipalHold, doc: &str, landed: Option<&LandedLine>) {
         let state = state_on(ph, doc);
         let moved = state == HeldState::Moved;
+        let judged = if moved { ph.judged_on(doc) } else { None };
         let sendable = if moved && session.may_write() { ph.sendable_told(doc) } else { None };
-        let hands = if moved { self.told(session, doc).map_or_else(Vec::new, |told| told.hands) } else { Vec::new() };
-        self.emit_said(session, doc, HeldSaid::of(ph.lines_on(doc), state, None, MovedFace { hands: &hands, sendable }), landed);
+        let told = if moved { self.told(session, doc).filter(|told| told.moved_for(judged.as_ref())) } else { None };
+        let hands = told.map_or_else(Vec::new, |told| told.hands);
+        self.emit_said(session, doc, HeldSaid::of(ph.lines_on(doc), state, None, MovedFace { hands: &hands, sendable, judged: judged.as_ref() }), landed);
     }
 
     /// Says the `held` event a moved face owes, its hands read first.
     ///
     /// A person's act or a landing left `owed.doc` moved, and no face told
-    /// `session` named its hands ([`HandsOwed`]; skep #960, #972). It runs
-    /// with no lock held. Where the board answers and the own node runs, the
-    /// hands are read for the line the board's verdict rides, as every moved
-    /// face's are ([`Holds::hands_since_typed_state`]); elsewhere no read is
-    /// made, nothing more of the hold's dialed at a board not answering
-    /// (§3c.5). The event is said under the board's lock again. Where that
-    /// line stands at the head as it stood, it says the document `moved` with
-    /// the hands read, its `sendable` and `landed` beside them — or, where no
-    /// page named them, the read going unanswered, answered with no page,
-    /// meeting the death signal or not made, with the hands not read
-    /// ([`Hand::UNREAD`], SP-14), the document owing them to the walk
-    /// ([`PrincipalHold::hands_owed`]) and a board that gave the read no
-    /// answer marked unanswered. Where the document moved on while the read
+    /// `session` named the hands of the verdict it stands on ([`HandsOwed`];
+    /// skep #960, #972, #973). It runs with no lock held. Where the board
+    /// answers and the own node runs, the hands are read for the line the
+    /// board's verdict rides, as every moved face's are
+    /// ([`Holds::hands_since_typed_state`]); elsewhere no read is made,
+    /// nothing more of the hold's dialed at a board not answering (§3c.5).
+    /// The event is said under the board's lock again. Where that line stands
+    /// at the head as it stood, it says the document `moved` with the hands
+    /// read and the verdict they were read for, its `sendable` and `landed`
+    /// beside them — or, where no page named them, the read going unanswered,
+    /// answered with no page, meeting the death signal or not made, with the
+    /// hands not read ([`Hand::UNREAD`], SP-14), the document owing them to
+    /// the walk ([`PrincipalHold::hands_owed`]) and a board that gave the read
+    /// no answer marked unanswered. Where the document moved on while the read
     /// was out — a `send` of it, its head kept or dropped — it says what
     /// stands, the hands as told ([`Holds::say_as_told`]), save a document
     /// moved again under a new verdict that no face told `session` of, which
-    /// names its hands not read and owes them to the walk. The act's answer
-    /// stands whatever the read met: a death at it is met again, and the
-    /// session ended, at the next request its token is dialed with.
+    /// names its hands not read for that verdict and owes them to the walk.
+    /// The act's answer stands whatever the read met: a death at it is met
+    /// again, and the session ended, at the next request its token is dialed
+    /// with.
     fn say_with_hands(&self, session: &SessionEntry, owed: HandsOwed) {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let HandsOwed { doc, k, reason, landed } = owed;
@@ -4950,21 +5162,22 @@ impl Holds {
             self.note_unanswered(&mut board_hold, None);
         }
         let ph = board_hold.principals.get_mut(&principal).expect("the principal's hold, entered by its door");
-        let (k, hands) = if ph.queue.reasons_on(&doc).next().is_some_and(|(head, standing)| head == k && *standing == reason) {
-            (k, hands)
-        } else if let Some((head, _)) = self.hands_owed_to(session, ph, &doc) {
+        let (judged, hands) = if ph.queue.reasons_on(&doc).next().is_some_and(|(head, standing)| head == k && *standing == reason) {
+            (Judged::of(k, &reason), hands)
+        } else if let Some((head, standing)) = self.hands_owed_to(session, ph, &doc) {
             // Moved again while the read was out, under a verdict the read
             // was not made for.
-            (head, vec![Hand::UNREAD])
+            (Judged::of(head, &standing), vec![Hand::UNREAD])
         } else {
             self.say_as_told(session, ph, &doc, landed.as_ref());
             return;
         };
-        if hands.contains(&Hand::UNREAD) {
-            ph.hands_owed.insert(doc.clone(), k);
+        if let Some(judged) = judged.as_ref().filter(|_| hands.contains(&Hand::UNREAD)) {
+            ph.hands_owed.insert(doc.clone(), judged.k);
         }
         let sendable = if session.may_write() { ph.sendable_told(&doc) } else { None };
-        self.emit_said(session, &doc, HeldSaid::of(ph.lines_on(&doc), HeldState::Moved, None, MovedFace { hands: &hands, sendable }), landed.as_ref());
+        let face = MovedFace { hands: &hands, sendable, judged: judged.as_ref() };
+        self.emit_said(session, &doc, HeldSaid::of(ph.lines_on(&doc), HeldState::Moved, None, face), landed.as_ref());
     }
 
     /// Emits the `held` event for a line the resend kept.
@@ -5397,10 +5610,11 @@ impl Holds {
     /// was last emitted for the same board, session and document is none
     /// ([`HeldSaid::repeated_by`]; skep #727): a document's state is said as
     /// it changes, never again per probe; the first emit for a key is always
-    /// made, one naming a line kept is made whatever was last told, its pair
-    /// the one remembered from it, and a document kept with no line left
-    /// clears its key ([`Holds::last_emitted`]). The memory's lock is a
-    /// leaf, taken here alone and released before the bus is reached, so the
+    /// made, a `moved` face for another verdict than the one remembered is
+    /// made (skep #973), one naming a line kept is made whatever was last
+    /// told, its pair the one remembered from it, and a document kept with no
+    /// line left clears its key ([`Holds::last_emitted`]). The memory's lock
+    /// is a leaf, taken here and released before the bus is reached, so the
     /// emit is safe under the board's lock as it is without one.
     fn emit_said(&self, session: &SessionEntry, doc: &str, said: HeldSaid, landed: Option<&LandedLine>) {
         let mut data = json!({"board": session.board_reference, "session": session.reference, "doc": doc, "held": said.held, "state": said.state.as_str()});
@@ -5715,10 +5929,11 @@ fn unrenumbered_cause(principal: u64, dir: &HeldDir, refused: &RenumberRefused) 
 /// It holds the line's members save `id`, `anchors` beside a line whose
 /// burst carried them, `refusal` beside a refused run's or a moved line's,
 /// `sendable` beside a moved document's first moved line, where the shell
-/// knows what a `send` would do ([`PrincipalHold::sendable_of`]), and
-/// `unwritable` and `unwritable_class` beside a line with no copy on disk
-/// (§3c.3; skep #860).
-fn line_json(l: &HeldLine, sendable: Option<bool>, unwritable: Option<&Unwritable>) -> Value {
+/// knows what a `send` would do ([`PrincipalHold::sendable_of`]), `hands`
+/// beside a moved document's first line, where they name any, as the `held`
+/// event spells them ([`Hand`]; skep #973), and `unwritable` and
+/// `unwritable_class` beside a line with no copy on disk (§3c.3; skep #860).
+fn line_json(l: &HeldLine, sendable: Option<bool>, hands: Option<&[Hand]>, unwritable: Option<&Unwritable>) -> Value {
     let mut line = json!({"held": l.k, "doc": l.doc, "base": l.base, "frame": l.frame, "cause": l.reason.cause, "sent": l.reason.sent, "time": l.time});
     if let Some(anchors) = &l.anchors {
         line["anchors"] = anchors.json();
@@ -5728,6 +5943,9 @@ fn line_json(l: &HeldLine, sendable: Option<bool>, unwritable: Option<&Unwritabl
     }
     if let Some(sendable) = sendable {
         line["sendable"] = Value::from(sendable);
+    }
+    if let Some(hands) = hands.filter(|hands| !hands.is_empty()) {
+        line["hands"] = Value::Array(hands.iter().map(Hand::json).collect());
     }
     if let Some(why) = unwritable {
         why.answer_in(&mut line);

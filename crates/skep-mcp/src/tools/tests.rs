@@ -626,6 +626,31 @@ fn the_held_card_names_sendable_and_an_agents_line_reading_false() {
     assert!(declared.contains(&"sendable"), "`sendable` is a member skep-shell declares for a held line: {declared:?}");
 }
 
+/// The `held` card names `hands`, whose writes moved a document.
+///
+/// The card lists every row member, and an agent's `held` is where it learns
+/// who moved a document its words wait on: the hands of the move the
+/// document stands on now, on the document's first line, each key a word
+/// skep-shell declares for a hand, `unread` among them where the shell has
+/// not read them yet (skep #973). A card silent on them leaves an agent to
+/// guess whose change it is placing its words against.
+#[test]
+fn the_held_card_names_hands_and_each_key_a_hand_carries() {
+    let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    let held = catalog.tools.iter().find(|t| t["name"] == "held").and_then(|t| t["description"].as_str()).expect("the held card");
+    assert!(
+        held.contains("hands? (on a moved document's first line: whose writes moved it, each once, for the move the document stands on now — each {key, fingerprint?, label?}"),
+        "the held card names hands: {held}"
+    );
+    let declarations = skep_shell::shapes::declarations();
+    let keys = declarations.lines().find(|line| line.starts_with("export type HandKey")).expect("skep-shell declares a hand's key");
+    for key in keys.split('\'').skip(1).step_by(2) {
+        assert!(held.contains(&format!("{key} (")), "the held card names the hand `{key}`: {held}");
+    }
+    let declared: Vec<&str> = skep_shell::shapes::shape("HeldRow").expect("skep-shell declares a held line").fields.iter().map(|field| field.name).collect();
+    assert!(declared.contains(&"hands"), "`hands` is a member skep-shell declares for a held line: {declared:?}");
+}
+
 /// The held card names why a line stands off disk.
 ///
 /// The card names `unwritable` and `unwritable_class` as skep-shell declares

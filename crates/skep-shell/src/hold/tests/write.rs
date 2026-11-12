@@ -709,6 +709,230 @@ fn hands_named_not_read_where_no_session_may_write_are_named_at_the_boards_answe
     assert_eq!(g.holds.with_principal("b-1", 1, |ph| ph.hands_owed.contains_key(DOC)), Some(false), "the debt paid");
 }
 
+/// Checks that a drop names the hands of its document's current verdict.
+///
+/// They are never an earlier move's (§4b.2; skep #973). A keyless session
+/// beside the writer drops the moved document's third
+/// line and is told the hand that moved it. The writer's `send` hands the
+/// document back, another key's row lands, and the walk, under the writer,
+/// holds the document moved again under a new verdict, telling the writer
+/// alone. The keyless session's drop of the second line then names the hand
+/// read for the new verdict, never the one it was told for the earlier move
+/// (the mutant that keeps the hands a session was told whatever verdict they
+/// were read for names in one window a move another window has seen
+/// replaced).
+#[test]
+fn a_drop_names_the_hands_of_the_verdict_its_document_stands_on_now_never_an_earlier_moves() {
+    let (g, ks, hands) = moved_document();
+    let keyless = beside(&g, bare_facts(), 0x7c);
+    assert_eq!(g.holds.resolve(&keyless, ks[2], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    let said = under(&told_events(&g), &keyless);
+    let [event] = &said[..] else { panic!("one event under the keyless session: {said:?}") };
+    assert_eq!(&event["hands"], &hands, "premise: told the earlier move's hand: {event}");
+    assert_eq!(g.holds.resolve(&g.session, ks[0], ResolveAct::Send).unwrap(), Resolved::HandedBack);
+    g.fake.rows.lock().unwrap().push(json!({"at": 78, "op": "insert", "key": "ee".repeat(32), "docs": [DOC]}));
+    g.fake.op_rejected.next(1, arrangement_moved(70, 78));
+    g.holds.probe("b-1");
+    let newer = json!([{"key": "other", "fingerprint": "ee".repeat(32)}]);
+    let said = told_events(&g);
+    let told_writer: Vec<Value> = under(&said, &g.session).into_iter().filter(|e| e["state"] == "moved").collect();
+    assert_eq!(told_writer.last().map(|e| &e["hands"]), Some(&newer), "premise: the walk tells the writer the new move's hand: {said:?}");
+    assert!(under(&said, &keyless).is_empty(), "premise: and the keyless session nothing: {said:?}");
+    assert_eq!(g.holds.resolve(&keyless, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    let said = under(&told_events(&g), &keyless);
+    let [event] = &said[..] else { panic!("one event under the keyless session: {said:?}") };
+    assert_eq!((event["state"].as_str(), event["held"].as_u64(), &event["hands"]), (Some("moved"), Some(1), &newer), "the new move's hand, never the earlier one: {event}");
+}
+
+/// Checks that a face names no hand read for a verdict no line carries.
+///
+/// The writer was told the moved document's hand for the board's verdict
+/// (skep #973). Its lines re-marked moved with no verdict beside them, a drop
+/// under the writer says the document `moved` with no hand: the verdict the
+/// hand was read for stands on no line (the mutant that repeats the hands
+/// last told, whatever verdict they were read for, names a move no line
+/// carries).
+#[test]
+fn a_face_names_no_hand_read_for_a_verdict_no_line_carries() {
+    let (g, ks, _) = moved_document();
+    g.holds.mark_moved("b-1", 1, DOC, None);
+    assert_eq!(g.holds.resolve(&g.session, ks[2], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    let said = told_events(&g);
+    let [event] = &said[..] else { panic!("one event: {said:?}") };
+    assert_eq!((event["state"].as_str(), event["held"].as_u64(), event.get("hands")), (Some("moved"), Some(2), None), "{event}");
+}
+
+/// Checks that a landing tells a session the move the walk told another.
+///
+/// It is the retry's landing (§3c.3; skep #860, #973). A line held under a
+/// keyless session beside the writer, its copy refused, is told `holding`
+/// with why it stands off disk; the walk, under the writer, holds the
+/// document moved, telling the writer alone. Once the device takes copies,
+/// the probe that writes the line tells the keyless session the document
+/// `moved` with the hand read for it, never the `holding` it was told before
+/// the move (the mutant that repeats the face last told says a moved
+/// document waits to be sent).
+#[test]
+fn a_landing_tells_a_session_the_move_the_walk_told_another() {
+    let g = ground();
+    let typed = g.fake.head();
+    let keyless = beside(&g, bare_facts(), 0x7c);
+    crate::held::tests::refuse_copies_as(std::io::ErrorKind::StorageFull);
+    let burst = Burst::admit(insert(DOC, json!(["a"]), typed), &keyless).unwrap();
+    let held = g.holds.hold(&keyless, burst, Reason::of("unreachable", false), None, keyless.opened_at).answered();
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
+    g.fake.move_arrangement(DOC, 77);
+    g.holds.probe("b-1");
+    crate::held::tests::take_copies();
+    assert_eq!(held.unwrap()["unwritable_class"], "full", "premise: the line stands off disk");
+    let said = told_events(&g);
+    let states = |session: &SessionEntry| under(&said, session).iter().map(|e| e["state"].as_str().unwrap_or("?").to_string()).collect::<Vec<_>>();
+    assert_eq!((states(&keyless), states(&g.session)), (vec!["holding".to_string()], vec!["sending".to_string(), "moved".to_string()]), "premise: the walk tells the writer alone: {said:?}");
+    g.holds.probe("b-1");
+    let said = under(&told_events(&g), &keyless);
+    let [event] = &said[..] else { panic!("one event under the keyless session: {said:?}") };
+    let hands = json!([{"key": "other", "fingerprint": "ff".repeat(32)}]);
+    assert_eq!((event["state"].as_str(), &event["hands"], event.get("unwritable")), (Some("moved"), &hands, None), "{event}");
+}
+
+/// Checks that a session told nothing of a moved document lists its hands.
+///
+/// It is the held list (§4b.1; skep #973). A session of the principal's
+/// opened beside the walk's after the move, and the one a restart re-opens
+/// in the walk's place, each told no event of the document, list its first
+/// line naming the hand the board's rows name, read once for that session,
+/// the lines behind it naming none, and no event is said (the mutant that
+/// lists no hands shows the document moved by no one in every window but the
+/// walk's; the one that says an event at the list tells the page twice).
+#[test]
+fn a_session_told_nothing_of_a_moved_document_lists_its_hands() {
+    for cell in ["a session opened beside", "a re-opened session"] {
+        let (g, _, hands) = moved_document();
+        let session = if cell == "a re-opened session" { reopened_session(&g) } else { beside(&g, writer_facts(&g.store), 0x9e) };
+        let reads = changes_reads(&g);
+        let rows = g.holds.lines(&session).unwrap();
+        let rows = rows.as_array().unwrap();
+        rows.iter().for_each(|row| crate::shapes::assert_declared("HeldRow", row));
+        let named: Vec<Option<&Value>> = rows.iter().map(|row| row.get("hands")).collect();
+        assert_eq!(named, [Some(&hands), None, None], "{cell}: the first row alone names the hands: {rows:?}");
+        assert_eq!(changes_reads(&g), reads + 1, "{cell}: read once for the session");
+        assert!(told_events(&g).is_empty(), "{cell}: the list says no event");
+    }
+}
+
+/// Checks that a list at a stopped node names the hands not read.
+///
+/// The walk names them to the session that listed (§3c.5; skep #973). A
+/// keyless session beside the writer lists the moved document with the own
+/// node stopped: no read is made, the first row names the hands `unread`, no
+/// `sendable` beside them, the document owes them, and no event is said. The
+/// node running, the next probe's walk reads them for that session and tells
+/// it the document `moved` with the hand, and its next list names it with no
+/// read (the mutant that owes the walk nothing leaves the row unread for
+/// good).
+#[test]
+fn a_list_at_a_stopped_node_names_the_hands_not_read_and_the_walk_names_them() {
+    let (g, _, hands) = moved_document();
+    let keyless = beside(&g, bare_facts(), 0x7c);
+    g.holds.set_node_stopped("b-1", true);
+    let reads = changes_reads(&g);
+    let rows = g.holds.lines(&keyless).unwrap();
+    assert_eq!((&rows[0]["hands"], rows[0].get("sendable"), changes_reads(&g)), (&json!([{"key": "unread"}]), None, reads), "no read at a stopped node: {rows}");
+    assert_eq!(g.holds.with_principal("b-1", 1, |ph| ph.hands_owed.contains_key(DOC)), Some(true), "the document owes its hands");
+    assert!(told_events(&g).is_empty(), "the list says no event");
+    g.holds.set_node_stopped("b-1", false);
+    g.holds.probe("b-1");
+    let said = under(&told_events(&g), &keyless);
+    let [event] = &said[..] else { panic!("the walk names the hands to the session that listed: {said:?}") };
+    assert_eq!((event["state"].as_str(), event["held"].as_u64(), &event["hands"]), (Some("moved"), Some(3), &hands), "{event}");
+    let reads = changes_reads(&g);
+    let rows = g.holds.lines(&keyless).unwrap();
+    assert_eq!((&rows[0]["hands"], changes_reads(&g)), (&hands, reads), "the next list names them with no read: {rows}");
+}
+
+/// Checks that two lists of one verdict read its hands once (skep #973).
+///
+/// The first list reads a moved document's hands for a session told nothing
+/// of it and enters them in its memory; the second names them from there
+/// with no read, and a drop under that session names them with none either
+/// (the mutant that enters nothing reads the board at every list).
+#[test]
+fn two_lists_of_one_verdict_read_its_hands_once() {
+    let (g, ks, hands) = moved_document();
+    let keyless = beside(&g, bare_facts(), 0x7c);
+    let reads = changes_reads(&g);
+    let first = g.holds.lines(&keyless).unwrap();
+    let again = g.holds.lines(&keyless).unwrap();
+    assert_eq!((&first[0]["hands"], &again[0]["hands"], changes_reads(&g)), (&hands, &hands, reads + 1), "one read for two lists");
+    assert_eq!(g.holds.resolve(&keyless, ks[2], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    let said = under(&told_events(&g), &keyless);
+    let [event] = &said[..] else { panic!("one event under the keyless session: {said:?}") };
+    assert_eq!((&event["hands"], changes_reads(&g)), (&hands, reads + 1), "the drop names the listed hands with no read: {event}");
+}
+
+/// Checks that every moved face told leaves the list naming its hands.
+///
+/// The list names them with no read (skep #973). Every path that tells a
+/// session a document `moved` enters the verdict its hands were read for: a
+/// first dial held moved, a first dial whose shift is not exact, the shift
+/// test's flip, the walk's moved hold, a drop's owed face, and the walk's read
+/// of hands a session was told not read. After each, that session's `held`
+/// names the hands the face told, and reads nothing (the mutant that tells one
+/// such face without its verdict reads the board at every list of that
+/// session).
+#[test]
+fn each_path_telling_a_moved_face_leaves_its_list_naming_the_hands_with_no_read() {
+    let ff = json!([{"key": "other", "fingerprint": "ff".repeat(32)}]);
+    let lists_with_no_read = |g: &Ground, session: &SessionEntry, hands: &Value, cell: &str| {
+        let reads = changes_reads(g);
+        let rows = g.holds.lines(session).unwrap();
+        assert_eq!((&rows[0]["hands"], changes_reads(g)), (hands, reads), "{cell}: {rows}");
+    };
+    let foreign = |g: &Ground| *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
+    let g = ground();
+    let typed = g.fake.head();
+    foreign(&g);
+    g.fake.op_rejected.next(1, arrangement_moved(typed, 77));
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["x"]), typed), None) else { panic!("held moved") };
+    assert_eq!(held["cause"], "moved", "{held}");
+    lists_with_no_read(&g, &g.session, &ff, "a first dial held moved");
+    let g = ground();
+    let typed = g.fake.head();
+    foreign(&g);
+    *g.fake.image.lock().unwrap() = vec![run(&i(1), 1), run(&i(10), 1), run(&i(2), 2)];
+    g.fake.move_arrangement(DOC, 77);
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert_at(DOC, 2, json!(["x"]), typed), Some(anchors(Some(&i(1)), Some(&i(2))))) else { panic!("held moved") };
+    assert_eq!(held["cause"], "moved", "{held}");
+    lists_with_no_read(&g, &g.session, &ff, "a first dial whose shift is not exact");
+    *g.fake.image.lock().unwrap() = vec![run(&i(1), 3)];
+    let mut named = RowsNamed::default();
+    named.note(&json!({"docs": [DOC]}));
+    g.holds.note_rows("b-1", 1, &named);
+    g.holds.probe("b-1");
+    assert!(told_events(&g).iter().any(|e| e["state"] == "moved" && e["sendable"] == true), "premise: the flip is told");
+    lists_with_no_read(&g, &g.session, &ff, "the shift test's flip");
+    // The walk's moved hold, no list made before the one measured.
+    let g = writer_at(80);
+    g.fake.next_at.store(81, Ordering::SeqCst);
+    foreign(&g);
+    g.hold(&insert(DOC, json!(["a"]), 70), "unreachable", false);
+    g.fake.op_rejected.next(1, arrangement_moved(70, 77));
+    g.holds.probe("b-1");
+    assert!(told_events(&g).iter().any(|e| e["state"] == "moved"), "premise: the walk holds the document moved");
+    lists_with_no_read(&g, &g.session, &ff, "the walk's moved hold");
+    let (g, ks, hands) = moved_document();
+    let session = reopened_session(&g);
+    assert_eq!(g.holds.resolve(&session, ks[2], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    lists_with_no_read(&g, &session, &hands, "a drop's owed face");
+    let (g, ks, hands) = moved_document();
+    let keyless = beside(&g, bare_facts(), 0x7c);
+    g.holds.set_node_stopped("b-1", true);
+    assert_eq!(g.holds.resolve(&keyless, ks[2], ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    g.holds.set_node_stopped("b-1", false);
+    g.holds.probe("b-1");
+    lists_with_no_read(&g, &keyless, &hands, "the walk's read of hands told not read");
+}
+
 /// Checks that a burst refused as typed against an older state is held moved.
 ///
 /// At its first dial the board refuses it `arrangement_moved` (wire.md
@@ -3480,20 +3704,23 @@ fn a_held_file_the_compaction_cannot_remove_is_said_on_talk_and_appended_on() {
     assert_eq!(queue.lines().len(), 1, "a reopen reads the line");
 }
 
-/// Checks that the `held` event's memory emits a state and count once until
-/// it changes or is cleared (skep #727).
+/// Checks that the `held` events' memory says a face once until it changes.
 ///
+/// It is skep #727's memory, a key cleared as its document is kept whole.
 /// The same state, count and `sendable` for one board, session and document
 /// is emitted once; a changed count, a changed state or a changed `sendable`
 /// is emitted; only an emit naming a line kept bypasses the memory, so the
 /// pair said again after the same pair is not emitted; a document kept with
-/// no line left clears its key, so the same pair after it is news again; and
-/// the memory is per session — a second session of the principal sees its
-/// own first emit (the mutant that
-/// forgets the memory floods the page with the same state at every probe;
-/// the one that never clears a key keeps a map entry per document ever
-/// held; the one that keys by document alone starves a second tab of its
-/// first event).
+/// no line left clears its key, so the same pair after it is news again; the
+/// memory is per session — a second session of the principal sees its own
+/// first emit; and a `moved` face for another verdict than the one
+/// remembered is emitted, its state, count and `sendable` alike, the same
+/// verdict again not (skep #973; the mutant that forgets the memory floods
+/// the page with the same state at every probe; the one that never clears a
+/// key keeps a map entry per document ever held; the one that keys by
+/// document alone starves a second tab of its first event; the one that
+/// leaves the verdict out of the memory tells a window an earlier move's
+/// hands for a later move).
 #[test]
 fn the_held_events_memory_emits_a_pair_once_until_it_changes_or_is_cleared() {
     let g = ground();
@@ -3515,12 +3742,19 @@ fn the_held_events_memory_emits_a_pair_once_until_it_changes_or_is_cleared() {
     let second = g.holds.sessions.register(&BoardEntry { reference: "b-1".into(), board: Arc::clone(&g.session.board) }, Open { token: Token::parse(&"9e".repeat(16)).unwrap(), facts: writer_facts(&g.store), opened_at: 0 }, &mut NoSupplements);
     g.holds.emit_held(&second, DOC, lines(1), HeldState::Holding, Some("unreachable"), MovedFace::default());
     assert_eq!(g.states(), ["holding"], "a second session of the principal sees its own first emit");
-    let moved = |sendable: Option<bool>| g.holds.emit_held(&g.session, OTHER, lines(1), HeldState::Moved, None, MovedFace { hands: &[], sendable });
+    let moved = |sendable: Option<bool>| g.holds.emit_held(&g.session, OTHER, lines(1), HeldState::Moved, None, MovedFace { hands: &[], sendable, judged: None });
     moved(Some(false));
     moved(Some(false));
     moved(Some(true));
     moved(None);
     assert_eq!(g.states(), ["moved", "moved", "moved"], "`sendable` joins the memory: each change said once, a repeat none (skep #867)");
+    let (first, later) = (Judged { k: 1, verdict: arrangement_moved(70, 77) }, Judged { k: 1, verdict: arrangement_moved(70, 78) });
+    let judged = |judged: &Judged| g.holds.emit_held(&g.session, OTHER, lines(1), HeldState::Moved, None, MovedFace { hands: &[], sendable: None, judged: Some(judged) });
+    judged(&first);
+    judged(&first);
+    judged(&later);
+    judged(&later);
+    assert_eq!(g.states(), ["moved", "moved"], "the verdict joins the memory: a face for another verdict said, the same verdict again none (skep #973)");
     let waits = |why: &str, class: UnwritableClass| g.holds.emit_held(&g.session, DOC, LinesOn { held: 1, unwritable: Some(Unwritable { why: why.to_string(), class }) }, HeldState::Holding, Some("unreachable"), MovedFace::default());
     waits("no room", UnwritableClass::Full);
     waits("no room", UnwritableClass::Full);

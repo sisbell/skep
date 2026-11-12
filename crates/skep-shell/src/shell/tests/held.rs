@@ -1080,28 +1080,29 @@ fn the_probe_keeps_its_cadence_while_the_board_keeps_committing() {
     sd.shutdown();
 }
 
-/// Checks that a burst typed against an older state is held moved, and
-/// nothing of it lands (skep #442).
+/// Checks that a stale burst is held moved and nothing of it lands.
 ///
-/// The board's `arrangement_moved` — a `permanent` refusal — holds the burst
-/// as a MOVED document, never a refused run whose resend meets the same
-/// refusal. Another write lands on the draft after the ground's insert; a
-/// burst typed against the ground's state, sent without anchors as an
-/// agent's is, is refused, answered `held` with
-/// cause `moved`, its line listed with the board's verdict naming the typed
-/// state and the current one, and the `held` event says `moved`, naming the
-/// hand of the write that moved the draft — this store's own; nothing of it
-/// lands — the draft reads what the other write left, and no row stands
-/// above that write. The same text typed against the current state lands
-/// once the moved line is discarded (the mutant that lands the stale burst
-/// writes the text a position off; the one that holds it a refused run
-/// faces an act that can never succeed; the one that names no hand draws
-/// the moved face with none).
+/// It is skep #442's hold. The board's `arrangement_moved` — a `permanent`
+/// refusal — holds the burst as a moved document, never a refused run whose
+/// resend meets the same refusal. Another write lands on the draft after the
+/// ground's insert; a burst typed against the ground's state, sent without
+/// anchors as an agent's is, is refused, answered `held` with cause `moved`,
+/// its line listed with the board's verdict naming the typed state and the
+/// current one, and the `held` event says `moved`, naming the hand of the write
+/// that moved the draft — this store's own, which the line's `held` row names
+/// too, and so does the row a session opened after the move lists, its hands
+/// read off the board's rows for it (skep #973); nothing of it lands — the
+/// draft reads what the other write left, and no row stands above that write.
+/// The same text typed against the current state lands once the moved line is
+/// discarded (the mutant that lands the stale burst writes the text a position
+/// off; the one that holds it a refused run faces an act that can never
+/// succeed; the one that names no hand draws the moved face with none, and the
+/// one that lists none shows every later window the document moved by no one).
 #[test]
 fn a_burst_typed_against_an_older_state_is_held_moved_and_nothing_lands() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
-    let HeldGround { shell, seen, session, draft, at, .. } = held_ground(&dir, &sd);
+    let HeldGround { shell, seen, board, session, draft, at } = held_ground(&dir, &sd);
     // Another write on the draft: the ground's state `at` is older now.
     let moved = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"], "as_of": at}})).unwrap();
     let current = moved["at"].as_u64().unwrap_or_else(|| panic!("the second insert is acked: {moved}"));
@@ -1122,6 +1123,10 @@ fn a_burst_typed_against_an_older_state_is_held_moved_and_nothing_lands() {
     assert_eq!(verdict["code"], "arrangement_moved", "the board's verdict rides the line: {rows}");
     assert_eq!(verdict["disposition"], "permanent", "{rows}");
     assert_eq!((verdict["site"]["as_of"].as_u64(), verdict["site"]["current"].as_u64()), (Some(at), Some(current)), "the two positions: {rows}");
+    assert_eq!(rows[0]["hands"], faced.data["hands"], "the row names the hand the event named: {rows}");
+    let later = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let listed = shell.call("held", &json!({"session": later})).unwrap();
+    assert_eq!(listed[0]["hands"], faced.data["hands"], "a session opened after the move lists the hand, read for it: {listed}");
     // Nothing landed: the draft reads `ab`, and no row stands above the
     // other write.
     let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 3)})).unwrap();

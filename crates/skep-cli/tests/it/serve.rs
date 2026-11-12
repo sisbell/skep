@@ -26,7 +26,9 @@
 //! and never as an `op` frame, the same write refused under bare before
 //! any dial; F5b the publication family over the bridge — the panel, the
 //! count, the confirm with its events and the feed row, the inert second
-//! confirm, the cancel, the mint form and `claim_refused`; F5c the script
+//! confirm, the cancel, the mint form and `claim_refused`; F5e the page's
+//! close carrying its last frames — two drafts' inserts landed and answered
+//! in `sent` in their order, a second close `session_ended`; F5c the script
 //! seam — a call's next answer armed as its result or its refusal, served
 //! once and logged `canned`, the later arm replacing the earlier, the
 //! seam's own refusals in their order, `fetch`'s armed refusal on its own
@@ -1157,6 +1159,45 @@ fn f5d_the_family_and_the_daughter_over_the_bridge() {
     let daughter = signed.result("publication.confirm", json!({"session": session}));
     assert_eq!((daughter["outcome"].as_str(), daughter["member"].as_str(), daughter["via"].as_str()), (Some("acknowledged"), Some(format!("{edition}.1.1").as_str()), Some("answer")), "{daughter}");
     signed.result("close", json!({"session": session}));
+    assert_eq!(signed.stop(), 0);
+    sd.shutdown();
+}
+
+// ── F5e ────────────────────────────────────────────────────────────────────
+
+/// F5e: the page's close carrying its last frames, against the real daemon.
+///
+/// It is the tab closed with words unsent (skep #999): a signed provider's
+/// session mints two drafts, and one `close` carries an insert on each, as
+/// the page posts them at `pagehide`, a single request; it answers `{sent}`
+/// with both acks in the list's order, a second close of the session answers
+/// `session_ended`, and a fresh session reads each draft's word (the close
+/// that reads no `frames` answers `{}` and writes neither).
+#[test]
+fn f5e_a_close_carrying_two_frames_lands_both_and_answers_each() {
+    let dir = tempfile::tempdir().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let board_origin = origin(sd.port());
+    let store = dir.path().join("claimant");
+    claim_board(&board_origin, &store, &dir.path().join("anchors"));
+    let signed = Provider::start(&["--board", &board_origin, "--session", "signed", "--principal", "1", "--dir", s(&store)]);
+    let board = signed.result("boards", json!({}))[0]["board"].as_str().unwrap().to_string();
+    let session = signed.result("session", json!({"board": board}))["session"].as_str().unwrap().to_string();
+    let mint = || signed.result("op", json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}}));
+    let (one, two) = (mint(), mint());
+    let insert = |minted: &Value, text: &str| json!({"frame": {"op": "insert", "doc": minted["addr"], "at": {"subspace": "1", "ordinal": "1"}, "values": [text], "as_of": minted["at"]}});
+    let closed = signed.result("close", json!({"session": session, "frames": [insert(&one, "one"), insert(&two, "two")]}));
+    let sent = closed["sent"].as_array().unwrap_or_else(|| panic!("the close answers its list: {closed}\n{}", signed.talk()));
+    let acks: Vec<&str> = sent.iter().filter_map(|answer| answer["resp"].as_str()).collect();
+    assert_eq!(acks, ["ack_addr", "ack_addr"], "both landed: {closed}");
+    assert!(matches!((sent[0]["at"].as_u64(), sent[1]["at"].as_u64()), (Some(first), Some(second)) if first < second), "in the list's order: {closed}");
+    assert_eq!(signed.refused("close", json!({"session": session}))["name"], "session_ended", "a second close");
+    let fresh = signed.result("session", json!({"board": board}))["session"].as_str().unwrap().to_string();
+    for (minted, text) in [(&one, "one"), (&two, "two")] {
+        let read = signed.result("op", json!({"session": fresh, "frame": skep_client::board::frames::retrieve_v(minted["addr"].as_str().unwrap(), 1, 3)}));
+        assert_eq!(read["items"][0]["content"], text, "{read}");
+    }
+    signed.result("close", json!({"session": fresh}));
     assert_eq!(signed.stop(), 0);
     sd.shutdown();
 }

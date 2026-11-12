@@ -6,7 +6,8 @@
 //! as one entry of its outcome and sizes, and `fetch` logging its own call,
 //! a stream's as its body is dropped; a present argument of another form
 //! refused before any dial, `fetch`'s address among them, and every optional
-//! argument a call row declares read in its declared form; the guest form
+//! argument a call row declares read in its declared form; a close's list
+//! of another form refused before anything is sent; the guest form
 //! refusing every write kind of the wire undialed and reading the board its
 //! reference or its origin names, the reference first and the target before
 //! the frame; a bare session refusing every write kind undialed, its
@@ -441,7 +442,48 @@ fn every_declared_optional_argument_is_read_in_its_form() {
             asked += 1;
         }
     }
-    assert_eq!(asked, 39, "the optional members of the sixteen rows of one form that declare any: the publication family's thirteen and the merge family's five among them, `publication.open`'s and `publication.standing`'s `also`, `merge.compose`'s `into` and `merge.land`'s `answers` included");
+    assert_eq!(asked, 41, "the optional members of the seventeen rows of one form that declare any: the publication family's thirteen and the merge family's five among them, `publication.open`'s and `publication.standing`'s `also`, `merge.compose`'s `into`, `merge.land`'s `answers` and `close`'s `after` and `frames` included");
+}
+
+/// Checks that a close's list of another form is refused, nothing sent.
+///
+/// A close's `after` is a list of burst `id`s within their bound, and its
+/// `frames` a list of entries each carrying a frame of the session form: an
+/// `after` of no list or naming an `id` past the bound, an entry of no
+/// object, one with no frame, one of the `/op-at` form, and a follower naming
+/// a frame after it in the list are each refused `malformed_args` naming the
+/// member before the session is looked up (the mutant that admits a follower
+/// of a later frame sends it ahead of the burst it waits on, which reaches
+/// the table only after the follower's wait: `no_such_burst`, and the words
+/// it takes back stand). A follower naming a frame before it, an `id` at the
+/// bound, and an entry whose own anchors are of no form — refused in its own
+/// `sent` entry as `op` refuses it — are of the list's form, and the call
+/// goes on to the session.
+#[test]
+fn a_closes_list_of_another_form_is_refused_before_anything_is_sent() {
+    let dir = TempDir::new().unwrap();
+    let (shell, _) = open_shell(&nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let insert = |id: &str| json!({"op": "insert", "id": id, "doc": "1.0.1.0.1", "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"], "as_of": 3});
+    let undo = json!({"op": "delete", "doc": "1.0.1.0.1", "p": {"subspace": "1", "ordinal": "1"}, "width": "1", "as_of": 3});
+    let undone = json!({"before": null, "after": null, "span": [{"burst": "b-1", "offset": 0, "width": 1}]});
+    let cases = [
+        (json!({"session": "s-x", "after": "b-1"}), "after"),
+        (json!({"session": "s-x", "after": ["b".repeat(crate::held::MAX_BURST_ID_BYTES + 1)]}), "after"),
+        (json!({"session": "s-x", "frames": [7]}), "frames"),
+        (json!({"session": "s-x", "frames": [{"anchors": null}]}), "frames"),
+        (json!({"session": "s-x", "frames": [{"frame": {"at": 3, "frame": {"op": "doc_metadata", "doc": "1.0.1.0.1"}}}]}), "frames"),
+        (json!({"session": "s-x", "frames": [{"frame": undo, "anchors": undone, "after": "b-1"}, {"frame": insert("b-1")}]}), "frames"),
+    ];
+    for (args, member) in cases {
+        let refused = shell.call("close", &args).unwrap_err().to_value();
+        assert_eq!((refused["name"].as_str(), refused["what"].as_str()), (Some("malformed_args"), Some(member)), "{args}: {refused}");
+    }
+    for args in [
+        json!({"session": "s-x", "after": ["b".repeat(crate::held::MAX_BURST_ID_BYTES)], "frames": [{"frame": insert("b-1")}, {"frame": undo, "anchors": undone, "after": "b-1"}]}),
+        json!({"session": "s-x", "frames": [{"frame": insert("b-2"), "anchors": 7}]}),
+    ] {
+        assert_eq!(shell.call("close", &args).unwrap_err().name(), "session_ended", "of the list's form, and the call goes on to the session: {args}");
+    }
 }
 
 /// Checks that an ended or another run's reference is answered its reason,

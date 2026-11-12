@@ -94,6 +94,14 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("BurstPiece", json!({"burst": "b-1", "offset": 6, "width": 5})),
         ("FollowerAnchors", json!({"before": {"burst": "b-1", "offset": 5}, "after": null, "span": [{"burst": "b-1", "offset": 6, "width": 5}, {"start": "1.0.1.0.1.0.1.4", "width": "2"}]})),
         (
+            "CloseFrame",
+            json!({"frame": {"op": "delete", "doc": "1.0.1.0.1", "p": {"subspace": "1", "ordinal": "7"}, "width": "5", "as_of": 3}, "anchors": {"before": {"burst": "b-1", "offset": 5}, "after": null, "span": [{"burst": "b-1", "offset": 6, "width": 5}]}, "after": "b-1"}),
+        ),
+        (
+            "CloseSent",
+            json!({"sent": [{"resp": "ack", "at": 4}, {"resp": "held", "held": 1, "cause": "unreachable"}, {"refused": Refusal::shell(Name::SESSION_ENDED, json!({"session": "s-0"})).to_value()}]}),
+        ),
+        (
             "HeldEvent",
             json!({"board": "b-0", "session": "s-0", "doc": "1.0.1.0.1", "held": 2, "state": "moved", "hands": [{"key": "bare"}], "again": true, "sendable": false, "unwritable": "Read-only file system (os error 30)", "unwritable_class": "read_only", "landed": [{"held": 1, "burst": "b-1", "at": 50, "addr": "1.0.1.0.1.0.1.9"}]}),
         ),
@@ -211,6 +219,8 @@ fn the_file_names_every_shape_call_and_event() {
         "  session(args: { board: string; principal?: number }): Promise<Outcome<SessionOpened>>;\n",
         "  probe(args: {}): Promise<Outcome<Probe>>;\n  'node.start'(args: {}): Promise<Outcome<Probe>>;\n  'node.stop'(args: {}): Promise<Outcome<Probe>>;\n  'node.restart'(args: {}): Promise<Outcome<Probe>>;\n",
         "  op(args: { session: string; frame: unknown; anchors?: Anchors | FollowerAnchors; after?: string } | { guest: true; board?: string; origin?: string; frame: unknown }): Promise<Outcome<unknown>>;\n",
+        "  close(args: { session: string; after?: string[]; frames?: CloseFrame[] }): Promise<Outcome<Empty | CloseSent>>;\n",
+        "export interface CloseFrame {\n  frame: unknown;\n  anchors?: Anchors | FollowerAnchors;\n  after?: string;\n}\n",
         "export interface FollowerAnchors {\n  before: string | AnchorPiece | null;\n  after: string | AnchorPiece | null;\n  span?: ({ start: string; width: string } | BurstPiece)[];\n}\n",
         "  'publication.open'(args: { session: string; draft: string; also?: string[]; doc?: string; mint?: string; claim?: boolean; selection?: Run[]; notes?: string[]; readable_drafts?: string[]; published?: string[] }): Promise<Outcome<PublicationPanel>>;\n",
         "  'publication.count'(args: { session: string; switches?: Switches; answers?: Record<string, OriginAnswer> }): Promise<Outcome<{ count: Count; price: Price; rows: PublicationRow[]; formatting: Formatting; windows: Window[]; parts: PartCounts[]; edition_links: number; p3_stands: boolean }>>;\n",

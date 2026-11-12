@@ -9,10 +9,13 @@
 //! nothing written, a delete's as a mark's; a delete follower whose dial
 //! meets the death held and landing under the re-opened session; a
 //! `nullify` following a `delete`, and a piece after a `delete` refused; a
-//! follower that overtakes its insert waiting for it and landing; and the
+//! follower that overtakes its insert waiting for it and landing; the
 //! shell's stop finishing a follower whose burst it answers while the stop
 //! waits, before any session closes, a mark and a delete each read back by a
-//! fresh shell.
+//! fresh shell; and the page's close (skep #999) — a follower among its
+//! frames landing after its burst, the stop waiting on a close under way
+//! until its frames land, and the close finishing a delete follower before
+//! it ends the session.
 
 use super::*;
 
@@ -432,6 +435,129 @@ fn the_stop_finishes_a_delete_follower_before_its_sessions_close() {
     let board = fresh.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
     let session = fresh.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
     assert_eq!(draft_text(&fresh, &session, &g.draft), "ho", "the delete landed before the stop closed its session");
+    fresh.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a follower a close carries lands after its burst.
+///
+/// A close carries the insert of "hello world" with its `id` and, after it,
+/// an undo's delete of "world" handed over as its follower — `after` that
+/// `id`, its anchors pieces of the insert's words, its frame typed against
+/// the draft's mint (D6 BM-34, BM-73; SWEEP 11 CLOSE C8 (a)): the insert is
+/// acked, then the delete, its pieces resolved against the insert's ack,
+/// refused as typed against an older state and shifted by them, `sent`
+/// answering both in order, and the draft reads "hello " under a fresh
+/// session (the close that refuses a follower among its frames loses the
+/// undo, and the word the person took back stands).
+#[test]
+fn a_follower_a_close_carries_lands_after_its_burst() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = follow_ground(&dir, &sd, false);
+    let frames = json!([{"frame": g.insert(Some("b-10"), "hello world")}, {"frame": g.delete(7, 5), "anchors": world_undone("b-10"), "after": "b-10"}]);
+    let closed = g.shell.call("close", &json!({"session": g.session, "frames": frames})).unwrap_or_else(|r| panic!("{r}\n{}", g.talk()));
+    crate::shapes::assert_declared("CloseSent", &closed);
+    assert_eq!((closed["sent"][0]["resp"].as_str(), closed["sent"][1]["resp"].as_str()), (Some("ack_addr"), Some("ack")), "{closed}\n{}", g.talk());
+    let board = g.shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
+    let fresh = g.shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    assert_eq!(draft_text(&g.shell, &fresh, &g.draft), "hello ", "the words the person took back are gone");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that the stop waits on a close under way, whose frames land.
+///
+/// A burst carrying an `id` is entered as the `op` row enters one and stands
+/// unanswered, its dial in flight; a close naming it in `after` and
+/// carrying the insert of "!" waits on it; the stop, begun on another thread,
+/// waits on the close, still under way a while after the stop began; the
+/// burst is answered with an insert's real ack of "hello", and the close
+/// sends its frame under its session, still open, and ends it, so a fresh
+/// shell over the same store reads "hello!" (the stop that does not wait on
+/// a close closes the session under it, and the "!" is refused).
+#[test]
+fn the_stop_waits_on_a_close_under_way_whose_frames_land() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = follow_ground(&dir, &sd, false);
+    let words = g.op(g.insert(None, "hello")).unwrap();
+    let in_flight = json!({"op": "insert", "id": "b-11", "doc": g.draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"], "as_of": g.at});
+    let sent = g.shell.followers.sent(&g.session, &in_flight, || true).expect("a burst with an id is kept");
+    let bang = json!({"op": "insert", "doc": g.draft, "at": {"subspace": "1", "ordinal": "6"}, "values": ["!"], "as_of": words["at"]});
+    let closed = thread::scope(|scope| {
+        let close = scope.spawn(|| g.shell.call("close", &json!({"session": g.session, "after": ["b-11"], "frames": [{"frame": bang}]})));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while g.shell.followers.closes() == 0 {
+            assert!(Instant::now() < deadline, "the close never began");
+            thread::sleep(Duration::from_millis(5));
+        }
+        let stop = scope.spawn(|| g.shell.shutdown());
+        while !g.shell.followers.stopping() {
+            assert!(Instant::now() < deadline, "the stop never reached its followers");
+            thread::sleep(Duration::from_millis(5));
+        }
+        thread::sleep(Duration::from_millis(200));
+        assert!(!stop.is_finished() && !close.is_finished(), "the stop waits on the close, which waits on its burst:\n{}", g.talk());
+        sent.settle(&Ok(words.clone()));
+        stop.join().unwrap();
+        close.join().unwrap()
+    });
+    let closed = closed.unwrap_or_else(|r| panic!("{r}\n{}", g.talk()));
+    assert_eq!(closed["sent"][0]["resp"], "ack_addr", "{closed}\n{}", g.talk());
+    let (fresh, _) = open_shell(&g.origin, &g.store, SessionMode::Signed { principal: 1 });
+    let board = fresh.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
+    let session = fresh.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    assert_eq!(draft_text(&fresh, &session, &g.draft), "hello!", "the close's frame landed before the stop closed its session");
+    fresh.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that the page's close finishes a delete follower first.
+///
+/// As the stop finishes one: a burst carrying an `id` is entered and stands
+/// unanswered; an undo's delete of its middle three positions waits on it;
+/// the page's close, begun on another thread, waits on the follower, still
+/// under way a while after the close began (SWEEP 11 CLOSE C8 (a)); the burst
+/// is answered with an insert's real ack of "hello", and the delete lands
+/// under its session, still open, before the close ends it, so a fresh
+/// shell over the same store reads "ho" (the close that ends its session at
+/// once ends the follower with it, `session_died`, and the words the person
+/// took back stand).
+#[test]
+fn the_pages_close_finishes_a_delete_follower_before_its_session_ends() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = follow_ground(&dir, &sd, false);
+    let words = g.op(g.insert(None, "hello")).unwrap();
+    let in_flight = json!({"op": "insert", "id": "b-12", "doc": g.draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"], "as_of": g.at});
+    let sent = g.shell.followers.sent(&g.session, &in_flight, || true).expect("a burst with an id is kept");
+    let anchors = json!({"before": {"burst": "b-12", "offset": 0}, "after": {"burst": "b-12", "offset": 4}, "span": [{"burst": "b-12", "offset": 1, "width": 3}]});
+    let (undone, closed) = thread::scope(|scope| {
+        let follower = scope.spawn(|| g.follow_with("b-12", g.delete(2, 3), anchors.clone()));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while g.shell.followers.waiting() == 0 {
+            assert!(Instant::now() < deadline, "the follower never arrived");
+            thread::sleep(Duration::from_millis(5));
+        }
+        let close = scope.spawn(|| g.shell.call("close", &json!({"session": g.session})));
+        while g.shell.followers.closes() == 0 {
+            assert!(Instant::now() < deadline, "the close never began");
+            thread::sleep(Duration::from_millis(5));
+        }
+        thread::sleep(Duration::from_millis(200));
+        assert!(!close.is_finished(), "the close waits on the follower:\n{}", g.talk());
+        sent.settle(&Ok(words.clone()));
+        (follower.join().unwrap(), close.join().unwrap())
+    });
+    let undone = undone.unwrap_or_else(|r| panic!("{r}\n{}", g.talk()));
+    assert_eq!(undone["resp"], "ack", "{undone}");
+    assert_eq!(closed.unwrap_or_else(|r| panic!("{r}")), json!({}), "a close carrying no frames answers `{{}}`");
+    g.shell.shutdown();
+    let (fresh, _) = open_shell(&g.origin, &g.store, SessionMode::Signed { principal: 1 });
+    let board = fresh.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
+    let session = fresh.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    assert_eq!(draft_text(&fresh, &session, &g.draft), "ho", "the delete landed before the close ended its session");
     fresh.shutdown();
     sd.shutdown();
 }

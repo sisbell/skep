@@ -57,7 +57,9 @@
 //! `nullify` or a `delete` sent with `after`, written at its burst's ack,
 //! its pieces resolved against the insert's words, and at the shell's stop
 //! before any session closes (§3c.6) — are the child module `follow`'s
-//! table, which the `op` row enters and waits on.
+//! table, which the `op` row enters and waits on, and which the page's
+//! `close` waits on before it sends the frames it carries and ends the
+//! session.
 //!
 //! **This machine's notebook** (foundations §3.4 F-C1; L1). Where the verb
 //! that runs the own node hands the shell its start and its stop
@@ -142,6 +144,7 @@
 //! never a silent stub; `fetch` reaches the dialer's streamed form and no
 //! further (the §Recovery order of the media design is not run here).
 
+use std::collections::HashMap;
 use std::fmt;
 use std::io::{self, Read};
 use std::path::PathBuf;
@@ -158,13 +161,14 @@ use skep_client::derive::Mode;
 use skep_client::dial::{Headers, Method, RequestHead};
 use skep_client::halt::Halt;
 use skep_client::search::{QueryTooLong, SearchOpts, QUERY_BOUND};
+use skep_client::sheet::render_inert;
 use skep_client::store::{FileStore, KeyFacts};
 use skep_client::Origin;
 
 use crate::dev_arm::DevArm;
 use crate::events::{Event, EventBus, EventName};
 use crate::feed::{answer_without_index, changes_since, places_without_index, query_too_long, BridgeSearchOpts, ChangesRead, Feed, FeedThreads, Searcher, Shared};
-use crate::held::{Anchors, CopiesOwed};
+use crate::held::{Anchors, CopiesOwed, MAX_BURST_ID_BYTES};
 use crate::hold::{AtDeath, BoardState, Holds, OpAnswer, ResolveAct, Resolved, Verdict};
 use crate::log::{CallOutcome, Log, ShellDialer};
 use crate::person::{Answerer, Pending};
@@ -181,9 +185,9 @@ mod publication;
 mod history;
 mod merge;
 
-use follow::{Followed, Follower, Followers, FOLLOW_AT_STOP};
+use follow::{Closing, Followed, Follower, Followers, FOLLOW_AT_STOP};
 use merge::Merges;
-use publication::{address_arg, Publications};
+use publication::{address_arg, clipped, Publications};
 
 /// The session mode a run names, both arms selectable per run.
 ///
@@ -845,6 +849,94 @@ fn optional<'a, T>(args: &'a Value, member: &str, read: impl FnOnce(&'a Value) -
     }
 }
 
+/// Returns the `anchors` a session-form frame carries, read in their form.
+///
+/// A delete follower's are its own, read in the follower's form by
+/// `Follower::of`, so none is read here for it.
+///
+/// # Errors
+///
+/// Returns `malformed_args` naming `anchors` where they are present beside
+/// any other frame and not of `Anchors`' form (`held::Anchors::of`).
+fn anchors_of(args: &Value, follower: Option<&Follower>) -> Result<Option<Anchors>, Refusal> {
+    if follower.is_some_and(Follower::reads_anchors) {
+        return Ok(None);
+    }
+    optional(args, "anchors", Anchors::of)
+}
+
+/// Returns a close's `after` as its row declares it, where `v` is one.
+///
+/// It is a list of the `id`s of bursts the session sent, each a string of at
+/// most [`MAX_BURST_ID_BYTES`] bytes, the bound the follower table keeps a
+/// burst's `id` to.
+fn burst_ids(v: &Value) -> Option<Vec<String>> {
+    v.as_array()?.iter().map(|id| id.as_str().filter(|id| id.len() <= MAX_BURST_ID_BYTES).map(str::to_string)).collect()
+}
+
+/// The bytes of a page's string a close's line on `Talk` names, at most.
+const NAMED_BYTES: usize = 120;
+
+/// One frame a close carries, as its list's check read it (SP-18).
+///
+/// It is the list's entry — its `anchors` and its `after` read as the `op`
+/// row's session form reads them when it is sent — and the entry's frame, an
+/// object of no `/op-at` form; the check holds a follower's `after` to the
+/// `id` of no frame after it in the list ([`carried`]).
+struct Carried<'a> {
+    entry: &'a Value,
+    frame: Value,
+}
+
+impl Carried<'_> {
+    /// Returns the frame as a close's line names it: its `op` and document.
+    ///
+    /// The document is named where the frame names one, and the burst's `id`
+    /// where it carries one, each clipped and rendered inert (SP-20).
+    fn named(&self) -> String {
+        let inert = |text: &str| render_inert(&clipped(text, NAMED_BYTES));
+        let mut named = format!("`{}`", inert(self.frame["op"].as_str().unwrap_or("?")));
+        if let Some(doc) = self.frame["doc"].as_str() {
+            named.push_str(&format!(" on `{}`", inert(doc)));
+        }
+        if let Some(id) = self.frame["id"].as_str() {
+            named.push_str(&format!(", burst `{}`", inert(id)));
+        }
+        named
+    }
+}
+
+/// Reads a close's `frames` as its row declares them (`CloseFrame[]`).
+///
+/// # Errors
+///
+/// Returns `malformed_args` naming `frames` where it is present and no list,
+/// where an entry is no object or its `frame` is no object or one of the
+/// `/op-at` form — the close sends what the page composed and did not dial,
+/// which no read of history is — or where an entry's `after` is the `id` of a
+/// frame after it in the list, which the close sends only once that follower
+/// has waited for it.
+fn carried(args: &Value) -> Result<Option<Vec<Carried<'_>>>, Refusal> {
+    let Some(entries) = optional(args, "frames", Value::as_array)? else { return Ok(None) };
+    let malformed = || Refusal::malformed("frames");
+    let mut frames = Vec::with_capacity(entries.len());
+    let mut last: HashMap<&str, usize> = HashMap::new();
+    for (k, entry) in entries.iter().enumerate() {
+        let (frame, at) = Shell::frame_of(entry).map_err(|_| malformed())?;
+        if at.is_some() {
+            return Err(malformed());
+        }
+        if let Some(id) = entry["frame"]["id"].as_str() {
+            last.insert(id, k);
+        }
+        frames.push(Carried { entry, frame });
+    }
+    if entries.iter().enumerate().any(|(k, entry)| entry["after"].as_str().and_then(|after| last.get(after)).is_some_and(|later| *later > k)) {
+        return Err(malformed());
+    }
+    Ok(Some(frames))
+}
+
 /// Returns whether the form a call names is the guest form.
 ///
 /// The forms are §4b.1's (its `op`, `fetch` and `search` rows): the guest
@@ -1420,31 +1512,138 @@ impl Shell {
         Ok(opened)
     }
 
-    /// Answers `close(session)` with `{}`: the session out of the table.
+    /// Answers `close(session, after?, frames?)`: the frames, then the end.
     ///
-    /// Then its drafts rows are read to the head under its token and its
-    /// supplement released (`Feed::closing`, answered before the token
+    /// They are the page's last words, then the session's end (§4b.1's `close`
+    /// row; §3c.6). The close is entered in the session's follower table for as
+    /// long as it runs, so the shell's stop waits on it (`Followers::closing`).
+    /// It waits for each burst `after` names until that burst's call answers —
+    /// an `id` that has not reached the shell within `BURST_ARRIVAL_WAIT` of
+    /// the close waited for no longer, and said on `Talk` — and then for the
+    /// follower writes the session handed over (`Closing::followers`). It sends
+    /// each of `frames` in the list's order, each answered before the next is
+    /// sent, by the path every `op` of the session form takes — the write door,
+    /// a follower's wait on its burst, the hold, the shift by its anchors — so
+    /// the words the page composed and did not dial before its close are
+    /// written or held in the order it composed them, never raced by the close
+    /// (SWEEP 11 CLOSE C8 (a)); and it waits for the followers again. Every
+    /// frame is sent whatever the one before it answered, save that once the
+    /// session no longer stands — a frame's send met the death signal, or the
+    /// shell's stop past its bound or another close ended it — each frame after
+    /// is answered as a call on the ended session, unsent
+    /// ([`Shell::send_carried`]). Then, where the session still stands, it
+    /// leaves the table, its drafts rows are read to the head under its token
+    /// and its supplement released (`Feed::closing`, answered before the token
     /// closes), `POST /session/close` is sent (idempotent at the board), and
     /// its own arm goes out on `session-died`, after every `feed` row of the
-    /// session. The close is the shell's act, whatever the board says —
-    /// §4b.1's row arms no refusal at the board: a token the board did not
-    /// close, or never answered for, is said on `Talk` and dies at the
-    /// board's restart.
+    /// session; a session ended under the close is ended no second time. The
+    /// close is the shell's act, whatever the board says — §4b.1's row arms no
+    /// refusal at the board: a token the board did not close, or never answered
+    /// for, is said on `Talk` and dies at the board's restart. It answers
+    /// `{sent}`, each frame's answer in the list's order, where `frames` is
+    /// given, and `{}` where it is not.
     ///
     /// # Errors
     ///
-    /// Returns `malformed_args` naming `session` where it is no string, and
-    /// "session ended", `session_ended`, for a reference this shell holds no
-    /// session under — stale, or ended by a death met first.
+    /// In this order, nothing waited on and nothing sent: `malformed_args`
+    /// naming `session` where it is no string; naming `after` where it is
+    /// present and no list of strings of at most [`MAX_BURST_ID_BYTES`] bytes;
+    /// naming `frames` where it is present and not of its form ([`carried`]);
+    /// and "session ended", `session_ended`, for a reference this shell holds
+    /// no session under — stale, or ended by a death met first.
     fn close(&self, args: &Value) -> Result<Value, Refusal> {
         let Some(session_reference) = args["session"].as_str() else { return Err(Refusal::malformed("session")) };
-        let session = self.sessions.close(session_reference).ok_or_else(|| Refusal::shell(Name::SESSION_ENDED, json!({"session": session_reference})))?;
-        self.feed(&session.board_reference).closing(&session);
-        if let Err(h) = session.board.session_close(&session.token) {
-            self.say(format!("close: the board did not close {}'s token ({h}); it dies at the board's restart", session.reference));
+        let after = optional(args, "after", burst_ids)?.unwrap_or_default();
+        let frames = carried(args)?;
+        let session = self.sessions.get(session_reference).ok_or_else(|| Refusal::shell(Name::SESSION_ENDED, json!({"session": session_reference})))?;
+        let closing = self.followers.closing(&session.reference, || self.sessions.get(&session.reference).is_some());
+        let missing = closing.bursts(&after);
+        if let Some(first) = missing.first() {
+            self.say(format!(
+                "close: {} burst(s) named in {}'s `after`, the first `{}`, had not reached the shell {} s into the close; its frames are sent without them",
+                missing.len(),
+                session.reference,
+                render_inert(first),
+                follow::BURST_ARRIVAL_WAIT.as_secs()
+            ));
         }
-        self.bus.emit(EventName::SessionDied, json!({"session": session.reference, "reason": sessions::closed()}));
-        Ok(json!({}))
+        self.await_followers(&closing, &session, "its frames are sent");
+        let sent = frames.map(|frames| self.send_carried(&session, frames));
+        self.await_followers(&closing, &session, "the session ends");
+        if let Some(session) = self.sessions.close(&session.reference) {
+            self.feed(&session.board_reference).closing(&session);
+            if let Err(h) = session.board.session_close(&session.token) {
+                self.say(format!("close: the board did not close {}'s token ({h}); it dies at the board's restart", session.reference));
+            }
+            self.bus.emit(EventName::SessionDied, json!({"session": session.reference, "reason": sessions::closed()}));
+        }
+        drop(closing);
+        Ok(sent.map_or_else(|| json!({}), |sent| json!({"sent": sent})))
+    }
+
+    /// Waits, for the page's close, until no follower of its session waits.
+    ///
+    /// It is the close's wait ([`Closing::followers`]); the followers still
+    /// waiting at the wait's bound are said on `Talk`, with `next`, what the
+    /// close does without them.
+    fn await_followers(&self, closing: &Closing<'_>, session: &SessionEntry, next: &str) {
+        let under_way = closing.followers();
+        if under_way > 0 {
+            self.say(format!(
+                "close: {under_way} write(s) handed over with their bursts under {} were still under way at the close's {} s bound; {next} without them",
+                session.reference,
+                FOLLOW_AT_STOP.as_secs()
+            ));
+        }
+    }
+
+    /// Sends a close's frames under `session` in order, answering each.
+    ///
+    /// The answers are the `close` row's `sent`. Each is sent as the `op` row's
+    /// session form sends it ([`Shell::carried_frame`]) while the session
+    /// stands, and once it stands no longer each frame after is answered as a
+    /// call on the ended session ([`Shell::session_gone`]), unsent. An answer
+    /// is `op`'s answer, or `{refused}` with the refusal. A frame held, refused
+    /// or unsent is said on `Talk`, since the page that sent it may be gone
+    /// (SP-12): its place in the list, its `op`, its document and its burst's
+    /// `id`, and the hold's cause or the refusal's name — a halt about a file
+    /// with its path, which never crosses the bridge (SP-15).
+    fn send_carried(&self, session: &SessionEntry, frames: Vec<Carried<'_>>) -> Vec<Value> {
+        let count = frames.len();
+        let mut answers = Vec::with_capacity(count);
+        for (k, carried) in frames.into_iter().enumerate() {
+            let named = carried.named();
+            let stands = self.sessions.get(&session.reference).is_some();
+            let answer = if stands { self.carried_frame(session, carried) } else { Err(self.session_gone(&session.reference)) };
+            let what = match &answer {
+                Ok(v) if v["resp"] == "held" => Some(format!("was held `{}`", render_inert(v["cause"].as_str().unwrap_or("held")))),
+                Ok(_) => None,
+                Err(refusal) if !stands => Some(format!("was not sent: the session had ended (`{}`)", refusal.name())),
+                Err(refusal @ Refusal::Halt { face, .. }) if face.path.is_some() => Some(format!("was refused: {refusal}")),
+                Err(refusal) => Some(format!("was refused `{}`", render_inert(refusal.name()))),
+            };
+            if let Some(what) = what {
+                self.say(format!("close: frame {} of {count} under {}, {named}, {what}", k + 1, session.reference));
+            }
+            answers.push(answer.unwrap_or_else(|refusal| json!({"refused": refusal.to_value()})));
+        }
+        answers
+    }
+
+    /// Answers one frame a close carries as `op`'s session form answers it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Shell::op`]'s session form past its session's lookup: the
+    /// follower's and the anchors' form (`Follower::of`, `anchors_of`), the
+    /// door's refusals ([`Shell::admit_frame`]), then the follow's or the
+    /// hold's answer ([`Shell::send_frame`]).
+    fn carried_frame(&self, session: &SessionEntry, carried: Carried<'_>) -> Result<Value, Refusal> {
+        let Carried { entry, frame } = carried;
+        let follower = Follower::of(entry, &frame, None)?;
+        let anchors = anchors_of(entry, follower.as_ref())?;
+        self.admit_frame(session, &frame, follower.is_some())?;
+        self.send_frame(session, frame, follower, anchors)
     }
 
     /// Answers `health(board)` with `{health, mode}`.
@@ -1760,7 +1959,9 @@ impl Shell {
     /// anchors' — are resolved against an insert's ack, and it goes by the
     /// hold's one path as every session write does, a delete with its
     /// anchors, answered as the frame's own send is ([`Shell::follow`]) — at
-    /// the shell's stop too, which waits on it before any session closes.
+    /// the shell's stop and at the page's close too, each of which waits on
+    /// it before the session closes. The frames a close carries go by the
+    /// same path past the session's lookup ([`Shell::close`]).
     ///
     /// # Errors
     ///
@@ -1842,38 +2043,64 @@ impl Shell {
             };
         }
         let follower = Follower::of(args, &frame, at)?;
-        // A delete follower's anchors are its own, read in its form.
-        let anchors = if follower.as_ref().is_some_and(Follower::reads_anchors) { None } else { optional(args, "anchors", Anchors::of)? };
+        let anchors = anchors_of(args, follower.as_ref())?;
         let session = self.session(&args["session"])?;
-        if WRITE_KINDS.contains(&op) {
-            // A follower waits on its burst, whose hold answers for it
-            // (`not_followed`): the standing hold is asked of it where it
-            // dials, never ahead of its burst.
-            let write = if follower.is_some() { Write::follower(op) } else { Write::frame(op) };
-            self.write_door(Writer::Session(&session), &write)?;
-        }
-        if op == "publish" {
-            return Err(Refusal::shell(Name::PUBLISH_IS_A_CALL, json!({"op": op})));
-        }
-        let Some(at) = at else {
-            if let Some(follower) = follower {
-                return self.follow(&session, follower, frame);
-            }
-            // A burst with an `id` is kept for its followers, its outcome the
-            // answer below, whichever arm gives it.
-            let stands = || self.sessions.get(&session.reference).is_some();
-            let sent = self.followers.sent(&session.reference, &frame, stands);
-            let answer = self.send(&session, frame, anchors);
-            if let Some(sent) = sent {
-                sent.settle(&answer);
-            }
-            return answer;
-        };
+        self.admit_frame(&session, &frame, follower.is_some())?;
+        let Some(at) = at else { return self.send_frame(&session, frame, follower, anchors) };
         match session.board.op_at(Some(&session.token), at, &frame)? {
             AtAnswer::Document(v) => Self::document_answer(v),
             AtAnswer::Closed => Err(self.died(&session)),
             other => Err(at_refusal(other)),
         }
+    }
+
+    /// Admits a session-form frame under `session` before any of it is sent.
+    ///
+    /// A write meets the shell's one write door ([`Shell::write_door`]) — a
+    /// follower as one its burst's hold answers for (`Write::follower`) —
+    /// and a `publish` frame is refused: a publication crosses as
+    /// `publication.confirm`, composed by the shell from the panel it holds,
+    /// never as a frame the page composed (§4b.1's `op` row, decision 1 (b)).
+    ///
+    /// # Errors
+    ///
+    /// Returns the write door's refusals, then `publish_is_a_call`.
+    fn admit_frame(&self, session: &SessionEntry, frame: &Value, follower: bool) -> Result<(), Refusal> {
+        let op = frame["op"].as_str().unwrap_or("");
+        if WRITE_KINDS.contains(&op) {
+            // A follower waits on its burst, whose hold answers for it
+            // (`not_followed`): the standing hold is asked of it where it
+            // dials, never ahead of its burst.
+            let write = if follower { Write::follower(op) } else { Write::frame(op) };
+            self.write_door(Writer::Session(session), &write)?;
+        }
+        if op == "publish" {
+            return Err(Refusal::shell(Name::PUBLISH_IS_A_CALL, json!({"op": op})));
+        }
+        Ok(())
+    }
+
+    /// Sends a session-form frame of no `/op-at` form, and answers it.
+    ///
+    /// It goes under `session`: a follower by its follow ([`Shell::follow`]);
+    /// any other frame by the hold's one path ([`Shell::send`]) with its
+    /// `anchors`, a burst with an `id` kept for its followers, its outcome the
+    /// answer, whichever arm gives it (`Followers::sent`).
+    ///
+    /// # Errors
+    ///
+    /// Returns the follow's refusals or the send's.
+    fn send_frame(&self, session: &SessionEntry, frame: Value, follower: Option<Follower>, anchors: Option<Anchors>) -> Result<Value, Refusal> {
+        if let Some(follower) = follower {
+            return self.follow(session, follower, frame);
+        }
+        let stands = || self.sessions.get(&session.reference).is_some();
+        let sent = self.followers.sent(&session.reference, &frame, stands);
+        let answer = self.send(session, frame, anchors);
+        if let Some(sent) = sent {
+            sent.settle(&answer);
+        }
+        answer
     }
 
     /// Sends one frame under `session` by the hold's one path, and answers it.
@@ -2414,10 +2641,12 @@ impl Shell {
     /// walk that asks the page after the stop is abandoned at once; the
     /// follower writes the page handed over with their bursts are waited on —
     /// each burst's dial, then the follower's own, under the session still
-    /// open — for at most `FOLLOW_AT_STOP`, each one still waiting then
-    /// refused `not_followed` and said on `Talk` (`Followers::drain`; §3c.6
-    /// step (2)); every session is out of the table and its close sent to
-    /// its board — a board that does not answer keeps the token until its
+    /// open — and so is each of the page's closes under way, its frames sent
+    /// and its session ended (`Shell::close`), for at most `FOLLOW_AT_STOP`,
+    /// each follower still waiting then refused `not_followed` and each close
+    /// left to its frames, said on `Talk` (`Followers::drain`; §3c.6
+    /// step (2)); every session is out of the table and its close sent to its
+    /// board — a board that does not answer keeps the token until its
     /// restart, said on `Talk` as `close` says it; the shell's dialer is
     /// stopped; every board's feed threads are stopped — each `/events`
     /// reader asked to stop, ending at its next read, each consumer saved and

@@ -27,7 +27,12 @@
 //! other writer's words untouched — the person's `send` on a moved
 //! document raising its base through the changes that moved it, a face
 //! after it naming only the changes since — the close order and the relaunch
-//! listing its held line, a second principal's file untouched and unlisted,
+//! listing its held line, the page's close carrying its last frames (skep
+//! #999) — a replacement's two landing in their order, a frame held at a
+//! silent board and listed by the next session, every frame sent whatever
+//! the one before it answered, the frames sent once the bursts the close's
+//! `after` names are answered, and each frame after a death answered
+//! `session_died` unsent — a second principal's file untouched and unlisted,
 //! a halted file's path crossing the bridge never and the file shown in the
 //! shell's own window as often as the page asks,
 //! a burst on a draft just minted kept across a restart, a relaunch with its
@@ -64,10 +69,15 @@ struct HeldGround {
 /// The store's key is the claim's, and the shell holds a session and a draft
 /// with one insert acked.
 fn held_ground(dir: &TempDir, sd: &Skepd) -> HeldGround {
+    held_ground_said(dir, sd).0
+}
+
+/// Builds [`held_ground`]'s ground, the shell's TALK lines beside it.
+fn held_ground_said(dir: &TempDir, sd: &Skepd) -> (HeldGround, Arc<Mutex<Vec<String>>>) {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (shell, _lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let (shell, lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
@@ -76,7 +86,7 @@ fn held_ground(dir: &TempDir, sd: &Skepd) -> HeldGround {
     let draft = minted["addr"].as_str().unwrap().to_string();
     let acked = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"], "as_of": minted["at"]}})).unwrap();
     let at = acked["at"].as_u64().unwrap_or_else(|| panic!("the ground's insert is acked: {acked}"));
-    HeldGround { shell, seen, board, session, draft, at }
+    (HeldGround { shell, seen, board, session, draft, at }, lines)
 }
 
 /// Checks that a held burst is resent after a restart and kept.
@@ -821,6 +831,253 @@ fn the_close_persists_the_held_line_and_the_relaunch_lists_it() {
     let rows = shell.call("held", &json!({"session": session})).unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 1, "the relaunch lists the held line: {rows}");
     assert_eq!(rows[0]["doc"], draft);
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// Returns the identity of the ground's `a`, the draft's one unit.
+///
+/// It is read off the board's own `image` as a page reads it.
+fn identity_of_a(ground: &HeldGround) -> String {
+    let image = ground.shell.call("op", &json!({"session": ground.session, "frame": skep_client::board::frames::image(&ground.draft, 1, 1)})).unwrap();
+    image["runs"][0]["i_start"].as_str().unwrap_or_else(|| panic!("the identity of `a`: {image}")).to_string()
+}
+
+/// Returns the draft's text, read under a session opened for the reading.
+///
+/// It is opened at `board`: the session the cell closed has ended.
+fn read_afresh(shell: &Shell, board: &str, draft: &str) -> String {
+    let later = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    text_of(&shell.call("op", &json!({"session": later, "frame": skep_client::board::frames::retrieve_v(draft, 1, 3)})).unwrap())
+}
+
+/// Checks that a close carrying a replacement lands its two frames in order.
+///
+/// It is the page's tab closed with a replacement unsent (§4b.1's `close`
+/// row; §3c.6): the delete of `a` and the insert of `b` in its place, each
+/// typed against the draft's state before either, with the anchors a page
+/// sends — the delete's `a`'s run between the document's two edges, the
+/// insert's two edges — carried by one close. The delete lands, the insert
+/// is shifted through it and lands, `sent` answering both acks in order; the
+/// draft reads `b`, no line is held and no `moved` said; and the close ends
+/// the session, its `session-died` the `closed` arm (the mutant that sends
+/// the frames in another order lands the insert first and holds the delete
+/// moved, its span refilled; the close that reads no `frames` writes
+/// neither, and answers `{}`).
+#[test]
+fn a_close_carrying_a_replacements_two_frames_lands_both_in_their_order() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let ground = held_ground(&dir, &sd);
+    let a = identity_of_a(&ground);
+    let HeldGround { shell, seen, board, session, draft, at } = ground;
+    let first = json!({"subspace": "1", "ordinal": "1"});
+    let delete = json!({"frame": {"op": "delete", "doc": draft, "p": first, "width": "1", "as_of": at}, "anchors": {"before": null, "after": null, "span": [{"start": a, "width": "1"}]}});
+    let insert = json!({"frame": {"op": "insert", "doc": draft, "at": first, "values": ["b"], "as_of": at}, "anchors": {"before": null, "after": null}});
+    let closed = shell.call("close", &json!({"session": session, "frames": [delete, insert]})).unwrap();
+    crate::shapes::assert_declared("CloseSent", &closed);
+    let sent = closed["sent"].as_array().unwrap_or_else(|| panic!("{closed}"));
+    assert_eq!((sent.len(), sent[0]["resp"].as_str(), sent[1]["resp"].as_str()), (2, Some("ack"), Some("ack_addr")), "both acked, the delete first: {closed}");
+    assert!(matches!((sent[0]["at"].as_u64(), sent[1]["at"].as_u64()), (Some(deleted), Some(inserted)) if deleted < inserted), "the delete landed before the insert: {closed}");
+    let died = wait_for(&seen, |e| e.name == EventName::SessionDied && e.data["session"] == session);
+    assert_eq!(died.data["reason"], json!({"arm": "closed"}), "{:?}", died.data);
+    assert_eq!(read_afresh(&shell, &board, &draft), "b", "the replacement landed whole");
+    let later = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    assert!(shell.call("held", &json!({"session": later})).unwrap().as_array().unwrap().is_empty(), "no line held");
+    assert!(!seen.lock().unwrap().iter().any(|e| e.name == EventName::Held && e.data["state"] == "moved"), "no `moved` said");
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a close's frame at a silent board is held and listed next.
+///
+/// The daemon stopped under the shell, a close carrying an insert holds it
+/// `unreachable` — `sent` answering `held`, the line said in the shell's own
+/// window, since the page that sent it is gone — and ends the session all
+/// the same; a relaunch over the same store, the daemon started again, lists
+/// the line at its first session's open, in the bare mode, which resends
+/// none of it (the close that reads no `frames` leaves the words with the
+/// page that is gone).
+#[test]
+fn a_close_carrying_a_frame_while_its_board_is_silent_holds_the_line_and_the_next_session_lists_it() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let port = sd.port();
+    let (HeldGround { shell, seen, session, draft, at, .. }, said) = held_ground_said(&dir, &sd);
+    sd.shutdown();
+    let frame = json!({"op": "insert", "id": "b-1", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"], "as_of": at});
+    let closed = shell.call("close", &json!({"session": session, "frames": [{"frame": frame}]})).unwrap();
+    crate::shapes::assert_declared("CloseSent", &closed);
+    let held = &closed["sent"][0];
+    crate::shapes::assert_declared("HeldAnswer", held);
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("unreachable")), "{closed}");
+    wait_for(&seen, |e| e.name == EventName::SessionDied && e.data["session"] == session);
+    let talk = said.lock().unwrap().join("\n");
+    assert!(talk.contains(&format!("close: frame 1 of 1 under {session}, `insert` on `{draft}`, burst `b-1`, was held `unreachable`")), "the held frame is said: {talk}");
+    shell.shutdown();
+    drop(shell);
+    let sd = spawn_at(&dir.path().join("board"), true, port);
+    let (shell, _lines) = open_shell(&format!("http://127.0.0.1:{port}"), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
+    let next = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let rows = shell.call("held", &json!({"session": next})).unwrap();
+    assert_eq!(
+        (rows.as_array().map(Vec::len), rows[0]["doc"].as_str(), &rows[0]["frame"]["values"]),
+        (Some(1), Some(draft.as_str()), &json!(["b"])),
+        "the relaunch lists the line the close held: {rows}"
+    );
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a close sends every frame, whatever the one before answered.
+///
+/// One close carries two drafts' frames: the first draft's `publish` frame,
+/// refused at the shell's door with nothing held (`publish_is_a_call`); its
+/// insert whose anchors are of no form, refused in its own entry as `op`
+/// refuses it (`malformed_args` naming `anchors`); then its insert of `x`;
+/// then the second draft's insert of `y`. Each refused frame is said in the
+/// shell's own window, the two inserts are acked in the list's order, the
+/// first draft reading `ax` and the second `y`, and the session ends with
+/// its `session-died` (the mutant that stops at a frame's refusal loses the
+/// person's `x` and `y`; the one that refuses the whole close for one
+/// entry's anchors loses them too).
+#[test]
+fn a_close_sends_every_frame_whatever_the_one_before_it_answered() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let (HeldGround { shell, seen, board, session, draft, at }, said) = held_ground_said(&dir, &sd);
+    let minted = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
+    let other = minted["addr"].as_str().unwrap().to_string();
+    let second = json!({"subspace": "1", "ordinal": "2"});
+    let frames = json!([
+        {"frame": {"op": "publish", "doc": draft, "draft": draft, "runs": []}},
+        {"frame": {"op": "insert", "doc": draft, "at": second, "values": ["w"], "as_of": at}, "anchors": 7},
+        {"frame": {"op": "insert", "doc": draft, "at": second, "values": ["x"], "as_of": at}},
+        {"frame": {"op": "insert", "doc": other, "at": {"subspace": "1", "ordinal": "1"}, "values": ["y"], "as_of": minted["at"]}},
+    ]);
+    let closed = shell.call("close", &json!({"session": session, "frames": frames})).unwrap();
+    crate::shapes::assert_declared("CloseSent", &closed);
+    let sent = closed["sent"].as_array().unwrap_or_else(|| panic!("{closed}"));
+    assert_eq!(sent.len(), 4, "one answer per frame: {closed}");
+    assert_eq!(sent[0]["refused"]["name"], "publish_is_a_call", "{closed}");
+    assert_eq!((sent[1]["refused"]["name"].as_str(), sent[1]["refused"]["what"].as_str()), (Some("malformed_args"), Some("anchors")), "{closed}");
+    assert!(matches!((sent[2]["at"].as_u64(), sent[3]["at"].as_u64()), (Some(x), Some(y)) if x < y), "both inserts acked, in the list's order: {closed}");
+    wait_for(&seen, |e| e.name == EventName::SessionDied && e.data["session"] == session);
+    let talk = said.lock().unwrap().join("\n");
+    let publish = format!("frame 1 of 4 under {session}, `publish` on `{draft}`, was refused `publish_is_a_call`");
+    let anchors = format!("frame 2 of 4 under {session}, `insert` on `{draft}`, was refused `malformed_args`");
+    for line in [publish, anchors] {
+        assert!(talk.contains(&line), "the refused frame is said, {line}: {talk}");
+    }
+    assert_eq!((read_afresh(&shell, &board, &draft), read_afresh(&shell, &board, &other)), ("ax".to_string(), "y".to_string()));
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a close sends its frames once its `after` bursts answer.
+///
+/// It is a tab hidden, then closed (§3c.6): the replacement's delete of `a`,
+/// dialed by `op` as the page was hidden, is entered as the `op` row enters a
+/// burst with an `id` and stands unanswered — its dial in flight — while the
+/// close that names it in `after` and carries the insert of `b` waits;
+/// nothing of the insert is sent while it waits, the draft reading `a`; the
+/// delete then dialed and its burst answered with its ack, the close sends
+/// the insert, shifted through the delete, the draft reading `b` and no
+/// `moved` said (the close that waits for nothing lands the insert first and
+/// holds the delete moved).
+#[test]
+fn a_close_sends_its_frames_once_the_bursts_its_after_names_are_answered() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let ground = held_ground(&dir, &sd);
+    let a = identity_of_a(&ground);
+    let HeldGround { shell, seen, board, session, draft, at } = ground;
+    let first = json!({"subspace": "1", "ordinal": "1"});
+    let delete = json!({"op": "delete", "doc": draft, "p": first, "width": "1", "as_of": at});
+    let mut in_flight = delete.clone();
+    in_flight["id"] = Value::from("b-1");
+    let sent = shell.followers.sent(&session, &in_flight, || true).expect("a burst with an id is kept");
+    let insert = json!({"frame": {"op": "insert", "doc": draft, "at": first, "values": ["b"], "as_of": at}, "anchors": {"before": null, "after": null}});
+    let closed = thread::scope(|scope| {
+        let close = scope.spawn(|| shell.call("close", &json!({"session": session, "after": ["b-1"], "frames": [insert]})));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while shell.followers.closes() == 0 {
+            assert!(Instant::now() < deadline, "the close never began");
+            thread::sleep(Duration::from_millis(5));
+        }
+        thread::sleep(Duration::from_millis(200));
+        assert!(!close.is_finished(), "the close waits on the burst its `after` names");
+        let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 3)})).unwrap();
+        assert_eq!(text_of(&read), "a", "nothing of the close's frames is sent while it waits");
+        let deleted = shell.call("op", &json!({"session": session, "frame": delete, "anchors": {"before": null, "after": null, "span": [{"start": a, "width": "1"}]}})).unwrap();
+        assert_eq!(deleted["resp"], "ack", "{deleted}");
+        sent.settle(&Ok(deleted));
+        close.join().unwrap()
+    });
+    let closed = closed.unwrap();
+    assert_eq!(closed["sent"][0]["resp"], "ack_addr", "the insert, shifted through the delete: {closed}");
+    assert_eq!(read_afresh(&shell, &board, &draft), "b", "the replacement landed whole");
+    assert!(!seen.lock().unwrap().iter().any(|e| e.name == EventName::Held && e.data["state"] == "moved"), "no `moved` said");
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a close's frames after a death are answered `session_died`.
+///
+/// The session's token closed at the board while its feed stands quiet, a
+/// close carries two inserts: the first meets the death at its dial and is
+/// held `session_died` (§3c.4), the session ended by the one sequence and
+/// the restart arm re-opening it; the second is answered the death's
+/// `session_died`, naming the re-opened session, unsent, and said in the
+/// shell's own window; the close answers its list — never `session_ended`,
+/// the end it would have made having been made — and `session-died` is said
+/// for the session once; the held line lands under the re-opened session,
+/// and the second insert's words never (the close that ends its session
+/// after a death answers `session_ended` and loses the list).
+#[test]
+fn a_close_whose_first_frame_meets_the_death_answers_each_later_frame_session_died() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let (HeldGround { shell, seen, board, session, draft, at }, said) = held_ground_said(&dir, &sd);
+    // The feed widens the session's supplement, then falls quiet: nothing
+    // commits, so the first frame's dial is the first to meet the death.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let (mut events, mut quiet_since) = (0, Instant::now());
+    loop {
+        let (now, widened) = {
+            let seen = seen.lock().unwrap();
+            (seen.len(), seen.iter().any(|e| e.name == EventName::Index && e.data["session"] == session))
+        };
+        if now != events {
+            (events, quiet_since) = (now, Instant::now());
+        }
+        if widened && quiet_since.elapsed() > Duration::from_millis(500) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the board never fell quiet");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let token = shell.sessions.get(&session).unwrap().token.clone();
+    Board::new(Origin::parse(&origin).unwrap(), skep_client::PlainHttp::new()).session_close(&token).unwrap();
+    shell.feed(&board).probe();
+    let insert = |ordinal: &str, text: &str| json!({"frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": ordinal}, "values": [text], "as_of": at}});
+    let closed = shell.call("close", &json!({"session": session, "frames": [insert("2", "b"), insert("3", "c")]})).unwrap_or_else(|r| panic!("the close answers its list: {r}"));
+    crate::shapes::assert_declared("CloseSent", &closed);
+    let sent = closed["sent"].as_array().unwrap_or_else(|| panic!("{closed}"));
+    assert_eq!((sent[0]["resp"].as_str(), sent[0]["cause"].as_str()), (Some("held"), Some("session_died")), "{closed}");
+    let died = wait_for(&seen, |e| e.name == EventName::SessionDied && e.data["session"] == session);
+    let reopened = died.data["reason"]["session"].as_str().expect("the restart arm re-opened the session").to_string();
+    let refused = &sent[1]["refused"];
+    assert_eq!((refused["name"].as_str(), refused["reason"]["arm"].as_str(), refused["reason"]["session"].as_str()), (Some("session_died"), Some("restart"), Some(reopened.as_str())), "{closed}");
+    let deaths = seen.lock().unwrap().iter().filter(|e| e.name == EventName::SessionDied && e.data["session"] == session).count();
+    assert_eq!(deaths, 1, "the death said `session-died`, and the close no second time");
+    let talk = said.lock().unwrap().join("\n");
+    assert!(talk.contains(&format!("close: frame 2 of 2 under {session}, `insert` on `{draft}`, was not sent: the session had ended (`session_died`)")), "{talk}");
+    wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept" && e.data["session"] == reopened);
+    let read = shell.call("op", &json!({"session": reopened, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 3)})).unwrap();
+    assert_eq!(text_of(&read), "ab", "the held frame landed, and the unsent one never: {read}");
     shell.shutdown();
     sd.shutdown();
 }

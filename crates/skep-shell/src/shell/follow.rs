@@ -55,17 +55,32 @@
 //! the table waits [`BURST_ARRIVAL_WAIT`] for it — no transport keeps two
 //! calls of one page in order — and is refused `no_such_burst` after.
 //!
+//! **The close.** The page's close of a session (§4b.1's `close` row) is
+//! entered in the session's table for as long as it runs
+//! ([`Followers::closing`]), and waits there before it sends the frames it
+//! carries (SWEEP 11 CLOSE C8 (a)): first for each burst its `after` names,
+//! until that burst's call answers whatever it answers — an `id` no burst of
+//! reaches the table within [`BURST_ARRIVAL_WAIT`] of the close is waited
+//! for no longer ([`Closing::bursts`]) — then until no follower of the
+//! session waits, for at most [`FOLLOW_AT_STOP`] ([`Closing::followers`]);
+//! and once its frames are sent, for the followers again before it ends the
+//! session. So the words the page handed over before its close are written
+//! or held before the close's own, and a follower is never ended by the
+//! close the same page asked for (§3c.6). Each wait ends where the session
+//! ends or the stop's wait is over.
+//!
 //! **The stop.** [`Followers::drain`] runs at the shell's stop before any
 //! session closes (§3c.6 step (2)): it waits until every follower handed
-//! over has its answer — its burst's dial, then its own — or for
-//! [`FOLLOW_AT_STOP`], and then answers each one still waiting
-//! `not_followed`, `why: "stop"`, as it answers every follower after it. A
-//! crash loses a burst's followers with the burst.
+//! over has its answer — its burst's dial, then its own — and every close
+//! under way has ended its session, or for [`FOLLOW_AT_STOP`], and then
+//! answers each follower still waiting `not_followed`, `why: "stop"`, as it
+//! answers every follower after it. A crash loses a burst's followers with
+//! the burst.
 //!
 //! Each `not_followed` is said in the shell's own window as it is answered,
 //! since the page that asked may be gone (SP-12).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -91,8 +106,9 @@ const BURSTS_KEPT: usize = 64;
 ///
 /// The page sends the burst, then its follower; two calls cross a transport
 /// in no promised order, so a follower that overtakes its burst waits this
-/// long for it before it is refused `no_such_burst`.
-const BURST_ARRIVAL_WAIT: Duration = Duration::from_secs(1);
+/// long for it before it is refused `no_such_burst`, and the page's close
+/// this long for a burst its `after` names ([`Closing::bursts`]).
+pub(super) const BURST_ARRIVAL_WAIT: Duration = Duration::from_secs(1);
 
 /// How long the shell's stop waits for the followers handed over.
 ///
@@ -102,7 +118,8 @@ const BURST_ARRIVAL_WAIT: Duration = Duration::from_secs(1);
 /// off within it. A delete the board refuses as typed against an older state
 /// makes up to three, its dial, the shift's read and the shifted dial; its
 /// line is synced from that refusal on, so a stop past the bound loses
-/// nothing of it.
+/// nothing of it. Each of the page's close's two waits for the followers is
+/// held to it too ([`Closing::followers`]).
 pub(super) const FOLLOW_AT_STOP: Duration = Duration::from_secs(2 * (CONNECT_TIMEOUT.as_secs() + IO_TIMEOUT.as_secs()));
 
 /// One slot a piece may stand in: a `make_link`'s `from` or `to`.
@@ -485,19 +502,29 @@ struct Kept {
     broken: bool,
 }
 
-/// One session's table: its bursts kept, oldest first, and its followers.
+/// One session's table: its bursts, oldest first, its followers, its closes.
 ///
 /// `waiting` counts the followers inside [`Followers::follow`] for the
 /// session — waiting for their burst to arrive, holding a turn, or dialing
-/// — and `ended` is whether the session ended under them.
+/// — `closing` the page's closes of it under way ([`Closing`]), and `ended`
+/// is whether the session ended under them.
 #[derive(Debug, Default)]
 struct Table {
     bursts: VecDeque<Kept>,
     waiting: usize,
+    closing: usize,
     ended: bool,
 }
 
 impl Table {
+    /// Returns whether the table holds nothing a waiter or a burst needs.
+    ///
+    /// No follower waits in it, no close runs in it and it keeps no burst:
+    /// the table may go.
+    fn idle(&self) -> bool {
+        self.waiting == 0 && self.closing == 0 && self.bursts.is_empty()
+    }
+
     /// Lets go of the oldest answered bursts past [`BURSTS_KEPT`].
     ///
     /// A burst in flight, or one a follower holds a turn of, is kept beside
@@ -543,13 +570,12 @@ struct State {
 }
 
 impl State {
-    /// Leaves a follower of `session`: its turn of `held`'s burst ended,
-    /// `acked` where its own dial was acked.
+    /// Leaves a follower of `session`, its turn of `held`'s burst ended.
     ///
-    /// The turn passes to the follower after it where the turn was this
-    /// one's, the burst is `broken` where the follower was not acked, and
-    /// the session's table goes once no follower waits in it and it keeps
-    /// no burst.
+    /// `acked` is whether its own dial was acked. The turn passes to the
+    /// follower after it where the turn was this one's, the burst is
+    /// `broken` where the follower was not acked, and the session's table
+    /// goes once it is idle ([`Table::idle`]).
     fn leave(&mut self, session: &str, held: Option<(u64, u64)>, acked: bool) {
         let Some(table) = self.tables.get_mut(session) else { return };
         if let Some((serial, ticket)) = held {
@@ -562,14 +588,14 @@ impl State {
             }
         }
         table.waiting -= 1;
-        if table.waiting == 0 && table.bursts.is_empty() {
+        if table.idle() {
             self.tables.remove(session);
         }
     }
 
-    /// Returns how many followers wait, in every session's table.
-    fn waiting(&self) -> usize {
-        self.tables.values().map(|table| table.waiting).sum()
+    /// Returns the followers waiting and the closes running, in every table.
+    fn under_way(&self) -> (usize, usize) {
+        self.tables.values().fold((0, 0), |(waiting, closing), table| (waiting + table.waiting, closing + table.closing))
     }
 }
 
@@ -651,6 +677,103 @@ struct Seat<'a> {
 impl Drop for Seat<'_> {
     fn drop(&mut self) {
         self.followers.lock().leave(self.session, Some((self.serial, self.ticket)), self.acked);
+        self.followers.moved.notify_all();
+    }
+}
+
+/// The page's close of a session, under way (the module doc's close).
+///
+/// It is counted in the session's table from [`Followers::closing`], so the
+/// shell's stop waits on it as on a follower; dropped — the close ended its
+/// session, or unwound — it leaves the table, which goes once idle.
+#[must_use = "the stop waits on a close until its guard drops"]
+pub(super) struct Closing<'a> {
+    followers: &'a Followers,
+    session: String,
+    started: Instant,
+}
+
+impl Closing<'_> {
+    /// Waits until every burst `after` names has its answer (the module doc).
+    ///
+    /// The newest burst of each `id` the session's table keeps is waited on
+    /// until its call answers, whatever it answers. An `id` no burst of
+    /// reaches the table within [`BURST_ARRIVAL_WAIT`] of the close is waited
+    /// for no longer, and those `id`s are returned, in `after`'s order, each
+    /// once. The wait ends where the session ends or the stop's wait is
+    /// over, returning none.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the session's table is gone: the close's own count keeps
+    /// it until the guard drops.
+    pub(super) fn bursts(&self, after: &[String]) -> Vec<String> {
+        let named: HashSet<&str> = after.iter().map(String::as_str).collect();
+        let arrival = self.started + BURST_ARRIVAL_WAIT;
+        let mut state = self.followers.lock();
+        loop {
+            let stop = state.stop;
+            let table = state.tables.get(&self.session).expect("a close's own count keeps its table");
+            if table.ended || stop == Stop::Closed {
+                return Vec::new();
+            }
+            let (flying, arrived) = {
+                let mut found = HashSet::new();
+                let mut flying = false;
+                for kept in table.bursts.iter().rev() {
+                    if named.contains(kept.id.as_str()) && found.insert(kept.id.as_str()) {
+                        flying |= kept.outcome == Outcome::InFlight;
+                    }
+                }
+                (flying, found.len())
+            };
+            let arriving = arrived < named.len() && Instant::now() < arrival;
+            if !flying && !arriving {
+                let kept: HashSet<&str> = table.bursts.iter().map(|kept| kept.id.as_str()).collect();
+                let mut missing = HashSet::new();
+                return after.iter().filter(|id| !kept.contains(id.as_str()) && missing.insert(id.as_str())).cloned().collect();
+            }
+            state = self.followers.wait(state, arriving.then_some(arrival));
+        }
+    }
+
+    /// Waits until no follower of the session waits (the module doc).
+    ///
+    /// It answers how many still wait at its bound, [`FOLLOW_AT_STOP`] from
+    /// the call; none where they all answered, the session ended or the
+    /// stop's wait is over.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the session's table is gone: the close's own count keeps
+    /// it until the guard drops.
+    pub(super) fn followers(&self) -> usize {
+        let deadline = Instant::now() + FOLLOW_AT_STOP;
+        let mut state = self.followers.lock();
+        loop {
+            let stop = state.stop;
+            let table = state.tables.get(&self.session).expect("a close's own count keeps its table");
+            if table.waiting == 0 || table.ended || stop == Stop::Closed {
+                return 0;
+            }
+            if Instant::now() >= deadline {
+                return table.waiting;
+            }
+            state = self.followers.wait(state, Some(deadline));
+        }
+    }
+}
+
+impl Drop for Closing<'_> {
+    fn drop(&mut self) {
+        let mut state = self.followers.lock();
+        if let Some(table) = state.tables.get_mut(&self.session) {
+            table.closing -= 1;
+            if table.idle() {
+                state.tables.remove(&self.session);
+            }
+        }
+        drop(state);
         self.followers.moved.notify_all();
     }
 }
@@ -837,29 +960,52 @@ impl Followers {
         followed()
     }
 
+    /// Enters the page's close of `session` in its table, under way.
+    ///
+    /// `stands`, asked once it is entered, says whether the session still
+    /// stands: where it does not, the table is let go as at the session's
+    /// end ([`Followers::ended`]), so each of the close's waits answers at
+    /// once.
+    pub(super) fn closing(&self, session: &str, stands: impl Fn() -> bool) -> Closing<'_> {
+        let started = Instant::now();
+        self.lock().tables.entry(session.to_string()).or_default().closing += 1;
+        if !stands() {
+            self.ended(session);
+        }
+        Closing { followers: self, session: session.to_string(), started }
+    }
+
     /// Waits for every follower handed over, until `deadline`: the stop.
     ///
-    /// It answers once no follower waits, or at `deadline`, from which on
-    /// every follower still waiting — and every one that arrives after — is
-    /// refused `not_followed`, `why: "stop"`; one already dialing is left to
-    /// its dial, and the number still under way at the deadline is said in
-    /// the shell's own window. A second drain finds the wait over.
+    /// It answers once no follower waits and no close runs, or at
+    /// `deadline`, from which on every follower still waiting — and every
+    /// one that arrives after — is refused `not_followed`, `why: "stop"`; one
+    /// already dialing is left to its dial, and a close under way to its
+    /// frames, each of whose waits answers at once. The followers and the
+    /// closes still under way at the deadline are said in the shell's own
+    /// window. A second drain finds the wait over.
     pub(super) fn drain(&self, deadline: Instant) {
         let mut state = self.lock();
         if state.stop == Stop::Closed {
             return;
         }
         state.stop = Stop::Draining;
-        while state.waiting() > 0 && Instant::now() < deadline {
+        while state.under_way() != (0, 0) && Instant::now() < deadline {
             state = self.wait(state, Some(deadline));
         }
-        let under_way = state.waiting();
+        let (waiting, closing) = state.under_way();
         state.stop = Stop::Closed;
         drop(state);
         self.moved.notify_all();
-        if under_way > 0 {
+        if waiting > 0 {
             self.say(format_args!(
-                "stop: {under_way} write(s) handed over with their bursts were still under way at the stop's {} s bound; each still waiting is refused `not_followed`, and the sessions close under the rest",
+                "stop: {waiting} write(s) handed over with their bursts were still under way at the stop's {} s bound; each still waiting is refused `not_followed`, and the sessions close under the rest",
+                FOLLOW_AT_STOP.as_secs()
+            ));
+        }
+        if closing > 0 {
+            self.say(format_args!(
+                "stop: {closing} of the page's close(s) were still under way at the stop's {} s bound; the sessions close under them, and each frame a close sends after its session's close is refused",
                 FOLLOW_AT_STOP.as_secs()
             ));
         }
@@ -867,14 +1013,15 @@ impl Followers {
 
     /// Lets go of `session`'s table: the session ended.
     ///
-    /// Every follower waiting in it answers [`Followed::Ended`], and no burst
-    /// of the session is entered after.
+    /// Every follower waiting in it answers [`Followed::Ended`], every close
+    /// running in it stops waiting, and no burst of the session is entered
+    /// after.
     pub(super) fn ended(&self, session: &str) {
         let mut state = self.lock();
         if let Some(table) = state.tables.get_mut(session) {
             table.ended = true;
             table.bursts.clear();
-            if table.waiting == 0 {
+            if table.idle() {
                 state.tables.remove(session);
             }
         }
@@ -909,7 +1056,13 @@ impl Followers {
     /// Returns how many followers wait, in every session's table.
     #[cfg(test)]
     pub(super) fn waiting(&self) -> usize {
-        self.lock().waiting()
+        self.lock().under_way().0
+    }
+
+    /// Returns how many of the page's closes run, in every session's table.
+    #[cfg(test)]
+    pub(super) fn closes(&self) -> usize {
+        self.lock().under_way().1
     }
 
     /// Returns whether the stop's wait on the followers has begun: under way,

@@ -1,11 +1,14 @@
 //! THE FOLLOWED BURSTS, with no board behind them: a burst entered and
 //! answered by hand, a follower's dial a closure that records each frame it
-//! is handed — the wait for a burst in flight and for one that has not
-//! arrived, the kept outcome a late follower is followed from, a held burst
+//! is handed and its anchors — the wait for a burst in flight and for one
+//! that has not arrived, a delete follower's anchors resolved at its insert's
+//! ack, the kept outcome a late follower is followed from, a held burst
 //! refusing its followers with nothing dialed, the turns in arrival order and
-//! a refusal stopping those behind it, a piece resolved by its offset and one
-//! past the insert's positions refused, the stop's wait and its bound, a
-//! session's end, and the table's keeping of its newest answered bursts.
+//! a refusal or a hold stopping those behind it, a piece resolved by its
+//! offset and one past the insert's positions refused, a delete's pieces that
+//! name no words of its burst refused, an ack naming no address of the
+//! insert's own, the stop's wait and its bound, a session's end, and the
+//! table's keeping of its newest answered bursts.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -45,15 +48,26 @@ fn ack_addr(first: u64) -> Result<Value, Refusal> {
     Ok(json!({"resp": "ack_addr", "addr": format!("1.0.1.0.1.0.1.{first}"), "at": 9}))
 }
 
-/// The frames a recording dial was handed, in order.
-type Dialed = Arc<Mutex<Vec<Value>>>;
+/// A `delete` of `width` positions from the document's position `p`.
+fn delete(p: u64, width: u64) -> Value {
+    json!({"op": "delete", "doc": "1.0.1.0.1", "p": {"subspace": "1", "ordinal": p.to_string()}, "width": width.to_string(), "as_of": 3})
+}
 
-/// A dial that records the frames it is handed and acks each.
-fn recording() -> (Dialed, impl Fn(Value) -> Result<Value, Refusal> + Clone) {
+/// The delete follower the door reads off `frame` with `after` and
+/// `anchors`.
+fn delete_follower(after: &str, frame: &Value, anchors: Value) -> Follower {
+    Follower::of(&json!({"after": after, "anchors": anchors}), frame, None).unwrap().expect("a follower")
+}
+
+/// The frames a recording dial was handed, in order, each with its anchors.
+type Dialed = Arc<Mutex<Vec<(Value, Option<Anchors>)>>>;
+
+/// A dial that records the frames and anchors it is handed and acks each.
+fn recording() -> (Dialed, impl Fn(Value, Option<Anchors>) -> Result<Value, Refusal> + Clone) {
     let dialed = Arc::new(Mutex::new(Vec::new()));
     let kept = Arc::clone(&dialed);
-    (dialed, move |frame: Value| {
-        kept.lock().unwrap().push(frame);
+    (dialed, move |frame: Value, anchors: Option<Anchors>| {
+        kept.lock().unwrap().push((frame, anchors));
         Ok(json!({"resp": "ack_addr", "addr": "1.0.1.0.1.0.2.1", "at": 10}))
     })
 }
@@ -101,11 +115,47 @@ fn a_follower_waits_for_its_burst_in_flight_and_goes_at_its_ack() {
     let dialed = dialed.lock().unwrap();
     assert_eq!(dialed.len(), 1, "{dialed:?}");
     assert_eq!(
-        dialed[0]["to"]["spans"],
+        dialed[0].0["to"]["spans"],
         json!([{"start": "1.0.1.0.1.0.1.18", "width": "5"}, {"start": "1.0.1.0.2.0.1.1", "width": "2"}]),
         "the piece resolved in its place, the span beside it as given"
     );
     assert_eq!(f.waiting(), 0, "the follower left the table");
+}
+
+/// Checks that a delete follower waits for its insert and goes at its ack,
+/// its anchors resolved.
+///
+/// It is an undo's delete of words of an insert in flight (D6 BM-34,
+/// BM-73): its `before` anchor a piece naming the insert's sixth position,
+/// its `after` an I-address and its `span` a run piece naming five positions
+/// from the seventh. Nothing is dialed while the insert is in flight; at its
+/// ack the delete is dialed once, its frame as sent and its anchors resolved
+/// against the first I-address the ack names — each piece that address
+/// advanced by its offset, the run's width kept — the I-address standing as
+/// given (the mutant that drops a delete follower's anchors dials it with
+/// none, so the board's refusal of it as typed against an older state holds
+/// it moved; the one that leaves a run piece unresolved dials anchors no
+/// reader takes).
+#[test]
+fn a_delete_follower_waits_for_its_insert_and_goes_at_its_ack_its_anchors_resolved() {
+    let (f, _) = followers();
+    let sent = f.sent(SESSION, &insert("b-1", "hello world"), || true).expect("a burst with an id is kept");
+    let (dialed, dial) = recording();
+    let frame = delete(7, 5);
+    let anchors = json!({"before": {"burst": "b-1", "offset": 5}, "after": "1.0.1.0.1.0.1.3", "span": [{"burst": "b-1", "offset": 6, "width": 5}]});
+    thread::scope(|scope| {
+        let waiting = scope.spawn(|| f.follow(SESSION, delete_follower("b-1", &frame, anchors.clone()), frame.clone(), || true, dial));
+        until_waiting(&f, 1);
+        thread::sleep(Duration::from_millis(20));
+        assert!(dialed.lock().unwrap().is_empty(), "nothing is dialed while the insert is in flight");
+        sent.settle(&ack_addr(12));
+        assert!(matches!(waiting.join().unwrap(), Followed::Answered(Ok(_))), "the follower is answered");
+    });
+    let dialed = dialed.lock().unwrap();
+    assert_eq!(dialed.len(), 1, "{dialed:?}");
+    assert_eq!(dialed[0].0, frame, "the frame dialed as sent");
+    let resolved = json!({"before": "1.0.1.0.1.0.1.17", "after": "1.0.1.0.1.0.1.3", "span": [{"start": "1.0.1.0.1.0.1.18", "width": "5"}]});
+    assert_eq!(dialed[0].1.as_ref().map(Anchors::json), Some(resolved), "each piece resolved against the ack's address, read by the anchors' one reader");
 }
 
 /// Checks that a burst answered before its follower arrives is followed from
@@ -122,7 +172,7 @@ fn a_burst_answered_before_its_follower_arrives_is_followed_from_its_kept_outcom
     let (dialed, dial) = recording();
     let frame = mark(json!([{"burst": "b-1", "offset": 0, "width": 3}]));
     let Followed::Answered(Ok(_)) = f.follow(SESSION, follower("b-1", &frame), frame.clone(), || true, dial) else { panic!("followed") };
-    assert_eq!(dialed.lock().unwrap()[0]["to"]["spans"], json!([{"start": "1.0.1.0.1.0.1.1", "width": "3"}]));
+    assert_eq!(dialed.lock().unwrap()[0].0["to"]["spans"], json!([{"start": "1.0.1.0.1.0.1.1", "width": "3"}]));
 }
 
 /// Checks that a held burst refuses its followers and nothing is dialed.
@@ -131,7 +181,8 @@ fn a_burst_answered_before_its_follower_arrives_is_followed_from_its_kept_outcom
 /// refused are not acked: each follower is refused `not_followed`, `why:
 /// "burst"` with the burst's cause, its dial never called, and the refusal
 /// said in the shell's own window, since the page that asked may be gone
-/// (SP-12); a `nullify` follows as a `make_link` does.
+/// (SP-12); a `nullify` follows as a `make_link` does, and a `delete`, held
+/// behind no line of the burst's (D6 BM-81).
 #[test]
 fn a_held_or_refused_burst_refuses_its_followers_and_nothing_is_dialed() {
     let (f, lines) = followers();
@@ -140,7 +191,7 @@ fn a_held_or_refused_burst_refuses_its_followers_and_nothing_is_dialed() {
         .unwrap()
         .settle(&Err(Refusal::shell(Name::FRAME_TOO_LARGE, json!({}))));
     let dials = AtomicUsize::new(0);
-    let dial = |_: Value| -> Result<Value, Refusal> {
+    let dial = |_: Value, _: Option<Anchors>| -> Result<Value, Refusal> {
         dials.fetch_add(1, Ordering::SeqCst);
         Ok(json!({}))
     };
@@ -152,9 +203,13 @@ fn a_held_or_refused_burst_refuses_its_followers_and_nothing_is_dialed() {
     let answer = f.follow(SESSION, follower("b-2", &nullify), nullify, || true, dial);
     let Followed::Answered(Err(r)) = answer else { panic!("refused") };
     assert_eq!((r.to_value()["why"].as_str(), r.to_value()["cause"].as_str()), (Some("burst"), Some("frame_too_large")));
+    let undo = delete(1, 1);
+    let answer = f.follow(SESSION, delete_follower("b-1", &undo, json!({"before": null, "after": null, "span": [{"burst": "b-1", "offset": 0, "width": 1}]})), undo, || true, dial);
+    let Followed::Answered(Err(r)) = answer else { panic!("refused") };
+    assert_eq!((r.to_value()["why"].as_str(), r.to_value()["cause"].as_str()), (Some("burst"), Some("stopped")), "a delete is refused as a link write is");
     assert_eq!(dials.load(Ordering::SeqCst), 0, "nothing is dialed");
     let said = lines.lock().unwrap();
-    assert_eq!(said.iter().filter(|line| line.contains("not sent") && line.contains("nothing of it was written")).count(), 2, "{said:?}");
+    assert_eq!(said.iter().filter(|line| line.contains("not sent") && line.contains("nothing of it was written")).count(), 3, "{said:?}");
 }
 
 /// Checks that followers go in arrival order and one not acked refuses
@@ -172,7 +227,7 @@ fn followers_go_in_arrival_order_and_one_not_acked_refuses_those_behind() {
     let order = Mutex::new(Vec::new());
     let dial_as = |n: usize, ok: bool| {
         let order = &order;
-        move |_: Value| -> Result<Value, Refusal> {
+        move |_: Value, _: Option<Anchors>| -> Result<Value, Refusal> {
             order.lock().unwrap().push(n);
             if ok {
                 Ok(json!({"resp": "ack_addr", "addr": "1.0.1.0.1.0.2.1", "at": 10}))
@@ -195,6 +250,28 @@ fn followers_go_in_arrival_order_and_one_not_acked_refuses_those_behind() {
         assert_eq!(refused(third.join().unwrap()), ("not_followed".to_string(), Some("ahead".to_string())));
     });
     assert_eq!(*order.lock().unwrap(), [1, 2], "dialed in arrival order, the third never");
+}
+
+/// Checks that a follower held at its dial is not acked, and refuses those
+/// behind it.
+///
+/// A delete follower is a burst, so its own answer may be the hold's `held`:
+/// such a follower of an acked burst leaves its turn unacked, and the one
+/// after it is refused `not_followed`, `why: "ahead"`, unsent (D6 BM-69; the
+/// mutant that takes every answer that is no refusal for an ack writes the
+/// step's second write beside a first still held).
+#[test]
+fn a_follower_held_at_its_dial_is_not_acked_and_refuses_those_behind() {
+    let (f, _) = followers();
+    f.sent(SESSION, &insert("b-1", "abc"), || true).unwrap().settle(&ack_addr(1));
+    let undo = delete(1, 1);
+    let held = |_: Value, _: Option<Anchors>| -> Result<Value, Refusal> { Ok(json!({"resp": "held", "held": 2, "cause": "behind"})) };
+    let Followed::Answered(Ok(answer)) = f.follow(SESSION, delete_follower("b-1", &undo, Value::Null), undo.clone(), || true, held) else { panic!("answered") };
+    assert_eq!(answer["resp"], "held", "the follower's own answer");
+    let (dialed, dial) = recording();
+    let nullify = json!({"op": "nullify", "home": "1.0.1.0.1", "target": "1.0.1.0.1.0.2.1"});
+    assert_eq!(refused(f.follow(SESSION, follower("b-1", &nullify), nullify.clone(), || true, dial)), ("not_followed".to_string(), Some("ahead".to_string())));
+    assert!(dialed.lock().unwrap().is_empty(), "nothing is dialed after a follower held");
 }
 
 /// Checks that a piece resolves by its offset and one past the burst's
@@ -225,8 +302,66 @@ fn a_piece_resolves_by_its_offset_and_one_past_the_bursts_positions_is_refused()
     let (name, why) = refused(f.follow(SESSION, follower("b-1", &over), over.clone(), || true, dial.clone()));
     assert_eq!((name.as_str(), why.as_deref()), ("not_followed", Some("ack")), "a start past what an address spells is no I-address");
     assert!(dialed.lock().unwrap().is_empty());
-    assert_eq!(Minted::of("1.0.1.0.1.0.1.7").and_then(|m| m.span(Piece { slot: Slot::To, index: 0, offset: 2, width: 1 })), Some(json!({"start": "1.0.1.0.1.0.1.9", "width": "1"})));
+    assert_eq!(Minted::of("1.0.1.0.1.0.1.7").and_then(|m| m.span(Piece { place: Place::Slot(Slot::To, 0), offset: 2, width: 1 })), Some(json!({"start": "1.0.1.0.1.0.1.9", "width": "1"})));
     assert_eq!(Minted::of("1.0.1.0.1.0.1.x"), None, "an ack naming no address names no words");
+}
+
+/// Checks that a delete follower's pieces that name no words of its burst
+/// are refused.
+///
+/// As a `make_link`'s pieces are, before the follower takes its turn and
+/// with nothing dialed: an anchor piece at the insert's positions, which
+/// names a unit past its words, is refused `malformed_args` naming
+/// `anchors.before`; a run piece past them names `anchors.span`; a piece
+/// after a `delete`, whose ack names no words, names its place; and pieces
+/// naming words of an insert on another document than the delete's name
+/// `frame.doc`. Pieces over the insert's last position are followed (the
+/// mutant that admits an anchor at the insert's positions places it on a
+/// unit the insert never minted; the one that reads no document takes the
+/// other document's words for the delete's own).
+#[test]
+fn a_delete_followers_pieces_that_name_no_words_of_its_burst_are_refused() {
+    let (f, _) = followers();
+    f.sent(SESSION, &insert("b-1", "abc"), || true).unwrap().settle(&ack_addr(1));
+    f.sent(SESSION, &json!({"op": "delete", "doc": "1.0.1.0.1", "id": "b-2", "p": {"subspace": "1", "ordinal": "1"}, "width": "1", "as_of": 3}), || true)
+        .unwrap()
+        .settle(&Ok(json!({"resp": "ack", "at": 9})));
+    let elsewhere = json!({"op": "insert", "doc": "1.0.1.0.2", "id": "b-3", "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"], "as_of": 3});
+    f.sent(SESSION, &elsewhere, || true).unwrap().settle(&Ok(json!({"resp": "ack_addr", "addr": "1.0.1.0.2.0.1.1", "at": 9})));
+    let (dialed, dial) = recording();
+    let undo = delete(1, 1);
+    let run = |burst: &str, offset: u64, width: u64| json!({"before": null, "after": null, "span": [{"burst": burst, "offset": offset, "width": width}]});
+    for (cell, after, anchors, what) in [
+        ("an anchor at the insert's positions", "b-1", json!({"before": {"burst": "b-1", "offset": 3}, "after": null}), "anchors.before"),
+        ("a run past them", "b-1", run("b-1", 1, 3), "anchors.span"),
+        ("a piece after a delete", "b-2", run("b-2", 0, 1), "anchors.span"),
+        ("an insert on another document", "b-3", run("b-3", 0, 1), "frame.doc"),
+    ] {
+        let Followed::Answered(Err(r)) = f.follow(SESSION, delete_follower(after, &undo, anchors), undo.clone(), || true, dial.clone()) else { panic!("{cell}: refused") };
+        assert_eq!((r.name(), r.to_value()["what"].as_str()), ("malformed_args", Some(what)), "{cell}");
+    }
+    assert_eq!((f.waiting(), dialed.lock().unwrap().len()), (0, 0), "none waited for its turn, and none was dialed");
+    let at_its_last = json!({"before": {"burst": "b-1", "offset": 2}, "after": null, "span": [{"burst": "b-1", "offset": 0, "width": 3}]});
+    assert!(matches!(f.follow(SESSION, delete_follower("b-1", &undo, at_its_last), undo.clone(), || true, dial), Followed::Answered(Ok(_))), "pieces over the insert's last position are followed");
+}
+
+/// Checks that an insert's ack naming an address outside its document names
+/// no words for its followers (SP-18).
+///
+/// The address is read by the hold's one reader of an insert's minted
+/// address (`hold::minted_on`): one in another document's content I-space
+/// is no address an insert on this one minted, so a follower's piece
+/// resolves against none and is refused `not_followed`, `why: "ack"`, nothing
+/// dialed (the mutant that reads whatever address the ack names marks the
+/// other document's words).
+#[test]
+fn an_ack_naming_an_address_outside_the_inserts_document_names_no_words() {
+    let (f, _) = followers();
+    f.sent(SESSION, &insert("b-1", "abc"), || true).unwrap().settle(&Ok(json!({"resp": "ack_addr", "addr": "1.0.2.0.1.0.1.5", "at": 9})));
+    let (dialed, dial) = recording();
+    let frame = mark(json!([{"burst": "b-1", "offset": 0, "width": 1}]));
+    assert_eq!(refused(f.follow(SESSION, follower("b-1", &frame), frame.clone(), || true, dial)), ("not_followed".to_string(), Some("ack".to_string())));
+    assert!(dialed.lock().unwrap().is_empty(), "nothing is dialed");
 }
 
 /// Checks that the stop waits for the followers and refuses the rest at its
@@ -305,7 +440,7 @@ fn a_follower_that_overtakes_its_burst_waits_for_it() {
         f.sent(SESSION, &insert("b-1", "abc"), || true).unwrap().settle(&ack_addr(4));
         assert!(matches!(waiting.join().unwrap(), Followed::Answered(Ok(_))));
     });
-    assert_eq!(dialed.lock().unwrap()[0]["to"]["spans"], json!([{"start": "1.0.1.0.1.0.1.5", "width": "1"}]));
+    assert_eq!(dialed.lock().unwrap()[0].0["to"]["spans"], json!([{"start": "1.0.1.0.1.0.1.5", "width": "1"}]));
     let never = mark(json!([{"burst": "b-9", "offset": 0, "width": 1}]));
     let started = Instant::now();
     let unknown = f.follow(SESSION, follower("b-9", &never), never.clone(), || true, dial.clone());

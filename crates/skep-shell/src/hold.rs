@@ -6287,13 +6287,22 @@ fn arranged_doc(frame: &Value) -> Option<&str> {
 
 /// Returns the first I-address an insert's ack minted its words at.
 ///
-/// It is the ack's `addr` (A-63) where `frame` is an insert and the address
-/// lies in the frame's document's own content I-space (`<doc>.0.1`), which
-/// an insert mints into; none for another write's ack, or for an address of
-/// another place (SP-19). It is what the pieces naming the insert's words
-/// are placed at, and what its landed-insert entry keeps (skep #969).
+/// It is [`minted_on`] the frame's document where `frame` is an insert;
+/// none for another write's ack. It is what the pieces naming the insert's
+/// words are placed at, and what its landed-insert entry keeps (skep #969).
 fn minted_by<'a>(frame: &Value, ack: &'a Value) -> Option<&'a str> {
-    let doc = frame["doc"].as_str().filter(|_| frame["op"] == "insert")?;
+    minted_on(frame["doc"].as_str().filter(|_| frame["op"] == "insert")?, ack)
+}
+
+/// Returns the first I-address an insert on `doc` minted, as its ack names
+/// it.
+///
+/// It is the ack's `addr` (A-63) where the address lies in `doc`'s own
+/// content I-space (`<doc>.0.1`), which an insert mints into; none for
+/// another answer, or for an address of another place (SP-19). It is the one
+/// reader of an insert's minted address, the hold's and a follower's alike
+/// (`shell/follow.rs`; SP-18).
+pub(crate) fn minted_on<'a>(doc: &str, ack: &'a Value) -> Option<&'a str> {
     acked_addr(ack).filter(|addr| i_address(addr).is_some_and(|(prefix, _)| prefix.strip_suffix(".0.1") == Some(doc)))
 }
 

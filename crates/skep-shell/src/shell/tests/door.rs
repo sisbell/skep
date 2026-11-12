@@ -257,23 +257,28 @@ pub(super) fn nowhere() -> String {
 /// `burst` of no string or past its bound, of no natural `offset`, or with a
 /// member beside its two (skep #969); and an `op`'s `after` of no
 /// string or past its bound, beside an `/op-at` frame or a frame that follows
-/// nothing, or in the guest form, and a piece of a follower's end in a
-/// `make_link`'s `ty`, outside the I-span form of its `to`, in a `nullify`'s
-/// target, naming another burst, of no natural offset, of a zero width,
-/// carrying a member beside its three, or in a frame with no `after` — the
-/// session form's two optional members, read in their forms before the
-/// session is looked up, which the single-form cell below does not reach —
-/// each before any dial, the shell's board one nothing answers at, where a
-/// dial would answer `unreachable`, and the guest origin a listener counting
-/// every dial (the mutants that read such a member as absent act as the
-/// mode's principal, open the label box, list every key or the whole index,
-/// or dial a guest read the page never asked for; the ones that read a span
-/// of another form shift a burst by units the page never named; the one that
-/// admits anchors past their bound holds a page's bytes without bound beside
-/// its burst; the one that reads no `after` sends a follower ahead of the
-/// words it names, and the board refuses a piece it cannot parse). A `null`
-/// is the row's default: the session opens as the mode's principal and
-/// meets the board's silence.
+/// nothing — an insert, a copy, a reinstate or a rearrange among them — or in
+/// the guest form, a piece of a follower's end in a `make_link`'s `ty`,
+/// outside the I-span form of its `to`, in a `nullify`'s target or a
+/// delete's `p`, naming another burst, of no natural offset, of a zero width,
+/// carrying a member beside its three, or in a frame with no `after`, and a
+/// delete follower's anchors naming another burst by a run or an anchor
+/// piece, or holding a run piece of a zero width or a member beside its three
+/// (skep #984) — the session form's two optional members, read in their
+/// forms before the session is looked up, which the single-form cell below
+/// does not reach — each before any dial, the shell's board one nothing
+/// answers at, where a dial would answer `unreachable`, and the guest origin
+/// a listener counting every dial (the mutants that read such a member as
+/// absent act as the mode's principal, open the label box, list every key or
+/// the whole index, or dial a guest read the page never asked for; the ones
+/// that read a span of another form shift a burst by units the page never
+/// named; the one that admits anchors past their bound holds a page's bytes
+/// without bound beside its burst; the one that reads no `after` sends a
+/// follower ahead of the words it names, and the board refuses a piece it
+/// cannot parse; the one that admits a delete's piece of another burst
+/// deletes words the follower was never handed with). A `null` is the row's
+/// default: the session opens as the mode's principal and meets the board's
+/// silence.
 #[test]
 fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
     let dir = TempDir::new().unwrap();
@@ -285,6 +290,9 @@ fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
     // A follower's mark, its `to` the I-span form holding `piece`.
     let mark = |piece: Value| json!({"op": "make_link", "home": "1.0.1.0.1", "from": {"spans": []}, "to": {"spans": [piece]}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}});
     let piece = json!({"burst": "b-1", "offset": 0, "width": 1});
+    // A follower's delete, and the position the other bursts write at.
+    let position = json!({"subspace": "1", "ordinal": "1"});
+    let delete = json!({"op": "delete", "doc": "1.0.1.0.1", "p": position, "width": "1", "as_of": 3});
     let cases = [
         ("session", json!({"board": board, "principal": "1"}), "principal"),
         ("session", json!({"board": board, "principal": 1u64 << 53}), "principal"),
@@ -341,6 +349,26 @@ fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
         ("op", json!({"session": "s-x", "frame": mark(json!({"burst": "b-1", "offset": 0, "width": 1, "start": "1.0.1.0.1.0.1.1"})), "after": "b-1"}), "frame.to"),
         ("op", json!({"session": "s-x", "frame": mark(piece.clone())}), "after"),
         ("op", json!({"guest": true, "origin": listener, "frame": read, "after": "b-1"}), "after"),
+        // A delete follower (skep #984), its anchors read in the follower's
+        // form before the session is looked up: a run piece or an anchor
+        // piece naming another burst, a piece in the delete's own `p`, a
+        // run piece of a zero width or with a member beside its three; the
+        // other bursts' `after`, which follows nothing; and a run piece on a
+        // delete sent with no `after`, of no form the anchors take.
+        ("op", json!({"session": "s-x", "frame": delete, "after": "b-1", "anchors": {"before": null, "after": null, "span": [{"burst": "b-2", "offset": 0, "width": 1}]}}), "anchors.span"),
+        ("op", json!({"session": "s-x", "frame": delete, "after": "b-1", "anchors": {"before": null, "after": {"burst": "b-2", "offset": 0}}}), "anchors.after"),
+        ("op", json!({"session": "s-x", "frame": {"op": "delete", "doc": "1.0.1.0.1", "p": piece.clone(), "width": "1", "as_of": 3}, "after": "b-1"}), "frame.p"),
+        ("op", json!({"session": "s-x", "frame": delete, "after": "b-1", "anchors": {"before": null, "after": null, "span": [{"burst": "b-1", "offset": 0, "width": 0}]}}), "anchors"),
+        (
+            "op",
+            json!({"session": "s-x", "frame": delete, "after": "b-1", "anchors": {"before": null, "after": null, "span": [{"burst": "b-1", "offset": 0, "width": 1, "start": "1.0.1.0.1.0.1.1"}]}}),
+            "anchors",
+        ),
+        ("op", json!({"session": "s-x", "frame": {"op": "insert", "doc": "1.0.1.0.1", "at": position, "values": ["x"], "as_of": 3}, "after": "b-1"}), "after"),
+        ("op", json!({"session": "s-x", "frame": {"op": "copy", "doc": "1.0.1.0.1", "at": position, "specs": [], "as_of": 3}, "after": "b-1"}), "after"),
+        ("op", json!({"session": "s-x", "frame": {"op": "reinstate", "doc": "1.0.1.0.1", "at": position, "runs": [], "as_of": 3}, "after": "b-1"}), "after"),
+        ("op", json!({"session": "s-x", "frame": {"op": "rearrange", "doc": "1.0.1.0.1", "cuts": [position, position], "as_of": 3}, "after": "b-1"}), "after"),
+        ("op", json!({"session": "s-x", "frame": delete, "anchors": {"before": null, "after": null, "span": [piece.clone()]}}), "anchors"),
         // `changes`' two forms: `class` of another value or form, and `under`
         // of no address or of another spelling, read before the session is
         // looked up; `class` in the guest form, a guest `limit` of another
@@ -364,6 +392,9 @@ fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
     let pieces = json!({"before": {"burst": "b".repeat(crate::held::MAX_BURST_ID_BYTES), "offset": 0}, "after": {"burst": "b-1", "offset": 3}});
     let admitted = shell.call("op", &json!({"session": "s-x", "frame": read, "anchors": pieces})).unwrap_err();
     assert_eq!(admitted.name(), "session_ended", "anchors of pieces at their bound are of the form, and the call goes on to the session");
+    let undone = json!({"before": {"burst": "b-1", "offset": 0}, "after": "1.0.1.0.1.0.1.9", "span": [{"burst": "b-1", "offset": 1, "width": 2}, {"start": "1.0.1.0.1.0.1.4", "width": "1"}]});
+    let follower = shell.call("op", &json!({"session": "s-x", "frame": delete, "after": "b-1", "anchors": undone})).unwrap_err();
+    assert_eq!(follower.name(), "session_ended", "a delete follower's anchors of the follower's form, and the call goes on to the session");
     let defaulted = shell.call("session", &json!({"board": board, "principal": null})).unwrap_err();
     assert_eq!(defaulted.name(), "unreachable", "a null is the row's default, and the call goes on to the board");
 }

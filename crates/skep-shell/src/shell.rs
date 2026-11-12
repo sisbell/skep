@@ -53,11 +53,11 @@
 //! current by one write, `history.restore`, typed against the page's own
 //! state of the draft (B3-S7) — are the child module `history`'s,
 //! `pub(super)` to the door. The bursts a session sends with an `id`, and
-//! the FOLLOWER writes the page hands over with them — a `make_link` or a
-//! `nullify` sent with `after`, written at its burst's ack, its pieces
-//! resolved against the insert's words, and at the shell's stop before any
-//! session closes (§3c.6) — are the child module `follow`'s table, which the
-//! `op` row enters and waits on.
+//! the FOLLOWER writes the page hands over with them — a `make_link`, a
+//! `nullify` or a `delete` sent with `after`, written at its burst's ack,
+//! its pieces resolved against the insert's words, and at the shell's stop
+//! before any session closes (§3c.6) — are the child module `follow`'s
+//! table, which the `op` row enters and waits on.
 //!
 //! **This machine's notebook** (foundations §3.4 F-C1; L1). Where the verb
 //! that runs the own node hands the shell its start and its stop
@@ -118,9 +118,10 @@
 //! crosses as `publication.confirm`, the shell composing the one request
 //! from the panel it holds, since the page composes no write — §4b.1's `op`
 //! row, decision 1 (b)); an `after` in the guest form, beside an `/op-at`
-//! frame or a frame that is no `make_link` and no `nullify`, and a piece of
-//! a follower's end standing anywhere but among a `make_link`'s `from` or
-//! `to` spans, each `malformed_args` (`Follower::of`); and a call's
+//! frame or a frame that is no `make_link`, no `nullify` and no `delete`, a
+//! piece of a follower standing anywhere but among a `make_link`'s `from` or
+//! `to` spans or a delete's anchors, and a delete follower's anchors not of
+//! the follower's form, each `malformed_args` (`Follower::of`); and a call's
 //! arguments not of its row's form (`shapes`' declarations): a required
 //! member absent or of another form (`accept`'s `address`, absent, answers
 //! `no_address`), and an optional member present in another form, refused
@@ -426,7 +427,8 @@ impl<'a> Write<'a> {
     /// A follower write through `op` (§3c.6): named by its op and judged by
     /// its burst's hold — its burst held, the follower is refused
     /// `not_followed` with the hold's cause, and sent at the burst's ack it
-    /// meets the hold's own check (`Holds::send`) — so the standing hold is
+    /// meets the hold's own check (`Holds::send`), a link write's refusal
+    /// under a standing hold and a delete's hold — so the standing hold is
     /// not asked of it ahead of its burst.
     pub(super) fn follower(op: &'a str) -> Write<'a> {
         Write { named: Named::Op(op), kind: None, drafts: Vec::new() }
@@ -1751,13 +1753,14 @@ impl Shell {
     ///
     /// **The follower** (§3c.6). A burst carrying an `id` is entered in the
     /// session's table before its dial and its answer after
-    /// (`Followers::sent`), whichever arm gives it. A `make_link` or a
-    /// `nullify` sent with `after`, the `id` of a burst the session sent, is
-    /// a follower: it waits for that burst's answer and for the followers of
-    /// it before it, its pieces are resolved against an insert's ack, and it
-    /// goes by the hold's one path as every session write does
-    /// ([`Shell::follow`]) — at the shell's stop too, which waits on it
-    /// before any session closes.
+    /// (`Followers::sent`), whichever arm gives it. A `make_link`, a
+    /// `nullify` or a `delete` sent with `after`, the `id` of a burst the
+    /// session sent, is a follower: it waits for that burst's answer and for
+    /// the followers of it before it, its pieces — a link's ends', a delete's
+    /// anchors' — are resolved against an insert's ack, and it goes by the
+    /// hold's one path as every session write does, a delete with its
+    /// anchors, answered as the frame's own send is ([`Shell::follow`]) — at
+    /// the shell's stop too, which waits on it before any session closes.
     ///
     /// # Errors
     ///
@@ -1766,17 +1769,21 @@ impl Shell {
     /// naming `after` where one is given, then the target's (`unknown_board`,
     /// `not_canonical`, `malformed_args`), then a write refused without a dial
     /// (`write_in_guest_form`), then the board's verdict or `unreachable`. In
-    /// the session form, `malformed_args` naming `anchors` where the member is
-    /// present and not of its declared form — `{before, after, span?}`, each
-    /// anchor an I-address, a piece `{burst, offset}` naming `offset` positions
-    /// into the words of a burst the session sent with the `id` `burst`, a
-    /// string of at most `held::MAX_BURST_ID_BYTES` bytes (skep #969), or
-    /// `null`, `span` a non-empty list of `{start, width}` runs, `start` an
-    /// I-address and `width` a natural of 1 or more in its decimal string, the
-    /// whole within the board's frame cap as compact JSON
-    /// (`held::MAX_ANCHOR_BYTES`) — never read as absent; then naming `after`
-    /// or a slot of the frame where the follower is not of its form
-    /// (`Follower::of`); then naming `session`, then `session_ended`; a write
+    /// the session form, `malformed_args` naming `after`, a member of the
+    /// frame, or `anchors` or a place in them where the follower is not of
+    /// its form (`Follower::of`) — a delete follower's anchors read there in
+    /// the form below, save that an anchor or a run of `span` may be a piece
+    /// of the words of the burst `after` names, `{burst, offset}` or `{burst,
+    /// offset, width}` — then naming `anchors` where the member is present
+    /// beside any other frame and not of its declared form — `{before,
+    /// after, span?}`, each anchor an I-address, a piece `{burst, offset}`
+    /// naming `offset` positions into the words of a burst the session sent
+    /// with the `id` `burst`, a string of at most `held::MAX_BURST_ID_BYTES`
+    /// bytes (skep #969), or `null`, `span` a non-empty list of `{start,
+    /// width}` runs, `start` an I-address and `width` a natural of 1 or more
+    /// in its decimal string, the whole within the board's frame cap as
+    /// compact JSON (`held::MAX_ANCHOR_BYTES`) — never read as absent; then
+    /// naming `session`, then `session_ended`; a write
     /// refused at the shell's one write door ([`Shell::write_door`]) —
     /// `write_in_bare_session` under a bare session, then `another_window` at a
     /// board whose held store another shell holds, then `stopped`, `poisoned`
@@ -1788,7 +1795,9 @@ impl Shell {
     /// the panel it holds, never as a frame the page composed (§4b.1's `op`
     /// row, decision 1 (b)); for a follower, the follow's answer
     /// ([`Shell::follow`]) — `not_followed`, `no_such_burst`, `malformed_args`
-    /// naming a slot whose piece its burst cannot name, or its own answer; else
+    /// naming a place whose piece its burst cannot name or `frame.doc` where a
+    /// delete's anchors name words of a burst on another document, or its own
+    /// answer, the hold's below; else
     /// the hold's answer ([`Holds::send`]) — a burst's door's refusals among
     /// it (`Burst::admit`), `malformed_args` naming `frame.id` where the
     /// burst's `id` begins `shell:`, the prefix of the `id`s the hold resends a
@@ -1832,8 +1841,9 @@ impl Shell {
                 None => Self::document_answer(board.guest(&frame)?),
             };
         }
-        let anchors = optional(args, "anchors", Anchors::of)?;
         let follower = Follower::of(args, &frame, at)?;
+        // A delete follower's anchors are its own, read in its form.
+        let anchors = if follower.as_ref().is_some_and(Follower::reads_anchors) { None } else { optional(args, "anchors", Anchors::of)? };
         let session = self.session(&args["session"])?;
         if WRITE_KINDS.contains(&op) {
             // A follower waits on its burst, whose hold answers for it
@@ -1853,20 +1863,7 @@ impl Shell {
             // answer below, whichever arm gives it.
             let stands = || self.sessions.get(&session.reference).is_some();
             let sent = self.followers.sent(&session.reference, &frame, stands);
-            let answer = match self.holds.send(&session, frame, anchors) {
-                OpAnswer::Answered(answer) => answer,
-                // The session ends first, so the death's reason is derived;
-                // a burst the hold held at it is then answered `held`, its
-                // line carrying that reason.
-                OpAnswer::Died(at_death) => {
-                    let died = self.died(&session);
-                    match at_death {
-                        AtDeath::NotABurst => Err(died),
-                        AtDeath::Held(held) => Ok(self.holds.note_death(&session, held, &died)),
-                        AtDeath::Refused(refusal) => Err(refusal),
-                    }
-                }
-            };
+            let answer = self.send(&session, frame, anchors);
             if let Some(sent) = sent {
                 sent.settle(&answer);
             }
@@ -1876,6 +1873,35 @@ impl Shell {
             AtAnswer::Document(v) => Self::document_answer(v),
             AtAnswer::Closed => Err(self.died(&session)),
             other => Err(at_refusal(other)),
+        }
+    }
+
+    /// Sends one frame under `session` by the hold's one path, and answers it.
+    ///
+    /// It is the `op` row's answer for every frame its session form sends
+    /// by [`Holds::send`], a follower's at its burst's ack among them, with
+    /// `anchors` for a burst's line. A death signal the send meets ends the
+    /// session first, by the one sequence, so the death's reason is derived;
+    /// a burst the hold held at it is then answered `held`, its line
+    /// carrying that reason (`Holds::note_death`; §3c.4).
+    ///
+    /// # Errors
+    ///
+    /// Returns the hold's answer's refusals, and `session_died` where a frame
+    /// that is no burst met the death signal; a burst the hold could not
+    /// hold at the death answers the hold's own refusal (`held_full`,
+    /// `store_halted`).
+    fn send(&self, session: &SessionEntry, frame: Value, anchors: Option<Anchors>) -> Result<Value, Refusal> {
+        match self.holds.send(session, frame, anchors) {
+            OpAnswer::Answered(answer) => answer,
+            OpAnswer::Died(at_death) => {
+                let died = self.died(session);
+                match at_death {
+                    AtDeath::NotABurst => Err(died),
+                    AtDeath::Held(held) => Ok(self.holds.note_death(session, held, &died)),
+                    AtDeath::Refused(refusal) => Err(refusal),
+                }
+            }
         }
     }
 
@@ -1959,24 +1985,24 @@ impl Shell {
     ///
     /// It waits on the burst in the session's table (`Followers::follow`),
     /// and goes, once its pieces are resolved against the burst's ack, by
-    /// the hold's one path under `session`, as every session write does.
+    /// the hold's one path under `session`, as every session write does
+    /// ([`Shell::send`]): a delete with its anchors, so the board's refusal
+    /// of it as typed against an older state shifts it, and held where the
+    /// hold holds a burst (D6 BM-73).
     ///
     /// # Errors
     ///
     /// Returns the follow's refusals — `not_followed`, `no_such_burst`,
-    /// `malformed_args` naming a slot whose piece the burst cannot name —
-    /// and the write's own answer: the hold's refusals, the board's verdict,
-    /// and `session_died` where its dial met the death signal, the session
-    /// ended by the one sequence. Where the session ended while the follower
-    /// waited, it is answered as [`Shell::session`] answers a reference no
-    /// live session stands under.
+    /// `malformed_args` naming a place whose piece the burst cannot name, or
+    /// `frame.doc` — and the write's own answer: the hold's refusals, the
+    /// board's verdict, and `session_died` where its dial met the death
+    /// signal, the session ended by the one sequence, a delete the hold held
+    /// at it answered `held` instead. Where the session ended while the
+    /// follower waited, it is answered as [`Shell::session`] answers a
+    /// reference no live session stands under.
     fn follow(&self, session: &SessionEntry, follower: Follower, frame: Value) -> Result<Value, Refusal> {
         let stands = || self.sessions.get(&session.reference).is_some();
-        let dial = |frame| match self.holds.send(session, frame, None) {
-            OpAnswer::Answered(answer) => answer,
-            // A follower is no burst: the hold held nothing at the death.
-            OpAnswer::Died(_) => Err(self.died(session)),
-        };
+        let dial = |frame, anchors| self.send(session, frame, anchors);
         match self.followers.follow(&session.reference, follower, frame, stands, dial) {
             Followed::Answered(answer) => answer,
             Followed::Ended => Err(self.session_gone(&session.reference)),

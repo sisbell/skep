@@ -1,42 +1,53 @@
-//! The follower write of `client.md` §3c.6 — a `make_link` or a `nullify`
-//! the page hands the shell with the burst it waits on, the `op` row's
-//! `after` (§4b.1) — reached from the `op` row alone: a formatting chord
-//! pressed while the burst before it is unanswered, its mark drawn at once,
-//! is written at the burst's ack (B3-S13's row rule; D6 BM-61), and at the
-//! shell's stop it is finished behind the window as the burst is, never
-//! lost with the page that held it.
+//! The follower write of `client.md` §3c.6 — a `make_link`, a `nullify` or
+//! a `delete` the page hands the shell with the burst it waits on, the `op`
+//! row's `after` (§4b.1) — reached from the `op` row alone: a formatting
+//! chord pressed while the burst before it is unanswered, its mark drawn at
+//! once, is written at the burst's ack (B3-S13's row rule; D6 BM-61), and so
+//! is an undo's `delete` of the burst's own words pressed in that interval
+//! (D6 BM-34, BM-73); at the shell's stop each is finished behind the window
+//! as the burst is, never lost with the page that held it (SWEEP 11 CLOSE
+//! C8 (a)).
 //!
 //! **The bursts kept.** Every burst the `op` row sends under a session with
 //! a string `id` of at most [`MAX_BURST_ID_BYTES`] bytes — the wire's
 //! per-session idempotency key — is entered in that session's table before
 //! it is dialed, and its outcome after its answer ([`Followers::sent`]): in
 //! flight, acked, or not acked with the hold's cause or the refusal's name.
-//! An insert's entry keeps the positions its frame mints, and the I-address
-//! its ack names, the first it minted (wire.md §Arrangement, `insert`): an
-//! insert is the one burst whose ack names its words. A session's table
-//! keeps its newest [`BURSTS_KEPT`] answered bursts, and beside them every
-//! burst in flight or followed (SP-17); it goes at the session's
-//! `session-died` ([`Followers::ended`]).
+//! An entry keeps its burst's document; an insert's keeps the positions its
+//! frame mints, and the I-address its ack names, the first it minted in its
+//! document's own content I-space (wire.md §Arrangement, `insert`), read by
+//! the hold's one reader of it (`hold::minted_on`): an insert is the one
+//! burst whose ack names its words. A session's table keeps its newest
+//! [`BURSTS_KEPT`] answered bursts, and beside them every burst in flight or
+//! followed (SP-17); it goes at the session's `session-died`
+//! ([`Followers::ended`]).
 //!
 //! **The follower** ([`Follower::of`], read at the row's door): `after`
-//! names the `id` of a burst the session sent, on a `make_link` or a
-//! `nullify` alone; and a PIECE — `{"burst", "offset", "width"}` beside the
-//! spans of a `make_link`'s `from` or `to` in the I-span form — names
-//! `width` positions of that burst's own words from its `offset`, positions
-//! as the board seats them: a byte of a text, one an atom. The follower
-//! waits for the burst's answer, then for every follower of the burst that
-//! came before it ([`Followers::follow`]), and then:
+//! names the `id` of a burst the session sent, on a `make_link`, a `nullify`
+//! or a `delete` alone. A PIECE names words of that burst's own, in
+//! positions as the board seats them — a byte of a text, one an atom:
+//! `{"burst", "offset", "width"}`, beside the spans of a `make_link`'s
+//! `from` or `to` in the I-span form or beside the runs of a delete's
+//! anchors' `span`, names `width` positions from its `offset`, and a
+//! delete's `before` or `after` anchor in the piece form `{"burst",
+//! "offset"}` (skep #969) names the one at its `offset`. The follower waits
+//! for the burst's answer, then for every follower of the burst that came
+//! before it ([`Followers::follow`]), and then:
 //!
-//! * the burst acked: its frame, each piece resolved to the I-span
-//!   `{"start": <the ack's I-address advanced by offset>, "width":
-//!   "<width>"}`, goes by the one path every session write takes, and the
-//!   call is answered with the follower's own answer;
+//! * the burst acked: its frame and its anchors — each piece resolved
+//!   against the first I-address the ack names, advanced by its offset, to
+//!   the I-span `{"start", "width": "<width>"}` or, at an anchor, to that
+//!   I-address — go by the one path every session write takes, so a delete
+//!   the board refuses as typed against an older state is shifted by them,
+//!   and the call is answered with the follower's own answer, a delete's
+//!   `held` where the hold holds it;
 //! * the burst not acked — held, or refused: `not_followed`, `why: "burst"`
 //!   with the burst's cause, nothing dialed and nothing held, a link write
-//!   being none of the held kinds;
-//! * a follower of the burst before it not acked: `not_followed`, `why:
-//!   "ahead"` — a chord's writes are one step (D6 BM-69), so no step lands
-//!   half.
+//!   being none of the held kinds and a delete held behind no line of words
+//!   the board may never have had (D6 BM-81);
+//! * a follower of the burst before it not acked — refused, or held:
+//!   `not_followed`, `why: "ahead"` — a chord's writes are one step (D6
+//!   BM-69), so no step lands half.
 //!
 //! A burst answered before its follower arrives is followed from its kept
 //! outcome: the page hands a write over while it has not seen the ack, not
@@ -60,14 +71,13 @@ use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use skep_client::address::is_address_text;
 use skep_client::dial::{CONNECT_TIMEOUT, IO_TIMEOUT};
 use skep_client::sheet::render_inert;
 
-use crate::held::MAX_BURST_ID_BYTES;
-use crate::hold::is_burst;
+use crate::held::{i_address, Anchor, Anchors, MAX_ANCHOR_BYTES, MAX_BURST_ID_BYTES};
+use crate::hold::{is_burst, minted_on};
 use crate::refusal::{Name, Refusal};
-use crate::wire::values_of;
+use crate::wire::{json_len, values_of};
 use crate::Talk;
 
 /// The answered bursts a session's table keeps, the newest.
@@ -89,7 +99,10 @@ const BURST_ARRIVAL_WAIT: Duration = Duration::from_secs(1);
 /// It is two exchanges at the dialer's own bounds, a connect and a read's
 /// wait each — the burst's, then its follower's (§3c.6 step (2), whose bound
 /// is the dialer's until S2 reports): a board that does not answer is cut
-/// off within it.
+/// off within it. A delete the board refuses as typed against an older state
+/// makes up to three, its dial, the shift's read and the shifted dial; its
+/// line is synced from that refusal on, so a stop past the bound loses
+/// nothing of it.
 pub(super) const FOLLOW_AT_STOP: Duration = Duration::from_secs(2 * (CONNECT_TIMEOUT.as_secs() + IO_TIMEOUT.as_secs()));
 
 /// One slot a piece may stand in: a `make_link`'s `from` or `to`.
@@ -117,26 +130,84 @@ impl Slot {
     }
 }
 
-/// A piece of a follower's end: `width` positions of the burst's words.
+/// One anchor a piece may stand at: a delete's `before` or `after`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Edge {
+    Before,
+    After,
+}
+
+impl Edge {
+    /// Returns the anchor as the anchors spell it.
+    fn name(self) -> &'static str {
+        match self {
+            Edge::Before => "before",
+            Edge::After => "after",
+        }
+    }
+}
+
+/// Where a piece of a follower stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// Among a `make_link`'s `from` or `to` spans, at the index given.
+    Slot(Slot, usize),
+    /// At a delete's `before` or `after` anchor.
+    Edge(Edge),
+    /// Among the runs of a delete's anchors' `span`, at the index given.
+    Run(usize),
+}
+
+impl Place {
+    /// Returns the member a refusal of the piece names.
+    fn what(self) -> &'static str {
+        match self {
+            Place::Slot(slot, _) => slot.what(),
+            Place::Edge(Edge::Before) => "anchors.before",
+            Place::Edge(Edge::After) => "anchors.after",
+            Place::Run(_) => "anchors.span",
+        }
+    }
+
+    /// Returns whether the piece stands among a delete's anchors.
+    fn in_anchors(self) -> bool {
+        matches!(self, Place::Edge(_) | Place::Run(_))
+    }
+}
+
+/// A piece of a follower: `width` positions of the burst's words.
 ///
-/// They run from the burst's `offset`-th position, counted from 0; the piece
-/// stands at `index` among its slot's spans.
+/// They run from the burst's `offset`-th position, counted from 0, and the
+/// piece stands at `place`; a piece at an anchor names one position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Piece {
-    slot: Slot,
-    index: usize,
+    place: Place,
     offset: u64,
     width: u64,
 }
 
+/// What a follower writes: a link write, or a delete with its anchors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Kind {
+    /// A `make_link` or a `nullify`, its pieces among its ends.
+    Link,
+    /// A `delete`, its anchors as the page sent them, where it sent any.
+    ///
+    /// They are in the follower's form ([`delete_anchors`]), its pieces
+    /// among them.
+    Delete(Option<Value>),
+}
+
 /// A follower write as the `op` row's door read it (SP-18).
 ///
-/// It is the `id` of the burst it follows and the pieces of its ends, in
-/// the order the frame holds them. Made by [`Follower::of`] alone, so every
-/// follower the table waits on is one the door checked.
+/// It is the `id` of the burst it follows, what it writes, and its pieces,
+/// in the order the frame and then the anchors hold them. Made by
+/// [`Follower::of`] alone, so every follower the table waits on is one the
+/// door checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Follower {
     after: String,
+    kind: Kind,
     pieces: Vec<Piece>,
 }
 
@@ -146,6 +217,8 @@ impl Follower {
     /// `frame` is the row's frame and `at` its position where the page sent
     /// the `/op-at` form. An `after` absent or `null` names none; then the
     /// frame is a follower of nothing, and a piece in it is refused below.
+    /// A delete follower's `anchors` are read here, in the follower's form,
+    /// and by no other reader ([`Follower::reads_anchors`]).
     ///
     /// # Errors
     ///
@@ -154,24 +227,28 @@ impl Follower {
     /// 1. naming `after` where it is present and no string of at most
     ///    [`MAX_BURST_ID_BYTES`] bytes;
     /// 2. naming `after` where it rides an `/op-at` frame, which reads and
-    ///    follows nothing, or a frame that is no `make_link` and no
-    ///    `nullify`;
-    /// 3. for a `make_link` or a `nullify`, at the first member of the frame
-    ///    in key order where a piece — an object with a `burst` member — is
-    ///    not of its place and form: naming the member (`frame.from`,
-    ///    `frame.to`, `frame.ty`, or another) where the piece stands anywhere
-    ///    but among the spans of a `make_link`'s `from` or `to` in the I-span
-    ///    form; naming the slot where its members are other than `burst`,
-    ///    `offset` and `width`, its `burst` no string, its `offset` no
-    ///    natural or its `width` no natural of 1 or more, or its `burst` not
-    ///    the `after` given; naming `after` where no `after` is given.
+    ///    follows nothing, or a frame that is no `make_link`, no `nullify`
+    ///    and no `delete`;
+    /// 3. for a `make_link`, a `nullify` or a `delete`, at the first member
+    ///    of the frame in key order where a piece — an object with a `burst`
+    ///    member — is not of its place and form: naming the member
+    ///    (`frame.from`, `frame.to`, `frame.ty`, `frame.p`, or another) where
+    ///    the piece stands anywhere but among the spans of a `make_link`'s
+    ///    `from` or `to` in the I-span form; naming the slot where its
+    ///    members are other than `burst`, `offset` and `width`, its `burst`
+    ///    no string, its `offset` no natural or its `width` no natural of 1
+    ///    or more, or its `burst` not the `after` given; naming `after` where
+    ///    no `after` is given;
+    /// 4. for a delete follower, where its `anchors` are present and not of
+    ///    the follower's form: naming `anchors`, then the place of a piece
+    ///    naming another burst than the `after` given ([`delete_anchors`]).
     pub(super) fn of(args: &Value, frame: &Value, at: Option<u64>) -> Result<Option<Follower>, Refusal> {
         let after = match args.get("after") {
             None | Some(Value::Null) => None,
             Some(v) => Some(v.as_str().filter(|id| id.len() <= MAX_BURST_ID_BYTES).ok_or_else(|| Refusal::malformed("after"))?),
         };
         let op = frame["op"].as_str().unwrap_or("");
-        let followable = matches!(op, "make_link" | "nullify");
+        let followable = matches!(op, "make_link" | "nullify" | "delete");
         if after.is_some() && (at.is_some() || !followable) {
             return Err(Refusal::malformed("after"));
         }
@@ -198,8 +275,86 @@ impl Follower {
                 }
             }
         }
-        Ok(after.map(|after| Follower { after: after.to_string(), pieces }))
+        let Some(after) = after else { return Ok(None) };
+        let kind = if op == "delete" {
+            let anchors = args.get("anchors").filter(|anchors| !anchors.is_null()).cloned();
+            if let Some(anchors) = &anchors {
+                pieces.extend(delete_anchors(anchors, after)?);
+            }
+            Kind::Delete(anchors)
+        } else {
+            Kind::Link
+        };
+        Ok(Some(Follower { after: after.to_string(), kind, pieces }))
     }
+
+    /// Returns whether the follower read the `op` row's `anchors` itself.
+    ///
+    /// It did where it is a delete: its anchors are its own, read in the
+    /// follower's form, and the row reads them no second time.
+    pub(super) fn reads_anchors(&self) -> bool {
+        matches!(self.kind, Kind::Delete(_))
+    }
+}
+
+/// Returns the pieces of a delete follower's anchors, read in its form.
+///
+/// The form is the anchors' own (`held::Anchors::of`), save that a run of
+/// the `span` may be a piece `{burst, offset, width}` of a `make_link`'s
+/// form, and that every piece — a run's, or an anchor's piece `{burst,
+/// offset}` (skep #969) — names words of the burst `after` names. The
+/// anchors as given are held to [`MAX_ANCHOR_BYTES`], and the rest of them,
+/// the run pieces left out, are read by `Anchors::of`, the one reader of
+/// their form (SP-18). The pieces are answered in the anchors' order:
+/// `before`'s, `after`'s, then the span's runs'.
+///
+/// # Errors
+///
+/// In this order, each `malformed_args`: naming `anchors` where the anchors
+/// as given pass [`MAX_ANCHOR_BYTES`], a run piece is not of its form, or
+/// the rest are not of the anchors' form; then naming `anchors.before`,
+/// `anchors.after` or `anchors.span` at the first piece in that order whose
+/// `burst` is not `after`.
+fn delete_anchors(v: &Value, after: &str) -> Result<Vec<Piece>, Refusal> {
+    let malformed = || Refusal::malformed("anchors");
+    if json_len(v) > MAX_ANCHOR_BYTES {
+        return Err(malformed());
+    }
+    let mut runs = Vec::new();
+    let mut rest = v.clone();
+    if let (Some(span), Some(members)) = (v.get("span").and_then(Value::as_array), rest.as_object_mut()) {
+        let mut addressed = Vec::new();
+        for (index, run) in span.iter().enumerate() {
+            if run.get("burst").is_none() {
+                addressed.push(run.clone());
+                continue;
+            }
+            let (burst, offset, width) = piece_of(run).ok_or_else(malformed)?;
+            runs.push((burst, Piece { place: Place::Run(index), offset, width }));
+        }
+        if !runs.is_empty() && addressed.is_empty() {
+            members.remove("span");
+        } else {
+            members.insert("span".to_string(), Value::Array(addressed));
+        }
+    }
+    let anchors = Anchors::of(&rest).ok_or_else(malformed)?;
+    let mut pieces = Vec::new();
+    for (edge, anchor) in [(Edge::Before, &anchors.before), (Edge::After, &anchors.after)] {
+        if let Some(Anchor::Piece(piece)) = anchor {
+            if piece.burst() != after {
+                return Err(Refusal::malformed(Place::Edge(edge).what()));
+            }
+            pieces.push(Piece { place: Place::Edge(edge), offset: piece.offset(), width: 1 });
+        }
+    }
+    for (burst, piece) in runs {
+        if burst != after {
+            return Err(Refusal::malformed(piece.place.what()));
+        }
+        pieces.push(piece);
+    }
+    Ok(pieces)
 }
 
 /// Returns the spans of a slot in the I-span form, `{"spans": […]}`.
@@ -230,15 +385,25 @@ fn holds_piece(v: &Value) -> bool {
 /// `after`; and naming `after` where none is given.
 fn piece(v: &Value, slot: Slot, index: usize, after: Option<&str>) -> Result<Piece, Refusal> {
     let malformed = || Refusal::malformed(slot.what());
-    let members = v.as_object().filter(|members| members.len() == 3).ok_or_else(malformed)?;
-    let burst = members.get("burst").and_then(Value::as_str).ok_or_else(malformed)?;
-    let offset = members.get("offset").and_then(Value::as_u64).ok_or_else(malformed)?;
-    let width = members.get("width").and_then(Value::as_u64).filter(|w| *w >= 1).ok_or_else(malformed)?;
+    let (burst, offset, width) = piece_of(v).ok_or_else(malformed)?;
     match after {
         None => Err(Refusal::malformed("after")),
-        Some(after) if after == burst => Ok(Piece { slot, index, offset, width }),
+        Some(after) if after == burst => Ok(Piece { place: Place::Slot(slot, index), offset, width }),
         Some(_) => Err(malformed()),
     }
+}
+
+/// Returns the `burst`, `offset` and `width` a piece spells.
+///
+/// The form is `{burst, offset, width}` alone, `burst` a string, `offset` a
+/// natural and `width` a natural of 1 or more; any other value is of no
+/// form.
+fn piece_of(v: &Value) -> Option<(&str, u64, u64)> {
+    let members = v.as_object().filter(|members| members.len() == 3)?;
+    let burst = members.get("burst")?.as_str()?;
+    let offset = members.get("offset")?.as_u64()?;
+    let width = members.get("width")?.as_u64().filter(|w| *w >= 1)?;
+    Some((burst, offset, width))
 }
 
 /// The first I-address an insert minted, split at its last component.
@@ -251,17 +416,24 @@ struct Minted {
 impl Minted {
     /// Returns the address an insert's ack names, split, where it reads.
     fn of(addr: &str) -> Option<Minted> {
-        let (prefix, last) = addr.rsplit_once('.').filter(|_| is_address_text(addr))?;
-        Some(Minted { prefix: prefix.to_string(), first: last.parse().ok()? })
+        let (prefix, first) = i_address(addr)?;
+        Some(Minted { prefix: prefix.to_string(), first })
+    }
+
+    /// Returns the I-address `offset` positions past the minted one.
+    ///
+    /// It answers none where the address is past what one spells.
+    fn at(&self, offset: u64) -> Option<String> {
+        Some(format!("{}.{}", self.prefix, self.first.checked_add(offset)?))
     }
 
     /// Returns the I-span a piece names, where its start is spellable.
     ///
     /// It is `width` positions from the minted address advanced by
-    /// `offset`, in the wire's I-span form (wire.md §Links (writes)).
+    /// `offset`, in the wire's I-span form (wire.md §Links (writes)), the
+    /// form an anchors' `span` run takes too.
     fn span(&self, piece: Piece) -> Option<Value> {
-        let start = self.first.checked_add(piece.offset)?;
-        Some(json!({"start": format!("{}.{start}", self.prefix), "width": piece.width.to_string()}))
+        Some(json!({"start": self.at(piece.offset)?, "width": piece.width.to_string()}))
     }
 }
 
@@ -277,11 +449,16 @@ enum Outcome {
 }
 
 impl Outcome {
-    /// Returns the outcome of a burst's answer; an insert's names its words.
-    fn of(answer: &Result<Value, Refusal>, insert: bool) -> Outcome {
+    /// Returns the outcome of a write's answer; an insert's names its words.
+    ///
+    /// `minting` is the document an insert mints into, none for another
+    /// write: an insert's ack names its words where the hold's one reader of
+    /// its minted address finds them in that document's own content I-space
+    /// (`hold::minted_on`; SP-18).
+    fn of(answer: &Result<Value, Refusal>, minting: Option<&str>) -> Outcome {
         match answer {
             Ok(v) if v["resp"] == "held" => Outcome::NotAcked(v["cause"].as_str().unwrap_or("held").to_string()),
-            Ok(v) => Outcome::Acked(v["addr"].as_str().filter(|_| insert).and_then(Minted::of)),
+            Ok(v) => Outcome::Acked(minting.and_then(|doc| minted_on(doc, v)).and_then(Minted::of)),
             Err(refusal) => Outcome::NotAcked(refusal.name().to_string()),
         }
     }
@@ -297,6 +474,8 @@ impl Outcome {
 struct Kept {
     serial: u64,
     id: String,
+    /// The document the burst's frame names, where it names one.
+    doc: Option<String>,
     /// The positions an insert's frame mints; none for any other kind.
     positions: Option<u64>,
     outcome: Outcome,
@@ -402,6 +581,8 @@ enum Why {
     /// A follower of the burst before it was not acked.
     Ahead,
     /// The burst's ack names no I-address its pieces resolve against.
+    ///
+    /// Or they resolve to anchors of no form `Anchors::of` reads.
     Ack,
     /// The shell's stop came before the burst's answer.
     Stop,
@@ -428,14 +609,15 @@ pub(super) struct SentBurst<'a> {
     followers: &'a Followers,
     session: String,
     serial: u64,
-    insert: bool,
+    /// The document the burst mints into where it is an insert.
+    minting: Option<String>,
     outcome: Option<Outcome>,
 }
 
 impl SentBurst<'_> {
     /// Sets the burst's outcome from the answer its call gives.
     pub(super) fn settle(mut self, answer: &Result<Value, Refusal>) {
-        self.outcome = Some(Outcome::of(answer, self.insert));
+        self.outcome = Some(Outcome::of(answer, self.minting.as_deref()));
     }
 }
 
@@ -515,8 +697,10 @@ impl Followers {
     /// nowhere. Every follower waiting for a burst of its `id` is woken.
     pub(super) fn sent(&self, session: &str, frame: &Value, stands: impl Fn() -> bool) -> Option<SentBurst<'_>> {
         let id = frame["id"].as_str().filter(|id| id.len() <= MAX_BURST_ID_BYTES && is_burst(frame))?;
+        let doc = frame["doc"].as_str().map(str::to_owned);
         let insert = frame["op"] == "insert";
         let positions = if insert { values_of(&frame["values"]).ok().map(|values| values.len() as u64) } else { None };
+        let minting = doc.clone().filter(|_| insert);
         let mut state = self.lock();
         let serial = state.next_serial;
         state.next_serial += 1;
@@ -524,7 +708,7 @@ impl Followers {
         if table.ended {
             return None;
         }
-        table.bursts.push_back(Kept { serial, id: id.to_string(), positions, outcome: Outcome::InFlight, issued: 0, served: 0, holders: 0, broken: false });
+        table.bursts.push_back(Kept { serial, id: id.to_string(), doc, positions, outcome: Outcome::InFlight, issued: 0, served: 0, holders: 0, broken: false });
         table.trim();
         drop(state);
         self.moved.notify_all();
@@ -532,14 +716,17 @@ impl Followers {
             self.ended(session);
             return None;
         }
-        Some(SentBurst { followers: self, session: session.to_string(), serial, insert, outcome: None })
+        Some(SentBurst { followers: self, session: session.to_string(), serial, minting, outcome: None })
     }
 
     /// Answers a follower once its burst is answered (the module doc).
     ///
-    /// `frame` is its write and `dial` sends it by the one path every
-    /// session write takes, answering the follower's own answer; `stands`
-    /// says whether `session` still stands, asked where no burst arrived.
+    /// `frame` is its write and `dial` sends it with its anchors — a
+    /// delete's, its pieces resolved, none for a link write — by the one
+    /// path every session write takes, answering the follower's own answer;
+    /// `stands` says whether `session` still stands, asked where no burst
+    /// arrived. The follower is acked where that answer is an ack, never
+    /// where it is refused or `held`.
     ///
     /// # Errors
     ///
@@ -550,20 +737,28 @@ impl Followers {
     /// 2. `no_such_burst` naming `after` where no burst of its `id` reaches
     ///    the session's table within [`BURST_ARRIVAL_WAIT`] — or
     ///    [`Followed::Ended`] where the session no longer stands;
-    /// 3. `malformed_args` naming the slot of the first piece where the
-    ///    burst names no positions — it is no insert, or an insert whose
-    ///    `values` are not the wire's forms — or the slot of the first piece
-    ///    past the insert's positions;
+    /// 3. `malformed_args`, before the follower takes its turn
+    ///    ([`unnamed`]): naming `frame.doc` where a delete's anchors name
+    ///    words of a burst on another document; naming the place of the
+    ///    first piece where the burst names no positions — it is no insert,
+    ///    or an insert whose `values` are not the wire's forms — or of the
+    ///    first piece past the insert's positions;
     /// 4. once the burst is answered and every follower before it has left:
     ///    `not_followed` with `why: "burst"` and the burst's cause where it
     ///    was not acked, `why: "ahead"` where a follower before it was not,
     ///    `why: "ack"` where the ack names no I-address its pieces resolve
-    ///    against, and `why: "stop"` where the stop's wait ended first;
+    ///    against, or the anchors they resolve to are of no form
+    ///    `Anchors::of` reads, and `why: "stop"` where the stop's wait ended
+    ///    first;
     /// 5. the dial's own answer.
     ///
     /// [`Followed::Ended`] answers where the session ended while it waited.
-    pub(super) fn follow(&self, session: &str, follower: Follower, frame: Value, stands: impl Fn() -> bool, dial: impl FnOnce(Value) -> Result<Value, Refusal>) -> Followed {
-        let Follower { after, pieces } = follower;
+    pub(super) fn follow(&self, session: &str, follower: Follower, frame: Value, stands: impl Fn() -> bool, dial: impl FnOnce(Value, Option<Anchors>) -> Result<Value, Refusal>) -> Followed {
+        let Follower { after, kind, pieces } = follower;
+        let anchors = match kind {
+            Kind::Delete(anchors) => anchors,
+            Kind::Link => None,
+        };
         let refused = |why: Why| Followed::Answered(Err(self.not_followed(&after, why)));
         let mut state = self.lock();
         if state.stop == Stop::Closed {
@@ -591,13 +786,8 @@ impl Followers {
         // The pieces against the burst, then the follower's turn.
         let table = state.tables.get_mut(session).expect("a follower's own count keeps its table");
         let kept = table.kept(serial);
-        let unnamed = match (pieces.first(), kept.positions) {
-            (None, _) => None,
-            (Some(first), None) => Some(first.slot),
-            (Some(_), Some(positions)) => pieces.iter().find(|p| p.offset.checked_add(p.width).is_none_or(|end| end > positions)).map(|p| p.slot),
-        };
-        if let Some(slot) = unnamed {
-            return self.left(state, session, None, || Followed::Answered(Err(Refusal::malformed(slot.what()))));
+        if let Some(what) = unnamed(&pieces, kept, frame["doc"].as_str()) {
+            return self.left(state, session, None, || Followed::Answered(Err(Refusal::malformed(what))));
         }
         let ticket = kept.issued;
         kept.issued += 1;
@@ -628,12 +818,12 @@ impl Followers {
         };
         drop(state);
         let mut seat = Seat { followers: self, session, serial, ticket, acked: false };
-        let Some(frame) = resolved(frame, &pieces, minted.as_ref()) else {
+        let Some((frame, anchors)) = resolved(frame, anchors, &pieces, minted.as_ref()) else {
             drop(seat);
             return refused(Why::Ack);
         };
-        let answer = dial(frame);
-        seat.acked = answer.is_ok();
+        let answer = dial(frame, anchors);
+        seat.acked = matches!(Outcome::of(&answer, None), Outcome::Acked(_));
         drop(seat);
         Followed::Answered(answer)
     }
@@ -700,7 +890,7 @@ impl Followers {
         let (token, cause, words) = match &why {
             Why::Burst(cause) => ("burst", Some(cause.as_str()), format!("its burst was not acked (`{}`)", render_inert(cause))),
             Why::Ahead => ("ahead", None, "a write after the same burst before it was not acked, and a chord's writes are one step".to_string()),
-            Why::Ack => ("ack", None, "its burst's ack names no I-address its pieces resolve against".to_string()),
+            Why::Ack => ("ack", None, "its burst's ack names no I-address its pieces resolve against, or they resolve to anchors of no form".to_string()),
             Why::Stop => ("stop", None, "the shell's stop came before its burst's answer".to_string()),
         };
         self.say(format_args!("op: the write after burst `{}` was not sent: {words}; nothing of it was written", render_inert(after)));
@@ -736,17 +926,51 @@ impl Followers {
     }
 }
 
-/// Returns a follower's frame, each piece resolved against `minted`.
+/// Returns the member a refusal names where `pieces` cannot name `kept`'s
+/// words, before the follower takes its turn.
 ///
-/// It answers the frame as it stands where it holds no piece; none where a
-/// piece stands and the burst's ack named no address, or a piece's start is
-/// past what an address spells.
-fn resolved(mut frame: Value, pieces: &[Piece], minted: Option<&Minted>) -> Option<Value> {
-    for piece in pieces {
-        let span = minted?.span(*piece)?;
-        *frame.get_mut(piece.slot.name())?.get_mut("spans")?.get_mut(piece.index)? = span;
+/// `doc` is the document the follower's frame names. In this order: a
+/// delete's anchors naming words of a burst on another document than `doc`
+/// name `frame.doc`; a burst that names no positions — no insert, or an
+/// insert whose `values` are not the wire's forms — names the first piece's
+/// place; a piece past the insert's positions names its own. None is
+/// answered where the follower holds no piece, or every piece names words
+/// the insert seats.
+fn unnamed(pieces: &[Piece], kept: &Kept, doc: Option<&str>) -> Option<&'static str> {
+    let first = pieces.first()?;
+    if pieces.iter().any(|piece| piece.place.in_anchors()) && kept.doc.as_deref() != doc {
+        return Some("frame.doc");
     }
-    Some(frame)
+    let Some(positions) = kept.positions else { return Some(first.place.what()) };
+    pieces.iter().find(|piece| piece.offset.checked_add(piece.width).is_none_or(|end| end > positions)).map(|piece| piece.place.what())
+}
+
+/// Returns a follower's frame and anchors, each piece resolved against
+/// `minted`.
+///
+/// A piece among a link's spans or a delete's span runs becomes the I-span
+/// it names, and one at a delete's anchor the I-address; the anchors are
+/// then read by `Anchors::of`, the one reader of their form. It answers the
+/// frame and the anchors as they stand where they hold no piece; none where
+/// a piece stands and the burst's ack named no address, a piece's start is
+/// past what an address spells, or the resolved anchors are of no form
+/// `Anchors::of` reads — past [`MAX_ANCHOR_BYTES`], an I-address spelling
+/// longer than the piece it replaces.
+fn resolved(mut frame: Value, mut anchors: Option<Value>, pieces: &[Piece], minted: Option<&Minted>) -> Option<(Value, Option<Anchors>)> {
+    for piece in pieces {
+        let minted = minted?;
+        let (spot, resolved) = match piece.place {
+            Place::Slot(slot, index) => (frame.get_mut(slot.name())?.get_mut("spans")?.get_mut(index)?, minted.span(*piece)?),
+            Place::Edge(edge) => (anchors.as_mut()?.get_mut(edge.name())?, Value::from(minted.at(piece.offset)?)),
+            Place::Run(index) => (anchors.as_mut()?.get_mut("span")?.get_mut(index)?, minted.span(*piece)?),
+        };
+        *spot = resolved;
+    }
+    let anchors = match anchors {
+        Some(anchors) => Some(Anchors::of(&anchors)?),
+        None => None,
+    };
+    Some((frame, anchors))
 }
 
 #[cfg(test)]

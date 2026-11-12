@@ -28,9 +28,10 @@
 //! read's state, its mapping and its marker with nothing written, the
 //! restore's typing, its way back and its note in the hold against the
 //! daemon, and the rules the shell alone keeps; `follow` the follower write
-//! — a mark landing on its insert's words, refused where its burst is held,
-//! following a delete, overtaking its insert, and finished by the stop
-//! before its session closes — against the daemon; `classes` the held
+//! — a mark landing on its insert's words and an undo's delete taking them
+//! back, refused where its burst is held, a delete held at its dial's
+//! death, following a delete, overtaking its insert, and finished by the
+//! stop before its session closes — against the daemon; `classes` the held
 //! store's defect classes over a `Shell` — one writer per board, a
 //! whole-draft write past a draft's held lines — each pinned against the
 //! daemon as an expected failure until the brief that closed it landed, and

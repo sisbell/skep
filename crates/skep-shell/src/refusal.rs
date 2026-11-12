@@ -351,12 +351,14 @@ impl Name {
     /// its way (§3c.6).
     ///
     /// Nothing of it was written and it is held nowhere, a link write being
-    /// none of the held kinds: the page takes off the mark it drew. The
-    /// detail names the `after` and `why`: `burst` where the burst was not
-    /// acked — held, with the hold's `cause`, or refused, with the refusal's
-    /// name as `cause`; `ahead` where a follower of the same burst before it
-    /// was not acked, a chord's writes being one step (D6 BM-69); `ack` where
-    /// the burst's ack names no I-address its pieces resolve against; `stop`
+    /// none of the held kinds and a delete held behind no line of words the
+    /// board may never have had (D6 BM-81): the page takes off the mark it
+    /// drew. The detail names the `after` and `why`: `burst` where the burst
+    /// was not acked — held, with the hold's `cause`, or refused, with the
+    /// refusal's name as `cause`; `ahead` where a follower of the same burst
+    /// before it was not acked, refused or held, a chord's writes being one
+    /// step (D6 BM-69); `ack` where the burst's ack names no I-address its
+    /// pieces resolve against, or they resolve to anchors of no form; `stop`
     /// where the shell's stop came before the burst's answer.
     pub const NOT_FOLLOWED: Name = Name("not_followed");
     /// A `merge.land` or a `merge.undo` with no composition standing, or a

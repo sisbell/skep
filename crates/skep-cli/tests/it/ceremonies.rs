@@ -1,5 +1,5 @@
 //! THE SIX COMMANDS through the binary (`client.md` §2; the build brief §3):
-//! the help lists sixteen and `--yes` at a retirement is exit 2; each person door refuses
+//! the help lists seventeen and `--yes` at a retirement is exit 2; each person door refuses
 //! without a controlling terminal, and opens under a pseudo-terminal only
 //! where stdin and stderr are both one, while `accept --reprint`, `enroll
 //! --reply`, `handoff` without `--payload`, `merge` and `restore` run without one; a usage
@@ -27,7 +27,7 @@ use skep_identity::parse_enroll;
 
 use crate::common::{origin, s, skep, skep_os, spawn, tree, Run};
 
-const SIXTEEN: [&str; 16] = ["keygen", "claim", "session", "fingerprint", "verify", "health", "bind", "enroll", "recover", "retire", "rotate", "handoff", "accept", "merge", "share", "restore"];
+const SEVENTEEN: [&str; 17] = ["keygen", "claim", "session", "fingerprint", "verify", "health", "bind", "enroll", "recover", "retire", "rotate", "handoff", "accept", "merge", "share", "restore", "hint"];
 
 /// A claimed board through the LIBRARY (the notebook arm is a person door
 /// the binary refuses without a terminal): the store holds the device key,
@@ -42,10 +42,10 @@ fn claim_board(board_origin: &str, store: &Path, anchors: &Path) {
 }
 
 #[test]
-fn help_lists_sixteen_and_names_none_as_not_in_this_build_and_yes_at_a_retirement_is_exit_2() {
+fn help_lists_seventeen_and_names_none_as_not_in_this_build_and_yes_at_a_retirement_is_exit_2() {
     let run = skep(&["--help"], &[], None);
     assert_eq!(run.code, 0, "{run:?}");
-    for c in SIXTEEN {
+    for c in SEVENTEEN {
         assert!(run.out.contains(&format!("\n  {c} ")), "{c} listed:\n{}", run.out);
     }
     assert!(!run.out.contains("not in this build"), "{}", run.out);

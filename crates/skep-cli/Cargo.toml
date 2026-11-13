@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "skep — the command over skep-client: sixteen commands, client.md §2.1's thirteen, merge, share and restore, flag parsing by hand, one file per command, a Person over the terminal, stdout DATA and stderr TALK (client.md §1.2, §2); and beside it skep-dev, the dev binary whose two verbs seed a running claimed board with a prose corpus and serve the shell's core (skep-shell) to a page over loopback"
+description = "skep — the command over skep-client: seventeen commands, client.md §2.1's thirteen, merge, share, restore and hint, flag parsing by hand, one file per command, a Person over the terminal, stdout DATA and stderr TALK (client.md §1.2, §2); and beside it skep-dev, the dev binary whose two verbs seed a running claimed board with a prose corpus and serve the shell's core (skep-shell) to a page over loopback"
 readme = "README.md"
 
 [[bin]]
@@ -15,8 +15,8 @@ path = "src/main.rs"
 # The dev binary beside `skep`: `skep-dev seed` fills a running, claimed
 # board with a prose corpus — editions, citation links, second versions,
 # drafts, a second account — and `skep-dev serve` serves the shell's core
-# (`skep-shell`) to a page in a browser over loopback. The sixteen
-# commands stand; this is no seventeenth. A plain second target, built by
+# (`skep-shell`) to a page in a browser over loopback. The seventeen
+# commands stand; this is no eighteenth. A plain second target, built by
 # every `--bins` and by the package's default build; the sidecar image
 # names `--bin skep`, so its image holds the command alone. `test = false`:
 # the two binaries compile the same `args`, `terminal` and `shared`
@@ -53,7 +53,10 @@ dev-hooks = ["dep:skepd"]
 # content-free; those two commands, the fourteenth and the sixteenth, are
 # the ones that read and write content. The fifteenth, `skep share`, is
 # over the library's `share` module, which the default `acting` feature
-# holds: a grant is a link, not content.
+# holds: a grant is a link, not content. The seventeenth, `skep hint`, is
+# over the library's `resolve` module, which `acting` holds with its
+# `skep-resolve` edge: it reads a registry board's claim and its claimant's
+# genesis record as a guest, and no content.
 skep-client = { path = "../skep-client", features = ["merge"] }
 skep-identity = { path = "../skep-identity" }
 # The address vocabulary the dev binary signs with: a citation link's

@@ -11,13 +11,17 @@
 //! privash and the lists on a claimed board; `restore` drives the
 //! sixteenth, `skep restore` — the usage forms against a dead port, then a
 //! draft put back to a past state on a claimed board over the merge
-//! suite's rig; `tidy` reads the crate's own source for the arrangement
-//! `ARCHITECTURE.md` §The command states.
+//! suite's rig; `hint` drives the seventeenth, `skep hint` — a claimed
+//! board's root hint printed as one line, its origins in order and its
+//! realm the genesis set's, then each refusal, an unclaimed board's and a
+//! scripted board's among them; `tidy` reads the crate's own source for
+//! the arrangement `ARCHITECTURE.md` §The command states.
 
 mod ceremonies;
 mod cli;
 mod common;
 mod dev;
+mod hint;
 mod hostile;
 mod merge;
 mod restore;

@@ -3,8 +3,8 @@
 //! The style is `skepd/src/main.rs`'s `parse_args` and `from_env`. A
 //! command line opens with its [`Command`], one of §2.1's thirteen,
 //! `merge`, the fourteenth (the merge record's §6), `share`, the
-//! fifteenth (PUB-5.29; PUB-5.108), or `restore`, the sixteenth (B3-S7),
-//! and is judged against `GRAMMAR`, one
+//! fifteenth (PUB-5.29; PUB-5.108), `restore`, the sixteenth (B3-S7), or
+//! `hint`, the seventeenth (REG-3.2), and is judged against `GRAMMAR`, one
 //! row per command beside `HELP`, the text that documents it: a flag in no
 //! row, a flag of another command's, a missing value, a value that is
 //! empty or is itself one of the grammar's flags, a second value of a flag
@@ -101,14 +101,15 @@ fn version_line(program: &str) -> String {
     )
 }
 
-/// One of the sixteen commands: the verb a command line opens with.
+/// One of the seventeen commands: the verb a command line opens with.
 ///
-/// The sixteen are `client.md` §2.1's thirteen, `merge`, the fourteenth
+/// The seventeen are `client.md` §2.1's thirteen, `merge`, the fourteenth
 /// (the merge record's §6), `share`, the fifteenth (PUB-5.29; PUB-5.108),
-/// and `restore`, the sixteenth (B3-S7; `client.md` §4b.1's
-/// `history.restore` row). A command is what `GRAMMAR`'s rows are keyed
-/// by, and what `main` dispatches on, one arm each, which the compiler
-/// holds exhaustive.
+/// `restore`, the sixteenth (B3-S7; `client.md` §4b.1's `history.restore`
+/// row), and `hint`, the seventeenth (REG-3.2: a registry's root hint,
+/// read off its board). A command is what `GRAMMAR`'s rows are keyed by,
+/// and what `main` dispatches on, one arm each, which the compiler holds
+/// exhaustive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Command {
     Keygen,
@@ -127,6 +128,7 @@ pub enum Command {
     Merge,
     Share,
     Restore,
+    Hint,
 }
 
 impl Command {
@@ -149,6 +151,7 @@ impl Command {
             Command::Merge => "merge",
             Command::Share => "share",
             Command::Restore => "restore",
+            Command::Hint => "hint",
         }
     }
 }
@@ -173,7 +176,7 @@ pub struct Line<C> {
     switches: Vec<String>,
 }
 
-/// The `skep` command's line: one of the sixteen, and its flags.
+/// The `skep` command's line: one of the seventeen, and its flags.
 pub type CommandLine = Line<Command>;
 
 /// The flags every command takes, each taking one value.
@@ -241,10 +244,10 @@ impl Form {
     }
 }
 
-/// The grammar: the sixteen commands, each with its flags and its forms.
+/// The grammar: the seventeen commands, each with its flags and its forms.
 ///
-/// The commands are `client.md` §2.1's in set, `merge`, `share` and
-/// `restore`, each
+/// The commands are `client.md` §2.1's in set, `merge`, `share`, `restore`
+/// and `hint`, each
 /// with the flags §2.2 gives it and `HELP` documents, and the rules its
 /// forms hold them to — the forms the record's synopses draw:
 /// `keygen --anchors` (§2.2), `claim`'s notebook walk or `--hosted` (§4.5),
@@ -265,11 +268,13 @@ impl Form {
 /// row alone, standing for the typed answer where no terminal stands; a
 /// retirement's confirmation is a typed answer at the terminal, never a
 /// flag (AUTH-5.46). `restore`'s row is its two flags, `--draft` and
-/// `--at`, each once, in the one form the command has. That a side and
-/// `--doc` are required at `merge`, a reader at `share` and both flags at
-/// `restore`, is the command's judgment, as `retire` judges its
-/// `--fingerprint`: no form says "one of".
-const GRAMMAR: [Row<Command>; 16] = [
+/// `--at`, each once, in the one form the command has; `hint`'s is
+/// `--also`, which repeats, each value a further origin of the registry in
+/// the order given, and `--fork`, once, in the one form the command has.
+/// That a side and `--doc` are required at `merge`, a reader at `share`,
+/// both flags at `restore` and the board at `hint`, is the command's
+/// judgment, as `retire` judges its `--fingerprint`: no form says "one of".
+const GRAMMAR: [Row<Command>; 17] = [
     Row {
         command: Command::Keygen,
         once: &[],
@@ -390,9 +395,10 @@ const GRAMMAR: [Row<Command>; 16] = [
         ],
     },
     Row { command: Command::Restore, once: &["--draft", "--at"], repeated: &[], switches: &[], forms: &[] },
+    Row { command: Command::Hint, once: &["--fork"], repeated: &["--also"], switches: &[], forms: &[] },
 ];
 
-/// The help text: the sixteen commands and the flags each takes.
+/// The help text: the seventeen commands and the flags each takes.
 ///
 /// Each command is as the design writes it, and the text is the grammar
 /// above, documented beside it.
@@ -461,6 +467,13 @@ usage: skep <command> [flags]
                write; a merge the draft carries stands, and is said; one
                JSON document on stdout, naming the position that puts the
                restore back; no person door
+  hint         print a registry's root hint, read off its board as a
+               guest (no key, no session): the line a reader is given to
+               find this registry; it is a setting the reader can change;
+               the board's origin first, then each --also, then the realm,
+               the fingerprint of the key set the board's claimant
+               enrolled at its genesis, and with --fork the fork point of
+               a forked lineage; one line on stdout; no person door
 
 flags (a flag beats its env variable; a variable set empty is unset):
   --board <origin>      the board, a canonical origin (env SKEP_BOARD)
@@ -543,6 +556,10 @@ flags (a flag beats its env variable; a variable set empty is unset):
   restore:  --draft <S>  --at <n> (a commit position before the draft's
             current one, as the change feed and the acknowledgments
             number them)
+  hint:     --board <origin>  [--also <origin>]... (a further origin of
+            the same registry, tried after those before it: written as
+            given, and never dialed)  [--fork <address>] (the address of
+            the fork's succession record; never inferred)
 
 exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
 4 transport. stdout carries data; stderr carries talk. A retirement's

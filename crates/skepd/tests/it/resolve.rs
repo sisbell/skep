@@ -8,7 +8,10 @@
 //! un-arranged atom (REG-3.25), the end-to-end walk from the hint (REG-3.7),
 //! THE MIRROR OVER `https` (REG-3.2, REG-3.12) — an `https` root reached
 //! from genesis through the client's dialer, behind the suite's TLS front —
-//! the recording of the resolver crate's own fixture, and THE MEASUREMENTS
+//! THE ROOT HINT PRINTED (REG-3.2, REG-3.39) — the fixture board's line read
+//! off the board as a guest by the read `skep hint` prints, equal to the
+//! line this suite composes from its own keys, a cold mirror opened from it
+//! — the recording of the resolver crate's own fixture, and THE MEASUREMENTS
 //! (the registry seam investigation §3.1, §3.3, §3.4), reported and never
 //! asserted.
 //!
@@ -889,6 +892,81 @@ fn one_org_registered_by_the_console_resolves_from_the_hint_by_a_cold_resolver()
         other => panic!("{other:?}"),
     }
     assert!(matches!(resolve_prefix(&mut mirror, "1.6"), Resolution::Unregistered { .. }));
+    sd.shutdown();
+}
+
+// ── the root hint, printed ─────────────────────────────────────────────────
+
+/// Checks that the fixture board's root hint is read off the board.
+///
+/// The read is the one `skep hint` prints (`skep_client::resolve`'s
+/// `root_hint`), made as a guest over the client's mirror dialer. Its line
+/// equals, byte for byte, the one this suite composes from the ceremony's
+/// own keys ([`hint_for`]): the board's origin and the fingerprint of the
+/// claimant's genesis set (REG-3.39). The fixture's registrar has rotated
+/// since — a third key enrolled, the device key retired — so the set the
+/// claimant holds now fingerprints to another realm, and a printer that
+/// read the living set would print another line. The read stops at the
+/// claim: one page of a feed that runs to several, and no key set or
+/// position read asked of the board. A cold mirror opens from the printed
+/// line, parsed back, and reaches the head.
+///
+/// Behind the suite's TLS front the same board prints the same realm over
+/// `https`, the front's origin first and the daemon's own after it as
+/// given, every read riding the front; and a cold mirror opens from that
+/// line at the `https` root.
+#[test]
+fn the_fixture_boards_root_hint_is_read_off_the_board_and_a_cold_mirror_opens_from_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_enforcing(dir.path());
+    let port = sd.port();
+    fixture_board(port);
+    let board = skep_client::Origin::parse(&format!("http://127.0.0.1:{port}")).expect("canonical");
+    let read = |dialer: skep_client::PlainHttp, board: &skep_client::Origin, also: &[skep_client::Origin]| {
+        skep_client::resolve::root_hint(Arc::new(dialer), board, also, None).unwrap_or_else(|h| panic!("the root hint of {board}: {h}"))
+    };
+    let (hint, genesis) = read(skep_client::resolve::mirror_dialer(), &board, &[]);
+    let line = hint.to_string();
+    assert_eq!(line, hint_for(port).to_string(), "byte for byte the line the suite composes from its own keys");
+    assert_eq!(genesis.claimant.to_string(), CLAIMANT_ACCOUNT);
+    assert_eq!(genesis.fingerprint, suite_realm());
+    // The genesis set, never the living one: the registrar has rotated.
+    let live = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
+    let living: Vec<Fingerprint> =
+        live["enrolled"].as_array().expect("enrolled").iter().map(|e| Fingerprint::parse_hex(e["fingerprint"].as_str().expect("a fingerprint")).expect("64 hex")).collect();
+    assert!(living.contains(&Fingerprint::of(&public_key_of(&rotated_registrar_key()))) && !living.contains(&Fingerprint::of(&public_key_of(&device_key()))), "the registrar rotated: {living:?}");
+    assert_ne!(RealmId::genesis_fingerprint(&living), suite_realm(), "the living set fingerprints to another realm");
+    // The read stops at the claim.
+    let head = head_position(port);
+    let (_, page) = http(port, "GET", "/changes?since=0", None, b"");
+    assert_eq!(json(&page)["more"].as_bool(), Some(true), "the feed runs past its first page");
+    assert!(genesis.claim_at < json(&page)["last"].as_u64().expect("last") && genesis.claim_at < head, "the claim stands near the board's start: {genesis:?}");
+    let reads = genesis.reads;
+    assert_eq!((reads.changes, reads.key_set, reads.op_at), (1, 0, 0), "one page, and no key set or position read: {reads:?}");
+    // A cold mirror opens from the printed line and reaches the head.
+    let printed = RootHint::parse(&line).expect("the printed line parses back");
+    assert_eq!(printed.to_string(), line);
+    let mdir = tempfile::tempdir().expect("tempdir");
+    let mirror = Mirror::open(&printed, mdir.path(), &skep_resolve::dial_http).unwrap_or_else(|e| panic!("a cold mirror from the printed line: {e}"));
+    assert_eq!(*mirror.opened(), Opened::Bootstrapped);
+    assert_eq!(mirror.claim().map(|(at, c)| (at, c.to_string())), Some((genesis.claim_at, CLAIMANT_ACCOUNT.to_string())), "the claim the read stopped at");
+    assert_eq!(mirror.head(), head, "the mirror reaches the head");
+    drop(mirror);
+
+    // The same board over https, the daemon's own origin after the front's.
+    let front = TlsFront::before(port);
+    let https = skep_client::Origin::parse(&front.origin()).expect("canonical");
+    let trusting = skep_client::resolve::mirror_dialer().trusting_test_root(&tls_front_test_root()).expect("the fixture certificate is a root");
+    let (fronted, over_https) = read(trusting, &https, std::slice::from_ref(&board));
+    assert_eq!(fronted.to_string(), format!("{https} {board} realm:{}", suite_realm().to_hex()), "the origins in the order given, and the one realm");
+    let front_reads = front.settled(Duration::ZERO);
+    assert!(front_reads.refused() == 0 && (over_https.reads.total()..=over_https.reads.total() + over_https.reads.busy_retries).contains(&front_reads.carried()), "every read rode the front: {} carried, {:?}", front_reads.carried(), over_https.reads);
+    let fdir = tempfile::tempdir().expect("tempdir");
+    let mirror = Mirror::open(&fronted, fdir.path(), &dial_trusting_the_front()).unwrap_or_else(|e| panic!("a cold mirror from the line read over https: {e}"));
+    assert_eq!(mirror.root().map(Origin::as_str), Some(https.as_str()), "the first origin of the line answers");
+    assert_eq!(mirror.head(), head);
+    drop(mirror);
+    drop(front);
     sd.shutdown();
 }
 

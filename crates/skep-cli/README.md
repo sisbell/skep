@@ -1,6 +1,6 @@
 # skep-cli — the `skep` command, and the dev binary `skep-dev`
 
-The command over `skep-client` (`client.md` §1.2, §2), sixteen commands:
+The command over `skep-client` (`client.md` §1.2, §2), seventeen commands:
 `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
 the ceremonies `enroll`, `recover`, `retire`, `rotate`, `handoff`,
 `accept`, `merge` — the editor's act on a daughter over the library's
@@ -42,7 +42,19 @@ back as the published words they became, a merge the draft carries left
 standing and said beside the withdrawal that takes it out; refused where
 the draft changed between the read and the write; the statement before
 the act on stderr, then one JSON document on stdout naming the position
-that puts the restore back. Flag parsing by hand, one file
+that puts the restore back. And `hint`, over the library's `resolve`
+module (REG-3.2): a registry's root hint printed as one line on stdout —
+the line a reader is given to find this registry, a setting the reader
+can change — its origins in the order given (`--board`, then each
+`--also`, a further origin written as given and never dialed), then
+`realm:` and the fingerprint of the key set the board's claimant enrolled
+at its genesis, never the set the account holds now, read off the board
+as a guest — no key, no session, no store — by the read a registry
+mirror's realm check makes, so a mirror opened from the line passes that
+check; `--fork` adds a forked lineage's fork point and is never inferred;
+an unclaimed board, and a claim that names no genesis record, are halts
+naming the board, exit 3, and no refusal prints anything on stdout. Flag
+parsing by hand, one file
 per command, a `Person` over the terminal, stdout DATA and stderr TALK,
 §2.3's exit codes (0 done, 1 the board refused, 2 usage, 3 halt and
 surface, 4 transport).
@@ -160,7 +172,7 @@ each kind is met, with the route it was met at, since a browser shows the
 page an origin refusal only as a CORS failure, and every one is counted
 to the stop.
 
-The sixteen commands stand: the dev binary is no command of `skep`, and
+The seventeen commands stand: the dev binary is no command of `skep`, and
 the sidecar image, built `--no-default-features --bin skep`, holds none of
 it and no `skepd` (the default build neither: `dev-hooks` alone links the
 daemon, which `scripts/gate-full.sh`'s isolation line and
@@ -182,10 +194,10 @@ variable the source reads to a row here.
 | setting | variable | default | checked | read at | what it sets |
 |---|---|---|---|---|---|
 | `--board` | `SKEP_BOARD` | none | a canonical origin, as the command reads it | every command but `keygen` and `fingerprint`; asked at `accept` where absent | the board; the store keys each binding by the origin as written, so `localhost` is another board than `127.0.0.1` |
-| `--dir` | `SKEP_KEYSTORE` | `~/.skep`, under `HOME`, else `USERPROFILE` | the home an absolute path, else refused | every command but `health`, `claim --hosted` and `session --close` | the key store: `keys/` (each file 0600, the directory 0700), `bindings` and `lock`; `skep-dev seed`'s manifest in `<store>-seed/` beside it |
+| `--dir` | `SKEP_KEYSTORE` | `~/.skep`, under `HOME`, else `USERPROFILE` | the home an absolute path, else refused | every command but `health`, `hint`, `claim --hosted` and `session --close` | the key store: `keys/` (each file 0600, the directory 0700), `bindings` and `lock`; `skep-dev seed`'s manifest in `<store>-seed/` beside it |
 | `--key` | `SKEP_KEY` | none | the file, as the command reads it; an anchor's file refused where the key signs | `session`, `verify`, `bind`, `fingerprint`, `merge`, `share`, `restore`, `accept --reprint`; refused at `enroll` and `retire` | one key file, bypassing the store's lookup; at `fingerprint`, the one key listed |
 | `--principal` | `SKEP_PRINCIPAL` (`skep-mcp` reads it too) | the store's one binding at the board; at `bind`, the reply's; at `claim`, `1` | an integer from 0 to 2^53 − 1, as the command reads it | `session`, `verify`, `enroll`, `recover`, `retire`, `rotate`, `handoff`, `merge`, `share`, `restore`, `bind`, `claim` | the principal; at `claim`, the new account's id |
-| `--json` | — | off | — | `verify`, `health`, `fingerprint`; at `merge`, `share` and `restore` the answer is one JSON document always, and the flag changes nothing | one JSON document on stdout |
+| `--json` | — | off | — | `verify`, `health`, `fingerprint`; at `merge`, `share` and `restore` the answer is one JSON document always, and the flag changes nothing; at `hint` the answer is the one line always | one JSON document on stdout |
 | `--kind` | `SKEP_MERGE_KIND` | none: required at `merge` | an address, as the command reads it, before any socket opens | `merge` | the merge record kind's type address — the kind's commons row is interim and unpinned (the merge record's decision 9), so the caller names it |
 | — | `SKEP_SESSION` | none | a session token, 32 lowercase hex | `session --close -` alone; never at `merge`, `share` or `restore`, whose sessions are their own — a token cannot sign the shot or the grant, nor name the account the restore's reads judge by | the token to end; stdin is then not read |
 | — | `HOME`, else `USERPROFILE` | — | an absolute path | where `--dir` and `SKEP_KEYSTORE` are absent | where the default store lives |

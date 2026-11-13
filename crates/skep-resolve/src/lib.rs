@@ -33,7 +33,10 @@
 //!   folds `skep-identity`'s SIGNATURE-FILTERED KEY TABLE from the credential
 //!   records the feed names (REG-3.39, REG-5.9), the one table every record
 //!   is judged under and the walk's key set is read off — never the board's
-//!   `key_set`.
+//!   `key_set`. The same pass, stopped at the claim and comparing nothing,
+//!   is the genesis read alone (`Mirror::read_genesis`, answering a
+//!   [`Genesis`]): what the realm check would compare, for a caller that
+//!   holds no hint yet — the printer of a registry's root hint (REG-3.2).
 //! * `verify` — THE VERIFY (rm-2; REG-1.86 (e)): the body parsed under the
 //!   canonical rule by `skep_registry::parse`, the record frame rebuilt from
 //!   the row's own members, the signer found in the set that opens the
@@ -59,8 +62,9 @@
 //! of it (R5 (a)); no resolution hop reads a third party.
 //!
 //! The modules are private: the root is the crate's whole surface — the
-//! names re-exported below and [`parse_address`] — each name at one path, so
-//! a file moved inside the crate moves nothing a dependent names.
+//! names re-exported below, [`Genesis`] and [`parse_address`] — each name at
+//! one path, so a file moved inside the crate moves nothing a dependent
+//! names.
 
 #![forbid(unsafe_code)]
 
@@ -91,6 +95,28 @@ pub use state::{
 pub use walk::{guest_resolve, resolve, GuestCost};
 
 use skep_address::{validate, Address, Nat, Tumbler};
+use skep_identity::Fingerprint;
+
+/// What the realm check reads of a board's base (REG-3.39, REG-3.42).
+///
+/// It is the first claim the board's feed carries that names a claimant,
+/// and the fingerprint of the key set that claimant's genesis record
+/// enrolls — its initial set, never its living one — in the realm id's form
+/// ([`RealmId::genesis_fingerprint`]): the value a mirror compares to the
+/// genesis half of its hint's realm id. [`Mirror::read_genesis`] answers it
+/// for a board no hint names yet, with the reads the pass made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Genesis {
+    /// The position of the claim row the read stopped at.
+    pub claim_at: u64,
+    /// The claimant: the account that claim's link names.
+    pub claimant: Address,
+    /// The genesis fingerprint, the realm id's first half (REG-3.39).
+    pub fingerprint: Fingerprint,
+    /// Every read the pass made of the board, by kind.
+    pub reads: Reads,
+}
 
 /// THE MOST DIGITS one component of an address a board serves carries:
 /// skepd's codec's `MAX_NAT_DIGITS`, the cap the board's own wire holds
@@ -162,6 +188,7 @@ const _: fn() = || {
     fn debug<T: std::fmt::Debug>() {}
     fn hash_key<T: Eq + std::hash::Hash>() {}
     send_sync::<RootHint>();
+    send_sync::<Genesis>();
     send_sync::<Resolution>();
     send_sync::<Index>();
     send_sync::<Stats>();

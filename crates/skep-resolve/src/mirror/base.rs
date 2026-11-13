@@ -33,7 +33,9 @@
 //! the way a child does — and THE FEED COPY's every line, the header, the
 //! rows and the head pairs, written here and read back by [`read_copy`]
 //! alone. The credential pass calls one method here,
-//! [`Mirror::realm_check`], at the claim's row.
+//! [`Mirror::realm_check`], at the claim's row; the genesis read alone
+//! ([`Mirror::read_genesis`]) dials its root as an open does
+//! ([`dial_root`]) and compares nothing.
 
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
@@ -46,7 +48,7 @@ use skep_identity::Fingerprint;
 
 use super::{position, Lines, Mirror, MirrorError, Opened, Refusal, FEED_COPY, FEED_FORMAT, FETCH_CACHE};
 use crate::board::{parse_chain, rises_past, Board, BoardError};
-use crate::hint::{RealmId, RootHint};
+use crate::hint::RootHint;
 use crate::http::Dial;
 use crate::origin::Origin;
 
@@ -279,14 +281,14 @@ impl Mirror {
     /// having read it off the board ([`Mirror::take_claim`]): its genesis set
     /// ([`Mirror::genesis_keys`] — the keys its genesis record enrolls, that
     /// record read off the board and never off the fetch cache),
-    /// fingerprinted and compared to the GENESIS FINGERPRINT the hint's realm
-    /// id carries, its first half — the fork point is not compared here; a
-    /// mismatch is REG-3.19's refusal, and no genesis to read
-    /// [`MirrorError::NoGenesis`]. Compared, every line that waited reaches
-    /// the copy, the genesis record's among them.
+    /// fingerprinted ([`Mirror::genesis_found`], the one place it is, which
+    /// the genesis read alone answers too) and compared to the GENESIS
+    /// FINGERPRINT the hint's realm id carries, its first half — the fork
+    /// point is not compared here; a mismatch is REG-3.19's refusal, and no
+    /// genesis to read [`MirrorError::NoGenesis`]. Compared, every line that
+    /// waited reaches the copy, the genesis record's among them.
     pub(super) fn realm_check(&mut self, claimant: &Address) -> Result<(), MirrorError> {
-        let keys = self.genesis_keys(claimant).ok_or(MirrorError::NoGenesis)?;
-        let found = RealmId::genesis_fingerprint(&keys.iter().map(|e| Fingerprint::of(&e.key)).collect::<Vec<_>>());
+        let found = self.genesis_found(claimant)?;
         let expected = self.hint.realm().genesis;
         if found != expected {
             return Err(MirrorError::Refused(Refusal::RealmMismatch { expected, found }));
@@ -348,8 +350,9 @@ fn read_lines(path: &Path) -> Result<Vec<Value>, MirrorError> {
 
 /// Dial the hint's origins in order; the first that answers `/health` is the
 /// root. Where none does, every origin is named beside its own error — the
-/// transport's where the dial failed, the board's where `/health` did.
-fn dial_root(hint: &RootHint, dial: &Dial<'_>) -> Result<(Origin, Board), MirrorError> {
+/// transport's where the dial failed, the board's where `/health` did. The
+/// open's first step, and the genesis read's ([`Mirror::read_genesis`]).
+pub(super) fn dial_root(hint: &RootHint, dial: &Dial<'_>) -> Result<(Origin, Board), MirrorError> {
     let mut tried = Vec::new();
     for origin in hint.origins() {
         match dial(origin) {

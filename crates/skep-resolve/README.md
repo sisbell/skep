@@ -24,6 +24,20 @@ parts, each under the design rule it realizes:
   holds an origin, its fields read through `origins()` and `realm()`. The
   mirror's realm check compares the id's genesis fingerprint at the base
   (REG-3.42); the fork point is compared by no check of this crate.
+  **The genesis read, alone** (`Mirror::read_genesis`, answering a
+  `Genesis`) is what composes a hint for a board no hint names yet: the
+  mirror's own credential pass over the board at one origin, from the
+  feed's first row to the first claim that names a claimant and no
+  further, answering that claim's position, its claimant, the fingerprint
+  of the key set the claimant's genesis record enrolls — never the set the
+  account holds now — and the reads the pass made. It is the value the
+  realm check compares, computed in one place and reached by the same
+  reads, so a mirror opened from a hint built on it passes that check; the
+  pass reads as a guest, keeps no copy and compares nothing, and its
+  refusals are the mirror's own (`MirrorError`: no root answering, a read
+  the board refused, a claim with no genesis record, no claim at all).
+  `skep-client`'s `resolve::root_hint` composes the line over it, and the
+  `skep` command's `hint` prints it.
 - **The mirror** (`Mirror`) — a `/changes` consumer from the floor
   (REG-3.10: no TTL, no negative cache) that fetches every row's bytes it
   needs — the stored link, the atom the link names (read where its home

@@ -309,13 +309,15 @@ foundation and on the stores above it.
   (its suite spawns the daemon as a dev-dependency). No feature, no
   transport: the loopback server is `skep-cli`'s dev verb's, the native
   bridge the shell's. Its modules and rules: §The shell's core.
-- `skep-cli` — the `skep` command over `skep-client`, sixteen commands:
+- `skep-cli` — the `skep` command over `skep-client`, seventeen commands:
   `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
   `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`,
   `merge` and `restore`, the two over the library's `merge` feature, which
-  this crate alone turns on, and `share`, which shares a draft or an
+  this crate alone turns on, `share`, which shares a draft or an
   account with one account, privashes a draft, revokes a share and lists
-  the grants over the library's `share` module; flag
+  the grants over the library's `share` module, and `hint`, which prints a
+  registry's root hint, read off its board as a guest, over the library's
+  `resolve` module; flag
   parsing by hand, a `Person` over the terminal, stdout data and stderr
   talk — and the dev binary `skep-dev`, whose two verbs `seed` a running
   claimed board with a prose corpus (`skep-corpus`) and `serve` the
@@ -961,7 +963,7 @@ and `keygen` sequence the library's compositions themselves, and so carry
 their own text. Its modules, in the order `src/main.rs` declares them,
 each naming only those above it:
 
-- `args.rs` `Command`, one of the sixteen, the verb `main` dispatches on;
+- `args.rs` `Command`, one of the seventeen, the verb `main` dispatches on;
   the grammar — one row per command and the rules its forms hold them to
   (`Form`), beside the flags every command takes (`GLOBAL`) — with `HELP`,
   the text that documents it; and `CommandLine`, one parsed command line
@@ -982,7 +984,7 @@ each naming only those above it:
   renders under a `Program`), `help`, and the plumbing from the flags to a
   board (`board_of`), a store (`store_of`), a principal
   (`principal_or_bound`) and a key (`select_key`, under `Purpose`).
-- `commands.rs` what the sixteen commands share among themselves alone:
+- `commands.rs` what the seventeen commands share among themselves alone:
   the `skep` `Program`'s `finish` and `help`; `require_terminal`, the
   check each `Door` makes; a payload read to its cap (`read_payload`,
   `MAX_PAYLOAD_BYTES`); the anchor boxes' per-run default (`BoxDefault`);

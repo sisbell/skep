@@ -1,10 +1,12 @@
-//! The seventeen commands, one file each beneath this one, and what they share.
+//! The eighteen commands, one file each beneath this one, and what they share.
 //!
 //! The commands are `client.md` §2.2's thirteen, each exactly as it writes
 //! it, `merge`, the fourteenth, as the merge record's §6 writes it,
 //! `share`, the fifteenth, as the grant rules write it (PUB-5.29;
-//! PUB-5.108), `restore`, the sixteenth, as B3-S7 draws it, and `hint`,
-//! the seventeenth, the printer of a registry's root hint (REG-3.2) — each a
+//! PUB-5.108), `restore`, the sixteenth, as B3-S7 draws it, `hint`, the
+//! seventeenth, the printer of a registry's root hint (REG-3.2), and
+//! `resolve`, the eighteenth, the resolver of a cross-board address
+//! (REG-3.7) — each a
 //! `pub fn` that `main` dispatches to and that answers
 //! `Ok` or the [`Stop`] it came to, every walk a library call. What they
 //! share among themselves alone is private here and so visible to each of
@@ -38,6 +40,7 @@ mod hint;
 mod keygen;
 mod merge;
 mod recover;
+mod resolve;
 mod restore;
 mod retire;
 mod rotate;
@@ -56,6 +59,7 @@ pub use hint::hint;
 pub use keygen::keygen;
 pub use merge::merge;
 pub use recover::recover;
+pub use resolve::resolve;
 pub use restore::restore;
 pub use retire::retire;
 pub use rotate::rotate;

@@ -1,6 +1,6 @@
 //! What both binaries share: the two streams, the stops and the plumbing.
 //!
-//! The binaries are `skep`'s seventeen commands and `skep-dev`'s two verbs,
+//! The binaries are `skep`'s eighteen commands and `skep-dev`'s two verbs,
 //! each root declaring this file as its `shared`. The two streams are
 //! stdout data (`data`, `data_verbatim`, `--help`'s text among what they
 //! carry) and stderr talk (the terminal's `talk`, which the prompts share)
@@ -19,7 +19,7 @@
 //! refusal's, and a write refused `poisoned` or `durability`, named here
 //! where the library's rendering names none (`act_beside`). The operator's
 //! lines of both programs name a key one way (`key_named`) and echo a third
-//! party's text to one bound (`clipped`). What the seventeen commands share
+//! party's text to one bound (`clipped`). What the eighteen commands share
 //! among themselves alone — the person doors, the payload's read, the
 //! anchor boxes' default, the three facts, the whole-set compare — stays in
 //! `commands.rs`.

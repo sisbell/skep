@@ -13,7 +13,7 @@
 //! claimant, which reads alone, or signed with a dev key, which writes too,
 //! and — behind the `dev-hooks` feature no shipped build enables — the
 //! daemon run in-process with its test hooks so its fault states are forced
-//! live. The seventeen commands of `skep` stand: this is no eighteenth, and
+//! live. The eighteen commands of `skep` stand: this is no nineteenth, and
 //! the sidecar image, built `--bin skep`, holds none of it.
 //!
 //! The root declares `args`, `terminal` and `shared` from the `skep` root's

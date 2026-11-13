@@ -80,7 +80,16 @@
 //!   this crate's signature check handed in, and a committed signature
 //!   judged against the set that table opens as of the entry's base
 //!   (AUTH-2.94; D14), a pure function of its caller's reads.
-//! * [`resolve`] — `skep_resolve::Transport` over this crate's dialer.
+//! * [`resolve`] — the registry over this crate's dialer:
+//!   `skep_resolve::Transport` over a `Dialer`, and the dial a registry
+//!   mirror opens through, for an `https` root and an `http` one alike
+//!   (REG-3.2); `root_hint`, a registry board's root-hint line read off the
+//!   board as a guest (REG-3.39); and `resolve_address`, a cross-board
+//!   address resolved to the board it lives on — its node field the prefix,
+//!   its local form the prefix swapped for `1` (REG-1.63) — off a mirror of
+//!   the registry kept under the caller's directory and read to the
+//!   registry's head at every call (REG-3.7, REG-3.10), its answer a named
+//!   state (REG-3.80).
 //! * [`ceremony`] — the ceremonies in two layers: the compositions every
 //!   walk runs over (P28) — `handshake`, `deposit`, `first_session`,
 //!   `backup`, `payload`, `preview`, `enumerate`, `trail`, `import`, `reads`

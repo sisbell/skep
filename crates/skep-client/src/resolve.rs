@@ -38,13 +38,39 @@
 //! passes. The fork point of a forked lineage is the caller's to name
 //! ([`fork_point`]; REG-3.40): no read answers one. What stops the read is
 //! a member of this crate's halt family.
+//!
+//! **A cross-board address, resolved.** A cross-board address is one global
+//! tumbler ([`global_address`]). Its node field is the prefix of the org
+//! that holds it (REG-1.62), and the registry says which board answers to
+//! that prefix by one link (REG-3.7); the rest of the address is read at
+//! that board, in the board's local form, the prefix swapped for `1`
+//! (REG-1.61; REG-1.63's ingress swap). [`resolve_address`] resolves the
+//! prefix off a mirror of the registry kept under a directory of the
+//! caller's — [`mirror_home`] names the one beside a key store, keyed by
+//! the hint's genesis fingerprint — and answers the walk's named state
+//! (REG-3.80) with the address's two parts, a [`Resolved`]. Every call
+//! opens the mirror against the root the hint names, which reads the
+//! registry to its head before the walk, so a binding or a deposit made
+//! since the last call is seen: no answer is given from a copy alone, and
+//! nothing is remembered as absent (REG-3.10). A deeper node field than any
+//! standing on the registry is the walk's own to answer (REG-3.82); it is
+//! never split another way. The walk dials no org's board, so the two faces
+//! read at the dial — BOUND-BUT-DISCLAIMED (REG-3.81) and the
+//! live-enforcement face (REG-3.84) — are not answered here. What a command
+//! prints of the answer as data is the answer's own ([`Resolved::line`],
+//! [`Resolved::object`]); the words of a face are its embedder's.
 
+use std::fs::{self, File, OpenOptions};
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::Value;
-use skep_address::Address;
-use skep_resolve::{BoardError, GuestCost, Method, Mirror, MirrorError, Resolution, SystemResolver, Transport, TransportError, Transports};
+use serde_json::{json, Value};
+use skep_address::{validate, Address, Nat, Tumbler};
+use skep_identity::{Enrolled, Fingerprint};
+use skep_resolve::{BoardError, GuestCost, Method, Mirror, MirrorError, Refusal, Transport, TransportError, FEED_COPY, FETCH_CACHE};
+use skep_util::file;
 
 use crate::dial::{DialError, Dialer, PlainHttp, Request};
 use crate::halt::{clipped, Halt, Refused};
@@ -58,6 +84,17 @@ use crate::origin::{NotCanonical, Origin};
 /// and reads what the genesis read found, with no dependency line of its
 /// own.
 pub use skep_resolve::{Genesis, RealmId, RootHint};
+
+/// The walk's names, as [`resolve_address`] takes and answers them.
+///
+/// They are the resolver's own, named here for the same embedder: the
+/// resolver's own resolution of a host name and the transports it holds,
+/// which the walk is handed; how a mirror came to hold its base; and the
+/// named state the walk answers, with every part a face is made of, so an
+/// embedder words each face with no dependency line of its own.
+pub use skep_resolve::{
+    BindingRecord, EndpointDial, EndpointRecord, Judged, MemberKind, MemberOutcome, NameResolver, Opened, Resolution, Standing, Successor, SystemResolver, Term, Transports, Unreachable, Verdict,
+};
 
 /// The per-call read/write bound of a mirror's exchange.
 ///
@@ -377,189 +414,543 @@ pub fn guest_resolve(dialer: Arc<dyn Dialer>, registry: &Origin, prefix: &Addres
     skep_resolve::guest_resolve(&board, prefix, &SystemResolver, &Transports::default())
 }
 
-#[cfg(test)]
-mod tests {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::thread;
+/// The directory under a key store that holds its registry mirrors.
+///
+/// It stands beside `keys/`, `bindings` and `lock`, one custody class to a
+/// directory (`client.md` §3.1): a mirror is a copy of a registry board's
+/// feed, and holds no key.
+const REGISTRY_DIR: &str = "registry";
 
-    use super::*;
-    use crate::board::fake::Fake;
-    use crate::dial::{Headers, RequestHead, Response, StreamedResponse};
+/// The lock file's name under a mirror's directory.
+const MIRROR_LOCK: &str = "lock";
 
-    /// The resolver's origin converts where the two grammars agree.
+/// Returns the directory a registry's mirror is kept in beside a key store.
+///
+/// It is `<store>/registry/<genesis>/`: `store` the key store's directory,
+/// and `<genesis>` the genesis fingerprint the hint's realm id opens with,
+/// 64 lowercase hex (REG-3.39). The directory is keyed by the genesis so
+/// that two registries — a dev registry and another — keep two copies and
+/// neither retires the other's (REG-3.17); a hint re-pointed within one
+/// genesis meets the copy held there, which the mirror's own open resumes
+/// by its check or refuses (REG-3.18, REG-3.19). Nothing is made here:
+/// [`resolve_address`] makes the directory it is handed.
+pub fn mirror_home(store: &Path, hint: &RootHint) -> PathBuf {
+    store.join(REGISTRY_DIR).join(hint.realm().genesis.to_hex())
+}
+
+/// Parses a cross-board address as the wire spells one.
+///
+/// It is the resolver's own reading of an address, the one [`fork_point`]
+/// reads a fork point by: each component a decimal natural of any size
+/// within the board's own wire caps, a leading zero naming its one address.
+/// `None` for any other text — a sign, an empty component, a tumbler that
+/// is no address.
+pub fn global_address(text: &str) -> Option<Address> {
+    skep_resolve::parse_address(text)
+}
+
+/// What [`resolve_address`] answers: the walk's state and the address's parts.
+///
+/// The state is the resolver's, a named value and never a blank (REG-3.80).
+/// The answer says beside it what was resolved — the prefix, the address's
+/// node field — and where the rest of the address is read, its local form;
+/// and how the registry was read for it: at which root, to which head, the
+/// copy begun or resumed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Resolved {
+    /// The address asked.
+    pub address: Address,
+    /// The prefix resolved: the address's node field (REG-1.62).
+    pub prefix: Address,
+    /// The walk's answer for the prefix, as a named state (REG-3.80).
+    pub resolution: Resolution,
+    /// The address in the local form of the board its prefix names.
     ///
-    /// Its text is kept byte for byte.
-    #[test]
-    fn a_resolver_origin_converts_to_this_crates() {
-        for text in ["http://127.0.0.1:8642", "https://board.example", "http://[::1]:8642"] {
-            let theirs = skep_resolve::Origin::parse(text).expect("canonical to the resolver");
-            assert_eq!(Origin::try_from(&theirs).map(|o| o.as_str().to_string()), Ok(text.to_string()));
-        }
-    }
-
-    /// The transport is this crate's one dialer and adds nothing (P25).
+    /// It is the address with its node field swapped for `1`, as that
+    /// board's ingress normalizes it (REG-1.61, REG-1.63). `None` for a
+    /// bare prefix, an address of no account field, which names no place on
+    /// a board. It is the address's own arithmetic, the same on every face;
+    /// BOUND alone names a board to read it at.
+    pub local: Option<Address>,
+    /// How the mirror came to hold its base at this call.
     ///
-    /// The resolver's request reaches the dialer at the transport's own
-    /// origin — method, path and body as the resolver framed them, no header
-    /// added — and the dialer's status and body come back as they were
-    /// answered.
-    #[test]
-    fn the_transport_carries_the_resolvers_request_to_its_own_origin() {
-        let fake = Fake::new(|_| Response { status: 418, headers: Headers(vec![("X-Board".into(), "registry".into())]), body: b"teapot".to_vec() });
-        let registry = Origin::parse("https://registry.example").unwrap();
-        let transport = DialerTransport::new(fake.clone(), registry.clone());
-        assert_eq!(transport.exchange(Method::Post, "/op", br#"{"op":"health"}"#), Ok((418, b"teapot".to_vec())));
-        assert_eq!(transport.exchange(Method::Get, "/health", b""), Ok((418, b"teapot".to_vec())));
-        let sent = fake.sent.lock().unwrap();
-        let expected = [
-            Request { method: crate::dial::Method::Post, path: "/op".into(), headers: Vec::new(), body: br#"{"op":"health"}"#.to_vec() },
-            Request { method: crate::dial::Method::Get, path: "/health".into(), headers: Vec::new(), body: Vec::new() },
-        ];
-        assert_eq!(sent.iter().map(|(origin, _)| origin).collect::<Vec<_>>(), [&registry, &registry]);
-        assert_eq!(sent.iter().map(|(_, req)| req.clone()).collect::<Vec<_>>(), expected);
-    }
-
-    /// The dial carries both schemes through the one dialer.
+    /// From genesis where the directory held no copy (REG-3.12), or a held
+    /// copy checked against the root and resumed (REG-3.18).
+    pub opened: Opened,
+    /// The registry root that answered, where the mirror names one.
     ///
-    /// An `https` origin and an `http` one each get this crate's transport,
-    /// and each exchange reaches the dialer at its own origin (the mutant
-    /// that hands an `https` origin to the resolver's own client refuses it
-    /// unheld, and the one that hands it an `http` origin dials past the
-    /// dialer).
-    #[test]
-    fn the_dial_carries_an_https_origin_and_an_http_one_through_the_one_dialer() {
-        let fake = Fake::new(|_| Response { status: 200, headers: Headers::default(), body: b"{}".to_vec() });
-        let dial = dial(fake.clone());
-        let origins = ["https://registry.example", "http://127.0.0.1:8642"];
-        for text in origins {
-            let transport = dial(&skep_resolve::Origin::parse(text).unwrap()).unwrap_or_else(|e| panic!("{text}: {e}"));
-            assert_eq!(transport.exchange(Method::Get, "/health", b""), Ok((200, b"{}".to_vec())), "{text}");
-        }
-        let dialed: Vec<String> = fake.sent.lock().unwrap().iter().map(|(origin, _)| origin.as_str().to_string()).collect();
-        assert_eq!(dialed, origins);
-    }
+    /// It is the first of the hint's origins, in the hint's order, to
+    /// answer.
+    pub root: Option<skep_resolve::Origin>,
+    /// The registry's head: the position the mirror was read to (REG-3.10).
+    pub head: u64,
+}
 
-    /// A dialer that refuses every exchange with one error.
-    struct Refusing(DialError);
-
-    impl Dialer for Refusing {
-        fn exchange(&self, _: &Origin, _: &Request) -> Result<Response, DialError> {
-            Err(self.0.clone())
-        }
-
-        fn stream(&self, _: &Origin, _: &RequestHead, _: &mut dyn Read, _: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
-            unreachable!("the resolver streams nothing")
-        }
-    }
-
-    /// Every class of a failed dial is the resolver's class of the same side.
+impl Resolved {
+    /// Returns the one line a BOUND address is answered by.
     ///
-    /// One row per class, in the order of the row index below, whose match
-    /// has no wildcard arm: a class the dialer gains is a row here before
-    /// this builds. An answer the board gave stays one and nothing else
-    /// becomes one (the mutant that names a read past its bound a failed
-    /// connection, as the map did before the dialer told the two apart,
-    /// reports a board that took the request as one never reached).
-    #[test]
-    fn every_class_of_a_failed_dial_is_the_resolvers_class_of_the_same_side() {
-        let row = |e: &DialError| match e {
-            DialError::NotHeld(_) => 0,
-            DialError::Resolve(_) => 1,
-            DialError::Connect(_) => 2,
-            DialError::Tls(_) => 3,
-            DialError::Timeout(_) => 4,
-            DialError::Io(_) => 5,
-            DialError::Truncated { .. } => 6,
-            DialError::Request(_) => 7,
-            DialError::Response(_) => 8,
-            DialError::TooLarge { .. } => 9,
-        };
-        let cells = [
-            (DialError::NotHeld("https".into()), TransportError::NotHeld("https".into())),
-            (DialError::Resolve("r".into()), TransportError::Resolve("r".into())),
-            (DialError::Connect("c".into()), TransportError::Connect("c".into())),
-            (DialError::Tls("t".into()), TransportError::Connect("tls: t".into())),
-            (DialError::Timeout("s".into()), TransportError::Io("timed out: s".into())),
-            (DialError::Io("i".into()), TransportError::Io("i".into())),
-            (DialError::Truncated { declared: 5, got: 2 }, TransportError::Io("truncated body (2 of 5 bytes) — the connection broke".into())),
-            (DialError::Request("q".into()), TransportError::Io("malformed request: q".into())),
-            (DialError::Response("p".into()), TransportError::Response("p".into())),
-            (DialError::TooLarge { cap: 7 }, TransportError::TooLarge { cap: 7 }),
-        ];
-        assert_eq!(cells.iter().map(|(dialed, _)| row(dialed)).collect::<Vec<_>>(), (0..10).collect::<Vec<_>>());
-        let origin = Origin::parse("https://registry.example").unwrap();
-        for (dialed, expected) in cells {
-            let transport = DialerTransport::new(Arc::new(Refusing(dialed.clone())), origin.clone());
-            let got = transport.exchange(Method::Get, "/health", b"").unwrap_err();
-            assert_eq!(got, expected, "{dialed:?}");
-            let an_answer = matches!(got, TransportError::Response(_) | TransportError::TooLarge { .. });
-            assert_eq!(an_answer, dialed.answered(), "{dialed:?}");
-        }
+    /// It is the origin of the endpoint member the walk would dial — the
+    /// first in the org's order whose terms pass and whose transport is
+    /// held (REG-3.34) — and then, a space between, the address in that
+    /// board's local form, where the address names a place on it. `None`
+    /// on every other face: no board is named to dial.
+    pub fn line(&self) -> Option<String> {
+        let Resolution::Bound { dial, .. } = &self.resolution else { return None };
+        Some(match &self.local {
+            Some(local) => format!("{} {local}", dial.origin),
+            None => dial.origin.to_string(),
+        })
     }
 
-    /// A body past the resolver's cap is too large whichever dialer read it.
+    /// Returns the face and its facts as one JSON object (REG-3.80).
     ///
-    /// A dialer that reads further than the mirror's — a frame's, a fake —
-    /// hands the transport a body at the cap, which it carries, and one a
-    /// byte past it, which it refuses at the resolver's cap.
-    #[test]
-    fn a_body_past_the_resolvers_cap_is_too_large_whichever_dialer_read_it() {
-        let registry = Origin::parse("https://registry.example").unwrap();
-        for len in [RESOLVER_ANSWER_CAP, RESOLVER_ANSWER_CAP + 1] {
-            let fake = Fake::new(move |_| Response { status: 200, headers: Headers::default(), body: vec![b'x'; len] });
-            let got = DialerTransport::new(fake, registry.clone()).exchange(Method::Post, "/op", b"{}").map(|(_, body)| body.len());
-            let expected = if len > RESOLVER_ANSWER_CAP { Err(TransportError::TooLarge { cap: RESOLVER_ANSWER_CAP }) } else { Ok(len) };
-            assert_eq!(got, expected, "a body of {len} bytes");
+    /// Every face carries `face`, its name as the resolver spells it
+    /// (`Resolution::face`), `address`, the address asked, and `prefix`. A
+    /// face with a standing carries `account` — `null` at a retired
+    /// binding — `binding`, the current one, and `history`, every verified
+    /// binding at the prefix in journal order. A face naming a bound
+    /// account carries `keys`, the set that opens it as of the registry's
+    /// head — `null` where this reader could not read it, never an empty
+    /// list — `endpoint`, the current deposit or `null`, and `members`,
+    /// each member's outcome in the org's order. Beside those, by face:
+    /// BOUND, `dial`, the member the walk would dial, and `local`, the
+    /// local form or `null` for a bare prefix; RETIRED-WITH-HISTORY,
+    /// `successor`; BOUND-BUT-UNREACHABLE, `cause` and, at a dead origin,
+    /// `member`; unreachable-by-policy, `member`, `term` and, on the host
+    /// term, `yielded`; THE DIAL NOT MADE, `member` and `kind`; THE HOP NOT
+    /// MADE, `parent`, the parent's own face as an object of this form, less
+    /// the address.
+    pub fn object(&self) -> Value {
+        let mut object = face_object(&self.resolution);
+        object["address"] = text(&self.address);
+        if matches!(self.resolution, Resolution::Bound { .. }) {
+            object["local"] = optional(self.local.as_ref());
         }
-    }
-
-    /// A loopback board for one connection: the request read, `answer` sent.
-    fn answering(answer: Vec<u8>) -> (skep_resolve::Origin, thread::JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let origin = skep_resolve::Origin::parse(&format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port())).unwrap();
-        let server = thread::spawn(move || {
-            let (mut s, _) = listener.accept().unwrap();
-            let mut got = Vec::new();
-            let mut buf = [0u8; 4096];
-            while !got.windows(4).any(|w| w == b"\r\n\r\n") {
-                let n = s.read(&mut buf).unwrap();
-                assert!(n > 0, "the peer closed before the head's blank line");
-                got.extend_from_slice(&buf[..n]);
-            }
-            // A reader that stops at its cap hangs up on the rest.
-            let _ = s.write_all(&answer);
-        });
-        (origin, server)
-    }
-
-    /// The mirror's dialer reads under the resolver's own two bounds.
-    ///
-    /// The cap is held to the resolver's own client by behaviour: an answer
-    /// of exactly the cap on the wire, head and body, is read whole by both,
-    /// and one a byte longer is refused by both at the same cap. The per-call
-    /// bound is held to that crate's source, which keeps the constant
-    /// private (the mutant that builds the mirror's dialer as a frame's reads
-    /// four times the cap, and gives up on a feed page after ten seconds).
-    #[test]
-    fn the_mirrors_dialer_reads_under_the_resolvers_own_two_bounds() {
-        let head = |body: usize| format!("HTTP/1.1 200 OK\r\nContent-Length: {body}\r\n\r\n");
-        let at_cap = RESOLVER_ANSWER_CAP - head(RESOLVER_ANSWER_CAP).len();
-        assert_eq!(head(at_cap).len() + at_cap, RESOLVER_ANSWER_CAP, "the answer is the cap, to the byte");
-        for body in [at_cap, at_cap + 1] {
-            for client in ["the resolver's own", "this crate's"] {
-                let (origin, server) = answering([head(body).into_bytes(), vec![b'x'; body]].concat());
-                let transport = if client == "this crate's" { mirror_dial()(&origin) } else { skep_resolve::dial_http(&origin) };
-                let got = transport.expect("an http origin is held").exchange(Method::Get, "/changes?since=0", b"").map(|(_, body)| body.len());
-                server.join().unwrap();
-                let expected = if body > at_cap { Err(TransportError::TooLarge { cap: RESOLVER_ANSWER_CAP }) } else { Ok(body) };
-                assert_eq!(got, expected, "{client} client, {} bytes on the wire", head(body).len() + body);
-            }
-        }
-        let theirs = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../skep-resolve/src/http.rs")).expect("the resolver's client");
-        let bound = format!("const IO_TIMEOUT: Duration = Duration::from_secs({});", RESOLVER_IO_TIMEOUT.as_secs());
-        assert!(theirs.contains(&bound), "skep-resolve's http.rs no longer spells `{bound}`: the two per-call bounds have parted");
-        assert_eq!(mirror_dialer(), PlainHttp::bounded(Duration::from_secs(60), 2 * 1024 * 1024 + 4 * 1024));
-        assert_ne!(mirror_dialer(), PlainHttp::new(), "a frame's bounds are not a mirror's");
+        object
     }
 }
+
+/// Resolves a cross-board address to the board it lives on (REG-3.7).
+///
+/// The address is one global tumbler: its node field is the prefix
+/// resolved, and its local form — the prefix swapped for `1` — is where the
+/// rest is read at the board that prefix names (REG-1.62, REG-1.63). The
+/// prefix is resolved off the registry mirror under `mirror_dir`, opened at
+/// this call against the root `hint` names, through `dialer`, as a guest: a
+/// directory holding no copy is read from the registry's genesis
+/// (REG-3.12), a held copy is checked against the root and resumed
+/// (REG-3.18), and either way the mirror is at the registry's head before
+/// the walk, so the answer holds as of that head and never of a copy held
+/// across calls (REG-3.10). `names` is this resolver's own resolution of a
+/// host name and `transports` what it can dial (REG-3.34, REG-3.35); the
+/// walk opens no socket to an org's board.
+///
+/// The directory is made where it is absent, with every directory above it
+/// that is, each `0700`; the copy's two files and the lock beside them are
+/// `0600`. The lock is held from before the copy is read until the walk has
+/// answered, so two calls over one directory take turns and the second
+/// resumes what the first wrote. A registry mirror's dialer is the one to
+/// pass ([`mirror_dialer`]).
+///
+/// # Errors
+///
+/// A [`Halt`], in the order they are met:
+///
+/// 1. A halt's face naming the directory where it, its lock or a file of
+///    the copy cannot be made.
+/// 2. Where no root of the hint answers, the first root's own halt —
+///    [`Halt::Dial`] where it was not reached or answered what the wire
+///    does not give, [`Halt::Refused`] where it answered and refused — its
+///    words naming each further root beside its own error.
+/// 3. A halt's face naming the directory where the held copy does not
+///    read.
+/// 4. A halt's face naming the directory where the root does not answer
+///    for the held copy — a position diverging, a head below the copy's, a
+///    chain contradicted (REG-3.19) — or where its genesis key set does not
+///    fingerprint to the hint's realm (REG-3.42).
+/// 5. A halt's face naming the hint's roots where the board that answered
+///    is unclaimed, or its claim names no genesis record.
+/// 6. [`Halt::Dial`] or [`Halt::Refused`] where a read of the registry
+///    past `/health` fails, at the open or at the walk's read of the bound
+///    account's key set; a line of the copy that cannot be written is the
+///    face of 3.
+pub fn resolve_address(
+    dialer: Arc<dyn Dialer>,
+    hint: &RootHint,
+    mirror_dir: &Path,
+    address: &Address,
+    names: &dyn NameResolver,
+    transports: &Transports,
+) -> Result<Resolved, Halt> {
+    let (prefix, local) = (prefix_of(address), local_form(address));
+    let _held = hold(mirror_dir)?;
+    let halted = |e: MirrorError| mirror_halt(hint, mirror_dir, e);
+    let mut mirror = Mirror::open(hint, mirror_dir, &dial(dialer)).map_err(halted)?;
+    let resolution = skep_resolve::resolve(&mut mirror, &prefix, names, transports).map_err(halted)?;
+    Ok(Resolved { address: address.clone(), prefix, resolution, local, opened: mirror.opened().clone(), root: mirror.root().cloned(), head: mirror.head() })
+}
+
+/// Returns the prefix a cross-board address is resolved by.
+///
+/// It is the address's node field (T4b's `N`), whole: the prefix of the org
+/// that holds the address (REG-1.62). A node field deeper than any standing
+/// on the registry is resolved as it is, and answered by the walk
+/// (REG-3.82).
+fn prefix_of(address: &Address) -> Address {
+    address_of(address.node_field().to_vec())
+}
+
+/// Returns a cross-board address in the local form of the board holding it.
+///
+/// It is the address with its node field swapped for `1`, which on a board
+/// means this node (REG-1.61): `N.x` read as `1.x`, the swap a board's
+/// ingress makes (REG-1.63). `None` for an address of no account field, a
+/// bare prefix.
+fn local_form(address: &Address) -> Option<Address> {
+    address.account_field()?;
+    let past_the_node = address.tumbler().iter().skip(address.node_field().len()).cloned();
+    Some(address_of(std::iter::once(Nat::from(1u32)).chain(past_the_node).collect()))
+}
+
+/// Returns the address `components` spell.
+///
+/// Its two callers hand it an address's own node field, and `1` before an
+/// address's components past its node field: each is a sequence a valid
+/// address's clauses carry over to — it opens on a nonzero component, ends
+/// as the address does or on a node field's last, and holds the separators
+/// the address holds past its node field, or none.
+fn address_of(components: Vec<Nat>) -> Address {
+    let tumbler = Tumbler::new(components).expect("a node field, and `1` before an address's tail, is nonempty");
+    validate(tumbler).expect("a valid address's node field, and its tail behind `1`, is a valid address")
+}
+
+/// Makes a mirror's directory, takes its lock and makes the copy's files.
+///
+/// The directory and every missing directory above it are made `0700`. The
+/// lock is `lock` under it, `0600`, taken exclusively and held until the
+/// file answered is dropped. The copy's two files are made empty, `0600`,
+/// where they are absent, so each mode is set as its file is born (SP-7):
+/// the resolver opens them with no mode of its own, and reads an empty file
+/// as no copy held.
+///
+/// # Errors
+///
+/// A halt's face naming the directory, where the directory, the lock or a
+/// file cannot be made, or the lock cannot be taken.
+fn hold(dir: &Path) -> Result<File, Halt> {
+    let unmade = |what: &str, e: io::Error| {
+        Halt::face_at(
+            dir,
+            format!("the registry mirror's {what} could not be made"),
+            e.to_string(),
+            "check that the directory beside the key store can be written, and that nothing but a directory stands at its name",
+        )
+    };
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir).map_err(|e| unmade("directory", e))?;
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let lock = options.open(dir.join(MIRROR_LOCK)).map_err(|e| unmade("lock", e))?;
+    lock.lock().map_err(|e| unmade("lock", e))?;
+    for name in [FEED_COPY, FETCH_CACHE] {
+        match file::write_once(&dir.join(name), b"", 0o600) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(unmade(name, e)),
+        }
+    }
+    Ok(lock)
+}
+
+/// Returns the halt a mirror's refusal comes to, under `hint` at `dir`.
+///
+/// A root that did not answer and a read the board refused are the family's
+/// members for them, as a root hint's read maps them ([`board_halt`]): the
+/// first root's where none answered, the further roots named beside it
+/// ([`further`]). Every other refusal is a state a person acts on: a face
+/// naming the directory where it is about the copy held there — the copy
+/// not read, the root not answering for it, the realm another's — and a
+/// face naming the hint's roots where the board is unclaimed or its claim
+/// names no genesis record. A class the resolver names later is a face
+/// carrying its words.
+fn mirror_halt(hint: &RootHint, dir: &Path, e: MirrorError) -> Halt {
+    let roots = || hint.origins().iter().map(|origin| origin.as_str()).collect::<Vec<_>>().join(", ");
+    match e {
+        MirrorError::Unreachable { mut tried } if !tried.is_empty() => {
+            let first = board_halt(tried.remove(0).1);
+            further(first, tried)
+        }
+        MirrorError::Board(e) => board_halt(e),
+        MirrorError::Refused(Refusal::RealmMismatch { expected, found }) => Halt::face_at(
+            dir,
+            "the registry the root hint names is of another realm than the hint's",
+            format!(
+                "the root's genesis fingerprint is {found}, and the hint's realm names {expected}: a realm is the fingerprint of the key set its registry's claimant enrolled at its genesis (REG-3.39), compared at the claim before a line of the copy is written (REG-3.42)"
+            ),
+            "check the root hint against the registry's own line, which `skep hint` prints for its board: a root of another lineage takes its own hint",
+        ),
+        MirrorError::Refused(refusal) => Halt::face_at(
+            dir,
+            "the registry's root does not answer for the copy held of it",
+            format!(
+                "{refusal}: a held copy is resumed only where every position it holds comes back the same from the root, read from genesis (REG-3.18), and a root that cannot answer for what it served is another lineage (REG-3.19), so the copy stands as it was and nothing is resolved from it"
+            ),
+            "where the hint was pointed at this root on purpose — a fork, a registry brought up from a backup — move the directory aside and run this again: the mirror is then read afresh from that root's genesis (REG-3.17); otherwise correct the hint",
+        ),
+        MirrorError::NoClaim => Halt::face(
+            format!("the board the root hint names ({}) is unclaimed: it is no registry", roots()),
+            "a registry's bindings are its claimant's (REG-2.8), and this board's change feed ends with no claim",
+            "check the root hint: its roots name a claimed registry board",
+        ),
+        MirrorError::NoGenesis => Halt::face(
+            format!("the claim of the board the root hint names ({}) names no genesis record: its realm cannot be compared", roots()),
+            "no enroll record naming the claimant stands on the feed before its claim, or the one that stands could not be read whole; the realm is that record's key set (REG-3.39), and a mirror compares it before it resolves anything (REG-3.42)",
+            "check that the root hint names a skep registry; a claimed board whose claimant's genesis record cannot be read is a board fault",
+        ),
+        MirrorError::Copy(words) => Halt::face_at(
+            dir,
+            "the registry mirror's copy could not be read or written",
+            within(dir, &words),
+            "check the directory's permissions and its room; a copy that does not read is moved aside by hand, and the next run reads the registry afresh from its genesis",
+        ),
+        other => Halt::face("the registry was not read", other.to_string(), "run it again; where it stops here again, report it with these words"),
+    }
+}
+
+/// Names the hint's further roots beside the first root's halt.
+///
+/// A mirror opens at the first root that answers, so where none does each
+/// was tried, in the hint's order. The halt is the first's, its exit code
+/// with it, and its words gain the rest, each origin beside its own error.
+/// A member that carries no words of its own — a transport this build does
+/// not hold, an answer past the cap — stands as it is.
+fn further(first: Halt, rest: Vec<(skep_resolve::Origin, BoardError)>) -> Halt {
+    if rest.is_empty() {
+        return first;
+    }
+    let rest: Vec<String> = rest.iter().map(|(origin, e)| format!("{origin}: {e}")).collect();
+    let also = format!("the hint's further roots did not answer either — {}", rest.join(", "));
+    let beside = |words: String| format!("{words}; {also}");
+    match first {
+        Halt::Dial(DialError::Resolve(words)) => Halt::Dial(DialError::Resolve(beside(words))),
+        Halt::Dial(DialError::Connect(words)) => Halt::Dial(DialError::Connect(beside(words))),
+        Halt::Dial(DialError::Io(words)) => Halt::Dial(DialError::Io(beside(words))),
+        Halt::Dial(DialError::Response(words)) => Halt::Dial(DialError::Response(beside(words))),
+        Halt::Refused(refused) => {
+            let detail = match &refused.detail {
+                Some(detail) => beside(detail.clone()),
+                None => also.clone(),
+            };
+            Halt::Refused(Refused { detail: Some(detail), ..refused })
+        }
+        wordless => wordless,
+    }
+}
+
+/// Returns a copy failure's words with the mirror's directory cut from them.
+///
+/// The resolver names a file of the copy by its whole path; a face names
+/// the directory beside its words and never in them (`Halt::face_at`), so
+/// the file is said as it stands within the directory (SP-13).
+fn within(dir: &Path, words: &str) -> String {
+    let dir = dir.display().to_string();
+    if dir.is_empty() {
+        return words.to_string();
+    }
+    words.replace(&format!("{dir}{}", std::path::MAIN_SEPARATOR), "").replace(&dir, "the directory")
+}
+
+/// Returns a face as one JSON object: its name, and the facts it carries.
+///
+/// [`Resolved::object`] states the form. The match names every face and has
+/// no wildcard arm, so a face the resolver gains is given its members here
+/// before the crate builds.
+fn face_object(resolution: &Resolution) -> Value {
+    let mut object = match resolution {
+        Resolution::Unregistered { prefix } => json!({ "prefix": text(prefix) }),
+        Resolution::RetiredWithHistory { standing, successor } => {
+            let mut object = standing_object(standing);
+            object["successor"] = match successor {
+                Some(successor) => json!({ "account": text(&successor.account), "prefix": optional(successor.prefix.as_ref()) }),
+                None => Value::Null,
+            };
+            object
+        }
+        Resolution::BoundButUnreachable { standing, keys, endpoint, cause, members } => {
+            let mut object = bound_object(standing, keys.as_deref(), endpoint.as_ref(), members);
+            match cause {
+                Unreachable::NoEndpointYet => object["cause"] = json!("no_endpoint_yet"),
+                Unreachable::NullifiedLast => object["cause"] = json!("nullified_last"),
+                Unreachable::DeadOrigin { member } => {
+                    object["cause"] = json!("dead_origin");
+                    object["member"] = json!(member);
+                }
+            }
+            object
+        }
+        Resolution::UnreachableByPolicy { standing, keys, endpoint, member, term, members } => {
+            let mut object = bound_object(standing, keys.as_deref(), Some(endpoint), members);
+            object["member"] = json!(member);
+            term_into(&mut object, term);
+            object
+        }
+        Resolution::DialNotMade { standing, keys, endpoint, member, kind, members } => {
+            let mut object = bound_object(standing, keys.as_deref(), Some(endpoint), members);
+            object["member"] = json!(member);
+            object["kind"] = json!(kind.name());
+            object
+        }
+        Resolution::HopNotMade { prefix, parent } => json!({ "prefix": text(prefix), "parent": face_object(parent) }),
+        Resolution::Bound { standing, keys, endpoint, dial, members } => {
+            let mut object = bound_object(standing, keys.as_deref(), Some(endpoint), members);
+            object["dial"] = json!({
+                "origin": dial.origin.as_str(),
+                "member": dial.member_index,
+                "kind": dial.kind.name(),
+                "addresses": dial.addresses.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            });
+            object
+        }
+        Resolution::BoundButDisclaimed { standing, asserted_prefix } => {
+            let mut object = standing_object(standing);
+            object["asserted_prefix"] = json!(asserted_prefix);
+            object
+        }
+        Resolution::LiveEnforcement { standing, claimant, local_trust } => {
+            let mut object = standing_object(standing);
+            object["claimant"] = optional(claimant.as_ref());
+            object["local_trust"] = json!(local_trust);
+            object
+        }
+    };
+    object["face"] = json!(resolution.face());
+    object
+}
+
+/// Returns a standing's members: the prefix, the account, the bindings.
+fn standing_object(standing: &Standing) -> Value {
+    json!({
+        "prefix": text(&standing.prefix),
+        "account": optional(standing.current.record.account.as_ref()),
+        "binding": binding_object(&standing.current),
+        "history": standing.history.iter().map(binding_object).collect::<Vec<_>>(),
+    })
+}
+
+/// Returns a bound account's members beside its standing's.
+///
+/// They are the key set, `null` where the reader could not read it and
+/// never an empty list in its place; the current endpoint, or `null`; and
+/// each member's outcome, in the org's order.
+fn bound_object(standing: &Standing, keys: Option<&[Enrolled]>, endpoint: Option<&Judged<EndpointRecord>>, members: &[MemberOutcome]) -> Value {
+    let mut object = standing_object(standing);
+    object["keys"] = match keys {
+        Some(keys) => keys.iter().map(|enrolled| json!({ "fingerprint": Fingerprint::of(&enrolled.key).to_hex(), "anchor": enrolled.anchor })).collect(),
+        None => Value::Null,
+    };
+    object["endpoint"] = match endpoint {
+        Some(endpoint) => {
+            let mut deposit = json!({
+                "link": text(&endpoint.link),
+                "position": endpoint.position,
+                "home": text(&endpoint.home),
+                "origins": endpoint.record.origins,
+                "replaces": optional(endpoint.record.replaces.as_ref()),
+            });
+            verdict_into(&mut deposit, &endpoint.verdict);
+            deposit
+        }
+        None => Value::Null,
+    };
+    object["members"] = members.iter().map(member_object).collect();
+    object
+}
+
+/// Returns a binding as the index holds it, its verdict beside it.
+fn binding_object(binding: &Judged<BindingRecord>) -> Value {
+    let mut object = json!({
+        "link": text(&binding.link),
+        "position": binding.position,
+        "home": text(&binding.home),
+        "account": optional(binding.record.account.as_ref()),
+        "replaces": optional(binding.record.replaces.as_ref()),
+        "honored": binding.record.honored,
+    });
+    verdict_into(&mut object, &binding.verdict);
+    object
+}
+
+/// Writes a record's verdict into its object (REG-1.86 (e)).
+///
+/// `verdict` is one of the signed-ops record §3.5's five values, as that
+/// record spells them, and `signed_by` the signing key's fingerprint beside
+/// SIGNED.
+fn verdict_into(object: &mut Value, verdict: &Verdict) {
+    object["verdict"] = json!(match verdict {
+        Verdict::BeforeAttestation => "BEFORE-ATTESTATION",
+        Verdict::Signed(_) => "SIGNED",
+        Verdict::Unsigned => "UNSIGNED",
+        Verdict::Disavowed => "DISAVOWED",
+        Verdict::UndeterminableHere => "UNDETERMINABLE HERE",
+    });
+    if let Verdict::Signed(key) = verdict {
+        object["signed_by"] = json!(key.to_hex());
+    }
+}
+
+/// Returns one endpoint member's outcome at this resolver (REG-3.34).
+fn member_object(member: &MemberOutcome) -> Value {
+    let addresses = |addresses: &[std::net::IpAddr]| addresses.iter().map(ToString::to_string).collect::<Vec<_>>();
+    match member {
+        MemberOutcome::WouldDial { origin, kind, addresses: passed } => {
+            json!({ "member": origin.as_str(), "outcome": "would_dial", "kind": kind.name(), "addresses": addresses(passed) })
+        }
+        MemberOutcome::Refused { member, term } => {
+            let mut object = json!({ "member": member, "outcome": "refused" });
+            term_into(&mut object, term);
+            object
+        }
+        MemberOutcome::NotDialed { origin, kind } => json!({ "member": origin.as_str(), "outcome": "not_dialed", "kind": kind.name() }),
+        MemberOutcome::Dead { origin } => json!({ "member": origin.as_str(), "outcome": "dead" }),
+    }
+}
+
+/// Writes the term that refused a member into its object (REG-3.80).
+///
+/// `term` is `scheme` or `host`; on the host term `yielded` is the address
+/// tested — the literal, or every address this resolver's own resolution of
+/// the name yielded, this resolver's yield and never the record's.
+fn term_into(object: &mut Value, term: &Term) {
+    match term {
+        Term::Scheme => object["term"] = json!("scheme"),
+        Term::Host { yielded } => {
+            object["term"] = json!("host");
+            object["yielded"] = yielded.iter().map(ToString::to_string).collect();
+        }
+    }
+}
+
+/// Returns an address as its dotted text.
+fn text(address: &Address) -> Value {
+    Value::String(address.to_string())
+}
+
+/// Returns an address as its dotted text, `null` where there is none.
+fn optional(address: Option<&Address>) -> Value {
+    address.map_or(Value::Null, text)
+}
+
+#[cfg(test)]
+mod tests;

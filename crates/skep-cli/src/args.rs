@@ -3,8 +3,9 @@
 //! The style is `skepd/src/main.rs`'s `parse_args` and `from_env`. A
 //! command line opens with its [`Command`], one of §2.1's thirteen,
 //! `merge`, the fourteenth (the merge record's §6), `share`, the
-//! fifteenth (PUB-5.29; PUB-5.108), `restore`, the sixteenth (B3-S7), or
-//! `hint`, the seventeenth (REG-3.2), and is judged against `GRAMMAR`, one
+//! fifteenth (PUB-5.29; PUB-5.108), `restore`, the sixteenth (B3-S7),
+//! `hint`, the seventeenth (REG-3.2), or `resolve`, the eighteenth
+//! (REG-3.7), and is judged against `GRAMMAR`, one
 //! row per command beside `HELP`, the text that documents it: a flag in no
 //! row, a flag of another command's, a missing value, a value that is
 //! empty or is itself one of the grammar's flags, a second value of a flag
@@ -28,7 +29,8 @@
 //! `SKEP_KEY`, `SKEP_PRINCIPAL`, `SKEP_SESSION` — read here and nowhere
 //! else in the crate, `SKEP_SESSION` by `session_env` alone, the one
 //! setting no flag carries (`tests/it/tidy.rs`) — and beside them
-//! `merge`'s `SKEP_MERGE_KIND` (`Line::merge_kind`) and the dev binary's
+//! `merge`'s `SKEP_MERGE_KIND` (`Line::merge_kind`), `resolve`'s
+//! `SKEP_ROOT_HINT` (`Line::root_hint`) and the dev binary's
 //! `SKEP_SEARCH_CORPUS`, each read here by the same rule ([`dev`]). The
 //! crate's README tables every setting both programs read — its flag, its
 //! variable, its default, when it is checked and where it is read — and
@@ -50,6 +52,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use skep_client::board::Token;
+use skep_client::resolve::RootHint;
 use skep_client::Origin;
 
 /// A usage refusal: what is wrong with the command line.
@@ -101,15 +104,16 @@ fn version_line(program: &str) -> String {
     )
 }
 
-/// One of the seventeen commands: the verb a command line opens with.
+/// One of the eighteen commands: the verb a command line opens with.
 ///
-/// The seventeen are `client.md` §2.1's thirteen, `merge`, the fourteenth
+/// The eighteen are `client.md` §2.1's thirteen, `merge`, the fourteenth
 /// (the merge record's §6), `share`, the fifteenth (PUB-5.29; PUB-5.108),
 /// `restore`, the sixteenth (B3-S7; `client.md` §4b.1's `history.restore`
-/// row), and `hint`, the seventeenth (REG-3.2: a registry's root hint,
-/// read off its board). A command is what `GRAMMAR`'s rows are keyed by,
-/// and what `main` dispatches on, one arm each, which the compiler holds
-/// exhaustive.
+/// row), `hint`, the seventeenth (REG-3.2: a registry's root hint, read
+/// off its board), and `resolve`, the eighteenth (REG-3.7: the board a
+/// cross-board address lives on, found through the registry). A command is
+/// what `GRAMMAR`'s rows are keyed by, and what `main` dispatches on, one
+/// arm each, which the compiler holds exhaustive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Command {
     Keygen,
@@ -129,6 +133,7 @@ pub enum Command {
     Share,
     Restore,
     Hint,
+    Resolve,
 }
 
 impl Command {
@@ -152,6 +157,7 @@ impl Command {
             Command::Share => "share",
             Command::Restore => "restore",
             Command::Hint => "hint",
+            Command::Resolve => "resolve",
         }
     }
 }
@@ -176,7 +182,7 @@ pub struct Line<C> {
     switches: Vec<String>,
 }
 
-/// The `skep` command's line: one of the seventeen, and its flags.
+/// The `skep` command's line: one of the eighteen, and its flags.
 pub type CommandLine = Line<Command>;
 
 /// The flags every command takes, each taking one value.
@@ -244,10 +250,10 @@ impl Form {
     }
 }
 
-/// The grammar: the seventeen commands, each with its flags and its forms.
+/// The grammar: the eighteen commands, each with its flags and its forms.
 ///
-/// The commands are `client.md` §2.1's in set, `merge`, `share`, `restore`
-/// and `hint`, each
+/// The commands are `client.md` §2.1's in set, `merge`, `share`, `restore`,
+/// `hint` and `resolve`, each
 /// with the flags §2.2 gives it and `HELP` documents, and the rules its
 /// forms hold them to — the forms the record's synopses draw:
 /// `keygen --anchors` (§2.2), `claim`'s notebook walk or `--hosted` (§4.5),
@@ -270,11 +276,15 @@ impl Form {
 /// flag (AUTH-5.46). `restore`'s row is its two flags, `--draft` and
 /// `--at`, each once, in the one form the command has; `hint`'s is
 /// `--also`, which repeats, each value a further origin of the registry in
-/// the order given, and `--fork`, once, in the one form the command has.
+/// the order given, and `--fork`, once, in the one form the command has;
+/// `resolve`'s is `--address`, the cross-board address, and `--root-hint`,
+/// the registry's root-hint line, a setting (`Line::root_hint`), each once,
+/// in the one form the command has.
 /// That a side and `--doc` are required at `merge`, a reader at `share`,
-/// both flags at `restore` and the board at `hint`, is the command's
+/// both flags at `restore`, the board at `hint` and the address and the
+/// root hint at `resolve`, is the command's
 /// judgment, as `retire` judges its `--fingerprint`: no form says "one of".
-const GRAMMAR: [Row<Command>; 17] = [
+const GRAMMAR: [Row<Command>; 18] = [
     Row {
         command: Command::Keygen,
         once: &[],
@@ -396,9 +406,10 @@ const GRAMMAR: [Row<Command>; 17] = [
     },
     Row { command: Command::Restore, once: &["--draft", "--at"], repeated: &[], switches: &[], forms: &[] },
     Row { command: Command::Hint, once: &["--fork"], repeated: &["--also"], switches: &[], forms: &[] },
+    Row { command: Command::Resolve, once: &["--address", "--root-hint"], repeated: &[], switches: &[], forms: &[] },
 ];
 
-/// The help text: the seventeen commands and the flags each takes.
+/// The help text: the eighteen commands and the flags each takes.
 ///
 /// Each command is as the design writes it, and the text is the grammar
 /// above, documented beside it.
@@ -474,6 +485,18 @@ usage: skep <command> [flags]
                the fingerprint of the key set the board's claimant
                enrolled at its genesis, and with --fork the fork point of
                a forked lineage; one line on stdout; no person door
+  resolve      find the board a cross-board address lives on, through the
+               registry the root-hint setting names: the address is one
+               global tumbler, its node field the prefix the registry
+               binds, and the rest is read at that board; the registry is
+               read as a guest (no key, no session) into a mirror kept
+               beside the key store, read afresh to the registry's head
+               at every run; BOUND prints one line on stdout, the origin
+               to dial, then the address in that board's local form, the
+               prefix swapped for 1; every other named state — the prefix
+               unregistered, retired, bound and not reachable, the hop
+               not made — is said on stderr, nothing on stdout, exit 3;
+               --json one object on stdout at every state; no person door
 
 flags (a flag beats its env variable; a variable set empty is unset):
   --board <origin>      the board, a canonical origin (env SKEP_BOARD)
@@ -492,8 +515,9 @@ flags (a flag beats its env variable; a variable set empty is unset):
                         id, 1 where omitted; not consulted elsewhere
   --label <text>        a byline (keygen, rotate, accept)
   --json                one JSON document on stdout (verify, health,
-                        fingerprint; merge, share and restore print one
-                        always, so the flag changes nothing there)
+                        fingerprint, resolve; merge, share and restore
+                        print one always, so the flag changes nothing
+                        there)
   --version             this program's version and the commit it was
                         built from, one line on stdout
   keygen:   [--payload]  [--anchors, and with it  [--paper]
@@ -560,6 +584,13 @@ flags (a flag beats its env variable; a variable set empty is unset):
             the same registry, tried after those before it: written as
             given, and never dialed)  [--fork <address>] (the address of
             the fork's succession record; never inferred)
+  resolve:  --address <address> (one global tumbler, as the wire spells
+            it; a bare prefix resolves the prefix alone)  --root-hint
+            <line> (env SKEP_ROOT_HINT; required, and no default: the
+            registry's root-hint line as `skep hint` prints it, its
+            origins in the order they are tried, then realm:<64 hex>)
+            [--dir <path>] (the mirror is kept under the key store, in
+            registry/<the realm's 64 hex>/)
 
 exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
 4 transport. stdout carries data; stderr carries talk. A retirement's
@@ -831,6 +862,28 @@ impl Line<Command> {
     /// Returns a usage refusal where the variable's value is not UTF-8 text.
     pub fn merge_kind(&self) -> Result<Option<String>, Usage> {
         self.setting("--kind", "SKEP_MERGE_KIND")
+    }
+
+    /// Returns the registry's root hint, required (`resolve`).
+    ///
+    /// It is `--root-hint` / `SKEP_ROOT_HINT`: the one line a reader finds
+    /// a registry by, its origins in the order they are tried and its realm
+    /// (REG-3.2), read as the resolver reads one (`RootHint::parse`). The
+    /// setting has no default: the hint a build ships with is a launch
+    /// decision (REG-3.72), so every run names its registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns a usage refusal where neither is set; where the line is no
+    /// root hint, in the resolver's own words for it; and where the
+    /// variable's value is not UTF-8 text.
+    pub fn root_hint(&self) -> Result<RootHint, Usage> {
+        let Some(line) = self.setting("--root-hint", "SKEP_ROOT_HINT")? else {
+            return Err(Usage(
+                "--root-hint (or SKEP_ROOT_HINT) is required: the registry's root-hint line, as `skep hint` prints it for the registry's board — there is no default".into(),
+            ));
+        };
+        RootHint::parse(&line).map_err(|e| Usage(format!("--root-hint: {e}")))
     }
 }
 

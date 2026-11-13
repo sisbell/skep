@@ -11,7 +11,10 @@
 //! THE ROOT HINT PRINTED (REG-3.2, REG-3.39) — the fixture board's line read
 //! off the board as a guest by the read `skep hint` prints, equal to the
 //! line this suite composes from its own keys, a cold mirror opened from it
-//! — the recording of the resolver crate's own fixture, and THE MEASUREMENTS
+//! — A CROSS-BOARD ADDRESS RESOLVED (REG-1.63, REG-3.7, REG-3.10) — the call
+//! `skep resolve` makes, its node field the prefix and its local form the
+//! prefix swapped for `1`, the registry read afresh at every call over one
+//! held copy — the recording of the resolver crate's own fixture, and THE MEASUREMENTS
 //! (the registry seam investigation §3.1, §3.3, §3.4), reported and never
 //! asserted.
 //!
@@ -892,6 +895,125 @@ fn one_org_registered_by_the_console_resolves_from_the_hint_by_a_cold_resolver()
         other => panic!("{other:?}"),
     }
     assert!(matches!(resolve_prefix(&mut mirror, "1.6"), Resolution::Unregistered { .. }));
+    sd.shutdown();
+}
+
+// ── a cross-board address, resolved ────────────────────────────────────────
+
+/// Checks that a cross-board address resolves to its board and local form.
+///
+/// The call is the one `skep resolve` makes (`skep_client::resolve`'s
+/// `resolve_address`), over the client's mirror dialer and this suite's own
+/// resolution of a name — the system's resolves none of the suite's hosts,
+/// so BOUND is reached here and never through the binary — against a
+/// registry with one org registered at `1.5`, its mirror kept under one
+/// directory across every call.
+///
+/// An address under the org is BOUND: the prefix resolved is its node field
+/// alone, `1.5`, the member to dial the org's first, and its local form the
+/// address with that prefix swapped for `1` (REG-1.63). What the command
+/// prints of it is the answer's own rendering: stdout's one line, the
+/// origin and then the local address, and `--json`'s object, the face with
+/// its binding, its key set, its endpoint and the dial. A bare prefix
+/// resolves the same way and has no local form; a node field deeper than
+/// any standing here is resolved whole and answered THE HOP NOT MADE under
+/// its bound parent (REG-3.82).
+///
+/// No negative cache (REG-3.10): a prefix no binding names is UNREGISTERED;
+/// the org is then registered on the board, and the next call over the same
+/// directory answers BOUND — the held copy checked and resumed, never begun
+/// again, and read to the registry's later head (the mutant that answers a
+/// held copy with no open against the root answers UNREGISTERED still).
+#[test]
+fn a_cross_board_address_resolves_to_its_board_and_local_form_off_a_registry_read_afresh() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_enforcing(dir.path());
+    let port = sd.port();
+    let console = console(port);
+    let org = register_org(port, &console, 5, "1.5", Some(&["https://acme.example", "https://acme.example.net"]), 0);
+    let hint = hint_for(port);
+    let mdir = tempfile::tempdir().expect("tempdir");
+    let ask = |address: &str| {
+        skep_client::resolve::resolve_address(Arc::new(skep_client::resolve::mirror_dialer()), &hint, mdir.path(), &addr(address), &names(), &Transports::default())
+            .unwrap_or_else(|h| panic!("resolve {address}: {h}"))
+    };
+    let said = |address: &Address| address.to_string();
+
+    // BOUND: the org's dial origin, and the address in its local form.
+    let bound = ask("1.5.0.1.0.2");
+    assert_eq!(bound.opened, Opened::Bootstrapped, "no copy was held");
+    assert_eq!(bound.root.as_ref().map(Origin::as_str), Some(format!("http://127.0.0.1:{port}").as_str()));
+    assert_eq!(bound.head, head_position(port), "read to the registry's head");
+    assert_eq!((said(&bound.address), said(&bound.prefix), bound.local.as_ref().map(said)), ("1.5.0.1.0.2".to_string(), "1.5".to_string(), Some("1.0.1.0.2".to_string())));
+    match &bound.resolution {
+        Resolution::Bound { standing, endpoint, dial, members, .. } => {
+            assert_eq!(standing.current.link, addr(&org.binding));
+            assert_eq!(standing.current.record.account, Some(addr(&org.account)));
+            assert_eq!(endpoint.link, addr(org.endpoint.as_ref().unwrap()));
+            assert_eq!((dial.member_index, dial.origin.as_str(), members.len()), (0, "https://acme.example", 2));
+        }
+        other => panic!("{} unexpected: {other:?}", other.face()),
+    }
+    // What the command prints of it: stdout's one line, and --json's object.
+    assert_eq!(bound.line().as_deref(), Some("https://acme.example 1.0.1.0.2"));
+    let object = bound.object();
+    let signed_by = |key: &SigningKey| Fingerprint::of(&public_key_of(key)).to_hex();
+    let binding = json!({ "link": org.binding, "position": object["binding"]["position"], "home": CLAIMANT_DOC1, "account": org.account, "replaces": null, "honored": true, "verdict": "SIGNED", "signed_by": signed_by(&device_key()) });
+    let expected = json!({
+        "face": "BOUND",
+        "address": "1.5.0.1.0.2",
+        "prefix": "1.5",
+        "local": "1.0.1.0.2",
+        "account": org.account,
+        "binding": binding,
+        "history": [binding],
+        "keys": [{ "fingerprint": signed_by(&org.key), "anchor": false }],
+        "endpoint": {
+            "link": org.endpoint,
+            "position": object["endpoint"]["position"],
+            "home": org.doc1,
+            "origins": ["https://acme.example", "https://acme.example.net"],
+            "replaces": null,
+            "verdict": "SIGNED",
+            "signed_by": signed_by(&org.key),
+        },
+        "dial": { "origin": "https://acme.example", "member": 0, "kind": "https", "addresses": ["93.184.216.34"] },
+        "members": [
+            { "member": "https://acme.example", "outcome": "would_dial", "kind": "https", "addresses": ["93.184.216.34"] },
+            { "member": "https://acme.example.net", "outcome": "would_dial", "kind": "https", "addresses": ["93.184.216.34"] },
+        ],
+    });
+    assert_eq!(object, expected);
+    assert!(object["binding"]["position"].as_u64().is_some_and(|at| at > 0 && at < object["endpoint"]["position"].as_u64().unwrap_or(0)), "the binding, then the org's deposit: {object}");
+
+    // NO NEGATIVE CACHE: unregistered, then registered, then asked again
+    // over the same directory — the resolution judged first, so a copy
+    // answered with no fresh read is caught as the stale face it gives.
+    let absent = ask("1.6.0.1.0.2");
+    assert!(matches!(&absent.resolution, Resolution::Unregistered { prefix } if *prefix == addr("1.6")), "{:?}", absent.resolution);
+    assert_eq!((absent.line(), absent.object()), (None, json!({ "face": "UNREGISTERED", "address": "1.6.0.1.0.2", "prefix": "1.6" })));
+    let six = register_org(port, &console, 6, "1.6", Some(&["https://six.example"]), 0);
+    let again = ask("1.6.0.1.0.2");
+    match &again.resolution {
+        Resolution::Bound { standing, dial, .. } => {
+            assert_eq!(standing.current.record.account, Some(addr(&six.account)));
+            assert_eq!(dial.origin.as_str(), "https://six.example");
+        }
+        other => panic!("bound since the last call, and {} still: {other:?}", other.face()),
+    }
+    assert!(matches!(again.opened, Opened::Resumed { checked_rows } if checked_rows > 0), "resumed, never begun again: {:?}", again.opened);
+    assert!(again.head > absent.head && again.head == head_position(port), "read to the registry's later head: {} then {}", absent.head, again.head);
+    assert_eq!(again.line().as_deref(), Some("https://six.example 1.0.1.0.2"));
+
+    // A bare prefix: the same board, and no place on it.
+    let bare = ask("1.5");
+    assert_eq!((said(&bare.prefix), &bare.local, bare.line().as_deref()), ("1.5".to_string(), &None, Some("https://acme.example")));
+    assert_eq!(bare.object()["local"], Value::Null);
+
+    // A node field deeper than any standing here: resolved whole.
+    let deeper = ask("1.5.3.0.1.0.2");
+    assert!(matches!(&deeper.resolution, Resolution::HopNotMade { prefix, parent } if *prefix == addr("1.5.3") && matches!(**parent, Resolution::Bound { .. })), "{:?}", deeper.resolution);
+    assert_eq!((said(&deeper.prefix), deeper.local.as_ref().map(said), deeper.line()), ("1.5.3".to_string(), Some("1.0.1.0.2".to_string()), None));
     sd.shutdown();
 }
 

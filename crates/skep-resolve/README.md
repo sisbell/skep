@@ -134,7 +134,12 @@ over `std::net`, as the MCP adapter's is, trying every address a host's
 name yields in order, as `TcpStream::connect` does; it speaks plain `http`
 alone, so an `https` root is a transport this build does not hold, refused
 by name, and it reads no answer past the feed's 2 MiB page budget and its
-envelope (`TransportError::TooLarge`).
+envelope (`TransportError::TooLarge`). An `https` root is reached through
+`skep-client`'s dialer, which the `skep` command and the frontend's shell
+hold: that crate fills `Transport` over it and hands a mirror its dial
+(`skep_client::resolve::mirror_dial`), for both schemes, under this
+client's own per-call bound and answer cap. This crate links no TLS
+library.
 The board's typed reads (`Board`) run over any `Transport` — that client,
 or a suite's replay of a recording — and count every read by kind
 (`Reads`), reported in `Stats` beside the table's own figures (the
@@ -165,7 +170,8 @@ SKEP_RESOLVE_FIXTURE_WRITE=1 cargo nextest run -p skepd -E 'test(=resolve::the_f
 
 The end-to-end cells and the measurements run in the daemon's suite,
 `crates/skepd/tests/it/resolve.rs`, where boards are spawned and
-registered.
+registered — the mirror over `https` among them, an `https` root reached
+from genesis through `skep-client`'s dialer behind that suite's TLS front.
 
 ## License
 

@@ -33,7 +33,10 @@
 //! write, so a board that trickles a byte inside each per-call bound cannot
 //! hold an exchange past it; the streamed form's read timeout scales with
 //! the declared size and its body, read by its caller, keeps that per-call
-//! bound alone.
+//! bound alone. Those are [`PlainHttp::new`]'s. A dialer built under two
+//! bounds of its caller's own — `resolve`'s, for a registry mirror's reads —
+//! keeps that per-call bound and that answer cap in their place, and its
+//! deadline is made from them the same way.
 //!
 //! **A connection never made.** The connection stands before a byte of the
 //! request is written: the TCP connect, and for `https://` the TLS
@@ -62,7 +65,11 @@
 //! `https://` is the `tls` feature's arm — rustls with the platform verifier
 //! (§9 item 12) — off in the library and on in the `skep` binary; without
 //! the feature an `https` origin is [`DialError::NotHeld`], refused before
-//! any connection opens and never dialed in the clear.
+//! any connection opens and never dialed in the clear. The platform's trust
+//! store is the one judge of a server's certificate in every shipped build:
+//! the one other judge, a single root a suite hands a dialer of its own, is
+//! compiled only under `tls` and `test-hooks` together
+//! (`PlainHttp::trusting_test_root`), and `tests/it/tidy.rs` holds it there.
 
 use std::fmt;
 use std::io::{self, Read, Write};
@@ -89,12 +96,13 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// `IO_TIMEOUT`).
 pub const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The most bytes [`PlainHttp`]'s exchange reads of one answer.
+/// The most bytes [`PlainHttp::new`]'s dialer reads of one answer.
 ///
 /// It is the frame routes' request cap, 8 MiB, with room for the head
 /// beside it (wire.md §Transport). An answer past it is
 /// [`DialError::TooLarge`], read no further: a board never sizes this
-/// client's memory past it.
+/// client's memory past it. A dialer built under its caller's own bounds
+/// reads no further than its own cap, named the same way.
 pub const MAX_ANSWER_BYTES: usize = 8 * 1024 * 1024 + 64 * 1024;
 
 /// The streamed form's read bound per declared byte, on top of [`IO_TIMEOUT`].
@@ -109,8 +117,16 @@ const STREAM_BYTES_PER_SECOND: u64 = 256 * 1024;
 /// answer at [`MAX_ANSWER_BYTES`] takes at [`STREAM_BYTES_PER_SECOND`] —
 /// 42.25 s, the rate the streamed form already demands of a board. The body
 /// adds its own bytes at the same rate.
-const EXCHANGE_BOUND: Duration =
-    Duration::from_millis(IO_TIMEOUT.as_millis() as u64 + MAX_ANSWER_BYTES as u64 * 1000 / STREAM_BYTES_PER_SECOND);
+const EXCHANGE_BOUND: Duration = exchange_bound(IO_TIMEOUT, MAX_ANSWER_BYTES);
+
+/// Returns an exchange's deadline before its request body's allowance.
+///
+/// It is the per-call bound `io_timeout`, and the time an answer at
+/// `answer_cap` takes at [`STREAM_BYTES_PER_SECOND`]: the one rule every
+/// dialer's deadline is made by, whatever its two bounds.
+const fn exchange_bound(io_timeout: Duration, answer_cap: usize) -> Duration {
+    Duration::from_millis(io_timeout.as_millis() as u64 + answer_cap as u64 * 1000 / STREAM_BYTES_PER_SECOND)
+}
 
 /// The method of one exchange.
 ///
@@ -492,13 +508,30 @@ pub struct PlainHttp {
     io_timeout: Duration,
     /// A frame exchange's deadline before its body's allowance.
     ///
-    /// It is [`EXCHANGE_BOUND`].
+    /// It is `exchange_bound` of the two bounds beside it: [`EXCHANGE_BOUND`]
+    /// for [`PlainHttp::new`]'s.
     exchange_bound: Duration,
+    /// The most bytes an exchange reads of one answer.
+    ///
+    /// It is [`MAX_ANSWER_BYTES`] for [`PlainHttp::new`]'s.
+    answer_cap: usize,
+    /// The one root this dialer trusts in the platform's place.
+    ///
+    /// `None` in every dialer but a suite's own.
+    #[cfg(all(feature = "tls", feature = "test-hooks"))]
+    test_root: Option<tls::test_root::TestRoot>,
 }
 
 impl Default for PlainHttp {
     fn default() -> PlainHttp {
-        PlainHttp { connect_timeout: CONNECT_TIMEOUT, io_timeout: IO_TIMEOUT, exchange_bound: EXCHANGE_BOUND }
+        PlainHttp {
+            connect_timeout: CONNECT_TIMEOUT,
+            io_timeout: IO_TIMEOUT,
+            exchange_bound: EXCHANGE_BOUND,
+            answer_cap: MAX_ANSWER_BYTES,
+            #[cfg(all(feature = "tls", feature = "test-hooks"))]
+            test_root: None,
+        }
     }
 }
 
@@ -506,6 +539,19 @@ impl PlainHttp {
     /// Returns the arm with the pinned timeouts.
     pub fn new() -> PlainHttp {
         PlainHttp::default()
+    }
+
+    /// Returns the arm under its caller's own per-call bound and answer cap.
+    ///
+    /// `io_timeout` bounds each read and each write in [`IO_TIMEOUT`]'s
+    /// place, and `answer_cap` is the most bytes an exchange reads of one
+    /// answer in [`MAX_ANSWER_BYTES`]'s; the exchange's deadline is made from
+    /// the two as [`PlainHttp::new`]'s is from its own, and the connect bound
+    /// is [`CONNECT_TIMEOUT`]. Its one caller is `resolve`, whose mirror
+    /// reads under the resolver's bounds; no other dialer's bounds move.
+    #[cfg(feature = "acting")]
+    pub(crate) fn bounded(io_timeout: Duration, answer_cap: usize) -> PlainHttp {
+        PlainHttp { io_timeout, exchange_bound: exchange_bound(io_timeout, answer_cap), answer_cap, ..PlainHttp::default() }
     }
 
     fn fail(origin: &Origin, what: &str, e: impl fmt::Display) -> String {
@@ -722,8 +768,8 @@ impl Dialer for PlainHttp {
         conn.write_all(&head)
             .and_then(|()| conn.write_all(&req.body))
             .map_err(|e| io_fault(origin, "write", e))?;
-        let raw = read_to_close(&mut *conn, MAX_ANSWER_BYTES).map_err(|e| io_fault(origin, "read", e))?;
-        let raw = raw.ok_or(DialError::TooLarge { cap: MAX_ANSWER_BYTES })?;
+        let raw = read_to_close(&mut *conn, self.answer_cap).map_err(|e| io_fault(origin, "read", e))?;
+        let raw = raw.ok_or(DialError::TooLarge { cap: self.answer_cap })?;
         let body_at = head_len(&raw).ok_or_else(|| closed_before_head(origin, &raw))?;
         let (status, headers) = parse_head(&raw[..body_at]).map_err(|e| DialError::Response(Self::fail(origin, "response", e)))?;
         let mut body = raw[body_at..].to_vec();
@@ -920,7 +966,9 @@ mod tls {
     //! The server's certificate is judged by the platform's own trust store
     //! (`rustls-platform-verifier`; §9 item 12). The crypto provider is
     //! `ring`, named explicitly so the build's provider never depends on
-    //! which features another crate turned on.
+    //! which features another crate turned on. Under `test-hooks` a suite's
+    //! dialer is judged by the one root it was handed instead, the `test_root`
+    //! module's whole; a build without the feature compiles none of it.
 
     use std::io;
     use std::sync::{Arc, OnceLock};
@@ -934,6 +982,14 @@ mod tls {
 
     impl Conn for StreamOwned<ClientConnection, Socket> {}
 
+    /// Returns the configuration every shipped dial handshakes under.
+    ///
+    /// The platform's trust store judges the server's certificate.
+    ///
+    /// # Errors
+    ///
+    /// [`DialError::Tls`] where the protocol versions or the platform's
+    /// verifier are refused.
     fn config() -> Result<Arc<ClientConfig>, DialError> {
         static CONFIG: OnceLock<Result<Arc<ClientConfig>, String>> = OnceLock::new();
         CONFIG
@@ -957,6 +1013,9 @@ mod tls {
     /// Every socket call the TLS layer makes is held to the connection's
     /// deadline, where one stands.
     ///
+    /// The certificate's judge is the platform's trust store; under
+    /// `test-hooks`, the one root a suite's dialer holds where it holds one.
+    ///
     /// # Errors
     ///
     /// `tcp`'s errors; [`DialError::Tls`] where the server name or the TLS
@@ -967,7 +1026,11 @@ mod tls {
         let mut tcp = dialer.tcp(origin, read_timeout, budget)?;
         let name = ServerName::try_from(origin.dial_host().to_string())
             .map_err(|e| DialError::Tls(PlainHttp::fail(origin, "server name", e)))?;
-        let mut conn = ClientConnection::new(config()?, name).map_err(|e| DialError::Tls(PlainHttp::fail(origin, "tls", e)))?;
+        #[cfg(not(feature = "test-hooks"))]
+        let config = config()?;
+        #[cfg(feature = "test-hooks")]
+        let config = match test_root::held(dialer) { Some(held) => held, None => config()? };
+        let mut conn = ClientConnection::new(config, name).map_err(|e| DialError::Tls(PlainHttp::fail(origin, "tls", e)))?;
         // `complete_io` can answer mid-handshake — a read past its bound
         // after earlier progress — so it is driven to the handshake's end; an
         // answer of no progress at all ends the loop, which no socket call
@@ -1001,6 +1064,105 @@ mod tls {
                 DialError::Connect(PlainHttp::fail(origin, "tls handshake timed out", e))
             }
             _ => DialError::Connect(PlainHttp::fail(origin, "tls handshake", e)),
+        }
+    }
+
+    /// The test trust root: one root a suite's dialer trusts.
+    ///
+    /// It is the one judge of a server's certificate beside the platform's
+    /// trust store, and the one place this crate builds a root store. A
+    /// suite's TLS front serves a certificate no platform trusts, so its
+    /// dialer is handed that certificate as its root
+    /// (`PlainHttp::trusting_test_root`) and trusts it alone: the platform's
+    /// store is not asked, so such a dialer completes a handshake with the
+    /// front and with no public server.
+    ///
+    /// Compiled only under `tls` and `test-hooks` together: a suite turns
+    /// the feature on, a build that compiles no test carries none of it —
+    /// no shipped dialer can trust a root the platform does not — and
+    /// `tests/it/tidy.rs` checks the gate on this module and on each line
+    /// outside it that names it.
+    #[cfg(feature = "test-hooks")]
+    pub(super) mod test_root {
+        use std::fmt;
+        use std::sync::Arc;
+
+        use rustls::pki_types::CertificateDer;
+        use rustls::{ClientConfig, RootCertStore};
+
+        use crate::dial::{DialError, PlainHttp};
+
+        /// One root, and the configuration that trusts it alone.
+        #[derive(Clone)]
+        pub(in crate::dial) struct TestRoot {
+            der: Arc<[u8]>,
+            config: Arc<ClientConfig>,
+        }
+
+        impl TestRoot {
+            /// Returns the configuration that trusts `der` alone.
+            ///
+            /// `der` is one certificate. The provider and the protocol
+            /// versions are the shipped configuration's; the judge is
+            /// rustls's own verifier over a store of that one root.
+            ///
+            /// # Errors
+            ///
+            /// [`DialError::Tls`] where `der` is no certificate a trust
+            /// anchor is read from, or the protocol versions are refused.
+            fn new(der: &[u8]) -> Result<TestRoot, DialError> {
+                let mut roots = RootCertStore::empty();
+                roots
+                    .add(CertificateDer::from(der.to_vec()))
+                    .map_err(|e| DialError::Tls(format!("the test root: {e}")))?;
+                let provider = Arc::new(rustls::crypto::ring::default_provider());
+                let config = ClientConfig::builder_with_provider(provider)
+                    .with_safe_default_protocol_versions()
+                    .map_err(|e| DialError::Tls(e.to_string()))?
+                    .with_root_certificates(roots)
+                    .with_no_client_auth();
+                Ok(TestRoot { der: der.into(), config: Arc::new(config) })
+            }
+        }
+
+        /// Shows the root's size and none of its bytes.
+        impl fmt::Debug for TestRoot {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "TestRoot({} bytes)", self.der.len())
+            }
+        }
+
+        /// Two are equal where they trust the same certificate.
+        impl PartialEq for TestRoot {
+            fn eq(&self, other: &TestRoot) -> bool {
+                self.der == other.der
+            }
+        }
+
+        impl Eq for TestRoot {}
+
+        impl PlainHttp {
+            /// Returns this dialer trusting `root` alone over `https://`.
+            ///
+            /// `root` is one certificate, in DER. The dialer answered keeps
+            /// this one's bounds and dials `http://` as before; over
+            /// `https://` a server's certificate is judged by `root` and no
+            /// other — the platform's trust store is not asked.
+            ///
+            /// # Errors
+            ///
+            /// [`DialError::Tls`] where `root` is no certificate a trust
+            /// anchor is read from.
+            #[doc(hidden)]
+            pub fn trusting_test_root(mut self, root: &[u8]) -> Result<PlainHttp, DialError> {
+                self.test_root = Some(TestRoot::new(root)?);
+                Ok(self)
+            }
+        }
+
+        /// Returns the configuration of the test root `dialer` holds, if any.
+        pub(super) fn held(dialer: &PlainHttp) -> Option<Arc<ClientConfig>> {
+            dialer.test_root.as_ref().map(|root| root.config.clone())
         }
     }
 }

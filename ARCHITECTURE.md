@@ -246,7 +246,8 @@ foundation and on the stores above it.
   on `skep-address`, `skep-registry`, `skep-identity` and `skep-signature`
   alone — no engine, no store, and never `skepd`, which never depends on
   it (the daemon's own suite takes it as a dev-dependency, where boards
-  are spawned). Its modules and rules: §The resolver.
+  are spawned). It links no TLS library: an `https` root is dialed through
+  `skep-client`, which depends on it. Its modules and rules: §The resolver.
 - `skep-search` — the search index, a LIBRARY a client embeds (the
   design's `search.md`; R9b's board-wide search is the reader's own index,
   the substrate search-free): the document model — one unit per document
@@ -280,10 +281,12 @@ foundation and on the stores above it.
   skep crates it depends on `skep-address`,
   `skep-identity`, `skep-signature`, `skep-resolve` and — optional, behind
   `search` — `skep-search` alone — never `skepd`, which does not depend on
-  it either (its suite spawns the daemon as a dev-dependency). Four
+  it either (its suite spawns the daemon as a dev-dependency, and the
+  daemon's suite takes it as one, for the mirror over `https`). Four
   features: `acting` (default on) gates everything that signs or holds a
   key; `tls` (default off) the `https://` arm; `test-hooks` (default off)
-  the scripted person a suite drives; `search` (default off, implies
+  the scripted person a suite drives and, beside `tls`, the dialer's test
+  trust root; `search` (default off, implies
   `acting`) the `search` module. Its modules and rules: §The client.
 - `skep-shell` — the SHELL's CORE, written once for the dev provider and
   the desktop shell (the design's `client.md` §4b; the dev provider
@@ -550,7 +553,9 @@ the daemon serves and knows the bindings it read were genuine. It links
 no daemon and no engine, speaks the wire as a guest, and opens no socket
 to an endpoint — the dial is the caller's. Its modules: `hint.rs` the root
 hint; `http.rs` the written-out HTTP/1.1 client behind a `Transport`
-trait; `board.rs` the typed reads over any transport (`Board`), every
+trait, plain `http` alone — an `https` root is `skep-client`'s to dial,
+through its `resolve.rs`, which fills the trait over the client's dialer;
+`board.rs` the typed reads over any transport (`Board`), every
 read counted by kind; `mirror.rs` the `/changes` consumer's types and
 state, the journal copy and the fetch cache under the caller's directory,
 and the fold, with four children — `mirror/base.rs` the base's check, its
@@ -591,7 +596,11 @@ Its integration suite is one binary, `tests/it/`, over a RECORDED feed
 demand): `index`, `mirror`, `walk` and `origin`. The paths no recording
 reaches run in the unit suites, each beside the code it pins, the mirror's
 suites sharing the fixtures in `mirror/testing.rs`. The end-to-end cells
-and the measurements run in `crates/skepd/tests/it/resolve.rs`.
+and the measurements run in `crates/skepd/tests/it/resolve.rs` — the
+mirror over `https` among them, opened through `skep-client`'s dial
+against a daemon behind that suite's TLS front
+(`tests/it/common/tls_front.rs`, over the certificate and test key in
+`tests/fixtures/`).
 
 Its rules of mechanism: SP-2, SP-10, SP-17.
 
@@ -668,7 +677,9 @@ each ceremony:
 - The reading half, in every build. `origin.rs` the canonical origin;
   `address.rs` the address grammar over the wire's dotted spelling;
   `hex.rs` (private) lowercase hex; `dial.rs` the one outbound `Dialer`,
-  its plain-HTTP arm and, under `tls`, the `https://` arm, its unit suite
+  its plain-HTTP arm and, under `tls`, the `https://` arm — and inside
+  that arm, under `test-hooks`, `test_root`, the one root a suite's dialer
+  trusts in the platform's place — its unit suite
   in `dial/tests.rs`; `halt.rs` the one error family and its exit codes;
   `board.rs` the wire's endpoints over a dialer, `board/frames.rs`, which
   spells every frame the crate sends, and `board/answers.rs`, which
@@ -687,7 +698,9 @@ each ceremony:
   reader's verifier — `skep-identity`'s signature-filtered key table built
   over the admitted read, and the entry verdict beside it — its unit suite
   in `verify/tests.rs`; `resolve.rs` the registry walk's `Transport` over a
-  dialer; `share.rs` the grant — `share`, `privash` (PUB-5.108), `revoke`,
+  dialer, and the dial a registry mirror opens through, for an `https`
+  root and an `http` one alike;
+  `share.rs` the grant — `share`, `privash` (PUB-5.108), `revoke`,
   the reads `issued`, `held` and `privashed`, and `Ledger::fold` — its unit
   suite in `share/tests.rs` and its daemon suite in `tests/it/share.rs`.
 - `ceremony.rs` and `ceremony/`, in two layers. The COMPOSITIONS, each the
@@ -757,7 +770,13 @@ Rules that hold across its files:
 - **One dialer.** Every request the crate makes goes through a `Dialer`:
   the one a `Board` holds, or the one `resolve.rs`'s transport wraps — and
   a dialer behind a reference, a box or an `Arc` is itself one, so a
-  shell's one `Arc<dyn Dialer>` serves both. Every token-bearing request
+  shell's one `Arc<dyn Dialer>` serves both. A registry mirror's reads go
+  through one too, whatever its root's scheme: `resolve.rs` builds the
+  dialer they ride, under the resolver's bounds in a frame's place, and
+  the resolver's own client is never the second path. In a shipped build
+  the platform's trust store is the one judge of a server's certificate;
+  `tests/it/tidy.rs` holds the test trust root to `test-hooks`. Every
+  token-bearing request
   but the close rides `Board::authed`, and every read answer is decoded by
   `board/answers.rs`.
 - **One home per composition.** Every signed session opens through
@@ -774,8 +793,8 @@ Rules that hold across its files:
 | Feature | Default | Adds | Compiled by the gate |
 |---|---|---|---|
 | `acting` | on | `sign`, `sheet`, `store`, `person`, `derive::records`, `verify`, `resolve`, `ceremony`, `publication`; `skep-signature`'s `sign` | every default build; `scripts/gate-full.sh` checks the library without it (the reading half) and with it alone |
-| `tls` | off | the dialer's `https://` arm over rustls and the platform verifier | `skep-cli`'s default build (its dev binary `skep-dev` needs none of it — a dev board is loopback, the dialer's plain arm, for `seed` and for `serve` alike; `serve` takes `search` through `skep-shell` and, under `skep-cli`'s `dev-hooks` alone, the daemon's `test-hooks`); `scripts/gate-full.sh` checks both of `skep-cli`'s binaries without it, and the sidecar image builds `--bin skep` so the dev binary stays out of it |
-| `test-hooks` | off | implies `acting`; `person::scripted` | every test build (the crate's self dev-dependency, and `skep-cli`'s dev-dependency); `scripts/gate-full.sh`'s `--features acting` check builds the library without it, and `tests/it/tidy.rs` checks its gate |
+| `tls` | off | the dialer's `https://` arm over rustls and the platform verifier | `skep-cli`'s default build and `skepd`'s test build, whose suite mirrors a board over it (`skep-cli`'s dev binary `skep-dev` needs none of it — a dev board is loopback, the dialer's plain arm, for `seed` and for `serve` alike; `serve` takes `search` through `skep-shell` and, under `skep-cli`'s `dev-hooks` alone, the daemon's `test-hooks`); `scripts/gate-full.sh` checks both of `skep-cli`'s binaries without it, and the sidecar image builds `--bin skep` so the dev binary stays out of it |
+| `test-hooks` | off | implies `acting`; `person::scripted`; and, beside `tls`, the dialer's test trust root | every test build (the crate's self dev-dependency, and `skep-cli`'s and `skepd`'s dev-dependencies, the two builds that take `tls` beside it and so compile the trust root); `scripts/gate-full.sh`'s `--features acting` check builds the library without it and its `skep-cli` `--bins` checks build the binaries without it, with `tls` and with none, and `tests/it/tidy.rs` checks both gates |
 | `search` | off | implies `acting`; the `search` module and the optional `skep-search` dependency | every test build of this crate (the self dev-dependency turns it on, so the search suites run under the workspace gate); `scripts/gate-full.sh` checks the library with it alone, and `tests/it/tidy.rs` checks that `pub mod search;` is gated and the feature off by default |
 
 Its integration suite is one binary, `tests/it/`: the walks driven through
@@ -1939,7 +1958,11 @@ SP-28.
   open a real engine to judge generic code against the concrete `World` —
   the media crate's library never depends on the engine — `skepd`'s on
   `skep-resolve`, whose end-to-end cells and measurements run where boards
-  are spawned — the daemon's library never depends on the resolver — and
+  are spawned — the daemon's library never depends on the resolver —
+  `skepd`'s on `skep-client`, whose dialer is the resolver's `https` path
+  and is proven there too, against a daemon behind a TLS front — the
+  daemon's library never depends on the client, and `skep-client`'s own
+  suite spawning the daemon makes this a dev-cycle Cargo admits — and
   `skep-search`'s on `skepd` and `skep-client`, whose budgets suite writes
   the design's corpus to a dev board through the client's frames and reads
   it back as the shell does, so the index is measured on units that came

@@ -24,12 +24,17 @@ acting = ["skep-signature/sign", "dep:skep-resolve", "dep:getrandom", "dep:zeroi
 tls = ["dep:rustls", "dep:rustls-platform-verifier"]
 # `test-hooks` compiles in the test support: `person::scripted`, the scripted
 # person a suite drives through a walk — and implies `acting`, the half that
-# holds the `Person` seam. DEFAULT-OFF, and no shipped build enables it: this
-# crate's own tests turn it on through the self dev-dependency below, and
-# skep-cli's tests on their `skep-client` line, so a build that compiles no
-# test compiles none of it. `scripts/gate-full.sh`'s `--features acting`
-# check builds the library without it, and `tests/it/tidy.rs` checks the
-# gate on the module's `mod` line.
+# holds the `Person` seam — and, where `tls` is on beside it, the dialer's
+# TEST TRUST ROOT (`dial.rs`'s `test_root`): one certificate a suite hands a
+# dialer of its own, trusted in the platform's place, so a suite's TLS front
+# is reached; without this feature the platform's trust store is the one
+# judge of a server's certificate. DEFAULT-OFF, and no shipped build enables
+# it: this crate's own tests turn it on through the self dev-dependency
+# below, and skep-cli's and skepd's tests on their `skep-client` lines, so a
+# build that compiles no test compiles none of it. `scripts/gate-full.sh`'s
+# `--features acting` check builds the library without it, and
+# `tests/it/tidy.rs` checks the gate on the module's `mod` line and on the
+# trust root's every line.
 test-hooks = ["acting"]
 # `search` — THE SHELL's HALF of search (client.md §4e; lane SH): the feed
 # consumer over `/changes`, the index directory beside the key store, the

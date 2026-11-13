@@ -10,7 +10,12 @@
 //! The client speaks plain `http` alone: this crate links no TLS library, so
 //! an `https` root in a hint is a transport this build does not hold,
 //! refused by name ([`TransportError::NotHeld`]) and never dialed in the
-//! clear.
+//! clear. An `https` root is reached through the dialer the `skep` command
+//! and the frontend's shell already hold: `skep-client` fills [`Transport`]
+//! over it and hands a mirror its dial (`skep_client::resolve::mirror_dial`),
+//! for an `https` root and an `http` one alike, under this client's own two
+//! bounds — the per-call bound and the answer cap below — so a fold reads
+//! the same answers whichever client carried them.
 //!
 //! An answer is read to EOF and no further than THE ANSWER CAP: a board
 //! sizes this client's memory by at most the largest answer the fold reads

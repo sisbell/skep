@@ -441,6 +441,78 @@ fn a_connect_past_its_bound_is_a_connection_never_made() {
     drop(listener);
 }
 
+/// The pinned bounds are `new`'s, and a dialer under its own keeps its own.
+///
+/// `new`'s four figures are spelled out, so a dialer built under other
+/// bounds beside it moves none of them; and a dialer under its caller's
+/// bounds holds that per-call bound and that cap, the connect bound as
+/// pinned, and a deadline made from its two by the one rule — here a minute
+/// and a feed page's cap, 60 s and the 8.015 s the cap takes at the streamed
+/// form's rate.
+#[cfg(feature = "acting")]
+#[test]
+fn the_pinned_bounds_are_news_and_a_dialer_under_its_own_bounds_keeps_them() {
+    let figures = |d: &PlainHttp| (d.connect_timeout, d.io_timeout, d.exchange_bound, d.answer_cap);
+    let pinned = (Duration::from_secs(5), Duration::from_secs(10), Duration::from_millis(42_250), 8 * 1024 * 1024 + 64 * 1024);
+    assert_eq!(figures(&PlainHttp::new()), pinned);
+    assert_eq!((CONNECT_TIMEOUT, IO_TIMEOUT, EXCHANGE_BOUND, MAX_ANSWER_BYTES), pinned);
+    let own = PlainHttp::bounded(Duration::from_secs(60), 2 * 1024 * 1024 + 4 * 1024);
+    assert_eq!(figures(&own), (Duration::from_secs(5), Duration::from_secs(60), Duration::from_millis(68_015), 2 * 1024 * 1024 + 4 * 1024));
+    assert_eq!(figures(&PlainHttp::new()), pinned, "a dialer built beside it moved none of them");
+}
+
+/// A dialer under its own bounds reads to its own cap and waits its own bound.
+///
+/// The cap counts the bytes on the wire, head and body: an answer of exactly
+/// the cap is read whole and one a byte past it is `TooLarge` at that cap,
+/// while `new`'s dialer reads either. And the per-call bound is the read's:
+/// a board that answers after 600 ms is a `Timeout` to a dialer bounded at
+/// 300 ms and an answer to one bounded at five seconds (the mutant that
+/// reads under the pinned cap sizes a mirror's memory by a frame's, and the
+/// one that waits the pinned bound gives up on a feed page a large board
+/// takes longer to make).
+#[cfg(feature = "acting")]
+#[test]
+fn a_dialer_under_its_own_bounds_reads_to_its_cap_and_waits_its_bound() {
+    let answer: &'static [u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}";
+    let whole = Ok((200, b"{}".to_vec()));
+    let dial = |dialer: PlainHttp, wait: Duration| {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = Origin::parse(&format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port())).unwrap();
+        let server = thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            read_request(&mut s);
+            thread::sleep(wait);
+            // A dialer past its bound has hung up on the answer.
+            let _ = s.write_all(answer);
+        });
+        let got = dialer.exchange(&origin, &Request::get("/changes?since=0")).map(|resp| (resp.status, resp.body));
+        server.join().unwrap();
+        got
+    };
+    let at = |cap: usize| PlainHttp::bounded(IO_TIMEOUT, cap);
+    assert_eq!(dial(at(answer.len()), Duration::ZERO), whole, "an answer of the cap, to the byte");
+    assert_eq!(dial(at(answer.len() - 1), Duration::ZERO), Err(DialError::TooLarge { cap: answer.len() - 1 }), "a byte past the cap");
+    assert_eq!(dial(PlainHttp::new(), Duration::ZERO), whole, "the pinned cap reads it");
+    let bounded_at = |bound: Duration| PlainHttp::bounded(bound, MAX_ANSWER_BYTES);
+    let slow = Duration::from_millis(600);
+    assert!(matches!(dial(bounded_at(Duration::from_millis(300)), slow), Err(DialError::Timeout(_))), "an answer past the bound");
+    assert_eq!(dial(bounded_at(Duration::from_secs(5)), slow), whole, "an answer inside the bound");
+}
+
+/// A test root that is no certificate is refused, and one dialer's is its own.
+///
+/// The seam hands a dialer one root: bytes that are no certificate make no
+/// dialer, and a dialer that was handed none is `new`'s, trusting the
+/// platform's store alone.
+#[cfg(all(feature = "tls", feature = "test-hooks"))]
+#[test]
+fn a_test_root_that_is_no_certificate_makes_no_dialer() {
+    let refused = PlainHttp::new().trusting_test_root(b"no certificate").unwrap_err();
+    assert!(matches!(refused, DialError::Tls(_)), "{refused:?}");
+    assert_eq!(PlainHttp::new().test_root, None, "no dialer holds a root it was not handed");
+}
+
 /// The request target and the headers are written as given, so a line
 /// break in either — the bytes that would end the request line or a header
 /// and write one of their own choosing — is refused before any connection

@@ -8,6 +8,11 @@
 //! TRANSPORT itself needs bytes outside that shape — a `Transfer-Encoding`
 //! header, a truncated body, a version that is not 1.1 — and reaches for
 //! [`raw_exchange`], which writes what it is given.
+//!
+//! The daemon serves plain HTTP alone. The one suite that reaches a board
+//! over `https` — the resolver's mirror, through the client's dialer —
+//! stands [`TlsFront`] before a spawned daemon, as a hosted board's proxy
+//! stands before it.
 
 #![allow(dead_code)]
 
@@ -36,9 +41,11 @@ use skepd::{
 
 mod ops;
 mod signer;
+mod tls_front;
 
 pub use ops::*;
 pub use signer::*;
+pub use tls_front::*;
 
 /// The credential type addresses this build allocates (AUTH-7.1 horn B):
 /// subspace 3 of the ghost document, ordinals enroll·retire·claim.

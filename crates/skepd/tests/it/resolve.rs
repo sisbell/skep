@@ -6,6 +6,8 @@
 //! (b)), THE ROOT MOVE's resume and its refusals (REG-3.18, REG-3.19,
 //! REG-3.42), NO NEGATIVE CACHE (REG-3.10), THE CHAIN WALK's recovery of an
 //! un-arranged atom (REG-3.25), the end-to-end walk from the hint (REG-3.7),
+//! THE MIRROR OVER `https` (REG-3.2, REG-3.12) — an `https` root reached
+//! from genesis through the client's dialer, behind the suite's TLS front —
 //! the recording of the resolver crate's own fixture, and THE MEASUREMENTS
 //! (the registry seam investigation §3.1, §3.3, §3.4), reported and never
 //! asserted.
@@ -34,6 +36,7 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use common::*;
@@ -42,9 +45,9 @@ use skep_address::Address;
 use skep_identity::{canonical_record, Fingerprint};
 use skep_registry::{encode, Body, BodyKind};
 use skep_resolve::{
-    guest_resolve, resolve, Board, Cause, Http, MemberOutcome, Method, Mirror, MirrorError,
-    NameResolver, Opened, Origin, RealmId, Refusal, Resolution, RootHint, Term, Transport,
-    TransportError, Transports, Unreachable, Verdict,
+    guest_resolve, resolve, Board, BoardError, Cause, Http, MemberOutcome, Method, Mirror,
+    MirrorError, NameResolver, Opened, Origin, RealmId, Refusal, Resolution, RootHint, Term,
+    Transport, TransportError, Transports, Unreachable, Verdict,
 };
 use skep_signature::Seed as SigningKey;
 
@@ -887,6 +890,246 @@ fn one_org_registered_by_the_console_resolves_from_the_hint_by_a_cold_resolver()
     }
     assert!(matches!(resolve_prefix(&mut mirror, "1.6"), Resolution::Unregistered { .. }));
     sd.shutdown();
+}
+
+// ── the mirror over https ──────────────────────────────────────────────────
+
+/// One registered board behind the suite's TLS front.
+///
+/// The board is the end-to-end cell's: ENFORCING, one org registered by the
+/// console at `1.5` with two origins. The front stands before it as a
+/// hosted board's proxy does ([`TlsFront`]), so the one board is reached at
+/// two origins: the front's `https` one and the daemon's own `http` one.
+struct Fronted {
+    _dir: tempfile::TempDir,
+    sd: skepd::Skepd,
+    front: TlsFront,
+    org: Org,
+}
+
+impl Fronted {
+    fn spawn() -> Fronted {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sd = spawn_enforcing(dir.path());
+        let console = console(sd.port());
+        let org = register_org(sd.port(), &console, 5, "1.5", Some(&["https://acme.example", "https://acme.example.net"]), 0);
+        let front = TlsFront::before(sd.port());
+        Fronted { _dir: dir, sd, front, org }
+    }
+
+    /// The board over `https`: the front's origin.
+    fn https(&self) -> Origin {
+        Origin::parse(&self.front.origin()).expect("canonical")
+    }
+
+    /// The board over plain `http`: the daemon's own origin.
+    fn http(&self) -> Origin {
+        Origin::parse(&format!("http://127.0.0.1:{}", self.sd.port())).expect("canonical")
+    }
+
+    fn shutdown(self) {
+        drop(self.front);
+        self.sd.shutdown();
+    }
+}
+
+/// The root hint naming `origins` in order, under the suite's realm.
+fn hint_of(origins: &[&Origin]) -> RootHint {
+    RootHint::new(origins.iter().map(|o| (*o).clone()).collect(), suite_realm(), None).expect("an origin")
+}
+
+/// The client's dial for a mirror, the front's certificate its one test root.
+///
+/// It is the shipped mirror dial (`skep_client::resolve::mirror_dial`) but
+/// for the root its dialer trusts: the same dialer under the resolver's
+/// bounds, both schemes through it.
+fn dial_trusting_the_front() -> impl Fn(&Origin) -> Result<Box<dyn Transport>, TransportError> {
+    let dialer = skep_client::resolve::mirror_dialer()
+        .trusting_test_root(&tls_front_test_root())
+        .expect("the fixture certificate is a root");
+    skep_client::resolve::dial(Arc::new(dialer))
+}
+
+/// Every line of the feed copy under `dir` but its header.
+///
+/// The header names the root that answered; the lines after it are the
+/// board's rows as it served them and the head pairs.
+fn copied_feed(dir: &Path) -> Vec<String> {
+    let feed = fs::read_to_string(dir.join(skep_resolve::FEED_COPY)).expect("the feed copy");
+    feed.lines().skip(1).map(str::to_string).collect()
+}
+
+/// The handshake's refusal of a certificate, as the resolver is told it.
+///
+/// The dialer's `DialError::Tls` reaches the resolver as a connection never
+/// made, its text led by `tls:` and naming the handshake and the
+/// certificate. The platform's own words after that are its own: no trust
+/// store holds the fixture's root, and macOS's policy refuses a server
+/// certificate that runs a hundred years before it says so.
+fn is_a_certificate_the_platform_refused(e: &BoardError) -> bool {
+    matches!(e, BoardError::Transport(TransportError::Connect(text))
+        if text.starts_with("tls: ") && text.contains("tls handshake") && text.to_lowercase().contains("certificate"))
+}
+
+/// Checks that a cold mirror reaches an `https` root from genesis.
+///
+/// The hint names the board at the front's `https` origin alone (REG-3.2),
+/// and the mirror opens through the client's dialer, the fixture
+/// certificate its one test root: the base is established from genesis at
+/// that root (REG-3.12), the copy line for line the one a mirror over plain
+/// `http` holds of the same board, through the same head; every read the
+/// mirror made rode the front and nothing else did; and the registered org
+/// resolves as the end-to-end cell resolves it over plain `http`.
+#[test]
+fn a_cold_mirror_reaches_an_https_root_from_genesis_through_the_clients_dialer() {
+    let board = Fronted::spawn();
+    let port = board.sd.port();
+    let hint = RootHint::parse(&hint_of(&[&board.https()]).to_string()).expect("the one line parses back");
+    let mdir = tempfile::tempdir().expect("tempdir");
+    let mut mirror = Mirror::open(&hint, mdir.path(), &dial_trusting_the_front()).unwrap_or_else(|e| panic!("a cold mirror over https: {e}"));
+    assert_eq!(*mirror.opened(), Opened::Bootstrapped);
+    assert_eq!(mirror.root(), Some(&board.https()), "the root that answered");
+    assert_eq!(mirror.claim().map(|(_, c)| c.to_string()).as_deref(), Some(CLAIMANT_ACCOUNT));
+    let reads = mirror.stats().reads;
+    let carried = board.front.settled(Duration::ZERO).carried();
+    assert!(
+        reads.total() > 0 && (reads.total()..=reads.total() + reads.busy_retries).contains(&carried),
+        "every read the mirror made rode the front, and nothing else did: {carried} carried, {reads:?}"
+    );
+    assert_eq!(board.front.refused(), 0, "no handshake was turned away");
+    // From genesis through the head: the copy a mirror over plain http holds.
+    let plain_dir = tempfile::tempdir().expect("tempdir");
+    let mut plain = cold_mirror(port, plain_dir.path());
+    assert!(mirror.head() > 0 && mirror.head() == plain.head(), "{} over https, {} over http", mirror.head(), plain.head());
+    assert_eq!(mirror.stats().rows, plain.stats().rows);
+    assert_eq!(copied_feed(mdir.path()), copied_feed(plain_dir.path()), "row for row and head pair for head pair");
+    let face = resolve_prefix(&mut mirror, "1.5");
+    assert_eq!(face, resolve_prefix(&mut plain, "1.5"), "the face a mirror over plain http resolves");
+    match face {
+        Resolution::Bound { standing, keys, endpoint, dial, members } => {
+            let org = &board.org;
+            assert_eq!(standing.current.link, addr(&org.binding));
+            assert_eq!(standing.current.record.account, Some(addr(&org.account)));
+            assert_eq!(standing.current.verdict, Verdict::Signed(Fingerprint::of(&public_key_of(&device_key()))));
+            assert_eq!(standing.history.len(), 1);
+            let live = op(port, None, &format!(r#"{{"op":"key_set","account":"{}"}}"#, org.account));
+            let live: Vec<String> = live["enrolled"].as_array().unwrap().iter().map(|e| e["fingerprint"].as_str().unwrap().to_string()).collect();
+            let keys = keys.as_ref().expect("the table at the head");
+            assert_eq!(keys.iter().map(|e| Fingerprint::of(&e.key).to_hex()).collect::<Vec<_>>(), live, "the filtered table equals the set the board folds");
+            assert_eq!(endpoint.link, addr(org.endpoint.as_ref().unwrap()));
+            assert_eq!(endpoint.verdict, Verdict::Signed(Fingerprint::of(&public_key_of(&org.key))));
+            assert_eq!(endpoint.record.origins, ["https://acme.example", "https://acme.example.net"]);
+            assert_eq!((dial.member_index, dial.origin.as_str()), (0, "https://acme.example"));
+            assert_eq!(dial.addresses, ["93.184.216.34".parse::<IpAddr>().unwrap()]);
+            assert_eq!(members.len(), 2);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(resolve_prefix(&mut mirror, "1.6"), Resolution::Unregistered { .. }));
+    board.shutdown();
+}
+
+/// Checks that the shipped dialer refuses the front's certificate.
+///
+/// Without the test root the client's dialer hands the certificate to the
+/// platform's verifier, which no platform's passes: the dial is refused in
+/// the handshake, before a byte of any request is written, and the mirror
+/// names the root beside that refusal. The front saw one handshake that did
+/// not finish and carried nothing, so no byte reached the daemon; its log
+/// position stands where it stood, and no line of a copy is written. The
+/// same hint through the dialer holding the test root then opens, so the
+/// certificate's judge is the one thing between the two.
+#[test]
+fn an_https_root_whose_certificate_the_platform_does_not_trust_is_refused_in_the_handshake() {
+    let board = Fronted::spawn();
+    let port = board.sd.port();
+    let https = board.https();
+    let hint = hint_of(&[&https]);
+    let before = head_position(port);
+    let mdir = tempfile::tempdir().expect("tempdir");
+    let refused = Mirror::open(&hint, mdir.path(), &skep_client::resolve::mirror_dial()).unwrap_err();
+    let tried = match refused {
+        MirrorError::Unreachable { tried } => tried,
+        other => panic!("no root answers: {other:?}"),
+    };
+    assert_eq!(tried.len(), 1);
+    assert_eq!(tried[0].0, https);
+    assert!(is_a_certificate_the_platform_refused(&tried[0].1), "{:?}", tried[0].1);
+    let front = board.front.settled(Duration::ZERO);
+    assert_eq!((front.refused(), front.carried()), (1, 0), "one handshake that did not finish, and no connection to the daemon");
+    assert_eq!(head_position(port), before, "the daemon's log position");
+    assert!(!mdir.path().join(skep_resolve::FEED_COPY).exists(), "nothing written");
+    let mirror = Mirror::open(&hint, mdir.path(), &dial_trusting_the_front()).unwrap_or_else(|e| panic!("with the test root: {e}"));
+    assert_eq!(mirror.root(), Some(&https));
+    assert!(board.front.settled(Duration::ZERO).carried() > 0);
+    drop(mirror);
+    board.shutdown();
+}
+
+/// Checks that the resolver's own dial refuses an `https` root by name.
+///
+/// `skep-resolve` links no TLS library: through its shipped dial the same
+/// hint is the transport this build does not hold, refused before any
+/// connection — the front accepts none — and nothing is written.
+#[test]
+fn the_resolvers_own_dial_refuses_the_https_root_by_name() {
+    let board = Fronted::spawn();
+    let https = board.https();
+    let mdir = tempfile::tempdir().expect("tempdir");
+    let refused = Mirror::open(&hint_of(&[&https]), mdir.path(), &skep_resolve::dial_http).unwrap_err();
+    assert_eq!(refused, MirrorError::Unreachable { tried: vec![(https, BoardError::Transport(TransportError::NotHeld("https".into())))] });
+    let front = board.front.settled(Duration::from_millis(200));
+    assert_eq!((front.refused(), front.carried()), (0, 0), "no connection reached the front");
+    assert!(!mdir.path().join(skep_resolve::FEED_COPY).exists(), "nothing written");
+    board.shutdown();
+}
+
+/// Checks that a hint's `https` root and `http` root are walked in order.
+///
+/// Both origins serve the one board, and both ride the client's dialer.
+/// Trusted, the first answers and is the root. Untrusted — the dialer
+/// without the test root — the first is refused in its handshake and the
+/// second is dialed, answers and is the root, the org resolving off it. And
+/// where no origin answers, each one tried is named beside its own error in
+/// the hint's order: the `https` root its certificate's refusal, the `http`
+/// one, here a port nothing listens on, its refused connection.
+#[test]
+fn a_hint_naming_an_https_root_and_an_http_root_is_walked_in_order() {
+    let board = Fronted::spawn();
+    let (https, http) = (board.https(), board.http());
+    let hint = hint_of(&[&https, &http]);
+    // The first origin answers.
+    let first_dir = tempfile::tempdir().expect("tempdir");
+    let mut mirror = Mirror::open(&hint, first_dir.path(), &dial_trusting_the_front()).unwrap_or_else(|e| panic!("the first origin: {e}"));
+    assert_eq!(mirror.root(), Some(&https), "the first origin answers");
+    assert!(matches!(resolve_prefix(&mut mirror, "1.5"), Resolution::Bound { .. }));
+    let front = board.front.settled(Duration::ZERO);
+    let carried = front.carried();
+    assert!(carried > 0 && front.refused() == 0);
+    // The first made untrusted: the second is dialed.
+    let second_dir = tempfile::tempdir().expect("tempdir");
+    let mut mirror = Mirror::open(&hint, second_dir.path(), &skep_client::resolve::mirror_dial()).unwrap_or_else(|e| panic!("the second origin: {e}"));
+    assert_eq!(mirror.root(), Some(&http), "the second origin is dialed");
+    assert!(matches!(resolve_prefix(&mut mirror, "1.5"), Resolution::Bound { .. }));
+    let front = board.front.settled(Duration::ZERO);
+    assert_eq!((front.refused(), front.carried()), (1, carried), "the first origin's one handshake did not finish, and it carried nothing more");
+    assert_eq!(copied_feed(first_dir.path()), copied_feed(second_dir.path()), "the one board at either origin");
+    // No origin answers: each is named beside its own error.
+    let down = Origin::parse("http://127.0.0.1:1").unwrap();
+    let none_dir = tempfile::tempdir().expect("tempdir");
+    let refused = Mirror::open(&hint_of(&[&https, &down]), none_dir.path(), &skep_client::resolve::mirror_dial()).unwrap_err();
+    assert!(refused.to_string().starts_with(&format!("no root answered: {https}: connect: tls: ")), "{refused}");
+    let tried = match refused {
+        MirrorError::Unreachable { tried } => tried,
+        other => panic!("no root answers: {other:?}"),
+    };
+    assert_eq!(tried.len(), 2);
+    assert_eq!(tried[0].0, https);
+    assert!(is_a_certificate_the_platform_refused(&tried[0].1), "{:?}", tried[0].1);
+    assert_eq!(tried[1].0, down);
+    assert!(matches!(&tried[1].1, BoardError::Transport(TransportError::Connect(text)) if !text.starts_with("tls: ")), "{:?}", tried[1].1);
+    assert!(!none_dir.path().join(skep_resolve::FEED_COPY).exists(), "nothing written");
+    board.shutdown();
 }
 
 // ── the measurements (reported, never asserted) ────────────────────────────

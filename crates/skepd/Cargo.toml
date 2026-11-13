@@ -195,6 +195,20 @@ proptest.workspace = true
 # the end-to-end cells and the measurements run here, where boards are
 # spawned and registered. The daemon itself never depends on it.
 skep-resolve = { path = "../skep-resolve" }
+# THE CLIENT's DIALER, taken as the resolver's `https` path
+# (tests/it/resolve.rs): the resolver links no TLS library, so a mirror
+# reaches an `https` root through `skep_client::resolve`, and the cells that
+# prove it run here, where boards are spawned. `tls` is the dialer's
+# `https://` arm; `test-hooks` its one test root, the fixture certificate the
+# suite's TLS front serves (tests/fixtures/), which no platform trusts. The
+# daemon itself never depends on the client, and a build that compiles no
+# test never reads this table.
+skep-client = { path = "../skep-client", features = ["tls", "test-hooks"] }
+# rustls's server side, for the suite's TLS front (tests/it/common/
+# tls_front.rs): a TLS end on loopback before a spawned daemon, as a hosted
+# board's proxy stands before it. Already in the graph through skep-client's
+# `tls`; the daemon links no TLS library.
+rustls.workspace = true
 # The content, arrangement, retrieval and link value types the suites build
 # their fixtures and read their answers with; the daemon's own sources name
 # none of them (the codec that round-trips them is the core's).

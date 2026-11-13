@@ -22,8 +22,8 @@
 //! The consumers are the engine's own reads ([`IDENTITY_TYPES`] for the
 //! identity slice; [`t_grant`] and [`t_replaces`] for the grant fold,
 //! [`t_edition`] for the audit-view edition-claim lookup), the daemon's
-//! credential classifiers, registry sequence and seeding check, and its
-//! write-path type-recognition input (PUB-kickoff D3) — the class addresses
+//! credential classifiers and registry sequence, and its write-path
+//! type-recognition input (PUB-kickoff D3) — the class addresses
 //! a `nullify` is refused at (PUB-6.30's grant, PUB-6.64's audit-view
 //! members), pinned here beside the ones the engine reads so one ledger names
 //! them all. Every class pin below cites its commons row and its
@@ -309,15 +309,15 @@ pub fn t_succession_policy() -> &'static Address {
 /// consumption marker, the journal designation, the rail record, the
 /// steward's classification, `replaces`, then the link-sets rows: read-with,
 /// the correspondence and the held removal — and the list is the parent's
-/// domain as the engine sees it (REG-1.31), which the seeding check compares
-/// the registry's rows against at every genesis (REG-1.30, REG-1.32). The
-/// three credential types stand beside this list rather than in it — they
-/// are the fold's kinds, which no engine index reads and which the write
-/// path's refusals read through a clone of [`IDENTITY_TYPES`] rather than as
-/// class pins — and the daemon widens the domain by them ([`t_enroll`],
-/// [`t_retire`], [`t_claim`]) and by M5's deposit-class spellings. The
-/// ledger's tests hold this list to be exactly the pins outside the
-/// registry's table but those three.
+/// domain as the engine sees it (REG-1.31). The three credential types stand
+/// beside this list rather than in it: they are the fold's kinds, which no
+/// engine index reads and which the write path's refusals read through a
+/// clone of [`IDENTITY_TYPES`] rather than as class pins. The daemon's
+/// seeding check runs at every genesis over the build's one commons table
+/// less the registry's rows (REG-1.30, REG-1.32), and the daemon core's
+/// suite holds every pin of this list, and the three, to be an entry of
+/// that domain. The ledger's tests hold this list to be exactly the pins
+/// outside the registry's table but those three.
 pub fn pins_outside_the_registry() -> [&'static Address; 11] {
     [
         t_grant(),

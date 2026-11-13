@@ -197,9 +197,10 @@ fn the_registrys_twelve_rows_are_the_ledgers_pins_at_the_maps_addresses() {
 /// registry's rows against the ledger's pins outside the registry and M5's
 /// deposit-class set, with the set's two registry members set aside — they
 /// are the rows spelled a second time, held equal above, and no foreign row.
-/// The three arms pass, so a daemon's genesis over this domain completes;
-/// each arm's refusal is proved on a list the registry crate's own suite
-/// builds, and the daemon widens the domain by its credential constants.
+/// The three arms pass over this domain; each arm's refusal is proved on a
+/// list the registry crate's own suite builds, and the daemon's check runs
+/// over the build's whole commons table less the registry's rows, a domain
+/// its own suite holds every one of these pins to be an entry of.
 #[test]
 fn the_seeding_check_passes_over_what_the_engine_sees() {
     let domain: Vec<&Address> = pins_outside_the_registry()

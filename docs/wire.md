@@ -4898,7 +4898,8 @@ before it stands (REG-1.11).
 **The seeding check** (REG-1.28 to REG-1.32). Ahead of every open — a
 fresh data dir's genesis and a reopen alike — the daemon runs three arms
 over the twelve rows and every other commons row the build holds (the
-engine's pins, the credential types, the deposit class): DISJOINTNESS at
+vocabulary's rows outside the twelve, the mail type, the credential types,
+the engine's pins and the media cell kinds among them): DISJOINTNESS at
 the subtree grain, COMPLETENESS against the kinds' home, and THE COUNT
 against the registry range's five ordinals; a refusal is a genesis that
 does not complete — the daemon does not open, naming the arm — so a served

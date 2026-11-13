@@ -24,10 +24,7 @@
 //! is a form fault.
 
 use skep_address::{Address, Span};
-use skep_arrangement::deposit_class_types;
-use skep_engine::types::{
-    pins_outside_the_registry, t_binding, t_claim, t_endpoint, t_enroll, t_retire,
-};
+use skep_engine::types::{t_binding, t_endpoint};
 use skep_febe::{Disposition, Op};
 use skep_identity::{record_bytes, single_address, Fingerprint, HasIdentity, Inert, PayloadError};
 use skep_links::SlotArg;
@@ -428,22 +425,26 @@ pub fn registry_admission(
 /// Returns the parent's domain as the daemon sees it (REG-1.31).
 ///
 /// It is every commons row the build holds that the registry does not
-/// itself allocate — the engine ledger's class pins outside the registry,
-/// the three credential pins (`3.1`–`3.3`, the engine's own as the World
-/// seats the identity fold, standing beside that ledger's list rather than
-/// in it), and M5's deposit-class members that are no registry row, which
-/// spell the first two a second time. The binding and the endpoint are M5's
-/// third and fourth members and the registry's own rows spelled a second
-/// time — held equal by the suite that sees both spellings, and no foreign
-/// row here.
-fn seeding_domain() -> Vec<Address> {
-    pins_outside_the_registry()
-        .into_iter()
-        .chain([t_enroll(), t_retire(), t_claim()])
-        .cloned()
-        .chain(
-            deposit_class_types().iter().filter(|ty| skep_registry::row_at(ty).is_none()).cloned(),
-        )
+/// itself allocate: the build's one commons table,
+/// [`skep_registry::vocabulary`], less the registry's twelve rows, each
+/// entry borrowed from the table. The table holds the twelve a second time,
+/// at the addresses `rows.rs` spells and under their own names, and holds
+/// each address once (its unit suite), so the filter — equality on a
+/// registry row, [`skep_registry::row_at`] — sets apart that second
+/// spelling and nothing else, as [`skep_registry::seeding_check`]'s
+/// contract asks. The mail type `3.15` (REG-1.31's sharpest non-credential
+/// case), the credential kinds, the engine ledger's class pins and the
+/// media cell kinds `3.88` and `3.89` are rows of the table, so each meets
+/// the arms. A pin a crate spells as a value outside the table — the
+/// ledger's, the credential kinds, M5's deposit-class members outside the
+/// registry, the picture cell's kind — is held by the unit suite beside it
+/// to be an entry of this domain itself, so one moved onto a registry row's
+/// address, which the filter sets apart, fails there.
+fn seeding_domain() -> Vec<&'static Address> {
+    skep_registry::vocabulary()
+        .iter()
+        .map(|d| &d.address)
+        .filter(|a| skep_registry::row_at(a).is_none())
         .collect()
 }
 
@@ -461,11 +462,13 @@ fn seeding_domain() -> Vec<Address> {
 /// that does not complete: no claim, no session and no board record,
 /// nothing written.
 pub fn genesis_seeding_check() -> Result<(), SeedingRefusal> {
-    skep_registry::seeding_check(skep_registry::rows(), &seeding_domain())
+    skep_registry::seeding_check(skep_registry::rows(), seeding_domain())
 }
 
 #[cfg(test)]
 mod tests {
+    use skep_arrangement::deposit_class_types;
+    use skep_engine::types::{pins_outside_the_registry, t_claim, t_enroll, t_retire};
     use skep_febe::Disposition::{Permanent, Reorder};
 
     use super::*;
@@ -516,18 +519,46 @@ mod tests {
 
     /// Checks that the shipped domain passes the seeding check.
     ///
-    /// It holds the eleven class pins outside the registry, the three
-    /// credential pins and M5's two credential members, no registry row — and
-    /// the check over it passes, so a daemon opens.
+    /// The domain is every row of the commons table but the registry's
+    /// twelve, and holds no registry row (REG-1.31); the mail type `3.15` and
+    /// the media cell kinds `3.88` and `3.89`, each read off the table by its
+    /// name, stand in it; and the check over it passes, so a daemon opens
+    /// (REG-1.32).
     #[test]
     fn the_shipped_domain_passes_the_seeding_check() {
         let domain = seeding_domain();
-        assert_eq!(domain.len(), 11 + 3 + 2, "eleven pins, three credential types, M5's two");
+        assert_eq!(
+            domain.len(),
+            skep_registry::vocabulary().len() - skep_registry::rows().len(),
+            "the table's rows less the registry's twelve"
+        );
         assert!(domain.iter().all(|a| skep_registry::row_at(a).is_none()));
-        for c in [t_enroll(), t_retire(), t_claim()] {
-            assert!(domain.contains(c));
+        for (ordinal, name) in [(15, "mail"), (88, "blind-cell"), (89, "picture-cell")] {
+            let row = skep_registry::commons_type(&[ordinal]);
+            assert_eq!(skep_registry::definition_at(&row).map(|d| d.name), Some(name), "{row}");
+            assert!(domain.contains(&&row), "{name} meets the arms");
         }
         assert_eq!(genesis_seeding_check(), Ok(()));
+    }
+
+    /// Checks that every pin spelled outside the table is in the domain.
+    ///
+    /// The engine ledger's pins outside the registry, the three credential
+    /// pins, M5's deposit-class members that are no registry row and the
+    /// picture cell's kind (`skep_media::cell::KIND`) are each an entry of
+    /// the domain itself, not only a row of the table: a pin with no row
+    /// fails here, and so does one moved onto a registry row's address,
+    /// which the domain's filter sets apart (REG-1.30, REG-1.31).
+    #[test]
+    fn every_pin_spelled_outside_the_table_stands_in_the_domain() {
+        let domain = seeding_domain();
+        let picture = crate::codec::wire_address(skep_media::cell::KIND).expect("an address");
+        let mut pins: Vec<&Address> = pins_outside_the_registry().to_vec();
+        pins.extend([t_enroll(), t_retire(), t_claim(), &picture]);
+        pins.extend(deposit_class_types().iter().filter(|ty| skep_registry::row_at(ty).is_none()));
+        for pin in pins {
+            assert!(domain.contains(&pin), "{pin} meets the arms");
+        }
     }
 
     /// Checks every refusal's token and class.

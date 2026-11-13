@@ -35,11 +35,10 @@ use std::collections::BTreeMap;
 use common::*;
 use serde_json::Value;
 use skep_address::{validate, Address, Nat, Tumbler};
-use skep_arrangement::deposit_class_types;
-use skep_engine::types::pins_outside_the_registry;
 use skep_identity::Fingerprint;
 use skep_registry::{
-    row_at, rows, seeding_check, Body, BodyKind, Kind, Row, RowOf, SeedingRefusal, Subtype,
+    row_at, rows, seeding_check, vocabulary, Body, BodyKind, Kind, Row, RowOf, SeedingRefusal,
+    Subtype,
 };
 
 /// The node account's principal and its own key's seed, above every other
@@ -708,8 +707,9 @@ fn a_declared_insert_under_an_unpinned_registry_row_is_refused_at_the_door() {
 
 /// REG-1.28 to REG-1.32 — THE SEEDING CHECK as the daemon's genesis hand
 /// runs it: the shipped lists pass over the domain the daemon reads — the
-/// engine's pins outside the registry, the three credential constants and
-/// M5's deposit-class members that are no registry row — so every board in
+/// commons table (`vocabulary`) less the registry's twelve rows, set apart
+/// by equality (`row_at`), the mail type, the credential kinds, the
+/// engine's pins and the media cell kinds among it — so every board in
 /// this suite is a genesis that completed; and each arm refuses a list this
 /// cell builds, through the check function: a foreign row placed inside the
 /// policy link's kind (disjointness), the LIFTED row dropped
@@ -723,13 +723,13 @@ fn the_seeding_check_passes_the_shipped_lists_and_refuses_each_arm_on_a_mutated_
     let sd = spawn_enforcing(dir.path());
     assert!(claimed(sd.port()), "the open ran the check and the genesis completed");
     assert_enforcing(sd.port());
-    let domain: Vec<Address> = pins_outside_the_registry()
-        .into_iter()
-        .cloned()
-        .chain([T_ENROLL, T_RETIRE, T_CLAIM].iter().map(|c| addr(c)))
-        .chain(deposit_class_types().iter().filter(|ty| row_at(ty).is_none()).cloned())
-        .collect();
-    assert_eq!(domain.len(), 11 + 3 + 2, "eleven pins, three credential types, M5's two credential members");
+    let domain: Vec<Address> =
+        vocabulary().iter().map(|d| d.address.clone()).filter(|a| row_at(a).is_none()).collect();
+    assert_eq!(
+        domain.len(),
+        vocabulary().len() - rows().len(),
+        "the commons table less the registry's twelve"
+    );
     assert_eq!(seeding_check(rows(), &domain), Ok(()));
 
     let mut collided = domain.clone();

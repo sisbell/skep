@@ -13,18 +13,19 @@
 //! Beneath it, two children, each an `impl M3State` that sees this module's
 //! private items the way a child does, so nothing here is widened for them:
 //!
-//! * [`mint`] — §A: the lock keys a transaction holds, the six mints, and
+//! * [`mint`] — §A: the lock keys a transaction holds, the seven mints, and
 //!   the two peeks, each a mint without its record.
-//! * [`query`] — §C: every other query but the opening slots, which `ns`
-//!   builds — entity membership (§2), the two chain-end reads that read a
+//! * [`query`] — §C: every other query but the addresses `ns` builds (the
+//!   opening slots and the mailbox's) — entity membership (§2), the two chain-end reads that read a
 //!   frontier directly, the publication reads, the principal registry and
 //!   the ω resolver (§5), and `prefix_contains`.
 //!
 //! The unit tests for the slice and both children are `state/tests.rs`.
 
-// §A: the lock keys a transaction holds, the six mints, the two peeks.
+// §A: the lock keys a transaction holds, the seven mints, the two peeks.
 mod mint;
-// §C: every other query but the opening slots, which `ns` builds —
+// §C: every other query but the addresses `ns` builds (the opening slots
+// and the mailbox's) —
 // membership, two chain-end reads, the publication reads, the principal
 // registry and ω.
 mod query;
@@ -605,8 +606,9 @@ impl M3State {
     /// mint's record is of the first kind wherever it is staged as
     /// [`M3Rec::Allocate`] requires — against the working state the mint
     /// read: a mint extends a registered parent and issues exactly its
-    /// chain's next address in that state, past the floor. Genesis's seed
-    /// holds three of the second kind, the system account's. That the parent
+    /// chain's next address in that state, past the floor — save the
+    /// mailbox's mint, whose record is of the second kind, at slot 2.
+    /// Genesis's seed holds three of the second kind, the system account's. That the parent
     /// is registered (P8) is the mints' gate and no part of this domain: an
     /// `Allocate` under an unregistered parent folds like any other, and that
     /// is the state [`M3State::has_documents`] and [`M3State::latest_version`]

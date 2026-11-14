@@ -28,12 +28,14 @@ use skep_address::GateViolation;
 /// `Gate` fires only if a mint's own structural gate regresses: an M3 defect,
 /// never a store condition.
 ///
-/// The sixth mint, the account chain's, is crate-private and answers `Option`
+/// Two more mints are crate-private. The account chain's answers `Option`
 /// rather than adding a leaf here: its callers are `delegate`, which already
 /// has a typed rejection for its one refusal, and the peek
 /// `next_account_prefix`, which answers the `None` as its own, so a fifth
 /// variant would be a permanently dead arm in M5's, M7's and M10's
-/// vocabularies.
+/// vocabularies. The mailbox's, which `create_well_known_document` calls,
+/// keeps `mint_document`'s gate and answers its leaf, `NotAnAccount`, so it
+/// adds none either; it never answers `Gate`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MintError {
     /// The home is not a registered Document (P6/C2/L1a).
@@ -44,9 +46,10 @@ pub enum MintError {
     ///
     /// It covers both an unregistered address and a registered non-document.
     SourceNotRegistered,
-    /// `mint_document`: the target is not a registered Account (P8/CND.pre).
+    /// A document mint's target is not a registered Account (P8/CND.pre).
     ///
-    /// It covers both unregistered and non-account.
+    /// `mint_document` earns it, and the mailbox's mint by the same gate. It
+    /// covers both unregistered and non-account.
     NotAnAccount,
     /// M1's TA5a inc gate refused (B6).
     ///
@@ -65,7 +68,7 @@ impl fmt::Display for MintError {
                 "mint_version: source is not a registered Document (V-WF; covers unregistered and non-document alike)"
             }
             MintError::NotAnAccount => {
-                "mint_document: target is not a registered Account (P8; covers unregistered and non-account alike)"
+                "document mint: target is not a registered Account (P8; covers unregistered and non-account alike)"
             }
             // This layer only — M1's own sentence is the `source`, so a
             // reporter walking the chain prints it once.
@@ -83,35 +86,40 @@ impl Error for MintError {
     }
 }
 
-/// A document baptism's rejection, shared by the two ops that create one.
+/// A document baptism's rejection, shared by the three ops that create one.
 ///
-/// They are `create_new_document` and `fork` (§B). "Not an account" and "not
-/// registered" both surface via `Mint(MintError::NotAnAccount)`.
+/// They are `create_new_document`, `fork` and `create_well_known_document`
+/// (§B). "Not an account" and "not registered" both surface via
+/// `Mint(MintError::NotAnAccount)`.
 ///
-/// The variants are declared in the pinned order both ops evaluate them:
+/// The variants are declared in the pinned order all three evaluate them:
 /// `NotOwner` before `Mint`. ω is read first and the mint's structural gate
 /// only after, so a caller who is not the effective owner of the target
 /// learns nothing about whether the target exists — the same probe returns
 /// `NotOwner` to a stranger and `Mint(NotAnAccount)` to ω. `fork` inherits
-/// the order by reducing to `create_new_document`.
+/// the order by reducing to `create_new_document`, and
+/// `create_well_known_document` keeps it in a transaction of its own, where
+/// the stranger learns nothing of the account's mailbox either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CreateDocumentError {
     /// Refused for want of effective ownership ω (O5).
     ///
     /// Authorization is by ω (longest match), never bare prefix containment.
-    /// The two producers refuse for two different reasons and the message
-    /// names both: from `create_new_document`, ω(`account`) is absent or names
-    /// another principal; from `fork`, which has no target address, the
-    /// caller's id names no principal at all, so it is the effective owner of
-    /// nothing — and the remedy there is an account, not another principal's
-    /// permission.
+    /// The producers refuse for two different reasons and the message names
+    /// both: from `create_new_document` and `create_well_known_document`,
+    /// ω(`account`) is absent or names another principal; from `fork`, which
+    /// has no target address, the caller's id names no principal at all, so
+    /// it is the effective owner of nothing — and the remedy there is an
+    /// account, not another principal's permission.
     NotOwner,
     /// The op's mint failed structurally.
     ///
-    /// Both ops mint through `mint_document`, so only two [`MintError`] leaves
-    /// can come out of it: `NotAnAccount`, and `Gate`, which no state reaches
-    /// (see [`MintError`]) yet the type still carries. A caller matching on
-    /// this owes `HomeNotRegistered` and `SourceNotRegistered` no handling:
+    /// `create_new_document` and `fork` mint through `mint_document`, and
+    /// `create_well_known_document` through the mailbox's mint, which keeps
+    /// that mint's gate, so only two [`MintError`] leaves can come out of
+    /// it: `NotAnAccount`, and `Gate`, which no state reaches (see
+    /// [`MintError`]) yet the type still carries. A caller matching on this
+    /// owes `HomeNotRegistered` and `SourceNotRegistered` no handling:
     /// neither can arrive. Its message names this layer only; the mint's
     /// refusal is its `source`.
     Mint(MintError),

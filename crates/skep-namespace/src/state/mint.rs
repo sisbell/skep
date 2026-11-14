@@ -1,21 +1,24 @@
-//! §A, beneath [`M3State`]: the lock keys, the six mints and the two peeks.
+//! §A, beneath [`M3State`]: the lock keys, the seven mints and the two peeks.
 //!
-//! The lock keys are those a transaction holds; the six mints read their
-//! frontiers — five single mints and the content chain's range mint; and the
-//! two peeks — [`M3State::next_account_prefix`] and
-//! [`M3State::next_content_address`] — are each its chain's mint without the
-//! record, kept beside the mints they call. An `impl M3State` child of
-//! `state`: it reaches the frontier arithmetic (`next_in`) the way a child
-//! does, and keeps `mint_on`, the mint behind the five single mints, private
-//! to itself, so no other module reaches that mint except through one of the
-//! gates.
+//! The lock keys are those a transaction holds; six of the mints read their
+//! frontiers — five single mints and the content chain's range mint — and
+//! the seventh, the mailbox's, reads none: it places a document at a fixed
+//! slot of its account's reserved block; and the two peeks —
+//! [`M3State::next_account_prefix`] and [`M3State::next_content_address`] —
+//! are each its chain's mint without the record, kept beside the mints they
+//! call. An `impl M3State` child of `state`: it reaches the frontier
+//! arithmetic (`next_in`) the way a child does, and keeps `mint_on`, the
+//! mint behind the five single mints, private to itself, so no other module
+//! reaches that mint except through one of the gates.
 
 use skep_address::{Address, GateViolation, Level, Nat};
 use skep_kernel::{LockKey, Space};
 
 use super::{M3State, MAX_PRINCIPAL_COMPONENTS, NO_PUBLICATION_STATE};
 use crate::error::MintError;
-use crate::ns::{account_ns, content_ns, document_ns, link_ns, ns_lock_key, version_ns, NsKey};
+use crate::ns::{
+    account_ns, content_ns, document_ns, link_ns, mailbox_address, ns_lock_key, version_ns, NsKey,
+};
 use crate::record::{Allocation, M3Rec, RangeAllocation};
 
 // ---------------------------------------------------------------------------
@@ -81,7 +84,11 @@ impl M3State {
     ///
     /// It pairs with [`M3State::mint_document`]`(account, published)` — take
     /// it before the closure; the mint inside reads this key's frontier, and
-    /// the [`M3Rec`] you stage advances it.
+    /// the [`M3Rec`] you stage advances it. The mailbox's mint
+    /// (`mint_mailbox`) pairs with it too, though its record advances no
+    /// frontier: the account's well-known slots lie on this chain, so this is
+    /// the key under which the read of a slot and the record that fills it
+    /// are one critical section.
     ///
     /// Same shape as [`M3State::version_lock_key`]: total on every
     /// [`Address`], T4-valid whatever tier arrives because the anchor is the
@@ -115,11 +122,12 @@ impl M3State {
     /// against concurrent same-id delegations — the id race is
     /// cross-namespace (same `new_id`, different `new_prefix`), which no
     /// per-namespace key can serialize. Held defensively by
-    /// `create_new_document`, whose ω read is stale-safe for the reason
-    /// stated beside that read (§6/§8). Redundant under M2 v1's global
-    /// applier lock. `pub(crate)` because only this crate's ops take it: a
-    /// store that took it as well would, under a per-key M2, serialize itself
-    /// against every delegation in the docuverse.
+    /// `create_new_document` and `create_well_known_document`, whose ω reads
+    /// are stale-safe for the reason stated beside the first (§6/§8).
+    /// Redundant under M2 v1's global applier lock. `pub(crate)` because only
+    /// this crate's ops take it: a store that took it as well would, under a
+    /// per-key M2, serialize itself against every delegation in the
+    /// docuverse.
     pub(crate) fn principals_lock_key() -> LockKey {
         LockKey::new(Space::Principals, &[])
     }
@@ -142,14 +150,16 @@ impl M3State {
 }
 
 // ---------------------------------------------------------------------------
-// §A The six pure mints: five single mints covering the six chain families,
-// since `mint_account` serves both account-tier families (`A_account(N)`
-// under a node and the sub-account `(A, 1)` under an account, whose `g` the
-// chain-family rule picks), and the content chain's range mint. So every
-// address M3 originates past genesis's fixed seed is minted here. Five are
-// public and fold into M5/M7 composites (M2 contract 3); the sixth,
-// `mint_account`, is `pub(crate)` because its callers — `delegate` and the
-// account peek — live in this crate.
+// §A The seven pure mints: five single mints covering the six chain
+// families, since `mint_account` serves both account-tier families
+// (`A_account(N)` under a node and the sub-account `(A, 1)` under an account,
+// whose `g` the chain-family rule picks), the content chain's range mint,
+// and the mailbox's mint, which reads no frontier: it places a document at
+// its account's well-known slot 2. So every address M3 originates past
+// genesis's fixed seed is minted here. Five are public and fold into M5/M7
+// composites (M2 contract 3); two are `pub(crate)` because their callers
+// live in this crate — `mint_account`, called by `delegate` and the account
+// peek, and `mint_mailbox`, called by `create_well_known_document`.
 //
 // Each is a query: called on a transaction's working state, it checks one
 // structural precondition and hands back the next address on its chain
@@ -161,7 +171,10 @@ impl M3State {
 // the caller has already destructured. "An address is never reused" is M3's
 // to keep *given* the caller's half; what dropping the record, or staging it
 // anywhere else, costs is stated on `M3Rec::Allocate`, the record the
-// caller stages.
+// caller stages. The mailbox's mint is a query of that shape with two
+// differences its card states: the address it hands back is fixed, no
+// chain's next, and its record is staged only where that slot holds no
+// document.
 // ---------------------------------------------------------------------------
 
 impl M3State {
@@ -386,6 +399,56 @@ impl M3State {
             self.mint_on(&account_ns(parent), NO_PUBLICATION_STATE)
                 .expect("a registered node/account anchor with g ≤ 2 passes TA5a"),
         )
+    }
+
+    /// Returns the address of `account`'s mailbox, with its record.
+    ///
+    /// The address is the account's well-known slot 2, `A·0·2`
+    /// ([`mailbox_address`]): a named slot of its document chain's reserved
+    /// block (the mailbox design §2), fixed by the account and read off no
+    /// frontier, so this is the one mint whose answer is no chain's next.
+    /// The record is an [`M3Rec::Allocate`] there, stamped private: a
+    /// mailbox is a private document, and the bit is this mint's own, where
+    /// every other document mint stamps the one its caller resolved. Folded,
+    /// the record registers the document, writes its bit and its position,
+    /// and moves no count ([`M3State::apply_m3`]), so the account's counter
+    /// hands out what it would have handed out.
+    /// [`crate::Namespace::create_well_known_document`] is the op that
+    /// stages it.
+    ///
+    /// It answers the same pair whether or not the slot holds a document,
+    /// which makes the caller's half its own. Hold
+    /// [`M3State::document_lock_key`]`(account)`, call this on that
+    /// transaction's working state, and stage the record there only where
+    /// the address is no registered document
+    /// ([`M3State::is_registered_document`]). Staged at a slot that holds
+    /// one, the record is outside the fold's totality domain and the fold
+    /// fail-stops on it, on every build: a slot is filled once. `pub(crate)`
+    /// for the reason [`M3State::mint_account`] is: its one caller lives in
+    /// this crate, and keeps both halves.
+    ///
+    /// # Errors
+    ///
+    /// `NotAnAccount` where `account` is no registered account, an
+    /// unregistered address and a registered non-account alike:
+    /// [`M3State::mint_document`]'s gate (P8). Never `Gate`: the address is
+    /// built off a registered account's anchor, which the inc gate admits.
+    pub(crate) fn mint_mailbox(&self, account: &Address) -> Result<(Address, M3Rec), MintError> {
+        if !self.is_registered_account(account) {
+            // P8, as `mint_document` gates (covers unregistered and
+            // non-account).
+            return Err(MintError::NotAnAccount);
+        }
+        let addr = mailbox_address(account)
+            .expect("a registered account is account-tier, and an account anchors a document chain");
+        Ok((
+            addr.clone(),
+            M3Rec::Allocate(Allocation {
+                addr,
+                // Private, by this mint's own word: the mailbox design §2.
+                published: false,
+            }),
+        ))
     }
 }
 

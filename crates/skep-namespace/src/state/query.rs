@@ -1,8 +1,8 @@
 //! §C, beneath [`M3State`]: the queries — pure reads off any M2 snapshot.
 //!
 //! They write nothing, and all of them live here but the two peeks, which
-//! call a mint and so live in `mint`, and the two slots a chain opens at,
-//! which `ns` builds. Entity membership (§2), the two chain-end reads that
+//! call a mint and so live in `mint`, and the addresses `ns` builds: the
+//! two slots a chain opens at, and an account's mailbox. Entity membership (§2), the two chain-end reads that
 //! read a frontier directly (`has_documents`, `latest_version`), the
 //! publication map's point read and its walk, the principal registry's
 //! reads, its walk and the ω resolver (§5), and [`prefix_contains`], which

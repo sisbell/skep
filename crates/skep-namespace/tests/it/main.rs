@@ -19,6 +19,7 @@ mod delegate;
 mod genesis;
 mod ghost;
 mod handle;
+mod mailbox;
 mod ownership;
 mod publication;
 mod recovery;

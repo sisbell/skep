@@ -115,7 +115,7 @@ pub const SYSTEM_PRINCIPAL: PrincipalId = PrincipalId(9_000_000_000_000_000);
 /// rewrites a decoded one's address reaches no address the decode could not
 /// have carried.
 ///
-/// So the mints, the four ops and genesis are this record's producers: a
+/// So the mints, the five ops and genesis are this record's producers: a
 /// composite in another crate stages the record a mint returned exactly as
 /// the mint built it, and the five public mints are the only constructors a
 /// foreign crate can *name* that choose what a record carries — it can name
@@ -277,10 +277,13 @@ pub enum M3Rec {
     /// with: frontier key and lock key are one key. One `Allocate` moves
     /// none: a record at a named slot of a document chain's reserved block,
     /// document 2, 3 or 4 of an account, places a document there and leaves
-    /// the chain's count where it stood. No mint returns such a record — the
-    /// counter steps over the block ([`crate::FIRST_ORDINARY_DOCUMENT`]) —
-    /// and genesis's seed holds the system account's three; the fold admits
-    /// one where the slot holds no document and refuses a second
+    /// the chain's count where it stood. No mint that reads a frontier
+    /// returns such a record — the counter steps over the block
+    /// ([`crate::FIRST_ORDINARY_DOCUMENT`]). It has two producers: genesis's
+    /// seed, which holds the system account's three, and the mailbox's mint,
+    /// whose record [`crate::Namespace::create_well_known_document`] stages
+    /// at an account's document [`crate::MAILBOX_SLOT`]. The fold admits one
+    /// where the slot holds no document and refuses a second
     /// ([`M3State::apply_m3`]).
     ///
     /// **Where it may be staged.** This is the caller's half of every mint, and
@@ -306,6 +309,16 @@ pub enum M3Rec {
     /// one — and [`M3State::is_allocated`]'s permanent `true` holds on its
     /// chain. A stale record whose chain has not moved still carries the next
     /// ordinal, and folds as the mint it is.
+    ///
+    /// The one mint that half does not bind is the mailbox's, whose record is
+    /// a named slot's: its address is fixed and no frontier's next, so its
+    /// caller's half is its own — in the transaction whose working state the
+    /// mint was called on, under the account's document-chain key, and only
+    /// where the slot holds no document. Dropped, it leaves the slot empty
+    /// for a later call to fill. Staged where the slot holds a document, it
+    /// is refused as a stale record is — the fold's once rule panics at the
+    /// push, on every build — so no second record touches the document that
+    /// stands there.
     ///
     /// An account's `Allocate` owes one record more, and the fold does not
     /// check it: its principal's [`M3Rec::RegisterPrincipal`], in the same

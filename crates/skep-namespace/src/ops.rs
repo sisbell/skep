@@ -7,7 +7,10 @@
 //! `stg.working().m3()`, stages its [`M3Rec`] deltas lifted via the
 //! `W::Record: From<M3Rec>` bound, and returns `(Address, Seq)` — the new
 //! address plus `transact`'s committed `last_seq` (the linearization
-//! coordinate) — only after commit (commit-before-acknowledge).
+//! coordinate) — only after commit (commit-before-acknowledge). One op can
+//! find its work done: `create_well_known_document`, called where its slot
+//! already holds a document, stages nothing and returns that document's
+//! address with the committed position it read.
 
 use std::fmt;
 
@@ -24,9 +27,11 @@ use crate::HasM3;
 /// M3's transact-driving op handle over M2 (§B).
 ///
 /// It is a thin borrow of the engine's kernel and, on an attested handle, of
-/// the attestation its two document mints commit under. The pure mints and
-/// queries live on [`M3State`] (reached through [`HasM3`]); this type owns
-/// only the four entity operations M10 dispatches.
+/// the attestation `create_new_document` and `fork` commit under. The pure
+/// mints and queries live on [`M3State`] (reached through [`HasM3`]); this
+/// type owns only the five entity operations. M10 dispatches four of them;
+/// the fifth, [`Namespace::create_well_known_document`], has no wire
+/// operation, so M10 does not dispatch it.
 ///
 /// Two facts each op inherits from M2's `transact`, written here because they
 /// bind its callers.
@@ -49,7 +54,7 @@ use crate::HasM3;
 /// and `Durability`.
 pub struct Namespace<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
-    /// The attestation its two document mints commit under (signed ops).
+    /// The attestation two of its document mints commit under (signed ops).
     ///
     /// They are [`Namespace::create_new_document`] and [`Namespace::fork`],
     /// which opens that same transaction — the two ops of this surface in
@@ -62,8 +67,10 @@ pub struct Namespace<'k, W: WorldState> {
     /// borrow, so the handle stays `Copy` and the value cannot outlive the
     /// caller that owns it; that an attested handle serves one call is its
     /// producer's obligation, which [`Namespace::attested`] states.
-    /// `delegate` and `register_node` lie outside the checked set and take
-    /// the plain arm whatever this field holds.
+    /// `delegate`, `register_node` and `create_well_known_document` lie
+    /// outside the checked set and take the plain arm whatever this field
+    /// holds — the last mints a document too, an account's mailbox, but a
+    /// private one, and a private mint signs nothing.
     attest: Option<&'k Attestation>,
 }
 
@@ -75,7 +82,7 @@ impl<'k, W: WorldState> Namespace<'k, W> {
         Namespace::attested(kernel, None)
     }
 
-    /// Returns a handle whose two document mints commit under `attest`.
+    /// Returns a handle that commits its two checked-set mints under `attest`.
     ///
     /// They are `create_new_document` and `fork`: this is the attested
     /// constructor (signed ops; the attestation rides the handle, as M5's
@@ -106,11 +113,11 @@ impl<'k, W: WorldState> Namespace<'k, W> {
 /// That is the kernel it borrows, whose own `Debug` reports the coordinate,
 /// the poison flag, the checkpoint-due flag and the configuration, lock-free,
 /// and nothing of the world; and whether it carries an attestation — the one
-/// fact about the handle that changes what its two document mints commit, as
-/// M5's `Vstream` prints its own — but never the attestation's bytes, a blob
-/// as wide as M2's `MAX_SIG_BYTES` that is no thing to print into a
-/// diagnostic. Written out because a derive would also bound the impl on
-/// `W: Debug`, which no `WorldState` owes.
+/// fact about the handle that changes what `create_new_document` and `fork`
+/// commit, as M5's `Vstream` prints its own — but never the attestation's
+/// bytes, a blob as wide as M2's `MAX_SIG_BYTES` that is no thing to print
+/// into a diagnostic. Written out because a derive would also bound the impl
+/// on `W: Debug`, which no `WorldState` owes.
 impl<W: WorldState> fmt::Debug for Namespace<'_, W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Namespace")
@@ -223,6 +230,106 @@ where
             // mint is private (PUB-1.1); an explicit flag is honored as sent.
             let published = published.unwrap_or_else(|| !m3.has_documents(account));
             let (addr, rec) = m3.mint_document(account, published)?;
+            stg.push(rec.into());
+            Ok(addr)
+        })
+    }
+
+    /// Mints `account`'s mailbox at its well-known slot, once.
+    ///
+    /// The mailbox is the account's document [`crate::MAILBOX_SLOT`],
+    /// `A·0·2` ([`crate::mailbox_address`]): a named slot of the reserved
+    /// block, which the account's counter never hands out, born private (the
+    /// mailbox design §2, §3). It mints the mailbox alone and takes no slot
+    /// name; a slot name is an argument another well-known document's
+    /// creation adds beside `account`. Returns the mailbox's address and a
+    /// `Seq`, only after commit (commit-before-acknowledge).
+    ///
+    /// **Once.** Where the slot already holds a document the op answers that
+    /// document's address and stages nothing: no record is journaled, no
+    /// position is drawn, and the `Seq` beside the address is the committed
+    /// position the call read (M2's zero-step answer), never before the
+    /// mint's. So a second call — a retry whose acknowledgement was lost,
+    /// another device, the loser of a race — is answered with the address
+    /// the first was. The read of the slot and the mint are one critical
+    /// section under the account's document-chain key, so two racing calls
+    /// stage one record. The fold refuses a second record at a filled slot,
+    /// on every build ([`M3State::apply_m3`]), and that read is what keeps a
+    /// repeated call from staging one.
+    ///
+    /// **No count moves.** The record is an ordinary [`M3Rec::Allocate`] at
+    /// the slot: it registers the mailbox, writes its bit and its position,
+    /// and leaves the account's counter where it stood, so the account's
+    /// next [`Namespace::create_new_document`] answers the number it would
+    /// have answered. Nor does the op ask for the account's doc 1: on an
+    /// account that holds no document it mints the slot,
+    /// [`M3State::has_documents`] still answers `false`, and the account's
+    /// next flagless create is still its doc 1, born published (PUB-8.21).
+    /// Refusing a mailbox ahead of the home page (the mailbox design §3) is
+    /// the daemon's door's, not this transaction's, as the explicit-`false`
+    /// first mint is (PUB-8.20).
+    ///
+    /// **The system account.** The op holds no guard for it. Its document 2
+    /// is the head document, which genesis seeds
+    /// ([`crate::head_document`]), so called for
+    /// [`crate::system_account`] by its principal the op finds the slot
+    /// filled, answers the head document's address and stages nothing. That
+    /// document is no mailbox — the system account has none (the mailbox
+    /// design §2) — and the refusal is the daemon's door's: a credential
+    /// refusal, made before any store is reached.
+    ///
+    /// **The plain arm.** The transaction commits with its marker's
+    /// signature slot empty whatever the handle carries: a private mint is
+    /// outside the daemon's checked set, as `delegate` and `register_node`
+    /// are.
+    ///
+    /// # Errors
+    ///
+    /// [`CreateDocumentError`], in the order and for the reasons
+    /// [`Namespace::create_new_document`] gives. `NotOwner` if ω(`account`)
+    /// is absent or names another principal: judged first, inside the op's
+    /// one transaction, so no delegation of `account` lands between the
+    /// authorization and the mint, and a caller who is not the effective
+    /// owner learns nothing from the refusal — not whether the account is
+    /// registered, nor whether its mailbox stands. With auth passed,
+    /// `Mint(MintError::NotAnAccount)` where `account` is no registered
+    /// account, an unregistered address and a registered non-account alike
+    /// (P8). Both come back as `TxnError::Rejected`; the kernel's own
+    /// failures come back as `transact` returns them, in the order
+    /// [`Namespace`] states.
+    pub fn create_well_known_document(
+        &self,
+        caller: PrincipalId,
+        account: &Address,
+    ) -> Result<(Address, Seq), TxnError<CreateDocumentError>> {
+        // The account's document-chain key, the chain its well-known slots
+        // lie on, and the principals key beside it, as `create_new_document`
+        // holds them and for its reasons.
+        let keys = [
+            M3State::document_lock_key(account),
+            M3State::principals_lock_key(),
+        ];
+        // The plain arm: this mint is private, and the handle's attestation,
+        // where it carries one, signs a mint born published.
+        self.kernel.transact(&keys, |stg| {
+            // ω first, off the base, as `create_new_document` reads it and
+            // stale-safe for the reason stated there: nothing is staged
+            // ahead of the mint, so the base is the state the mint's account
+            // gate reads. First, too, so a caller who is not ω is refused
+            // before the slot is read.
+            if !stg.base().m3().is_effective_owner(caller, account) {
+                return Err(CreateDocumentError::NotOwner);
+            }
+            let m3 = stg.working().m3();
+            let (addr, rec) = m3.mint_mailbox(account)?;
+            // The incumbent, off working state under the held chain key: a
+            // slot that holds a document is answered as it stands and
+            // nothing is pushed, which makes this M2's zero-step
+            // transaction. The mint's record is staged only where the slot
+            // is empty — the fold fail-stops on a second record there.
+            if m3.is_registered_document(&addr) {
+                return Ok(addr);
+            }
             stg.push(rec.into());
             Ok(addr)
         })

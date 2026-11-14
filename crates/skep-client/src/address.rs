@@ -77,7 +77,10 @@ pub const FIRST_ORDINARY_DOCUMENT: u64 = 64;
 /// The well-known slot of an account's mailbox: document 2.
 ///
 /// The mailbox design §2: every account but the system account has one
-/// mailbox, at this document number.
+/// mailbox, at this document number. It is `skep-namespace`'s
+/// `MAILBOX_SLOT`, reproduced: the board mints an account's mailbox at the
+/// namespace's constant (`skep-namespace/src/ns.rs`), which this crate does
+/// not link, and its suite holds the two equal.
 pub const MAILBOX_SLOT: u64 = 2;
 
 /// Returns an account's mailbox at its computable address.
@@ -227,6 +230,23 @@ mod tests {
     fn the_first_ordinary_document_is_the_namespaces_own() {
         assert_eq!(FIRST_ORDINARY_DOCUMENT, u64::from(skep_namespace::FIRST_ORDINARY_DOCUMENT));
         assert!(1 < MAILBOX_SLOT && MAILBOX_SLOT < FIRST_ORDINARY_DOCUMENT);
+    }
+
+    /// The mailbox's slot is the namespace's own constant, held.
+    ///
+    /// Where either number moves alone, this fails and names the other, so
+    /// the address this crate computes for an account's mailbox is the one
+    /// the board mints it at: the namespace's own address for the slot, in
+    /// the wire's spelling, for an account, an agent's account and the
+    /// system account alike.
+    #[test]
+    fn the_mailbox_slot_is_the_namespaces_own() {
+        assert_eq!(MAILBOX_SLOT, u64::from(skep_namespace::MAILBOX_SLOT));
+        for account in ["1.0.5", "1.3.0.5", "1.0.5.1.1", "1.1.0.1"] {
+            let parsed = parse_address(account).expect("an account's address");
+            let minted = skep_namespace::mailbox_address(&parsed).expect("an account has a mailbox slot");
+            assert_eq!(mailbox_of(account), minted.to_string(), "{account}");
+        }
     }
 
     /// The namespace's depth admits its last component and refuses one past.

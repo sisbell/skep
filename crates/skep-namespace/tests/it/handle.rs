@@ -1,4 +1,5 @@
-//! §B the `Namespace` handle, across its four ops: what the type's own doc
+//! §B the `Namespace` handle, across its five ops (the fifth, the mailbox's
+//! mint, has its own cells in `mailbox.rs`): what the type's own doc
 //! and impls promise rather than any one op's — the transaction each op
 //! opens, the refusals it decides before opening it and those it decides
 //! inside, the nested call its caller must never make, and which of those

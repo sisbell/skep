@@ -68,20 +68,24 @@
 //!   past the slots the ghost region reserves (below). And an account's
 //!   document chain issues its doc 1 and then document
 //!   [`FIRST_ORDINARY_DOCUMENT`] and on: the numbers between are the
-//!   reserved block of well-known slots, in every account, which no mint
-//!   issues. A named slot of the block — document 2, 3 or 4 — holds a
-//!   document only where a record placed one there, once, and such a record
-//!   moves no count; the system account's three are in genesis's seed. Two
-//!   of the chains issue elements — a
-//!   document's content chain and its link chain — and no third does: the
-//!   allocator refuses to issue any other element, so no element in any
-//!   other subspace is ever minted, and subspace 3, where type names are
-//!   spelled, stays unallocated ([`M3State::is_allocated`]).
+//!   reserved block of well-known slots, in every account, which the
+//!   counter never issues. A named slot of the block — document 2, 3 or 4 —
+//!   holds a document only where a record placed one there, once, and such
+//!   a record moves no count; the system account's three are in genesis's
+//!   seed, and an account's mailbox, its document [`MAILBOX_SLOT`], is
+//!   placed by [`Namespace::create_well_known_document`]. Two of the chains
+//!   issue elements — a document's content chain and its link chain — and
+//!   no third does: the allocator refuses to issue any other element, so no
+//!   element in any other subspace is ever minted, and subspace 3, where
+//!   type names are spelled, stays unallocated ([`M3State::is_allocated`]).
 //! * **Entity operations** (§B) — the transact-driving [`Namespace`]
 //!   handle: [`Namespace::create_new_document`] \[ASN-0103\],
 //!   [`Namespace::delegate`] \[ASN-0042 O15/O17c\],
-//!   [`Namespace::register_node`] \[ASN-0047 NodeBaptism\], and
-//!   [`Namespace::fork`] \[ASN-0042 O10, account-tier case\].
+//!   [`Namespace::register_node`] \[ASN-0047 NodeBaptism\],
+//!   [`Namespace::fork`] \[ASN-0042 O10, account-tier case\], and
+//!   [`Namespace::create_well_known_document`], which mints an account's
+//!   mailbox at its well-known slot, private, once \[the mailbox design
+//!   §3\].
 //! * **Queries** (§C) — pure reads off any M2 snapshot: allocation and
 //!   entity membership (exact chain membership, §2), the ω authorization
 //!   predicate [`M3State::is_effective_owner`] beside the three readers of
@@ -100,11 +104,13 @@
 //!   [`M3State::published`] and its enumeration [`M3State::documents`] —
 //!   the engine's one definition of a document's publication state, the
 //!   bit its own allocation record journaled \[PUB-7.8, PUB-7.10;
-//!   PUB-kickoff D1\] — plus three registry-free address answers:
+//!   PUB-kickoff D1\] — plus four registry-free address answers:
 //!   [`prefix_contains`], which answers where an address *sits* and never
-//!   who may write it, and the two slots a chain opens at,
+//!   who may write it; the two slots a chain opens at,
 //!   [`first_document_address`] for an account's document chain and
-//!   [`first_version_address`] for a document's version chain.
+//!   [`first_version_address`] for a document's version chain; and
+//!   [`mailbox_address`], the well-known slot an account's mailbox
+//!   occupies, minted or not.
 //! * **The ghost region** — the first [`GHOST_POSITIONS`] content addresses
 //!   of [`ghost_home_document`], spelled by [`ghost_position`]: five ghost
 //!   tumblers that are compiled format constants, which M7's
@@ -129,8 +135,10 @@
 //! * the request lifecycle and session→principal binding (M10), including
 //!   exactly-once/idempotency for every retried write — a retried
 //!   [`Namespace::create_new_document`] or [`Namespace::fork`] yields a second
-//!   empty document, while a retried [`Namespace::delegate`] or
-//!   [`Namespace::register_node`] is refused; each op's doc says which —
+//!   empty document, a retried [`Namespace::delegate`] or
+//!   [`Namespace::register_node`] is refused, and a retried
+//!   [`Namespace::create_well_known_document`] is answered with the mailbox
+//!   the first attempt minted and stages nothing; each op's doc says which —
 //!   `fork`'s through the op it reduces to — and, where a retry is refused,
 //!   how to tell it from a lost race or why that need not be told;
 //! * address algebra (M1 — M3 holds none of its own) and
@@ -142,8 +150,8 @@
 //!   two carve-outs are compiled format rather than state, the same on
 //!   every board: the ghost region above, whose skipped ordinals are never
 //!   issued and never members; and the reserved block of every document
-//!   chain, whose numbers are never issued, and of which only a named slot
-//!   a record filled is a member;
+//!   chain, whose numbers the counter never issues, and of which only a
+//!   named slot a record filled is a member;
 //! * a publication transition — none exists, in either direction: a
 //!   document's publication state is fixed at its mint and journaled on its
 //!   own allocation record, and no M3 function changes it (PUB-1.9:
@@ -173,7 +181,8 @@
 mod error;
 // Namespaces — ASN-0040's `(p, d)`, spelled `(anchor, g)` here: the frontier
 // and lock key, built only here; the chain-family rule; a chain's slots by
-// ordinal; its opening slots; a document chain's reserved block.
+// ordinal; its opening slots; a document chain's reserved block, and the
+// mailbox's slot in it.
 mod ns;
 // The ghost region: the five reserved type addresses M7 reads, and the floor
 // that keeps the allocator past them.
@@ -184,16 +193,19 @@ mod ghost;
 mod record;
 // M3's slice: `M3State`, genesis and the fold, the frontier arithmetic and
 // the two registry caps; beneath it `state/mint.rs` (§A: the lock keys, the
-// six mints and the two peeks, each a mint without its record) and
-// `state/query.rs` (§C: every other query but the opening slots, which `ns`
-// builds).
+// seven mints and the two peeks, each a mint without its record) and
+// `state/query.rs` (§C: every other query but the opening slots and the
+// mailbox's slot, which `ns` builds).
 mod state;
-// The `Namespace` handle: the four entity operations, each one transaction.
+// The `Namespace` handle: the five entity operations, each one transaction.
 mod ops;
 
 pub use error::{CreateDocumentError, DelegateError, MintError, RegisterNodeError};
 pub use ghost::{ghost_home_document, ghost_position, GHOST_POSITIONS};
-pub use ns::{first_document_address, first_version_address, FIRST_ORDINARY_DOCUMENT};
+pub use ns::{
+    first_document_address, first_version_address, mailbox_address, FIRST_ORDINARY_DOCUMENT,
+    MAILBOX_SLOT,
+};
 pub use ops::Namespace;
 pub use record::{
     Allocation, M3Rec, Principal, PrincipalId, RangeAllocation, BOOTSTRAP_PRINCIPAL,

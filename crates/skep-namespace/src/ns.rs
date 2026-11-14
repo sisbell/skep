@@ -17,8 +17,9 @@
 //! published to callers outside M3 ([`first_document_address`],
 //! [`first_version_address`]), and the reserved block of an account's
 //! document chain: the number its counter resumes at after doc 1
-//! ([`FIRST_ORDINARY_DOCUMENT`]), the named slots below it, and the test
-//! that tells a document chain's key from every other (`is_document_ns`).
+//! ([`FIRST_ORDINARY_DOCUMENT`]), the named slots below it, the mailbox's
+//! among them ([`MAILBOX_SLOT`], [`mailbox_address`]), and the test that
+//! tells a document chain's key from every other (`is_document_ns`).
 
 use num_traits::{ToPrimitive, Zero};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -82,11 +83,11 @@ pub(crate) struct NsKey {
 /// no panic to prevent.
 ///
 /// No key read out of `frontiers` reaches `first_in`: every caller — the six
-/// mints, `M3State::latest_version` and the two published slots — builds a
-/// fresh key from a `*_ns` constructor, and loaded keys are only compared for
-/// lookup and written back out. So the door guards a reader M3 does not have
-/// yet — one that enumerates or re-keys the frontier map, which no M3 read
-/// does.
+/// mints that read a frontier, `M3State::latest_version`, the two published
+/// opening slots and [`mailbox_address`] — builds a fresh key from a `*_ns`
+/// constructor, and loaded keys are only compared for lookup and written
+/// back out. So the door guards a reader M3 does not have yet — one that
+/// enumerates or re-keys the frontier map, which no M3 read does.
 ///
 /// # Errors
 ///
@@ -318,10 +319,11 @@ pub(crate) fn account_ns(parent: &Address) -> NsKey {
 /// the one place an anchor is lifted back to an [`Address`]: `key.parent` is
 /// T4-valid, and under [`Generator::NextField`] it is not Element-level
 /// (M1's TA5a admits `k = 2` only below that tier). Who meets it: the six
-/// mints, each by its own gate (`M3State::next_in` lists the gates);
-/// `M3State::latest_version` and the two published slots, by their tier tests
-/// and an anchor cloned from an [`Address`]; and a key decoded off a
-/// checkpoint, whose T4 half [`t4_anchor`] re-establishes.
+/// mints that read a frontier, each by its own gate (`M3State::next_in`
+/// lists the gates); `M3State::latest_version`, the two published opening
+/// slots and [`mailbox_address`], by their tier tests and an anchor cloned
+/// from an [`Address`]; and a key decoded off a checkpoint, whose T4 half
+/// [`t4_anchor`] re-establishes.
 ///
 /// # Errors
 ///
@@ -344,13 +346,13 @@ fn first_in(key: &NsKey) -> Result<Address, GateViolation> {
 ///
 /// It is [`first_in`] with its trailing ordinal advanced by `n − 1` — the one
 /// spelling of a chain's slot by ordinal, which `M3State::next_in` asks for
-/// at `m + 1`, the slot the next mint fills, and
-/// [`M3State::latest_version`] at `m`, the latest member's. M1's `shift` is
-/// ordinal-only and safe here: `c₁` is a full address carrying its ordinal in
-/// the last position, never a bare `doc·0·subspace` base (the TA7a hazard);
-/// and it is total at 0, so `n = 1` is `c₁` itself with no branch.
-/// Re-`validate` is total, since `cₙ` differs from the gated `c₁` only in a
-/// positive ordinal.
+/// at `m + 1`, the slot the next mint fills, [`M3State::latest_version`] at
+/// `m`, the latest member's, and [`mailbox_address`] at [`MAILBOX_SLOT`], a
+/// slot it names off no count. M1's `shift` is ordinal-only and safe here:
+/// `c₁` is a full address carrying its ordinal in the last position, never a
+/// bare `doc·0·subspace` base (the TA7a hazard); and it is total at 0, so
+/// `n = 1` is `c₁` itself with no branch. Re-`validate` is total, since `cₙ`
+/// differs from the gated `c₁` only in a positive ordinal.
 ///
 /// # Errors
 ///
@@ -360,12 +362,13 @@ fn first_in(key: &NsKey) -> Result<Address, GateViolation> {
 /// # Panics
 ///
 /// Panics at `n = 0`, against the precondition `n ≥ 1` — a chain opens at
-/// ordinal 1. Both callers discharge it (`next_in` passes `m + 1`;
-/// `latest_version` answers `None` at `m = 0`). The precondition is asserted
-/// on entry, ahead of the anchor's own precondition, so a call at `n = 0` is
-/// a caller's bug answered as one: a panic naming this precondition, whatever
-/// key it names. Panics too where [`first_in`] does, on a key whose anchor is
-/// no valid address.
+/// ordinal 1. Its three callers discharge it (`next_in` passes `m + 1`;
+/// `latest_version` answers `None` at `m = 0`; `mailbox_address` passes a
+/// constant past 1). The precondition is asserted on entry, ahead of the
+/// anchor's own precondition, so a call at `n = 0` is a caller's bug
+/// answered as one: a panic naming this precondition, whatever key it names.
+/// Panics too where [`first_in`] does, on a key whose anchor is no valid
+/// address.
 ///
 /// [`M3State::latest_version`]: crate::M3State::latest_version
 pub(crate) fn nth_in(key: &NsKey, n: &Nat) -> Result<Address, GateViolation> {
@@ -411,11 +414,11 @@ pub fn first_document_address(account: &Address) -> Option<Address> {
 /// An account's documents are numbered 1, its doc 1, and then from this
 /// number on. The numbers between, from 2 up to the one below this, are the
 /// reserved block of well-known slots, in every account, the system
-/// account's included (the mailbox design §2). No mint issues a number of
-/// the block: a document chain that holds its doc 1 is floored at this
-/// number less one (`M3State::effective_frontier`), as the ghost content
-/// chain is floored past the ghost region. The fold admits a record in the
-/// block only at a named slot that holds no document
+/// account's included (the mailbox design §2). The counter hands out no
+/// number of the block: a document chain that holds its doc 1 is floored at
+/// this number less one (`M3State::effective_frontier`), as the ghost
+/// content chain is floored past the ghost region. The fold admits a record
+/// in the block only at a named slot that holds no document
 /// ([`M3State::apply_m3`]), and membership answers a number of the block by
 /// the document a record placed there, never by the count
 /// ([`M3State::is_allocated`]).
@@ -435,10 +438,60 @@ pub const FIRST_ORDINARY_DOCUMENT: u32 = 64;
 /// A named slot is a document number that means one well-known document in
 /// every account of a kind: in the system account the head document, the
 /// staging draft and the time document, which genesis seeds; in every other
-/// account the mailbox, the bio and the link page (the mailbox design §2).
-/// The slots past it, up to [`FIRST_ORDINARY_DOCUMENT`], are reserved and
-/// named by nothing, so no record is admitted there.
+/// account the mailbox ([`MAILBOX_SLOT`]), the bio and the link page (the
+/// mailbox design §2). The slots past it, up to [`FIRST_ORDINARY_DOCUMENT`],
+/// are reserved and named by nothing, so no record is admitted there.
 const LAST_NAMED_SLOT: u32 = 4;
+
+/// The well-known slot of an account's mailbox: document 2.
+///
+/// It is the first of the reserved block's named slots. In every account but
+/// the system account it is the account's mailbox: the address mail to the
+/// account points at, and the private document that holds its owner's marks
+/// (the mailbox design §2, §3). The system account has no mailbox, and there
+/// the number is the head document, which genesis seeds ([`head_document`]). No
+/// counter hands the number out ([`FIRST_ORDINARY_DOCUMENT`]), so a document
+/// stands at it only where a record placed one, and a mailbox's record is
+/// the one [`crate::Namespace::create_well_known_document`] stages.
+///
+/// It is the one spelling of the number. `skep-client`, which does not link
+/// this crate, holds a copy its suite holds equal to this (its `address`
+/// module), as it holds one of [`FIRST_ORDINARY_DOCUMENT`].
+///
+/// [`head_document`]: crate::head_document
+pub const MAILBOX_SLOT: u32 = 2;
+
+// The mailbox's slot is one of the named slots, held at compile time: the
+// fold admits a record in the reserved block at a named slot alone, so a
+// slot moved past them would make the mailbox's own mint a fold panic.
+const _: () = assert!(1 < MAILBOX_SLOT && MAILBOX_SLOT <= LAST_NAMED_SLOT);
+
+/// Returns the address an account's mailbox occupies, minted or not.
+///
+/// It is slot [`MAILBOX_SLOT`] of the `(account, 2)` chain, `A·0·2`: the
+/// account's well-known slot 2 (the mailbox design §2). `None` unless
+/// `account` is account-tier, because no other tier anchors a document
+/// chain, which is [`first_document_address`]'s reason too.
+///
+/// Registry-free, like [`first_document_address`]: it names the *slot* and
+/// claims nothing about what is in it, nor that `account` is registered. A
+/// mailbox's address stands from the moment its account's does — mail points
+/// at it, and nothing in mail needs the document minted (the mailbox design
+/// §3) — so the slot is public for a caller that names the place before the
+/// document exists, or without it. Whether a document stands there is
+/// [`M3State::is_registered_document`] of this address, and what places one
+/// is [`crate::Namespace::create_well_known_document`]. For the system
+/// account the slot is no mailbox: this answers its head document
+/// ([`head_document`]).
+///
+/// [`M3State::is_registered_document`]: crate::M3State::is_registered_document
+/// [`head_document`]: crate::head_document
+pub fn mailbox_address(account: &Address) -> Option<Address> {
+    (account.level() == Level::Account).then(|| {
+        nth_in(&document_ns(account), &Nat::from(MAILBOX_SLOT))
+            .expect("an Account anchor is not Element-level, so TA5a admits k = 2")
+    })
+}
 
 /// Returns whether `key` names an account's document chain, `(A, 2)`.
 ///

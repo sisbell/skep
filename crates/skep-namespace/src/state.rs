@@ -6,8 +6,9 @@
 //! whose doc 1 (`ghost_home_document`) is `crate::ghost`'s — with genesis and
 //! the fold (§D); and the frontier arithmetic the fold checks and the mints
 //! draw on (§1). The records the fold consumes, and the identity type they
-//! name, are `crate::record`'s; namespace keys are `crate::ns`'s, and the
-//! ghost floor is `crate::ghost`'s.
+//! name, are `crate::record`'s; namespace keys are `crate::ns`'s, with the
+//! bounds of a document chain's reserved block, and the ghost floor is
+//! `crate::ghost`'s.
 //!
 //! Beneath it, two children, each an `impl M3State` that sees this module's
 //! private items the way a child does, so nothing here is widened for them:
@@ -38,7 +39,10 @@ use skep_address::{link_subspace, ordinal, validate, Address, GateViolation, Lev
 use skep_kernel::Seq;
 
 use crate::ghost::{ghost_floor, ghost_home_document};
-use crate::ns::{is_content_or_link_slot, namespace_of, nth_in, NsKey};
+use crate::ns::{
+    is_content_or_link_slot, is_document_ns, is_named_slot, is_reserved_slot, namespace_of, nth_in,
+    NsKey, FIRST_ORDINARY_DOCUMENT,
+};
 use crate::record::{
     Allocation, M3Rec, Principal, PrincipalId, RangeAllocation, BOOTSTRAP_PRINCIPAL,
     SYSTEM_PRINCIPAL,
@@ -115,13 +119,21 @@ pub struct M3State {
     /// is O(log |namespaces|) tumbler comparisons per lookup instead of a
     /// hash.
     ///
-    /// The count is the realized set for every namespace but the ghost content
-    /// one, whose realized set is `{c_{floor+1}..cₘ}`: the format's one
-    /// carve-out reserves the first [`GHOST_POSITIONS`] ordinals of that chain
-    /// and is held as a compiled floor ([`ghost_floor`]), not as a gap in the
-    /// count. So a reader enumerating a namespace's members from its count is
-    /// right everywhere else and must start past the floor there — where the
-    /// skipped ordinals are M7's reserved type addresses, never members.
+    /// The count is the realized set for every namespace but two kinds, each
+    /// a carve-out of the format held as a compiled floor and never as a gap
+    /// in the count. The ghost content namespace's realized set is
+    /// `{c_{floor+1}..cₘ}`: the first [`GHOST_POSITIONS`] ordinals of that
+    /// chain are reserved ([`ghost_floor`]) — M7's reserved type addresses,
+    /// never members. An account's document chain counts its doc 1 and then
+    /// from [`FIRST_ORDINARY_DOCUMENT`] on: its count is the last number the
+    /// counter handed out, and the numbers between are the reserved block of
+    /// well-known slots, which no count covers. A document placed at a named
+    /// slot is registered by its entry in `publication` and moves no count
+    /// ([`M3State::apply_m3`]), so the count of an account that holds its
+    /// doc 1 and any of its slots is still 1. A reader enumerating a
+    /// namespace's members from its count is therefore right everywhere
+    /// else, starts past the floor on the ghost chain, and on a document
+    /// chain skips the block and reads its slots off the publication map.
     ///
     /// Not the entity registry E (ASN-0047): E is this map's below-element
     /// part together with `nodes`, which is the pair
@@ -473,8 +485,10 @@ impl M3State {
     /// That is `nodes = {[1], [1.1]}`,
     /// `Π = { [1] → BOOTSTRAP_PRINCIPAL, [1.1.0.1] → SYSTEM_PRINCIPAL }`, the
     /// account chain `([1.1], 2)` at 1 and the document chain
-    /// `([1.1.0.1], 2)` at 4, three of its documents born published and one,
-    /// the staging draft, born unpublished. `pub` — the engine seeds
+    /// `([1.1.0.1], 2)` at 1 as well — the account's doc 1 counted, its
+    /// docs 2, 3 and 4 standing at its three named slots, which move no
+    /// count — three of the four born published and one, the staging draft,
+    /// born unpublished. `pub` — the engine seeds
     /// `Kernel::open(cfg, genesis-World)` with it; "load empty journal" and
     /// "fresh genesis" are the same code path (§7). Deterministic, per M2's
     /// byte-identical-genesis caller contract — and byte-identical across
@@ -483,24 +497,30 @@ impl M3State {
     /// **Two parts, built two ways.** The roots — node `[1]` and π₀ seated at
     /// it — are written directly: they are the state every record folds onto,
     /// and π₀'s node-tier seat is a shape no op stages and
-    /// `RegisterPrincipal`'s prefix door refuses. The seed is folded: it is
-    /// the seven records M3's own ops stage for the same work —
-    /// [`crate::Namespace::register_node`]'s admission of [`system_node`]
+    /// `RegisterPrincipal`'s prefix door refuses. The seed is folded: seven
+    /// records, the first four the ones M3's own ops stage for the same work
+    /// — [`crate::Namespace::register_node`]'s admission of [`system_node`]
     /// `1.1`, [`crate::Namespace::delegate`]'s baptism and seat of
     /// [`system_account`] `1.1.0.1` for [`SYSTEM_PRINCIPAL`], and the
-    /// allocations of the four documents
-    /// [`crate::Namespace::create_new_document`] mints there: doc 1
-    /// ([`ghost_home_document`], the commons registry's future home) and doc 2
-    /// ([`head_document`] `H`), born published (PUB-1.25's
+    /// allocation [`crate::Namespace::create_new_document`] mints first
+    /// there, doc 1 ([`ghost_home_document`], the commons registry's future
+    /// home) — and then three allocations no op stages, one at each of the
+    /// account's named slots (the mailbox design §2): doc 2
+    /// ([`head_document`] `H`), born published as doc 1 is (PUB-1.25's
     /// genesis/commons-seeded row); doc 3 ([`staging_draft`]), born
     /// unpublished (PUB-6.65); and doc 4 ([`time_document`] `T`), born
     /// published — handed to [`M3State::apply_m3`] in that order. So the fold
     /// is the one writer of the frontier and publication maps: each chain
-    /// reaches its count by the fold's own advance to each record's ordinal,
-    /// each document's bit lands in the step that registers it, and the
-    /// fold's contiguity check confirms, on every build, that the account and
-    /// each document is the next member of its own chain. A document added to
-    /// the seed is one more record.
+    /// reaches its count by the fold's own advance to each counted record's
+    /// ordinal, each document's bit lands in the step that registers it, and
+    /// the fold's checks confirm, on every build, that the account and doc 1
+    /// are each the next member of their own chain and that docs 2, 3 and 4
+    /// each fill a named slot that held nothing. The account's counter then
+    /// stands where every account's does once it holds its doc 1: its next
+    /// mint is document [`FIRST_ORDINARY_DOCUMENT`]. And no later record
+    /// places a system document: all three named slots are filled, and the
+    /// fold refuses a second record at a filled one. A document added to the
+    /// seed is one more record.
     ///
     /// What the seed leaves alone: node `[1]`'s own account chain — the
     /// seeded account chain is `([1.1], 2)`, not `([1], 2)` — so
@@ -533,9 +553,10 @@ impl M3State {
                 prefix: system_account(),
                 id: SYSTEM_PRINCIPAL,
             }),
-            // Four creates under it, in the chain's order: doc 1 and doc 2
-            // (H) born published, doc 3 (the staging draft) born unpublished,
-            // doc 4 (T) born published.
+            // Four documents under it, in address order: doc 1, the chain's
+            // first member, born published; then the account's three named
+            // slots — doc 2 (H) born published, doc 3 (the staging draft)
+            // born unpublished, doc 4 (T) born published.
             M3Rec::Allocate(Allocation {
                 addr: ghost_home_document(),
                 published: true,
@@ -573,46 +594,61 @@ impl M3State {
     /// **Totality domain.** M2's total-apply obligation, stated here at the
     /// seam the engine wires: total — deterministic, side-effect-free,
     /// panic-free — over every record whose `Allocate` address, or
-    /// `AllocateRange` first address, both extends a parent and carries its
-    /// namespace's effective frontier + 1 as its ordinal (effective =
-    /// `max(frontier, floor)`; the floor is nonzero only for the ghost content
-    /// namespace — `ghost_floor`). A mint's record is such a record wherever
-    /// it is staged as [`M3Rec::Allocate`] requires — against the working
-    /// state the mint read: a mint extends a registered parent and issues
-    /// exactly `c_{m+1}` of that state, past the floor. That the parent is
-    /// registered (P8) is the mints' gate and no part of this domain: an
+    /// `AllocateRange` first address, extends a parent and is one of two
+    /// things. Either it carries its namespace's effective frontier + 1 as
+    /// its ordinal (effective = `max(frontier, floor)`; the floor is nonzero
+    /// for the ghost content namespace — `ghost_floor` — and for an account's
+    /// document chain that holds its doc 1, where it is
+    /// [`FIRST_ORDINARY_DOCUMENT`] less one). Or it is an `Allocate` at a
+    /// named slot of a document chain's reserved block — document number 2, 3
+    /// or 4 — and the slot holds no document (the mailbox design §2). A
+    /// mint's record is of the first kind wherever it is staged as
+    /// [`M3Rec::Allocate`] requires — against the working state the mint
+    /// read: a mint extends a registered parent and issues exactly its
+    /// chain's next address in that state, past the floor. Genesis's seed
+    /// holds three of the second kind, the system account's. That the parent
+    /// is registered (P8) is the mints' gate and no part of this domain: an
     /// `Allocate` under an unregistered parent folds like any other, and that
     /// is the state [`M3State::has_documents`] and [`M3State::latest_version`]
-    /// answer by their chains.
+    /// answer by their chains. Nor does a slot's record ask for its account's
+    /// doc 1: it folds into an account that holds no document and moves no
+    /// count, so [`M3State::has_documents`] still answers `false` there and
+    /// the account's next mint is still its doc 1.
     ///
-    /// The two conditions differ in kind, and each is checked where it can be.
+    /// The conditions differ in kind, and each is checked where it can be.
     /// Extending a parent is a fact about one field, so it is carried at that
     /// field's door: the [`Address`] payloads carry T4-validity, `Allocate`'s
     /// address door (`parented_address`) and `AllocateRange`'s first-address
     /// door (`content_range_first`, which runs it) carry the parent, and a
     /// record arriving from disk or a peer that lacks either is refused at
-    /// decode rather than folded into a panic. Contiguity is not decidable
-    /// from one record — it is a claim about the frontier the record is about
-    /// to advance — so no door can carry it, and the fold checks it instead,
-    /// on every build: an `Allocate` or a range whose ordinal jumps, repeats
-    /// or regresses its chain's next is outside the domain — corruption, or a
-    /// caller's bug, a mint's record staged where [`M3Rec::Allocate`] forbids
-    /// — and the fold fail-stops on it (`# Panics`) rather than register
-    /// ordinals no mint issued (B1) or issue a live address again (B8). On the
-    /// write path the fold runs at the record's push, in the transaction's
-    /// closure phase, so the panic unwinds a transaction that has journaled
-    /// nothing, drawn no position and poisoned nothing; at replay it halts the
-    /// open, as the engine's `Engine::open` states for every structural fact a
-    /// fold asserts. [`M3Rec`]'s seals keep the producer inside this crate in
-    /// a build that compiles no test — the mints, the ops and genesis
-    /// construct every record, and no other crate constructs one or edits the
-    /// `Allocate` a mint returned, whose payload's fields are private — but not
-    /// the stager: a composite in another crate places the record a mint
-    /// returned, and contiguity rests on where it does ([`M3Rec::Allocate`]),
-    /// which is why the fold is what checks it. A record decoded from bytes
-    /// rather than constructed here carries the first condition through its
-    /// door and meets the second at the fold; [`M3Rec`] states what else it
-    /// owes.
+    /// decode rather than folded into a panic. Contiguity is not decidable from
+    /// one record — it is a claim about the frontier the record is about to
+    /// advance — so no door can carry it, and the fold checks it instead, on
+    /// every build: an `Allocate` or a range whose ordinal jumps, repeats or
+    /// regresses its chain's next is outside the domain — corruption, or a
+    /// caller's bug, a mint's record staged where [`M3Rec::Allocate`] forbids —
+    /// and the fold fail-stops on it (`# Panics`) rather than register ordinals
+    /// no mint issued (B1) or issue a live address again (B8). The reserved
+    /// block is judged here too, ahead of contiguity, which a record in the
+    /// block never meets: whether a slot holds a document is a claim about the
+    /// publication map, as contiguity is one about the frontier, and the slot's
+    /// name is judged beside it so that the block has one judge. A record in
+    /// the block at no named slot, and a second record at a slot that holds a
+    /// document, are outside the domain, and the fold fail-stops on each by
+    /// words of its own. On the write path the fold runs at the record's push,
+    /// in the transaction's closure phase, so the panic unwinds a transaction
+    /// that has journaled nothing, drawn no position and poisoned nothing; at
+    /// replay it halts the open, as the engine's `Engine::open` states for
+    /// every structural fact a fold asserts. [`M3Rec`]'s seals keep the
+    /// producer inside this crate in a build that compiles no test — the mints,
+    /// the ops and genesis construct every record, and no other crate
+    /// constructs one or edits the `Allocate` a mint returned, whose payload's
+    /// fields are private — but not the stager: a composite in another crate
+    /// places the record a mint returned, and contiguity rests on where it does
+    /// ([`M3Rec::Allocate`]), which is why the fold is what checks it. A record
+    /// decoded from bytes rather than constructed here carries the first
+    /// condition through its door and meets the second at the fold; [`M3Rec`]
+    /// states what else it owes.
     ///
     /// `Allocate`'s publication bit is folded for a document-tier address and
     /// read for no other (PUB-7.7's fold half, at M3's own allocation record:
@@ -627,7 +663,9 @@ impl M3State {
     /// publication map is a per-arm fact no door can carry — "this document
     /// already has a bit" is a claim about the map, which a decoder holding
     /// one frame cannot settle — so it is answered here, at one lookup, rather
-    /// than refused at decode.
+    /// than refused at decode. The fold judges no bit: which one a named slot's
+    /// document is born with is its producer's to choose, as every document's
+    /// is, and the fold stores the bit the slot's record carries.
     ///
     /// `RegisterNode`'s admission conditions — node level, the
     /// [`MAX_NODE_COMPONENTS`] cap, and bootstrap lineage — belong to
@@ -684,7 +722,12 @@ impl M3State {
     /// extends no parent: the `namespace_of` `expect`. Panics, on every build,
     /// where an `Allocate`'s ordinal, or a range's first ordinal, is not its
     /// chain's effective frontier + 1 — a jump, a repeat or a regression: the
-    /// contiguity check, whose message names the record's address.
+    /// contiguity check, whose message names the record's address. Panics, on
+    /// every build, where an `Allocate` names a document number of the
+    /// reserved block that is no named slot, and where it names a named slot
+    /// that already holds a document: the block's two checks, each with words
+    /// of its own that name the record's address. A record in the block is
+    /// held to those two and never to contiguity.
     #[must_use = "apply_m3 returns the folded slice; it does not modify the receiver"]
     pub fn apply_m3(&self, at: Seq, r: &M3Rec) -> M3State {
         let mut s = self.clone();
@@ -694,25 +737,49 @@ impl M3State {
                     "≥ 2 components: Allocate's address door refuses a parentless address off the journal, and the totality domain asks it of an in-process producer",
                 );
                 let n = ordinal(addr.tumbler()).clone();
-                // The totality domain's contiguity condition, held on every
-                // build: an ordinal past the chain's next would register the
-                // ordinals between as members no mint issued (B1); one at the
-                // chain's frontier or below would issue a live address again
-                // (B8), and below it set the frontier back (B0). Its floor term
-                // matters at most once per journal: the ghost home document's
-                // first content record, an Allocate or a range, carries
-                // ordinal GHOST_POSITIONS + 1 over an absent frontier.
-                let next = s.effective_frontier(&key) + 1u32;
-                assert_eq!(
-                    n, next,
-                    "Allocate ordinal must equal its namespace's effective frontier + 1: {addr} is not its chain's next"
-                );
-                s.frontiers.insert(key, n);
-                // Written once (PUB-1.9) on every build. The check above holds
-                // a record to the stored frontier, and a frontier regressed off
-                // a corrupted checkpoint makes a second record for a registered
-                // document contiguous: this `contains_key` test holds the bit
-                // there.
+                if is_document_ns(&key) && is_reserved_slot(&n) {
+                    // The reserved block of a document chain, judged ahead of
+                    // contiguity and never by it, on every build: a record
+                    // there names a well-known slot and fills it once. It
+                    // moves no count — a document chain's count is the last
+                    // number its counter handed out — so the slot's whole
+                    // state is the bit and the position written below, and
+                    // membership reads the slot off the publication map.
+                    // Neither check reads the bit, and neither asks for the
+                    // account's doc 1.
+                    assert!(
+                        is_named_slot(&n),
+                        "an Allocate in the reserved block names a well-known slot: {addr} is none of them"
+                    );
+                    assert!(
+                        !s.publication.contains_key(addr),
+                        "a well-known slot is minted once: {addr} already holds a document"
+                    );
+                } else {
+                    // The totality domain's contiguity condition, held on
+                    // every build: an ordinal past the chain's next would
+                    // register the ordinals between as members no mint issued
+                    // (B1); one at the chain's frontier or below would issue a
+                    // live address again (B8), and below it set the frontier
+                    // back (B0). Its floor term matters at two records: the
+                    // ghost home document's first content record, an Allocate
+                    // or a range, which carries ordinal GHOST_POSITIONS + 1
+                    // over an absent frontier, once per journal at most; and
+                    // an account's first document after its doc 1, which
+                    // carries FIRST_ORDINARY_DOCUMENT over a count of 1.
+                    let next = s.effective_frontier(&key) + 1u32;
+                    assert_eq!(
+                        n, next,
+                        "Allocate ordinal must equal its namespace's effective frontier + 1: {addr} is not its chain's next"
+                    );
+                    s.frontiers.insert(key, n);
+                }
+                // Written once (PUB-1.9) on every build. The contiguity check
+                // holds a record to the stored frontier, and a frontier
+                // regressed off a corrupted checkpoint makes a second record
+                // for a registered document contiguous: this `contains_key`
+                // test holds the bit there. A slot's record always passes it,
+                // the once rule above having refused the other case.
                 if addr.level() == Level::Document && !s.publication.contains_key(addr) {
                     s.publication.insert(addr.clone(), *published);
                 }
@@ -788,23 +855,40 @@ impl M3State {
 // ---------------------------------------------------------------------------
 
 impl M3State {
-    /// Returns the effective frontier: `max(frontiers[key], ghost_floor(key))`.
+    /// Returns the effective frontier: `max(frontiers[key], floor(key))`.
     ///
     /// It is the frontier `next_in` mints past and the fold's contiguity check
-    /// expects. For every namespace but the ghost content one the floor is 0
-    /// and this is the stored frontier; for that one it starts the chain past
-    /// the ghost region ([`ghost_floor`] carries the non-reissue argument). Not
-    /// the membership bound — membership reads the stored frontier and
+    /// expects. For most namespaces the floor is 0 and this is the stored
+    /// frontier. Two kinds carry a floor, each compiled format. The ghost
+    /// content namespace starts past the ghost region ([`ghost_floor`]
+    /// carries the non-reissue argument). An account's document chain that
+    /// holds its doc 1 — one whose stored count is not zero — resumes past
+    /// the reserved block of well-known slots: its floor is
+    /// [`FIRST_ORDINARY_DOCUMENT`] less one, so after doc 1 the next document
+    /// is that number and then the one after it. An empty document chain has
+    /// no floor, so its next document is its doc 1; and the floor is the
+    /// document chain's alone (`is_document_ns`), so the account chain under
+    /// a node, which shares its generator, counts on from 1.
+    ///
+    /// Each floor is taken as a `max` and never as a fallback: a stored count
+    /// below it — one regressed off a corrupted checkpoint, which no fold
+    /// check reads — still answers the floor, so no mint issues a ghost
+    /// tumbler or a number of the reserved block whatever the count reads.
+    ///
+    /// Not the membership bound — membership reads the stored frontier and
     /// excludes the floored ordinals, because a floor that counted as members
-    /// would make the five ghost tumblers allocated without a mint. Given that
-    /// exclusion the two bounds agree, so membership stays on the stored value,
-    /// which it can borrow.
+    /// would make the five ghost tumblers allocated without a mint, and every
+    /// slot of the reserved block registered without a record. Given those
+    /// exclusions the two bounds agree, so membership stays on the stored
+    /// value, which it can borrow.
     fn effective_frontier(&self, key: &NsKey) -> Nat {
-        self.frontiers
-            .get(key)
-            .cloned()
-            .unwrap_or_else(Nat::zero)
-            .max(ghost_floor(key))
+        let stored = self.frontiers.get(key).cloned().unwrap_or_else(Nat::zero);
+        let floor = if !stored.is_zero() && is_document_ns(key) {
+            Nat::from(FIRST_ORDINARY_DOCUMENT - 1)
+        } else {
+            ghost_floor(key)
+        };
+        stored.max(floor)
     }
 
     /// Returns `next(B, p, g)` in closed form (§1).
@@ -813,8 +897,10 @@ impl M3State {
     /// address is `c_{m+1}` — read the count, advance the trailing ordinal —
     /// which is [`nth_in`] at `m + 1`, where `m` is the
     /// [`M3State::effective_frontier`] (the stored count, floored past the
-    /// ghost region for the one namespace that holds it). Pure function of
-    /// `frontiers` (B2 determinism — the natural property-test oracle).
+    /// ghost region for the one namespace that holds it, and past the
+    /// reserved block for a document chain that holds its doc 1). Pure
+    /// function of `frontiers` (B2 determinism — the natural property-test
+    /// oracle).
     ///
     /// `first_in`'s anchor precondition is stated in `crate::ns` beside the
     /// `validate` that consumes it, and the six mints — this function's only

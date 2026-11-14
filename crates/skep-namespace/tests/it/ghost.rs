@@ -119,23 +119,24 @@ fn the_content_chain_of_the_ghost_home_document_never_issues_a_ghost_tumbler() {
 
     // ANOTHER document under the account carries no floor: its content chain
     // starts at 1 like any other — the region is five content addresses of
-    // one document, not a rule about the prefix. Genesis seeds docs 1 to 4,
-    // so the account's next mint (as its own principal, the system's) is
-    // doc 5.
-    let (d5, _) = ns
+    // one document, not a rule about the prefix. Genesis seeds the account's
+    // doc 1 and fills its three named slots, so the account's next mint (as
+    // its own principal, the system's) is its second document, past the
+    // reserved block.
+    let (next_doc, _) = ns
         .create_new_document(SYSTEM_PRINCIPAL, &system_account(), None)
-        .expect("doc 5");
-    assert_eq!(d5, a(&[1, 1, 0, 1, 0, 5]));
+        .expect("the system account's second document");
+    assert_eq!(next_doc, nth_document(&system_account(), 2));
     // Its content-frontier read's ordinal is the ordinary one: the mint count
     // plus one.
     assert_eq!(
-        k.snapshot().world().m3().next_content_address(&d5),
-        Some(a(&[1, 1, 0, 1, 0, 5, 0, 1, 1]))
+        k.snapshot().world().m3().next_content_address(&next_doc),
+        Some(under(&next_doc, &[0, 1, 1]))
     );
-    let first = commit_mint(&k, M3State::content_lock_key(&d5), |m3| {
-        m3.mint_content(&d5)
+    let first = commit_mint(&k, M3State::content_lock_key(&next_doc), |m3| {
+        m3.mint_content(&next_doc)
     });
-    assert_eq!(first, a(&[1, 1, 0, 1, 0, 5, 0, 1, 1]));
+    assert_eq!(first, under(&next_doc, &[0, 1, 1]));
 }
 
 /// A frontier past the ghost floor is ordinary recoverable state — the floor

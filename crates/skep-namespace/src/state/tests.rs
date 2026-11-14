@@ -2,6 +2,7 @@ use super::*;
 
 use crate::ghost::{ghost_position, GHOST_POSITIONS};
 use crate::ns::{account_ns, content_ns, document_ns, link_ns, ns_lock_key, version_ns};
+use crate::system_account;
 use skep_address::parent;
 
 fn t(comps: &[u32]) -> Tumbler {
@@ -42,7 +43,7 @@ fn each_chains_minted_addresses_advance_the_key_their_mint_read() {
         (
             "document",
             document_ns(&acct),
-            [a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, 2])],
+            [a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, FIRST_ORDINARY_DOCUMENT])],
         ),
         (
             "account under a node",
@@ -126,7 +127,7 @@ fn lock_keys_distinguish_every_chain_and_key_space() {
     // Distinct homes get distinct keys.
     assert_ne!(
         M3State::content_lock_key(&doc),
-        M3State::content_lock_key(&a(&[1, 0, 1, 0, 2]))
+        M3State::content_lock_key(&a(&[1, 0, 1, 0, FIRST_ORDINARY_DOCUMENT]))
     );
 }
 
@@ -160,6 +161,115 @@ fn the_ghost_floor_holds_against_a_regressed_frontier() {
             "ghost {ordinal} became a member"
         );
     }
+}
+
+/// §1: the document chain's floor is a MAX too, never a fallback for the one
+/// count it is met at — so a stored count INSIDE the reserved block cannot
+/// drag a mint back into it. The fold leaves a document chain's count at 1 or
+/// past the block, and only a decoded checkpoint carries any other. No fold
+/// check reads a checkpoint's counts, so the `max` is what keeps every mint
+/// off the block there, at every count the block spans. Built by hand, as the
+/// ghost cell above is, because a checkpoint is the one route such a count
+/// has.
+#[test]
+fn the_reserved_block_holds_against_a_count_inside_it() {
+    let acct = a(&[1, 0, 1]);
+    let key = document_ns(&acct);
+    let base = M3State::genesis()
+        .apply_m3(Seq(1), &M3Rec::Allocate(Allocation {
+            addr: acct.clone(),
+            published: false,
+        }))
+        .apply_m3(Seq(1), &M3Rec::Allocate(Allocation {
+            addr: a(&[1, 0, 1, 0, 1]),
+            published: true,
+        }));
+    for stored in 1..FIRST_ORDINARY_DOCUMENT {
+        let mut s = base.clone();
+        s.frontiers.insert(key.clone(), Nat::from(stored));
+        let next = s.next_in(&key).expect("an account anchors a document chain");
+        assert_eq!(
+            *skep_address::ordinal(next.tumbler()),
+            Nat::from(FIRST_ORDINARY_DOCUMENT),
+            "a stored count of {stored} moved a mint into the reserved block"
+        );
+        assert_eq!(s.mint_document(&acct, false).expect("the account mints").0, next);
+        // …and membership answers every number of the block off the
+        // publication map, which holds none of them here, however the count
+        // reads.
+        for number in 2..FIRST_ORDINARY_DOCUMENT {
+            assert!(
+                !s.is_registered_document(&a(&[1, 0, 1, 0, number])),
+                "a stored count of {stored} registered document {number} of the block"
+            );
+        }
+    }
+    // Past the block the count is the count: the floor adds nothing to it.
+    for past in [0, 1, 100] {
+        let stored = FIRST_ORDINARY_DOCUMENT + past;
+        let mut s = base.clone();
+        s.frontiers.insert(key.clone(), Nat::from(stored));
+        assert_eq!(
+            s.next_in(&key).expect("an account anchors a document chain"),
+            a(&[1, 0, 1, 0, stored + 1])
+        );
+    }
+    // An empty chain has no floor, written down as empty or never written:
+    // its next document is its doc 1.
+    let mut emptied = base.clone();
+    emptied.frontiers.insert(key.clone(), Nat::zero());
+    assert_eq!(emptied.next_in(&key), Ok(a(&[1, 0, 1, 0, 1])));
+    assert_eq!(
+        M3State::genesis().next_in(&document_ns(&a(&[1, 0, 9]))),
+        Ok(a(&[1, 0, 9, 0, 1]))
+    );
+    // And the floor is the document chain's alone. The account chain under a
+    // node carries the same generator and counts on from where it stands, as
+    // the sub-account and version chains do.
+    assert_eq!(
+        base.next_in(&account_ns(&a(&[1]))),
+        Ok(a(&[1, 0, 2])),
+        "the account chain under a node took the document chain's floor"
+    );
+    assert_eq!(base.next_in(&account_ns(&acct)), Ok(a(&[1, 0, 1, 1])));
+    assert_eq!(base.next_in(&version_ns(&a(&[1, 0, 1, 0, 1]))), Ok(a(&[1, 0, 1, 0, 1, 1])));
+    assert_eq!(
+        base.next_in(&account_ns(&crate::system_node())),
+        Ok(a(&[1, 1, 0, 2])),
+        "genesis's own account chain counts on from the system account"
+    );
+}
+
+/// §2: a number of the reserved block that no slot names is a member on NO
+/// slice, a decoded one included. Membership answers the block off the
+/// publication map, and the fold never writes an entry at such a number — it
+/// refuses the record — so only a checkpoint can carry one. The slot's name
+/// is tested ahead of the map for that slice: without it, one corrupted entry
+/// registers a document at an address every reader computes as empty. Built
+/// by hand, since the fold cannot build it. The control beside it is a named
+/// slot's entry, which the same read answers registered.
+#[test]
+fn an_unnamed_number_of_the_block_is_no_member_whatever_the_maps_hold() {
+    let acct = system_account();
+    let mut s = M3State::genesis();
+    let last_named = a(&[1, 1, 0, 1, 0, 4]);
+    assert!(s.is_registered_document(&last_named), "the control: a named slot genesis filled");
+    for number in 5..FIRST_ORDINARY_DOCUMENT {
+        let unnamed = a(&[1, 1, 0, 1, 0, number]);
+        s.publication.insert(unnamed.clone(), true);
+        s.minted_at.insert(unnamed.clone(), Seq(0));
+        assert!(!s.is_allocated(&unnamed), "document {number} reads allocated off the map");
+        assert!(!s.is_registered_document(&unnamed), "document {number} reads registered");
+        assert_eq!(s.entity_level(&unnamed), None, "document {number} reads as an entity");
+    }
+    // …and no count makes one a member either: the interval is never asked
+    // about the block.
+    s.frontiers.insert(document_ns(&acct), Nat::from(FIRST_ORDINARY_DOCUMENT + 10));
+    for number in 5..FIRST_ORDINARY_DOCUMENT {
+        assert!(!s.is_allocated(&a(&[1, 1, 0, 1, 0, number])), "document {number}");
+    }
+    assert!(s.is_registered_document(&last_named));
+    assert!(s.is_registered_document(&a(&[1, 1, 0, 1, 0, FIRST_ORDINARY_DOCUMENT + 10])));
 }
 
 /// §1: the allocator holds the element families to two. Asked to issue an
@@ -282,8 +392,8 @@ fn a_replayed_allocate_never_moves_a_documents_bit() {
 /// so a registration gate added here would pass them all.
 #[test]
 fn latest_version_reads_the_chain_not_the_registry() {
-    let unregistered_doc = a(&[1, 0, 1, 0, 9]);
-    let member = a(&[1, 0, 1, 0, 9, 1]);
+    let unregistered_doc = a(&[1, 0, 1, 0, 71]);
+    let member = a(&[1, 0, 1, 0, 71, 1]);
     let s = M3State::genesis().apply_m3(Seq(1), &M3Rec::Allocate(Allocation {
         addr: member.clone(),
         published: false,
@@ -454,10 +564,10 @@ fn effective_owner_pair_is_omega_unprojected() {
         // Unallocated `inc(X, 1)`: X's own seat, the nearest above it.
         (a(&[1, 0, 1, 1]), Some((&x, x_id))),
         // Beneath a sub-account: the LONGEST containing prefix wins.
-        (a(&[1, 0, 1, 2, 0, 4]), Some((&sub_acct, sub_acct_id))),
+        (a(&[1, 0, 1, 2, 0, 66]), Some((&sub_acct, sub_acct_id))),
         // A document of X's, and an unregistered sibling account under
         // the node alone.
-        (a(&[1, 0, 1, 0, 3]), Some((&x, x_id))),
+        (a(&[1, 0, 1, 0, 65]), Some((&x, x_id))),
         (a(&[1, 0, 2]), Some((&node, BOOTSTRAP_PRINCIPAL))),
         // Under no seat: both halves absent, TOGETHER.
         (a(&[2]), None),

@@ -263,6 +263,90 @@ fn every_address_is_the_slot_its_own_key_names() {
     }
 }
 
+/// `is_document_ns` IS the document chain family, and no other: over every
+/// address `every_address(8, 2)` yields, an address's own key answers `true`
+/// exactly when the address is a document directly under an account — a
+/// document-tier child of an account-tier parent — which is every slot of
+/// every `(A, 2)` chain and nothing else. The test is spelled on the KEY,
+/// since the counter holds nothing else, and by M1's classification of its
+/// anchor; this law is what holds it to the family the anchor-side
+/// constructor builds. The shapes it must refuse are all in the enumeration:
+/// the account chain under a node, which carries the same generator; the
+/// sub-account and version chains, which carry the other; a version of a
+/// document, document-tier under a document; and a subspace base under its
+/// document, the other chain that opens a next field.
+#[test]
+fn the_document_ns_check_is_the_document_chain_family() {
+    let addresses = every_address(8, 2);
+    let (mut on_a_document_chain, mut off) = (0, 0);
+    for addr in &addresses {
+        let Some(key) = namespace_of(addr) else {
+            continue;
+        };
+        let a_document_under_an_account = addr.level() == Level::Document
+            && parent(addr).is_some_and(|anchor| anchor.level() == Level::Account);
+        assert_eq!(
+            is_document_ns(&key),
+            a_document_under_an_account,
+            "{addr}: the key's test and the address's own tiers disagree"
+        );
+        if a_document_under_an_account {
+            // The child-side key is the one the anchor-side constructor builds.
+            let account = parent(addr).expect("a document has a parent");
+            assert_eq!(key, document_ns(&account), "{addr}");
+            on_a_document_chain += 1;
+        } else {
+            off += 1;
+        }
+    }
+    assert!(
+        on_a_document_chain > 0 && off > 0,
+        "both answers occur: {on_a_document_chain} on a document chain, {off} off one"
+    );
+
+    // The five constructors, at the tiers they are built for: the document
+    // chain's key alone answers `true`.
+    let (node, acct, doc) = (a(&[1]), a(&[1, 0, 1]), a(&[1, 0, 1, 0, 1]));
+    assert!(is_document_ns(&document_ns(&acct)));
+    for (family, key) in [
+        ("the account chain under a node", account_ns(&node)),
+        ("the sub-account chain", account_ns(&acct)),
+        ("the version chain", version_ns(&doc)),
+        ("the content chain", content_ns(&doc)),
+        ("the link chain", link_ns(&doc)),
+        // A wrong-tier argument names another chain, never the document one.
+        ("document_ns over a node", document_ns(&node)),
+        ("document_ns over a document", document_ns(&doc)),
+        ("version_ns over an account", version_ns(&acct)),
+    ] {
+        assert!(!is_document_ns(&key), "{family} reads as a document chain");
+    }
+    // …and a key whose anchor is outside T4, which a lock key built off an
+    // element carries, is answered and not dereferenced.
+    let outside_t4 = content_ns(&a(&[1, 0, 1, 0, 1, 0, 1, 1]));
+    assert!(!is_t4_valid(&outside_t4.parent));
+    assert!(!is_document_ns(&outside_t4));
+    assert!(!is_document_ns(&NsKey {
+        parent: outside_t4.parent.clone(),
+        g: Generator::NextField,
+    }));
+
+    // The block's two tests on a number: reserved past doc 1 and below the
+    // first ordinary document, named at its first slots, and neither at doc 1,
+    // at the first ordinary document or past a machine word.
+    for number in 0..=FIRST_ORDINARY_DOCUMENT + 2 {
+        let n = Nat::from(number);
+        let reserved = 1 < number && number < FIRST_ORDINARY_DOCUMENT;
+        assert_eq!(is_reserved_slot(&n), reserved, "{number}");
+        assert_eq!(is_named_slot(&n), 1 < number && number <= LAST_NAMED_SLOT, "{number}");
+        assert!(!is_named_slot(&n) || is_reserved_slot(&n), "{number}: a named slot is reserved");
+    }
+    for huge in [Nat::from(u64::from(u32::MAX)) + 3u32, Nat::from(u64::MAX) + 2u32] {
+        assert!(!is_reserved_slot(&huge) && !is_named_slot(&huge));
+    }
+    assert!(LAST_NAMED_SLOT < FIRST_ORDINARY_DOCUMENT - 1, "the block holds slots no name fills");
+}
+
 /// The allocator's element check, `is_content_or_link_slot`, IS the two
 /// element families: over every address `every_address(9, 3)` yields, an
 /// element answers `true` exactly when its own chain is its document's

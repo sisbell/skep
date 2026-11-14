@@ -26,14 +26,14 @@ use std::path::Path;
 
 use common::{
     acked_addr, acked_at, assert_withheld, board_term, ceremony_before_the_claim, claim_frame, claimed,
-    device_key, doc_metadata, expect_resp, get, head_position, http, json, op, op_as_written,
-    open_session, open_signed_session, read_link, region, spawn, spawn_seeded, spawn_unclaimed,
-    typed_link_frame, verdict, Sse, CLAIMANT_ACCOUNT, CLAIMANT_DOC1, CLAIMANT_PRINCIPAL, SEED_HEAD,
-    T_GRANT,
+    device_key, doc_metadata, expect_resp, get, head_position, http, json, nth_document, op,
+    op_as_written, open_session, open_signed_session, read_link, region, spawn, spawn_seeded,
+    spawn_unclaimed, system_accounts_first_mint, typed_link_frame, verdict, Sse, CLAIMANT_ACCOUNT,
+    CLAIMANT_DOC1, CLAIMANT_PRINCIPAL, SEED_HEAD, T_GRANT,
 };
 use serde_json::Value;
 use skep_kernel::Step;
-use skep_namespace::SYSTEM_PRINCIPAL;
+use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
 use skepd::{Seq, Skepd};
 
 /// The head document `H` — doc 2 of the system account (PUB-6.65).
@@ -1074,11 +1074,14 @@ fn a_restarted_writer_writes_into_the_seeded_staging_draft_and_mints_no_document
 /// forced hour with its time record — leave the system account the four
 /// documents genesis seeds and no fifth. `1.1.0.1.0.3` is the draft —
 /// registered and private, so the guest is `withheld`; `1.1.0.1.0.4` is the
-/// time document, published, so the guest reads it; and `1.1.0.1.0.5` was
-/// never minted, so the guest is told `doc_not_registered`. Named rather
-/// than measured: a writer that minted a draft of its own would leave a
-/// private document per head for as long as it runs, and no guest-visible
-/// entry would name one.
+/// time document, published, so the guest reads it; and the account's
+/// second document by its counter — where its first mint would land, past
+/// the reserved block — was never minted, so the guest is told
+/// `doc_not_registered`. The address probed is held to the namespace's own
+/// answer for that mint, so the probe cannot pass by reading a number no
+/// mint fills. Named rather than measured: a writer that minted a draft of
+/// its own would leave a private document per head for as long as it runs,
+/// and no guest-visible entry would name one.
 #[test]
 fn every_head_in_one_uptime_reuses_the_one_staging_draft() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1098,7 +1101,13 @@ fn every_head_in_one_uptime_reuses_the_one_staging_draft() {
         Some(true),
         "the time document stands published, as genesis seeds it: {time_document}"
     );
-    let next = doc_metadata(port, None, "1.1.0.1.0.5");
+    let first_mint = nth_document(&system_account().to_string(), 2);
+    assert_eq!(
+        first_mint,
+        system_accounts_first_mint(),
+        "the probe reads where a mint under the system account would land"
+    );
+    let next = doc_metadata(port, None, &first_mint);
     assert_eq!(
         expect_resp(&next, "rejected")["code"].as_str(),
         Some("doc_not_registered"),

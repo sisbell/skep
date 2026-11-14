@@ -41,7 +41,7 @@ use skep_links::{
     AlsoPlaces, Endset, HasLinks, Link, LinkWriter, PublicationError, PublishDeposits,
     PublishTarget, SlotArg, Visibility, FROM, TO,
 };
-use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
+use skep_namespace::{first_version_address, HasM3, M3Rec, M3State, PrincipalId};
 
 use crate::common::*;
 
@@ -453,7 +453,7 @@ fn a_shot_keeping_its_drafts_base_re_windows_the_draft_and_leaves_its_base_stand
         let k = journaled_over(edition_world());
         let vs = Vstream::new(&k);
         let (d, _) = vs.stage(PrincipalId(1), &pdoc()).expect("a draft of the memberless edition");
-        assert_eq!(d, doc(4), "the premise: the account's fourth document");
+        assert_eq!(d, minted(1), "the premise: the first document the account's counter hands out here");
         let (start, _) = vs
             .insert(P1, &d, vp(1, 1), vec![Val::new(*b"a"), Val::new(*b"b")], Deposit::Undeclared, AsOf::Typed(k.current_seq()))
             .expect("the draft's own words");
@@ -473,7 +473,7 @@ fn a_shot_keeping_its_drafts_base_re_windows_the_draft_and_leaves_its_base_stand
         assert_eq!(runs_of(&k, &d), vec![fresh.clone()], "keep_base {keep_base}: re-windowed at its place");
         assert_eq!(bytes_of(&k, &d), "ab", "keep_base {keep_base}");
         let s = k.snapshot();
-        let homed = s.world().links().readlink(&a(&[1, 0, 1, 0, 4, 0, 2, 1])).cloned();
+        let homed = s.world().links().readlink(&link_of(&minted(1), 1)).cloned();
         assert_eq!(homed, Some(record(&named, &fresh)), "keep_base {keep_base}: the record homed in the draft");
         let moved = DraftBase { base: member.clone(), extent: n(2), source: pdoc(), merge: None, stamped: vec![] };
         assert_eq!(
@@ -1091,6 +1091,15 @@ fn set_s() -> Address {
     a(&[1, 0, 1, 0, 4])
 }
 
+/// The `k`-th document a mint hands out in the owner's account over this
+/// suite's worlds. Their documents past doc1 — doc2, the edition `E` and the
+/// set `S` — stand at well-known slots, which move no count, so the
+/// account's counter stands at doc1 and its first mint is the account's
+/// second document by its counter, [`doc`]`(2)`.
+fn minted(k: u32) -> Address {
+    doc(k + 1)
+}
+
 /// [`edition_world`] with the set `S` registered published: the world every
 /// deposit cell opens over — doc1 the staging draft, doc2 the private notes
 /// `N`, `pdoc` the edition `E`, `S` the set, the sibling's published
@@ -1330,8 +1339,8 @@ fn a_minting_publication_mints_the_edition_and_homes_the_claim_in_it() {
     let target = PublishTarget::Mint { account: account.clone() };
     let deposits = PublishDeposits { claim: true, links: vec![], retract: vec![], read_with: vec![set_s()], supersede: vec![], originals: vec![], base_runs: vec![] };
     let (member, seq) = writer(&k).publication(P1, &target, &the_shot, &[], &[], &deposits).expect("the mint");
-    let edition = a(&[1, 0, 1, 0, 5]);
-    assert_eq!(member, a(&[1, 0, 1, 0, 5, 1]), "the edition's first member");
+    let edition = minted(1);
+    assert_eq!(Some(member.clone()), first_version_address(&edition), "the edition's first member");
     assert_eq!(k.boundaries_above(before.seq()).expect("boundaries"), vec![(seq, None)], "one commit");
     let s = k.snapshot();
     let (m3, links) = (s.world().m3(), s.world().links());

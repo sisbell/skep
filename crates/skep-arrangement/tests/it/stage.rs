@@ -9,15 +9,20 @@
 
 use skep_arrangement::{reading_surface, AsOf, Deposit, DraftBase, HasM5, InsertError, Marker, SetArrangement, SetArrangementError, SetMerge, Shot, StageError, Vstream};
 use skep_kernel::{Attestation, Kernel};
-use skep_namespace::{HasM3, PrincipalId};
+use skep_namespace::{HasM3, PrincipalId, FIRST_ORDINARY_DOCUMENT};
 use tempfile::tempdir;
 
 use crate::common::*;
 
-/// The `k`-th document of principal 1's account — the fourth and on are
-/// what a stage mints there, the first three being the seeded fixtures.
+/// The `k`-th document of principal 1's account, for the fourth and on —
+/// what a stage mints there, the first three being the seeded fixtures. The
+/// fixtures' second and third stand at well-known slots, which move no
+/// count, so the account's counter stands at its doc 1 and the fourth
+/// document is the first it hands out: `FIRST_ORDINARY_DOCUMENT`, and the
+/// fifth the one after it.
 fn minted(k: u32) -> skep_address::Address {
-    a(&[1, 0, 1, 0, k])
+    assert!(k >= 4, "the first three are the seeded fixtures, at their own addresses");
+    a(&[1, 0, 1, 0, FIRST_ORDINARY_DOCUMENT + k - 4])
 }
 
 /// THE STAGING ACT IS ONE BOARD OPERATION (B3-S10; A-350): a stage off a

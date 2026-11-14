@@ -170,8 +170,10 @@ fn two_concurrent_first_mints_below_the_daemon_bear_exactly_one_published_home()
         let account = seat_empty_account(&febe, boot, id);
         let sessions = [febe.open_session(id), febe.open_session(id)];
         assert_ne!(sessions[0], sessions[1], "two live sessions of the one principal");
-        // The chain's first two addresses — ghosts until this round mints them.
-        let (home, draft) = (ghost_doc(&account, 1), ghost_doc(&account, 2));
+        // The account's first two documents — ghosts until this round mints
+        // them: its doc 1, and its second, past the reserved block.
+        let second = skep_namespace::FIRST_ORDINARY_DOCUMENT;
+        let (home, draft) = (ghost_doc(&account, 1), ghost_doc(&account, second));
 
         // The start line: each thread counts itself in and spins on `go`,
         // which rises once both are there — neither parked, neither ahead.

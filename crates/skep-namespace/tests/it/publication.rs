@@ -10,7 +10,7 @@ use skep_address::{Address, Tumbler};
 use skep_kernel::{Kernel, Seq};
 use skep_namespace::{
     first_document_address, ghost_home_document, head_document, prefix_contains, staging_draft,
-    time_document, HasM3, M3Rec, M3State, Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL,
+    time_document, HasM3, M3Rec, M3State, MintError, Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL,
     SYSTEM_PRINCIPAL,
 };
 use tempfile::tempdir;
@@ -119,13 +119,13 @@ fn a_create_into_a_non_empty_account_is_private_unless_flagged() {
     assert!(published);
 
     let (d2, published) = create_and_read(&ns, &k, ID1, &acct, None);
-    assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
+    assert_eq!(d2, nth_document(&acct, 2));
     assert!(!published, "flagless into a non-empty account is private");
     let (d3, published) = create_and_read(&ns, &k, ID1, &acct, Some(true));
-    assert_eq!(d3, a(&[1, 0, 1, 0, 3]));
+    assert_eq!(d3, nth_document(&acct, 3));
     assert!(published);
     let (d4, published) = create_and_read(&ns, &k, ID1, &acct, Some(false));
-    assert_eq!(d4, a(&[1, 0, 1, 0, 4]));
+    assert_eq!(d4, nth_document(&acct, 4));
     assert!(!published);
 
     let m3 = k.snapshot().world().m3().clone();
@@ -185,6 +185,7 @@ fn mint_version_stamps_exactly_the_bit_passed() {
     let ns = Namespace::new(&k);
     // A PRIVATE source: the account's second document, flagless.
     let (src, published) = create_and_read(&ns, &k, ID1, &acct, None);
+    assert_eq!(src, nth_document(&acct, 2));
     assert!(!published);
 
     let v1 = commit_mint(&k, M3State::version_lock_key(&src), |m3| {
@@ -193,8 +194,8 @@ fn mint_version_stamps_exactly_the_bit_passed() {
     let v2 = commit_mint(&k, M3State::version_lock_key(&src), |m3| {
         m3.mint_version(&src, true)
     });
-    assert_eq!(v1, a(&[1, 0, 1, 0, 2, 1]));
-    assert_eq!(v2, a(&[1, 0, 1, 0, 2, 2]));
+    assert_eq!(v1, under(&src, &[1]));
+    assert_eq!(v2, under(&src, &[2]));
     let m3 = k.snapshot().world().m3().clone();
     assert!(m3.is_registered_document(&v1) && m3.is_registered_document(&v2));
     assert!(!m3.published(&v1), "passed false, reads false");
@@ -250,7 +251,7 @@ fn mint_document_applies_no_default_into_an_empty_account() {
     let second = commit_mint(&k, M3State::document_lock_key(&acct), |m3| {
         m3.mint_document(&acct, true)
     });
-    assert_eq!(second, a(&[1, 0, 1, 0, 2]));
+    assert_eq!(second, nth_document(&acct, 2));
     assert!(k.snapshot().world().m3().published(&second));
 }
 
@@ -301,26 +302,36 @@ fn only_a_document_allocate_writes_the_publication_map() {
 }
 
 /// The walk is in ADDRESS order, which is not mint order: a version of doc 1
-/// sorts BETWEEN doc 1 and doc 2, whichever was minted first. The two agree on
-/// every other fixture in this file — each mints one chain in ascending
-/// ordinals — so this is the shape that tells them apart, and it is the shape
-/// the engine's dump renders (two boards with one history must render one byte
-/// string). It also fixes what `.next_back()` gives: the ADDRESS-greatest
-/// entry, which is NOT the newest document. Genesis is never empty —
-/// PUB-6.65's seed holds the system account's doc 1, `H` and `T`, born
-/// published, and its staging draft, born unpublished — so every walk here
-/// ends with those four, above everything minted under `1.0.1`.
+/// sorts BETWEEN doc 1 and doc 2, whichever was minted first, and a document
+/// at a well-known slot sorts between doc 1 and the account's second
+/// document, whichever was placed first. The two orders agree on every other
+/// fixture in this file — each mints one chain in ascending ordinals — so
+/// this is the shape that tells them apart, and it is the shape the engine's
+/// dump renders (two boards with one history must render one byte string).
+/// It also fixes what `.next_back()` gives: the ADDRESS-greatest entry, which
+/// is NOT the newest document. Genesis is never empty — PUB-6.65's seed holds
+/// the system account's doc 1, `H` and `T`, born published, and its staging
+/// draft, born unpublished — so every walk here ends with those four, above
+/// everything minted under `1.0.1`.
+///
+/// `d2` is the account's document 2: a record there fills a well-known slot,
+/// which is what this walk's middle entry has to be for the order to differ
+/// from the mint order among one account's documents, so it stays at 2. The
+/// account's second document, past the reserved block, is folded AHEAD of
+/// the slot and walked after it.
 #[test]
 fn the_publication_walk_is_in_address_order_not_mint_order() {
+    let acct = a(&[1, 0, 1]);
     let (d1, d2, v1) = (
         a(&[1, 0, 1, 0, 1]),
-        a(&[1, 0, 1, 0, 2]),
+        slot(&acct, 2),
         a(&[1, 0, 1, 0, 1, 1]),
     );
+    let second = nth_document(&acct, 2);
     let (seed_1, seed_h) = (ghost_home_document(), head_document());
     let (seed_draft, seed_t) = (staging_draft(), time_document());
     // The seed alone, one minted, many — the walk's three sizes, in mint order
-    // d1, d2, v1.
+    // d1, the second document, d2, v1.
     let s = M3State::genesis();
     assert_eq!(
         s.documents().collect::<Vec<_>>(),
@@ -340,30 +351,124 @@ fn the_publication_walk_is_in_address_order_not_mint_order() {
         ]
     );
     let s = s
+        .apply_m3(Seq(0), &M3Rec::allocate(second.clone(), true))
         .apply_m3(Seq(0), &M3Rec::allocate(d2.clone(), false))
         .apply_m3(Seq(0), &M3Rec::allocate(v1.clone(), true));
 
-    // Address order — d1, then d1's version, then d2, then the seed — not the
-    // mint order (seed), d1, d2, v1.
+    // Address order — d1, then d1's version, then the slot d2, then the
+    // account's second document, then the seed — not the mint order (seed),
+    // d1, the second document, d2, v1.
     assert_eq!(
         s.documents().collect::<Vec<_>>(),
         vec![
             (&d1, true),
             (&v1, true),
             (&d2, false),
+            (&second, true),
             (&seed_1, true),
             (&seed_h, true),
             (&seed_draft, false),
             (&seed_t, true)
         ]
     );
-    assert_eq!(s.documents().len(), 7);
+    assert_eq!(s.documents().len(), 8);
     // So the back of the walk is the address-greatest entry and not the
-    // newest: v1 was minted last, and the seeded `T` — older than all three —
-    // is what `.next_back()` answers; among the minted three, d2 is the
-    // greatest and v1 sorts below it.
+    // newest: v1 was minted last, and the seeded `T` — older than all four —
+    // is what `.next_back()` answers; among the minted four, the account's
+    // second document is the greatest, and the slot placed after it sorts
+    // below it.
     assert_eq!(s.documents().next_back(), Some((&seed_t, true)));
-    assert_eq!(s.documents().nth_back(4), Some((&d2, false)));
+    assert_eq!(s.documents().nth_back(4), Some((&second, true)));
+    assert_eq!(s.documents().nth_back(5), Some((&d2, false)));
+    // The slot moved no count: the account's next mint is its third document.
+    assert_eq!(
+        s.mint_document(&acct, false).expect("the account mints").0,
+        nth_document(&acct, 3)
+    );
+}
+
+/// A document at a well-known slot keeps the bit its record carried, and the
+/// fold judges neither bit: which one a slot's document is born with is its
+/// producer's, as every document's is (PUB-8.18). Each named slot is folded
+/// PRIVATE into one account and PUBLISHED into another, so every slot is seen
+/// with both bits: each reads registered from its own record on, `published`
+/// reads the bit that record carried, the position map holds the record's
+/// position, and the walk lists the slots between the account's doc 1 and
+/// everything past the reserved block. No slot moves a count: each account's
+/// next mint is still its second document. A fold that held a slot to a bit —
+/// either account kind's table of them — refuses half of these records.
+#[test]
+fn a_slot_record_folds_with_either_bit_and_keeps_the_bit_it_carried() {
+    let accounts = [(a(&[1, 0, 1]), false), (a(&[1, 0, 2]), true)];
+    let mut s = M3State::genesis()
+        .apply_m3(Seq(1), &alloc(&[1, 0, 1]))
+        .apply_m3(Seq(1), &alloc(&[1, 0, 2]));
+    for (acct, bit) in &accounts {
+        s = s.apply_m3(Seq(2), &M3Rec::allocate(nth_document(acct, 1), true));
+        for (nth, number) in NAMED_SLOTS.into_iter().enumerate() {
+            let (at, placed) = (Seq(10 + nth as u64), slot(acct, number));
+            assert!(!s.is_registered_document(&placed), "{placed} reads registered unfilled");
+            s = s.apply_m3(at, &M3Rec::allocate(placed.clone(), *bit));
+            assert!(s.is_registered_document(&placed), "{placed} is not registered by its record");
+            assert_eq!(s.published(&placed), *bit, "{placed} lost the bit its record carried");
+            assert_eq!(s.minted_at(&placed), Some(at), "{placed} is not dated by its record");
+        }
+        assert_eq!(
+            s.mint_document(acct, false).expect("the account mints").0,
+            nth_document(acct, 2),
+            "a slot's record moved the count of {acct}"
+        );
+    }
+    // The walk: each account's doc 1, then its three slots with the bit each
+    // carried — the two accounts' eight documents, ahead of genesis's four.
+    let expected: Vec<(Address, bool)> = accounts
+        .iter()
+        .flat_map(|(acct, bit)| {
+            std::iter::once((nth_document(acct, 1), true))
+                .chain(NAMED_SLOTS.into_iter().map(move |number| (slot(acct, number), *bit)))
+        })
+        .collect();
+    let walked: Vec<(Address, bool)> =
+        s.documents().take(expected.len()).map(|(doc, bit)| (doc.clone(), bit)).collect();
+    assert_eq!(walked, expected);
+    assert_eq!(s.documents().len(), expected.len() + 4);
+}
+
+/// A slot's record asks for no doc 1 and gives its account none: committed
+/// into an account that holds no document it registers the slot, and the
+/// account still holds no document its counter handed out — `has_documents`
+/// answers `false` — so the account's first create is still its doc 1,
+/// flagless and born published (PUB-8.21, PUB-1.17), and its second lands
+/// past the reserved block. That an account's first document is its doc 1 is
+/// a rule of the daemon's door; the fold neither keeps it nor breaks it.
+#[test]
+fn a_slot_filled_first_leaves_the_accounts_first_create_its_published_doc_1() {
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    let (acct, _) = ns
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+        .expect("delegate");
+    let (doc_1, slot_2) = (first_document_address(&acct).expect("slot"), slot(&acct, 2));
+    k.transact::<_, MintError>(&[M3State::document_lock_key(&acct)], |stg| {
+        stg.push(M3Rec::allocate(slot_2.clone(), false).into());
+        Ok(())
+    })
+    .expect("the slot's record commits into the empty account");
+    let m3 = k.snapshot().world().m3().clone();
+    assert!(m3.is_registered_document(&slot_2) && !m3.published(&slot_2));
+    assert!(!m3.is_registered_document(&doc_1), "the slot's record registered a doc 1");
+    assert!(
+        !m3.has_documents(&acct),
+        "a slot counted as a document: the account's first create would be born private"
+    );
+
+    let (first, published) = create_and_read(&ns, &k, ID1, &acct, None);
+    assert_eq!(first, doc_1, "the account's first create is its doc 1");
+    assert!(published, "the flagless first create is born published, the slot notwithstanding");
+    let (second, published) = create_and_read(&ns, &k, ID1, &acct, None);
+    assert_eq!(second, nth_document(&acct, 2));
+    assert!(!published);
+    assert!(k.snapshot().world().m3().is_registered_document(&slot_2));
 }
 
 /// PUB-1.9/PUB-1.68, and PUB-7.7's fold half: no public function changes a
@@ -545,8 +650,10 @@ fn registration_precedes_publication() {
     let m3 = k.snapshot().world().m3().clone();
     assert!(m3.is_registered_document(&doc) && m3.published(&doc));
     for never_minted in [
-        a(&[1, 0, 1, 0, 2]),    // the chain's next slot
-        a(&[1, 0, 1, 0, 9]),    // deeper on the chain
+        nth_document(&acct, 2), // the slot the chain's next mint fills
+        a(&[1, 0, 1, 0, 71]),   // deeper on the chain
+        slot(&acct, 2),         // a named slot of the reserved block, unfilled
+        slot(&acct, 9),         // a number of the block no slot names
         a(&[1, 0, 1, 0, 1, 1]), // doc 1's version chain, never opened
         a(&[1, 0, 2, 0, 1]),    // under an account that does not exist
     ] {
@@ -560,7 +667,7 @@ fn registration_precedes_publication() {
     let d2 = commit_mint(&k, M3State::document_lock_key(&acct), |m3| {
         m3.mint_document(&acct, true)
     });
-    assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
+    assert_eq!(d2, nth_document(&acct, 2));
     let m3 = k.snapshot().world().m3().clone();
     assert!(m3.is_registered_document(&d2));
     assert!(m3.published(&d2));

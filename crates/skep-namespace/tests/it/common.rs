@@ -13,6 +13,7 @@ use skep_kernel::{
 };
 use skep_namespace::{
     HasM3, M3Rec, M3State, MintError, Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL,
+    FIRST_ORDINARY_DOCUMENT,
 };
 
 // ---- the minimal engine assembly (composition contract) ----
@@ -58,6 +59,42 @@ pub fn t(comps: &[u32]) -> Tumbler {
 
 pub fn a(comps: &[u32]) -> Address {
     validate(t(comps)).expect("test addresses are T4-valid")
+}
+
+/// The address `tail` spells under `base`: `base`'s components, then
+/// `tail`'s — a version of a document, an element of it, a document of an
+/// account.
+pub fn under(base: &Address, tail: &[u32]) -> Address {
+    let comps = base.tumbler().iter().cloned().chain(tail.iter().map(|&c| Nat::from(c)));
+    validate(Tumbler::new(comps).expect("test tumblers are nonempty"))
+        .expect("test addresses are T4-valid")
+}
+
+/// `account`'s `k`-th document, its doc 1 first: the address its counter
+/// hands out `k`-th. That is doc 1, and then the numbers from
+/// `FIRST_ORDINARY_DOCUMENT` on, past the reserved block of well-known slots.
+/// Every row of this suite that names a document a mint handed out after
+/// doc 1, or the slot the next mint fills, is worked out here from the
+/// constant, so none spells that number.
+pub fn nth_document(account: &Address, k: u32) -> Address {
+    assert!(k >= 1, "an account's documents are counted from its doc 1");
+    let number = if k == 1 { 1 } else { FIRST_ORDINARY_DOCUMENT + k - 2 };
+    under(account, &[0, number])
+}
+
+/// The named slots of an account's reserved block, by document number: the
+/// well-known slots a record may fill, once each.
+pub const NAMED_SLOTS: [u32; 3] = [2, 3, 4];
+
+/// The document at `account`'s slot `number`, a document number of its
+/// reserved block: an address that names the slot whether or not anything
+/// stands there.
+pub fn slot(account: &Address, number: u32) -> Address {
+    assert!(
+        (2..FIRST_ORDINARY_DOCUMENT).contains(&number),
+        "a slot is a document number of the reserved block"
+    );
+    under(account, &[0, number])
 }
 
 /// An `Allocate` off the publication axis — an account, an element, or a

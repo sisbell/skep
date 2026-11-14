@@ -7,10 +7,11 @@ use std::error::Error;
 
 use crate::common::*;
 
-use skep_address::{content_subspace, link_subspace, Address, GateViolation, Level};
+use skep_address::{content_subspace, link_subspace, ordinal, Address, GateViolation, Level, Nat};
 use skep_kernel::Kernel;
 use skep_namespace::{
-    first_version_address, CreateDocumentError, HasM3, M3Rec, M3State, MintError,
+    first_version_address, system_account, CreateDocumentError, HasM3, M3Rec, M3State, MintError,
+    Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL, FIRST_ORDINARY_DOCUMENT, SYSTEM_PRINCIPAL,
 };
 
 #[test]
@@ -44,9 +45,11 @@ fn pure_mints_answer_the_next_address_on_their_own_chains() {
     assert_eq!(v1.level(), Level::Document);
 
     // mint_document: namespace (account, 2) — advances independently of the
-    // version chain; no collision (the ASN-0103 fix).
+    // version chain; no collision (the ASN-0103 fix). The account holds its
+    // doc 1, so the counter's next is its second document, past the reserved
+    // block.
     let (d2, _) = m3.mint_document(&acct, false).expect("document mint");
-    assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
+    assert_eq!(d2, nth_document(&acct, 2));
     assert_ne!(d2, v1);
 }
 
@@ -150,7 +153,7 @@ fn every_chain_survives_the_round_trip_from_mint_to_allocated() {
     // separation, now checked across real folds rather than one snapshot.
     assert_eq!(
         m3.mint_document(&acct, false).expect("document mint").0,
-        a(&[1, 0, 1, 0, 2])
+        nth_document(&acct, 2)
     );
 }
 
@@ -290,6 +293,119 @@ fn the_allocator_never_repeats_an_address_across_an_interleaved_schedule() {
     assert_eq!(minted, again);
 }
 
+/// The first ordinary document's number, spelled: the one cell that says what
+/// `FIRST_ORDINARY_DOCUMENT` is (the mailbox design §2: an account's own
+/// documents are 1, then 64, 65 and on). Every other row of this suite reads
+/// the constant through `nth_document`, as the helpers and fixtures of the
+/// crates above read it, so a moved constant moves them all and this pin
+/// alone sees it.
+#[test]
+fn the_first_ordinary_document_is_number_64() {
+    assert_eq!(FIRST_ORDINARY_DOCUMENT, 64);
+    // …and the helper every row reads is that number worked out: doc 1, the
+    // constant, the one after it.
+    let acct = a(&[1, 0, 1]);
+    assert_eq!(nth_document(&acct, 1), a(&[1, 0, 1, 0, 1]));
+    assert_eq!(nth_document(&acct, 2), under(&acct, &[0, FIRST_ORDINARY_DOCUMENT]));
+    assert_eq!(nth_document(&acct, 3), under(&acct, &[0, FIRST_ORDINARY_DOCUMENT + 1]));
+}
+
+/// No mint answers a document number of the reserved block (the mailbox
+/// design §2), held as a law over a generated run rather than at one
+/// account. Eight accounts — six under the bootstrap node, a sub-account, and
+/// the system account, whose doc 1 and three named slots genesis seeded —
+/// take four hundred steps a fixed generator picks: a document minted
+/// through one of the three doors that mint one — the create op, `fork`, and
+/// the bare mint a cross-owner version makes — or a record that fills the
+/// account's next empty named slot. Every mint answers the account's next
+/// document by the helper: doc 1, then the first ordinary document and on,
+/// in every account, the system account's included. So none lies in the
+/// block, a slot's record moves no count wherever it falls among the mints,
+/// and under counts far past the block a number of it reads registered
+/// exactly where a record placed a document.
+#[test]
+fn no_mint_ever_answers_a_document_number_of_the_reserved_block() {
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    // Each account with its principal, the documents its counter has handed
+    // out, and the named slots a record has filled.
+    let mut accounts: Vec<(Address, PrincipalId, u32, Vec<u32>)> = (1..=6)
+        .map(|i| {
+            let id = PrincipalId(10 + u64::from(i));
+            let (acct, _) = ns
+                .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, i]), id)
+                .expect("an account under the bootstrap node");
+            (acct, id, 0, Vec::new())
+        })
+        .collect();
+    let (sub_acct, _) = ns
+        .delegate(PrincipalId(11), t(&[1, 0, 1, 1]), PrincipalId(20))
+        .expect("a sub-account");
+    accounts.push((sub_acct, PrincipalId(20), 0, Vec::new()));
+    // Genesis handed the system account its doc 1 and filled its three slots.
+    accounts.push((system_account(), SYSTEM_PRINCIPAL, 1, NAMED_SLOTS.to_vec()));
+
+    let mut state = 0x9E37_79B9u32;
+    for step in 0..400 {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let which = (state >> 16) as usize % accounts.len();
+        let (acct, id, minted, filled) = &mut accounts[which];
+        let door = (state >> 28) % 4;
+        if door == 3 {
+            // Fill the account's next empty named slot, where one is left.
+            let Some(&number) = NAMED_SLOTS.iter().find(|number| !filled.contains(number)) else {
+                continue;
+            };
+            let placed = slot(acct, number);
+            k.transact::<_, MintError>(&[M3State::document_lock_key(acct)], |stg| {
+                stg.push(M3Rec::allocate(placed.clone(), state & 1 == 1).into());
+                Ok(())
+            })
+            .expect("a named slot's record commits");
+            filled.push(number);
+            continue;
+        }
+        let doc = match door {
+            0 => ns.create_new_document(*id, acct, None).expect("create").0,
+            1 => ns.fork(*id, None).expect("fork").0,
+            _ => commit_mint(&k, M3State::document_lock_key(acct), |m3| {
+                m3.mint_document(acct, false)
+            }),
+        };
+        *minted += 1;
+        assert_eq!(
+            doc,
+            nth_document(acct, *minted),
+            "step {step}: mint {minted} of {acct} is not its next document"
+        );
+        let number = ordinal(doc.tumbler());
+        assert!(
+            *number == Nat::from(1u32) || *number >= Nat::from(FIRST_ORDINARY_DOCUMENT),
+            "step {step}: a mint answered {doc}, a document number of the reserved block"
+        );
+    }
+
+    let m3 = k.snapshot().world().m3().clone();
+    for (acct, _, minted, filled) in &accounts {
+        assert!(
+            *minted >= 3,
+            "{acct} took {minted} mints: the run never carried it past the block"
+        );
+        for number in 2..FIRST_ORDINARY_DOCUMENT {
+            let placed = slot(acct, number);
+            assert_eq!(
+                m3.is_registered_document(&placed),
+                filled.contains(&number),
+                "{placed} under a count past the block"
+            );
+        }
+        for nth in 1..=*minted {
+            assert!(m3.is_registered_document(&nth_document(acct, nth)), "{acct}'s document {nth}");
+        }
+        assert!(!m3.is_registered_document(&nth_document(acct, minted + 1)));
+    }
+}
+
 #[test]
 fn mint_preconditions_reject_structurally() {
     let (k, acct, doc) = kernel_with_account_and_doc();
@@ -301,7 +417,7 @@ fn mint_preconditions_reject_structurally() {
     let node = a(&[1]); // the registered bootstrap node
     let snap = k.snapshot();
     let m3 = snap.world().m3();
-    let unregistered_doc = a(&[1, 0, 1, 0, 9]); // document-level, never registered
+    let unregistered_doc = a(&[1, 0, 1, 0, 71]); // document-level, never registered
     let unregistered_acct = a(&[1, 0, 9]); // account-level, never registered
 
     // P6/C2/L1a: content/link home must be a REGISTERED Document.
@@ -424,7 +540,7 @@ fn a_mint_refusal_lifts_into_the_document_rejection() {
     let (k, acct, doc) = kernel_with_account_and_doc();
     let snap = k.snapshot();
     let m3 = snap.world().m3();
-    assert_eq!(create(m3, &acct), Ok(a(&[1, 0, 1, 0, 2])));
+    assert_eq!(create(m3, &acct), Ok(nth_document(&acct, 2)));
     assert_eq!(
         create(m3, &doc),
         Err(CreateDocumentError::Mint(MintError::NotAnAccount))
@@ -479,11 +595,14 @@ fn membership_is_exact_chain_membership() {
     assert!(!m3.is_registered_account(&doc)); // a document is not an account
     assert!(!m3.is_registered_account(&a(&[1]))); // nor is the bootstrap node
 
-    // Exact range membership (§2): the ordinal past the frontier is out.
-    assert!(!m3.is_allocated(&a(&[1, 0, 1, 0, 2])));
+    // Exact range membership (§2): the slot the next mint fills is out —
+    // on the document chain the account's second document, past the reserved
+    // block; on the account chain the ordinal past the frontier.
+    let next_doc = nth_document(&acct, 2);
+    assert!(!m3.is_allocated(&next_doc));
     assert!(!m3.is_allocated(&a(&[1, 0, 2])));
-    assert_eq!(m3.entity_level(&a(&[1, 0, 1, 0, 2])), None);
-    assert!(!m3.is_registered_document(&a(&[1, 0, 1, 0, 2])));
+    assert_eq!(m3.entity_level(&next_doc), None);
+    assert!(!m3.is_registered_document(&next_doc));
     assert!(!m3.is_registered_account(&a(&[1, 0, 2])));
 
     // Content elements: unallocated before their mint, allocated after —
@@ -514,7 +633,7 @@ fn membership_is_exact_chain_membership() {
         a(&[1, 0, 1, 0, 1, 0, 2, 1]),    // the same ordinal in the link subspace
         a(&[1, 0, 1, 0, 1, 0, 3, 1]),    // the same ordinal in subspace 3, which no chain anchors
         a(&[1, 0, 1, 0, 1, 0, 1, 1, 1]), // one component deeper than c1
-        a(&[1, 0, 1, 0, 2, 0, 1, 1]),    // the same ordinal under a sibling doc
+        under(&next_doc, &[0, 1, 1]),    // the same ordinal under a sibling doc
         a(&[1, 0, 1, 0, 1, 1]),          // the version chain's first slot
     ] {
         assert!(
@@ -523,6 +642,83 @@ fn membership_is_exact_chain_membership() {
         );
     }
     assert!(m3.is_allocated(&c1)); // …while the real member still is
+}
+
+/// Under a count past the reserved block, membership still answers each
+/// number of the block by the document a record placed there, never by the
+/// count (§2; the mailbox design §2: a slot can be named, and linked to,
+/// before anything stands at it). With the account's second document minted
+/// the count covers every number of the block, and all of them read
+/// unregistered at all three membership reads, so nothing mints under one.
+/// One record then fills one named slot: that slot is registered and is a
+/// home like any document, and no other number is. In the system account
+/// genesis filled the three named slots, and those three alone read
+/// registered, before its counter passes the block and after.
+#[test]
+fn a_number_of_the_reserved_block_is_registered_only_where_a_record_placed_a_document() {
+    let (k, acct, doc) = kernel_with_account_and_doc();
+    let second = commit_mint(&k, M3State::document_lock_key(&acct), |m3| {
+        m3.mint_document(&acct, false)
+    });
+    assert_eq!(second, nth_document(&acct, 2), "the count stands past the block");
+    let m3 = k.snapshot().world().m3().clone();
+    assert!(m3.is_registered_document(&doc) && m3.is_registered_document(&second));
+    for number in 2..FIRST_ORDINARY_DOCUMENT {
+        let empty = slot(&acct, number);
+        assert!(!m3.is_registered_document(&empty), "{empty} reads registered");
+        assert!(!m3.is_allocated(&empty), "{empty} reads allocated");
+        assert_eq!(m3.entity_level(&empty), None, "{empty} reads as an entity");
+        assert_eq!(
+            m3.mint_version(&empty, false).unwrap_err(),
+            MintError::SourceNotRegistered,
+            "{empty}"
+        );
+        assert_eq!(m3.mint_content(&empty).unwrap_err(), MintError::HomeNotRegistered, "{empty}");
+        assert_eq!(m3.mint_link(&empty).unwrap_err(), MintError::HomeNotRegistered, "{empty}");
+    }
+
+    let filled = slot(&acct, 2);
+    let m3 = m3.apply_m3(Seq(9), &M3Rec::allocate(filled.clone(), false));
+    for number in 2..FIRST_ORDINARY_DOCUMENT {
+        let placed = slot(&acct, number);
+        let is_the_filled_one = placed == filled;
+        assert_eq!(m3.is_registered_document(&placed), is_the_filled_one, "{placed}");
+        assert_eq!(m3.is_allocated(&placed), is_the_filled_one, "{placed}");
+        assert_eq!(
+            m3.entity_level(&placed),
+            is_the_filled_one.then_some(Level::Document),
+            "{placed}"
+        );
+    }
+    assert_eq!(
+        m3.mint_version(&filled, false).expect("a filled slot is a version's source").0,
+        under(&filled, &[1])
+    );
+    assert_eq!(
+        m3.mint_content(&filled).expect("a filled slot is a home").0,
+        under(&filled, &[0, 1, 1])
+    );
+    assert_eq!(
+        m3.mint_link(&filled).expect("a filled slot is a home").0,
+        under(&filled, &[0, 2, 1])
+    );
+
+    // The seeded half, before the system account's counter passes the block
+    // and after its next mint carries it there.
+    let (sys_second, rec) = m3
+        .mint_document(&system_account(), false)
+        .expect("the system account mints");
+    assert_eq!(sys_second, nth_document(&system_account(), 2));
+    for m3 in [m3.clone(), m3.apply_m3(Seq(10), &rec)] {
+        for number in 2..FIRST_ORDINARY_DOCUMENT {
+            let placed = slot(&system_account(), number);
+            assert_eq!(
+                m3.is_registered_document(&placed),
+                NAMED_SLOTS.contains(&number),
+                "{placed}: genesis fills the system account's named slots and no other"
+            );
+        }
+    }
 }
 
 /// The position map (D1; the permanence record's D6): the record each mint
@@ -554,7 +750,7 @@ fn each_mint_enters_its_position_for_a_document_a_member_and_a_link_and_for_noth
     assert_eq!(folded.minted_at(&l1), Some(Seq(42)), "a link enters its mint's position");
     assert_eq!(folded.minted_at(&c1), None, "a content element enters no position");
     assert_eq!(folded.minted_at(&acct), None, "an account enters no position");
-    assert_eq!(folded.minted_at(&a(&[1, 0, 1, 0, 9])), None, "an address never minted has none");
+    assert_eq!(folded.minted_at(&a(&[1, 0, 1, 0, 71])), None, "an address never minted has none");
     // Genesis's four seeded documents stand at the genesis coordinate.
     for n in 1..=4 {
         assert_eq!(folded.minted_at(&a(&[1, 1, 0, 1, 0, n])), Some(Seq(0)));

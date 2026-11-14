@@ -1213,6 +1213,14 @@ Rules that hold across its files:
   never inserted or reordered; `tests/it/genesis.rs` pins genesis's bytes
   field by field, and `tests/it/recovery.rs` each variant's against a raw
   struct-variant twin.
+- **The first ordinary document has one spelling.**
+  `FIRST_ORDINARY_DOCUMENT`, in `src/ns.rs`, is the number an account's
+  counter resumes at after its doc 1. Every helper and fixture that names
+  a document a mint hands out past doc 1 — in this crate's suites and in
+  every crate's above it — works its number out from the constant and
+  never spells it. `skep-client`, which does not link this crate, holds a
+  copy in `src/address.rs` that its own suite holds equal, for the tools
+  that link neither.
 
 Its integration suite is one binary, `tests/it/`: one file per surface over
 the shared `common` world, and `heap`, the binary's byte-counting

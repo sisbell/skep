@@ -43,7 +43,7 @@ use skep_coordination::{
 };
 use skep_engine::{Engine, World};
 use skep_links::{Caller, HasLinks, ShippedType, View};
-use skep_namespace::HasM3;
+use skep_namespace::{HasM3, FIRST_ORDINARY_DOCUMENT};
 
 /// An always-true one-Addr-parameter trigger.
 fn always(coord: &Coordinator<World>) -> Trigger {
@@ -68,8 +68,14 @@ fn marker_rule(engine: &Engine, coord: &Coordinator<World>, home: Address) -> Ru
     }
 }
 
-/// The published home `1.0.1.0.1` and the private draft `1.0.1.0.2` of the
-/// genesis node's first account.
+/// The private draft's address: the second document of the genesis node's
+/// first account, where its counter resumes past the reserved block.
+fn the_draft() -> Address {
+    addr(&[1, 0, 1, 0, FIRST_ORDINARY_DOCUMENT])
+}
+
+/// The published home `1.0.1.0.1` and the private draft, [`the_draft`], of
+/// the genesis node's first account.
 fn a_published_home_and_a_private_draft(engine: &Engine) -> (Address, Address) {
     let (acct, home) = setup_home(engine);
     assert_eq!(home, addr(&[1, 0, 1, 0, 1]), "the first account's home is its doc 1");
@@ -77,7 +83,7 @@ fn a_published_home_and_a_private_draft(engine: &Engine) -> (Address, Address) {
         .namespace()
         .create_new_document(USER, &acct, None)
         .expect("the second flagless mint is a private draft");
-    assert_eq!(draft, addr(&[1, 0, 1, 0, 2]));
+    assert_eq!(draft, the_draft());
     (home, draft)
 }
 
@@ -220,7 +226,7 @@ fn a_fire_into_a_draft_home_is_refused_before_any_deposit() {
 #[test]
 fn a_fire_on_a_draft_s_content_is_refused_before_any_deposit() {
     let engine = mem_engine();
-    let member = addr(&[1, 0, 1, 0, 2, 0, 1, 1]); // a position of the draft
+    let member = addr(&[1, 0, 1, 0, FIRST_ORDINARY_DOCUMENT, 0, 1, 1]); // a position of the draft
     let (home, draft) = member_registered_in_the_home(&engine, &member);
     let mut coord = engine.coordinator();
     let rule = marker_rule(&engine, &coord, home);
@@ -280,8 +286,8 @@ fn a_fire_into_a_version_member_shaped_home_under_a_draft_is_refused_at_the_draf
     let engine = mem_engine();
     let member = addr(&[1, 0, 1, 0, 1, 0, 1, 1]); // a position of the published home
     let (_home, draft) = member_registered_in_the_home(&engine, &member);
-    let shaped = addr(&[1, 0, 1, 0, 2, 1]); // the draft's first version member, by shape
-    assert_eq!(draft, addr(&[1, 0, 1, 0, 2]), "the premise: shaped under the draft");
+    let shaped = addr(&[1, 0, 1, 0, FIRST_ORDINARY_DOCUMENT, 1]); // the draft's first version member, by shape
+    assert_eq!(draft, the_draft(), "the premise: shaped under the draft");
     assert!(
         !engine.kernel().snapshot().world().m3().is_registered_document(&shaped),
         "a private document is versionless, so no mint produced it"

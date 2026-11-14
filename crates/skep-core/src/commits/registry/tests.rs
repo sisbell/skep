@@ -413,7 +413,9 @@ fn a_refusal_at_the_sections_insert_leaves_the_next_open_the_whole_table() {
 /// is `1.1.0.1.0.3`, unpublished, the one document the seed's insert names,
 /// and no document is minted under the system account by the seed — the
 /// time document stands at doc 4, registered and published, as genesis
-/// seeds it, and doc 5 is unregistered after the seed.
+/// seeds it, and the account's counter stands where genesis left it: its
+/// next mint is still the account's second document, past the reserved
+/// block, which is unregistered after the seed.
 #[test]
 fn the_seed_writes_as_the_system_principal_through_the_one_staging_draft() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -430,8 +432,20 @@ fn the_seed_writes_as_the_system_principal_through_the_one_staging_draft() {
         m3.is_registered_document(&time) && m3.published(&time),
         "the time document, published"
     );
-    let doc5 = crate::codec::wire_address("1.1.0.1.0.5").expect("an address");
-    assert!(!m3.is_registered_document(&doc5), "the system principal minted no document");
+    let first_mint = crate::codec::wire_address(&format!(
+        "{}.0.{}",
+        skep_namespace::system_account(),
+        skep_namespace::FIRST_ORDINARY_DOCUMENT
+    ))
+    .expect("an address");
+    let (next_mint, _) = m3
+        .mint_document(&skep_namespace::system_account(), false)
+        .expect("the system account mints");
+    assert_eq!(
+        next_mint, first_mint,
+        "the probe reads where a mint under the system account lands, and the seed moved no count"
+    );
+    assert!(!m3.is_registered_document(&first_mint), "the system principal minted no document");
     // The draft the seed wrote into, read off its insert's own entry, the
     // feed's first.
     match wp.feed.entries_above(0).first() {

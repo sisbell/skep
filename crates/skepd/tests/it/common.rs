@@ -33,6 +33,7 @@ use skep_identity::{
     LinkSlots, PublicKey, RecordEntry, RecordRows, ShotBase, ShotSegmentPiece, SigAlgRow,
     SESSION_TAG, SESSION_TAG_V2,
 };
+use skep_namespace::FIRST_ORDINARY_DOCUMENT;
 use skep_signature::{HybridSigner, Seed as SigningKey};
 use skepd::{
     bind, embed, embed_seeded, serve_bound, AuthOptions, Daemon, MediaOptions, NodePrefix,
@@ -152,24 +153,43 @@ pub const ANCHOR_SEED: [u8; 32] = [8; 32];
 
 /// Returns the address of `account`'s k-th document, its home page first.
 ///
-/// Past an ordinary account's home page, this is the one place these suites
-/// spell the number of a document a board hands out: a test names the
-/// claimant's second document `nth_document(CLAIMANT_ACCOUNT, 2)`, not by
-/// its number. The counter numbers an account's documents 1, 2, 3, …, so
-/// the k-th is `k`. Under a counter that skips the namespace's reserved
-/// block, slots 2 to 63, the home page is 1 and the k-th document `k + 62`,
-/// and this body alone changes to say so.
+/// Past an account's home page, this is the one place these suites say the
+/// number of a document a board hands out: a test names the claimant's
+/// second document `nth_document(CLAIMANT_ACCOUNT, 2)`, not by its number.
+/// The counter numbers an account's documents 1 and then from the
+/// namespace's `FIRST_ORDINARY_DOCUMENT` on, past the reserved block of
+/// well-known slots, in every account, the system account's included. So
+/// the home page is 1 and the k-th document past it is worked out from that
+/// constant, which this body reads and never spells.
 ///
 /// `skep-cli`'s live suite holds a copy of this function in its own
-/// `tests/it/common.rs`, since the two suites share no crate. The two bodies
-/// stay equal.
+/// `tests/it/common.rs`, since the two suites share no crate. That suite
+/// links no namespace, so its body reads the client's copy of the constant,
+/// which the client's suite holds equal to the namespace's.
 ///
 /// # Panics
 ///
 /// If `k` is 0: an account has no 0th document.
 pub fn nth_document(account: &str, k: u64) -> String {
     assert_ne!(k, 0, "an account has no 0th document");
-    format!("{account}.0.{k}")
+    let first = u64::from(FIRST_ORDINARY_DOCUMENT);
+    format!("{account}.0.{}", if k == 1 { 1 } else { first + k - 2 })
+}
+
+/// Returns the document a mint under the system account would take first.
+///
+/// It is the namespace's own answer at genesis, where the account holds its
+/// doc 1 and its three seeded slots: the address a daemon writer that minted
+/// a document of its own would leave registered. A test that shows no such
+/// document was minted probes the address `nth_document` works out for the
+/// account's second document and holds it equal to this, so the probe
+/// cannot pass by reading an address no mint fills.
+pub fn system_accounts_first_mint() -> String {
+    skep_namespace::M3State::genesis()
+        .mint_document(&skep_namespace::system_account(), false)
+        .expect("the system account mints")
+        .0
+        .to_string()
 }
 
 pub fn device_key() -> SigningKey {

@@ -62,7 +62,13 @@
 //! - M5's slice holds its draft bases — each staged draft's base, the extent
 //!   its copy took and its source (the staging act), a map the fixture leaves
 //!   empty, staging nothing: the checkpoint's body and every dump move; the
-//!   segment and the fixture's ops do not.
+//!   segment and the fixture's ops do not;
+//! - M3's document chains step over their reserved block — genesis's system
+//!   account counts its doc 1 alone, its three other seeded documents
+//!   standing at named slots, and an account's second document is its first
+//!   ordinary one: genesis's count, the two documents the fixture mints past
+//!   its account's doc 1 and every address beneath them move, so the segment,
+//!   the checkpoint's body and every dump move; the fixture's ops do not.
 
 use std::collections::BTreeMap;
 use std::fs;

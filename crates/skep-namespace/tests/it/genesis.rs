@@ -72,8 +72,9 @@ fn genesis_seeds_the_bootstrap_roots_and_the_system_account() {
         s.mint_document(&system_account(), false)
             .expect("the system account mints")
             .0,
-        a(&[1, 1, 0, 1, 0, 5]),
-        "the seed's four documents stand, so the account's next mint is doc 5"
+        nth_document(&system_account(), 2),
+        "the seed's doc 1 is counted and its three slots move no count, so the account's next \
+         mint is its second document, past the reserved block, as every account's is"
     );
     // Unknown ids resolve to nothing (single-valued scan, §5).
     assert!(s.principal_prefix(ID1).is_none());
@@ -93,9 +94,10 @@ fn genesis_seeds_the_bootstrap_roots_and_the_system_account() {
 /// tumbler and then its generator numeral (`ns/tests.rs` pins the shape), so
 /// a raw struct of that shape spells its two entries: the system node's
 /// account chain `(1.1, 2)` at 1, and the system account's document chain
-/// `(1.1.0.1, 2)` at 4. Every value is spelled as the bytes it must be, the
-/// two fixed ids included: a pin spelled by their constants would carry any
-/// change to them along.
+/// `(1.1.0.1, 2)` at 1 — its doc 1 is the one document its counter handed
+/// out, and the three seeded at its named slots move no count. Every value is
+/// spelled as the bytes it must be, the two fixed ids included: a pin spelled
+/// by their constants would carry any change to them along.
 #[test]
 fn genesis_is_the_roots_and_the_seed_byte_for_byte() {
     #[derive(Serialize)]
@@ -116,7 +118,7 @@ fn genesis_is_the_roots_and_the_seed_byte_for_byte() {
                 parent: t(&[1, 1, 0, 1]),
                 g: 2,
             },
-            Nat::from(4u32),
+            Nat::from(1u32),
         ),
     ])
     .expect("the frontier map");

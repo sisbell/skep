@@ -213,7 +213,7 @@ fn a_window_pays_for_its_page_and_the_homes_it_passes() {
     let heap_of = |k: &Kernel<World>, read: &dyn Fn(&Kernel<World>) -> usize| settled_heap_bytes(|| read(k)).1;
     let page_v = |k: &Kernel<World>| {
         let page = window_v_on(&k.snapshot(), &doc1(), &region, None, 10, &every_home).expect("window_v");
-        assert_eq!(page.batch, (1..=10).map(|i| a(&[1, 0, 1, 0, 2, 0, 2, i])).collect::<Vec<_>>());
+        assert_eq!(page.batch, (1..=10).map(|i| doc_la(2, i)).collect::<Vec<_>>());
         assert!(!page.exhausted);
         page.batch.len()
     };
@@ -253,12 +253,13 @@ fn the_count_by_home_is_the_fourth_read_out_of_the_selection_index() {
     // doc1: two links on position 1.
     link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     link(&store, &doc1(), &[ca(1)], &[ca(102)]);
-    // doc2: three links — one touching at FROM and TO both, counted once.
-    link(&store, &doc2(), &[ca(2)], &[ca(3)]);
-    link(&store, &doc2(), &[ca(103)], &[ca(1)]);
-    link(&store, &doc2(), &[ca(3)], &[ca(104)]);
-    // doc3: one link; doc4: a link in the passage's block, off the passage;
-    // doc5: two links, one retracted.
+    // The second document: three links — one touching at FROM and TO both,
+    // counted once.
+    link(&store, &doc(2), &[ca(2)], &[ca(3)]);
+    link(&store, &doc(2), &[ca(103)], &[ca(1)]);
+    link(&store, &doc(2), &[ca(3)], &[ca(104)]);
+    // The third: one link; the fourth: a link in the passage's block, off the
+    // passage; the fifth: two links, one retracted.
     link(&store, &doc(3), &[ca(2)], &[ca(105)]);
     link(&store, &doc(4), &[ca(50)], &[ca(106)]);
     link(&store, &doc(5), &[ca(1)], &[ca(107)]);
@@ -270,7 +271,7 @@ fn the_count_by_home_is_the_fourth_read_out_of_the_selection_index() {
     let all = reads.findlinks_v(&doc1(), &region).expect("findlinks_v");
     assert_eq!(all.len(), 7, "the seven live links on the passage: {all:?}");
     let full = by_home(&all);
-    assert_eq!(full, vec![(doc1(), 2), (doc2(), 3), (doc(3), 1), (doc(5), 1)]);
+    assert_eq!(full, vec![(doc1(), 2), (doc(2), 3), (doc(3), 1), (doc(5), 1)]);
 
     // No budget, nothing excepted: the enumeration grouped by home.
     let counts = reads.count_v_by_home(&doc1(), &region, usize::MAX, &[]).expect("count_v_by_home");
@@ -280,15 +281,15 @@ fn the_count_by_home_is_the_fourth_read_out_of_the_selection_index() {
 
     // Excepted homes: their rows go, the sum drops by their links, and a
     // home with no hit on the passage is passed to no effect.
-    let without_doc2 = reads.count_v_by_home(&doc1(), &region, usize::MAX, &[doc2()]).expect("count_v_by_home");
+    let without_doc2 = reads.count_v_by_home(&doc1(), &region, usize::MAX, &[doc(2)]).expect("count_v_by_home");
     assert_eq!(without_doc2.homes, vec![(doc1(), 2), (doc(3), 1), (doc(5), 1)]);
     assert_eq!(counted(&without_doc2), all.len() - 3);
     assert!(without_doc2.exhausted);
-    let excepted = [doc(4), doc2(), doc(5)];
+    let excepted = [doc(4), doc(2), doc(5)];
     let fewer = reads.count_v_by_home(&doc1(), &region, usize::MAX, &excepted).expect("count_v_by_home");
     assert_eq!(fewer.homes, vec![(doc1(), 2), (doc(3), 1)]);
     assert_eq!(counted(&fewer), all.len() - 4, "the links homed in the excepted homes");
-    let every = [doc1(), doc2(), doc(3), doc(5)];
+    let every = [doc1(), doc(2), doc(3), doc(5)];
     let none = reads.count_v_by_home(&doc1(), &region, 1, &every).expect("count_v_by_home");
     assert_eq!(none.homes, vec![], "every home excepted: no row");
     assert!(none.exhausted, "…and the walk ended under its budget");

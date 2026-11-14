@@ -7,7 +7,7 @@ use skep_arrangement::{
     RearrangeError, ReinstateError, VPos, VSpec, VersionError, Vstream,
 };
 use skep_kernel::{Seq, TxnError};
-use skep_namespace::{HasM3, Namespace, PrincipalId};
+use skep_namespace::{HasM3, Namespace, PrincipalId, FIRST_ORDINARY_DOCUMENT};
 
 use crate::common::*;
 
@@ -424,11 +424,12 @@ fn an_accounts_home_is_a_published_target_from_its_flagless_first_mint() {
     assert_eq!(start, a(&[1, 0, 2, 0, 1, 0, 1, 1]));
     assert_eq!(k.snapshot().world().m5().content_count(&home), n(1));
     // The account's SECOND flagless mint is a draft: an undeclared insert is
-    // admitted there as into any private document.
+    // admitted there as into any private document. It is the account's
+    // second document, past the reserved block.
     let (draft, _) = ns
         .create_new_document(PrincipalId(2), &p2_account, None)
         .expect("a later flagless mint into the account commits");
-    assert_eq!(draft, a(&[1, 0, 2, 0, 2]));
+    assert_eq!(draft, a(&[1, 0, 2, 0, FIRST_ORDINARY_DOCUMENT]));
     assert!(
         !k.snapshot().world().m3().published(&draft),
         "a later flagless mint is private by default (PUB-1.1)"

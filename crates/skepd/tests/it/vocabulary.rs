@@ -30,9 +30,10 @@ use skep_registry::{definition_at, defines_type, vocabulary, Definition};
 use skepd::Skepd;
 
 use crate::common::{
-    addrs_of, board_term, claim_board, doc_metadata, expect_resp, get, head_position, json, op,
-    open_session, read_link, region, seed_ats, spawn, spawn_unclaimed, BLIND_KIND, SEED_HEAD,
-    SEED_LINK_RECORDS, SEED_PUBLISH_AT, SEED_TYPES,
+    addrs_of, board_term, claim_board, doc_metadata, expect_resp, get, head_position, json,
+    nth_document, op, open_session, read_link, region, seed_ats, spawn, spawn_unclaimed,
+    system_accounts_first_mint, BLIND_KIND, SEED_HEAD, SEED_LINK_RECORDS, SEED_PUBLISH_AT,
+    SEED_TYPES,
 };
 
 /// The registry document: doc 1 of the system account.
@@ -400,7 +401,11 @@ fn a_seed_cut_short_by_a_refusal_is_said_once_and_finished_at_the_next_open() {
 /// under the system account, withheld from a guest on `doc_metadata` and
 /// `retrieve_v` alike, and no document is minted under the account across
 /// the seed and the claim's head: the time document `1.1.0.1.0.4` answers
-/// published, as genesis seeds it, and `1.1.0.1.0.5` is unregistered.
+/// published, as genesis seeds it, and the account's second document by its
+/// counter — where its first mint would land, past the reserved block — is
+/// unregistered. The address probed is held to the namespace's own answer
+/// for that mint, so the probe cannot pass by reading a number no mint
+/// fills.
 #[test]
 fn the_seed_writes_as_the_system_principal_through_the_one_staging_draft() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -427,7 +432,7 @@ fn the_seed_writes_as_the_system_principal_through_the_one_staging_draft() {
         assert!(row.get("attest").is_none(), "unsigned: {row}");
     }
     // The staging draft, private, on both reads that take a document; the
-    // time document, published; and no fifth document under the system
+    // time document, published; and no document minted under the system
     // account after the seed and the claim's head.
     let draft = doc_metadata(port, None, STAGING_DRAFT);
     assert_eq!(expect_resp(&draft, "rejected")["code"].as_str(), Some("withheld"), "{draft}");
@@ -442,11 +447,17 @@ fn the_seed_writes_as_the_system_principal_through_the_one_staging_draft() {
     assert_eq!(expect_resp(&read, "rejected")["code"].as_str(), Some("withheld"), "{read}");
     let time = doc_metadata(port, None, TIME_DOCUMENT);
     assert_eq!(expect_resp(&time, "doc_metadata")["published"].as_bool(), Some(true), "{time}");
-    let fifth = doc_metadata(port, None, "1.1.0.1.0.5");
+    let first_mint = nth_document(&skep_namespace::system_account().to_string(), 2);
     assert_eq!(
-        expect_resp(&fifth, "rejected")["code"].as_str(),
+        first_mint,
+        system_accounts_first_mint(),
+        "the probe reads where a mint under the system account would land"
+    );
+    let unminted = doc_metadata(port, None, &first_mint);
+    assert_eq!(
+        expect_resp(&unminted, "rejected")["code"].as_str(),
         Some("doc_not_registered"),
-        "{fifth}"
+        "{unminted}"
     );
     sd.shutdown();
 }

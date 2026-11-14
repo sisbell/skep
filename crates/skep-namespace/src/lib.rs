@@ -63,9 +63,16 @@
 //!   [`Namespace::delegate`], the only op that allocates one, and its next
 //!   value is published as the peek [`M3State::next_account_prefix`]. Every
 //!   chain issues `c_{m+1}`, so on an empty frontier its first member lands
-//!   on the slot it opens at, ordinal 1 — except on the ghost content chain,
-//!   whose first member lands at [`GHOST_POSITIONS`] + 1, past the slots the
-//!   ghost region reserves (below). Two of the chains issue elements — a
+//!   on the slot it opens at, ordinal 1 — except on two kinds of chain. The
+//!   ghost content chain's first member lands at [`GHOST_POSITIONS`] + 1,
+//!   past the slots the ghost region reserves (below). And an account's
+//!   document chain issues its doc 1 and then document
+//!   [`FIRST_ORDINARY_DOCUMENT`] and on: the numbers between are the
+//!   reserved block of well-known slots, in every account, which no mint
+//!   issues. A named slot of the block — document 2, 3 or 4 — holds a
+//!   document only where a record placed one there, once, and such a record
+//!   moves no count; the system account's three are in genesis's seed. Two
+//!   of the chains issue elements — a
 //!   document's content chain and its link chain — and no third does: the
 //!   allocator refuses to issue any other element, so no element in any
 //!   other subspace is ever minted, and subspace 3, where type names are
@@ -88,8 +95,8 @@
 //!   peek [`M3State::next_account_prefix`], the content chain's next
 //!   address [`M3State::next_content_address`] (the content-frontier
 //!   read's answer, AUTH-6.38), the version chain's latest member
-//!   [`M3State::latest_version`], and the emptiness of an account's
-//!   document chain [`M3State::has_documents`] — and the publication read
+//!   [`M3State::latest_version`], and whether an account holds its doc 1
+//!   [`M3State::has_documents`] — and the publication read
 //!   [`M3State::published`] and its enumeration [`M3State::documents`] —
 //!   the engine's one definition of a document's publication state, the
 //!   bit its own allocation record journaled \[PUB-7.8, PUB-7.10;
@@ -132,9 +139,11 @@
 //!   replay, §8);
 //! * deletion/revocation — none exists: allocations, nodes, and principals
 //!   are permanent (B0/O12), and a frontier gap is unrepresentable (B1). The
-//!   one carve-out is the ghost region above, which is compiled format
-//!   rather than state: the skipped ordinals are never issued and never
-//!   members, on every board;
+//!   two carve-outs are compiled format rather than state, the same on
+//!   every board: the ghost region above, whose skipped ordinals are never
+//!   issued and never members; and the reserved block of every document
+//!   chain, whose numbers are never issued, and of which only a named slot
+//!   a record filled is a member;
 //! * a publication transition — none exists, in either direction: a
 //!   document's publication state is fixed at its mint and journaled on its
 //!   own allocation record, and no M3 function changes it (PUB-1.9:
@@ -164,7 +173,7 @@
 mod error;
 // Namespaces — ASN-0040's `(p, d)`, spelled `(anchor, g)` here: the frontier
 // and lock key, built only here; the chain-family rule; a chain's slots by
-// ordinal; its opening slots.
+// ordinal; its opening slots; a document chain's reserved block.
 mod ns;
 // The ghost region: the five reserved type addresses M7 reads, and the floor
 // that keeps the allocator past them.
@@ -184,7 +193,7 @@ mod ops;
 
 pub use error::{CreateDocumentError, DelegateError, MintError, RegisterNodeError};
 pub use ghost::{ghost_home_document, ghost_position, GHOST_POSITIONS};
-pub use ns::{first_document_address, first_version_address};
+pub use ns::{first_document_address, first_version_address, FIRST_ORDINARY_DOCUMENT};
 pub use ops::Namespace;
 pub use record::{
     Allocation, M3Rec, Principal, PrincipalId, RangeAllocation, BOOTSTRAP_PRINCIPAL,

@@ -19,6 +19,7 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use skep_client::address::FIRST_ORDINARY_DOCUMENT;
 use skepd::{embed, AuthOptions, MediaOptions, Skepd, DEFAULT_WORKERS};
 
 pub fn spawn(dir: &Path, local_trust: bool) -> Skepd {
@@ -47,24 +48,28 @@ pub fn origin(port: u16) -> String {
 
 /// Returns the address of `account`'s k-th document, its home page first.
 ///
-/// Past an ordinary account's home page, this is the one place these suites
-/// spell the number of a document a board hands out: a test names the
-/// claimant's second document `nth_document("1.0.1", 2)`, not by its
-/// number. The counter numbers an account's documents 1, 2, 3, …, so the
-/// k-th is `k`. Under a counter that skips the namespace's reserved block,
-/// slots 2 to 63, the home page is 1 and the k-th document `k + 62`, and
-/// this body alone changes to say so.
+/// Past an account's home page, this is the one place these suites say the
+/// number of a document a board hands out: a test names the claimant's
+/// second document `nth_document("1.0.1", 2)`, not by its number. The
+/// counter numbers an account's documents 1 and then from the first
+/// ordinary document's number on, past the namespace's reserved block of
+/// well-known slots. So the home page is 1 and the k-th document past it is
+/// worked out from that number, which this body reads and never spells. It
+/// reads the client's copy, `skep_client::address::FIRST_ORDINARY_DOCUMENT`:
+/// this suite links no namespace, and the client's suite holds its copy
+/// equal to the namespace's constant.
 ///
 /// `skepd`'s live suite holds a copy of this function in its own
-/// `tests/it/common.rs`, since the two suites share no crate. The two bodies
-/// stay equal.
+/// `tests/it/common.rs`, since the two suites share no crate; its body reads
+/// the namespace's constant itself. The two answer alike.
 ///
 /// # Panics
 ///
 /// If `k` is 0: an account has no 0th document.
 pub fn nth_document(account: &str, k: u64) -> String {
     assert_ne!(k, 0, "an account has no 0th document");
-    format!("{account}.0.{k}")
+    let first = FIRST_ORDINARY_DOCUMENT;
+    format!("{account}.0.{}", if k == 1 { 1 } else { first + k - 2 })
 }
 
 /// A recording proxy in front of a daemon: every connection made to

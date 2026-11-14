@@ -70,7 +70,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use skep_client::address::parent_account;
+use skep_client::address::{parent_account, FIRST_ORDINARY_DOCUMENT};
 use skep_client::board::{frames, Token};
 use skep_client::derive::Mode;
 use skep_client::dial::plaintext_non_loopback_warning;
@@ -289,7 +289,12 @@ pub fn seed(c: &DevLine) -> Result<(), Stop> {
     if manifest.is_new() {
         // No manifest: a board holding documents past doc 1 is not fresh,
         // and no probe guesses what landed there (§5.1 arm (c), the one read).
-        let second = format!("{account}.0.2");
+        // The read is of the account's second document, where its counter
+        // resumes past the reserved block: this tool mints through the
+        // counter alone, so its first write past doc 1 stands there, and a
+        // number of the block is empty on a seeded board and a fresh one
+        // alike.
+        let second = format!("{account}.0.{FIRST_ORDINARY_DOCUMENT}");
         if w.registered(&second)? {
             let file = if manifest.is_torn() { "holds no complete line" } else { "does not exist" };
             return Err(Halt::face(

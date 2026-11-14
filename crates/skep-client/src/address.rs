@@ -4,8 +4,10 @@
 //! The grammar gives an account's parent account, which AUTH-5.21's walk
 //! climbs by; its first child, `inc(X, 1)`, the agents' home (AUTH-5.87);
 //! its doc 1 (AUTH-2.109); its mailbox, at the well-known slot
-//! [`MAILBOX_SLOT`] (the mailbox design §2); the document an element or link
-//! address lies in; the parse into `skep_address`'s `Address`, T4 checked;
+//! [`MAILBOX_SLOT`] (the mailbox design §2); the number its documents are
+//! counted from past doc 1, [`FIRST_ORDINARY_DOCUMENT`]; the document an
+//! element or link address lies in; the parse into `skep_address`'s
+//! `Address`, T4 checked;
 //! the text test a key file's `account` member is held to (§3.2); and the
 //! principal depth the namespace delegates to, which every walk upward from
 //! a board-named account is held to before its first read. Pure functions
@@ -59,6 +61,18 @@ pub fn first_child(account: &str) -> String {
 pub fn doc_1_of(account: &str) -> String {
     format!("{account}.0.1")
 }
+
+/// `skep-namespace`'s `FIRST_ORDINARY_DOCUMENT`, reproduced.
+///
+/// It is the first document number an account's counter hands out after its
+/// doc 1: an account's documents are numbered 1 and then from here on, and
+/// the numbers between are reserved for well-known documents, the mailbox's
+/// [`MAILBOX_SLOT`] among them (the mailbox design §2). So an account's
+/// second document stands at `<account>.0.` and this number. The namespace's
+/// constant is the one spelling of the number (`skep-namespace/src/ns.rs`);
+/// this crate does not link that one, so it holds this copy for the tools
+/// above it that link neither, and its suite holds the two equal.
+pub const FIRST_ORDINARY_DOCUMENT: u64 = 64;
 
 /// The well-known slot of an account's mailbox: document 2.
 ///
@@ -201,6 +215,18 @@ mod tests {
     #[test]
     fn the_depth_bound_is_the_namespaces_own() {
         assert_eq!(MAX_PRINCIPAL_COMPONENTS, skep_namespace::MAX_PRINCIPAL_COMPONENTS);
+    }
+
+    /// The first ordinary document is the namespace's own constant, held.
+    ///
+    /// Where the namespace moves the number its counter resumes at, this
+    /// fails and names the copy to move, so no tool above this crate looks
+    /// for an account's second document where the board no longer puts it.
+    /// The mailbox's slot lies below it, in the block the counter steps over.
+    #[test]
+    fn the_first_ordinary_document_is_the_namespaces_own() {
+        assert_eq!(FIRST_ORDINARY_DOCUMENT, u64::from(skep_namespace::FIRST_ORDINARY_DOCUMENT));
+        assert!(1 < MAILBOX_SLOT && MAILBOX_SLOT < FIRST_ORDINARY_DOCUMENT);
     }
 
     /// The namespace's depth admits its last component and refuses one past.

@@ -19,7 +19,9 @@ use skep_address::{is_prefix, ordinal, validate, Address, Level, Tumbler};
 
 use super::M3State;
 use crate::ghost::ghost_floor;
-use crate::ns::{document_ns, namespace_of, nth_in, version_ns};
+use crate::ns::{
+    document_ns, is_document_ns, is_named_slot, is_reserved_slot, namespace_of, nth_in, version_ns,
+};
 use crate::record::PrincipalId;
 
 // ---------------------------------------------------------------------------
@@ -57,11 +59,31 @@ impl M3State {
     /// permanent: the five ghost tumblers answer unallocated on every board
     /// forever ([`ghost_floor`] — nothing exists at a reserved type address),
     /// however far the chain past them has advanced.
+    ///
+    /// One part of one chain family is answered off another map. A document
+    /// number of the reserved block — a slot of an account's document chain
+    /// past its doc 1 and below [`FIRST_ORDINARY_DOCUMENT`] — is never
+    /// answered by the count, which steps over the block: under a count at
+    /// or past the block's end the interval would call every slot a member.
+    /// A slot is a member iff it is a named slot and the publication map
+    /// holds its document — the entry the fold writes in the step that
+    /// places a document there, and writes for nothing else at that address
+    /// ([`M3State::apply_m3`]). So a slot no record filled answers
+    /// unregistered, a filled one registered, and a slot that is not named
+    /// unregistered on every slice, one decoded from a corrupted checkpoint
+    /// included: the name is tested ahead of the map. Doc 1 and every number
+    /// from [`FIRST_ORDINARY_DOCUMENT`] on are answered by the interval, as
+    /// every other chain's slots are.
+    ///
+    /// [`FIRST_ORDINARY_DOCUMENT`]: crate::FIRST_ORDINARY_DOCUMENT
     fn is_chain_member(&self, a: &Address) -> bool {
         let Some(key) = namespace_of(a) else {
             return false; // parentless only for a 1-component node — the callers' Node arm
         };
         let n = ordinal(a.tumbler()); // &Nat — compare BY REFERENCE (BigUint is not Copy)
+        if is_document_ns(&key) && is_reserved_slot(n) {
+            return is_named_slot(n) && self.publication.contains_key(a);
+        }
         *n > ghost_floor(&key) && self.frontiers.get(&key).is_some_and(|m| n <= m)
     }
 
@@ -79,7 +101,16 @@ impl M3State {
     /// answer is permanent (B0/P1) on every slice the fold produces: the one
     /// record that could set a frontier back — an `Allocate` or a range staged
     /// where [`M3Rec::Allocate`] forbids — [`M3State::apply_m3`] refuses, on
-    /// every build.
+    /// every build, and a publication entry, which is what registers a
+    /// document at a well-known slot, is never removed.
+    ///
+    /// A document number of the reserved block — past an account's doc 1 and
+    /// below [`crate::FIRST_ORDINARY_DOCUMENT`] — is allocated only where a
+    /// record placed a document at it, and only a named slot can hold one
+    /// (the mailbox design §2). A slot nothing has filled answers `false`
+    /// however many documents the account has minted past the block, so an
+    /// address there can be named, and linked to, before anything stands at
+    /// it.
     ///
     /// An element is allocated only on one of two chains: its document's
     /// content chain, `d·0·1·n`, or its link chain, `d·0·2·n` — the only
@@ -139,29 +170,32 @@ impl M3State {
         self.entity_level(a) == Some(Level::Account)
     }
 
-    /// Returns whether `account`'s `(account, 2)` chain is non-empty.
+    /// Returns whether `account` holds a document its counter handed out.
     ///
-    /// That is whether it has any documents: AUTH-3.68's
-    /// `has_documents(account)`, and the premise of the create path's
-    /// empty-account rule (PUB-8.21). The chain's frontier *is* its count
-    /// (B1), so the chain is non-empty iff that frontier exists and is
-    /// nonzero — one lookup on the key [`M3State::mint_document`] reads; a
-    /// zero count, representable only off a corrupted checkpoint, is an empty
-    /// chain, as [`M3State::latest_version`] reads it. `false` off the account
-    /// tier, where no document chain is anchored — the tier gate is what makes
-    /// the key the document chain's, since `(N, 2)` under a node is the
-    /// account chain — and, on every state M3's own ops produce, for an
-    /// unregistered account, whose chain is empty because `mint_document`
-    /// refuses one (P8). It reads the chain and not the registry, like
-    /// `latest_version`: P8 is a producer invariant the fold does not
-    /// re-check, so off it — a document folded under an account no op
+    /// That is whether it holds its doc 1, the first the counter hands out:
+    /// AUTH-3.68's `has_documents(account)`, and the premise of the create
+    /// path's empty-account rule (PUB-8.21). The frontier of the account's
+    /// `(account, 2)` chain is the last number its counter handed out, so the
+    /// account holds its doc 1 iff that frontier exists and is nonzero — one
+    /// lookup on the key [`M3State::mint_document`] reads; a zero count,
+    /// representable only off a corrupted checkpoint, is an empty chain, as
+    /// [`M3State::latest_version`] reads it. A document at a well-known slot
+    /// moves no count, so an account that holds a slot and no doc 1 answers
+    /// `false`, and its next create is still its doc 1, born published by that
+    /// rule. `false` off the account tier, where no document chain is anchored
+    /// — the tier gate is what makes the key the document chain's, since
+    /// `(N, 2)` under a node is the account chain — and, on every state M3's
+    /// own ops produce, for an unregistered account, whose chain is empty
+    /// because `mint_document` refuses one (P8). It reads the chain and not the
+    /// registry, like `latest_version`: P8 is a producer invariant the fold
+    /// does not re-check, so off it — a document folded under an account no op
     /// registered — this answers the chain, and whether the account is
     /// registered stays the caller's question
     /// ([`M3State::is_registered_account`]). Asked by
-    /// [`crate::Namespace::create_new_document`] under the held
-    /// document-chain key and by the daemon's gates off a snapshot — its two
-    /// mint doors, the publish-class gate and the pre-claim gate; answered
-    /// here so that neither reassembles it.
+    /// [`crate::Namespace::create_new_document`] under the held document-chain
+    /// key and by the daemon's gates off a snapshot — its two mint doors, the
+    /// publish-class gate and the pre-claim gate; answered here so that neither
+    /// reassembles it.
     pub fn has_documents(&self, account: &Address) -> bool {
         account.level() == Level::Account
             && self

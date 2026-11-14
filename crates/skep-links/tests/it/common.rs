@@ -24,7 +24,7 @@ use skep_links::{
     enc, Caller, Endset, HasLinks, LinkRec, LinkState, LinkWriter, ReservedAddrs, SlotArg,
     Visibility,
 };
-use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
+use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId, FIRST_ORDINARY_DOCUMENT};
 use tempfile::{tempdir, TempDir};
 
 /// The seeded owner of doc1/doc2 — every pre-ruling op runs under it, so
@@ -380,18 +380,23 @@ pub fn edition_world() -> World {
     }
 }
 
-/// Document `d` of the owner's account: `[1,0,1,0,d]` — doc1 at 1, doc2 at
-/// 2, and the homes [`many_documents`] registers past them.
+/// The owner's account's `d`-th document, as its counter hands them out:
+/// doc1 at `[1,0,1,0,1]`, and the rest from `FIRST_ORDINARY_DOCUMENT` on,
+/// past the reserved block of well-known slots — the homes
+/// [`many_documents`] registers, and the document a mint over any fixture
+/// here answers. The second is NOT the seeded fixtures' [`doc2`], which
+/// stands at a slot of that block.
 pub fn doc(d: u32) -> Address {
-    a(&[1, 0, 1, 0, d])
+    a(&[1, 0, 1, 0, if d == 1 { 1 } else { FIRST_ORDINARY_DOCUMENT + d - 2 }])
 }
 
 /// An M3 slice registering `count` private documents under the owner's
-/// account, `[1,0,1,0,1]` through `[1,0,1,0,count]`, each allocated at its
+/// account, [`doc`]`(1)` through [`doc`]`(count)`, each allocated at its
 /// chain's next ordinal as M3's fold requires — the many-homes fixture the
 /// cost laws and the open's timing read, where [`seeded_m3`]'s two documents
-/// cannot spread links over a thousand homes. Doc1 and doc2 are the first two,
-/// so every fixture address holds.
+/// cannot spread links over a thousand homes. Doc1 is the first, so every
+/// doc1 fixture address holds; no slot of the reserved block is filled, so
+/// [`doc2`] is not registered here.
 pub fn many_documents(count: u32) -> M3State {
     let mut m3 = M3State::genesis()
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1]), false))

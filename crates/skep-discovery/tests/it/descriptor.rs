@@ -290,7 +290,7 @@ fn a_two_slot_descriptor_drives_from_the_constraint_with_the_fewest_homes() {
         seed_content(&k, &doc1(), 1);
         let store = LinkWriter::new(&k, &EVERYONE);
         for i in 0..READ_WITHS {
-            typed_link(&store, &doc2(), &[ca(1)], &[ca2(1 + i)], &rel2()); // the read-withs, one home
+            typed_link(&store, &doc(2), &[ca(1)], &[doc_ca(2, 1 + i)], &rel2()); // the read-withs, one home
         }
         for i in 0..flood {
             link(&store, &doc(3 + i), &[ca(1)], &[ca(1_000 + i)]); // the flood, a home apiece

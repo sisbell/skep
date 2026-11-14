@@ -463,12 +463,13 @@ fn the_preview_asks_its_predicate_only_of_the_links_it_orphans() {
 }
 
 /// A world of `flood` links FROM doc1's position 1, homed round-robin in
-/// `homes` documents past doc2 — every fourth of them RETRACTED from its own
-/// home, so the audit population of the passage holds the whole flood and
-/// the active one three quarters of it — beside two of doc1's own on the
-/// same position and one of doc2's on position 70 alone — another block of
-/// the content axis, so the passage's directory never names doc2 — the
-/// fixture the home rule's cost laws read at two floods and two home counts.
+/// `homes` documents past the account's second — every fourth of them
+/// RETRACTED from its own home, so the audit population of the passage holds
+/// the whole flood and the active one three quarters of it — beside two of
+/// doc1's own on the same position and one of the second document's on
+/// position 70 alone — another block of the content axis, so the passage's
+/// directory never names that document — the fixture the home rule's cost
+/// laws read at two floods and two home counts.
 /// A retraction's own record, homed where its target is, has its FROM over
 /// that home's content and touches nothing of doc1's passage.
 fn flooded_homes(flood: u32, homes: u32) -> Kernel<World> {
@@ -477,7 +478,7 @@ fn flooded_homes(flood: u32, homes: u32) -> Kernel<World> {
     let store = LinkWriter::new(&k, &EVERYONE);
     link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     link(&store, &doc1(), &[ca(1)], &[ca(102)]);
-    link(&store, &doc2(), &[ca(70)], &[ca(103)]); // off the passage, in another block
+    link(&store, &doc(2), &[ca(70)], &[ca(103)]); // off the passage, in another block
     for i in 0..flood {
         let home = doc(3 + i % homes);
         let minted = link(&store, &home, &[ca(1)], &[ca(1_000 + i)]);
@@ -550,8 +551,8 @@ fn a_region_read_pays_for_the_homes_the_reader_may_not_read_and_none_of_their_li
                 "doc1's two, whatever the flood"
             );
             // The homes asked: doc1 and the flood's, once each, in home order
-            // — never doc2, whose link lies off the passage and outside its
-            // block.
+            // — never the account's second document, whose link lies off the
+            // passage and outside its block.
             let asked = Asked::default();
             let recorder = asked.recording(only_doc1);
             findlinks_v_on(&k.snapshot(), &doc1(), &region, &recorder).expect("findlinks_v");

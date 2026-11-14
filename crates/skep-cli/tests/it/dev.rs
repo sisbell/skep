@@ -44,14 +44,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
-use skep_client::board::{frames, Answer, Board, Opened, SessionBody, Token};
+use skep_client::address::parse_address;
+use skep_client::board::{acked_addr, frames, Answer, Board, Opened, Scope, SessionBody, Token};
 use skep_client::ceremony::claim::{self, ClaimOutcome, NotebookOptions};
+use skep_client::ceremony::handshake::{handshake, Site};
 use skep_client::dial::PlainHttp;
 use skep_client::person::scripted::{Script, Scripted};
 use skep_client::sheet::Label;
+use skep_client::sign::{sig_hex, Signer};
 use skep_client::store::{FileStore, KeyStore};
 use skep_client::Origin;
 use skep_corpus::{Corpus, Cut};
+use skep_identity::{entry_body_empty, entry_frame, ContentFreeOp, DocTerm, Fingerprint};
 use skepd::{embed, AuthOptions, MediaOptions, Skepd, DEFAULT_WORKERS};
 use tempfile::TempDir;
 
@@ -241,11 +245,12 @@ fn repository(dir: &Path) -> (PathBuf, String, Cut) {
 // ── THE BOARD ──────────────────────────────────────────────────────────────
 
 /// A claimed board through the LIBRARY, as `ceremonies.rs` claims one: the
-/// store holds the device key and the account's line.
-fn claim_board(board_origin: &str, store: &Path, anchors: &Path) {
+/// store holds the device key, whose fingerprint is answered, and the
+/// account's line.
+fn claim_board(board_origin: &str, store: &Path, anchors: &Path) -> Fingerprint {
     let board = Board::new(Origin::parse(board_origin).unwrap(), PlainHttp::new());
     let store = FileStore::open(store);
-    store.generate(Some(Label::new("notebook").unwrap())).unwrap();
+    let fp = store.generate(Some(Label::new("notebook").unwrap())).unwrap().0;
     let mut person = Scripted::new(vec![Script::LabelDefault, Script::LabelDefault]);
     let opts = NotebookOptions {
         principal: None,
@@ -260,6 +265,26 @@ fn claim_board(board_origin: &str, store: &Path, anchors: &Path) {
     else {
         panic!("a stranger's board")
     };
+    fp
+}
+
+/// A document minted PUBLISHED into the claimant's account by a hand that is
+/// not the tool's: a content session under the store's device key `fp`, the
+/// mint attested over its parent account as a publish-class write on a
+/// claimed board is (wire.md §Namespace, `create_new_document`). The minted
+/// address.
+fn mint_published_as_the_claimant(board: &Board, store: &Path, fp: &Fingerprint) -> String {
+    let file_store = FileStore::open(store);
+    let device = file_store.load(&file_store.key_path(fp)).expect("the device key").signer();
+    let session = handshake(board, Scope::Content, &device, 1, Site::Session).expect("a content session");
+    let term = board.board_term().expect("the board term read").expect("H.1 stands on a claimed board");
+    let (alg, account) = (Signer::public_key(&device).alg(), parse_address("1.0.1").expect("an address"));
+    let body = entry_body_empty(ContentFreeOp::CreateNewDocument);
+    let signed = entry_frame(alg, term, &account, DocTerm::One(&account), &body);
+    let mut frame = serde_json::json!({"op": "create_new_document", "account": "1.0.1", "published": true});
+    frame["attest"] = serde_json::json!({"alg": alg, "sig": sig_hex(&Signer::sign(&device, &signed))});
+    let Answer::Document(v) = session.op(&frame).expect("the exchange") else { panic!("closed") };
+    acked_addr(&v).unwrap_or_else(|| panic!("a minted address: {v}")).to_string()
 }
 
 /// The built `skep-dev` with `args`, its environment cleared of the
@@ -1430,6 +1455,124 @@ fn a_manifest_write_refused_shows_its_lines_and_the_run_after_resumes_exact() {
     assert_eq!(v["already_seeded"], false);
     assert_expected_shape(&v, &cut);
     assert!(r.err.contains("the run resumes after them"), "{}", r.err);
+}
+
+/// A BOARD HOLDING A DOCUMENT PAST DOC 1 AND NO MANIFEST LINE IS REFUSED
+/// (the record's §5.1 arm (c), the probe of the board alone): the claimant's
+/// account already holds its second document — published here, so a guest
+/// reads its state — and no manifest stands beside the store. The run does
+/// not guess what another hand landed: it reads the account's second
+/// document, finds it registered and halts by the probe's own words, naming
+/// the document and the manifest, with nothing written to the board and no
+/// manifest made. The probe reads the document where the board's counter
+/// puts an account's second one, past the reserved block of well-known
+/// slots: aimed at a number of that block it would read an empty slot on
+/// this board and a fresh one alike, pass, and seed over what stands here.
+#[test]
+fn a_board_holding_a_document_past_doc_1_and_no_manifest_is_refused_by_the_probe() {
+    let dir: TempDir = tempfile::tempdir().unwrap();
+    let (repo, pin, _cut) = repository(dir.path());
+    let sd = spawn(&dir.path().join("board"), true);
+    let board_origin = origin(sd.port());
+    let board = board_at(&board_origin);
+    let store = dir.path().join("store");
+    let fp = claim_board(&board_origin, &store, &dir.path().join("anchors"));
+    // Another hand's write: the claimant's second document, born published.
+    let second = nth_document("1.0.1", 2);
+    assert_eq!(
+        mint_published_as_the_claimant(&board, &store, &fp),
+        second,
+        "the account's second document"
+    );
+    let manifest = manifest_at(dir.path(), &board);
+    let args = seed_args(&board_origin, s(&store), s(&repo), &pin);
+    let before = log_position(&board);
+    let r = skep_dev(&args);
+    assert_eq!(r.code, 3, "{r:?}");
+    assert!(r.out.is_empty(), "a halt carries no data: {}", r.out);
+    assert!(
+        r.err.contains("this board holds documents past doc 1, and no manifest records a seed"),
+        "{}",
+        r.err
+    );
+    assert!(
+        r.err.contains(&format!("{second} is registered")) && r.err.contains("does not exist"),
+        "the halt names the document it read and the manifest it did not find: {}",
+        r.err
+    );
+    assert_eq!(log_position(&board), before, "the refused run wrote to the board");
+    assert!(!manifest.exists(), "the refused run made a manifest");
+    let third = guest(&board, &frames::doc_metadata(&nth_document("1.0.1", 3)));
+    assert_eq!(rejected(&third), Some("doc_not_registered"), "the run minted nothing: {third}");
+}
+
+/// …AND SO IS A BOARD HOLDING A SEED'S OWN FIRST WRITE: the run before,
+/// refused its manifest's own write, left the board holding the staging
+/// draft — the account's second document, PRIVATE — and no line recording
+/// it. A run that meets that board with a manifest holding no complete
+/// line, or with none at all, reads the same document and goes no further:
+/// it ends without an object, with nothing written to the board and the
+/// manifest left as it stood. A private document answers the probe's
+/// token-free read `withheld`, so this run ends on the board's refusal of
+/// that read where the published document above ends on the probe's halt.
+#[cfg(unix)]
+#[test]
+fn a_board_holding_a_seeds_first_write_and_no_manifest_line_is_seeded_no_further() {
+    let dir: TempDir = tempfile::tempdir().unwrap();
+    let (repo, pin, _cut) = repository(dir.path());
+    let sd = spawn(&dir.path().join("board"), true);
+    let board_origin = origin(sd.port());
+    let board = board_at(&board_origin);
+    let store = dir.path().join("store");
+    claim_board(&board_origin, &store, &dir.path().join("anchors"));
+    let args = seed_args(&board_origin, s(&store), s(&repo), &pin);
+    // The run stopped inside its first write: the staging draft landed on
+    // the board, and the manifest records nothing.
+    let out = under_a_file_size_limit(env!("CARGO_BIN_EXE_skep-dev"), &args, 0)
+        .output()
+        .expect("the seed under a file-size limit");
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(3), "{err}");
+    assert!(
+        err.contains("the write `staging:mint` LANDED on the board and is not recorded"),
+        "{err}"
+    );
+    let second = nth_document("1.0.1", 2);
+    let landed = guest(&board, &frames::doc_metadata(&second));
+    assert_eq!(
+        rejected(&landed),
+        Some("withheld"),
+        "the staging draft stands at the account's second document, private: {landed}"
+    );
+    let manifest = manifest_at(dir.path(), &board);
+    for state in ["as the stopped run left it", "holding a torn header", "removed"] {
+        match state {
+            "holding a torn header" => {
+                let header = expected_header(&board_origin, &chain_of(&board), &pin);
+                std::fs::write(&manifest, &header.as_bytes()[..header.len() / 2]).unwrap();
+            }
+            "removed" if manifest.exists() => std::fs::remove_file(&manifest).unwrap(),
+            _ => {}
+        }
+        let found = manifest.exists().then(|| std::fs::read(&manifest).unwrap());
+        let before = log_position(&board);
+        let r = skep_dev(&args);
+        assert_ne!(r.code, 0, "{state}: the run went on over a board it did not seed: {r:?}");
+        assert!(r.out.is_empty(), "{state}: a run that stops carries no data: {}", r.out);
+        assert!(
+            r.err.contains("doc_metadata"),
+            "{state}: the run ends at its one read of the board: {}",
+            r.err
+        );
+        assert_eq!(log_position(&board), before, "{state}: the stopped run wrote to the board");
+        assert_eq!(
+            manifest.exists().then(|| std::fs::read(&manifest).unwrap()),
+            found,
+            "{state}: the stopped run left the manifest as it stood"
+        );
+    }
+    let third = guest(&board, &frames::doc_metadata(&nth_document("1.0.1", 3)));
+    assert_eq!(rejected(&third), Some("doc_not_registered"), "no run minted past the draft: {third}");
 }
 
 /// AN EMPTY MANIFEST FILE AND ONE HOLDING A TORN HEADER ALONE are each a

@@ -3152,6 +3152,12 @@ refused `credential_refused:mint_home_public` (permanent) — the home is
 public from birth; create it first, then everything else is private by
 default.
 
+The address answered follows the account's own count. The home page is
+document 1, and after it an account's documents are numbered from 64: a
+second document stands at the account's address followed by `.0.64`, a
+third at `.0.65`. Numbers 2–63 are reserved for well-known documents, in
+every account, and this op never mints one.
+
 On a CLAIMED board a mint BORN PUBLISHED — an explicit `published:true`
 into an account that already holds a document, or an account's first
 mint from a SIGNED session, flagless or `published:true` — carries the
@@ -6387,7 +6393,7 @@ one of these:
 
 <!-- wire: changes feed -->
 ```json
-{"changes":[{"at":406,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":407,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":408,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":411,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":414,"docs":["1.0.2.0.2"],"key":"bare","link":"1.0.2.0.2.0.2.1","op":"make_link","time":1786838400047}],"last":414,"more":false}
+{"changes":[{"at":406,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":407,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":408,"docs":["1.0.2.0.64"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":411,"docs":["1.0.2.0.64"],"key":"bare","op":"insert","time":1786838400033},{"at":414,"docs":["1.0.2.0.64"],"key":"bare","link":"1.0.2.0.64.0.2.1","op":"make_link","time":1786838400047}],"last":414,"more":false}
 ```
 
 The first page of the same feed, `GET /changes?since=404&limit=2`:

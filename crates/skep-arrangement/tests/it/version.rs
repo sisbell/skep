@@ -3,7 +3,7 @@
 
 use skep_address::SpanSet;
 use skep_arrangement::{seat_link, AsOf, Caller, Deposit, HasM5, Shot, VersionError, Vstream};
-use skep_namespace::{HasM3, PrincipalId};
+use skep_namespace::{HasM3, PrincipalId, FIRST_ORDINARY_DOCUMENT};
 
 use crate::common::*;
 
@@ -387,7 +387,9 @@ fn the_cross_owner_arm_is_refused_by_neither_version_chain_rule() {
     // source default plus the flag, and neither refusal reads on it — the
     // entitled reader's PRIVATE working copy of published material (an
     // explicit `false`), the inherited copy (absent), and the fork of
-    // another's draft all stand.
+    // another's draft all stand. The forker's account holds no document, so
+    // the three are its doc 1 and then its second and third, past the
+    // reserved block.
     let k = mem_kernel();
     let vs = deposit_abc(&k);
     insert_abc(&k);
@@ -398,11 +400,11 @@ fn the_cross_owner_arm_is_refused_by_neither_version_chain_rule() {
     let (inherited, _) = vs
         .version(PrincipalId(2), &pdoc(), None)
         .expect("the inherited copy");
-    assert_eq!(inherited, a(&[1, 0, 2, 0, 2]));
+    assert_eq!(inherited, a(&[1, 0, 2, 0, FIRST_ORDINARY_DOCUMENT]));
     let (of_draft, _) = vs
         .version(PrincipalId(2), &doc1(), None)
         .expect("a fork of another's draft");
-    assert_eq!(of_draft, a(&[1, 0, 2, 0, 3]));
+    assert_eq!(of_draft, a(&[1, 0, 2, 0, FIRST_ORDINARY_DOCUMENT + 1]));
     let s = k.snapshot();
     let m3 = s.world().m3();
     assert!(!m3.published(&private_copy), "the explicit false is the copy's bit");

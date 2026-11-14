@@ -126,8 +126,9 @@ pub const SYSTEM_PRINCIPAL: PrincipalId = PrincipalId(9_000_000_000_000_000);
 /// crate wrote decode into one, through the field doors. Such a record holds
 /// every door fact and nothing more. What its producer owes no door can
 /// check: the next ordinal the fold checks instead, on every build, and
-/// refuses a record that does not carry it; the seat beside an account and a
-/// fresh id nothing checks. So a crate that decodes a record and pushes it is
+/// refuses a record that carries neither it nor a named slot that holds no
+/// document; the seat beside an account and a fresh id nothing checks. So a
+/// crate that decodes a record and pushes it is
 /// a producer, owes what [`M3Rec::Allocate`] and [`M3Rec::RegisterPrincipal`]
 /// state, and is covered by none of the fold's guarantees where it falls
 /// short of those two. What the doors and the seals settle together is the
@@ -273,31 +274,38 @@ pub enum M3Rec {
     /// The address is [`Allocation::addr`]; these two records, this one and
     /// [`M3Rec::AllocateRange`], are the only things that move a frontier,
     /// and the chain is exactly the one whose `*_lock_key` its mint pairs
-    /// with: frontier key and lock key are one key.
+    /// with: frontier key and lock key are one key. One `Allocate` moves
+    /// none: a record at a named slot of a document chain's reserved block,
+    /// document 2, 3 or 4 of an account, places a document there and leaves
+    /// the chain's count where it stood. No mint returns such a record — the
+    /// counter steps over the block ([`crate::FIRST_ORDINARY_DOCUMENT`]) —
+    /// and genesis's seed holds the system account's three; the fold admits
+    /// one where the slot holds no document and refuses a second
+    /// ([`M3State::apply_m3`]).
     ///
-    /// **Where it may be staged.** This is the caller's half of every mint,
-    /// and an obligation M3 checks only by its consequence, since the record
+    /// **Where it may be staged.** This is the caller's half of every mint, and
+    /// an obligation M3 checks only by its consequence, since the record
     /// carries an address and not the state its mint read: in the transaction
     /// whose working state the mint was called on, under the mint's paired
     /// `*_lock_key`, before any other record advances the same chain. Its
-    /// address is `c_{m+1}` of *that* state, so there the record is always
-    /// inside [`M3State::apply_m3`]'s totality domain. Dropped, it leaves the
-    /// frontier where it stood, and the next mint on the chain hands out the
-    /// same address with nothing to say so — that mint's record is
-    /// legitimately `m + 1`. Staged anywhere else, it is stale: a peek's
-    /// record staged in a later transaction, a mint called on `stg.base()`
-    /// after another on its chain was staged, or two mints on one chain
-    /// before either record is pushed. Once another mint has landed on the
-    /// chain, a stale record names an address already issued, and once two
-    /// have, one below the frontier: folded, it would issue that address a
-    /// second time, and in the second case set the frontier back to its own
-    /// ordinal, so the later addresses would read unallocated and be minted
-    /// again. The fold refuses it, on every build: its contiguity check panics
-    /// at the push, which unwinds the transaction before anything is
-    /// journaled — a caller's bug answered as one — and
-    /// [`M3State::is_allocated`]'s permanent `true` holds on its chain. A
-    /// stale record whose chain has not moved still carries the next ordinal,
-    /// and folds as the mint it is.
+    /// address is the chain's next in *that* state — `c_{m+1}`, `m` the chain's
+    /// effective frontier there — so there the record is always inside
+    /// [`M3State::apply_m3`]'s totality domain. Dropped, it leaves the frontier
+    /// where it stood, and the next mint on the chain hands out the same
+    /// address with nothing to say so — that mint's record is legitimately the
+    /// chain's next. Staged anywhere else, it is stale: a peek's record staged
+    /// in a later transaction, a mint called on `stg.base()` after another on
+    /// its chain was staged, or two mints on one chain before either record is
+    /// pushed. Once another mint has landed on the chain, a stale record names
+    /// an address already issued, and once two have, one below the frontier:
+    /// folded, it would issue that address a second time, and in the second
+    /// case set the frontier back to its own ordinal, so the later addresses
+    /// would read unallocated and be minted again. The fold refuses it, on
+    /// every build: its contiguity check panics at the push, which unwinds the
+    /// transaction before anything is journaled — a caller's bug answered as
+    /// one — and [`M3State::is_allocated`]'s permanent `true` holds on its
+    /// chain. A stale record whose chain has not moved still carries the next
+    /// ordinal, and folds as the mint it is.
     ///
     /// An account's `Allocate` owes one record more, and the fold does not
     /// check it: its principal's [`M3Rec::RegisterPrincipal`], in the same
@@ -408,7 +416,10 @@ pub enum M3Rec {
 /// door (`parented_address`), and `published` takes no default (PUB-7.8).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Allocation {
-    /// The address the mint issued: `c_{m+1}` of the chain it lies on.
+    /// The address the record registers.
+    ///
+    /// It is the one its mint issued, the next address of the chain it lies
+    /// on, or a named slot of a document chain's reserved block.
     #[serde(deserialize_with = "parented_address")]
     pub(crate) addr: Address,
     /// The bit the mint stamped ([`M3Rec::Allocate`] states its rule).

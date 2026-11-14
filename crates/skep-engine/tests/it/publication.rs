@@ -21,7 +21,7 @@ use skep_arrangement::{Deposit, VersionError};
 use skep_content::Val;
 use skep_engine::{Draft, Engine, EngineError, OpenError, World};
 use skep_kernel::TxnError;
-use skep_namespace::{staging_draft, system_account, HasM3};
+use skep_namespace::{staging_draft, system_account, HasM3, FIRST_ORDINARY_DOCUMENT};
 use tempfile::tempdir;
 
 /// The set as `(draft, owner account)` pairs in address order — the
@@ -459,7 +459,10 @@ fn the_dump_renders_the_exception_set_as_a_hint() {
 /// and a dotted rendering is decimal, so the two orders agree only while
 /// every ordinal has the same digit count.
 ///
-/// Ten drafts in one account cross that boundary at 9 → 10. Its neighbour
+/// The drafts of one account cross that boundary where their numbers gain a
+/// digit: they are numbered from the account's second document,
+/// `FIRST_ORDINARY_DOCUMENT`, so they are minted through the next power of
+/// ten past it. Its neighbour
 /// above builds each expectation by its own rule — `seq_of` for the section, a
 /// text sort for the hint — over ordinals where the two orders coincide; here
 /// the two lists are asserted to differ before either is read against the
@@ -468,7 +471,8 @@ fn the_dump_renders_the_exception_set_as_a_hint() {
 fn the_publication_section_is_address_ordered_where_its_hint_is_text_ordered() {
     let engine = mem_engine();
     let (acct, _home) = setup_home(&engine);
-    let drafts: Vec<Address> = (0..10)
+    let gains_a_digit = 10u32.pow(FIRST_ORDINARY_DOCUMENT.ilog10() + 1);
+    let drafts: Vec<Address> = (FIRST_ORDINARY_DOCUMENT..=gains_a_digit)
         .map(|_| {
             engine
                 .namespace()
@@ -478,7 +482,7 @@ fn the_publication_section_is_address_ordered_where_its_hint_is_text_ordered() {
         })
         .collect();
 
-    // The set holds the ten and, under the system account, the staging draft
+    // The set holds them all and, under the system account, the staging draft
     // genesis seeds: each row a draft and its owner, as the dump renders them.
     let mut rows: Vec<(Address, String, String)> = drafts
         .iter()
@@ -502,5 +506,5 @@ fn the_publication_section_is_address_ordered_where_its_hint_is_text_ordered() {
         rows.iter().map(|(_, draft, owner)| format!("{draft}: {owner}")).collect();
     let hint = format!("\"publication.drafts\": {{{}}}", entries.join(", "));
     assert!(text.contains(&hint), "the hint is in RENDERED-TEXT order: expected {hint}\n{text}");
-    engine.check_hints().expect("the set's fold equals its seed over ten drafts");
+    engine.check_hints().expect("the set's fold equals its seed over the drafts");
 }

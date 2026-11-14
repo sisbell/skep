@@ -7,12 +7,12 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use crate::common::*;
 
 use serde::Serialize;
-use skep_address::{shift, validate, Level, Nat, Tumbler};
+use skep_address::{shift, validate, Address, Level, Nat, Tumbler};
 use skep_kernel::{Kernel, Seq};
 use skep_namespace::{
-    ghost_position, head_document, system_account, HasM3, M3Rec, M3State, MintError, Namespace,
-    PrincipalId, BOOTSTRAP_PRINCIPAL, MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS,
-    SYSTEM_PRINCIPAL,
+    first_document_address, ghost_position, head_document, staging_draft, system_account,
+    time_document, HasM3, M3Rec, M3State, MintError, Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL,
+    FIRST_ORDINARY_DOCUMENT, MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS, SYSTEM_PRINCIPAL,
 };
 use tempfile::tempdir;
 
@@ -61,6 +61,160 @@ fn a_regressed_range_first_ordinal_fail_stops_the_fold() {
     let _ = s.apply_m3(Seq(0), &alloc_range(&[1, 0, 1, 0, 1, 0, 1, 2], 2));
 }
 
+/// The document chain's own contiguity, past the reserved block: once an
+/// account holds its doc 1 its chain's next is the first ordinary document,
+/// so the fold admits that record after doc 1 and then the one after it — a
+/// hand-folded account of three documents, the shape every fixture above
+/// this crate folds. It reads as the same three minted through the ops do:
+/// each registered with its bit and its position, the account holding
+/// documents, each version chain its own, the walk in address order, the
+/// next mint the account's fourth, and no number of the block registered.
+#[test]
+fn the_fold_admits_the_first_ordinary_document_after_doc_1_and_then_the_next() {
+    let acct = a(&[1, 0, 1]);
+    let docs = [1, 2, 3].map(|k| nth_document(&acct, k));
+    let folded = M3State::genesis()
+        .apply_m3(Seq(1), &alloc(&[1, 0, 1]))
+        .apply_m3(Seq(2), &M3Rec::allocate(docs[0].clone(), true))
+        .apply_m3(Seq(3), &M3Rec::allocate(docs[1].clone(), false))
+        .apply_m3(Seq(4), &M3Rec::allocate(docs[2].clone(), true));
+    for (doc, (bit, at)) in docs.iter().zip([(true, 2), (false, 3), (true, 4)]) {
+        assert!(folded.is_registered_document(doc), "{doc} is not registered");
+        assert_eq!(folded.published(doc), bit, "{doc}");
+        assert_eq!(folded.minted_at(doc), Some(Seq(at)), "{doc}");
+        assert_eq!(folded.latest_version(doc), None, "{doc} has no version yet");
+    }
+    assert!(folded.has_documents(&acct));
+    assert_eq!(
+        folded.documents().take(3).map(|(doc, bit)| (doc.clone(), bit)).collect::<Vec<_>>(),
+        docs.iter().cloned().zip([true, false, true]).collect::<Vec<_>>(),
+        "the account's three documents lead the walk, in address order"
+    );
+    assert_eq!(
+        folded.mint_document(&acct, false).expect("the account mints").0,
+        nth_document(&acct, 4)
+    );
+    for number in 2..FIRST_ORDINARY_DOCUMENT {
+        assert!(
+            !folded.is_registered_document(&slot(&acct, number)),
+            "document {number} of the reserved block reads registered under a count past it"
+        );
+    }
+    // The same three through the ops are the same slice, but for the seat
+    // `delegate` stages beside the account and the positions the commits took.
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1).expect("delegate");
+    for (doc, bit) in docs.iter().zip([true, false, true]) {
+        let (minted, _) = ns.create_new_document(ID1, &acct, Some(bit)).expect("create");
+        assert_eq!(&minted, doc, "the ops mint what the hand-built fixture folds");
+    }
+    let minted = k.snapshot().world().m3().clone();
+    assert_eq!(
+        minted.documents().collect::<Vec<_>>(),
+        folded.documents().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        minted.mint_document(&acct, false).expect("the account mints").0,
+        nth_document(&acct, 4)
+    );
+}
+
+/// …and it stops on a document PAST the first ordinary one, folded straight
+/// after doc 1: the block is stepped over once, and the chain past it is as
+/// gap-free as any other.
+#[test]
+#[should_panic(expected = "Allocate ordinal must equal its namespace's effective frontier + 1")]
+fn a_document_past_the_chains_next_after_doc_1_fail_stops_the_fold() {
+    let acct = a(&[1, 0, 1]);
+    let s = M3State::genesis()
+        .apply_m3(Seq(0), &alloc(&[1, 0, 1]))
+        .apply_m3(Seq(0), &M3Rec::allocate(nth_document(&acct, 1), true));
+    let _ = s.apply_m3(Seq(0), &M3Rec::allocate(nth_document(&acct, 3), false));
+}
+
+/// A well-known slot is filled ONCE (the mailbox design §2). A second record
+/// at a slot that holds a document is outside the totality domain, and the
+/// fold fail-stops on it by the slot's own words, on every build — whatever
+/// bit either record carries, since the fold judges none.
+#[test]
+#[should_panic(expected = "a well-known slot is minted once: 1.0.1.0.2 already holds a document")]
+fn a_second_record_at_a_filled_slot_fail_stops_the_fold() {
+    let acct = a(&[1, 0, 1]);
+    let s = M3State::genesis()
+        .apply_m3(Seq(0), &alloc(&[1, 0, 1]))
+        .apply_m3(Seq(0), &M3Rec::allocate(nth_document(&acct, 1), true))
+        .apply_m3(Seq(0), &M3Rec::allocate(slot(&acct, 2), false));
+    let _ = s.apply_m3(Seq(0), &M3Rec::allocate(slot(&acct, 2), false));
+}
+
+/// The message a panic carried, for the cells that tell the fold's three
+/// refusals of an `Allocate` apart by their words.
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    payload.downcast_ref::<String>().cloned().unwrap_or_default()
+}
+
+/// Genesis fills all three of the system account's named slots, so the once
+/// rule is what keeps a system document from being placed while a board
+/// runs: a record at the head document, the staging draft or the time
+/// document, with either bit, fail-stops the fold on genesis, naming the
+/// slot. No rule about the account's kind is asked for.
+#[test]
+fn a_record_at_a_slot_genesis_filled_fail_stops_the_fold() {
+    for seeded in [head_document(), staging_draft(), time_document()] {
+        for bit in [false, true] {
+            let record = M3Rec::allocate(seeded.clone(), bit);
+            let refused = catch_unwind(|| M3State::genesis().apply_m3(Seq(1), &record));
+            let message =
+                panic_message(refused.expect_err("a second record at a seeded slot folded"));
+            assert!(
+                message.contains(&format!(
+                    "a well-known slot is minted once: {seeded} already holds a document"
+                )),
+                "the refusal names the slot: {message:?}"
+            );
+        }
+    }
+}
+
+/// The reserved block admits a record at a named slot and nowhere else (the
+/// mailbox design §2): every other document number of the block is refused
+/// by the block's own words, naming the record, on every build — in an
+/// account that holds no document, one that holds its doc 1, and one whose
+/// count stands past the block, so no count makes a number of the block the
+/// chain's next.
+#[test]
+fn a_record_in_the_reserved_block_at_no_named_slot_fail_stops_the_fold() {
+    let acct = a(&[1, 0, 1]);
+    let empty = M3State::genesis().apply_m3(Seq(0), &alloc(&[1, 0, 1]));
+    let with_doc_1 = empty.apply_m3(Seq(0), &M3Rec::allocate(nth_document(&acct, 1), true));
+    let past_the_block =
+        with_doc_1.apply_m3(Seq(0), &M3Rec::allocate(nth_document(&acct, 2), false));
+    let unnamed: Vec<u32> =
+        (2..FIRST_ORDINARY_DOCUMENT).filter(|number| !NAMED_SLOTS.contains(number)).collect();
+    assert_eq!(
+        unnamed.len() + NAMED_SLOTS.len(),
+        (FIRST_ORDINARY_DOCUMENT - 2) as usize,
+        "the block is its named slots and the numbers no slot names"
+    );
+    for (state, s) in [("empty", &empty), ("doc 1", &with_doc_1), ("past", &past_the_block)] {
+        for &number in &unnamed {
+            let record = M3Rec::allocate(slot(&acct, number), false);
+            let refused = catch_unwind(AssertUnwindSafe(|| s.apply_m3(Seq(1), &record)));
+            let message = panic_message(
+                refused.expect_err("a record at a number of the block no slot names folded"),
+            );
+            assert!(
+                message.contains(&format!(
+                    "an Allocate in the reserved block names a well-known slot: {} is none of them",
+                    slot(&acct, number)
+                )),
+                "{state}, document {number}: {message:?}"
+            );
+        }
+    }
+}
+
 /// A jumped `Allocate` is refused at the fold, on every build, and nowhere
 /// earlier: no field door can see contiguity — a claim about the frontier the
 /// record would advance — so the frame decodes, as a producer that decodes a
@@ -68,47 +222,91 @@ fn a_regressed_range_first_ordinal_fail_stops_the_fold() {
 /// refusal is clean: nothing is journaled, the kernel is not poisoned and
 /// still commits, no document the record names or would have skipped reads
 /// registered, the account's next document is the one it was, and the panic
-/// names the record. Folded, the record would register docs 2–4 with no
-/// publication entry, each read published by the engine's exception set.
+/// names the record. The record is the account's fourth document, pushed
+/// when its chain's next is its second: folded, it would register the second
+/// and third with no publication entry, each read published by the engine's
+/// exception set.
 #[test]
 fn a_jumped_allocate_decodes_and_fail_stops_at_the_push() {
     let (k, acct, _doc) = kernel_with_account_and_doc();
-    let frame = bincode::serialize(&RawM3Rec::Allocate {
-        addr: t(&[1, 0, 1, 0, 5]),
-        published: false,
-    })
-    .expect("serialize the raw shape");
-    let jumped: M3Rec = bincode::deserialize(&frame).expect("no field door sees contiguity");
-    let before = k.current_seq();
-    let refused = catch_unwind(AssertUnwindSafe(|| {
-        k.transact::<_, MintError>(&[M3State::document_lock_key(&acct)], |stg| {
-            stg.push(jumped.into());
-            Ok(())
-        })
-    }));
-    let payload = refused.expect_err("the jumped Allocate folded and committed");
-    let message = payload
-        .downcast_ref::<String>()
-        .cloned()
-        .unwrap_or_default();
+    let fourth = nth_document(&acct, 4);
+    let message = refused_at_the_push(&k, &acct, &fourth);
     assert!(
-        message.contains("1.0.1.0.5 is not its chain's next"),
+        message.contains(&format!("{fourth} is not its chain's next")),
         "the refusal names the record: {message:?}"
     );
-    assert_eq!(k.current_seq(), before, "the refusal committed something");
-    assert!(!k.is_poisoned(), "the refusal poisoned the kernel");
     let m3 = k.snapshot().world().m3().clone();
-    for skipped in 2..=5 {
+    for skipped in 2..=4 {
         assert!(
-            !m3.is_registered_document(&a(&[1, 0, 1, 0, skipped])),
-            "doc {skipped} reads registered"
+            !m3.is_registered_document(&nth_document(&acct, skipped)),
+            "the account's document {skipped} reads registered"
         );
     }
-    // …and the kernel still commits: the account's next document is doc 2.
+    // …and the kernel still commits: the account's next document is its second.
     let d2 = commit_mint(&k, M3State::document_lock_key(&acct), |m3| {
         m3.mint_document(&acct, false)
     });
-    assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
+    assert_eq!(d2, nth_document(&acct, 2));
+}
+
+/// Pushes an `Allocate` at `addr`, decoded off a raw frame as a producer that
+/// decodes a record and pushes it would hold it, and returns the words the
+/// fold stopped it by. Asserts the refusal is clean: nothing is journaled,
+/// and the kernel is not poisoned.
+fn refused_at_the_push(k: &Kernel<World>, acct: &Address, addr: &Address) -> String {
+    let frame = bincode::serialize(&RawM3Rec::Allocate {
+        addr: addr.tumbler().clone(),
+        published: false,
+    })
+    .expect("serialize the raw shape");
+    let record: M3Rec = bincode::deserialize(&frame).expect("no field door refuses the frame");
+    let before = k.current_seq();
+    let refused = catch_unwind(AssertUnwindSafe(|| {
+        k.transact::<_, MintError>(&[M3State::document_lock_key(acct)], |stg| {
+            stg.push(record.into());
+            Ok(())
+        })
+    }));
+    let message = panic_message(refused.expect_err("the record folded and committed"));
+    assert_eq!(k.current_seq(), before, "the refusal committed something");
+    assert!(!k.is_poisoned(), "the refusal poisoned the kernel");
+    message
+}
+
+/// A record in the reserved block at no named slot is refused at the push
+/// too, and by the block's own words, never the contiguity check's: at the
+/// first number past the named slots and at the block's last, when the
+/// account's count stands at its doc 1 and again when it stands past the
+/// block. No field door sees it either — the frame decodes — and the refusal
+/// is as clean: nothing is journaled, the kernel is not poisoned and still
+/// commits, the number reads unregistered, and the account's next document is
+/// the one it was.
+#[test]
+fn an_allocate_at_an_unnamed_slot_decodes_and_fail_stops_at_the_push() {
+    let (k, acct, _doc) = kernel_with_account_and_doc();
+    let unnamed = [NAMED_SLOTS[NAMED_SLOTS.len() - 1] + 1, FIRST_ORDINARY_DOCUMENT - 1]
+        .map(|number| slot(&acct, number));
+    for next in [2, 3] {
+        for refused in &unnamed {
+            let message = refused_at_the_push(&k, &acct, refused);
+            assert!(
+                message.contains(&format!(
+                    "an Allocate in the reserved block names a well-known slot: {refused} is none of them"
+                )),
+                "the refusal is the reserved block's and names the record: {message:?}"
+            );
+            assert!(
+                !message.contains("is not its chain's next"),
+                "the block's refusal is not the contiguity check's: {message:?}"
+            );
+            assert!(!k.snapshot().world().m3().is_registered_document(refused));
+        }
+        // …and the kernel still commits, on the count the refusals left.
+        let minted = commit_mint(&k, M3State::document_lock_key(&acct), |m3| {
+            m3.mint_document(&acct, false)
+        });
+        assert_eq!(minted, nth_document(&acct, next));
+    }
 }
 
 /// The range mint's precondition, held on every build: a range of nothing
@@ -164,7 +362,7 @@ fn a_range_mint_issues_the_addresses_n_single_mints_would_and_moves_the_frontier
     let (second, _) = after_range.mint_content_range(&doc, &Nat::from(2u32)).expect("registered");
     assert_eq!(second, next);
     assert_eq!(
-        base.mint_content_range(&a(&[1, 0, 1, 0, 9]), &Nat::from(1u32)).unwrap_err(),
+        base.mint_content_range(&a(&[1, 0, 1, 0, 71]), &Nat::from(1u32)).unwrap_err(),
         MintError::HomeNotRegistered
     );
 }
@@ -182,7 +380,7 @@ fn a_range_mint_issues_the_addresses_n_single_mints_would_and_moves_the_frontier
 #[test]
 fn a_non_node_entry_in_the_node_registry_is_unreachable() {
     let acct = a(&[1, 0, 9]);
-    let doc = a(&[1, 0, 1, 0, 9]);
+    let doc = a(&[1, 0, 1, 0, 71]);
     let ghost = ghost_position(1);
     let s = [&acct, &doc, &ghost]
         .into_iter()
@@ -667,6 +865,75 @@ fn the_slice_prints_its_four_fields_and_their_contents() {
     // asserts on.
 }
 
+/// The reserved block adds no field and no form to the slice: a filled slot
+/// is an entry of the publication map and of the position map, and a count
+/// past the block is a count. So a slice holding its account's doc 1, two
+/// filled slots and a second document round-trips M2's checkpoint encoding
+/// whole, and a durable kernel recovers the same slice — one slot restored
+/// FROM the checkpoint, the second document and the other slot by replay —
+/// and each answers as the live one did: the slots registered with the bits
+/// they carried, every other number of the block unregistered, and the
+/// counter standing past the block.
+#[test]
+fn a_slice_holding_filled_slots_and_a_count_past_the_block_recovers_whole() {
+    let dir = tempdir().expect("tempdir");
+    let fill = |k: &Kernel<World>, acct: &Address, placed: &Address, bit: bool| {
+        k.transact::<_, MintError>(&[M3State::document_lock_key(acct)], |stg| {
+            stg.push(M3Rec::allocate(placed.clone(), bit).into());
+            Ok(())
+        })
+        .expect("the slot's record commits");
+    };
+    let (acct, live) = {
+        let k = Kernel::open(fsync_config(dir.path()), genesis_world()).expect("open");
+        let ns = Namespace::new(&k);
+        let (acct, _) = ns
+            .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+            .expect("delegate");
+        ns.create_new_document(ID1, &acct, None).expect("doc 1");
+        fill(&k, &acct, &slot(&acct, 2), false);
+        // Checkpoint here: doc 1 and slot 2 are restored FROM the checkpoint;
+        // the rest ride post-checkpoint replay.
+        k.checkpoint().expect("checkpoint");
+        let (second, _) = ns
+            .create_new_document(ID1, &acct, Some(true))
+            .expect("the second document");
+        assert_eq!(second, nth_document(&acct, 2));
+        fill(&k, &acct, &slot(&acct, 3), true);
+        (acct, k.snapshot().world().m3().clone())
+    };
+    let bytes = bincode::serialize(&live).expect("checkpoint-encode the slice");
+    let restored: M3State = bincode::deserialize(&bytes).expect("the slice re-enters");
+    assert_eq!(restored, live);
+    let k2 = Kernel::open(fsync_config(dir.path()), genesis_world()).expect("reopen");
+    let recovered = k2.snapshot().world().m3().clone();
+    assert_eq!(recovered, live);
+    for (which, m3) in [("round-tripped", &restored), ("recovered", &recovered)] {
+        for (number, bit) in [(2, false), (3, true)] {
+            let placed = slot(&acct, number);
+            assert!(m3.is_registered_document(&placed), "{which}: {placed}");
+            assert_eq!(m3.published(&placed), bit, "{which}: {placed}");
+        }
+        for number in 4..FIRST_ORDINARY_DOCUMENT {
+            assert!(
+                !m3.is_registered_document(&slot(&acct, number)),
+                "{which}: document {number} of the block reads registered"
+            );
+        }
+        assert!(m3.is_registered_document(&nth_document(&acct, 2)), "{which}");
+        assert_eq!(
+            m3.mint_document(&acct, false).expect("the account mints").0,
+            nth_document(&acct, 3),
+            "{which}: the counter does not stand past the block"
+        );
+        assert_eq!(
+            Some(nth_document(&acct, 1)),
+            first_document_address(&acct),
+            "{which}"
+        );
+    }
+}
+
 #[test]
 fn durable_kernel_recovers_the_whole_slice_by_checkpoint_and_replay() {
     // M3 rides M2 (§8): its slice — the three registries and the publication
@@ -704,5 +971,5 @@ fn durable_kernel_recovers_the_whole_slice_by_checkpoint_and_replay() {
     // The frontiers recovered too: the chains continue where they left off.
     assert_eq!(m3.next_account_prefix(&a(&[1])), Some(a(&[1, 0, 2])));
     let (d2, _) = m3.mint_document(&acct, false).expect("mint after recovery");
-    assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
+    assert_eq!(d2, nth_document(&acct, 2));
 }

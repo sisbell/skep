@@ -37,7 +37,7 @@ fn containment_is_not_authorization() {
         m3.effective_owner(&a(&[1, 0, 2])),
         Some(BOOTSTRAP_PRINCIPAL)
     );
-    assert_eq!(m3.effective_owner(&a(&[1, 0, 1, 0, 9, 0, 1, 5])), Some(ID1));
+    assert_eq!(m3.effective_owner(&a(&[1, 0, 1, 0, 71, 0, 1, 5])), Some(ID1));
     // Uncovered (a foreign node's subtree): None.
     assert!(m3.effective_owner(&a(&[2])).is_none());
     assert!(m3.effective_owner(&a(&[2, 0, 1])).is_none());

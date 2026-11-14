@@ -17,11 +17,12 @@ fn create_new_document_authorizes_by_omega() {
         .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
         .expect("delegate");
 
-    // Ordinary: the effective owner baptizes documents in chain order.
+    // Ordinary: the effective owner baptizes documents in chain order — the
+    // account's doc 1, then its second document, past the reserved block.
     let (d1, seq1) = ns.create_new_document(ID1, &acct, None).expect("create 1");
     let (d2, seq2) = ns.create_new_document(ID1, &acct, None).expect("create 2");
     assert_eq!(d1, a(&[1, 0, 1, 0, 1]));
-    assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
+    assert_eq!(d2, nth_document(&acct, 2));
     assert!(seq2 > seq1);
     assert!(k.snapshot().world().m3().is_registered_document(&d1));
 
@@ -56,10 +57,10 @@ fn create_new_document_authorizes_by_omega() {
     );
     // A refused creation baptizes nothing: no commit, and the account's
     // document chain still stands where d1 and d2 left it — the next
-    // creation takes ordinal 3, so no refusal spent a slot.
+    // creation is the account's third document, so no refusal spent a number.
     assert_eq!(k.current_seq(), before);
     let (d3, _) = ns.create_new_document(ID1, &acct, None).expect("create 3");
-    assert_eq!(d3, a(&[1, 0, 1, 0, 3]));
+    assert_eq!(d3, nth_document(&acct, 3));
 }
 
 #[test]
@@ -132,7 +133,7 @@ fn fork_mints_in_the_callers_own_account_at_its_own_commit() {
     assert!(snap.world().m3().is_effective_owner(ID1, &d1));
     // Shares the (account, 2) chain with create_new_document.
     let (d2, _) = ns.create_new_document(ID1, &acct, None).expect("create");
-    assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
+    assert_eq!(d2, nth_document(&acct, 2));
 }
 
 #[test]
@@ -156,7 +157,7 @@ fn fork_resolves_its_flag_as_create_new_document_does() {
     // …a flagless fork into the NON-empty account is private, and an
     // explicit flag is honored as sent.
     let (d3, _) = ns.fork(ID1, None).expect("a later fork");
-    assert_eq!(d3, a(&[1, 0, 1, 0, 3]));
+    assert_eq!(d3, nth_document(&acct, 3));
     let (d4, _) = ns.fork(ID1, Some(true)).expect("an explicit-true fork");
     let (d5, _) = ns.fork(ID1, Some(false)).expect("an explicit-false fork");
     let m3 = k.snapshot().world().m3().clone();

@@ -13,15 +13,18 @@
 //! at-rest door [`t4_anchor`]. Its fields are private to this module, so the
 //! key a mint reads, the key its `Allocate` advances and the lock its caller
 //! holds cannot be spelled two ways. Also here: the chain-family rule that
-//! picks every generator, a chain's slots by ordinal, and the two opening
-//! slots published to callers outside M3 ([`first_document_address`],
-//! [`first_version_address`]).
+//! picks every generator, a chain's slots by ordinal, the two opening slots
+//! published to callers outside M3 ([`first_document_address`],
+//! [`first_version_address`]), and the reserved block of an account's
+//! document chain: the number its counter resumes at after doc 1
+//! ([`FIRST_ORDINARY_DOCUMENT`]), the named slots below it, and the test
+//! that tells a document chain's key from every other (`is_document_ns`).
 
-use num_traits::Zero;
+use num_traits::{ToPrimitive, Zero};
 use serde::{Deserialize, Deserializer, Serialize};
 use skep_address::{
-    checked_inc, content_subspace, inc, is_t4_valid, link_subspace, parent, shift, validate,
-    Address, GateViolation, Level, Nat, Tumbler,
+    checked_inc, classify, content_subspace, inc, is_t4_valid, link_subspace, parent, shift,
+    validate, Address, Class, GateViolation, Level, Nat, Tumbler,
 };
 use skep_kernel::{LockKey, Space};
 
@@ -388,7 +391,7 @@ pub(crate) fn nth_in(key: &NsKey, n: &Nat) -> Result<Address, GateViolation> {
 /// Registry-free, like [`prefix_contains`]: it names the *slot* and claims
 /// nothing about what is in it — which is why it is spelled differently from
 /// the corpus's "doc 1", a phrase that names the document. Whether the
-/// account has any documents is [`M3State::has_documents`], which reads the
+/// account holds that document is [`M3State::has_documents`], which reads the
 /// chain's frontier; the slot itself is public for the other question asked
 /// of that chain from outside M3 — is `d` the account's first document —
 /// which is otherwise answerable only by rebuilding the chain's anchor and
@@ -401,6 +404,72 @@ pub fn first_document_address(account: &Address) -> Option<Address> {
         first_in(&document_ns(account))
             .expect("an Account anchor is not Element-level, so TA5a admits k = 2")
     })
+}
+
+/// The first document number an account's counter hands out after doc 1.
+///
+/// An account's documents are numbered 1, its doc 1, and then from this
+/// number on. The numbers between, from 2 up to the one below this, are the
+/// reserved block of well-known slots, in every account, the system
+/// account's included (the mailbox design §2). No mint issues a number of
+/// the block: a document chain that holds its doc 1 is floored at this
+/// number less one (`M3State::effective_frontier`), as the ghost content
+/// chain is floored past the ghost region. The fold admits a record in the
+/// block only at a named slot that holds no document
+/// ([`M3State::apply_m3`]), and membership answers a number of the block by
+/// the document a record placed there, never by the count
+/// ([`M3State::is_allocated`]).
+///
+/// It is the one spelling of the number. Every other crate that says where
+/// an account's second document stands reads it here, a test helper and a
+/// fixture included; a crate that does not link this one holds a copy its
+/// suite holds equal to this (`skep-client`'s `address` module).
+///
+/// [`M3State::is_allocated`]: crate::M3State::is_allocated
+///
+/// [`M3State::apply_m3`]: crate::M3State::apply_m3
+pub const FIRST_ORDINARY_DOCUMENT: u32 = 64;
+
+/// The last of the reserved block's named slots, which are 2, 3 and 4.
+///
+/// A named slot is a document number that means one well-known document in
+/// every account of a kind: in the system account the head document, the
+/// staging draft and the time document, which genesis seeds; in every other
+/// account the mailbox, the bio and the link page (the mailbox design §2).
+/// The slots past it, up to [`FIRST_ORDINARY_DOCUMENT`], are reserved and
+/// named by nothing, so no record is admitted there.
+const LAST_NAMED_SLOT: u32 = 4;
+
+/// Returns whether `key` names an account's document chain, `(A, 2)`.
+///
+/// That is the one chain whose anchor is an account and whose generator
+/// opens the next field. The generator alone does not say so: the account
+/// chain under a node, `(N, 2)`, carries it too, and the reserved block is
+/// the document chain's alone. Asked of the key because the counter holds
+/// nothing else (`M3State::effective_frontier`); the fold and membership ask
+/// it of the key their address derives, so the three agree by one test.
+/// Total: an anchor outside T4, which a lock key built off an element can
+/// carry, classifies as no account.
+pub(crate) fn is_document_ns(key: &NsKey) -> bool {
+    key.g == Generator::NextField && classify(&key.parent) == Class::Account
+}
+
+/// Returns whether `n` is a document number of the reserved block.
+///
+/// That is a number past doc 1 and below [`FIRST_ORDINARY_DOCUMENT`]. It is
+/// asked of an ordinal on a document chain ([`is_document_ns`]) and means
+/// nothing on any other.
+pub(crate) fn is_reserved_slot(n: &Nat) -> bool {
+    n.to_u32()
+        .is_some_and(|n| 1 < n && n < FIRST_ORDINARY_DOCUMENT)
+}
+
+/// Returns whether `n` is one of the reserved block's named slots.
+///
+/// That is a number past doc 1 and no greater than `LAST_NAMED_SLOT`: the
+/// slots a record may fill, once each.
+pub(crate) fn is_named_slot(n: &Nat) -> bool {
+    n.to_u32().is_some_and(|n| 1 < n && n <= LAST_NAMED_SLOT)
 }
 
 /// Returns the address a document's first version occupies.

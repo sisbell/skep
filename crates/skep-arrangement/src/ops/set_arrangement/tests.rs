@@ -22,7 +22,7 @@
 use serde::{Deserialize, Serialize};
 use skep_content::{stage_write, ContentStore, ContentStretch, ContentWrite, Val};
 use skep_kernel::{Kernel, Seq};
-use skep_namespace::{M3Rec, PrincipalId};
+use skep_namespace::{M3Rec, PrincipalId, FIRST_ORDINARY_DOCUMENT};
 
 use super::*;
 use crate::error::SetArrangementError as E;
@@ -119,13 +119,15 @@ fn seeded() -> Kernel<LandWorld> {
 
 /// The edition's first member, minted by `version`, and the staging draft of
 /// it: `(member, draft)`, the draft holding the member's `a b c` by identity
-/// with the member as its recorded base at three.
+/// with the member as its recorded base at three. The draft is the first
+/// document the account's counter hands out here: the seeded world's
+/// documents past doc 1 stand at well-known slots, which move no count.
 fn staged(k: &Kernel<LandWorld>) -> (Address, Address) {
     let vs = Vstream::new(k);
     let (member, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the edition's first member");
     assert_eq!(member, a(&[1, 0, 1, 0, 3, 1]));
     let (draft, _) = vs.stage(PrincipalId(1), &member).expect("the staging draft");
-    assert_eq!(draft, a(&[1, 0, 1, 0, 4]));
+    assert_eq!(draft, a(&[1, 0, 1, 0, FIRST_ORDINARY_DOCUMENT]));
     (member, draft)
 }
 

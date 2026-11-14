@@ -35,7 +35,9 @@ use skep_kernel::{
 use skep_links::{
     enc, Endset, HasLinks, LinkRec, LinkState, LinkWriter, SlotArg, View,
 };
-use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId, GHOST_POSITIONS};
+use skep_namespace::{
+    HasM3, M3Rec, M3State, PrincipalId, FIRST_ORDINARY_DOCUMENT, GHOST_POSITIONS,
+};
 
 // ───────────────────────── the assembled test world ─────────────────────────
 
@@ -414,19 +416,43 @@ fn kernel_over(world: World) -> Kernel<World> {
     Kernel::open(cfg, world).expect("in-memory open cannot fail")
 }
 
-/// Document `d` of the account: `[1,0,1,0,d]` — doc1 at 1, doc2 at 2, pdoc
-/// at 3, and the homes [`kernel_with_documents`] registers past them.
+/// The account's `d`-th document, as its counter hands them out: doc1 at
+/// `[1,0,1,0,1]`, and the rest from `FIRST_ORDINARY_DOCUMENT` on, past the
+/// reserved block of well-known slots — the homes [`kernel_with_documents`]
+/// registers. The second and third are NOT the seeded fixture's [`doc2`] and
+/// [`pdoc`], which stand at slots of that block.
 pub fn doc(d: u32) -> Address {
-    a(&[1, 0, 1, 0, d])
+    a(&[1, 0, 1, 0, if d == 1 { 1 } else { FIRST_ORDINARY_DOCUMENT + d - 2 }])
+}
+
+/// Content element `ordinal` of [`doc`]`(d)`, as [`ca`] is doc1's: the
+/// address a link's end names in a home [`kernel_with_documents`] registers.
+pub fn doc_ca(d: u32, ordinal: u32) -> Address {
+    element_of(&doc(d), 1, ordinal)
+}
+
+/// Link element `ordinal` of [`doc`]`(d)`, as [`la`] is doc1's: the address
+/// of the `ordinal`-th link homed in it.
+pub fn doc_la(d: u32, ordinal: u32) -> Address {
+    element_of(&doc(d), 2, ordinal)
+}
+
+/// Element `ordinal` of `doc`'s `subspace`: the document's components, the
+/// separator, the subspace and the ordinal.
+fn element_of(doc: &Address, subspace: u32, ordinal: u32) -> Address {
+    let comps = doc.tumbler().iter().cloned().chain([0, subspace, ordinal].map(Nat::from));
+    validate(Tumbler::new(comps).expect("a document's address is nonempty"))
+        .expect("an element of a document is T4-valid")
 }
 
 /// An in-memory kernel over a world registering `count` PRIVATE documents
-/// under the account, `[1,0,1,0,1]` through `[1,0,1,0,count]`, each allocated
+/// under the account, [`doc`]`(1)` through [`doc`]`(count)`, each allocated
 /// at its chain's next ordinal as M3's fold requires — the many-homes fixture
 /// the cost laws read, where [`seeded_m3`]'s three documents cannot spread
-/// links over a thousand homes. Doc1 and doc2 are the first two, so every
-/// fixture address holds; the third is private here where [`pdoc`] is
-/// published.
+/// links over a thousand homes. Doc1 is the first, so every doc1 fixture
+/// address holds; no slot of the reserved block is filled, so [`doc2`] and
+/// [`pdoc`] are not registered here, and a test over this world names its
+/// second and third documents by [`doc`].
 pub fn kernel_with_documents(count: u32) -> Kernel<World> {
     let mut m3 = M3State::genesis()
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1]), false))

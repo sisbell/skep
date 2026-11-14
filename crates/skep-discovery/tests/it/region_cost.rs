@@ -92,7 +92,7 @@ fn world(homes: u32, flood: u32, named_only: bool) -> Kernel<World> {
             &store,
             &doc(home),
             &[ca(position)],
-            &[a(&[1, 0, 1, 0, home, 0, 1, 1])],
+            &[doc_ca(home, 1)],
         );
     }
     k
@@ -219,7 +219,7 @@ fn the_per_set_home_read_over_a_large_set_reports_its_cost() {
         // positions past the page's content, in blocks the passage never
         // names.
         let position = if i < VIEW { PASSAGE_START + i } else { 1_000 + i };
-        link(&store, &set, &[ca(position)], &[a(&[1, 0, 1, 0, 2, 0, 1, 1])]);
+        link(&store, &set, &[ca(position)], &[doc_ca(2, 1)]);
     }
     let seeded = seeding.elapsed();
     let snap = k.snapshot();
@@ -371,7 +371,7 @@ fn retracted_world(homes: u32, flood: u32) -> Kernel<World> {
     for i in 0..2 * flood {
         let home = 2 + i % homes;
         let position = PASSAGE_START + (10 * (i / homes) + i % homes) % PASSAGE;
-        let minted = link(&store, &doc(home), &[ca(position)], &[a(&[1, 0, 1, 0, home, 0, 1, 1])]);
+        let minted = link(&store, &doc(home), &[ca(position)], &[doc_ca(home, 1)]);
         if (i / homes) % 2 == 1 {
             store.nullify(SYS, &doc(home), &minted).expect("nullify succeeds");
         }

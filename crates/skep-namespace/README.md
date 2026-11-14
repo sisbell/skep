@@ -19,6 +19,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `(anchor, generator)`: account, document, version, content and link
   addresses are minted as the next ordinal on the chain their anchor
   names, gap-free and monotone behind M1's structural-validity gate.
+  One chain steps over a block: an account's documents are numbered 1
+  and then from `FIRST_ORDINARY_DOCUMENT`, 64, on. Numbers 2–63 are
+  reserved for well-known documents in every account and are never
+  minted; a document stands at 2, 3 or 4 only where a record placed it
+  there, once, as genesis places the system account's three, and a
+  number of the block that holds none reads unregistered.
   The content chain also mints a RANGE — `count` consecutive addresses
   in one record, the addresses `count` single mints would have issued,
   for a run of single-byte values the content store holds as one

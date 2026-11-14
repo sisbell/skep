@@ -4,10 +4,10 @@
 //! transactions its handle states — and this is the one place all three are
 //! observed at once. M10 holds no copy of the checked set — skepd's name for
 //! the writes an attestation is admitted on — so the set is pinned here, over
-//! the seventeen writes a draft takes; the eighteenth of the partition,
-//! `set_arrangement`, is outside the checked set as `stage` is and takes no
-//! `attest` member at all (wire.md §Arrangement), so no commit of it is
-//! observed here.
+//! the seventeen writes a draft takes; the partition's other two,
+//! `set_arrangement` and `create_well_known_document`, are outside the
+//! checked set as `stage` is and take no `attest` member at all (wire.md
+//! §Arrangement, §Namespace), so no commit of either is observed here.
 
 use std::sync::Arc;
 
@@ -94,7 +94,7 @@ fn an_attestation_lands_in_the_marker_of_the_ten_publish_class_kinds_alone() {
         );
         seen.push(kind);
     });
-    assert_eq!(seen.len(), 16, "the fixture's chain is 16 of the partition's 18 writes (reinstate above, set_arrangement outside the checked set): {seen:?}");
+    assert_eq!(seen.len(), 16, "the fixture's chain is 16 of the partition's 19 writes (reinstate above; set_arrangement and create_well_known_document outside the checked set, neither observed here): {seen:?}");
     let empty: Vec<&OpKind> = seen
         .iter()
         .filter(|k| matches!(k, OpKind::Delete | OpKind::Copy | OpKind::Reinstate | OpKind::Rearrange | OpKind::Delegate | OpKind::RegisterNode | OpKind::Stage))

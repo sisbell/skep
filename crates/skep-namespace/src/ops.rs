@@ -29,9 +29,7 @@ use crate::HasM3;
 /// It is a thin borrow of the engine's kernel and, on an attested handle, of
 /// the attestation `create_new_document` and `fork` commit under. The pure
 /// mints and queries live on [`M3State`] (reached through [`HasM3`]); this
-/// type owns only the five entity operations. M10 dispatches four of them;
-/// the fifth, [`Namespace::create_well_known_document`], has no wire
-/// operation, so M10 does not dispatch it.
+/// type owns only the five entity operations M10 dispatches.
 ///
 /// Two facts each op inherits from M2's `transact`, written here because they
 /// bind its callers.

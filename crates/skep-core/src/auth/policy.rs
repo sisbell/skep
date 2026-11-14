@@ -225,6 +225,7 @@ pub fn deposits_credential_link(op: &Op) -> bool {
         | Op::Delegate { .. }
         | Op::RegisterNode { .. }
         | Op::Fork { .. }
+        | Op::CreateWellKnownDocument { .. }
         | Op::NextAccountPrefix { .. }
         | Op::PrincipalPrefix { .. }
         | Op::EffectiveOwner { .. }
@@ -464,6 +465,21 @@ pub enum CredentialRefusal {
     /// permanent, the family's: the system account enrols no key, ever; the
     /// act that exists is an enrolment under an account of one's own.
     SystemAccountKeyless,
+    /// The system account creates no well-known document.
+    ///
+    /// A `create_well_known_document` naming the system account `1.1.0.1`,
+    /// whoever sends it. That account's well-known documents stand from
+    /// genesis at their fixed addresses, and its document 2 is the head
+    /// document, no mailbox (the mailbox design §2): the store, asked by
+    /// the system principal, would find that slot filled and answer the head
+    /// document's address as a mailbox's. Refused in the plain path's mint
+    /// slot, ahead of the board-state pair, so on claimed and unclaimed
+    /// boards alike, and read off the op's `account` alone: it discloses a
+    /// constant and no state. Token `system_account_no_well_known`, spelled
+    /// beside `system_account_keyless`, and permanent, the family's: no
+    /// committed state admits the same request; the act that exists is the
+    /// mailbox of an account of one's own.
+    SystemAccountNoWellKnown,
     /// The write-path check's second refusal (§4.5 (2)).
     ///
     /// An `attest` that does not verify, or a write over which none can be
@@ -599,6 +615,7 @@ impl CredentialRefusal {
             CredentialRefusal::AttestationRequired => "attestation_required".into(),
             CredentialRefusal::RecordSigRequired => "record_sig_required".into(),
             CredentialRefusal::SystemAccountKeyless => "system_account_keyless".into(),
+            CredentialRefusal::SystemAccountNoWellKnown => "system_account_no_well_known".into(),
             CredentialRefusal::AttestationInvalid(f) => {
                 format!("attestation_invalid:{}", f.sub_token())
             }
@@ -719,14 +736,21 @@ mod tests {
         assert_eq!(CredentialRefusal::ClaimFirst.disposition(), Permanent);
         // A sig-less record atom and the system account's credential
         // deposit are `Permanent` — no committed state admits the same bytes
-        // (SO-I7 (f)).
-        for refusal in
-            [CredentialRefusal::RecordSigRequired, CredentialRefusal::SystemAccountKeyless]
-        {
+        // (SO-I7 (f)) — and so is the system account's well-known mint,
+        // which no state admits either (the mailbox design §2).
+        for refusal in [
+            CredentialRefusal::RecordSigRequired,
+            CredentialRefusal::SystemAccountKeyless,
+            CredentialRefusal::SystemAccountNoWellKnown,
+        ] {
             assert_eq!(refusal.disposition(), Permanent, "{}", refusal.token());
         }
         assert_eq!(CredentialRefusal::RecordSigRequired.token(), "record_sig_required");
         assert_eq!(CredentialRefusal::SystemAccountKeyless.token(), "system_account_keyless");
+        assert_eq!(
+            CredentialRefusal::SystemAccountNoWellKnown.token(),
+            "system_account_no_well_known"
+        );
     }
 
     /// Checks each identity type's kind, and that a shipped type has none.

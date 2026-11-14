@@ -333,14 +333,15 @@ fn a_plain_handle_is_a_kernel_borrow_that_copies_and_prints() {
 /// dispatch holds no copy of it — so this suite is the one place M3's half is
 /// observed. An attested handle's `create_new_document` and `fork` commit
 /// under the value it carries; its `delegate` and `register_node`, outside
-/// the checked set, leave their signature slots empty whatever it carries; a
-/// plain handle's mint leaves its signature slot empty too; and the handle
-/// prints the arm it commits under, never the value. Over a journaled
-/// kernel, since an in-memory one keeps no marker. One attested handle serves
-/// four calls here to pin what the type does; a producer builds one per call
-/// (`Namespace::attested`'s obligation).
+/// the checked set, leave their signature slots empty whatever it carries —
+/// as its third document mint, the mailbox's, does, in a cell of its own in
+/// `mailbox.rs`; a plain handle's mint leaves its signature slot empty too;
+/// and the handle prints the arm it commits under, never the value. Over a
+/// journaled kernel, since an in-memory one keeps no marker. One attested
+/// handle serves four calls here to pin what the type does; a producer
+/// builds one per call (`Namespace::attested`'s obligation).
 #[test]
-fn an_attested_handle_signs_its_two_document_mints_alone() {
+fn an_attested_handle_signs_its_two_checked_set_mints_alone() {
     let dir = tempdir().expect("tempdir");
     let k = Kernel::open(fsync_config(dir.path()), genesis_world()).expect("open");
     let attestation =

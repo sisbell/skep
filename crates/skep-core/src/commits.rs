@@ -2129,7 +2129,8 @@ pub struct WriteMeta {
 /// They are the write's target doc; a link write names its home
 /// (`edit_link` both its homes, the successor's `d_s` first; `nullify` its
 /// home and the target link's home, as a set — PUB-6.46); the minted
-/// document for create/fork/version and the minted member for `publish`
+/// document for create/fork/version/stage/create_well_known_document and
+/// the minted member for `publish`
 /// (each known only from the ack); delegate/register_node touch no
 /// document.
 #[derive(Debug)]
@@ -2319,8 +2320,8 @@ impl RowTerms {
 /// time as the head's, the one thing that method's contract says it does
 /// not do. A read classified here as a write runs on `/op` through a write
 /// sequence, under the serialization lock, rather than as a read; `/op-at`
-/// asks the partition directly and is untouched. The two tables agree at 18
-/// writes of 50.
+/// asks the partition directly and is untouched. The two tables agree at 19
+/// writes of 51.
 ///
 /// **Second obligation**, and the one no assertion here can reach:
 /// `classify::derived_docs` answers this same question — which documents a
@@ -2381,6 +2382,14 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
             meta(OpKind::RegisterNode, AffectedDocs::Named(Vec::new()), absent, no_cell)
         }
         Op::Fork { .. } => meta(OpKind::Fork, AffectedDocs::Minted, absent, no_cell),
+        // The well-known mint's row names the mailbox it minted, known only
+        // from the ack, and carries no term and no cell. A call that finds
+        // the mailbox standing commits nothing: its ack names the position
+        // it read, one the feed already carries, so the record declines it
+        // and the mailbox has one row, its mint's.
+        Op::CreateWellKnownDocument { .. } => {
+            meta(OpKind::CreateWellKnownDocument, AffectedDocs::Minted, absent, no_cell)
+        }
         // The values that may hold a cell, by index — the prefix test ahead
         // of the commit, so the record's entry reads only those.
         Op::Insert { doc, values, .. } => meta(

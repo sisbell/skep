@@ -47,6 +47,7 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         (Op::Delegate { new_prefix: tum(&[1, 0, 1]), new_id: PrincipalId(1) }, false),
         (Op::RegisterNode { addr: tum(&[1, 1]) }, false),
         (Op::Fork { published: None }, false),
+        (Op::CreateWellKnownDocument { account: addr(&[1, 0, 1]) }, false),
         (Op::NextAccountPrefix { parent: addr(&[1]) }, true),
         (Op::PrincipalPrefix { id: PrincipalId(1) }, true),
         (Op::EffectiveOwner { addr: addr(&[1, 0, 1, 1]) }, true),
@@ -167,11 +168,13 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
 }
 
 /// §1: the read/write partition is exhaustive and two-sided
-/// (`is_write == !is_read`), with 32 reads and 18 writes (the publish
+/// (`is_write == !is_read`), with 32 reads and 19 writes (the publish
 /// shot joining the fourteen of the design, lane 3.2; the write by
 /// identity, `reinstate`, the sixteenth — the replacement act's record;
 /// the staging act, `stage`, the seventeenth — B3-S10; the landing,
 /// `set_arrangement`, the eighteenth — the landing lane, skep #764;
+/// the well-known mint, `create_well_known_document`, the nineteenth —
+/// the mailbox design §3;
 /// the doc-metadata read and the edition-claim lookup joining the
 /// twenty-four reads, lane 3.4; the owner-of-address read the
 /// twenty-seventh, AUTH-6.37; the any-principal discovery read the
@@ -182,7 +185,7 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
 #[test]
 fn partition_matches_the_design_grouping() {
     let ops = all_ops();
-    assert_eq!(ops.len(), 50);
+    assert_eq!(ops.len(), 51);
     let reads = ops.iter().filter(|(_, r)| *r).count();
     assert_eq!(reads, 32);
     for (op, expect_read) in &ops {
@@ -206,7 +209,7 @@ fn kind_is_injective_and_never_unparseable() {
         assert_ne!(kind, OpKind::Unparseable);
         assert!(seen.insert(kind), "{kind:?} is produced by two variants");
     }
-    assert_eq!(seen.len(), 50);
+    assert_eq!(seen.len(), 51);
 }
 
 /// [`SuccessorSpec`] is a VALUE, and the comparison macros are what a

@@ -60,18 +60,19 @@ where
     /// only two spellings; a third would make one concept read as two.
     ///
     /// **The attestation (signed ops).** It rides every M5 and M7 driver a
-    /// write acquires, and the M3 driver of the two document mints —
-    /// [`Stores::namespace_attested`], [`Stores::vstream_attested`] and
+    /// write acquires (save `stage`'s, which takes the plain M5 driver), and the M3 driver of `create_new_document` and `fork`
+    /// — [`Stores::namespace_attested`], [`Stores::vstream_attested`] and
     /// [`Stores::linkstore_attested`] — and which of a store's transactions it
     /// signs is that store's alone, stated on its handle's `attest` field: a
     /// handle built with a value fills no signature slot outside the
     /// transactions its store signs. So this table holds no copy of the
     /// checked set — skepd's name for the writes an attestation is admitted
     /// on, the ten publish-class kinds — and widening it is the stores' and
-    /// the transport's work. `delegate` and `register_node` acquire the plain
-    /// namespace driver, so there it is dropped. Nothing is classified,
-    /// verified or filtered here: the value arrives admitted by the dispatched
-    /// write path's check, or not at all.
+    /// the transport's work. `delegate`, `register_node` and
+    /// `create_well_known_document` acquire the plain namespace driver, so
+    /// there it is dropped. Nothing is classified, verified or filtered
+    /// here: the value arrives admitted by the dispatched write path's
+    /// check, or not at all.
     ///
     /// # Errors
     ///
@@ -150,6 +151,25 @@ where
                     .stores
                     .namespace_attested(attest)
                     .fork(wc.principal, published)
+                    .map_err(|e| lower_txn(kind, e))?;
+                Ok(Response::AckAddr { addr, at })
+            }
+            // The well-known mint (the mailbox design §3): M3 mints the
+            // account's mailbox at its slot, private, under ω judged inside
+            // the mint's own transaction — this door decides nothing of
+            // ownership, and the store's refusals lower as
+            // `create_new_document`'s do. The mint is never publish-class, so
+            // the plain driver, as `delegate`'s and `register_node`'s: an
+            // attestation the request carries is dropped here. A call that
+            // finds the mailbox standing needs no special case, as `emit`'s
+            // dedup hit needs none below: M3 answers the standing address
+            // beside the position it read, no commit made, and it is
+            // marshaled as the mint's own ack is.
+            Op::CreateWellKnownDocument { account } => {
+                let (addr, at) = self
+                    .stores
+                    .namespace()
+                    .create_well_known_document(wc.principal, &account)
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
@@ -800,6 +820,7 @@ where
             | Op::Delegate { .. }
             | Op::RegisterNode { .. }
             | Op::Fork { .. }
+            | Op::CreateWellKnownDocument { .. }
             | Op::Insert { .. }
             | Op::Delete { .. }
             | Op::Copy { .. }

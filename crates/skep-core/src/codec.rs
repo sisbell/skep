@@ -625,6 +625,15 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
         },
         "register_node" => Op::RegisterNode { addr: fields.tum("addr")? },
         "fork" => Op::Fork { published: fields.published()? },
+        // The well-known mint (wire.md §Namespace,
+        // `create_well_known_document`): one argument, the account whose
+        // mailbox it creates, required. No `published` — the mailbox is
+        // private always — no `attest`, the op being outside the checked
+        // set, and no slot name: each of the three on this op is an unknown
+        // field `finish` refuses.
+        "create_well_known_document" => {
+            Op::CreateWellKnownDocument { account: fields.addr("account")? }
+        }
         "next_account_prefix" => Op::NextAccountPrefix { parent: fields.addr("parent")? },
         "principal_prefix" => Op::PrincipalPrefix { id: PrincipalId(fields.u64("principal")?) },
         "effective_owner" => Op::EffectiveOwner { addr: fields.addr("addr")? },

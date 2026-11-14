@@ -313,6 +313,7 @@ pub fn media_door<W: FebeWorld>(
         | Op::Delegate { .. }
         | Op::RegisterNode { .. }
         | Op::Fork { .. }
+        | Op::CreateWellKnownDocument { .. }
         | Op::NextAccountPrefix { .. }
         | Op::PrincipalPrefix { .. }
         | Op::EffectiveOwner { .. }

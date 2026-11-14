@@ -391,6 +391,7 @@ impl Op {
             | Op::Delegate { .. }
             | Op::RegisterNode { .. }
             | Op::Fork { .. }
+            | Op::CreateWellKnownDocument { .. }
             | Op::Insert { .. }
             | Op::Delete { .. }
             | Op::Rearrange { .. }
@@ -468,6 +469,7 @@ impl Op {
             | Op::Delegate { .. }
             | Op::RegisterNode { .. }
             | Op::Fork { .. }
+            | Op::CreateWellKnownDocument { .. }
             | Op::Version { .. }
             | Op::Stage { .. }
             | Op::Publish { .. }
@@ -545,6 +547,7 @@ impl Op {
             | Op::Delegate { .. }
             | Op::RegisterNode { .. }
             | Op::Fork { .. }
+            | Op::CreateWellKnownDocument { .. }
             | Op::Insert { .. }
             | Op::Delete { .. }
             | Op::Copy { .. }

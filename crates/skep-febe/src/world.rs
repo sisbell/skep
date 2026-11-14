@@ -268,8 +268,9 @@ pub trait Stores<W: WorldState>: Send + Sync {
     ///
     /// It is [`Stores::namespace`] with the attestation beside the kernel,
     /// built by `Namespace::attested`, whose signed transactions M3 states
-    /// there: the two document mints, a mint born published being a
-    /// publish-class act. The same producer-set discipline as
+    /// there: the two checked-set document mints, a mint born published
+    /// being a publish-class act (the mailbox's mint is plain and signs
+    /// nothing). The same producer-set discipline as
     /// [`Stores::vstream_attested`]; `None` is [`Stores::namespace`] exactly.
     fn namespace_attested<'a>(&'a self, attest: Option<&'a Attestation>) -> Namespace<'a, W> {
         Namespace::attested(self.kernel(), attest)

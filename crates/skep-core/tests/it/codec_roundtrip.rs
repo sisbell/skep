@@ -118,6 +118,10 @@ fn all_requests() -> Vec<Request> {
         rq(None, Op::RegisterNode { addr: t(&[1, 1]) }),
         rq(None, Op::Fork { published: None }),
         rq(None, Op::Fork { published: Some(true) }),
+        // The well-known mint (wire.md §Namespace): its one argument, with
+        // and without the idempotency id.
+        rq(None, Op::CreateWellKnownDocument { account: a(&[1, 0, 1]) }),
+        rq(Some("mailbox-1"), Op::CreateWellKnownDocument { account: a(&[1, 0, 1]) }),
         rq(None, Op::NextAccountPrefix { parent: a(&[1]) }),
         rq(None, Op::PrincipalPrefix { id: PrincipalId(2) }),
         // The owner-of-address read (AUTH-6.37): an ACCOUNT-tier address, and
@@ -632,6 +636,7 @@ const OP_NAMES: &[&str] = &[
     "delegate",
     "register_node",
     "fork",
+    "create_well_known_document",
     "next_account_prefix",
     "principal_prefix",
     "effective_owner",
@@ -691,52 +696,53 @@ fn op_index(kind: OpKind) -> usize {
         OpKind::Delegate => 1,
         OpKind::RegisterNode => 2,
         OpKind::Fork => 3,
-        OpKind::NextAccountPrefix => 4,
-        OpKind::PrincipalPrefix => 5,
-        OpKind::EffectiveOwner => 6,
-        OpKind::Insert => 7,
-        OpKind::Delete => 8,
-        OpKind::Copy => 9,
-        OpKind::Reinstate => 10,
-        OpKind::Rearrange => 11,
-        OpKind::SetArrangement => 12,
-        OpKind::Version => 13,
-        OpKind::Stage => 14,
-        OpKind::Publish => 15,
-        OpKind::MakeLink => 16,
-        OpKind::Emit => 17,
-        OpKind::Nullify => 18,
-        OpKind::AssertSup => 19,
-        OpKind::EditLink => 20,
-        OpKind::ReadLink => 21,
-        OpKind::FollowLink => 22,
-        OpKind::RetrieveV => 23,
-        OpKind::RetrieveI => 24,
-        OpKind::ContentFrontier => 25,
-        OpKind::RetrieveDocVSpan => 26,
-        OpKind::RetrieveDocVSpanSet => 27,
-        OpKind::ShowOrigin => 28,
-        OpKind::ShowDeletions => 29,
-        OpKind::Compare => 30,
-        OpKind::FindDocsContaining => 31,
-        OpKind::Image => 32,
-        OpKind::FindLinksV => 33,
-        OpKind::FindLinksFtt => 34,
-        OpKind::CountV => 35,
-        OpKind::CountFtt => 36,
-        OpKind::WindowV => 37,
-        OpKind::WindowFtt => 38,
-        OpKind::CountVByHome => 39,
-        OpKind::FindLinksVHistory => 40,
-        OpKind::RetrieveEndsets => 41,
-        OpKind::Project => 42,
-        OpKind::DiscoverableFrom => 43,
-        OpKind::DeleteOrphans => 44,
-        OpKind::InClaims => 45,
-        OpKind::OutClaims => 46,
-        OpKind::DocMetadata => 47,
-        OpKind::EditionClaims => 48,
-        OpKind::UniversalGrants => 49,
+        OpKind::CreateWellKnownDocument => 4,
+        OpKind::NextAccountPrefix => 5,
+        OpKind::PrincipalPrefix => 6,
+        OpKind::EffectiveOwner => 7,
+        OpKind::Insert => 8,
+        OpKind::Delete => 9,
+        OpKind::Copy => 10,
+        OpKind::Reinstate => 11,
+        OpKind::Rearrange => 12,
+        OpKind::SetArrangement => 13,
+        OpKind::Version => 14,
+        OpKind::Stage => 15,
+        OpKind::Publish => 16,
+        OpKind::MakeLink => 17,
+        OpKind::Emit => 18,
+        OpKind::Nullify => 19,
+        OpKind::AssertSup => 20,
+        OpKind::EditLink => 21,
+        OpKind::ReadLink => 22,
+        OpKind::FollowLink => 23,
+        OpKind::RetrieveV => 24,
+        OpKind::RetrieveI => 25,
+        OpKind::ContentFrontier => 26,
+        OpKind::RetrieveDocVSpan => 27,
+        OpKind::RetrieveDocVSpanSet => 28,
+        OpKind::ShowOrigin => 29,
+        OpKind::ShowDeletions => 30,
+        OpKind::Compare => 31,
+        OpKind::FindDocsContaining => 32,
+        OpKind::Image => 33,
+        OpKind::FindLinksV => 34,
+        OpKind::FindLinksFtt => 35,
+        OpKind::CountV => 36,
+        OpKind::CountFtt => 37,
+        OpKind::WindowV => 38,
+        OpKind::WindowFtt => 39,
+        OpKind::CountVByHome => 40,
+        OpKind::FindLinksVHistory => 41,
+        OpKind::RetrieveEndsets => 42,
+        OpKind::Project => 43,
+        OpKind::DiscoverableFrom => 44,
+        OpKind::DeleteOrphans => 45,
+        OpKind::InClaims => 46,
+        OpKind::OutClaims => 47,
+        OpKind::DocMetadata => 48,
+        OpKind::EditionClaims => 49,
+        OpKind::UniversalGrants => 50,
         OpKind::Unparseable => unreachable!("`Op::kind` never answers `Unparseable`"),
     }
 }
@@ -3007,4 +3013,61 @@ fn a_stage_takes_its_source_alone_and_refuses_a_flag_and_an_attest() {
     let e = codec.parse(br#"{"op":"stage"}"#).expect_err("the source is required");
     let detail = e.detail.expect("a parse failure names what failed");
     assert!(detail.contains("missing field 'from'"), "{detail}");
+}
+
+/// The well-known mint's frame (wire.md §Namespace,
+/// `create_well_known_document`): one argument, the account whose mailbox it
+/// creates, required, parsed and marshaled canonically, the idempotency `id`
+/// riding it as it rides any write; and no flag, no attest and no slot — the
+/// mailbox is always private, the op is outside the checked set and it names
+/// no slot — so `published`, `attest` and `slot` on it are unknown fields,
+/// refused as any member an op does not take (never-silent). The attest sent
+/// is one a checked-set op parses, so the refusal is the unknown-field
+/// rule's and never the member's own grammar's.
+#[test]
+fn a_well_known_mint_takes_its_account_alone_and_refuses_a_flag_an_attest_and_a_slot() {
+    let codec = JsonCodec;
+    let frame = r#"{"account":"1.0.1","op":"create_well_known_document"}"#;
+    let req = parse_ok(&codec, frame.as_bytes());
+    assert_eq!(req.op, Op::CreateWellKnownDocument { account: a(&[1, 0, 1]) });
+    assert_eq!(req.id, None);
+    assert_eq!(req.attest, None, "no attest rides a well-known mint");
+    assert_eq!(
+        String::from_utf8(codec.marshal_request(&req)).expect("utf-8"),
+        frame,
+        "the canonical form: the one argument, then the op"
+    );
+    let keyed = r#"{"account":"1.0.1","id":"mailbox-1","op":"create_well_known_document"}"#;
+    let req = parse_ok(&codec, keyed.as_bytes());
+    assert_eq!(req.id, Some(ReqId(b"mailbox-1".to_vec())), "the optional idempotency id");
+    assert_eq!(String::from_utf8(codec.marshal_request(&req)).expect("utf-8"), keyed);
+
+    // The premise: this attest is whole, and a checked-set mint carries it.
+    let attest = r#""attest":{"alg":"mldsa65-ed25519","sig":"00"}"#;
+    let checked = format!(r#"{{"account":"1.0.1","op":"create_new_document",{attest}}}"#);
+    assert!(parse_ok(&codec, checked.as_bytes()).attest.is_some(), "{checked}");
+    for (member, extra) in [
+        ("published", r#""published":false"#),
+        ("published", r#""published":true"#),
+        ("attest", attest),
+        ("slot", r#""slot":2"#),
+        ("slot", r#""slot":"mailbox""#),
+    ] {
+        let with = format!(r#"{{"account":"1.0.1","op":"create_well_known_document",{extra}}}"#);
+        let e = codec.parse(with.as_bytes()).expect_err("an unknown member is refused");
+        let detail = e.detail.expect("a parse failure names what failed");
+        assert!(detail.contains(&format!("unknown field '{member}'")), "{with}: {detail}");
+    }
+    let e = codec
+        .parse(br#"{"op":"create_well_known_document"}"#)
+        .expect_err("the account is required");
+    let detail = e.detail.expect("a parse failure names what failed");
+    assert!(detail.contains("missing field 'account'"), "{detail}");
+    // The account is an address, as `create_new_document`'s is: no tumbler
+    // that fails T4 parses into one.
+    let e = codec
+        .parse(br#"{"account":"1.0.0.1","op":"create_well_known_document"}"#)
+        .expect_err("an account that is no address is refused");
+    let detail = e.detail.expect("a parse failure names what failed");
+    assert!(detail.contains("field 'account'"), "{detail}");
 }

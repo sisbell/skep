@@ -228,6 +228,11 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         ),
         Op::RegisterNode { addr } => (op_name(OpKind::RegisterNode), vec![("addr", j_tum(addr))]),
         Op::Fork { published } => (op_name(OpKind::Fork), published_pair(published)),
+        // The well-known mint names its account and nothing else: no flag,
+        // the mailbox being private always, and no slot.
+        Op::CreateWellKnownDocument { account } => {
+            (op_name(OpKind::CreateWellKnownDocument), vec![("account", j_addr(account))])
+        }
         Op::NextAccountPrefix { parent } => {
             (op_name(OpKind::NextAccountPrefix), vec![("parent", j_addr(parent))])
         }
@@ -1445,6 +1450,7 @@ pub fn op_name(k: OpKind) -> &'static str {
         OpKind::Delegate => "delegate",
         OpKind::RegisterNode => "register_node",
         OpKind::Fork => "fork",
+        OpKind::CreateWellKnownDocument => "create_well_known_document",
         OpKind::NextAccountPrefix => "next_account_prefix",
         OpKind::PrincipalPrefix => "principal_prefix",
         OpKind::EffectiveOwner => "effective_owner",

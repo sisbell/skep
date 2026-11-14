@@ -193,6 +193,21 @@ pub enum Op {
     /// empty account is refused `mint_home_first` at the daemon (PUB-8.22)
     /// before the flag is read.
     Fork { published: Option<bool> },
+    /// The well-known mint (the mailbox design §3): `account`'s mailbox.
+    ///
+    /// It creates the account's document at its well-known slot 2, always
+    /// private, once: `Namespace::create_well_known_document` answers a later
+    /// call with the same address and commits nothing. `account` is named,
+    /// as [`Op::CreateNewDocument`]'s is, and M3 judges its owner inside the
+    /// mint's own transaction; M10 decides nothing about ownership. No slot
+    /// is named, the mailbox being the one well-known document an owner
+    /// creates: a slot name is a member another such document's creation
+    /// adds beside `account`. Never publish-class: no `attest` rides it, and
+    /// the codec refuses the member as it refuses `published`. Its two
+    /// refusals ahead of the store — the system account's, which has no
+    /// well-known document to create, and an account's whose home page is
+    /// not yet minted — are the daemon's door's alone, never this type's.
+    CreateWellKnownDocument { account: Address },
     // ── namespace reads (→ M3) ──
     /// M3's next-form delegable prefix — what [`Op::Delegate`] demands (§2).
     NextAccountPrefix { parent: Address },
@@ -848,6 +863,8 @@ pub enum OpKind {
     RegisterNode,
     /// The kind of [`Op::Fork`].
     Fork,
+    /// The kind of [`Op::CreateWellKnownDocument`].
+    CreateWellKnownDocument,
     /// The kind of [`Op::NextAccountPrefix`].
     NextAccountPrefix,
     /// The kind of [`Op::PrincipalPrefix`].
@@ -1008,6 +1025,7 @@ impl Op {
             | Op::Delegate { .. }
             | Op::RegisterNode { .. }
             | Op::Fork { .. }
+            | Op::CreateWellKnownDocument { .. }
             | Op::Insert { .. }
             | Op::Delete { .. }
             | Op::Copy { .. }
@@ -1040,6 +1058,7 @@ impl Op {
             Op::Delegate { .. } => OpKind::Delegate,
             Op::RegisterNode { .. } => OpKind::RegisterNode,
             Op::Fork { .. } => OpKind::Fork,
+            Op::CreateWellKnownDocument { .. } => OpKind::CreateWellKnownDocument,
             Op::NextAccountPrefix { .. } => OpKind::NextAccountPrefix,
             Op::PrincipalPrefix { .. } => OpKind::PrincipalPrefix,
             Op::EffectiveOwner { .. } => OpKind::EffectiveOwner,
@@ -1171,6 +1190,7 @@ impl Op {
             | Op::Delegate { .. }
             | Op::RegisterNode { .. }
             | Op::Fork { .. }
+            | Op::CreateWellKnownDocument { .. }
             | Op::Insert { .. }
             | Op::Delete { .. }
             | Op::Copy { .. }
@@ -1271,6 +1291,7 @@ impl Op {
             | Op::Delegate { .. }
             | Op::RegisterNode { .. }
             | Op::Fork { .. }
+            | Op::CreateWellKnownDocument { .. }
             | Op::Insert { .. }
             | Op::Delete { .. }
             | Op::Copy { .. }
@@ -1380,6 +1401,7 @@ impl Op {
             | Op::Delegate { .. }
             | Op::RegisterNode { .. }
             | Op::Fork { .. }
+            | Op::CreateWellKnownDocument { .. }
             | Op::Insert { .. }
             | Op::Delete { .. }
             | Op::Rearrange { .. }

@@ -65,11 +65,12 @@ fn blocks() -> Vec<(String, String, String)> {
     out
 }
 
-const OP_NAMES: [&str; 50] = [
+const OP_NAMES: [&str; 51] = [
     "create_new_document",
     "delegate",
     "register_node",
     "fork",
+    "create_well_known_document",
     "next_account_prefix",
     "principal_prefix",
     "effective_owner",
@@ -119,7 +120,7 @@ const OP_NAMES: [&str; 50] = [
 ];
 
 /// Every request example parses, is canonical (re-marshal equals the doc
-/// value), is tagged with the marker's own op name — and all 50 ops appear.
+/// value), is tagged with the marker's own op name — and all 51 ops appear.
 #[test]
 fn doc_request_examples_are_canonical_and_complete() {
     let codec = JsonCodec;
@@ -568,6 +569,58 @@ fn doc_owner_of_address_row_states_the_allocation_test() {
     ] {
         assert!(row.contains(fact), "the effective_owner row says {fact:?}: {row}");
     }
+}
+
+/// THE WELL-KNOWN MINT (the mailbox design §2, §3): §Namespace's
+/// `create_well_known_document` row states the mailbox it creates — the
+/// account's slot 2, private always, its owner's alone, once — its answer,
+/// what a second call is answered and what its `at` is, the members the op
+/// does not take, the bare session it is admitted from, its refusals by
+/// token, and that mail needs no mailbox document; §Credential refusals
+/// carries the system account's token in a bullet of its own — whoever
+/// asks, on claimed and unclaimed boards alike — names the op in
+/// `mint_home_first`'s cell, and puts the mint outside the board-state
+/// gate; and §The change feed lists the op among the mints whose row names
+/// the minted document. The daemon's answers are pinned in skep-core's and
+/// skep-febe's suites; this pins that the contract says so.
+#[test]
+fn doc_states_the_well_known_mint_its_refusals_and_its_feed_row() {
+    let row = op_row("create_well_known_document");
+    for fact in [
+        "`<account>.0.2`",
+        "PRIVATE, ALWAYS",
+        "OWNER's ALONE and is created ONCE",
+        "names the account and no slot",
+        "→ `ack_addr` (the mailbox's address)",
+        "takes no `published` and no `attest`",
+        "admitted from a bare session on a claimed board as `stage` is",
+        "is answered `ack_addr` with the SAME `addr` and commits nothing",
+        "Its `at` is the position the call was JUDGED at",
+        "`credential_refused:system_account_no_well_known`, whoever asks",
+        "`credential_refused:mint_home_first`",
+        "`credential_refused:claim_first`",
+        "`not_owner`",
+        "`not_an_account`",
+        "MAIL NEEDS NO MAILBOX DOCUMENT",
+    ] {
+        assert!(row.contains(fact), "the create_well_known_document row says {fact:?}: {row}");
+    }
+    let refusals = prose("\n### Credential refusals", &["\n## Operations"]);
+    for fact in [
+        "* `system_account_no_well_known` — a `create_well_known_document`",
+        "it has no well-known document to create",
+        "Refused WHOEVER ASKS",
+        "on claimed and unclaimed boards alike: it stands in the MINT class",
+        "a `fork`, a `version` or a `stage` by a principal whose account's space has never held a document, and a `create_well_known_document` (§Namespace) by the owner of the `account` it names",
+        "the well-known mint (`create_well_known_document`, private always)",
+    ] {
+        assert!(refusals.contains(fact), "§Credential refusals says {fact:?}");
+    }
+    let feed = prose("\n## The change feed", &["\n## The other endpoints"]);
+    assert!(
+        feed.contains("the **minted** document for `create_new_document`/`fork`/`version`/`stage`/`create_well_known_document`"),
+        "§The change feed lists the well-known mint among the mints"
+    );
 }
 
 /// The any-principal discovery row (PUB-8.47) carries the facts a client

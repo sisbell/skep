@@ -120,6 +120,7 @@ pub fn deposits_registry_link(op: &Op) -> bool {
         | Op::Delegate { .. }
         | Op::RegisterNode { .. }
         | Op::Fork { .. }
+        | Op::CreateWellKnownDocument { .. }
         | Op::NextAccountPrefix { .. }
         | Op::PrincipalPrefix { .. }
         | Op::EffectiveOwner { .. }

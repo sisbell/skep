@@ -645,6 +645,64 @@ fn first_mint_private_refusal(
     }
 }
 
+// ── well_known_mint_refusal — the well-known mint's door ─────────────────
+
+/// Answers the well-known mint's two refusals ahead of the store.
+///
+/// They are a `create_well_known_document`'s alone, and the store holds a
+/// guard for neither (the mailbox design §2, §3):
+///
+/// 1. `system_account_no_well_known`, where the op's `account` is the system
+///    account, whoever calls. That account has no well-known document to
+///    create: its own stand from genesis, and its document 2 is the head
+///    document, no mailbox. Asked by the system principal, the store would
+///    find that slot filled and answer the head document's address. The arm
+///    reads the op and no world, so what it discloses is a constant.
+/// 2. `mint_home_first`, where the caller is the effective owner of
+///    `account`, the account is registered, and it holds no document: the
+///    home page stays every account's first document. On such an account
+///    the store would mint the slot.
+///
+/// The second arm takes [`first_mint_private_refusal`]'s form and not
+/// [`mint_home_refusal`]'s, because this op names its account where a
+/// `fork`, a `version` and a `stage` mint in the caller's own. Ownership
+/// stands ahead (PUB-6.36 slot 1), so only the account's own owner reaches
+/// it: a non-owner falls through to the store's `not_owner`, which never
+/// leaks whether the account is empty, and the principal that owns the
+/// space an address of no registered account names falls through to the
+/// store's `not_an_account`.
+///
+/// Placed in the mint slot, ahead of the board-state pair: the system
+/// account's token answers on claimed and unclaimed boards alike, and an
+/// owner with no home page is told to mint it before being asked to claim.
+/// The slot's two other producers read other ops, so its order against them
+/// is inert.
+///
+/// **Precondition.** `world` must be the snapshot taken under the read guard
+/// for this request; the guard argument is that contract's cheap half.
+fn well_known_mint_refusal(
+    _lock: &LockRead<'_>,
+    world: &World,
+    op: &Op,
+    principal: PrincipalId,
+) -> Option<CredentialRefusal> {
+    let Op::CreateWellKnownDocument { account } = op else {
+        return None;
+    };
+    if *account == system_account() {
+        return Some(CredentialRefusal::SystemAccountNoWellKnown);
+    }
+    let m3 = world.m3();
+    if m3.is_effective_owner(principal, account)
+        && m3.is_registered_account(account)
+        && !m3.has_documents(account)
+    {
+        Some(CredentialRefusal::MintHomeFirst)
+    } else {
+        None
+    }
+}
+
 // ── sole_writer_refusal — the two commons classes with one writer: the
 //    `replaces` class (PUB-5.15) and the correspondence class (the link-sets
 //    design §5.7) ────────────────────────────────────────────────────────────
@@ -1070,6 +1128,14 @@ fn publish_class(world: &World, op: &Op, principal: PrincipalId, signed: bool) -
         // this gate into an empty account as a `fork` is. Spelled out rather
         // than left to the wildcard, so the decision is read here.
         Op::Stage { .. } => false,
+        // The well-known mint creates an account's mailbox, private always
+        // (the mailbox design §3), so it never lands in the published world
+        // and is never this gate's input: admitted from a bare session on a
+        // claimed board as a `stage` is, and refused ahead of this gate, in
+        // the mint slot, for the system account and for an account holding
+        // no home page. Spelled out rather than left to the wildcard, so
+        // the decision is read here.
+        Op::CreateWellKnownDocument { .. } => false,
         // `fork` with a non-`true` flag — a draft — and every op with no
         // input form here.
         _ => false,
@@ -1142,14 +1208,17 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
 /// the credential path's slots (3)–(8).
 ///
 /// `first_mint_private_refusal` (PUB-8.20's door) shares the mint slot with
-/// `mint_home_refusal` and is disjoint from it — the door reads a
-/// `create` with an explicit `false`, mint-first reads a `fork`/`version` —
-/// so their relative order is inert; both stand ahead of the board-state
-/// pair (PUB-6.36 slot 2 before slot 4), which is why a `fork` or `version`
-/// by a principal whose account holds no document answers
-/// `mint_home_first` and never the pre-claim `claim_first`. An
-/// explicit-`false` home mint answers `mint_home_public` in either order:
-/// the pre-claim gate admits a `create` into an empty account.
+/// `mint_home_refusal` and `well_known_mint_refusal`, and the three are
+/// pairwise disjoint — the door reads a `create` with an explicit `false`,
+/// mint-first a `fork`, a `version` or a `stage`, the well-known mint's
+/// producer a `create_well_known_document` — so their relative order is
+/// inert; all stand ahead of the board-state pair (PUB-6.36 slot 2 before
+/// slot 4), which is why a `fork` or `version` by a principal whose account
+/// holds no document answers `mint_home_first` and never the pre-claim
+/// `claim_first`, and why a well-known mint naming the system account
+/// answers `system_account_no_well_known` on an unclaimed board as on a
+/// claimed one. An explicit-`false` home mint answers `mint_home_public` in
+/// either order: the pre-claim gate admits a `create` into an empty account.
 ///
 /// The order is PUB-6.36's write-side order as RES-195 places the
 /// `nullify` cells: mint-first is slot 2; the board-state pair stands in
@@ -1192,11 +1261,13 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
 /// # Errors
 ///
 /// The order is the mint class — the first-mint publication door's
-/// `mint_home_public`, then mint-first's `mint_home_first`; then the
-/// sole-writer fences, `replaces_not_standalone` and
-/// `correspondence_not_standalone` (`sole_writer_refusal`, PUB-5.15 and the
-/// link-sets design §5.7); then the claim-complementary board-state pair
-/// (`board_state_admission`); then the nullify class (`nullify_refusal`).
+/// `mint_home_public`, then mint-first's `mint_home_first`, then the
+/// well-known mint's `system_account_no_well_known` and `mint_home_first`
+/// (`well_known_mint_refusal`); then the sole-writer fences,
+/// `replaces_not_standalone` and `correspondence_not_standalone`
+/// (`sole_writer_refusal`, PUB-5.15 and the link-sets design §5.7); then the
+/// claim-complementary board-state pair (`board_state_admission`); then the
+/// nullify class (`nullify_refusal`).
 ///
 /// Named an admission and not a refusal because both sides of its answer
 /// are load-bearing: `Err` is the refusal the first producer to fire names,
@@ -1216,6 +1287,9 @@ pub fn plain_admission(
         return Err(r);
     }
     if let Some(r) = mint_home_refusal(lock, world, op, principal) {
+        return Err(r);
+    }
+    if let Some(r) = well_known_mint_refusal(lock, world, op, principal) {
         return Err(r);
     }
     if let Some(r) = sole_writer_refusal(lock, world, op, principal) {

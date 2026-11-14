@@ -41,7 +41,8 @@
 //! fourth, with no site allowed. And NO CODE OF THE CRATE CREATES A
 //! DOCUMENT: the documents the daemon's own writers write into are seeded
 //! at genesis, and a session's mint goes through `skep-febe`'s dispatch, so
-//! no code line under `src/` calls the namespace's `.create_new_document(`
+//! no code line under `src/` calls either of the namespace's two document
+//! creations, `.create_new_document(` and `.create_well_known_document(`,
 //! outside a test module or the test-hooks gate — the fifth, with no site
 //! allowed.
 
@@ -366,25 +367,60 @@ fn a_line_file_is_read_and_appended_through_the_support_crates_module() {
     );
 }
 
+/// The namespace's document creations, each as a call spells it.
+///
+/// They are `create_new_document`, the counter's mint, and
+/// `create_well_known_document`, a well-known slot's; `fork` reduces to the
+/// first inside the namespace. A line of this crate's code holding either is
+/// a fault of [`no_code_line_of_the_crate_creates_a_document`].
+const DOCUMENT_CREATIONS: [&str; 2] = [".create_new_document(", ".create_well_known_document("];
+
+/// Whether `line` calls one of the namespace's document creations.
+fn creates_a_document(line: &str) -> bool {
+    DOCUMENT_CREATIONS.iter().any(|call| line.contains(call))
+}
+
 /// NO CODE OF THE CRATE CREATES A DOCUMENT (ARCHITECTURE.md §The daemon's
 /// core): the head writer, the link-type registry's seed and the time
 /// writer write into documents genesis seeds — the staging draft, `H`, the
 /// registry document and `T` — and a session's mint goes through
-/// `skep-febe`'s dispatch, so no code line under `src/` calls the
-/// namespace's `.create_new_document(`. Not code here, as the fourth check
-/// reads it: a `tests.rs` file whole, an inline `mod tests {` from its line
-/// on, a comment line, and a line inside an item under the test-hooks gate.
-/// No site is allowed: the allow list is empty, and a hit is a fault. The
-/// control: the scan read the two writers' files, `src/commits/head.rs` and
+/// `skep-febe`'s dispatch, a mailbox's as an ordinary document's, so no
+/// code line under `src/` calls either of the namespace's two creations,
+/// `.create_new_document(` or `.create_well_known_document(`
+/// ([`DOCUMENT_CREATIONS`]). Not code here, as the fourth check reads it: a
+/// `tests.rs` file whole, an inline `mod tests {` from its line on, a
+/// comment line, and a line inside an item under the test-hooks gate. No
+/// site is allowed: the allow list is empty, and a hit is a fault. The
+/// controls: the scan read the two writers' files, `src/commits/head.rs` and
 /// `src/commits/time.rs`, and in each read a line that names the writer's
 /// own seeded document — `head_document()`, `time_document()` — as it
 /// would read a fault there, code and ungated; so a scan that finds no
 /// file, or one whose exemptions have widened to the whole crate, fails
-/// here.
+/// here. And the scan's reading of a line faults a call of each creation as
+/// a session's dispatch spells it, and passes the lines of this crate that
+/// name the mailbox's creation without calling it — its wire name in the
+/// codec's two tables, its variant in a match; so a scan that has lost
+/// either creation, or that reads a name as a call, fails here too.
 #[test]
 fn no_code_line_of_the_crate_creates_a_document() {
     const WRITERS: [(&str, &str); 2] =
         [("src/commits/head.rs", "head_document()"), ("src/commits/time.rs", "time_document()")];
+    for call in [
+        "let (addr, at) = self.stores.namespace_attested(attest).create_new_document(p, &a, None)",
+        "                    .create_new_document(wc.principal, &account, published)",
+        "let (addr, at) = self.stores.namespace().create_well_known_document(p, &account)",
+        "                    .create_well_known_document(wc.principal, &account)",
+    ] {
+        assert!(creates_a_document(call), "the scan reads no creation in `{call}`");
+    }
+    for named in [
+        r#"        OpKind::CreateWellKnownDocument => "create_well_known_document","#,
+        r#"        "create_well_known_document" => {"#,
+        "            Op::CreateWellKnownDocument { account: fields.addr(\"account\")? }",
+        "        Op::CreateWellKnownDocument { .. } => false,",
+    ] {
+        assert!(!creates_a_document(named), "the scan reads a creation in `{named}`");
+    }
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let src = manifest.join("src");
     let mut files = Vec::new();
@@ -406,7 +442,7 @@ fn no_code_line_of_the_crate_creates_a_document() {
                 continue;
             }
             let names_its_document = writer.is_some_and(|(_, seeded)| line.contains(seeded));
-            let creates = line.contains(".create_new_document(");
+            let creates = creates_a_document(line);
             if !(names_its_document || creates) || enclosing_item_is_gated(&lines, i) {
                 continue;
             }

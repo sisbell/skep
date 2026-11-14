@@ -1135,8 +1135,8 @@ and `at` as before:
 
 **`ack_addr`** — a write that minted (or found) an address:
 create_new_document / insert (start address) / version / publish (the
-member) / make_link / emit / nullify / assert_sup / fork / delegate /
-register_node.
+member) / make_link / emit / nullify / assert_sup / fork / stage /
+create_well_known_document / delegate / register_node.
 
 <!-- wire: response ack_addr -->
 ```json
@@ -2806,6 +2806,22 @@ like the family's, each naming the act that exists):
   no credential deposits and never meet it. The act that exists is an
   enrolment under an account of your own.
 
+**The system account's well-known refusal** (`credential_refused`,
+PERMANENT like the family's, naming the act that exists), beside
+`system_account_keyless`:
+
+* `system_account_no_well_known` — a `create_well_known_document`
+  (§Namespace) whose `account` is the system account `1.1.0.1`. The
+  system account's documents stand from the board's birth, at their
+  fixed addresses, so it has no well-known document to create: its
+  document 2 is the head document (§The other endpoints), no mailbox.
+  Refused WHOEVER ASKS — the token reads the request's `account` and
+  nothing of the caller, the system account's own principal included —
+  on claimed and unclaimed boards alike: it stands in the MINT class of
+  the write order below, ahead of the board-state gate, so no caller is
+  asked to claim first and none is told `not_owner`. The act that exists
+  is the mailbox of an account of your own.
+
 **The media door's four tokens** (media lanes A and B; §Media under
 §Operations): `unbound_cell`, `unknown_cell_schema` and `lease_lapsed`,
 PERMANENT like the family's, and `index_rebuilding`, RETRY — the rebuild window's
@@ -2846,10 +2862,14 @@ resolves AFTER every token below.
 (PUB-6.36 as RES-195 places the `nullify` cells), after the actor resolves:
 
 1. The MINT class:
-   * `mint_home_first` — MINT-FIRST: a `fork` or `version` by a
-     principal whose account's space has never held a document. Mint the
+   * `mint_home_first` — MINT-FIRST: a `fork`, a `version` or a `stage`
+     by a principal whose account's space has never held a document, and
+     a `create_well_known_document` (§Namespace) by the owner of the
+     `account` it names, where that account holds no document. Mint the
      home first (`create_new_document`, which becomes the account's
-     doc 1).
+     doc 1). The well-known mint's cell answers the account's OWNER
+     alone: anyone else answers `not_owner` instead, and is never told
+     whether the account is empty.
    * `mint_home_public` — the first-mint publication door (PUB-8.20): an
      explicit `published:false` on the **first** `create_new_document`
      into an empty account you own. The home is public from birth;
@@ -2914,10 +2934,11 @@ resolves AFTER every token below.
      target stands ahead of the gate, so a caller owning either alone
      answers `not_owner` and is never told what is published. Signed
      sessions, draft mints (flagless or `published:false`, into an account
-     holding a document), draft writes, bare reads, `delegate` and the
-     home mint from a bare session are outside the gate; the home mint
-     from a signed session is publish-class and takes the check
-     (§Namespace).
+     holding a document), the well-known mint
+     (`create_well_known_document`, private always), draft writes, bare
+     reads, `delegate` and the home mint from a bare session are outside
+     the gate; the home mint from a signed session is publish-class and
+     takes the check (§Namespace).
    * unclaimed — `claim_first`: an unclaimed daemon admits only the
      ceremony's own shape — `delegate` from principal 0, a
      `create_new_document` into an account holding no documents, an
@@ -3298,6 +3319,52 @@ sets or clears the marker with it. The record is the board's own fact,
 read on every device and by every reader of the draft; the shot's own
 `base` is still the request's statement (§Arrangement, `publish`), and
 nothing compares the two.
+
+**`create_well_known_document`** — CREATE THE ACCOUNT'S MAILBOX: mint the
+document at `account`'s well-known slot 2 — the address `<account>.0.2`,
+`1.0.1.0.2` for the account `1.0.1` — PRIVATE, ALWAYS. It is the account
+OWNER's ALONE and is created ONCE. The mailbox is the one well-known
+document an owner creates, so the op names the account and no slot.
+→ `ack_addr` (the mailbox's address).
+
+<!-- wire: request create_well_known_document -->
+```json
+{"account":"1.0.1","op":"create_well_known_document"}
+```
+
+The mint moves no count: the account's next `create_new_document`
+answers the number it would have answered. It is never publish-class and
+takes no `published` and no `attest` (each member is an unknown field on
+it, refused as on `stage`), and it is admitted from a bare session on a
+claimed board as `stage` is.
+
+A SECOND CALL — another device, the loser of a race, a re-send with no
+`id` after an acknowledgment was lost — is answered `ack_addr` with the
+SAME `addr` and commits nothing: no record, no feed row. Its `at` is the
+position the call was JUDGED at, at or after the mint's, and not the
+mint's own: it does not say where the mailbox was minted. A re-send
+under the first request's `id` is answered from the memo (§Correlation
+and idempotency): the first acknowledgment whole, its `at` the mint's.
+
+Its refusals, in the order a caller meets them: a guest is
+`unauthenticated`; an `account` that is the system account `1.1.0.1` is
+`credential_refused:system_account_no_well_known`, whoever asks; the
+owner of an account that holds no document is
+`credential_refused:mint_home_first` — mint the home page first
+(`create_new_document`), so the home page stays every account's first
+document; on an unclaimed board every call past those is
+`credential_refused:claim_first`; a caller who does not own `account` is
+`not_owner`, and is told nothing of the account; and an `account` that
+names no registered account is `not_an_account`, answered to the one
+caller who owns the space it names (§Credential refusals, for the
+tokens and their order).
+
+MAIL NEEDS NO MAILBOX DOCUMENT. The address stands from the moment the
+account does: a link may point at `<account>.0.2` while nothing is
+minted there, so reaching a person, the search for their mail, a reply
+and a thread all work for an account that never created its mailbox.
+The document is where its owner's own links about their mail are kept,
+and a client creates it just before the first of them.
 
 **`next_account_prefix`** — the next delegable prefix under `parent`
 (what `delegate` demands). → `maybe_addr` (`null` = ineligible parent, or a
@@ -6084,7 +6151,7 @@ Each entry:
   `nullify` — PUB-6.46 — its home AND the target link's home, a
   SET with each document named once, so a same-home retraction carries
   one name); the **minted** document for
-  `create_new_document`/`fork`/`version`/`stage`,
+  `create_new_document`/`fork`/`version`/`stage`/`create_well_known_document`,
   and for `publish` the minted MEMBER (`1.0.1.0.1.2`, whose
   trunk is the document it advances) FIRST, then, at the mint form, the
   EDITION it was minted under, then the RENDERING draft, ALWAYS, whether

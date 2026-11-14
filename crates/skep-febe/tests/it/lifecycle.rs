@@ -749,6 +749,88 @@ fn refusals_arrive_typed_classified_and_localized() {
     assert_eq!(rej.disposition, Disposition::Permanent);
 }
 
+/// THE WELL-KNOWN MINT (the mailbox design §3): `create_well_known_document`
+/// mints the account's mailbox at its slot 2 — `ack_addr`, a PRIVATE
+/// document; a second call is answered `ack_addr` with the SAME address at
+/// the position it was judged at and commits nothing, the log position
+/// unmoved; and the store's two refusals arrive lowered as
+/// `create_new_document`'s are, nothing committed — `not_owner`, PERMANENT,
+/// for every caller who is not the account's effective owner, whether the
+/// account is registered or not, and `not_an_account`, REORDER, for an
+/// address that is no registered account, asked by the principal that owns
+/// the space it names. M10 holds neither of the daemon's two refusals: the
+/// account here has no home page when its mailbox is minted, and its next
+/// flagless create is still its home, born published.
+#[test]
+fn a_well_known_mint_lands_once_and_the_stores_refusals_arrive_lowered() {
+    let fx = setup();
+    let mint =
+        |account: &skep_address::Address| Op::CreateWellKnownDocument { account: account.clone() };
+
+    let before = fx.febe.log_position();
+    let (mailbox, minted_at) = ack_addr(ex(&fx.febe, fx.user, mint(&fx.account)));
+    assert_eq!(Some(&mailbox), skep_namespace::mailbox_address(&fx.account).as_ref(), "slot 2");
+    assert!(minted_at > before, "the mint commits a transaction of its own");
+    assert_eq!(fx.febe.log_position(), minted_at);
+    let (doc, published, ..) =
+        doc_metadata(ex(&fx.febe, fx.user, Op::DocMetadata { doc: mailbox.clone() }));
+    assert_eq!(doc, mailbox);
+    assert!(!published, "born private");
+
+    // The home, after it: the mint moved no count.
+    let (home, home_at) = ack_addr(ex(
+        &fx.febe,
+        fx.user,
+        Op::CreateNewDocument { account: fx.account.clone(), published: None },
+    ));
+    assert_eq!(Some(&home), skep_namespace::first_document_address(&fx.account).as_ref());
+    assert!(home_at > minted_at);
+
+    // A second call: the same address, nothing committed, and its position
+    // the one it was judged at — the home's, not the mint's.
+    let (again, judged_at) = ack_addr(ex(&fx.febe, fx.user, mint(&fx.account)));
+    assert_eq!(again, mailbox, "the same address");
+    assert_eq!(fx.febe.log_position(), home_at, "nothing committed");
+    assert_eq!(judged_at, home_at, "the position the call read");
+
+    // Not the owner: a seated stranger, the principal seated above the
+    // account, and anyone naming an address that is no account at all.
+    let (prefix, _) = maybe_addr(ex(&fx.febe, fx.boot, Op::NextAccountPrefix { parent: node1() }));
+    let prefix = prefix.expect("the genesis node has a delegable next-form prefix");
+    let (other_account, _) = ack_addr(ex(
+        &fx.febe,
+        fx.boot,
+        Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: PrincipalId(8) },
+    ));
+    let stranger = fx.febe.open_session(PrincipalId(8));
+    let unregistered = addr(&[1, 0, 77]);
+    let standing = fx.febe.log_position();
+    for (session, account, who) in [
+        (stranger, &fx.account, "a seated stranger"),
+        (fx.boot, &fx.account, "the principal seated above the account"),
+        (fx.user, &other_account, "an owner naming another's account"),
+        (fx.user, &unregistered, "a non-owner naming an unregistered account"),
+    ] {
+        let rej = rejected(ex(&fx.febe, session, mint(account)));
+        assert_eq!(rej.op, OpKind::CreateWellKnownDocument, "{who}");
+        assert_eq!(rej.code, RejectCode::NotOwner, "{who}");
+        assert_eq!(rej.disposition, Disposition::Permanent, "{who}");
+        assert!(rej.site.is_none(), "{who}: M3's refusal is fieldless");
+    }
+    // No account: an unregistered address, and a registered document's,
+    // each asked by its effective owner.
+    for (session, account, what) in [
+        (fx.boot, &unregistered, "an unregistered account address"),
+        (fx.user, &mailbox, "a document's address"),
+    ] {
+        let rej = rejected(ex(&fx.febe, session, mint(account)));
+        assert_eq!(rej.op, OpKind::CreateWellKnownDocument, "{what}");
+        assert_eq!(rej.code, RejectCode::NotAnAccount, "{what}");
+        assert_eq!(rej.disposition, Disposition::Reorder, "{what}");
+    }
+    assert_eq!(fx.febe.log_position(), standing, "no refusal commits");
+}
+
 /// THE STAGING ACT (B3-S10): where `version` refuses a private member of
 /// the owner's published edition and any version of the owner's draft, a
 /// `stage` of either lands — a PRIVATE document of the owner's account

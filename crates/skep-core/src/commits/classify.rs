@@ -123,7 +123,8 @@ pub(super) fn parse_dotted(s: &str) -> Option<Address> {
 ///    put the draft in its class still leads with the member;
 /// 1. the drafts the commit minted — every draft of `after` absent from
 ///    `before` (`create_new_document`/`fork`/`version` resolving private,
-///    and `stage`, whose draft is always private);
+///    and `stage` and `create_well_known_document`, whose draft and whose
+///    mailbox are always private);
 /// 2. the links the commit deposited — every link of `after` absent from
 ///    `before`, each one's home, and for a retraction (the shipped `[R]`
 ///    class) its targets' homes too, which is `nullify`'s own `docs` rule
@@ -303,8 +304,10 @@ fn derived_docs_over(
 ///
 /// What this cannot name, and says so by `None`: the op of an arrangement
 /// write, into a draft or a published document, of a `register_node`, of a
-/// `create_new_document`, a `fork`, a cross-owner `version` or a `stage`
-/// recording no base (one new document, four ops), of a plain `make_link`
+/// `create_new_document`, a `fork`, a cross-owner `version`, a `stage`
+/// recording no base or a `create_well_known_document` (one new document,
+/// five ops; the last mints at a reserved slot, which no witness here
+/// reads, so its row stays unnamed with the rest), of a plain `make_link`
 /// against an `emit` or `assert_sup`, of an `edit_link`; a `delegate` under
 /// a node that `register_node` admitted and that no enumeration from the
 /// bootstrap and system nodes reaches (that enumeration follows account

@@ -241,6 +241,18 @@ fn each_write_states_which_addresses_may_hold_a_cell() {
     let stage = write_meta(&Op::Stage { from: doc.clone() }).expect("a write");
     assert_eq!(stage.kind, OpKind::Stage);
     assert!(matches!(stage.docs, AffectedDocs::Minted), "the minted draft, off the ack");
+    // A well-known mint's row names the mailbox it minted — known only from
+    // the ack, never the account the frame names — with no term and no cell.
+    let account = crate::codec::wire_address("1.0.1").expect("a test address");
+    let mailbox = write_meta(&Op::CreateWellKnownDocument { account }).expect("a write");
+    assert_eq!(mailbox.kind, OpKind::CreateWellKnownDocument);
+    assert!(
+        matches!(mailbox.docs, AffectedDocs::Minted),
+        "the minted mailbox, off the ack: {:?}",
+        mailbox.docs
+    );
+    assert!(matches!(mailbox.terms, RowTerms::Absent), "{:?}", mailbox.terms);
+    assert!(matches!(mailbox.minting, Minting::None), "{:?}", mailbox.minting);
     let publish = Op::Publish {
         target: PublishTarget::Document(doc),
         shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: Vec::new() },
@@ -350,11 +362,13 @@ fn each_write_states_the_terms_its_row_carries() {
         deposit: Deposit::Undeclared,
         as_of: Seq(7),
     };
+    let well_known = Op::CreateWellKnownDocument { account: addr("1.0.1") };
     for (op, name) in [
         (emit, "emit"),
         (assert_sup, "assert_sup"),
         (edit_link, "edit_link"),
         (Op::Fork { published: None }, "fork"),
+        (well_known, "create_well_known_document"),
         (insert, "insert"),
     ] {
         let carried = terms(op);
@@ -1313,6 +1327,124 @@ fn the_head_and_time_writers_write_into_the_seeded_documents_and_mint_none() {
         ],
         "the system account's documents are the four genesis seeds: the writers minted none"
     );
+}
+
+/// Checks that a mailbox's mint leaves one row, however often it is asked.
+///
+/// Over this suite's own kernel config ([`fsync_engine`]), every write
+/// through the session door: an account delegated to a principal of its own,
+/// its home, then `create_well_known_document` for it, a draft, and
+/// `create_well_known_document` again. The first is acked the mailbox — the
+/// account's document 2 — at the position it committed, and recorded: one
+/// row, `op` the wire name, `docs` the mailbox alone, no term. The second is
+/// acked the same address at the position it read, the draft's, and commits
+/// nothing: the journal's position stands, the draft's row stays the
+/// draft's, and no row is added, so the mailbox has one row. That row is its
+/// owner's: the owner's page carries it, and a stranger's and a guest's omit
+/// it, the mailbox being private.
+#[test]
+fn a_mailboxs_mint_is_one_row_however_often_it_is_asked() {
+    use skep_namespace::{mailbox_address, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL};
+
+    use super::sidecar::CommitMeta;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let wp = open_the_write_path(dir.path(), &engine);
+    let stores = engine.stores();
+    let owner = PrincipalId(41);
+    // One write through the session door, bare, answering its ack.
+    let through_the_door = |op: Op, execute: &dyn Fn() -> (Address, Seq)| -> (Address, u64) {
+        let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
+        let serial = wp.serial_lock();
+        let resp = wp.commit_under(&serial, meta, || {
+            let (addr, at) = execute();
+            Response::AckAddr { addr, at }
+        });
+        let Response::AckAddr { addr, at } = resp else { panic!("the write is acked") };
+        (addr, at.0)
+    };
+    let prefix = crate::codec::wire_tumbler("1.0.1").expect("a tumbler");
+    let (account, _) =
+        through_the_door(Op::Delegate { new_prefix: prefix.clone(), new_id: owner }, &|| {
+            stores
+                .namespace()
+                .delegate(BOOTSTRAP_PRINCIPAL, prefix.clone(), owner)
+                .expect("the delegation commits")
+        });
+    let create = |published: Option<bool>| {
+        through_the_door(Op::CreateNewDocument { account: account.clone(), published }, &|| {
+            stores
+                .namespace()
+                .create_new_document(owner, &account, published)
+                .expect("the mint commits")
+        })
+    };
+    let create_the_mailbox = || {
+        through_the_door(Op::CreateWellKnownDocument { account: account.clone() }, &|| {
+            stores
+                .namespace()
+                .create_well_known_document(owner, &account)
+                .expect("the owner's call is answered")
+        })
+    };
+    create(None);
+    let (mailbox, minted_at) = create_the_mailbox();
+    assert_eq!(Some(&mailbox), mailbox_address(&account).as_ref(), "the account's document 2");
+    assert_eq!(
+        engine.kernel().current_seq().0,
+        minted_at,
+        "the mint committed at its ack's position"
+    );
+    let (draft, draft_at) = create(Some(false));
+    assert!(draft_at > minted_at, "the premise: a commit between the two calls");
+    let rows_before = wp.feed.entries_above(0).len();
+
+    let (again, judged_at) = create_the_mailbox();
+    assert_eq!(again, mailbox, "the second call answers the same address");
+    assert_eq!(judged_at, draft_at, "at the position it read, not the mint's");
+    assert_eq!(engine.kernel().current_seq().0, draft_at, "and commits nothing");
+    assert_eq!(wp.feed.entries_above(0).len(), rows_before, "no row is added");
+
+    let rows: Vec<(u64, String, Vec<String>)> = wp
+        .feed
+        .entries_above(0)
+        .into_iter()
+        .map(|(at, meta)| match meta {
+            CommitMeta::Recorded { op, docs, .. } => (at, op, docs),
+            other @ CommitMeta::Bare { .. } => panic!("a bare entry at {at}: {other:?}"),
+        })
+        .collect();
+    let of_the_mint: Vec<_> =
+        rows.iter().filter(|(_, op, _)| op == "create_well_known_document").collect();
+    assert_eq!(
+        of_the_mint,
+        [&(minted_at, "create_well_known_document".to_string(), vec![mailbox.to_string()])],
+        "one row, at the mint's position, naming the mailbox alone: {rows:?}"
+    );
+    assert!(
+        rows.contains(&(draft_at, "create_new_document".to_string(), vec![draft.to_string()])),
+        "the position the second call read keeps the draft's row: {rows:?}"
+    );
+
+    let snap = engine.kernel().snapshot();
+    let page = |principal: Option<PrincipalId>| {
+        served(page_from(&wp, &FeedClass::of(snap.world(), principal), 0))
+    };
+    let row =
+        page(Some(owner)).remove(&minted_at).expect("the owner's page carries the mint's row");
+    assert_eq!(row["op"], "create_well_known_document", "{row}");
+    assert_eq!(row["docs"], serde_json::json!([mailbox.to_string()]), "{row}");
+    assert_eq!(row["key"], "bare", "{row}");
+    for member in ["attest", "link", "new_prefix", "new_id", "placed", "base", "merge"] {
+        assert!(row.get(member).is_none(), "the row carries no `{member}`: {row}");
+    }
+    for stranger in [Some(SYSTEM_PRINCIPAL), None] {
+        assert!(
+            !page(stranger).contains_key(&minted_at),
+            "{stranger:?}: the row of a private mailbox is omitted"
+        );
+    }
 }
 
 /// Mints four drafts and tears `commits.log` back to the first.

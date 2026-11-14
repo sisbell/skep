@@ -60,7 +60,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   answered at any age and never rebuilt from the feed; a content element
   and an account enter none. `time_document`, doc 4 of the system
   account, is the daemon's hourly time record's home, beside
-  `head_document`.
+  `head_document`, doc 2, and `staging_draft`, doc 3, the account's
+  one private document; genesis seeds all three with doc 1.
 - **The publication bit** — one bit per document, resolved by the
   minting op and journaled on the document's own allocation record
   at mint; immutable thereafter, there being no publication

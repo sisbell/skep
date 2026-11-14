@@ -303,13 +303,13 @@ fn the_format_stamp_leads_the_world_s_bytes() {
 /// the old ones and not a strawman: the current encoding IS the stamp
 /// followed by the four slices and then the identity slice, and M3's slice
 /// at genesis IS its old bytes followed by the publication map and the
-/// position map — since PUB-6.65's seed, the system account's two
-/// born-published documents behind an eight-byte length, then the same two
-/// at the genesis coordinate behind another (M3's own test pins that half;
-/// this one rides it).
+/// position map — PUB-6.65's seed: the system account's four documents, each
+/// with the bit it was born with, behind an eight-byte length, then the same
+/// four at the genesis coordinate behind another (M3's own test pins that
+/// half; this one rides it).
 #[test]
 fn a_checkpoint_without_the_bit_or_the_stamp_fails_to_decode() {
-    use skep_namespace::{ghost_home_document, head_document};
+    use skep_namespace::{ghost_home_document, head_document, staging_draft, time_document};
 
     let world = World::genesis();
     let current = bincode::serialize(&world).expect("a world serializes");
@@ -332,22 +332,28 @@ fn a_checkpoint_without_the_bit_or_the_stamp_fails_to_decode() {
     );
 
     // The pre-bit layout: additionally without M3's publication map, which
-    // at genesis holds the seed's two born-published documents and nothing
-    // else — hand-built from the seed's public pins (a `Vec` of pairs
-    // encodes exactly as the map does) — and without the position map after
-    // it, the same two documents at the genesis coordinate; the two maps
-    // are pinned as the bytes that end M3's slice.
+    // at genesis holds the seed's four documents and nothing else — three
+    // born published and the staging draft born unpublished, hand-built
+    // from the seed's public pins (a `Vec` of pairs encodes exactly as the
+    // map does) — and without the position map after it, the same four
+    // documents at the genesis coordinate; the two maps are pinned as the
+    // bytes that end M3's slice.
     let namespace_bytes = bincode::serialize(&world.namespace).expect("M3 serializes");
+    let seeded = [
+        (ghost_home_document(), true),
+        (head_document(), true),
+        (staging_draft(), false),
+        (time_document(), true),
+    ];
     let publication_bytes =
-        bincode::serialize(&vec![(ghost_home_document(), true), (head_document(), true)])
-            .expect("the map's entries serialize");
+        bincode::serialize(&seeded.to_vec()).expect("the map's entries serialize");
     let position_bytes =
-        bincode::serialize(&vec![(ghost_home_document(), 0u64), (head_document(), 0u64)])
+        bincode::serialize(&seeded.iter().map(|(doc, _)| (doc.clone(), 0u64)).collect::<Vec<_>>())
             .expect("the map's entries serialize");
     let trailing = [publication_bytes.as_slice(), position_bytes.as_slice()].concat();
     assert!(
         namespace_bytes.ends_with(&trailing),
-        "genesis's publication map and position map are the seed's two documents: their \
+        "genesis's publication map and position map are the seed's four documents: their \
          entries end M3's bytes"
     );
     let mut pre_bit = pre_stamp.clone();
@@ -357,12 +363,15 @@ fn a_checkpoint_without_the_bit_or_the_stamp_fails_to_decode() {
         "a pre-publication checkpoint decoded — it must fail, never read as everything-published"
     );
 
-    // …and this build's own bytes decode. Genesis holds no draft, so the
-    // empty set below says nothing about a rebuild: the hazard the
-    // invariant note names is held over a world that has one, in
-    // `the_hint_check_refuses_a_world_whose_derived_state_was_never_rebuilt`.
+    // …and this build's own bytes decode. The exception set is no part of
+    // the bytes, so the decoded world's is empty though genesis registers a
+    // draft, and stays so until a rebuild runs over it: the hazard the
+    // invariant note names, which
+    // `the_hint_check_refuses_a_world_whose_derived_state_was_never_rebuilt`
+    // holds over a world a write minted its draft in.
     let decoded = bincode::deserialize::<World>(&current).expect("this build's own bytes decode");
-    assert_eq!(decoded.drafts().count(), 0);
+    assert_eq!(world.drafts().count(), 1, "genesis seeds its one draft's entry");
+    assert_eq!(decoded.drafts().count(), 0, "a decoded world's set is empty until rebuilt");
 }
 
 /// A world holding one link per entry of `shapes`, each homed in a
@@ -521,12 +530,17 @@ fn a_base_written_before_the_birth_memo_fails_to_decode() {
 /// The bytes of `world` as a build before the position map wrote them: M3's
 /// slice without its trailing `minted_at` map, the rest as this build
 /// writes it. The map's bytes are hand-built from the public read, one
-/// entry per address the fixture minted — the seed's two documents and
+/// entry per address the fixture minted — the seed's four documents and
 /// whatever `addresses` names — in address order, a `Vec` of pairs encoding
 /// exactly as the map does; the cut is pinned against the slice's own
 /// bytes first, so the shape is the old one and not a strawman.
 fn written_before_the_position_map(world: &World, addresses: &[Address]) -> Vec<u8> {
-    let mut entries: Vec<(Address, u64)> = [skep_namespace::ghost_home_document(), skep_namespace::head_document()]
+    let mut entries: Vec<(Address, u64)> = [
+        skep_namespace::ghost_home_document(),
+        skep_namespace::head_document(),
+        skep_namespace::staging_draft(),
+        skep_namespace::time_document(),
+    ]
         .into_iter()
         .chain(addresses.iter().cloned())
         .map(|a| {

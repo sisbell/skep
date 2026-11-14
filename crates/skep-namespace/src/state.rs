@@ -287,7 +287,7 @@ pub struct M3State {
     /// journal below the reclaim floor is gone: the fork source's reason, in
     /// its shape (`skep-arrangement`'s `fork_sources`). It is the one map in
     /// the engine that keeps a position, and the fold alone writes it;
-    /// `rebuild_derived` stays the identity. Genesis's two seeded documents
+    /// `rebuild_derived` stays the identity. Genesis's four seeded documents
     /// are entered at `Seq(0)`, the coordinate the genesis state answers at.
     ///
     /// **The budget.** One full [`Address`] key and eight bytes per entry,
@@ -411,10 +411,12 @@ pub fn system_node() -> Address {
 /// Returns the system account `1.1.0.1` (PUB-6.65, RES-304).
 ///
 /// It is the commons account of the design, owned by [`SYSTEM_PRINCIPAL`] and
-/// seeded by [`M3State::genesis`] with its doc 1 (the commons registry's
-/// future home, which is [`ghost_home_document`]) and its doc 2 (the daemon's
-/// head document `H`), both born published. Its account chain sits under
-/// [`system_node`].
+/// seeded by [`M3State::genesis`] with four documents: its doc 1 (the commons
+/// registry's future home, which is [`ghost_home_document`]), its doc 2 (the
+/// daemon's head document `H`, [`head_document`]) and its doc 4 (the time
+/// document `T`, [`time_document`]), all three born published, and its doc 3
+/// (the staging draft, [`staging_draft`]), born unpublished. Its account
+/// chain sits under [`system_node`].
 pub fn system_account() -> Address {
     let t = Tumbler::new([1u32, 1, 0, 1].into_iter().map(Nat::from))
         .expect("a four-component sequence is nonempty");
@@ -434,18 +436,31 @@ pub fn head_document() -> Address {
     validate(t).expect("the head document 1.1.0.1.0.2 is T4-valid by construction")
 }
 
+/// Returns the staging draft `1.1.0.1.0.3` (PUB-6.65).
+///
+/// It is doc 3 of [`system_account`], the account's one private document:
+/// the draft the daemon's own writers insert into, each ahead of the publish
+/// shot that mints, from what it inserted, the next member of one of the
+/// account's published documents. Seeded born unpublished and empty by
+/// [`M3State::genesis`], so the genesis state itself holds it registered
+/// with its bit unset; a bit is written once (PUB-1.9), so it is never
+/// published.
+pub fn staging_draft() -> Address {
+    let t = Tumbler::new([1u32, 1, 0, 1, 0, 3].into_iter().map(Nat::from))
+        .expect("a six-component sequence is nonempty");
+    validate(t).expect("the staging draft 1.1.0.1.0.3 is T4-valid by construction")
+}
+
 /// Returns the time document `T` = `1.1.0.1.0.4`.
 ///
 /// It is doc 4 of [`system_account`], the daemon's own document of hourly
 /// `skep-time` records — each a published version member holding one record
 /// that names a committed position and the daemon's clock at it — which a
 /// reader of a minted address's age falls back on where the change feed's
-/// line is gone (wire.md §The other endpoints, the time document). Not
-/// seeded by [`M3State::genesis`]: the daemon's time writer mints it,
-/// published, at its first record, after the staging draft doc 3 the head
-/// writer and the registry seed share, so by the document chain's frontier
-/// it lands here. One spelling for the writer and every reader, as
-/// [`head_document`] is for `H`.
+/// line is gone (wire.md §The other endpoints, the time document). Seeded
+/// born published by [`M3State::genesis`], with no member: it holds no
+/// record until the daemon's time writer writes its first. One spelling for
+/// the seed, the writer and every reader, as [`head_document`] is for `H`.
 pub fn time_document() -> Address {
     let t = Tumbler::new([1u32, 1, 0, 1, 0, 4].into_iter().map(Nat::from))
         .expect("a six-component sequence is nonempty");
@@ -458,39 +473,41 @@ impl M3State {
     /// That is `nodes = {[1], [1.1]}`,
     /// `Π = { [1] → BOOTSTRAP_PRINCIPAL, [1.1.0.1] → SYSTEM_PRINCIPAL }`, the
     /// account chain `([1.1], 2)` at 1 and the document chain
-    /// `([1.1.0.1], 2)` at 2, and both documents born published. `pub` — the
-    /// engine seeds `Kernel::open(cfg, genesis-World)` with it; "load empty
-    /// journal" and "fresh genesis" are the same code path (§7).
-    /// Deterministic, per M2's byte-identical-genesis caller contract — and
-    /// byte-identical across processes because every field is ordered (the
-    /// frontier map included).
+    /// `([1.1.0.1], 2)` at 4, three of its documents born published and one,
+    /// the staging draft, born unpublished. `pub` — the engine seeds
+    /// `Kernel::open(cfg, genesis-World)` with it; "load empty journal" and
+    /// "fresh genesis" are the same code path (§7). Deterministic, per M2's
+    /// byte-identical-genesis caller contract — and byte-identical across
+    /// processes because every field is ordered (the frontier map included).
     ///
     /// **Two parts, built two ways.** The roots — node `[1]` and π₀ seated at
     /// it — are written directly: they are the state every record folds onto,
     /// and π₀'s node-tier seat is a shape no op stages and
     /// `RegisterPrincipal`'s prefix door refuses. The seed is folded: it is
-    /// the five records M3's own ops stage for the same work —
+    /// the seven records M3's own ops stage for the same work —
     /// [`crate::Namespace::register_node`]'s admission of [`system_node`]
     /// `1.1`, [`crate::Namespace::delegate`]'s baptism and seat of
     /// [`system_account`] `1.1.0.1` for [`SYSTEM_PRINCIPAL`], and the
-    /// allocations of the two documents
-    /// [`crate::Namespace::create_new_document`] mints there, doc 1
+    /// allocations of the four documents
+    /// [`crate::Namespace::create_new_document`] mints there: doc 1
     /// ([`ghost_home_document`], the commons registry's future home) and doc 2
     /// ([`head_document`] `H`), born published (PUB-1.25's
-    /// genesis/commons-seeded row) — handed to [`M3State::apply_m3`] in that
-    /// order. So the fold is the one writer of the frontier and publication
-    /// maps: each chain reaches its count by the fold's own advance to each
-    /// record's ordinal, each document's bit lands in the step that registers
-    /// it, and the fold's contiguity check confirms, on every build, that the
-    /// account and each document is the next member of its own chain. A
-    /// document added to the seed is one more record.
+    /// genesis/commons-seeded row); doc 3 ([`staging_draft`]), born
+    /// unpublished (PUB-6.65); and doc 4 ([`time_document`] `T`), born
+    /// published — handed to [`M3State::apply_m3`] in that order. So the fold
+    /// is the one writer of the frontier and publication maps: each chain
+    /// reaches its count by the fold's own advance to each record's ordinal,
+    /// each document's bit lands in the step that registers it, and the
+    /// fold's contiguity check confirms, on every build, that the account and
+    /// each document is the next member of its own chain. A document added to
+    /// the seed is one more record.
     ///
     /// What the seed leaves alone: node `[1]`'s own account chain — the
     /// seeded account chain is `([1.1], 2)`, not `([1], 2)` — so
-    /// `next_account_prefix([1])` answers `1.0.1`; and content — both
+    /// `next_account_prefix([1])` answers `1.0.1`; and content — all four
     /// documents are born empty, so the ghost content namespace has no
     /// frontier and its floor (`ghost_floor`, [`GHOST_POSITIONS`]) stands.
-    /// It seeds no unpublished document and no link.
+    /// It seeds one unpublished document, the staging draft, and no link.
     ///
     /// [`GHOST_POSITIONS`]: crate::GHOST_POSITIONS
     pub fn genesis() -> M3State {
@@ -516,7 +533,9 @@ impl M3State {
                 prefix: system_account(),
                 id: SYSTEM_PRINCIPAL,
             }),
-            // Two creates under it, both born published: doc 1, then doc 2 (H).
+            // Four creates under it, in the chain's order: doc 1 and doc 2
+            // (H) born published, doc 3 (the staging draft) born unpublished,
+            // doc 4 (T) born published.
             M3Rec::Allocate(Allocation {
                 addr: ghost_home_document(),
                 published: true,
@@ -525,10 +544,18 @@ impl M3State {
                 addr: head_document(),
                 published: true,
             }),
+            M3Rec::Allocate(Allocation {
+                addr: staging_draft(),
+                published: false,
+            }),
+            M3Rec::Allocate(Allocation {
+                addr: time_document(),
+                published: true,
+            }),
         ];
-        // Folded at `Seq(0)`, the genesis coordinate: the two documents enter
-        // the position map there, which is where a reader of the genesis
-        // state finds them registered.
+        // Folded at `Seq(0)`, the genesis coordinate: the four documents
+        // enter the position map there, which is where a reader of the
+        // genesis state finds them registered.
         seed.iter().fold(roots, |s, r| s.apply_m3(Seq(0), r))
     }
 
@@ -743,7 +770,7 @@ impl M3State {
     ///
     /// It is the position map's entry (the `minted_at` field's card): `Some`
     /// for every document, version member and link minted by a build that
-    /// keeps the map — genesis's two seeded documents at `Seq(0)` — and
+    /// keeps the map — genesis's four seeded documents at `Seq(0)` — and
     /// `None` for every other address: a content element, an account, a
     /// node, an address never minted, and one minted by a build that kept no
     /// map, which a checkpoint written without the field never carries. A

@@ -470,8 +470,9 @@ apart.
    holds every line from position {position}: commits.log {bytes}
    bytes, {n} entries resident, the most this uptime {n}` is what the
    change feed holds: the first position its files hold a line for —
-   `1` on a board that never compacted and never lost a line, the
-   `floor` a `410 history_reclaimed` on `/changes` names otherwise —
+   the first commit's position on a board that never compacted and
+   never lost a line, the `floor` a `410 history_reclaimed` on
+   `/changes` names otherwise —
    `commits.log`'s size, which grows with every commit for the life of
    the board (step 7), and the entries the daemon holds in memory for
    the feed, bounded by its window of 2,048 positions, beside the most

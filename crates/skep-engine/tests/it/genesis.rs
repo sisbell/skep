@@ -1,11 +1,10 @@
 //! Genesis: the initial world seeds each store per its own design, and the
-//! registry built from the compiled format constants (owner ruling,
-//! 2026-08-26 — `GenesisConfig` is retired) is ONE process constant, which
-//! M7's slice and the engine handle each read rather than hold and M9's
-//! catalog projects. The five reserved type addresses are
-//! in-docuverse ghost tumblers, and the property the abolished 9-space
-//! bought by unreachability is re-proven here through the real ops: the
-//! allocator never issues them.
+//! registry built from the compiled format constants — there is no genesis
+//! configuration — is ONE process constant, which M7's slice and the engine
+//! handle each read rather than hold and M9's catalog projects. The five
+//! reserved type addresses are in-docuverse ghost tumblers, and the property
+//! the abolished 9-space bought by unreachability is re-proven here through
+//! the real ops: the allocator never issues them.
 
 use crate::common;
 
@@ -19,24 +18,29 @@ use skep_engine::types::{
     t_policy_link, t_policy_link_own, t_succession_ground, t_succession_policy, t_successor_of,
     t_takedown, t_takedown_base, t_takedown_lifted,
 };
-use skep_engine::World;
+use skep_engine::{Engine, Seq, World};
+use skep_febe::{Disposition, Op, OperationSurface, RejectCode, Request, Response, SessionId};
 use skep_links::{
     coverage_class, edition_type, read_with_type, HasLinks, ReservedAddrs, ShippedType, View,
 };
 use skep_namespace::{
-    ghost_home_document, ghost_position, head_document, system_account, system_node, HasM3,
-    BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS, SYSTEM_PRINCIPAL,
+    ghost_home_document, ghost_position, head_document, staging_draft, system_account, system_node,
+    time_document, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS, SYSTEM_PRINCIPAL,
 };
+use skep_retrieval::Spec;
+use tempfile::tempdir;
 
 /// M7's own list of the five — read rather than restated, so a walk here
 /// cannot come to cover four classes out of five.
 const SHIPPED: [ShippedType; 5] = ShippedType::ALL;
 
-/// Genesis seeds M3's baptismal roots and, since PUB-6.65, its system account
-/// seed — two documents born published and empty — and leaves M4/M5/M7's
-/// stores empty. So Σ₀ holds no draft and no link, and every derived structure
-/// the engine seeds empty agrees with a rebuild over it: the check this ends
-/// on is the standing one `World::genesis` names, run over bare Σ₀.
+/// Genesis seeds M3's baptismal roots and its system account seed (PUB-6.65)
+/// — four empty documents, three born published and one, the staging draft,
+/// born unpublished — and leaves M4/M5/M7's stores empty. So Σ₀ holds one
+/// draft and no link, and every derived structure the engine seeds agrees
+/// with a rebuild over it: the exception set holds that one draft, withheld
+/// from every reader class but its owner's, and the check this ends on is the
+/// standing one `World::genesis` names, run over bare Σ₀.
 #[test]
 fn genesis_seeds_each_store_per_its_design() {
     let engine = mem_engine();
@@ -47,15 +51,53 @@ fn genesis_seeds_each_store_per_its_design() {
     assert_eq!(world.m3().entity_level(&node1()), Some(skep_address::Level::Node));
     assert_eq!(world.m3().effective_owner(&node1()), Some(BOOTSTRAP_PRINCIPAL));
 
-    // M3's system account seed (PUB-6.65): two documents, born published and
-    // empty. The bit is read off M3, not off `World::published`, which an
-    // empty exception set answers `true` whatever M3 holds.
-    for doc in [ghost_home_document(), head_document()] {
-        assert!(world.m3().is_registered_document(&doc), "{doc} is seeded");
-        assert!(world.m3().published(&doc), "{doc} is born published (M3's bit)");
-        assert_eq!(world.m5().content_count(&doc), nat(0), "{doc} is born empty");
+    // M3's system account seed (PUB-6.65): four documents, all empty, the
+    // staging draft alone born unpublished. The bit is read off M3, and then
+    // off `World::published`, which answers off the exception set: an empty
+    // set would answer `true` for the draft whatever M3 holds.
+    let seeded = [
+        (ghost_home_document(), true),
+        (head_document(), true),
+        (staging_draft(), false),
+        (time_document(), true),
+    ];
+    for (doc, published) in &seeded {
+        assert!(world.m3().is_registered_document(doc), "{doc} is seeded");
+        assert_eq!(world.m3().published(doc), *published, "{doc}: the bit it was born with (M3's)");
+        assert_eq!(world.published(doc), *published, "{doc}: the exception set agrees with M3");
+        assert_eq!(world.m5().content_count(doc), nat(0), "{doc} is born empty");
     }
-    assert_eq!(world.drafts().count(), 0, "…so the engine's exception set holds nothing");
+    assert_eq!(
+        world.m3().documents().len(),
+        seeded.len(),
+        "the four seeded documents and no other"
+    );
+
+    // The exception set holds the one draft, owned by the system account.
+    let drafts: Vec<(Address, Address)> =
+        world.drafts().map(|d| (d.document.clone(), d.owner_account.clone())).collect();
+    assert_eq!(
+        drafts,
+        vec![(staging_draft(), system_account())],
+        "Σ₀'s exception set is the staging draft alone, under its owner account"
+    );
+
+    // Every reader class but the draft's own owner is refused it: the guest;
+    // a principal seated nowhere; principal 0, whose node-tier seat reads no
+    // draft by subtree; and the rule engine's fires, which read at guest
+    // class. The system principal reads it, as its publish shots must.
+    let draft = staging_draft();
+    assert!(!world.readable(None, &draft), "the guest is refused the staging draft");
+    assert!(
+        !world.readable(Some(PrincipalId(77)), &draft),
+        "a principal seated nowhere is refused"
+    );
+    assert!(!world.readable(Some(BOOTSTRAP_PRINCIPAL), &draft), "principal 0 is refused");
+    assert!(!World::visible_to(Caller::System)(world, &draft), "a rule fire is refused");
+    assert!(world.readable(Some(SYSTEM_PRINCIPAL), &draft), "the system principal reads its draft");
+    for (doc, _) in seeded.iter().filter(|(_, published)| *published) {
+        assert!(world.readable(None, doc), "{doc} is born published, so the guest reads it");
+    }
 
     // M4: the permascroll starts empty.
     assert!(world.content().is_empty());
@@ -69,6 +111,134 @@ fn genesis_seeds_each_store_per_its_design() {
     engine
         .check_hints()
         .expect("Σ₀ carries its own derived state: a rebuild over the seed agrees");
+}
+
+/// The staging draft is withheld in a world held in memory, on the two
+/// reads that take a document, at every reader class but its owner's. An
+/// in-memory world is installed as built and never rebuilt, so what holds the
+/// draft back here is the exception set `World::genesis` seeds, and nothing
+/// else: with that set empty the draft would read published to every class.
+/// The classes are the guest; a principal seated at an account of its own; a
+/// principal seated nowhere; and principal 0, seated at node `[1]`. The
+/// system principal owns the draft and reads it.
+#[test]
+fn the_staging_draft_is_withheld_from_every_class_but_its_owner_in_memory() {
+    let engine = mem_engine();
+    let febe: OperationSurface<World> =
+        OperationSurface::new(Box::new(engine.stores()), std::num::NonZeroUsize::MIN);
+    let boot = febe.bootstrap_session();
+    let next_prefix = Request::from(Op::NextAccountPrefix { parent: node1() });
+    let prefix = match febe.execute(boot, next_prefix) {
+        Response::MaybeAddr { addr: Some(a), .. } => a,
+        other => panic!("expected the next account prefix, got {other:?}"),
+    };
+    match febe.execute(
+        boot,
+        Request::from(Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: USER }),
+    ) {
+        Response::AckAddr { .. } => {}
+        other => panic!("expected the delegation's ack, got {other:?}"),
+    }
+    let draft = staging_draft();
+    let retrieve_v = |session: SessionId| {
+        febe.execute(
+            session,
+            Request::from(Op::RetrieveV {
+                specs: vec![Spec { doc: draft.clone(), span: vspan(1, 1, 1) }],
+            }),
+        )
+    };
+    let doc_metadata = |session: SessionId| {
+        febe.execute(session, Request::from(Op::DocMetadata { doc: draft.clone() }))
+    };
+    let assert_withheld = |resp: Response, read: &str, class: &str| match resp {
+        Response::Rejected(rej) => {
+            assert_eq!(rej.code, RejectCode::Withheld, "{read} at {class}: {rej:?}");
+            assert_eq!(rej.disposition, Disposition::Reorder, "{read} at {class}: {rej:?}");
+            assert_eq!(
+                rej.site.as_ref().and_then(|s| s.addr.as_ref()),
+                Some(&draft),
+                "{read} at {class}: {rej:?}"
+            );
+            assert!(rej.detail.is_none(), "{read} at {class}: withheld carries no detail: {rej:?}");
+        }
+        other => panic!("{read} at {class}: expected withheld, got {other:?}"),
+    };
+
+    let classes = [
+        (SessionId::GUEST, "the guest"),
+        (febe.open_session(USER), "a principal seated at its own account"),
+        (febe.open_session(PrincipalId(77)), "a principal seated nowhere"),
+        (boot, "principal 0"),
+    ];
+    for (session, class) in classes {
+        assert_withheld(retrieve_v(session), "retrieve_v", class);
+        assert_withheld(doc_metadata(session), "doc_metadata", class);
+    }
+
+    // The owner's class: the draft answers, empty and unpublished, entered
+    // at the genesis coordinate.
+    let system = febe.open_session(SYSTEM_PRINCIPAL);
+    match retrieve_v(system) {
+        Response::Delivery { items, .. } => {
+            assert!(delivered_bytes(&items).is_empty(), "the draft is born empty: {items:?}");
+        }
+        other => panic!("the system principal was refused its own draft: {other:?}"),
+    }
+    match doc_metadata(system) {
+        Response::DocMetadata { doc, published, owner, at, .. } => {
+            assert_eq!(doc, draft);
+            assert!(!published, "the staging draft is born unpublished");
+            assert_eq!(owner, Some(system_account()));
+            assert_eq!(at, Some(Seq(0)), "minted at the genesis coordinate");
+        }
+        other => panic!("the system principal was refused its own draft's metadata: {other:?}"),
+    }
+}
+
+/// The staging draft stands in a journalled world before anything is
+/// written: an engine over a directory with no daemon above it, so no write
+/// of the system account's has run. A journalled open rebuilds the exception
+/// set from the namespace it loaded, so what holds the draft here is the
+/// namespace's own seed record — registered, unpublished, owned by the
+/// system account — and a reopen reads the same. It is the journalled cell
+/// that reads the genesis state alone: a daemon's board has the system
+/// account's own writes above genesis by the time a test reads it.
+#[test]
+fn a_journalled_board_no_seed_has_written_holds_the_staging_draft_withheld() {
+    let dir = tempdir().expect("tempdir");
+    let draft = staging_draft();
+    for open in ["the first open", "a reopen"] {
+        let engine = Engine::open(fsync_cfg(dir.path())).expect("open");
+        assert_eq!(engine.kernel().current_seq(), Seq(0), "{open}: nothing has been written");
+        let snap = engine.kernel().snapshot();
+        let world = snap.world();
+        assert!(world.m3().is_registered_document(&draft), "{open}: the draft is registered");
+        assert!(!world.m3().published(&draft), "{open}: its bit is unset (M3's)");
+        assert_eq!(world.m3().minted_at(&draft), Some(Seq(0)), "{open}: at the genesis coordinate");
+        let drafts: Vec<(Address, Address)> =
+            world.drafts().map(|d| (d.document.clone(), d.owner_account.clone())).collect();
+        assert_eq!(
+            drafts,
+            vec![(draft.clone(), system_account())],
+            "{open}: the rebuilt exception set is the staging draft alone"
+        );
+        assert!(!world.readable(None, &draft), "{open}: the guest is refused it");
+        assert!(
+            !world.readable(Some(BOOTSTRAP_PRINCIPAL), &draft),
+            "{open}: principal 0 is refused it"
+        );
+        assert!(world.readable(Some(SYSTEM_PRINCIPAL), &draft), "{open}: its owner reads it");
+        let guest = engine.world_dump_visible_to(None).into_string();
+        assert!(
+            guest.contains("\"publication\": []"),
+            "{open}: the guest's dump lists no draft:\n{guest}"
+        );
+        let whole = engine.world_dump().into_string();
+        let listed = format!("\"publication\": [{}]", quoted(&draft));
+        assert!(whole.contains(&listed), "{open}: the unfiltered dump lists it:\n{whole}");
+        engine.check_hints().expect("the rebuilt hints agree with a rebuild");
+    }
 }
 
 /// Genesis is a compiled constant: two constructions are byte-identical

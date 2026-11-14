@@ -43,11 +43,10 @@ mod mirror;
 /// (`common::SEED_HEAD`): delegate (2 records), the home mint (1), the
 /// one-atom insert (3), the genesis link (3), the claim link (3) — twelve
 /// records. The claim's own step then writes the board's first head `H.1`
-/// above it ([`H1_ATS`]; signed ops, s1), so the board the claim leaves
-/// behind stands at [`CLAIMED_HEAD`], the base every seeded position below
-/// sits on. Lane 3.2 re-pinned wire.md's change-feed examples onto the
-/// ceremony's numbers; the s1 lane onto these; the registry seed's lane onto
-/// the seeded board's, every figure derived from the one constant.
+/// above it ([`H1_ATS`]; signed ops), so the board the claim leaves behind
+/// stands at [`CLAIMED_HEAD`], the base every seeded position below sits
+/// on, wire.md's change-feed examples among them, every figure derived from
+/// the one constant.
 const CLAIM_POSITION: u64 = SEED_HEAD + 12;
 
 /// The ceremony's own commit positions (the record counts above,
@@ -57,8 +56,8 @@ const CEREMONY_ATS: [u64; 5] =
     [SEED_HEAD + 2, SEED_HEAD + 3, SEED_HEAD + 6, SEED_HEAD + 9, SEED_HEAD + 12];
 
 /// `H.1`'s two commits, in the claim's own step: the head record's insert
-/// into the staging draft (3 records) — which stands from the open's
-/// registry seed, so the claim's head mints none — and the publish shot into
+/// into the staging draft (3 records) — which stands from genesis, so the
+/// claim's head mints none — and the publish shot into
 /// `H` (7: the shot's four and its correspondence record's three). The insert
 /// writes the system account's PRIVATE draft and is masked at every class
 /// but the system's; the publish is public, `key: "system"`, its `docs` the
@@ -261,7 +260,11 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     assert_eq!(st, 200);
     assert!(json(&body)["head_time"].is_u64(), "fresh board: the seed's head_time");
     let v = changes_ok(port, None, "since=0");
-    assert_eq!(entry_ats(&v), seed_ats(), "the seed's publish and links, the draft's writes masked");
+    assert_eq!(
+        entry_ats(&v),
+        seed_ats(),
+        "the seed's publish and links, the draft's one write masked"
+    );
 
     // …and from the seed's head the feed answers the empty page, not a
     // refusal: this is every client's first poll past the seed, and a 410
@@ -1118,7 +1121,7 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
         let v = changes_ok(port, Some(&s1), "since=0");
         assert_eq!(entry_ats(&v), all_ats());
         let entries = v["changes"].as_array().expect("changes");
-        let (tail, kept) = entries.split_last().expect("eleven entries");
+        let (tail, kept) = entries.split_last().expect("a page of entries");
         assert!(
             tail["docs"].is_null() && tail["time"].is_null() && tail["key"].is_null(),
             "a lost record answers null in EVERY testimony field, `key` included: the \

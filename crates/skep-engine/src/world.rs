@@ -75,8 +75,9 @@ use crate::publication::{self, Drafts};
 /// derived indexes, the exception set and the grant fold. Two construction
 /// paths establish it, and the third does not.
 /// [`World::genesis`] establishes it, each slice arriving from its own
-/// genesis constructor and both indexes empty over a world with no draft and
-/// no link; and
+/// genesis constructor, the exception set seeded off M3's slice with the one
+/// draft that slice registers, and the grant fold empty over a world with no
+/// link; and
 /// [`WorldState::rebuild_derived`] re-establishes it, which M2 runs over
 /// every base it loads, before replay — at open, and again for every world
 /// [`crate::Engine::world_at`] reconstructs from a base read from disk or

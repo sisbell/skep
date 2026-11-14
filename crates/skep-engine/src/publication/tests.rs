@@ -1,6 +1,6 @@
 use serde::Deserialize;
 use skep_address::{validate, Nat, Tumbler};
-use skep_namespace::{HasM3, PrincipalId};
+use skep_namespace::{staging_draft, system_account, HasM3, PrincipalId};
 
 use crate::canon::{to_tree, SerdeTree, TreeDe};
 use crate::testkit::{addr, delegated_account, mem_engine, USER};
@@ -262,5 +262,14 @@ fn the_seed_skips_an_entry_for_an_address_the_registry_never_held() {
          false"
     );
     assert_eq!(drafts.get(&doc), Some(&acct), "…while the registered draft is memoized");
-    assert_eq!(drafts.len(), 1, "one draft, and none for the address the registry never held");
+    assert_eq!(
+        drafts.get(&staging_draft()),
+        Some(&system_account()),
+        "…and genesis's staging draft beside it, under the system account"
+    );
+    assert_eq!(
+        drafts.len(),
+        2,
+        "the two registered drafts, and none for the address the registry never held"
+    );
 }

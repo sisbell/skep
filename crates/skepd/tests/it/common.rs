@@ -76,18 +76,20 @@ pub const T_ENDPOINT: &str = "1.1.0.1.0.1.0.3.56";
 ///
 /// A fresh board's first open seeds the link-type registry (wire.md
 /// §Registry; `skep-core`'s `commits/registry.rs`) before any client writes,
-/// in order: the staging draft's mint (1 record), the one insert of every
-/// type's section (3: a range mint, a stretch, a placement), and the one
+/// in order: the one insert of every type's section into the staging draft
+/// genesis seeds (3: a range mint, a stretch, a placement), and the one
 /// publish of the member that holds them (7: the sections' range mint and
 /// stretch re-inserted as fresh identity, the member's mint and its placing
 /// record — 4 — and the publication's one correspondence record homed in the
 /// staging draft, the link-sets design §5.7: its link mint, its deposit and
 /// its seat — 3); then one `defines` link per type of `skep-registry`'s
-/// vocabulary. A record count is a store's transaction shape, which no
-/// constant of the code names, so this block spells the counts and the
-/// vocabulary's size, every position of a fresh board derives from them,
-/// and the suites' live reads of a fresh board hold them.
-pub const SEED_LEAD_RECORDS: [u64; 3] = [1, 3, 7];
+/// vocabulary. No commit mints a document: the draft and the three
+/// documents the system account publishes into all stand from genesis. A
+/// record count is a store's transaction shape, which no constant of the
+/// code names, so this block spells the counts and the vocabulary's size,
+/// every position of a fresh board derives from them, and the suites' live
+/// reads of a fresh board hold them.
+pub const SEED_LEAD_RECORDS: [u64; 2] = [3, 7];
 
 /// The records of one `defines` link: its mint, the link and its seat.
 pub const SEED_LINK_RECORDS: u64 = 3;
@@ -126,14 +128,15 @@ pub const SEED_LEAD_COMMITS: u64 = SEED_LEAD_RECORDS.len() as u64;
 
 // The positions the facts above give, spelled out: a changed fact fails the
 // build here until the positions it moves are spelled again.
-const _: () = assert!(SEED_FIRST_AT == 1 && SEED_PUBLISH_AT == 11 && SEED_HEAD == 368);
+const _: () = assert!(SEED_FIRST_AT == 3 && SEED_PUBLISH_AT == 10 && SEED_HEAD == 367);
 
 /// The positions of the seed's rows every class sees on a fresh board.
 ///
 /// The publish stands first, at [`SEED_PUBLISH_AT`], then a link per type,
-/// [`SEED_LINK_RECORDS`] apart, to [`SEED_HEAD`]; the commits below the
-/// publish are the system account's private writes to the staging draft,
-/// masked at every class but the system's.
+/// [`SEED_LINK_RECORDS`] apart, to [`SEED_HEAD`]; the one commit below the
+/// publish, the sections' insert at [`SEED_FIRST_AT`], is the system
+/// account's private write to the staging draft, masked at every class but
+/// the system's.
 pub fn seed_ats() -> Vec<u64> {
     (SEED_PUBLISH_AT..=SEED_HEAD).step_by(SEED_LINK_RECORDS as usize).collect()
 }
@@ -396,15 +399,15 @@ pub fn claimed(port: u16) -> bool {
 /// delegate from 0, the home mint, the genesis atom + deposit, the SIGNED
 /// claim. Idempotent — a reopened claimed board skips it.
 ///
-/// THE CLAIM WRITES `H.1` (signed ops, s1; RULED 2026-09-25): the claim's
-/// own request commits the board's first head — the head record's insert
-/// into the staging draft the registry seed left standing, and the shot into
-/// `H` with its correspondence record, ten records right after the claim
-/// link, the system account's own and exempt from the check by ω — so the
-/// board term every attested write's frame names (D13) is present at the
-/// claim's ack and names the claim's own position. Asserted here, at
-/// every claim a suite makes, and on every reopened claimed board (a claimed
-/// board without `H.1` is the crash window the open closes).
+/// THE CLAIM WRITES `H.1` (signed ops): the claim's own request commits the
+/// board's first head — the head record's insert into the staging draft,
+/// which stands from genesis, and the shot into `H` with its correspondence
+/// record, ten records right after the claim link, the system account's own
+/// and exempt from the check by ω — so the board term every attested
+/// write's frame names (signed-ops D13) is present at the claim's ack and
+/// names the claim's own position. Asserted here, at every claim a suite
+/// makes, and on every reopened claimed board (a claimed board without
+/// `H.1` is the crash window the open closes).
 pub fn claim_board(port: u16) {
     if claimed(port) {
         assert!(board_term(port).is_some(), "a reopened claimed board has its H.1");

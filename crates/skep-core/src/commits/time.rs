@@ -53,10 +53,11 @@
 //! whose `time` is the hour's origin — so a board restarted every few
 //! minutes still measures its hour from the record it wrote, never from the
 //! open. A board with no record yet measures from the feed's recorded time
-//! of its first commit ([`Feed::time_at`] at position 1, the board's birth),
-//! else from the open, so a board older than an hour that never held a
-//! record writes one at its first write after this build's first open, and
-//! a board younger than an hour holds none until its hour.
+//! of its first commit ([`Feed::time_at`] at the first commit's position,
+//! the first line the feed holds: the board's birth where it kept every
+//! line), else from the open, so a board older than an hour that never held
+//! a record writes one at its first write after this build's first open,
+//! and a board younger than an hour holds none until its hour.
 //!
 //! **What a refusal does.** A driver refusal on any of the record's commits
 //! — the draft's mint, the document's mint, the record's insert or the
@@ -195,17 +196,27 @@ impl TimeWriter {
     /// becomes `last` whole, so a record written after a restart names no
     /// position already dated, and the hour is measured from the record's
     /// own `time` — and the time document where an earlier uptime minted it.
-    /// With no record, the hour's origin is the feed's recorded time at
-    /// position 1, the board's first commit, else the open (the module doc's
-    /// resume by reading). `lines` is the write path's classed door, cloned
-    /// in, for the one line this writer says.
+    /// With no record, the hour's origin is the feed's recorded time at the
+    /// first commit's position, the first line the feed holds, else the
+    /// open (the module doc's resume by reading). `lines` is the write
+    /// path's classed door, cloned in, for the one line this writer says.
     pub(super) fn open(stores: EngineStores, feed: &Feed, lines: &Lines) -> TimeWriter {
         let snap = stores.kernel().snapshot();
         let last = read_latest_record(snap.world());
         let time_document = find_time_document(snap.world());
         let last_time_millis = match last {
             Some(record) => record.time,
-            None => feed.time_at(1).unwrap_or_else(wall_clock_millis),
+            // The birth read. The feed is asked for the first line it holds
+            // and never for a fixed position: a board's first commit stands
+            // at its own last record's position, whatever that commit is.
+            // Where the feed kept every line that is the board's birth;
+            // where it lost its oldest, the oldest it still holds; and
+            // where it holds no time there, this open.
+            None => feed
+                .figures()
+                .first
+                .and_then(|at| feed.time_at(at))
+                .unwrap_or_else(wall_clock_millis),
         };
         TimeWriter {
             stores,

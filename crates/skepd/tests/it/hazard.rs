@@ -536,7 +536,7 @@ fn f_sidecar_mutilation_never_touches_the_world() {
     let sidecar = |dir: &Path| dir.join("commits.log");
     let sidecar_len = fs::metadata(sidecar(&fixture)).expect("commits.log").len();
     // The committed positions a guest's feed enumerates: the registry seed's
-    // publish and links (the draft's two writes masked), then the acks.
+    // publish and links (the draft's one write masked), then the acks.
     let committed: Vec<u64> = seed_ats().into_iter().chain(acks.iter().copied()).collect();
 
     // The world-intact judge: recovery byte-identical (as_of included) and
@@ -1017,8 +1017,8 @@ const CLAIM_POSITION: u64 = SEED_HEAD + 12;
 
 /// `H.1`'s records above the claim: the head record's insert (3) and the
 /// publish shot into `H` (7: the shot's four and the correspondence record
-/// it homes in the staging draft, lane S1) — the staging draft stands from
-/// the open's registry seed, so the claim's head mints none.
+/// it homes in the staging draft, the link-sets design §5.7) — the staging
+/// draft stands from genesis, so the claim's head mints none.
 const H1_RECORDS: u64 = 10;
 
 /// The kernel below the daemon's door, opened to LOOK and write nothing: a

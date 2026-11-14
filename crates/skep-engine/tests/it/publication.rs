@@ -1,4 +1,4 @@
-//! The exception set (PUB round 1, delta 2 — owner ruling D1, 2026-09-05):
+//! The exception set (PUB-7.5):
 //! the engine's derived membership index over M3's publication bit takes
 //! both halves of the hint discipline (PUB-7.7) — SEEDED at load, FOLDED on
 //! every document-minting record — and the load check that guards its
@@ -21,7 +21,7 @@ use skep_arrangement::{Deposit, VersionError};
 use skep_content::Val;
 use skep_engine::{Draft, Engine, EngineError, OpenError, World};
 use skep_kernel::TxnError;
-use skep_namespace::HasM3;
+use skep_namespace::{staging_draft, system_account, HasM3};
 use tempfile::tempdir;
 
 /// The set as `(draft, owner account)` pairs in address order — the
@@ -43,10 +43,13 @@ struct Docs {
 }
 
 impl Docs {
-    /// What these documents put in the exception set, in address order.
+    /// The exception set over these documents, in address order: their three
+    /// drafts under the account, and genesis's staging draft under the
+    /// system account.
     fn expected_set(&self) -> Vec<(Address, Address)> {
         let mut pairs: Vec<(Address, Address)> =
             self.drafts.iter().map(|d| (d.clone(), self.acct.clone())).collect();
+        pairs.push((staging_draft(), system_account()));
         pairs.sort();
         pairs
     }
@@ -151,9 +154,10 @@ fn pre_stamp_body() -> Vec<u8> {
 }
 
 /// Test 1 — the SEED: a checkpoint holding three drafts and two published
-/// documents, reopened, yields exactly the three. The checkpoint sits at the
-/// head, so the reopened base IS the checkpoint and nothing replays onto it:
-/// the set below is the seed's alone.
+/// documents, reopened, yields exactly the three beside the staging draft
+/// genesis seeds. The checkpoint sits at the head, so the reopened base IS
+/// the checkpoint and nothing replays onto it: the set below is the seed's
+/// alone.
 #[test]
 fn the_seed_holds_exactly_the_drafts_of_a_checkpoint() {
     let dir = tempdir().expect("tempdir");
@@ -168,7 +172,11 @@ fn the_seed_holds_exactly_the_drafts_of_a_checkpoint() {
     let engine = Engine::open(fsync_cfg(dir.path())).expect("reopen over the checkpoint");
     let snap = engine.kernel().snapshot();
     let world = snap.world();
-    assert_eq!(drafts_of(world), docs.expected_set(), "the seed holds exactly the three drafts");
+    assert_eq!(
+        drafts_of(world),
+        docs.expected_set(),
+        "the seed holds exactly the three drafts and genesis's staging draft"
+    );
     assert_eq!(drafts_of(world), live, "…and equals the live fold it stands in for");
     for draft in &docs.drafts {
         assert!(!world.published(draft), "{draft} is a draft");
@@ -206,7 +214,7 @@ fn a_draft_joins_the_set_in_the_commit_that_registers_it() {
         // never visible ahead of the fold.
         assert!(!before.world().m3().is_registered_document(&draft));
         assert!(before.world().owner_account(&draft).is_none());
-        assert_eq!(drafts_of(after.world()).len(), 4);
+        assert_eq!(drafts_of(after.world()).len(), 5);
 
         // A published mint after the checkpoint registers and joins nothing.
         let (edition, _) = engine
@@ -216,13 +224,13 @@ fn a_draft_joins_the_set_in_the_commit_that_registers_it() {
         let head = engine.kernel().snapshot();
         assert!(head.world().m3().is_registered_document(&edition));
         assert!(head.world().published(&edition));
-        assert_eq!(drafts_of(head.world()).len(), 4);
+        assert_eq!(drafts_of(head.world()).len(), 5);
         engine.check_hints().expect("the fold equals a from-authoritative rebuild");
         (draft, drafts_of(head.world()))
     };
 
-    // The reopen is checkpoint + replay: the seed covers the three, the
-    // replayed tail folds the fourth.
+    // The reopen is checkpoint + replay: the seed covers the three and
+    // genesis's staging draft, the replayed tail folds the fourth.
     let engine = Engine::open(fsync_cfg(dir.path())).expect("reopen");
     let snap = engine.kernel().snapshot();
     assert!(!snap.world().published(&draft), "the replayed draft is in the recovered set");
@@ -254,7 +262,11 @@ fn checkpoint_plus_replay_and_full_replay_yield_the_live_set() {
         engine.vstream().version(USER, &docs.edition, None).expect("a version of the edition");
         engine.check_hints().expect("the live fold equals a from-authoritative rebuild");
         let live = drafts_of(engine.kernel().snapshot().world());
-        assert_eq!(live.len(), 4, "three drafts and one more; the refused version joined nothing");
+        assert_eq!(
+            live.len(),
+            5,
+            "genesis's staging draft, three drafts and one more; the refused version joined nothing"
+        );
         (engine.kernel().current_seq(), live)
     };
 
@@ -422,21 +434,20 @@ fn the_dump_renders_the_exception_set_as_a_hint() {
     let text = engine.world_dump().into_string();
     assert!(text.starts_with("skep-world-dump v5\n"), "unexpected banner: {text:.32}");
 
-    let mut pairs: Vec<(String, String)> = docs
-        .drafts
-        .iter()
-        .map(|d| (quoted(d), quoted(&docs.acct)))
-        .collect();
+    let mut pairs: Vec<(String, String)> =
+        docs.expected_set().iter().map(|(draft, owner)| (quoted(draft), quoted(owner))).collect();
     pairs.sort();
     let entries: Vec<String> = pairs.iter().map(|(k, v)| format!("{k}: {v}")).collect();
     let expected = format!("\"publication.drafts\": {{{}}}", entries.join(", "));
     assert!(text.contains(&expected), "expected {expected} in the dump:\n{text}");
     engine.check_hints().expect("the set's fold equals its seed");
 
-    // v5 (lane 3.4 §3): the AUTHORITATIVE publication section lists the same
-    // drafts, in address order, as a sequence of their own — the state the
-    // hint above is the derived index over.
-    let section = format!("\"publication\": {}", seq_of(&docs.drafts.iter().collect::<Vec<_>>()));
+    // v5: the AUTHORITATIVE publication section lists the same drafts, in
+    // address order, as a sequence of their own — the state the hint above
+    // is the derived index over.
+    let listed = docs.expected_set();
+    let section =
+        format!("\"publication\": {}", seq_of(&listed.iter().map(|(d, _)| d).collect::<Vec<_>>()));
     assert!(text.contains(&section), "expected {section} in the dump:\n{text}");
 }
 
@@ -467,11 +478,17 @@ fn the_publication_section_is_address_ordered_where_its_hint_is_text_ordered() {
         })
         .collect();
 
-    let mut by_address = drafts.clone();
-    by_address.sort();
-    let by_address: Vec<String> = by_address.iter().map(quoted).collect();
-    let mut by_text: Vec<String> = drafts.iter().map(quoted).collect();
-    by_text.sort();
+    // The set holds the ten and, under the system account, the staging draft
+    // genesis seeds: each row a draft and its owner, as the dump renders them.
+    let mut rows: Vec<(Address, String, String)> = drafts
+        .iter()
+        .map(|d| (d.clone(), quoted(d), quoted(&acct)))
+        .chain([(staging_draft(), quoted(&staging_draft()), quoted(&system_account()))])
+        .collect();
+    rows.sort();
+    let by_address: Vec<String> = rows.iter().map(|(_, draft, _)| draft.clone()).collect();
+    rows.sort_by(|a, b| a.1.cmp(&b.1));
+    let by_text: Vec<String> = rows.iter().map(|(_, draft, _)| draft.clone()).collect();
     assert_ne!(
         by_address, by_text,
         "the fixture must cross a digit boundary, or the two orders coincide and neither \
@@ -481,8 +498,8 @@ fn the_publication_section_is_address_ordered_where_its_hint_is_text_ordered() {
     let text = engine.world_dump().into_string();
     let section = format!("\"publication\": [{}]", by_address.join(", "));
     assert!(text.contains(&section), "the section is in ADDRESS order: expected {section}\n{text}");
-    let owner = quoted(&acct);
-    let entries: Vec<String> = by_text.iter().map(|d| format!("{d}: {owner}")).collect();
+    let entries: Vec<String> =
+        rows.iter().map(|(_, draft, owner)| format!("{draft}: {owner}")).collect();
     let hint = format!("\"publication.drafts\": {{{}}}", entries.join(", "));
     assert!(text.contains(&hint), "the hint is in RENDERED-TEXT order: expected {hint}\n{text}");
     engine.check_hints().expect("the set's fold equals its seed over ten drafts");

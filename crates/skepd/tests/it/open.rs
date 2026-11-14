@@ -650,8 +650,8 @@ fn tail_cut_lines(whole: &[String]) -> Vec<String> {
 /// position in `(position, head]` that is a transaction's boundary — the
 /// kernel's own history read, one probe per position — the independent
 /// count the landing's `{k}` is held to where the feed's would mask a row:
-/// the head writer's own commits, the staging draft's mint and the record's
-/// insert among them, are a draft's and no guest's to see.
+/// the head writer's own commits, the record's insert among them, are a
+/// draft's and no guest's to see.
 fn boundaries_above(sd: &skepd::Skepd, position: u64) -> u64 {
     let head = sd.daemon().log_position().0;
     (position + 1..=head).filter(|&at| sd.daemon().attestation_at(skepd::Seq(at)).is_ok()).count() as u64
@@ -909,9 +909,8 @@ fn the_open_says_its_directory_first_and_its_recovery_with_the_kernels_figures()
     first.child.kill();
 
     // SECOND LIFE: the same board, no checkpoint — genesis, N replayed
-    // beside the seed's own commits (the staging draft's mint, the sections'
-    // insert, the member's publish, a link per type), and the head the first
-    // life was killed at.
+    // beside the seed's own commits (the sections' insert, the member's
+    // publish, a link per type), and the head the first life was killed at.
     let seed_commits = crate::common::SEED_LEAD_COMMITS + skep_registry::vocabulary().len() as u64;
     let mut second = serve_and_read_the_open(&dir, &[]);
     assert_eq!(second.data_dir_line, format!("data-dir {}", dir.display()));

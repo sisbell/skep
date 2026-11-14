@@ -79,6 +79,19 @@ fn registry_head(engine: &Engine) -> Option<Address> {
     trunk_head(engine.kernel().snapshot().world().m3(), &ghost_home_document())
 }
 
+/// The op each feed entry records, in position order: every commit the
+/// board has made, whatever class may read its row.
+fn ops_recorded(wp: &Commits) -> Vec<String> {
+    wp.feed
+        .entries_above(0)
+        .into_iter()
+        .map(|(at, meta)| match meta {
+            CommitMeta::Recorded { op, .. } => op,
+            other => panic!("a bare entry at {at} on a fresh board's own feed: {other:?}"),
+        })
+        .collect()
+}
+
 /// R1 — EVERY TYPE, ONCE, ON A FRESH BOARD, before any claim: the seed writes
 /// every row and finds none standing; a guest's query constrained in `to`
 /// and `ty` answers exactly one link per row, whose `to` is the type's
@@ -86,7 +99,7 @@ fn registry_head(engine: &Engine) -> Option<Address> {
 /// whose `from` lies in the registry document and reads back as the row's
 /// section, the name alone on its first line; a type not in the table
 /// answers none. And THE COUNT a fresh board stands at after the seed: one
-/// draft mint, one insert of every section, one publish, one link per row.
+/// insert of every section, one publish, one link per row.
 #[test]
 fn a_fresh_board_names_every_type_once_to_a_guest() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -98,27 +111,34 @@ fn a_fresh_board_names_every_type_once_to_a_guest() {
     let seeded = seed(&wp);
     assert_eq!(seeded, Seeded { written: table.len(), stood: 0, refused: None });
 
-    // The commits: the staging draft's mint, the sections' insert, the
-    // member's publish, then one `make_link` per row — each link three
-    // records (mint, link, seat) — and the whole the figure skepd's suites
-    // pin as `SEED_HEAD`.
+    // The commits: the sections' insert into the staging draft genesis
+    // seeds, the member's publish, then one `make_link` per row — each link
+    // three records (mint, link, seat) — and the whole the figure skepd's
+    // suites pin as `SEED_HEAD`. The board began at 0, so the first entry's
+    // position is the insert's own record count.
     let entries = wp.feed.entries_above(0);
-    assert_eq!(entries.len(), 3 + table.len(), "one commit per act, one link per row");
+    assert_eq!(entries.len(), 2 + table.len(), "one commit per act, one link per row");
+    let ops = ops_recorded(&wp);
+    assert_eq!(
+        (ops[0].as_str(), ops[1].as_str()),
+        ("insert", "publish"),
+        "the first commit is the sections' insert, the second the member's publish"
+    );
+    assert!(ops[2..].iter().all(|op| op == "make_link"), "then one link per row: {ops:?}");
     let ats: Vec<u64> = entries.iter().map(|(at, _)| *at).collect();
-    assert_eq!(ats[0], 1, "the draft's mint: one record");
-    let (insert_records, publish_records) = (ats[1] - ats[0], ats[2] - ats[1]);
-    assert!(ats[3..].windows(2).all(|w| w[1] - w[0] == 3), "each link is three records: {ats:?}");
-    assert_eq!(ats[3] - ats[2], 3, "the first link: three records");
+    let (insert_records, publish_records) = (ats[0], ats[1] - ats[0]);
+    assert!(ats[2..].windows(2).all(|w| w[1] - w[0] == 3), "each link is three records: {ats:?}");
+    assert_eq!(ats[2] - ats[1], 3, "the first link: three records");
     let head = engine.kernel().current_seq().0;
     assert_eq!(head, *ats.last().expect("entries"), "the head is the last link's position");
     println!(
-        "the seed's layout on a fresh board: {} rows; the draft's mint at 1, the insert {} \
-         records to {}, the publish {} records to {}, {} links of 3 records to {}: SEED_HEAD = {}",
+        "the seed's layout on a fresh board: {} rows; the insert {} records to {}, the publish \
+         {} records to {}, {} links of 3 records to {}: SEED_HEAD = {}",
         table.len(),
         insert_records,
-        ats[1],
+        ats[0],
         publish_records,
-        ats[2],
+        ats[1],
         table.len(),
         head,
         head
@@ -289,9 +309,9 @@ fn a_refused_commit_ends_the_seed_once_and_the_next_open_finishes_it() {
         // The refused link committed nothing: the head is the second link's
         // position, three records past the first's.
         let ats: Vec<u64> = wp.feed.entries_above(0).into_iter().map(|(at, _)| at).collect();
-        assert_eq!(ats.len(), 5, "the mint, the insert, the publish and two links: {ats:?}");
-        assert_eq!(engine.kernel().current_seq().0, ats[4]);
-        assert_eq!(ats[4] - ats[3], 3);
+        assert_eq!(ats.len(), 4, "the insert, the publish and two links: {ats:?}");
+        assert_eq!(engine.kernel().current_seq().0, ats[3]);
+        assert_eq!(ats[3] - ats[2], 3);
         drop(wp);
         engine.kernel().current_seq().0
     };
@@ -313,8 +333,10 @@ fn a_refused_commit_ends_the_seed_once_and_the_next_open_finishes_it() {
 
 /// R4 at the sections' insert — the seed's first commit of its own: nothing
 /// is published and nothing linked, the line names the first row written
-/// (`defines`) and the `insert`, and the next open writes everything, the
-/// draft standing from the first open so no second mint is made.
+/// (`defines`) and the `insert`, and the next open writes everything. The
+/// refused open committed nothing — the staging draft stands from genesis,
+/// so no commit comes before the insert — and the finishing open ends at a
+/// whole seed's head.
 #[test]
 fn a_refusal_at_the_sections_insert_leaves_the_next_open_the_whole_table() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -337,7 +359,8 @@ fn a_refusal_at_the_sections_insert_leaves_the_next_open_the_whole_table() {
             "{}",
             said[0]
         );
-        assert_eq!(engine.kernel().current_seq().0, 1, "the draft's mint alone landed");
+        assert_eq!(engine.kernel().current_seq().0, 0, "nothing landed: the head did not move");
+        assert!(wp.feed.entries_above(0).is_empty(), "no commit, so no feed entry");
         assert_eq!(registry_head(&engine), None, "no member");
         drop(wp);
         // A whole seed on another fresh board, for the figure to hold the
@@ -350,16 +373,21 @@ fn a_refusal_at_the_sections_insert_leaves_the_next_open_the_whole_table() {
     };
     let (engine, wp) = open(dir.path());
     assert_eq!(seed(&wp), Seeded { written: table.len(), stood: 0, refused: None });
-    assert_eq!(engine.kernel().current_seq().0, whole_head, "the draft stood: no second mint");
+    assert_eq!(
+        engine.kernel().current_seq().0,
+        whole_head,
+        "the finishing open ends at a whole seed's head: the refused open left nothing behind"
+    );
     for def in table {
         assert_eq!(definition_links(&engine, &def.address).len(), 1, "{}", def.address);
     }
 }
 
 /// R5 — THE WRITER: every seed commit testifies `system`; the staging draft
-/// is `1.1.0.1.0.3`, unpublished, and no other document is minted under the
-/// system account by the seed — doc 4 is unregistered after it, and row
-/// 40's line is never said.
+/// is `1.1.0.1.0.3`, unpublished, and no document is minted under the
+/// system account by the seed — the time document stands at doc 4,
+/// registered and published, as genesis seeds it, doc 5 is unregistered
+/// after the seed, and row 40's line is never said.
 #[test]
 fn the_seed_writes_as_the_system_principal_through_the_one_staging_draft() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -370,8 +398,14 @@ fn the_seed_writes_as_the_system_principal_through_the_one_staging_draft() {
     let draft = super::super::head::staging_draft_address();
     assert_eq!(draft.tumbler().to_string(), "1.1.0.1.0.3");
     assert!(m3.is_registered_document(&draft) && !m3.published(&draft), "the draft, private");
-    let doc4 = crate::codec::wire_address("1.1.0.1.0.4").expect("an address");
-    assert!(!m3.is_registered_document(&doc4), "the system principal minted no other document");
+    let time = skep_namespace::time_document();
+    assert_eq!(time.tumbler().to_string(), "1.1.0.1.0.4");
+    assert!(
+        m3.is_registered_document(&time) && m3.published(&time),
+        "the time document, published"
+    );
+    let doc5 = crate::codec::wire_address("1.1.0.1.0.5").expect("an address");
+    assert!(!m3.is_registered_document(&doc5), "the system principal minted no document");
     assert!(
         lines_said(&wp).iter().all(|l| !l.contains("staging draft minted at")),
         "row 40's line never said: {:?}",
@@ -386,6 +420,32 @@ fn the_seed_writes_as_the_system_principal_through_the_one_staging_draft() {
             other => panic!("a bare entry on a fresh board's own feed: {other:?}"),
         }
     }
+}
+
+/// A FRESH BOARD's FIRST COMMIT IS THE SECTIONS' INSERT, and no commit of
+/// the seed mints a document: the staging draft the seed writes into and
+/// the registry document it publishes into both stand from genesis, so the
+/// feed's first entry is an `insert` and no entry at any reader class is a
+/// `create_new_document`. Read off the feed's own entries, which hold every
+/// commit whoever may read its row. A reopen adds none.
+#[test]
+fn a_fresh_boards_first_commit_is_the_sections_insert_and_none_mints_a_document() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let seeded = {
+        let (engine, wp) = open(dir.path());
+        assert_eq!(engine.kernel().current_seq().0, 0, "a fresh board");
+        seed(&wp);
+        let ops = ops_recorded(&wp);
+        assert_eq!(ops.first().map(String::as_str), Some("insert"), "the first commit: {ops:?}");
+        assert!(
+            ops.iter().all(|op| op != "create_new_document"),
+            "no commit of the seed mints a document: {ops:?}"
+        );
+        ops
+    };
+    let (_engine, wp) = open(dir.path());
+    seed(&wp);
+    assert_eq!(ops_recorded(&wp), seeded, "a reopen's seed commits nothing");
 }
 
 /// THE LINE's WORDS at fixed inputs: the act as the wire names the op, the

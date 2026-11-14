@@ -36,15 +36,20 @@ enum Shape {
 /// owed nothing of any of them.
 ///
 /// The exception set is HASH-KEYED and its enumeration has no order of
-/// its own, so taking the first entry is deterministic only while there
-/// is one entry to take. A fixture that grew a second document would
-/// leave the three tests below choosing a draft per process — passing or
-/// failing on the hasher's seed, which is worse than either. The count is
-/// asserted here so that growth is an immediate and legible failure
-/// instead.
+/// its own, and it holds a second entry beside the fixture's: genesis's
+/// staging draft, under the system account. So the fixture's draft is
+/// picked by its OWNER — the account `USER` is seated at — and never by
+/// its place in the walk. A fixture that grew a second document of its
+/// own would leave the three tests below choosing a draft per process —
+/// passing or failing on the hasher's seed, which is worse than either.
+/// The count under that owner is asserted here so that growth is an
+/// immediate and legible failure instead.
 fn the_one_draft(world: &World) -> Address {
-    let drafts: Vec<&Address> = world.drafts().map(|d| d.document).collect();
-    assert_eq!(drafts.len(), 1, "the fixture must hold exactly one draft: {drafts:?}");
+    let owner =
+        world.namespace.principal_prefix(USER).expect("the fixture seats USER at its account");
+    let drafts: Vec<&Address> =
+        world.drafts().filter(|d| d.owner_account == owner).map(|d| d.document).collect();
+    assert_eq!(drafts.len(), 1, "the fixture must hold exactly one draft of its own: {drafts:?}");
     drafts[0].clone()
 }
 

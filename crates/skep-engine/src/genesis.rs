@@ -16,7 +16,7 @@ use skep_links::LinkState;
 use skep_namespace::M3State;
 
 use crate::grants::Grants;
-use crate::publication::Drafts;
+use crate::publication;
 use crate::world::{FormatStamp, World};
 
 impl World {
@@ -24,14 +24,15 @@ impl World {
     ///
     /// M3 is seeded per `M3State::genesis`: the baptismal roots (node `[1]`,
     /// bootstrap principal π₀) and the system account seed (PUB-6.65,
-    /// RES-304), whose two documents M3's card lists, born published and
-    /// empty. M4 is empty (`ContentStore::default` — the permascroll starts
-    /// with no content); M5 is empty (`M5State::genesis`: no arrangements, no
-    /// provenance, no birth memo, no shot terms, no fork sources); and M7
-    /// holds `links = ∅` and empty hints (`LinkState::genesis`), read against
-    /// the format registry — M7's module constant, whose five shipped classes
-    /// include the PredLayer `pdef`/`pd_stable` registrations. Genesis mints
-    /// no content and deposits no link, which is why the other three stay
+    /// RES-304), whose four documents M3's card lists, all empty: three born
+    /// published and one, the staging draft, born unpublished. M4 is empty
+    /// (`ContentStore::default` — the permascroll starts with no content);
+    /// M5 is empty (`M5State::genesis`: no arrangements, no provenance, no
+    /// birth memo, no shot terms, no fork sources); and M7 holds `links = ∅`
+    /// and empty hints (`LinkState::genesis`), read against the format
+    /// registry — M7's module constant, whose five shipped classes include
+    /// the PredLayer `pdef`/`pd_stable` registrations. Genesis mints no
+    /// content and deposits no link, which is why the other three stay
     /// empty. It is a constant — deterministic with no inputs to hold
     /// constant — which is what discharges M2's byte-identical-genesis caller
     /// contract by construction; the World's own leading format stamp and
@@ -55,26 +56,33 @@ impl World {
     /// does not load, so M2 never runs `WorldState::rebuild_derived` over it
     /// — and every in-memory caller (the conformance rig, the daemon's
     /// historical reads, the whole in-memory suite) reads through whatever
-    /// hints it arrives with. It needs no rebuild because every derived
-    /// structure over this authoritative state is empty — and each is seeded
-    /// empty here: M7's hints over an empty links map, M5's (whose rebuild is
-    /// the identity), the exception set, since the only documents at Σ₀ — the
-    /// system account's two — are born published and the set stores the
-    /// unpublished side (PUB-7.5), so it has nothing to hold; the world where
-    /// an empty set and everything-published are the same true statement
-    /// (PUB-7.5's fail-open sign has nothing to fail open over) — and the
-    /// grant fold, since no link exists to be a grant. The corollary is a
-    /// maintainer's, and the system account seed exercises it: a genesis that
-    /// seeds anything beyond M3's roots — a document, a link — must seed that
-    /// entry's derived state beside it, and two born-published documents seed
-    /// nothing (no draft, no grant). `Engine::check_hints` is the standing
-    /// check that what is seeded here equals a from-authoritative rebuild,
-    /// and the genesis suite runs it over bare Σ₀
-    /// (`genesis_seeds_each_store_per_its_design`).
+    /// hints it arrives with. It needs no rebuild because each derived
+    /// structure over this authoritative state is seeded here as a rebuild
+    /// would leave it: M7's hints, empty over an empty links map; M5's (whose
+    /// rebuild is the identity); the exception set, which stores the
+    /// unpublished side (PUB-7.5) and is built by the rebuild's own walk
+    /// (`publication::seed`) over the one namespace this world carries, so
+    /// it holds the one draft M3's seed registers — the system account's
+    /// staging draft, owned by that account — and that document is withheld
+    /// from the first moment, where an empty set would read it published
+    /// (PUB-7.5's fail-open sign); and the grant fold, empty since no link
+    /// exists to be a grant. The corollary is a maintainer's, and the system
+    /// account seed exercises it: a genesis that seeds anything beyond M3's
+    /// roots — a document, a link — must seed that entry's derived state
+    /// beside it. The seed's three born-published documents seed nothing (no
+    /// draft, no grant); its one unpublished document seeds its entry in the
+    /// set. `Engine::check_hints` is the standing check that what is seeded
+    /// here equals a from-authoritative rebuild, and the genesis suite runs
+    /// it over bare Σ₀ (`genesis_seeds_each_store_per_its_design`).
     pub fn genesis() -> World {
+        // One namespace, built once: the world carries it and the exception
+        // set is seeded off it, so the set holds exactly the drafts the
+        // slice beside it registers.
+        let namespace = M3State::genesis();
+        let drafts = publication::seed(&namespace);
         World {
             format: FormatStamp,
-            namespace: M3State::genesis(),
+            namespace,
             content: ContentStore::default(),
             arrangement: M5State::genesis(),
             links: LinkState::genesis(),
@@ -84,7 +92,7 @@ impl World {
             // it (AUTH-2.81), and carried rather than resolved.
             identity: Some(IdentityState::genesis()),
             identity_resolved: false,
-            drafts: Drafts::new(),
+            drafts,
             // Σ₀ has no links, so no grants — the fold's failure sign
             // (PUB-7.68: a seeded fold is empty only where no link is an
             // admitted record of the grants class) holds trivially here, a

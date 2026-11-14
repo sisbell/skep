@@ -810,8 +810,8 @@ pub(super) struct CommitsLog {
     ///
     /// It is the wire's `floor` on a board whose walk has nothing pending
     /// ([`CommitsLog::floor`]): the oldest position `/changes` answers —
-    /// `1` on a board that never compacted and never lost a line. `None`
-    /// where no line stands above the fence.
+    /// the first commit's position on a board that never compacted and
+    /// never lost a line. `None` where no line stands above the fence.
     first_held: Option<u64>,
     /// The smallest admissible `since`: the fence of a hole.
     ///
@@ -1653,12 +1653,12 @@ impl CommitsLog {
     ///
     /// It is the wire's `floor` (wire.md §Reading history), which is the
     /// first line the file holds above the fence [`CommitsLog::admits_since`]
-    /// tests and not that number itself — `1` on a board that never
-    /// compacted and never lost a line. The two are one apart by
-    /// definition, keeping them apart is this file's job, and so is the step
-    /// between them: a caller rendering `floor` asks rather than deriving it
-    /// from this type's own state. `None` where nothing above the fence
-    /// survives.
+    /// tests and not that number itself — the first commit's position on a
+    /// board that never compacted and never lost a line. The two are apart
+    /// by definition, keeping them apart is this file's job, and so is the
+    /// step between them: a caller rendering `floor` asks rather than
+    /// deriving it from this type's own state. `None` where nothing above
+    /// the fence survives.
     ///
     /// **While the walk's region is pending**, the region's first position
     /// above the fence — `max(low, min_since) + 1` — is the floor where it

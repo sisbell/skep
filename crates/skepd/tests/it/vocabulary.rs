@@ -38,6 +38,12 @@ const REGISTRY: &str = "1.1.0.1.0.1";
 /// The staging draft the seed and the head writer share.
 const STAGING_DRAFT: &str = "1.1.0.1.0.3";
 
+/// The time document: doc 4 of the system account.
+const TIME_DOCUMENT: &str = "1.1.0.1.0.4";
+
+/// A `retrieve_v` spec's span over a document's first content position.
+const FIRST_POSITION: &str = r#""span":{"start":"1.1","width":"0.1"}"#;
+
 /// The unit span of `addr` as a client spells a type in a four-set slot or
 /// reads one back off a stored addrs-form endset: the address as the start
 /// and a width of as many components, zeros then one.
@@ -214,14 +220,14 @@ fn a_board_seeded_under_a_smaller_table_gains_the_added_row_at_the_next_open() {
     let links = definition_links(port, None, citation);
     assert_eq!(links.len(), 1, "the added row's link");
     assert_eq!(from_text(port, None, &links[0]), citation_def.section());
-    // THE SEED SHOT TWICE FROM ONE DRAFT (the link-sets design §5.7; Lane
-    // S's acceptance): the first open's publish and this addition's each
-    // minted one correspondence record in the staging draft — read as the
-    // system principal, the draft's owner — the second's `from` the
-    // addition's run, which begins right after the first seed's sections
-    // (the first record's `from`, from the draft's first position, as wide
-    // as those bytes), and its `to` the second member's own run; no fence
-    // met, the run fresh.
+    // THE SEED SHOT TWICE FROM ONE DRAFT (the link-sets design §5.7): the
+    // first open's publish and this addition's each minted one
+    // correspondence record in the staging draft — read as the system
+    // principal, the draft's owner — the second's `from` the addition's
+    // run, which begins right after the first seed's sections (the first
+    // record's `from`, from the draft's first position, as wide as those
+    // bytes), and its `to` the second member's own run; no fence met, the
+    // run fresh.
     let system = open_session(port, 9_000_000_000_000_000);
     let record = |k: u64| read_link(port, Some(&system), &format!("{STAGING_DRAFT}.0.2.{k}"));
     let (first, second) = (record(1), record(2));
@@ -298,7 +304,7 @@ fn a_seed_cut_short_by_a_refusal_is_said_once_and_finished_at_the_next_open() {
         assert_eq!(
             log_position(port),
             SEED_PUBLISH_AT + SEED_LINK_RECORDS * 2,
-            "the mint, the insert, the publish with its correspondence record, and two links"
+            "the insert, the publish with its correspondence record, and two links"
         );
         sd.shutdown();
     }
@@ -316,9 +322,11 @@ fn a_seed_cut_short_by_a_refusal_is_said_once_and_finished_at_the_next_open() {
 
 /// R5 — THE WRITER: every seed commit's row on `/changes` testifies
 /// `system`; the staging draft `1.1.0.1.0.3` is the one private document
-/// under the system account, withheld from a guest, and no other is minted
-/// across the seed and the claim's head alike (`1.1.0.1.0.4` is never
-/// registered; row 40's line is never said).
+/// under the system account, withheld from a guest on `doc_metadata` and
+/// `retrieve_v` alike, and no document is minted under the account across
+/// the seed and the claim's head: the time document `1.1.0.1.0.4` answers
+/// published, as genesis seeds it, `1.1.0.1.0.5` is unregistered, and row
+/// 40's line is never said.
 #[test]
 fn the_seed_writes_as_the_system_principal_through_the_one_staging_draft() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -331,7 +339,7 @@ fn the_seed_writes_as_the_system_principal_through_the_one_staging_draft() {
     assert_eq!(
         seed_rows.iter().map(|r| r["at"].as_u64().expect("at")).collect::<Vec<_>>(),
         seed_ats(),
-        "the guest sees the publish and the links; the draft's two writes are masked"
+        "the guest sees the publish and the links; the draft's one write is masked"
     );
     assert_eq!(seed_rows[0]["op"].as_str(), Some("publish"));
     assert_eq!(seed_rows[0]["docs"], serde_json::json!([format!("{REGISTRY}.1")]), "the member minted");
@@ -344,12 +352,28 @@ fn the_seed_writes_as_the_system_principal_through_the_one_staging_draft() {
         assert_eq!(row["key"].as_str(), Some("system"), "the system principal's: {row}");
         assert!(row.get("attest").is_none(), "unsigned: {row}");
     }
-    // The staging draft, private; no fourth document under the system
+    // The staging draft, private, on both reads that take a document; the
+    // time document, published; and no fifth document under the system
     // account after the seed and the claim's head.
     let draft = doc_metadata(port, None, STAGING_DRAFT);
     assert_eq!(expect_resp(&draft, "rejected")["code"].as_str(), Some("withheld"), "{draft}");
-    let fourth = doc_metadata(port, None, "1.1.0.1.0.4");
-    assert_eq!(expect_resp(&fourth, "rejected")["code"].as_str(), Some("doc_not_registered"), "{fourth}");
+    let read = op(
+        port,
+        None,
+        &format!(
+            r#"{{"op":"retrieve_v","specs":[{{"doc":"{STAGING_DRAFT}",{}}}]}}"#,
+            FIRST_POSITION
+        ),
+    );
+    assert_eq!(expect_resp(&read, "rejected")["code"].as_str(), Some("withheld"), "{read}");
+    let time = doc_metadata(port, None, TIME_DOCUMENT);
+    assert_eq!(expect_resp(&time, "doc_metadata")["published"].as_bool(), Some(true), "{time}");
+    let fifth = doc_metadata(port, None, "1.1.0.1.0.5");
+    assert_eq!(
+        expect_resp(&fifth, "rejected")["code"].as_str(),
+        Some("doc_not_registered"),
+        "{fifth}"
+    );
     assert!(
         sd.daemon().lines_said().iter().all(|l| !l.contains("staging draft minted at")),
         "row 40's line never said: {:?}",
@@ -360,7 +384,7 @@ fn the_seed_writes_as_the_system_principal_through_the_one_staging_draft() {
 
 /// R6 — THE CEREMONY's NUMBERS on the seeded board: the claim lands at
 /// `SEED_HEAD + 12`, `H.1` names it and its records above it are the head's
-/// insert and publish (the draft stood from the seed), and `/changes` from
+/// insert and publish (the draft stands from genesis), and `/changes` from
 /// position 0 lists the seed's commits first, each the system principal's,
 /// then the ceremony's.
 #[test]

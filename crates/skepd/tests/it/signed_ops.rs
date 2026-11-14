@@ -1589,8 +1589,8 @@ fn the_head_writers_own_commits_land_unsigned_beside_an_attested_write() {
     let h1 = board_term(port).expect("H.1");
     assert_eq!(h1.log_position, SEED_HEAD + 12, "H.1 names the claim's own position");
     // The head's two commits: the record's insert and the shot into H —
-    // the staging draft stands from the registry seed — both above the
-    // claim, both unsigned.
+    // the staging draft stands from genesis — both above the claim, both
+    // unsigned.
     let head = head_position(port);
     assert!(head > SEED_HEAD + 12, "the head's commits landed above the claim");
     assert_eq!(filled_slots(&sd, 1, head), Vec::<u64>::new(), "no slot filled yet");

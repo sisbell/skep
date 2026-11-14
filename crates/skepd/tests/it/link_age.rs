@@ -294,6 +294,24 @@ fn every_minted_address_answers_the_position_of_the_commit_that_minted_it() {
     // The seeded documents: the genesis coordinate, no testimony.
     let seeded = doc_metadata(port, None, H);
     assert_eq!(age(&seeded), (Some(0), None, None), "H was minted at genesis: {seeded}");
+    // The time document among them: published from genesis and memberless
+    // until its first record, so the bare `T` answers its own metadata to a
+    // guest — `at` 0, `time` and `time_from` null together — and delivers
+    // nothing.
+    let seeded = doc_metadata(port, None, T);
+    assert_eq!(expect_resp(&seeded, "doc_metadata")["published"].as_bool(), Some(true), "{seeded}");
+    assert_eq!(seeded["doc"].as_str(), Some(T), "T answers as its own trunk: {seeded}");
+    assert!(seeded["birth"].is_null(), "T is memberless until its first record: {seeded}");
+    assert_eq!(age(&seeded), (Some(0), None, None), "T was minted at genesis: {seeded}");
+    let read = op(
+        port,
+        None,
+        &format!(
+            r#"{{"op":"retrieve_v","specs":[{{"doc":"{T}","span":{{"start":"1.1","width":"0.1"}}}}]}}"#
+        ),
+    );
+    let items = expect_resp(&read, "delivery")["items"].as_array().expect("items").clone();
+    assert!(items.is_empty(), "the bare T holds no record on a board younger than an hour: {read}");
     sd.shutdown();
 }
 

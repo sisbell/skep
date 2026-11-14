@@ -18,7 +18,7 @@ use skep_arrangement::{Caller, Deposit};
 use skep_content::Val;
 use skep_engine::{Engine, Seq, World};
 use skep_links::SlotArg;
-use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
+use skep_namespace::{staging_draft, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use tempfile::tempdir;
 
 /// The GRANTS class type address (COMMONS DECISION 5 — 1.1.0.1.0.1.0.3.90).
@@ -104,7 +104,8 @@ fn secret_line() -> String {
     format!("[{}, {}, {}]", SECRET[0], SECRET[1], SECRET[2])
 }
 
-/// The v5 format: the banner, the PUBLICATION section listing the draft, and
+/// The v5 format: the banner, the PUBLICATION section listing the board's
+/// draft and, after it in address order, genesis's staging draft, and
 /// the GRANTS section holding the fold's operative record with its five
 /// fields — a first share's `replaces` the EMPTY state, `none` (PUB-5.15
 /// (iv)) — and the faithfulness check, which now compares the grant fold's
@@ -117,7 +118,7 @@ fn the_v5_format_renders_the_publication_and_grants_sections() {
     let text = engine.world_dump().into_string();
 
     assert!(text.starts_with("skep-world-dump v5\n"), "unexpected banner: {text:.32}");
-    let publication = format!("\"publication\": [{}]", quoted(&board.draft_a));
+    let publication = format!("\"publication\": {}", seq_of(&[&board.draft_a, &staging_draft()]));
     assert!(text.contains(&publication), "expected {publication} in:\n{text}");
     let grants = format!(
         "\"grants\": {{{}: {{\"content_prefix\": {}, \"grantee\": {}, \"home\": {}, \"issuer\": {}, \"replaces\": none}}}}",

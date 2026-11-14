@@ -184,7 +184,7 @@ fn every_registered_document_is_owned_at_its_own_account() {
     // That account is the document's OWNER ACCOUNT (PUB-7.5, PUB-8.12), which
     // `account_seat` reads by one lookup, so ω and that read are both walked
     // over EVERY document `documents` enumerates — on a fold-produced slice,
-    // every registered document: genesis's two under the system account, and
+    // every registered document: genesis's four under the system account, and
     // under one account a document, a fork, a version and a version of that
     // version, beside a document under the account's sub-account — the one
     // shape where an ancestor account's seat covers the document too.
@@ -228,8 +228,8 @@ fn every_registered_document_is_owned_at_its_own_account() {
         );
         walked.push(d.clone());
     }
-    // The walk reached every shape built above; genesis's two are the seed's,
-    // pinned in `genesis.rs`.
+    // The walk reached every shape built above; genesis's four are the
+    // seed's, pinned in `genesis.rs`.
     for built in [&doc, &sub_doc, &forked, &v1, &v2] {
         assert!(walked.contains(built), "the walk missed {built:?}");
     }
@@ -283,7 +283,7 @@ fn the_account_seat_is_omega_by_one_lookup_and_never_climbs() {
     });
     let m3 = k.snapshot().world().m3().clone();
 
-    // Agreement: every document the walk yields — genesis's two included —
+    // Agreement: every document the walk yields — genesis's four included —
     // every seated account and its doc-1 slot, and an element.
     let mut probes: Vec<Address> = m3.documents().map(|(d, _)| d.clone()).collect();
     for built in [&doc, &v1, &last_doc] {

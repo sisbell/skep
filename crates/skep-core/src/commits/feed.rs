@@ -368,10 +368,10 @@ impl<'a> FeedClass<'a> {
 /// its landing line: the feed's files are kept whole from genesis, so what
 /// a landing moves of the feed is nothing, and what the line says is what
 /// the feed holds — the first position its files hold a line for (the wire's
-/// `floor`; `1` on a board that never compacted and never lost a line),
-/// `commits.log`'s size, the operator's sizing figure, and the resident
-/// window's count beside the most it has held this uptime, so a window that
-/// outgrew its span is told from one that holds it.
+/// `floor`; the first commit's position on a board that never compacted and
+/// never lost a line), `commits.log`'s size, the operator's sizing figure,
+/// and the resident window's count beside the most it has held this uptime,
+/// so a window that outgrew its span is told from one that holds it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FeedFigures {
     /// The first position the feed's files hold a line for, or `None` for none.

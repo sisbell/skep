@@ -39,13 +39,14 @@ use skepd::{Seq, Skepd};
 /// The head document `H` — doc 2 of the system account (PUB-6.65).
 const H: &str = "1.1.0.1.0.2";
 
-/// The staging draft — doc 3 of the system account, the one document the
-/// head writer mints (PUB-6.65), private at every class.
+/// The staging draft — doc 3 of the system account, seeded at genesis
+/// (PUB-6.65): the account's one private document, withheld from every
+/// class but its owner's.
 const STAGING_DRAFT: &str = "1.1.0.1.0.3";
 
-/// The time document — doc 4 of the system account, the one document the
-/// time writer mints, published; its records ride every forced hour here,
-/// since the time writer's hour is the head writer's clock.
+/// The time document — doc 4 of the system account, seeded at genesis,
+/// published; its records ride every forced hour here, since the time
+/// writer's hour is the head writer's clock.
 const TIME_DOCUMENT: &str = "1.1.0.1.0.4";
 
 /// The head record's `format` member — the journal stamp in force, `SKJ4`
@@ -866,14 +867,14 @@ fn the_hour_since_the_last_head_survives_a_restart() {
 /// operations design §3.3 step 2) — every journal record above the head's
 /// position counts, the head's own among them, since nothing tells them
 /// from the rest until the walk lands. So the next head comes EARLY by at
-/// most the head's own records (seven at a later head: the record's insert,
-/// three, and the publish, four; eight at a first head, the staging draft's
-/// mint beside them) and never late: 40 one-record commits after a head,
-/// the loss, a restart, and the next head comes no sooner than the 17th
-/// commit after it and no later than the 24th — never at the 64th, where a
+/// most the writers' own records above the head — the head's ten (the
+/// record's insert, three, and the publish with its correspondence record,
+/// seven) and the ten of the time record the forced hour wrote after it —
+/// and never late: 40 one-record commits after a head, the loss, a restart,
+/// and the next head comes no later than the 24th commit after it, and
+/// sooner by no more than those twenty records — never at the 64th, where a
 /// resume that started the count at zero would put it, 104 commits past the
-/// last head. (The head's own records are ten since lane S1, the publish
-/// carrying its correspondence record — the bounds below read the constant.)
+/// last head. The bounds below read the constants.
 /// The heads' own chain is the journal's and survives the loss:
 /// the new head's `prev` is the head before it.
 #[test]
@@ -913,9 +914,9 @@ fn a_lost_sidecar_counts_the_commits_the_journal_shows_landed() {
     }
     let (i, at) = next.expect("a head by the 24th commit after the loss: the seq counts");
     assert!(
-        i >= 64 - 40 - H1_RECORDS - FIRST_TIME_RECORD_RECORDS,
-        "early by at most the head's own ten records and the first time record's eleven, \
-         never more: the head came at +{i}"
+        i >= 64 - 40 - H1_RECORDS - TIME_RECORD_RECORDS,
+        "early by at most the head's own ten records and the time record's ten, never more: \
+         the head came at +{i}"
     );
     let rec = expect_latest_head(port);
     assert_eq!(rec["position"].as_u64(), Some(at), "it names the commit that brought it: {rec}");
@@ -1006,54 +1007,49 @@ fn a_pending_region_resumes_the_count_off_the_seq_early_and_never_late() {
     sd.shutdown();
 }
 
-/// The staging draft is minted ONCE — doc 3 of the system account — and found
-/// again after a restart (PUB-6.65: the head reaches `H` and the system
-/// account's own staging draft and NO other document; the writer resumes by
-/// reading). Pinned by the journal's own arithmetic, in RECORDS as `/health`
-/// counts them: the board's FIRST head — the claim's own, `H.1` (s1), which
-/// mints the draft — costs exactly one document mint more than a head that
-/// found it, on the same uptime and on the next, and a document mint's cost
-/// is measured here on this build rather than assumed.
+/// The staging draft is found at every open and never minted — doc 3 of the
+/// system account, seeded at genesis — on the first uptime and after a
+/// restart (PUB-6.65: the head reaches `H` and the system account's own
+/// staging draft and NO other document; the writer resumes by reading).
+/// Pinned by the journal's own arithmetic, in RECORDS as `/health` counts
+/// them: the board's FIRST head — the claim's own, `H.1` — costs exactly what
+/// a later head costs, on the same uptime and on the next, and the first
+/// time record beside a later head costs what every time record costs, so
+/// neither writer's first write carries a document's mint.
 #[test]
-fn a_restarted_writer_finds_the_staging_draft_it_minted_and_mints_no_other() {
+fn a_restarted_writer_finds_the_seeded_staging_draft_and_mints_no_document() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut clock = clock_origin();
 
-    let (first_head_cost, later_head_cost, mint_cost) = {
-        // The claim made by hand, so `H.1`'s own records — the draft's mint,
-        // the atom's insert, the publish shot — are measured off the claim's
-        // ack: everything the claim's request committed above the claim.
+    let (first_head_cost, later_head_cost) = {
+        // The claim made by hand, so `H.1`'s own records — the atom's insert
+        // and the publish shot — are measured off the claim's ack:
+        // everything the claim's request committed above the claim.
         let sd = spawn_unclaimed(dir.path());
         let port = sd.port();
         ceremony_before_the_claim(port);
         let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
         let claim_at = acked_at(&op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT)));
         let first_head_cost = health(port).0 - claim_at;
-        // One plain document mint, measured: what one `create_new_document`
-        // adds to the position on this build.
-        let owner = open_session(port, CLAIMANT_PRINCIPAL);
-        let before = health(port).0;
-        commit(port, &owner, CLAIMANT_ACCOUNT);
-        let mint_cost = health(port).0 - before;
         // A later head on the SAME uptime, measured off its trigger's ack:
         // the atom's insert and the publish shot, the draft found.
+        let owner = open_session(port, CLAIMANT_PRINCIPAL);
         let trigger = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
         let later_head_cost = health(port).0 - trigger;
         sd.shutdown();
-        (first_head_cost, later_head_cost, mint_cost)
+        (first_head_cost, later_head_cost)
     };
-    // The staging draft is minted by the open's registry seed, before the
-    // claim: the claim's `H.1` finds it and costs what a later head costs —
-    // the atom's insert and the publish shot — and never a document mint
-    // more. The forced hour brings the time writer's first record after the
-    // later head: the time document's one mint, then the record's insert
-    // and publish, the head's own shape.
-    assert!(mint_cost > 0, "a document mint moves the position");
+    // The staging draft and the time document both stand from genesis: the
+    // claim's `H.1` finds the draft and costs what a later head costs — the
+    // atom's insert and the publish shot — and never a document mint more.
+    // The forced hour brings the time writer's first record after the later
+    // head: the record's insert and publish, the head's own shape, into the
+    // document it finds.
     assert_eq!(
         later_head_cost,
-        first_head_cost + mint_cost + TIME_RECORD_RECORDS,
-        "the open's seed minted the draft; the claim's H.1 and the next head both reused it, \
-         and the hour's first time record minted its document"
+        first_head_cost + TIME_RECORD_RECORDS,
+        "the claim's H.1 and the next head both found the seeded draft, and the hour's first \
+         time record found its seeded document: neither minted one"
     );
 
     // The second uptime's head: the same, the draft found at open — and the
@@ -1071,17 +1067,17 @@ fn a_restarted_writer_finds_the_staging_draft_it_minted_and_mints_no_other() {
     sd.shutdown();
 }
 
-/// The staging draft is minted ONCE FOR THE LIFE OF THE BOARD — the half the
-/// restart test above cannot see, since it writes one head per uptime: four
-/// heads in ONE uptime — the claim's `H.1` and three forced — leave exactly
-/// two documents under the system account beyond the seed's two.
-/// `1.1.0.1.0.3` is the draft — registered and private, so the guest is
-/// `withheld`; `1.1.0.1.0.4` is the time document the forced hours' time
-/// writer minted, published, so the guest reads it; and `1.1.0.1.0.5` was
+/// The staging draft is the ONE draft FOR THE LIFE OF THE BOARD — the half
+/// the restart test above cannot see, since it writes one head per uptime:
+/// four heads in ONE uptime — the claim's `H.1` and three forced, each
+/// forced hour with its time record — leave the system account the four
+/// documents genesis seeds and no fifth. `1.1.0.1.0.3` is the draft —
+/// registered and private, so the guest is `withheld`; `1.1.0.1.0.4` is the
+/// time document, published, so the guest reads it; and `1.1.0.1.0.5` was
 /// never minted, so the guest is told `doc_not_registered`. Named rather
-/// than measured: a writer that forgot the draft it minted this uptime would
-/// mint a private document per head for as long as it runs, and no
-/// guest-visible entry would name one.
+/// than measured: a writer that lost the draft it holds would mint a
+/// private document per head for as long as it runs, and no guest-visible
+/// entry would name one.
 #[test]
 fn every_head_in_one_uptime_reuses_the_one_staging_draft() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1099,13 +1095,13 @@ fn every_head_in_one_uptime_reuses_the_one_staging_draft() {
     assert_eq!(
         expect_resp(&time_document, "doc_metadata")["published"].as_bool(),
         Some(true),
-        "the forced hours' time writer minted the time document, published: {time_document}"
+        "the time document stands published, as genesis seeds it: {time_document}"
     );
     let next = doc_metadata(port, None, "1.1.0.1.0.5");
     assert_eq!(
         expect_resp(&next, "rejected")["code"].as_str(),
         Some("doc_not_registered"),
-        "the heads minted no second draft under the system account: {next}"
+        "the heads and the time records minted no document under the system account: {next}"
     );
     sd.shutdown();
 }
@@ -1257,13 +1253,12 @@ fn a_peer_re_reads_a_saved_head_byte_equal_and_walks_prev() {
 /// on a head's OWN chain is relational and blind to a wrong value: two boards
 /// under one seed name one wrong value, two seeds two, `prev` copies it
 /// faithfully, and it still differs from `/health` after the head's commits.
-/// `H.1` is in the set on purpose — that head alone mints the staging draft
-/// between reading its pair and writing its record, and it is the CLAIM's own
-/// (s1), written inside the claim's request.
+/// `H.1` is in the set on purpose — it is the CLAIM's own, written inside
+/// the claim's request and not on the cadence's turn.
 #[test]
 fn every_head_names_the_pair_the_boards_recomputation_answers() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path()); // H.1: the claim's, minting the draft
+    let sd = spawn(dir.path()); // H.1: the claim's
     let port = sd.port();
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
     let mut clock = clock_origin();
@@ -1495,7 +1490,7 @@ fn the_head_writers_turn_after_the_claim_can_write_a_head_and_the_claim_still_co
     assert!(head_record(port, &head_member(2)).is_none(), "the claim's step wrote no second head");
     assert_eq!(
         live,
-        at + H1_RECORDS + FIRST_TIME_RECORD_RECORDS,
+        at + H1_RECORDS + TIME_RECORD_RECORDS,
         "one head's records above the claim, not two heads' — and the hour's first time record"
     );
     sd.shutdown();
@@ -1505,9 +1500,9 @@ fn the_head_writers_turn_after_the_claim_can_write_a_head_and_the_claim_still_co
 /// ONE, AT THE CLAIM'S OWN POSITION, AND THE CADENCE COUNTS FROM IT. A board
 /// `spawn` claims has its first head at the claim's ack — `H.1` naming the
 /// claim link's position, `prev` null, `base` null — and no `H.2`; the head's
-/// two commits (the record's insert into the staging draft the open's
-/// registry seed minted, the publish shot with its correspondence record:
-/// ten records) are the whole
+/// two commits (the record's insert into the staging draft, which stands
+/// from genesis, the publish shot with its correspondence record: ten
+/// records) are the whole
 /// distance from the claim to the live head; and with the clock frozen and
 /// no checkpoint taken, the 64th commit
 /// after the claim writes `H.2` naming itself, with `prev` the claim's head —
@@ -1803,7 +1798,7 @@ fn a_refused_head_is_said_once_per_cause_with_its_position_and_cleared_when_a_he
     let p1 = commit(port, &owner, CLAIMANT_ACCOUNT);
     assert_eq!(
         head_position(port),
-        p1 + FIRST_TIME_RECORD_RECORDS,
+        p1 + TIME_RECORD_RECORDS,
         "the refused head landed nothing, not a partial commit; the time writer's first record, \
          due at the same hour, landed whole after it"
     );
@@ -1939,9 +1934,10 @@ fn the_head_is_guest_readable_its_feed_entry_is_system_and_the_draft_is_masked()
     let system_entries: Vec<&Value> =
         changes.iter().filter(|e| e["key"].as_str() == Some("system")).collect();
     assert!(!system_entries.is_empty(), "the head's publish carries key: system: {page}");
-    // The forced hour brings the time writer's first record too: the time
-    // document's mint, published, and the record's publish into it — two
-    // more guest-visible system entries beside the head's publish.
+    // The forced hour brings the time writer's first record too: the
+    // record's publish into the time document — one more guest-visible
+    // system entry beside the head's publish. Neither writer mints a
+    // document, so no guest-visible system entry is a `create_new_document`.
     let is_member_of = |doc: &str, of: &str| doc == of || doc.starts_with(&format!("{of}."));
     for e in &system_entries {
         let docs: Vec<&str> =
@@ -1951,12 +1947,7 @@ fn the_head_is_guest_readable_its_feed_entry_is_system_and_the_draft_is_masked()
                 docs.iter().all(|doc| is_member_of(doc, H) || is_member_of(doc, TIME_DOCUMENT)),
                 "a guest-visible system publish names H's or T's members, never the private draft: {e}"
             ),
-            Some("create_new_document") => assert_eq!(
-                docs,
-                [TIME_DOCUMENT],
-                "the one guest-visible system mint is the time document's: {e}"
-            ),
-            other => panic!("a guest-visible system entry is a publish or the time document's mint, not {other:?}: {e}"),
+            other => panic!("a guest-visible system entry is a publish, not {other:?}: {e}"),
         }
     }
     // No guest-visible entry names the staging draft (1.1.0.1.0.3), the
@@ -2060,34 +2051,30 @@ fn board_under(dir: &Path, seed: Option<u64>, origin: u64) -> Board {
 /// re-inserted as fresh identity, its mint and write, the member's mint and
 /// its placing record — and the correspondence record the publication homes
 /// in the staging draft, its link mint, deposit and seat; the link-sets
-/// design §5.7); the staging draft stands from the open's registry seed, so
-/// the claim's head mints none. `H.1` is the claim's own (signed ops, s1).
+/// design §5.7); the staging draft stands from genesis, so the claim's head
+/// mints none. `H.1` is the claim's own (signed ops).
 const CLAIM_POSITION: u64 = SEED_HEAD + 12;
 const H1_RECORDS: u64 = 10;
 
 /// The time record's records (wire.md §The other endpoints, the time document):
 /// its insert into the staging draft (3) and its publish shot into `T` (7),
-/// the head's own shape — and, at the board's first record, the time
-/// document's mint ahead of them (1). The time writer measures its hour on
-/// the head writer's clock, so every forced hour here that moves the
-/// position writes a time record after the head: the first one minting `T`.
+/// the head's own shape, at the board's first record as at every later one:
+/// `T` stands from genesis. The time writer measures its hour on the head
+/// writer's clock, so every forced hour here that moves the position writes
+/// a time record after the head.
 const TIME_RECORD_RECORDS: u64 = 10;
-const FIRST_TIME_RECORD_RECORDS: u64 = 1 + TIME_RECORD_RECORDS;
 
 /// THE POSITIONS, pinned off the one constant: the head names the triggering
 /// commit — the seed's commits, the ceremony's (12 records), the claim's own
 /// `H.1` (10), three creates and the fourth — and the live head is that plus
 /// the head's own insert and publish (10 more) and the first time record's
-/// mint, insert and publish (11 more), due at the same forced hour. The salt adds no record and
-/// moves no coordinate: the same ops produced 16 and 24 at `d77bfa4`, before
-/// it, and again after it, until s1 (2026-09-25) moved the first head into
-/// the claim's own step, the registry seed (2026-10-21) put the seed's
-/// commits and the draft's mint ahead of the ceremony, and lane S1
-/// (2026-10-27) gave every drafted shot its correspondence record — the
-/// three re-pins. A position moving here otherwise is a STOP, not a number
-/// to update.
+/// insert and publish (10 more), due at the same forced hour. The salt adds
+/// no record and moves no coordinate. Each term is a fact this suite's
+/// constants spell — the seed's layout, the ceremony's records, a head's and
+/// a time record's — and a position moving here with none of them is a
+/// STOP, not a number to update.
 const TRIGGER_POSITION: u64 = CLAIM_POSITION + H1_RECORDS + 4;
-const LIVE_HEAD_POSITION: u64 = TRIGGER_POSITION + H1_RECORDS + FIRST_TIME_RECORD_RECORDS;
+const LIVE_HEAD_POSITION: u64 = TRIGGER_POSITION + H1_RECORDS + TIME_RECORD_RECORDS;
 
 /// (viii) — two daemons over ONE op sequence write byte-identical heads. The
 /// head record carries no timestamp and no board-unique term, so identical

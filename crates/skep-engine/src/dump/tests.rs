@@ -137,7 +137,17 @@ fn the_hint_check_refuses_a_populated_index_that_drifted_from_its_rebuild() {
 
     // The exception set, one entry wider: a document-tier address under the
     // draft's own owner that no mint produced, memoized beside the draft.
-    let owner = world.drafts().next().expect("the fixture's draft").owner_account.clone();
+    // The fixture's draft is picked by its owner, the account `USER` is
+    // seated at, never by its place in the set's walk: the set is
+    // hash-keyed, and genesis's staging draft stands in it too.
+    let seat =
+        world.namespace.principal_prefix(USER).expect("the fixture seats USER at its account");
+    let owner = world
+        .drafts()
+        .find(|d| d.owner_account == seat)
+        .expect("the fixture's draft")
+        .owner_account
+        .clone();
     let comps = owner.tumbler().iter().cloned().chain([Nat::from(0u32), Nat::from(99u32)]);
     let phantom = validate(Tumbler::new(comps).expect("nonempty"))
         .expect("a document-tier address under the owner is T4-valid");

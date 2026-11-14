@@ -9,8 +9,9 @@ use serde::Serialize;
 use skep_address::{Address, Tumbler};
 use skep_kernel::{Kernel, Seq};
 use skep_namespace::{
-    first_document_address, ghost_home_document, head_document, prefix_contains, HasM3, M3Rec,
-    M3State, Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL,
+    first_document_address, ghost_home_document, head_document, prefix_contains, staging_draft,
+    time_document, HasM3, M3Rec, M3State, Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL,
+    SYSTEM_PRINCIPAL,
 };
 use tempfile::tempdir;
 
@@ -273,27 +274,30 @@ fn only_a_document_allocate_writes_the_publication_map() {
     assert!(!s.published(&a(&[1, 0, 1, 0, 1, 1])));
     // The enumeration is the registered documents and nothing else — the
     // account and the element are absent — in address order: the two minted
-    // here, then genesis's two born-published seeds under the system account
-    // (PUB-6.65: `1.1.0.1.0.1` and `H`), which sort above everything under
-    // `1.0.1`.
+    // here, then genesis's four seeds under the system account (PUB-6.65:
+    // `1.1.0.1.0.1`, `H`, the staging draft born unpublished, and `T`),
+    // which sort above everything under `1.0.1`.
     let (doc, version) = (a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, 1, 1]));
     let (seed_1, seed_h) = (ghost_home_document(), head_document());
+    let (seed_draft, seed_t) = (staging_draft(), time_document());
     assert_eq!(
         s.documents().collect::<Vec<_>>(),
         vec![
             (&doc, true),
             (&version, false),
             (&seed_1, true),
-            (&seed_h, true)
+            (&seed_h, true),
+            (&seed_draft, false),
+            (&seed_t, true)
         ]
     );
     // The walk is exact-size and double-ended, as a map walk is in std: the
     // count is answered without walking, and the back of the walk is the
-    // ADDRESS-greatest entry — the seeded `H`, which is not the newest (the
+    // ADDRESS-greatest entry — the seeded `T`, which is not the newest (the
     // version was minted last; `the_publication_walk_is_in_address_order_not_mint_order`
     // is the shape that tells the two apart among minted documents).
-    assert_eq!(s.documents().len(), 4);
-    assert_eq!(s.documents().next_back(), Some((&seed_h, true)));
+    assert_eq!(s.documents().len(), 6);
+    assert_eq!(s.documents().next_back(), Some((&seed_t, true)));
 }
 
 /// The walk is in ADDRESS order, which is not mint order: a version of doc 1
@@ -302,9 +306,10 @@ fn only_a_document_allocate_writes_the_publication_map() {
 /// ordinals — so this is the shape that tells them apart, and it is the shape
 /// the engine's dump renders (two boards with one history must render one byte
 /// string). It also fixes what `.next_back()` gives: the ADDRESS-greatest
-/// entry, which is NOT the newest document. Genesis is never empty since
-/// PUB-6.65's seed — the system account's doc 1 and `H`, born published — so
-/// every walk here ends with those two, above everything minted under `1.0.1`.
+/// entry, which is NOT the newest document. Genesis is never empty —
+/// PUB-6.65's seed holds the system account's doc 1, `H` and `T`, born
+/// published, and its staging draft, born unpublished — so every walk here
+/// ends with those four, above everything minted under `1.0.1`.
 #[test]
 fn the_publication_walk_is_in_address_order_not_mint_order() {
     let (d1, d2, v1) = (
@@ -313,19 +318,26 @@ fn the_publication_walk_is_in_address_order_not_mint_order() {
         a(&[1, 0, 1, 0, 1, 1]),
     );
     let (seed_1, seed_h) = (ghost_home_document(), head_document());
+    let (seed_draft, seed_t) = (staging_draft(), time_document());
     // The seed alone, one minted, many — the walk's three sizes, in mint order
     // d1, d2, v1.
     let s = M3State::genesis();
     assert_eq!(
         s.documents().collect::<Vec<_>>(),
-        vec![(&seed_1, true), (&seed_h, true)]
+        vec![(&seed_1, true), (&seed_h, true), (&seed_draft, false), (&seed_t, true)]
     );
     let s = s
         .apply_m3(Seq(0), &alloc(&[1, 0, 1]))
         .apply_m3(Seq(0), &M3Rec::allocate(d1.clone(), true));
     assert_eq!(
         s.documents().collect::<Vec<_>>(),
-        vec![(&d1, true), (&seed_1, true), (&seed_h, true)]
+        vec![
+            (&d1, true),
+            (&seed_1, true),
+            (&seed_h, true),
+            (&seed_draft, false),
+            (&seed_t, true)
+        ]
     );
     let s = s
         .apply_m3(Seq(0), &M3Rec::allocate(d2.clone(), false))
@@ -340,16 +352,18 @@ fn the_publication_walk_is_in_address_order_not_mint_order() {
             (&v1, true),
             (&d2, false),
             (&seed_1, true),
-            (&seed_h, true)
+            (&seed_h, true),
+            (&seed_draft, false),
+            (&seed_t, true)
         ]
     );
-    assert_eq!(s.documents().len(), 5);
+    assert_eq!(s.documents().len(), 7);
     // So the back of the walk is the address-greatest entry and not the
-    // newest: v1 was minted last, and the seeded `H` — older than all three —
+    // newest: v1 was minted last, and the seeded `T` — older than all three —
     // is what `.next_back()` answers; among the minted three, d2 is the
     // greatest and v1 sorts below it.
-    assert_eq!(s.documents().next_back(), Some((&seed_h, true)));
-    assert_eq!(s.documents().nth_back(2), Some((&d2, false)));
+    assert_eq!(s.documents().next_back(), Some((&seed_t, true)));
+    assert_eq!(s.documents().nth_back(4), Some((&d2, false)));
 }
 
 /// PUB-1.9/PUB-1.68, and PUB-7.7's fold half: no public function changes a
@@ -462,9 +476,10 @@ fn a_record_or_checkpoint_without_the_bit_fails_to_decode() {
 
     // The checkpointed slice: the frontier map, the node set, the principal
     // map, then the publication map — the field the bit appended — and then
-    // the position map, appended after it. Genesis is no longer empty
-    // (PUB-6.65's seed: system node 1.1, the system account 1.1.0.1, its doc
-    // 1 and `H` born published, both minted at the genesis coordinate), so
+    // the position map, appended after it. Genesis is not empty (PUB-6.65's
+    // seed: system node 1.1, the system account 1.1.0.1, and its four
+    // documents — doc 1, `H` and `T` born published, the staging draft born
+    // unpublished — all minted at the genesis coordinate), so
     // the four trailing fields are hand-built from the seed's public pins —
     // a `Vec` of pairs encodes exactly as the maps do — and pinned as the
     // slice's suffix; the frontier map's key is the crate's own type, so its
@@ -481,11 +496,15 @@ fn a_record_or_checkpoint_without_the_bit_fails_to_decode() {
     let publication = bincode::serialize(&vec![
         (t(&[1, 1, 0, 1, 0, 1]), true),
         (t(&[1, 1, 0, 1, 0, 2]), true),
+        (t(&[1, 1, 0, 1, 0, 3]), false),
+        (t(&[1, 1, 0, 1, 0, 4]), true),
     ])
     .expect("the publication map");
     let minted_at = bincode::serialize(&vec![
         (t(&[1, 1, 0, 1, 0, 1]), 0u64),
         (t(&[1, 1, 0, 1, 0, 2]), 0u64),
+        (t(&[1, 1, 0, 1, 0, 3]), 0u64),
+        (t(&[1, 1, 0, 1, 0, 4]), 0u64),
     ])
     .expect("the position map");
     assert!(

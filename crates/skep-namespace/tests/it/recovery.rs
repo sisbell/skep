@@ -627,10 +627,10 @@ fn two_slices_holding_the_same_entries_encode_to_one_byte_string() {
         y = y.apply_m3(Seq(0), &seat(i));
     }
 
-    // One set of entries — nine frontiers, eight nodes, eight seats, eight
+    // One set of entries — nine frontiers, eight nodes, eight seats, ten
     // documents — reached two ways…
     assert_eq!(x, y);
-    assert_eq!(x.documents().len(), 8);
+    assert_eq!(x.documents().len(), 10);
     // …is one byte string.
     assert_eq!(
         bincode::serialize(&x).expect("serialize history X"),

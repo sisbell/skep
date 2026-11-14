@@ -1515,7 +1515,7 @@ own `time`, the exact source) or `"anchor"` (the newest hourly
 `skep-time` record at or below `at`), `null` together where neither
 holds a reading; and `at` `null` — the two with it — for an address a
 build before the position map minted. Served to whoever may read the
-address named, as `source` is. The system account's two seeded documents
+address named, as `source` is. The system account's four seeded documents
 answer `at: 0`, the genesis coordinate, with no time.
 
 This example is asked of the birth version `1.0.1.0.1.1`, which a shot
@@ -6007,12 +6007,12 @@ the position alone):
 <!-- wire: sse commit_event -->
 ```
 event: commit
-data: {"log_position":391}
+data: {"log_position":390}
 ```
 
 A worked exchange on a board the registry seed and the claim ceremony
-have left at 390 (§The change feed) — connect, receive the initial head
-(390), then a write elsewhere commits at 391:
+have left at 389 (§The change feed) — connect, receive the initial head
+(389), then a write elsewhere commits at 390:
 
 ```
 GET /events HTTP/1.1
@@ -6026,12 +6026,12 @@ Content-Type: text/event-stream
 Cache-Control: no-cache
 
 event: commit
-data: {"log_position":390}
+data: {"log_position":389}
 
 :ka
 
 event: commit
-data: {"log_position":391}
+data: {"log_position":390}
 ```
 
 Rules:
@@ -6355,46 +6355,46 @@ The examples below are produced by this flow on a fresh board, asserted
 against live daemon bytes (the `time` values are illustrative — the one
 normalized field). A fresh board's first commits are the link-type
 registry's seed (§Registry), the board's own daemon's at its first open:
-the system account's staging-draft mint at 1 and the one insert of every
-type's section into it at 4 — writes into the system account's private
-draft, masked at every class but the system's — then the publish of the
-member that holds the sections into `1.1.0.1.0.1` at 11 (seven records:
+the one insert of every type's section into the system account's
+staging draft at 3 — a write into that account's private draft, masked
+at every class but the system's — then the publish of the
+member that holds the sections into `1.1.0.1.0.1` at 10 (seven records:
 the shot's four and its correspondence record's three, the record homed
 in the staging draft — the row's `docs` the member alone to every class
 but the system's, which sees the draft beside it) and one `defines`
-link per type, three records apart, to 368, each a public entry with
-`key: "system"`, so a fresh board stands at 368 before any client writes.
-The claim ceremony's five commits follow (§A first board): positions 370,
-371, 374, 377, 380 — the delegate, the home mint, the record insert, the
+link per type, three records apart, to 367, each a public entry with
+`key: "system"`, so a fresh board stands at 367 before any client writes.
+The claim ceremony's five commits follow (§A first board): positions 369,
+370, 373, 376, 379 — the delegate, the home mint, the record insert, the
 genesis link, the claim link — and the claim's own step then writes the
 board's first head `H.1` (§The other endpoints, the published head
-document): the head record's insert into the staging draft at 383 — the
-draft stands from the seed, so the claim's head mints none — and the
-publish into `H` at 390, seven records with its correspondence record,
+document): the head record's insert into the staging draft at 382 — the
+draft stands from genesis, so the claim's head mints none — and the
+publish into `H` at 389, seven records with its correspondence record,
 the publish a public entry with `key: "system"`,
 the insert masked at every class but the system's. The flow behind the
 examples then runs on that base, from bare sessions (CLAIMED-PERMISSIVE,
 so every `key` reads `"bare"`, and no entry is signed, so no row carries
-`attest`): `delegate` commits at position 392 — its row carrying the
-minted pair —, the home mint at 393, a second — private — document at 394
+`attest`): `delegate` commits at position 391 — its row carrying the
+minted pair —, the home mint at 392, a second — private — document at 393
 (the account's doc 1 is born published, where bare writes are gated by
 design, so the flow's content goes to a draft document), a two-byte
-`insert` at 397 (one range mint, one stretch, one placement), `make_link`
-at 400 — its row carrying the minted link's address. The feed past the
-seed, the ceremony and its head, `GET /changes?since=390`, read AS
+`insert` at 396 (one range mint, one stretch, one placement), `make_link`
+at 399 — its row carrying the minted link's address. The feed past the
+seed, the ceremony and its head, `GET /changes?since=389`, read AS
 PRINCIPAL 1 — the owner of the private document, whose class sees every
 one of these:
 
 <!-- wire: changes feed -->
 ```json
-{"changes":[{"at":392,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":393,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":394,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":397,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":400,"docs":["1.0.2.0.2"],"key":"bare","link":"1.0.2.0.2.0.2.1","op":"make_link","time":1786838400047}],"last":400,"more":false}
+{"changes":[{"at":391,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":392,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":393,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":396,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":399,"docs":["1.0.2.0.2"],"key":"bare","link":"1.0.2.0.2.0.2.1","op":"make_link","time":1786838400047}],"last":399,"more":false}
 ```
 
-The first page of the same feed, `GET /changes?since=390&limit=2`:
+The first page of the same feed, `GET /changes?since=389&limit=2`:
 
 <!-- wire: changes feed_page -->
 ```json
-{"changes":[{"at":392,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":393,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":393,"more":true}
+{"changes":[{"at":391,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":392,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":392,"more":true}
 ```
 
 The same feed read as the GUEST (no token): the private document's
@@ -6403,7 +6403,7 @@ position and `more` false, since nothing visible remains:
 
 <!-- wire: changes feed_guest -->
 ```json
-{"changes":[{"at":392,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":393,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":393,"more":false}
+{"changes":[{"at":391,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":392,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":392,"more":false}
 ```
 
 A SIGNED entry's row, for contrast — a grant link deposited into the
@@ -6693,9 +6693,10 @@ where that row is gone — the feed lost below the walk's re-covered
 window — a read of a link's or a member's age (`read_link`'s and
 `doc_metadata`'s `time`, `time_from: "anchor"`) answers the newest record
 at or below the position, so every address minted after the first record
-is dated forever, to the hour. `T` is minted by the first record's write,
-published from birth and guest-readable (`retrieve_v` on the bare `T`
-floats to the latest record; `T.k` is pinned); each record shows on
+is dated forever, to the hour. `T` is seeded at genesis, published and
+guest-readable, and holds no record until the first is written
+(`retrieve_v` on the bare `T` floats to the latest record, and delivers
+nothing before the first; `T.k` is pinned); each record shows on
 `/changes` as one public `publish` entry with `key: "system"`, its insert
 into the staging draft masked at every class but the system's.
 

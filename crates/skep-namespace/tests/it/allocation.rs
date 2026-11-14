@@ -555,8 +555,10 @@ fn each_mint_enters_its_position_for_a_document_a_member_and_a_link_and_for_noth
     assert_eq!(folded.minted_at(&c1), None, "a content element enters no position");
     assert_eq!(folded.minted_at(&acct), None, "an account enters no position");
     assert_eq!(folded.minted_at(&a(&[1, 0, 1, 0, 9])), None, "an address never minted has none");
-    // Genesis's two seeded documents stand at the genesis coordinate.
-    assert_eq!(folded.minted_at(&a(&[1, 1, 0, 1, 0, 2])), Some(Seq(0)));
+    // Genesis's four seeded documents stand at the genesis coordinate.
+    for n in 1..=4 {
+        assert_eq!(folded.minted_at(&a(&[1, 1, 0, 1, 0, n])), Some(Seq(0)));
+    }
 
     // Off the kernel: the committed position is the one the fold was handed.
     let (_, at) = k

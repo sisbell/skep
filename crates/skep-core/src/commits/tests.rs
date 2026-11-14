@@ -975,48 +975,6 @@ fn commits_log_entry(dir: &std::path::Path, at: u64) -> Option<serde_json::Value
         .find(|v| v.get("at").and_then(serde_json::Value::as_u64) == Some(at))
 }
 
-/// Holds the head writer's row 40 to the classed door.
-///
-/// `ensure_draft`'s line — the draft minted elsewhere — goes out through
-/// the door the head writer holds, under `failure:`, into the record the
-/// daemon shares: a published document at the staging draft's address
-/// moves the head writer's mint to the next, and the line names both.
-#[test]
-fn the_head_writers_row_40_goes_through_the_classed_door() {
-    use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
-
-    let dir = tempfile::tempdir().expect("tempdir");
-    let engine = fsync_engine(dir.path());
-    let wp = Commits::open(dir.path(), &engine, Arc::new(CellIndex::new())).expect("open");
-    let stores = engine.stores();
-    let account = system_account();
-    // Another writer takes the staging draft's address with a PUBLISHED
-    // document, which the head writer's resume never takes for its draft.
-    let op = Op::CreateNewDocument { account: account.clone(), published: Some(true) };
-    let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
-    let serial = wp.serial_lock();
-    let resp = wp.commit_under(&serial, meta, || {
-        let (addr, at) = stores
-            .namespace()
-            .create_new_document(SYSTEM_PRINCIPAL, &account, Some(true))
-            .expect("the mint commits");
-        Response::AckAddr { addr, at }
-    });
-    assert!(matches!(resp, Response::AckAddr { .. }), "the mint is acked");
-    wp.write_first_head(&serial);
-    drop(serial);
-    let row_40 = "failure: head writer: the staging draft minted at 1.1.0.1.0.4, not at \
-                  1.1.0.1.0.3 — another writer minted under the system account; the head goes \
-                  on with the draft it minted";
-    let said = wp.lines_said().lock().clone();
-    assert_eq!(
-        said.iter().filter(|l| l.as_str() == row_40).count(),
-        1,
-        "row 40 through the classed door, into the one record:\n{}",
-        said.join("\n")
-    );
-}
-
 /// Holds the feed's three journal reads to their refusal lines, end to end.
 ///
 /// A kernel that keeps no journal refuses every history read, so one open

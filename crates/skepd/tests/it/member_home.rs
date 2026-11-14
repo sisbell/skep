@@ -116,7 +116,7 @@ fn history_rows(port: u16, token: Option<&str>, d: &str, from: u64, width: u64) 
 /// The board's chain: `E` holding P, `E.1` and `E.2`, and `F`.
 fn chain(port: u16, signed: &str, bare: &str) -> Chain {
     let e = edition_with(port, signed, P);
-    assert_eq!(e, "1.0.1.0.2", "the claimant's second document");
+    assert_eq!(e, nth_document(CLAIMANT_ACCOUNT, 2), "the claimant's second document");
     assert_eq!(image_runs(port, None, &e, 1, P_LEN), vec![p_run(&e)]);
     // Shot 1, the birth version: E's own runs by reference.
     let e1 = shot(port, signed, &e, Some((&e, P_LEN)), None, &shot_runs(port, None, &e, 1, P_LEN));
@@ -124,7 +124,7 @@ fn chain(port: u16, signed: &str, bare: &str) -> Chain {
     // Q staged in a draft; shot 2 off E.1: P by reference, Q re-minted under
     // E's own content chain.
     let d_q = draft_with(port, bare, Q);
-    assert_eq!(d_q, "1.0.1.0.3");
+    assert_eq!(d_q, nth_document(CLAIMANT_ACCOUNT, 3));
     let mut runs = shot_runs(port, None, &e1, 1, P_LEN);
     runs.push(run(&d_q, &format!("{d_q}.0.1.1"), Q_LEN));
     let e2 = shot(port, signed, &e, Some((&e1, P_LEN)), Some(&d_q), &runs);
@@ -141,7 +141,7 @@ fn chain(port: u16, signed: &str, bare: &str) -> Chain {
     // F transcludes P from E: `copy` reads the address named — E's own
     // arrangement, which holds P (§The publish shot and head-float).
     let f = owner_draft(port, bare);
-    assert_eq!(f, "1.0.1.0.4");
+    assert_eq!(f, nth_document(CLAIMANT_ACCOUNT, 4));
     expect_resp(&copy_span(port, bare, &f, 1, &e, 1, P_LEN), "ack");
     assert_eq!(image_runs(port, Some(bare), &f, 1, P_LEN), vec![p_run(&e)], "F holds P's identity");
     Chain { e, e1, e2, f }

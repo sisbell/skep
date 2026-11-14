@@ -150,7 +150,7 @@ fn citation(home: &str, from: &str, to: &str) -> String {
 /// The board's chain: `E` holding P, `E.1` and `E.2` holding it by reference.
 fn chain(port: u16, signed: &str) -> Chain {
     let e = edition_with(port, signed, P);
-    assert_eq!(e, "1.0.1.0.2", "the claimant's second document");
+    assert_eq!(e, nth_document(CLAIMANT_ACCOUNT, 2), "the claimant's second document");
     let e1 = shot(port, signed, &e, Some((&e, P_LEN)), None, &shot_runs(port, None, &e, 1, P_LEN));
     assert_eq!(e1, format!("{e}.1"));
     let e2 = shot(port, signed, &e, Some((&e1, P_LEN)), None, &shot_runs(port, None, &e1, 1, P_LEN));
@@ -180,7 +180,7 @@ struct Notes {
 /// which the stored-endset test keeps off every publication's list.
 fn notes_and_original(port: u16, bare: &str, c: &Chain) -> Notes {
     let n = draft_with(port, bare, Z);
-    assert_eq!(n, "1.0.1.0.3", "the notes, the claimant's third document");
+    assert_eq!(n, nth_document(CLAIMANT_ACCOUNT, 3), "the notes, the claimant's third document");
     let l = acked_addr(&op(port, Some(bare), &citation(&n, &vspec(&c.e2, 1, P_LEN), &vspec(&n, 1, Z_LEN))));
     assert_eq!(l, format!("{n}.0.2.1"), "the original, N's first link");
     assert_eq!(
@@ -600,7 +600,7 @@ fn a_put_back_passage_offers_its_original_again_and_takes_a_second_claim() {
     let c = chain(port, &signed);
     let Chain { e, e2, .. } = &c;
     let d = draft_with(port, &bare, W);
-    assert_eq!(d, "1.0.1.0.3", "the draft, the claimant's third document");
+    assert_eq!(d, nth_document(CLAIMANT_ACCOUNT, 3), "the draft, the claimant's third document");
     let w_native = (format!("{d}.0.1.1"), W_LEN);
     let m = acked_addr(&op(port, Some(&bare), &citation(&d, &vspec(&d, 1, W_LEN), NONE)));
     assert_eq!(m, format!("{d}.0.2.1"), "the one-sided link on W, D's first");
@@ -758,7 +758,7 @@ fn the_accept_reaches_no_other_arrangement_of_the_words_where_the_retraction_rea
         let c = chain(port, signed);
         let notes = notes_and_original(port, bare, &c);
         let f = owner_draft(port, bare);
-        assert_eq!(f, "1.0.1.0.4", "the transcluding draft, the claimant's fourth document");
+        assert_eq!(f, nth_document(CLAIMANT_ACCOUNT, 4), "the transcluding draft, the claimant's fourth document");
         expect_resp(&copy_span(port, bare, &f, 1, &c.e, 1, P_LEN), "ack");
         assert_eq!(image_runs(port, Some(bare), &f, 1, P_LEN), vec![p_run(&c.e)], "F holds P's identity");
         assert_eq!(find_links_v(port, Some(signed), &f, 1, P_LEN), floor_and(&[&notes.l, &notes.w]), "before the accept: L at F, and W on E's identity");

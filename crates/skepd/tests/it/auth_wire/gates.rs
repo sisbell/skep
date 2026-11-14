@@ -358,7 +358,7 @@ fn two_concurrent_first_mints_bear_exactly_one_published_home() {
 
         // The chain's first two documents, one each: the account's doc 1 went
         // to the mint that committed first.
-        let (home, draft) = (format!("{account}.0.1"), format!("{account}.0.2"));
+        let (home, draft) = (format!("{account}.0.1"), nth_document(&account, 2));
         let winner = minted.iter().position(|doc| *doc == home).unwrap_or_else(|| {
             panic!("round {rounds}: neither mint is {home}: {minted:?}")
         });
@@ -527,7 +527,7 @@ fn a_home_minted_private_below_the_door_is_served_private_and_has_no_clearing_ac
     // The one other home a holder can publish: a second document, minted
     // `published: true` from its signed session.
     let second = acked_addr(&op(port, Some(&holder), &create_frame(&account, Some(true))));
-    assert_eq!(second, format!("{account}.0.2"));
+    assert_eq!(second, nth_document(&account, 2));
 
     // THE HOLDER CELL (AUTH-3.58). Into the PUBLISHED second document the
     // record carries its `sig` (round 7: a sig-less record-kind atom is

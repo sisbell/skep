@@ -57,7 +57,7 @@ use tempfile::TempDir;
 
 #[cfg(unix)]
 use crate::common::under_a_file_size_limit;
-use crate::common::{origin, s, scrub, spawn, Run};
+use crate::common::{nth_document, origin, s, scrub, spawn, Run};
 
 /// The citation type every link is typed, as the tool spells it.
 const CITATION_TYPE: &str = "1.1.0.1.0.1.0.3.13";
@@ -527,16 +527,17 @@ fn shape(v: &Value) -> Value {
 }
 
 /// The expected shape of the suite's seed on a fresh board: doc 1 at
-/// `1.0.1.0.1`, the staging draft `.2`, the editions `.3` to `.14`, the
-/// drafts `.15` to `.17`, the second account `1.0.2`.
+/// `1.0.1.0.1`, the staging draft the claimant's second document, the
+/// editions its third to fourteenth, the drafts its fifteenth to
+/// seventeenth, the second account `1.0.2`.
 fn assert_expected_shape(v: &Value, cut: &Cut) {
     assert_eq!(v["tool"], "skep-dev seed");
     assert_eq!(v["account"], "1.0.1");
     assert_eq!(v["principal"], 1);
-    assert_eq!(v["staging"]["drafts"], serde_json::json!(["1.0.1.0.2"]));
+    assert_eq!(v["staging"]["drafts"], serde_json::json!([nth_document("1.0.1", 2)]));
     assert_eq!(v["editions"]["count"], 12);
-    assert_eq!(v["editions"]["first"], "1.0.1.0.3");
-    assert_eq!(v["editions"]["last"], "1.0.1.0.14");
+    assert_eq!(v["editions"]["first"], nth_document("1.0.1", 3));
+    assert_eq!(v["editions"]["last"], nth_document("1.0.1", 14));
     assert_eq!(v["editions"]["members"], 15);
     let planted: usize =
         cut.documents.iter().take(DOCUMENTS).map(|s| cites(&s.document.bytes).len()).sum();
@@ -563,27 +564,45 @@ fn assert_expected_shape(v: &Value, cut: &Cut) {
         "one ghost per distinct outside name"
     );
     assert_eq!(
-        v["links"]["first"], "1.0.1.0.3.0.2.1",
+        v["links"]["first"], format!("{}.0.2.1", nth_document("1.0.1", 3)),
         "the first link is homed in the first edition's link subspace"
     );
     assert_eq!(v["versions"]["count"], 3);
     assert_eq!(v["versions"]["rule"], "every 4th");
     assert_eq!(
         v["versions"]["members"],
-        serde_json::json!(["1.0.1.0.3.2", "1.0.1.0.7.2", "1.0.1.0.11.2"])
+        serde_json::json!([
+            format!("{}.2", nth_document("1.0.1", 3)),
+            format!("{}.2", nth_document("1.0.1", 7)),
+            format!("{}.2", nth_document("1.0.1", 11))
+        ])
     );
     assert_eq!(v["versions"]["arms"], serde_json::json!(["appended", "removed", "changed"]));
     assert_eq!(
         v["drafts"]["addresses"],
-        serde_json::json!(["1.0.1.0.15", "1.0.1.0.16", "1.0.1.0.17"])
+        serde_json::json!([
+            nth_document("1.0.1", 15),
+            nth_document("1.0.1", 16),
+            nth_document("1.0.1", 17)
+        ])
     );
     assert_eq!(
         v["window"],
-        serde_json::json!({"edition": "1.0.1.0.3", "member": "1.0.1.0.3.2", "draft": "1.0.1.0.15", "width": 240})
+        serde_json::json!({
+            "edition": nth_document("1.0.1", 3),
+            "member": format!("{}.2", nth_document("1.0.1", 3)),
+            "draft": nth_document("1.0.1", 15),
+            "width": 240
+        })
     );
     assert_eq!(
         v["second_account"],
-        serde_json::json!({"account": "1.0.2", "principal": 2, "home": "1.0.2.0.1", "draft": "1.0.2.0.2"})
+        serde_json::json!({
+            "account": "1.0.2",
+            "principal": 2,
+            "home": "1.0.2.0.1",
+            "draft": nth_document("1.0.2", 2)
+        })
     );
     assert_eq!(v["corpus"]["cut"], "cut-v1");
     assert_eq!(v["corpus"]["documents"], 12);
@@ -748,12 +767,21 @@ fn the_seed_lands_every_shape_and_a_guest_reads_them() {
         "links: {} in all, {} of them naming files outside the set (ghosts: 1)",
         v["links"]["count"], v["links"]["outside"]["count"]
     );
+    let versions_line = format!(
+        "versions: 3 in all, the window — 240 positions of {} — in {}.2",
+        nth_document("1.0.1", 15),
+        nth_document("1.0.1", 3)
+    );
+    let second_account_line = format!(
+        "second account: 1.0.2, principal 2, its home 1.0.2.0.1 and one draft {}",
+        nth_document("1.0.2", 2)
+    );
     for phase in [
         "editions: 12 of 12 landed",
         links_line.as_str(),
-        "versions: 3 in all, the window — 240 positions of 1.0.1.0.15 — in 1.0.1.0.3.2",
+        versions_line.as_str(),
         "drafts: 3 in all",
-        "second account: 1.0.2, principal 2, its home 1.0.2.0.1 and one draft 1.0.2.0.2",
+        second_account_line.as_str(),
     ] {
         assert!(r.err.contains(phase), "the phase's line `{phase}`: {}", r.err);
     }
@@ -776,7 +804,7 @@ fn the_seed_lands_every_shape_and_a_guest_reads_them() {
 
     // F1: a guest reads every edition byte-exact — the birth member where
     // the document has a second version, the bare address else.
-    let editions: Vec<String> = (0..DOCUMENTS).map(|i| format!("1.0.1.0.{}", i + 3)).collect();
+    let editions: Vec<String> = (0..DOCUMENTS).map(|i| nth_document("1.0.1", i as u64 + 3)).collect();
     let versioned = [0usize, 4, 8];
     for (i, e) in editions.iter().enumerate() {
         let want = &cut.documents[i].document.bytes;
@@ -915,7 +943,7 @@ fn the_seed_lands_every_shape_and_a_guest_reads_them() {
     }
     assert_eq!(
         withheld,
-        vec![Item::Withheld { width: 240, origin: "1.0.1.0.15".into() }],
+        vec![Item::Withheld { width: 240, origin: nth_document("1.0.1", 15) }],
         "the windowed run is withheld from a guest to the width, naming its origin"
     );
     assert_eq!(
@@ -1028,7 +1056,7 @@ fn the_seed_lands_every_shape_and_a_guest_reads_them() {
 
     // F4: the drafts answer the claimant and are withheld from a guest; the
     // second account's draft is withheld from the claimant too.
-    for (j, draft) in ["1.0.1.0.15", "1.0.1.0.16", "1.0.1.0.17"].iter().enumerate() {
+    for (j, draft) in [15, 16, 17].map(|k| nth_document("1.0.1", k)).iter().enumerate() {
         let want = &cut.documents[DOCUMENTS + j].document.bytes;
         let mine = under(&board, &claimant, &frames::retrieve_v(draft, 1, want.len() as u64));
         assert_eq!(text_of(&mine), *want, "{draft} for the claimant");
@@ -1036,7 +1064,7 @@ fn the_seed_lands_every_shape_and_a_guest_reads_them() {
         assert_eq!(rejected(&theirs), Some("withheld"), "{theirs}");
         assert_eq!(theirs["site"]["addr"], *draft, "{theirs}");
     }
-    let second_draft = "1.0.2.0.2";
+    let second_draft: &str = &nth_document("1.0.2", 2);
     let want = &cut.documents[DOCUMENTS + DRAFTS].document.bytes;
     let refused = under(&board, &claimant, &frames::retrieve_v(second_draft, 1, want.len() as u64));
     assert_eq!(
@@ -1059,7 +1087,7 @@ fn the_seed_lands_every_shape_and_a_guest_reads_them() {
     );
 
     // F8: the agent space holds no document after the run.
-    let agent = guest(&board, &frames::doc_metadata("1.0.1.1.0.2"));
+    let agent = guest(&board, &frames::doc_metadata(&nth_document("1.0.1.1", 2)));
     assert_eq!(rejected(&agent), Some("doc_not_registered"), "{agent}");
 
     // F5: a second run adds nothing and says so — on stderr as it opens the
@@ -1328,7 +1356,7 @@ fn a_run_cut_short_resumes_and_lands_what_a_one_shot_run_lands() {
     );
     for i in 0..DOCUMENTS {
         let want = &cut.documents[i].document.bytes;
-        let e = format!("1.0.1.0.{}.1", i + 3);
+        let e = format!("{}.1", nth_document("1.0.1", i as u64 + 3));
         assert_eq!(text_of(&read_guest(&board, &e)), *want, "{e} byte-exact after the resume");
     }
     let before = log_position(&board);
@@ -1439,7 +1467,7 @@ fn an_empty_manifest_and_a_torn_header_are_written_from_the_first_byte() {
         );
         assert_expected_shape(&v, &cut);
         let text = std::fs::read_to_string(&manifest).unwrap();
-        let first_item = "{\"addr\":\"1.0.1.0.2\",\"id\":\"staging:mint\"}";
+        let first_item = format!("{{\"addr\":\"{}\",\"id\":\"staging:mint\"}}", nth_document("1.0.1", 2));
         let second_item = format!(
             "{{\"at\":1,\"id\":\"cut-00001:draft\",\"len\":{}}}",
             cut.documents[0].document.bytes.len()

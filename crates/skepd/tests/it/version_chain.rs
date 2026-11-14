@@ -296,7 +296,7 @@ fn the_cross_owner_branch_is_refused_by_neither_rule() {
     assert_eq!(home, format!("{account}.0.1"));
 
     let copy_doc = acked_addr(&op(port, Some(&stranger), &version(CLAIMANT_DOC1, r#","published":false"#)));
-    assert_eq!(copy_doc, format!("{account}.0.2"), "a fresh document in the stranger's account, not a member");
+    assert_eq!(copy_doc, nth_document(&account, 2), "a fresh document in the stranger's account, not a member");
     // Private, and the stranger's own: an undeclared insert at its fresh
     // position (the snapshot holds doc 1's one element) commits.
     expect_resp(&op(port, Some(&stranger), &insert(&copy_doc, 2, "m", false)), "ack_addr");
@@ -520,7 +520,7 @@ fn an_unregistered_target_answers_registration_not_publication() {
     let port = sd.port();
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
-    let ghost = format!("{CLAIMANT_ACCOUNT}.0.9");
+    let ghost = format!("{CLAIMANT_ACCOUNT}.0.71");
     let ghost_member = format!("{CLAIMANT_DOC1}.7");
 
     let before = head(port);

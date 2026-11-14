@@ -135,7 +135,7 @@ fn seed_flow(port: u16) -> String {
         &format!(r#"{{"op":"create_new_document","account":"{prefix}"}}"#),
     );
     let doc = acked_addr(&v);
-    assert_eq!(doc, "1.0.2.0.2", "second document address drifted; re-pin the examples");
+    assert_eq!(doc, nth_document("1.0.2", 2), "second document address drifted; re-pin the examples");
     assert_eq!(acked_at(&v), CLAIMED_HEAD + 4, "create_new_document is a 1-record commit");
     let v = op(
         port,

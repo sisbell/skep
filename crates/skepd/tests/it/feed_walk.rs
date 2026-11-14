@@ -78,8 +78,8 @@ use serde_json::Value;
 use skepd::{bind, serve_bound, AuthOptions, Daemon, Origin, Skepd, DEFAULT_WORKERS};
 
 use crate::common::{
-    acked_addr, acked_at, expect_resp, get, http, json, op, open_session, spawn, Sse,
-    CLAIMANT_ACCOUNT, CLAIMANT_PRINCIPAL, SEED_HEAD,
+    acked_addr, acked_at, expect_resp, get, http, json, op, open_session, seed_ats, spawn, Sse,
+    CLAIMANT_ACCOUNT, CLAIMANT_PRINCIPAL, SEED_FIRST_AT, SEED_HEAD,
 };
 
 /// The tests here hold the walk one at a time (the module doc).
@@ -679,15 +679,13 @@ fn the_three_lines_come_at_the_cadence() {
     sd.shutdown();
 }
 
-/// The positions every class sees at or below the claimed head, off the one
-/// constant: the registry seed's publish at 11 and its links three records
-/// apart to `SEED_HEAD` (the draft's mint at 1 and the sections' insert at 4
-/// are the system account's private writes, masked at every class but the
-/// system's), the ceremony's five commits, and `H.1`'s publish, the claimed
-/// head itself (`changes.rs` pins them).
+/// The positions every class sees at or below the claimed head, off the
+/// seed's layout: the registry seed's publish and links (`common::seed_ats`),
+/// the ceremony's five commits, and `H.1`'s publish, the claimed head itself
+/// (`changes.rs` pins them).
 fn public_ats_through_the_claimed_head() -> Vec<u64> {
-    (11..=SEED_HEAD)
-        .step_by(3)
+    seed_ats()
+        .into_iter()
         .chain([SEED_HEAD + 2, SEED_HEAD + 3, SEED_HEAD + 6, SEED_HEAD + 9, SEED_HEAD + 12])
         .chain([CLAIMED_HEAD])
         .collect()
@@ -925,9 +923,10 @@ fn a_checkpoint_during_the_walk_defers_its_rewrite_to_the_landing() {
         "FINDING: the checkpoint's compaction rewrote the file under the pending region"
     );
     assert!(sd.daemon().feed_pending_region().is_some(), "still pending");
-    // Line 25 says what the feed holds — every line from position 1 — and
-    // never that anything compacted or waits on the landing: the feed's
-    // files are kept whole, and a landing moves nothing of them.
+    // Line 25 says what the feed holds — every line from position
+    // `SEED_FIRST_AT` — and never that anything compacted or waits on the
+    // landing: the feed's files are kept whole, and a landing moves nothing
+    // of them.
     let landed = format!("landing: checkpoint at position {} landed", floor.0);
     let line_25 = sd
         .daemon()
@@ -936,7 +935,9 @@ fn a_checkpoint_during_the_walk_defers_its_rewrite_to_the_landing() {
         .rfind(|line| line.starts_with(&landed))
         .expect("the third checkpoint's landing line");
     assert!(
-        line_25.contains("; the change feed holds every line from position 1: commits.log "),
+        line_25.contains(&format!(
+            "; the change feed holds every line from position {SEED_FIRST_AT}: commits.log "
+        )),
         "line 25 says what the feed holds: {line_25}"
     );
     assert!(!line_25.contains("compacted below"), "no file was compacted: {line_25}");
@@ -1504,7 +1505,9 @@ fn a_checkpoint_during_the_sort_defers_its_rewrite_to_the_landing() {
         .rfind(|line| line.starts_with(&landed))
         .expect("the third checkpoint's landing line");
     assert!(
-        line_25.contains("; the change feed holds every line from position 1: commits.log "),
+        line_25.contains(&format!(
+            "; the change feed holds every line from position {SEED_FIRST_AT}: commits.log "
+        )),
         "line 25 says what the feed holds: {line_25}"
     );
     assert!(!line_25.contains("compacted below"), "no file was compacted: {line_25}");

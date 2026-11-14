@@ -12,7 +12,7 @@
 //! writes nothing; R3 an addition writes the added row alone; R4 a seed cut
 //! short is finished at the next open, none twice; R5 the writer is the
 //! system principal through the one staging draft; R6 the ceremony's numbers
-//! on the seeded board, and the one constant every position pin derives from
+//! on the seeded board, and the seed's layout every position pin derives from
 //! held equal to what a fresh board counts; R7 every pin the workspace holds
 //! in non-test code is a row of the table. R8, the open's line off the
 //! binary's stderr, is `open.rs`'s.
@@ -28,7 +28,8 @@ use skepd::Skepd;
 
 use crate::common::{
     addrs_of, board_term, claim_board, doc_metadata, expect_resp, get, head_position, json, op,
-    open_session, read_link, region, spawn, spawn_unclaimed, BLIND_KIND, SEED_HEAD,
+    open_session, read_link, region, seed_ats, spawn, spawn_unclaimed, BLIND_KIND, SEED_HEAD,
+    SEED_LINK_RECORDS, SEED_PUBLISH_AT, SEED_TYPES,
 };
 
 /// The registry document: doc 1 of the system account.
@@ -36,16 +37,6 @@ const REGISTRY: &str = "1.1.0.1.0.1";
 
 /// The staging draft the seed and the head writer share.
 const STAGING_DRAFT: &str = "1.1.0.1.0.3";
-
-/// The registry seed's positions a guest sees: the member's publish at 8 —
-/// the draft's mint at 1 and the sections' insert at 4 are the system
-/// account's private writes, masked at every class but the system's — then
-/// one `make_link` per type, three records apart, to `SEED_HEAD` — the
-/// publish at 11, seven records past the sections' insert: the shot's four
-/// and its correspondence record's three (lane S1).
-fn seed_ats() -> Vec<u64> {
-    (11..=SEED_HEAD).step_by(3).collect()
-}
 
 /// The unit span of `addr` as a client spells a type in a four-set slot or
 /// reads one back off a stored addrs-form endset: the address as the start
@@ -120,10 +111,9 @@ fn log_position(port: u16) -> u64 {
 /// table one `defines` link, its `to` the type's address in addrs form, its
 /// `from` a span in the registry document that reads back as the section,
 /// the name alone on the first line; a type not in the table answers none.
-/// R6's constant too: the fresh board stands at `SEED_HEAD`, which is eleven
-/// records — the draft's mint, the sections' insert, the publish with its
-/// correspondence record — and three per type, and the `open:` line says
-/// every type written.
+/// R6's constants too: the fresh board stands at `SEED_HEAD`, the size the
+/// seed's layout spells (`SEED_TYPES`) is the table's, and the `open:` line
+/// says every type written.
 #[test]
 fn a_fresh_board_names_every_type_once_to_a_guest() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -132,7 +122,7 @@ fn a_fresh_board_names_every_type_once_to_a_guest() {
     let table = vocabulary();
 
     assert_eq!(log_position(port), SEED_HEAD, "the fresh board stands at the seed's head");
-    assert_eq!(SEED_HEAD, 11 + 3 * table.len() as u64, "eleven records, then three per type");
+    assert_eq!(SEED_TYPES, table.len() as u64, "the seed's layout spells the table's size");
     assert_eq!(
         open_line(&sd, table.len(), 0).len(),
         1,
@@ -229,9 +219,9 @@ fn a_board_seeded_under_a_smaller_table_gains_the_added_row_at_the_next_open() {
     // minted one correspondence record in the staging draft — read as the
     // system principal, the draft's owner — the second's `from` the
     // addition's run, which begins right after the first seed's sections
-    // (the first record's `from`, from position 1, as wide as those bytes),
-    // and its `to` the second member's own run; no fence met, the run
-    // fresh.
+    // (the first record's `from`, from the draft's first position, as wide
+    // as those bytes), and its `to` the second member's own run; no fence
+    // met, the run fresh.
     let system = open_session(port, 9_000_000_000_000_000);
     let record = |k: u64| read_link(port, Some(&system), &format!("{STAGING_DRAFT}.0.2.{k}"));
     let (first, second) = (record(1), record(2));
@@ -307,7 +297,7 @@ fn a_seed_cut_short_by_a_refusal_is_said_once_and_finished_at_the_next_open() {
         assert!(definition_links(port, None, &table[2].address.to_string()).is_empty());
         assert_eq!(
             log_position(port),
-            11 + 3 * 2,
+            SEED_PUBLISH_AT + SEED_LINK_RECORDS * 2,
             "the mint, the insert, the publish with its correspondence record, and two links"
         );
         sd.shutdown();

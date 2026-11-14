@@ -38,20 +38,6 @@ use skepd::{Seq, Skepd};
 
 mod mirror;
 
-/// The registry seed's rows a guest sees on a fresh board (wire.md
-/// §Registry): the member's publish at `SEED_PUBLISH_AT` — the staging
-/// draft's mint at 1 and the one insert of every type's section at 4 are the
-/// system account's private writes, masked at every class but the system's;
-/// the publish is seven records (the shot's four and its correspondence
-/// record's three, homed in the draft and reduced away for every class but
-/// the system's) — then one `make_link` per type, three records apart, to
-/// `SEED_HEAD`.
-const SEED_PUBLISH_AT: u64 = 11;
-
-fn seed_ats() -> Vec<u64> {
-    (SEED_PUBLISH_AT..=SEED_HEAD).step_by(3).collect()
-}
-
 /// The claim link's committed position on a fresh board — the ceremony's
 /// fifth commit (`common::claim_board`) above the seeded board's head
 /// (`common::SEED_HEAD`): delegate (2 records), the home mint (1), the
@@ -110,14 +96,14 @@ fn all_ats() -> Vec<u64> {
 }
 
 /// The scripted flow behind the wire.md examples. Positions are pinned by
-/// the stores' record counts: `delegate` commits 2 records (position 22),
-/// the home mint 1 (position 23) — MINT-FIRST (RES-26): the account's doc 1
-/// is born published, where bare writes are gated by design, so the flow
-/// writes a SECOND, private document — that mint 1 (position 24), a
-/// two-byte `insert` 3 — one range mint, one stretch, one placement —
-/// (position 27), `make_link` 3 — mint, link, seat — (position 30). If an
-/// ack below drifts, a store changed its transaction shape and wire.md
-/// §The change feed must be re-pinned.
+/// the stores' record counts above the claimed board's head ([`SEEDED_ATS`]):
+/// `delegate` commits 2 records (`CLAIMED_HEAD + 2`), the home mint 1
+/// (`+ 3`) — MINT-FIRST (RES-26): the account's doc 1 is born published,
+/// where bare writes are gated by design, so the flow writes a SECOND,
+/// private document — that mint 1 (`+ 4`), a two-byte `insert` 3 — one
+/// range mint, one stretch, one placement — (`+ 7`), `make_link` 3 — mint,
+/// link, seat — (`+ 10`). If an ack below drifts, a store changed its
+/// transaction shape and wire.md §The change feed must be re-pinned.
 fn seed_flow(port: u16) -> String {
     let boot = open_session(port, 0);
     let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
@@ -298,7 +284,11 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     assert_eq!(entry_ats(&v), vec![H1_PUBLISH_AT], "the guest sees H.1's publish and nothing else of it");
     assert_eq!(v["changes"][0]["op"].as_str(), Some("publish"), "{v}");
     assert_eq!(v["changes"][0]["key"].as_str(), Some("system"), "{v}");
-    assert_eq!(head(port), CLAIMED_HEAD, "the seed, the claim and its head: nineteen records above the seed");
+    assert_eq!(
+        head(port),
+        CLAIMED_HEAD,
+        "the seed, the claim and its head: twenty-two records above the seed"
+    );
     let doc = seed_flow(port);
     let s1 = open_session(port, 1);
     // The owner's view of its own feed — the seeded document is principal
@@ -1044,14 +1034,15 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
     // ── torn tail: a partial trailing record is truncated at open; the
     //    daemon comes up and the feed is unchanged. (The fragment's number
     //    must not prefix any REAL record's `{"at":N,` — every committed
-    //    position here is ≤ 32.) THE CUT IS SAID (`operations.md` §1.1 row
-    //    9): once, under `failure:`, with the last trusted position — the
-    //    head, every position recorded — the bytes, and this file's case,
-    //    the cut part re-derived as bare entries. A DERIVED file torn
-    //    beside it — `feed-index.log` cut through its fence line and into
-    //    the head's own entry line — says its own case, the cut part
-    //    re-derived, `{c}` the highest position its surviving lines reach,
-    //    below the head; the open re-derives the head's entry. ──
+    //    position here is ≤ `SEEDED_ATS[4]`.) THE CUT IS SAID
+    //    (`operations.md` §1.1 row 9): once, under `failure:`, with the
+    //    last trusted position — the head, every position recorded — the
+    //    bytes, and this file's case, the cut part re-derived as bare
+    //    entries. A DERIVED file torn beside it — `feed-index.log` cut
+    //    through its fence line and into the head's own entry line — says
+    //    its own case, the cut part re-derived, `{c}` the highest position
+    //    its surviving lines reach, below the head; the open re-derives the
+    //    head's entry. ──
     {
         use std::io::Write;
         let whole = std::fs::metadata(&sidecar_path).expect("metadata").len();
@@ -1112,9 +1103,9 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
     }
 
     // ── lost record: drop the last whole record (the make_link entry at
-    //    32). Reopen: the position is reconstructed as a BARE entry — the
-    //    daemon reports null, never a wrong value — while earlier entries
-    //    keep their recorded metadata verbatim. ──
+    //    `SEEDED_ATS[4]`). Reopen: the position is reconstructed as a BARE
+    //    entry — the daemon reports null, never a wrong value — while
+    //    earlier entries keep their recorded metadata verbatim. ──
     {
         let contents = std::fs::read_to_string(&sidecar_path).expect("read commits.log");
         let trimmed = &contents[..contents.len() - 1]; // drop the final \n
@@ -1709,7 +1700,7 @@ pub(crate) fn op_at_floor(port: u16) -> u64 {
 /// `/changes` serves their rows, which carry EVENTS: the sidecar drops
 /// nothing and rewrites nothing at the open, and `/changes` from 0 answers
 /// every position it answered before the reclamation, at every class, the
-/// open's line saying the feed answers from position 1.
+/// open's line saying the feed answers from position `SEED_FIRST_AT`.
 ///
 /// Reclamation is reached honestly rather than simulated, and the daemon
 /// makes every commit itself, so the sidecar has FULL coverage when it
@@ -1767,7 +1758,7 @@ fn the_sidecar_keeps_every_line_through_the_journals_retention() {
     let contents = String::from_utf8(before).expect("the file is text");
     assert!(!contents.contains("min_since"), "no fence: nothing was compacted: {contents}");
     assert!(
-        contents.starts_with(r#"{"at":1,"#),
+        contents.starts_with(&format!("{{\"at\":{SEED_FIRST_AT},")),
         "the oldest entry survives the reclamation, first"
     );
     assert!(contents.contains(&format!("{{\"at\":{},", ats[0])), "and the first the owner reads");
@@ -1803,7 +1794,8 @@ fn the_sidecar_keeps_every_line_through_the_journals_retention() {
     assert_eq!(opened.len(), 1, "the feed's open line once: {said:?}");
     assert!(
         opened[0].starts_with(&format!(
-            "open: the change feed answers from position 1 to position {head}: commits.log "
+            "open: the change feed answers from position {SEED_FIRST_AT} to position {head}: \
+             commits.log "
         )),
         "from genesis: {}",
         opened[0]
@@ -1889,11 +1881,11 @@ fn small_commit(port: u16, session: &str, doc: &str) -> u64 {
 /// seam, on this thread) lands the checkpoint, the journal reclaims the
 /// closed segment below it, and `commits.log` and the four derived files do
 /// not change by a byte; the landing line says what the feed holds — every
-/// line from position 1, `commits.log`'s size — and never that anything was
-/// compacted; the feed serves from genesis at every class, the signed write
-/// below the floor among its rows with its slot; a commit after the landing
-/// lands in the files, which are whole and take it; a second landing moves
-/// nothing either.
+/// line from position `SEED_FIRST_AT`, `commits.log`'s size — and never that
+/// anything was compacted; the feed serves from genesis at every class, the
+/// signed write below the floor among its rows with its slot; a commit after
+/// the landing lands in the files, which are whole and take it; a second
+/// landing moves nothing either.
 #[test]
 fn the_checkpoint_threads_landing_leaves_the_five_feed_files_whole_while_serving() {
     const FIVE: [&str; 5] = [
@@ -1936,7 +1928,8 @@ fn the_checkpoint_threads_landing_leaves_the_five_feed_files_whole_while_serving
     let line = sd.daemon().checkpoint_lines().last().cloned().expect("the landing's line");
     assert!(
         line.contains(&format!(
-            "; the change feed holds every line from position 1: commits.log {} bytes, ",
+            "; the change feed holds every line from position {SEED_FIRST_AT}: commits.log {} \
+             bytes, ",
             bytes_before[0].len()
         )),
         "the line says what the feed holds, the file's own size: {line}"

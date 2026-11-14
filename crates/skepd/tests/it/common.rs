@@ -72,22 +72,71 @@ pub const T_GRANT: &str = "1.1.0.1.0.1.0.3.90";
 pub const T_BINDING: &str = "1.1.0.1.0.1.0.3.55";
 pub const T_ENDPOINT: &str = "1.1.0.1.0.1.0.3.56";
 
-/// THE SEEDED BOARD's HEAD: the committed position a fresh board stands at
-/// once its first open has seeded the link-type registry (wire.md §Registry;
-/// `skep-core`'s `commits/registry.rs`) and before any client writes — the
-/// staging draft's mint (1 record), the one insert of every type's section
-/// (3: a range mint, a stretch, a placement), the one publish of the member
-/// that holds them (7: the sections' range mint and stretch re-inserted as
-/// fresh identity, the member's mint and its placing record — 4 — and the
-/// publication's one correspondence record homed in the staging draft, the
-/// link-sets design §5.7: its link mint, its deposit and its seat — 3),
-/// then one `defines` link per type of `skep-registry`'s vocabulary (3
-/// each): `11 + 3 × the vocabulary's size`, 119 types. The ONE constant
-/// every position pin of a fresh board derives from — the ceremony's five
-/// commits land at `SEED_HEAD + 2`, `+ 3`, `+ 6`, `+ 9`, `+ 12` — held equal
-/// to what a fresh board counts by `vocabulary.rs`'s own test; a type the
-/// table gains or loses moves it by three.
-pub const SEED_HEAD: u64 = 368;
+/// The records of each commit the registry seed makes ahead of its links.
+///
+/// A fresh board's first open seeds the link-type registry (wire.md
+/// §Registry; `skep-core`'s `commits/registry.rs`) before any client writes,
+/// in order: the staging draft's mint (1 record), the one insert of every
+/// type's section (3: a range mint, a stretch, a placement), and the one
+/// publish of the member that holds them (7: the sections' range mint and
+/// stretch re-inserted as fresh identity, the member's mint and its placing
+/// record — 4 — and the publication's one correspondence record homed in the
+/// staging draft, the link-sets design §5.7: its link mint, its deposit and
+/// its seat — 3); then one `defines` link per type of `skep-registry`'s
+/// vocabulary. A record count is a store's transaction shape, which no
+/// constant of the code names, so this block spells the counts and the
+/// vocabulary's size, every position of a fresh board derives from them,
+/// and the suites' live reads of a fresh board hold them.
+pub const SEED_LEAD_RECORDS: [u64; 3] = [1, 3, 7];
+
+/// The records of one `defines` link: its mint, the link and its seat.
+pub const SEED_LINK_RECORDS: u64 = 3;
+
+/// The types of `skep-registry`'s vocabulary, a `defines` link each.
+///
+/// The table is built at run time, so no `const` reads its length;
+/// `vocabulary.rs` holds this equal to it.
+pub const SEED_TYPES: u64 = 119;
+
+/// A fresh board's first commit, and so the change feed's first line.
+pub const SEED_FIRST_AT: u64 = SEED_LEAD_RECORDS[0];
+
+/// The member's publish: the first of the seed's rows every class sees.
+///
+/// It is the last commit ahead of the links, so its position is the sum of
+/// `SEED_LEAD_RECORDS`.
+pub const SEED_PUBLISH_AT: u64 = {
+    let mut at = 0;
+    let mut commit = 0;
+    while commit < SEED_LEAD_RECORDS.len() {
+        at += SEED_LEAD_RECORDS[commit];
+        commit += 1;
+    }
+    at
+};
+
+/// A fresh board's head: the publish, then a link per type.
+///
+/// The ceremony's five commits land above it, at `SEED_HEAD + 2`, `+ 3`,
+/// `+ 6`, `+ 9` and `+ 12` ([`claim_board`]).
+pub const SEED_HEAD: u64 = SEED_PUBLISH_AT + SEED_LINK_RECORDS * SEED_TYPES;
+
+/// The seed's commits ahead of its links.
+pub const SEED_LEAD_COMMITS: u64 = SEED_LEAD_RECORDS.len() as u64;
+
+// The positions the facts above give, spelled out: a changed fact fails the
+// build here until the positions it moves are spelled again.
+const _: () = assert!(SEED_FIRST_AT == 1 && SEED_PUBLISH_AT == 11 && SEED_HEAD == 368);
+
+/// The positions of the seed's rows every class sees on a fresh board.
+///
+/// The publish stands first, at [`SEED_PUBLISH_AT`], then a link per type,
+/// [`SEED_LINK_RECORDS`] apart, to [`SEED_HEAD`]; the commits below the
+/// publish are the system account's private writes to the staging draft,
+/// masked at every class but the system's.
+pub fn seed_ats() -> Vec<u64> {
+    (SEED_PUBLISH_AT..=SEED_HEAD).step_by(SEED_LINK_RECORDS as usize).collect()
+}
 
 /// The claim ceremony's fixed test identity: a high principal id so suite
 /// principals (0, 1, 2, …) never collide with it, and deterministic key
@@ -348,11 +397,12 @@ pub fn claimed(port: u16) -> bool {
 /// claim. Idempotent — a reopened claimed board skips it.
 ///
 /// THE CLAIM WRITES `H.1` (signed ops, s1; RULED 2026-09-25): the claim's
-/// own request commits the board's first head — the staging draft's mint,
-/// the head record's insert, the shot into `H`, eight records right after
-/// the claim link, the system account's own and exempt from the check by ω
-/// — so the board term every attested write's frame names (D13) is present
-/// at the claim's ack and names the claim's own position. Asserted here, at
+/// own request commits the board's first head — the head record's insert
+/// into the staging draft the registry seed left standing, and the shot into
+/// `H` with its correspondence record, ten records right after the claim
+/// link, the system account's own and exempt from the check by ω — so the
+/// board term every attested write's frame names (D13) is present at the
+/// claim's ack and names the claim's own position. Asserted here, at
 /// every claim a suite makes, and on every reopened claimed board (a claimed
 /// board without `H.1` is the crash window the open closes).
 pub fn claim_board(port: u16) {

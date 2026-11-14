@@ -25,7 +25,10 @@ use skep_kernel::Step;
 use skepd::Skepd;
 
 use crate::common;
-use common::{acked_addr, acked_at, op, open_session, spawn, CLAIMANT_ACCOUNT, CLAIMANT_PRINCIPAL};
+use common::{
+    acked_addr, acked_at, op, open_session, spawn, CLAIMANT_ACCOUNT, CLAIMANT_PRINCIPAL,
+    SEED_FIRST_AT,
+};
 
 /// One committing write as `session`: a fresh private draft under the
 /// claimant's account. Answers the committed position.
@@ -88,14 +91,15 @@ fn attest_figures(dir: &Path) -> String {
 
 /// Returns the feed's clause of `line` as the data directory and the line's
 /// own resident figures bear it out: the feed holds every line from
-/// position 1 — nothing is ever dropped — `commits.log`'s size the file's,
-/// and the entries resident no more than the window's span and no more than
-/// the most held this uptime, both read off the line itself.
+/// position `SEED_FIRST_AT` — nothing is ever dropped — `commits.log`'s size
+/// the file's, and the entries resident no more than the window's span and
+/// no more than the most held this uptime, both read off the line itself.
 fn feed_figures(line: &str, dir: &Path) -> String {
     let bytes = fs::metadata(dir.join("commits.log")).expect("commits.log").len();
-    let head = "; the change feed holds every line from position 1: commits.log ";
+    let head =
+        format!("; the change feed holds every line from position {SEED_FIRST_AT}: commits.log ");
     let clause =
-        &line[line.find(head).unwrap_or_else(|| panic!("{head:?} in {line}")) + head.len()..];
+        &line[line.find(&head).unwrap_or_else(|| panic!("{head:?} in {line}")) + head.len()..];
     let resident = figure_after(clause, " bytes, ");
     let most = figure_after(clause, " entries resident, the most this uptime ");
     assert!(resident > 0 && resident <= most, "resident {resident}, the most {most}: {line}");
@@ -104,8 +108,8 @@ fn feed_figures(line: &str, dir: &Path) -> String {
         "the window bounds the entries resident: {line}"
     );
     format!(
-        "; the change feed holds every line from position 1: commits.log {bytes} bytes, \
-         {resident} entries resident, the most this uptime {most}"
+        "; the change feed holds every line from position {SEED_FIRST_AT}: commits.log \
+         {bytes} bytes, {resident} entries resident, the most this uptime {most}"
     )
 }
 
@@ -194,8 +198,9 @@ fn newest_clause(line: &str) -> (&str, &str) {
 /// the largest of the uptime's readings beside it, that one is the daemon's
 /// high-water and never decreases across two landings; both bounds are the
 /// small board's, and the feed's clause says it holds every line from
-/// position 1, `commits.log`'s size the file's own, the entries resident
-/// no more than the window's span and no more than the most held; and the write guard's takes are the writes
+/// position `SEED_FIRST_AT`, `commits.log`'s size the file's own, the
+/// entries resident no more than the window's span and no more than the
+/// most held; and the write guard's takes are the writes
 /// since the line before, none of them waiting — one client writes in turn —
 /// so a second landing with nothing committed between counts none, from the
 /// first landing's position.
@@ -266,15 +271,15 @@ fn a_landing_line_carries_the_kernels_reclaimed_bytes_the_hosts_free_space_and_t
     assert!(
         line.contains(&format!(
             "; the write guard taken {taken} times since position {since}, 0 of them after a \
-             wait; the change feed holds every line from position 1: commits.log "
+             wait; the change feed holds every line from position {SEED_FIRST_AT}: commits.log "
         )),
         "one client writing in turn waits on no other writer: {line}"
     );
     let feed = feed_figures(line, dir.path());
     assert!(
         line.ends_with(&format!("{feed}{}", attest_figures(dir.path()))),
-        "the feed holds every line from position 1, commits.log's size the file's own, then what \
-         the attest store holds, and no inline run moved: {line}"
+        "the feed holds every line from position {SEED_FIRST_AT}, commits.log's size the file's \
+         own, then what the attest store holds, and no inline run moved: {line}"
     );
 
     // THE SECOND LANDING, at the same head with nothing committed between:

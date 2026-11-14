@@ -46,13 +46,8 @@ use crate::changes::op_at_floor;
 use crate::common::{
     acked_addr, acked_at, anchor_key, copy_board, device_key, expect_resp, get, http, json, op,
     open_session, public_key_of, spawn, tear_commits_log_to, CLAIMANT_ACCOUNT, CLAIMANT_DOC1,
-    CLAIMANT_PRINCIPAL,
+    CLAIMANT_PRINCIPAL, SEED_FIRST_AT, SEED_PUBLISH_AT,
 };
-
-/// The registry seed's first public row: the member's publish at 11 (seven
-/// records past the sections' insert: the shot's four and its
-/// correspondence record's three, lane S1).
-const SEED_PUBLISH_AT: u64 = 11;
 
 /// The window K2 and K3 set for their boards, in positions.
 const SMALL_WINDOW: u64 = 64;
@@ -273,8 +268,9 @@ fn reclaimed_board(dir: &Path) -> Reclaimed {
 /// commits, answers `/changes?since=0` with every row from the seed's first
 /// public row, owner and guest pages row for row what they were before the
 /// landings; the landing line says the feed holds every line from position
-/// 1, `commits.log`'s size the file's own; `/op-at` at a reclaimed position
-/// answers `history_reclaimed` as today; a reopen answers the same rows.
+/// `SEED_FIRST_AT`, `commits.log`'s size the file's own; `/op-at` at a
+/// reclaimed position answers `history_reclaimed` as today; a reopen answers
+/// the same rows.
 /// MUTANT: the open's compaction restored → red at `since=0`.
 #[test]
 fn k1_nothing_is_dropped_past_three_checkpoint_landings() {
@@ -292,7 +288,7 @@ fn k1_nothing_is_dropped_past_three_checkpoint_landings() {
         "the guest's rows from genesis"
     );
     let (first, bytes, resident, most) = landing_feed_figures(&board.sd);
-    assert_eq!(first, 1, "the feed holds every line from position 1");
+    assert_eq!(first, SEED_FIRST_AT, "the feed holds every line from position {SEED_FIRST_AT}");
     assert_eq!(
         bytes,
         std::fs::metadata(dir.path().join("commits.log")).expect("commits.log").len()
@@ -330,7 +326,9 @@ fn k1_nothing_is_dropped_past_three_checkpoint_landings() {
         .filter(|l| l.starts_with("open: the change feed answers from position "))
         .collect();
     assert!(
-        opened[0].starts_with("open: the change feed answers from position 1 to position "),
+        opened[0].starts_with(&format!(
+            "open: the change feed answers from position {SEED_FIRST_AT} to position "
+        )),
         "{opened:?}"
     );
     sd.shutdown();
@@ -437,7 +435,7 @@ fn k2_pages_below_the_window_are_byte_equal_to_pages_above_it() {
     let small = spawn(dir.path());
     assert_pages_match(small.port(), whole.port(), head, &draft);
     let (first, _, resident, most) = landing_feed_figures(&small);
-    assert_eq!(first, 1);
+    assert_eq!(first, SEED_FIRST_AT);
     assert!(
         resident <= SMALL_WINDOW && most <= SMALL_WINDOW,
         "the resident entries never exceed the window: {resident} now, {most} at most"
@@ -739,7 +737,7 @@ fn k6_a_lost_index_on_a_three_thousand_position_board_is_sorted_and_nothing_comp
     assert_eq!(ats(Some(&owner)), owner_ats, "the owner's positions, classified from the journal");
     assert_eq!(ats(None), guest_ats, "the guest's: the drafts masked as before");
     let (first, _, resident, most) = landing_feed_figures(&sd);
-    assert_eq!(first, 1);
+    assert_eq!(first, SEED_FIRST_AT);
     assert!(
         resident <= skep_core::limits::FEED_RESIDENT_WINDOW && most >= resident,
         "{resident} resident, {most} at most"

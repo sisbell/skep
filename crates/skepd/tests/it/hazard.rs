@@ -50,7 +50,7 @@ use std::time::Duration;
 use common::{
     acked_addr, acked_at, blob_hex, board_term, cell_of, ceremony_before_the_claim, claim_board,
     claim_frame, claimed, create_frame, device_key, expect_resp, get, head_position, json, op,
-    open_session, open_signed_session, seeded_bytes, spawn_configured, spawn_unclaimed,
+    open_session, open_signed_session, seed_ats, seeded_bytes, spawn_configured, spawn_unclaimed,
     typed_link_frame, verdict, WalkUnheld, BLOB_UPLOAD, CLAIMANT_ACCOUNT, CLAIMANT_DOC1,
     CLAIMANT_PRINCIPAL, HEAD_MEMBER_1, SEED_HEAD, T_ENROLL, T_GRANT,
 };
@@ -537,7 +537,7 @@ fn f_sidecar_mutilation_never_touches_the_world() {
     let sidecar_len = fs::metadata(sidecar(&fixture)).expect("commits.log").len();
     // The committed positions a guest's feed enumerates: the registry seed's
     // publish and links (the draft's two writes masked), then the acks.
-    let committed: Vec<u64> = seed_rows().into_iter().chain(acks.iter().copied()).collect();
+    let committed: Vec<u64> = seed_ats().into_iter().chain(acks.iter().copied()).collect();
 
     // The world-intact judge: recovery byte-identical (as_of included) and
     // `/changes` still enumerating exactly the committed positions.
@@ -811,7 +811,7 @@ fn f_a_kill_mid_walk_leaves_the_sidecar_unchanged_and_the_next_open_walks_again(
     );
     let entries = changes_entries(&d);
     let positions: Vec<u64> = entries.iter().map(|(at, _)| *at).collect();
-    let mut want = seed_rows();
+    let mut want = seed_ats();
     want.extend(acks.iter().copied());
     // The write, then the head's publish; the head's insert into the system
     // account's private draft is masked, classified from the journal.
@@ -824,14 +824,6 @@ fn f_a_kill_mid_walk_leaves_the_sidecar_unchanged_and_the_next_open_walks_again(
     );
     let (_, first) = entries.iter().find(|(at, _)| *at == acks[0]).expect("the delegate's entry");
     assert_eq!(first["op"].as_str(), Some("delegate"), "the intact prefix keeps its metadata: {first}");
-}
-
-/// The registry seed's rows a guest's feed shows on a fresh board: the
-/// member's publish at 11, then one `make_link` per type three records apart
-/// to `SEED_HEAD` — the draft's mint and the sections' insert being the
-/// system account's private writes, masked (`changes.rs` pins them).
-fn seed_rows() -> Vec<u64> {
-    (11..=SEED_HEAD).step_by(3).collect()
 }
 
 // ── G. Disk exhaustion (best-effort, dedicated tiny volume) ──────────────

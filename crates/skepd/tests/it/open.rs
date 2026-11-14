@@ -912,7 +912,7 @@ fn the_open_says_its_directory_first_and_its_recovery_with_the_kernels_figures()
     // beside the seed's own commits (the staging draft's mint, the sections'
     // insert, the member's publish, a link per type), and the head the first
     // life was killed at.
-    let seed_commits = 3 + skep_registry::vocabulary().len() as u64;
+    let seed_commits = crate::common::SEED_LEAD_COMMITS + skep_registry::vocabulary().len() as u64;
     let mut second = serve_and_read_the_open(&dir, &[]);
     assert_eq!(second.data_dir_line, format!("data-dir {}", dir.display()));
     let (base, head, replayed, _) = recovered_figures(&second.recovered_line);

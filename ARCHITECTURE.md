@@ -388,13 +388,12 @@ Rules that hold across its files:
   and the directory fsync from `journal`.
 - **The formats are pinned.** `tests/golden/` holds the bytes the
   fixture's ops must reproduce; a moved byte is a format event and bumps
-  the `SKJ` and `SKC` stamps, and `tests/golden-prestretch/` keeps the one
-  committed pre-stretch board, which this build opens from genesis. A
-  moved bound the reader holds every journal to — the frame cap, the
-  transaction budget, the segment ceiling, the slot's width — is a format
-  event too, though it keeps every golden byte, so `src/journal/tests.rs`
-  pins those four beside the stamps; the rotation threshold and the
-  resynchronization budget are pins a ruling moves under one stamp.
+  the `SKJ` and `SKC` stamps. A moved bound the reader holds every journal
+  to — the frame cap, the transaction budget, the segment ceiling, the
+  slot's width — is a format event too, though it keeps every golden byte,
+  so `src/journal/tests.rs` pins those four beside the stamps; the
+  rotation threshold and the resynchronization budget are pins a ruling
+  moves under one stamp.
 
 Its integration suites are one binary, `tests/it/`: `kernel`, `hazard`,
 `golden`, `chain`, `docs`, `modes` and `tidy`, over the shared `fixture`

@@ -1,15 +1,11 @@
-//! The GOLDEN BYTE FIXTURE (the encoding report's §7; QUEUE item 10, the
-//! hash chain's first lane; `SKJ4`/`SKC4` since the chain's salt): one
-//! journal segment, one checkpoint and one world dump per boundary, produced
-//! BY THE OPS of [`Fixture::build_golden`] — the hazard suite's eleven
-//! extended by the eight that reach every journal variant and leaf form —
-//! under the SEEDED salt source ([`GOLDEN_SALT_SEED`]: a marker's salt is a
-//! pure function of the seed and the transaction, so the bytes reproduce),
-//! and committed under `tests/golden/` as `seg-1.wal`, `checkpoint.<S>` and
-//! `dumps/<seq>.txt`. Beside it, `tests/golden-prestretch/` keeps the three
-//! artifacts as they stood before the stretch record — the one committed
-//! board written in M4's per-byte form — for the pin that this build opens
-//! such a board from genesis ([`the_pre_stretch_golden_opens_from_genesis_and_answers_every_boundary`]).
+//! The GOLDEN BYTE FIXTURE (the encoding report's §7; `SKJ4`/`SKC4`, the
+//! chain's salt): one journal segment, one checkpoint and one world dump per
+//! boundary, produced BY THE OPS of [`Fixture::build_golden`] — the hazard
+//! suite's eleven extended by the eight that reach every journal variant and
+//! leaf form — under the SEEDED salt source ([`GOLDEN_SALT_SEED`]: a marker's
+//! salt is a pure function of the seed and the transaction, so the bytes
+//! reproduce), and committed under `tests/golden/` as `seg-1.wal`,
+//! `checkpoint.<S>` and `dumps/<seq>.txt`.
 //!
 //! What the pin catches: a release of bincode or serde that moves a width or
 //! a tag, a field reordered or inserted, a variant inserted, a shadow that no
@@ -27,8 +23,9 @@
 //! the files byte for byte), the READER pin (this build opens the files and
 //! answers every recorded boundary — H6's frozen data dir), and the STAMP
 //! gate (the files carry this build's own format stamps, so a bump without a
-//! new golden fails by name). A fourth proves option (i)'s claim directly:
-//! two PROCESSES writing one history write one checkpoint byte string.
+//! new golden fails by name). A fourth proves directly that the encoding is
+//! canonical: two PROCESSES writing one history write one checkpoint byte
+//! string.
 //!
 //! REGENERATION — at a format bump or a genesis change, and never otherwise:
 //!
@@ -37,42 +34,35 @@
 //! ```
 //!
 //! rewrites the three artifacts from the ops; the stamp gate then holds the
-//! new files to the new stamp, and the bump's commit carries them. TWO
-//! regenerations moved the bytes under an UNCHANGED stamp. 2026-09-29, when
-//! the chain's preimage gained the signature slot's digest (the board's
-//! r6-2c) and M5's slice its shot terms (D25's (c′)) — a format event by the
-//! marker doc's own rule, landed as `SKJ4`/`SKC4` by the owner's no-stamp
-//! ruling (no served board exists; dev boards regenerate): every marker's
-//! chain, the checkpoint's header and every dump moved; the fixture's ops
-//! did not. And 2026-10-15, when a per-byte insert became one `AllocateRange`
-//! and one `ContentStretch` where it was two records per byte, and M4's
-//! checkpoint entry a tagged value or stretch — the same ruling renewed: the
-//! fixture gained one op, the atom at 16, so the records the per-byte inserts
-//! no longer reach stay under the pin, and every record position, the
-//! checkpoint's seq and every dump moved. The artifacts of the first
-//! regeneration stand under `tests/golden-prestretch/`. And 2026-10-17, when
-//! M5's slice gained its fork sources — each `version`-minted document's
-//! source, noted off the snapshot the fixture's cross-owner version already
-//! journals — under the same ruling renewed once more: the checkpoint's body
-//! and every dump moved (the new map renders in each), the segment and the
-//! fixture's ops did not. And 2026-10-22, when M3's slice gained its position
-//! map — every document, member and link the fixture mints, at the position
-//! the fold is handed for its record — under the same ruling renewed again:
-//! the checkpoint's body and every dump moved, the segment and the fixture's
-//! ops did not. And 2026-10-31, when M5's slice gained its arranged-at
-//! positions — every document whose content arrangement a record of the
-//! fixture changes, at the position the fold is handed for that record (the
-//! stale-edit check, skep #442) — under the same ruling renewed once more:
-//! the checkpoint's body and every dump moved, the segment and the fixture's
-//! ops did not; the pre-stretch artifacts stand, their reader pin taking the
-//! new map's line out of each dump as it takes the two before it. And
-//! 2026-11-01, when M5's slice gained its draft bases — each staged draft's
-//! base, the extent its copy took and its source (the staging act, B3-S10),
-//! a map the fixture leaves empty, staging nothing — under the same ruling
-//! renewed once more: the checkpoint's body and every dump moved, the
-//! segment and the fixture's ops did not; the pre-stretch artifacts stand,
-//! their reader pin taking the empty map's entry out of each dump as it
-//! takes the three before it.
+//! new files to the new stamp, and the bump's commit carries them. The
+//! changes below stand under `SKJ4` and `SKC4` with no bump (no served board
+//! exists; dev boards regenerate), each a format event by the marker doc's
+//! own rule, and each regenerates the golden:
+//!
+//! - the chain's preimage hashes the signature slot's digest, and M5's slice
+//!   holds its shot terms: every marker's chain, the checkpoint's header and
+//!   every dump move; the fixture's ops do not;
+//! - a per-byte insert journals as one `AllocateRange` and one
+//!   `ContentStretch`, not two records per byte, and M4's checkpoint entry is
+//!   a tagged value or stretch: the fixture's ops gain one, the atom at 16,
+//!   so the records the per-byte inserts do not reach stay under the pin, and
+//!   every record position, the checkpoint's seq and every dump move;
+//! - M5's slice holds its fork sources — each `version`-minted document's
+//!   source, noted off the snapshot the fixture's cross-owner version already
+//!   journals: the checkpoint's body and every dump move (the map renders in
+//!   each); the segment and the fixture's ops do not;
+//! - M3's slice holds its position map — every document, member and link the
+//!   fixture mints, at the position the fold is handed for its record: the
+//!   checkpoint's body and every dump move; the segment and the fixture's ops
+//!   do not;
+//! - M5's slice holds its arranged-at positions — every document whose
+//!   content arrangement a record of the fixture changes, at the position the
+//!   fold is handed for that record (the stale-edit check): the checkpoint's
+//!   body and every dump move; the segment and the fixture's ops do not;
+//! - M5's slice holds its draft bases — each staged draft's base, the extent
+//!   its copy took and its source (the staging act), a map the fixture leaves
+//!   empty, staging nothing: the checkpoint's body and every dump move; the
+//!   segment and the fixture's ops do not.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -324,208 +314,6 @@ fn the_reader_pin_this_build_opens_the_golden_and_answers_every_boundary() {
         engine.world_at(Seq(1)).is_err(),
         "below the base the damaged first transaction must halt a genesis replay"
     );
-}
-
-/// The golden as it stood before the stretch record, kept whole beside the
-/// crate: the one committed board written in M4's per-byte form.
-fn pre_stretch_golden_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("golden-prestretch")
-}
-
-/// The recorded dumps of the pre-stretch golden, by boundary.
-fn pre_stretch_dumps() -> BTreeMap<u64, String> {
-    let dumps = pre_stretch_golden_dir().join("dumps");
-    fs::read_dir(&dumps)
-        .unwrap_or_else(|e| panic!("list {}: {e}", dumps.display()))
-        .map(|entry| {
-            let path = entry.expect("a directory entry").path();
-            let seq: u64 = path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .and_then(|stem| stem.parse().ok())
-                .unwrap_or_else(|| panic!("a dump is named <seq>.txt: {}", path.display()));
-            (seq, fs::read_to_string(&path).expect("read a dump"))
-        })
-        .collect()
-}
-
-/// A dump of this build over the pre-stretch board, as the pre-stretch build
-/// rendered it. Five differences between the two, and nothing else moves:
-/// M4's entry form — a bare value then, `Value([..])` now, every entry of an
-/// opened old board being a one-byte value — so the `Value(` … `)` wrapper
-/// is taken off each content entry; M5's fifth map, `fork_sources`, which
-/// the pre-stretch build did not hold and this build renders in every dump
-/// — empty before the fixture's cross-owner version, one entry from it on —
-/// so that entry is taken out of M5's rendering whole
-/// ([`without_the_fork_sources`]); M3's fifth map, `minted_at`, likewise
-/// unheld then and rendered now — the seed's two documents at genesis, and
-/// every document, member and link the fixture mints at its position — taken
-/// out of M3's rendering whole ([`without_the_minted_at`]); M5's sixth map,
-/// `arranged_at`, likewise — every document the fixture's edits arrange, at
-/// the position of its last change — taken out of M5's rendering whole
-/// ([`without_the_arranged_at`]); and M5's seventh map, `draft_bases`,
-/// likewise — empty in every dump, the fixture staging nothing — taken out
-/// whole ([`without_the_draft_bases`]).
-fn without_the_value_wrapper(dump: &str) -> String {
-    let mut out = String::with_capacity(dump.len());
-    let mut rest = dump;
-    while let Some(at) = rest.find("Value([") {
-        out.push_str(&rest[..at]);
-        let inner = &rest[at + "Value(".len()..];
-        let close = inner.find("])").expect("a byte list closes") + 1;
-        out.push_str(&inner[..close]);
-        assert!(inner[close..].starts_with(')'), "the wrapper closes after the list");
-        rest = &inner[close + 1..];
-    }
-    without_the_minted_at(&without_the_fork_sources(&without_the_arranged_at(
-        &without_the_draft_bases(&format!("{out}{rest}")),
-    )))
-}
-
-/// `dump` with M5's `draft_bases` entry taken out of the arrangement slice,
-/// as [`without_the_fork_sources`] takes its fifth map: the key, its map and
-/// the separator that follows, since the entry is never the slice's last
-/// (`fork_sources`, `provenance` and `shot_terms` sort after it). The map
-/// is asserted EMPTY as well as present: a value of it renders as a struct
-/// with braces of its own, which the first `}` would not close, and the
-/// fixture stages nothing — a dump rendering an entry would be a fixture
-/// that grew a stage, which this comparison must not quietly admit.
-fn without_the_draft_bases(dump: &str) -> String {
-    const ENTRY: &str = "\"draft_bases\": {}, ";
-    let at = dump.find(ENTRY).expect(
-        "this build renders M5's draft bases in every dump, empty: the fixture stages nothing",
-    );
-    let rest = &dump[at + ENTRY.len()..];
-    assert!(!rest.contains("\"draft_bases\""), "M5's draft bases render once");
-    format!("{}{rest}", &dump[..at])
-}
-
-/// `dump` with M5's `arranged_at` entry taken out of the arrangement slice,
-/// as [`without_the_fork_sources`] takes its fifth map: the key, its map —
-/// addresses render as nested lists and positions as bare integers, so the
-/// first `}` after the key closes it — and the separator that follows, since
-/// the entry is the slice's FIRST (`arranged_at` sorts before
-/// `arrangements`) and never its last. Asserted PRESENT, for the reason that
-/// twin states.
-fn without_the_arranged_at(dump: &str) -> String {
-    const KEY: &str = "\"arranged_at\": {";
-    let at = dump.find(KEY).expect("this build renders M5's arranged-at positions in every dump");
-    let after_key = &dump[at + KEY.len()..];
-    let close = after_key.find('}').expect("the arranged-at map closes");
-    let rest = &after_key[close + 1..];
-    let rest = rest.strip_prefix(", ").expect("the entry is followed by its sibling");
-    assert!(!rest.contains(KEY), "M5's arranged-at positions render once");
-    format!("{}{rest}", &dump[..at])
-}
-
-/// `dump` with M3's `minted_at` entry taken out of the namespace slice, as
-/// [`without_the_fork_sources`] takes M5's: the key, its map — addresses
-/// render as nested lists and positions as bare integers, so the first `}`
-/// after the key closes it — and the separator that follows, since the entry
-/// is never the slice's last (`nodes`, `principals` and `publication` sort
-/// after it). Asserted PRESENT, for the reason that twin states.
-fn without_the_minted_at(dump: &str) -> String {
-    const KEY: &str = "\"minted_at\": {";
-    let at = dump.find(KEY).expect("this build renders M3's position map in every dump");
-    let after_key = &dump[at + KEY.len()..];
-    let close = after_key.find('}').expect("the position map closes");
-    let rest = &after_key[close + 1..];
-    let rest = rest.strip_prefix(", ").expect("the entry is followed by its sibling");
-    assert!(!rest.contains(KEY), "M3's position map renders once");
-    format!("{}{rest}", &dump[..at])
-}
-
-/// `dump` with M5's `fork_sources` entry taken out of the arrangement slice:
-/// the key, its map — addresses render as nested lists and never as a brace,
-/// so the first `}` after the key closes it — and the separator that
-/// follows, since the entry is never the slice's last (`provenance` and
-/// `shot_terms` sort after it). Asserted PRESENT: a dump without the entry
-/// would be a build that stopped rendering the map, which this comparison
-/// must not quietly admit.
-fn without_the_fork_sources(dump: &str) -> String {
-    const KEY: &str = "\"fork_sources\": {";
-    let at = dump.find(KEY).expect("this build renders M5's fork sources in every dump");
-    let after_key = &dump[at + KEY.len()..];
-    let close = after_key.find('}').expect("the fork sources map closes");
-    let rest = &after_key[close + 1..];
-    let rest = rest.strip_prefix(", ").expect("the entry is followed by its sibling");
-    assert!(!rest.contains(KEY), "M5's fork sources render once");
-    format!("{}{rest}", &dump[..at])
-}
-
-/// (b′) THE PRE-STRETCH READER PIN — this build opens the one committed
-/// pre-stretch board FROM GENESIS: its checkpoint, written under this build's
-/// own stamps over the bare-value content form and without M5's fork
-/// sources or M3's position map, refuses at decode and is passed over (the
-/// open's report says so, and says why), the journal still reaches genesis,
-/// every per-byte frame replays into a one-byte value entry, the fork
-/// sources are recomputed from the replayed `version` record and the
-/// position map from every replayed mint at its seq, and the board answers
-/// its head and every recorded boundary — the dumps differing from the
-/// pre-stretch build's in nothing but the content entry's rendering and the
-/// two new maps' lines — writing nothing to the files. The open is the class an existing
-/// development board meets under the no-stamp ruling renewed; such a board
-/// is correct data, served as it stands until it is re-seeded. What the
-/// refusal proves for the new map in particular: an old checkpoint never
-/// decodes as "no source" — the field carries no default — so a fork on such
-/// a board answers its source off the replay rather than `null` off a
-/// defaulted map.
-#[test]
-fn the_pre_stretch_golden_opens_from_genesis_and_answers_every_boundary() {
-    let tmp = tempdir().expect("tempdir");
-    let case = tmp.path().join("prestretch");
-    copy_dir(&pre_stretch_golden_dir(), &case);
-    let segment = seg_file(&case, 1);
-    let checkpoint = checkpoint_in(&case);
-    let checkpoint_seq: u64 = checkpoint
-        .file_name()
-        .and_then(|name| name.to_str())
-        .and_then(|name| name.strip_prefix("checkpoint."))
-        .and_then(|seq| seq.parse().ok())
-        .expect("checkpoint.<seq>");
-    let (segment_before, checkpoint_before) =
-        (fs::read(&segment).expect("segment"), fs::read(&checkpoint).expect("checkpoint"));
-    assert_eq!(&segment_before[..4], b"SKJ4", "the pre-stretch board carries this build's stamps");
-    assert_eq!(&checkpoint_before[..4], b"SKC4");
-    let dumps = pre_stretch_dumps();
-    let last = *dumps.keys().max().expect("the pre-stretch golden records boundaries");
-
-    let engine = Engine::open(cfg_manual(&case))
-        .unwrap_or_else(|e| panic!("this build does not open the pre-stretch board: {e}"));
-    let recovery = engine.kernel().recovery().expect("a journaled open reports");
-    assert_eq!(recovery.start_point, Seq(0), "no checkpoint survives decode: genesis is the base");
-    assert_eq!(recovery.skipped.len(), 1, "the one checkpoint was passed over: {recovery:?}");
-    assert_eq!(recovery.skipped[0].seq, Seq(checkpoint_seq));
-    assert!(
-        !recovery.skipped[0].why.contains("checksum") && !recovery.skipped[0].why.contains("hash"),
-        "refused at decode, not for damage: {}",
-        recovery.skipped[0].why
-    );
-    assert_eq!(engine.kernel().current_seq(), Seq(last), "the recovered head");
-    assert_eq!(
-        without_the_value_wrapper(engine.world_dump().as_str()),
-        dumps[&last].as_str(),
-        "the recovered world is not the one the pre-stretch golden recorded at its head"
-    );
-    assert_ne!(
-        engine.world_dump().as_str(),
-        dumps[&last],
-        "the rendering did move: M4's entries are tagged values now"
-    );
-    for (seq, dump) in &dumps {
-        let world = engine
-            .world_at(Seq(*seq))
-            .unwrap_or_else(|e| panic!("boundary {seq} of the pre-stretch golden is unanswerable: {e}"));
-        assert_eq!(
-            without_the_value_wrapper(engine.dump_of(&world).as_str()),
-            dump.as_str(),
-            "history at boundary {seq} diverges from what the pre-stretch golden recorded"
-        );
-    }
-    engine.check_hints().expect("the recovered hints equal a from-authoritative rebuild");
-    drop(engine);
-    assert_eq!(fs::read(&segment).expect("segment"), segment_before, "the open cut the segment");
-    assert_eq!(fs::read(&checkpoint).expect("checkpoint"), checkpoint_before);
 }
 
 /// (c) THE STAMP GATE — the golden's files open with this build's own

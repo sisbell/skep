@@ -535,7 +535,7 @@ mod tests {
         // X12 R1: a block answers for its own foot WHOLE — document and
         // position together — so each foot is offset within the block it
         // comes from and both resolve to the overlap's shared start address.
-        let (d1, d2) = (a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, 2]));
+        let (d1, d2) = (a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, 64]));
         let pb = block(&d1, 1, ca(1), 3); // [ca1, ca4) at V 1..
         let qb = block(&d2, 1, ca(2), 1); // [ca2, ca3) at V 1..
         // The same I-address is a different foot in each block…
@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn overlap_pair_rejects_disjoint_and_cross_chain_intervals() {
-        let (d1, d2) = (a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, 2]));
+        let (d1, d2) = (a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, 64]));
         // Same chain, disjoint: [ca1, ca4) vs [ca5, ca6).
         let pb = block(&d1, 1, ca(1), 3);
         let qb = block(&d2, 1, ca(5), 1);
@@ -568,7 +568,7 @@ mod tests {
         // Different chains have disjoint I-intervals — the guard rejects
         // BEFORE any ordinal arithmetic runs (co-chain precondition). doc2's
         // own content element 1 is on a chain doc1's `ca` never touches.
-        let doc2_ca1 = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+        let doc2_ca1 = a(&[1, 0, 1, 0, 64, 0, 1, 1]);
         let qb = block(&d2, 1, doc2_ca1, 2);
         assert!(overlap_pair(&pb, &qb).is_none());
         // A MIXED-LENGTH pair — an 8-component base-chain start against a
@@ -587,7 +587,7 @@ mod tests {
         // a false correspondence (X12 R1). A document transcluding from both
         // a base chain and a fork chain hands `interval_join` exactly this
         // pair, from the wire.
-        let vca1 = a(&[1, 0, 1, 0, 3, 1, 0, 1, 1]); // a fork's length-9 content element
+        let vca1 = a(&[1, 0, 1, 0, 65, 1, 0, 1, 1]); // a fork's length-9 content element
         let nine = block(&d2, 1, vca1, 3);
         assert!(overlap_pair(&pb, &nine).is_none());
         assert!(overlap_pair(&nine, &pb).is_none());
@@ -601,7 +601,7 @@ mod tests {
         let pair = |u2_ordinal: u32| CorrPair {
             d1: a(&[1, 0, 1, 0, 1]),
             u1: vp(1, 1),
-            d2: a(&[1, 0, 1, 0, 2]),
+            d2: a(&[1, 0, 1, 0, 64]),
             u2: vp(1, u2_ordinal),
             width: n(1),
         };

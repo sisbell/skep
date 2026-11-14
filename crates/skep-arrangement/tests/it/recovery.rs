@@ -24,7 +24,7 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
     // (PUB-2.66) — the source-changes-after-the-fork case this test is about
     // needs a source that still takes deposits itself.
     let dir = tempdir().expect("tempdir");
-    let link1 = a(&[1, 0, 1, 0, 3, 0, 2, 1]);
+    let link1 = a(&[1, 0, 1, 0, nth_doc(3), 0, 2, 1]);
     let fork = a(&[1, 0, 2, 0, 1]);
     let bytes_before;
     let arranged_before;

@@ -36,7 +36,7 @@ fn register_pred_refuses_garbage_bytes_an_empty_start_and_an_unregistered_home()
     let (start, _) = c
         .define_predicate(&doc2(), &c.type_check(vec![], tru()).expect("closed True"))
         .expect("define at doc2");
-    let unregistered_doc = a(&[1, 0, 1, 0, 7]);
+    let unregistered_doc = a(&[1, 0, 1, 0, 69]);
     assert!(matches!(
         c.register_pred(&unregistered_doc, &start),
         Err(RegisterError::HomeNotRegistered)
@@ -51,7 +51,7 @@ fn register_pred_refuses_garbage_bytes_an_empty_start_and_an_unregistered_home()
 fn an_unregistered_home_is_refused_by_the_store_after_m9_s_own_gates() {
     let k = kernel();
     let c = coord(&k);
-    let unregistered = a(&[1, 0, 1, 0, 7]);
+    let unregistered = a(&[1, 0, 1, 0, 69]);
     let term = c.type_check(vec![], tru()).expect("closed True");
 
     let before = k.current_seq();
@@ -250,7 +250,7 @@ fn register_pred_s_later_gates_speak_in_their_stated_order() {
     ));
     // Endorsement before the home: R names an unregistered home, and both its
     // referents are retracted — P2, the first, is the one named.
-    match c.register_pred(&a(&[1, 0, 1, 0, 7]), &r) {
+    match c.register_pred(&a(&[1, 0, 1, 0, 69]), &r) {
         Err(RegisterError::ReferentNotActive(x)) => assert_eq!(x, p2, "R names P2 before P"),
         other => panic!("expected ReferentNotActive(P2) ahead of the home gate, got {other:?}"),
     }

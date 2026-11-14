@@ -17,7 +17,7 @@ use crate::common::*;
 /// doc2's content element at `ordinal` (length 8) — the family's other
 /// draft's own identity.
 fn ca2(ordinal: u32) -> Address {
-    a(&[1, 0, 1, 0, 2, 0, 1, ordinal])
+    a(&[1, 0, 1, 0, nth_doc(2), 0, 1, ordinal])
 }
 
 /// Leave doc2 — P1's second private draft, the family's other draft —

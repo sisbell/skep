@@ -52,11 +52,11 @@ fn a_publication_with_no_deposit_is_todays_body_byte_for_byte() {
 fn a_copys_group_is_its_home_its_kind_and_the_make_link_bodys_four_rows() {
     let ty = unit_span(&addr(&[1, 1, 0, 1, 0, 1, 0, 3, 13]));
     let from = Span::new(
-        Tumbler::new([1u32, 0, 1, 0, 2, 0, 1, 1].map(Nat::from)).unwrap(),
+        Tumbler::new([1u32, 0, 1, 0, 64, 0, 1, 1].map(Nat::from)).unwrap(),
         Tumbler::new([0u32, 0, 0, 0, 0, 0, 0, 5].map(Nat::from)).unwrap(),
     )
     .unwrap();
-    let to = unit_span(&addr(&[1, 0, 1, 0, 3, 0, 2, 1]));
+    let to = unit_span(&addr(&[1, 0, 1, 0, 65, 0, 2, 1]));
     let row = DepositRow {
         home: DepositHome::Member,
         kind: DepositKind::Copy,
@@ -85,9 +85,9 @@ fn a_copys_group_is_its_home_its_kind_and_the_make_link_bodys_four_rows() {
 #[test]
 fn the_home_row_and_the_kind_byte_part_the_groups() {
     let ty = unit_span(&addr(&[1, 1, 0, 1, 0, 1, 0, 3, 71]));
-    let from = unit_span(&addr(&[1, 0, 1, 0, 2]));
-    let to = unit_span(&addr(&[1, 0, 1, 0, 4]));
-    let home = addr(&[1, 0, 1, 0, 4]);
+    let from = unit_span(&addr(&[1, 0, 1, 0, 64]));
+    let to = unit_span(&addr(&[1, 0, 1, 0, 66]));
+    let home = addr(&[1, 0, 1, 0, 66]);
     fn row<'a>(
         home: DepositHome<'a>,
         kind: DepositKind,
@@ -151,8 +151,8 @@ fn the_home_row_and_the_kind_byte_part_the_groups() {
 /// spells today's body byte for byte, the group absent.
 #[test]
 fn a_supersession_claims_group_is_its_home_its_kind_and_the_assert_sup_bodys_four_rows() {
-    let trunk = addr(&[1, 0, 1, 0, 3]);
-    let daughter = addr(&[1, 0, 1, 0, 3, 1, 1]);
+    let trunk = addr(&[1, 0, 1, 0, 65]);
+    let daughter = addr(&[1, 0, 1, 0, 65, 1, 1]);
     let sup = unit_span(&addr(&[1, 1, 0, 1, 0, 1, 0, 1, 4]));
     let old = unit_span(&daughter);
     let row = DepositRow {
@@ -166,7 +166,7 @@ fn a_supersession_claims_group_is_its_home_its_kind_and_the_assert_sup_bodys_fou
     let to_row = [vec![0x03u8], 1u64.to_be_bytes().to_vec(), delimited(b"member"), delimited(b"")].concat();
     let want = [
         shot().as_bytes().to_vec(),
-        delimited(b"1.0.1.0.3"),
+        delimited(b"1.0.1.0.65"),
         vec![0x05],
         stored(&[&sup]),
         stored(&[&old]),
@@ -186,9 +186,9 @@ fn a_supersession_claims_group_is_its_home_its_kind_and_the_assert_sup_bodys_fou
 #[test]
 fn a_tag_element_spells_its_token_and_an_empty_width() {
     let ty = unit_span(&addr(&[1, 1, 0, 1, 0, 1, 0, 3, 71]));
-    let set = unit_span(&addr(&[1, 0, 1, 0, 4]));
+    let set = unit_span(&addr(&[1, 0, 1, 0, 66]));
     let row = DepositRow {
-        home: DepositHome::Address(&addr(&[1, 0, 1, 0, 4])),
+        home: DepositHome::Address(&addr(&[1, 0, 1, 0, 66])),
         kind: DepositKind::ReadWith,
         ty: spans(&[&ty]),
         from: DepositSlot::Stored(vec![SlotElement::Edition]),
@@ -198,7 +198,7 @@ fn a_tag_element_spells_its_token_and_an_empty_width() {
     let from_row = [vec![0x03u8], 1u64.to_be_bytes().to_vec(), delimited(b"edition"), delimited(b"")].concat();
     let want = [
         shot().as_bytes().to_vec(),
-        delimited(b"1.0.1.0.4"),
+        delimited(b"1.0.1.0.66"),
         vec![0x04],
         stored(&[&ty]),
         from_row,
@@ -215,7 +215,7 @@ fn a_tag_element_spells_its_token_and_an_empty_width() {
         ..row.clone()
     };
     let bytes = entry_body_publication(shot(), &[beside]).as_bytes().to_vec();
-    let at = shot().as_bytes().len() + delimited(b"1.0.1.0.4").len() + 1 + stored(&[&ty]).len();
+    let at = shot().as_bytes().len() + delimited(b"1.0.1.0.66").len() + 1 + stored(&[&ty]).len();
     assert_eq!(bytes[at], 0x03);
     assert_eq!(&bytes[at + 1..at + 9], &2u64.to_be_bytes(), "two elements: the tag and the span");
 }
@@ -226,7 +226,7 @@ fn a_tag_element_spells_its_token_and_an_empty_width() {
 #[test]
 fn the_member_position_row_is_its_count_then_each_spans_ordinal_and_width() {
     let ty = unit_span(&addr(&[1, 1, 0, 1, 0, 1, 0, 3, 13]));
-    let to = unit_span(&addr(&[1, 0, 1, 0, 3, 0, 2, 1]));
+    let to = unit_span(&addr(&[1, 0, 1, 0, 65, 0, 2, 1]));
     let row = DepositRow {
         home: DepositHome::Member,
         kind: DepositKind::Copy,

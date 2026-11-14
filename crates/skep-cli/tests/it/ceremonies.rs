@@ -99,8 +99,8 @@ fn the_person_doors_refuse_without_a_terminal_and_the_five_non_doors_run() {
         vec!["accept", "--dir", s(&store), "--reprint"],
         vec!["enroll", "--board", &board, "--dir", s(&store), "--principal", "1", "--reply", "ab"],
         vec!["handoff", "--board", &board, "--dir", s(&store), "--principal", "1", "--account", "1.0.1.2"],
-        vec!["merge", "--board", &board, "--dir", s(&store), "--principal", "1", "--doc", "1.0.1.0.2", "--alternative", "1.0.1.0.2.1.1", "--kind", "1.0.1.0.3"],
-        vec!["restore", "--board", &board, "--dir", s(&store), "--principal", "1", "--draft", "1.0.1.0.4", "--at", "3"],
+        vec!["merge", "--board", &board, "--dir", s(&store), "--principal", "1", "--doc", "1.0.1.0.64", "--alternative", "1.0.1.0.64.1.1", "--kind", "1.0.1.0.65"],
+        vec!["restore", "--board", &board, "--dir", s(&store), "--principal", "1", "--draft", "1.0.1.0.66", "--at", "3"],
     ] {
         let r = skep(&args, &[], None);
         assert!(!r.err.contains("requires a controlling terminal"), "{args:?} runs without a terminal: {}", r.err);

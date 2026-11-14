@@ -117,7 +117,7 @@ fn the_directory_names_a_home_once_however_many_ranges_reach_it() {
     // names nothing without stabbing anything.
     let (h1, h2) = (
         home(),
-        Arc::new(tumbler([1u32, 0, 1, 0, 2].map(Nat::from))),
+        Arc::new(tumbler([1u32, 0, 1, 0, 64].map(Nat::from))),
     );
     let link = Arc::new(tumbler([Nat::from(9u32)]));
     let mut index = SlotIndex::default();

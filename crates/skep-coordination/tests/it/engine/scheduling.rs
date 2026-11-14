@@ -385,7 +385,7 @@ fn a_failing_rule_does_not_starve_the_agenda() {
     let k = kernel();
     let mut c = coord(&k);
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
-    let unregistered = a(&[1, 0, 1, 0, 7]);
+    let unregistered = a(&[1, 0, 1, 0, 69]);
     let r1 = c
         .register_rule(Rule {
             domain: Dom::MembersDom(concrete(&pred_stable_ty())),
@@ -427,8 +427,8 @@ fn a_failing_rule_does_not_starve_the_agenda() {
 fn a_failing_occurrence_does_not_starve_its_own_rule_s_later_arguments() {
     let k = kernel();
     let mut c = coord_with_guest(&k, |_, d| *d != doc2());
-    let in_draft = a(&[1, 0, 1, 0, 2, 0, 1, 1]); // an element of the draft doc2
-    let readable = a(&[1, 0, 1, 0, 3, 0, 1, 1]); // of the published doc3, after it in T1
+    let in_draft = a(&[1, 0, 1, 0, nth_doc(2), 0, 1, 1]); // an element of the draft doc2
+    let readable = a(&[1, 0, 1, 0, nth_doc(3), 0, 1, 1]); // of the published doc3, after it in T1
     let writer = link_writer(&k);
     for member in [&in_draft, &readable] {
         writer.emit(Caller::System, &doc1(), &pred_stable_ty(), member, &[]).expect("a member");
@@ -584,7 +584,7 @@ fn a_no_op_step_rotates_past_its_rule() {
 /// asked first, so an unreadable unregistered home is `DraftBoundary`.
 #[test]
 fn a_fire_into_an_unregistered_home_fails_loudly() {
-    let unregistered = a(&[1, 0, 1, 0, 7]);
+    let unregistered = a(&[1, 0, 1, 0, 69]);
     let members_dom = || Dom::MembersDom(concrete(&pred_stable_ty()));
     let marker_at = |home: &Address| FireAction::Marker { home: home.clone(), ty: key(&marker_ty()) };
 

@@ -294,7 +294,7 @@ fn a_document_of_twice_the_delivery_budget_with_a_character_across_the_edge_is_j
 /// binary search over the item table's start ordinals.
 #[test]
 fn an_occurrences_range_runs_across_a_gap_and_a_hex_stretch_its_item_found_by_binary_search() {
-    let origin = addr(&[1, 0, 1, 0, 2]);
+    let origin = addr(&[1, 0, 1, 0, 64]);
     let items = vec![
         Item::Text { start: 1, bytes: b"alpha beta".to_vec() },
         Item::Gap { start: 11, width: 5, kind: GapKind::Withheld { origin } },

@@ -34,7 +34,7 @@ fn d() -> Address {
 
 /// `Z`, another document of the same account.
 fn z() -> Address {
-    addr("1.0.1.0.2")
+    addr("1.0.1.0.64")
 }
 
 /// `F`, a cross-owner fork in another account.
@@ -886,7 +886,7 @@ fn base_of_finds_the_nearest_common_ancestor_along_the_anchor_chains() {
     assert_eq!(base_of(&m("2"), &m("2")), Some(m("2")), "a member against itself");
     assert_eq!(base_of(&m("2"), &m("5")), Some(m("2")), "a member against its descendant");
     assert_eq!(base_of(&m("1"), &m("1.1")), Some(m("1")), "the first member against its daughter");
-    assert_eq!(base_of(&m("2"), &addr("1.0.1.0.2.2")), None, "across chains");
+    assert_eq!(base_of(&m("2"), &addr("1.0.1.0.64.2")), None, "across chains");
     assert_eq!(base_of(&d(), &m("2")), None, "a bare document — a draft's shape");
     assert_eq!(base_of(&d_at(4), &m("2")), None, "an element");
     assert_eq!(base_of(&addr("1.0.1"), &m("2")), None, "an account");
@@ -1052,11 +1052,11 @@ fn a_run_names_its_positions_and_the_options_default_as_ruled() {
 /// which the embedder says.
 #[test]
 fn the_withheld_refusals_name_the_document_and_leave_the_outcome_to_the_embedder() {
-    let doc = addr("1.0.2.0.8");
+    let doc = addr("1.0.2.0.70");
     let unreadable = Refusal::Unreadable(doc.clone()).to_string();
-    assert_eq!(unreadable, "1.0.2.0.8 is not readable to this reader (withheld)");
+    assert_eq!(unreadable, "1.0.2.0.70 is not readable to this reader (withheld)");
     let windowed = Refusal::WindowWithheld(doc).to_string();
-    assert!(windowed.starts_with("1.0.2.0.8 is not shared with you (withheld)"), "{windowed}");
+    assert!(windowed.starts_with("1.0.2.0.70 is not shared with you (withheld)"), "{windowed}");
     for said in [&unreadable, &windowed] {
         for outcome in ["nothing", "composed", "published", "shot", "merged"] {
             assert!(!said.contains(outcome), "`{outcome}`: {said}");
@@ -1072,11 +1072,11 @@ mod kept_places {
     use crate::board::answers::IRun;
 
     fn s() -> Address {
-        addr("1.0.1.0.4")
+        addr("1.0.1.0.66")
     }
 
     fn o() -> Address {
-        addr("1.0.1.0.5")
+        addr("1.0.1.0.67")
     }
 
     /// A run of the draft's own words, as the shot re-mints it.
@@ -1256,16 +1256,16 @@ mod scripted {
     /// `S` the merger's staging draft; `K` the document standing as the
     /// record kind; `F` a fork in another account, `OTHER_DOC1` that
     /// account's doc 1.
-    const D: &str = "1.0.1.0.2";
-    const Z: &str = "1.0.1.0.3";
-    const S: &str = "1.0.1.0.4";
-    const K: &str = "1.0.1.0.9";
-    const F: &str = "1.0.2.0.7";
+    const D: &str = "1.0.1.0.64";
+    const Z: &str = "1.0.1.0.65";
+    const S: &str = "1.0.1.0.66";
+    const K: &str = "1.0.1.0.71";
+    const F: &str = "1.0.2.0.69";
     const OTHER_DOC1: &str = "1.0.2.0.1";
     /// `O`, an unpublished draft of the merger's own; `E` another published
     /// document of theirs, in which a record may name `O`'s words.
-    const O: &str = "1.0.1.0.5";
-    const E: &str = "1.0.1.0.6";
+    const O: &str = "1.0.1.0.67";
+    const E: &str = "1.0.1.0.68";
 
     fn a(text: &str) -> Address {
         parse_address(text).expect("an address")
@@ -1550,7 +1550,7 @@ mod scripted {
                 image_cap: 1 << 12,
                 delivery_cap: 1 << 17,
                 compare_cap: 1 << 12,
-                next_doc: 10,
+                next_doc: 72,
                 claimed: true,
                 head: true,
                 ..World::default()
@@ -2909,7 +2909,7 @@ mod scripted {
         // Another published document `Z` with a member, and four forks in
         // another account: one no `version` minted, one of `Z`'s member, one
         // of the bare `D`, and one the merger may not read.
-        let (unminted, of_z, of_bare, hidden) = ("1.0.2.0.3", "1.0.2.0.4", "1.0.2.0.5", "1.0.2.0.6");
+        let (unminted, of_z, of_bare, hidden) = ("1.0.2.0.65", "1.0.2.0.66", "1.0.2.0.67", "1.0.2.0.68");
         w.text(Z, 1, "hello");
         w.doc(Z, true, ACCOUNT, vec![run(Z, 1, 5)]);
         w.member(&format!("{Z}.1"), vec![run(Z, 1, 5)], None);
@@ -2922,7 +2922,7 @@ mod scripted {
         // `D.1` with "!!!" typed at its end; one never staged, so the board
         // records no base; one staged from `Z`'s member; one staged from the
         // bare `D`.
-        let (unstaged, of_z_draft, of_bare_draft) = ("1.0.1.0.5", "1.0.1.0.6", "1.0.1.0.8");
+        let (unstaged, of_z_draft, of_bare_draft) = ("1.0.1.0.67", "1.0.1.0.68", "1.0.1.0.70");
         w.text(S, 1, "!!!");
         w.doc(S, false, ACCOUNT, vec![run(D, 1, 11), run(S, 1, 3)]);
         w.staged(S, &format!("{D}.1"), 11);
@@ -2966,7 +2966,7 @@ mod scripted {
         );
         let foreign = Side::Member(a(&format!("{Z}.1")));
         refuses(foreign.clone(), None, Refusal::BaseUnknown(foreign));
-        let other_account = Side::Draft { at: a("1.0.2.0.9"), position: None };
+        let other_account = Side::Draft { at: a("1.0.2.0.71"), position: None };
         refuses(
             other_account.clone(),
             Some(a(&format!("{D}.1"))),
@@ -3001,7 +3001,7 @@ mod scripted {
         );
         let two = vec![
             Side::Draft { at: a(S), position: None },
-            Side::Draft { at: a("1.0.1.0.5"), position: None },
+            Side::Draft { at: a("1.0.1.0.67"), position: None },
         ];
         assert_eq!(
             compose(&board, Some(&token()), &with(two, Some(a(&format!("{D}.1"))))),
@@ -3139,7 +3139,7 @@ mod scripted {
     #[test]
     fn a_forks_own_text_is_a_window_in_the_merge() {
         let mut w = World::race();
-        let f2 = "1.0.2.0.8";
+        let f2 = "1.0.2.0.70";
         w.text(f2, 1, "fat ");
         w.fork(f2, "1.0.2", &format!("{D}.1"), vec![run(D, 1, 4), run(f2, 1, 4), run(D, 5, 7)]);
         let (_dialer, board, _) = open(w);
@@ -3519,7 +3519,7 @@ mod scripted {
     #[test]
     fn a_draft_staged_from_a_daughter_composes_over_the_daughters_base() {
         let mut w = World::race();
-        let t = "1.0.1.0.5";
+        let t = "1.0.1.0.67";
         w.text(t, 1, "!");
         w.doc(t, false, ACCOUNT, vec![run(D, 1, 7), run(t, 1, 1)]);
         w.staged(t, &format!("{D}.1.1"), 7);
@@ -3591,7 +3591,7 @@ mod scripted {
         };
         assert_eq!((address.to_string(), *retries, claims.len()), (format!("{D}.3"), 0, 0));
         assert!(
-            record.to_string().starts_with("1.0.1.0.10.0.2."),
+            record.to_string().starts_with("1.0.1.0.72.0.2."),
             "the record's link is homed in the journal minted: {record}"
         );
         let frames = dialer.frames("publish");
@@ -3752,7 +3752,7 @@ mod scripted {
         );
         let insert = &dialer.frames("insert")[0];
         let journal = insert["doc"].as_str().unwrap().to_string();
-        assert_eq!(journal, "1.0.1.0.10", "the minted journal");
+        assert_eq!(journal, "1.0.1.0.72", "the minted journal");
         assert_eq!((insert["at"]["ordinal"].as_str(), insert.get("deposit")), (Some("1"), None));
         let atom: Value =
             serde_json::from_str(insert["values"][0]["atom"].as_str().unwrap()).unwrap();
@@ -4140,7 +4140,7 @@ mod scripted {
         };
         assert_eq!(
             (address, *position, claims.clone(), record.to_string(), *retries),
-            (&member, at, vec![a(&format!("{D}.0.2.1"))], "1.0.1.0.10.0.2.1".to_string(), 0)
+            (&member, at, vec![a(&format!("{D}.0.2.1"))], "1.0.1.0.72.0.2.1".to_string(), 0)
         );
         assert_eq!(
             dialer.ops(),
@@ -4411,7 +4411,7 @@ mod scripted {
     /// again reads the draft as it stands.
     #[test]
     fn a_race_on_a_draft_that_is_no_side_says_landing_there_again_replaces_the_change() {
-        let t = "1.0.1.0.5";
+        let t = "1.0.1.0.67";
         let mut w = World::race();
         w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
         w.staged(t, &format!("{D}.1"), 11);
@@ -4789,7 +4789,7 @@ mod scripted {
     /// board's, with the landing's record standing: nothing is written.
     #[test]
     fn a_landing_into_a_baseless_draft_sends_no_base() {
-        let plain = "1.0.1.0.5";
+        let plain = "1.0.1.0.67";
         let mut w = draft_landing_world();
         w.doc(plain, false, ACCOUNT, Vec::new());
         let (dialer, board, signer) = open(w);
@@ -4824,7 +4824,7 @@ mod scripted {
     /// and no marker.
     #[test]
     fn a_fork_is_refused_fork_base_moved_and_admitted_where_its_source_is_the_head() {
-        let (moved, fresh) = ("1.0.1.0.7", "1.0.1.0.8");
+        let (moved, fresh) = ("1.0.1.0.69", "1.0.1.0.70");
         let mut w = World::race();
         // A fork of version 1 that removed " sat", and a fork of version 2
         // that did the same.
@@ -4874,7 +4874,7 @@ mod scripted {
     /// each and record no base.
     #[test]
     fn the_scripted_board_judges_set_arrangement_as_the_store_does() {
-        let (plain, fork) = ("1.0.1.0.5", "1.0.1.0.7");
+        let (plain, fork) = ("1.0.1.0.67", "1.0.1.0.69");
         let mut w = draft_landing_world();
         w.doc(plain, false, ACCOUNT, Vec::new());
         w.fork(fork, ACCOUNT, &format!("{D}.1"), vec![run(D, 1, 7)]);
@@ -4966,7 +4966,7 @@ mod scripted {
         dialer.clear();
         let landed = land(&board, &merged, draft_landing(&session, &signer, None)).expect("landed");
         let Landed::Draft { into: fresh, position, record, head_moved, staged } = &landed else { panic!("{landed:?}") };
-        assert_eq!((fresh.to_string(), head_moved.clone(), *staged), ("1.0.1.0.10".to_string(), None, true), "the fresh draft minted");
+        assert_eq!((fresh.to_string(), head_moved.clone(), *staged), ("1.0.1.0.72".to_string(), None, true), "the fresh draft minted");
         let ops = dialer.ops();
         let writes: Vec<&str> = ops.iter().map(String::as_str).filter(|o| ["stage", "set_arrangement", "insert", "make_link", "create_new_document"].contains(o)).collect();
         assert_eq!(writes, ["stage", "set_arrangement", "create_new_document", "insert", "make_link"], "{ops:?}");
@@ -5360,7 +5360,7 @@ mod scripted {
     #[test]
     fn the_draft_landings_refusals_are_mapped() {
         // `T`, a draft staged from `Z`'s first member: its chain is `Z`'s.
-        let t = "1.0.1.0.5";
+        let t = "1.0.1.0.67";
         let mut w = draft_landing_world();
         w.member(&format!("{Z}.1"), vec![run(Z, 1, 5)], None);
         w.doc(t, false, ACCOUNT, vec![run(Z, 1, 5)]);
@@ -5444,7 +5444,7 @@ mod scripted {
     /// (SP-14), nothing staged or written.
     #[test]
     fn a_draft_the_merger_may_not_read_is_refused_unreadable_before_any_write() {
-        let x = "1.0.2.0.8";
+        let x = "1.0.2.0.70";
         let mut w = draft_landing_world();
         w.doc(x, false, "1.0.2", vec![run(D, 1, 11)]);
         w.withheld.insert(x.to_string());
@@ -5816,7 +5816,7 @@ mod scripted {
     /// re-run finds the merge taken back.
     #[test]
     fn a_journal_the_act_cannot_write_into_leaves_the_act_standing_with_its_record_unwritten() {
-        let (j, u, g) = ("1.0.2.0.8", "1.0.2.0.9", "1.0.1.0.8");
+        let (j, u, g) = ("1.0.2.0.70", "1.0.2.0.71", "1.0.1.0.70");
         let world = |mut w: World| {
             w.doc(j, false, "1.0.2", Vec::new());
             w.withheld.insert(j.to_string());
@@ -5939,7 +5939,7 @@ mod scripted {
     /// merger's own (`G`) passes, and the record's atom goes into it.
     #[test]
     fn a_named_journal_is_checked_before_the_acts_first_write() {
-        let (j, u, o, g) = ("1.0.2.0.8", "1.0.2.0.9", "1.0.2.0.6", "1.0.1.0.8");
+        let (j, u, o, g) = ("1.0.2.0.70", "1.0.2.0.71", "1.0.2.0.68", "1.0.1.0.70");
         let world = |mut w: World| {
             w.doc(j, false, "1.0.2", Vec::new());
             w.withheld.insert(j.to_string());
@@ -6026,7 +6026,7 @@ mod scripted {
     /// (`G`) nothing — one `doc_metadata` of each and no other frame.
     #[test]
     fn the_journal_check_is_the_landings_check_alone() {
-        let (o, g) = ("1.0.2.0.6", "1.0.1.0.8");
+        let (o, g) = ("1.0.2.0.68", "1.0.1.0.70");
         let mut world = World::race();
         world.doc(o, false, "1.0.2", Vec::new());
         world.doc(g, false, ACCOUNT, Vec::new());
@@ -6058,7 +6058,7 @@ mod scripted {
     /// and the record goes into that, once.
     #[test]
     fn a_named_journal_that_refuses_the_atom_leaves_the_member_standing() {
-        let (o, p) = ("1.0.2.0.6", "1.0.1.0.8");
+        let (o, p) = ("1.0.2.0.68", "1.0.1.0.70");
         let mut world = World::race();
         world.doc(o, false, "1.0.2", Vec::new());
         let (dialer, board, signer) = open(world);
@@ -6096,7 +6096,7 @@ mod scripted {
         {
             let mut w = dialer.world();
             w.doc(p, true, ACCOUNT, Vec::new());
-            file(&mut w, p, &merged.record, &["1.0.1.0.5"], None);
+            file(&mut w, p, &merged.record, &["1.0.1.0.67"], None);
         }
         dialer.clear();
         let resumed = resume(&board, &merged, shot_into(None)).expect("resumed, never the library's own fault");
@@ -6158,7 +6158,7 @@ mod scripted {
             assert_eq!(dialer.world().rows.len(), rows, "nothing applied");
             assert_eq!(stage("k".repeat(MAX_REQ_ID_BYTES))["resp"].as_str(), Some("ack_addr"));
         }
-        let t = "1.0.1.0.5";
+        let t = "1.0.1.0.67";
         let world = || {
             let mut w = World::race();
             for k in 2..=16 {
@@ -6747,7 +6747,7 @@ mod scripted {
     /// already taken back, nothing sent (skep #889; the next test).
     #[test]
     fn undo_of_a_baseless_landing_goes_by_its_feed_row_with_no_base_sent() {
-        let plain = "1.0.1.0.5";
+        let plain = "1.0.1.0.67";
         let mut w = draft_landing_world();
         w.doc(plain, false, ACCOUNT, vec![run(D, 1, 11)]);
         let (dialer, board, signer) = open(w);
@@ -6822,7 +6822,7 @@ mod scripted {
     /// merge taken back, the landing's record current.
     #[test]
     fn a_baseless_undo_run_again_after_it_landed_is_nothing_to_undo() {
-        let plain = "1.0.1.0.5";
+        let plain = "1.0.1.0.67";
         let baseless = |c: Vec<Run>| {
             let mut w = draft_landing_world();
             w.text(plain, 1, "?!");
@@ -7589,7 +7589,7 @@ mod scripted {
         assert_eq!(appended_record(&dialer)["replaces"].as_str(), Some(link.to_string().as_str()));
 
         // The withdrawal: the race shape landed in `T`, staged from `D.1`.
-        let t = "1.0.1.0.5";
+        let t = "1.0.1.0.67";
         let mut w = World::race();
         w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
         w.staged(t, &format!("{D}.1"), 11);
@@ -7889,7 +7889,7 @@ mod scripted {
 
         // (d) A draft with no recorded base that held M's list before the
         // landing, the landing undone and the undo recorded.
-        let plain = "1.0.1.0.5";
+        let plain = "1.0.1.0.67";
         let mut w = draft_landing_world();
         w.doc(plain, false, ACCOUNT, draft_m());
         let (dialer, board, signer) = open(w);
@@ -7924,7 +7924,7 @@ mod scripted {
         assert_eq!(found.link, Some(undone), "(d): the undo's record current");
 
         // (e) A composition made after its landing, the marker standing.
-        let t = "1.0.1.0.5";
+        let t = "1.0.1.0.67";
         let mut w = World::race();
         w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
         w.staged(t, &format!("{D}.1"), 11);
@@ -7963,7 +7963,7 @@ mod scripted {
         let wrote = |dialer: &Scripted| {
             dialer.ops().into_iter().filter(|o| writes.contains(&o.as_str())).collect::<Vec<_>>()
         };
-        let t = "1.0.1.0.5";
+        let t = "1.0.1.0.67";
         let mut w = World::race();
         w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
         w.staged(t, &format!("{D}.1"), 11);
@@ -8211,7 +8211,7 @@ mod scripted {
         );
 
         // (d) A composition made after the landing, raced.
-        let t = "1.0.1.0.5";
+        let t = "1.0.1.0.67";
         let mut w = World::race();
         w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
         w.staged(t, &format!("{D}.1"), 11);
@@ -8268,7 +8268,7 @@ mod scripted {
         );
 
         // (f) A draft with no recorded base, its record unwritten.
-        let plain = "1.0.1.0.5";
+        let plain = "1.0.1.0.67";
         let baseless = || {
             let mut w = draft_landing_world();
             w.doc(plain, false, ACCOUNT, vec![run(D, 1, 11)]);
@@ -8406,8 +8406,8 @@ mod scripted {
         let (at, link) = landing_of(&landed);
         let planted = {
             let mut w = dialer.world();
-            w.doc("1.0.2.0.5", false, "1.0.2", Vec::new());
-            file(&mut w, "1.0.2.0.5", &merged.record, &[S], None)
+            w.doc("1.0.2.0.67", false, "1.0.2", Vec::new());
+            file(&mut w, "1.0.2.0.67", &merged.record, &[S], None)
         };
         let comps = crate::merge::reads::comps;
         assert!(comps(&a(&planted)) > comps(&link), "the premise: another home's link sorts above the merger's");
@@ -8421,7 +8421,7 @@ mod scripted {
 
         // A landing of the key elsewhere: the race shape landed in `T`, then
         // in `U`, then in `T` again.
-        let (t, u) = ("1.0.1.0.5", "1.0.1.0.6");
+        let (t, u) = ("1.0.1.0.67", "1.0.1.0.68");
         let mut w = World::race();
         for draft in [t, u] {
             w.doc(draft, false, ACCOUNT, vec![run(D, 1, 11)]);
@@ -8476,7 +8476,7 @@ mod scripted {
     /// record.
     #[test]
     fn a_second_landing_of_one_key_into_one_draft_is_the_same_landing() {
-        let t = "1.0.1.0.5";
+        let t = "1.0.1.0.67";
         let world = || {
             let mut w = World::race();
             w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
@@ -8721,7 +8721,7 @@ mod scripted {
     /// record; a third has nothing to undo.
     #[test]
     fn one_merge_landed_twice_is_taken_back_one_landing_at_a_time() {
-        let t = "1.0.1.0.5";
+        let t = "1.0.1.0.67";
         let mut w = World::race();
         w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
         w.staged(t, &format!("{D}.1"), 11);
@@ -8816,7 +8816,7 @@ mod scripted {
     /// replaces A's record.
     #[test]
     fn an_undo_of_a_merge_landed_over_another_puts_its_marker_back_and_leaves_its_record() {
-        let t = "1.0.1.0.5";
+        let t = "1.0.1.0.67";
         let mut w = World::race();
         w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
         w.staged(t, &format!("{D}.1"), 11);
@@ -8901,7 +8901,7 @@ mod scripted {
     /// replaces the first's.
     #[test]
     fn two_merges_of_one_head_and_sides_are_each_taken_back_by_their_own_record() {
-        let t = "1.0.1.0.5";
+        let t = "1.0.1.0.67";
         let mut w = World::race();
         w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
         w.staged(t, &format!("{D}.1"), 11);
@@ -9028,7 +9028,7 @@ mod scripted {
     /// an earlier landing's merge standing again.
     #[test]
     fn an_undo_over_the_marker_a_stage_copied_puts_it_back_and_the_next_answers_inherited() {
-        let t0 = "1.0.1.0.5";
+        let t0 = "1.0.1.0.67";
         let world = || {
             let mut w = World::race();
             w.doc(t0, false, ACCOUNT, vec![run(D, 1, 11)]);
@@ -9169,13 +9169,13 @@ mod scripted {
         let (dialer, board, signer) = open(draft_landing_world());
         let session = sign_in(&board, &signer);
         let fresh_landing = || draft_landing(&session, &signer, None);
-        let theirs = "1.0.2.0.6";
+        let theirs = "1.0.2.0.68";
         let mut record = compose(&board, Some(session.token()), &draft_inputs()).expect("composed").record;
         record.landed = Some(RecordLanding::Draft { draft: a(theirs), position: 5 });
         let planted = {
             let mut w = dialer.world();
-            w.doc("1.0.2.0.5", false, "1.0.2", Vec::new());
-            file(&mut w, "1.0.2.0.5", &record, &[theirs, S], None)
+            w.doc("1.0.2.0.67", false, "1.0.2", Vec::new());
+            file(&mut w, "1.0.2.0.67", &record, &[theirs, S], None)
         };
         let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed after it");
         assert_eq!(merged.prior.as_ref().and_then(|p| p.link.as_ref()).map(ToString::to_string), Some(planted), "the premise: another home's record is the prior");
@@ -9277,7 +9277,7 @@ mod scripted {
     #[test]
     fn a_landings_record_replaces_the_mergers_newest_record_as_it_lands() {
         // A composition kept across a withdrawal, landed into another draft.
-        let (t, u) = ("1.0.1.0.5", "1.0.1.0.6");
+        let (t, u) = ("1.0.1.0.67", "1.0.1.0.68");
         let mut w = World::race();
         for draft in [t, u] {
             w.doc(draft, false, ACCOUNT, vec![run(D, 1, 11)]);
@@ -9304,8 +9304,8 @@ mod scripted {
         theirs.landed = Some(RecordLanding::Draft { draft: a(F), position: 5 });
         let planted = {
             let mut w = dialer.world();
-            w.doc("1.0.2.0.5", false, "1.0.2", Vec::new());
-            file(&mut w, "1.0.2.0.5", &theirs, &[F, &daughter], None)
+            w.doc("1.0.2.0.67", false, "1.0.2", Vec::new());
+            file(&mut w, "1.0.2.0.67", &theirs, &[F, &daughter], None)
         };
         let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed after it");
         assert_eq!(merged.record.replaces.as_ref().map(ToString::to_string), Some(planted), "the premise: the composition names another home's record");
@@ -9483,8 +9483,8 @@ mod scripted {
         other.landed = Some(RecordLanding::Member { member: a(&format!("{D}.3")), position: 99 });
         let other_link = {
             let mut w = dialer.world();
-            w.doc("1.0.2.0.5", false, "1.0.2", Vec::new());
-            file(&mut w, "1.0.2.0.5", &other, &[&format!("{D}.3"), &daughter], None)
+            w.doc("1.0.2.0.67", false, "1.0.2", Vec::new());
+            file(&mut w, "1.0.2.0.67", &other, &[&format!("{D}.3"), &daughter], None)
         };
         let found = current(&board, Some(&token()), &a(K), &merged.key)
             .expect("the lookup")
@@ -9497,8 +9497,8 @@ mod scripted {
         let question = merged.record.clone();
         let owners_link = {
             let mut w = dialer.world();
-            w.doc("1.0.1.0.5", false, ACCOUNT, Vec::new());
-            file(&mut w, "1.0.1.0.5", &question, &[&daughter], None)
+            w.doc("1.0.1.0.67", false, ACCOUNT, Vec::new());
+            file(&mut w, "1.0.1.0.67", &question, &[&daughter], None)
         };
         let found = current(&board, Some(&token()), &a(K), &merged.key)
             .expect("the lookup")
@@ -9511,10 +9511,10 @@ mod scripted {
         let mut later = merged.record.clone();
         later.landed = Some(RecordLanding::Member { member: a(&format!("{D}.3")), position: 120 });
         let later_link =
-            file(&mut dialer.world(), "1.0.1.0.5", &later, &[&format!("{D}.3"), &daughter], None);
+            file(&mut dialer.world(), "1.0.1.0.67", &later, &[&format!("{D}.3"), &daughter], None);
         let mut another_key = merged.record.clone();
         another_key.base = a(&format!("{D}.2"));
-        file(&mut dialer.world(), "1.0.1.0.5", &another_key, &[&daughter], None);
+        file(&mut dialer.world(), "1.0.1.0.67", &another_key, &[&daughter], None);
         dialer.clear();
         let found = current(&board, Some(&token()), &a(K), &merged.key)
             .expect("the lookup")
@@ -9539,7 +9539,7 @@ mod scripted {
         );
         assert_eq!(merged.record.replaces.as_ref().map(ToString::to_string), Some(later_link));
         // The owner's journal unreadable: the other account's record stands.
-        dialer.world().withheld.insert("1.0.1.0.5".into());
+        dialer.world().withheld.insert("1.0.1.0.67".into());
         let found = current(&board, Some(&token()), &a(K), &merged.key)
             .expect("the lookup")
             .expect("a record");
@@ -9561,12 +9561,12 @@ mod scripted {
         let merger = merger(&session, &signer);
         dialer.clear();
         assert_eq!(
-            journal::of(&board, &merger, &a(K), Some(a("1.0.1.0.7"))).expect("named"),
-            a("1.0.1.0.7")
+            journal::of(&board, &merger, &a(K), Some(a("1.0.1.0.69"))).expect("named"),
+            a("1.0.1.0.69")
         );
         assert!(dialer.ops().is_empty());
         let minted = journal::of(&board, &merger, &a(K), None).expect("minted");
-        assert_eq!(minted, a("1.0.1.0.10"));
+        assert_eq!(minted, a("1.0.1.0.72"));
         assert_eq!(dialer.frames("create_new_document")[0]["published"], false);
         assert_eq!(dialer.ops(), ["find_links_ftt", "create_new_document"]);
         let q = &dialer.frames("find_links_ftt")[0]["q"];
@@ -9583,40 +9583,40 @@ mod scripted {
         let record = compose(&board, Some(&token()), &race_inputs()).expect("composed").record;
         {
             let mut w = dialer.world();
-            w.doc("1.0.1.0.6", false, ACCOUNT, Vec::new());
-            file(&mut w, "1.0.1.0.6", &record, &[&format!("{D}.1.1")], Some(30));
+            w.doc("1.0.1.0.68", false, ACCOUNT, Vec::new());
+            file(&mut w, "1.0.1.0.68", &record, &[&format!("{D}.1.1")], Some(30));
         }
         dialer.clear();
-        assert_eq!(journal::of(&board, &merger, &a(K), None).expect("found"), a("1.0.1.0.6"));
+        assert_eq!(journal::of(&board, &merger, &a(K), None).expect("found"), a("1.0.1.0.68"));
         assert_eq!(dialer.ops(), ["find_links_ftt", "read_link", "doc_metadata"]);
         // A second journal, at a greater address, whose first record went
         // in earlier, holding two: its earliest link alone read, and it is
         // the journal the account's first record went to.
         {
             let mut w = dialer.world();
-            w.doc("1.0.1.0.12", false, ACCOUNT, Vec::new());
-            file(&mut w, "1.0.1.0.12", &record, &[&format!("{D}.1.1")], Some(20));
-            file(&mut w, "1.0.1.0.12", &record, &[&format!("{D}.1.1")], Some(40));
+            w.doc("1.0.1.0.74", false, ACCOUNT, Vec::new());
+            file(&mut w, "1.0.1.0.74", &record, &[&format!("{D}.1.1")], Some(20));
+            file(&mut w, "1.0.1.0.74", &record, &[&format!("{D}.1.1")], Some(40));
         }
         dialer.clear();
         assert_eq!(
             journal::of(&board, &merger, &a(K), None).expect("found"),
-            a("1.0.1.0.12"),
+            a("1.0.1.0.74"),
             "the journal the first record went to"
         );
         assert_eq!(dialer.ops(), ["find_links_ftt", "read_link", "read_link", "doc_metadata"]);
         assert_eq!(
             dialer.frames("read_link").iter().map(|f| f["a"].clone()).collect::<Vec<_>>(),
-            [json!("1.0.1.0.6.0.2.1"), json!("1.0.1.0.12.0.2.1")],
+            [json!("1.0.1.0.68.0.2.1"), json!("1.0.1.0.74.0.2.1")],
             "each home's earliest link, once"
         );
-        assert_eq!(dialer.frames("doc_metadata")[0]["doc"], "1.0.1.0.12");
+        assert_eq!(dialer.frames("doc_metadata")[0]["doc"], "1.0.1.0.74");
         // That journal published: passed over for the next.
-        dialer.world().docs.get_mut("1.0.1.0.12").unwrap().published = true;
+        dialer.world().docs.get_mut("1.0.1.0.74").unwrap().published = true;
         dialer.clear();
         assert_eq!(
             journal::of(&board, &merger, &a(K), None).expect("found"),
-            a("1.0.1.0.6"),
+            a("1.0.1.0.68"),
             "the private draft, never the published document"
         );
         assert_eq!(
@@ -9633,18 +9633,18 @@ mod scripted {
             w.links.push(LinkRow {
                 addr: format!("{DOC1}.0.2.1"),
                 home: DOC1.into(),
-                from: vec![i_addr(&a("1.0.1.0.6"), 1)],
+                from: vec![i_addr(&a("1.0.1.0.68"), 1)],
                 to: vec![format!("{D}.1.1")],
                 ty: K.into(),
                 width: 1,
                 at: Some(10),
             });
-            file(&mut w, "1.0.1.2.0.3", &record, &[&format!("{D}.1.1")], Some(5));
+            file(&mut w, "1.0.1.2.0.65", &record, &[&format!("{D}.1.1")], Some(5));
         }
         dialer.clear();
         assert_eq!(
             journal::of(&board, &merger, &a(K), None).expect("minted"),
-            a("1.0.1.0.10"),
+            a("1.0.1.0.72"),
             "the mint's id answered by the board's memo"
         );
         assert_eq!(dialer.ops(), ["find_links_ftt", "read_link", "create_new_document"]);
@@ -9733,8 +9733,8 @@ mod scripted {
         let daughter = format!("{D}.1.1");
         let later = {
             let mut w = dialer.world();
-            file(&mut w, "1.0.1.0.12", &merged.record, &[&daughter], Some(20));
-            file(&mut w, "1.0.1.0.6", &merged.record, &[&daughter], Some(40))
+            file(&mut w, "1.0.1.0.74", &merged.record, &[&daughter], Some(20));
+            file(&mut w, "1.0.1.0.68", &merged.record, &[&daughter], Some(40))
         };
         let link = |r: Option<Record>| r.and_then(|r| r.link).map(|l| l.to_string());
         assert_eq!(
@@ -9757,7 +9757,7 @@ mod scripted {
         let (merged, landed) = landed_in_s(&board, &session, &signer);
         let (position, first) = landing_of(&landed);
         assert!(
-            first.to_string().starts_with("1.0.1.0.10.0.2."),
+            first.to_string().starts_with("1.0.1.0.72.0.2."),
             "the premise: the landing's record at the greater address"
         );
         let mut record = merged.record.clone();
@@ -9765,7 +9765,7 @@ mod scripted {
         let later = {
             let mut w = dialer.world();
             let at = w.position + 100;
-            file(&mut w, "1.0.1.0.6", &record, &[S], Some(at))
+            file(&mut w, "1.0.1.0.68", &record, &[S], Some(at))
         };
         dialer.clear();
         withdraw(&board, merger(&session, &signer), &a(S), &a(K), None).expect("withdrawn");
@@ -9791,8 +9791,8 @@ mod scripted {
         let daughter = format!("{D}.1.1");
         let (owners, subs) = {
             let mut w = dialer.world();
-            let owners = file(&mut w, "1.0.1.0.6", &merged.record, &[&daughter], Some(20));
-            let subs = file(&mut w, "1.0.1.2.0.3", &merged.record, &[&daughter], Some(40));
+            let owners = file(&mut w, "1.0.1.0.68", &merged.record, &[&daughter], Some(20));
+            let subs = file(&mut w, "1.0.1.2.0.65", &merged.record, &[&daughter], Some(40));
             (owners, subs)
         };
         let link = |r: Option<Record>| r.and_then(|r| r.link).map(|l| l.to_string());
@@ -9803,7 +9803,7 @@ mod scripted {
         );
         let again = compose(&board, Some(session.token()), &race_inputs()).expect("composed again");
         assert_eq!(link(again.prior), Some(owners), "the composition's prior");
-        dialer.world().withheld.insert("1.0.1.0.6".into());
+        dialer.world().withheld.insert("1.0.1.0.68".into());
         assert_eq!(
             link(current(&board, Some(&token()), &a(K), &merged.key).expect("the lookup")),
             Some(subs),
@@ -9953,7 +9953,7 @@ mod scripted {
     /// a board fault.
     #[test]
     fn a_withheld_run_in_a_readable_side_refuses_naming_its_origin() {
-        const W: &str = "1.0.2.0.8";
+        const W: &str = "1.0.2.0.70";
         let daughter = format!("{D}.1.2");
         let mut w = World::race();
         w.text(W, 1, "big ");
@@ -10198,19 +10198,19 @@ mod scripted {
         }
         // The record written into a journal named: no class scan.
         let (dialer, board, signer) = open(World::race());
-        dialer.world().doc("1.0.1.0.6", false, ACCOUNT, Vec::new());
+        dialer.world().doc("1.0.1.0.68", false, ACCOUNT, Vec::new());
         let session = sign_in(&board, &signer);
         let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
         let named = Landing::Shot {
             merger: merger(&session, &signer),
             draft: None,
             answers: Answers::default(),
-            journal: Some(a("1.0.1.0.6")),
+            journal: Some(a("1.0.1.0.68")),
         };
         land(&board, &merged, named).expect("landed");
         assert_eq!(
             dialer.frames("insert")[0]["doc"],
-            "1.0.1.0.6",
+            "1.0.1.0.68",
             "the premise: the record in the journal named"
         );
         assert!(
@@ -10560,7 +10560,7 @@ mod scripted {
             Ends::TakeBack(OnEnd::TakenOut),
         );
         assert!(undoing.ended > 0 && undoing.faulted == 0, "no head read: the undo signs nothing");
-        const PLAIN: &str = "1.0.1.0.5";
+        const PLAIN: &str = "1.0.1.0.67";
         let baseless = || {
             let mut w = draft_landing_world();
             w.doc(PLAIN, false, ACCOUNT, vec![run(D, 1, 11)]);
@@ -10592,7 +10592,7 @@ mod scripted {
         );
         // A merge landed over another, both recorded: the undo puts the
         // first one's marker back and replaces the second's record.
-        const OVER: &str = "1.0.1.0.5";
+        const OVER: &str = "1.0.1.0.67";
         let two_drafts = || {
             let mut w = World::race();
             w.doc(OVER, false, ACCOUNT, vec![run(D, 1, 11)]);
@@ -10681,8 +10681,8 @@ mod scripted {
             |dialer: &Scripted, board: &Board, session: &Session<'_>, signer: &HybridSigner| {
                 let record = race_composed(dialer, board, session, signer).record;
                 let mut w = dialer.world();
-                w.doc("1.0.1.0.6", false, ACCOUNT, Vec::new());
-                file(&mut w, "1.0.1.0.6", &record, &[&format!("{D}.1.1")], None);
+                w.doc("1.0.1.0.68", false, ACCOUNT, Vec::new());
+                file(&mut w, "1.0.1.0.68", &record, &[&format!("{D}.1.1")], None);
             };
         let finding = deaths_of(
             "journal::of finding",
@@ -10690,7 +10690,7 @@ mod scripted {
             filed,
             |board, session, signer, _| {
                 journal::of(board, &merger(session, signer), &a(K), None)
-                    .map(|j| assert_eq!(j, a("1.0.1.0.6"), "the premise"))
+                    .map(|j| assert_eq!(j, a("1.0.1.0.68"), "the premise"))
             },
             rerun,
         );
@@ -10974,7 +10974,7 @@ mod scripted {
     /// origin is asked with no words and no records read.
     #[test]
     fn another_accounts_words_are_asked_naming_their_owner_and_withheld_ones_with_no_reads() {
-        let f2 = "1.0.2.0.8";
+        let f2 = "1.0.2.0.70";
         let fork_world = || {
             let mut w = World::race();
             w.text(f2, 1, "fat ");
@@ -10997,7 +10997,7 @@ mod scripted {
 
         // A document this merger may not read: asked with no words and no
         // records read; M holds its words only as the head's window.
-        let private = "1.0.2.0.9";
+        let private = "1.0.2.0.71";
         let mut world = World::new();
         world.text(D, 1, "the cat sat");
         world.text(private, 1, "hidden");

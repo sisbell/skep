@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn sorted_addr_set_is_deduped_and_t1_ordered() {
-        let d2 = a(&[1, 0, 1, 0, 2]);
+        let d2 = a(&[1, 0, 1, 0, 64]);
         let d1 = a(&[1, 0, 1, 0, 1]);
         let got = sorted_addr_set(vec![d2.clone(), d1.clone(), d2.clone(), d1.clone()]);
         assert_eq!(got, vec![d1, d2]);

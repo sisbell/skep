@@ -408,7 +408,7 @@ fn doc_metadata_is_dispatched_with_the_source_a_fork_was_born_sharing() {
     assert_eq!(meta["resp"], "doc_metadata", "{meta}");
     assert!(meta["source"].is_null(), "the document forked was minted by no `version`: {meta}");
     assert_eq!(meta["published"], json!(true), "{meta}");
-    let v = mcp.call_json("doc_metadata", json!({"doc": "1.0.1.0.9.0.1.7"}));
+    let v = mcp.call_json("doc_metadata", json!({"doc": "1.0.1.0.71.0.1.7"}));
     assert_eq!(v["kind"], "refused", "{v}");
     assert_eq!(v["body"]["code"], "doc_not_registered", "the daemon's own rejection, verbatim: {v}");
     assert_eq!(v["body"]["op"], "doc_metadata", "{v}");
@@ -442,7 +442,7 @@ fn stage_is_dispatched_and_doc_metadata_serves_the_base_it_recorded() {
     assert!(meta["base_copied"].as_str().is_some_and(|n| n.parse::<u64>().is_ok_and(|n| n >= 1)), "the atoms the copy took, counted: {meta}");
     let text = mcp.call_json("retrieve_v", json!({"specs": [{"doc": draft, "span": {"start": "1.1", "width": "0.1"}}]}));
     assert_eq!(text["resp"], "delivery", "the draft reads: {text}");
-    let v = mcp.call_json("stage", json!({"from_": "1.0.1.0.9"}));
+    let v = mcp.call_json("stage", json!({"from_": "1.0.1.0.71"}));
     assert_eq!((v["kind"].as_str(), v["body"]["code"].as_str(), v["body"]["op"].as_str()), (Some("refused"), Some("source_not_registered"), Some("stage")), "the daemon's own rejection, verbatim: {v}");
     assert!(mcp.finish().success());
 }

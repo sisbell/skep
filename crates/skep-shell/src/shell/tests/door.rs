@@ -957,7 +957,7 @@ fn the_write_door_asks_its_four_questions_in_one_order() {
         shell.holds.open_session(&entry);
         entry.reference.clone()
     };
-    let draft = "1.0.2.0.4";
+    let draft = "1.0.2.0.66";
     let delete = |p: &str| json!({"op": "delete", "doc": draft, "p": {"subspace": "1", "ordinal": p}, "width": "1", "as_of": 0});
     let restore = |session: &str| json!({"session": session, "draft": draft, "at": 3, "as_of": 5});
     let a = open_at();

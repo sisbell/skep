@@ -1224,20 +1224,20 @@ fn f5c_the_script_seam_arms_a_calls_next_answer_as_its_result_or_its_refusal() {
     // A panel no board state built: its private row, its read-with need,
     // its window with a counterpart, its hold.
     let panel = json!({
-        "rows": [{"home": "1.0.1.0.9", "kind": "private", "label": "notes", "links": ["1.0.1.0.9.0.2.1"],
-                  "types": [{"ty": "1.1.0.1.0.1.0.3.13", "n": 1, "far": ["1.0.1.0.4"]}],
+        "rows": [{"home": "1.0.1.0.71", "kind": "private", "label": "notes", "links": ["1.0.1.0.71.0.2.1"],
+                  "types": [{"ty": "1.1.0.1.0.1.0.3.13", "n": 1, "far": ["1.0.1.0.66"]}],
                   "line": {"p": 1, "d": 0, "c": 0, "t": 0, "u": 0}, "read_through": 1}],
         "formatting": {"marks": [], "cut": 0, "removals": []},
-        "read_with": {"1.0.1.0.3": false},
-        "count": {"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": ["1.0.1.0.3"]},
+        "read_with": {"1.0.1.0.65": false},
+        "count": {"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": ["1.0.1.0.65"]},
         "price": {"lists": [2, 2, 0, 0, 0], "body": 4096, "values": 19, "reads": 12, "bytes": 65536, "over": []},
-        "windows": [{"run": 1, "origin": "1.0.1.0.8", "owner": "1.0.1", "i_start": 1, "width": 5,
-                     "counterpart": {"run": 1, "draft": "1.0.1.0.7", "record": "1.0.1.0.7.0.2.1",
-                                     "from": {"chain": "1.0.1.0.8.0.1", "first": 1, "width": 5},
-                                     "to": {"chain": "1.0.1.0.3.1.0.1", "first": 1, "width": 5}}}],
+        "windows": [{"run": 1, "origin": "1.0.1.0.70", "owner": "1.0.1", "i_start": 1, "width": 5,
+                     "counterpart": {"run": 1, "draft": "1.0.1.0.69", "record": "1.0.1.0.69.0.2.1",
+                                     "from": {"chain": "1.0.1.0.70.0.1", "first": 1, "width": 5},
+                                     "to": {"chain": "1.0.1.0.65.1.0.1", "first": 1, "width": 5}}}],
         "hold": {"since": 1_793_330_000_000_u64}
     });
-    let args = json!({"session": "s-000000000000000000000000", "draft": "1.0.1.0.2"});
+    let args = json!({"session": "s-000000000000000000000000", "draft": "1.0.1.0.64"});
     assert_eq!(provider.result("script", json!({"call": "publication.open", "answer": panel})), json!({"armed": "publication.open"}));
     assert_eq!(provider.result("publication.open", args.clone()), panel, "served exactly as armed");
     assert_ne!(provider.call("publication.open", args.clone()).get("result"), Some(&panel), "served once");
@@ -1307,10 +1307,10 @@ fn f5c_the_script_seam_arms_a_calls_next_answer_as_its_result_or_its_refusal() {
     assert!(!said.contains(&"x".repeat(120)), "a refusal's name is clipped on talk");
     // The event arm.
     assert_eq!(
-        provider.result("script", json!({"event": "publication", "data": {"board": board, "session": "s-000000000000000000000000", "draft": "1.0.1.0.2", "state": "sent"}})),
+        provider.result("script", json!({"event": "publication", "data": {"board": board, "session": "s-000000000000000000000000", "draft": "1.0.1.0.64", "state": "sent"}})),
         json!({"fired": "publication"})
     );
-    assert_eq!(next_event(&rx, "publication", |v| v["state"] == "sent")["draft"], "1.0.1.0.2");
+    assert_eq!(next_event(&rx, "publication", |v| v["state"] == "sent")["draft"], "1.0.1.0.64");
     drop(rx);
     assert_eq!(provider.stop(), 0);
     sd.shutdown();

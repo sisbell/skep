@@ -463,7 +463,7 @@ impl Rig {
 fn the_usage_forms_are_refused_before_any_socket() {
     let dir = tempfile::tempdir().unwrap();
     let store = dir.path().join("store");
-    let (doc, alt, draft, base, kind) = ("1.0.1.0.2", "1.0.1.0.2.1.1", "1.0.1.0.4", "1.0.1.0.2.1", "1.0.1.0.3");
+    let (doc, alt, draft, base, kind) = ("1.0.1.0.64", "1.0.1.0.64.1.1", "1.0.1.0.66", "1.0.1.0.64.1", "1.0.1.0.65");
     let refused = |extra: &[&str], words: &str| {
         let mut args = vec!["merge", "--board", DEAD, "--dir", s(&store)];
         args.extend_from_slice(extra);

@@ -170,7 +170,7 @@ fn a_pinned_member_answers_its_own_arrangement_after_the_head_moves_on() {
         .version(PrincipalId(1), &pdoc(), None)
         .expect("second fork commits");
     assert_eq!(first, vdoc());
-    assert_eq!(second, a(&[1, 0, 1, 0, 3, 2])); // the trunk's second member, now its head
+    assert_eq!(second, a(&[1, 0, 1, 0, nth_doc(3), 2])); // the trunk's second member, now its head
     vs.insert(P1, &second, vp(1, 4), vec![val(b"z")], declared(), AsOf::Typed(k.current_seq()))
         .expect("head deposit commits"); // head = [a, b, c, z]
     let s = k.snapshot();

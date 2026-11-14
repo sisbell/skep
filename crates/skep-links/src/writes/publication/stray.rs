@@ -160,7 +160,7 @@ mod tests {
 
     /// The edition's content element `k`.
     fn pca(k: u32) -> Address {
-        validate(t(&[1, 0, 1, 0, 3, 0, 1, k])).expect("valid")
+        validate(t(&[1, 0, 1, 0, 65, 0, 1, k])).expect("valid")
     }
 
     /// The draft's content element `k`.
@@ -209,7 +209,7 @@ mod tests {
         assert_eq!(pieces(&run(&pca(1), 4), &[bc.clone(), gapped]), None, "a gap at pca(3)");
         assert_eq!(pieces(&run(&pca(1), 5), &[bc.clone(), de.clone()]), None, "reaching past the records");
         assert_eq!(pieces(&run(&pca(1), 2), &[bc.clone(), past]), None, "two records over one position");
-        let elsewhere = (run(&ca(2), 2).iextent(), run(&validate(t(&[1, 0, 1, 0, 4, 0, 1, 1])).expect("valid"), 2).iextent());
+        let elsewhere = (run(&ca(2), 2).iextent(), run(&validate(t(&[1, 0, 1, 0, 66, 0, 1, 1])).expect("valid"), 2).iextent());
         assert_eq!(pieces(&run(&pca(1), 2), &[elsewhere]), None, "another chain's identity");
         let skewed = (run(&ca(2), 3).iextent(), run(&pca(1), 2).iextent());
         assert_eq!(pieces(&run(&pca(1), 2), &[skewed]), None, "slots of two widths");

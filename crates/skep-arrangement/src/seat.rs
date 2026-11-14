@@ -193,7 +193,7 @@ mod tests {
         // element of another document passes it and is refused for the
         // reason it should be.
         assert!(matches!(
-            stage_seat_link(&s, &doc1(), &a(&[1, 0, 1, 0, 2, 0, 2, 1])),
+            stage_seat_link(&s, &doc1(), &a(&[1, 0, 1, 0, 64, 0, 2, 1])),
             Err(SeatError::NotHomeLink)
         ));
     }

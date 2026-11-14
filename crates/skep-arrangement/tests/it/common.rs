@@ -16,7 +16,7 @@ use skep_kernel::{
     BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, Reclaim, SaltSource, Seq,
     Snapshot, TxnError, WorldState,
 };
-use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
+use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId, FIRST_ORDINARY_DOCUMENT};
 
 // ---- the minimal engine assembly (composition contract) ----
 
@@ -116,16 +116,31 @@ pub fn doc1() -> Address {
     a(&[1, 0, 1, 0, 1])
 }
 
-/// Document 2 — principal 1's second draft (private, empty at genesis).
-pub fn doc2() -> Address {
-    a(&[1, 0, 1, 0, 2])
+/// The number of principal 1's account's `k`-th document: its home page is
+/// 1, and its documents past it are numbered from `FIRST_ORDINARY_DOCUMENT`
+/// on, past the reserved block of well-known slots. [`doc2`] and [`pdoc`]
+/// are its second and third; every fixture address at or below one of them
+/// reads its number here, worked out from that constant and never spelled.
+pub fn nth_doc(k: u32) -> u32 {
+    assert_ne!(k, 0, "an account has no 0th document");
+    if k == 1 {
+        1
+    } else {
+        FIRST_ORDINARY_DOCUMENT + k - 2
+    }
 }
 
-/// Document 3 — principal 1's PUBLISHED edition (an explicit `true` at its
-/// mint): the target the version-chain model's refusals key on, and the one
-/// owned source the owner may version.
+/// Doc2, the account's second document — principal 1's second draft
+/// (private, empty at genesis).
+pub fn doc2() -> Address {
+    a(&[1, 0, 1, 0, nth_doc(2)])
+}
+
+/// Pdoc, the account's third document — principal 1's PUBLISHED edition (an
+/// explicit `true` at its mint): the target the version-chain model's
+/// refusals key on, and the one owned source the owner may version.
 pub fn pdoc() -> Address {
-    a(&[1, 0, 1, 0, 3])
+    a(&[1, 0, 1, 0, nth_doc(3)])
 }
 
 /// doc1 content element at `ordinal` (length 8), M3's minted shape.
@@ -135,16 +150,16 @@ pub fn ca(ordinal: u32) -> Address {
 
 /// pdoc's content element at `ordinal` (length 8).
 pub fn pca(ordinal: u32) -> Address {
-    a(&[1, 0, 1, 0, 3, 0, 1, ordinal])
+    a(&[1, 0, 1, 0, nth_doc(3), 0, 1, ordinal])
 }
 
 /// The version member of pdoc on M3's `(d_src, 1)` chain — the owned fork of
 /// the published edition — and its length-9 elements.
 pub fn vdoc() -> Address {
-    a(&[1, 0, 1, 0, 3, 1])
+    a(&[1, 0, 1, 0, nth_doc(3), 1])
 }
 pub fn vca(ordinal: u32) -> Address {
-    a(&[1, 0, 1, 0, 3, 1, 0, 1, ordinal])
+    a(&[1, 0, 1, 0, nth_doc(3), 1, 0, 1, ordinal])
 }
 
 pub fn vp(subspace: u32, ordinal: u32) -> VPos {
@@ -207,8 +222,8 @@ pub fn genesis() -> World {
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 1]), false))
         .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 1, 1]), PrincipalId(3)))
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 1]), false))
-        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 2]), false))
-        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 3]), true))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, nth_doc(2)]), false))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, nth_doc(3)]), true))
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 1, 0, 1]), false));
     World {
         m3,
@@ -219,17 +234,17 @@ pub fn genesis() -> World {
 
 /// [`genesis`] plus one version MEMBER under each of doc1 and pdoc, each
 /// journaled with the bit its DOCUMENT does NOT carry — `[1,0,1,0,1,1]`
-/// (a member of the private doc1) stamped `true`, `[1,0,1,0,3,1]` (a member
-/// of the published pdoc) stamped `false`. Neither state is one the write
-/// path admits any more (PUB-2.7, PUB-2.9); both are reachable by fold, and
-/// they are exactly what tells a projected read (PUB-2.15) from a read of the
-/// member's own bit.
+/// (a member of the private doc1) stamped `true`, `[1,0,1,0,nth_doc(3),1]`
+/// (a member of the published pdoc) stamped `false`. Neither state is one
+/// the write path admits any more (PUB-2.7, PUB-2.9); both are reachable by
+/// fold, and they are exactly what tells a projected read (PUB-2.15) from a
+/// read of the member's own bit.
 pub fn genesis_with_members() -> World {
     let world = genesis();
     let m3 = world
         .m3
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 1, 1]), true))
-        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 3, 1]), false));
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, nth_doc(3), 1]), false));
     World { m3, ..world }
 }
 

@@ -85,7 +85,7 @@ fn delete_contracts_the_arrangement_and_touches_neither_content_nor_r() {
 fn delete_rejects_in_documented_order() {
     let k = mem_kernel();
     let vs = insert_abc(&k);
-    let unregistered_doc = a(&[1, 0, 1, 0, 9]);
+    let unregistered_doc = a(&[1, 0, 1, 0, 71]);
     assert!(matches!(
         rejected(vs.delete(P1, &unregistered_doc, vp(1, 1), n(1), now(&k))),
         DeleteError::DocNotRegistered

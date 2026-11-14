@@ -40,12 +40,18 @@ pub fn addr(comps: &[u32]) -> Address {
     validate(t).expect("a T4-valid address")
 }
 
-/// The document `1.0.1.0.n`.
+/// The namespace's first ordinary document: an account's documents past its
+/// home page are numbered from it, past the reserved block of well-known
+/// slots. This crate links no namespace, so the number is named here, once.
+const FIRST_ORDINARY_DOCUMENT: u32 = 64;
+
+/// The account `1.0.1`'s `n`-th document: its home page `1.0.1.0.1`, then
+/// the rest from [`FIRST_ORDINARY_DOCUMENT`] on.
 pub fn doc(n: u32) -> Address {
-    addr(&[1, 0, 1, 0, n])
+    addr(&[1, 0, 1, 0, if n == 1 { 1 } else { FIRST_ORDINARY_DOCUMENT + n - 2 }])
 }
 
-/// The key of document `1.0.1.0.n`.
+/// The key of the account `1.0.1`'s `n`-th document, [`doc`]`(n)`.
 pub fn key(n: u32) -> UnitKey {
     UnitKey::new(doc(n))
 }

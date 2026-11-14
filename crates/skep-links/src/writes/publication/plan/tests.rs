@@ -1,13 +1,28 @@
 use skep_address::{validate, Nat, Tumbler};
 use skep_arrangement::{head_lock_key, Base, MintedRun, ShotRun, VPos};
 use skep_kernel::LockKey;
-use skep_namespace::M3State;
+use skep_namespace::{M3State, FIRST_ORDINARY_DOCUMENT};
 
 use super::super::{publication_lock_keys, AlsoPlaces};
 use super::*;
 
 fn a(comps: &[u32]) -> Address {
     validate(Tumbler::new(comps.iter().map(|&c| Nat::from(c))).unwrap()).unwrap()
+}
+
+/// The number of the owner's account's `k`-th document: its home page is 1,
+/// and its documents past it are numbered from `FIRST_ORDINARY_DOCUMENT` on,
+/// past the reserved block of well-known slots. Its second is the private
+/// draft beside doc1, and the edition `E` and the set `S` are its third and
+/// fourth; every address these cells spell at or below one of them reads
+/// its number here, worked out from that constant and never spelled.
+fn nth_doc(k: u32) -> u32 {
+    assert_ne!(k, 0, "an account has no 0th document");
+    if k == 1 {
+        1
+    } else {
+        FIRST_ORDINARY_DOCUMENT + k - 2
+    }
 }
 
 /// doc1's content element `k`.
@@ -17,7 +32,7 @@ fn ca(k: u32) -> Address {
 
 /// The edition's content element `k`.
 fn pca(k: u32) -> Address {
-    a(&[1, 0, 1, 0, 3, 0, 1, k])
+    a(&[1, 0, 1, 0, nth_doc(3), 0, 1, k])
 }
 
 fn run(start: &Address, width: u32) -> Run {
@@ -101,7 +116,7 @@ fn the_request_image_and_the_member_image_spell_one_canonical_row() {
         keep_base: false,
         runs: vec![
             ShotRun { origin: draft.clone(), run: run(&ca(1), 2) },
-            ShotRun { origin: a(&[1, 0, 1, 0, 3]), run: run(&pca(1), 1) },
+            ShotRun { origin: a(&[1, 0, 1, 0, nth_doc(3)]), run: run(&pca(1), 1) },
             ShotRun { origin: draft.clone(), run: run(&ca(1), 2) },
         ],
     };
@@ -133,7 +148,7 @@ fn the_request_image_and_the_member_image_spell_one_canonical_row() {
 /// member-position end through the member's image.
 #[test]
 fn resolve_end_resolves_the_tags_and_the_member_positions_at_the_commit() {
-    let (member, edition) = (a(&[1, 0, 1, 0, 3, 1]), a(&[1, 0, 1, 0, 3]));
+    let (member, edition) = (a(&[1, 0, 1, 0, nth_doc(3), 1]), a(&[1, 0, 1, 0, nth_doc(3)]));
     let image = [run(&pca(1), 3)];
     let stored = PlannedEnd::Stored(enc([&edition]));
     assert_eq!(resolve_end(&stored, &member, Some(&edition), &image), Some(enc([&edition])));
@@ -157,8 +172,8 @@ fn resolve_end_resolves_the_tags_and_the_member_positions_at_the_commit() {
 /// sorted and deduped.
 #[test]
 fn a_family_publication_takes_each_also_drafts_link_key_and_its_content_key_where_its_entry_carries_a_place() {
-    let (edition, draft, other) = (a(&[1, 0, 1, 0, 3]), a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, 2]));
-    let other_ca = |k: u32| a(&[1, 0, 1, 0, 2, 0, 1, k]);
+    let (edition, draft, other) = (a(&[1, 0, 1, 0, nth_doc(3)]), a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, nth_doc(2)]));
+    let other_ca = |k: u32| a(&[1, 0, 1, 0, nth_doc(2), 0, 1, k]);
     let shot = |also: Vec<Address>, runs: Vec<ShotRun>| Shot { base: None, draft: Some(draft.clone()), also, keep_base: false, runs };
     let target = PublishTarget::Document(edition.clone());
     let none = PublishDeposits::default();
@@ -213,8 +228,8 @@ fn a_family_publication_takes_each_also_drafts_link_key_and_its_content_key_wher
 /// set holds in either case; the birth shape, no base, takes neither.
 #[test]
 fn a_bare_base_takes_the_first_members_version_key_and_a_member_base_its_own() {
-    let (edition, draft) = (a(&[1, 0, 1, 0, 3]), a(&[1, 0, 1, 0, 1]));
-    let (first, second) = (a(&[1, 0, 1, 0, 3, 1]), a(&[1, 0, 1, 0, 3, 2]));
+    let (edition, draft) = (a(&[1, 0, 1, 0, nth_doc(3)]), a(&[1, 0, 1, 0, 1]));
+    let (first, second) = (a(&[1, 0, 1, 0, nth_doc(3), 1]), a(&[1, 0, 1, 0, nth_doc(3), 2]));
     let target = PublishTarget::Document(edition.clone());
     let none = PublishDeposits::default();
     let shot = |base: Option<Base>| Shot { base, draft: Some(draft.clone()), also: vec![], keep_base: false, runs: vec![ShotRun { origin: draft.clone(), run: run(&ca(1), 2) }] };
@@ -302,22 +317,22 @@ impl HasM5 for World {
 
 /// The edition `E`, the owner's third document, published.
 fn trunk() -> Address {
-    a(&[1, 0, 1, 0, 3])
+    a(&[1, 0, 1, 0, nth_doc(3)])
 }
 
 /// `E.k`, a trunk member.
 fn member(k: u32) -> Address {
-    a(&[1, 0, 1, 0, 3, k])
+    a(&[1, 0, 1, 0, nth_doc(3), k])
 }
 
 /// `E.k.m`, a daughter of `E.k`.
 fn daughter(k: u32, m: u32) -> Address {
-    a(&[1, 0, 1, 0, 3, k, m])
+    a(&[1, 0, 1, 0, nth_doc(3), k, m])
 }
 
 /// The owner's other published document, the set `S`.
 fn set() -> Address {
-    a(&[1, 0, 1, 0, 4])
+    a(&[1, 0, 1, 0, nth_doc(4)])
 }
 
 /// The sibling account's published document.
@@ -343,7 +358,7 @@ fn chain_world() -> World {
         .apply_m3(at, &M3Rec::allocate(a(&[1, 0, 2]), false))
         .apply_m3(at, &M3Rec::register_principal(a(&[1, 0, 2]), PrincipalId(2)))
         .apply_m3(at, &M3Rec::allocate(a(&[1, 0, 1, 0, 1]), false))
-        .apply_m3(at, &M3Rec::allocate(a(&[1, 0, 1, 0, 2]), false))
+        .apply_m3(at, &M3Rec::allocate(a(&[1, 0, 1, 0, nth_doc(2)]), false))
         .apply_m3(at, &M3Rec::allocate(trunk(), true))
         .apply_m3(at, &M3Rec::allocate(set(), true))
         .apply_m3(at, &M3Rec::allocate(theirs(), true))
@@ -384,7 +399,7 @@ fn a_supersede_entry_plans_the_daughters_claim_in_the_trunk_behind_the_other_kin
         home: NamedAddress::Address(trunk()),
         from: EndArg::Addrs(vec![]),
         to: EndArg::Addrs(vec![]),
-        ty: EndArg::Addrs(vec![NamedAddress::Address(a(&[1, 0, 1, 0, 3, 0, 3, 6, 1]))]),
+        ty: EndArg::Addrs(vec![NamedAddress::Address(a(&[1, 0, 1, 0, nth_doc(3), 0, 3, 6, 1]))]),
         old: None,
     };
     let deposits = PublishDeposits { links: vec![copy], supersede: vec![daughter(1, 1), member(1)], ..PublishDeposits::default() };
@@ -416,7 +431,7 @@ fn each_supersede_refusal_names_its_entry_and_its_cause() {
     assert_eq!(refused(supersede(vec![trunk()])), not_member(0), "the trunk itself");
     assert_eq!(refused(supersede(vec![set()])), not_member(0), "a document outside the chain");
     assert_eq!(refused(supersede(vec![member(3)])), not_member(0), "a member not yet minted");
-    assert_eq!(refused(supersede(vec![a(&[1, 0, 1, 0, 3, 0, 1, 1])])), not_member(0), "an element address");
+    assert_eq!(refused(supersede(vec![a(&[1, 0, 1, 0, nth_doc(3), 0, 1, 1])])), not_member(0), "an element address");
     assert_eq!(refused(supersede(vec![theirs()])), not_member(0), "another account's document");
     assert_eq!(refused(supersede(vec![daughter(1, 1), member(2)])), PlanFault::Supersede { index: 1, cause: SupersedeCause::Base }, "the base");
     assert_eq!(
@@ -431,7 +446,7 @@ fn each_supersede_refusal_names_its_entry_and_its_cause() {
         not_member(0),
         "the mint form has no chain before the commit"
     );
-    let both = PublishDeposits { read_with: vec![a(&[1, 0, 1, 0, 2])], supersede: vec![trunk()], ..PublishDeposits::default() };
+    let both = PublishDeposits { read_with: vec![a(&[1, 0, 1, 0, nth_doc(2)])], supersede: vec![trunk()], ..PublishDeposits::default() };
     assert!(matches!(refused(both), PlanFault::ReadWith { index: 0, .. }), "(5) speaks ahead of (6)");
 }
 
@@ -454,7 +469,7 @@ fn a_supersede_list_beside_a_base_the_trunk_moved_past_is_refused_whole_as_head_
         assert_eq!(refused(supersede(vec![daughter(1, 1)])), head_moved, "{name}");
         assert_eq!(refused(supersede(vec![daughter(1, 1), trunk()])), head_moved, "{name}: ahead of the second entry's `not_member`");
         assert_eq!(refused(supersede(vec![trunk()])), head_moved, "{name}: ahead of the first entry's own `not_member`");
-        let rw = PublishDeposits { read_with: vec![a(&[1, 0, 1, 0, 2])], supersede: vec![daughter(1, 1)], ..PublishDeposits::default() };
+        let rw = PublishDeposits { read_with: vec![a(&[1, 0, 1, 0, nth_doc(2)])], supersede: vec![daughter(1, 1)], ..PublishDeposits::default() };
         assert!(matches!(refused(rw), PlanFault::ReadWith { index: 0, .. }), "{name}: (5) speaks ahead of (6)");
         assert!(plan_deposits(&world, P1, &target, &shot, &PublishDeposits::default()).expect("planned").is_empty(), "{name}: no daughter, no refusal");
     }
@@ -468,7 +483,7 @@ fn a_supersede_list_beside_a_base_the_trunk_moved_past_is_refused_whole_as_head_
     // bare document and in the birth shape — no head, so each entry's own
     // check speaks.
     let memberless = PublishTarget::Document(set());
-    let s1 = a(&[1, 0, 1, 0, 4, 1]);
+    let s1 = a(&[1, 0, 1, 0, nth_doc(4), 1]);
     let birth = Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![] };
     for shot in [off(&set()), birth] {
         let refused = plan_deposits(&world, P1, &memberless, &shot, &supersede(vec![s1.clone()])).expect_err("refused");
@@ -488,7 +503,7 @@ fn a_daughter_a_claim_of_the_callers_own_names_is_skipped_and_anothers_or_a_retr
     let plan_of = |world: &World, daughters: Vec<Address>| plan_deposits(world, P1, &target, &shot, &supersede(daughters)).expect("planned");
     let own = with_claim(chain_world(), &trunk(), 1, &daughter(1, 1), &member(2));
     assert!(plan_of(&own, vec![daughter(1, 1)]).is_empty(), "the caller's own claim in the trunk: skipped");
-    let elsewhere = with_claim(chain_world(), &a(&[1, 0, 1, 0, 2]), 1, &daughter(1, 1), &a(&[1, 0, 1, 0, 2, 0, 2, 9]));
+    let elsewhere = with_claim(chain_world(), &a(&[1, 0, 1, 0, nth_doc(2)]), 1, &daughter(1, 1), &a(&[1, 0, 1, 0, nth_doc(2), 0, 2, 9]));
     assert!(plan_of(&elsewhere, vec![daughter(1, 1)]).is_empty(), "a claim in the caller's draft onto a link: skipped all the same");
     let not_mine = with_claim(chain_world(), &theirs(), 1, &daughter(1, 1), &member(2));
     assert_eq!(
@@ -573,7 +588,7 @@ fn take_off(copy: &Address, old: &Address, rest: Vec<Span>) -> PublishDeposits {
 /// fresh mark over the rest in the end that holds it.
 #[test]
 fn an_original_of_a_fenced_class_takes_no_fresh_mark_and_a_plain_one_does() {
-    let (draft, draft_word, trunk_word) = (a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, 1, 0, 1, 1]), a(&[1, 0, 1, 0, 3, 0, 1, 1]));
+    let (draft, draft_word, trunk_word) = (a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, 1, 0, 1, 1]), a(&[1, 0, 1, 0, nth_doc(3), 0, 1, 1]));
     let span = |start: &Address, width: u32| Run::new(start.clone(), Nat::from(width)).unwrap().iextent();
     let copy = link_in(&trunk(), 1);
     let plain_ty = a(&[1, 1, 0, 1, 0, 1, 0, 3, 23, 2]);
@@ -613,7 +628,7 @@ fn an_original_of_a_fenced_class_takes_no_fresh_mark_and_a_plain_one_does() {
 #[test]
 fn a_publication_naming_an_original_takes_its_homes_link_key() {
     let (target, shot) = (PublishTarget::Document(trunk()), off(&member(2)));
-    let draft = a(&[1, 0, 1, 0, 2]);
+    let draft = a(&[1, 0, 1, 0, nth_doc(2)]);
     let keys = publication_lock_keys(&target, &shot, &[], &[], &PublishDeposits::default());
     assert!(!keys.contains(&M3State::link_lock_key(&draft)), "no original: no key: {keys:?}");
     let keys = publication_lock_keys(&target, &shot, &[], &[], &take_off(&link_in(&trunk(), 1), &link_in(&draft, 1), vec![]));

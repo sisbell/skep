@@ -14,7 +14,7 @@ use crate::deposit::Deposit;
 use crate::ops::AsOf;
 use crate::shot::{Base, ShotRun};
 use crate::state::M5State;
-use crate::testutil::{a, ca, doc1, mem_kernel_of, n, pca, pdoc, rejected, run, seeded_m3, vp};
+use crate::testutil::{a, ca, doc1, mem_kernel_of, n, nth_doc, pca, pdoc, rejected, run, seeded_m3, vp};
 
 /// A world carrying all three slices the SHOT touches — M3 (its member's
 /// mint), M4 (the existence check and the re-insert's writes) and M5 (the
@@ -102,7 +102,7 @@ impl HasM5 for ShotWorld {
 
 /// pdoc's first member, the head of its chain in `shot_kernel`'s world.
 fn pdoc_member() -> Address {
-    a(&[1, 0, 1, 0, 3, 1])
+    a(&[1, 0, 1, 0, nth_doc(3), 1])
 }
 
 /// pdoc with `pdoc_member()` heading its chain and arranging
@@ -433,7 +433,7 @@ fn a_shot_refused_after_its_reinsert_is_staged_leaves_no_mint_no_write_and_no_me
         "the staged mint is gone"
     );
     assert!(
-        !m3.is_registered_document(&a(&[1, 0, 1, 0, 3, 2])),
+        !m3.is_registered_document(&a(&[1, 0, 1, 0, 65, 2])),
         "no member"
     );
     let (member, _) = vs

@@ -249,11 +249,11 @@ fn the_rows_read_their_members_first_and_answer_no_merge_with_nothing_composed()
     assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1.1", "alternative": "1.0.2.0.1.1.1"})), "doc", "a member, no bare document");
     assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1", "alternative": "1.0.2.0.1.1"})), "alternative", "a trunk member is no daughter");
     assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1", "alternative": "1.0.3.0.1.1.1"})), "alternative", "another document's daughter");
-    assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1", "alternative": "1.0.2.0.1.1.1", "draft": "1.0.2.0.4"})), "draft", "both forms");
+    assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1", "alternative": "1.0.2.0.1.1.1", "draft": "1.0.2.0.66"})), "draft", "both forms");
     assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1"})), "alternative or draft", "neither form");
-    assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1", "draft": "1.0.2.0.4", "into": "1.0.2.0.4"})), "into", "the draft side itself");
+    assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1", "draft": "1.0.2.0.66", "into": "1.0.2.0.66"})), "into", "the draft side itself");
     assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1", "alternative": "1.0.2.0.1.1.1", "into": 7})), "into", "another form");
-    for in_form in [json!({"session": "s-gone", "doc": "1.0.2.0.1", "alternative": "1.0.2.0.1.1.1"}), json!({"session": "s-gone", "doc": "1.0.2.0.1", "draft": "1.0.2.0.4", "into": "1.0.2.0.5"})] {
+    for in_form in [json!({"session": "s-gone", "doc": "1.0.2.0.1", "alternative": "1.0.2.0.1.1.1"}), json!({"session": "s-gone", "doc": "1.0.2.0.1", "draft": "1.0.2.0.66", "into": "1.0.2.0.67"})] {
         assert_eq!(shell.call("merge.compose", &in_form).unwrap_err().name(), "session_ended", "{in_form}: in its form, the members pass to the session");
     }
     let refused = shell.call("merge.withdraw", &json!({"session": "s-gone"})).unwrap_err().to_value();
@@ -266,7 +266,7 @@ fn the_rows_read_their_members_first_and_answer_no_merge_with_nothing_composed()
     }
     let keyless = shell.call("merge.compose", &json!({"session": bare, "doc": "1.0.1.0.1", "alternative": "1.0.1.0.1.1.1"})).unwrap_err();
     assert_eq!((keyless.name(), keyless.to_value()["call"].as_str()), ("write_in_bare_session", Some("merge.compose")), "{keyless}");
-    let keyless = shell.call("merge.withdraw", &json!({"session": bare, "draft": "1.0.1.0.4"})).unwrap_err();
+    let keyless = shell.call("merge.withdraw", &json!({"session": bare, "draft": "1.0.1.0.66"})).unwrap_err();
     assert_eq!((keyless.name(), keyless.to_value()["call"].as_str()), ("write_in_bare_session", Some("merge.withdraw")), "{keyless}");
 }
 
@@ -336,9 +336,9 @@ fn already_published_crosses_as_typed_data_naming_the_draft_and_the_member() {
     let (shell, _) = open_shell(&super::door::nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
     let standing = register(&shell, "8e", signed_facts(2));
     let parse = |text: &str| skep_client::address::parse_address(text).expect("an address");
-    let crossed = shell.merge_refusal(&shell.sessions.get(&standing).unwrap(), Library::AlreadyPublished { draft: parse("1.0.1.0.2"), member: parse("1.0.1.0.3.1") });
+    let crossed = shell.merge_refusal(&shell.sessions.get(&standing).unwrap(), Library::AlreadyPublished { draft: parse("1.0.1.0.64"), member: parse("1.0.1.0.65.1") });
     let v = crossed.to_value();
-    assert_eq!((crossed.name(), v["arm"].as_str(), v["draft"].as_str(), v["member"].as_str()), ("merge_refused", Some("already_published"), Some("1.0.1.0.2"), Some("1.0.1.0.3.1")), "{v}");
+    assert_eq!((crossed.name(), v["arm"].as_str(), v["draft"].as_str(), v["member"].as_str()), ("merge_refused", Some("already_published"), Some("1.0.1.0.64"), Some("1.0.1.0.65.1")), "{v}");
     assert_eq!(shell.call("merge.land", &json!({"session": standing})).unwrap_err().name(), "no_merge", "the session stands");
     shell.shutdown();
 }
@@ -444,7 +444,7 @@ fn answer_as_a_trunk(mut stream: std::net::TcpStream, doc: &str, members: Option
 /// after the head).
 #[test]
 fn the_head_read_is_refused_past_its_doubling_and_hands_the_composition_the_newest_member() {
-    let doc = "1.0.2.0.2";
+    let doc = "1.0.2.0.64";
     let compose = |members: Option<u64>| -> (Refusal, Vec<Value>) {
         let dir = TempDir::new().unwrap();
         let (origin, frames) = trunk_board(doc, members);

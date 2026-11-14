@@ -403,7 +403,7 @@ fn a_baseless_draft_is_admitted_with_nothing_moved_and_refuses_a_base_by_name() 
     expect_resp(&ack, "ack");
     assert_eq!(content_extent(port, Some(&owner), &plain), 0, "emptied");
     // The wire's example, verbatim: parsed and answered as the op.
-    let example = r#"{"as_of":12,"base":{"at":"1.0.1.0.1.2","extent":"6"},"doc":"1.0.1.0.2","head":{"at":"1.0.1.0.1.2","extent":"6"},"merge":{"sides":["1.0.1.0.1.1.1"]},"op":"set_arrangement","runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"4"},{"i_start":"1.0.1.0.2.0.1.1","origin":"1.0.1.0.2","width":"2"}]}"#;
+    let example = r#"{"as_of":12,"base":{"at":"1.0.1.0.1.2","extent":"6"},"doc":"1.0.1.0.64","head":{"at":"1.0.1.0.1.2","extent":"6"},"merge":{"sides":["1.0.1.0.1.1.1"]},"op":"set_arrangement","runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"4"},{"i_start":"1.0.1.0.64.0.1.1","origin":"1.0.1.0.64","width":"2"}]}"#;
     let v = op_as_written(port, Some(&owner), example);
     assert_eq!(v["resp"].as_str(), Some("rejected"), "{v}");
     assert_eq!(v["op"].as_str(), Some("set_arrangement"), "the frame is the op: {v}");

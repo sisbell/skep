@@ -190,9 +190,9 @@ pub fn doc1() -> Address {
     a(&[1, 0, 1, 0, 1])
 }
 
-/// Document 2: `[1,0,1,0,2]`.
+/// Doc2, the owner's account's second document: [`doc`]`(2)`.
 pub fn doc2() -> Address {
-    a(&[1, 0, 1, 0, 2])
+    doc(2)
 }
 
 /// doc1 content element `k`: `[1,0,1,0,1,0,1,k]`.
@@ -205,9 +205,9 @@ pub fn la(k: u32) -> Address {
     a(&[1, 0, 1, 0, 1, 0, 2, k])
 }
 
-/// doc2 link element `k`: `[1,0,1,0,2,0,2,k]`.
+/// doc2 link element `k`: `[1,0,1,0,nth_doc(2),0,2,k]`.
 pub fn la2(k: u32) -> Address {
-    a(&[1, 0, 1, 0, 2, 0, 2, k])
+    a(&[1, 0, 1, 0, nth_doc(2), 0, 2, k])
 }
 
 /// Reserved type address `k` — ghost tumbler `[1,1,0,1,0,1,0,1,k]`, content
@@ -308,11 +308,11 @@ pub fn retraction_ty() -> Endset {
 }
 
 /// An UNREGISTERED type's address — an ordinary content address of a foreign
-/// document (`[1,0,9,0,9,0,1,k]`). A type is a number: the open surface
+/// document (`[1,0,9,0,71,0,1,k]`). A type is a number: the open surface
 /// deposits it verbatim, and the managed surface refuses it `NotRegistered`,
 /// because the registry's population is the shipped five and nothing else.
 pub fn unregistered_ta(k: u32) -> Address {
-    a(&[1, 0, 9, 0, 9, 0, 1, k])
+    a(&[1, 0, 9, 0, 71, 0, 1, k])
 }
 
 /// [`unregistered_ta`] as the one-address type endset the reads take.
@@ -328,8 +328,8 @@ pub fn unregistered_ty(k: u32) -> Endset {
 /// SIBLING account [1,0,2] → principal 2 with its own document [1,0,2,0,1]
 /// — the ownership-gate probe fixtures (as amended 2026-08-16). The
 /// publication bits are the flagless create path's (PUB-8.21): each
-/// account's first document born published, [1,0,1,0,2] private; an
-/// account's `Allocate` carries no publication state.
+/// account's first document born published, [`doc2`] private; an account's
+/// `Allocate` carries no publication state.
 pub fn seeded_m3() -> M3State {
     M3State::genesis()
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1]), false))
@@ -342,7 +342,7 @@ pub fn seeded_m3() -> M3State {
         // state M3 produces below the daemon's door. The sibling's document
         // keeps its born-published bit: nothing edits it.
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 1]), false))
-        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 2]), false))
+        .apply_m3(Seq(0), &M3Rec::allocate(doc(2), false))
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 2, 0, 1]), true))
 }
 
@@ -351,22 +351,22 @@ pub fn sib_doc() -> Address {
     a(&[1, 0, 2, 0, 1])
 }
 
-/// Principal 1's PUBLISHED edition: `[1,0,1,0,3]`, registered by
-/// [`edition_world`] alone — the target the publication suite's shots
-/// append to, M5's `pdoc` by another name.
+/// Principal 1's PUBLISHED edition, the account's third document,
+/// [`doc`]`(3)`: registered by [`edition_world`] alone — the target the
+/// publication suite's shots append to, M5's `pdoc` by another name.
 pub fn pdoc() -> Address {
-    a(&[1, 0, 1, 0, 3])
+    doc(3)
 }
 
-/// The edition's content element at `ordinal`: `[1,0,1,0,3,0,1,k]`, where
-/// a shot's fresh identity lands.
+/// The edition's content element at `ordinal`:
+/// `[1,0,1,0,nth_doc(3),0,1,k]`, where a shot's fresh identity lands.
 pub fn pca(k: u32) -> Address {
-    a(&[1, 0, 1, 0, 3, 0, 1, k])
+    a(&[1, 0, 1, 0, nth_doc(3), 0, 1, k])
 }
 
-/// The edition's `k`-th trunk member: `[1,0,1,0,3,k]`.
+/// The edition's `k`-th trunk member: `[1,0,1,0,nth_doc(3),k]`.
 pub fn pmember(k: u32) -> Address {
-    a(&[1, 0, 1, 0, 3, k])
+    a(&[1, 0, 1, 0, nth_doc(3), k])
 }
 
 /// [`genesis_world`] with [`pdoc`] registered published, an explicit `true`
@@ -384,19 +384,27 @@ pub fn edition_world() -> World {
 /// doc1 at `[1,0,1,0,1]`, and the rest from `FIRST_ORDINARY_DOCUMENT` on,
 /// past the reserved block of well-known slots — the homes
 /// [`many_documents`] registers, and the document a mint over any fixture
-/// here answers. The second is NOT the seeded fixtures' [`doc2`], which
-/// stands at a slot of that block.
+/// here answers. The second and third are the seeded fixtures' [`doc2`] and
+/// [`pdoc`].
 pub fn doc(d: u32) -> Address {
     a(&[1, 0, 1, 0, if d == 1 { 1 } else { FIRST_ORDINARY_DOCUMENT + d - 2 }])
+}
+
+/// The number of the owner's account's `d`-th document, [`doc`]`(d)`'s last
+/// component: the document place of an address these fixtures spell below
+/// one of its documents, as [`pmember`] does.
+pub fn nth_doc(d: u32) -> u32 {
+    let home = doc(d);
+    let place = home.tumbler().iter().next_back().expect("a document's address is nonempty");
+    u32::try_from(place).expect("a document's number is small")
 }
 
 /// An M3 slice registering `count` private documents under the owner's
 /// account, [`doc`]`(1)` through [`doc`]`(count)`, each allocated at its
 /// chain's next ordinal as M3's fold requires — the many-homes fixture the
 /// cost laws and the open's timing read, where [`seeded_m3`]'s two documents
-/// cannot spread links over a thousand homes. Doc1 is the first, so every
-/// doc1 fixture address holds; no slot of the reserved block is filled, so
-/// [`doc2`] is not registered here.
+/// cannot spread links over a thousand homes. Doc1 and doc2 are the first
+/// two, so every fixture address holds.
 pub fn many_documents(count: u32) -> M3State {
     let mut m3 = M3State::genesis()
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1]), false))

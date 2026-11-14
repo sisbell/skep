@@ -141,7 +141,7 @@ fn ownership_stands_ahead_of_the_published_target_refusal() {
         rejected(vs.insert(p2, &pdoc(), vp(1, 4), vec![val(b"x")], declared(), now(&k))),
         InsertError::NotOwner(d) if d == pdoc()
     ));
-    let never_minted_member = a(&[1, 0, 1, 0, 3, 7]);
+    let never_minted_member = a(&[1, 0, 1, 0, 65, 7]);
     assert!(matches!(
         rejected(vs.insert(P1, &never_minted_member, vp(1, 1), vec![val(b"x")], Deposit::Undeclared, now(&k))),
         InsertError::DocNotRegistered
@@ -356,7 +356,7 @@ fn a_version_member_target_is_judged_as_its_document() {
     // contradicting bits, so this cannot pass by reading the member.
     let k = mem_kernel_of(genesis_with_members());
     let vs = Vstream::new(&k);
-    let member_of_edition = a(&[1, 0, 1, 0, 3, 1]);
+    let member_of_edition = a(&[1, 0, 1, 0, nth_doc(3), 1]);
     let member_of_draft = a(&[1, 0, 1, 0, 1, 1]);
     assert!(matches!(
         rejected(vs.insert(P1, &member_of_edition, vp(1, 1), vec![val(b"x")], Deposit::Undeclared, now(&k))),

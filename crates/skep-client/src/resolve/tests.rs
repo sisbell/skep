@@ -221,7 +221,7 @@ fn a(text: &str) -> Address {
 /// signed one).
 #[test]
 fn a_cross_board_address_is_read_as_the_wire_spells_one() {
-    assert_eq!(a("1.05.0.1.0.2"), a("1.5.0.1.0.2"), "a leading zero names its one address");
+    assert_eq!(a("1.05.0.1.0.64"), a("1.5.0.1.0.64"), "a leading zero names its one address");
     assert_eq!(a("1.18446744073709551616.0.1").to_string(), "1.18446744073709551616.0.1", "a component past a machine word");
     for none in ["", "+1.5.0.1", "1.5.0.+1", "1..5", "1.5.0", "0.1", "1.5.0.0.1", "one.5"] {
         assert_eq!(global_address(none), None, "{none:?}");
@@ -240,14 +240,14 @@ fn a_cross_board_address_is_read_as_the_wire_spells_one() {
 #[test]
 fn the_prefix_is_the_node_field_whole_and_the_local_form_swaps_it_for_one() {
     let rows = [
-        ("1.5.0.1.0.2", "1.5", Some("1.0.1.0.2")),
+        ("1.5.0.1.0.64", "1.5", Some("1.0.1.0.64")),
         ("1.5.0.1", "1.5", Some("1.0.1")),
         ("1.5.0.7.0.1.0.2.9", "1.5", Some("1.0.7.0.1.0.2.9")),
         ("1.5.3.0.7.0.1.3.0.1.4", "1.5.3", Some("1.0.7.0.1.3.0.1.4")),
         ("1.5", "1.5", None),
         ("1.5.3", "1.5.3", None),
         ("1", "1", None),
-        ("1.0.1.0.2", "1", Some("1.0.1.0.2")),
+        ("1.0.1.0.64", "1", Some("1.0.1.0.64")),
         ("7.0.3", "7", Some("1.0.3")),
         ("1.18446744073709551616.0.1", "1.18446744073709551616", Some("1.0.1")),
     ];
@@ -450,14 +450,14 @@ fn bound_is_answered_by_one_line_and_by_its_object() {
             MemberOutcome::WouldDial { origin: origin("https://acme.example"), kind: MemberKind::Https, addresses: vec![public] },
         ],
     };
-    let asked = answered("1.5.0.1.0.2", bound(Some(vec![enrolled.clone()])));
-    assert_eq!(asked.line().as_deref(), Some("https://acme.example 1.0.1.0.2"));
+    let asked = answered("1.5.0.1.0.64", bound(Some(vec![enrolled.clone()])));
+    assert_eq!(asked.line().as_deref(), Some("https://acme.example 1.0.1.0.64"));
     let binding = json!({ "link": "1.0.1.0.1.0.2.1", "position": 10, "home": "1.0.1.0.1", "account": "1.0.2", "replaces": null, "honored": true, "verdict": "SIGNED", "signed_by": "ab".repeat(32) });
     let expected = json!({
         "face": "BOUND",
-        "address": "1.5.0.1.0.2",
+        "address": "1.5.0.1.0.64",
         "prefix": "1.5",
-        "local": "1.0.1.0.2",
+        "local": "1.0.1.0.64",
         "account": "1.0.2",
         "binding": binding,
         "history": [binding],
@@ -629,7 +629,7 @@ fn an_unanswered_root_halts_as_transport_and_leaves_no_line_of_a_copy() {
     let dialed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let ask = |dir: &Path| {
         let dialer = Counting { dialed: dialed.clone(), refusal: DialError::Connect("down".into()) };
-        resolve_address(Arc::new(dialer), &hint, dir, &a("1.5.0.1.0.2"), &SystemResolver, &Transports::default())
+        resolve_address(Arc::new(dialer), &hint, dir, &a("1.5.0.1.0.64"), &SystemResolver, &Transports::default())
     };
     for run in 1..=2 {
         assert_eq!(ask(&dir), Err(Halt::Dial(DialError::Connect("down".into()))), "run {run}");

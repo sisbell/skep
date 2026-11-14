@@ -74,7 +74,7 @@ fn ts_ordinal_shift_is_strictly_increasing_length_preserving_and_additive() {
         t(&[1]),
         t(&[1, 0]),
         t(&[2, 5]),
-        t(&[1, 0, 2, 0, 5, 0, 1, 9]),
+        t(&[1, 0, 2, 0, 67, 0, 1, 9]),
         tumbler([Nat::from(u64::MAX)]),
         tumbler([n(2), Nat::from(u64::MAX)]),
     ];

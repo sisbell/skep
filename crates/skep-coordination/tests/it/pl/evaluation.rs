@@ -438,7 +438,7 @@ fn the_quantifiers_denote_all_and_any() {
 fn in_coverage_reads_coverage_not_denotation_and_derives_the_audit_is_k() {
     let k = kernel();
     let c = coord(&k);
-    let in_doc2 = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let in_doc2 = a(&[1, 0, 1, 0, nth_doc(2), 0, 1, 1]);
     deposit_rel(&k, PRED_STABLE, &doc1(), &ca(2)); // F denotes doc1, covers its subtree
     deposit_rel(&k, PRED_STABLE, &ca(5), &doc2()); // G denotes doc2, covers its subtree
     let some_tuple = |body: Term| exists(2, Dom::AuditSlice(concrete(&pred_stable_ty())), body);

@@ -1472,4 +1472,4 @@ fn lost_row() -> Value {
 const DOC: &str = "1.0.1.0.1";
 
 /// A second document of the session's account.
-const OTHER: &str = "1.0.1.0.2";
+const OTHER: &str = "1.0.1.0.64";

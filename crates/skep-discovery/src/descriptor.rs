@@ -451,7 +451,7 @@ mod tests {
     /// from M7's home ranges rather than from the list.
     #[test]
     fn link_constraints_leave_the_home_slot_out_and_answer_none_for_its_zero() {
-        let home = enc(&[a(&[1, 0, 1, 0, 2])]);
+        let home = enc(&[a(&[1, 0, 1, 0, 64])]);
         let from = enc(&[a(&[1, 0, 1, 0, 1, 0, 1, 2])]);
         let homed = FourSet {
             home: SlotSpec::Spans(home),

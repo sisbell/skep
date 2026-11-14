@@ -124,7 +124,7 @@ fn every_transport_error_pairs_its_documented_name_with_its_documented_status() 
 #[test]
 fn every_status_outside_the_transport_errors_has_a_reason_phrase() {
     use skep_core::auth::session::SessionRejected;
-    let record = skep_core::codec::wire_address("1.0.1.0.7.1").expect("a record's address");
+    let record = skep_core::codec::wire_address("1.0.1.0.69.1").expect("a record's address");
     let rejected = refuse_handshake(&HandshakeRefusal::Rejected(SessionRejected));
     let blocked = refuse_handshake(&HandshakeRefusal::Blocked { record });
     for status in [rejected.status, blocked.status, Reply::preflight().status, 200] {
@@ -161,7 +161,7 @@ fn the_fetch_preflight_and_each_refusals_status_and_body() {
     assert_eq!(fetch.headers[0], ("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS"));
     assert_eq!(fetch.headers[1..], Reply::preflight().headers[1..]);
     assert_eq!((fetch.status, fetch.body.is_none()), (204, true));
-    let home = skep_core::codec::wire_address("1.0.1.0.2").expect("a document");
+    let home = skep_core::codec::wire_address("1.0.1.0.64").expect("a document");
     let withheld = Rejection::classified(
         OpKind::RetrieveI,
         RejectCode::Withheld,
@@ -171,7 +171,7 @@ fn the_fetch_preflight_and_each_refusals_status_and_body() {
     assert_eq!(r.status, 403);
     assert_eq!(
         String::from_utf8(r.bytes().to_vec()).expect("json"),
-        r#"{"code":"withheld","disposition":"reorder","op":"retrieve_i","resp":"rejected","site":{"addr":"1.0.1.0.2"}}"#
+        r#"{"code":"withheld","disposition":"reorder","op":"retrieve_i","resp":"rejected","site":{"addr":"1.0.1.0.64"}}"#
     );
     let unregistered =
         Rejection::classified(OpKind::RetrieveI, RejectCode::DocNotRegistered, None);

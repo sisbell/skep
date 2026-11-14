@@ -571,7 +571,7 @@ mod tests {
             let text = v["content"][0]["text"].as_str().expect("a text block");
             (v["isError"].as_bool().expect("isError"), serde_json::from_str(text).expect("JSON text"))
         };
-        let answer = json!({"resp": "ack_addr", "addr": "1.0.1.0.2", "at": 7});
+        let answer = json!({"resp": "ack_addr", "addr": "1.0.1.0.64", "at": 7});
         let (is_error, value) = read(&tool_result(Ok(answer.clone())));
         assert!(!is_error);
         assert_eq!(value, answer, "the shell's answer, whole");
@@ -592,7 +592,7 @@ mod tests {
             Refusal::named(Name::NO_KEY, face.clone()),
             Refusal::named(Name::STORE_UNREADABLE, Face { path: Some("/a/store/keys/x.key".into()), ..face.clone() }),
             Refusal::halt(face),
-            Refusal::Blocked(skep_client::Blocked { record: "1.0.1.0.7.1".into(), named_by: "http://x".into(), ground: None }),
+            Refusal::Blocked(skep_client::Blocked { record: "1.0.1.0.69.1".into(), named_by: "http://x".into(), ground: None }),
             Refusal::Unreachable(skep_client::DialError::Connect("refused".into())),
             Refusal::shell(Name::SESSION_ENDED, json!({"session": "s-1"})),
             Refusal::malformed("since"),

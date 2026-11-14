@@ -238,7 +238,7 @@ fn editlink_commits_successor_and_claim_together_and_guards_the_successor_type()
         Err(TxnError::Rejected(EditLinkError::OriginalNotResident))
     ));
     assert!(matches!(
-        w.editlink(P1, &orig, valid_successor.clone(), &a(&[1, 0, 1, 0, 7]), &doc1()),
+        w.editlink(P1, &orig, valid_successor.clone(), &a(&[1, 0, 1, 0, 69]), &doc1()),
         Err(TxnError::Rejected(EditLinkError::HomeNotRegistered))
     ));
     let arity4 = Link::new(vec![
@@ -341,7 +341,7 @@ fn editlink_reports_an_unregistered_home_before_a_non_resident_original() {
     let w = writer(&k);
     let successor_value = Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30));
     assert!(matches!(
-        w.editlink(P1, &la(90), successor_value, &a(&[1, 0, 1, 0, 7]), &doc1()),
+        w.editlink(P1, &la(90), successor_value, &a(&[1, 0, 1, 0, 69]), &doc1()),
         Err(TxnError::Rejected(EditLinkError::HomeNotRegistered))
     ));
 }

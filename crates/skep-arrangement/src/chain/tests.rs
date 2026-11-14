@@ -1,5 +1,5 @@
 use super::*;
-use crate::testutil::{a, doc1, pca, pdoc, seeded_m3};
+use crate::testutil::{a, doc1, nth_doc, pca, pdoc, seeded_m3};
 use skep_kernel::Seq;
 use skep_namespace::M3Rec;
 
@@ -15,9 +15,9 @@ fn a_bare_published_address_floats_to_its_trunk_head_and_nothing_else_moves() {
     assert_eq!(trunk_head(&m3, &pdoc()), None);
     assert_eq!(reading_surface(&m3, &pdoc()), pdoc());
     // The chain grows two trunk members and a daughter of the first.
-    let member1 = a(&[1, 0, 1, 0, 3, 1]);
-    let member2 = a(&[1, 0, 1, 0, 3, 2]);
-    let daughter = a(&[1, 0, 1, 0, 3, 1, 1]);
+    let member1 = a(&[1, 0, 1, 0, nth_doc(3), 1]);
+    let member2 = a(&[1, 0, 1, 0, nth_doc(3), 2]);
+    let daughter = a(&[1, 0, 1, 0, nth_doc(3), 1, 1]);
     let m3 = m3
         .apply_m3(Seq(0), &M3Rec::allocate(member1.clone(), true))
         .apply_m3(Seq(0), &M3Rec::allocate(member2.clone(), true))
@@ -50,9 +50,9 @@ fn a_declared_deposit_lands_on_the_head_whichever_chain_address_it_names() {
     let m3 = seeded_m3();
     let edition = pdoc();
     assert_eq!(deposit_surface(&m3, &edition), edition, "memberless: its own arrangement");
-    let member1 = a(&[1, 0, 1, 0, 3, 1]);
-    let member2 = a(&[1, 0, 1, 0, 3, 2]);
-    let daughter = a(&[1, 0, 1, 0, 3, 1, 1]);
+    let member1 = a(&[1, 0, 1, 0, nth_doc(3), 1]);
+    let member2 = a(&[1, 0, 1, 0, nth_doc(3), 2]);
+    let daughter = a(&[1, 0, 1, 0, nth_doc(3), 1, 1]);
     let m3 = m3
         .apply_m3(Seq(0), &M3Rec::allocate(member1.clone(), true))
         .apply_m3(Seq(0), &M3Rec::allocate(member2.clone(), true))
@@ -88,9 +88,9 @@ fn the_birth_version_is_the_trunks_first_member_whoever_asks() {
     let m3 = seeded_m3();
     let trunk = pdoc();
     assert_eq!(birth_version(&m3, &trunk), None, "memberless");
-    let member1 = a(&[1, 0, 1, 0, 3, 1]);
-    let member2 = a(&[1, 0, 1, 0, 3, 2]);
-    let daughter = a(&[1, 0, 1, 0, 3, 2, 1]);
+    let member1 = a(&[1, 0, 1, 0, nth_doc(3), 1]);
+    let member2 = a(&[1, 0, 1, 0, nth_doc(3), 2]);
+    let daughter = a(&[1, 0, 1, 0, nth_doc(3), 2, 1]);
     let m3 = m3
         .apply_m3(Seq(0), &M3Rec::allocate(member1.clone(), true))
         .apply_m3(Seq(0), &M3Rec::allocate(member2.clone(), true))
@@ -99,7 +99,7 @@ fn the_birth_version_is_the_trunks_first_member_whoever_asks() {
         assert_eq!(birth_version(&m3, named), Some(member1.clone()), "{named:?}");
         assert_eq!(is_birth_version(named), *named == member1, "{named:?}");
     }
-    for headless in [a(&[1, 0, 1]), pca(1), a(&[1, 0, 1, 0, 9])] {
+    for headless in [a(&[1, 0, 1]), pca(1), a(&[1, 0, 1, 0, 71])] {
         assert_eq!(trunk_head(&m3, &headless), None, "{headless:?}");
         assert_eq!(birth_version(&m3, &headless), None, "{headless:?}");
         assert!(!is_birth_version(&headless), "{headless:?}");
@@ -114,7 +114,7 @@ fn the_birth_version_is_the_trunks_first_member_whoever_asks() {
 #[test]
 fn the_publication_read_judges_a_member_as_its_document() {
     let member_of_draft = a(&[1, 0, 1, 0, 1, 1]);
-    let member_of_edition = a(&[1, 0, 1, 0, 3, 1]);
+    let member_of_edition = a(&[1, 0, 1, 0, nth_doc(3), 1]);
     let m3 = seeded_m3()
         .apply_m3(Seq(0), &M3Rec::allocate(member_of_draft.clone(), true))
         .apply_m3(Seq(0), &M3Rec::allocate(member_of_edition.clone(), false));

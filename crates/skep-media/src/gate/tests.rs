@@ -168,7 +168,7 @@ fn the_default_limit_is_a_share_of_the_capacity_and_an_install_overrides_it_whol
         venue_total: Some(100),
         lease_interval_ms: 1_000,
         per_file_cap: MAX_BLOB_BYTES,
-        address: Some("1.0.1.0.3.1".into()),
+        address: Some("1.0.1.0.65.1".into()),
     })
     .expect("a record at the route's cap installs");
     assert_eq!(gate.limits().per_file_cap, MAX_BLOB_BYTES, "the route's cap");
@@ -177,7 +177,7 @@ fn the_default_limit_is_a_share_of_the_capacity_and_an_install_overrides_it_whol
     assert!(!gate.index_ready(), "an opened gate's index is not ready until the walk");
     assert_eq!(MediaGate::principal_of_key(&MediaGate::key(p)), Some(p));
     assert_eq!(MediaGate::principal_of_key("k"), None);
-    assert!(gate.startup_line().contains("1.0.1.0.3.1"));
+    assert!(gate.startup_line().contains("1.0.1.0.65.1"));
     // The hold: one stream at a time, released as its guard drops.
     let id = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
     let hold = gate.claim(id).expect("a fresh id is claimable");
@@ -496,7 +496,7 @@ fn a_record_naming_a_cap_past_the_routes_is_refused_at_install_and_said_once() {
         venue_total: Some(100),
         lease_interval_ms: 1_000,
         per_file_cap: MAX_BLOB_BYTES + 1,
-        address: Some("1.0.1.0.3.1".into()),
+        address: Some("1.0.1.0.65.1".into()),
     };
     let refused = LimitsRefused::PerFileCap { named: MAX_BLOB_BYTES + 1, route: MAX_BLOB_BYTES };
     assert_eq!(gate.install(past.clone()), Err(refused.clone()));
@@ -561,7 +561,7 @@ fn the_rebuild_window_answers_rebuilding_where_the_lease_arm_alone_would_refuse(
     deposit(10_000);
     std::fs::remove_file(store.blob_path(DESIGNATION, &hex_string(&hash)).unwrap()).unwrap();
     assert_eq!(gate.binding(p, &cell), Binding::Rebuilding, "a live lease over no file: the state");
-    let at = addr("1.0.1.0.2.0.1.1");
+    let at = addr("1.0.1.0.64.0.1.1");
     gate.index().enter(&at, Some(p), &cell);
     ready(&gate);
     assert_eq!(gate.binding(p, &cell), Binding::Lapsed, "named, the file gone: the permanent verdict");
@@ -676,7 +676,7 @@ fn the_binding_reads_the_principals_own_lease_first_and_the_file_only_under_it()
     stream.finish(Duration::from_millis(10_000), now).unwrap();
     assert_eq!(gate.own_pending(p, now), 9, "no cell names it: the lease counts as pending");
     assert_eq!(gate.own_scope(p, now), 9);
-    let at = addr("1.0.1.0.2.0.1.1");
+    let at = addr("1.0.1.0.64.0.1.1");
     gate.index().enter(&at, Some(p), &cell);
     assert_eq!(gate.own_pending(p, now), 0, "a named hash counts in the base, not the pending");
     assert_eq!(gate.own_scope(p, now), 9, "the own scope is one number either way");
@@ -839,7 +839,7 @@ fn a_deposit_file_the_store_cannot_read_is_said_at_its_edges_and_never_admitted(
     assert!(gate.deposit_whole(DESIGNATION, &b.hex, b.cell.size));
     // The failed reads after the first: counted, unsaid.
     assert!(!gate.deposit_whole(DESIGNATION, &a.hex, a.cell.size), "an unread size is not whole");
-    gate.index().enter(&addr("1.0.1.0.2.0.1.1"), Some(p), &a.cell);
+    gate.index().enter(&addr("1.0.1.0.64.0.1.1"), Some(p), &a.cell);
     assert_eq!(gate.binding(p, &a.cell), Binding::Lapsed, "the index arm answers it as gone too");
     assert_eq!(
         gate.lines_said().len(),

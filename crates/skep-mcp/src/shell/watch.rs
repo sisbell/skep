@@ -315,7 +315,7 @@ mod tests {
             (json!({"arm": "retired", "fingerprint": "ab12", "hand": "cd34", "label": "second", "position": 9, "own": false}), "stops this agent so (its retirement landed at position 9)"),
             (json!({"arm": "retired", "fingerprint": "ab12", "hand": "bare", "position": 9}), "retired at the board by a bare session"),
             (json!({"arm": "retired", "fingerprint": "ab12", "hand": "cd34"}), "retired at the board by the key cd34: "),
-            (json!({"arm": "blocked", "record": "1.0.1.0.7.1", "ground": null}), "1.0.1.0.7.1"),
+            (json!({"arm": "blocked", "record": "1.0.1.0.69.1", "ground": null}), "1.0.1.0.69.1"),
             (json!({"arm": "seeded", "account": "1.0.1.1", "as_of": 9, "writer": null}), "1.0.1.1 now holds a key set of its own (as of position 9)"),
             (json!({"arm": "seeded", "account": "1.0.1.1", "as_of": 9, "writer": "ef56"}), "of its own (its first key ef56, as of position 9)"),
             (json!({"arm": "mode", "mode": "ENFORCING"}), "ENFORCING"),
@@ -341,7 +341,7 @@ mod tests {
         ] {
             assert_eq!(lapse_cause(&reason), cause, "{reason}");
         }
-        let Death::Stop(line) = classify(&json!({"arm": "blocked", "record": "1.0.1.0.7.1"})) else { panic!() };
+        let Death::Stop(line) = classify(&json!({"arm": "blocked", "record": "1.0.1.0.69.1"})) else { panic!() };
         assert!(line.contains("until the board's operator lifts it"), "the act that clears it: {line}");
         let serve_on = [
             json!({"arm": "unreachable", "text": "connect refused"}),

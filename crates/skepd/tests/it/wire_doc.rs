@@ -211,7 +211,7 @@ fn fixture(name: &str) -> Response {
         "delivery_withheld" => Response::Delivery {
             items: Delivery(vec![
                 DeliveryItem::Content(Val::new(vec![b'a'])),
-                DeliveryItem::Withheld { origin: a(&[1, 0, 1, 0, 2]), width: n(3) },
+                DeliveryItem::Withheld { origin: a(&[1, 0, 1, 0, 64]), width: n(3) },
             ]),
             as_of: Seq(9),
         },
@@ -250,7 +250,7 @@ fn fixture(name: &str) -> Response {
         // The count by home: two homes' rows in address order, the walk
         // ended under its budget.
         "homes" => Response::Homes {
-            homes: vec![(a(&[1, 0, 1, 0, 1]), 2), (a(&[1, 0, 1, 0, 2]), 1)],
+            homes: vec![(a(&[1, 0, 1, 0, 1]), 2), (a(&[1, 0, 1, 0, 64]), 1)],
             exhausted: true,
             as_of: Seq(9),
         },
@@ -280,8 +280,8 @@ fn fixture(name: &str) -> Response {
             link: Some(
                 Link::new([
                     Endset::from_spans([ispan()]),
-                    Endset::from_spans([sp(&[1, 0, 1, 0, 2, 0, 1, 1], &[0, 0, 0, 0, 0, 0, 0, 6])]),
-                    Endset::from_spans([sp(&[1, 0, 1, 0, 3, 0, 1, 1], &[0, 0, 0, 0, 0, 0, 0, 1])]),
+                    Endset::from_spans([sp(&[1, 0, 1, 0, 64, 0, 1, 1], &[0, 0, 0, 0, 0, 0, 0, 6])]),
+                    Endset::from_spans([sp(&[1, 0, 1, 0, 65, 0, 1, 1], &[0, 0, 0, 0, 0, 0, 0, 1])]),
                 ])
                 .expect("arity-3 link fixture"),
             ),
@@ -306,7 +306,7 @@ fn fixture(name: &str) -> Response {
             rep: CompareReport(vec![CorrPair {
                 d1: a(&[1, 0, 1, 0, 1]),
                 u1: VPos { subspace: n(1), ordinal: n(1) },
-                d2: a(&[1, 0, 1, 0, 2]),
+                d2: a(&[1, 0, 1, 0, 64]),
                 u2: VPos { subspace: n(1), ordinal: n(3) },
                 width: n(5),
             }]),
@@ -349,7 +349,7 @@ fn fixture(name: &str) -> Response {
         // copied, its `base` that member and `base_copied` the five positions
         // the copy took.
         "doc_metadata_unborn" => Response::DocMetadata {
-            doc: a(&[1, 0, 1, 0, 2]),
+            doc: a(&[1, 0, 1, 0, 64]),
             published: false,
             owner: Some(a(&[1, 0, 1])),
             birth: None,
@@ -388,7 +388,7 @@ fn fixture(name: &str) -> Response {
         // one side merged, the head at the extent read, the landing's
         // position.
         "doc_metadata_marked" => Response::DocMetadata {
-            doc: a(&[1, 0, 1, 0, 2]),
+            doc: a(&[1, 0, 1, 0, 64]),
             published: false,
             owner: Some(a(&[1, 0, 1])),
             birth: None,
@@ -408,8 +408,8 @@ fn fixture(name: &str) -> Response {
         },
         "edition_claims" => Response::EditionClaims {
             claims: vec![EditionClaim {
-                claim: a(&[1, 0, 1, 0, 5, 0, 2, 1]),
-                home: a(&[1, 0, 1, 0, 5]),
+                claim: a(&[1, 0, 1, 0, 67, 0, 2, 1]),
+                home: a(&[1, 0, 1, 0, 67]),
                 to: Endset::from_spans([sp(&[1, 0, 1, 0, 1], &[0, 0, 0, 0, 1])]),
                 active: true,
             }],
@@ -420,7 +420,7 @@ fn fixture(name: &str) -> Response {
         // the guest's empty answer under the same tag.
         "universal_grants" => Response::UniversalGrants {
             rows: vec![UniversalGrant {
-                prefix: a(&[1, 0, 1, 0, 2]),
+                prefix: a(&[1, 0, 1, 0, 64]),
                 issuers: BTreeSet::from([a(&[1, 0, 1])]),
             }],
             as_of: Seq(9),

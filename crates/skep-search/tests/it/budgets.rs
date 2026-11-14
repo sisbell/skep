@@ -115,7 +115,7 @@ fn direct(docs: Vec<Document>) -> Fed {
     let mut units = Vec::with_capacity(docs.len());
     let mut names = Vec::with_capacity(docs.len());
     for (i, doc) in docs.into_iter().enumerate() {
-        let address = parse_addr(&format!("1.0.1.0.{}", i + 2));
+        let address = parse_addr(&format!("1.0.1.0.{}", i + 64));
         let item = Item::Text { start: 1, bytes: doc.bytes };
         let unit = Unit::new(
             UnitKey::new(address.clone()),

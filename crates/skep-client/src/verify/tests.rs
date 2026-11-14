@@ -128,7 +128,7 @@ fn a_planted_key_with_no_valid_sig_reads_unsigned() {
     // An entry at 28, signed by the plant: UNSIGNED here.
     let home = parse_address("1.0.1.0.1").unwrap();
     let ty = [unit_span(&parse_address("1.1.0.1.0.1.0.3.90").unwrap())];
-    let from = [unit_span(&parse_address("1.0.1.0.2").unwrap())];
+    let from = [unit_span(&parse_address("1.0.1.0.64").unwrap())];
     let to: [skep_address::Span; 0] = [];
     let body = entry_body_make_link(LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) });
     let frame = entry_frame(HybridSigner::public_key(&plant).alg(), board(), &account(), DocTerm::One(&home), &body);
@@ -192,7 +192,7 @@ fn only_the_claimants_genesis_is_host_trusted() {
 fn link_frame() -> Vec<u8> {
     let home = parse_address("1.0.1.0.1").unwrap();
     let ty = [unit_span(&parse_address("1.1.0.1.0.1.0.3.90").unwrap())];
-    let from = [unit_span(&parse_address("1.0.1.0.2").unwrap())];
+    let from = [unit_span(&parse_address("1.0.1.0.64").unwrap())];
     let to: [skep_address::Span; 0] = [];
     let body = entry_body_make_link(LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) });
     entry_frame("mldsa65-ed25519", board(), &account(), DocTerm::One(&home), &body)

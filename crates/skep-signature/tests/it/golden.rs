@@ -165,8 +165,8 @@ fn golden_tag_1_mldsa65_ed25519() {
         sigs: [
             "2892943416a13f80eeb95f4c8bd55f115d7248324c433bffbeaf7f0501828148",
             "66f4f573eaf53426b5a3d4d360a06d98df61ca6d0578fa5fe5aadc92c9c32bb0",
-            "b433f7cd372e1bd8073f1b3222eba5b06976ee47734b66e761a3493d2c0deac0",
-            "d3a2c0e47b239894219f616eab3f66eb2d45712e8abd47ade53005299f70f00c",
+            "eceeda0357b644c7b6bffac7bd80f8102f50ab3c83a9d134acaa33ba864a8ff6",
+            "bef3adb4088c80634c13de634cb08458a37522c959a307f1e9ec5cc830237387",
             "28c70f669d44919062bf99a79cec75a973c7f6acaf315991a53daea054b7f508",
             "abb554df48572fb1fbfa72445b1ef8024dd6fd2c8889ed33cc1a756d5a9a07c3",
             "4c367931a56e731f01c0f5dc19d4d79d7be5b459c3cc113cbf946fe54cf90472",
@@ -175,8 +175,8 @@ fn golden_tag_1_mldsa65_ed25519() {
             "69438cf67ea4ae427185e7b6cdf153935df95c277ff075441716aa145cd40836",
             "87993cf5652f6cb0c71de67152615f67b66300534b7d0f8282bf119c48959c02",
             "4979c2918ea65effe9786f37f0c17507542552fa3f77905d872bd3b0c11ddeb4",
-            "bb1e5dd0f0d3eb078fefc15c45742dadf0799e7fe299db0d2ceac3ea8059d972",
-            "d2257f46aa5bc456f5012509ad36a5a8fe59c6fdac7cd6f8b1649653c2b95c13",
+            "06f50a012118fb622aa0e929e669b08dbf63dbf1f2e4385ed2647528e1905ad2",
+            "c2277b652a1d3a00a8fbfb33bfa5ef2d64eb190a398d1c557166afd76713afa6",
         ],
     });
 }
@@ -198,8 +198,8 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
         sigs: [
             "da92e3fc0247d5f39ed149f574a6c18cc1bf959a4f167ba33d381a955ed95779",
             "be84ffa9151b386e184f89530add29898fb70808537dc8b2bd044c290a1173cb",
-            "5df7ecb18a4809f0f6dad4a3db1cecfe946724d66024e66ff78d4fb92c5046a6",
-            "dd3d196a0451587afd6536f243389d8554f440c42c803a8800b7b81acbb24694",
+            "1df67bed5e44fb16a129ab5e39df0b9e1b9bb9569cf94a4a607890efcd637f60",
+            "a1b59d05cbd397b096e3bfc94cbd8551a47600e52fc2e3df4080d0420545f632",
             "38b456b9f4413a0f6164aad2e0cc3e9e8b35b8534c915f465992391cf71b03ad",
             "7399b23baaae2e1a1bdc85eb74bfc6b88f76029bf3e17857635c86b9e106eab1",
             "7807cbba98e2e04fa7647c50baeacdaefb44fbf477fd9ee3f71095f47d1fe37d",
@@ -208,8 +208,8 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
             "e8b3180c3e5e756e8c92b43c8f26a079f9c2427d207d03cbe3c6d2311deea456",
             "c20031b32997b4a332d318caebd02844e31f9c2779d1e5bc091bbf31f6cbd711",
             "8dbf24acd9767066804d04d1bc1c4d7b5e7e5cbce18bb36ce3d44b4c4ee5af01",
-            "cff4019b429c51d254eebfb0e416a275c53ac839789585d2409014fcdc025b28",
-            "68bd991afd3b4f9283f12027cf51f914f437f3952aba3afbdd7be974b07c5cc0",
+            "4a517922b4cae6aec6a0665cc0913fc1d27cc084a3e340ad3116d5ad57f1622f",
+            "4829e32bc8198d4dc4d0879979a09eb8c1f2b73b87b28e7d32779d7101155493",
         ],
     });
 }
@@ -253,13 +253,13 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
         LinkSlots { from: EntrySlot(&from), to: EntrySlot(&[]), ty: EntrySlot(&ty) },
         &addr("1.0.1.0.1.0.2.9"),
     );
-    let resolved_to = [extent("1.0.1.0.2.0.1.1", 5)];
+    let resolved_to = [extent("1.0.1.0.64.0.1.1", 5)];
     let resolved = entry_body_make_link(LinkSlots {
         from: EntrySlot(&from),
         to: EntrySlot(&resolved_to),
         ty: EntrySlot(&ty),
     });
-    let window = addr("1.0.1.0.2.0.1.1");
+    let window = addr("1.0.1.0.64.0.1.1");
     let birth = entry_body_publish(
         [
             ShotSegmentPiece::Value(b"x"),
@@ -302,11 +302,11 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
         ("insert, declared", frame(&declared), 146, "199775c4e92c52b6b49b7fb702de449690f2b6be837b5f72d07cb640176aed26"),
         named(link, 207, "c31ac3319996a82e6900d2571724d5b8ae69616fd2c3f785535bb09f63e880f5"),
         ("make_link, replacing", frame(&replacing), 235, "c18ce6f345cde5d15dcd2883d6be46b693fdaf87e0059dab6bdd1ecd1c093da3"),
-        ("make_link, a resolved to", frame(&resolved), 245, "daea951d32f82858d99ea5e0500feceec7ae5d926d2ee5375f7392b48a95cd7b"),
-        named(publish, 209, "774ae1d5bd454d7eb59ae7f3f3027a2f7cbc927c855036a9cbdda2b0664a6945"),
-        ("publish, the birth shape", frame(&birth), 167, "34e6abd5f4dc9dac148a29b6dcddf040918730e45bd510d91cff262308e88e6f"),
-        named(deposits, 641, "437f26fdc5da3747eee6cc240d91d9c36f21ba56131c509064fdfb0ed6e99e1a"),
-        ("publish, with a supersession claim", frame(&supersede), 344, "4c96f9017488cea59fcd829e7cae7a8242055916327bed946fb175ffc66ecffb"),
+        ("make_link, a resolved to", frame(&resolved), 246, "1d1a21c7f8547a482060c2c403b464f8535c6848f472ccdbb6dbc98c65e041d1"),
+        named(publish, 210, "04ee9ddf45dab4472a7185590635598b19039224cade60d13834ae971502ae6a"),
+        ("publish, the birth shape", frame(&birth), 168, "8c0111de93a35b6abcd3362bbefc99432c97a6c91ac2cf81b00e1bb72a97b7d7"),
+        named(deposits, 648, "df814feba40bc24e302ac6595a1baf45fe13d0b1083bfb8de5658dff1c8baad7"),
+        ("publish, with a supersession claim", frame(&supersede), 345, "2016da46840c01f1c4932e008586d55ad708eb8d38e166343968cfcf1a1f33c6"),
         named(enroll, 194, "e15f5fce4fd268e3064237c413eb6d7fb25f67269c6d7f0b046b26c72a9dfc60"),
         named(retire, 194, "e60761e01fbd6785680b07833fd9618de55150aacefaee1d3e1ebf75ae42918a"),
         named(claim, 163, "e5f5b1a5b96c2f7ce52cf32c8ef6f59a8ea56e882f7e5181456feb511b74b15f"),
@@ -315,8 +315,8 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
         named(version, 109, "6f593040109dc5cf8932bb1c7d690fb053339fdba2ac196aee60ae74e833f1f6"),
         named(nullify, 250, "662660f94fedf12edec1f1a6aac041f953344dc3c4214b3021c3cee880662d1b"),
         named(assert_sup, 265, "9fd23e8ac0bb18347353b830fbc5bbbd0f68a268bd45451651c18d854aff54cc"),
-        named(emit, 209, "e7b6e747a67f7d0f3545ae31f096c82df586c07e51c9d3537482bd8e22288d10"),
-        named(edit, 333, "86c04744e99ffe3317c82e6283afa645e4601e177474fbf5f2eb61c80a39e09c"),
+        named(emit, 210, "0b4462a4042c48f57d85c50e24480618660814e2147197b918f86450f49ebe1a"),
+        named(edit, 337, "56362c0541c074b2a6519d9665105b32dd4323192e278825b7f06fc34b5d1e7a"),
     ];
     let names: BTreeSet<&str> = shapes.iter().map(|(name, ..)| *name).collect();
     assert_eq!(

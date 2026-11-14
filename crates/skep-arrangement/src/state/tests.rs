@@ -751,7 +751,7 @@ fn the_slice_decodes_or_refuses_whatever_count_its_bytes_declare() {
         draft: None,
     });
     let s = s.apply_m5(Seq(1), &M5Rec::ShotPlace {
-        doc: a(&[1, 0, 1, 0, 2, 1]),
+        doc: a(&[1, 0, 1, 0, 64, 1]),
         runs: vec![run(&pca(1), 1)],
         terms: ShotTerms {
             placed: n(1),
@@ -812,9 +812,9 @@ fn fork_doc() -> Address {
     a(&[1, 0, 2, 0, 1])
 }
 
-/// A second document of that account, `[1,0,2,0,2]`: a fork of the fork.
+/// A second document of that account, `[1,0,2,0,64]`: a fork of the fork.
 fn fork_of_fork_doc() -> Address {
-    a(&[1, 0, 2, 0, 2])
+    a(&[1, 0, 2, 0, 64])
 }
 
 #[test]
@@ -990,7 +990,7 @@ fn m5rec_survives_a_bincode_round_trip() {
             draft: None,
         },
         M5Rec::ShotPlace {
-            doc: a(&[1, 0, 1, 0, 2, 1]),
+            doc: a(&[1, 0, 1, 0, 64, 1]),
             runs: vec![],
             terms: ShotTerms { placed: n(0), base_extent: None },
             draft: Some(doc2()),
@@ -1057,7 +1057,7 @@ fn every_arm_that_changes_a_content_arrangement_notes_its_position_and_the_link_
         &M5Rec::ShotPlace { doc: pca_member(), runs: vec![run(&pca(1), 1)], terms: terms.clone(), draft: None },
     );
     assert_eq!(s.arranged_at(&pca_member()), Some(Seq(17)), "the shot's member");
-    let empty_member = a(&[1, 0, 1, 0, 2, 1]);
+    let empty_member = a(&[1, 0, 1, 0, 64, 1]);
     let s = s.apply_m5(Seq(19), &M5Rec::ShotPlace { doc: empty_member.clone(), runs: vec![], terms, draft: None });
     assert_eq!(s.content_count(&empty_member), n(0));
     assert_eq!(s.arranged_at(&empty_member), Some(Seq(19)), "an empty placement is noted too");
@@ -1065,7 +1065,7 @@ fn every_arm_that_changes_a_content_arrangement_notes_its_position_and_the_link_
 
 /// The member the shot places into in the cell above: pdoc's first member.
 fn pca_member() -> Address {
-    a(&[1, 0, 1, 0, 3, 1])
+    a(&[1, 0, 1, 0, 65, 1])
 }
 
 /// The arranged-at map rides the checkpoint as its siblings do, is
@@ -1369,7 +1369,7 @@ fn the_marker_is_stamped_at_the_fold_cleared_by_the_shot_and_kept_by_the_rewindo
     let staged = landed.apply_m5(
         Seq(11),
         &M5Rec::DraftBase {
-            draft: a(&[1, 0, 1, 0, 4]),
+            draft: a(&[1, 0, 1, 0, 66]),
             base: pdoc(),
             extent: n(2),
             source: doc2(),
@@ -1377,7 +1377,7 @@ fn the_marker_is_stamped_at_the_fold_cleared_by_the_shot_and_kept_by_the_rewindo
         },
     );
     assert_eq!(
-        staged.draft_base(&a(&[1, 0, 1, 0, 4])).and_then(|b| b.merge.as_ref()),
+        staged.draft_base(&a(&[1, 0, 1, 0, 66])).and_then(|b| b.merge.as_ref()),
         Some(&Marker { at: Seq(11), ..marker.clone() }),
         "inherited content, the stage's own position"
     );
@@ -1453,7 +1453,7 @@ fn the_stamps_keep_every_marker_stamped_and_the_restore_installs_one_as_carried(
     assert_eq!(restored.arranged_at(&doc2()), relanded.arranged_at(&doc2()), "no arranged-at entry moves");
     // A stage of the restored draft: the alternative's stamps hold its
     // inherited marker alone, stamped at the stage.
-    let alternative = a(&[1, 0, 1, 0, 4]);
+    let alternative = a(&[1, 0, 1, 0, 66]);
     let inherited = restored.apply_m5(
         Seq(15),
         &M5Rec::DraftBase { draft: alternative.clone(), base: pdoc(), extent: n(2), source: doc2(), merge: Some(Merge::from(&m8)) },

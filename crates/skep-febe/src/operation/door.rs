@@ -858,7 +858,7 @@ mod tests {
         // Consulted with destinations: the documents the store's own
         // `not_owner` is judged on, which is what the door defers to.
         let d1 = addr(&[1, 0, 1, 0, 1]);
-        let d2 = addr(&[1, 0, 1, 0, 2]);
+        let d2 = addr(&[1, 0, 1, 0, 64]);
         let edit = Op::EditLink {
             original: d1.clone(),
             successor: SuccessorSpec {
@@ -933,7 +933,7 @@ mod tests {
         // The destination named is the document edited, not a source read —
         // for the transclusion by position and for the one by identity.
         let d = addr(&[1, 0, 1, 0, 1]);
-        let src = addr(&[1, 0, 1, 0, 2]);
+        let src = addr(&[1, 0, 1, 0, 64]);
         let copy = Op::Copy {
             doc: d.clone(),
             at: vpos(),
@@ -946,7 +946,7 @@ mod tests {
             at: vpos(),
             runs: vec![ShotRun {
                 origin: src.clone(),
-                run: Run::new(addr(&[1, 0, 1, 0, 2, 0, 1, 1]), Nat::from(1u32))
+                run: Run::new(addr(&[1, 0, 1, 0, 64, 0, 1, 1]), Nat::from(1u32))
                     .expect("a content run"),
             }],
             as_of: Seq(7),
@@ -961,12 +961,12 @@ mod tests {
             arrangement: skep_arrangement::SetArrangement {
                 runs: vec![ShotRun {
                     origin: src.clone(),
-                    run: Run::new(addr(&[1, 0, 1, 0, 2, 0, 1, 1]), Nat::from(1u32))
+                    run: Run::new(addr(&[1, 0, 1, 0, 64, 0, 1, 1]), Nat::from(1u32))
                         .expect("a content run"),
                 }],
-                head: Some(skep_arrangement::Base { member: addr(&[1, 0, 1, 0, 3, 1]), extent: Nat::from(1u32) }),
-                base: Some(skep_arrangement::Base { member: addr(&[1, 0, 1, 0, 3, 1]), extent: Nat::from(1u32) }),
-                merge: Some(SetMerge { sides: vec![addr(&[1, 0, 1, 0, 4])], at: None }),
+                head: Some(skep_arrangement::Base { member: addr(&[1, 0, 1, 0, 65, 1]), extent: Nat::from(1u32) }),
+                base: Some(skep_arrangement::Base { member: addr(&[1, 0, 1, 0, 65, 1]), extent: Nat::from(1u32) }),
+                merge: Some(SetMerge { sides: vec![addr(&[1, 0, 1, 0, 66])], at: None }),
             },
             as_of: Seq(7),
         };
@@ -1001,7 +1001,7 @@ mod tests {
         }
 
         // The links named, in declaration order, each op with its own code.
-        let (old, new) = (addr(&[1, 0, 1, 0, 2]), addr(&[1, 0, 1, 0, 3]));
+        let (old, new) = (addr(&[1, 0, 1, 0, 64]), addr(&[1, 0, 1, 0, 65]));
         let sup = Op::AssertSup { home: doc(), old: old.clone(), new: new.clone() };
         assert_eq!(
             sup.link_address_arguments(),

@@ -136,8 +136,8 @@ fn a_commons_template_absent_or_without_its_placeholder_refuses() {
 #[test]
 fn append_commons_fills_every_placeholder() {
     let mut catalog = Catalog { instructions: "Base.".to_string(), commons_instructions: "Commons at {addr}; defines is {addr}.0.3.50.".to_string(), tools: Vec::new() };
-    catalog.append_commons("1.0.2.0.9");
-    assert_eq!(catalog.instructions, "Base.\n\nCommons at 1.0.2.0.9; defines is 1.0.2.0.9.0.3.50.");
+    catalog.append_commons("1.0.2.0.71");
+    assert_eq!(catalog.instructions, "Base.\n\nCommons at 1.0.2.0.71; defines is 1.0.2.0.71.0.3.50.");
 }
 
 /// A wire op's frame makes the name the op and the arguments the frame.
@@ -219,9 +219,9 @@ fn the_dispatchs_door_admits_a_call_or_refuses_it_naming_the_culprit() {
     assert_eq!(Tool::admit("changes_since", &args(json!({"since": 0, "under": "1.0.1"}))), Ok(Tool::ChangesSince), "the narrowing the row takes");
     let err = Tool::admit("changes_since", &args(json!({"since": 0, "undr": "1"}))).expect_err("a stranger");
     assert!(err.contains("'since', 'limit', 'class', 'under'") && err.contains("'undr'"), "{err}");
-    let err = Tool::admit("publication_open", &args(json!({"draft": "1.0.1.0.2", "doc": "1.0.1.0.3", "base": "1.0.1.0.3.1"}))).expect_err("a base the shell reads itself");
+    let err = Tool::admit("publication_open", &args(json!({"draft": "1.0.1.0.64", "doc": "1.0.1.0.65", "base": "1.0.1.0.65.1"}))).expect_err("a base the shell reads itself");
     assert!(err.contains("publication_open takes") && err.contains("'base'"), "{err}");
-    assert_eq!(Tool::admit("publication_open", &args(json!({"draft": "1.0.1.0.2", "doc": "1.0.1.0.3"}))), Ok(Tool::PublicationOpen));
+    assert_eq!(Tool::admit("publication_open", &args(json!({"draft": "1.0.1.0.64", "doc": "1.0.1.0.65"}))), Ok(Tool::PublicationOpen));
     let err = Tool::admit("doc_metadata", &args(json!({"at": 5, "frame": {"op": "retrieve_v"}}))).expect_err("the /op-at shape");
     assert!(err.contains("'at'") && err.contains("'frame'"), "{err}");
     for plain in [json!({"at": {"subspace": "1", "ordinal": "1"}, "frame": {}}), json!({"at": "5", "frame": {}}), json!({"at": -1, "frame": {}}), json!({"at": 5, "frame": "f"}), json!({"at": 5})] {

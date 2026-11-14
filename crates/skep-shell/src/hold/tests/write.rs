@@ -210,30 +210,30 @@ fn a_hold_takes_the_last_acked_write_or_the_sessions_open_as_its_base() {
     let g = writer_at(60);
     let noted = |frame: Value, ack: Value| g.holds.note_ack(&g.session, &frame, &ack);
     let minted = |addr: &str, at: u64| json!({"resp": "ack_addr", "addr": addr, "at": at});
-    noted(json!({"op": "create_new_document", "account": "1.0.1"}), minted("1.0.1.0.2", 70));
-    noted(json!({"op": "make_link", "home": "1.0.1.0.3", "from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": []}}), minted("1.0.1.0.3.0.2.1", 71));
-    noted(insert("1.0.1.0.4", json!(["x"]), g.fake.head()), json!({"resp": "delivery", "items": []}));
-    noted(json!({"op": "emit", "home": "1.0.1.0.5", "ty": [], "from": "1.0.1.0.5.0.1.1", "to": []}), minted("1.0.1.0.5.0.2.1", 72));
-    noted(json!({"op": "nullify", "home": "1.0.1.0.6", "target": "1.0.1.0.3.0.2.1"}), minted("1.0.1.0.6.0.2.1", 73));
-    noted(json!({"op": "assert_sup", "home": "1.0.1.0.7", "old": "1.0.1.0.3.0.2.1", "new": "1.0.1.0.5.0.2.1"}), minted("1.0.1.0.7.0.2.1", 74));
-    noted(json!({"op": "edit_link", "original": "1.0.1.0.3.0.2.1", "d_s": "1.0.1.0.8", "d_a": "1.0.1.0.9", "successor": {}}), json!({"resp": "ack_edit", "at": 75}));
-    noted(json!({"op": "fork"}), minted("1.0.1.0.10", 76));
-    noted(json!({"op": "version", "d_src": "1.0.1.0.2"}), minted("1.0.1.0.2.1", 77));
+    noted(json!({"op": "create_new_document", "account": "1.0.1"}), minted("1.0.1.0.64", 70));
+    noted(json!({"op": "make_link", "home": "1.0.1.0.65", "from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": []}}), minted("1.0.1.0.65.0.2.1", 71));
+    noted(insert("1.0.1.0.66", json!(["x"]), g.fake.head()), json!({"resp": "delivery", "items": []}));
+    noted(json!({"op": "emit", "home": "1.0.1.0.67", "ty": [], "from": "1.0.1.0.67.0.1.1", "to": []}), minted("1.0.1.0.67.0.2.1", 72));
+    noted(json!({"op": "nullify", "home": "1.0.1.0.68", "target": "1.0.1.0.65.0.2.1"}), minted("1.0.1.0.68.0.2.1", 73));
+    noted(json!({"op": "assert_sup", "home": "1.0.1.0.69", "old": "1.0.1.0.65.0.2.1", "new": "1.0.1.0.67.0.2.1"}), minted("1.0.1.0.69.0.2.1", 74));
+    noted(json!({"op": "edit_link", "original": "1.0.1.0.65.0.2.1", "d_s": "1.0.1.0.70", "d_a": "1.0.1.0.71", "successor": {}}), json!({"resp": "ack_edit", "at": 75}));
+    noted(json!({"op": "fork"}), minted("1.0.1.0.72", 76));
+    noted(json!({"op": "version", "d_src": "1.0.1.0.64"}), minted("1.0.1.0.64.1", 77));
     // A stage's ack names the draft it minted, never the source it copied:
     // the source's base stands at its own last ack.
-    noted(json!({"op": "stage", "from": "1.0.1.0.2"}), minted("1.0.1.0.11", 78));
+    noted(json!({"op": "stage", "from": "1.0.1.0.64"}), minted("1.0.1.0.73", 78));
     let bases = [
-        ("1.0.1.0.2", 70),
-        ("1.0.1.0.3", 71),
-        ("1.0.1.0.4", 60),
-        ("1.0.1.0.5", 72),
-        ("1.0.1.0.6", 73),
-        ("1.0.1.0.7", 74),
-        ("1.0.1.0.8", 75),
-        ("1.0.1.0.9", 75),
-        ("1.0.1.0.10", 76),
-        ("1.0.1.0.2.1", 77),
-        ("1.0.1.0.11", 78),
+        ("1.0.1.0.64", 70),
+        ("1.0.1.0.65", 71),
+        ("1.0.1.0.66", 60),
+        ("1.0.1.0.67", 72),
+        ("1.0.1.0.68", 73),
+        ("1.0.1.0.69", 74),
+        ("1.0.1.0.70", 75),
+        ("1.0.1.0.71", 75),
+        ("1.0.1.0.72", 76),
+        ("1.0.1.0.64.1", 77),
+        ("1.0.1.0.73", 78),
     ];
     for (doc, base) in bases {
         let held = g.hold(&insert(doc, json!(["x"]), g.fake.head()), "unreachable", false);
@@ -304,15 +304,15 @@ fn the_arrangement_position_is_an_arrangement_writes_alone_never_a_links_or_a_mi
     let g = writer_at(60);
     let noted = |frame: Value, ack: Value| g.holds.note_ack(&g.session, &frame, &ack);
     let arranged = |doc: &str| g.holds.last_arranged(&g.session, doc);
-    let draft = "1.0.1.0.4";
+    let draft = "1.0.1.0.66";
     noted(insert(DOC, json!(["x"]), 60), json!({"resp": "ack_addr", "addr": i(1), "at": 70}));
     noted(json!({"op": "set_arrangement", "doc": draft, "runs": [], "as_of": 60}), json!({"resp": "ack", "at": 71}));
     noted(json!({"op": "make_link", "home": DOC, "from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": []}}), json!({"resp": "ack_addr", "addr": "1.0.1.0.1.0.2.1", "at": 72}));
-    noted(json!({"op": "create_new_document", "account": "1.0.1"}), json!({"resp": "ack_addr", "addr": "1.0.1.0.7", "at": 73}));
-    noted(json!({"op": "stage", "from": DOC}), json!({"resp": "ack_addr", "addr": "1.0.1.0.8", "at": 74}));
+    noted(json!({"op": "create_new_document", "account": "1.0.1"}), json!({"resp": "ack_addr", "addr": "1.0.1.0.69", "at": 73}));
+    noted(json!({"op": "stage", "from": DOC}), json!({"resp": "ack_addr", "addr": "1.0.1.0.70", "at": 74}));
     assert_eq!((arranged(DOC), arranged(draft)), (Some(70), Some(71)), "a burst's and a set_arrangement's, each on its `doc`");
     assert_eq!(g.base_of(DOC), 72, "the link raises the base");
-    assert_eq!((arranged("1.0.1.0.7"), arranged("1.0.1.0.8")), (None, None), "a mint is no arrangement write");
+    assert_eq!((arranged("1.0.1.0.69"), arranged("1.0.1.0.70")), (None, None), "a mint is no arrangement write");
     noted(delete(DOC, 50), json!({"resp": "ack", "at": 65}));
     assert_eq!(arranged(DOC), Some(70), "an earlier ack read after a later one lowers it never");
     assert_eq!(arranged(OTHER), None, "no write on the document, none");
@@ -342,7 +342,7 @@ fn the_arrangement_position_is_an_arrangement_writes_alone_never_a_links_or_a_mi
 #[test]
 fn a_restore_is_noted_as_an_acknowledged_set_arrangement_on_its_draft() {
     let g = writer_at(60);
-    let draft = "1.0.1.0.4";
+    let draft = "1.0.1.0.66";
     let restored = |at: u64, position: u64| Restored { draft: crate::wire::bounded_address(draft).unwrap(), at, position };
     g.holds.note_restored(&g.session, &restored(5, 80));
     assert_eq!((g.holds.last_arranged(&g.session, draft), g.base_of(draft), g.holds.acked("b-1", 80)), (Some(80), 80, true), "the restore's position, as an ack's");
@@ -2543,7 +2543,7 @@ fn a_first_dial_the_board_gives_no_answer_to_holds_the_next_bursts_at_once_until
     assert_eq!((other["cause"].as_str(), g.fake.sends()), (Some("unreachable"), 1), "another principal's burst held at once, undialed: {other}");
     g.fake.health_unanswered.store(true, Ordering::SeqCst);
     assert_eq!(g.holds.probe("b-1"), Turn::Unanswered, "the probe's `/health` unanswered");
-    let OpAnswer::Answered(Ok(silent)) = g.holds.send_burst(&g.session, insert("1.0.1.0.3", json!(["d"]), g.fake.head()), None) else { panic!("held at once") };
+    let OpAnswer::Answered(Ok(silent)) = g.holds.send_burst(&g.session, insert("1.0.1.0.65", json!(["d"]), g.fake.head()), None) else { panic!("held at once") };
     assert_eq!((silent["cause"].as_str(), g.fake.sends()), (Some("unreachable"), 1), "the board silent: held `unreachable` at once, undialed: {silent}");
     g.fake.health_unanswered.store(false, Ordering::SeqCst);
     while g.holds.probe("b-1") == Turn::Bounded {}
@@ -3227,7 +3227,7 @@ fn a_line_no_file_holds_is_listed_so_and_its_landing_is_said() {
 fn a_landing_lifts_each_document_it_wrote_and_no_other() {
     let g = ground();
     // The file stands, so the retry's one copy is the lines' own.
-    g.hold(&insert("1.0.1.0.3", json!(["x"]), g.fake.head()), "unreachable", false);
+    g.hold(&insert("1.0.1.0.65", json!(["x"]), g.fake.head()), "unreachable", false);
     let _ = told_events(&g);
     crate::held::tests::refuse_copies_as(std::io::ErrorKind::StorageFull);
     g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);

@@ -8,9 +8,15 @@ fn addr(comps: &[u32]) -> Address {
     validate(t).expect("a T4-valid address")
 }
 
-/// The document `1.0.1.0.n`.
+/// The namespace's first ordinary document: an account's documents past its
+/// home page are numbered from it, past the reserved block of well-known
+/// slots. This crate links no namespace, so the number is named here, once.
+const FIRST_ORDINARY_DOCUMENT: u32 = 64;
+
+/// The account `1.0.1`'s `n`-th document: its home page `1.0.1.0.1`, then
+/// the rest from [`FIRST_ORDINARY_DOCUMENT`] on.
 fn doc(n: u32) -> Address {
-    addr(&[1, 0, 1, 0, n])
+    addr(&[1, 0, 1, 0, if n == 1 { 1 } else { FIRST_ORDINARY_DOCUMENT + n - 2 }])
 }
 
 fn unit_of(class: Class, n: u32, items: Vec<Item>) -> Unit {
@@ -21,7 +27,8 @@ fn unit(class: Class, n: u32, text: &str) -> Unit {
     unit_of(class, n, vec![Item::Text { start: 1, bytes: text.as_bytes().to_vec() }])
 }
 
-/// A published index of `texts`, the documents numbered from 1 in order.
+/// A published index of `texts`, the account's documents from its first, in
+/// order.
 fn published(texts: &[&str]) -> Index {
     let mut index = Index::new(Class::Guest);
     for (i, text) in texts.iter().enumerate() {
@@ -387,7 +394,7 @@ fn nothing_answers_nothing() {
 #[test]
 fn a_hit_carries_its_units_member_position_kind_and_standing() {
     let mut index = Index::new(Class::Guest);
-    let member = addr(&[1, 0, 1, 0, 4, 2]);
+    let member = addr(&[1, 0, 1, 0, 66, 2]);
     let u = Unit::new(
         UnitKey::new(doc(4)),
         Some(member.clone()),

@@ -478,12 +478,12 @@ fn classed(page: &crate::feed::CaughtUp) -> Vec<(u64, &str)> {
 fn the_two_reads_merge_by_position_the_wider_rendering_winning() {
     let script = |since: u64, drafts: bool, _: Option<u64>| match drafts {
         false => page(vec![row(22, &["1.0.1.0.1"]), row(30, &["1.0.1.0.1"])], 30, false),
-        true => page(vec![row(24, &["1.0.1.0.2"]), row(30, &["1.0.1.0.2", "1.0.1.0.1"])], 30.max(since), false),
+        true => page(vec![row(24, &["1.0.1.0.64"]), row(30, &["1.0.1.0.64", "1.0.1.0.1"])], 30.max(since), false),
     };
     let (read, asked) = catch_up_over(40, script, 20, None);
     let caught = page_of(read);
     assert_eq!(classed(&caught), [(22, "published"), (24, "drafts"), (30, "drafts")]);
-    assert_eq!(caught.entries[2]["docs"], json!(["1.0.1.0.2", "1.0.1.0.1"]), "the wider rendering: {:?}", caught.entries);
+    assert_eq!(caught.entries[2]["docs"], json!(["1.0.1.0.64", "1.0.1.0.1"]), "the wider rendering: {:?}", caught.entries);
     assert_eq!((caught.entries[0].get("session"), caught.entries[1]["session"].as_str().map(|s| s.starts_with("s-"))), (None, Some(true)), "a drafts entry names the session, a published one none");
     assert!(caught.entries.iter().all(|entry| entry["position"] == entry["at"]), "{:?}", caught.entries);
     assert_eq!((caught.next, caught.head), (40, 40), "both reads complete: `next` is the head read first");
@@ -501,11 +501,11 @@ fn the_two_reads_merge_by_position_the_wider_rendering_winning() {
 #[test]
 fn the_page_is_cut_where_a_reads_more_stands() {
     let published_short =
-        |_: u64, drafts: bool, _: Option<u64>| if drafts { page(vec![row(13, &["1.0.1.0.2"])], 13, false) } else { page(vec![row(11, &["1.0.1.0.1"]), row(12, &["1.0.1.0.1"])], 12, true) };
+        |_: u64, drafts: bool, _: Option<u64>| if drafts { page(vec![row(13, &["1.0.1.0.64"])], 13, false) } else { page(vec![row(11, &["1.0.1.0.1"]), row(12, &["1.0.1.0.1"])], 12, true) };
     let caught = page_of(catch_up_over(50, published_short, 10, None).0);
     assert_eq!((classed(&caught), caught.next), (vec![(11, "published"), (12, "published")], 12), "the drafts row at 13 is withheld: a published position may lie between 12 and 13");
     let drafts_short =
-        |_: u64, drafts: bool, _: Option<u64>| if drafts { page(vec![row(11, &["1.0.1.0.2"]), row(13, &["1.0.1.0.2"])], 13, true) } else { page(vec![row(15, &["1.0.1.0.1"])], 15, false) };
+        |_: u64, drafts: bool, _: Option<u64>| if drafts { page(vec![row(11, &["1.0.1.0.64"]), row(13, &["1.0.1.0.64"])], 13, true) } else { page(vec![row(15, &["1.0.1.0.1"])], 15, false) };
     let caught = page_of(catch_up_over(50, drafts_short, 10, None).0);
     assert_eq!((classed(&caught), caught.next), (vec![(11, "drafts"), (13, "drafts")], 13));
     let quiet = |since: u64, _: bool, _: Option<u64>| page(Vec::new(), since, false);
@@ -528,10 +528,10 @@ fn the_page_is_cut_where_a_reads_more_stands() {
 /// its next ask answering it again).
 #[test]
 fn a_read_to_the_head_is_sure_of_no_more_than_its_snapshot() {
-    let drafts_later = |since: u64, drafts: bool, _: Option<u64>| if drafts { page(vec![row(45, &["1.0.1.0.2"])], 45, false) } else { page(Vec::new(), since, false) };
+    let drafts_later = |since: u64, drafts: bool, _: Option<u64>| if drafts { page(vec![row(45, &["1.0.1.0.64"])], 45, false) } else { page(Vec::new(), since, false) };
     let caught = page_of(catch_up_over(40, drafts_later, 30, None).0);
     assert_eq!((caught.entries.len(), caught.next), (0, 40), "the drafts row at 45 is withheld: a published commit may lie between 40 and 45 on neither page");
-    let published_later = |_: u64, drafts: bool, _: Option<u64>| if drafts { page(vec![row(38, &["1.0.1.0.2"])], 38, false) } else { page(vec![row(42, &["1.0.1.0.1"])], 42, false) };
+    let published_later = |_: u64, drafts: bool, _: Option<u64>| if drafts { page(vec![row(38, &["1.0.1.0.64"])], 38, false) } else { page(vec![row(42, &["1.0.1.0.1"])], 42, false) };
     let caught = page_of(catch_up_over(40, published_later, 30, None).0);
     assert_eq!((classed(&caught), caught.next), (vec![(38, "drafts"), (42, "published")], 42), "the published row past the head is answered, the drafts read made after it");
 }
@@ -545,7 +545,7 @@ fn a_read_to_the_head_is_sure_of_no_more_than_its_snapshot() {
 /// the budget's refusal).
 #[test]
 fn limit_bounds_the_merged_page_and_the_budget_is_re_asked() {
-    let script = |_: u64, drafts: bool, _: Option<u64>| if drafts { page(vec![row(12, &["1.0.1.0.2"])], 12, false) } else { page(vec![row(11, &["1.0.1.0.1"]), row(13, &["1.0.1.0.1"])], 13, false) };
+    let script = |_: u64, drafts: bool, _: Option<u64>| if drafts { page(vec![row(12, &["1.0.1.0.64"])], 12, false) } else { page(vec![row(11, &["1.0.1.0.1"]), row(13, &["1.0.1.0.1"])], 13, false) };
     let (read, asked) = catch_up_over(20, script, 10, Some(2));
     let caught = page_of(read);
     assert_eq!((classed(&caught), caught.next), (vec![(11, "published"), (12, "drafts")], 12));
@@ -604,7 +604,7 @@ fn the_floor_and_the_death_are_faced() {
 fn class_drafts_answers_the_drafts_page_alone_with_its_next() {
     let script = |since: u64, drafts: bool, _: Option<u64>| match drafts {
         false => page(vec![row(22, &["1.0.1.0.1"])], 30, false),
-        true => page(vec![row(24, &["1.0.1.0.2"]), row(30, &["1.0.1.0.2", "1.0.1.0.1"])], 30.max(since), false),
+        true => page(vec![row(24, &["1.0.1.0.64"]), row(30, &["1.0.1.0.64", "1.0.1.0.1"])], 30.max(since), false),
     };
     let (read, asked) = catch_up_in(Form::Drafts, 40, script, 20, None, None);
     let caught = page_of(read);
@@ -612,7 +612,7 @@ fn class_drafts_answers_the_drafts_page_alone_with_its_next() {
     assert!(caught.entries.iter().all(|entry| entry["session"].as_str().is_some_and(|s| s.starts_with("s-"))), "every entry names the session: {:?}", caught.entries);
     assert_eq!((caught.next, caught.head), (40, 40), "read to the head: `next` is the head read first");
     assert_eq!(asked, [(20, true, None, true, None)], "the one read: the supplement under the token, from `since`");
-    let more = |_: u64, drafts: bool, _: Option<u64>| if drafts { page(vec![row(24, &["1.0.1.0.2"])], 24, true) } else { panic!("the published feed is not read") };
+    let more = |_: u64, drafts: bool, _: Option<u64>| if drafts { page(vec![row(24, &["1.0.1.0.64"])], 24, true) } else { panic!("the published feed is not read") };
     let caught = page_of(catch_up_in(Form::Drafts, 40, more, 20, None, None).0);
     assert_eq!((classed(&caught), caught.next), (vec![(24, "drafts")], 24), "`more` standing: `next` is the page's `last`");
     let (read, asked) = catch_up_in(Form::Drafts, 40, script, 20, Some(1), None);
@@ -651,7 +651,7 @@ fn the_guest_form_answers_the_published_rows_alone_with_no_token() {
 /// from the re-ask answers the whole feed's page at `fits`).
 #[test]
 fn under_rides_every_ask_of_every_form_and_meets_the_floor() {
-    const DRAFT: &str = "1.0.1.0.2";
+    const DRAFT: &str = "1.0.1.0.64";
     let script = |_: u64, drafts: bool, limit: Option<u64>| match (drafts, limit) {
         (false, None) => refused(400, json!({"error": "malformed_changes", "budget": 2_097_152, "fits": 1})),
         (false, Some(_)) => page(Vec::new(), 10, false),
@@ -686,7 +686,7 @@ fn under_rides_every_ask_of_every_form_and_meets_the_floor() {
 fn a_drafts_entry_names_the_writer_the_hold_recorded_and_a_published_one_none() {
     let script = |since: u64, drafts: bool, _: Option<u64>| match drafts {
         false => page(vec![row(22, &["1.0.1.0.1"]), row(26, &["1.0.1.0.1"]), row(30, &["1.0.1.0.1"])], 30, false),
-        true => page(vec![row(24, &["1.0.1.0.2"]), row(28, &["1.0.1.0.2"]), row(30, &["1.0.1.0.2", "1.0.1.0.1"])], 30.max(since), false),
+        true => page(vec![row(24, &["1.0.1.0.64"]), row(28, &["1.0.1.0.64"]), row(30, &["1.0.1.0.64", "1.0.1.0.1"])], 30.max(since), false),
     };
     let written = |at: u64| (at != 28).then(|| Written { by: Some("s-writer".to_string()), burst: (at == 24).then(|| "b-7".to_string()) });
     let named = |caught: &CaughtUp| -> Vec<(u64, String, Option<String>, Option<String>)> {

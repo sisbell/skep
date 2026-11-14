@@ -227,7 +227,7 @@ impl PartialOrd for Tumbler {
     }
 }
 
-/// The canonical rendering: components in order, `.`-separated (`1.0.2.0.5`).
+/// The canonical rendering: components in order, `.`-separated (`1.0.2.0.67`).
 ///
 /// Lossless and unambiguous by T3 — the representation admits no aliases, so
 /// the text and the value determine each other. This is the dotted-decimal

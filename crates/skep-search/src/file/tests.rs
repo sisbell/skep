@@ -21,9 +21,15 @@ fn addr(comps: &[u32]) -> Address {
     validate(t).expect("a T4-valid address")
 }
 
-/// The document `1.0.1.0.n`.
+/// The namespace's first ordinary document: an account's documents past its
+/// home page are numbered from it, past the reserved block of well-known
+/// slots. This crate links no namespace, so the number is named here, once.
+const FIRST_ORDINARY_DOCUMENT: u32 = 64;
+
+/// The account `1.0.1`'s `n`-th document: its home page `1.0.1.0.1`, then
+/// the rest from [`FIRST_ORDINARY_DOCUMENT`] on.
 fn key(n: u32) -> UnitKey {
-    UnitKey::new(addr(&[1, 0, 1, 0, n]))
+    UnitKey::new(addr(&[1, 0, 1, 0, if n == 1 { 1 } else { FIRST_ORDINARY_DOCUMENT + n - 2 }]))
 }
 
 fn text(start: u64, bytes: &[u8]) -> Item {
@@ -67,8 +73,8 @@ fn rich_header() -> Header {
                 under: Some(addr(&[1, 0, 2])),
                 held: at(4100, 0x12),
                 refusals: vec![
-                    Refusal { doc: addr(&[1, 0, 2, 0, 5]), reason: "withheld".to_string() },
-                    Refusal { doc: addr(&[1, 0, 2, 0, 6]), reason: "too_many_items".to_string() },
+                    Refusal { doc: addr(&[1, 0, 2, 0, 67]), reason: "withheld".to_string() },
+                    Refusal { doc: addr(&[1, 0, 2, 0, 68]), reason: "too_many_items".to_string() },
                 ],
                 bare_rows: 3,
                 grant: Some(Grant { kind: GrantKind::AnyPrincipal, issuer: addr(&[1, 0, 2]) }),
@@ -92,12 +98,12 @@ fn sample() -> Index {
         Item::Gap {
             start: 11,
             width: 5,
-            kind: GapKind::Withheld { origin: addr(&[1, 0, 1, 0, 9]) },
+            kind: GapKind::Withheld { origin: addr(&[1, 0, 1, 0, 71]) },
         },
         text(16, b"eps\xFFilon alpha"),
     ];
     let edition =
-        Unit::new(key(2), Some(addr(&[1, 0, 1, 0, 2, 3])), Kind::Edition, Class::Guest, 7, items)
+        Unit::new(key(2), Some(addr(&[1, 0, 1, 0, 64, 3])), Kind::Edition, Class::Guest, 7, items)
             .expect("one extent");
     index.index(edition).expect("admitted");
     index.index(guest(3, "zeta")).expect("admitted");
@@ -242,7 +248,7 @@ fn an_address_round_trips_through_the_body_and_a_non_canonical_component_is_refu
     let big = Nat::parse_bytes(b"123456789012345678901234567890123456789", 10).expect("decimal");
     let wide = validate(Tumbler::new([Nat::from(1u32), Nat::from(0u32), big]).expect("nonempty"))
         .expect("an account address");
-    for address in [addr(&[1, 0, 1, 0, 5]), addr(&[1, 1, 0, 1, 0, 2, 9]), wide] {
+    for address in [addr(&[1, 0, 1, 0, 67]), addr(&[1, 1, 0, 1, 0, 2, 9]), wide] {
         let mut bytes = Vec::new();
         put_address(&mut bytes, &address);
         let mut r = Reader::new("x", &bytes);
@@ -353,7 +359,7 @@ fn load_of_save_round_trips_the_index_and_the_header_and_the_file_is_a_fixed_poi
     }
     assert_eq!(loaded.body.keys, index.body.keys);
     let Record::Live { unit, .. } = &loaded.body.units[1] else { panic!("unit 2 is live") };
-    assert_eq!(unit.member(), Some(&addr(&[1, 0, 1, 0, 2, 3])));
+    assert_eq!(unit.member(), Some(&addr(&[1, 0, 1, 0, 64, 3])));
     assert_eq!(unit.as_of(), 7);
     assert_eq!(unit.items().len(), 3);
     assert_eq!(unit.item_at(12), Some(1), "the withheld run, at its width");

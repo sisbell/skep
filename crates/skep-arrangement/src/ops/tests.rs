@@ -17,7 +17,7 @@ use crate::error::{DeleteError, InsertError, PublishError, RearrangeError};
 use crate::ownership::Caller;
 use crate::shot::{Shot, ShotRun};
 use crate::state::{M5Rec, M5State};
-use crate::testutil::{a, ca, doc1, doc2, mem_kernel_of, n, pdoc, rejected, run, seeded_m3, vp};
+use crate::testutil::{a, ca, doc1, doc2, mem_kernel_of, n, nth_doc, pdoc, rejected, run, seeded_m3, vp};
 use crate::HasM5;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -162,7 +162,7 @@ fn the_allocation_step_mints_writes_and_accumulates_through_the_merge_condition(
             Ok::<_, InsertError>(runs)
         })
         .expect("the allocations commit");
-    let doc2_first = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let doc2_first = a(&[1, 0, 1, 0, nth_doc(2), 0, 1, 1]);
     assert_eq!(runs, vec![run(&ca(1), 2), run(&doc2_first, 1)]);
     // Each address holds the value written at it, and each mint advanced
     // its home's frontier: the next mint under doc1 is ca(3).

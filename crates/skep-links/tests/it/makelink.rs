@@ -138,7 +138,7 @@ fn makelink_resolves_deposits_and_seats() {
         w.makelink(
             P1,
             &doc1(),
-            SlotArg::Resolve(vec![spec(&a(&[1, 0, 1, 0, 7]), 1, 1, 1)]),
+            SlotArg::Resolve(vec![spec(&a(&[1, 0, 1, 0, 69]), 1, 1, 1)]),
             SlotArg::Resolve(vec![]),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 3, 1)])
         ),
@@ -147,7 +147,7 @@ fn makelink_resolves_deposits_and_seats() {
     assert!(matches!(
         w.makelink(
             P1,
-            &a(&[1, 0, 1, 0, 7]),
+            &a(&[1, 0, 1, 0, 69]),
             SlotArg::Resolve(vec![]),
             SlotArg::Resolve(vec![]),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 3, 1)])
@@ -236,7 +236,7 @@ fn makelink_wf_admits_exactly_the_depth_2_ordinal_content_spec() {
         ("conforming", spec(&doc1(), 1, 1, 1), true),
         (
             "unregistered source",
-            spec(&a(&[1, 0, 1, 0, 7]), 1, 1, 1),
+            spec(&a(&[1, 0, 1, 0, 69]), 1, 1, 1),
             false,
         ),
         ("#start ≠ 2", raw(&[1, 1, 1], &[0, 0, 1]), false),
@@ -272,7 +272,7 @@ fn makelink_wf_checks_every_slot_s_specs_not_only_the_from_slot() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
     let w = writer(&k);
-    let bad = || spec(&a(&[1, 0, 1, 0, 7]), 1, 1, 1); // unregistered source
+    let bad = || spec(&a(&[1, 0, 1, 0, 69]), 1, 1, 1); // unregistered source
     assert!(matches!(
         w.makelink(
             P1,
@@ -444,11 +444,11 @@ fn makelink_ispan_form_records_content_spans_verbatim_and_consults_no_document()
     // Ghosts past doc1's frontier, and a document no one registered: valid
     // names, nothing consulted. doc2 is registered but unarranged — its
     // positions are ghosts too.
-    let elsewhere = iext_in(&[1, 0, 1, 0, 7], 1, 4);
+    let elsewhere = iext_in(&[1, 0, 1, 0, 69], 1, 4);
     for (label, span) in [
         ("past the frontier", iext(9, 12)),
         ("an unregistered document", elsewhere),
-        ("a registered, unarranged document", iext_in(&[1, 0, 1, 0, 2], 1, 2)),
+        ("a registered, unarranged document", iext_in(&[1, 0, 1, 0, nth_doc(2)], 1, 2)),
     ] {
         let (l, _) = w
             .makelink(P1, &doc1(), SlotArg::Spans(vec![span.clone()]), SlotArg::Spans(vec![span.clone()]), ty())
@@ -594,8 +594,8 @@ fn building_an_ispan_slot_costs_exactly_the_endset_it_stores_whatever_the_world_
     let cases = [
         ("(i) a registered, arranged document's occupied positions", iext(1, 3)),
         ("(ii) ghosts past that document's frontier", iext(9, 11)),
-        ("(iii) a document no one registered", iext_in(&[1, 0, 1, 0, 7], 1, 3)),
-        ("(iv) the writer's own home's positions", iext_in(&[1, 0, 1, 0, 2], 1, 3)),
+        ("(iii) a document no one registered", iext_in(&[1, 0, 1, 0, 69], 1, 3)),
+        ("(iv) the writer's own home's positions", iext_in(&[1, 0, 1, 0, nth_doc(2)], 1, 3)),
     ];
     let mut figures = Vec::new();
     for (label, span) in cases {
@@ -690,8 +690,8 @@ fn a_makelink_in_the_ispan_form_costs_the_same_whatever_its_spans_name() {
     let cases = [
         ("(i) a registered, arranged document's occupied positions", iext(1, 3)),
         ("(ii) ghosts past its frontier", iext(9, 11)),
-        ("(iii) a document no one registered", iext_in(&[1, 0, 1, 0, 7], 1, 3)),
-        ("(iv) the home's own positions", iext_in(&[1, 0, 1, 0, 2], 1, 3)),
+        ("(iii) a document no one registered", iext_in(&[1, 0, 1, 0, 69], 1, 3)),
+        ("(iv) the home's own positions", iext_in(&[1, 0, 1, 0, nth_doc(2)], 1, 3)),
     ];
     let figures: Vec<(&str, u64)> = cases
         .iter()

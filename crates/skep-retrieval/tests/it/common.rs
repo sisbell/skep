@@ -14,7 +14,7 @@ use skep_arrangement::{
 };
 use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, WorldState};
-use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
+use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId, FIRST_ORDINARY_DOCUMENT};
 use skep_retrieval::{Delivery, DeliveryItem, RegionSpec, Spec};
 
 // ---- the minimal engine assembly (composition contract) ----
@@ -113,19 +113,33 @@ pub fn doc1() -> Address {
     a(&[1, 0, 1, 0, 1])
 }
 
+/// The number of principal 1's account's `k`-th document: its home page is
+/// 1, and its documents past it are numbered from `FIRST_ORDINARY_DOCUMENT`
+/// on, past the reserved block of well-known slots. [`doc2`] and [`pdoc`]
+/// are its second and third; every fixture address at or below one of them
+/// reads its number here, worked out from that constant and never spelled.
+pub fn nth_doc(k: u32) -> u32 {
+    assert_ne!(k, 0, "an account has no 0th document");
+    if k == 1 {
+        1
+    } else {
+        FIRST_ORDINARY_DOCUMENT + k - 2
+    }
+}
+
 pub fn doc2() -> Address {
-    a(&[1, 0, 1, 0, 2])
+    a(&[1, 0, 1, 0, nth_doc(2)])
 }
 
 /// Never registered.
 pub fn unregistered() -> Address {
-    a(&[1, 0, 1, 0, 9])
+    a(&[1, 0, 1, 0, 71])
 }
 
 /// A second never-registered document, so a two-document rejection can say
 /// WHICH one it named.
 pub fn unregistered2() -> Address {
-    a(&[1, 0, 1, 0, 8])
+    a(&[1, 0, 1, 0, 70])
 }
 
 /// doc1's content element at `ordinal` (length 8), M3's minted shape.
@@ -136,7 +150,7 @@ pub fn ca(ordinal: u32) -> Address {
 /// doc2's content element at `ordinal` — doc2's OWN minted content, on a
 /// different I-chain from doc1's [`ca`].
 pub fn doc2_ca(ordinal: u32) -> Address {
-    a(&[1, 0, 1, 0, 2, 0, 1, ordinal])
+    a(&[1, 0, 1, 0, nth_doc(2), 0, 1, ordinal])
 }
 
 /// doc1's link element at `ordinal`.
@@ -146,43 +160,43 @@ pub fn la(ordinal: u32) -> Address {
 
 /// doc2's link element at `ordinal`.
 pub fn doc2_la(ordinal: u32) -> Address {
-    a(&[1, 0, 1, 0, 2, 0, 2, ordinal])
+    a(&[1, 0, 1, 0, nth_doc(2), 0, 2, ordinal])
 }
 
-/// Document 3 — principal 1's PUBLISHED edition `[1,0,1,0,3]`: the one owned
-/// source `version` admits (PUB-2.9), whose content enters by declared
-/// deposit alone (PUB-2.59).
+/// Pdoc — principal 1's PUBLISHED edition, the account's third document
+/// `[1,0,1,0,nth_doc(3)]`: the one owned source `version` admits (PUB-2.9),
+/// whose content enters by declared deposit alone (PUB-2.59).
 pub fn pdoc() -> Address {
-    a(&[1, 0, 1, 0, 3])
+    a(&[1, 0, 1, 0, nth_doc(3)])
 }
 
 /// pdoc's own content element at `ordinal` — what [`deposit3`] mints.
 pub fn pca(ordinal: u32) -> Address {
-    a(&[1, 0, 1, 0, 3, 0, 1, ordinal])
+    a(&[1, 0, 1, 0, nth_doc(3), 0, 1, ordinal])
 }
 
 /// The version fork of pdoc (`(d_src, 1)` chain) and its length-9 content
 /// elements — the mixed-length transclusion case.
 pub fn vdoc() -> Address {
-    a(&[1, 0, 1, 0, 3, 1])
+    a(&[1, 0, 1, 0, nth_doc(3), 1])
 }
 pub fn vca(ordinal: u32) -> Address {
-    a(&[1, 0, 1, 0, 3, 1, 0, 1, ordinal])
+    a(&[1, 0, 1, 0, nth_doc(3), 1, 0, 1, ordinal])
 }
 
 /// The fork's link element at `ordinal` — a link whose HOME is the fork.
 pub fn vla(ordinal: u32) -> Address {
-    a(&[1, 0, 1, 0, 3, 1, 0, 2, ordinal])
+    a(&[1, 0, 1, 0, nth_doc(3), 1, 0, 2, ordinal])
 }
 
 /// pdoc's ninth member, never minted — an origin no registration names.
 pub fn unheld_member() -> Address {
-    a(&[1, 0, 1, 0, 3, 9])
+    a(&[1, 0, 1, 0, nth_doc(3), 9])
 }
 
 /// [`unheld_member`]'s content element at `ordinal`.
 pub fn unheld_ca(ordinal: u32) -> Address {
-    a(&[1, 0, 1, 0, 3, 9, 0, 1, ordinal])
+    a(&[1, 0, 1, 0, nth_doc(3), 9, 0, 1, ordinal])
 }
 
 pub fn vp(subspace: u32, ordinal: u32) -> VPos {
@@ -264,8 +278,8 @@ fn genesis() -> World {
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 2]), false))
         .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 2]), PrincipalId(2)))
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 1]), false))
-        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 2]), false))
-        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 3]), true));
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, nth_doc(2)]), false))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, nth_doc(3)]), true));
     World {
         m3,
         content: ContentStore::default(),

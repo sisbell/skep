@@ -409,7 +409,7 @@ fn a_link_row_is_an_unattested_make_link() {
     // the draft beside the member, the member FIRST (the link-sets design
     // §5.7's pinned order): the chain gains the member alone, never the
     // draft.
-    let two_docs = json!({ "at": 10, "op": "publish", "docs": ["1.0.2.0.1.2", "1.0.2.0.7"] });
+    let two_docs = json!({ "at": 10, "op": "publish", "docs": ["1.0.2.0.1.2", "1.0.2.0.69"] });
     assert_eq!(Row::of(&two_docs), Row::Chain { members: vec![a("1.0.2.0.1.2")] });
 }
 

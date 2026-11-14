@@ -589,6 +589,6 @@ mod tests {
             out.status()
         };
         assert_eq!(judged(&[]), Status::Agreed);
-        assert_eq!(judged(&["(1.0.1.0.7,1.0.1.0.8)".to_string()]), Status::Disagreed);
+        assert_eq!(judged(&["(1.0.1.0.69,1.0.1.0.70)".to_string()]), Status::Disagreed);
     }
 }

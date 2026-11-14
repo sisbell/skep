@@ -142,8 +142,8 @@ fn a_run_is_judged_by_its_shape_then_its_origin_then_its_bytes_and_the_first_def
     // Registration before bytes: an unregistered document's own address,
     // rightly stated, is refused for the document — the address is never
     // probed.
-    let ghost = a(&[1, 0, 1, 0, 9]);
-    let ghost_run = ShotRun { origin: ghost.clone(), run: run(&a(&[1, 0, 1, 0, 9, 0, 1, 1]), 1) };
+    let ghost = a(&[1, 0, 1, 0, 71]);
+    let ghost_run = ShotRun { origin: ghost.clone(), run: run(&a(&[1, 0, 1, 0, 71, 0, 1, 1]), 1) };
     assert!(matches!(
         rejected(vs.reinstate(p1, &doc2(), vp(1, 1), &[ghost_run.clone()], AsOf::Typed(k.current_seq()))),
         ReinstateError::SourceNotRegistered
@@ -155,7 +155,7 @@ fn a_run_is_judged_by_its_shape_then_its_origin_then_its_bytes_and_the_first_def
             p1,
             &doc2(),
             vp(1, 1),
-            &[ShotRun { origin: doc1(), run: run(&a(&[1, 0, 1, 0, 9, 0, 1, 1]), 1) }]
+            &[ShotRun { origin: doc1(), run: run(&a(&[1, 0, 1, 0, 71, 0, 1, 1]), 1) }]
         , AsOf::Typed(k.current_seq()))),
         ReinstateError::BadRun
     ));

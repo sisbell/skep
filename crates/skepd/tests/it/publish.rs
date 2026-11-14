@@ -1189,7 +1189,7 @@ fn a_shot_on_a_private_document_is_refused_with_one_code() {
     // from the bare session the daemon's gate answers first (slot 4).
     assert_gated(&op(port, Some(&bare), &publish(&d, None, None, &[run(&d, &d_text, 3)])));
     // Registration ahead of everything.
-    let ghost = format!("{CLAIMANT_ACCOUNT}.0.9");
+    let ghost = format!("{CLAIMANT_ACCOUNT}.0.71");
     let v = op(port, Some(&signed), &publish(&ghost, None, None, &[]));
     assert_eq!(expect_resp(&v, "rejected")["code"].as_str(), Some("doc_not_registered"), "{v}");
     let v = op(port, Some(&signed), &publish(CLAIMANT_DOC1, Some((&ghost, 1)), None, &[]));

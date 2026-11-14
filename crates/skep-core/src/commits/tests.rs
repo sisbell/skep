@@ -81,7 +81,7 @@ fn a_publish_rows_drafts_lead_with_the_rendering_draft_then_the_also_drafts_writ
     use skep_febe::{PublishDeposits, PublishTarget, Run, Shot, ShotRun, VPos};
 
     let addr = |text: &str| crate::codec::wire_address(text).expect("a test address");
-    let (edition, d, a1, b) = (addr("1.0.1.0.1"), addr("1.0.1.0.5"), addr("1.0.1.0.6"), addr("1.0.1.0.7"));
+    let (edition, d, a1, b) = (addr("1.0.1.0.1"), addr("1.0.1.0.67"), addr("1.0.1.0.68"), addr("1.0.1.0.69"));
     let run_of = |doc: &str, k: u32| ShotRun {
         origin: addr(doc),
         run: Run::new(addr(&format!("{doc}.0.1.{k}")), Nat::from(1u32)).expect("a run"),
@@ -103,7 +103,7 @@ fn a_publish_rows_drafts_lead_with_the_rendering_draft_then_the_also_drafts_writ
     // with no run of its identity, not.
     assert_eq!(
         drafts_of(
-            Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone(), b.clone()], keep_base: false, runs: vec![run_of("1.0.1.0.5", 1), run_of("1.0.1.0.6", 1)] },
+            Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone(), b.clone()], keep_base: false, runs: vec![run_of("1.0.1.0.67", 1), run_of("1.0.1.0.68", 1)] },
             vec![]
         ),
         vec![d.clone(), a1.clone()]
@@ -111,7 +111,7 @@ fn a_publish_rows_drafts_lead_with_the_rendering_draft_then_the_also_drafts_writ
     // A's run alone: the rendering draft first all the same, though nothing
     // is written in it, then A — never A where the rendering draft stands.
     assert_eq!(
-        drafts_of(Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone()], keep_base: false, runs: vec![run_of("1.0.1.0.6", 1)] }, vec![]),
+        drafts_of(Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone()], keep_base: false, runs: vec![run_of("1.0.1.0.68", 1)] }, vec![]),
         vec![d.clone(), a1.clone()]
     );
     // A kept place beside a trunk run — a stray re-window — names the
@@ -147,7 +147,7 @@ fn a_publish_row_names_an_also_draft_re_windowed_without_a_run_of_its_own_after_
     use skep_febe::{AlsoPlaces, PublishDeposits, PublishTarget, Run, Shot, ShotRun, VPos};
 
     let addr = |text: &str| crate::codec::wire_address(text).expect("a test address");
-    let (edition, d, a1, b) = (addr("1.0.1.0.1"), addr("1.0.1.0.5"), addr("1.0.1.0.6"), addr("1.0.1.0.7"));
+    let (edition, d, a1, b) = (addr("1.0.1.0.1"), addr("1.0.1.0.67"), addr("1.0.1.0.68"), addr("1.0.1.0.69"));
     let trunk_run = ShotRun {
         origin: edition.clone(),
         run: Run::new(addr("1.0.1.0.1.0.1.1"), Nat::from(1u32)).expect("a run"),
@@ -182,7 +182,7 @@ fn a_publish_row_names_an_also_draft_re_windowed_without_a_run_of_its_own_after_
     );
     // An entry with no place, and one for a draft `also` does not name: nothing.
     assert_eq!(
-        drafts_of(vec![AlsoPlaces { draft: a1.clone(), places: vec![None] }, AlsoPlaces { draft: addr("1.0.1.0.9"), places: vec![place] }]),
+        drafts_of(vec![AlsoPlaces { draft: a1.clone(), places: vec![None] }, AlsoPlaces { draft: addr("1.0.1.0.71"), places: vec![place] }]),
         vec![d.clone()],
         "no place, or no named draft: the rendering draft alone"
     );
@@ -268,13 +268,13 @@ fn a_reinstate_row_names_its_destination_and_never_a_runs_origin() {
     use skep_febe::{Run, ShotRun, VPos};
 
     let addr = |s: &str| crate::codec::wire_address(s).expect("a test address");
-    let (doc, origin) = (addr("1.0.1.0.1"), addr("1.0.1.0.2"));
+    let (doc, origin) = (addr("1.0.1.0.1"), addr("1.0.1.0.64"));
     let op = Op::Reinstate {
         doc: doc.clone(),
         at: VPos::content(Nat::from(1u32)),
         runs: vec![ShotRun {
             origin: origin.clone(),
-            run: Run::new(addr("1.0.1.0.2.0.1.1"), Nat::from(1u32)).expect("a content run"),
+            run: Run::new(addr("1.0.1.0.64.0.1.1"), Nat::from(1u32)).expect("a content run"),
         }],
         as_of: Seq(7),
     };
@@ -376,13 +376,13 @@ fn a_set_arrangement_row_names_its_draft_and_carries_the_base_and_merge_it_named
     use skep_febe::{Base, Run, SetArrangement, SetMerge, ShotRun};
 
     let addr = |s: &str| crate::codec::wire_address(s).expect("a test address");
-    let (draft, origin, head) = (addr("1.0.1.0.5"), addr("1.0.1.0.2"), addr("1.0.1.0.1.2"));
+    let (draft, origin, head) = (addr("1.0.1.0.67"), addr("1.0.1.0.64"), addr("1.0.1.0.1.2"));
     let request = |head_: Option<&Address>, base: Option<&Address>, merge: Option<SetMerge>| Op::SetArrangement {
         doc: draft.clone(),
         arrangement: SetArrangement {
             runs: vec![ShotRun {
                 origin: origin.clone(),
-                run: Run::new(addr("1.0.1.0.2.0.1.1"), Nat::from(1u32)).expect("a content run"),
+                run: Run::new(addr("1.0.1.0.64.0.1.1"), Nat::from(1u32)).expect("a content run"),
             }],
             head: head_.map(|h| Base { member: h.clone(), extent: Nat::from(3u32) }),
             base: base.map(|b| Base { member: b.clone(), extent: Nat::from(3u32) }),

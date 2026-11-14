@@ -553,8 +553,8 @@ fn a_documents_region_reads_contend_only_among_themselves() {
     // THE CEILING: six across three documents — the two further documents
     // need not exist, the key is the frame's `d` — and the draft, a fourth,
     // is refused though it holds none of its own two.
-    let x = address("1.0.1.0.7");
-    let y = address("1.0.1.0.8");
+    let x = address("1.0.1.0.69");
+    let y = address("1.0.1.0.70");
     let x1 = daemon.try_hold_region_permit(&x).expect("X's region permit 1 of 2");
     let x2 = daemon.try_hold_region_permit(&x).expect("X's region permit 2 of 2");
     let y1 = daemon.try_hold_region_permit(&y).expect("Y's region permit 1 of 2");
@@ -864,7 +864,7 @@ fn the_minimum_worker_count_is_evaluable_and_serves_with_every_pool_drained() {
     }
     // The per-document pool, to its ceiling: a document's width is two, so
     // three documents drain six, and a fourth is refused by the ceiling.
-    let documents = ["1.0.1.0.1", "1.0.1.0.2", "1.0.1.0.3"].map(address);
+    let documents = ["1.0.1.0.1", "1.0.1.0.64", "1.0.1.0.65"].map(address);
     let mut region_held = Vec::new();
     for d in &documents {
         while let Some(p) = sd.daemon().try_hold_region_permit(d) {
@@ -872,7 +872,7 @@ fn the_minimum_worker_count_is_evaluable_and_serves_with_every_pool_drained() {
         }
     }
     assert!(
-        sd.daemon().try_hold_region_permit(&address("1.0.1.0.4")).is_none(),
+        sd.daemon().try_hold_region_permit(&address("1.0.1.0.66")).is_none(),
         "the ceiling is drained: a fourth document finds no slot"
     );
     assert_eq!(

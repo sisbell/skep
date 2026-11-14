@@ -27,7 +27,7 @@ impl Drop for Scratch {
 /// all refuse; depth and magnitude do not.
 #[test]
 fn the_t4_check_refuses_each_clause_but_no_depth_or_magnitude() {
-    for good in ["1", "1.1", "1.0.2", "1.0.1.0.1", "1.0.1.0.1.0.1.1", "1.0.2.0.3.0.3.6.1", "10.20.30"] {
+    for good in ["1", "1.1", "1.0.2", "1.0.1.0.1", "1.0.1.0.1.0.1.1", "1.0.2.0.65.0.3.6.1", "10.20.30"] {
         assert!(is_t4_address(good), "'{good}' is T4-valid");
     }
     for bad in ["", "0", "0.1", "1.0", "1..2", "1.a", " 1", "1.0.0.1", "1.0.1.0.1.0.1.0.2", "1.-2"] {

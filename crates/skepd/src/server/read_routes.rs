@@ -564,8 +564,8 @@ mod tests {
             "under= names an address or prefix"
         );
         assert_eq!(
-            plain("since=3&drafts=true&under=1.0.2.0.4"),
-            (3, 256, Some("1.0.2.0.4".into()), true)
+            plain("since=3&drafts=true&under=1.0.2.0.66"),
+            (3, 256, Some("1.0.2.0.66".into()), true)
         );
         assert!(!plain("since=3&drafts=false").3, "drafts=false is the plain feed");
         for bad in [

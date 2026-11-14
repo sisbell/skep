@@ -697,7 +697,7 @@ mod tests {
         let cfg = AuthConfig::new(AuthOptions::default());
         assert!(cfg.blocked_prefixes().issue_is_empty(), "a fresh config holds no list");
         let prefix = wire_address("1.0.3").expect("an account address");
-        let record = wire_address("1.0.1.0.7.1").expect("a record's address");
+        let record = wire_address("1.0.1.0.69.1").expect("a record's address");
         let entry = BlockedEntry { prefix: prefix.clone(), record: record.clone() };
         let issue = BlockedIssue { entries: vec![entry], ..BlockedIssue::default() };
         let list = BlockedPrefixes::installed_under(issue, None, None);

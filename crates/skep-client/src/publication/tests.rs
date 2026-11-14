@@ -59,13 +59,13 @@ const DOC1: &str = "1.0.1.0.1";
 /// `E` the published edition, `S`/`S2` the public sets, `D` the staging
 /// draft, `N` the notes, `O` the person's unpublished origin, `Z` a private
 /// far document, `SUB` a sub-account's draft, `OTHER` another account's.
-const E: &str = "1.0.1.0.2";
-const S: &str = "1.0.1.0.3";
-const S2: &str = "1.0.1.0.4";
-const D: &str = "1.0.1.0.5";
-const N: &str = "1.0.1.0.6";
-const O: &str = "1.0.1.0.7";
-const Z: &str = "1.0.1.0.8";
+const E: &str = "1.0.1.0.64";
+const S: &str = "1.0.1.0.65";
+const S2: &str = "1.0.1.0.66";
+const D: &str = "1.0.1.0.67";
+const N: &str = "1.0.1.0.68";
+const O: &str = "1.0.1.0.69";
+const Z: &str = "1.0.1.0.70";
 const SUB: &str = "1.0.1.2.0.1";
 const OTHER: &str = "1.0.2.0.1";
 const T_STRONG: &str = "1.1.0.1.0.1.0.3.23.2";
@@ -259,7 +259,7 @@ impl World {
 
     /// The fixture (the module doc). Returns the addresses the cells name.
     fn base() -> (World, Named) {
-        let mut w = World { position: 10, next_doc: 20, image_cap: 1 << 12, claimed: true, head: true, ..World::default() };
+        let mut w = World { position: 10, next_doc: 82, image_cap: 1 << 12, claimed: true, head: true, ..World::default() };
         w.doc(DOC1, true, ACCOUNT, Vec::new());
         w.text(E, 1, E_TEXT);
         w.doc(E, true, ACCOUNT, vec![run(E, 1, 19)]);
@@ -2273,7 +2273,7 @@ fn the_price_table_is_the_daemons() {
     assert_eq!(price::MAX_REINSERTED_VALUES, skep_arrangement::MAX_REINSERTED_VALUES as u64);
     assert_eq!(MAX_WIRE_LIST, skep_links::MAX_SLOT_SPANS, "the codec reuses the slot cap for its lists");
     let t = |comps: &[u64]| Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty");
-    for (start, width) in [(vec![1, 0, 1, 0, 3, 0, 1, 1], vec![0, 0, 0, 0, 0, 0, 0, 1]), (vec![1, 1, 0, 1, 0, 1, 0, 3, 23, 1], vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 1]), (vec![1, 0, 1, 0, 3, 0, 1, 1], vec![0, 0, 0, 0, 0, 0, 0, 70_000]), (vec![1 << 40, 1 << 40], vec![0, 1])] {
+    for (start, width) in [(vec![1, 0, 1, 0, 65, 0, 1, 1], vec![0, 0, 0, 0, 0, 0, 0, 1]), (vec![1, 1, 0, 1, 0, 1, 0, 3, 23, 1], vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 1]), (vec![1, 0, 1, 0, 65, 0, 1, 1], vec![0, 0, 0, 0, 0, 0, 0, 70_000]), (vec![1 << 40, 1 << 40], vec![0, 1])] {
         let span = Span::new(t(&start), t(&width)).expect("a span");
         assert_eq!(price::stored_span_bytes(&start, &width), skep_links::stored_span_bytes(&span), "{start:?}");
     }
@@ -2770,7 +2770,7 @@ fn a_run_two_records_name_has_two_named_parts() {
 /// onto the published identity, `E`'s or `F`'s.
 #[test]
 fn the_counterpart_arm_sends_the_covered_pieces_place_in_this_document_or_another_and_the_precheck_counts_its_record() {
-    const F: &str = "1.0.1.0.10";
+    const F: &str = "1.0.1.0.72";
     // The record's `to`: E's 5..8 (the fixture's earlier record in D names
     // E's 16..19 already), or F's 16..19.
     for (what, to_doc, to_first, published_into_f) in [("into this document", E, 5u64, false), ("into another document", F, 16u64, true)] {
@@ -2821,7 +2821,7 @@ fn the_counterpart_arm_sends_the_covered_pieces_place_in_this_document_or_anothe
 
 /// `F`, a published document holding `O`'s words 1..4 as its 16..19, the
 /// record in `O`, for the identity suites below.
-const F_ORIGIN: &str = "1.0.1.0.10";
+const F_ORIGIN: &str = "1.0.1.0.72";
 
 /// The base fixture with `O`'s words 1..4 published before as `F`'s 16..19:
 /// `mark_o` a bold in `D` on `O`'s 2..3, published at `E.1` while the window
@@ -3928,7 +3928,7 @@ fn the_mint_form_mints_the_edition_and_its_lost_answer_is_read_through_the_claim
 
 /// `A`, an alternative of `D`'s: a private draft of the person's holding
 /// five words of its own, which `D` arranges by identity beside its own.
-const A: &str = "1.0.1.0.9";
+const A: &str = "1.0.1.0.71";
 const A_TEXT: &str = " also";
 
 /// The base fixture with `A` beside `D`: `D` arranges `E`'s words, its own
@@ -4225,7 +4225,7 @@ fn an_also_drafts_published_words_shown_as_its_own_again_offer_nothing_their_pub
 /// board's `placed_in`).
 #[test]
 fn the_reads_draft_term_sums_every_draft_a_list_places_as_the_boards_does() {
-    const B: &str = "1.0.1.0.11";
+    const B: &str = "1.0.1.0.73";
     let (d, a_draft, b, term) = (a(D), a(A), a(B), a(E));
     let drafts = vec![d.clone(), a_draft.clone(), b.clone()];
     let runs = vec![run(D, 1, 10), run(A, 1, 5), run(B, 1, 7)];
@@ -4685,7 +4685,7 @@ fn a_recorded_piece_of_a_run_no_list_places_counts_no_record() {
 /// and an atom of another kind last — "ab", a record, "cd", a record, a
 /// note — at ordinals 1 to 7, each record's link homed in `J` beside it, as
 /// the merge library writes it.
-const J: &str = "1.0.1.0.11";
+const J: &str = "1.0.1.0.73";
 
 /// The merge record kind the journal's links are typed: the account's doc
 /// 1, as the shell names it.
@@ -4859,7 +4859,7 @@ fn a_merge_record_of_an_also_draft_is_left_out_of_both_lists() {
 // ── THE DRAFT'S BASE ─────────────────────────────────────────────────────
 
 /// `X` a memberless edition of the person's.
-const X: &str = "1.0.1.0.30";
+const X: &str = "1.0.1.0.92";
 
 /// What `draft_base` answers.
 type BaseRead = Result<DraftBase, Fault>;
@@ -4902,14 +4902,14 @@ fn a_staged_drafts_base_is_the_boards_record_read_once() {
     // The memberless edition: the bare document is its own base.
     let (mut world, _) = World::base();
     world.doc(X, true, ACCOUNT, Vec::new());
-    let d2 = "1.0.1.0.31";
+    let d2 = "1.0.1.0.93";
     world.doc(d2, false, ACCOUNT, vec![run(d2, 1, 3)]);
     world.stage(d2, X);
     assert_eq!(base_of(world, X, d2).1, recorded(X, 0), "doc itself while the chain is empty");
     // A trunk the board holds no record of is that fault, ahead of the rest.
     let (mut world, _) = World::base();
     world.stage(D, &e1);
-    assert_eq!(base_of(world, "1.0.1.0.40", D).1, Err(Fault::NoSuchDocument(a("1.0.1.0.40"))));
+    assert_eq!(base_of(world, "1.0.1.0.102", D).1, Err(Fault::NoSuchDocument(a("1.0.1.0.102"))));
 }
 
 /// NO RECORD, NO BASE — AND WHY: a draft the board records no base for is
@@ -4930,7 +4930,7 @@ fn a_draft_the_board_records_no_base_for_is_unrecorded_with_its_reason() {
     world.docs.get_mut(D).unwrap().source = Some(format!("{E}.1"));
     assert_eq!(base_of(world, E, D).1, unrecorded(Unrecorded::NoRecord), "a source in E's own chain and no base: never staged");
     let (mut world, _) = World::base();
-    let alternative = "1.0.1.0.31";
+    let alternative = "1.0.1.0.93";
     world.doc(alternative, false, ACCOUNT, vec![run(D, 1, 10)]);
     world.stage(alternative, D);
     assert_eq!(base_of(world, E, alternative).1, unrecorded(Unrecorded::FreeStanding), "an alternative of an unrecorded draft stands free");
@@ -5094,7 +5094,7 @@ fn a_board_answering_every_trunk_member_is_refused_within_the_doublings_reads() 
 /// trunk's second member, which no bare-based shot mints.
 #[test]
 fn the_landed_walk_from_a_bare_base_finds_the_first_member_then_its_daughters_and_never_the_second_member() {
-    let (first_draft, second_draft) = ("1.0.1.0.37", "1.0.1.0.38");
+    let (first_draft, second_draft) = ("1.0.1.0.99", "1.0.1.0.100");
     let (x1, x11, x2) = (format!("{X}.1"), format!("{X}.1.1"), format!("{X}.2"));
     let (mut world, _) = World::base();
     world.text(X, 1, "xyz");
@@ -5158,7 +5158,7 @@ fn the_landed_walk_from_a_bare_base_finds_the_first_member_then_its_daughters_an
 /// member `X.2` stands, the base still stands `Behind`, now naming it.
 #[test]
 fn a_base_under_a_trunk_member_stands_behind_off_its_address_and_its_shot_lands_its_daughter() {
-    let (first_draft, second_draft) = ("1.0.1.0.37", "1.0.1.0.38");
+    let (first_draft, second_draft) = ("1.0.1.0.99", "1.0.1.0.100");
     let (x1, x11, x111, x2) = (format!("{X}.1"), format!("{X}.1.1"), format!("{X}.1.1.1"), format!("{X}.2"));
     let (mut world, _) = World::base();
     world.text(X, 1, "xyz");
@@ -5228,7 +5228,7 @@ fn a_base_under_a_trunk_member_stands_behind_off_its_address_and_its_shot_lands_
 #[test]
 fn the_family_left_behind_is_also_then_the_drafts_on_this_base_where_the_publication_heads() {
     let e1 = format!("{E}.1");
-    let (q, r, g) = ("1.0.1.0.32", "1.0.1.0.33", "1.0.1.0.34");
+    let (q, r, g) = ("1.0.1.0.94", "1.0.1.0.95", "1.0.1.0.96");
     let (mut world, _) = family_world();
     world.stage(D, &e1);
     world.stage(A, &e1);
@@ -5250,7 +5250,7 @@ fn the_family_left_behind_is_also_then_the_drafts_on_this_base_where_the_publica
     assert!(dialer.ops().is_empty(), "nothing read at Behind: {:?}", dialer.ops());
     assert_eq!(of_e1(&Standing::AtHead, &[a(OTHER)]), Err(Fault::Unreadable(a(OTHER))), "a refused read is that fault, never a draft passed over");
     // The bare document: its first member leaves the drafts staged from it.
-    let (first, second) = ("1.0.1.0.35", "1.0.1.0.36");
+    let (first, second) = ("1.0.1.0.97", "1.0.1.0.98");
     let (mut world, _) = World::base();
     world.doc(X, true, ACCOUNT, Vec::new());
     for d in [first, second] {
@@ -5562,7 +5562,7 @@ fn a_window_answer_moves_a_links_type_between_the_rows_two_folds_and_reads_nothi
 /// A citation with far ends in the documents numbered 10 and 9, beside the
 /// notes' own 6: the fold over the row and the fold over its changed links
 /// (at this base, every link) answer 6, 9, 10, the order of the addresses
-/// and not of their spellings, in which `1.0.1.0.10` stands first.
+/// and not of their spellings, in which `1.0.1.0.72` stands first.
 #[test]
 fn a_folds_far_documents_stand_in_address_order() {
     let (mut world, _) = World::base();

@@ -518,7 +518,7 @@ account sits at or under a BLOCKED PREFIX answers
 
 ```
 → 403
-{"error":"prefix_blocked","record":"1.0.1.0.7.1"}
+{"error":"prefix_blocked","record":"1.0.1.0.69.1"}
 ```
 
 — never the 401, which is every failure of the credential: this party's
@@ -1174,7 +1174,7 @@ withheld item at its own position, never coalesced:
 
 <!-- wire: response delivery_withheld -->
 ```json
-{"as_of":9,"items":[{"content":"a"},{"withheld":{"origin":"1.0.1.0.2","width":"3"}}],"resp":"delivery"}
+{"as_of":9,"items":[{"content":"a"},{"withheld":{"origin":"1.0.1.0.64","width":"3"}}],"resp":"delivery"}
 ```
 
 **`i_delivery`** — retrieve_i (the read by identity): one item per
@@ -1269,7 +1269,7 @@ budget:
 
 <!-- wire: response homes -->
 ```json
-{"as_of":9,"exhausted":true,"homes":[{"home":"1.0.1.0.1","n":2},{"home":"1.0.1.0.2","n":1}],"resp":"homes"}
+{"as_of":9,"exhausted":true,"homes":[{"home":"1.0.1.0.1","n":2},{"home":"1.0.1.0.64","n":1}],"resp":"homes"}
 ```
 
 **`links`** — find_links_v_history: one window of the retracted-links
@@ -1338,7 +1338,7 @@ in the feed:
 
 <!-- wire: response link_value -->
 ```json
-{"as_of":9,"at":7,"link":{"slots":[[{"start":"1.0.1.0.1.0.1.1","width":"0.0.0.0.0.0.0.5"}],[{"start":"1.0.1.0.2.0.1.1","width":"0.0.0.0.0.0.0.6"}],[{"start":"1.0.1.0.3.0.1.1","width":"0.0.0.0.0.0.0.1"}]]},"resp":"link_value","time":1786838400047,"time_from":"feed"}
+{"as_of":9,"at":7,"link":{"slots":[[{"start":"1.0.1.0.1.0.1.1","width":"0.0.0.0.0.0.0.5"}],[{"start":"1.0.1.0.64.0.1.1","width":"0.0.0.0.0.0.0.6"}],[{"start":"1.0.1.0.65.0.1.1","width":"0.0.0.0.0.0.0.1"}]]},"resp":"link_value","time":1786838400047,"time_from":"feed"}
 ```
 
 <!-- wire: response link_value_null -->
@@ -1373,7 +1373,7 @@ deleted from one document yet current in the other.
 
 <!-- wire: response compare -->
 ```json
-{"as_of":9,"pairs":[{"d1":"1.0.1.0.1","d2":"1.0.1.0.2","u1":{"ordinal":"1","subspace":"1"},"u2":{"ordinal":"3","subspace":"1"},"width":"5"}],"resp":"compare"}
+{"as_of":9,"pairs":[{"d1":"1.0.1.0.1","d2":"1.0.1.0.64","u1":{"ordinal":"1","subspace":"1"},"u2":{"ordinal":"3","subspace":"1"},"width":"5"}],"resp":"compare"}
 ```
 
 **`orphans`** — delete_orphans: the links the proposed delete would orphan
@@ -1535,7 +1535,7 @@ five positions the copy took, so a `publish` off it carries
 
 <!-- wire: response doc_metadata_unborn -->
 ```json
-{"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.2","merge":null,"owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":1786838400052,"time_from":"anchor"}
+{"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":null,"owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":1786838400052,"time_from":"anchor"}
 ```
 
 A cross-owner fork — a private document of another account, minted by
@@ -1558,7 +1558,7 @@ version 3 is published, when the landing's ack tells it (`ack`'s
 
 <!-- wire: response doc_metadata_marked -->
 ```json
-{"as_of":15,"at":8,"base":"1.0.1.0.1.2","base_copied":"6","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.2","merge":{"at":14,"head":"1.0.1.0.1.2","head_copied":"6","sides":["1.0.1.0.1.1.1"]},"owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":1786838400052,"time_from":"anchor"}
+{"as_of":15,"at":8,"base":"1.0.1.0.1.2","base_copied":"6","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":{"at":14,"head":"1.0.1.0.1.2","head_copied":"6","sides":["1.0.1.0.1.1.1"]},"owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":1786838400052,"time_from":"anchor"}
 ```
 
 **`edition_claims`** — edition_claims (§Link discovery reads): the
@@ -1570,7 +1570,7 @@ way). Only rows whose home you may read are returned.
 
 <!-- wire: response edition_claims -->
 ```json
-{"as_of":9,"claims":[{"active":true,"claim":"1.0.1.0.5.0.2.1","home":"1.0.1.0.5","to":[{"start":"1.0.1.0.1","width":"0.0.0.0.1"}]}],"resp":"edition_claims"}
+{"as_of":9,"claims":[{"active":true,"claim":"1.0.1.0.67.0.2.1","home":"1.0.1.0.67","to":[{"start":"1.0.1.0.1","width":"0.0.0.0.1"}]}],"resp":"edition_claims"}
 ```
 
 **`universal_grants`** — universal_grants (§Grants): the grant fold's live
@@ -1582,7 +1582,7 @@ same tag — an answer, never a rejection.
 
 <!-- wire: response universal_grants -->
 ```json
-{"as_of":9,"resp":"universal_grants","rows":[{"issuers":["1.0.1"],"prefix":"1.0.1.0.2"}]}
+{"as_of":9,"resp":"universal_grants","rows":[{"issuers":["1.0.1"],"prefix":"1.0.1.0.64"}]}
 ```
 
 <!-- wire: response universal_grants_empty -->
@@ -3556,7 +3556,7 @@ it.
 
 <!-- wire: request copy -->
 ```json
-{"as_of":7,"at":{"ordinal":"6","subspace":"1"},"doc":"1.0.1.0.1","op":"copy","specs":[{"source":"1.0.1.0.2","span":{"start":"1.1","width":"0.5"}}]}
+{"as_of":7,"at":{"ordinal":"6","subspace":"1"},"doc":"1.0.1.0.1","op":"copy","specs":[{"source":"1.0.1.0.64","span":{"start":"1.1","width":"0.5"}}]}
 ```
 
 **`reinstate`** — place runs of PERMANENT content I-addresses into `doc`
@@ -3607,7 +3607,7 @@ destination.
 
 <!-- wire: request reinstate -->
 ```json
-{"as_of":7,"at":{"ordinal":"3","subspace":"1"},"doc":"1.0.1.0.2","op":"reinstate","runs":[{"i_start":"1.0.1.0.2.0.1.4","origin":"1.0.1.0.2","width":"5"}]}
+{"as_of":7,"at":{"ordinal":"3","subspace":"1"},"doc":"1.0.1.0.64","op":"reinstate","runs":[{"i_start":"1.0.1.0.64.0.1.4","origin":"1.0.1.0.64","width":"5"}]}
 ```
 
 **`rearrange`** — pivot/swap `doc`'s content about the cut positions.
@@ -3746,13 +3746,13 @@ list under the list cap. Every refusal writes nothing. A write: refused
 `merge` (§The change feed). Never held by the shell's burst machine
 (an unholdable write, with `stage` and `publish`). This example lands a
 merge composed on version 2 of `1.0.1.0.1`, read at six positions, into
-the staged draft `1.0.1.0.2` with the daughter `1.0.1.0.1.1.1` as its
+the staged draft `1.0.1.0.64` with the daughter `1.0.1.0.1.1.1` as its
 one side — four of the edition's positions and two of the draft's own
 — recording version 2 as the draft's base and the marker beside it:
 
 <!-- wire: request set_arrangement -->
 ```json
-{"as_of":12,"base":{"at":"1.0.1.0.1.2","extent":"6"},"doc":"1.0.1.0.2","head":{"at":"1.0.1.0.1.2","extent":"6"},"merge":{"sides":["1.0.1.0.1.1.1"]},"op":"set_arrangement","runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"4"},{"i_start":"1.0.1.0.2.0.1.1","origin":"1.0.1.0.2","width":"2"}]}
+{"as_of":12,"base":{"at":"1.0.1.0.1.2","extent":"6"},"doc":"1.0.1.0.64","head":{"at":"1.0.1.0.1.2","extent":"6"},"merge":{"sides":["1.0.1.0.1.1.1"]},"op":"set_arrangement","runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"4"},{"i_start":"1.0.1.0.64.0.1.1","origin":"1.0.1.0.64","width":"2"}]}
 ```
 
 Say that landing committed at position 13 and the merge was taken out
@@ -3762,7 +3762,7 @@ position, so the draft's marker stands again with `at` 13:
 
 <!-- wire: request set_arrangement -->
 ```json
-{"as_of":14,"base":{"at":"1.0.1.0.1.2","extent":"6"},"doc":"1.0.1.0.2","head":{"at":"1.0.1.0.1.2","extent":"6"},"merge":{"at":13,"sides":["1.0.1.0.1.1.1"]},"op":"set_arrangement","runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"4"},{"i_start":"1.0.1.0.2.0.1.1","origin":"1.0.1.0.2","width":"2"}]}
+{"as_of":14,"base":{"at":"1.0.1.0.1.2","extent":"6"},"doc":"1.0.1.0.64","head":{"at":"1.0.1.0.1.2","extent":"6"},"merge":{"at":13,"sides":["1.0.1.0.1.1.1"]},"op":"set_arrangement","runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"4"},{"i_start":"1.0.1.0.64.0.1.1","origin":"1.0.1.0.64","width":"2"}]}
 ```
 
 **`version`** — the content-sharing, copy-on-write fork of `d_src`.
@@ -4031,7 +4031,7 @@ and one read-with:
 
 <!-- wire: request publish -->
 ```json
-{"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.7","links":[{"from":{"member":[{"ordinal":"4","width":"2"}]},"home":"member","old":"1.0.1.0.7.0.2.1","to":{"addrs":["1.0.1.0.2"]},"ty":{"addrs":["1.1.0.1.0.1.0.3.13"]}}],"op":"publish","originals":[{"old":"1.0.1.0.7.0.2.2"}],"places":[null,{"ordinal":"4","subspace":"1"}],"read_with":["1.0.1.0.2"],"retract":["1.0.1.0.1.0.2.1"],"runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"},{"i_start":"1.0.1.0.7.0.1.1","origin":"1.0.1.0.7","width":"2"}]}
+{"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.69","links":[{"from":{"member":[{"ordinal":"4","width":"2"}]},"home":"member","old":"1.0.1.0.69.0.2.1","to":{"addrs":["1.0.1.0.64"]},"ty":{"addrs":["1.1.0.1.0.1.0.3.13"]}}],"op":"publish","originals":[{"old":"1.0.1.0.69.0.2.2"}],"places":[null,{"ordinal":"4","subspace":"1"}],"read_with":["1.0.1.0.64"],"retract":["1.0.1.0.1.0.2.1"],"runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"},{"i_start":"1.0.1.0.69.0.1.1","origin":"1.0.1.0.69","width":"2"}]}
 ```
 
 ### Media — the reference cell and its door (lane A; the fence) and the upload (lane B)
@@ -4216,7 +4216,7 @@ refused `unbound_cell` where the caller holds no lease on its hash:
 
 <!-- wire: request insert -->
 ```json
-{"as_of":7,"at":{"ordinal":"1","subspace":"1"},"doc":"1.0.1.0.2","op":"insert","values":[{"atom":"{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":5}"}]}
+{"as_of":7,"at":{"ordinal":"1","subspace":"1"},"doc":"1.0.1.0.64","op":"insert","values":[{"atom":"{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":5}"}]}
 ```
 
 ```json
@@ -5136,11 +5136,11 @@ transaction just minted, never a well-formed request's refusal
 
 <!-- wire: request make_link -->
 ```json
-{"from":[{"source":"1.0.1.0.1","span":{"start":"1.1","width":"0.5"}}],"home":"1.0.1.0.1","op":"make_link","to":[{"source":"1.0.1.0.2","span":{"start":"1.1","width":"0.6"}}],"ty":[{"source":"1.0.1.0.3","span":{"start":"1.1","width":"0.1"}}]}
+{"from":[{"source":"1.0.1.0.1","span":{"start":"1.1","width":"0.5"}}],"home":"1.0.1.0.1","op":"make_link","to":[{"source":"1.0.1.0.64","span":{"start":"1.1","width":"0.6"}}],"ty":[{"source":"1.0.1.0.65","span":{"start":"1.1","width":"0.1"}}]}
 ```
 
 Typing by pure name: the `ty` below names position `3.6.1` of document
-`1.0.1.0.3`'s (never-occupied) subspace 3 — a ghost. Every link naming the
+`1.0.1.0.65`'s (never-occupied) subspace 3 — a ghost. Every link naming the
 same address is typed identically, and because names nest by tumbler
 prefix, one `find_links_ftt` filter over the name — or over the `…3.6`
 prefix's subtree — finds every link so typed. The `to` here is a
@@ -5149,21 +5149,21 @@ other address.
 
 <!-- wire: request make_link -->
 ```json
-{"from":[{"source":"1.0.1.0.1","span":{"start":"1.1","width":"0.5"}}],"home":"1.0.1.0.1","op":"make_link","to":{"addrs":["1.0.1.0.1.0.2.1"]},"ty":{"addrs":["1.0.1.0.3.0.3.6.1"]}}
+{"from":[{"source":"1.0.1.0.1","span":{"start":"1.1","width":"0.5"}}],"home":"1.0.1.0.1","op":"make_link","to":{"addrs":["1.0.1.0.1.0.2.1"]},"ty":{"addrs":["1.0.1.0.65.0.3.6.1"]}}
 ```
 
-THE I-SPAN FORM: the `from` names five content positions of `1.0.1.0.2`
+THE I-SPAN FORM: the `from` names five content positions of `1.0.1.0.64`
 by their I-addresses — the span `retrieve_i` would read — and is stored
-as that one span, whatever `1.0.1.0.2` arranges, holds or is readable as;
+as that one span, whatever `1.0.1.0.64` arranges, holds or is readable as;
 the empty `to` is the form's empty slot; the type is a ghost name.
 
 <!-- wire: request make_link -->
 ```json
-{"from":{"spans":[{"start":"1.0.1.0.2.0.1.1","width":"5"}]},"home":"1.0.1.0.1","op":"make_link","to":{"spans":[]},"ty":{"addrs":["1.0.1.0.3.0.3.6.1"]}}
+{"from":{"spans":[{"start":"1.0.1.0.64.0.1.1","width":"5"}]},"home":"1.0.1.0.1","op":"make_link","to":{"spans":[]},"ty":{"addrs":["1.0.1.0.65.0.3.6.1"]}}
 ```
 
 A RE-SHARE (§The read predicate): account `1.0.1` shares its draft
-`1.0.1.0.2` with account `1.0.2` again after revoking an earlier share,
+`1.0.1.0.64` with account `1.0.2` again after revoking an earlier share,
 its `replaces` naming that revocation — the record at `1.0.1.0.1.0.2.9`
 in its doc 1 — and so honored where the revocation is still that key's
 latest record. Replayed after a later revocation, the same request is
@@ -5171,7 +5171,7 @@ honored for nothing.
 
 <!-- wire: request make_link -->
 ```json
-{"from":{"addrs":["1.0.1.0.2"]},"home":"1.0.1.0.1","op":"make_link","replaces":"1.0.1.0.1.0.2.9","to":{"addrs":["1.0.2"]},"ty":{"addrs":["1.1.0.1.0.1.0.3.90"]}}
+{"from":{"addrs":["1.0.1.0.64"]},"home":"1.0.1.0.1","op":"make_link","replaces":"1.0.1.0.1.0.2.9","to":{"addrs":["1.0.2"]},"ty":{"addrs":["1.1.0.1.0.1.0.3.90"]}}
 ```
 
 **`emit`** — gated typed-relation emission: a managed tuple of type `ty`
@@ -5184,7 +5184,7 @@ read is invisible to the gate, so the re-emit mints afresh, and
 value-identical tuples may coexist across the visibility boundary.
 → `ack_addr`. A `ty` that resolves into the retraction class is
 `retraction_class` — retraction writes only through `nullify`. The
-example retires `1.0.1.0.2` under the shipped Retired
+example retires `1.0.1.0.64` under the shipped Retired
 class at its reserved ghost tumbler `1.1.0.1.0.1.0.1.3`: Unary, so `to`
 is empty. On a CLAIMED board an `emit` into a published home carries the
 optional top-level `attest` member (signed ops): the entry signature over
@@ -5208,7 +5208,7 @@ authoritative for a type.
 
 <!-- wire: request emit -->
 ```json
-{"from":"1.0.1.0.2","home":"1.0.1.0.1","op":"emit","to":[],"ty":[{"start":"1.1.0.1.0.1.0.1.3","width":"0.0.0.0.0.0.0.0.1"}]}
+{"from":"1.0.1.0.64","home":"1.0.1.0.1","op":"emit","to":[],"ty":[{"start":"1.1.0.1.0.1.0.1.3","width":"0.0.0.0.0.0.0.0.1"}]}
 ```
 
 **`nullify`** — the sole retraction path: retract `target` (a link) from
@@ -5283,7 +5283,7 @@ the two links' own addresses.
 
 <!-- wire: request edit_link -->
 ```json
-{"d_a":"1.0.1.0.1","d_s":"1.0.1.0.2","op":"edit_link","original":"1.0.1.0.1.0.2.1","successor":{"from":[{"source":"1.0.1.0.2","span":{"start":"1.1","width":"0.5"}}],"to":[{"source":"1.0.1.0.2","span":{"start":"1.6","width":"0.2"}}],"ty":{"addrs":["1.0.1.0.3.0.2.1"]}}}
+{"d_a":"1.0.1.0.1","d_s":"1.0.1.0.64","op":"edit_link","original":"1.0.1.0.1.0.2.1","successor":{"from":[{"source":"1.0.1.0.64","span":{"start":"1.1","width":"0.5"}}],"to":[{"source":"1.0.1.0.64","span":{"start":"1.6","width":"0.2"}}],"ty":{"addrs":["1.0.1.0.65.0.2.1"]}}}
 ```
 
 ### Links (raw reads)
@@ -5383,7 +5383,7 @@ directions. → `deletions`.
 
 <!-- wire: request show_deletions -->
 ```json
-{"d_a":"1.0.1.0.1","d_b":"1.0.1.0.2","op":"show_deletions"}
+{"d_a":"1.0.1.0.1","d_b":"1.0.1.0.64","op":"show_deletions"}
 ```
 
 **`compare`** — the shared-content correspondence between two region sets.
@@ -5391,7 +5391,7 @@ directions. → `deletions`.
 
 <!-- wire: request compare -->
 ```json
-{"op":"compare","rho1":[{"doc":"1.0.1.0.1","spans":[{"start":"1.1","width":"0.5"}]}],"rho2":[{"doc":"1.0.1.0.2","spans":[{"start":"1.1","width":"0.5"}]}]}
+{"op":"compare","rho1":[{"doc":"1.0.1.0.1","spans":[{"start":"1.1","width":"0.5"}]}],"rho2":[{"doc":"1.0.1.0.64","spans":[{"start":"1.1","width":"0.5"}]}]}
 ```
 
 **`find_docs_containing`** — the documents whose arrangements contain the
@@ -5634,7 +5634,7 @@ is `count_v`'s answer to the same reader.
 
 <!-- wire: request count_v_by_home -->
 ```json
-{"d":"1.0.1.0.1","except":["1.0.1.0.2"],"n":64,"op":"count_v_by_home","region":[{"start":"1.1","width":"0.5"}]}
+{"d":"1.0.1.0.1","except":["1.0.1.0.64"],"n":64,"op":"count_v_by_home","region":[{"start":"1.1","width":"0.5"}]}
 ```
 
 **`find_links_v_history`** — THE RETRACTED-LINKS READ: every link ever
@@ -5702,7 +5702,7 @@ the region, per slot. → `endsets`. It draws on the per-document pool as
 
 <!-- wire: request project -->
 ```json
-{"a":"1.0.1.0.1.0.2.1","d":"1.0.1.0.2","op":"project","slot":2}
+{"a":"1.0.1.0.1.0.2.1","d":"1.0.1.0.64","op":"project","slot":2}
 ```
 
 **`discoverable_from`** — is link `a` arrangement-reachable AND active

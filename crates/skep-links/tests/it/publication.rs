@@ -323,7 +323,7 @@ fn the_composite_stages_under_a_callers_transaction_and_a_refusal_discards_it_wh
     };
     assert!(matches!(staged(P2, doc1()), Err(TxnError::Rejected(PublicationError::NotOwner(d))) if d == doc1()));
     assert!(matches!(
-        staged(P1, a(&[1, 0, 1, 0, 9])),
+        staged(P1, a(&[1, 0, 1, 0, 71])),
         Err(TxnError::Rejected(PublicationError::HomeNotRegistered))
     ));
 }
@@ -652,13 +652,13 @@ fn a_run_named_twice_with_a_place_on_each_re_windows_the_second_to_the_firsts_fr
 /// the draft left as it stands.
 #[test]
 fn a_published_document_named_as_the_draft_is_refused_at_the_placement_and_lands_with_no_place() {
-    let published_draft = a(&[1, 0, 1, 0, 4]);
+    let published_draft = doc(4);
     let world = edition_world();
     let k = kernel_over(World { m3: world.m3.apply_m3(Seq(0), &M3Rec::allocate(published_draft.clone(), true)), ..world });
     Vstream::new(&k)
         .insert(P1, &published_draft, vp(1, 1), vec![Val::new([b'q'])], Deposit::Declared(skep_arrangement::deposit_class_types()[0].clone()), AsOf::Typed(k.current_seq()))
         .expect("a declared deposit at the published document's fresh position");
-    let q = Run::new(a(&[1, 0, 1, 0, 4, 0, 1, 1]), n(1)).expect("a run");
+    let q = Run::new(a(&[1, 0, 1, 0, nth_doc(4), 0, 1, 1]), n(1)).expect("a run");
     let the_shot = Shot { base: None, draft: Some(published_draft.clone()), also: vec![], keep_base: false, runs: vec![ShotRun { origin: published_draft.clone(), run: q }] };
     let before = k.current_seq();
     assert_eq!(
@@ -674,9 +674,9 @@ fn a_published_document_named_as_the_draft_is_refused_at_the_placement_and_lands
 
 // ───────────────────────── the stray places (F4) ─────────────────────────
 
-/// doc2's content element `k`: `[1,0,1,0,2,0,1,k]`.
+/// doc2's content element `k`: `[1,0,1,0,nth_doc(2),0,1,k]`.
 fn ca2(k: u32) -> Address {
-    a(&[1, 0, 1, 0, 2, 0, 1, k])
+    a(&[1, 0, 1, 0, nth_doc(2), 0, 1, k])
 }
 
 /// The board every stray cell opens over: doc1 `a b c`, published once with
@@ -987,16 +987,17 @@ fn a_draft_that_transcluded_another_drafts_words_before_they_were_published_heal
     assert_eq!(k.snapshot().world().m3().next_content_address(&pdoc()), Some(pca(5)), "nothing of doc2's minted again");
 }
 
-/// The owner's second published document `F`: `[1,0,1,0,4]`, the chain's
-/// next after `E`, registered published by [`two_editions_world`] alone —
-/// the document another draft's words were published into.
+/// The owner's second published document `F`, the account's fourth,
+/// [`doc`]`(4)`: the chain's next after `E`, registered published by
+/// [`two_editions_world`] alone — the document another draft's words were
+/// published into.
 fn fdoc() -> Address {
-    a(&[1, 0, 1, 0, 4])
+    doc(4)
 }
 
 /// `F`'s content element `k`.
 fn fca(k: u32) -> Address {
-    a(&[1, 0, 1, 0, 4, 0, 1, k])
+    a(&[1, 0, 1, 0, nth_doc(4), 0, 1, k])
 }
 
 /// [`edition_world`] with `F` registered published beside `E`.
@@ -1085,19 +1086,18 @@ use skep_links::{
     PlannedDeposit, ReadWithCause, RetractCause, TYPE,
 };
 
-/// The owner's second published document, the SET `S`: `[1,0,1,0,4]`,
-/// registered published by [`deposits_world`] alone.
+/// The owner's second published document, the SET `S`, the account's
+/// fourth, [`doc`]`(4)`: registered published by [`deposits_world`] alone.
 fn set_s() -> Address {
-    a(&[1, 0, 1, 0, 4])
+    doc(4)
 }
 
-/// The `k`-th document a mint hands out in the owner's account over this
-/// suite's worlds. Their documents past doc1 — doc2, the edition `E` and the
-/// set `S` — stand at well-known slots, which move no count, so the
-/// account's counter stands at doc1 and its first mint is the account's
-/// second document by its counter, [`doc`]`(2)`.
+/// The `k`-th document a mint hands out in the owner's account over
+/// [`edition_world`], which holds the account's first three — doc1, doc2
+/// and the edition `E` — so its first mint is the account's fourth,
+/// [`doc`]`(4)`.
 fn minted(k: u32) -> Address {
-    doc(k + 1)
+    doc(k + 3)
 }
 
 /// [`edition_world`] with the set `S` registered published: the world every
@@ -1339,7 +1339,9 @@ fn a_minting_publication_mints_the_edition_and_homes_the_claim_in_it() {
     let target = PublishTarget::Mint { account: account.clone() };
     let deposits = PublishDeposits { claim: true, links: vec![], retract: vec![], read_with: vec![set_s()], supersede: vec![], originals: vec![], base_runs: vec![] };
     let (member, seq) = writer(&k).publication(P1, &target, &the_shot, &[], &[], &deposits).expect("the mint");
-    let edition = minted(1);
+    // The deposits world holds the account's first four documents, `S` the
+    // fourth, so the mint is its fifth.
+    let edition = doc(5);
     assert_eq!(Some(member.clone()), first_version_address(&edition), "the edition's first member");
     assert_eq!(k.boundaries_above(before.seq()).expect("boundaries"), vec![(seq, None)], "one commit");
     let s = k.snapshot();
@@ -1502,7 +1504,7 @@ fn each_refused_entry_names_its_index_and_commits_nothing() {
     assert_eq!(refused_plan(&k, &the_shot, read_with_only(vec![doc2()])), PlanFault::ReadWith { index: 0, cause: ReadWithCause::NotPublished });
     assert_eq!(refused_plan(&k, &the_shot, read_with_only(vec![set_s(), pmember(1)])), PlanFault::ReadWith { index: 1, cause: ReadWithCause::NotDocument });
     assert_eq!(refused_plan(&k, &the_shot, read_with_only(vec![sib_doc()])), PlanFault::ReadWith { index: 0, cause: ReadWithCause::NotOwner });
-    assert_eq!(refused_plan(&k, &the_shot, read_with_only(vec![a(&[1, 0, 1, 0, 9])])), PlanFault::ReadWith { index: 0, cause: ReadWithCause::NotRegistered });
+    assert_eq!(refused_plan(&k, &the_shot, read_with_only(vec![a(&[1, 0, 1, 0, 71])])), PlanFault::ReadWith { index: 0, cause: ReadWithCause::NotRegistered });
     // The order: a links fault speaks ahead of a retract fault ahead of a
     // read-with fault.
     assert_eq!(
@@ -2153,13 +2155,13 @@ fn a_shot_naming_a_daughter_lands_on_the_trunk_or_is_refused_as_head_moved() {
     assert_eq!(publish(&k, &shot(None, vec![shot_run(&doc1(), &ca(1), 3)]), &none).expect("E.1").0, pmember(1));
     assert_eq!(publish(&k, &shot_off(&k, &pmember(1)), &none).expect("E.2").0, pmember(2));
     let e11 = publish(&k, &shot_off(&k, &pmember(1)), &none).expect("E.1.1").0;
-    assert_eq!(e11, a(&[1, 0, 1, 0, 3, 1, 1]), "off the member the trunk moved past: its daughter");
+    assert_eq!(e11, a(&[1, 0, 1, 0, nth_doc(3), 1, 1]), "off the member the trunk moved past: its daughter");
     let merge = PublishDeposits { supersede: vec![e11.clone()], ..PublishDeposits::default() };
     let head_moved = PlanFault::Supersede { index: 0, cause: SupersedeCause::HeadMoved(pmember(2)) };
     for (base, lands) in [
-        (pmember(1), a(&[1, 0, 1, 0, 3, 1, 2])),
-        (pdoc(), a(&[1, 0, 1, 0, 3, 1, 3])),
-        (e11.clone(), a(&[1, 0, 1, 0, 3, 1, 1, 1])),
+        (pmember(1), a(&[1, 0, 1, 0, nth_doc(3), 1, 2])),
+        (pdoc(), a(&[1, 0, 1, 0, nth_doc(3), 1, 3])),
+        (e11.clone(), a(&[1, 0, 1, 0, nth_doc(3), 1, 1, 1])),
     ] {
         let off = shot_off(&k, &base);
         assert_eq!(refused_plan(&k, &off, merge.clone()), head_moved, "off {base}: refused, nothing committed");

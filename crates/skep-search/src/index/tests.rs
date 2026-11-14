@@ -2,9 +2,16 @@ use super::*;
 use crate::unit::{GapKind, Item, Kind};
 use skep_address::{validate, Nat, Tumbler};
 
-/// The document `1.0.1.0.n`.
+/// The namespace's first ordinary document: an account's documents past its
+/// home page are numbered from it, past the reserved block of well-known
+/// slots. This crate links no namespace, so the number is named here, once.
+const FIRST_ORDINARY_DOCUMENT: u32 = 64;
+
+/// The account `1.0.1`'s `n`-th document: its home page `1.0.1.0.1`, then
+/// the rest from [`FIRST_ORDINARY_DOCUMENT`] on.
 fn key(n: u32) -> UnitKey {
-    let t = Tumbler::new([1u32, 0, 1, 0, n].map(Nat::from)).expect("nonempty");
+    let doc = if n == 1 { 1 } else { FIRST_ORDINARY_DOCUMENT + n - 2 };
+    let t = Tumbler::new([1u32, 0, 1, 0, doc].map(Nat::from)).expect("nonempty");
     UnitKey::new(validate(t).expect("a T4-valid address"))
 }
 
@@ -269,11 +276,13 @@ fn a_fresh_index_holds_its_class_and_the_running_revision_and_nothing_else() {
 #[test]
 fn keys_by_range_scans_the_keys_under_a_prefix_in_address_order() {
     let a = |n: u32| {
-        let t = Tumbler::new([1u32, 0, 1, 0, n].map(Nat::from)).expect("nonempty");
+        let doc = if n == 1 { 1 } else { FIRST_ORDINARY_DOCUMENT + n - 2 };
+        let t = Tumbler::new([1u32, 0, 1, 0, doc].map(Nat::from)).expect("nonempty");
         UnitKey::new(validate(t).expect("a T4-valid address"))
     };
     let b = |n: u32| {
-        let t = Tumbler::new([1u32, 0, 2, 0, n].map(Nat::from)).expect("nonempty");
+        let doc = if n == 1 { 1 } else { FIRST_ORDINARY_DOCUMENT + n - 2 };
+        let t = Tumbler::new([1u32, 0, 2, 0, doc].map(Nat::from)).expect("nonempty");
         UnitKey::new(validate(t).expect("a T4-valid address"))
     };
     let of = |key: &UnitKey| {
@@ -296,7 +305,7 @@ fn keys_by_range_scans_the_keys_under_a_prefix_in_address_order() {
         "account 1's documents, in order"
     );
     assert_eq!(under(&index, &prefix(&[1, 0, 2])), [b(1), b(2)]);
-    assert_eq!(under(&index, &prefix(&[1, 0, 1, 0, 2])), [a(2)], "a document's own prefix: itself");
+    assert_eq!(under(&index, &prefix(&[1, 0, 1, 0, 64])), [a(2)], "a document's own prefix: itself");
     assert_eq!(under(&index, &prefix(&[1, 0, 3])), [], "an account holding nothing");
     assert_eq!(under(&index, &prefix(&[1])), [a(1), a(2), a(3), b(1), b(2)], "the node: every key");
     assert!(prefix(&[1, 0, 1]).admits(a(3).doc()) && !prefix(&[1, 0, 1]).admits(b(1).doc()));

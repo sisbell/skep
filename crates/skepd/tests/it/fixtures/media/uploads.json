@@ -245,7 +245,7 @@
       "clause": "M-I6 (b), (d) (the owner's ruling): a per-account limit is ALWAYS in force — with no written record the daemon's default, one eighth of the volume's capacity and never below 256 MiB, which the deposit read ECHOES as per_account so R68's read-before-refusal holds under it; a written record overrides the default whole and the read echoes the record's figure, or null where the record sets none",
       "steps": [
         {"read": {"as": "a"}, "expect": {"status": 200, "per_account": "default", "base": 0, "pending": 0}},
-        {"limits": {"per_account": 100, "address": "1.0.1.0.3.1"}},
+        {"limits": {"per_account": 100, "address": "1.0.1.0.65.1"}},
         {"read": {"as": "a"}, "expect": {"status": 200, "per_account": 100}},
         {"create": {"as": "a", "length": 101}, "expect": {"status": 507, "error": "deposit_refused", "scope": "own", "ended": false, "offset": 0}},
         {"create": {"as": "a", "length": 100}, "expect": {"status": 200, "offset": 0, "upload": true}},

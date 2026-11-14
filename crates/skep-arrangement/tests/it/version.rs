@@ -46,7 +46,7 @@ fn owned_version_shares_the_map_and_diverges_copy_on_write() {
     // deposit at its fresh position — the head's own exempt act (PUB-2.66).
     let k = mem_kernel();
     let vs = deposit_abc(&k);
-    seat_link(&k, &pdoc(), &a(&[1, 0, 1, 0, 3, 0, 2, 1])).expect("seat commits");
+    seat_link(&k, &pdoc(), &a(&[1, 0, 1, 0, nth_doc(3), 0, 2, 1])).expect("seat commits");
     let (fork, _) = vs
         .version(PrincipalId(1), &pdoc(), None)
         .expect("owned fork commits");
@@ -247,7 +247,7 @@ fn a_fork_is_as_empty_as_the_reading_surface_it_snapshots_not_the_address_named(
     vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"z")], declared(), now(&k))
         .expect("lands in the head member1");
     let (member2, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("forks the head");
-    assert_eq!(member2, a(&[1, 0, 1, 0, 3, 2]));
+    assert_eq!(member2, a(&[1, 0, 1, 0, nth_doc(3), 2]));
     {
         let s = k.snapshot();
         let m5 = s.world().m5();
@@ -282,7 +282,7 @@ fn a_fork_is_as_empty_as_the_reading_surface_it_snapshots_not_the_address_named(
 fn version_rejects_an_unregistered_source_an_unknown_principal_and_a_node_tier_forker() {
     let k = mem_kernel();
     let vs = insert_abc(&k);
-    let unregistered_doc = a(&[1, 0, 1, 0, 9]);
+    let unregistered_doc = a(&[1, 0, 1, 0, 71]);
     assert!(matches!(
         rejected(vs.version(PrincipalId(1), &unregistered_doc, None)),
         VersionError::SourceNotRegistered
@@ -337,7 +337,7 @@ fn version_refuses_the_owners_private_source_whatever_the_flag() {
     // The registration check stands ahead (PUB-6.37): an unregistered slot of
     // the chain answers registration, never a publication code.
     assert!(matches!(
-        rejected(vs.version(PrincipalId(1), &a(&[1, 0, 1, 0, 9]), Some(false))),
+        rejected(vs.version(PrincipalId(1), &a(&[1, 0, 1, 0, 71]), Some(false))),
         VersionError::SourceNotRegistered
     ));
 }
@@ -363,7 +363,7 @@ fn version_refuses_an_explicit_private_member_of_the_owners_published_source() {
     let (member2, _) = vs
         .version(PrincipalId(1), &pdoc(), Some(true))
         .expect("an explicit true is admitted");
-    assert_eq!(member2, a(&[1, 0, 1, 0, 3, 2]));
+    assert_eq!(member2, a(&[1, 0, 1, 0, nth_doc(3), 2]));
     let s = k.snapshot();
     assert!(s.world().m3().published(&member1));
     assert!(s.world().m3().published(&member2));
@@ -377,7 +377,7 @@ fn version_refuses_an_explicit_private_member_of_the_owners_published_source() {
     let (daughter, _) = vs
         .version(PrincipalId(1), &member1, None)
         .expect("a member's daughter chain opens");
-    assert_eq!(daughter, a(&[1, 0, 1, 0, 3, 1, 1]));
+    assert_eq!(daughter, a(&[1, 0, 1, 0, nth_doc(3), 1, 1]));
 }
 
 #[test]
@@ -434,11 +434,11 @@ fn version_judges_a_member_source_as_its_document() {
     let vs = Vstream::new(&k);
     // A member of the PUBLISHED pdoc, journaled private: versionable, and
     // the daughter it opens is published-born.
-    let member_of_edition = a(&[1, 0, 1, 0, 3, 1]);
+    let member_of_edition = a(&[1, 0, 1, 0, nth_doc(3), 1]);
     let (daughter, _) = vs
         .version(PrincipalId(1), &member_of_edition, None)
         .expect("a member of a published document is versioned as its document");
-    assert_eq!(daughter, a(&[1, 0, 1, 0, 3, 1, 1]));
+    assert_eq!(daughter, a(&[1, 0, 1, 0, nth_doc(3), 1, 1]));
     assert!(k.snapshot().world().m3().published(&daughter));
     // A member of the PRIVATE doc1, journaled published: versionless, as its
     // document is.

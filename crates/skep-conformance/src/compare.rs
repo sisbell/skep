@@ -442,7 +442,7 @@ mod tests {
         assert_eq!(cmp(&["ABCD"], &per_byte("ABXD")), Err(crossed));
         assert!(cmp(&["ab"], &text("AB")).is_err());
         assert!(cmp(&["ABCD"], &text("ABC")).is_err());
-        let origin = addr(&[1, 0, 1, 0, 3]).expect("valid");
+        let origin = addr(&[1, 0, 1, 0, 65]).expect("valid");
         let mut withheld = text("AB");
         withheld.push(DeliveryItem::Withheld { origin, width: Nat::from(2u64) });
         withheld.extend(text("CD"));
@@ -455,16 +455,16 @@ mod tests {
     /// one; otherwise it surfaces as never bound.
     #[test]
     fn a_delivered_address_compares_through_the_bijection() {
-        let link = |n: u64| DeliveryItem::Ref(addr(&[1, 0, 1, 0, 3, 0, 2, n]).expect("valid"));
+        let link = |n: u64| DeliveryItem::Ref(addr(&[1, 0, 1, 0, 65, 0, 2, n]).expect("valid"));
         let mut alpha = Alpha::new();
-        alpha.bind("1.1.0.1.0.1", &addr(&[1, 0, 1, 0, 3]).expect("valid"));
+        alpha.bind("1.1.0.1.0.1", &addr(&[1, 0, 1, 0, 65]).expect("valid"));
         let want = strings(&["AB", "1.1.0.1.0.1.0.2.1"]);
         let with = |item: DeliveryItem| [text("AB"), vec![item]].concat();
         assert_eq!(compare_content(&want, &with(link(1)), &mut alpha), Ok(()));
         assert!(compare_content(&want, &with(link(2)), &mut alpha).is_err());
         assert_eq!(alpha.drain_findings().count(), 0);
 
-        let stray = addr(&[1, 0, 1, 0, 7, 0, 2, 1]).expect("valid");
+        let stray = addr(&[1, 0, 1, 0, 69, 0, 2, 1]).expect("valid");
         let delivered = [DeliveryItem::Ref(stray.clone())];
         let mut fresh = Alpha::new();
         let misaligned = strings(&["1.1.0.1.0.9.0.2.1", "X"]);
@@ -494,8 +494,8 @@ mod tests {
             let got: Vec<Address> = got.iter().filter(|x| infra != Some(*x)).cloned().collect();
             compare_addr_sets(&strings(want), &got, alpha, &mut Vec::new())
         }
-        let a = addr(&[1, 0, 1, 0, 3]).expect("valid");
-        let b = addr(&[1, 0, 1, 0, 4]).expect("valid");
+        let a = addr(&[1, 0, 1, 0, 65]).expect("valid");
+        let b = addr(&[1, 0, 1, 0, 66]).expect("valid");
         let mut alpha = Alpha::new();
         alpha.bind("1.1.0.1.0.1", &a);
         alpha.bind("1.1.0.1.0.2", &b);
@@ -511,7 +511,7 @@ mod tests {
         assert_eq!(sets(&["1.1.0.1.0.1"], &both, &mut alpha, Some(&b)), Ok(()));
 
         let mut fresh = Alpha::new();
-        let stray = addr(&[1, 0, 1, 0, 9]).expect("valid");
+        let stray = addr(&[1, 0, 1, 0, 71]).expect("valid");
         assert!(sets(&["1.1.0.1.0.7", "1.1.0.1.0.8"], &[stray], &mut fresh, None).is_err());
         assert_eq!(fresh.len(), 0);
         let found: Vec<FindingKind> = fresh.drain_findings().map(|f| f.kind).collect();
@@ -523,7 +523,7 @@ mod tests {
     /// it would match the golden exactly.
     #[test]
     fn an_answer_listing_an_address_twice_never_agrees() {
-        let a = addr(&[1, 0, 1, 0, 3]).expect("valid");
+        let a = addr(&[1, 0, 1, 0, 65]).expect("valid");
         let mut alpha = Alpha::new();
         alpha.bind("1.1.0.1.0.1", &a);
         let twice = [a.clone(), a.clone()];
@@ -563,7 +563,7 @@ mod tests {
     fn unbound_results_pair_in_tumbler_order() {
         let mut alpha = Alpha::new();
         let (eleven, twelve) =
-            (addr(&[1, 0, 1, 0, 11]).expect("valid"), addr(&[1, 0, 1, 0, 12]).expect("valid"));
+            (addr(&[1, 0, 1, 0, 73]).expect("valid"), addr(&[1, 0, 1, 0, 74]).expect("valid"));
         let want = ["1.1.0.1.0.10".to_string(), "1.1.0.1.0.9".to_string()];
         let mut adaptations = Vec::new();
         let comparison =

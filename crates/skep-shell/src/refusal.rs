@@ -708,8 +708,8 @@ mod tests {
         let placed = Refusal::of_named(Name::NO_KEY, Halt::face_at("/a/store", "s", "c", "a"));
         assert_eq!(placed.to_value(), json!({"kind": "halt", "name": "no_key", "state": "s", "cause": "c", "act": "a"}));
         assert!(placed.to_string().contains("\n  path: /a/store\n"), "{placed}");
-        let blocked = Refusal::Blocked(Blocked { record: "1.0.1.0.7.1".into(), named_by: "http://x".into(), ground: None });
-        assert_eq!((blocked.name(), blocked.to_value()["record"].as_str()), ("blocked", Some("1.0.1.0.7.1")));
+        let blocked = Refusal::Blocked(Blocked { record: "1.0.1.0.69.1".into(), named_by: "http://x".into(), ground: None });
+        assert_eq!((blocked.name(), blocked.to_value()["record"].as_str()), ("blocked", Some("1.0.1.0.69.1")));
         let dial = Refusal::from(Halt::Dial(DialError::Connect("refused".into())));
         assert_eq!((dial.name(), dial.to_value()["kind"].as_str()), ("unreachable", Some("unreachable")));
         let shell = Refusal::shell(Name::SESSION_ENDED, json!({"session": "s-1"}));
@@ -756,10 +756,10 @@ mod tests {
         let r = skep_client::board::Rejection::of(&body).expect("a rejected document");
         let v = Refusal::from(r.refused(&body)).to_value();
         assert_eq!(v["site"], json!({"index": 1}), "{v}");
-        let body = json!({"resp": "rejected", "code": "already_published", "disposition": "permanent", "op": "publish", "site": {"addr": "1.0.1.0.2.3"}});
+        let body = json!({"resp": "rejected", "code": "already_published", "disposition": "permanent", "op": "publish", "site": {"addr": "1.0.1.0.64.3"}});
         let r = skep_client::board::Rejection::of(&body).expect("a rejected document");
         let v = Refusal::from(r.refused(&body)).to_value();
-        assert_eq!((v["site"]["addr"].as_str(), v["site"].get("index")), (Some("1.0.1.0.2.3"), None), "{v}");
+        assert_eq!((v["site"]["addr"].as_str(), v["site"].get("index")), (Some("1.0.1.0.64.3"), None), "{v}");
     }
 
     /// Checks that a verdict's name is the token its rejection dispatches on.

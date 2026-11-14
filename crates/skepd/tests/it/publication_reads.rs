@@ -155,7 +155,7 @@ fn doc_metadata_serves_the_publication_state_per_class() {
 
     // An UNREGISTERED address is fail-open at the consult and takes the
     // store's own registration code, never `withheld`.
-    let v = doc_metadata(port, Some(&owner), "1.0.1.0.9.0.1.7");
+    let v = doc_metadata(port, Some(&owner), "1.0.1.0.71.0.1.7");
     assert_eq!(
         expect_resp(&v, "rejected")["code"].as_str(),
         Some("doc_not_registered"),

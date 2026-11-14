@@ -54,11 +54,11 @@ fn d1() -> Address {
 }
 
 fn d2() -> Address {
-    a(&[1, 0, 1, 0, 2])
+    a(&[1, 0, 1, 0, 64])
 }
 
 fn d3() -> Address {
-    a(&[1, 0, 1, 0, 3])
+    a(&[1, 0, 1, 0, 65])
 }
 
 fn link1() -> Address {
@@ -164,7 +164,7 @@ fn all_requests() -> Vec<Request> {
                 at: vp(1, 3),
                 runs: vec![
                     shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 4]), 5),
-                    shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 1]), 1),
+                    shot_run(d2(), a(&[1, 0, 1, 0, 64, 0, 1, 1]), 1),
                 ],
                 as_of: Seq(7),
             },
@@ -182,7 +182,7 @@ fn all_requests() -> Vec<Request> {
                 arrangement: SetArrangement {
                     runs: vec![
                         shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 4),
-                        shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 1]), 1),
+                        shot_run(d2(), a(&[1, 0, 1, 0, 64, 0, 1, 1]), 1),
                     ],
                     head: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }),
                     base: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }),
@@ -253,8 +253,8 @@ fn all_requests() -> Vec<Request> {
                     keep_base: false,
                     runs: vec![
                         shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 3),
-                        shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 2),
-                        shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 4]), 1),
+                        shot_run(d3(), a(&[1, 0, 1, 0, 65, 0, 1, 1]), 2),
+                        shot_run(d2(), a(&[1, 0, 1, 0, 64, 0, 1, 4]), 1),
                     ],
                 },
                 places: vec![None, Some(vp(1, 4)), None],
@@ -271,7 +271,7 @@ fn all_requests() -> Vec<Request> {
                     draft: None,
                     also: vec![],
                     keep_base: false,
-                    runs: vec![shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 1]), 5)],
+                    runs: vec![shot_run(d2(), a(&[1, 0, 1, 0, 64, 0, 1, 1]), 5)],
                 },
                 places: vec![],
                 also_places: vec![],
@@ -295,8 +295,8 @@ fn all_requests() -> Vec<Request> {
                     keep_base: false,
                     runs: vec![
                         shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 3),
-                        shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 2),
-                        shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 4]), 1),
+                        shot_run(d3(), a(&[1, 0, 1, 0, 65, 0, 1, 1]), 2),
+                        shot_run(d2(), a(&[1, 0, 1, 0, 64, 0, 1, 4]), 1),
                     ],
                 },
                 places: vec![None, Some(vp(1, 4)), Some(vp(1, 6))],
@@ -320,7 +320,7 @@ fn all_requests() -> Vec<Request> {
                     keep_base: false,
                     runs: vec![
                         shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 3),
-                        shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 2),
+                        shot_run(d3(), a(&[1, 0, 1, 0, 65, 0, 1, 1]), 2),
                     ],
                 },
                 places: vec![],
@@ -333,13 +333,13 @@ fn all_requests() -> Vec<Request> {
                             from: EndArg::Addrs(vec![NamedAddress::Member, NamedAddress::Address(d2())]),
                             to: EndArg::Member(vec![MemberSpan { ordinal: 4, width: 2 }]),
                             ty: EndArg::Addrs(vec![NamedAddress::Address(a(&[1, 1, 0, 1, 0, 1, 0, 3, 13]))]),
-                            old: Some(a(&[1, 0, 1, 0, 3, 0, 2, 1])),
+                            old: Some(a(&[1, 0, 1, 0, 65, 0, 2, 1])),
                         },
                         LinkEntry {
                             home: NamedAddress::Address(d2()),
-                            from: EndArg::Spans(vec![sp(&[1, 0, 1, 0, 2, 0, 1, 1], &[0, 0, 0, 0, 0, 0, 0, 2])]),
+                            from: EndArg::Spans(vec![sp(&[1, 0, 1, 0, 64, 0, 1, 1], &[0, 0, 0, 0, 0, 0, 0, 2])]),
                             to: EndArg::Spans(vec![]),
-                            ty: EndArg::Spans(vec![sp(&[1, 0, 1, 0, 2, 0, 1, 7], &[0, 0, 0, 0, 0, 0, 0, 1])]),
+                            ty: EndArg::Spans(vec![sp(&[1, 0, 1, 0, 64, 0, 1, 7], &[0, 0, 0, 0, 0, 0, 0, 1])]),
                             old: None,
                         },
                     ],
@@ -384,7 +384,7 @@ fn all_requests() -> Vec<Request> {
                     draft: Some(d3()),
                     also: vec![],
                     keep_base: false,
-                    runs: vec![shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 4)],
+                    runs: vec![shot_run(d3(), a(&[1, 0, 1, 0, 65, 0, 1, 1]), 4)],
                 },
                 places: vec![],
                 also_places: vec![],
@@ -409,7 +409,7 @@ fn all_requests() -> Vec<Request> {
             None,
             Op::Publish {
                 target: PublishTarget::Mint { account: a(&[1, 0, 1]) },
-                shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 1]), 1)] },
+                shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![shot_run(d2(), a(&[1, 0, 1, 0, 64, 0, 1, 1]), 1)] },
                 places: vec![],
                 also_places: vec![],
                 deposits: PublishDeposits::default(),
@@ -421,7 +421,7 @@ fn all_requests() -> Vec<Request> {
             None,
             Op::Publish {
                 target: PublishTarget::Document(d1()),
-                shot: Shot { base: None, draft: Some(d3()), also: vec![], keep_base: false, runs: vec![shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 2)] },
+                shot: Shot { base: None, draft: Some(d3()), also: vec![], keep_base: false, runs: vec![shot_run(d3(), a(&[1, 0, 1, 0, 65, 0, 1, 1]), 2)] },
                 places: vec![],
                 also_places: vec![],
                 deposits: PublishDeposits { claim: true, ..PublishDeposits::default() },
@@ -458,7 +458,7 @@ fn all_requests() -> Vec<Request> {
                 home: d1(),
                 from: SlotArg::Resolve(vec![vs(d1(), 1, 5)]),
                 to: SlotArg::Addrs(vec![link1()]),
-                ty: SlotArg::Addrs(vec![a(&[1, 0, 1, 0, 3, 0, 3, 6, 1])]),
+                ty: SlotArg::Addrs(vec![a(&[1, 0, 1, 0, 65, 0, 3, 6, 1])]),
                 replaces: None,
             },
         ),
@@ -470,7 +470,7 @@ fn all_requests() -> Vec<Request> {
                 home: d1(),
                 from: SlotArg::Addrs(vec![]),
                 to: SlotArg::Addrs(vec![]),
-                ty: SlotArg::Addrs(vec![a(&[1, 0, 1, 0, 3, 0, 3, 6, 2])]),
+                ty: SlotArg::Addrs(vec![a(&[1, 0, 1, 0, 65, 0, 3, 6, 2])]),
                 replaces: None,
             },
         ),
@@ -492,7 +492,7 @@ fn all_requests() -> Vec<Request> {
                 successor: SuccessorSpec {
                     from: vec![vs(d2(), 1, 5)].into(),
                     to: vec![vs(d2(), 6, 2)].into(),
-                    ty: SlotArg::Addrs(vec![a(&[1, 0, 1, 0, 3, 0, 2, 1])]),
+                    ty: SlotArg::Addrs(vec![a(&[1, 0, 1, 0, 65, 0, 2, 1])]),
                 },
                 d_s: d2(),
                 d_a: d1(),
@@ -521,10 +521,10 @@ fn all_requests() -> Vec<Request> {
                 home: d1(),
                 from: SlotArg::Spans(vec![
                     ispan(),
-                    sp(&[1, 0, 1, 0, 2, 0, 1, 9], &[0, 0, 0, 0, 0, 0, 0, 2]),
+                    sp(&[1, 0, 1, 0, 64, 0, 1, 9], &[0, 0, 0, 0, 0, 0, 0, 2]),
                 ]),
                 to: SlotArg::Spans(vec![]),
-                ty: SlotArg::Spans(vec![sp(&[1, 0, 1, 0, 3, 0, 1, 7], &[0, 0, 0, 0, 0, 0, 0, 1])]),
+                ty: SlotArg::Spans(vec![sp(&[1, 0, 1, 0, 65, 0, 1, 7], &[0, 0, 0, 0, 0, 0, 0, 1])]),
                 replaces: None,
             },
         ),
@@ -535,7 +535,7 @@ fn all_requests() -> Vec<Request> {
                 successor: SuccessorSpec {
                     from: SlotArg::Spans(vec![ispan()]),
                     to: SlotArg::Spans(vec![]),
-                    ty: SlotArg::Spans(vec![sp(&[1, 0, 1, 0, 3, 0, 1, 7], &[0, 0, 0, 0, 0, 0, 0, 1])]),
+                    ty: SlotArg::Spans(vec![sp(&[1, 0, 1, 0, 65, 0, 1, 7], &[0, 0, 0, 0, 0, 0, 0, 1])]),
                 },
                 d_s: d2(),
                 d_a: d1(),
@@ -789,7 +789,7 @@ fn a_shot_base_travels_with_its_extent_and_a_run_is_a_run() {
     };
     parse_ok(&codec, &frame(""));
     parse_ok(&codec, &frame(r#","base":"1.0.1.0.1.2","base_extent":"3""#));
-    parse_ok(&codec, &frame(r#","base":"1.0.1.0.1.2","base_extent":"3","draft":"1.0.1.0.7""#));
+    parse_ok(&codec, &frame(r#","base":"1.0.1.0.1.2","base_extent":"3","draft":"1.0.1.0.69""#));
     for bad in [
         r#","base":"1.0.1.0.1.2""#,
         r#","base_extent":"3""#,
@@ -844,11 +844,11 @@ fn a_shots_kept_places_are_parallel_to_its_runs_and_refused_by_entry() {
     // Two runs: the edition's own, then the draft's.
     let frame = |draft: &str, places: &str| {
         format!(
-            r#"{{"op":"publish","doc":"1.0.1.0.1"{draft},"runs":[{{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"}},{{"origin":"1.0.1.0.7","i_start":"1.0.1.0.7.0.1.1","width":"2"}}]{places}}}"#
+            r#"{{"op":"publish","doc":"1.0.1.0.1"{draft},"runs":[{{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"}},{{"origin":"1.0.1.0.69","i_start":"1.0.1.0.69.0.1.1","width":"2"}}]{places}}}"#
         )
         .into_bytes()
     };
-    let drafted = |places: &str| frame(r#","draft":"1.0.1.0.7""#, places);
+    let drafted = |places: &str| frame(r#","draft":"1.0.1.0.69""#, places);
     let places_of = |req: &Request| match &req.op {
         Op::Publish { places, .. } => places.clone(),
         other => panic!("a publish, not {other:?}"),
@@ -871,7 +871,7 @@ fn a_shots_kept_places_are_parallel_to_its_runs_and_refused_by_entry() {
     // length and written back so.
     let first = |places: &str| {
         format!(
-            r#"{{"op":"publish","doc":"1.0.1.0.1","draft":"1.0.1.0.7","runs":[{{"origin":"1.0.1.0.7","i_start":"1.0.1.0.7.0.1.1","width":"2"}},{{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"}}]{places}}}"#
+            r#"{{"op":"publish","doc":"1.0.1.0.1","draft":"1.0.1.0.69","runs":[{{"origin":"1.0.1.0.69","i_start":"1.0.1.0.69.0.1.1","width":"2"}},{{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"}}]{places}}}"#
         )
         .into_bytes()
     };
@@ -901,7 +901,7 @@ fn a_shots_kept_places_are_parallel_to_its_runs_and_refused_by_entry() {
     // one beside any run at the mint form: one rule at both forms.
     let windowed = |places: &str| {
         format!(
-            r#"{{"op":"publish","doc":"1.0.1.0.1","draft":"1.0.1.0.7","runs":[{{"origin":"1.0.1.0.7","i_start":"1.0.1.0.7.0.1.1","width":"2"}},{{"origin":"1.0.1.0.9","i_start":"1.0.1.0.9.0.1.1","width":"1"}}]{places}}}"#
+            r#"{{"op":"publish","doc":"1.0.1.0.1","draft":"1.0.1.0.69","runs":[{{"origin":"1.0.1.0.69","i_start":"1.0.1.0.69.0.1.1","width":"2"}},{{"origin":"1.0.1.0.71","i_start":"1.0.1.0.71.0.1.1","width":"1"}}]{places}}}"#
         )
         .into_bytes()
     };
@@ -911,7 +911,7 @@ fn a_shots_kept_places_are_parallel_to_its_runs_and_refused_by_entry() {
     assert!(text.contains(r#""places":[null,{"ordinal":"3","subspace":"1"}]"#), "{text}");
     assert_eq!(parse_ok(&codec, text.as_bytes()), req, "the canonical form carries it and parses to the same request");
     assert_eq!(places_of(&parse_ok(&codec, &windowed(r#","places":[{"subspace":"1","ordinal":"1"},null]"#))), vec![Some(vp(1, 1)), None], "the draft's run beside it, admitted");
-    let minted = br#"{"op":"publish","mint":true,"account":"1.0.1","draft":"1.0.1.0.7","runs":[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"}],"places":[{"subspace":"1","ordinal":"1"}]}"#;
+    let minted = br#"{"op":"publish","mint":true,"account":"1.0.1","draft":"1.0.1.0.69","runs":[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"}],"places":[{"subspace":"1","ordinal":"1"}]}"#;
     assert_eq!(places_of(&parse_ok(&codec, minted)), vec![Some(vp(1, 1))], "at the mint form a place stands beside another document's run as at the document form");
     assert_eq!(index_of(&frame("", r#","places":[null,{"subspace":"1","ordinal":"4"}]"#)), Some(1), "no draft named: no draft to window");
     assert_eq!(index_of(&frame("", r#","places":[{"subspace":"1","ordinal":"1"},null]"#)), Some(0), "no draft named: no stray run either, the re-window having no draft");
@@ -940,19 +940,19 @@ fn a_shots_kept_places_are_parallel_to_its_runs_and_refused_by_entry() {
 fn a_shots_also_names_the_familys_other_drafts_and_is_refused_by_entry() {
     let codec = JsonCodec;
     // Three runs: the edition's own, the rendering draft's, the other draft's.
-    const RUNS: &str = r#"[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"},{"origin":"1.0.1.0.7","i_start":"1.0.1.0.7.0.1.1","width":"2"},{"origin":"1.0.1.0.8","i_start":"1.0.1.0.8.0.1.1","width":"1"}]"#;
+    const RUNS: &str = r#"[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"},{"origin":"1.0.1.0.69","i_start":"1.0.1.0.69.0.1.1","width":"2"},{"origin":"1.0.1.0.70","i_start":"1.0.1.0.70.0.1.1","width":"1"}]"#;
     let frame = |head: &str, tail: &str| format!(r#"{{"op":"publish","doc":"1.0.1.0.1"{head},"runs":{RUNS}{tail}}}"#).into_bytes();
     let also_of = |req: &Request| match &req.op {
         Op::Publish { shot, .. } => shot.also.clone(),
         other => panic!("a publish, not {other:?}"),
     };
     let canonical = |req: &Request| String::from_utf8(codec.marshal_request(req)).expect("utf-8");
-    let req = parse_ok(&codec, &frame(r#","draft":"1.0.1.0.7","also":["1.0.1.0.8","1.0.1.0.9"]"#, ""));
-    assert_eq!(also_of(&req), vec![a(&[1, 0, 1, 0, 8]), a(&[1, 0, 1, 0, 9])], "the request's order");
+    let req = parse_ok(&codec, &frame(r#","draft":"1.0.1.0.69","also":["1.0.1.0.70","1.0.1.0.71"]"#, ""));
+    assert_eq!(also_of(&req), vec![a(&[1, 0, 1, 0, 70]), a(&[1, 0, 1, 0, 71])], "the request's order");
     let text = canonical(&req);
-    assert!(text.contains(r#""also":["1.0.1.0.8","1.0.1.0.9"]"#), "{text}");
+    assert!(text.contains(r#""also":["1.0.1.0.70","1.0.1.0.71"]"#), "{text}");
     assert_eq!(parse_ok(&codec, text.as_bytes()), req, "the canonical form parses to the same request");
-    for one_draft in [r#","draft":"1.0.1.0.7""#, r#","draft":"1.0.1.0.7","also":[]"#] {
+    for one_draft in [r#","draft":"1.0.1.0.69""#, r#","draft":"1.0.1.0.69","also":[]"#] {
         let req = parse_ok(&codec, &frame(one_draft, ""));
         assert!(also_of(&req).is_empty(), "{one_draft}: the one-draft shot");
         assert!(!canonical(&req).contains("also"), "{one_draft}: no member in the canonical form");
@@ -965,21 +965,21 @@ fn a_shots_also_names_the_familys_other_drafts_and_is_refused_by_entry() {
         assert_eq!(rej.site, site);
         (detail, site.and_then(|s| s.index))
     };
-    let (detail, index) = refused(&frame(r#","also":["1.0.1.0.8"]"#, ""));
+    let (detail, index) = refused(&frame(r#","also":["1.0.1.0.70"]"#, ""));
     assert!(detail.contains("'also'") && detail.contains("'draft'") && index.is_none(), "also without draft: {detail}");
-    let (detail, index) = refused(&frame(r#","draft":"1.0.1.0.7","also":["1.0.1.0.8","1.0.1.0.7"]"#, ""));
+    let (detail, index) = refused(&frame(r#","draft":"1.0.1.0.69","also":["1.0.1.0.70","1.0.1.0.69"]"#, ""));
     assert!(detail.contains("'also'") && index == Some(1), "the draft itself: {detail}");
-    let (detail, index) = refused(&frame(r#","draft":"1.0.1.0.7","also":["1.0.1.0.8","1.0.1.0.9","1.0.1.0.8"]"#, ""));
+    let (detail, index) = refused(&frame(r#","draft":"1.0.1.0.69","also":["1.0.1.0.70","1.0.1.0.71","1.0.1.0.70"]"#, ""));
     assert!(detail.contains("repeats") && index == Some(2), "a repeat: {detail}");
-    let (detail, index) = refused(&frame(r#","draft":"1.0.1.0.7","also":["1.0.1.0.8","x"]"#, ""));
+    let (detail, index) = refused(&frame(r#","draft":"1.0.1.0.69","also":["1.0.1.0.70","x"]"#, ""));
     assert!(detail.contains("'also'") && index == Some(1), "no address: {detail}");
-    let (detail, index) = refused(&frame(r#","draft":"1.0.1.0.7","also":"1.0.1.0.8""#, ""));
+    let (detail, index) = refused(&frame(r#","draft":"1.0.1.0.69","also":"1.0.1.0.70""#, ""));
     assert!(detail.contains("'also'") && index.is_none(), "no array: {detail}");
     // A place beside the other draft's run is ADMITTED — the rendering
     // draft's own position of a run it holds by identity — and carried by
     // the canonical form, at either form; the trunk's own run and the
     // rendering draft's keep theirs.
-    let family = |places: &str| frame(r#","draft":"1.0.1.0.7","also":["1.0.1.0.8"]"#, places);
+    let family = |places: &str| frame(r#","draft":"1.0.1.0.69","also":["1.0.1.0.70"]"#, places);
     let places_of = |req: &Request| match &req.op {
         Op::Publish { places, .. } => places.clone(),
         other => panic!("a publish, not {other:?}"),
@@ -989,7 +989,7 @@ fn a_shots_also_names_the_familys_other_drafts_and_is_refused_by_entry() {
     let text = canonical(&req);
     assert!(text.contains(r#""places":[null,null,{"ordinal":"6","subspace":"1"}]"#), "{text}");
     assert_eq!(parse_ok(&codec, text.as_bytes()), req, "the canonical form parses to the same request");
-    let minted_family = br#"{"op":"publish","mint":true,"account":"1.0.1","draft":"1.0.1.0.7","also":["1.0.1.0.8"],"runs":[{"origin":"1.0.1.0.8","i_start":"1.0.1.0.8.0.1.1","width":"1"}],"places":[{"subspace":"1","ordinal":"1"}]}"#;
+    let minted_family = br#"{"op":"publish","mint":true,"account":"1.0.1","draft":"1.0.1.0.69","also":["1.0.1.0.70"],"runs":[{"origin":"1.0.1.0.70","i_start":"1.0.1.0.70.0.1.1","width":"1"}],"places":[{"subspace":"1","ordinal":"1"}]}"#;
     assert_eq!(places_of(&parse_ok(&codec, minted_family)), vec![Some(vp(1, 1))], "at the mint form too");
     let req = parse_ok(&codec, &family(r#","places":[{"subspace":"1","ordinal":"1"},{"subspace":"1","ordinal":"4"},null]"#));
     assert_eq!(places_of(&req), vec![Some(vp(1, 1)), Some(vp(1, 4)), None]);
@@ -1006,24 +1006,24 @@ fn a_shots_also_names_the_familys_other_drafts_and_is_refused_by_entry() {
 #[test]
 fn a_shots_keep_base_rides_only_beside_its_draft() {
     let codec = JsonCodec;
-    const RUNS: &str = r#"[{"origin":"1.0.1.0.7","i_start":"1.0.1.0.7.0.1.1","width":"2"}]"#;
+    const RUNS: &str = r#"[{"origin":"1.0.1.0.69","i_start":"1.0.1.0.69.0.1.1","width":"2"}]"#;
     let frame = |members: &str| format!(r#"{{"op":"publish","doc":"1.0.1.0.1"{members},"runs":{RUNS}}}"#).into_bytes();
     let keep_base_of = |req: &Request| match &req.op {
         Op::Publish { shot, .. } => (shot.keep_base, shot.moves_base_of()),
         other => panic!("a publish, not {other:?}"),
     };
     let canonical = |req: &Request| String::from_utf8(codec.marshal_request(req)).expect("utf-8");
-    let req = parse_ok(&codec, &frame(r#","draft":"1.0.1.0.7","keep_base":true"#));
+    let req = parse_ok(&codec, &frame(r#","draft":"1.0.1.0.69","keep_base":true"#));
     assert_eq!(keep_base_of(&req), (true, None), "the base kept: the shot moves none");
     let text = canonical(&req);
     assert!(text.contains(r#""keep_base":true"#), "{text}");
     assert_eq!(parse_ok(&codec, text.as_bytes()), req, "the canonical form parses to the same request");
-    for unset in [r#","draft":"1.0.1.0.7""#, r#","draft":"1.0.1.0.7","keep_base":false"#, r#","draft":"1.0.1.0.7","keep_base":null"#] {
+    for unset in [r#","draft":"1.0.1.0.69""#, r#","draft":"1.0.1.0.69","keep_base":false"#, r#","draft":"1.0.1.0.69","keep_base":null"#] {
         let req = parse_ok(&codec, &frame(unset));
-        assert_eq!(keep_base_of(&req), (false, Some(a(&[1, 0, 1, 0, 7]))), "{unset}: the draft's own publication");
+        assert_eq!(keep_base_of(&req), (false, Some(a(&[1, 0, 1, 0, 69]))), "{unset}: the draft's own publication");
         assert!(!canonical(&req).contains("keep_base"), "{unset}: no member in the canonical form");
     }
-    for (members, what) in [(r#","keep_base":true"#, "without draft"), (r#","draft":"1.0.1.0.7","keep_base":"yes""#, "no boolean")] {
+    for (members, what) in [(r#","keep_base":true"#, "without draft"), (r#","draft":"1.0.1.0.69","keep_base":"yes""#, "no boolean")] {
         let e = codec.parse(&frame(members)).expect_err("refused");
         let (site, detail) = (e.site.clone(), e.detail.clone().unwrap_or_default());
         let rej = Rejection::unparseable(e);
@@ -1054,8 +1054,8 @@ fn a_shots_also_places_are_each_also_drafts_own_kept_places_and_refused_by_entry
     let codec = JsonCodec;
     // Four runs: the edition's own, the rendering draft's (7), the first
     // `also` draft's (8), the second `also` draft's (9).
-    const RUNS: &str = r#"[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"},{"origin":"1.0.1.0.7","i_start":"1.0.1.0.7.0.1.1","width":"2"},{"origin":"1.0.1.0.8","i_start":"1.0.1.0.8.0.1.1","width":"1"},{"origin":"1.0.1.0.9","i_start":"1.0.1.0.9.0.1.1","width":"1"}]"#;
-    let frame = |tail: &str| format!(r#"{{"op":"publish","doc":"1.0.1.0.1","draft":"1.0.1.0.7","also":["1.0.1.0.8","1.0.1.0.9"],"runs":{RUNS}{tail}}}"#).into_bytes();
+    const RUNS: &str = r#"[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"},{"origin":"1.0.1.0.69","i_start":"1.0.1.0.69.0.1.1","width":"2"},{"origin":"1.0.1.0.70","i_start":"1.0.1.0.70.0.1.1","width":"1"},{"origin":"1.0.1.0.71","i_start":"1.0.1.0.71.0.1.1","width":"1"}]"#;
+    let frame = |tail: &str| format!(r#"{{"op":"publish","doc":"1.0.1.0.1","draft":"1.0.1.0.69","also":["1.0.1.0.70","1.0.1.0.71"],"runs":{RUNS}{tail}}}"#).into_bytes();
     let also_places_of = |req: &Request| match &req.op {
         Op::Publish { also_places, .. } => also_places.clone(),
         other => panic!("a publish, not {other:?}"),
@@ -1071,15 +1071,15 @@ fn a_shots_also_places_are_each_also_drafts_own_kept_places_and_refused_by_entry
         p4 = place(4),
         p6 = place(6),
         p7 = place(7),
-        e9 = entry("1.0.1.0.9", &format!("[null,null,null,{}]", place(2))),
-        e8 = entry("1.0.1.0.8", &format!("[null,null,{}]", place(1))),
+        e9 = entry("1.0.1.0.71", &format!("[null,null,null,{}]", place(2))),
+        e8 = entry("1.0.1.0.70", &format!("[null,null,{}]", place(1))),
     ));
     let req = parse_ok(&codec, &both);
     assert_eq!(
         also_places_of(&req),
         vec![
-            AlsoPlaces { draft: a(&[1, 0, 1, 0, 9]), places: vec![None, None, None, Some(vp(1, 2))] },
-            AlsoPlaces { draft: a(&[1, 0, 1, 0, 8]), places: vec![None, None, Some(vp(1, 1)), None] },
+            AlsoPlaces { draft: a(&[1, 0, 1, 0, 71]), places: vec![None, None, None, Some(vp(1, 2))] },
+            AlsoPlaces { draft: a(&[1, 0, 1, 0, 70]), places: vec![None, None, Some(vp(1, 1)), None] },
         ],
         "each draft's own places, in the order given, padded to runs' length"
     );
@@ -1091,14 +1091,14 @@ fn a_shots_also_places_are_each_also_drafts_own_kept_places_and_refused_by_entry
     // `runs`' length; and the canonical form parses to the same request.
     let text = canonical(&req);
     assert!(
-        text.contains(r#""also_places":[{"draft":"1.0.1.0.8","places":[null,null,{"ordinal":"1","subspace":"1"},null]},{"draft":"1.0.1.0.9","places":[null,null,null,{"ordinal":"2","subspace":"1"}]}]"#),
+        text.contains(r#""also_places":[{"draft":"1.0.1.0.70","places":[null,null,{"ordinal":"1","subspace":"1"},null]},{"draft":"1.0.1.0.71","places":[null,null,null,{"ordinal":"2","subspace":"1"}]}]"#),
         "{text}"
     );
     let again = parse_ok(&codec, text.as_bytes());
     assert_eq!(also_places_of(&again), vec![also_places_of(&req)[1].clone(), also_places_of(&req)[0].clone()], "re-parsed in `also`'s order");
     assert_eq!(canonical(&again), text, "the canonical form is a fixpoint");
     // Today's shot: absent, the empty list, and an all-null entry alike.
-    for none in ["", r#","also_places":[]"#, &format!(r#","also_places":[{}]"#, entry("1.0.1.0.8", "[null,null,null]"))] {
+    for none in ["", r#","also_places":[]"#, &format!(r#","also_places":[{}]"#, entry("1.0.1.0.70", "[null,null,null]"))] {
         let req = parse_ok(&codec, &frame(none));
         assert!(also_places_of(&req).is_empty(), "{none}: no `also` draft re-windowed");
         assert!(!canonical(&req).contains("also_places"), "{none}: no member in the canonical form");
@@ -1106,8 +1106,8 @@ fn a_shots_also_places_are_each_also_drafts_own_kept_places_and_refused_by_entry
     // A stray place in an `also` draft's list — beside the edition's own run,
     // of no named draft's identity — is admitted: whether it re-windows is
     // the commit's, through the records the caller may read.
-    let strayed = parse_ok(&codec, &frame(&format!(r#","also_places":[{}]"#, entry("1.0.1.0.8", &format!("[{}]", place(1))))));
-    assert_eq!(also_places_of(&strayed), vec![AlsoPlaces { draft: a(&[1, 0, 1, 0, 8]), places: vec![Some(vp(1, 1)), None, None, None] }]);
+    let strayed = parse_ok(&codec, &frame(&format!(r#","also_places":[{}]"#, entry("1.0.1.0.70", &format!("[{}]", place(1))))));
+    assert_eq!(also_places_of(&strayed), vec![AlsoPlaces { draft: a(&[1, 0, 1, 0, 70]), places: vec![Some(vp(1, 1)), None, None, None] }]);
     // The shape refusals: `malformed` through `Rejection::unparseable`, the
     // detail naming the member and the site the entry or the place.
     let refused = |frame: &[u8]| -> (String, Option<usize>) {
@@ -1121,44 +1121,44 @@ fn a_shots_also_places_are_each_also_drafts_own_kept_places_and_refused_by_entry
     };
     let one = |draft: &str, places: &str| frame(&format!(r#","also_places":[{}]"#, entry(draft, places)));
     // The entry at fault.
-    let (detail, index) = refused(&one("1.0.1.0.5", &format!("[{}]", place(1))));
+    let (detail, index) = refused(&one("1.0.1.0.67", &format!("[{}]", place(1))));
     assert!(detail.contains("'also'") && index == Some(0), "a draft `also` does not name: {detail}");
-    let (detail, index) = refused(&one("1.0.1.0.7", &format!("[null,{}]", place(1))));
+    let (detail, index) = refused(&one("1.0.1.0.69", &format!("[null,{}]", place(1))));
     assert!(detail.contains("'also'") && index == Some(0), "the rendering draft itself is no `also` draft: {detail}");
-    let (detail, index) = refused(&frame(&format!(r#","also_places":[{},{}]"#, entry("1.0.1.0.8", &format!("[null,null,{}]", place(1))), entry("1.0.1.0.8", "[null]"))));
+    let (detail, index) = refused(&frame(&format!(r#","also_places":[{},{}]"#, entry("1.0.1.0.70", &format!("[null,null,{}]", place(1))), entry("1.0.1.0.70", "[null]"))));
     assert!(detail.contains("repeats") && index == Some(1), "a repeated draft: {detail}");
-    let (detail, index) = refused(&frame(&format!(r#","also_places":[{},{},{}]"#, entry("1.0.1.0.8", "[null]"), entry("1.0.1.0.9", "[null]"), entry("1.0.1.0.8", "[null]"))));
+    let (detail, index) = refused(&frame(&format!(r#","also_places":[{},{},{}]"#, entry("1.0.1.0.70", "[null]"), entry("1.0.1.0.71", "[null]"), entry("1.0.1.0.70", "[null]"))));
     assert!(detail.contains("entries beside") && index == Some(2), "more entries than drafts: the first past them: {detail}");
     let (detail, index) = refused(&frame(r#","also_places":[7]"#));
     assert!(detail.contains("object") && index == Some(0), "no object: {detail}");
-    let (detail, index) = refused(&frame(r#","also_places":[{"draft":"1.0.1.0.8"}]"#));
+    let (detail, index) = refused(&frame(r#","also_places":[{"draft":"1.0.1.0.70"}]"#));
     assert!(detail.contains("places") && index == Some(0), "no places: {detail}");
-    let (detail, index) = refused(&frame(&format!(r#","also_places":[{{"draft":"1.0.1.0.8","places":[{}],"extra":1}}]"#, place(1))));
+    let (detail, index) = refused(&frame(&format!(r#","also_places":[{{"draft":"1.0.1.0.70","places":[{}],"extra":1}}]"#, place(1))));
     assert!(detail.contains("extra") && index == Some(0), "a member of its own: {detail}");
     let (detail, index) = refused(&one("x", "[null]"));
     assert!(detail.contains("draft") && index == Some(0), "no address: {detail}");
-    let (_, index) = refused(&one("1.0.1.0.8", "7"));
+    let (_, index) = refused(&one("1.0.1.0.70", "7"));
     assert_eq!(index, Some(0), "places no array: the entry");
     // The place at fault.
-    let (detail, index) = refused(&one("1.0.1.0.8", "[null,null,null,null,null]"));
+    let (detail, index) = refused(&one("1.0.1.0.70", "[null,null,null,null,null]"));
     assert!(detail.contains("entries beside") && index == Some(4), "longer than runs: the first place past them: {detail}");
-    let (detail, index) = refused(&one("1.0.1.0.8", &format!("[null,{}]", place(5))));
+    let (detail, index) = refused(&one("1.0.1.0.70", &format!("[null,{}]", place(5))));
     assert!(detail.contains("rendering draft") && index == Some(1), "beside the rendering draft's run: {detail}");
-    let (detail, index) = refused(&one("1.0.1.0.8", &format!("[null,null,null,{}]", place(5))));
+    let (detail, index) = refused(&one("1.0.1.0.70", &format!("[null,null,null,{}]", place(5))));
     assert!(detail.contains("'also'") && index == Some(3), "beside another `also` draft's run: {detail}");
-    let (detail, index) = refused(&one("1.0.1.0.8", r#"[null,null,{"subspace":"2","ordinal":"1"}]"#));
+    let (detail, index) = refused(&one("1.0.1.0.70", r#"[null,null,{"subspace":"2","ordinal":"1"}]"#));
     assert!(detail.contains("content") && index == Some(2), "the link subspace: {detail}");
-    let (_, index) = refused(&one("1.0.1.0.8", r#"[null,null,{"subspace":"1"}]"#));
+    let (_, index) = refused(&one("1.0.1.0.70", r#"[null,null,{"subspace":"1"}]"#));
     assert_eq!(index, Some(2), "no V-position");
-    let (_, index) = refused(&one("1.0.1.0.8", "[null,null,7]"));
+    let (_, index) = refused(&one("1.0.1.0.70", "[null,null,7]"));
     assert_eq!(index, Some(2), "no object for a place");
     // No array: refused with no site. Without `also`: no draft to name.
     let (_, index) = refused(&frame(r#","also_places":{}"#));
     assert_eq!(index, None, "no array: no site");
-    let (detail, index) = refused(format!(r#"{{"op":"publish","doc":"1.0.1.0.1","draft":"1.0.1.0.7","runs":{RUNS},"also_places":[{}]}}"#, entry("1.0.1.0.8", &format!("[null,null,{}]", place(1)))).as_bytes());
+    let (detail, index) = refused(format!(r#"{{"op":"publish","doc":"1.0.1.0.1","draft":"1.0.1.0.69","runs":{RUNS},"also_places":[{}]}}"#, entry("1.0.1.0.70", &format!("[null,null,{}]", place(1)))).as_bytes());
     assert!(detail.contains("'also'") && index == Some(0), "no `also`: no draft an entry may name: {detail}");
     // The member is read against the envelope as every other is.
-    assert!(codec.parse(&frame(&format!(r#","also_places":[{}],"extra":1"#, entry("1.0.1.0.8", &format!("[null,null,{}]", place(1)))))).is_err());
+    assert!(codec.parse(&frame(&format!(r#","also_places":[{}],"extra":1"#, entry("1.0.1.0.70", &format!("[null,null,{}]", place(1)))))).is_err());
 }
 
 /// The publication's members (the link-sets design §5.7; lane S3), at the
@@ -1179,8 +1179,8 @@ fn a_publications_members_parse_in_their_forms_and_are_refused_by_entry() {
     let codec = JsonCodec;
     // Three runs: the edition's own three positions, the draft's two, a
     // window of one — placed = 6.
-    const RUNS: &str = r#"[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"},{"origin":"1.0.1.0.3","i_start":"1.0.1.0.3.0.1.1","width":"2"},{"origin":"1.0.1.0.2","i_start":"1.0.1.0.2.0.1.4","width":"1"}]"#;
-    let frame = |head: &str, tail: &str| format!(r#"{{"op":"publish"{head},"draft":"1.0.1.0.3","runs":{RUNS}{tail}}}"#).into_bytes();
+    const RUNS: &str = r#"[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"},{"origin":"1.0.1.0.65","i_start":"1.0.1.0.65.0.1.1","width":"2"},{"origin":"1.0.1.0.64","i_start":"1.0.1.0.64.0.1.4","width":"1"}]"#;
+    let frame = |head: &str, tail: &str| format!(r#"{{"op":"publish"{head},"draft":"1.0.1.0.65","runs":{RUNS}{tail}}}"#).into_bytes();
     let doc = |tail: &str| frame(r#","doc":"1.0.1.0.1""#, tail);
     let mint = |tail: &str| frame(r#","account":"1.0.1","mint":true"#, tail);
     let index_of = |frame: &[u8]| {
@@ -1242,8 +1242,8 @@ fn a_publications_members_parse_in_their_forms_and_are_refused_by_entry() {
     };
     let ty = r#"{"addrs":["1.1.0.1.0.1.0.3.13"]}"#;
     let links = doc(&format!(
-        r#","links":[{}],"retract":["1.0.1.0.1.0.2.1"],"read_with":["1.0.1.0.2"]"#,
-        entry(r#""member""#, r#"{"addrs":["member","1.0.1.0.2"]}"#, r#"{"member":[{"ordinal":"4","width":"2"}]}"#, ty, r#","old":"1.0.1.0.3.0.2.1""#)
+        r#","links":[{}],"retract":["1.0.1.0.1.0.2.1"],"read_with":["1.0.1.0.64"]"#,
+        entry(r#""member""#, r#"{"addrs":["member","1.0.1.0.64"]}"#, r#"{"member":[{"ordinal":"4","width":"2"}]}"#, ty, r#","old":"1.0.1.0.65.0.2.1""#)
     ));
     let req = parse_ok(&codec, &links);
     let Op::Publish { deposits, .. } = &req.op else { panic!("a publish") };
@@ -1251,7 +1251,7 @@ fn a_publications_members_parse_in_their_forms_and_are_refused_by_entry() {
     assert_eq!(deposits.links[0].home, NamedAddress::Member);
     assert_eq!(deposits.links[0].from, EndArg::Addrs(vec![NamedAddress::Member, NamedAddress::Address(d2())]));
     assert_eq!(deposits.links[0].to, EndArg::Member(vec![MemberSpan { ordinal: 4, width: 2 }]));
-    assert_eq!(deposits.links[0].old, Some(a(&[1, 0, 1, 0, 3, 0, 2, 1])));
+    assert_eq!(deposits.links[0].old, Some(a(&[1, 0, 1, 0, 65, 0, 2, 1])));
     assert_eq!(deposits.retract, vec![link1()]);
     assert_eq!(deposits.read_with, vec![d2()]);
     let canonical = codec.marshal_request(&req);
@@ -1259,7 +1259,7 @@ fn a_publications_members_parse_in_their_forms_and_are_refused_by_entry() {
     let text = String::from_utf8(canonical).expect("utf-8");
     assert!(text.contains(r#""to":{"member":[{"ordinal":"4","width":"2"}]}"#), "{text}");
     // The I-span form, and the empty `to`.
-    let spans = doc(&format!(r#","links":[{}]"#, entry(r#""1.0.1.0.2""#, r#"{"spans":[{"start":"1.0.1.0.2.0.1.1","width":"2"}]}"#, r#"{"spans":[]}"#, ty, "")));
+    let spans = doc(&format!(r#","links":[{}]"#, entry(r#""1.0.1.0.64""#, r#"{"spans":[{"start":"1.0.1.0.64.0.1.1","width":"2"}]}"#, r#"{"spans":[]}"#, ty, "")));
     let req = parse_ok(&codec, &spans);
     let Op::Publish { deposits, .. } = &req.op else { panic!("a publish") };
     assert!(matches!(&deposits.links[0].from, EndArg::Spans(s) if s.len() == 1));
@@ -1276,7 +1276,7 @@ fn a_publications_members_parse_in_their_forms_and_are_refused_by_entry() {
     // address, a missing slot, a stray member; the second entry refused
     // names index 1; a `retract` or `read_with` entry that is no address
     // names its own index; a list that is no array names none.
-    let vspec = r#"[{"source":"1.0.1.0.2","span":{"start":"1.1","width":"0.2"}}]"#;
+    let vspec = r#"[{"source":"1.0.1.0.64","span":{"start":"1.1","width":"0.2"}}]"#;
     let good = entry(r#""member""#, r#"{"addrs":[]}"#, r#"{"addrs":[]}"#, ty, "");
     for (bad, want, why) in [
         (entry(r#""member""#, vspec, r#"{"addrs":[]}"#, ty, ""), Some(0), "a V-spec end"),
@@ -1306,16 +1306,16 @@ fn a_publications_members_parse_in_their_forms_and_are_refused_by_entry() {
     // object of `old` and `rest`, one with no `old`, one whose `old` is no
     // address, a stray member, a zero-width rest span and a rest that is no
     // array each name the entry's index; a rider that is no array none.
-    let ridden = parse_ok(&codec, &doc(r#","originals":[{"old":"1.0.1.0.3.0.2.1"},{"old":"1.0.1.0.3.0.2.2","rest":[{"start":"1.0.1.0.3.0.1.4","width":"1"}]}]"#));
+    let ridden = parse_ok(&codec, &doc(r#","originals":[{"old":"1.0.1.0.65.0.2.1"},{"old":"1.0.1.0.65.0.2.2","rest":[{"start":"1.0.1.0.65.0.1.4","width":"1"}]}]"#));
     let Op::Publish { deposits, .. } = &ridden.op else { panic!("a publish") };
     assert_eq!(deposits.originals.len(), 2);
-    assert_eq!((&deposits.originals[0].old, deposits.originals[0].rest.len()), (&a(&[1, 0, 1, 0, 3, 0, 2, 1]), 0));
-    assert_eq!(deposits.originals[1].old, a(&[1, 0, 1, 0, 3, 0, 2, 2]));
+    assert_eq!((&deposits.originals[0].old, deposits.originals[0].rest.len()), (&a(&[1, 0, 1, 0, 65, 0, 2, 1]), 0));
+    assert_eq!(deposits.originals[1].old, a(&[1, 0, 1, 0, 65, 0, 2, 2]));
     assert_eq!(deposits.originals[1].rest.len(), 1);
     assert!(!deposits.is_empty(), "the rider alone is a member the plan reads");
     let canonical = codec.marshal_request(&ridden);
     let text = String::from_utf8_lossy(&canonical);
-    assert!(text.contains(r#""originals":[{"old":"1.0.1.0.3.0.2.1"},{"old":"1.0.1.0.3.0.2.2","rest":[{"start":"1.0.1.0.3.0.1.4","width":"1"}]}]"#), "{text}");
+    assert!(text.contains(r#""originals":[{"old":"1.0.1.0.65.0.2.1"},{"old":"1.0.1.0.65.0.2.2","rest":[{"start":"1.0.1.0.65.0.1.4","width":"1"}]}]"#), "{text}");
     assert_eq!(parse_ok(&codec, &canonical), ridden, "the canonical form parses to the same request");
     for (tail, why) in [(r#","originals":[]"#, "the empty rider"), (r#","originals":null"#, "null"), ("", "absent")] {
         let req = parse_ok(&codec, &doc(tail));
@@ -1323,20 +1323,20 @@ fn a_publications_members_parse_in_their_forms_and_are_refused_by_entry() {
         assert!(deposits.originals.is_empty(), "{why}");
         assert!(!String::from_utf8_lossy(&codec.marshal_request(&req)).contains("originals"), "{why}: no member written");
     }
-    let empty_rest = parse_ok(&codec, &doc(r#","originals":[{"old":"1.0.1.0.3.0.2.1","rest":null}]"#));
+    let empty_rest = parse_ok(&codec, &doc(r#","originals":[{"old":"1.0.1.0.65.0.2.1","rest":null}]"#));
     let Op::Publish { deposits, .. } = &empty_rest.op else { panic!("a publish") };
     assert!(deposits.originals[0].rest.is_empty(), "a null rest is the empty rest");
     for (bad, why) in [
-        (r#","originals":["1.0.1.0.3.0.2.1"]"#, "an entry that is no object"),
+        (r#","originals":["1.0.1.0.65.0.2.1"]"#, "an entry that is no object"),
         (r#","originals":[{"rest":[]}]"#, "no old"),
         (r#","originals":[{"old":7}]"#, "an old that is no address"),
-        (r#","originals":[{"old":"1.0.1.0.3.0.2.1","extra":1}]"#, "a stray member"),
-        (r#","originals":[{"old":"1.0.1.0.3.0.2.1","rest":[{"start":"1.0.1.0.3.0.1.4","width":"0"}]}]"#, "a zero-width rest span"),
-        (r#","originals":[{"old":"1.0.1.0.3.0.2.1","rest":{}}]"#, "a rest that is no array"),
+        (r#","originals":[{"old":"1.0.1.0.65.0.2.1","extra":1}]"#, "a stray member"),
+        (r#","originals":[{"old":"1.0.1.0.65.0.2.1","rest":[{"start":"1.0.1.0.65.0.1.4","width":"0"}]}]"#, "a zero-width rest span"),
+        (r#","originals":[{"old":"1.0.1.0.65.0.2.1","rest":{}}]"#, "a rest that is no array"),
     ] {
         assert_eq!(index_of(&doc(bad)), Some(0), "{why}");
     }
-    assert_eq!(index_of(&doc(r#","originals":[{"old":"1.0.1.0.3.0.2.1"},{"old":"x"}]"#)), Some(1), "the second entry refused names index 1");
+    assert_eq!(index_of(&doc(r#","originals":[{"old":"1.0.1.0.65.0.2.1"},{"old":"x"}]"#)), Some(1), "the second entry refused names index 1");
     assert_eq!(index_of(&doc(r#","originals":{}"#)), None, "no array: refused with no site");
     // The fourth list (the merge bridge lane, brief A): `supersede`, the
     // daughters by address, parsed in order and written back only where it
@@ -1471,7 +1471,7 @@ fn the_universal_grants_read_parses_bare_and_answers_rows_always_present() {
             "as_of": 9,
             "resp": "universal_grants",
             "rows": [
-                {"issuers": ["1.0.1"], "prefix": "1.0.1.0.2"},
+                {"issuers": ["1.0.1"], "prefix": "1.0.1.0.64"},
                 {"issuers": ["1.0.2", "1.0.2.1"], "prefix": "1.0.2.1"},
             ],
         }),
@@ -1785,11 +1785,11 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                     Link::new([
                         Endset::from_spans([ispan()]),
                         Endset::from_spans([sp(
-                            &[1, 0, 1, 0, 2, 0, 1, 1],
+                            &[1, 0, 1, 0, 64, 0, 1, 1],
                             &[0, 0, 0, 0, 0, 0, 0, 6],
                         )]),
                         Endset::from_spans([sp(
-                            &[1, 0, 1, 0, 3, 0, 1, 1],
+                            &[1, 0, 1, 0, 65, 0, 1, 1],
                             &[0, 0, 0, 0, 0, 0, 0, 1],
                         )]),
                     ])
@@ -1933,8 +1933,8 @@ fn all_responses() -> Vec<(&'static str, Response)> {
             "edition_claims",
             Response::EditionClaims {
                 claims: vec![EditionClaim {
-                    claim: a(&[1, 0, 1, 0, 5, 0, 2, 1]),
-                    home: a(&[1, 0, 1, 0, 5]),
+                    claim: a(&[1, 0, 1, 0, 67, 0, 2, 1]),
+                    home: a(&[1, 0, 1, 0, 67]),
                     to: Endset::from_spans([sp(&[1, 0, 1, 0, 1], &[0, 0, 0, 0, 1])]),
                     active: false,
                 }],
@@ -2056,7 +2056,7 @@ fn a_set_arrangement_takes_its_three_optional_members_and_refuses_a_merge_withou
     let codec = JsonCodec;
     let frame = |fields: &str| {
         format!(
-            r#"{{"op":"set_arrangement","doc":"1.0.1.0.3","runs":[{{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"}}],"as_of":7{fields}}}"#
+            r#"{{"op":"set_arrangement","doc":"1.0.1.0.65","runs":[{{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"}}],"as_of":7{fields}}}"#
         )
         .into_bytes()
     };
@@ -2065,7 +2065,7 @@ fn a_set_arrangement_takes_its_three_optional_members_and_refuses_a_merge_withou
     assert!(arrangement.head.is_none() && arrangement.base.is_none() && arrangement.merge.is_none());
     assert_eq!(
         String::from_utf8(codec.marshal_request(&plain)).expect("utf-8"),
-        r#"{"as_of":7,"doc":"1.0.1.0.3","op":"set_arrangement","runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"}]}"#,
+        r#"{"as_of":7,"doc":"1.0.1.0.65","op":"set_arrangement","runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"}]}"#,
         "the canonical form carries no absent member"
     );
     let landing = parse_ok(
@@ -2118,9 +2118,9 @@ fn a_set_arrangement_takes_its_three_optional_members_and_refuses_a_merge_withou
         let got = e.detail.expect("a parse failure names what failed");
         assert!(got.contains(detail), "{bad}: {got}");
     }
-    let e = codec.parse(br#"{"op":"set_arrangement","doc":"1.0.1.0.3","runs":[]}"#).expect_err("as_of is required");
+    let e = codec.parse(br#"{"op":"set_arrangement","doc":"1.0.1.0.65","runs":[]}"#).expect_err("as_of is required");
     assert!(e.detail.expect("named").contains("missing field 'as_of'"));
-    let e = codec.parse(br#"{"op":"set_arrangement","doc":"1.0.1.0.3","as_of":7}"#).expect_err("runs is required");
+    let e = codec.parse(br#"{"op":"set_arrangement","doc":"1.0.1.0.65","as_of":7}"#).expect_err("runs is required");
     assert!(e.detail.expect("named").contains("missing field 'runs'"));
 }
 
@@ -2395,7 +2395,7 @@ fn every_disposition_marshals_and_diagnostics_are_omitted_when_absent() {
     assert_eq!(v["site"]["slot"].as_u64(), Some(skep_febe::FROM as u64));
     assert_eq!(v["site"]["index"].as_u64(), Some(2));
     assert_eq!(v["site"]["fault"].as_str(), Some("start_too_shallow"));
-    assert_eq!(v["site"]["addr"].as_str(), Some("1.0.1.0.2"));
+    assert_eq!(v["site"]["addr"].as_str(), Some("1.0.1.0.64"));
     // The stale-edit refusal's two positions ride as positions (skep #442).
     assert_eq!(v["site"]["as_of"].as_u64(), Some(5));
     assert_eq!(v["site"]["current"].as_u64(), Some(9));
@@ -2521,7 +2521,7 @@ fn lenient_forms_parse_and_re_emit_canonically() {
 fn an_except_list_is_bounded_by_the_wire_list_cap() {
     let codec = JsonCodec;
     let frame = |homes: usize| {
-        let list = vec![r#""1.0.1.0.2""#; homes].join(",");
+        let list = vec![r#""1.0.1.0.64""#; homes].join(",");
         format!(
             r#"{{"op":"count_v_by_home","d":"1.0.1.0.1","except":[{list}],"region":[{{"start":"1.1","width":"0.5"}}],"n":64}}"#
         )
@@ -2539,7 +2539,7 @@ fn an_except_list_is_bounded_by_the_wire_list_cap() {
             .expect("json");
     assert_eq!(marshaled["code"].as_str(), Some("malformed"));
     assert_eq!(marshaled["op"].as_str(), Some("unparseable"));
-    let bad = br#"{"op":"count_v_by_home","d":"1.0.1.0.1","except":["1.0.1.0.2","x"],"region":[{"start":"1.1","width":"0.5"}],"n":64}"#;
+    let bad = br#"{"op":"count_v_by_home","d":"1.0.1.0.1","except":["1.0.1.0.64","x"],"region":[{"start":"1.1","width":"0.5"}],"n":64}"#;
     let e = codec.parse(bad).expect_err("an entry that is no address");
     assert!(e.detail.is_some_and(|d| d.contains("[1]")), "refused by its index");
 }
@@ -2781,9 +2781,9 @@ fn every_malformed_frame_fails_parse_with_a_detail() {
         br#"{"op":"insert","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"values":[true],"as_of":7}"#,
         br#"{"op":"make_link","home":"1.0.1.0.1","from":[],"to":[],"ty":{"resolve":[]}}"#,
         br#"{"op":"make_link","home":"1.0.1.0.1","from":[],"to":[],"ty":{"addrs":["0.1"]}}"#,
-        br#"{"op":"make_link","home":"1.0.1.0.1","from":{"spans":[{"start":"1.0.1.0.1.0.1.1","width":"0"}]},"to":[],"ty":{"addrs":["1.0.1.0.3.0.3.6.1"]}}"#,
-        br#"{"op":"make_link","home":"1.0.1.0.1","from":{"addrs":[],"spans":[]},"to":[],"ty":{"addrs":["1.0.1.0.3.0.3.6.1"]}}"#,
-        br#"{"op":"edit_link","original":"1.0.1.0.1.0.2.1","d_s":"1.0.1.0.1","d_a":"1.0.1.0.1","successor":{"from":{"addrs":["1.0.1.0.1"]},"to":[],"ty":{"addrs":["1.0.1.0.3.0.3.6.1"]}}}"#,
+        br#"{"op":"make_link","home":"1.0.1.0.1","from":{"spans":[{"start":"1.0.1.0.1.0.1.1","width":"0"}]},"to":[],"ty":{"addrs":["1.0.1.0.65.0.3.6.1"]}}"#,
+        br#"{"op":"make_link","home":"1.0.1.0.1","from":{"addrs":[],"spans":[]},"to":[],"ty":{"addrs":["1.0.1.0.65.0.3.6.1"]}}"#,
+        br#"{"op":"edit_link","original":"1.0.1.0.1.0.2.1","d_s":"1.0.1.0.1","d_a":"1.0.1.0.1","successor":{"from":{"addrs":["1.0.1.0.1"]},"to":[],"ty":{"addrs":["1.0.1.0.65.0.3.6.1"]}}}"#,
         // Signed and fractional numbers where the wire says "non-negative
         // integer": a slot index, a natural width, and a page size. Each
         // wraps rather than merely differing if the parse is ever widened
@@ -2866,7 +2866,7 @@ fn an_over_cap_request_marshals_to_a_frame_parse_refuses() {
 fn an_ispan_slot_round_trips_at_the_cap_and_is_refused_past_it() {
     let codec = JsonCodec;
     let spans = |n: usize| (0..n).map(|_| ispan()).collect::<Vec<Span>>();
-    let ty = || SlotArg::Addrs(vec![a(&[1, 0, 1, 0, 3, 0, 3, 6, 1])]);
+    let ty = || SlotArg::Addrs(vec![a(&[1, 0, 1, 0, 65, 0, 3, 6, 1])]);
     let make = |n: usize| {
         rq(
             None,
@@ -2911,7 +2911,7 @@ fn an_ispan_slot_round_trips_at_the_cap_and_is_refused_past_it() {
     // The wire's I-span and the stored span: `{"start": …, "width": "5"}`
     // is the span whose width is `0.0.0.0.0.0.0.5` — one spelling on the
     // wire, `retrieve_i`'s, for the slot form and the read by identity.
-    let frame = br#"{"from":{"spans":[{"start":"1.0.1.0.1.0.1.1","width":"5"}]},"home":"1.0.1.0.1","op":"make_link","to":{"spans":[]},"ty":{"addrs":["1.0.1.0.3.0.3.6.1"]}}"#;
+    let frame = br#"{"from":{"spans":[{"start":"1.0.1.0.1.0.1.1","width":"5"}]},"home":"1.0.1.0.1","op":"make_link","to":{"spans":[]},"ty":{"addrs":["1.0.1.0.65.0.3.6.1"]}}"#;
     let req = parse_ok(&codec, frame);
     assert_eq!(req, make(1), "the I-span parses to the span of five positions from its start");
     assert_eq!(codec.marshal_request(&req), frame, "and renders back as the I-span it was sent as");
@@ -2935,7 +2935,7 @@ fn the_typed_state_is_required_on_the_five_edits_and_unknown_on_every_other_op()
     let six = [
         r#"{"op":"insert","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"values":["a"]}"#,
         r#"{"op":"delete","doc":"1.0.1.0.1","p":{"subspace":"1","ordinal":"1"},"width":"1"}"#,
-        r#"{"op":"copy","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"specs":[{"source":"1.0.1.0.2","span":{"start":"1.1","width":"0.1"}}]}"#,
+        r#"{"op":"copy","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"specs":[{"source":"1.0.1.0.64","span":{"start":"1.1","width":"0.1"}}]}"#,
         r#"{"op":"reinstate","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"runs":[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"1"}]}"#,
         r#"{"op":"rearrange","doc":"1.0.1.0.1","cuts":[{"subspace":"1","ordinal":"1"},{"subspace":"1","ordinal":"2"},{"subspace":"1","ordinal":"3"}]}"#,
         r#"{"op":"set_arrangement","doc":"1.0.1.0.1","runs":[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"1"}]}"#,
@@ -2969,7 +2969,7 @@ fn the_typed_state_is_required_on_the_five_edits_and_unknown_on_every_other_op()
         r#"{"op":"create_new_document","account":"1.0.1","as_of":7}"#,
         r#"{"op":"version","d_src":"1.0.1.0.1","as_of":7}"#,
         r#"{"op":"retrieve_v","specs":[{"doc":"1.0.1.0.1","span":{"start":"1.1","width":"0.1"}}],"as_of":7}"#,
-        r#"{"op":"make_link","home":"1.0.1.0.1","from":{"addrs":["1.0.1.0.1.0.1.1"]},"to":{"addrs":["1.0.1.0.1.0.1.2"]},"ty":{"addrs":["1.0.1.0.3.0.3.6.1"]},"as_of":7}"#,
+        r#"{"op":"make_link","home":"1.0.1.0.1","from":{"addrs":["1.0.1.0.1.0.1.1"]},"to":{"addrs":["1.0.1.0.1.0.1.2"]},"ty":{"addrs":["1.0.1.0.65.0.3.6.1"]},"as_of":7}"#,
         r#"{"op":"doc_metadata","doc":"1.0.1.0.1","as_of":7}"#,
     ] {
         let detail = refused(frame);

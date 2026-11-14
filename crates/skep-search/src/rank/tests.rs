@@ -8,6 +8,11 @@ fn addr(comps: &[u32]) -> Address {
     validate(t).expect("a T4-valid address")
 }
 
+/// The namespace's first ordinary document: an account's documents past its
+/// home page are numbered from it, past the reserved block of well-known
+/// slots. This crate links no namespace, so the number is named here, once.
+const FIRST_ORDINARY_DOCUMENT: u32 = 64;
+
 fn hit(doc: &[u32], member: Option<&[u32]>, start: u64, score: f64) -> Hit {
     Hit {
         doc: addr(doc),
@@ -66,8 +71,9 @@ fn the_term_score_is_bm25s_with_the_pinned_parameters() {
 #[test]
 fn the_statistics_merge_the_pair_counting_each_member_once() {
     let unit = |class: Class, n: u32, text: &str| {
+        let doc = if n == 1 { 1 } else { FIRST_ORDINARY_DOCUMENT + n - 2 };
         Unit::new(
-            UnitKey::new(addr(&[1, 0, 1, 0, n])),
+            UnitKey::new(addr(&[1, 0, 1, 0, doc])),
             None,
             Kind::Edition,
             class,
@@ -94,9 +100,9 @@ fn the_statistics_merge_the_pair_counting_each_member_once() {
 #[test]
 fn the_order_is_score_then_address_member_and_span() {
     let a = hit(&[1, 0, 1, 0, 1], None, 5, 2.0);
-    let b = hit(&[1, 0, 1, 0, 2], None, 5, 2.0);
-    let c = hit(&[1, 0, 1, 0, 2], Some(&[1, 0, 1, 0, 2, 1]), 5, 2.0);
-    let d = hit(&[1, 0, 1, 0, 2], Some(&[1, 0, 1, 0, 2, 1]), 9, 2.0);
+    let b = hit(&[1, 0, 1, 0, 64], None, 5, 2.0);
+    let c = hit(&[1, 0, 1, 0, 64], Some(&[1, 0, 1, 0, 64, 1]), 5, 2.0);
+    let d = hit(&[1, 0, 1, 0, 64], Some(&[1, 0, 1, 0, 64, 1]), 9, 2.0);
     let e = hit(&[1, 0, 1, 0, 1], None, 5, 3.0);
     let mut hits = vec![d.clone(), c.clone(), b.clone(), a.clone(), e.clone()];
     hits.sort_by(order);

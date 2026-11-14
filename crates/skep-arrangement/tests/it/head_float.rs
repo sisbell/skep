@@ -84,7 +84,7 @@ fn a_version_of_a_pinned_member_forks_the_member_not_the_head() {
         assert_eq!(s.world().m5().content_count(&member2), n(5), "the head grew to five");
     }
     let (daughter, _) = vs.version(PrincipalId(1), &member1, None).expect("a pinned member's daughter");
-    assert_eq!(daughter, a(&[1, 0, 1, 0, 3, 1, 1]));
+    assert_eq!(daughter, a(&[1, 0, 1, 0, nth_doc(3), 1, 1]));
     let s = k.snapshot();
     let m5 = s.world().m5();
     assert_eq!(

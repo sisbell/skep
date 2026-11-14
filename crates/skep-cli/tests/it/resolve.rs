@@ -119,7 +119,7 @@ fn resolve_refuses_by_name_and_prints_nothing() {
     let absent = dir.path().join("no-store");
     let realm = "ab".repeat(32);
     let dead = format!("{DEAD} realm:{realm}");
-    let address = "1.5.0.1.0.2";
+    let address = "1.5.0.1.0.64";
     let required = "--root-hint (or SKEP_ROOT_HINT) is required: the registry's root-hint line";
     let rows = [
         (vec!["resolve", "--root-hint", &dead], vec![], "--address is required: the cross-board address to resolve".to_string()),
@@ -225,7 +225,7 @@ fn resolve_names_an_addresss_state_off_a_registry_read_afresh_into_a_mirror_besi
     let dead = format!("http://127.0.0.1:1 realm:{}", "ab".repeat(32));
 
     // The flag: UNREGISTERED under the node field, the copy read from genesis.
-    let r = skep(&["resolve", "--address", "1.9.0.1.0.2", "--root-hint", &hint, "--dir", s(&store)], &[("SKEP_ROOT_HINT", &dead)], None);
+    let r = skep(&["resolve", "--address", "1.9.0.1.0.64", "--root-hint", &hint, "--dir", s(&store)], &[("SKEP_ROOT_HINT", &dead)], None);
     refused(&r, 3, "skep: UNREGISTERED: no binding on this registry names the prefix 1.9\n");
     assert!(r.err.contains(&format!("reading the registry the root hint names ({board}) as a guest; its mirror is kept under {}", mirror.display())), "{}", r.err);
     assert!(r.err.contains(&format!("registry read at {board} to its head, position ")) && r.err.contains(": the copy read from the registry's genesis (REG-3.12)"), "{}", r.err);
@@ -233,14 +233,14 @@ fn resolve_names_an_addresss_state_off_a_registry_read_afresh_into_a_mirror_besi
     let first_head = head_said(&r);
 
     // The variable, and `--json`: the face as one object, the copy resumed.
-    let r = skep(&["resolve", "--address", "1.9.0.1.0.2", "--json", "--dir", s(&store)], &[("SKEP_ROOT_HINT", &hint)], None);
+    let r = skep(&["resolve", "--address", "1.9.0.1.0.64", "--json", "--dir", s(&store)], &[("SKEP_ROOT_HINT", &hint)], None);
     assert_eq!(r.code, 3, "{r:?}");
     assert_eq!(r.out.lines().count(), 1, "one object on stdout and nothing else: {:?}", r.out);
-    assert_eq!(serde_json::from_str::<Value>(&r.out).expect("JSON"), json!({ "face": "UNREGISTERED", "address": "1.9.0.1.0.2", "prefix": "1.9" }));
+    assert_eq!(serde_json::from_str::<Value>(&r.out).expect("JSON"), json!({ "face": "UNREGISTERED", "address": "1.9.0.1.0.64", "prefix": "1.9" }));
     assert!(r.err.contains("skep: UNREGISTERED: no binding on this registry names the prefix 1.9\n"), "the face is said on stderr too: {}", r.err);
     assert!(r.err.contains("the copy held here resumed, its ") && r.err.contains(" checked against the root first (REG-3.18)"), "{}", r.err);
     assert_eq!(head_said(&r), first_head, "the board has not moved");
-    let r = skep(&["resolve", "--address", "1.9.0.1.0.2", "--root-hint", &dead, "--dir", s(&store)], &[("SKEP_ROOT_HINT", &hint)], None);
+    let r = skep(&["resolve", "--address", "1.9.0.1.0.64", "--root-hint", &dead, "--dir", s(&store)], &[("SKEP_ROOT_HINT", &hint)], None);
     refused(&r, 4, "skep: transport: connect: ");
     let other = mirror_under(&store, &dead);
 
@@ -289,7 +289,7 @@ fn resolve_names_an_addresss_state_off_a_registry_read_afresh_into_a_mirror_besi
     let registrar = Board::new(Origin::parse(&board).unwrap(), PlainHttp::new());
     let mut person = Scripted::new(vec![Script::Confirm(true)]);
     enroll(&registrar, &FileStore::open(&store), &mut person, &EnrollOptions { principal: 1, payload: format!("{payload}\n").into_bytes() }).unwrap_or_else(|h| panic!("{h}"));
-    let r = skep(&["resolve", "--address", "1.9.0.1.0.2", "--root-hint", &hint, "--dir", s(&store)], &[], None);
+    let r = skep(&["resolve", "--address", "1.9.0.1.0.64", "--root-hint", &hint, "--dir", s(&store)], &[], None);
     refused(&r, 3, "skep: UNREGISTERED: no binding on this registry names the prefix 1.9\n");
     assert!(r.err.contains("the copy held here resumed"), "{}", r.err);
     assert!(head_said(&r) > first_head, "read to the registry's head at this run, past {first_head}: {}", r.err);
@@ -298,7 +298,7 @@ fn resolve_names_an_addresss_state_off_a_registry_read_afresh_into_a_mirror_besi
     let copy = std::fs::read(mirror.join("feed.jsonl")).unwrap();
     sd.shutdown();
     for json in [false, true] {
-        let mut args = vec!["resolve", "--address", "1.9.0.1.0.2", "--root-hint", &hint, "--dir", s(&store)];
+        let mut args = vec!["resolve", "--address", "1.9.0.1.0.64", "--root-hint", &hint, "--dir", s(&store)];
         args.extend(json.then_some("--json"));
         let r = skep(&args, &[], None);
         refused(&r, 4, "skep: transport: connect: ");

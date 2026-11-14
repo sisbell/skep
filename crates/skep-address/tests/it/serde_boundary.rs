@@ -10,7 +10,7 @@ use skep_address::*;
 
 #[test]
 fn tumbler_round_trips_and_revalidates_at_the_boundary() {
-    let x = t(&[1, 0, 2, 0, 5]);
+    let x = t(&[1, 0, 2, 0, 67]);
     let json = serde_json::to_string(&x).unwrap();
     // Symmetric shadow: the serialize side emits exactly the `Vec<Nat>` shape
     // the validating `try_from` side reads, so the round trip below holds by
@@ -31,7 +31,7 @@ fn tumbler_round_trips_and_revalidates_at_the_boundary() {
 
 #[test]
 fn address_serializes_as_its_bare_tumbler_and_revalidates() {
-    let a = addr(&[1, 0, 2, 0, 5, 0, 1, 9]);
+    let a = addr(&[1, 0, 2, 0, 67, 0, 1, 9]);
     let json = serde_json::to_string(&a).unwrap();
     // Journal entries stay flat tumblers: the Address wire shape IS the tumbler's.
     assert_eq!(json, serde_json::to_string(a.tumbler()).unwrap());

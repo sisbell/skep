@@ -34,7 +34,7 @@ use super::*;
 fn the_trunk_is_the_document_field_cut_to_its_first_component() {
     assert_eq!(trunk_text("1.0.1.0.1.2").as_deref(), Some("1.0.1.0.1"));
     assert_eq!(trunk_text("1.0.1.0.1").as_deref(), Some("1.0.1.0.1"));
-    assert_eq!(trunk_text("1.0.1.0.7.3.1").as_deref(), Some("1.0.1.0.7"));
+    assert_eq!(trunk_text("1.0.1.0.69.3.1").as_deref(), Some("1.0.1.0.69"));
     assert_eq!(trunk_text("1.0.1.0.1.0.1.7").as_deref(), Some("1.0.1.0.1"));
     assert_eq!(trunk_text("1.0.1"), None);
     assert_eq!(trunk_text("1"), None);
@@ -75,12 +75,12 @@ fn the_composer_reads_a_frame_as_the_wire_spells_it() {
 /// whether the range came from an `image` run or a shot's copied run.
 #[test]
 fn an_i_range_is_made_where_its_reach_is_spellable() {
-    let range = IRange::new("1.0.1.0.2.0.1", 1, 3).expect("a spellable range");
+    let range = IRange::new("1.0.1.0.64.0.1", 1, 3).expect("a spellable range");
     assert_eq!((range.positions().collect::<Vec<_>>(), range.width()), (vec![1, 2, 3], 3));
-    assert_eq!(IRange::new("1.0.1.0.2.0.1", u64::MAX - 2, 2).map(IRange::width), Some(2), "a reach at u64::MAX is spellable");
-    assert!(IRange::new("1.0.1.0.2.0.1", u64::MAX, 1).is_none(), "a reach past it is none");
-    let image = json!({"i_start": "1.0.1.0.2.0.1.18446744073709551615", "width": "1"});
-    assert!(image_run(&image, "1.0.1.0.2").unwrap_err().to_string().contains("is no I-extent"), "an `image` run whose reach passes it is refused");
+    assert_eq!(IRange::new("1.0.1.0.64.0.1", u64::MAX - 2, 2).map(IRange::width), Some(2), "a reach at u64::MAX is spellable");
+    assert!(IRange::new("1.0.1.0.64.0.1", u64::MAX, 1).is_none(), "a reach past it is none");
+    let image = json!({"i_start": "1.0.1.0.64.0.1.18446744073709551615", "width": "1"});
+    assert!(image_run(&image, "1.0.1.0.64").unwrap_err().to_string().contains("is no I-extent"), "an `image` run whose reach passes it is refused");
 }
 
 /// THE BOARD's BUDGETS the board exports are the shell's: the frame cap the
@@ -280,21 +280,21 @@ fn vspec(source: &str) -> Value {
 #[test]
 fn a_slot_is_held_to_the_wire_list_and_its_span_budget() {
     let mut fake = Fake::default();
-    fake.images.insert("1.0.1.0.8", image_runs(MAX_SLOT_SPANS + 1));
-    fake.images.insert("1.0.1.0.9", image_runs(MAX_SLOT_SPANS));
+    fake.images.insert("1.0.1.0.70", image_runs(MAX_SLOT_SPANS + 1));
+    fake.images.insert("1.0.1.0.71", image_runs(MAX_SLOT_SPANS));
     let g = Ground::over(fake);
     let c = g.composer();
-    let past = Value::Array(vec![vspec("1.0.1.0.9"); MAX_WIRE_LIST + 1]);
+    let past = Value::Array(vec![vspec("1.0.1.0.71"); MAX_WIRE_LIST + 1]);
     assert!(c.slot(&past, "from").is_err());
     assert!(c.slot(&json!({"resolve": past}), "successor.ty").is_err());
     assert!(c.slot(&json!({"addrs": vec!["1.0.1.0.1"; MAX_WIRE_LIST + 1]}), "to").is_err());
     assert!(g.fake.dialed().is_empty(), "nothing is read for a list past the wire's: {:?}", g.fake.dialed());
     assert_eq!(c.slot(&json!({"addrs": vec!["1.0.1.0.1"; MAX_WIRE_LIST]}), "to").unwrap().len(), MAX_WIRE_LIST);
-    let refused = c.slot(&json!([vspec("1.0.1.0.8"), vspec("1.0.1.0.9")]), "from").unwrap_err();
+    let refused = c.slot(&json!([vspec("1.0.1.0.70"), vspec("1.0.1.0.71")]), "from").unwrap_err();
     assert!(refused.to_string().contains("spans"), "{refused}");
     assert_eq!(g.fake.dialed(), ["image"], "refused at the first read past the budget");
-    assert_eq!(c.slot(&json!([vspec("1.0.1.0.9")]), "from").unwrap().len(), MAX_SLOT_SPANS);
-    let ispans = |n: usize| json!({"spans": vec![json!({"start": "1.0.1.0.2.0.1.1", "width": "1"}); n]});
+    assert_eq!(c.slot(&json!([vspec("1.0.1.0.71")]), "from").unwrap().len(), MAX_SLOT_SPANS);
+    let ispans = |n: usize| json!({"spans": vec![json!({"start": "1.0.1.0.64.0.1.1", "width": "1"}); n]});
     g.fake.dialed.lock().unwrap().clear();
     assert!(c.slot(&ispans(MAX_WIRE_LIST + 1), "to").is_err());
     assert_eq!(c.slot(&ispans(MAX_WIRE_LIST), "to").unwrap().len(), MAX_WIRE_LIST, "an I-span list at the wire's is composed");
@@ -313,18 +313,18 @@ fn a_link_slot_in_the_i_span_form_is_signed_as_stored() {
     let g = Ground::over(Fake::default());
     let c = g.composer();
     let a = |text: &str| parse_address(text).unwrap();
-    let to = json!({"spans": [{"start": "1.0.1.0.2.0.1.3", "width": "4"}, {"start": "1.0.1.0.2.0.1.9", "width": "1"}]});
+    let to = json!({"spans": [{"start": "1.0.1.0.64.0.1.3", "width": "4"}, {"start": "1.0.1.0.64.0.1.9", "width": "1"}]});
     let ty = json!({"addrs": ["1.1.0.1.0.1.0.3.13"]});
-    let spans = [extent_span("1.0.1.0.2.0.1.3", 4).unwrap(), extent_span("1.0.1.0.2.0.1.9", 1).unwrap()];
+    let spans = [extent_span("1.0.1.0.64.0.1.3", 4).unwrap(), extent_span("1.0.1.0.64.0.1.9", 1).unwrap()];
     let ty_unit = [unit_span(&a("1.1.0.1.0.1.0.3.13"))];
     let slots = LinkSlots { from: EntrySlot(&[]), to: EntrySlot(&spans), ty: EntrySlot(&ty_unit) };
     let make_link = json!({"op": "make_link", "home": "1.0.1.0.1", "from": {"addrs": []}, "to": to, "ty": ty});
     let (term, body) = c.doc_term_and_body(CheckedKind::MakeLink, &make_link).unwrap();
     assert_eq!((term.as_doc_term(), body), (DocTerm::One(&a("1.0.1.0.1")), entry_body_make_link(slots)));
-    let edit_link = json!({"op": "edit_link", "original": "1.0.1.0.1.0.2.1", "d_s": "1.0.1.0.1", "d_a": "1.0.1.0.3", "successor": {"from": {"spans": []}, "to": to, "ty": ty}});
+    let edit_link = json!({"op": "edit_link", "original": "1.0.1.0.1.0.2.1", "d_s": "1.0.1.0.1", "d_a": "1.0.1.0.65", "successor": {"from": {"spans": []}, "to": to, "ty": ty}});
     let (_, body) = c.doc_term_and_body(CheckedKind::EditLink, &edit_link).unwrap();
     assert_eq!(body, entry_body_edit_link(slots, &unit_span(&a("1.0.1.0.1.0.2.1"))));
-    for (cell, span) in [("a zero width", json!({"start": "1.0.1.0.2.0.1.3", "width": "0"})), ("a width of no decimal", json!({"start": "1.0.1.0.2.0.1.3", "width": "0.4"}))] {
+    for (cell, span) in [("a zero width", json!({"start": "1.0.1.0.64.0.1.3", "width": "0"})), ("a width of no decimal", json!({"start": "1.0.1.0.64.0.1.3", "width": "0.4"}))] {
         let refused = c.slot(&json!({"spans": [span]}), "to").unwrap_err();
         assert!(refused.to_string().contains("`to` span"), "{cell}: {refused}");
     }
@@ -348,9 +348,9 @@ fn run(origin: &str, i_start: &str, width: u64) -> Value {
 fn a_shot_is_held_to_its_arithmetic_before_any_read() {
     let g = Ground::over(Fake::default());
     let c = g.composer();
-    let shot = |runs: Vec<Value>| json!({"op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.2", "runs": runs});
-    let draft_run = |width: u64| run("1.0.1.0.2", "1.0.1.0.2.0.1.1", width);
-    let past_the_draft = run("1.0.1.0.2", &format!("1.0.1.0.2.0.1.{}", MAX_REINSERTED_VALUES + 1), 1);
+    let shot = |runs: Vec<Value>| json!({"op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.64", "runs": runs});
+    let draft_run = |width: u64| run("1.0.1.0.64", "1.0.1.0.64.0.1.1", width);
+    let past_the_draft = run("1.0.1.0.64", &format!("1.0.1.0.64.0.1.{}", MAX_REINSERTED_VALUES + 1), 1);
     let cells = [
         ("runs past the wire's list", shot(vec![draft_run(1); MAX_WIRE_LIST + 1]), "elements"),
         ("the draft past the re-insert budget", shot(vec![draft_run(MAX_REINSERTED_VALUES), past_the_draft]), "re-inserts"),
@@ -382,26 +382,26 @@ fn a_shot_is_held_to_its_arithmetic_before_any_read() {
 /// allocate for what no body could carry).
 #[test]
 fn a_read_back_is_held_to_its_extent_its_map_and_the_body_budget() {
-    let mut fake = Fake::default().text("1.0.1.0.2", "1.0.1.0.2.0.1", 1, "abc").text("1.0.1.0.3", "1.0.1.0.3.0.1", 1, "xyz");
-    fake.extents.insert("1.0.1.0.4", MAX_ANSWER_BYTES as u64 + 1);
-    fake.images.insert("1.0.1.0.3", json!([{"i_start": "1.0.1.0.3.0.1.1", "width": "1000000"}]));
+    let mut fake = Fake::default().text("1.0.1.0.64", "1.0.1.0.64.0.1", 1, "abc").text("1.0.1.0.65", "1.0.1.0.65.0.1", 1, "xyz");
+    fake.extents.insert("1.0.1.0.66", MAX_ANSWER_BYTES as u64 + 1);
+    fake.images.insert("1.0.1.0.65", json!([{"i_start": "1.0.1.0.65.0.1.1", "width": "1000000"}]));
     let g = Ground::over(fake);
     let c = g.composer();
     let read = |origin: &'static str, spent: &mut usize| {
         let mut wanted = Wanted::new(origin);
-        wanted.want(IRange::new(if origin == "1.0.1.0.3" { "1.0.1.0.3.0.1" } else { "1.0.1.0.2.0.1" }, 1, 3).expect("a spellable range"));
+        wanted.want(IRange::new(if origin == "1.0.1.0.65" { "1.0.1.0.65.0.1" } else { "1.0.1.0.64.0.1" }, 1, 3).expect("a spellable range"));
         c.read_back(wanted, spent)
     };
-    assert!(read("1.0.1.0.4", &mut 0).unwrap_err().to_string().contains("more than one delivery"));
+    assert!(read("1.0.1.0.66", &mut 0).unwrap_err().to_string().contains("more than one delivery"));
     assert_eq!(g.fake.dialed(), ["retrieve_doc_v_span_set"], "no image asked past the answer cap");
     g.fake.dialed.lock().unwrap().clear();
-    assert!(read("1.0.1.0.3", &mut 0).unwrap_err().to_string().contains("maps more positions"));
+    assert!(read("1.0.1.0.65", &mut 0).unwrap_err().to_string().contains("maps more positions"));
     assert_eq!(g.fake.dialed(), ["retrieve_doc_v_span_set", "image"], "no values asked past the map");
     let mut spent = MAX_FRAME_BYTES - 2 * (4 + 1) - 1;
-    assert!(read("1.0.1.0.2", &mut spent).is_err(), "the third value passes the body budget");
+    assert!(read("1.0.1.0.64", &mut spent).is_err(), "the third value passes the body budget");
     let mut spent = 0;
-    let read_back = read("1.0.1.0.2", &mut spent).unwrap();
-    assert_eq!((read_back.value("1.0.1.0.2.0.1", 2), spent), (Some(&b"b"[..]), 3 * (4 + 1)));
+    let read_back = read("1.0.1.0.64", &mut spent).unwrap();
+    assert_eq!((read_back.value("1.0.1.0.64.0.1", 2), spent), (Some(&b"b"[..]), 3 * (4 + 1)));
 }
 
 /// THE SHOT's BODY, the positive control: runs copied in from the staging
@@ -411,15 +411,15 @@ fn a_read_back_is_held_to_its_extent_its_map_and_the_body_budget() {
 /// exactly as the signer's builder spells the same pieces.
 #[test]
 fn a_shots_body_is_composed_from_the_values_it_copies_in() {
-    let fake = Fake::default().text("1.0.1.0.2", "1.0.1.0.2.0.1", 1, "abcd").text("1.0.1.0.1.1", "1.0.1.0.1.1.0.1", 1, "xyz");
+    let fake = Fake::default().text("1.0.1.0.64", "1.0.1.0.64.0.1", 1, "abcd").text("1.0.1.0.1.1", "1.0.1.0.1.1.0.1", 1, "xyz");
     let g = Ground::over(fake);
     let frame = json!({
-        "op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.2", "base": "1.0.1.0.1.1", "base_extent": "3",
+        "op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.64", "base": "1.0.1.0.1.1", "base_extent": "3",
         "runs": [
-            run("1.0.1.0.2", "1.0.1.0.2.0.1.3", 2),
+            run("1.0.1.0.64", "1.0.1.0.64.0.1.3", 2),
             run("1.0.9.0.1", "1.0.9.0.1.0.1.5", 3),
             run("1.0.1.0.1.1", "1.0.1.0.1.1.0.1.1", 2),
-            run("1.0.1.0.2", "1.0.1.0.2.0.1.1", 3),
+            run("1.0.1.0.64", "1.0.1.0.64.0.1.1", 3),
         ],
     });
     let body = g.composer().publish_body(&frame, "1.0.1.0.1").unwrap();
@@ -451,28 +451,28 @@ fn a_shots_body_is_composed_from_the_values_it_copies_in() {
 /// are the board's to refuse.
 #[test]
 fn a_publications_deposit_rows_follow_the_signed_order_and_a_standing_retraction_is_skipped() {
-    let mut fake = Fake::default().text("1.0.1.0.2", "1.0.1.0.2.0.1", 1, "abc");
-    fake.retracted.push("1.0.1.0.5.0.2.1");
+    let mut fake = Fake::default().text("1.0.1.0.64", "1.0.1.0.64.0.1", 1, "abc");
+    fake.retracted.push("1.0.1.0.67.0.2.1");
     let g = Ground::over(fake);
     let c = g.composer();
     let ty = json!({"addrs": ["1.1.0.1.0.1.0.3.13"]});
     let frame = json!({
-        "op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.2",
-        "runs": [run("1.0.1.0.2", "1.0.1.0.2.0.1.1", 3)],
+        "op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.64",
+        "runs": [run("1.0.1.0.64", "1.0.1.0.64.0.1.1", 3)],
         "links": [
-            {"home": "1.0.1.0.4", "from": {"spans": [{"start": "1.0.1.0.4.0.1.1", "width": "2"}]}, "to": {"addrs": []}, "ty": ty},
-            {"home": "member", "from": {"member": [{"ordinal": "1", "width": "3"}]}, "to": {"addrs": ["member", "1.0.1.0.3"]}, "ty": ty, "old": "1.0.1.0.6.0.2.1"},
+            {"home": "1.0.1.0.66", "from": {"spans": [{"start": "1.0.1.0.66.0.1.1", "width": "2"}]}, "to": {"addrs": []}, "ty": ty},
+            {"home": "member", "from": {"member": [{"ordinal": "1", "width": "3"}]}, "to": {"addrs": ["member", "1.0.1.0.65"]}, "ty": ty, "old": "1.0.1.0.68.0.2.1"},
         ],
-        "retract": ["1.0.1.0.5.0.2.1", "1.0.1.0.3.0.2.1"],
-        "read_with": ["1.0.1.0.3"],
+        "retract": ["1.0.1.0.67.0.2.1", "1.0.1.0.65.0.2.1"],
+        "read_with": ["1.0.1.0.65"],
     });
     let (term, body) = c.doc_term_and_body(CheckedKind::Publish, &frame).unwrap();
     assert_eq!(term.as_doc_term(), DocTerm::One(&parse_address("1.0.1.0.1").unwrap()));
     let a = |text: &str| parse_address(text).unwrap();
     let (ty_unit, three, four, five_target, three_target) =
-        (unit_span(&a("1.1.0.1.0.1.0.3.13")), unit_span(&a("1.0.1.0.3")), unit_span(&a("1.0.1.0.4")), unit_span(&a("1.0.1.0.5.0.2.1")), unit_span(&a("1.0.1.0.3.0.2.1")));
+        (unit_span(&a("1.1.0.1.0.1.0.3.13")), unit_span(&a("1.0.1.0.65")), unit_span(&a("1.0.1.0.66")), unit_span(&a("1.0.1.0.67.0.2.1")), unit_span(&a("1.0.1.0.65.0.2.1")));
     let (retraction_ty, read_with_ty, trunk) = (unit_span(&a(T_RETRACTION)), unit_span(&a(T_READ_WITH)), unit_span(&a("1.0.1.0.1")));
-    let four_span = extent_span("1.0.1.0.4.0.1.1", 2).unwrap();
+    let four_span = extent_span("1.0.1.0.66.0.1.1", 2).unwrap();
     fn stored<'a>(elements: Vec<SlotElement<'a>>) -> DepositSlot<'a> {
         DepositSlot::Stored(elements)
     }
@@ -485,21 +485,21 @@ fn a_publications_deposit_rows_follow_the_signed_order_and_a_standing_retraction
             to: stored(vec![SlotElement::Member, SlotElement::Span(&three)]),
         },
         DepositRow {
-            home: DepositHome::Address(&a("1.0.1.0.3")),
+            home: DepositHome::Address(&a("1.0.1.0.65")),
             kind: DepositKind::Retraction,
             ty: stored(vec![SlotElement::Span(&retraction_ty)]),
             from: stored(vec![SlotElement::Span(&three)]),
             to: stored(vec![SlotElement::Span(&three_target)]),
         },
         DepositRow {
-            home: DepositHome::Address(&a("1.0.1.0.3")),
+            home: DepositHome::Address(&a("1.0.1.0.65")),
             kind: DepositKind::ReadWith,
             ty: stored(vec![SlotElement::Span(&read_with_ty)]),
             from: stored(vec![SlotElement::Span(&trunk)]),
             to: stored(vec![SlotElement::Span(&three)]),
         },
         DepositRow {
-            home: DepositHome::Address(&a("1.0.1.0.4")),
+            home: DepositHome::Address(&a("1.0.1.0.66")),
             kind: DepositKind::Copy,
             ty: stored(vec![SlotElement::Span(&ty_unit)]),
             from: stored(vec![SlotElement::Span(&four_span)]),
@@ -512,10 +512,10 @@ fn a_publications_deposit_rows_follow_the_signed_order_and_a_standing_retraction
     let reads = g.fake.dialed();
     assert_eq!(reads.iter().filter(|op| *op == "find_links_ftt").count(), 3, "two retract skips and one read-with skip read: {reads:?}");
     // The mint form: the account as the term, the claim's row in the edition.
-    let mint = json!({"op": "publish", "account": "1.0.1", "mint": true, "claim": true, "draft": "1.0.1.0.2", "runs": [run("1.0.1.0.2", "1.0.1.0.2.0.1.1", 3)], "read_with": ["1.0.1.0.3"]});
+    let mint = json!({"op": "publish", "account": "1.0.1", "mint": true, "claim": true, "draft": "1.0.1.0.64", "runs": [run("1.0.1.0.64", "1.0.1.0.64.0.1.1", 3)], "read_with": ["1.0.1.0.65"]});
     let (term, body) = c.doc_term_and_body(CheckedKind::Publish, &mint).unwrap();
     assert_eq!(term.as_doc_term(), DocTerm::One(&a("1.0.1")));
-    let (edition_ty, draft) = (unit_span(&a(T_EDITION)), unit_span(&a("1.0.1.0.2")));
+    let (edition_ty, draft) = (unit_span(&a(T_EDITION)), unit_span(&a("1.0.1.0.64")));
     let rows = [
         DepositRow {
             home: DepositHome::Edition,
@@ -525,7 +525,7 @@ fn a_publications_deposit_rows_follow_the_signed_order_and_a_standing_retraction
             to: stored(vec![SlotElement::Span(&draft)]),
         },
         DepositRow {
-            home: DepositHome::Address(&a("1.0.1.0.3")),
+            home: DepositHome::Address(&a("1.0.1.0.65")),
             kind: DepositKind::ReadWith,
             ty: stored(vec![SlotElement::Span(&read_with_ty)]),
             from: stored(vec![SlotElement::Edition]),
@@ -538,7 +538,7 @@ fn a_publications_deposit_rows_follow_the_signed_order_and_a_standing_retraction
     // the claim row first in `doc`'s own group — homed by address, `from`
     // the edition's unit span, never the tag — ahead of the read-with homed
     // in a later address; nothing read of the edition's members.
-    let claimed = json!({"op": "publish", "doc": "1.0.1.0.1", "claim": true, "draft": "1.0.1.0.2", "runs": [run("1.0.1.0.2", "1.0.1.0.2.0.1.1", 3)], "read_with": ["1.0.1.0.3"]});
+    let claimed = json!({"op": "publish", "doc": "1.0.1.0.1", "claim": true, "draft": "1.0.1.0.64", "runs": [run("1.0.1.0.64", "1.0.1.0.64.0.1.1", 3)], "read_with": ["1.0.1.0.65"]});
     let (term, body) = c.doc_term_and_body(CheckedKind::Publish, &claimed).unwrap();
     assert_eq!(term.as_doc_term(), DocTerm::One(&a("1.0.1.0.1")));
     let edition = unit_span(&a("1.0.1.0.1"));
@@ -551,7 +551,7 @@ fn a_publications_deposit_rows_follow_the_signed_order_and_a_standing_retraction
             to: stored(vec![SlotElement::Span(&draft)]),
         },
         DepositRow {
-            home: DepositHome::Address(&a("1.0.1.0.3")),
+            home: DepositHome::Address(&a("1.0.1.0.65")),
             kind: DepositKind::ReadWith,
             ty: stored(vec![SlotElement::Span(&read_with_ty)]),
             from: stored(vec![SlotElement::Span(&edition)]),
@@ -576,15 +576,15 @@ fn a_publications_deposit_rows_follow_the_signed_order_and_a_standing_retraction
 /// `effective_owner` per claim's home.
 #[test]
 fn a_publications_supersede_entries_spell_the_claims_group_and_an_own_claim_is_skipped() {
-    let mut fake = Fake::default().text("1.0.1.0.2", "1.0.1.0.2.0.1", 1, "abc");
-    fake.claims.push(("1.0.1.0.1.1.2", "1.0.1.0.6"));
+    let mut fake = Fake::default().text("1.0.1.0.64", "1.0.1.0.64.0.1", 1, "abc");
+    fake.claims.push(("1.0.1.0.1.1.2", "1.0.1.0.68"));
     fake.claims.push(("1.0.1.0.1.1.3", "1.0.2.0.1"));
     let g = Ground::over(fake);
     let c = g.composer();
     let frame = json!({
-        "op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.2",
-        "runs": [run("1.0.1.0.2", "1.0.1.0.2.0.1.1", 3)],
-        "read_with": ["1.0.1.0.3"],
+        "op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.64",
+        "runs": [run("1.0.1.0.64", "1.0.1.0.64.0.1.1", 3)],
+        "read_with": ["1.0.1.0.65"],
         "supersede": ["1.0.1.0.1.1.1", "1.0.1.0.1.1.2", "1.0.1.0.1.1.3"],
     });
     let (term, body) = c.doc_term_and_body(CheckedKind::Publish, &frame).unwrap();
@@ -593,7 +593,7 @@ fn a_publications_supersede_entries_spell_the_claims_group_and_an_own_claim_is_s
     fn stored<'a>(elements: Vec<SlotElement<'a>>) -> DepositSlot<'a> {
         DepositSlot::Stored(elements)
     }
-    let (sup_ty, read_with_ty, trunk, three) = (unit_span(&a(T_SUPERSEDES)), unit_span(&a(T_READ_WITH)), unit_span(&a("1.0.1.0.1")), unit_span(&a("1.0.1.0.3")));
+    let (sup_ty, read_with_ty, trunk, three) = (unit_span(&a(T_SUPERSEDES)), unit_span(&a(T_READ_WITH)), unit_span(&a("1.0.1.0.1")), unit_span(&a("1.0.1.0.65")));
     let (first, third) = (unit_span(&a("1.0.1.0.1.1.1")), unit_span(&a("1.0.1.0.1.1.3")));
     /// The group as the client's builder spells it: the trunk by address,
     /// the supersedes class, `from` the daughter, `to` the tag `member`.
@@ -604,7 +604,7 @@ fn a_publications_supersede_entries_spell_the_claims_group_and_an_own_claim_is_s
     let rows = [
         claim_group(&trunk_addr, &sup_ty, &first),
         claim_group(&trunk_addr, &sup_ty, &third),
-        DepositRow { home: DepositHome::Address(&a("1.0.1.0.3")), kind: DepositKind::ReadWith, ty: stored(vec![SlotElement::Span(&read_with_ty)]), from: stored(vec![SlotElement::Span(&trunk)]), to: stored(vec![SlotElement::Span(&three)]) },
+        DepositRow { home: DepositHome::Address(&a("1.0.1.0.65")), kind: DepositKind::ReadWith, ty: stored(vec![SlotElement::Span(&read_with_ty)]), from: stored(vec![SlotElement::Span(&trunk)]), to: stored(vec![SlotElement::Span(&three)]) },
     ];
     let shot = entry_body_publish([ShotSegmentPiece::Value(b"a"), ShotSegmentPiece::Value(b"b"), ShotSegmentPiece::Value(b"c")], None);
     assert_eq!(body.as_bytes(), entry_body_publication(shot, &rows).as_bytes(), "the trunk's group: one claim per daughter in declared order, the own-claimed second daughter skipped, another account's claim skipping nothing; then the read-with's home");
@@ -612,7 +612,7 @@ fn a_publications_supersede_entries_spell_the_claims_group_and_an_own_claim_is_s
     assert_eq!(reads.iter().filter(|op| *op == "in_claims").count(), 3, "one in_claims per daughter: {reads:?}");
     assert_eq!(reads.iter().filter(|op| *op == "effective_owner").count(), 2, "the two claims' homes: {reads:?}");
     // The mint form: no trunk stands, the group under the edition's tag.
-    let mint = json!({"op": "publish", "account": "1.0.1", "mint": true, "draft": "1.0.1.0.2", "runs": [run("1.0.1.0.2", "1.0.1.0.2.0.1.1", 3)], "supersede": ["1.0.1.0.1.1.1"]});
+    let mint = json!({"op": "publish", "account": "1.0.1", "mint": true, "draft": "1.0.1.0.64", "runs": [run("1.0.1.0.64", "1.0.1.0.64.0.1.1", 3)], "supersede": ["1.0.1.0.1.1.1"]});
     let (term, body) = c.doc_term_and_body(CheckedKind::Publish, &mint).unwrap();
     assert_eq!(term.as_doc_term(), DocTerm::One(&a("1.0.1")));
     let rows = [DepositRow { home: DepositHome::Edition, kind: DepositKind::Supersede, ty: stored(vec![SlotElement::Span(&sup_ty)]), from: stored(vec![SlotElement::Span(&first)]), to: stored(vec![SlotElement::Member]) }];
@@ -632,10 +632,10 @@ fn a_publications_supersede_entries_spell_the_claims_group_and_an_own_claim_is_s
 /// refused `attestation_invalid:signature` after the send).
 #[test]
 fn a_member_position_end_is_asserted_canonical_before_the_signing() {
-    let g = Ground::over(Fake::default().text("1.0.1.0.2", "1.0.1.0.2.0.1", 1, "abcdef"));
+    let g = Ground::over(Fake::default().text("1.0.1.0.64", "1.0.1.0.64.0.1", 1, "abcdef"));
     let c = g.composer();
     let ty = json!({"addrs": ["1.1.0.1.0.1.0.3.13"]});
-    let frame = |member: Value| json!({"op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.2", "runs": [run("1.0.1.0.2", "1.0.1.0.2.0.1.1", 6)], "links": [{"home": "member", "from": {"member": member}, "to": {"addrs": []}, "ty": ty}]});
+    let frame = |member: Value| json!({"op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.64", "runs": [run("1.0.1.0.64", "1.0.1.0.64.0.1.1", 6)], "links": [{"home": "member", "from": {"member": member}, "to": {"addrs": []}, "ty": ty}]});
     let span = |ordinal: &str, width: &str| json!({"ordinal": ordinal, "width": width});
     for (member, why) in [
         (json!([span("0", "2")]), "starts before the member's first position"),
@@ -669,12 +669,12 @@ fn a_member_position_end_is_asserted_canonical_before_the_signing() {
 /// `attest_not_composed`, and the page is told the shell could not sign).
 #[test]
 fn a_death_signal_at_a_read_is_the_sessions_end() {
-    let fake = Fake::default().text("1.0.1.0.2", "1.0.1.0.2.0.1", 1, "abc");
+    let fake = Fake::default().text("1.0.1.0.64", "1.0.1.0.64.0.1", 1, "abc");
     fake.closed.store(true, Ordering::SeqCst);
     let g = Ground::over(fake);
     let c = g.composer();
-    assert!(matches!(c.slot(&json!([vspec("1.0.1.0.2")]), "from"), Err(Unattested::Died)));
-    let shot = json!({"op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.2", "runs": [run("1.0.1.0.2", "1.0.1.0.2.0.1.1", 2)]});
+    assert!(matches!(c.slot(&json!([vspec("1.0.1.0.64")]), "from"), Err(Unattested::Died)));
+    let shot = json!({"op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.64", "runs": [run("1.0.1.0.64", "1.0.1.0.64.0.1.1", 2)]});
     assert!(matches!(c.publish_body(&shot, "1.0.1.0.1"), Err(Unattested::Died)));
     assert_eq!(g.fake.dialed(), ["image", "retrieve_doc_v_span_set"], "each stopped at its first read");
 }
@@ -689,7 +689,7 @@ fn a_death_signal_at_a_read_is_the_sessions_end() {
 #[test]
 fn a_boards_refusal_at_a_read_is_its_verdict_verbatim() {
     let g = Ground::over(Fake::default());
-    match g.composer().slot(&json!([vspec("1.0.1.0.7")]), "from") {
+    match g.composer().slot(&json!([vspec("1.0.1.0.69")]), "from") {
         Err(Unattested::Refused(r)) => assert_eq!((r.name(), r.to_value()["kind"].as_str()), ("doc_not_registered", Some("refused")), "{r}"),
         other => panic!("the board's verdict was not carried: {other:?}"),
     }

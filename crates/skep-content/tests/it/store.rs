@@ -332,7 +332,7 @@ fn point_queries_match_the_stored_address_exactly_never_a_prefix_or_an_extension
         ("its document", t(&[1, 0, 1, 0, 1])),
         ("its content anchor", t(&[1, 0, 1, 0, 1, 0, 1])),
         ("an element beneath it", t(&[1, 0, 1, 0, 1, 0, 1, 1, 1])),
-        ("the link element beside it", t(&[1, 0, 1, 0, 2, 0, 2, 1])),
+        ("the link element beside it", t(&[1, 0, 1, 0, 64, 0, 2, 1])),
         ("the next ordinal", t(&[1, 0, 1, 0, 1, 0, 1, 2])),
     ] {
         assert!(!c.contains(&near), "{what}, {near}, answered stored");
@@ -864,15 +864,15 @@ fn apply_stretch_never_replaces_a_stored_entry_and_panics_on_the_attempt_in_debu
 #[test]
 fn another_chains_address_whose_predecessor_is_a_stretch_answers_nothing() {
     // THE CROSS-CHAIN CASE (store.rs, `value_at`'s chain test): the greatest
-    // key at or below document 2's first content address is document 1's
+    // key at or below document 64's first content address is document 1's
     // stretch, and the stretch answers for its own chain alone — equal
     // component counts, every component but the last equal — so `value_at`
     // answers `None`, `contains` `false`, and `pieces` stops uncovered; the
     // same at a version document's content address beneath the stretch's
-    // document, which sorts between its content keys and document 2's.
+    // document, which sorts between its content keys and document 64's.
     let c = with_stretch(&ContentStore::default(), 1, b"abcdefgh");
     for (what, other) in [
-        ("document 2's first content address", a(&[1, 0, 1, 0, 2, 0, 1, 1])),
+        ("document 64's first content address", a(&[1, 0, 1, 0, 64, 0, 1, 1])),
         ("a version document's content address", a(&[1, 0, 1, 0, 1, 1, 0, 1, 2])),
         ("document 1's first link address", a(&[1, 0, 1, 0, 1, 0, 2, 1])),
     ] {

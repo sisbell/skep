@@ -36,7 +36,7 @@ fn records_and_fences_replay_and_coverage_follows_them() {
         );
         assert_eq!(f.coverage(), 0);
         f.append(3, vec![]).expect("append");
-        f.append(7, vec![("docs", Value::Array(vec![Value::String("1.0.2.0.2".into())]))])
+        f.append(7, vec![("docs", Value::Array(vec![Value::String("1.0.2.0.64".into())]))])
             .expect("append");
         f.fence(9).expect("fence");
         assert_eq!(f.coverage(), 9);
@@ -47,7 +47,7 @@ fn records_and_fences_replay_and_coverage_follows_them() {
     let contents = std::fs::read_to_string(&path).expect("read");
     assert_eq!(
         contents,
-        "{\"at\":3}\n{\"at\":7,\"docs\":[\"1.0.2.0.2\"]}\n{\"covered\":9}\n",
+        "{\"at\":3}\n{\"at\":7,\"docs\":[\"1.0.2.0.64\"]}\n{\"covered\":9}\n",
         "lines are key-sorted and newline-terminated"
     );
     // A torn tail: truncated at open, coverage unaffected by it, and the

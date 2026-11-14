@@ -31,7 +31,7 @@ fn a_copy_typed_against_an_older_destination_is_refused_ahead_of_the_shape_check
         rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec.clone()], AsOf::Typed(Seq(0)))),
         CopyError::ArrangementMoved { as_of: Seq(0), current: at }
     );
-    let unregistered = VSpec { source: a(&[1, 0, 1, 0, 9]), span: vspan(1, 1, 1) };
+    let unregistered = VSpec { source: a(&[1, 0, 1, 0, 71]), span: vspan(1, 1, 1) };
     assert!(matches!(
         rejected(vs.copy(P1, &doc2(), vp(1, 99), &[spec.clone()], AsOf::Typed(Seq(0)))),
         CopyError::ArrangementMoved { .. }
@@ -111,7 +111,7 @@ fn self_copy_resolves_against_the_pre_edit_arrangement_preserving_multiplicity()
 fn copy_rejects_each_documented_guard() {
     let k = mem_kernel();
     let vs = insert_abc(&k);
-    let unregistered_doc = a(&[1, 0, 1, 0, 9]);
+    let unregistered_doc = a(&[1, 0, 1, 0, 71]);
     // Destination checks first (as INSERT, minus EmptyContent).
     assert!(matches!(
         rejected(vs.copy(P1, &unregistered_doc, vp(1, 1), &[], now(&k))),

@@ -79,7 +79,7 @@ fn a_publish_frame_through_op_is_refused_as_a_call_before_any_dial() {
     let (shell, _) = open_shell(&origin, &dir.path().join("store"), SessionMode::Bare { principal: 1 });
     let signed = register(&shell, "8e", signed_facts(2));
     let bare = register(&shell, "9f", Facts { principal: 1, account: Some("1.0.1".into()), kind: SessionKind::Bare });
-    let publish = json!({"op": "publish", "doc": "1.0.2.0.1", "draft": "1.0.2.0.2", "runs": []});
+    let publish = json!({"op": "publish", "doc": "1.0.2.0.1", "draft": "1.0.2.0.64", "runs": []});
     let refused = shell.call("op", &json!({"session": signed, "frame": publish})).unwrap_err();
     let v = refused.to_value();
     assert_eq!((refused.name(), v["kind"].as_str(), v["op"].as_str()), ("publish_is_a_call", Some("shell"), Some("publish")), "{v}");
@@ -208,8 +208,8 @@ fn the_merge_rows_are_refused_under_a_standing_hold_before_any_read() {
     let own = frames.lock().unwrap().len();
     let rows = [
         ("merge.compose", json!({"session": session, "doc": "1.0.2.0.1", "alternative": "1.0.2.0.1.1.1"}), "stage"),
-        ("merge.compose", json!({"session": session, "doc": "1.0.2.0.1", "alternative": "1.0.2.0.1.1.1", "into": "1.0.2.0.4"}), "set_arrangement"),
-        ("merge.withdraw", json!({"session": session, "draft": "1.0.2.0.4"}), "set_arrangement"),
+        ("merge.compose", json!({"session": session, "doc": "1.0.2.0.1", "alternative": "1.0.2.0.1.1.1", "into": "1.0.2.0.66"}), "set_arrangement"),
+        ("merge.withdraw", json!({"session": session, "draft": "1.0.2.0.66"}), "set_arrangement"),
     ];
     let halted = |halted: bool| Health { body: json!({"writes": {"halted": halted}}), raw: Vec::new() };
     for (cause, stand) in [("stopped", NodeState::Stopped), ("halted", NodeState::Running)] {
@@ -325,13 +325,13 @@ fn no_panel_cancel_is_idempotent_and_the_rows_read_their_members_first() {
         v["what"].as_str().unwrap().to_string()
     };
     assert_eq!(what(json!({"session": signed, "doc": "1.0.2.0.1"})), "draft");
-    assert_eq!(what(json!({"session": signed, "draft": "1.0.2.0.2"})), "doc or mint");
-    assert_eq!(what(json!({"session": signed, "draft": "1.0.2.0.2", "doc": "1.0.2.0.1", "mint": "1.0.2"})), "mint");
-    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.2", "doc": "1.0.2.0.1", "claim": "yes"})), "claim", "the members before the session");
-    assert_eq!(what(json!({"session": signed, "draft": "1.0.2.0.2", "doc": "1.0.2.0.1", "selection": [{"origin": "1.0.2.0.2", "i_start": 1, "width": 0}]})), "selection", "a run of no width");
-    let stale = shell.call("publication.open", &json!({"session": "s-gone", "draft": "1.0.2.0.2", "doc": "1.0.2.0.1"})).unwrap_err();
+    assert_eq!(what(json!({"session": signed, "draft": "1.0.2.0.64"})), "doc or mint");
+    assert_eq!(what(json!({"session": signed, "draft": "1.0.2.0.64", "doc": "1.0.2.0.1", "mint": "1.0.2"})), "mint");
+    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.64", "doc": "1.0.2.0.1", "claim": "yes"})), "claim", "the members before the session");
+    assert_eq!(what(json!({"session": signed, "draft": "1.0.2.0.64", "doc": "1.0.2.0.1", "selection": [{"origin": "1.0.2.0.64", "i_start": 1, "width": 0}]})), "selection", "a run of no width");
+    let stale = shell.call("publication.open", &json!({"session": "s-gone", "draft": "1.0.2.0.64", "doc": "1.0.2.0.1"})).unwrap_err();
     assert_eq!(stale.name(), "session_ended");
-    let keyless = shell.call("publication.open", &json!({"session": bare, "draft": "1.0.1.0.2", "doc": "1.0.1.0.1"})).unwrap_err();
+    let keyless = shell.call("publication.open", &json!({"session": bare, "draft": "1.0.1.0.64", "doc": "1.0.1.0.1"})).unwrap_err();
     assert_eq!((keyless.name(), keyless.to_value()["call"].as_str()), ("write_in_bare_session", Some("publication.open")), "{keyless}");
     // The standing read's own members, before the session, and its bare
     // session refused by name before any dial — the page keys the keyless
@@ -343,12 +343,12 @@ fn no_panel_cancel_is_idempotent_and_the_rows_read_their_members_first() {
         v["what"].as_str().unwrap().to_string()
     };
     assert_eq!(what(json!({"session": signed, "doc": "1.0.2.0.1"})), "draft");
-    assert_eq!(what(json!({"session": signed, "draft": "1.0.2.0.2"})), "doc", "doc is required: a draft's base does not say which chain it joins");
-    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.2", "doc": "1.0.2.0.1", "also": ["1.0.2.0.2"]})), "also", "the draft named among also, before the session");
-    assert_eq!(what(json!({"session": signed, "draft": "1.0.2.0.2", "doc": "1.0.2.0.1", "also": ["1.0.2.0.3", "1.0.2.0.3"]})), "also", "a repeat");
-    let stale = shell.call("publication.standing", &json!({"session": "s-gone", "draft": "1.0.2.0.2", "doc": "1.0.2.0.1"})).unwrap_err();
+    assert_eq!(what(json!({"session": signed, "draft": "1.0.2.0.64"})), "doc", "doc is required: a draft's base does not say which chain it joins");
+    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.64", "doc": "1.0.2.0.1", "also": ["1.0.2.0.64"]})), "also", "the draft named among also, before the session");
+    assert_eq!(what(json!({"session": signed, "draft": "1.0.2.0.64", "doc": "1.0.2.0.1", "also": ["1.0.2.0.65", "1.0.2.0.65"]})), "also", "a repeat");
+    let stale = shell.call("publication.standing", &json!({"session": "s-gone", "draft": "1.0.2.0.64", "doc": "1.0.2.0.1"})).unwrap_err();
     assert_eq!(stale.name(), "session_ended");
-    let keyless = shell.call("publication.standing", &json!({"session": bare, "draft": "1.0.1.0.2", "doc": "1.0.1.0.1"})).unwrap_err();
+    let keyless = shell.call("publication.standing", &json!({"session": bare, "draft": "1.0.1.0.64", "doc": "1.0.1.0.1"})).unwrap_err();
     assert_eq!((keyless.name(), keyless.to_value()["call"].as_str()), ("write_in_bare_session", Some("publication.standing")), "{keyless}");
     assert!(rx.try_iter().all(|e| e.name != EventName::Publication), "a refused standing read says nothing");
 }
@@ -776,19 +776,19 @@ fn the_familys_members_are_read_in_their_form_before_the_session() {
         assert_eq!(refused.name(), "malformed_args", "{args}: {v}");
         v["what"].as_str().unwrap().to_string()
     };
-    let base_args = json!({"session": "s-gone", "draft": "1.0.2.0.2", "doc": "1.0.2.0.1"});
+    let base_args = json!({"session": "s-gone", "draft": "1.0.2.0.64", "doc": "1.0.2.0.1"});
     let with = |member: &str, value: Value| {
         let mut args = base_args.clone();
         args[member] = value;
         args
     };
-    assert_eq!(what(with("also", json!("1.0.2.0.3"))), "also", "no list");
-    assert_eq!(what(with("also", json!(["1.0.2.0.3", 7]))), "also", "no address");
-    assert_eq!(what(with("also", json!(["1.0.2.0.3", "1.0.2.0.3"]))), "also", "a repeat");
-    assert_eq!(what(with("also", json!(["1.0.2.0.2"]))), "also", "the draft itself");
-    let in_form = with("also", json!(["1.0.2.0.3", "1.0.2.0.4"]));
+    assert_eq!(what(with("also", json!("1.0.2.0.65"))), "also", "no list");
+    assert_eq!(what(with("also", json!(["1.0.2.0.65", 7]))), "also", "no address");
+    assert_eq!(what(with("also", json!(["1.0.2.0.65", "1.0.2.0.65"]))), "also", "a repeat");
+    assert_eq!(what(with("also", json!(["1.0.2.0.64"]))), "also", "the draft itself");
+    let in_form = with("also", json!(["1.0.2.0.65", "1.0.2.0.66"]));
     assert_eq!(shell.call("publication.open", &in_form).unwrap_err().name(), "session_ended", "{in_form}: in its form, the member passes to the session");
-    for unread in [with("base", json!(7)), with("base", json!("1.0.2.0.9.1")), json!({"session": "s-gone", "draft": "1.0.2.0.2", "mint": "1.0.2", "base": "1.0.2.0.1.1"})] {
+    for unread in [with("base", json!(7)), with("base", json!("1.0.2.0.71.1")), json!({"session": "s-gone", "draft": "1.0.2.0.64", "mint": "1.0.2", "base": "1.0.2.0.1.1"})] {
         assert_eq!(shell.call("publication.open", &unread).unwrap_err().name(), "session_ended", "{unread}: a `base` is read by nothing");
     }
 }
@@ -1031,14 +1031,14 @@ fn a_windows_parts_take_their_own_answers_and_each_answer_re_keys_the_panel() {
 #[test]
 fn the_lineage_re_statement_names_the_entry_its_original_and_cause() {
     use skep_client::publication::{LineageCause, PartKey, RaceKey, Restatement};
-    let original = skep_client::address::parse_address("1.0.1.0.6.0.2.1").expect("an address");
-    let record = skep_client::address::parse_address("1.0.1.0.7.0.2.1").expect("an address");
+    let original = skep_client::address::parse_address("1.0.1.0.68.0.2.1").expect("an address");
+    let record = skep_client::address::parse_address("1.0.1.0.69.0.2.1").expect("an address");
     let race = RaceKey { at: 999, key: Some("bare".into()), signed: false };
     let restatement = Restatement { parts: vec![(PartKey { run: 2, part: 0 }, Some(record))], ..Restatement::default() };
     let answer = super::super::publication::restated_json(&restatement, Some(&race), Some((3, &original, LineageCause::Superseded)));
     crate::shapes::assert_declared("Restated", &answer);
-    assert_eq!(answer["left_out"], json!([{"entry": 3, "original": "1.0.1.0.6.0.2.1", "cause": "superseded"}]));
-    assert_eq!(answer["parts"], json!([{"run": 2, "part": 0, "record": "1.0.1.0.7.0.2.1"}]));
+    assert_eq!(answer["left_out"], json!([{"entry": 3, "original": "1.0.1.0.68.0.2.1", "cause": "superseded"}]));
+    assert_eq!(answer["parts"], json!([{"run": 2, "part": 0, "record": "1.0.1.0.69.0.2.1"}]));
     assert_eq!((answer["outcome"].as_str(), answer["race"]["at"].as_u64()), (Some("restated"), Some(999)));
     let quiet = super::super::publication::restated_json(&Restatement::default(), None, Some((0, &original, LineageCause::Retracted)));
     crate::shapes::assert_declared("Restated", &quiet);
@@ -1055,17 +1055,17 @@ fn the_lineage_re_statement_names_the_entry_its_original_and_cause() {
 #[test]
 fn the_refusals_that_name_a_draft_carry_it() {
     use skep_client::publication::{OwnFault, RaceKey, Refusal as PubRefusal};
-    let d = skep_client::address::parse_address("1.0.1.0.5").expect("an address");
+    let d = skep_client::address::parse_address("1.0.1.0.67").expect("an address");
     let race = RaceKey { at: 999, key: Some("bare".into()), signed: false };
     let (arm, members) = super::super::publication::refusal_arm(&PubRefusal::KeptPlaceMoved { index: 1, draft: d.clone(), race: Some(race) });
     let answer = super::super::publication::refused_json(arm, members);
     crate::shapes::assert_declared("PublicationRefused", &answer);
     crate::shapes::assert_declared("RaceKey", &answer["race"]);
-    assert_eq!(answer, json!({"outcome": "refused", "arm": "kept_place_moved", "index": 1, "draft": "1.0.1.0.5", "race": {"at": 999, "key": "bare", "signed": false}}));
+    assert_eq!(answer, json!({"outcome": "refused", "arm": "kept_place_moved", "index": 1, "draft": "1.0.1.0.67", "race": {"at": 999, "key": "bare", "signed": false}}));
     let (arm, members) = super::super::publication::refusal_arm(&PubRefusal::OwnFault(OwnFault::StrayPlace { index: 2, draft: d }));
     let answer = super::super::publication::refused_json(arm, members);
     crate::shapes::assert_declared("PublicationRefused", &answer);
-    assert_eq!(answer, json!({"outcome": "refused", "arm": "own_fault", "fault": {"kind": "stray_place", "index": 2, "draft": "1.0.1.0.5"}}));
+    assert_eq!(answer, json!({"outcome": "refused", "arm": "own_fault", "fault": {"kind": "stray_place", "index": 2, "draft": "1.0.1.0.67"}}));
 }
 
 /// Checks that a publication that only removes published words leaves the

@@ -385,7 +385,7 @@ fn the_drain_settles_each_death_of_the_session_once_and_drops_every_other_event(
     backend.drain(events, Path::new("/store/index"));
     let died = |session: &str, reason: Value| Event { name: EventName::SessionDied, data: json!({"session": session, "reason": reason}) };
     for event in [
-        Event { name: EventName::Held, data: json!({"board": "b-1", "session": "s-1", "doc": "1.0.1.0.2", "held": 1, "state": "holding"}) },
+        Event { name: EventName::Held, data: json!({"board": "b-1", "session": "s-1", "doc": "1.0.1.0.64", "held": 1, "state": "holding"}) },
         Event { name: EventName::Index, data: json!({"board": "b-1", "session": "s-1", "state": {"arm": "building"}}) },
         died("s-0", json!({"arm": "retired", "fingerprint": "ff00"})),
         died("s-1", json!({"arm": "restart", "reopened": true, "session": "s-2"})),
@@ -594,7 +594,7 @@ fn the_index_states_that_ask_an_act_are_said_once() {
 #[test]
 fn an_earlier_runs_held_bursts_are_counted_as_they_stand() {
     assert_eq!(carried_line(&json!([])), None, "no line where no burst stands");
-    let line = |k: u64, cause: &str, sent: bool| json!({"held": k, "doc": "1.0.1.0.2", "base": 0, "frame": {}, "cause": cause, "sent": sent, "time": k});
+    let line = |k: u64, cause: &str, sent: bool| json!({"held": k, "doc": "1.0.1.0.64", "base": 0, "frame": {}, "cause": cause, "sent": sent, "time": k});
     let with_refusal = |k: u64, cause: &str, refusal: Value| {
         let mut held = line(k, cause, false);
         held["refusal"] = refusal;
@@ -701,7 +701,7 @@ fn the_clean_stop_says_what_it_closes_as_the_session_state_has_it() {
 fn what_the_clean_stop_leaves_held_is_counted_as_it_stands() {
     let none = CopiesOwed::default();
     assert_eq!(left_held(&json!([]), none), None, "no tail where no burst stands");
-    let line = |k: u64, sent: bool| json!({"held": k, "doc": "1.0.1.0.2", "base": 0, "frame": {}, "cause": "unreachable", "sent": sent, "time": k});
+    let line = |k: u64, sent: bool| json!({"held": k, "doc": "1.0.1.0.64", "base": 0, "frame": {}, "cause": "unreachable", "sent": sent, "time": k});
     assert_eq!(left_held(&json!([line(1, true), line(2, false)]), none), Some("; it leaves 2 bursts held at this board (1 sent and so perhaps landed): the next start counts the 2 its held file holds".to_string()));
     assert_eq!(left_held(&json!([line(1, false)]), none), Some("; it leaves 1 burst held at this board (0 sent and so perhaps landed): the next start counts the 1 its held file holds".to_string()));
     let alone = CopiesOwed { lines: 1, ..none };

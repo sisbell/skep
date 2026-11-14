@@ -15,17 +15,17 @@ use super::*;
 /// reads no record and knows no takedown — it echoes the address — so these
 /// name nothing on the board; each is distinct so a 403 says WHICH entry
 /// answered.
-const RECORD_MEMBER: &str = "1.0.1.0.7.1";
+const RECORD_MEMBER: &str = "1.0.1.0.69.1";
 
-const RECORD_UNDER: &str = "1.0.1.0.8.1";
+const RECORD_UNDER: &str = "1.0.1.0.70.1";
 
-const RECORD_CLAIMANT: &str = "1.0.1.0.9.1";
+const RECORD_CLAIMANT: &str = "1.0.1.0.71.1";
 
-const RECORD_SEAT: &str = "1.0.1.0.10.1";
+const RECORD_SEAT: &str = "1.0.1.0.72.1";
 
-const RECORD_HOST: &str = "1.0.1.0.11.1";
+const RECORD_HOST: &str = "1.0.1.0.73.1";
 
-const RECORD_NODE: &str = "1.0.1.0.12.1";
+const RECORD_NODE: &str = "1.0.1.0.74.1";
 
 /// An OFF-BOARD host's account, lexically: `2` is no root the registry
 /// assigns (REG-1.67), so it sits under no `1.N` and the off-board test —
@@ -684,7 +684,7 @@ fn a_restart_reinstalls_the_list_and_a_bad_issue_installs_nothing() {
     let bad_issues: [&[u8]; 5] = [
         &br#"{"entries":[{"prefix":"1.0.2","#[..],
         br#"{"entries":[],"lifted":true}"#,
-        br#"{"entries":[{"prefix":"1..2","record":"1.0.1.0.7.1"}]}"#,
+        br#"{"entries":[{"prefix":"1..2","record":"1.0.1.0.69.1"}]}"#,
         br#"{"operator":null,"entries":[]}"#,
         br#"[]"#,
     ];

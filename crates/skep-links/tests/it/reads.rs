@@ -652,7 +652,7 @@ fn age_answers_ungated_and_the_staleness_family_refuses_every_class() {
     // ...even at an unregistered home: NotBh4 outranks the home check, so
     // no transaction opens anywhere on this surface.
     assert!(matches!(
-        w.retract_stale(P1, &a(&[1, 0, 1, 0, 7]), &pred_def_ty(), 2),
+        w.retract_stale(P1, &a(&[1, 0, 1, 0, 69]), &pred_def_ty(), 2),
         Err(TxnError::Rejected(RetractStaleError::NotBh4))
     ));
     assert_eq!(k.current_seq(), before);

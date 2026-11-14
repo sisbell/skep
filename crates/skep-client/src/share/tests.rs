@@ -12,8 +12,8 @@ use crate::dial::{Request as DialRequest, Response};
 /// `1.0.1.0.1.0.2.k`.
 const ISSUER: &str = "1.0.1";
 const HOME: &str = "1.0.1.0.1";
-const DOC: &str = "1.0.1.0.5";
-const OTHER_DOC: &str = "1.0.1.0.6";
+const DOC: &str = "1.0.1.0.67";
+const OTHER_DOC: &str = "1.0.1.0.68";
 const GRANTEE: &str = "1.0.7";
 
 fn a(text: &str) -> Address {

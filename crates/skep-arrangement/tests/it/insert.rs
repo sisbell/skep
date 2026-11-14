@@ -128,7 +128,7 @@ fn insert_rejects_in_documented_order_and_commits_nothing() {
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let before = k.current_seq();
-    let unregistered_doc = a(&[1, 0, 1, 0, 9]); // never registered
+    let unregistered_doc = a(&[1, 0, 1, 0, 71]); // never registered
     assert!(matches!(
         rejected(vs.insert(P1, &unregistered_doc, vp(2, 0), vec![], Deposit::Undeclared, now(&k))),
         InsertError::DocNotRegistered

@@ -82,7 +82,7 @@ fn a_tie_set_is_ordered_by_address_then_member_then_span() {
     let mut published = Index::new(Class::Guest);
     let later = Unit::new(
         UnitKey::new(doc(5)),
-        Some(addr(&[1, 0, 1, 0, 5, 2])),
+        Some(addr(&[1, 0, 1, 0, 67, 2])),
         Kind::Edition,
         Class::Guest,
         1,
@@ -93,7 +93,7 @@ fn a_tie_set_is_ordered_by_address_then_member_then_span() {
     let mut supplement = Index::new(Class::Principal(3));
     let earlier = Unit::new(
         UnitKey::new(doc(5)),
-        Some(addr(&[1, 0, 1, 0, 5, 1])),
+        Some(addr(&[1, 0, 1, 0, 67, 1])),
         Kind::Edition,
         Class::Principal(3),
         1,
@@ -104,8 +104,8 @@ fn a_tie_set_is_ordered_by_address_then_member_then_span() {
     let pair = Pair::session(&published, &supplement, &[], &[]);
     let answer = ask(pair, "alpha");
     assert_eq!(answer.hits.len(), 2);
-    assert_eq!(answer.hits[0].member, Some(addr(&[1, 0, 1, 0, 5, 1])), "the lesser member first");
-    assert_eq!(answer.hits[1].member, Some(addr(&[1, 0, 1, 0, 5, 2])));
+    assert_eq!(answer.hits[0].member, Some(addr(&[1, 0, 1, 0, 67, 1])), "the lesser member first");
+    assert_eq!(answer.hits[1].member, Some(addr(&[1, 0, 1, 0, 67, 2])));
     assert_eq!(answer.hits[0].score, answer.hits[1].score);
 }
 
@@ -155,7 +155,7 @@ fn the_same_pair_and_query_answer_the_same_order_twice() {
     }
     let mut supplement = Index::new(Class::Principal(2));
     supplement
-        .index(draft(Class::Principal(2), &addr(&[1, 0, 2, 0, 3]), b"alpha beta"))
+        .index(draft(Class::Principal(2), &addr(&[1, 0, 2, 0, 65]), b"alpha beta"))
         .expect("admitted");
     let pair = Pair::session(&published, &supplement, &[], &[]);
     let first = ask(pair, "alpha beta");

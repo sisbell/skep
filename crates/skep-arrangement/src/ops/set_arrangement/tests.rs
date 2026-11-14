@@ -22,14 +22,14 @@
 use serde::{Deserialize, Serialize};
 use skep_content::{stage_write, ContentStore, ContentStretch, ContentWrite, Val};
 use skep_kernel::{Kernel, Seq};
-use skep_namespace::{M3Rec, PrincipalId, FIRST_ORDINARY_DOCUMENT};
+use skep_namespace::{M3Rec, PrincipalId};
 
 use super::*;
 use crate::error::SetArrangementError as E;
 use crate::ops::MAX_PLACED_RUNS;
 use crate::run::Run;
 use crate::state::{DraftBase, M5State, Marker};
-use crate::testutil::{a, ca, doc1, doc2, la, mem_kernel_of, n, pca, pdoc, rejected, run, seeded_m3, vca, vp};
+use crate::testutil::{a, ca, doc1, doc2, la, mem_kernel_of, n, nth_doc, pca, pdoc, rejected, run, seeded_m3, vca, vp};
 use crate::Deposit;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -119,15 +119,15 @@ fn seeded() -> Kernel<LandWorld> {
 
 /// The edition's first member, minted by `version`, and the staging draft of
 /// it: `(member, draft)`, the draft holding the member's `a b c` by identity
-/// with the member as its recorded base at three. The draft is the first
-/// document the account's counter hands out here: the seeded world's
-/// documents past doc 1 stand at well-known slots, which move no count.
+/// with the member as its recorded base at three. The draft is the account's
+/// fourth document, the first its counter hands out here: the seeded world
+/// holds its first three.
 fn staged(k: &Kernel<LandWorld>) -> (Address, Address) {
     let vs = Vstream::new(k);
     let (member, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the edition's first member");
-    assert_eq!(member, a(&[1, 0, 1, 0, 3, 1]));
+    assert_eq!(member, a(&[1, 0, 1, 0, nth_doc(3), 1]));
     let (draft, _) = vs.stage(PrincipalId(1), &member).expect("the staging draft");
-    assert_eq!(draft, a(&[1, 0, 1, 0, FIRST_ORDINARY_DOCUMENT]));
+    assert_eq!(draft, a(&[1, 0, 1, 0, nth_doc(4)]));
     (member, draft)
 }
 
@@ -188,8 +188,8 @@ fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
     let bad_run = || vec![ShotRun { origin: doc1(), run: run(&pca(9), 1) }];
     // A document no mint has made, and an address in the edition's chain
     // that no mint has made either.
-    let ghost = a(&[1, 0, 1, 0, 9]);
-    let unminted = a(&[1, 0, 1, 0, 3, 9]);
+    let ghost = a(&[1, 0, 1, 0, 71]);
+    let unminted = a(&[1, 0, 1, 0, 65, 9]);
     let unchanged = |what: &str| {
         assert_eq!(k.current_seq(), before, "{what}: a refusal commits nothing");
         assert_eq!(runs_of(&k, &draft), vec![run(&pca(1), 3)], "{what}: the draft's arrangement stands");
@@ -199,7 +199,7 @@ fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
     };
     // Registration, then ω, then publication — with a bad run behind each.
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &a(&[1, 0, 1, 0, 9]), &request(bad_run(), None, None, None), now(&k))),
+        rejected(vs.set_arrangement(P1, &a(&[1, 0, 1, 0, 71]), &request(bad_run(), None, None, None), now(&k))),
         E::DocNotRegistered
     ));
     assert!(matches!(
@@ -305,7 +305,7 @@ fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
         E::BadRun
     ));
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &draft, &request(vec![ShotRun { origin: ghost.clone(), run: run(&a(&[1, 0, 1, 0, 9, 0, 1, 1]), 1) }], None, None, None), now(&k))),
+        rejected(vs.set_arrangement(P1, &draft, &request(vec![ShotRun { origin: ghost.clone(), run: run(&a(&[1, 0, 1, 0, 71, 0, 1, 1]), 1) }], None, None, None), now(&k))),
         E::SourceNotRegistered
     ));
     assert!(matches!(
@@ -378,8 +378,8 @@ fn a_head_or_base_naming_no_member_is_refused_and_one_minted_since_records() {
     let k = seeded();
     let (member, draft) = staged(&k);
     let vs = Vstream::new(&k);
-    let next = a(&[1, 0, 1, 0, 3, 2]);
-    let daughter = a(&[1, 0, 1, 0, 3, 1, 1]);
+    let next = a(&[1, 0, 1, 0, 65, 2]);
+    let daughter = a(&[1, 0, 1, 0, nth_doc(3), 1, 1]);
     let recorded = Some(DraftBase { base: member.clone(), extent: n(3), source: member.clone(), merge: None, stamped: vec![] });
     let before = k.current_seq();
     for unminted in [&next, &daughter] {
@@ -454,7 +454,7 @@ fn a_landing_sets_the_arrangement_moves_the_base_marks_the_merge_and_tells_a_mov
     // A second member stands: the trunk moved past the head the merge was
     // composed on. The landing lands and tells.
     let (second, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the second member");
-    assert_eq!(second, a(&[1, 0, 1, 0, 3, 2]));
+    assert_eq!(second, a(&[1, 0, 1, 0, nth_doc(3), 2]));
     let (at2, head_moved) = vs
         .set_arrangement(P1, &draft, &request(vec![of_edition(1, 3)], Some(pair(&member, 3)), Some(pair(&member, 3)), Some(vec![])), now(&k))
         .expect("land and tell");
@@ -587,7 +587,7 @@ fn a_fork_is_admitted_where_its_source_is_the_head_and_a_free_standing_draft_gai
     // mint has made, past the zero its count answers, and a document no
     // mint has made.
     let before = k.current_seq();
-    for unminted in [a(&[1, 0, 1, 0, 3, 9]), a(&[1, 0, 1, 0, 9])] {
+    for unminted in [a(&[1, 0, 1, 0, 65, 9]), a(&[1, 0, 1, 0, 71])] {
         assert!(matches!(
             rejected(vs.set_arrangement(P1, &doc1(), &request(vec![of_edition(2, 1)], Some(pair(&unminted, 5)), None, None), now(&k))),
             E::SourceNotRegistered
@@ -600,7 +600,7 @@ fn a_fork_is_admitted_where_its_source_is_the_head_and_a_free_standing_draft_gai
     // head of the first is told the second, and a head of the second tells
     // nothing; neither is recorded.
     let (second, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the second member");
-    assert_eq!(second, a(&[1, 0, 1, 0, 3, 2]));
+    assert_eq!(second, a(&[1, 0, 1, 0, nth_doc(3), 2]));
     let (_, head_moved) = vs
         .set_arrangement(P1, &doc1(), &request(vec![of_edition(1, 3)], Some(pair(&member, 3)), None, None), now(&k))
         .expect("free-standing: a head the trunk has moved past");

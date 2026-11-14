@@ -22,7 +22,7 @@ use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource
 use skep_links::{
     enc, Caller, Endset, HasLinks, LinkRec, LinkState, LinkWriter, SlotArg, TypeRegistry,
 };
-use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
+use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId, FIRST_ORDINARY_DOCUMENT};
 
 // ───────────────────────── the assembled test world ─────────────────────────
 
@@ -125,19 +125,33 @@ pub fn doc1() -> Address {
     a(&[1, 0, 1, 0, 1])
 }
 
-/// Document 2: `[1,0,1,0,2]`.
-pub fn doc2() -> Address {
-    a(&[1, 0, 1, 0, 2])
+/// The number of the account's `k`-th document: its home page is 1, and its
+/// documents past it are numbered from `FIRST_ORDINARY_DOCUMENT` on, past
+/// the reserved block of well-known slots. [`doc2`] and [`published_doc`]
+/// are its second and third; every fixture address at or below one of them
+/// reads its number here, worked out from that constant and never spelled.
+pub fn nth_doc(k: u32) -> u32 {
+    assert_ne!(k, 0, "an account has no 0th document");
+    if k == 1 {
+        1
+    } else {
+        FIRST_ORDINARY_DOCUMENT + k - 2
+    }
 }
 
-/// Document 3: `[1,0,1,0,3]` — the one PUBLISHED document. Publication is
-/// resolved at the mint and immutable afterwards (there is no publish op), so
-/// a published document is a `published: true` `Allocate` and nothing else.
-/// `define_predicate`'s undeclared insert is refused here at M5's door, while
-/// every `emit`/`nullify` M9 makes is a link deposit, outside the
-/// version-chain rule, and lands.
+/// Doc2, the account's second document: `[1,0,1,0,nth_doc(2)]`.
+pub fn doc2() -> Address {
+    a(&[1, 0, 1, 0, nth_doc(2)])
+}
+
+/// The account's third document, `[1,0,1,0,nth_doc(3)]` — the one PUBLISHED
+/// document. Publication is resolved at the mint and immutable afterwards
+/// (there is no publish op), so a published document is a `published: true`
+/// `Allocate` and nothing else. `define_predicate`'s undeclared insert is
+/// refused here at M5's door, while every `emit`/`nullify` M9 makes is a link
+/// deposit, outside the version-chain rule, and lands.
 pub fn published_doc() -> Address {
-    a(&[1, 0, 1, 0, 3])
+    a(&[1, 0, 1, 0, nth_doc(3)])
 }
 
 /// doc1 content element `ordinal`.
@@ -215,8 +229,8 @@ pub fn seeded_m3() -> M3State {
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1]), false))
         .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 1]), PrincipalId(1)))
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 1]), false))
-        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 2]), false))
-        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 3]), true))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, nth_doc(2)]), false))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, nth_doc(3)]), true))
 }
 
 pub fn genesis_world() -> World {

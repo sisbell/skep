@@ -224,13 +224,13 @@ fn the_address_list_row_keeps_its_addresses_in_the_order_given() {
 /// home FIRST — and the one-address term the address row.
 #[test]
 fn the_pairs_row_is_the_successors_home_then_the_supersession_claims() {
-    let (d_s, d_a) = (addr(&[1, 0, 1, 0, 2]), addr(&[1, 0, 1, 0, 1]));
+    let (d_s, d_a) = (addr(&[1, 0, 1, 0, 64]), addr(&[1, 0, 1, 0, 1]));
     assert_eq!(
         doc_bytes(DocTerm::Pair { d_s: &d_s, d_a: &d_a }),
         [
             &[0x01u8, 0, 0, 0, 0, 0, 0, 0, 2][..],
-            &[0, 0, 0, 9][..],
-            b"1.0.1.0.2",
+            &[0, 0, 0, 10][..],
+            b"1.0.1.0.64",
             &[0, 0, 0, 9][..],
             b"1.0.1.0.1",
         ]
@@ -814,7 +814,7 @@ fn the_frame_is_framed_under_the_entry_tag_over_six_members() {
         }),
     ];
     // The pair's row as the `doc` member, whole, where the op names two homes.
-    let d_s = addr(&[1, 0, 1, 0, 2]);
+    let d_s = addr(&[1, 0, 1, 0, 64]);
     let pair = DocTerm::Pair { d_s: &d_s, d_a: &doc };
     for body in &bodies {
         let (doc_term, doc_member) = match body.op() {
@@ -849,7 +849,7 @@ fn the_frame_is_framed_under_the_entry_tag_over_six_members() {
 #[test]
 #[should_panic(expected = "this `edit_link` body was framed under one address")]
 fn an_edit_link_body_under_one_address_is_refused_at_the_frame() {
-    let (account, d_s) = (addr(&[1, 0, 1]), addr(&[1, 0, 1, 0, 2]));
+    let (account, d_s) = (addr(&[1, 0, 1]), addr(&[1, 0, 1, 0, 64]));
     let empty = EntrySlot(&[]);
     let edit = entry_body_edit_link(
         LinkSlots { from: empty, to: empty, ty: empty },
@@ -864,7 +864,7 @@ fn an_edit_link_body_under_one_address_is_refused_at_the_frame() {
 #[test]
 #[should_panic(expected = "this `make_link` body was framed under the pair's row")]
 fn any_other_body_under_the_pairs_row_is_refused_at_the_frame() {
-    let (account, d_s, d_a) = (addr(&[1, 0, 1]), addr(&[1, 0, 1, 0, 2]), addr(&[1, 0, 1, 0, 1]));
+    let (account, d_s, d_a) = (addr(&[1, 0, 1]), addr(&[1, 0, 1, 0, 64]), addr(&[1, 0, 1, 0, 1]));
     let empty = EntrySlot(&[]);
     let body = entry_body_make_link(LinkSlots { from: empty, to: empty, ty: empty });
     let term = BoardTerm { log_position: 1, chain: [0; 32] };

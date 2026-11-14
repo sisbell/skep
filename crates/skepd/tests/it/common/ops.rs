@@ -452,8 +452,8 @@ pub fn shot(
 }
 
 /// The DOCUMENT that minted a content I-address: the prefix before its last
-/// `.0.1.` (subspace 1, the content subspace) — `1.0.1.0.5.0.1.3` is
-/// `1.0.1.0.5`'s, and a member-chain mint `1.0.1.0.5.1.0.1.2` is the
+/// `.0.1.` (subspace 1, the content subspace) — `1.0.1.0.67.0.1.3` is
+/// `1.0.1.0.67`'s, and a member-chain mint `1.0.1.0.67.1.0.1.2` is the
 /// member's.
 pub fn origin_of(i_addr: &str) -> String {
     let idx = i_addr.rfind(".0.1.").unwrap_or_else(|| panic!("{i_addr} is not a content I-address"));

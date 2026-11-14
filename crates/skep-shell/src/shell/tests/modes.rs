@@ -807,7 +807,7 @@ fn the_codecs_budgets_are_the_shells() {
     let deep = |components: usize| format!("1.0.1.0.1{}", ".1".repeat(components - 5));
     // Typed at genesis: the frame names a document no board holds, and what
     // is under test is the codec's cap, met before any state is asked.
-    let insert = |values: usize| json!({"op": "insert", "doc": "1.0.1.0.9", "at": {"subspace": "1", "ordinal": "1"}, "values": ["a".repeat(values)], "as_of": 0});
+    let insert = |values: usize| json!({"op": "insert", "doc": "1.0.1.0.71", "at": {"subspace": "1", "ordinal": "1"}, "values": ["a".repeat(values)], "as_of": 0});
     let cells = [
         ("a list", json!({"op": "retrieve_v", "specs": vec![spec.clone(); MAX_WIRE_LIST]}), json!({"op": "retrieve_v", "specs": vec![spec; MAX_WIRE_LIST + 1]})),
         ("an address", json!({"op": "doc_metadata", "doc": deep(MAX_TUMBLER_COMPONENTS)}), json!({"op": "doc_metadata", "doc": deep(MAX_TUMBLER_COMPONENTS + 1)})),

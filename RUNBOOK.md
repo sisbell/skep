@@ -1911,7 +1911,7 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    which entries it exempts. To block the account `1.0.7`:
 
    ```
-   {"operator": "1.3.0.1", "entries": [{"prefix": "1.0.7", "record": "1.3.0.1.0.7.1"}]}
+   {"operator": "1.3.0.1", "entries": [{"prefix": "1.0.7", "record": "1.3.0.1.0.69.1"}]}
    ```
 
    Write each new issue beside the file, in the same directory, and

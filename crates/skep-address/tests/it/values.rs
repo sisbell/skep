@@ -72,12 +72,12 @@ fn the_component_walk_runs_both_ways_and_reports_its_length() {
     {
     }
 
-    let x = t(&[1, 0, 2, 0, 5]);
+    let x = t(&[1, 0, 2, 0, 67]);
     double_ended_exact_and_fused(x.iter());
     assert_eq!(x.iter().len(), x.len()); // exact, before a single step
     assert_eq!(
         x.iter().cloned().rev().collect::<Vec<_>>(),
-        vec![n(5), n(0), n(2), n(0), n(1)]
+        vec![n(67), n(0), n(2), n(0), n(1)]
     );
     // The two reads a caller wants from the tail, neither copying the head.
     assert_eq!(x.iter().next_back(), x.get(x.len()));
@@ -95,16 +95,16 @@ fn the_component_walk_runs_both_ways_and_reports_its_length() {
 /// into any message without a per-crate helper.
 #[test]
 fn tumbler_renders_as_dotted_decimal() {
-    assert_eq!(t(&[1, 0, 2, 0, 5]).to_string(), "1.0.2.0.5");
+    assert_eq!(t(&[1, 0, 2, 0, 67]).to_string(), "1.0.2.0.67");
     assert_eq!(t(&[7]).to_string(), "7");
     assert_eq!(t(&[0, 0]).to_string(), "0.0"); // carrier sentinels render too
     assert_eq!(format!("{}", t(&[1, 0])), "1.0");
     // Distinct tumblers render distinctly — no leading-zero alias collapses.
     assert_ne!(t(&[0, 1]).to_string(), t(&[1]).to_string());
     // An address renders as its tumbler; the derived level is never shown.
-    let a = addr(&[1, 0, 2, 0, 5, 0, 1, 9]);
+    let a = addr(&[1, 0, 2, 0, 67, 0, 1, 9]);
     assert_eq!(a.to_string(), a.tumbler().to_string());
-    assert_eq!(a.to_string(), "1.0.2.0.5.0.1.9");
+    assert_eq!(a.to_string(), "1.0.2.0.67.0.1.9");
 }
 
 /// T0(a) — the value layer holds components no fixed-width representation
@@ -159,10 +159,10 @@ fn is_prefix_is_reflexive_and_directional() {
 #[test]
 fn zeros_counts_separators_unbounded() {
     assert_eq!(zeros(&t(&[1, 2])), 0);
-    assert_eq!(zeros(&t(&[1, 0, 2, 0, 5, 0, 1, 9])), 3);
+    assert_eq!(zeros(&t(&[1, 0, 2, 0, 67, 0, 1, 9])), 3);
     // 6 separators: the true count is reported (usize, T0(b)) and the
     // classifier lands on Invalid — never a wrapped level, never a fault.
-    let garbage = t(&[1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7]);
+    let garbage = t(&[1, 0, 2, 0, 65, 0, 4, 0, 5, 0, 6, 0, 7]);
     assert_eq!(zeros(&garbage), 6);
     assert_eq!(classify(&garbage), Class::Invalid);
 }
@@ -172,9 +172,9 @@ fn classify_reads_the_level_off_the_separator_count() {
     assert_eq!(classify(&t(&[1])), Class::Node);
     assert_eq!(classify(&t(&[1, 2, 3])), Class::Node); // any zero-free sequence
     assert_eq!(classify(&t(&[1, 0, 2])), Class::Account);
-    assert_eq!(classify(&t(&[1, 0, 2, 0, 5])), Class::Document);
-    assert_eq!(classify(&t(&[1, 0, 2, 0, 5, 3])), Class::Document); // versioned document
-    assert_eq!(classify(&t(&[1, 0, 2, 0, 5, 0, 1, 9])), Class::Element);
+    assert_eq!(classify(&t(&[1, 0, 2, 0, 67])), Class::Document);
+    assert_eq!(classify(&t(&[1, 0, 2, 0, 67, 3])), Class::Document); // versioned document
+    assert_eq!(classify(&t(&[1, 0, 2, 0, 67, 0, 1, 9])), Class::Element);
 }
 
 /// The Partition embedding is a conversion, so a caller holding a `Level` can
@@ -185,8 +185,8 @@ fn every_level_embeds_as_its_class() {
     let pairs = [
         (Level::Node, Class::Node, t(&[1])),
         (Level::Account, Class::Account, t(&[1, 0, 2])),
-        (Level::Document, Class::Document, t(&[1, 0, 2, 0, 5])),
-        (Level::Element, Class::Element, t(&[1, 0, 2, 0, 5, 0, 1, 9])),
+        (Level::Document, Class::Document, t(&[1, 0, 2, 0, 67])),
+        (Level::Element, Class::Element, t(&[1, 0, 2, 0, 67, 0, 1, 9])),
     ];
     for (level, class, example) in pairs {
         assert_eq!(Class::from(level), class);
@@ -205,8 +205,8 @@ fn classification_answers_key_a_map() {
         addr(&[1]),
         addr(&[2]),
         addr(&[1, 0, 2]),
-        addr(&[1, 0, 2, 0, 5]),
-        addr(&[1, 0, 2, 0, 5, 0, 1, 9]),
+        addr(&[1, 0, 2, 0, 67]),
+        addr(&[1, 0, 2, 0, 67, 0, 1, 9]),
     ] {
         by_level.entry(a.level()).or_default().push(a);
     }
@@ -229,16 +229,16 @@ fn classify_rejects_each_t4_clause() {
     assert_eq!(classify(&t(&[0, 1])), Class::Invalid); // leading zero
     assert_eq!(classify(&t(&[1, 0])), Class::Invalid); // trailing zero
     assert_eq!(classify(&t(&[1, 0, 0, 2])), Class::Invalid); // adjacent zeros
-    assert_eq!(classify(&t(&[1, 0, 2, 0, 3, 0, 4, 0, 5])), Class::Invalid); // over depth
+    assert_eq!(classify(&t(&[1, 0, 2, 0, 65, 0, 4, 0, 5])), Class::Invalid); // over depth
     assert!(is_t4_valid(&t(&[1, 0, 2])));
     assert!(!is_t4_valid(&t(&[0, 1])));
 }
 
 #[test]
 fn validate_mints_classified_addresses() {
-    let a = validate(t(&[1, 0, 2, 0, 5, 0, 1, 9])).unwrap();
+    let a = validate(t(&[1, 0, 2, 0, 67, 0, 1, 9])).unwrap();
     assert_eq!(a.level(), Level::Element);
-    assert_eq!(a.tumbler(), &t(&[1, 0, 2, 0, 5, 0, 1, 9]));
+    assert_eq!(a.tumbler(), &t(&[1, 0, 2, 0, 67, 0, 1, 9]));
 }
 
 #[test]
@@ -253,7 +253,7 @@ fn validate_reports_the_violated_clauses() {
     assert_eq!(e.clauses().len(), 3);
     assert!(e.clauses().contains(&T4Clause::AdjacentZeros));
     // Over-depth garbage reports OverDepth.
-    let e = validate(t(&[1, 0, 2, 0, 3, 0, 4, 0, 5])).unwrap_err();
+    let e = validate(t(&[1, 0, 2, 0, 65, 0, 4, 0, 5])).unwrap_err();
     assert!(e.clauses().contains(&T4Clause::OverDepth));
 }
 
@@ -343,7 +343,7 @@ fn t4_error_renders_every_violated_clause() {
     );
     // The fourth clause, which co-occurs with none of the others: four
     // separators, with no leading, trailing or adjacent zero.
-    let e = validate(t(&[1, 0, 2, 0, 3, 0, 4, 0, 5])).unwrap_err();
+    let e = validate(t(&[1, 0, 2, 0, 65, 0, 4, 0, 5])).unwrap_err();
     assert_eq!(e.clauses(), &[T4Clause::OverDepth][..]);
     assert_eq!(
         e.to_string(),
@@ -357,7 +357,7 @@ fn address_orders_by_the_tumbler_order() {
     v.sort();
     assert_eq!(v, vec![addr(&[1]), addr(&[1, 0, 2]), addr(&[2])]);
     // `level` plays no part: an Element sorts directly under its Document.
-    assert!(addr(&[1, 0, 2, 0, 5]) < addr(&[1, 0, 2, 0, 5, 0, 1, 9]));
+    assert!(addr(&[1, 0, 2, 0, 67]) < addr(&[1, 0, 2, 0, 67, 0, 1, 9]));
 }
 
 /// The order is `Ord`, not a comparator every caller supplies: an `Address`
@@ -385,8 +385,8 @@ fn address_keys_an_ordered_collection_directly() {
 fn tumblers_and_addresses_key_a_hash_map() {
     // One value, two construction paths: the public constructor, and the
     // internal one every arithmetic result comes out of.
-    let literal = t(&[1, 0, 2, 0, 6]);
-    let computed = inc(&t(&[1, 0, 2, 0, 5]), 0);
+    let literal = t(&[1, 0, 2, 0, 68]);
+    let computed = inc(&t(&[1, 0, 2, 0, 67]), 0);
     assert_eq!(literal, computed);
     let mut by_tumbler: HashMap<Tumbler, &str> = HashMap::new();
     by_tumbler.insert(literal, "here");
@@ -401,8 +401,8 @@ fn tumblers_and_addresses_key_a_hash_map() {
 
     // An Address hashes as its tumbler, so the same two paths agree for it.
     let mut by_address: HashMap<Address, &str> = HashMap::new();
-    by_address.insert(addr(&[1, 0, 2, 0, 5]), "doc");
-    let minted = checked_inc(&addr(&[1, 0, 2, 0, 4]), 0).unwrap();
+    by_address.insert(addr(&[1, 0, 2, 0, 67]), "doc");
+    let minted = checked_inc(&addr(&[1, 0, 2, 0, 66]), 0).unwrap();
     assert_eq!(by_address.get(&minted), Some(&"doc"));
 }
 
@@ -410,15 +410,15 @@ fn tumblers_and_addresses_key_a_hash_map() {
 
 #[test]
 fn field_projections_return_the_components_between_the_separators() {
-    let e = addr(&[1, 0, 2, 0, 5, 0, 1, 9]);
+    let e = addr(&[1, 0, 2, 0, 67, 0, 1, 9]);
     assert_eq!(e.node_field(), &[n(1)][..]);
     assert_eq!(e.account_field().unwrap(), &[n(2)][..]);
-    assert_eq!(e.document_field().unwrap(), &[n(5)][..]);
+    assert_eq!(e.document_field().unwrap(), &[n(67)][..]);
     assert_eq!(e.element_field().unwrap(), &[n(1), n(9)][..]);
     assert_eq!(e.subspace(), Some(&content_subspace())); // T7: the content subspace
 
-    let d = addr(&[1, 0, 2, 0, 5, 3]);
-    assert_eq!(d.document_field().unwrap(), &[n(5), n(3)][..]); // version components included
+    let d = addr(&[1, 0, 2, 0, 67, 3]);
+    assert_eq!(d.document_field().unwrap(), &[n(67), n(3)][..]); // version components included
     assert_eq!(d.element_field(), None);
     assert_eq!(d.subspace(), None);
 
@@ -438,10 +438,10 @@ fn field_projections_carve_the_address_at_its_separators() {
     let battery = [
         addr(&[1, 2]),
         addr(&[1, 0, 2]),
-        addr(&[1, 0, 2, 0, 5]),
-        addr(&[1, 0, 2, 0, 5, 3]),
-        addr(&[1, 0, 2, 0, 5, 0, 1, 9]),
-        addr(&[1, 0, 2, 0, 5, 0, 2, 4, 7]),
+        addr(&[1, 0, 2, 0, 67]),
+        addr(&[1, 0, 2, 0, 67, 3]),
+        addr(&[1, 0, 2, 0, 67, 0, 1, 9]),
+        addr(&[1, 0, 2, 0, 67, 0, 2, 4, 7]),
     ];
     for a in &battery {
         let z = zeros(a.tumbler());
@@ -465,8 +465,8 @@ fn field_projections_carve_the_address_at_its_separators() {
 /// which subspace it names rather than by a numeral each caller re-derives.
 #[test]
 fn the_two_subspaces_are_named() {
-    let content = addr(&[1, 0, 2, 0, 5, 0, 1, 9]);
-    let link = addr(&[1, 0, 2, 0, 5, 0, 2, 4]);
+    let content = addr(&[1, 0, 2, 0, 67, 0, 1, 9]);
+    let link = addr(&[1, 0, 2, 0, 67, 0, 2, 4]);
     assert_eq!(content.subspace(), Some(&content_subspace()));
     assert_eq!(link.subspace(), Some(&link_subspace()));
     assert_ne!(content_subspace(), link_subspace()); // disjoint by 1 < 2 (T7)
@@ -474,14 +474,14 @@ fn the_two_subspaces_are_named() {
     // Both are mint-side too: the numeral an element field opens with is the
     // one `ElemPos` carries into it.
     let minted = elem_addr(ElemPos {
-        doc: addr(&[1, 0, 2, 0, 5]),
+        doc: addr(&[1, 0, 2, 0, 67]),
         subspace: link_subspace(),
         ordinal: n(4),
     })
     .unwrap();
     assert_eq!(minted, link);
     // An address below Element level names no subspace at all.
-    assert_eq!(addr(&[1, 0, 2, 0, 5]).subspace(), None);
+    assert_eq!(addr(&[1, 0, 2, 0, 67]).subspace(), None);
 }
 
 // ---- T6 a–d: containment ----------------------------------------------------
@@ -494,13 +494,13 @@ fn containment_battery() -> Vec<Address> {
         addr(&[1]),
         addr(&[1, 2]),
         addr(&[1, 0, 2]),
-        addr(&[1, 0, 2, 0, 5]),
-        addr(&[1, 0, 2, 0, 5, 3]),
-        addr(&[1, 0, 2, 0, 5, 0, 1, 9]),
-        addr(&[1, 0, 2, 0, 6]),
-        addr(&[1, 0, 2, 0, 6, 0, 2, 4]),
-        addr(&[1, 0, 3, 0, 5]),
-        addr(&[2, 0, 2, 0, 5, 0, 1, 9]),
+        addr(&[1, 0, 2, 0, 67]),
+        addr(&[1, 0, 2, 0, 67, 3]),
+        addr(&[1, 0, 2, 0, 67, 0, 1, 9]),
+        addr(&[1, 0, 2, 0, 68]),
+        addr(&[1, 0, 2, 0, 68, 0, 2, 4]),
+        addr(&[1, 0, 3, 0, 67]),
+        addr(&[2, 0, 2, 0, 67, 0, 1, 9]),
     ]
 }
 
@@ -514,16 +514,16 @@ fn containment_field_absence_is_decisive() {
     // T6(c)/(d): an account has no document field on either side.
     let acct = addr(&[1, 0, 2]);
     assert!(!same_document(&acct, &acct));
-    let d = addr(&[1, 0, 2, 0, 5]);
+    let d = addr(&[1, 0, 2, 0, 67]);
     assert!(!under_document(&acct, &d));
 }
 
 #[test]
 fn containment_holds_under_the_document_and_fails_across_siblings() {
-    let d = addr(&[1, 0, 2, 0, 5]);
-    let v = addr(&[1, 0, 2, 0, 5, 3]); // a version of d
-    let e = addr(&[1, 0, 2, 0, 5, 0, 1, 9]); // an element under d
-    let other = addr(&[1, 0, 2, 0, 6]); // a sibling document
+    let d = addr(&[1, 0, 2, 0, 67]);
+    let v = addr(&[1, 0, 2, 0, 67, 3]); // a version of d
+    let e = addr(&[1, 0, 2, 0, 67, 0, 1, 9]); // an element under d
+    let other = addr(&[1, 0, 2, 0, 68]); // a sibling document
 
     assert!(same_node(&d, &other));
     assert!(same_account(&d, &other));
@@ -543,9 +543,9 @@ fn containment_holds_under_the_document_and_fails_across_siblings() {
 /// document number.
 #[test]
 fn containment_requires_agreement_at_every_enclosing_level() {
-    let a = addr(&[1, 0, 2, 0, 5]);
-    let cross_node = addr(&[2, 0, 2, 0, 5]); // same U and D, different N
-    let cross_acct = addr(&[1, 0, 3, 0, 5]); // same N and D, different U
+    let a = addr(&[1, 0, 2, 0, 67]);
+    let cross_node = addr(&[2, 0, 2, 0, 67]); // same U and D, different N
+    let cross_acct = addr(&[1, 0, 3, 0, 67]); // same N and D, different U
 
     assert!(!same_node(&a, &cross_node));
     assert!(same_node(&a, &cross_acct));
@@ -557,8 +557,8 @@ fn containment_requires_agreement_at_every_enclosing_level() {
     assert!(!same_document(&a, &cross_acct)); // T6(c) conjoins U
 
     // Another node's like-numbered document encloses nothing of a's.
-    assert!(!under_document(&addr(&[2, 0, 2, 0, 5, 0, 1, 9]), &a));
-    assert!(!under_document(&addr(&[1, 0, 3, 0, 5, 0, 1, 9]), &a));
+    assert!(!under_document(&addr(&[2, 0, 2, 0, 67, 0, 1, 9]), &a));
+    assert!(!under_document(&addr(&[1, 0, 3, 0, 67, 0, 1, 9]), &a));
 }
 
 /// T6(b)/(c) read straight from their clauses — `N, U equal` and
@@ -612,12 +612,12 @@ fn under_document_agrees_with_document_of() {
 
 #[test]
 fn parent_peels_one_structural_step() {
-    let e = addr(&[1, 0, 2, 0, 5, 0, 1, 9]);
+    let e = addr(&[1, 0, 2, 0, 67, 0, 1, 9]);
     let sub_base = parent(&e).unwrap();
-    assert_eq!(sub_base.tumbler(), &t(&[1, 0, 2, 0, 5, 0, 1]));
+    assert_eq!(sub_base.tumbler(), &t(&[1, 0, 2, 0, 67, 0, 1]));
     assert_eq!(sub_base.level(), Level::Element); // still Element-class: NOT a level-coarsening
     let doc = parent(&sub_base).unwrap();
-    assert_eq!(doc.tumbler(), &t(&[1, 0, 2, 0, 5]));
+    assert_eq!(doc.tumbler(), &t(&[1, 0, 2, 0, 67]));
     assert_eq!(doc.level(), Level::Document);
     let acct = parent(&doc).unwrap();
     assert_eq!(acct.tumbler(), &t(&[1, 0, 2]));
@@ -629,16 +629,16 @@ fn parent_peels_one_structural_step() {
     assert_eq!(parent(&addr(&[1, 2])).unwrap().tumbler(), &t(&[1]));
     // A versioned document peels to its base document.
     assert_eq!(
-        parent(&addr(&[1, 0, 2, 0, 5, 3])).unwrap().tumbler(),
-        &t(&[1, 0, 2, 0, 5])
+        parent(&addr(&[1, 0, 2, 0, 67, 3])).unwrap().tumbler(),
+        &t(&[1, 0, 2, 0, 67])
     );
 }
 
 #[test]
 fn document_of_truncates_to_the_origin_document() {
-    let e = addr(&[1, 0, 2, 0, 5, 0, 1, 9]);
+    let e = addr(&[1, 0, 2, 0, 67, 0, 1, 9]);
     let d = document_of(&e).unwrap();
-    assert_eq!(d.tumbler(), &t(&[1, 0, 2, 0, 5]));
+    assert_eq!(d.tumbler(), &t(&[1, 0, 2, 0, 67]));
     assert_eq!(d.level(), Level::Document);
     assert_eq!(document_of(&d), Some(d.clone())); // a Document input returns itself
     assert_eq!(document_of(&addr(&[1, 0, 2])), None); // zeros < 2
@@ -646,7 +646,7 @@ fn document_of_truncates_to_the_origin_document() {
 
 #[test]
 fn ordinal_is_the_last_component_and_level_is_not_a_count() {
-    assert_eq!(ordinal(&t(&[1, 0, 2, 0, 5, 3])), &n(3));
+    assert_eq!(ordinal(&t(&[1, 0, 2, 0, 67, 3])), &n(3));
     assert_eq!(ordinal(&t(&[7])), &n(7));
     // The hierarchical level is the enum, never a numeric nesting count: this
     // three-component address reads as Account, not as 3.

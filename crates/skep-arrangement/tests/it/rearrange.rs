@@ -98,7 +98,7 @@ fn rearrange_swap_exchanges_the_outer_regions_around_the_middle() {
 fn rearrange_rejects_in_documented_order() {
     let k = mem_kernel();
     let vs = insert_abc(&k);
-    let unregistered_doc = a(&[1, 0, 1, 0, 9]);
+    let unregistered_doc = a(&[1, 0, 1, 0, 71]);
     assert!(matches!(
         rejected(vs.rearrange(P1, &unregistered_doc, &[vp(1, 1), vp(1, 2), vp(1, 3)], now(&k))),
         RearrangeError::DocNotRegistered

@@ -299,7 +299,7 @@ fn pi_from_the_feed_alone_is_effective_owners_answer_for_every_minted_prefix() {
     // the derivation a mirror makes from these rows, checked against the
     // board's own: a document under A.1 is A.1's, not A's.
     assert_eq!(effective_owner(port, None, &format!("{a1}.0.1")), Some((a1.clone(), 3)));
-    assert_eq!(effective_owner(port, None, &format!("{a}.0.9")), Some((a.clone(), 1)));
+    assert_eq!(effective_owner(port, None, &format!("{a}.0.71")), Some((a.clone(), 1)));
     sd.shutdown();
 }
 

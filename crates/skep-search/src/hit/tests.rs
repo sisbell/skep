@@ -41,9 +41,9 @@ fn leak(s: &str) -> &'static str {
 /// former, the node the latter.
 #[test]
 fn the_rung_is_the_ranges_own_shape() {
-    assert_eq!(Rung::of(&addr(&[1, 0, 2, 0, 4])), Rung::Document);
-    assert_eq!(Rung::of(&addr(&[1, 0, 2, 0, 4, 1])), Rung::Document, "a member");
-    assert_eq!(Rung::of(&addr(&[1, 0, 2, 0, 4, 0, 1, 7])), Rung::Document, "a position");
+    assert_eq!(Rung::of(&addr(&[1, 0, 2, 0, 66])), Rung::Document);
+    assert_eq!(Rung::of(&addr(&[1, 0, 2, 0, 66, 1])), Rung::Document, "a member");
+    assert_eq!(Rung::of(&addr(&[1, 0, 2, 0, 66, 0, 1, 7])), Rung::Document, "a position");
     assert_eq!(Rung::of(&addr(&[1, 0, 2])), Rung::Account);
     assert_eq!(Rung::of(&addr(&[1])), Rung::Account, "the node, the coarser");
 }
@@ -122,7 +122,7 @@ fn a_multi_byte_character_at_the_bound_is_never_split() {
 /// same, at width one.
 #[test]
 fn a_gap_inside_the_window_is_cut_out_and_marked() {
-    let origin = addr(&[1, 0, 2, 0, 9]);
+    let origin = addr(&[1, 0, 2, 0, 71]);
     let u = unit(vec![
         Item::Text { start: 1, bytes: b"alpha ".to_vec() },
         Item::Gap { start: 7, width: 5, kind: GapKind::Withheld { origin } },

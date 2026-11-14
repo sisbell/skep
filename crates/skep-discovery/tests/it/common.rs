@@ -216,28 +216,28 @@ pub fn doc1() -> Address {
     a(&[1, 0, 1, 0, 1])
 }
 
-/// Document 2: `[1,0,1,0,2]`.
+/// Doc2, the account's second document: [`doc`]`(2)`.
 pub fn doc2() -> Address {
-    a(&[1, 0, 1, 0, 2])
+    doc(2)
 }
 
-/// The PUBLISHED document: `[1,0,1,0,3]`. Its readers answer from its trunk
-/// head once it has one (head-float, PUB-2.53), and content enters it only as
-/// a declared deposit ([`seed_published_content`]).
+/// The PUBLISHED document, the account's third: [`doc`]`(3)`. Its readers
+/// answer from its trunk head once it has one (head-float, PUB-2.53), and
+/// content enters it only as a declared deposit ([`seed_published_content`]).
 pub fn pdoc() -> Address {
-    a(&[1, 0, 1, 0, 3])
+    doc(3)
 }
 
-/// `pdoc`'s first trunk member, `[1,0,1,0,3,1]` — its head, once VERSION
-/// mints it.
+/// `pdoc`'s first trunk member, `[1,0,1,0,nth_doc(3),1]` — its head, once
+/// VERSION mints it.
 pub fn phead() -> Address {
-    a(&[1, 0, 1, 0, 3, 1])
+    a(&[1, 0, 1, 0, nth_doc(3), 1])
 }
 
-/// An UNREGISTERED document address: `[1,0,1,0,7]` (the account chain's
-/// frontier is 3, so 7 is beyond it).
+/// An UNREGISTERED document address: `[1,0,1,0,69]` (the account chain's
+/// frontier is its third document, [`pdoc`], so 69 is beyond it).
 pub fn unregistered_doc() -> Address {
-    a(&[1, 0, 1, 0, 7])
+    a(&[1, 0, 1, 0, 69])
 }
 
 /// doc1 content element `k`: `[1,0,1,0,1,0,1,k]`.
@@ -245,15 +245,15 @@ pub fn ca(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 1, 0, 1, ordinal])
 }
 
-/// pdoc content element `k`: `[1,0,1,0,3,0,1,k]` — minted under pdoc's own
+/// pdoc content element `k`: [`doc_ca`]`(3, k)` — minted under pdoc's own
 /// content chain wherever the deposit that minted it was placed.
 pub fn pca(ordinal: u32) -> Address {
-    a(&[1, 0, 1, 0, 3, 0, 1, ordinal])
+    doc_ca(3, ordinal)
 }
 
-/// doc2 content element `k`: `[1,0,1,0,2,0,1,k]`.
+/// doc2 content element `k`: [`doc_ca`]`(2, k)`.
 pub fn ca2(ordinal: u32) -> Address {
-    a(&[1, 0, 1, 0, 2, 0, 1, ordinal])
+    doc_ca(2, ordinal)
 }
 
 /// doc1 link element `k`: `[1,0,1,0,1,0,2,k]`.
@@ -261,9 +261,9 @@ pub fn la(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 1, 0, 2, ordinal])
 }
 
-/// doc2 link element `k`: `[1,0,1,0,2,0,2,k]`.
+/// doc2 link element `k`: [`doc_la`]`(2, k)`.
 pub fn la2(ordinal: u32) -> Address {
-    a(&[1, 0, 1, 0, 2, 0, 2, ordinal])
+    doc_la(2, ordinal)
 }
 
 /// Reserved type address `k` — ghost tumbler `[1,1,0,1,0,1,0,1,k]`, content
@@ -387,8 +387,8 @@ pub fn seeded_m3() -> M3State {
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1]), false))
         .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 1]), PrincipalId(1)))
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 1]), false))
-        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 2]), false))
-        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 3]), true))
+        .apply_m3(Seq(0), &M3Rec::allocate(doc(2), false))
+        .apply_m3(Seq(0), &M3Rec::allocate(doc(3), true))
 }
 
 pub fn genesis_world() -> World {
@@ -419,8 +419,8 @@ fn kernel_over(world: World) -> Kernel<World> {
 /// The account's `d`-th document, as its counter hands them out: doc1 at
 /// `[1,0,1,0,1]`, and the rest from `FIRST_ORDINARY_DOCUMENT` on, past the
 /// reserved block of well-known slots — the homes [`kernel_with_documents`]
-/// registers. The second and third are NOT the seeded fixture's [`doc2`] and
-/// [`pdoc`], which stand at slots of that block.
+/// registers. The second and third are the seeded fixture's [`doc2`] and
+/// [`pdoc`].
 pub fn doc(d: u32) -> Address {
     a(&[1, 0, 1, 0, if d == 1 { 1 } else { FIRST_ORDINARY_DOCUMENT + d - 2 }])
 }
@@ -437,6 +437,15 @@ pub fn doc_la(d: u32, ordinal: u32) -> Address {
     element_of(&doc(d), 2, ordinal)
 }
 
+/// The number of the account's `d`-th document, [`doc`]`(d)`'s last
+/// component: the document place of an address these fixtures spell below
+/// one of its documents, as [`phead`] does.
+pub fn nth_doc(d: u32) -> u32 {
+    let home = doc(d);
+    let place = home.tumbler().iter().next_back().expect("a document's address is nonempty");
+    u32::try_from(place).expect("a document's number is small")
+}
+
 /// Element `ordinal` of `doc`'s `subspace`: the document's components, the
 /// separator, the subspace and the ordinal.
 fn element_of(doc: &Address, subspace: u32, ordinal: u32) -> Address {
@@ -449,10 +458,9 @@ fn element_of(doc: &Address, subspace: u32, ordinal: u32) -> Address {
 /// under the account, [`doc`]`(1)` through [`doc`]`(count)`, each allocated
 /// at its chain's next ordinal as M3's fold requires — the many-homes fixture
 /// the cost laws read, where [`seeded_m3`]'s three documents cannot spread
-/// links over a thousand homes. Doc1 is the first, so every doc1 fixture
-/// address holds; no slot of the reserved block is filled, so [`doc2`] and
-/// [`pdoc`] are not registered here, and a test over this world names its
-/// second and third documents by [`doc`].
+/// links over a thousand homes. Doc1 and doc2 are the first two, so every
+/// fixture address of theirs holds; the third is private here where
+/// [`pdoc`] is published.
 pub fn kernel_with_documents(count: u32) -> Kernel<World> {
     let mut m3 = M3State::genesis()
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1]), false))

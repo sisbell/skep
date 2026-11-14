@@ -109,14 +109,14 @@ mod tests {
     #[test]
     fn a_deleted_needle_slices_out_of_the_runs_that_held_it() {
         let mut d = Deletions::default();
-        let (a, b) = (run(&[1, 0, 1, 0, 3, 0, 1, 1], 3), run(&[1, 0, 1, 0, 4, 0, 1, 5], 3));
+        let (a, b) = (run(&[1, 0, 1, 0, 65, 0, 1, 1], 3), run(&[1, 0, 1, 0, 66, 0, 1, 5], 3));
         d.record("doc", b"ABCDEF".to_vec(), vec![a.clone(), b.clone()]);
-        d.record("doc", b"XY".to_vec(), vec![run(&[1, 0, 1, 0, 3, 0, 1, 9], 2)]);
-        d.record("doc", Vec::new(), vec![run(&[1, 0, 1, 0, 3, 0, 1, 20], 1)]);
+        d.record("doc", b"XY".to_vec(), vec![run(&[1, 0, 1, 0, 65, 0, 1, 9], 2)]);
+        d.record("doc", Vec::new(), vec![run(&[1, 0, 1, 0, 65, 0, 1, 20], 1)]);
 
         assert_eq!(
             d.locate(b"CDE"),
-            Some(vec![run(&[1, 0, 1, 0, 3, 0, 1, 3], 1), run(&[1, 0, 1, 0, 4, 0, 1, 5], 2)])
+            Some(vec![run(&[1, 0, 1, 0, 65, 0, 1, 3], 1), run(&[1, 0, 1, 0, 66, 0, 1, 5], 2)])
         );
         assert_eq!(d.locate(b"QQ"), None);
         assert_eq!(d.bytes_of("doc"), vec![b"XY".to_vec(), b"ABCDEF".to_vec()]);
@@ -130,8 +130,8 @@ mod tests {
     #[test]
     fn a_needle_deleted_twice_locates_in_the_newer_deletion() {
         let mut d = Deletions::default();
-        d.record("doc", b"XAB".to_vec(), vec![run(&[1, 0, 1, 0, 3, 0, 1, 1], 3)]);
-        d.record("doc", b"AB".to_vec(), vec![run(&[1, 0, 1, 0, 3, 0, 1, 7], 2)]);
-        assert_eq!(d.locate(b"AB"), Some(vec![run(&[1, 0, 1, 0, 3, 0, 1, 7], 2)]));
+        d.record("doc", b"XAB".to_vec(), vec![run(&[1, 0, 1, 0, 65, 0, 1, 1], 3)]);
+        d.record("doc", b"AB".to_vec(), vec![run(&[1, 0, 1, 0, 65, 0, 1, 7], 2)]);
+        assert_eq!(d.locate(b"AB"), Some(vec![run(&[1, 0, 1, 0, 65, 0, 1, 7], 2)]));
     }
 }

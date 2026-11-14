@@ -67,7 +67,7 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
             Op::Reinstate {
                 doc: doc(),
                 at: vpos(),
-                runs: vec![run_of(&addr(&[1, 0, 1, 0, 2]), &[1, 0, 1, 0, 2, 0, 1, 1])],
+                runs: vec![run_of(&addr(&[1, 0, 1, 0, 64]), &[1, 0, 1, 0, 64, 0, 1, 1])],
                 as_of: Seq(7),
             },
             false,
@@ -77,10 +77,10 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
             Op::SetArrangement {
                 doc: doc(),
                 arrangement: SetArrangement {
-                    runs: vec![run_of(&addr(&[1, 0, 1, 0, 2]), &[1, 0, 1, 0, 2, 0, 1, 1])],
-                    head: Some(Base { member: addr(&[1, 0, 1, 0, 2, 1]), extent: Nat::from(1u32) }),
-                    base: Some(Base { member: addr(&[1, 0, 1, 0, 2, 1]), extent: Nat::from(1u32) }),
-                    merge: Some(SetMerge { sides: vec![addr(&[1, 0, 1, 0, 2, 1, 1])], at: None }),
+                    runs: vec![run_of(&addr(&[1, 0, 1, 0, 64]), &[1, 0, 1, 0, 64, 0, 1, 1])],
+                    head: Some(Base { member: addr(&[1, 0, 1, 0, 64, 1]), extent: Nat::from(1u32) }),
+                    base: Some(Base { member: addr(&[1, 0, 1, 0, 64, 1]), extent: Nat::from(1u32) }),
+                    merge: Some(SetMerge { sides: vec![addr(&[1, 0, 1, 0, 64, 1, 1])], at: None }),
                 },
                 as_of: Seq(7),
             },
@@ -223,7 +223,7 @@ fn a_successor_spec_is_a_value_the_comparison_macros_accept() {
         ty: SlotArg::Addrs(vec![addr(&[1, 0, 1, 0, ordinal])]),
     };
     assert_eq!(spec(1), spec(1), "a rebuilt successor is the same successor");
-    assert_ne!(spec(1), spec(2), "…and one with another type slot is a different one");
+    assert_ne!(spec(1), spec(64), "…and one with another type slot is a different one");
     assert_eq!(spec(1).clone(), spec(1), "a clone is the same successor too");
 }
 
@@ -277,8 +277,8 @@ fn a_request_of_an_op_alone_carries_neither_companion() {
 #[test]
 fn doc_arguments_run_in_declaration_order() {
     let d1 = addr(&[1, 0, 1, 0, 1]);
-    let d2 = addr(&[1, 0, 1, 0, 2]);
-    let d3 = addr(&[1, 0, 1, 0, 3]);
+    let d2 = addr(&[1, 0, 1, 0, 64]);
+    let d3 = addr(&[1, 0, 1, 0, 65]);
     let op = Op::ShowDeletions { d_a: d1.clone(), d_b: d2.clone() };
     assert_eq!(op.doc_arguments(), vec![&d1, &d2]);
     let op = Op::Compare {
@@ -346,13 +346,13 @@ fn doc_arguments_run_in_declaration_order() {
 #[test]
 fn only_the_read_by_identity_derives_documents_and_its_shape_is_refused_by_index() {
     let d1 = addr(&[1, 0, 1, 0, 1]);
-    let d2 = addr(&[1, 0, 1, 0, 2]);
-    let member = addr(&[1, 0, 1, 0, 2, 1]);
+    let d2 = addr(&[1, 0, 1, 0, 64]);
+    let member = addr(&[1, 0, 1, 0, 64, 1]);
     let op = Op::RetrieveI {
         spans: vec![
-            ispan(&[1, 0, 1, 0, 2, 0, 1, 7], 3),
+            ispan(&[1, 0, 1, 0, 64, 0, 1, 7], 3),
             ispan(&[1, 0, 1, 0, 1, 0, 1, 1], 1),
-            ispan(&[1, 0, 1, 0, 2, 1, 0, 1, 2], 2),
+            ispan(&[1, 0, 1, 0, 64, 1, 0, 1, 2], 2),
             // A link position derives its document too: M4 answers `None`
             // there, but the consult is the document's.
             ispan(&[1, 0, 1, 0, 1, 0, 2, 1], 1),
@@ -367,7 +367,7 @@ fn only_the_read_by_identity_derives_documents_and_its_shape_is_refused_by_index
         (&[1][..], ISpanFault::NoElementPosition),
         (&[1, 0, 1][..], ISpanFault::NoElementPosition),
         (&[1, 0, 1, 0, 1][..], ISpanFault::NoElementPosition),
-        (&[1, 0, 1, 0, 2, 1][..], ISpanFault::NoElementPosition),
+        (&[1, 0, 1, 0, 64, 1][..], ISpanFault::NoElementPosition),
     ] {
         let op =
             Op::RetrieveI { spans: vec![ispan(&[1, 0, 1, 0, 1, 0, 1, 1], 1), ispan(start, 1)] };
@@ -402,12 +402,12 @@ fn only_the_read_by_identity_derives_documents_and_its_shape_is_refused_by_index
 #[test]
 fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
     let d1 = addr(&[1, 0, 1, 0, 1]);
-    let d2 = addr(&[1, 0, 1, 0, 2]);
-    let d3 = addr(&[1, 0, 1, 0, 3]);
+    let d2 = addr(&[1, 0, 1, 0, 64]);
+    let d3 = addr(&[1, 0, 1, 0, 65]);
     let spec = |d: &Address| VSpec { source: d.clone(), span: vspan() };
     // A content I-span inside d2: positions the writer may or may not read,
     // and a slot the door consults nothing for either way.
-    let ispan_in_d2 = Span::new(tum(&[1, 0, 1, 0, 2, 0, 1, 1]), tum(&[0, 0, 0, 0, 0, 0, 0, 2]))
+    let ispan_in_d2 = Span::new(tum(&[1, 0, 1, 0, 64, 0, 1, 1]), tum(&[0, 0, 0, 0, 0, 0, 0, 2]))
         .expect("a content I-span");
 
     let op = Op::Copy { doc: d1.clone(), at: vpos(), specs: vec![spec(&d2), spec(&d3)], as_of: Seq(7) };
@@ -420,10 +420,10 @@ fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
         doc: d1.clone(),
         at: vpos(),
         runs: vec![
-            run_of(&d3, &[1, 0, 1, 0, 3, 0, 1, 1]),
+            run_of(&d3, &[1, 0, 1, 0, 65, 0, 1, 1]),
             run_of(&d1, &[1, 0, 1, 0, 1, 0, 1, 1]),
-            run_of(&d2, &[1, 0, 1, 0, 2, 0, 1, 4]),
-            run_of(&d3, &[1, 0, 1, 0, 3, 0, 1, 7]),
+            run_of(&d2, &[1, 0, 1, 0, 64, 0, 1, 4]),
+            run_of(&d3, &[1, 0, 1, 0, 65, 0, 1, 7]),
             run_of(&member_of_d1, &[1, 0, 1, 0, 1, 1, 0, 1, 1]),
         ],
         as_of: Seq(7),
@@ -446,14 +446,14 @@ fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
         doc: d1.clone(),
         arrangement: SetArrangement {
             runs: vec![
-                run_of(&d3, &[1, 0, 1, 0, 3, 0, 1, 1]),
+                run_of(&d3, &[1, 0, 1, 0, 65, 0, 1, 1]),
                 run_of(&d1, &[1, 0, 1, 0, 1, 0, 1, 1]),
-                run_of(&d2, &[1, 0, 1, 0, 2, 0, 1, 4]),
-                run_of(&d3, &[1, 0, 1, 0, 3, 0, 1, 7]),
+                run_of(&d2, &[1, 0, 1, 0, 64, 0, 1, 4]),
+                run_of(&d3, &[1, 0, 1, 0, 65, 0, 1, 7]),
             ],
-            head: Some(Base { member: addr(&[1, 0, 1, 0, 9, 1]), extent: Nat::from(1u32) }),
-            base: Some(Base { member: addr(&[1, 0, 1, 0, 9, 1]), extent: Nat::from(1u32) }),
-            merge: Some(SetMerge { sides: vec![addr(&[1, 0, 1, 0, 8]), addr(&[1, 0, 1, 0, 7])], at: None }),
+            head: Some(Base { member: addr(&[1, 0, 1, 0, 71, 1]), extent: Nat::from(1u32) }),
+            base: Some(Base { member: addr(&[1, 0, 1, 0, 71, 1]), extent: Nat::from(1u32) }),
+            merge: Some(SetMerge { sides: vec![addr(&[1, 0, 1, 0, 70]), addr(&[1, 0, 1, 0, 69])], at: None }),
         },
         as_of: Seq(7),
     };

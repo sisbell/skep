@@ -54,7 +54,7 @@ fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
     // home in doc1 — refused the same way, naming doc2.
     let k = kernel();
     let mut c = coord_with_guest(&k, refuse_doc2());
-    let in_doc2 = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let in_doc2 = a(&[1, 0, 1, 0, nth_doc(2), 0, 1, 1]);
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &in_doc2, &[]).expect("rel");
     let rule = Rule {
         domain: Dom::MembersDom(concrete(&pred_stable_ty())),
@@ -97,7 +97,7 @@ fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
     // class also refuses.
     let k = kernel();
     let mut c = coord_with_guest(&k, |_, d| *d != doc2() && *d != published_doc());
-    let in_doc2 = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let in_doc2 = a(&[1, 0, 1, 0, nth_doc(2), 0, 1, 1]);
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &in_doc2, &[]).expect("rel");
     c.register_rule(Rule {
         domain: Dom::MembersDom(concrete(&pred_stable_ty())),

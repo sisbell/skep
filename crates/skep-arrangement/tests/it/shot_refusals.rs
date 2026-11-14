@@ -77,7 +77,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
     let sub = Caller::Principal(PrincipalId(3));
     let subdoc = a(&[1, 0, 1, 1, 0, 1]);
     vs.insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared, now(&k)).expect("subdoc");
-    let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let w = a(&[1, 0, 1, 0, nth_doc(2), 0, 1, 1]);
     let sca = a(&[1, 0, 1, 1, 0, 1, 0, 1, 1]);
     // Every origin a consult is asked about, in the order asked.
     let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
@@ -164,7 +164,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
         )
         .expect("carried runs need no consult");
     assert_eq!(asked.borrow().as_slice(), &[] as &[Address], "every run was carried by the base");
-    assert_eq!(member2, a(&[1, 0, 1, 0, 3, 2]));
+    assert_eq!(member2, a(&[1, 0, 1, 0, nth_doc(3), 2]));
     // (4) existence, behind the gate: a readable origin's non-existent
     //     address answers dangling.
     assert!(matches!(
@@ -208,7 +208,7 @@ fn the_consult_is_asked_once_per_origin_in_run_order_and_stops_at_the_first_refu
     let sub = Caller::Principal(PrincipalId(3));
     let subdoc = a(&[1, 0, 1, 1, 0, 1]);
     vs.insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared, now(&k)).expect("subdoc");
-    let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let w = a(&[1, 0, 1, 0, nth_doc(2), 0, 1, 1]);
     let sca = a(&[1, 0, 1, 1, 0, 1, 0, 1, 1]);
     assert!(doc2() < subdoc, "the address order the run orders below reverse");
     let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
@@ -281,7 +281,7 @@ fn the_consult_is_asked_once_per_origin_in_run_order_and_stops_at_the_first_refu
         )
         .expect("the edition's own I-space takes no consult, whichever member names the shot");
     assert!(asked.borrow().is_empty(), "nothing was asked");
-    assert_eq!(member2, a(&[1, 0, 1, 0, 3, 2]));
+    assert_eq!(member2, a(&[1, 0, 1, 0, nth_doc(3), 2]));
     assert_eq!(k.snapshot().world().m5().content_count(&member2), n(3));
 }
 
@@ -298,7 +298,7 @@ fn carried_ness_is_judged_per_supplied_run_over_its_whole_i_extent() {
     let vs = deposit_abc(&k);
     vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w"), val(b"x")], Deposit::Undeclared, now(&k))
         .expect("doc2 holds w, x");
-    let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let w = a(&[1, 0, 1, 0, nth_doc(2), 0, 1, 1]);
     let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
     let admitting = recording_consult(&asked, vec![doc2()]);
     let (member1, _) = vs
@@ -318,7 +318,7 @@ fn carried_ness_is_judged_per_supplied_run_over_its_whole_i_extent() {
     let (y, _) = vs
         .insert(P1, &doc2(), vp(1, 3), vec![val(b"y")], Deposit::Undeclared, now(&k))
         .expect("doc2 grows y");
-    assert_eq!(y, a(&[1, 0, 1, 0, 2, 0, 1, 3]), "y continues w..x's I-extent");
+    assert_eq!(y, a(&[1, 0, 1, 0, nth_doc(2), 0, 1, 3]), "y continues w..x's I-extent");
     let refusing = recording_consult(&asked, vec![]);
     let shot_off_member1 = |runs: Vec<ShotRun>| Shot { base: Some(base(&member1, 5)), draft: None, also: vec![], keep_base: false, runs };
     let before = k.current_seq();
@@ -376,8 +376,8 @@ fn a_run_bridging_a_gap_in_what_the_base_arranges_is_not_carried() {
     let vs = deposit_abc(&k);
     vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w"), val(b"x"), val(b"y")], Deposit::Undeclared, now(&k))
         .expect("doc2 holds w, x, y");
-    let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
-    let y = a(&[1, 0, 1, 0, 2, 0, 1, 3]);
+    let w = a(&[1, 0, 1, 0, nth_doc(2), 0, 1, 1]);
+    let y = a(&[1, 0, 1, 0, nth_doc(2), 0, 1, 3]);
     let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
     let admitting = recording_consult(&asked, vec![doc2()]);
     let (member1, _) = vs
@@ -459,7 +459,7 @@ fn the_carried_test_answers_a_run_of_the_wires_largest_width_without_searching_i
         )
         .expect("the head arranges the edition's three positions");
     let widest = Nat::from(10u32).pow(4096) - n(1);
-    let never_minted = a(&[1, 0, 1, 0, 2, 1, 0, 1, 1]); // doc2's member's first element
+    let never_minted = a(&[1, 0, 1, 0, 64, 1, 0, 1, 1]); // doc2's member's first element
     let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
     let admitting = recording_consult(&asked, vec![doc2()]);
     let before = k.current_seq();
@@ -561,7 +561,7 @@ fn the_existence_walk_probes_the_union_of_the_runs_and_misses_no_address_of_any(
         now(&k),
     )
     .expect("doc2 holds w, x");
-    let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let w = a(&[1, 0, 1, 0, nth_doc(2), 0, 1, 1]);
     let readable = readable_by(PrincipalId(1));
     let shot = |widths: [u32; 3]| Shot {
         base: Some(base(&pdoc(), 3)),
@@ -712,7 +712,7 @@ fn a_draft_the_caller_does_not_own_is_refused_at_the_shots_own_door() {
         PublishError::NotOwner(d) if d == subdoc
     ));
     // (d): right after the draft's registration, ahead of the runs.
-    let unregistered = a(&[1, 0, 1, 1, 0, 9]);
+    let unregistered = a(&[1, 0, 1, 1, 0, 71]);
     assert!(matches!(
         rejected(vs.publish(
             P1,
@@ -770,7 +770,7 @@ fn an_also_draft_the_caller_does_not_own_is_refused_after_the_drafts_own_check_a
     let (start, _) = vs
         .insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared, now(&k))
         .expect("the sub-account's draft holds a byte");
-    let unregistered = a(&[1, 0, 1, 1, 0, 9]);
+    let unregistered = a(&[1, 0, 1, 1, 0, 71]);
     let anyone = |_: &World, _: &Address| true;
     let own_class = readable_by(PrincipalId(1));
     let family = |draft: Address, also: Vec<Address>, runs: Vec<ShotRun>| Shot { base: Some(base(&pdoc(), 3)), draft: Some(draft), also, keep_base: false, runs };
@@ -918,7 +918,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
     let readable = readable_by(PrincipalId(1));
     let before = k.current_seq();
     let plain = |runs: Vec<ShotRun>| Shot { base: None, draft: None, also: vec![], keep_base: false, runs };
-    let unregistered_doc = a(&[1, 0, 1, 0, 9]);
+    let unregistered_doc = a(&[1, 0, 1, 0, 71]);
     // A private document has no chain (PUB-2.9).
     assert!(matches!(
         rejected(vs.publish(P1, &doc1(), &plain(vec![shot_run(&doc1(), &ca(1), 1)]), &readable)),
@@ -974,7 +974,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &plain(vec![shot_run(&unregistered_doc, &a(&[1, 0, 1, 0, 9, 0, 1, 1]), 1)]),
+            &plain(vec![shot_run(&unregistered_doc, &a(&[1, 0, 1, 0, 71, 0, 1, 1]), 1)]),
             &readable
         )),
         PublishError::SourceNotRegistered
@@ -1059,7 +1059,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
             &pdoc(),
             &plain(vec![
                 shot_run(&doc2(), &ca(1), 1),
-                shot_run(&unregistered_doc, &a(&[1, 0, 1, 0, 9, 0, 1, 1]), 1),
+                shot_run(&unregistered_doc, &a(&[1, 0, 1, 0, 71, 0, 1, 1]), 1),
             ]),
             &readable
         )),
@@ -1100,7 +1100,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         PublishError::BaseExtentTooLarge
     ));
     assert_eq!(k.current_seq(), after, "every refusal is a clean no-op");
-    assert!(!k.snapshot().world().m3().is_registered_document(&a(&[1, 0, 1, 0, 3, 2])), "no member was minted");
+    assert!(!k.snapshot().world().m3().is_registered_document(&a(&[1, 0, 1, 0, 65, 2])), "no member was minted");
     // Named by the member, the shot is still the document's (PUB-2.15): a
     // base naming the document itself, whichever chain address names the
     // shot, is a draft begun before any version, and the shot LANDS as the
@@ -1116,10 +1116,10 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
             &readable,
         )
         .expect("the bare base lands as the first member's daughter");
-    assert_eq!(daughter, a(&[1, 0, 1, 0, 3, 1, 1]), "beside version 1, under it");
+    assert_eq!(daughter, a(&[1, 0, 1, 0, nth_doc(3), 1, 1]), "beside version 1, under it");
     assert_eq!(k.snapshot().world().m5().content_count(&daughter), n(0), "no runs, and nothing of the bare document past its extent");
     assert_eq!(reading_surface(k.snapshot().world().m3(), &pdoc()), member1, "a daughter moves no head");
-    assert!(!k.snapshot().world().m3().is_registered_document(&a(&[1, 0, 1, 0, 3, 2])), "no trunk member was minted");
+    assert!(!k.snapshot().world().m3().is_registered_document(&a(&[1, 0, 1, 0, 65, 2])), "no trunk member was minted");
     // Named, the member is a base — and a shot with no runs lands an EMPTY
     // member, read as the lazy empty arrangement.
     let (member2, _) = vs
@@ -1188,12 +1188,12 @@ fn a_shot_named_by_a_member_is_gated_as_named_and_judged_as_its_document() {
         runs: vec![],
     };
     let member_of_draft = a(&[1, 0, 1, 0, 1, 1]); // stamped published; doc1 is private
-    let member_of_edition = a(&[1, 0, 1, 0, 3, 1]); // stamped private; pdoc is published
+    let member_of_edition = a(&[1, 0, 1, 0, nth_doc(3), 1]); // stamped private; pdoc is published
     let before = k.current_seq();
     // Gated on the trunk instead, this would pass slot 1 and answer
     // `BaseSuperseded`, pdoc's chain having a member.
     assert!(matches!(
-        rejected(vs.publish(P1, &a(&[1, 0, 1, 0, 3, 7]), &shot(None), &readable)),
+        rejected(vs.publish(P1, &a(&[1, 0, 1, 0, 65, 7]), &shot(None), &readable)),
         PublishError::DocNotRegistered
     ));
     // The payload is the address named, not the document it projects to.
@@ -1217,7 +1217,7 @@ fn a_shot_named_by_a_member_is_gated_as_named_and_judged_as_its_document() {
     let (member, _) = vs
         .publish(P1, &member_of_edition, &off_the_member, &readable)
         .expect("a member of a published document is shot as its document");
-    assert_eq!(member, a(&[1, 0, 1, 0, 3, 2]));
+    assert_eq!(member, a(&[1, 0, 1, 0, nth_doc(3), 2]));
     assert!(
         k.snapshot().world().m3().published(&member),
         "born published"
@@ -1308,7 +1308,7 @@ fn the_shots_admission_is_the_answer_publish_gives_through_its_source_gate() {
             now(&k),
         )
         .expect("a private draft P1 may not read holds a byte");
-    let unregistered = a(&[1, 0, 1, 0, 9]);
+    let unregistered = a(&[1, 0, 1, 0, 71]);
     let readable = readable_by(PrincipalId(1));
     let plain = |base: Option<Base>, runs: Vec<ShotRun>| Shot { base, draft: None, also: vec![], keep_base: false, runs };
     let cases = [

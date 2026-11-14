@@ -43,15 +43,15 @@ fn board() -> Board {
         .expect("admitted");
     let class_a = Class::Principal(1);
     let mut a = Index::new(class_a);
-    a.index(draft(class_a, &addr(&[1, 0, 1, 0, 7]), b"alice drafts about transclusion"))
+    a.index(draft(class_a, &addr(&[1, 0, 1, 0, 69]), b"alice drafts about transclusion"))
         .expect("admitted");
-    a.index(draft(class_a, &addr(&[1, 0, 1, 0, 8]), b"alice's secret alpenglow"))
+    a.index(draft(class_a, &addr(&[1, 0, 1, 0, 70]), b"alice's secret alpenglow"))
         .expect("admitted");
     let class_b = Class::Principal(2);
     let mut b = Index::new(class_b);
-    b.index(draft(class_b, &addr(&[1, 0, 2, 0, 3]), b"bob drafts the charter again"))
+    b.index(draft(class_b, &addr(&[1, 0, 2, 0, 65]), b"bob drafts the charter again"))
         .expect("admitted");
-    b.index(draft(class_b, &addr(&[1, 0, 2, 0, 4]), b"bob's secret zymurgy")).expect("admitted");
+    b.index(draft(class_b, &addr(&[1, 0, 2, 0, 66]), b"bob's secret zymurgy")).expect("admitted");
     Board { published, a, b }
 }
 
@@ -123,7 +123,7 @@ fn a_query_over_one_pair_returns_no_term_only_another_principals_drafts_hold() {
     assert_eq!(docs(&ask(alice, "charter ")), published_charter, "Alice holds no charter draft");
     let bobs = docs(&ask(bob, "charter "));
     assert_eq!(bobs.len(), 2);
-    assert!(bobs.contains(&addr(&[1, 0, 2, 0, 3])) && bobs.is_superset(&published_charter));
+    assert!(bobs.contains(&addr(&[1, 0, 2, 0, 65])) && bobs.is_superset(&published_charter));
     let transclusion = ask(alice, "transclusion ");
     assert_eq!(transclusion.hits.len(), 2);
     let standings: BTreeSet<String> =

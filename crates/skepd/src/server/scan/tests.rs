@@ -71,7 +71,7 @@ fn a_class_scan_is_a_shape_and_a_region_read_names_its_document() {
         format!(r#"{{"cur":null,"d":"1.0.1.0.1","n":16,"op":"window_v","region":{REGION}}}"#),
         // The count by home, `except` naming a home or none: keyed by `d`.
         format!(
-            r#"{{"d":"1.0.1.0.1","except":["1.0.1.0.2"],"n":64,"op":"count_v_by_home","region":{REGION}}}"#
+            r#"{{"d":"1.0.1.0.1","except":["1.0.1.0.64"],"n":64,"op":"count_v_by_home","region":{REGION}}}"#
         ),
         format!(r#"{{"d":"1.0.1.0.1","n":64,"op":"count_v_by_home","region":{REGION}}}"#),
         // The retracted-links read, from the start and resumed: keyed by `d`.
@@ -113,7 +113,7 @@ fn a_class_scan_is_a_shape_and_a_region_read_names_its_document() {
         // The M6 and M3 reads touch no link store at all.
         r#"{"op":"retrieve_v","specs":[{"doc":"1.0.1.0.1","span":{"start":"1.1","width":"0.1"}}]}"#
             .to_string(),
-        r#"{"op":"show_deletions","d_a":"1.0.1.0.1","d_b":"1.0.1.0.2"}"#.to_string(),
+        r#"{"op":"show_deletions","d_a":"1.0.1.0.1","d_b":"1.0.1.0.64"}"#.to_string(),
         r#"{"op":"doc_metadata","doc":"1.0.1.0.1"}"#.to_string(),
         r#"{"op":"next_account_prefix","parent":"1"}"#.to_string(),
     ];
@@ -200,7 +200,7 @@ fn the_class_pool_admission_takes_a_permit_only_for_a_class_scan_shape() {
 fn the_per_document_pool_admits_a_width_per_document_inside_the_ceiling() {
     let scans = ClassScans::new();
     let read = |d: &str| parse(&format!(r#"{{"d":"{d}","op":"find_links_v","region":{REGION}}}"#));
-    let (a, b, c, e) = (address("1.0.1.0.1"), address("1.0.1.0.2"), address("1.0.1.0.3"), address("1.0.1.0.4"));
+    let (a, b, c, e) = (address("1.0.1.0.1"), address("1.0.1.0.64"), address("1.0.1.0.65"), address("1.0.1.0.66"));
 
     // A's width, then A refused while B is admitted.
     let a1 = scans.take_region(&a, Duration::ZERO).expect("A's first");
@@ -215,7 +215,7 @@ fn the_per_document_pool_admits_a_width_per_document_inside_the_ceiling() {
         Some(ScanBusy::Document),
         "a wire read of A is refused, by its width, once its wait ends"
     );
-    let b1 = scans.admit(&read("1.0.1.0.2")).expect("B is admitted").expect("with a permit");
+    let b1 = scans.admit(&read("1.0.1.0.64")).expect("B is admitted").expect("with a permit");
     assert_eq!(scans.documents_held(), 2, "an entry per document holding a permit");
 
     // The ceiling: six across three documents, the seventh refused by the
@@ -346,7 +346,7 @@ fn a_read_still_at_its_documents_width_after_the_wait_is_refused() {
 #[test]
 fn the_waiting_slots_are_capped_across_the_board() {
     let scans = ClassScans::new();
-    let (a, c) = (address("1.0.1.0.1"), address("1.0.1.0.3"));
+    let (a, c) = (address("1.0.1.0.1"), address("1.0.1.0.65"));
     let a_width = hold_width(&scans, &a);
     let _c_width = hold_width(&scans, &c);
     std::thread::scope(|s| {
@@ -381,12 +381,12 @@ fn the_waiting_slots_are_capped_across_the_board() {
 #[test]
 fn the_ceiling_refuses_at_once() {
     let scans = ClassScans::new();
-    let held: Vec<_> = ["1.0.1.0.1", "1.0.1.0.2", "1.0.1.0.3"]
+    let held: Vec<_> = ["1.0.1.0.1", "1.0.1.0.64", "1.0.1.0.65"]
         .into_iter()
         .flat_map(|d| hold_width(&scans, &address(d)))
         .collect();
     assert_eq!(held.len(), MAX_CONCURRENT_REGION_READS, "the premise: the ceiling is held");
-    let (taken, took) = timed_take(&scans, &address("1.0.1.0.4"), LONG);
+    let (taken, took) = timed_take(&scans, &address("1.0.1.0.66"), LONG);
     assert_eq!(taken, Err(ScanBusy::Ceiling), "a page with room, on a board at its ceiling");
     assert!(took < PROMPT, "FINDING (#658): the ceiling is never waited for: {took:?}");
     assert_eq!(scans.waiting(), 0, "and took no waiting slot");
@@ -402,7 +402,7 @@ fn the_ceiling_refuses_at_once() {
 #[test]
 fn a_returned_permit_admits_its_own_pages_waiter_and_no_other() {
     let scans = ClassScans::new();
-    let (a, b) = (address("1.0.1.0.1"), address("1.0.1.0.2"));
+    let (a, b) = (address("1.0.1.0.1"), address("1.0.1.0.64"));
     let _a_width = hold_width(&scans, &a);
     let mut b_width = hold_width(&scans, &b);
     let a_wait = Duration::from_secs(3);

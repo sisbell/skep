@@ -97,8 +97,8 @@ fn every_class_address_answers_its_own_arm() {
 #[test]
 fn an_unclassified_address_is_ordinary() {
     let t = write_types();
-    assert_eq!(t.target_class(&[unit(&[1, 1, 0, 5, 0, 3, 0, 3, 6, 1])]), None, "a ghost type");
-    assert_eq!(t.target_class(&[unit(&[1, 1, 0, 5, 0, 3, 0, 1, 1])]), None, "a content position");
+    assert_eq!(t.target_class(&[unit(&[1, 1, 0, 5, 0, 65, 0, 3, 6, 1])]), None, "a ghost type");
+    assert_eq!(t.target_class(&[unit(&[1, 1, 0, 5, 0, 65, 0, 1, 1])]), None, "a content position");
     assert_eq!(t.target_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 14])]), None, "another name");
     assert_eq!(
         t.target_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2])]),

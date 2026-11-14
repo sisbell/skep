@@ -28,26 +28,26 @@ fn issue(operator: Option<&str>, binding_writer: Option<&str>, entries: &[(&str,
 #[test]
 fn covers_answers_the_longest_covering_entrys_record() {
     let list = BlockedPrefixes::installed_under(
-        issue(None, None, &[("1.0.2", "1.0.1.0.7.1"), ("1.0.2.1", "1.0.1.0.8.1")]),
+        issue(None, None, &[("1.0.2", "1.0.1.0.69.1"), ("1.0.2.1", "1.0.1.0.70.1")]),
         None,
         None,
     );
-    assert_eq!(list.covers(&addr("1.0.2")), Some(&addr("1.0.1.0.7.1")), "the prefix itself");
-    assert_eq!(list.covers(&addr("1.0.2.5")), Some(&addr("1.0.1.0.7.1")), "and below it");
-    assert_eq!(list.covers(&addr("1.0.2.1")), Some(&addr("1.0.1.0.8.1")), "the longest");
-    assert_eq!(list.covers(&addr("1.0.2.1.4")), Some(&addr("1.0.1.0.8.1")));
+    assert_eq!(list.covers(&addr("1.0.2")), Some(&addr("1.0.1.0.69.1")), "the prefix itself");
+    assert_eq!(list.covers(&addr("1.0.2.5")), Some(&addr("1.0.1.0.69.1")), "and below it");
+    assert_eq!(list.covers(&addr("1.0.2.1")), Some(&addr("1.0.1.0.70.1")), "the longest");
+    assert_eq!(list.covers(&addr("1.0.2.1.4")), Some(&addr("1.0.1.0.70.1")));
     assert_eq!(list.covers(&addr("1.0.3")), None, "a sibling");
     assert_eq!(list.covers(&addr("1.0.21")), None, "containment is by component");
     let below =
-        BlockedPrefixes::installed_under(issue(None, None, &[("1.0.2.1", "1.0.1.0.8.1")]), None, None);
+        BlockedPrefixes::installed_under(issue(None, None, &[("1.0.2.1", "1.0.1.0.70.1")]), None, None);
     assert_eq!(below.covers(&addr("1.0.2")), None, "an entry over X.k does not reach X");
     // Two entries over ONE prefix: the first in supply order answers.
     let tied = BlockedPrefixes::installed_under(
-        issue(None, None, &[("1.0.2", "1.0.1.0.7.1"), ("1.0.2", "1.0.1.0.8.1")]),
+        issue(None, None, &[("1.0.2", "1.0.1.0.69.1"), ("1.0.2", "1.0.1.0.70.1")]),
         None,
         None,
     );
-    assert_eq!(tied.covers(&addr("1.0.2")), Some(&addr("1.0.1.0.7.1")));
+    assert_eq!(tied.covers(&addr("1.0.2")), Some(&addr("1.0.1.0.69.1")));
     assert_eq!(BlockedPrefixes::default().covers(&addr("1.0.2")), None, "no supply, no block");
 }
 
@@ -67,7 +67,7 @@ fn covers_answers_the_longest_covering_entrys_record() {
 fn the_install_ignores_exactly_the_entries_covering_a_comparand() {
     let (claimant, seat, member, host) = ("1.0.1", "1.0.2", "1.0.3", "2.0.7");
     let seat_global = "1.3.0.2";
-    let record = "1.0.1.0.7.1";
+    let record = "1.0.1.0.69.1";
     let prefix = node_prefix("1.3");
     let entries =
         [(claimant, record), (seat, record), (member, record), (host, record), (seat_global, record)];
@@ -137,7 +137,7 @@ fn the_install_ignores_exactly_the_entries_covering_a_comparand() {
 fn an_all_inert_issue_is_not_an_empty_one() {
     let claimant = addr("1.0.1");
     let all_inert = BlockedPrefixes::installed_under(
-        issue(None, None, &[("1.0.1", "1.0.1.0.9.1")]),
+        issue(None, None, &[("1.0.1", "1.0.1.0.71.1")]),
         Some(&claimant),
         Some(&node_prefix("1.3")),
     );
@@ -159,7 +159,7 @@ fn an_all_inert_issue_is_not_an_empty_one() {
 /// is never tested: it is an account of this board by construction.
 #[test]
 fn the_off_board_test_reads_the_node_prefix_and_never_the_local_root() {
-    let (claimant, record) = ("1.0.1", "1.0.1.0.7.1");
+    let (claimant, record) = ("1.0.1", "1.0.1.0.69.1");
     let (own, foreign) = (node_prefix("1.3"), node_prefix("1.5"));
     let entries = [(claimant, record), ("1.3.0.7", record)];
     let verdicts = |operator: Option<&str>, prefix: Option<&NodePrefix>| {
@@ -202,7 +202,7 @@ fn the_install_log_names_the_count_the_header_and_each_inert_entry() {
     let claimant = addr("1.0.1");
     let prefix = node_prefix("1.3");
     let list = BlockedPrefixes::installed_under(
-        issue(Some("2.0.7"), None, &[("1.0.1", "1.0.1.0.9.1"), ("1.0.3", "1.0.1.0.7.1"), ("2.0.7", "1.0.1.0.11.1")]),
+        issue(Some("2.0.7"), None, &[("1.0.1", "1.0.1.0.71.1"), ("1.0.3", "1.0.1.0.69.1"), ("2.0.7", "1.0.1.0.73.1")]),
         Some(&claimant),
         Some(&prefix),
     );
@@ -212,14 +212,14 @@ fn the_install_log_names_the_count_the_header_and_each_inert_entry() {
             "1 of 3 entries in force, 2 inert; operator account 2.0.7 (the header's); \
              binding-writing account 1.0.1 (the claimant — the header omits it) — exempt, \
              the operator account being off-board (not under the node prefix 1.3)",
-            "entry 1.0.1 (record 1.0.1.0.9.1) is INERT — it covers the board's \
+            "entry 1.0.1 (record 1.0.1.0.71.1) is INERT — it covers the board's \
              binding-writing account 1.0.1; ignored",
-            "entry 2.0.7 (record 1.0.1.0.11.1) is INERT — it covers the configured \
+            "entry 2.0.7 (record 1.0.1.0.73.1) is INERT — it covers the configured \
              operator account 2.0.7; ignored",
         ]
     );
     let root = BlockedPrefixes::installed_under(
-        issue(None, None, &[("1.0.3", "1.0.1.0.7.1")]),
+        issue(None, None, &[("1.0.3", "1.0.1.0.69.1")]),
         Some(&claimant),
         Some(&prefix),
     );
@@ -233,7 +233,7 @@ fn the_install_log_names_the_count_the_header_and_each_inert_entry() {
     // No node prefix: the test is off, and the header line says so ONCE
     // — per install, not per entry — whatever the header names.
     let untold = BlockedPrefixes::installed_under(
-        issue(Some("1.3.0.7"), None, &[("1.0.1", "1.0.1.0.9.1"), ("1.0.3", "1.0.1.0.7.1")]),
+        issue(Some("1.3.0.7"), None, &[("1.0.1", "1.0.1.0.71.1"), ("1.0.3", "1.0.1.0.69.1")]),
         Some(&claimant),
         None,
     );
@@ -318,10 +318,10 @@ fn a_supply_path_that_names_no_regular_file_is_refused_unopened() {
 #[test]
 fn the_supply_file_is_one_strict_json_object() {
     let parsed = parse_issue(
-        br#"{"operator":"2.0.7","binding_writer":"1.0.2","entries":[{"prefix":"1.0.3","record":"1.0.1.0.7.1"}]}"#,
+        br#"{"operator":"2.0.7","binding_writer":"1.0.2","entries":[{"prefix":"1.0.3","record":"1.0.1.0.69.1"}]}"#,
     )
     .expect("the whole grammar");
-    assert_eq!(parsed, issue(Some("2.0.7"), Some("1.0.2"), &[("1.0.3", "1.0.1.0.7.1")]));
+    assert_eq!(parsed, issue(Some("2.0.7"), Some("1.0.2"), &[("1.0.3", "1.0.1.0.69.1")]));
     assert_eq!(parse_issue(br#"{"entries":[]}"#), Ok(BlockedIssue::default()), "the empty list");
     for (bad, why) in [
         (&br#"{}"#[..], "entries is required"),
@@ -330,9 +330,9 @@ fn the_supply_file_is_one_strict_json_object() {
         (br#"{"entries":[],"lifted":true}"#, "an unread field"),
         (br#"{"operator":null,"entries":[]}"#, "absence is the one spelling of none"),
         (br#"{"entries":[{"prefix":"1.0.3"}]}"#, "an entry without its record"),
-        (br#"{"entries":[{"prefix":"1.0.3","record":"1.0.1.0.7.1","note":"x"}]}"#, "an unread entry field"),
-        (br#"{"entries":[{"prefix":"1..3","record":"1.0.1.0.7.1"}]}"#, "not a tumbler"),
-        (br#"{"entries":[{"prefix":"1.0.0.3","record":"1.0.1.0.7.1"}]}"#, "not T4-valid"),
+        (br#"{"entries":[{"prefix":"1.0.3","record":"1.0.1.0.69.1","note":"x"}]}"#, "an unread entry field"),
+        (br#"{"entries":[{"prefix":"1..3","record":"1.0.1.0.69.1"}]}"#, "not a tumbler"),
+        (br#"{"entries":[{"prefix":"1.0.0.3","record":"1.0.1.0.69.1"}]}"#, "not T4-valid"),
         (br#"{"entries":["1.0.3"]}"#, "an entry that is not an object"),
     ] {
         assert!(parse_issue(bad).is_err(), "{why}: {}", String::from_utf8_lossy(bad));

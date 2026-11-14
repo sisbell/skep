@@ -52,7 +52,7 @@ fn seating_appends_a_home_link_refuses_a_reseat_and_never_touches_r() {
         assert!(stage_seat_link(m5, &doc1(), &a(&[1, 0, 1, 0, 1, 0, 2, 3])).is_ok());
     }
     assert_eq!(rejected(seat_link(&k, &doc1(), &link1)), SeatError::AlreadySeated);
-    let foreign = a(&[1, 0, 1, 0, 2, 0, 2, 1]); // doc2's home link
+    let foreign = a(&[1, 0, 1, 0, nth_doc(2), 0, 2, 1]); // doc2's home link
     assert_eq!(rejected(seat_link(&k, &doc1(), &foreign)), SeatError::NotHomeLink);
     // Link survival: a text delete leaves the link subspace untouched.
     vs.delete(P1, &doc1(), vp(1, 1), n(3), now(&k)).expect("delete commits");
@@ -60,8 +60,8 @@ fn seating_appends_a_home_link_refuses_a_reseat_and_never_touches_r() {
     assert_eq!(s.world().m5().link_count(&doc1()), n(2));
     // Link writes are OUTSIDE the version-chain rule (PUB-2.12): a home link
     // seats into the PUBLISHED edition exactly as into a draft.
-    let (seated, _) = seat_link(&k, &pdoc(), &a(&[1, 0, 1, 0, 3, 0, 2, 1]))
+    let (seated, _) = seat_link(&k, &pdoc(), &a(&[1, 0, 1, 0, nth_doc(3), 0, 2, 1]))
         .expect("seating into a published document is not an in-place edit");
-    assert_eq!(seated, a(&[1, 0, 1, 0, 3, 0, 2, 1]));
+    assert_eq!(seated, a(&[1, 0, 1, 0, nth_doc(3), 0, 2, 1]));
     assert_eq!(k.snapshot().world().m5().link_count(&pdoc()), n(1));
 }

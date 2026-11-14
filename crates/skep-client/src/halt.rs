@@ -264,7 +264,7 @@ mod tests {
         };
         assert_eq!(refused.token(), "credential_refused:content_session");
         assert_eq!(Halt::Refused(refused).exit_code(), 1);
-        let blocked = Blocked { record: "1.0.1.0.7.1".into(), named_by: "http://x".into(), ground: None };
+        let blocked = Blocked { record: "1.0.1.0.69.1".into(), named_by: "http://x".into(), ground: None };
         assert_eq!(Halt::Blocked(blocked).exit_code(), 3);
         assert_eq!(Halt::Dial(DialError::Connect("refused".into())).exit_code(), 4);
     }

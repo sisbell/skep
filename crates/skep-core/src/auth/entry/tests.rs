@@ -267,7 +267,7 @@ fn the_supersession_claims_rows_are_the_class_the_daughter_and_the_member_by_tag
         )
         .expect("an address")
     };
-    let (trunk, daughter) = (addr(&[1, 0, 1, 0, 3]), addr(&[1, 0, 1, 0, 3, 1, 1]));
+    let (trunk, daughter) = (addr(&[1, 0, 1, 0, 65]), addr(&[1, 0, 1, 0, 65, 1, 1]));
     let plan = DepositPlan {
         homes: vec![PlannedHome {
             home: NamedAddress::Address(trunk.clone()),

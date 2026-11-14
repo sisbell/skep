@@ -188,8 +188,8 @@ mod tests {
     /// owned-home test compares exactly.
     #[test]
     fn the_account_of_an_address_is_its_own_and_never_a_parents() {
-        assert_eq!(account_of("1.0.1.0.2.0.2.3"), Some("1.0.1".into()));
-        assert_eq!(account_of("1.0.1.0.2"), Some("1.0.1".into()));
+        assert_eq!(account_of("1.0.1.0.64.0.2.3"), Some("1.0.1".into()));
+        assert_eq!(account_of("1.0.1.0.64"), Some("1.0.1".into()));
         assert_eq!(account_of("1.0.1.2.0.1.0.1.4"), Some("1.0.1.2".into()));
         assert_eq!(account_of("1.0.1"), Some("1.0.1".into()));
         assert_eq!(account_of("1"), None, "a node");

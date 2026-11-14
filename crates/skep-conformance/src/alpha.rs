@@ -197,16 +197,16 @@ mod tests {
     fn the_element_lift_goes_through_documents_only() {
         let mut alpha = Alpha::new();
         alpha.bind("1.1.0.1", &a(&[1, 0, 1]));
-        alpha.bind("1.1.0.1.0.1", &a(&[1, 0, 1, 0, 3]));
+        alpha.bind("1.1.0.1.0.1", &a(&[1, 0, 1, 0, 65]));
 
-        assert_eq!(alpha.translate("1.1.0.1.0.1.0.2.1"), Some(a(&[1, 0, 1, 0, 3, 0, 2, 1])));
+        assert_eq!(alpha.translate("1.1.0.1.0.1.0.2.1"), Some(a(&[1, 0, 1, 0, 65, 0, 2, 1])));
         assert_eq!(alpha.drain_findings().count(), 0);
         assert_eq!(alpha.translate("1.1.0.1.0.1.1"), None, "a never-minted version");
         let found: Vec<FindingKind> = alpha.drain_findings().map(|f| f.kind).collect();
         assert_eq!(found, [FindingKind::NeverBound]);
         assert_eq!(alpha.drain_findings().count(), 0, "a drain empties the findings");
 
-        assert_eq!(alpha.render_skep(&a(&[1, 0, 1, 0, 3, 0, 2, 1])), "1.1.0.1.0.1.0.2.1");
+        assert_eq!(alpha.render_skep(&a(&[1, 0, 1, 0, 65, 0, 2, 1])), "1.1.0.1.0.1.0.2.1");
         assert_eq!(alpha.render_skep(&a(&[1, 0, 1, 0, 1, 1])), "skep:1.0.1.0.1.1");
     }
 
@@ -216,15 +216,15 @@ mod tests {
     #[test]
     fn a_double_bind_is_a_finding_and_the_first_binding_stands() {
         let mut alpha = Alpha::new();
-        alpha.bind("1.1.0.1.0.1", &a(&[1, 0, 1, 0, 3]));
-        alpha.bind("1.1.0.1.0.1", &a(&[1, 0, 1, 0, 3]));
-        alpha.bind("1.1.0.1.0.1", &a(&[1, 0, 1, 0, 4]));
-        alpha.bind("1.1.0.1.0.2", &a(&[1, 0, 1, 0, 3]));
+        alpha.bind("1.1.0.1.0.1", &a(&[1, 0, 1, 0, 65]));
+        alpha.bind("1.1.0.1.0.1", &a(&[1, 0, 1, 0, 65]));
+        alpha.bind("1.1.0.1.0.1", &a(&[1, 0, 1, 0, 66]));
+        alpha.bind("1.1.0.1.0.2", &a(&[1, 0, 1, 0, 65]));
         let found: Vec<FindingKind> = alpha.drain_findings().map(|f| f.kind).collect();
         assert_eq!(found, [FindingKind::DoubleBindGolden, FindingKind::DoubleBindSkep]);
-        assert_eq!(alpha.peek_exact("1.1.0.1.0.1"), Some(a(&[1, 0, 1, 0, 3])));
-        assert!(!alpha.is_bound_skep(&a(&[1, 0, 1, 0, 4])));
+        assert_eq!(alpha.peek_exact("1.1.0.1.0.1"), Some(a(&[1, 0, 1, 0, 65])));
+        assert!(!alpha.is_bound_skep(&a(&[1, 0, 1, 0, 66])));
         assert_eq!(alpha.peek_exact("1.1.0.1.0.2"), None);
-        assert_eq!(alpha.render_skep(&a(&[1, 0, 1, 0, 3])), "1.1.0.1.0.1");
+        assert_eq!(alpha.render_skep(&a(&[1, 0, 1, 0, 65])), "1.1.0.1.0.1");
     }
 }

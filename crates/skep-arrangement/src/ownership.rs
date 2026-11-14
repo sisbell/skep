@@ -153,7 +153,7 @@ mod tests {
         // so the registration half is asked and not assumed — an account and
         // an element.
         let m3 = seeded_m3();
-        let nameless = a(&[1, 0, 1, 0, 9]);
+        let nameless = a(&[1, 0, 1, 0, 71]);
         let p1 = Caller::Principal(PrincipalId(1));
         assert!(
             p1.is_owner(&m3, &nameless),

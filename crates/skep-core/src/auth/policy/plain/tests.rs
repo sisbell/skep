@@ -226,7 +226,7 @@ fn a_publications_base_runs_are_set_ahead_of_the_lock_where_an_entry_names_an_or
     };
     let runs: Vec<Run> = snap.world().m5().content_runs(&member).cloned().collect();
     assert_eq!(runs.len(), 1, "the premise: the member's one run of three");
-    let original = Some(addr_of(&[1, 0, 1, 0, 2, 0, 2, 1]));
+    let original = Some(addr_of(&[1, 0, 1, 0, 64, 0, 2, 1]));
     assert_eq!(based(publish(&member, 3, original.clone())), runs, "the member's positions 1..3");
     assert_eq!(based(publish(&member, 2, original.clone())), vec![Run::new(runs[0].i_start().clone(), Nat::from(2u32)).expect("a run")], "cut where the extent stops");
     assert!(based(publish(&member, 3, None)).is_empty(), "no entry names an original: no read");
@@ -379,7 +379,7 @@ fn a_correspondence_records_nullify_is_refused_to_its_owner_and_falls_through_fo
     // `LinkRec` being `#[non_exhaustive]`, no crate but M7 builds one by
     // literal.
     let draft_addr = crate::codec::wire_address(draft).expect("the draft's address");
-    let run = addr_of(&[1, 0, 1, 0, 3, 0, 1, 1]);
+    let run = addr_of(&[1, 0, 1, 0, 65, 0, 1, 1]);
     let member = addr_of(&[1, 0, 1, 0, 1, 1, 0, 1, 1]);
     let value = Link::triple(enc([&run]), enc([&member]), enc([t_correspondence()]));
     let (record, _) = board

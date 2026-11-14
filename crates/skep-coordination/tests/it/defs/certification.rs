@@ -253,7 +253,7 @@ fn a_reg_quantified_def_is_certified_and_evaluated_through_a_reference() {
     let p = c.type_check(vec![(v(1), Sort::Addr)], in_some_class).expect("P(x)");
     let (p, _) = c.define_predicate(&doc1(), &p).expect("define P");
     // A doc2 position: no def's `pdef` or certificate covers it.
-    let x0 = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let x0 = a(&[1, 0, 1, 0, nth_doc(2), 0, 1, 1]);
     let r = c
         .type_check(vec![], Term::Ref { addr: p.clone(), args: vec![at(lit_addr(&x0))] })
         .expect("R := P(x₀)");

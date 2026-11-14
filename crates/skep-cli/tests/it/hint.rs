@@ -257,7 +257,7 @@ fn hint_refuses_by_name_and_prints_nothing() {
         (vec!["hint", "--board", DEAD, "--fork", "1.0"], "--fork: '1.0' is not an address".to_string()),
         (vec!["hint", "--board", DEAD, "--fork", "+1.0.1"], "--fork: '+1.0.1' is not an address".to_string()),
         (vec!["hint", "--board", DEAD, "--fork", "1.0.1", "--fork", "1.0.2"], "`--fork` is given at most once at `hint`".to_string()),
-        (vec!["hint", "--board", DEAD, "--doc", "1.0.1.0.2"], "`--doc` is not a flag of `hint`".to_string()),
+        (vec!["hint", "--board", DEAD, "--doc", "1.0.1.0.64"], "`--doc` is not a flag of `hint`".to_string()),
     ] {
         refused(&skep(&args, &[], None), 2, &named);
     }

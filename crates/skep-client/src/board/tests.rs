@@ -47,9 +47,9 @@ fn the_frames_spell_the_wire() {
     assert_eq!(f["id"], "x");
     assert_eq!(f["at"]["ordinal"], "1");
     assert_eq!(f["as_of"], 7, "the typed state rides as a position (wire.md §Arrangement)");
-    assert_eq!(frames::insert_plain_atom("1.0.1.0.2", 3, "{}", 11, None)["as_of"], 11);
-    assert_eq!(frames::delete("1.0.1.0.2", 3, 1, 12, None)["as_of"], 12);
-    assert_eq!(frames::reinstate("1.0.1.0.2", 3, &[], 13, None)["as_of"], 13);
+    assert_eq!(frames::insert_plain_atom("1.0.1.0.64", 3, "{}", 11, None)["as_of"], 11);
+    assert_eq!(frames::delete("1.0.1.0.64", 3, 1, 12, None)["as_of"], 12);
+    assert_eq!(frames::reinstate("1.0.1.0.64", 3, &[], 13, None)["as_of"], 13);
     let r = Rejection::of(&json!({"code":"credential_refused","detail":"content_session","disposition":"permanent","op":"make_link","resp":"rejected"})).unwrap();
     assert_eq!(r.token(), "credential_refused:content_session");
 }
@@ -84,45 +84,45 @@ fn the_builders_spell_the_wires_own_examples() {
     assert_eq!(paged, json!({"cur":null,"n":16,"op":"window_ftt","q":{"from":"any","home":"any","to":[{"start":"1.0.5.0.2","width":"0.0.0.0.1"}],"ty":[{"start":"1.1.0.1.0.1.0.3.15","width":"0.0.0.0.0.0.0.0.1"}]}}));
     assert_eq!(paged["q"], frames::find_links_ftt(frames::T_MAIL, &mailbox)["q"], "the paged search asks the unpaged read's query");
     assert_eq!(frames::window_ftt(frames::T_MAIL, &mailbox, Some("1.0.7.0.64.0.2.1"), 16)["cur"], "1.0.7.0.64.0.2.1");
-    assert_eq!(frames::count_v_by_home("1.0.1.0.1", &[(1, 5)], 64, &["1.0.1.0.2"]), json!({"d":"1.0.1.0.1","except":["1.0.1.0.2"],"n":64,"op":"count_v_by_home","region":[{"start":"1.1","width":"0.5"}]}));
+    assert_eq!(frames::count_v_by_home("1.0.1.0.1", &[(1, 5)], 64, &["1.0.1.0.64"]), json!({"d":"1.0.1.0.1","except":["1.0.1.0.64"],"n":64,"op":"count_v_by_home","region":[{"start":"1.1","width":"0.5"}]}));
     assert!(frames::count_v_by_home("1.0.1.0.1", &[(1, 5)], 64, &[]).get("except").is_none(), "no `except` where none is named");
     assert_eq!(frames::find_links_v_history("1.0.1.0.1", &[(1, 5)], None, 16), json!({"cur":null,"d":"1.0.1.0.1","n":16,"op":"find_links_v_history","region":[{"start":"1.1","width":"0.5"}]}));
     assert_eq!(frames::find_links_v_history("1.0.1.0.1", &[(1, 5)], Some("1.0.1.0.1.0.2.2"), 16)["cur"], "1.0.1.0.1.0.2.2");
-    assert_eq!(frames::project("1.0.1.0.1.0.2.1", 2, "1.0.1.0.2"), json!({"a":"1.0.1.0.1.0.2.1","d":"1.0.1.0.2","op":"project","slot":2}));
+    assert_eq!(frames::project("1.0.1.0.1.0.2.1", 2, "1.0.1.0.64"), json!({"a":"1.0.1.0.1.0.2.1","d":"1.0.1.0.64","op":"project","slot":2}));
     assert_eq!(frames::edition_claims("1.0.1.0.1"), json!({"op":"edition_claims","target":"1.0.1.0.1"}));
     let out = frames::out_claims("1.0.1.0.1.0.2.2");
     assert_eq!((out["op"].as_str(), out["x"].as_str(), out["view"].as_str()), (Some("out_claims"), Some("1.0.1.0.1.0.2.2"), Some("active")));
-    let runs = [frames::shot_run("1.0.1.0.1", "1.0.1.0.1.0.1.1", 3), frames::shot_run("1.0.1.0.7", "1.0.1.0.7.0.1.1", 2)];
+    let runs = [frames::shot_run("1.0.1.0.1", "1.0.1.0.1.0.1.1", 3), frames::shot_run("1.0.1.0.69", "1.0.1.0.69.0.1.1", 2)];
     let places = [Value::Null, frames::place(4)];
     // Two `also` drafts' own places: one carrying a place, one all null —
     // dropped, as a `places` list of nulls is.
-    let also_places = [frames::AlsoPlacesFrame { draft: "1.0.1.0.8", places: &[Value::Null, frames::place(9)] }, frames::AlsoPlacesFrame { draft: "1.0.1.0.9", places: &[Value::Null, Value::Null] }];
-    let links = [frames::link_entry("member", frames::member_end(&[(4, 2)]), frames::addrs_end(&["1.0.1.0.2"]), frames::addrs_end(&["1.1.0.1.0.1.0.3.13"]), Some("1.0.1.0.7.0.2.1"))];
+    let also_places = [frames::AlsoPlacesFrame { draft: "1.0.1.0.70", places: &[Value::Null, frames::place(9)] }, frames::AlsoPlacesFrame { draft: "1.0.1.0.71", places: &[Value::Null, Value::Null] }];
+    let links = [frames::link_entry("member", frames::member_end(&[(4, 2)]), frames::addrs_end(&["1.0.1.0.64"]), frames::addrs_end(&["1.1.0.1.0.1.0.3.13"]), Some("1.0.1.0.69.0.2.1"))];
     let frame = frames::publication(&frames::PublishFrame {
         doc: Some("1.0.1.0.1"),
         base: Some(("1.0.1.0.1.2", 3)),
-        draft: Some("1.0.1.0.7"),
-        also: &["1.0.1.0.8", "1.0.1.0.9"],
+        draft: Some("1.0.1.0.69"),
+        also: &["1.0.1.0.70", "1.0.1.0.71"],
         runs: &runs,
         places: &places,
         also_places: &also_places,
         links: &links,
         retract: &["1.0.1.0.1.0.2.1"],
-        read_with: &["1.0.1.0.2"],
+        read_with: &["1.0.1.0.64"],
         ..frames::PublishFrame::default()
     });
     assert_eq!(
         frame,
-        json!({"also":["1.0.1.0.8","1.0.1.0.9"],"also_places":[{"draft":"1.0.1.0.8","places":[null,{"ordinal":"9","subspace":"1"}]}],"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.7","links":[{"from":{"member":[{"ordinal":"4","width":"2"}]},"home":"member","old":"1.0.1.0.7.0.2.1","to":{"addrs":["1.0.1.0.2"]},"ty":{"addrs":["1.1.0.1.0.1.0.3.13"]}}],"op":"publish","places":[null,{"ordinal":"4","subspace":"1"}],"read_with":["1.0.1.0.2"],"retract":["1.0.1.0.1.0.2.1"],"runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"},{"i_start":"1.0.1.0.7.0.1.1","origin":"1.0.1.0.7","width":"2"}]})
+        json!({"also":["1.0.1.0.70","1.0.1.0.71"],"also_places":[{"draft":"1.0.1.0.70","places":[null,{"ordinal":"9","subspace":"1"}]}],"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.69","links":[{"from":{"member":[{"ordinal":"4","width":"2"}]},"home":"member","old":"1.0.1.0.69.0.2.1","to":{"addrs":["1.0.1.0.64"]},"ty":{"addrs":["1.1.0.1.0.1.0.3.13"]}}],"op":"publish","places":[null,{"ordinal":"4","subspace":"1"}],"read_with":["1.0.1.0.64"],"retract":["1.0.1.0.1.0.2.1"],"runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"},{"i_start":"1.0.1.0.69.0.1.1","origin":"1.0.1.0.69","width":"2"}]})
     );
     // A frame carrying no optional member is the bare shot — byte for byte.
-    let bare = frames::publication(&frames::PublishFrame { doc: Some("1.0.1.0.1"), base: Some(("1.0.1.0.1.2", 3)), draft: Some("1.0.1.0.7"), runs: &runs, id: Some("k"), ..frames::PublishFrame::default() });
-    assert_eq!(bare, json!({"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.7","id":"k","op":"publish","runs":runs}));
+    let bare = frames::publication(&frames::PublishFrame { doc: Some("1.0.1.0.1"), base: Some(("1.0.1.0.1.2", 3)), draft: Some("1.0.1.0.69"), runs: &runs, id: Some("k"), ..frames::PublishFrame::default() });
+    assert_eq!(bare, json!({"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.69","id":"k","op":"publish","runs":runs}));
     // The mint form: `account` with `mint` and `claim`, no `doc`; a list of
     // nulls is no `places` member, and `also_places` entries all null are
     // no member either.
-    let mint = frames::publication(&frames::PublishFrame { account: Some("1.0.1"), mint: true, claim: true, draft: Some("1.0.1.0.7"), also: &["1.0.1.0.9"], runs: &runs[1..], places: &[Value::Null], also_places: &also_places[1..], ..frames::PublishFrame::default() });
-    assert_eq!(mint, json!({"account":"1.0.1","also":["1.0.1.0.9"],"claim":true,"draft":"1.0.1.0.7","mint":true,"op":"publish","runs":runs[1..]}));
+    let mint = frames::publication(&frames::PublishFrame { account: Some("1.0.1"), mint: true, claim: true, draft: Some("1.0.1.0.69"), also: &["1.0.1.0.71"], runs: &runs[1..], places: &[Value::Null], also_places: &also_places[1..], ..frames::PublishFrame::default() });
+    assert_eq!(mint, json!({"account":"1.0.1","also":["1.0.1.0.71"],"claim":true,"draft":"1.0.1.0.69","mint":true,"op":"publish","runs":runs[1..]}));
 }
 
 /// The merge marker read (the merge bridge lane): `merge_marker` decodes
@@ -135,18 +135,18 @@ fn the_builders_spell_the_wires_own_examples() {
 /// say so as a fact).
 #[test]
 fn the_marker_read_decodes_the_boards_merge_member_and_absent_where_it_serves_none() {
-    let marked = json!({"as_of": 9, "at": 8, "base": "1.0.1.0.1.3", "base_copied": "7", "doc": "1.0.1.0.2", "merge": {"sides": ["1.0.1.0.1.2.1", "1.0.1.0.4"], "head": "1.0.1.0.1.3", "head_copied": "7", "at": 8}, "owner": "1.0.1", "published": false, "resp": "doc_metadata"});
+    let marked = json!({"as_of": 9, "at": 8, "base": "1.0.1.0.1.3", "base_copied": "7", "doc": "1.0.1.0.64", "merge": {"sides": ["1.0.1.0.1.2.1", "1.0.1.0.66"], "head": "1.0.1.0.1.3", "head_copied": "7", "at": 8}, "owner": "1.0.1", "published": false, "resp": "doc_metadata"});
     let marker = merge_marker(&marked).expect("a doc_metadata answer").expect("a marker");
-    assert_eq!(marker, MergeMarker { sides: vec!["1.0.1.0.1.2.1".into(), "1.0.1.0.4".into()], head: "1.0.1.0.1.3".into(), head_copied: Some(7), at: Some(8) });
-    let bare = json!({"as_of": 9, "at": 8, "base": "1.0.1.0.1.3", "base_copied": "7", "doc": "1.0.1.0.2", "merge": null, "owner": "1.0.1", "published": false, "resp": "doc_metadata"});
+    assert_eq!(marker, MergeMarker { sides: vec!["1.0.1.0.1.2.1".into(), "1.0.1.0.66".into()], head: "1.0.1.0.1.3".into(), head_copied: Some(7), at: Some(8) });
+    let bare = json!({"as_of": 9, "at": 8, "base": "1.0.1.0.1.3", "base_copied": "7", "doc": "1.0.1.0.64", "merge": null, "owner": "1.0.1", "published": false, "resp": "doc_metadata"});
     assert_eq!(merge_marker(&bare), Some(None), "a draft carrying no marker");
-    let absent = json!({"as_of": 9, "doc": "1.0.1.0.2", "owner": "1.0.1", "published": false, "resp": "doc_metadata"});
+    let absent = json!({"as_of": 9, "doc": "1.0.1.0.64", "owner": "1.0.1", "published": false, "resp": "doc_metadata"});
     assert_eq!(merge_marker(&absent), Some(None), "an older board serving no member");
-    let headless = json!({"as_of": 9, "doc": "1.0.1.0.2", "merge": {"sides": []}, "owner": "1.0.1", "published": false, "resp": "doc_metadata"});
+    let headless = json!({"as_of": 9, "doc": "1.0.1.0.64", "merge": {"sides": []}, "owner": "1.0.1", "published": false, "resp": "doc_metadata"});
     assert_eq!(merge_marker(&headless), Some(None), "an object naming no head is no marker");
-    let empty_sides = json!({"as_of": 9, "doc": "1.0.1.0.2", "merge": {"sides": [], "head": "1.0.1.0.1.3"}, "owner": "1.0.1", "published": false, "resp": "doc_metadata"});
+    let empty_sides = json!({"as_of": 9, "doc": "1.0.1.0.64", "merge": {"sides": [], "head": "1.0.1.0.1.3"}, "owner": "1.0.1", "published": false, "resp": "doc_metadata"});
     assert_eq!(merge_marker(&empty_sides).flatten().map(|m| (m.sides.len(), m.head_copied, m.at)), Some((0, None, None)), "the draft-side form's marker names no daughter");
-    let refused = json!({"code": "withheld", "disposition": "permanent", "op": "doc_metadata", "resp": "rejected", "site": {"addr": "1.0.1.0.2"}});
+    let refused = json!({"code": "withheld", "disposition": "permanent", "op": "doc_metadata", "resp": "rejected", "site": {"addr": "1.0.1.0.64"}});
     assert_eq!(merge_marker(&refused), None, "a rejection is no answer, never no marker");
     assert_eq!(merge_marker(&json!({"as_of": 9, "resp": "span_set", "set": []})), None);
 }
@@ -177,8 +177,8 @@ fn the_type_constants_are_the_wires_spellings() {
 /// absent where the code carries none.
 #[test]
 fn a_rejection_carries_its_site_where_the_code_names_one() {
-    let twin = Rejection::of(&json!({"code":"already_published","disposition":"permanent","op":"publish","resp":"rejected","site":{"addr":"1.0.1.0.2.3"}})).unwrap();
-    assert_eq!((twin.site().addr.as_deref(), twin.site().index, twin.code()), (Some("1.0.1.0.2.3"), None, "already_published"));
+    let twin = Rejection::of(&json!({"code":"already_published","disposition":"permanent","op":"publish","resp":"rejected","site":{"addr":"1.0.1.0.64.3"}})).unwrap();
+    assert_eq!((twin.site().addr.as_deref(), twin.site().index, twin.code()), (Some("1.0.1.0.64.3"), None, "already_published"));
     let moved = Rejection::of(&json!({"code":"kept_place_moved","disposition":"permanent","op":"publish","resp":"rejected","site":{"index":2}})).unwrap();
     assert_eq!((moved.site().addr.as_deref(), moved.site().index), (None, Some(2)));
     let old = Rejection::of(&json!({"code":"old_refused","detail":"superseded","disposition":"permanent","op":"publish","resp":"rejected","site":{"index":0}})).unwrap();

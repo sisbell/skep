@@ -2509,15 +2509,15 @@ fn extent(start: &str, width: u64) -> Span {
 /// `create_new_document`, a `fork` and a `version`, each the EMPTY body
 /// over the parent account `1.0.1`; a `nullify` of the link `…0.2.1` from
 /// its home, a `assert_sup` of that link by `…0.2.2`, an `emit` of the
-/// retired class over `1.0.1.0.2` with its `to` EMPTY (Unary), each the
+/// retired class over `1.0.1.0.64` with its `to` EMPTY (Unary), each the
 /// stored link's rows; and an `edit_link` of `…0.2.1` whose successor is
-/// homed in `1.0.1.0.2` with two resolved content extents and a named
+/// homed in `1.0.1.0.64` with two resolved content extents and a named
 /// type, its claim homed in `1.0.1.0.1` — the pair's row as its `doc`. Each
 /// comes under its NAME — its op and, after a comma, what marks the instance
 /// out (`insert, undeclared`; `record, enroll`) — the one label both goldens
 /// report it by.
 fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 14] {
-    let (account, doc, other) = (addr("1.0.1"), addr("1.0.1.0.1"), addr("1.0.1.0.2"));
+    let (account, doc, other) = (addr("1.0.1"), addr("1.0.1.0.1"), addr("1.0.1.0.64"));
     let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
     let insert = entry_body_insert(None, [&b"a"[..], &b"b"[..]]);
     let ty = [unit(&addr("1.1.0.1.0.1.0.3.90"))];
@@ -2527,7 +2527,7 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 14] {
         to: EntrySlot(&[]),
         ty: EntrySlot(&ty),
     });
-    let window = addr("1.0.1.0.2.0.1.1");
+    let window = addr("1.0.1.0.64.0.1.1");
     let base_member = addr("1.0.1.0.1.1");
     let publish = entry_body_publish(
         [
@@ -2582,8 +2582,8 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 14] {
         to: EntrySlot(&[]),
         ty: EntrySlot(std::slice::from_ref(&retired)),
     });
-    let (s_from, s_to) = (extent("1.0.1.0.2.0.1.1", 5), extent("1.0.1.0.2.0.1.6", 2));
-    let s_ty = unit(&addr("1.0.1.0.3.0.2.1"));
+    let (s_from, s_to) = (extent("1.0.1.0.64.0.1.1", 5), extent("1.0.1.0.64.0.1.6", 2));
+    let s_ty = unit(&addr("1.0.1.0.65.0.2.1"));
     let edit = entry_body_edit_link(
         LinkSlots {
             from: EntrySlot(std::slice::from_ref(&s_from)),
@@ -2622,14 +2622,14 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 14] {
 /// The `publish` body `shot` with the three deposit rows behind it (lane S3;
 /// skep-signature's `frames.rs` twin): a copy homed in the member by tag,
 /// typed `3.13`, `from` the member's positions 1–3 by the member-position
-/// row, `to` the member by tag beside `1.0.1.0.2`'s unit span; a retraction
-/// of `1.0.1.0.2.0.2.1` homed in `1.0.1.0.2`; a read-with from `1.0.1.0.1`
-/// to `1.0.1.0.2` homed there — the member's home first.
+/// row, `to` the member by tag beside `1.0.1.0.64`'s unit span; a retraction
+/// of `1.0.1.0.64.0.2.1` homed in `1.0.1.0.64`; a read-with from `1.0.1.0.1`
+/// to `1.0.1.0.64` homed there — the member's home first.
 fn publish_deposits(shot: EntryBody, other: &skep_address::Address, doc: &skep_address::Address) -> EntryBody {
     let copy_ty = unit(&addr("1.1.0.1.0.1.0.3.13"));
     let (other_unit, doc_unit) = (unit(other), unit(doc));
     let retraction_ty = unit(&addr("1.1.0.1.0.1.0.1.5"));
-    let target = unit(&addr("1.0.1.0.2.0.2.1"));
+    let target = unit(&addr("1.0.1.0.64.0.2.1"));
     let read_with_ty = unit(&addr("1.1.0.1.0.1.0.3.71"));
     let rows = [
         DepositRow {
@@ -2762,7 +2762,7 @@ fn the_entry_frames_bytes_per_op_are_pinned() {
             &[0, 0, 0, 1, b'y'][..],
             &[0, 0, 0, 1, b'z'][..],
             &[0x01][..],
-            &member(b"1.0.1.0.2.0.1.1")[..],
+            &member(b"1.0.1.0.64.0.1.1")[..],
             &[0, 0, 0, 0, 0, 0, 0, 2][..],
             &[0, 0, 0, 32][..],
             &list(&[b"1.0.1.0.1.1"])[..],
@@ -2778,14 +2778,14 @@ fn the_entry_frames_bytes_per_op_are_pinned() {
     // member: 0x02; its type's unit span; its `from` the MEMBER-POSITION ROW
     // `0x04 ‖ be64(1) ‖ be64(1) ‖ be64(3)`; its `to` a stored row of two —
     // the tag `member` spelled as its token where a start goes and the EMPTY
-    // element where a width goes, then `1.0.1.0.2`'s unit span. The
-    // retraction in `1.0.1.0.2`: 0x03, the retraction class's unit span, the
+    // element where a width goes, then `1.0.1.0.64`'s unit span. The
+    // retraction in `1.0.1.0.64`: 0x03, the retraction class's unit span, the
     // home's, the target's. The read-with there: 0x04, `3.71`'s unit span,
-    // `from` `1.0.1.0.1`, `to` `1.0.1.0.2`.
+    // `from` `1.0.1.0.1`, `to` `1.0.1.0.64`.
     // The shot's body as just pinned: past the shared members, the op and
     // the body's own length prefix.
     let shot_body = want[prefix.len() + member(b"publish").len() + 4..].to_vec();
-    let other_unit: (&[u8], &[u8]) = (b"1.0.1.0.2", b"0.0.0.0.1");
+    let other_unit: (&[u8], &[u8]) = (b"1.0.1.0.64", b"0.0.0.0.1");
     let doc_unit: (&[u8], &[u8]) = (b"1.0.1.0.1", b"0.0.0.0.1");
     let mut groups = Vec::new();
     groups.extend(member(b"member"));
@@ -2794,13 +2794,13 @@ fn the_entry_frames_bytes_per_op_are_pinned() {
     groups.extend([&[0x04u8][..], &[0, 0, 0, 0, 0, 0, 0, 1][..], &[0, 0, 0, 0, 0, 0, 0, 1][..], &[0, 0, 0, 0, 0, 0, 0, 3][..]].concat());
     groups.extend(stored(&[(b"member", b""), other_unit]));
     groups.extend([0, 0, 0, 0]);
-    groups.extend(member(b"1.0.1.0.2"));
+    groups.extend(member(b"1.0.1.0.64"));
     groups.push(0x03);
     groups.extend(stored(&[(b"1.1.0.1.0.1.0.1.5", b"0.0.0.0.0.0.0.0.1")]));
     groups.extend(stored(&[other_unit]));
-    groups.extend(stored(&[(b"1.0.1.0.2.0.2.1", b"0.0.0.0.0.0.0.1")]));
+    groups.extend(stored(&[(b"1.0.1.0.64.0.2.1", b"0.0.0.0.0.0.0.1")]));
     groups.extend([0, 0, 0, 0]);
-    groups.extend(member(b"1.0.1.0.2"));
+    groups.extend(member(b"1.0.1.0.64"));
     groups.push(0x04);
     groups.extend(stored(&[(b"1.1.0.1.0.1.0.3.71", b"0.0.0.0.0.0.0.0.1")]));
     groups.extend(stored(&[doc_unit]));
@@ -2901,24 +2901,24 @@ fn the_entry_frames_bytes_per_op_are_pinned() {
     want.extend(member(
         &[
             stored(&[(b"1.1.0.1.0.1.0.1.3", b"0.0.0.0.0.0.0.0.1")]),
-            stored(&[(b"1.0.1.0.2", b"0.0.0.0.1")]),
+            stored(&[(b"1.0.1.0.64", b"0.0.0.0.1")]),
             stored(&[]),
             vec![0, 0, 0, 0],
         ]
         .concat(),
     ));
     assert_eq!(emit, want, "emit: the retired class's unit span, from's, the to EMPTY");
-    // THE EDIT: `doc` the pair's row — `1.0.1.0.2` then `1.0.1.0.1`, a list
+    // THE EDIT: `doc` the pair's row — `1.0.1.0.64` then `1.0.1.0.1`, a list
     // row of two — then the successor's four rows (two resolved extents and
     // a named type) and the fifth, the claim's `from`: the original's unit
     // span.
-    let mut want = [head, member(&list(&[b"1.0.1.0.2", b"1.0.1.0.1"]))].concat();
+    let mut want = [head, member(&list(&[b"1.0.1.0.64", b"1.0.1.0.1"]))].concat();
     want.extend(member(b"edit_link"));
     want.extend(member(
         &[
-            stored(&[(b"1.0.1.0.3.0.2.1", b"0.0.0.0.0.0.0.1")]),
-            stored(&[(b"1.0.1.0.2.0.1.1", b"0.0.0.0.0.0.0.5")]),
-            stored(&[(b"1.0.1.0.2.0.1.6", b"0.0.0.0.0.0.0.2")]),
+            stored(&[(b"1.0.1.0.65.0.2.1", b"0.0.0.0.0.0.0.1")]),
+            stored(&[(b"1.0.1.0.64.0.1.1", b"0.0.0.0.0.0.0.5")]),
+            stored(&[(b"1.0.1.0.64.0.1.6", b"0.0.0.0.0.0.0.2")]),
             vec![0, 0, 0, 0],
             stored(&[link_1]),
         ]

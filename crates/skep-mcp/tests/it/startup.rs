@@ -514,14 +514,14 @@ fn skep_commons_appends_the_commons_sentence() {
 #[test]
 fn a_skep_commons_that_is_not_the_commons_refuses_startup() {
     let dir = TempDir::new("badcommons");
-    for bad in ["banana", "1..2", "0.1", "1.0", "1.0.0.1", "1.0.1.0.1.0.1.0.2", "1.0.2.0.9", "1.1.0.1.0.2"] {
+    for bad in ["banana", "1..2", "0.1", "1.0", "1.0.0.1", "1.0.1.0.1.0.1.0.2", "1.0.2.0.71", "1.1.0.1.0.2"] {
         let (code, err) = Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").env("SKEP_COMMONS", bad).refusal();
         assert_eq!(code, Some(1), "'{bad}' must refuse startup: {err}");
         assert!(err.contains(&format!("SKEP_COMMONS: '{bad}' is not ")), "stderr names the variable for '{bad}': {err}");
         assert!(!err.contains("health was not read"), "refused before any dial: {err}");
     }
-    let (_, err) = Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").env("SKEP_COMMONS", "1.0.2.0.9").refusal();
-    assert!(err.contains("SKEP_COMMONS: '1.0.2.0.9' is not the commons: every board's link types are addresses in subspace 3 of 1.1.0.1.0.1"), "{err}");
+    let (_, err) = Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").env("SKEP_COMMONS", "1.0.2.0.71").refusal();
+    assert!(err.contains("SKEP_COMMONS: '1.0.2.0.71' is not the commons: every board's link types are addresses in subspace 3 of 1.1.0.1.0.1"), "{err}");
     let (code, err) = Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").env("SKEP_COMMONS", "").refusal();
     assert_eq!(code, Some(1), "{err}");
     assert!(!err.contains("SKEP_COMMONS:") && err.contains("no commons (SKEP_COMMONS unset)"), "set empty, it is unset: {err}");

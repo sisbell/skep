@@ -419,11 +419,11 @@ mod tests {
         let readable = json!({"as_of": 9, "items": [{"atom": "takedown: the ground"}], "resp": "delivery"});
         let unreadable = json!({"code": "withheld", "op": "retrieve_v", "resp": "rejected"});
         for (ground, read) in [(readable, Some("takedown: the ground")), (unreadable, None)] {
-            let blocked = fake::json(403, json!({"error": "prefix_blocked", "record": "1.0.1.0.7.1"}));
+            let blocked = fake::json(403, json!({"error": "prefix_blocked", "record": "1.0.1.0.69.1"}));
             let fake = signing_in(&signer, vec![blocked], ground);
             let halt = handshake(&fake::board(&fake), Scope::Content, &signer, 1, Site::Session).expect_err("blocked");
             let Halt::Blocked(b) = &halt else { panic!("not the block's face: {halt}") };
-            assert_eq!((b.record.as_str(), b.named_by.as_str(), b.ground.as_deref()), ("1.0.1.0.7.1", fake::origin().as_str(), read));
+            assert_eq!((b.record.as_str(), b.named_by.as_str(), b.ground.as_deref()), ("1.0.1.0.69.1", fake::origin().as_str(), read));
             assert_eq!(halt.exit_code(), 3);
             let text = halt.to_string();
             assert!(!text.contains("try again") && !text.contains("busy"), "{text}");

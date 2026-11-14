@@ -48,9 +48,9 @@ pub fn extent(start: &str, width: u64) -> skep_address::Span {
 /// `create_new_document`, a `fork` and a `version`, each the EMPTY body
 /// over the parent account `1.0.1`; a `nullify` of the link `…0.2.1` from
 /// its home, a `assert_sup` of that link by `…0.2.2`, an `emit` of the
-/// retired class over `1.0.1.0.2` with its `to` EMPTY (Unary), each the
+/// retired class over `1.0.1.0.64` with its `to` EMPTY (Unary), each the
 /// stored link's rows; and an `edit_link` of `…0.2.1` whose successor is
-/// homed in `1.0.1.0.2` with two resolved content extents and a named
+/// homed in `1.0.1.0.64` with two resolved content extents and a named
 /// type, its claim homed in `1.0.1.0.1` — the pair's row as its `doc`. Each
 /// comes under its NAME — its op and, after a comma, what marks the instance
 /// out (`insert, undeclared`; `record, enroll`) — the one label both goldens
@@ -58,11 +58,11 @@ pub fn extent(start: &str, width: u64) -> skep_address::Span {
 /// signed entry): the same `publish` body with THREE DEPOSIT ROWS behind
 /// it — a copy homed in the member by tag, typed `3.13`, `from` the
 /// member's positions 1–3 by the member-position row, `to` the member by
-/// tag beside `1.0.1.0.2`'s unit span; a retraction of `1.0.1.0.2.0.2.1`
-/// homed in `1.0.1.0.2`; and a read-with from `1.0.1.0.1` to `1.0.1.0.2`
+/// tag beside `1.0.1.0.64`'s unit span; a retraction of `1.0.1.0.64.0.2.1`
+/// homed in `1.0.1.0.64`; and a read-with from `1.0.1.0.1` to `1.0.1.0.64`
 /// homed there — in the signed order, the member's home first.
 pub fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 14] {
-    let (account, doc, other) = (addr("1.0.1"), addr("1.0.1.0.1"), addr("1.0.1.0.2"));
+    let (account, doc, other) = (addr("1.0.1"), addr("1.0.1.0.1"), addr("1.0.1.0.64"));
     let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
     let insert = entry_body_insert(None, [&b"a"[..], &b"b"[..]]);
     let ty = [unit_span(&addr("1.1.0.1.0.1.0.3.90"))];
@@ -72,7 +72,7 @@ pub fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 14] {
         to: EntrySlot(&[]),
         ty: EntrySlot(&ty),
     });
-    let window = addr("1.0.1.0.2.0.1.1");
+    let window = addr("1.0.1.0.64.0.1.1");
     let base_member = addr("1.0.1.0.1.1");
     let publish = entry_body_publish(
         [
@@ -110,7 +110,7 @@ pub fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 14] {
     });
     // The other link writes, over the stored link's unit spans: the link
     // `1.0.1.0.1.0.2.1` retracted from its home, superseded by `…0.2.2`; a
-    // retired-class tuple over `1.0.1.0.2`, its `to` EMPTY.
+    // retired-class tuple over `1.0.1.0.64`, its `to` EMPTY.
     let (l1, l2) = (unit_span(&addr("1.0.1.0.1.0.2.1")), unit_span(&addr("1.0.1.0.1.0.2.2")));
     let (home, retraction) = (unit_span(&doc), unit_span(&addr("1.1.0.1.0.1.0.1.5")));
     let supersedes = unit_span(&addr("1.1.0.1.0.1.0.1.4"));
@@ -131,10 +131,10 @@ pub fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 14] {
         ty: EntrySlot(std::slice::from_ref(&retired)),
     });
     // The edit: the successor's `from` and `to` resolved to content extents
-    // of `1.0.1.0.2` (five positions from its first, two from its sixth),
+    // of `1.0.1.0.64` (five positions from its first, two from its sixth),
     // its type a ghost name, the original `…0.2.1`'s unit span the fifth row.
-    let (s_from, s_to) = (extent("1.0.1.0.2.0.1.1", 5), extent("1.0.1.0.2.0.1.6", 2));
-    let s_ty = unit_span(&addr("1.0.1.0.3.0.2.1"));
+    let (s_from, s_to) = (extent("1.0.1.0.64.0.1.1", 5), extent("1.0.1.0.64.0.1.6", 2));
+    let s_ty = unit_span(&addr("1.0.1.0.65.0.2.1"));
     let edit = entry_body_edit_link(
         LinkSlots {
             from: EntrySlot(std::slice::from_ref(&s_from)),
@@ -205,7 +205,7 @@ pub fn publish_deposits(
     let copy_ty = unit_span(&addr("1.1.0.1.0.1.0.3.13"));
     let (other_unit, doc_unit) = (unit_span(other), unit_span(doc));
     let retraction_ty = unit_span(&addr("1.1.0.1.0.1.0.1.5"));
-    let target = unit_span(&addr("1.0.1.0.2.0.2.1"));
+    let target = unit_span(&addr("1.0.1.0.64.0.2.1"));
     let read_with_ty = unit_span(&addr("1.1.0.1.0.1.0.3.71"));
     let rows = [
         DepositRow {

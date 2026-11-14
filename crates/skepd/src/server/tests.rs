@@ -172,8 +172,8 @@ fn route_of_names_a_request_in_the_routers_words_and_nothing_of_its_bytes() {
         ("BREW", "/health"),
         ("GET", "/nope"),
         ("GET", "/op/"),
-        ("GET", "/1.0.1.0.2"),
-        ("GET", "/blob/1.0.1.0.2.0.1.1"),
+        ("GET", "/1.0.1.0.64"),
+        ("GET", "/blob/1.0.1.0.64.0.1.1"),
     ] {
         assert_eq!(route_of(method, path).to_string(), "an unknown route", "{method} {path}");
     }

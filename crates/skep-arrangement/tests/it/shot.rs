@@ -68,7 +68,7 @@ fn a_shot_appends_the_next_trunk_member_from_the_clients_runs() {
     // A home link seated in the base: the shot places content alone, so it
     // stays the base's (CL-OWN, PUB-2.12) and the member is born with an
     // empty link subspace.
-    seat_link(&k, &pdoc(), &a(&[1, 0, 1, 0, 3, 0, 2, 1]))
+    seat_link(&k, &pdoc(), &a(&[1, 0, 1, 0, nth_doc(3), 0, 2, 1]))
         .expect("a home link seats into the edition");
     let readable = readable_by(PrincipalId(1));
     let shot = Shot {
@@ -187,7 +187,7 @@ fn a_window_stays_a_window_and_a_daughter_lands_under_its_base() {
     assert_eq!(member1, vdoc());
     // The window's origin: doc2, P1's own private draft (readable to P1).
     vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w")], Deposit::Undeclared, now(&k)).expect("doc2 holds a byte");
-    let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let w = a(&[1, 0, 1, 0, nth_doc(2), 0, 1, 1]);
     let staged = |member: &Address| Shot {
         base: Some(base(member, 3)),
         draft: None,
@@ -197,11 +197,11 @@ fn a_window_stays_a_window_and_a_daughter_lands_under_its_base() {
     };
     // Shot A off the head member1 → the trunk's next member.
     let (member2, _) = vs.publish(P1, &pdoc(), &staged(&member1), &readable).expect("A commits");
-    assert_eq!(member2, a(&[1, 0, 1, 0, 3, 2]));
+    assert_eq!(member2, a(&[1, 0, 1, 0, nth_doc(3), 2]));
     // Shot B, ALSO staged off member1, after A landed → member1's daughter,
     // and no refusal (PUB-2.38: the gesture never fails for want of a base).
     let (daughter, _) = vs.publish(P1, &pdoc(), &staged(&member1), &readable).expect("B commits");
-    assert_eq!(daughter, a(&[1, 0, 1, 0, 3, 1, 1]), "the nested form (PUB-2.55)");
+    assert_eq!(daughter, a(&[1, 0, 1, 0, nth_doc(3), 1, 1]), "the nested form (PUB-2.55)");
     let s = k.snapshot();
     let m5 = s.world().m5();
     for member in [&member2, &daughter] {
@@ -219,12 +219,12 @@ fn a_window_stays_a_window_and_a_daughter_lands_under_its_base() {
     let (granddaughter, _) = vs
         .publish(P1, &pdoc(), &staged(&daughter), &readable)
         .expect("nests again");
-    assert_eq!(granddaughter, a(&[1, 0, 1, 0, 3, 1, 1, 1]));
+    assert_eq!(granddaughter, a(&[1, 0, 1, 0, nth_doc(3), 1, 1, 1]));
     // A shot may name a member as `doc`: it is the document's shot.
     let (member3, _) = vs
         .publish(P1, &member2, &staged(&member2), &readable)
         .expect("named by a member");
-    assert_eq!(member3, a(&[1, 0, 1, 0, 3, 3]));
+    assert_eq!(member3, a(&[1, 0, 1, 0, nth_doc(3), 3]));
 }
 
 #[test]
@@ -285,7 +285,7 @@ fn a_declared_deposit_in_the_staging_interval_is_carried_by_the_shot() {
         runs: vec![shot_run(&pdoc(), &pca(1), 4)],
     };
     let (daughter, _) = vs.publish(P1, &pdoc(), &daughter_shot, &readable).expect("a daughter");
-    assert_eq!(daughter, a(&[1, 0, 1, 0, 3, 1, 1]));
+    assert_eq!(daughter, a(&[1, 0, 1, 0, nth_doc(3), 1, 1]));
     assert_eq!(k.snapshot().world().m5().content_count(&daughter), n(4));
     assert!(matches!(
         rejected(vs.publish(
@@ -456,7 +456,7 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
     insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
     vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"d"), val(b"e")], Deposit::Undeclared, now(&k))
         .expect("doc2, the window's source: d e at its first two addresses");
-    let doc2_ca = |ordinal: u32| a(&[1, 0, 1, 0, 2, 0, 1, ordinal]);
+    let doc2_ca = |ordinal: u32| a(&[1, 0, 1, 0, nth_doc(2), 0, 1, ordinal]);
     // Two windows onto doc2, adjacent; the draft's `a` re-inserted; the
     // edition's own `a b` by reference — with the base taken at two, so `c`
     // is the carried tail, I-adjacent to that last run.
@@ -548,7 +548,7 @@ fn the_address_forms_agree_as_the_body_spells_them_where_their_runs_do_not() {
     insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
     vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w")], Deposit::Undeclared, now(&k))
         .expect("doc2, the window's source, holds w");
-    let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let w = a(&[1, 0, 1, 0, nth_doc(2), 0, 1, 1]);
     let shot = Shot {
         base: Some(base(&pdoc(), 3)),
         draft: Some(doc1()),
@@ -614,7 +614,7 @@ fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
     insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
     vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w")], Deposit::Undeclared, now(&k))
         .expect("doc2, a window's source, holds w");
-    let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let w = a(&[1, 0, 1, 0, nth_doc(2), 0, 1, 1]);
     let shot = Shot {
         base: Some(base(&pdoc(), 3)),
         draft: Some(doc1()),
@@ -839,7 +839,7 @@ fn a_shot_judges_every_address_it_names_as_the_document_it_projects_to() {
     insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
     vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w")], Deposit::Undeclared, now(&k))
         .expect("doc2, the window's source, holds w");
-    let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let w = a(&[1, 0, 1, 0, nth_doc(2), 0, 1, 1]);
     let readable = readable_by(PrincipalId(1));
     let head_shot = Shot {
         base: Some(base(&pdoc(), 3)),
@@ -963,7 +963,7 @@ fn the_address_forms_agree_as_the_body_spells_them_over_every_short_shot() {
         now(&k),
     )
     .expect("doc2, the windows' source, holds w x");
-    let doc2_ca = |ordinal: u32| a(&[1, 0, 1, 0, 2, 0, 1, ordinal]);
+    let doc2_ca = |ordinal: u32| a(&[1, 0, 1, 0, nth_doc(2), 0, 1, ordinal]);
     let readable = readable_by(PrincipalId(1));
     // The base, five positions: a b c by reference, a window onto doc2's x,
     // and a deposit z it took while the head, under its own content chain.

@@ -93,9 +93,9 @@ fn held_is_composed_from_the_departed_ranges_record_and_never_under_an_admitting
     let issuer_b = [1, 0, 4];
     let ranges = [
         range(Some(&[1, 0, 3]), None), // the principal's own subtree
-        range(Some(&[1, 0, 2, 0, 4]), Some((GrantKind::Named, &issuer_a))), // a document grant, departed
+        range(Some(&[1, 0, 2, 0, 66]), Some((GrantKind::Named, &issuer_a))), // a document grant, departed
         range(Some(&[1, 0, 4]), Some((GrantKind::AnyPrincipal, &issuer_b))), // an account grant, departed
-        range(Some(&[1, 0, 4, 0, 7]), Some((GrantKind::Named, &issuer_a))), // a narrower document grant under it, departed
+        range(Some(&[1, 0, 4, 0, 69]), Some((GrantKind::Named, &issuer_a))), // a narrower document grant under it, departed
         range(Some(&[1, 0, 5]), Some((GrantKind::Named, &issuer_b))), // an account grant, still honored
     ];
     let honored = [Prefix::new(addr(&[1, 0, 5]))];
@@ -104,12 +104,12 @@ fn held_is_composed_from_the_departed_ranges_record_and_never_under_an_admitting
 
     assert_eq!(standing(&[1, 0, 3, 0, 1]), Standing::YoursToRead, "the principal's own draft");
     assert_eq!(
-        standing(&[1, 0, 2, 0, 4]),
+        standing(&[1, 0, 2, 0, 66]),
         Standing::Held { kind: GrantKind::Named, rung: Rung::Document, issuer: addr(&issuer_a) },
         "the departed document grant's cell and issuer"
     );
     assert_eq!(
-        standing(&[1, 0, 4, 0, 2]),
+        standing(&[1, 0, 4, 0, 64]),
         Standing::Held {
             kind: GrantKind::AnyPrincipal,
             rung: Rung::Account,
@@ -118,7 +118,7 @@ fn held_is_composed_from_the_departed_ranges_record_and_never_under_an_admitting
         "the departed account grant's cell"
     );
     assert_eq!(
-        standing(&[1, 0, 4, 0, 7]),
+        standing(&[1, 0, 4, 0, 69]),
         Standing::Held { kind: GrantKind::Named, rung: Rung::Document, issuer: addr(&issuer_a) },
         "of several departed grants the narrowest prefix's"
     );
@@ -126,16 +126,16 @@ fn held_is_composed_from_the_departed_ranges_record_and_never_under_an_admitting
     assert_eq!(standing(&[1, 0, 9, 0, 1]), Standing::YoursToRead, "no range covers it");
 
     // A second honored grant covering a departed range's document admits it.
-    let honored_too = [Prefix::new(addr(&[1, 0, 5])), Prefix::new(addr(&[1, 0, 2, 0, 4]))];
+    let honored_too = [Prefix::new(addr(&[1, 0, 5])), Prefix::new(addr(&[1, 0, 2, 0, 66]))];
     let pair = Pair::session(&published, &supplement, &ranges, &honored_too);
-    assert_eq!(pair.standing(Role::Supplement, &draft(&[1, 0, 2, 0, 4])), Standing::YoursToRead);
+    assert_eq!(pair.standing(Role::Supplement, &draft(&[1, 0, 2, 0, 66])), Standing::YoursToRead);
 
     // An ancestor's range, which carries no grant, admits a draft under it
     // whatever departed grant covers it too.
     let with_ancestor = [
         range(Some(&[1, 0, 4]), None),
-        range(Some(&[1, 0, 4, 0, 7]), Some((GrantKind::Named, &issuer_a))),
+        range(Some(&[1, 0, 4, 0, 69]), Some((GrantKind::Named, &issuer_a))),
     ];
     let pair = Pair::session(&published, &supplement, &with_ancestor, &[]);
-    assert_eq!(pair.standing(Role::Supplement, &draft(&[1, 0, 4, 0, 7])), Standing::YoursToRead);
+    assert_eq!(pair.standing(Role::Supplement, &draft(&[1, 0, 4, 0, 69])), Standing::YoursToRead);
 }

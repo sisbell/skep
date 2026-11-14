@@ -975,7 +975,7 @@ const LISTED_COLS: [&str; 2] = ["signed", "bare"];
 
 /// The takedown record the entry cites. The daemon reads no record — it
 /// echoes the address — so this names nothing on the board.
-const LISTED_RECORD: &str = "1.0.1.0.7.1";
+const LISTED_RECORD: &str = "1.0.1.0.69.1";
 
 #[derive(Clone, Copy)]
 struct ListedRow {

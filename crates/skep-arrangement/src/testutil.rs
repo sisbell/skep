@@ -11,7 +11,7 @@ use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_kernel::{
     CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, TxnError, WorldState,
 };
-use skep_namespace::{M3Rec, M3State, PrincipalId};
+use skep_namespace::{M3Rec, M3State, PrincipalId, FIRST_ORDINARY_DOCUMENT};
 
 use crate::run::Run;
 use crate::vspace::{ordinal_vspan, VPos};
@@ -33,16 +33,37 @@ pub(crate) fn doc1() -> Address {
     a(&[1, 0, 1, 0, 1])
 }
 
-/// Returns document 2, `[1,0,1,0,2]`.
-pub(crate) fn doc2() -> Address {
-    a(&[1, 0, 1, 0, 2])
+/// Returns the number of the account's `k`-th document.
+///
+/// The account's home page is 1, and its documents past it are numbered
+/// from [`FIRST_ORDINARY_DOCUMENT`] on, past the reserved block of
+/// well-known slots: doc2 and pdoc are its second and third. Every fixture
+/// address at or below one of them reads its number here, worked out from
+/// that constant and never spelled.
+///
+/// # Panics
+///
+/// Panics where `k` is zero: an account has no 0th document.
+pub(crate) fn nth_doc(k: u32) -> u32 {
+    assert_ne!(k, 0, "an account has no 0th document");
+    if k == 1 {
+        1
+    } else {
+        FIRST_ORDINARY_DOCUMENT + k - 2
+    }
 }
 
-/// Returns document 3, `[1,0,1,0,3]`: the account's published edition.
+/// Returns doc2, the account's second document, `[1,0,1,0,nth_doc(2)]`.
+pub(crate) fn doc2() -> Address {
+    a(&[1, 0, 1, 0, nth_doc(2)])
+}
+
+/// Returns pdoc, the account's third document, `[1,0,1,0,nth_doc(3)]`: its
+/// published edition.
 ///
 /// It is the target the version-chain refusals (PUB-2.11) key on.
 pub(crate) fn pdoc() -> Address {
-    a(&[1, 0, 1, 0, 3])
+    a(&[1, 0, 1, 0, nth_doc(3)])
 }
 
 /// Returns the first version fork of doc1, on M3's `(d_src, 1)` chain.
@@ -65,13 +86,13 @@ pub(crate) fn ca(ordinal: u32) -> Address {
 
 /// Returns pdoc's content element at `ordinal` (length 8).
 ///
-/// It is `[1,0,1,0,3,0,1,ordinal]`.
+/// It is `[1,0,1,0,nth_doc(3),0,1,ordinal]`.
 ///
 /// # Panics
 ///
 /// Panics where `ordinal` is zero: no T4-valid address ends in a zero.
 pub(crate) fn pca(ordinal: u32) -> Address {
-    a(&[1, 0, 1, 0, 3, 0, 1, ordinal])
+    a(&[1, 0, 1, 0, nth_doc(3), 0, 1, ordinal])
 }
 
 /// Returns doc1's link element at `ordinal` (length 8).
@@ -137,10 +158,10 @@ pub(crate) fn vp(subspace: u32, ordinal: u32) -> VPos {
 /// `[1,0,2]` → principal 2. The publication bits: doc1 and doc2 are private
 /// drafts — the working documents the edit ops admit (doc1 as an
 /// explicit-`false` first mint, the state M3 produces below the daemon's
-/// first-mint door, PUB-8.20 being the daemon's alone) — and pdoc
-/// `[1,0,1,0,3]` is a published edition (an explicit `true`), the target the
-/// version-chain model's in-place refusal keys on (PUB-2.11). An account's
-/// `Allocate` carries no publication state.
+/// first-mint door, PUB-8.20 being the daemon's alone) — and pdoc, the
+/// account's third document, is a published edition (an explicit `true`),
+/// the target the version-chain model's in-place refusal keys on (PUB-2.11).
+/// An account's `Allocate` carries no publication state.
 pub(crate) fn seeded_m3() -> M3State {
     M3State::genesis()
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1]), false))
@@ -148,8 +169,8 @@ pub(crate) fn seeded_m3() -> M3State {
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 2]), false))
         .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 2]), PrincipalId(2)))
         .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 1]), false))
-        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 2]), false))
-        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 3]), true))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, nth_doc(2)]), false))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, nth_doc(3)]), true))
 }
 
 /// Returns an in-memory kernel over `world`.

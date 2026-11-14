@@ -152,7 +152,7 @@ impl Rig {
 fn the_usage_forms_are_refused_before_any_socket() {
     let dir = tempfile::tempdir().unwrap();
     let store = dir.path().join("store");
-    let (doc, to, grant) = ("1.0.1.0.2", "1.0.1.2", "1.0.1.0.1.0.2.3");
+    let (doc, to, grant) = ("1.0.1.0.64", "1.0.1.2", "1.0.1.0.1.0.2.3");
     let refused = |extra: &[&str], words: &str| {
         let mut args = vec!["share", "--board", DEAD, "--dir", s(&store)];
         args.extend_from_slice(extra);

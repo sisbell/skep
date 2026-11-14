@@ -25,9 +25,9 @@ const TOKEN: &str = "9f3a6c21d4b8e07a5c1b2d4e6f708192";
 /// The person's account; `S` their draft, `E` the trunk its words were
 /// published into, `Z` another account's document a run windows.
 const ACCOUNT: &str = "1.0.1";
-const S: &str = "1.0.1.0.4";
-const E: &str = "1.0.1.0.2";
-const Z: &str = "1.0.2.0.3";
+const S: &str = "1.0.1.0.66";
+const E: &str = "1.0.1.0.64";
+const Z: &str = "1.0.2.0.65";
 
 fn a(text: &str) -> Address {
     parse_address(text).expect("an address")

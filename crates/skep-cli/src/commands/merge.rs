@@ -1119,16 +1119,16 @@ mod tests {
 
     /// One window part, its words and pair as a test names them.
     fn part(version: Option<&str>, named_since: bool) -> WindowPart {
-        let span = skep_client::publication::ISpan { chain: "1.0.1.0.7.0.1".to_string(), first: 1, width: 5 };
+        let span = skep_client::publication::ISpan { chain: "1.0.1.0.69.0.1".to_string(), first: 1, width: 5 };
         WindowPart {
             key: skep_client::publication::PartKey { run: 1, part: 0 },
             words: Some("quote".to_string()),
             after: Some("the cat".to_string()),
             ordinal: 8,
-            origin: parse_address("1.0.1.0.7").expect("an address"),
+            origin: parse_address("1.0.1.0.69").expect("an address"),
             owner: None,
             span,
-            record: version.map(|_| parse_address("1.0.1.0.7.0.2.1").expect("an address")),
+            record: version.map(|_| parse_address("1.0.1.0.69.0.2.1").expect("an address")),
             counterpart: None,
             version: version.map(|v| parse_address(v).expect("an address")),
             sides: Vec::new(),
@@ -1144,8 +1144,8 @@ mod tests {
     /// process's two reads.
     #[test]
     fn a_part_named_since_its_answer_says_the_version_that_published_it() {
-        let line = named_since_line(&part(Some("1.0.1.0.2.1"), true));
-        assert_eq!(line, "nothing was published — 1.0.1.0.7’s words were published in 1.0.1.0.2.1 after you answered; answer for them again: --window 1.0.1.0.2.1 or --leave-out 1.0.1.0.2.1");
+        let line = named_since_line(&part(Some("1.0.1.0.64.1"), true));
+        assert_eq!(line, "nothing was published — 1.0.1.0.69’s words were published in 1.0.1.0.64.1 after you answered; answer for them again: --window 1.0.1.0.64.1 or --leave-out 1.0.1.0.64.1");
     }
 
     /// A passage's words are rendered one line and inert before a line
@@ -1162,11 +1162,11 @@ mod tests {
     /// second answer also names.
     #[test]
     fn a_misfit_says_which_answer_fits_nothing_or_names_the_same_words_twice() {
-        let key = parse_address("1.0.1.0.2.1").expect("an address");
-        let origin = parse_address("1.0.1.0.7").expect("an address");
-        assert_eq!(misfit_line(&Misfit::FitsNothing { flag: Flag::Window, key: key.clone(), published_in: vec![] }), "--window 1.0.1.0.2.1 answers nothing here — no words in this merge are published in 1.0.1.0.2.1");
-        assert_eq!(misfit_line(&Misfit::FitsNothing { flag: Flag::KeepPrivate, key: origin.clone(), published_in: vec![key.clone()] }), "--keep-private 1.0.1.0.7 answers nothing here — 1.0.1.0.7’s words in this merge are already published in 1.0.1.0.2.1; answer --window 1.0.1.0.2.1 or --leave-out 1.0.1.0.2.1");
-        assert_eq!(misfit_line(&Misfit::FitsNothing { flag: Flag::LeaveOut, key: origin.clone(), published_in: vec![] }), "--leave-out 1.0.1.0.7 answers nothing here — this merge asks nothing about 1.0.1.0.7’s words");
-        assert_eq!(misfit_line(&Misfit::TwoAnswers { first: Flag::Window, second: Flag::LeaveOut, key: key.clone() }), "--window 1.0.1.0.2.1 and --leave-out 1.0.1.0.2.1 both answer the same words — give one");
+        let key = parse_address("1.0.1.0.64.1").expect("an address");
+        let origin = parse_address("1.0.1.0.69").expect("an address");
+        assert_eq!(misfit_line(&Misfit::FitsNothing { flag: Flag::Window, key: key.clone(), published_in: vec![] }), "--window 1.0.1.0.64.1 answers nothing here — no words in this merge are published in 1.0.1.0.64.1");
+        assert_eq!(misfit_line(&Misfit::FitsNothing { flag: Flag::KeepPrivate, key: origin.clone(), published_in: vec![key.clone()] }), "--keep-private 1.0.1.0.69 answers nothing here — 1.0.1.0.69’s words in this merge are already published in 1.0.1.0.64.1; answer --window 1.0.1.0.64.1 or --leave-out 1.0.1.0.64.1");
+        assert_eq!(misfit_line(&Misfit::FitsNothing { flag: Flag::LeaveOut, key: origin.clone(), published_in: vec![] }), "--leave-out 1.0.1.0.69 answers nothing here — this merge asks nothing about 1.0.1.0.69’s words");
+        assert_eq!(misfit_line(&Misfit::TwoAnswers { first: Flag::Window, second: Flag::LeaveOut, key: key.clone() }), "--window 1.0.1.0.64.1 and --leave-out 1.0.1.0.64.1 both answer the same words — give one");
     }
 }

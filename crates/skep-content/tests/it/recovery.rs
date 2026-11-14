@@ -100,7 +100,7 @@ fn the_slice_serializes_as_its_map_alone_in_tumbler_order() {
     for k in 0..64u32 {
         // 37 is coprime to 64: every (document, ordinal) once, out of order.
         let i = k * 37 % 64;
-        let (doc, ordinal) = (1 + i / 16, 1 + i % 16);
+        let (doc, ordinal) = (if i < 16 { 1 } else { 63 + i / 16 }, 1 + i % 16);
         // Ordinals 1, 5, 9 and 13 of each document are stretches of one byte;
         // a longer one would reach over the next ordinal's entry.
         let addr = a(&[1, 0, 1, 0, doc, 0, 1, ordinal]);
@@ -117,7 +117,7 @@ fn the_slice_serializes_as_its_map_alone_in_tumbler_order() {
     // Five more, where Tumbler order parts from orders that agree with it on
     // the keys above (equal lengths, one-byte components): a version
     // document's content, nine components sorting between document 1's and
-    // document 2's — not shortest first; and ordinals 256, 2³² and 2⁶⁴ (one
+    // document 64's — not shortest first; and ordinals 256, 2³² and 2⁶⁴ (one
     // `u32` digit past a byte, two digits, three), each sorting after 16 —
     // not by encoded bytes, nor by a low digit.
     let ca_under = |anchor: &[u32], ordinal: Nat| {
@@ -126,10 +126,10 @@ fn the_slice_serializes_as_its_map_alone_in_tumbler_order() {
     };
     for addr in [
         ca_under(&[1, 0, 1, 0, 1, 1, 0, 1], Nat::from(2u32)),
-        ca_under(&[1, 0, 1, 0, 3, 0, 1], Nat::from(256u32)),
-        ca_under(&[1, 0, 1, 0, 2, 0, 1], Nat::from(1u64 << 32)),
+        ca_under(&[1, 0, 1, 0, 65, 0, 1], Nat::from(256u32)),
+        ca_under(&[1, 0, 1, 0, 64, 0, 1], Nat::from(1u64 << 32)),
         ca_under(&[1, 0, 1, 0, 1, 1, 0, 1], Nat::from(1u32)),
-        ca_under(&[1, 0, 1, 0, 4, 0, 1], Nat::from(u64::MAX) + 1u32),
+        ca_under(&[1, 0, 1, 0, 66, 0, 1], Nat::from(u64::MAX) + 1u32),
     ] {
         let payload = addr.tumbler().to_string().into_bytes();
         c = c.apply_write(&stage_write(&c, addr.clone(), Val::new(payload.clone())).expect("fresh"));

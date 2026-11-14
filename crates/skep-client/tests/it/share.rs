@@ -219,7 +219,7 @@ fn a_share_opens_a_draft_a_revoke_closes_it_and_a_reshare_names_the_revocation()
     assert!(matches!(share(&rig.board, &issuer_a, &d, &addr(&rig.a.account)), Err(Refusal::ToYourself(_))));
     assert!(matches!(share(&rig.board, &issuer_a, &d, &addr("1.0.9")), Err(Refusal::NoSuchAccount(_))), "an account no registry row names");
     assert!(matches!(share(&rig.board, &issuer_a, &addr(&rig.b.account), &addr(&rig.c.account)), Err(Refusal::NotOwner { .. })), "another's account prefix");
-    assert!(matches!(share(&rig.board, &issuer_a, &addr("1.0.1.2.0.9"), &b_account), Err(Refusal::NoSuchDocument(_))), "a document never minted");
+    assert!(matches!(share(&rig.board, &issuer_a, &addr("1.0.1.2.0.71"), &b_account), Err(Refusal::NoSuchDocument(_))), "a document never minted");
     let issuer_b = issuer(&b, &rig.b);
     match revoke(&rig.board, &issuer_b, &g2.at) {
         Err(Refusal::NotYours { grant, issuer }) => assert_eq!((grant, issuer.map(|i| i.to_string())), (g2.at.clone(), Some(rig.a.account.clone()))),

@@ -61,11 +61,11 @@ fn an_unregistered_document_never_yields_an_ownership_verdict() {
     // address that names no document is refused for that, and the caller
     // learns nothing about who would have owned it. The caller MUST be one
     // that fails the ω check — ω of an unregistered address still resolves
-    // by longest registered prefix, so P1 owns [1,0,1,0,9] and would pass,
+    // by longest registered prefix, so P1 owns [1,0,1,0,71] and would pass,
     // leaving both orders agreeing on DocNotRegistered.
     let k = mem_kernel();
     let vs = insert_abc(&k);
-    let unregistered_doc = a(&[1, 0, 1, 0, 9]);
+    let unregistered_doc = a(&[1, 0, 1, 0, 71]);
     let p2 = Caller::Principal(PrincipalId(2));
     assert!(matches!(
         rejected(vs.insert(p2, &unregistered_doc, vp(1, 1), vec![val(b"x")], Deposit::Undeclared, now(&k))),
@@ -142,7 +142,7 @@ fn the_system_caller_bypasses_the_owner_check_but_not_registration() {
         .expect("no document's ω restricts the automation path");
     // Registration is not waived.
     assert!(matches!(
-        rejected(vs.insert(Caller::System, &a(&[1, 0, 1, 0, 9]), vp(1, 1), vec![val(b"x")], Deposit::Undeclared, now(&k))),
+        rejected(vs.insert(Caller::System, &a(&[1, 0, 1, 0, 71]), vp(1, 1), vec![val(b"x")], Deposit::Undeclared, now(&k))),
         InsertError::DocNotRegistered
     ));
 }

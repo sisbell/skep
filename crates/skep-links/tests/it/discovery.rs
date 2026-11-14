@@ -338,8 +338,8 @@ fn homed_under_answers_exactly_what_a_scan_filtered_by_home_would() {
         enc(&[la(1)]),
         enc(&[doc1(), doc2()]),
         enc(&[doc2(), sib_doc(), doc1()]),
-        between(&[1, 0, 1, 0, 1], &[1, 0, 1, 0, 3]), // a run across both of the owner's documents
-        between(&[1, 0, 1, 0, 1, 0, 1, 5], &[1, 0, 1, 0, 2, 0, 1, 3]), // inside doc1's content to inside doc2's
+        between(&[1, 0, 1, 0, 1], &[1, 0, 1, 0, nth_doc(3)]), // a run across both of the owner's documents
+        between(&[1, 0, 1, 0, 1, 0, 1, 5], &[1, 0, 1, 0, nth_doc(2), 0, 1, 3]), // inside doc1's content to inside doc2's
         between(&[1, 0, 1, 0, 1, 0, 2, 2], &[1, 0, 2, 0, 1, 0, 2, 1]), // doc1's link chain to the sibling's
         between(&[1, 0, 1, 0, 1, 0], &[1, 0, 2, 0, 1, 0]), // two trailing-zero prefixes: doc2 and the sibling's document, not its member
         skew(),
@@ -516,7 +516,7 @@ fn homes_touching_names_every_home_of_every_hit_and_stab_in_concatenates_in_addr
     let (t, u) = (unregistered_ta(1), unregistered_ta(2)); // siblings in one directory block
     let gone = open_deposit(&w, &[ca(1)], &[ca(2), la(1)], std::slice::from_ref(&t));
     open_deposit(&w, &[ca(2)], &[doc2()], std::slice::from_ref(&t));
-    open_deposit(&w, &[doc1(), ca(3)], &[a(&[1, 0, 2])], &[a(&[1, 0, 9, 0, 9])]); // the document above t and u
+    open_deposit(&w, &[doc1(), ca(3)], &[a(&[1, 0, 2])], &[a(&[1, 0, 9, 0, 71])]); // the document above t and u
     let successor = Link::triple(
         Endset::from_spans([iext(1, 3)]),
         Endset::from_spans([iext(2, 4), iext(60, 70)]),
@@ -525,7 +525,7 @@ fn homes_touching_names_every_home_of_every_hit_and_stab_in_concatenates_in_addr
     w.editlink(P1, &gone, successor, &doc1(), &doc1()).expect("an extent-slotted successor");
     w.nullify(P1, &doc1(), &gone).expect("retract one");
     deposit_in(&k, &doc2(), &[ca(1)], &[ca(4)], &u);
-    deposit_in(&k, &doc2(), &[ca(70)], &[ca(1)], &a(&[1, 0, 9, 0, 9, 0, 1, 1, 1])); // beneath t
+    deposit_in(&k, &doc2(), &[ca(70)], &[ca(1)], &a(&[1, 0, 9, 0, 71, 0, 1, 1, 1])); // beneath t
     deposit_in(&k, &sib_doc(), &[ca(1), ca(5)], &[], &t);
     let (member, _) = Vstream::new(&k)
         .version(PrincipalId(2), &sib_doc(), None)
@@ -548,7 +548,7 @@ fn homes_touching_names_every_home_of_every_hit_and_stab_in_concatenates_in_addr
         enc(&[la(1)]),
         enc([&t]),
         enc([&u]),
-        enc(&[a(&[1, 0, 9, 0, 9])]),
+        enc(&[a(&[1, 0, 9, 0, 71])]),
         enc(&[ca(1), ca(70)]),
         Endset::from_spans([iext(1, 3)]),
         Endset::from_spans([iext(2, 100)]),

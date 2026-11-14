@@ -527,8 +527,8 @@ mod tests {
     /// What is not one is refused rather than guessed.
     #[test]
     fn dotted_decimal_round_trips_and_garbage_is_refused() {
-        let a = parse_dotted("1.0.2.0.3").expect("a document address");
-        assert_eq!(a.to_string(), "1.0.2.0.3");
+        let a = parse_dotted("1.0.2.0.65").expect("a document address");
+        assert_eq!(a.to_string(), "1.0.2.0.65");
         assert!(parse_dotted("1.0").is_none(), "a trailing separator is not an address");
         assert!(parse_dotted("").is_none());
         assert!(parse_dotted("1..2").is_none());

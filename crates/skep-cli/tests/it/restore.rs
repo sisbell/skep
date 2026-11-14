@@ -32,7 +32,7 @@ fn restore(rig: &Rig, extra: &[&str]) -> Run {
 fn the_usage_forms_are_refused_before_any_socket() {
     let dir = tempfile::tempdir().unwrap();
     let store = dir.path().join("store");
-    let draft = "1.0.1.0.4";
+    let draft = "1.0.1.0.66";
     let refused = |extra: &[&str], words: &str| {
         let mut args = vec!["restore", "--board", DEAD, "--dir", s(&store)];
         args.extend_from_slice(extra);
@@ -47,7 +47,7 @@ fn the_usage_forms_are_refused_before_any_socket() {
     refused(&["--draft", draft, "--at", "x"], "--at: 'x' is not a position");
     refused(&["--draft", draft, "--at", "-1"], "--at: '-1' is not a position");
     refused(&["--draft", "not-an-address", "--at", "3"], "--draft: 'not-an-address' is not an address");
-    refused(&["--draft", draft, "--at", "3", "--kind", "1.0.1.0.3"], "`--kind` is not a flag of `restore`");
+    refused(&["--draft", draft, "--at", "3", "--kind", "1.0.1.0.65"], "`--kind` is not a flag of `restore`");
     refused(&["--draft", draft, "--at", "3", "--at", "4"], "`--at` is given at most once at `restore`");
     let r = skep(&["restore", "--board", DEAD, "--dir", s(&store), "--principal", "1", "--draft", draft, "--at", "3"], &[], None);
     assert_eq!(r.code, 4, "the whole form reaches the dead board: {r:?}");

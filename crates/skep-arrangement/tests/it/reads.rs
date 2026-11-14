@@ -95,7 +95,7 @@ fn mixed_length_transclusion_flows_through_the_level_class_discipline() {
         assert_eq!(lens, vec![8, 9]);
         // project is fault-free under a cross-length prefix cover: pdoc's
         // content-base subtree picks out only the length-8 positions.
-        let content_base = SpanSet::singleton(subtree_of(&t(&[1, 0, 1, 0, 3, 0, 1])));
+        let content_base = SpanSet::singleton(subtree_of(&t(&[1, 0, 1, 0, nth_doc(3), 0, 1])));
         let got = m5.project(&doc2(), &content_base);
         let spans: Vec<Span> = got.iter().cloned().collect();
         assert_eq!(spans.len(), 1);

@@ -162,7 +162,7 @@ fn reinstate_rejects_each_documented_guard() {
     let k = mem_kernel();
     let vs = insert_abc(&k);
     let before = k.current_seq();
-    let unregistered_doc = a(&[1, 0, 1, 0, 9]);
+    let unregistered_doc = a(&[1, 0, 1, 0, 71]);
     let sound = shot_run(&doc1(), &ca(1), 1);
     // A run defective in its SHAPE: a link element is no content run.
     let link_start = ShotRun {
@@ -174,7 +174,7 @@ fn reinstate_rejects_each_documented_guard() {
     // …and one naming an address doc1 never minted.
     let never_minted = shot_run(&doc1(), &ca(9), 1);
     // …and one under a document M3 never registered.
-    let ghost = shot_run(&unregistered_doc, &a(&[1, 0, 1, 0, 9, 0, 1, 1]), 1);
+    let ghost = shot_run(&unregistered_doc, &a(&[1, 0, 1, 0, 71, 0, 1, 1]), 1);
 
     // Destination first, as COPY.
     assert!(matches!(

@@ -828,9 +828,9 @@ mod tests {
         let cell = Cell { hash, size: 10 };
         let hex = hex_string(&hash);
         let (a, b) = (PrincipalId(1), PrincipalId(2));
-        assert!(index.enter(&addr("1.0.1.0.2.0.1.1"), Some(a), &cell));
-        assert!(!index.enter(&addr("1.0.1.0.2.0.1.1"), Some(a), &cell), "idempotent per address");
-        assert!(index.enter(&addr("1.0.1.0.3.0.1.1"), Some(a), &cell), "a second cell of a's");
+        assert!(index.enter(&addr("1.0.1.0.64.0.1.1"), Some(a), &cell));
+        assert!(!index.enter(&addr("1.0.1.0.64.0.1.1"), Some(a), &cell), "idempotent per address");
+        assert!(index.enter(&addr("1.0.1.0.65.0.1.1"), Some(a), &cell), "a second cell of a's");
         assert_eq!(index.base(a), 10, "one hash, counted once");
         assert!(index.enter(&addr("1.0.2.0.1.0.1.1"), Some(b), &Cell { hash, size: 10 }));
         assert_eq!(index.base(b), 10);
@@ -847,13 +847,13 @@ mod tests {
         assert!(index.referenced(DESIGNATION, &hex_string(&other.hash)));
         assert_eq!(index.total_base(), 20);
         // The larger size wins per hash per account, whatever the order.
-        assert!(index.enter(&addr("1.0.1.0.4.0.1.1"), Some(a), &Cell { hash, size: 12 }));
+        assert!(index.enter(&addr("1.0.1.0.66.0.1.1"), Some(a), &Cell { hash, size: 12 }));
         assert_eq!(index.base(a), 12);
-        assert!(index.enter(&addr("1.0.1.0.5.0.1.1"), Some(a), &Cell { hash, size: 11 }));
+        assert!(index.enter(&addr("1.0.1.0.67.0.1.1"), Some(a), &Cell { hash, size: 11 }));
         assert_eq!(index.base(a), 12);
         assert_eq!(index.first_halt(), None);
-        assert!(index.halt(&addr("1.0.1.0.6.0.1.1")));
-        assert!(!index.halt(&addr("1.0.1.0.6.0.1.1")));
+        assert!(index.halt(&addr("1.0.1.0.68.0.1.1")));
+        assert!(!index.halt(&addr("1.0.1.0.68.0.1.1")));
         let mark = index.first_halt().expect("a halt mark");
         assert_eq!(mark.fault, "unknown_cell_schema");
         assert_eq!(mark.kind, cell::KIND);

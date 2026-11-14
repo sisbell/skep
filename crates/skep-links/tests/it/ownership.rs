@@ -57,7 +57,7 @@ fn deposit_ops_reject_a_foreign_home_and_commit_nothing() {
     // ownership: an unregistered second home outranks an unowned first, so
     // the verdict does not depend on which home is named first.
     assert!(matches!(
-        w.editlink(P1, &x, successor_value, &sib_doc(), &a(&[1, 0, 1, 0, 7])),
+        w.editlink(P1, &x, successor_value, &sib_doc(), &a(&[1, 0, 1, 0, 69])),
         Err(TxnError::Rejected(EditLinkError::HomeNotRegistered))
     ));
     assert_eq!(k.current_seq(), before, "ownership rejections leave no state change");

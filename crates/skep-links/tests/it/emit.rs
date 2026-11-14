@@ -101,7 +101,7 @@ fn emit_names_a_distinct_rejection_for_each_gate_it_fails() {
     ));
     // Home existence, enforced on every path.
     assert!(matches!(
-        w.emit(P1, &a(&[1, 0, 1, 0, 7]), &pred_def_ty(), &ca(1), &[]),
+        w.emit(P1, &a(&[1, 0, 1, 0, 69]), &pred_def_ty(), &ca(1), &[]),
         Err(TxnError::Rejected(EmitError::HomeNotRegistered))
     ));
 }
@@ -234,7 +234,7 @@ fn emit_rejects_an_unregistered_home_on_the_dedup_hit_path() {
         .expect("incumbent");
     let before = k.current_seq();
     assert!(matches!(
-        w.emit(P1, &a(&[1, 0, 1, 0, 7]), &pred_def_ty(), &ca(1), &[]),
+        w.emit(P1, &a(&[1, 0, 1, 0, 69]), &pred_def_ty(), &ca(1), &[]),
         Err(TxnError::Rejected(EmitError::HomeNotRegistered))
     ));
     assert_eq!(k.current_seq(), before);
@@ -254,7 +254,7 @@ fn pre_transact_fences_outrank_the_home_and_owner_checks() {
     let k = kernel();
     let w = writer(&k);
     let sup = supersedes_ty();
-    let ghost_home = a(&[1, 0, 1, 0, 7]);
+    let ghost_home = a(&[1, 0, 1, 0, 69]);
     assert!(matches!(
         w.emit(P2, &ghost_home, &Endset::from_spans([iext(1, 3)]), &ca(1), &[ca(2)]),
         Err(TxnError::Rejected(EmitError::NonAddressDenotingType))

@@ -15,7 +15,7 @@
 //! its constant there, so the table moves when the record encodings do and
 //! a figure that drifts is a red test, not a stale number. The depth every
 //! figure is measured at is THE SHALLOW END: a top-level document of an
-//! account (`1.0.1.0.3`, five components), its content elements at eight,
+//! account (`1.0.1.0.65`, five components), its content elements at eight,
 //! its links at eight, its members at six — the depth `budget.rs`'s span
 //! argument prices from. A span's own bytes are not a constant but a
 //! function of its depth and its components' magnitudes
@@ -600,11 +600,11 @@ mod tests {
     #[test]
     fn a_spans_stored_bytes_follow_the_kernels_layout() {
         let t = |comps: &[u32]| Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty");
-        let content = Span::new(t(&[1, 0, 1, 0, 3, 0, 1, 1]), t(&[0, 0, 0, 0, 0, 0, 0, 1])).expect("a span");
+        let content = Span::new(t(&[1, 0, 1, 0, 65, 0, 1, 1]), t(&[0, 0, 0, 0, 0, 0, 0, 1])).expect("a span");
         assert_eq!(stored_span_bytes(&content), (8 + 5 * 12 + 3 * 8) + (8 + 7 * 8 + 12));
         assert_eq!(stored_span_bytes(&content), SHALLOW_CONTENT_SPAN_BYTES);
         assert_eq!(stored_span_bytes(&subtree_of(&t(&[1, 1, 0, 1, 0, 1, 0, 3, 23, 1]))), SHALLOW_TYPE_SPAN_BYTES);
-        let wide = Span::new(t(&[1, 0, 1, 0, 3, 0, 1, 1]), t(&[0, 0, 0, 0, 0, 0, 0, 70_000])).expect("a span");
+        let wide = Span::new(t(&[1, 0, 1, 0, 65, 0, 1, 1]), t(&[0, 0, 0, 0, 0, 0, 0, 70_000])).expect("a span");
         assert_eq!(stored_span_bytes(&wide), SHALLOW_CONTENT_SPAN_BYTES, "one digit still");
         let deep = Tumbler::new(std::iter::repeat_n(Nat::from(1u64 << 40), 8)).expect("nonempty");
         assert_eq!(stored_tumbler_bytes(&deep), 8 + 8 * 16, "two digits a component");

@@ -380,7 +380,7 @@ fn the_wire_frame_is_the_op_and_a_write_on_op_at_is_refused() {
     let mine = Some(owner.as_str());
 
     // The example's frame, verbatim: parsed and answered as `reinstate`.
-    let example = r#"{"as_of":7,"at":{"ordinal":"3","subspace":"1"},"doc":"1.0.1.0.2","op":"reinstate","runs":[{"i_start":"1.0.1.0.2.0.1.4","origin":"1.0.1.0.2","width":"5"}]}"#;
+    let example = r#"{"as_of":7,"at":{"ordinal":"3","subspace":"1"},"doc":"1.0.1.0.64","op":"reinstate","runs":[{"i_start":"1.0.1.0.64.0.1.4","origin":"1.0.1.0.64","width":"5"}]}"#;
     let v = op(port, mine, example);
     assert_eq!(v["resp"].as_str(), Some("rejected"), "{v}");
     assert_eq!(v["op"].as_str(), Some("reinstate"), "the frame is the op: {v}");

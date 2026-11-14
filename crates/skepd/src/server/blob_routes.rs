@@ -1090,12 +1090,12 @@ mod tests {
             assert!(!is_fetch_path(not), "{not}");
         }
         assert_eq!(
-            fetch_query(Some("i=1.0.1.0.2.0.1.1")).map(|a| a.tumbler().to_string()),
-            Ok("1.0.1.0.2.0.1.1".into())
+            fetch_query(Some("i=1.0.1.0.64.0.1.1")).map(|a| a.tumbler().to_string()),
+            Ok("1.0.1.0.64.0.1.1".into())
         );
         assert_eq!(
-            fetch_query(Some("i=1.0.1.0.2")).map(|a| a.tumbler().to_string()),
-            Ok("1.0.1.0.2".into()),
+            fetch_query(Some("i=1.0.1.0.64")).map(|a| a.tumbler().to_string()),
+            Ok("1.0.1.0.64".into()),
             "a document: the shape is the serve's"
         );
         for bad in [

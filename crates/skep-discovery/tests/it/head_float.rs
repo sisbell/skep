@@ -192,7 +192,7 @@ fn a_pinned_version_member_answers_its_own_arrangement_not_the_heads() {
         .expect("the owner versions its published document again");
     assert_eq!(
         new_head,
-        a(&[1, 0, 1, 0, 3, 2]),
+        a(&[1, 0, 1, 0, nth_doc(3), 2]),
         "the chain's second member"
     );
     seed_published_content(&k, &pdoc(), 1); // pca(5), on the new head alone

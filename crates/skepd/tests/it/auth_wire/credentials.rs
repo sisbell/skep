@@ -1408,7 +1408,7 @@ fn altering_any_one_member_of_a_signed_record_frame_fails_the_record_grade() {
         ("board's position", frame(ALG_MLDSA65_ED25519, BoardTerm { log_position: board.log_position + 1, ..board }, &account, &doc, &right_body)),
         ("board's chain", frame(ALG_MLDSA65_ED25519, moved_chain, &account, &doc, &right_body)),
         ("account", frame(ALG_MLDSA65_ED25519, board, &address("1.0.2"), &doc, &right_body)),
-        ("doc", frame(ALG_MLDSA65_ED25519, board, &account, &address("1.0.1.0.2"), &right_body)),
+        ("doc", frame(ALG_MLDSA65_ED25519, board, &account, &address("1.0.1.0.64"), &right_body)),
         ("op", {
             let mut board_row = board.log_position.to_be_bytes().to_vec();
             board_row.extend_from_slice(&board.chain);

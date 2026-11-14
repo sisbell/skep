@@ -366,7 +366,7 @@ fn two_origins_at_one_depth_never_coalesce_even_where_ordinals_line_up() {
     // length, one level class, one ordinal — and they are still two
     // origins: widening doc1's run over it would place doc1's own ca(3),
     // which is not the address the second run names.
-    let doc2_third = a(&[1, 0, 1, 0, 2, 0, 1, 3]);
+    let doc2_third = a(&[1, 0, 1, 0, 64, 0, 1, 3]);
     assert_eq!(doc2_third.tumbler().len(), ca(1).tumbler().len());
     let l = list(vec![run(&ca(1), 2)]);
     let out = l.splice_in(&n(3), [run(&doc2_third, 1)]);

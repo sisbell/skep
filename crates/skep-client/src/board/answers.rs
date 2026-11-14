@@ -916,24 +916,24 @@ mod tests {
     fn the_reads_decode_the_wires_own_examples() {
         assert_eq!(addrs(&json!({"addrs":["1.0.1.0.1.0.2.1"],"as_of":9,"resp":"addrs"})), ["1.0.1.0.1.0.2.1"]);
         assert!(addrs(&json!({"as_of":9,"n":2,"resp":"count"})).is_empty());
-        let link = json!({"as_of":9,"link":{"slots":[[{"start":"1.0.1.0.1.0.1.1","width":"0.0.0.0.0.0.0.5"}],[{"start":"1.0.1.0.2.0.1.1","width":"0.0.0.0.0.0.0.6"}],[{"start":"1.0.1.0.3.0.1.1","width":"0.0.0.0.0.0.0.1"}]]},"resp":"link_value"});
-        assert_eq!((link_from(&link), link_to(&link)), (Some("1.0.1.0.1.0.1.1"), Some("1.0.1.0.2.0.1.1")));
+        let link = json!({"as_of":9,"link":{"slots":[[{"start":"1.0.1.0.1.0.1.1","width":"0.0.0.0.0.0.0.5"}],[{"start":"1.0.1.0.64.0.1.1","width":"0.0.0.0.0.0.0.6"}],[{"start":"1.0.1.0.65.0.1.1","width":"0.0.0.0.0.0.0.1"}]]},"resp":"link_value"});
+        assert_eq!((link_from(&link), link_to(&link)), (Some("1.0.1.0.1.0.1.1"), Some("1.0.1.0.64.0.1.1")));
         assert_eq!(link_to(&json!({"as_of":9,"link":null,"resp":"link_value"})), None);
         assert_eq!(content_extent(&json!({"as_of":9,"resp":"span_set","set":[{"start":"1.1","width":"0.5"}]})), 5);
         assert_eq!(content_extent(&json!({"as_of":9,"resp":"span_set","set":[]})), 0);
         // `<!-- wire: response link_value -->`: the three slots as spans with the age.
-        let aged = json!({"as_of":9,"at":7,"link":{"slots":[[{"start":"1.0.1.0.1.0.1.1","width":"0.0.0.0.0.0.0.5"}],[{"start":"1.0.1.0.2.0.1.1","width":"0.0.0.0.0.0.0.6"}],[{"start":"1.0.1.0.3.0.1.1","width":"0.0.0.0.0.0.0.1"}]]},"resp":"link_value","time":1786838400047u64,"time_from":"feed"});
+        let aged = json!({"as_of":9,"at":7,"link":{"slots":[[{"start":"1.0.1.0.1.0.1.1","width":"0.0.0.0.0.0.0.5"}],[{"start":"1.0.1.0.64.0.1.1","width":"0.0.0.0.0.0.0.6"}],[{"start":"1.0.1.0.65.0.1.1","width":"0.0.0.0.0.0.0.1"}]]},"resp":"link_value","time":1786838400047u64,"time_from":"feed"});
         let value = link_value(&aged).expect("a link_value answer").expect("a link");
         assert_eq!((value.from.len(), value.to.len(), value.ty.len(), value.at), (1, 1, 1, Some(7)));
         assert_eq!((value.from[0].count(), value.to[0].count(), value.ty[0].is_unit()), (Some(5), Some(6), true));
-        assert_eq!(value.type_address(), Some("1.0.1.0.3.0.1.1"));
-        assert!(value.typed_exactly("1.0.1.0.3.0.1.1") && !value.typed_exactly("1.0.1.0.3.0.1"));
+        assert_eq!(value.type_address(), Some("1.0.1.0.65.0.1.1"));
+        assert!(value.typed_exactly("1.0.1.0.65.0.1.1") && !value.typed_exactly("1.0.1.0.65.0.1"));
         // `<!-- wire: response link_value_null -->`: the absent address's answer.
         assert_eq!(link_value(&json!({"as_of":9,"at":null,"link":null,"resp":"link_value","time":null,"time_from":null})), Some(None));
         assert_eq!(link_value(&json!({"as_of":9,"n":2,"resp":"count"})), None);
         // `<!-- wire: response homes -->`.
-        let (rows, exhausted) = homes(&json!({"as_of":9,"exhausted":true,"homes":[{"home":"1.0.1.0.1","n":2},{"home":"1.0.1.0.2","n":1}],"resp":"homes"})).expect("a homes answer");
-        assert_eq!((rows, exhausted), (vec![HomeCount { home: "1.0.1.0.1".into(), n: 2 }, HomeCount { home: "1.0.1.0.2".into(), n: 1 }], true));
+        let (rows, exhausted) = homes(&json!({"as_of":9,"exhausted":true,"homes":[{"home":"1.0.1.0.1","n":2},{"home":"1.0.1.0.64","n":1}],"resp":"homes"})).expect("a homes answer");
+        assert_eq!((rows, exhausted), (vec![HomeCount { home: "1.0.1.0.1".into(), n: 2 }, HomeCount { home: "1.0.1.0.64".into(), n: 1 }], true));
         // `<!-- wire: response links -->`: an active link beside one retracted at 8.
         let window = history(&json!({"as_of":9,"exhausted":false,"links":[{"a":"1.0.1.0.1.0.2.1","at":5,"retracted_at":null},{"a":"1.0.1.0.1.0.2.2","at":6,"retracted_at":8}],"next":"1.0.1.0.1.0.2.2","resp":"links"})).expect("a links answer");
         assert_eq!(window.links, vec![HistoryRow { a: "1.0.1.0.1.0.2.1".into(), at: Some(5), retracted_at: None }, HistoryRow { a: "1.0.1.0.1.0.2.2".into(), at: Some(6), retracted_at: Some(8) }]);
@@ -947,8 +947,8 @@ mod tests {
         assert_eq!(paged(json!({"batch":["1.0.1.0.1.0.2.1"],"exhausted":false,"next":null})).map(|p| p.next), Some(None), "`next` is the answer's own member");
         assert_eq!((paged(json!({"batch":[],"next":null})), link_page(&json!({"as_of":9,"n":2,"resp":"count"}))), (None, None), "no `exhausted`; no page answer");
         // `<!-- wire: response edition_claims -->`.
-        let claims = edition_claims(&json!({"as_of":9,"claims":[{"active":true,"claim":"1.0.1.0.5.0.2.1","home":"1.0.1.0.5","to":[{"start":"1.0.1.0.1","width":"0.0.0.0.1"}]}],"resp":"edition_claims"}));
-        assert_eq!(claims, vec![EditionClaim { claim: "1.0.1.0.5.0.2.1".into(), home: "1.0.1.0.5".into(), to: vec![LinkSpan { start: "1.0.1.0.1".into(), width: "0.0.0.0.1".into() }], active: true }]);
+        let claims = edition_claims(&json!({"as_of":9,"claims":[{"active":true,"claim":"1.0.1.0.67.0.2.1","home":"1.0.1.0.67","to":[{"start":"1.0.1.0.1","width":"0.0.0.0.1"}]}],"resp":"edition_claims"}));
+        assert_eq!(claims, vec![EditionClaim { claim: "1.0.1.0.67.0.2.1".into(), home: "1.0.1.0.67".into(), to: vec![LinkSpan { start: "1.0.1.0.1".into(), width: "0.0.0.0.1".into() }], active: true }]);
         assert!(claims[0].to[0].is_unit(), "a unit span at the document");
         // `<!-- wire: response doc_metadata -->`: the member's own mint at 7.
         let meta = metadata(&json!({"as_of":9,"at":7,"base":null,"base_copied":null,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","source":null,"time":1786838400047u64,"time_from":"feed"})).expect("a doc_metadata answer");
@@ -956,7 +956,7 @@ mod tests {
         assert_eq!((meta.base, meta.base_copied, meta.source), (None, None, None), "a member records no base");
         // `<!-- wire: response doc_metadata_unborn -->`: a staged draft, its
         // base the member copied and `base_copied` what the copy took.
-        let staged = metadata(&json!({"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.2","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":1786838400052u64,"time_from":"anchor"})).expect("a doc_metadata answer");
+        let staged = metadata(&json!({"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":1786838400052u64,"time_from":"anchor"})).expect("a doc_metadata answer");
         assert_eq!((staged.base.as_deref(), staged.base_copied, staged.source.as_deref(), staged.placed), (Some("1.0.1.0.1.1"), Some(5), Some("1.0.1.0.1.1"), None));
     }
 
@@ -993,11 +993,11 @@ mod tests {
     /// `withheld` rejection, which is no delivery.
     #[test]
     fn a_withheld_item_spells_no_value_and_names_its_origin() {
-        let masked = json!({"as_of":9,"items":[{"content":"a"},{"withheld":{"origin":"1.0.1.0.2","width":"3"}}],"resp":"delivery"});
-        assert_eq!((delivery_values(&masked), withheld_origin(&masked)), (None, Some("1.0.1.0.2")));
+        let masked = json!({"as_of":9,"items":[{"content":"a"},{"withheld":{"origin":"1.0.1.0.64","width":"3"}}],"resp":"delivery"});
+        assert_eq!((delivery_values(&masked), withheld_origin(&masked)), (None, Some("1.0.1.0.64")));
         let with_ref = json!({"as_of":9,"items":[{"content":"hello"},{"ref":"1.0.1.0.1.0.2.1"}],"resp":"delivery"});
         assert_eq!((delivery_values(&with_ref), withheld_origin(&with_ref)), (None, None));
-        assert_eq!(withheld_origin(&json!({"code":"withheld","op":"retrieve_v","resp":"rejected","site":{"addr":"1.0.1.0.2"}})), None);
+        assert_eq!(withheld_origin(&json!({"code":"withheld","op":"retrieve_v","resp":"rejected","site":{"addr":"1.0.1.0.64"}})), None);
         let readable = json!({"as_of":9,"items":[{"content":"hi"},{"atom":"chunk"}],"resp":"delivery"});
         assert_eq!(delivery_values(&readable).map(|v| v.len()), Some(3), "two bytes and one atom");
         assert_eq!(withheld_origin(&readable), None);

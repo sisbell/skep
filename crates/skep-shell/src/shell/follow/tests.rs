@@ -102,7 +102,7 @@ fn a_follower_waits_for_its_burst_in_flight_and_goes_at_its_ack() {
     let (f, _) = followers();
     let sent = f.sent(SESSION, &insert("b-1", "hello world"), || true).expect("a burst with an id is kept");
     let (dialed, dial) = recording();
-    let frame = mark(json!([{"burst": "b-1", "offset": 6, "width": 5}, {"start": "1.0.1.0.2.0.1.1", "width": "2"}]));
+    let frame = mark(json!([{"burst": "b-1", "offset": 6, "width": 5}, {"start": "1.0.1.0.64.0.1.1", "width": "2"}]));
     thread::scope(|scope| {
         let waiting = scope.spawn(|| f.follow(SESSION, follower("b-1", &frame), frame.clone(), || true, dial));
         until_waiting(&f, 1);
@@ -116,7 +116,7 @@ fn a_follower_waits_for_its_burst_in_flight_and_goes_at_its_ack() {
     assert_eq!(dialed.len(), 1, "{dialed:?}");
     assert_eq!(
         dialed[0].0["to"]["spans"],
-        json!([{"start": "1.0.1.0.1.0.1.18", "width": "5"}, {"start": "1.0.1.0.2.0.1.1", "width": "2"}]),
+        json!([{"start": "1.0.1.0.1.0.1.18", "width": "5"}, {"start": "1.0.1.0.64.0.1.1", "width": "2"}]),
         "the piece resolved in its place, the span beside it as given"
     );
     assert_eq!(f.waiting(), 0, "the follower left the table");
@@ -326,8 +326,8 @@ fn a_delete_followers_pieces_that_name_no_words_of_its_burst_are_refused() {
     f.sent(SESSION, &json!({"op": "delete", "doc": "1.0.1.0.1", "id": "b-2", "p": {"subspace": "1", "ordinal": "1"}, "width": "1", "as_of": 3}), || true)
         .unwrap()
         .settle(&Ok(json!({"resp": "ack", "at": 9})));
-    let elsewhere = json!({"op": "insert", "doc": "1.0.1.0.2", "id": "b-3", "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"], "as_of": 3});
-    f.sent(SESSION, &elsewhere, || true).unwrap().settle(&Ok(json!({"resp": "ack_addr", "addr": "1.0.1.0.2.0.1.1", "at": 9})));
+    let elsewhere = json!({"op": "insert", "doc": "1.0.1.0.64", "id": "b-3", "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"], "as_of": 3});
+    f.sent(SESSION, &elsewhere, || true).unwrap().settle(&Ok(json!({"resp": "ack_addr", "addr": "1.0.1.0.64.0.1.1", "at": 9})));
     let (dialed, dial) = recording();
     let undo = delete(1, 1);
     let run = |burst: &str, offset: u64, width: u64| json!({"before": null, "after": null, "span": [{"burst": burst, "offset": offset, "width": width}]});

@@ -394,8 +394,8 @@ mod tests {
         assert_eq!(surfaced(&bound(None)), None);
         let key = skep_client::sheet::KeyFile::new(skep_client::sheet::Seed::fresh(), false, None, None).public;
         assert_eq!(
-            bound_said(&bound(Some(vec![skep_identity::Enrolled { key, anchor: false }])), Some(&a("1.0.1.0.2"))),
-            "BOUND: the prefix 1.5 is bound to the account 1.0.2: dial https://acme.example, member 2 of 2 in the org's order; read 1.0.1.0.2 there, the address in that board's local form (REG-1.63); the account's key set holds 1 key as of the registry's head"
+            bound_said(&bound(Some(vec![skep_identity::Enrolled { key, anchor: false }])), Some(&a("1.0.1.0.64"))),
+            "BOUND: the prefix 1.5 is bound to the account 1.0.2: dial https://acme.example, member 2 of 2 in the org's order; read 1.0.1.0.64 there, the address in that board's local form (REG-1.63); the account's key set holds 1 key as of the registry's head"
         );
         let bare = bound_said(&bound(None), None);
         assert!(bare.contains("; a bare prefix names no place on that board; the account's key set is undeterminable here"), "{bare}");

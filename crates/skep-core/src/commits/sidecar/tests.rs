@@ -580,7 +580,7 @@ fn a_failed_append_stops_the_log_so_the_reopen_walk_starts_below_the_gap() {
 
     // The position after the gap — the one whose line would raise the
     // walk's floor over it. Accepted as an outcome, written nowhere.
-    log.record(&serial, 11, "insert", vec!["1.0.1.0.2".into()], "bare".into(), None, None)
+    log.record(&serial, 11, "insert", vec!["1.0.1.0.64".into()], "bare".into(), None, None)
         .expect("a stopped log still records: the ack is owed either way");
     assert_eq!(log.lines.said().lock().len(), 1, "the stop takes the next line in silence");
     assert_eq!(
@@ -635,7 +635,7 @@ fn the_landing_is_one_rewrite_in_position_order_keeping_every_line() {
     let serial = crate::serial::Serial::new();
     let serial = serial.lock();
 
-    let held = log.record(&serial, 31, "insert", vec!["1.0.1.0.2".into()], "bare".into(), None, None);
+    let held = log.record(&serial, 31, "insert", vec!["1.0.1.0.64".into()], "bare".into(), None, None);
     assert_eq!(held, Some(Recorded::Held), "a write while the region pends is held");
     assert_eq!(std::fs::read(&path).expect("read"), old, "no line appended");
     assert!(log.entries.contains_key(&31), "in memory");
@@ -1152,7 +1152,7 @@ fn malformed_names_are_said_once_with_the_count_and_the_first_position() {
     let entries = [
         (20, recorded("insert", &["1.0.1.0.1"], 1, Some("bare"))),
         (24, recorded("insert", &["1.0"], 2, Some("bare"))),
-        (29, recorded("make_link", &["1.0.2.0.2", "not an address"], 3, Some("bare"))),
+        (29, recorded("make_link", &["1.0.2.0.64", "not an address"], 3, Some("bare"))),
         (31, CommitMeta::bare()),
         (32, recorded("insert", &["1.0"], 4, Some("bare"))),
     ];
@@ -1601,7 +1601,7 @@ fn a_line_at_the_bound_replays_whole_and_one_past_it_is_damage() {
 fn a_set_arrangement_lines_merge_carries_a_restored_position_and_a_landings_none() {
     let line = |time: u64, at: Option<u64>| CommitMeta::Recorded {
         op: "set_arrangement".into(),
-        docs: vec!["1.0.1.0.5".into()],
+        docs: vec!["1.0.1.0.67".into()],
         time,
         key: Some("bare".into()),
         signed: None,
@@ -1613,12 +1613,12 @@ fn a_set_arrangement_lines_merge_carries_a_restored_position_and_a_landings_none
     let (landing, put_back) = (line(1_700_000_000_005, None), line(1_700_000_000_006, Some(5)));
     assert_eq!(
         String::from_utf8(entry_line(8, &landing)).expect("utf-8"),
-        "{\"at\":8,\"base\":\"1.0.1.0.1.2\",\"docs\":[\"1.0.1.0.5\"],\"key\":\"bare\",\"merge\":{\"head\":\"1.0.1.0.1.2\",\"sides\":[\"1.0.1.0.1.1.1\"]},\"op\":\"set_arrangement\",\"time\":1700000000005}\n",
+        "{\"at\":8,\"base\":\"1.0.1.0.1.2\",\"docs\":[\"1.0.1.0.67\"],\"key\":\"bare\",\"merge\":{\"head\":\"1.0.1.0.1.2\",\"sides\":[\"1.0.1.0.1.1.1\"]},\"op\":\"set_arrangement\",\"time\":1700000000005}\n",
         "a landing's term names no position"
     );
     assert_eq!(
         String::from_utf8(entry_line(9, &put_back)).expect("utf-8"),
-        "{\"at\":9,\"base\":\"1.0.1.0.1.2\",\"docs\":[\"1.0.1.0.5\"],\"key\":\"bare\",\"merge\":{\"at\":5,\"head\":\"1.0.1.0.1.2\",\"sides\":[\"1.0.1.0.1.1.1\"]},\"op\":\"set_arrangement\",\"time\":1700000000006}\n",
+        "{\"at\":9,\"base\":\"1.0.1.0.1.2\",\"docs\":[\"1.0.1.0.67\"],\"key\":\"bare\",\"merge\":{\"at\":5,\"head\":\"1.0.1.0.1.2\",\"sides\":[\"1.0.1.0.1.1.1\"]},\"op\":\"set_arrangement\",\"time\":1700000000006}\n",
         "the merge put back names the position it restored"
     );
     let mut file = entry_line(8, &landing);
@@ -1630,7 +1630,7 @@ fn a_set_arrangement_lines_merge_carries_a_restored_position_and_a_landings_none
         other => panic!("a recorded entry: {other:?}"),
     };
     assert_eq!((terms(0), terms(1)), (landing_terms(&landing), landing_terms(&put_back)), "each replays as written");
-    let torn = br#"{"at":9,"base":"1.0.1.0.1.2","docs":["1.0.1.0.5"],"key":"bare","merge":{"at":"5","head":"1.0.1.0.1.2","sides":[]},"op":"set_arrangement","time":1}"#;
+    let torn = br#"{"at":9,"base":"1.0.1.0.1.2","docs":["1.0.1.0.67"],"key":"bare","merge":{"at":"5","head":"1.0.1.0.1.2","sides":[]},"op":"set_arrangement","time":1}"#;
     assert!(parse_line(torn).is_none(), "a position of another shape is torn");
 }
 

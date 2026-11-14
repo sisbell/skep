@@ -17,7 +17,7 @@ fn action_point_is_first_nonzero_none_iff_zero() {
 
 #[test]
 fn sig_is_last_nonzero_else_len() {
-    assert_eq!(sig(&t(&[1, 0, 2, 0, 5])), 5); // T4-valid ⇒ sig = #t (TA5-SigValid)
+    assert_eq!(sig(&t(&[1, 0, 2, 0, 67])), 5); // T4-valid ⇒ sig = #t (TA5-SigValid)
     assert_eq!(sig(&t(&[1, 2, 0])), 2);
     assert_eq!(sig(&t(&[0, 0, 0])), 3); // all-zero: #t
 }
@@ -81,7 +81,7 @@ fn ta5a_gate_admits_the_descent_only_for_a_non_element_address() {
     assert!(inc_preserves_t4(&node, 1));
     assert!(inc_preserves_t4(&node, 2)); // zeros = 0 ≤ 2
     assert!(!inc_preserves_t4(&node, 3)); // k ≥ 3 never
-    let elem = addr(&[1, 0, 2, 0, 5, 0, 1]);
+    let elem = addr(&[1, 0, 2, 0, 67, 0, 1]);
     assert!(inc_preserves_t4(&elem, 1));
     assert!(!inc_preserves_t4(&elem, 2)); // zeros = 3: one more separator breaks T4
 }
@@ -118,13 +118,13 @@ fn the_ta5a_gate_admits_exactly_what_inc_leaves_t4_valid() {
 
 #[test]
 fn checked_inc_gates_and_reclassifies() {
-    let doc = addr(&[1, 0, 2, 0, 5]);
+    let doc = addr(&[1, 0, 2, 0, 67]);
     let elem = checked_inc(&doc, 2).unwrap();
-    assert_eq!(elem.tumbler(), &t(&[1, 0, 2, 0, 5, 0, 1]));
+    assert_eq!(elem.tumbler(), &t(&[1, 0, 2, 0, 67, 0, 1]));
     assert_eq!(elem.level(), Level::Element); // reclassified across the descent
     assert_eq!(checked_inc(&elem, 2), Err(GateViolation));
     let next = checked_inc(&doc, 0).unwrap(); // next sibling stays a Document
-    assert_eq!(next.tumbler(), &t(&[1, 0, 2, 0, 6]));
+    assert_eq!(next.tumbler(), &t(&[1, 0, 2, 0, 68]));
     assert_eq!(next.level(), Level::Document);
 }
 
@@ -140,7 +140,7 @@ fn checked_inc_gates_and_reclassifies() {
 /// which is why the constant is `usize::MAX` rather than merely a large one.
 #[test]
 fn checked_inc_refuses_an_unsatisfiable_k_before_it_allocates() {
-    let doc = addr(&[1, 0, 2, 0, 5]);
+    let doc = addr(&[1, 0, 2, 0, 67]);
     assert!(!inc_preserves_t4(&doc, usize::MAX));
     assert_eq!(checked_inc(&doc, usize::MAX), Err(GateViolation));
     assert_eq!(checked_inc(&addr(&[1]), usize::MAX), Err(GateViolation));
@@ -202,26 +202,26 @@ fn raw_shift_on_a_subspace_base_advances_the_subspace_id() {
     // The documented TA7a hazard: on `doc·0·subspace` the last component IS
     // the subspace id — a raw shift advances content (1) → link (2). This is
     // shift's specified primitive behavior; `shift_ordinal` is the safe form.
-    let base = t(&[1, 0, 2, 0, 5, 0, 1]);
+    let base = t(&[1, 0, 2, 0, 67, 0, 1]);
     assert_eq!(ordinal(&base), &content_subspace()); // the "ordinal" here is s_C
-    assert_eq!(shift(&base, &n(1)), t(&[1, 0, 2, 0, 5, 0, 2]));
+    assert_eq!(shift(&base, &n(1)), t(&[1, 0, 2, 0, 67, 0, 2]));
 }
 
 #[test]
 fn elem_addr_mints_the_guarded_element() {
     let p = ElemPos {
-        doc: addr(&[1, 0, 2, 0, 5]),
+        doc: addr(&[1, 0, 2, 0, 67]),
         subspace: n(1),
         ordinal: n(9),
     };
     let a = elem_addr(p).unwrap();
-    assert_eq!(a.tumbler(), &t(&[1, 0, 2, 0, 5, 0, 1, 9]));
+    assert_eq!(a.tumbler(), &t(&[1, 0, 2, 0, 67, 0, 1, 9]));
     assert_eq!(a.level(), Level::Element);
 }
 
 #[test]
 fn elem_addr_guards_each_condition() {
-    let doc = addr(&[1, 0, 2, 0, 5]);
+    let doc = addr(&[1, 0, 2, 0, 67]);
     let not_doc = ElemPos {
         doc: addr(&[1, 0, 2]),
         subspace: n(1),
@@ -259,7 +259,7 @@ fn elem_addr_reports_the_earliest_violated_guard() {
     // Doc admitted, the last two violated: the subspace clause speaks.
     assert_eq!(
         elem_addr(ElemPos {
-            doc: addr(&[1, 0, 2, 0, 5]),
+            doc: addr(&[1, 0, 2, 0, 67]),
             subspace: n(0),
             ordinal: n(0),
         }),
@@ -273,7 +273,7 @@ fn elem_addr_reports_the_earliest_violated_guard() {
 #[test]
 fn shift_ordinal_leaves_the_subspace_untouched() {
     let p = ElemPos {
-        doc: addr(&[1, 0, 2, 0, 5]),
+        doc: addr(&[1, 0, 2, 0, 67]),
         subspace: content_subspace(),
         ordinal: n(9),
     };
@@ -281,7 +281,7 @@ fn shift_ordinal_leaves_the_subspace_untouched() {
     assert_eq!(
         q,
         ElemPos {
-            doc: addr(&[1, 0, 2, 0, 5]),
+            doc: addr(&[1, 0, 2, 0, 67]),
             subspace: content_subspace(),
             ordinal: n(12),
         }
@@ -289,6 +289,6 @@ fn shift_ordinal_leaves_the_subspace_untouched() {
     assert_eq!(shift_ordinal(p.clone(), &n(0)), p); // the identity displacement
     assert_eq!(
         elem_addr(q).unwrap().tumbler(),
-        &t(&[1, 0, 2, 0, 5, 0, 1, 12])
+        &t(&[1, 0, 2, 0, 67, 0, 1, 12])
     );
 }

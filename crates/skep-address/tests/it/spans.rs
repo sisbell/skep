@@ -141,7 +141,7 @@ fn subtree_of_denotes_exactly_the_extensions_of_the_prefix() {
         t(&[2, 0]),
         t(&[0, 0]), // a carrier sentinel is a legal prefix
         t(&[1, 0, 2]),
-        t(&[1, 0, 2, 0, 5]),
+        t(&[1, 0, 2, 0, 67]),
         t(&[3, 7]),
     ];
     let mut probes = tumblers_upto(&[0, 1, 2, 3], 3);

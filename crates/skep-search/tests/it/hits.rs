@@ -42,14 +42,14 @@ fn held_is_composed_across_a_restart_off_the_ranges_record_with_its_cells_keys()
     let mut supplement = Index::new(principal);
     let issuer_a = [1u32, 0, 2];
     let issuer_b = [1u32, 0, 4];
-    let under_document = [1u32, 0, 2, 0, 4];
+    let under_document = [1u32, 0, 2, 0, 66];
     let under_account = [1u32, 0, 4];
     let ancestor = [1u32, 0, 3];
     supplement
         .index(draft(principal, &addr(&under_document), b"a granted draft's words"))
         .expect("admitted");
     supplement
-        .index(draft(principal, &addr(&[1, 0, 4, 0, 9]), b"an account grant's words"))
+        .index(draft(principal, &addr(&[1, 0, 4, 0, 71]), b"an account grant's words"))
         .expect("admitted");
     supplement
         .index(draft(principal, &addr(&[1, 0, 3, 0, 1, 0, 5]), b"an ancestor's draft's words"))
@@ -85,7 +85,7 @@ fn held_is_composed_across_a_restart_off_the_ranges_record_with_its_cells_keys()
         "the departed document grant's cell and issuer"
     );
     assert_eq!(
-        standing(&[1, 0, 4, 0, 9]),
+        standing(&[1, 0, 4, 0, 71]),
         Standing::Held {
             kind: GrantKind::AnyPrincipal,
             rung: Rung::Account,
@@ -137,7 +137,7 @@ fn a_drafts_hit_is_never_public() {
 /// postings' ranges, the extent's start counted in.
 #[test]
 fn the_span_is_byte_exact_in_the_members_v_ordinals_with_the_member_and_as_of() {
-    let member = addr(&[1, 0, 1, 0, 8, 3]);
+    let member = addr(&[1, 0, 1, 0, 70, 3]);
     let unit = Unit::new(
         UnitKey::new(doc(8)),
         Some(member.clone()),
@@ -205,7 +205,7 @@ fn a_multi_byte_character_at_the_snippets_bound_is_never_split() {
 /// rendered as text; an invalid byte of a `hex` stretch the same.
 #[test]
 fn a_gap_inside_the_snippets_window_is_marked_and_never_rendered() {
-    let origin = addr(&[1, 0, 2, 0, 9]);
+    let origin = addr(&[1, 0, 2, 0, 71]);
     let unit = Unit::new(
         UnitKey::new(doc(1)),
         None,

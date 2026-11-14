@@ -477,10 +477,10 @@ fn an_unclaimed_board_mounts_nothing_and_answers_none_until_the_claim_lands() {
     assert!(answer.hits.is_empty() && answer.places.is_empty() && answer.state == State::None);
     assert_eq!(consumer.places(Who::Guest, None), PlacesAnswer { docs: Vec::new(), counts: BTreeMap::new(), state: State::None }, "no listing without an index");
     *world.lock().unwrap() = World::claimed();
-    world.lock().unwrap().publish("1.0.1.0.2", "the claim landed");
+    world.lock().unwrap().publish("1.0.1.0.64", "the claim landed");
     consumer.poll().expect("polls");
     assert!(matches!(consumer.state(Who::Guest), State::Complete { .. }), "{:?}", consumer.state(Who::Guest));
-    assert_eq!(hits(&consumer, Who::Guest, "landed"), ["1.0.1.0.2"]);
+    assert_eq!(hits(&consumer, Who::Guest, "landed"), ["1.0.1.0.64"]);
 }
 
 /// `client.md` §4e.2: "EVERY CONTENT CHANGE COSTS ONE READ of the changed
@@ -491,10 +491,10 @@ fn an_unclaimed_board_mounts_nothing_and_answers_none_until_the_claim_lands() {
 #[test]
 fn the_first_build_reads_each_published_document_once_token_free_and_completes_at_the_health_pair() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "alpha beta\nsecond line");
-    w.publish("1.0.1.0.3", "gamma delta");
+    w.publish("1.0.1.0.64", "alpha beta\nsecond line");
+    w.publish("1.0.1.0.65", "gamma delta");
     for _ in 0..3 {
-        w.publish("1.0.1.0.3", "gamma delta epsilon");
+        w.publish("1.0.1.0.65", "gamma delta epsilon");
     }
     let world = shared(w);
     let (b, dialer) = board(&world);
@@ -510,8 +510,8 @@ fn the_first_build_reads_each_published_document_once_token_free_and_completes_a
     let health_at = served.iter().position(|s| s.line == "GET /health").unwrap();
     let first_page = served.iter().position(|s| s.line.starts_with("GET /changes?")).unwrap();
     assert!(health_at < first_page, "the `/health` pair is read BEFORE the draining poll");
-    assert_eq!(hits(&consumer, Who::Guest, "epsilon"), ["1.0.1.0.3"]);
-    assert_eq!(hits(&consumer, Who::Guest, "alpha"), ["1.0.1.0.2"]);
+    assert_eq!(hits(&consumer, Who::Guest, "epsilon"), ["1.0.1.0.65"]);
+    assert_eq!(hits(&consumer, Who::Guest, "alpha"), ["1.0.1.0.64"]);
     let position = world.lock().unwrap().position;
     assert_eq!(consumer.state(Who::Guest), State::Complete { as_of: position, floor: None });
     consumer.save().unwrap();
@@ -521,8 +521,8 @@ fn the_first_build_reads_each_published_document_once_token_free_and_completes_a
     assert_eq!(header.head.as_ref().map(|h| h.member.to_string()).as_deref(), Some(HEAD_MEMBER_1), "the newest `H.k` the feed delivered");
     let answer = consumer.search(Who::Guest, "alpha beta", &SearchOpts::default()).unwrap();
     assert_eq!(answer.places.len(), 1, "the label matches exactly: {:?}", answer.places);
-    assert_eq!((answer.places[0].doc.to_string().as_str(), answer.places[0].standing.clone()), ("1.0.1.0.2", Standing::Public));
-    assert_eq!(consumer.search(Who::Guest, "1.0.1.0.3", &SearchOpts::default()).unwrap().places[0].doc.to_string(), "1.0.1.0.3", "an address parses exact");
+    assert_eq!((answer.places[0].doc.to_string().as_str(), answer.places[0].standing.clone()), ("1.0.1.0.64", Standing::Public));
+    assert_eq!(consumer.search(Who::Guest, "1.0.1.0.65", &SearchOpts::default()).unwrap().places[0].doc.to_string(), "1.0.1.0.65", "an address parses exact");
     assert_eq!(consumer.counts(Who::Guest).get(&addr(ACCOUNT)), Some(&3), "doc 1 and the two documents under the account");
 }
 
@@ -535,35 +535,35 @@ fn the_first_build_reads_each_published_document_once_token_free_and_completes_a
 #[test]
 fn a_minting_row_moves_the_head_a_daughter_moves_none_and_an_unnamed_trunk_is_probed() {
     let mut w = World::claimed();
-    w.publish_member("1.0.1.0.2", 1, "first edition");
-    w.publish_member("1.0.1.0.2", 2, "second edition");
+    w.publish_member("1.0.1.0.64", 1, "first edition");
+    w.publish_member("1.0.1.0.64", 2, "second edition");
     // A daughter `D.2.1` minted by a late shot: indexed nowhere.
     let at = w.next();
-    w.rows.push(Row { at, op: Some("publish"), docs: Some(vec!["1.0.1.0.2.2.1".to_string()]), key: Some("bare"), draft: false });
-    w.docs.insert("1.0.1.0.2.2.1".to_string(), Doc { text: b"a daughter".to_vec(), refuse: None });
+    w.rows.push(Row { at, op: Some("publish"), docs: Some(vec!["1.0.1.0.64.2.1".to_string()]), key: Some("bare"), draft: false });
+    w.docs.insert("1.0.1.0.64.2.1".to_string(), Doc { text: b"a daughter".to_vec(), refuse: None });
     // A document whose publishes lie below what the feed holds: an `insert`
     // names the bare address; the trunk holds D.1..D.3.
     for k in 1..=3 {
-        w.registered.insert(format!("1.0.1.0.4.{k}"));
-        w.docs.insert(format!("1.0.1.0.4.{k}"), Doc { text: format!("probed edition {k}").into_bytes(), refuse: None });
+        w.registered.insert(format!("1.0.1.0.66.{k}"));
+        w.docs.insert(format!("1.0.1.0.66.{k}"), Doc { text: format!("probed edition {k}").into_bytes(), refuse: None });
     }
-    w.publish("1.0.1.0.4", "the bare address floats");
+    w.publish("1.0.1.0.66", "the bare address floats");
     let world = shared(w);
     let (b, dialer) = board(&world);
     let tmp = tempfile::tempdir().unwrap();
     let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
     consumer.poll().unwrap();
-    assert_eq!(hits(&consumer, Who::Guest, "second"), ["1.0.1.0.2"]);
+    assert_eq!(hits(&consumer, Who::Guest, "second"), ["1.0.1.0.64"]);
     assert!(hits(&consumer, Who::Guest, "first").is_empty(), "the old head's unit was replaced under the document's key");
     assert!(hits(&consumer, Who::Guest, "daughter").is_empty());
-    assert_eq!(hits(&consumer, Who::Guest, "probed"), ["1.0.1.0.4"]);
+    assert_eq!(hits(&consumer, Who::Guest, "probed"), ["1.0.1.0.66"]);
     assert!(hits(&consumer, Who::Guest, "floats").is_empty(), "read at the pinned member D.3, never at the bare address");
     let answer = consumer.search(Who::Guest, "probed", &SearchOpts::default()).unwrap();
-    assert_eq!(answer.hits[0].member.as_ref().map(ToString::to_string).as_deref(), Some("1.0.1.0.4.3"));
+    assert_eq!(answer.hits[0].member.as_ref().map(ToString::to_string).as_deref(), Some("1.0.1.0.66.3"));
     let probes: Vec<String> = dialer.served.lock().unwrap().iter().filter(|s| s.line == "POST /op doc_metadata").map(|s| serde_json::from_slice::<Value>(&s.body).unwrap()["doc"].as_str().unwrap().to_string()).collect();
-    assert_eq!(probes, ["1.0.1.0.1.1", "1.0.1.0.4.1", "1.0.1.0.4.2", "1.0.1.0.4.4", "1.0.1.0.4.3"], "the trunk probed once per such document, doubling to `doc_not_registered` then bisecting: {probes:?}");
+    assert_eq!(probes, ["1.0.1.0.1.1", "1.0.1.0.66.1", "1.0.1.0.66.2", "1.0.1.0.66.4", "1.0.1.0.66.3"], "the trunk probed once per such document, doubling to `doc_not_registered` then bisecting: {probes:?}");
     let reads: Vec<String> = dialer.served.lock().unwrap().iter().filter(|s| s.line == "POST /op retrieve_v").map(|s| serde_json::from_slice::<Value>(&s.body).unwrap()["specs"][0]["doc"].as_str().unwrap().to_string()).collect();
-    assert!(reads.contains(&"1.0.1.0.2.2".to_string()) && !reads.contains(&"1.0.1.0.2".to_string()), "{reads:?}");
+    assert!(reads.contains(&"1.0.1.0.64.2".to_string()) && !reads.contains(&"1.0.1.0.64".to_string()), "{reads:?}");
 }
 
 /// THE PUBLICATION's FEED ROW names every home its one commit touched —
@@ -580,11 +580,11 @@ fn a_minting_row_moves_the_head_a_daughter_moves_none_and_an_unnamed_trunk_is_pr
 #[test]
 fn a_publications_row_re_reads_each_home_it_names_on_the_face_that_reads_it() {
     let mut w = World::claimed();
-    w.publish_member("1.0.1.0.2", 1, "first edition");
-    w.publish_member("1.0.1.0.2", 2, "second edition");
-    w.publish("1.0.1.0.3", "the public set");
-    w.draft("1.0.1.0.5", b"the staging draft");
-    w.draft("1.0.1.0.6", b"the notes");
+    w.publish_member("1.0.1.0.64", 1, "first edition");
+    w.publish_member("1.0.1.0.64", 2, "second edition");
+    w.publish("1.0.1.0.65", "the public set");
+    w.draft("1.0.1.0.67", b"the staging draft");
+    w.draft("1.0.1.0.68", b"the notes");
     let world = shared(w);
     let (b, dialer) = board(&world);
     let tmp = tempfile::tempdir().unwrap();
@@ -592,36 +592,36 @@ fn a_publications_row_re_reads_each_home_it_names_on_the_face_that_reads_it() {
     consumer.poll().unwrap();
     let tok = token();
     consumer.widen(session(&tok)).unwrap();
-    assert_eq!(hits(&consumer, Who::Guest, "second"), ["1.0.1.0.2"]);
+    assert_eq!(hits(&consumer, Who::Guest, "second"), ["1.0.1.0.64"]);
     // THE ROW: the member first, then the draft, then the other homes in
     // address order — on the published page reduced to its public homes, on
     // the drafts page whole.
     {
         let mut w = world.lock().unwrap();
         let at = w.next();
-        w.docs.insert("1.0.1.0.2.3".to_string(), Doc { text: b"third edition published with links".to_vec(), refuse: None });
-        w.registered.insert("1.0.1.0.2.3".to_string());
-        w.docs.insert("1.0.1.0.3".to_string(), Doc { text: b"the public set with a copy".to_vec(), refuse: None });
-        w.docs.insert("1.0.1.0.5".to_string(), Doc { text: b"the staging draft re-windowed".to_vec(), refuse: None });
-        w.docs.insert("1.0.1.0.6".to_string(), Doc { text: b"the notes with a claim".to_vec(), refuse: None });
-        w.rows.push(Row { at, op: Some("publish"), docs: Some(vec!["1.0.1.0.2.3".into(), "1.0.1.0.3".into(), "1.0.1.0.2.2".into()]), key: None, draft: false });
-        w.rows.push(Row { at, op: Some("publish"), docs: Some(vec!["1.0.1.0.2.3".into(), "1.0.1.0.5".into(), "1.0.1.0.6".into(), "1.0.1.0.3".into(), "1.0.1.0.2.2".into()]), key: None, draft: true });
+        w.docs.insert("1.0.1.0.64.3".to_string(), Doc { text: b"third edition published with links".to_vec(), refuse: None });
+        w.registered.insert("1.0.1.0.64.3".to_string());
+        w.docs.insert("1.0.1.0.65".to_string(), Doc { text: b"the public set with a copy".to_vec(), refuse: None });
+        w.docs.insert("1.0.1.0.67".to_string(), Doc { text: b"the staging draft re-windowed".to_vec(), refuse: None });
+        w.docs.insert("1.0.1.0.68".to_string(), Doc { text: b"the notes with a claim".to_vec(), refuse: None });
+        w.rows.push(Row { at, op: Some("publish"), docs: Some(vec!["1.0.1.0.64.3".into(), "1.0.1.0.65".into(), "1.0.1.0.64.2".into()]), key: None, draft: false });
+        w.rows.push(Row { at, op: Some("publish"), docs: Some(vec!["1.0.1.0.64.3".into(), "1.0.1.0.67".into(), "1.0.1.0.68".into(), "1.0.1.0.65".into(), "1.0.1.0.64.2".into()]), key: None, draft: true });
     }
     dialer.clear();
     consumer.poll().unwrap();
     let served = dialer.served.lock().unwrap().clone();
     let reads: Vec<(String, bool)> = served.iter().filter(|s| s.line == "POST /op retrieve_v").map(|s| (serde_json::from_slice::<Value>(&s.body).unwrap()["specs"][0]["doc"].as_str().unwrap().to_string(), s.token)).collect();
-    assert!(reads.contains(&("1.0.1.0.2.3".to_string(), false)), "the member moves the head and is read at its address: {reads:?}");
-    assert!(reads.contains(&("1.0.1.0.3".to_string(), false)), "the public set is re-read as changed: {reads:?}");
-    assert!(!reads.iter().any(|(d, _)| d == "1.0.1.0.2.2" || d == "1.0.1.0.2"), "an older member moves no head back; the bare edition is never read: {reads:?}");
-    assert!(reads.contains(&("1.0.1.0.5".to_string(), true)) && reads.contains(&("1.0.1.0.6".to_string(), true)), "the drafts are re-read under the session's token: {reads:?}");
-    assert_eq!(reads.iter().filter(|(d, t)| d == "1.0.1.0.2.3" && *t).count(), 0, "the member is passed over on the drafts face");
-    assert_eq!(hits(&consumer, Who::Guest, "third"), ["1.0.1.0.2"]);
-    assert_eq!(hits(&consumer, Who::Guest, "copy"), ["1.0.1.0.3"]);
-    assert_eq!(hits(&consumer, Who::Session(session(&tok)), "re-windowed"), ["1.0.1.0.5"]);
-    assert_eq!(hits(&consumer, Who::Session(session(&tok)), "claim"), ["1.0.1.0.6"]);
+    assert!(reads.contains(&("1.0.1.0.64.3".to_string(), false)), "the member moves the head and is read at its address: {reads:?}");
+    assert!(reads.contains(&("1.0.1.0.65".to_string(), false)), "the public set is re-read as changed: {reads:?}");
+    assert!(!reads.iter().any(|(d, _)| d == "1.0.1.0.64.2" || d == "1.0.1.0.64"), "an older member moves no head back; the bare edition is never read: {reads:?}");
+    assert!(reads.contains(&("1.0.1.0.67".to_string(), true)) && reads.contains(&("1.0.1.0.68".to_string(), true)), "the drafts are re-read under the session's token: {reads:?}");
+    assert_eq!(reads.iter().filter(|(d, t)| d == "1.0.1.0.64.3" && *t).count(), 0, "the member is passed over on the drafts face");
+    assert_eq!(hits(&consumer, Who::Guest, "third"), ["1.0.1.0.64"]);
+    assert_eq!(hits(&consumer, Who::Guest, "copy"), ["1.0.1.0.65"]);
+    assert_eq!(hits(&consumer, Who::Session(session(&tok)), "re-windowed"), ["1.0.1.0.67"]);
+    assert_eq!(hits(&consumer, Who::Session(session(&tok)), "claim"), ["1.0.1.0.68"]);
     let answer = consumer.search(Who::Guest, "third", &SearchOpts::default()).unwrap();
-    assert_eq!(answer.hits[0].member.as_ref().map(ToString::to_string).as_deref(), Some("1.0.1.0.2.3"), "the head is the member the row named first");
+    assert_eq!(answer.hits[0].member.as_ref().map(ToString::to_string).as_deref(), Some("1.0.1.0.64.3"), "the head is the member the row named first");
 }
 
 /// `search.md` §5.4: "a BARE ROW whose `op` is `null` or `publish` … is
@@ -631,7 +631,7 @@ fn a_publications_row_re_reads_each_home_it_names_on_the_face_that_reads_it() {
 #[test]
 fn a_bare_row_is_counted_and_withholds_complete_until_the_refresh() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "some text");
+    w.publish("1.0.1.0.64", "some text");
     w.bare();
     let world = shared(w);
     let (b, _) = board(&world);
@@ -641,7 +641,7 @@ fn a_bare_row_is_counted_and_withholds_complete_until_the_refresh() {
     assert_eq!(consumer.state(Who::Guest), State::Unplaced { range: Range::Board, count: 1 });
     consumer.reindex(Who::Guest).unwrap();
     assert!(matches!(consumer.state(Who::Guest), State::Complete { .. }));
-    assert_eq!(hits(&consumer, Who::Guest, "text"), ["1.0.1.0.2"], "the refresh dropped nothing");
+    assert_eq!(hits(&consumer, Who::Guest, "text"), ["1.0.1.0.64"], "the refresh dropped nothing");
 }
 
 // ── THE PARTS RULE ───────────────────────────────────────────────────────
@@ -733,7 +733,7 @@ fn a_straddled_drafts_join_is_held_pending_and_settled_by_the_next_polls_page() 
 #[test]
 fn a_withheld_read_records_its_refusal_a_transport_error_holds_held_and_a_widening_retries() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "readable");
+    w.publish("1.0.1.0.64", "readable");
     let world = shared(w);
     let (b, _) = board(&world);
     let tmp = tempfile::tempdir().unwrap();
@@ -746,23 +746,23 @@ fn a_withheld_read_records_its_refusal_a_transport_error_holds_held_and_a_wideni
     {
         let mut w = world.lock().unwrap();
         w.draft("1.0.1.2.0.1", b"shared");
-        w.draft("1.0.1.2.0.2", b"withheld");
-        w.docs.get_mut("1.0.1.2.0.2").unwrap().refuse = Some("withheld");
+        w.draft("1.0.1.2.0.64", b"withheld");
+        w.docs.get_mut("1.0.1.2.0.64").unwrap().refuse = Some("withheld");
     }
     consumer.poll().unwrap();
     consumer.save().unwrap();
     let dir = board_dir(consumer.dir(), &world);
     let header = load_header(&dir.file(&BoardDir::supplement_name(7)), Class::Principal(7));
     let own = header.ranges.iter().find(|r| r.under.as_ref().map(ToString::to_string).as_deref() == Some(SUB_ACCOUNT)).unwrap();
-    assert_eq!(own.refusals.iter().map(|r| (r.doc.to_string(), r.reason.clone())).collect::<Vec<_>>(), [("1.0.1.2.0.2".to_string(), "withheld".to_string())]);
+    assert_eq!(own.refusals.iter().map(|r| (r.doc.to_string(), r.reason.clone())).collect::<Vec<_>>(), [("1.0.1.2.0.64".to_string(), "withheld".to_string())]);
     let withheld_at = world.lock().unwrap().position;
     assert_eq!(own.held.position, withheld_at, "the page is whole once the refusal is recorded");
     assert_eq!(hits(&consumer, Who::Session(session(&tok)), "shared"), ["1.0.1.2.0.1"]);
     // A transport error on a later page holds `held`.
     {
         let mut w = world.lock().unwrap();
-        w.draft("1.0.1.2.0.3", b"unreachable");
-        w.transport_fail.insert("1.0.1.2.0.3".to_string());
+        w.draft("1.0.1.2.0.65", b"unreachable");
+        w.transport_fail.insert("1.0.1.2.0.65".to_string());
     }
     let err = consumer.poll().expect_err("the transport broke");
     assert_eq!(err.exit_code(), 4, "{err}");
@@ -775,12 +775,12 @@ fn a_withheld_read_records_its_refusal_a_transport_error_holds_held_and_a_wideni
     // recorded refusal, and the transport mended, the page completes.
     {
         let mut w = world.lock().unwrap();
-        w.docs.get_mut("1.0.1.2.0.2").unwrap().refuse = None;
+        w.docs.get_mut("1.0.1.2.0.64").unwrap().refuse = None;
         w.transport_fail.clear();
     }
     consumer.widen(session(&tok)).unwrap();
-    assert_eq!(hits(&consumer, Who::Session(session(&tok)), "withheld"), ["1.0.1.2.0.2"], "retried at the widening");
-    assert_eq!(hits(&consumer, Who::Session(session(&tok)), "unreachable"), ["1.0.1.2.0.3"]);
+    assert_eq!(hits(&consumer, Who::Session(session(&tok)), "withheld"), ["1.0.1.2.0.64"], "retried at the widening");
+    assert_eq!(hits(&consumer, Who::Session(session(&tok)), "unreachable"), ["1.0.1.2.0.65"]);
     consumer.save().unwrap();
     let header = load_header(&dir.file(&BoardDir::supplement_name(7)), Class::Principal(7));
     let own = header.ranges.iter().find(|r| r.under.as_ref().map(ToString::to_string).as_deref() == Some(SUB_ACCOUNT)).unwrap();
@@ -818,12 +818,12 @@ fn past_the_ceiling_counts_the_consumers_own_refusals_once_a_document() {
         board: Chain::from_bytes([1; 32]),
         floor: None,
         ranges: vec![
-            range(Some(SUB_ACCOUNT), vec![refusal("1.0.1.2.0.1", "unit_past_the_ceiling"), refusal("1.0.1.2.0.2", "withheld")]),
+            range(Some(SUB_ACCOUNT), vec![refusal("1.0.1.2.0.1", "unit_past_the_ceiling"), refusal("1.0.1.2.0.64", "withheld")]),
             range(Some(ACCOUNT), vec![refusal("1.0.1.2.0.1", "unit_past_the_ceiling")]),
         ],
         head: None,
     };
-    let withheld = Header { ranges: vec![range(None, vec![refusal("1.0.1.0.2", "withheld")])], ..header.clone() };
+    let withheld = Header { ranges: vec![range(None, vec![refusal("1.0.1.0.64", "withheld")])], ..header.clone() };
     let stats = |seen: u64| Stats { units: 4, terms: 0, postings: 0, bytes: 0, tombstones: 0, dead_postings: 0, ceiling: CEILING_BYTES, seen };
     let facts = |header, seen| Facts { stats: stats(seen), header, building: None, widening: None, resumed: None, lost: None, aside: false };
     assert_eq!(State::compose(&[Part::Index(facts(&header, 0))]), State::PastTheCeiling { held: 4, seen: 1, limit: CEILING_BYTES });
@@ -848,21 +848,21 @@ fn built_and_closed(world: &Arc<Mutex<World>>, dir: &SearchDir) -> ChainAt {
 #[test]
 fn an_equal_chain_resumes_from_held_and_reads_only_what_changed_since() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "kept across the restart");
+    w.publish("1.0.1.0.64", "kept across the restart");
     let world = shared(w);
     let tmp = tempfile::tempdir().unwrap();
     let dir = SearchDir::new(tmp.path());
     let held = built_and_closed(&world, &dir);
-    world.lock().unwrap().publish("1.0.1.0.3", "written since");
+    world.lock().unwrap().publish("1.0.1.0.65", "written since");
     world.lock().unwrap().new_head(2);
     let (b, dialer) = board(&world);
     let consumer = Consumer::open(&b, dir.clone()).unwrap();
     assert_eq!(dialer.lines().iter().filter(|l| l.starts_with("GET /chain?at=")).collect::<Vec<_>>(), [&format!("GET /chain?at={}", held.position)], "one read per distinct saved position");
-    assert_eq!(hits(&consumer, Who::Guest, "kept"), ["1.0.1.0.2"], "the file's units stand before any poll");
+    assert_eq!(hits(&consumer, Who::Guest, "kept"), ["1.0.1.0.64"], "the file's units stand before any poll");
     dialer.clear();
     consumer.poll().unwrap();
     assert_eq!(dialer.reads_of("retrieve_v"), 3, "the one document written since, the new head's unit and its record: {:?}", dialer.lines());
-    assert_eq!(hits(&consumer, Who::Guest, "since"), ["1.0.1.0.3"]);
+    assert_eq!(hits(&consumer, Who::Guest, "since"), ["1.0.1.0.65"]);
     assert!(matches!(consumer.state(Who::Guest), State::Complete { .. }));
     consumer.close().unwrap();
     let header = load_header(&board_dir(&dir, &world).file(&BoardDir::published_name()), Class::Guest);
@@ -876,7 +876,7 @@ fn an_equal_chain_resumes_from_held_and_reads_only_what_changed_since() {
 #[test]
 fn history_reclaimed_keeps_the_file_and_resumes_from_the_floor_with_the_hk_byte_equal() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "below the floor");
+    w.publish("1.0.1.0.64", "below the floor");
     let world = shared(w);
     let tmp = tempfile::tempdir().unwrap();
     let dir = SearchDir::new(tmp.path());
@@ -884,7 +884,7 @@ fn history_reclaimed_keeps_the_file_and_resumes_from_the_floor_with_the_hk_byte_
     let floor = {
         let mut w = world.lock().unwrap();
         for _ in 0..5 {
-            w.publish("1.0.1.0.3", "above the floor");
+            w.publish("1.0.1.0.65", "above the floor");
         }
         let floor = w.position - 2;
         w.floor = Some(floor);
@@ -900,9 +900,9 @@ fn history_reclaimed_keeps_the_file_and_resumes_from_the_floor_with_the_hk_byte_
     let bdir = board_dir(&dir, &world);
     assert!(bdir.file(&BoardDir::published_name()).is_file());
     assert!(std::fs::read_dir(bdir.path()).unwrap().filter_map(Result::ok).all(|e| !e.file_name().to_string_lossy().contains(".aside.")), "nothing moved aside");
-    assert_eq!(hits(&consumer, Who::Guest, "below"), ["1.0.1.0.2"], "a document written below the floor is searched as last read");
+    assert_eq!(hits(&consumer, Who::Guest, "below"), ["1.0.1.0.64"], "a document written below the floor is searched as last read");
     consumer.poll().unwrap();
-    assert_eq!(hits(&consumer, Who::Guest, "above"), ["1.0.1.0.3"]);
+    assert_eq!(hits(&consumer, Who::Guest, "above"), ["1.0.1.0.65"]);
     assert_eq!(consumer.state(Who::Guest), State::ResumedFromTheFloor { floor, held }, "the arm stands for the open's life");
     consumer.save().unwrap();
     let header = load_header(&bdir.file(&BoardDir::published_name()), Class::Guest);
@@ -917,7 +917,7 @@ fn history_reclaimed_keeps_the_file_and_resumes_from_the_floor_with_the_hk_byte_
 fn a_different_chain_beyond_head_or_a_changed_hk_moves_the_file_aside_with_its_pair_and_builds_fresh() {
     for case in ["different chain", "beyond head", "changed H.k"] {
         let mut w = World::claimed();
-        w.publish("1.0.1.0.2", "the old history");
+        w.publish("1.0.1.0.64", "the old history");
         let h2_at = w.new_head(2);
         let world = shared(w);
         let tmp = tempfile::tempdir().unwrap();
@@ -936,7 +936,7 @@ fn a_different_chain_beyond_head_or_a_changed_hk_moves_the_file_aside_with_its_p
                     w.floor = Some(held.position + 1);
                     w.head_members.insert(format!("{HEAD_DOCUMENT}.2"), (h2_at, "cd".repeat(32)));
                     for _ in 0..3 {
-                        w.publish("1.0.1.0.3", "later");
+                        w.publish("1.0.1.0.65", "later");
                     }
                 }
             }
@@ -957,7 +957,7 @@ fn a_different_chain_beyond_head_or_a_changed_hk_moves_the_file_aside_with_its_p
 #[test]
 fn history_busy_retries_and_then_resumes() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "kept");
+    w.publish("1.0.1.0.64", "kept");
     let world = shared(w);
     let tmp = tempfile::tempdir().unwrap();
     let dir = SearchDir::new(tmp.path());
@@ -966,7 +966,7 @@ fn history_busy_retries_and_then_resumes() {
     let (b, dialer) = board(&world);
     let consumer = Consumer::open(&b, dir).unwrap();
     assert_eq!(dialer.lines().iter().filter(|l| l.starts_with("GET /chain?at=")).count(), 3, "two busy answers, then the chain");
-    assert_eq!(hits(&consumer, Who::Guest, "kept"), ["1.0.1.0.2"]);
+    assert_eq!(hits(&consumer, Who::Guest, "kept"), ["1.0.1.0.64"]);
     assert!(matches!(consumer.state(Who::Guest), State::Complete { .. }));
 }
 
@@ -978,7 +978,7 @@ fn history_busy_retries_and_then_resumes() {
 #[test]
 fn a_resume_busy_past_its_retries_is_left_pending_and_resumed_at_the_next_poll() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "kept");
+    w.publish("1.0.1.0.64", "kept");
     let world = shared(w);
     let tmp = tempfile::tempdir().unwrap();
     let dir = SearchDir::new(tmp.path());
@@ -989,7 +989,7 @@ fn a_resume_busy_past_its_retries_is_left_pending_and_resumed_at_the_next_poll()
     assert_eq!(consumer.state(Who::Guest), State::Busy);
     assert!(hits(&consumer, Who::Guest, "kept").is_empty());
     consumer.poll().unwrap();
-    assert_eq!(hits(&consumer, Who::Guest, "kept"), ["1.0.1.0.2"]);
+    assert_eq!(hits(&consumer, Who::Guest, "kept"), ["1.0.1.0.64"]);
     assert!(matches!(consumer.state(Who::Guest), State::Complete { .. }), "{:?}", consumer.state(Who::Guest));
 }
 
@@ -1021,11 +1021,11 @@ fn a_supplements_resume_busy_past_its_retries_is_widened_at_the_next_poll() {
     assert!(consumer.mounted(7));
     assert_eq!(consumer.state(who), State::Busy, "the supplement is pending its open");
     assert!(hits(&consumer, who, "saved").is_empty());
-    world.lock().unwrap().draft("1.0.1.2.0.2", b"a later draft");
+    world.lock().unwrap().draft("1.0.1.2.0.64", b"a later draft");
     consumer.poll().unwrap();
     assert!(matches!(consumer.state(who), State::Complete { .. }), "{:?}", consumer.state(who));
     assert_eq!(hits(&consumer, who, "saved"), ["1.0.1.2.0.1"], "the saved file resumed");
-    assert_eq!(hits(&consumer, who, "later"), ["1.0.1.2.0.2"], "and the widening read on from it");
+    assert_eq!(hits(&consumer, who, "later"), ["1.0.1.2.0.64"], "and the widening read on from it");
 }
 
 // ── THE ASIDE AND THE FILE's FACES ───────────────────────────────────────
@@ -1041,7 +1041,7 @@ fn a_misplaced_file_is_set_aside_at_ordinal_one_then_two_and_the_originals_are_b
     let mut other = World::claimed();
     other.head = Some((20, "bb".repeat(32)));
     other.head_members.insert(HEAD_MEMBER_1.to_string(), (20, "bb".repeat(32)));
-    other.publish("1.0.1.0.2", "board B's text");
+    other.publish("1.0.1.0.64", "board B's text");
     let other = shared(other);
     let other_tmp = tempfile::tempdir().unwrap();
     let other_dir = SearchDir::new(other_tmp.path());
@@ -1110,7 +1110,7 @@ fn a_file_of_another_principals_class_is_set_aside_under_its_own_chain() {
 #[test]
 fn a_newer_skeps_file_is_faced_searched_not_and_left_untouched() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "from the future");
+    w.publish("1.0.1.0.64", "from the future");
     let world = shared(w);
     let tmp = tempfile::tempdir().unwrap();
     let dir = SearchDir::new(tmp.path());
@@ -1136,7 +1136,7 @@ fn a_newer_skeps_file_is_faced_searched_not_and_left_untouched() {
 #[test]
 fn a_damaged_file_is_rebuilt_with_its_loss_stated() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "damaged later");
+    w.publish("1.0.1.0.64", "damaged later");
     let world = shared(w);
     let tmp = tempfile::tempdir().unwrap();
     let dir = SearchDir::new(tmp.path());
@@ -1153,7 +1153,7 @@ fn a_damaged_file_is_rebuilt_with_its_loss_stated() {
         other => panic!("{other:?}"),
     }
     consumer.poll().unwrap();
-    assert_eq!(hits(&consumer, Who::Guest, "damaged"), ["1.0.1.0.2"], "rebuilt from the feed");
+    assert_eq!(hits(&consumer, Who::Guest, "damaged"), ["1.0.1.0.64"], "rebuilt from the feed");
 }
 
 // ── ONE WRITER ───────────────────────────────────────────────────────────
@@ -1169,7 +1169,7 @@ fn a_damaged_file_is_rebuilt_with_its_loss_stated() {
 #[test]
 fn a_second_consumer_on_the_directory_answers_busy_and_mounts_nothing_until_the_first_is_gone() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "the first's text");
+    w.publish("1.0.1.0.64", "the first's text");
     let world = shared(w);
     let tmp = tempfile::tempdir().unwrap();
     let dir = SearchDir::new(tmp.path());
@@ -1188,7 +1188,7 @@ fn a_second_consumer_on_the_directory_answers_busy_and_mounts_nothing_until_the_
     first.close().unwrap();
     second.poll().unwrap();
     assert!(second.board_dir().is_some(), "the lock died with the first, and the second's poll took it");
-    assert_eq!(hits(&second, Who::Guest, "text"), ["1.0.1.0.2"]);
+    assert_eq!(hits(&second, Who::Guest, "text"), ["1.0.1.0.64"]);
     let (b3, _) = board(&world);
     let third = Consumer::open(&b3, dir).unwrap();
     assert_eq!(third.state(Who::Guest), State::Busy, "the second holds the lock now");
@@ -1197,7 +1197,7 @@ fn a_second_consumer_on_the_directory_answers_busy_and_mounts_nothing_until_the_
 /// Returns a world with a published document and principal 7's draft.
 fn with_a_draft() -> Arc<Mutex<World>> {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "the first's text");
+    w.publish("1.0.1.0.64", "the first's text");
     w.draft("1.0.1.2.0.1", b"a kept draft");
     shared(w)
 }
@@ -1302,7 +1302,7 @@ fn a_kept_session_that_died_lands_in_the_mounting_polls_died() {
     let outcome = second.poll().unwrap();
     assert_eq!(outcome.died, [7]);
     assert!(!second.mounted(7));
-    assert_eq!(hits(&second, Who::Guest, "text"), ["1.0.1.0.2"], "the published index mounted all the same");
+    assert_eq!(hits(&second, Who::Guest, "text"), ["1.0.1.0.64"], "the published index mounted all the same");
 }
 
 /// A session widened before the claim lands is kept, and a forget drops one.
@@ -1338,7 +1338,7 @@ fn a_session_widened_before_the_claim_is_kept_for_the_mounting_poll_and_a_forget
 #[test]
 fn a_crash_between_the_tmp_and_the_rename_leaves_the_old_file_readable() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "the old save");
+    w.publish("1.0.1.0.64", "the old save");
     let world = shared(w);
     let tmp = tempfile::tempdir().unwrap();
     let dir = SearchDir::new(tmp.path());
@@ -1350,7 +1350,7 @@ fn a_crash_between_the_tmp_and_the_rename_leaves_the_old_file_readable() {
     assert_eq!(std::fs::read(bdir.file(&BoardDir::published_name())).unwrap(), old, "the old file as it was");
     let (b, _) = board(&world);
     let consumer = Consumer::open(&b, dir).unwrap();
-    assert_eq!(hits(&consumer, Who::Guest, "old"), ["1.0.1.0.2"]);
+    assert_eq!(hits(&consumer, Who::Guest, "old"), ["1.0.1.0.64"]);
     consumer.close().unwrap();
     assert!(!bdir.file("published.index.tmp").is_file() || std::fs::read(bdir.file(&BoardDir::published_name())).unwrap() != b"a half-saved index", "the rename completes a save, never adopts a stray tmp");
 }
@@ -1362,7 +1362,7 @@ fn a_crash_between_the_tmp_and_the_rename_leaves_the_old_file_readable() {
 fn the_directory_is_0700_and_its_files_0600() {
     use std::os::unix::fs::PermissionsExt;
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "modes");
+    w.publish("1.0.1.0.64", "modes");
     let world = shared(w);
     let tmp = tempfile::tempdir().unwrap();
     let dir = SearchDir::new(tmp.path());
@@ -1387,9 +1387,9 @@ fn the_directory_is_0700_and_its_files_0600() {
 #[test]
 fn a_discovered_grant_widens_a_range_and_its_revocation_leaves_the_hit_held_with_the_cell() {
     let mut w = World::claimed();
-    // 1.0.2 grants its draft 1.0.2.0.5 to the sub-account, by name.
-    w.grants.push(GrantRow { link: "1.0.2.0.1.0.2.1".to_string(), from: "1.0.2.0.5".to_string(), to: SUB_ACCOUNT.to_string() });
-    w.draft("1.0.2.0.5", b"granted words");
+    // 1.0.2 grants its draft 1.0.2.0.67 to the sub-account, by name.
+    w.grants.push(GrantRow { link: "1.0.2.0.1.0.2.1".to_string(), from: "1.0.2.0.67".to_string(), to: SUB_ACCOUNT.to_string() });
+    w.draft("1.0.2.0.67", b"granted words");
     // 1.0.3 grants its account to every principal.
     w.universal.push(("1.0.3".to_string(), vec!["1.0.3".to_string()]));
     w.draft("1.0.3.0.1", b"universal words");
@@ -1419,12 +1419,12 @@ fn a_discovered_grant_widens_a_range_and_its_revocation_leaves_the_hit_held_with
     let answer = consumer.search(who, "granted words", &SearchOpts::default()).unwrap();
     assert_eq!(answer.hits[0].standing, held, "the hit stands, marked Held with the departed grant's cell");
     assert_eq!(answer.places[0].standing, held, "the place at the document grain");
-    assert_eq!(consumer.places(who, Some(&addr("1.0.2.0.5"))).docs[0].standing, held, "and the listed document");
+    assert_eq!(consumer.places(who, Some(&addr("1.0.2.0.67"))).docs[0].standing, held, "and the listed document");
     let answer = consumer.search(who, "universal", &SearchOpts::default()).unwrap();
     assert_eq!(answer.hits[0].standing, Standing::Held { kind: GrantKind::AnyPrincipal, rung: Rung::Account, issuer: addr("1.0.3") });
     consumer.save().unwrap();
     let header = load_header(&board_dir(consumer.dir(), &world).file(&BoardDir::supplement_name(7)), Class::Principal(7));
-    let granted = header.ranges.iter().find(|r| r.under.as_ref().map(ToString::to_string).as_deref() == Some("1.0.2.0.5")).expect("the range stays");
+    let granted = header.ranges.iter().find(|r| r.under.as_ref().map(ToString::to_string).as_deref() == Some("1.0.2.0.67")).expect("the range stays");
     assert_eq!(granted.grant, Some(Grant { kind: GrantKind::Named, issuer: addr("1.0.2") }), "the cell's keys written beside the range when the widening added it");
 }
 
@@ -1434,7 +1434,7 @@ fn a_discovered_grant_widens_a_range_and_its_revocation_leaves_the_hit_held_with
 #[test]
 fn narrow_unmounts_the_supplement_keeps_its_file_and_a_re_widening_resumes_from_held() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "published words");
+    w.publish("1.0.1.0.64", "published words");
     w.draft("1.0.1.2.0.1", b"my draft");
     let world = shared(w);
     let (b, dialer) = board(&world);
@@ -1448,7 +1448,7 @@ fn narrow_unmounts_the_supplement_keeps_its_file_and_a_re_widening_resumes_from_
     consumer.narrow(7).unwrap();
     assert!(!consumer.mounted(7));
     assert!(hits(&consumer, who, "draft").is_empty(), "the published index alone");
-    assert_eq!(hits(&consumer, who, "published"), ["1.0.1.0.2"]);
+    assert_eq!(hits(&consumer, who, "published"), ["1.0.1.0.64"]);
     assert!(consumer.search(who, "my draft", &SearchOpts::default()).unwrap().places.is_empty(), "the principal's part retired from `places`");
     assert!(consumer.places(who, Some(&addr(SUB_ACCOUNT))).docs.is_empty(), "and from the listing");
     let file = board_dir(consumer.dir(), &world).file(&BoardDir::supplement_name(7));
@@ -1471,8 +1471,8 @@ fn narrow_unmounts_the_supplement_keeps_its_file_and_a_re_widening_resumes_from_
 #[test]
 fn the_refresh_re_reads_every_unit_at_its_own_class_drops_nothing_and_the_guest_form_touches_no_supplement() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "published one");
-    w.publish("1.0.1.0.3", "published two");
+    w.publish("1.0.1.0.64", "published one");
+    w.publish("1.0.1.0.65", "published two");
     w.draft("1.0.1.2.0.1", b"a draft");
     let world = shared(w);
     let (b, dialer) = board(&world);
@@ -1485,7 +1485,7 @@ fn the_refresh_re_reads_every_unit_at_its_own_class_drops_nothing_and_the_guest_
     // holding's shape) and the draft's.
     {
         let mut w = world.lock().unwrap();
-        w.docs.get_mut("1.0.1.0.3").unwrap().refuse = Some("withheld");
+        w.docs.get_mut("1.0.1.0.65").unwrap().refuse = Some("withheld");
         w.docs.get_mut("1.0.1.2.0.1").unwrap().refuse = Some("withheld");
     }
     dialer.clear();
@@ -1493,11 +1493,11 @@ fn the_refresh_re_reads_every_unit_at_its_own_class_drops_nothing_and_the_guest_
     let served = dialer.served.lock().unwrap().clone();
     let reads: Vec<&Served> = served.iter().filter(|s| s.line == "POST /op retrieve_doc_v_span_set" || s.line == "POST /op retrieve_v").collect();
     assert!(!reads.is_empty() && reads.iter().all(|s| !s.token), "the guest refresh reads token-free alone: {:?}", served.iter().filter(|s| s.token).map(|s| &s.line).collect::<Vec<_>>());
-    assert_eq!(hits(&consumer, Who::Guest, "two"), ["1.0.1.0.3"], "the refused re-read keeps its text");
+    assert_eq!(hits(&consumer, Who::Guest, "two"), ["1.0.1.0.65"], "the refused re-read keeps its text");
     consumer.save().unwrap();
     let bdir = board_dir(consumer.dir(), &world);
     let header = load_header(&bdir.file(&BoardDir::published_name()), Class::Guest);
-    assert_eq!(header.ranges[0].refusals.iter().map(|r| r.doc.to_string()).collect::<Vec<_>>(), ["1.0.1.0.3"], "its refusal recorded");
+    assert_eq!(header.ranges[0].refusals.iter().map(|r| r.doc.to_string()).collect::<Vec<_>>(), ["1.0.1.0.65"], "its refusal recorded");
     let who = Who::Session(session(&tok));
     assert_eq!(hits(&consumer, who, "draft"), ["1.0.1.2.0.1"], "the supplement untouched");
     dialer.clear();
@@ -1515,7 +1515,7 @@ fn the_refresh_re_reads_every_unit_at_its_own_class_drops_nothing_and_the_guest_
 #[test]
 fn the_query_is_bounded_at_1024_bytes_the_refusal_echoes_nothing_and_the_call_dials_nothing() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "needle in the index");
+    w.publish("1.0.1.0.64", "needle in the index");
     let world = shared(w);
     let (b, dialer) = board(&world);
     let tmp = tempfile::tempdir().unwrap();
@@ -1528,7 +1528,7 @@ fn the_query_is_bounded_at_1024_bytes_the_refusal_echoes_nothing_and_the_call_di
     assert!(!err.to_string().contains("sss"), "{err}");
     let exact = "n".repeat(QUERY_BOUND);
     assert!(consumer.search(Who::Guest, &exact, &SearchOpts::default()).is_ok(), "the bound admits 1,024 bytes");
-    assert_eq!(hits(&consumer, Who::Guest, "needle"), ["1.0.1.0.2"]);
+    assert_eq!(hits(&consumer, Who::Guest, "needle"), ["1.0.1.0.64"]);
     assert!(dialer.lines().is_empty(), "no board read on the call's path: {:?}", dialer.lines());
 }
 
@@ -1544,7 +1544,7 @@ fn the_query_is_bounded_at_1024_bytes_the_refusal_echoes_nothing_and_the_call_di
 #[test]
 fn the_listing_is_every_document_of_the_parts_at_the_calls_class() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "alpha\nbeta");
+    w.publish("1.0.1.0.64", "alpha\nbeta");
     w.publish("1.0.2.0.1", "elsewhere");
     w.draft("1.0.1.2.0.1", b"my draft\nbody");
     let world = shared(w);
@@ -1559,11 +1559,11 @@ fn the_listing_is_every_document_of_the_parts_at_the_calls_class() {
     let docs = |answer: &PlacesAnswer| answer.docs.iter().map(|p| p.doc.to_string()).collect::<Vec<_>>();
     let counts = |pairs: &[(&str, usize)]| pairs.iter().map(|(account, n)| (addr(account), *n)).collect::<BTreeMap<_, _>>();
     let guest = consumer.places(Who::Guest, None);
-    assert_eq!(docs(&guest), ["1.0.1.0.1", "1.0.1.0.2", "1.0.2.0.1", HEAD_DOCUMENT], "the published part alone, in address order");
+    assert_eq!(docs(&guest), ["1.0.1.0.1", "1.0.1.0.64", "1.0.2.0.1", HEAD_DOCUMENT], "the published part alone, in address order");
     assert_eq!(guest.counts, counts(&[("1.0.1", 2), ("1.0.2", 1), ("1.1.0.1", 1)]));
     assert_eq!(guest.state, consumer.state(Who::Guest));
     let own = consumer.places(who, None);
-    assert_eq!(docs(&own), ["1.0.1.0.1", "1.0.1.0.2", "1.0.1.2.0.1", "1.0.2.0.1", HEAD_DOCUMENT], "the published part and the principal's");
+    assert_eq!(docs(&own), ["1.0.1.0.1", "1.0.1.0.64", "1.0.1.2.0.1", "1.0.2.0.1", HEAD_DOCUMENT], "the published part and the principal's");
     assert_eq!(own.counts, counts(&[("1.0.1", 2), ("1.0.1.2", 1), ("1.0.2", 1), ("1.1.0.1", 1)]));
     assert_eq!(own.state, consumer.state(who));
     let draft = Place { doc: addr("1.0.1.2.0.1"), kind: Kind::Draft, label: Some("my draft".into()), standing: Standing::YoursToRead };
@@ -1574,7 +1574,7 @@ fn the_listing_is_every_document_of_the_parts_at_the_calls_class() {
         assert_eq!(matched.iter().find(|m| m.doc == place.doc), Some(place), "the listed place is the match of its address");
     }
     let under = |prefix: &str| consumer.places(who, Some(&addr(prefix)));
-    assert_eq!((docs(&under("1.0.1")), under("1.0.1").counts), (vec!["1.0.1.0.1".to_string(), "1.0.1.0.2".into(), "1.0.1.2.0.1".into()], counts(&[("1.0.1", 2), ("1.0.1.2", 1)])));
+    assert_eq!((docs(&under("1.0.1")), under("1.0.1").counts), (vec!["1.0.1.0.1".to_string(), "1.0.1.0.64".into(), "1.0.1.2.0.1".into()], counts(&[("1.0.1", 2), ("1.0.1.2", 1)])));
     assert_eq!((under("1.0.1.2.0.1").docs, under("1.0.1.2.0.1").counts), (vec![draft], counts(&[("1.0.1.2", 1)])), "a document's own address lists it alone");
     assert!(under("1.0.9").docs.is_empty() && under("1.0.9").counts.is_empty());
     assert!(dialer.lines().is_empty(), "no board read on the call's path: {:?}", dialer.lines());
@@ -1583,7 +1583,7 @@ fn the_listing_is_every_document_of_the_parts_at_the_calls_class() {
 // ── THE JUMP's LANDING RULE ──────────────────────────────────────────────
 
 fn pair(u1: u64, u2: u64, width: u64) -> Correspondence {
-    Correspondence { d1: "1.0.1.0.2.3".into(), d2: "1.0.1.0.2".into(), u1, u2, width }
+    Correspondence { d1: "1.0.1.0.64.3".into(), d2: "1.0.1.0.64".into(), u1, u2, width }
 }
 
 /// `search.md` §3.4's ONE LANDING RULE: CARRIED where the pairs carry the
@@ -1617,7 +1617,7 @@ fn the_three_budget_refusals_land_pinned_and_a_compare_answer_lands_by_the_rule(
     }
     let withheld = json!({"resp": "rejected", "code": "withheld", "disposition": "reorder", "op": "compare"});
     assert_eq!(landing_of(&withheld, span), None, "the departure face is the page's");
-    let answer = json!({"as_of": 9, "resp": "compare", "pairs": [{"d1": "1.0.1.0.1", "d2": "1.0.1.0.2", "u1": {"ordinal": "1", "subspace": "1"}, "u2": {"ordinal": "3", "subspace": "1"}, "width": "5"}]});
+    let answer = json!({"as_of": 9, "resp": "compare", "pairs": [{"d1": "1.0.1.0.1", "d2": "1.0.1.0.64", "u1": {"ordinal": "1", "subspace": "1"}, "u2": {"ordinal": "3", "subspace": "1"}, "width": "5"}]});
     assert_eq!(landing_of(&answer, span), Some(Landing::Carried { at: 5 }));
 }
 
@@ -1629,19 +1629,19 @@ fn the_three_budget_refusals_land_pinned_and_a_compare_answer_lands_by_the_rule(
 #[test]
 fn the_document_index_round_trips_counts_per_account_and_matches_exactly() {
     let mut places = Places::new();
-    places.record(addr("1.0.1.0.2"), PlaceRecord { kind: Kind::Edition, member: Some(addr("1.0.1.0.2.3")), label: Some("A first line".into()) });
-    places.record(addr("1.0.1.0.3"), PlaceRecord { kind: Kind::Draft, member: None, label: None });
-    places.record(addr("1.0.2.0.1"), PlaceRecord { kind: Kind::Edition, member: None, label: Some("1.0.1.0.2".into()) });
+    places.record(addr("1.0.1.0.64"), PlaceRecord { kind: Kind::Edition, member: Some(addr("1.0.1.0.64.3")), label: Some("A first line".into()) });
+    places.record(addr("1.0.1.0.65"), PlaceRecord { kind: Kind::Draft, member: None, label: None });
+    places.record(addr("1.0.2.0.1"), PlaceRecord { kind: Kind::Edition, member: None, label: Some("1.0.1.0.64".into()) });
     let bytes = places.encode();
     let text = String::from_utf8(bytes.clone()).unwrap();
-    assert_eq!(text.lines().next().unwrap(), r#"{"doc":"1.0.1.0.2","kind":"edition","label":"A first line","member":"1.0.1.0.2.3"}"#);
+    assert_eq!(text.lines().next().unwrap(), r#"{"doc":"1.0.1.0.64","kind":"edition","label":"A first line","member":"1.0.1.0.64.3"}"#);
     assert_eq!(Places::decode(&bytes).unwrap(), places);
     assert_eq!(places.counts(), BTreeMap::from([(addr("1.0.1"), 2), (addr("1.0.2"), 1)]));
-    assert_eq!(places.matching("A first line").iter().map(ToString::to_string).collect::<Vec<_>>(), ["1.0.1.0.2"]);
-    assert_eq!(places.matching(" 1.0.1.0.2 ").iter().map(ToString::to_string).collect::<Vec<_>>(), ["1.0.1.0.2", "1.0.2.0.1"], "the address exact, and a label spelling it");
+    assert_eq!(places.matching("A first line").iter().map(ToString::to_string).collect::<Vec<_>>(), ["1.0.1.0.64"]);
+    assert_eq!(places.matching(" 1.0.1.0.64 ").iter().map(ToString::to_string).collect::<Vec<_>>(), ["1.0.1.0.64", "1.0.2.0.1"], "the address exact, and a label spelling it");
     assert!(places.matching("first").is_empty(), "exact, never a substring");
     assert!(Places::decode(b"{\"doc\":7}\n").is_err());
-    let unit = skep_search::Unit::new(skep_search::UnitKey::new(addr("1.0.1.0.9")), None, Kind::Edition, Class::Guest, 1, vec![skep_search::Item::Text { start: 1, bytes: b"  the first line \nthe second".to_vec() }]).unwrap();
+    let unit = skep_search::Unit::new(skep_search::UnitKey::new(addr("1.0.1.0.71")), None, Kind::Edition, Class::Guest, 1, vec![skep_search::Item::Text { start: 1, bytes: b"  the first line \nthe second".to_vec() }]).unwrap();
     assert_eq!(Places::first_line(&unit).as_deref(), Some("the first line"));
 }
 
@@ -1702,8 +1702,8 @@ fn widening_is_the_state_while_a_ranges_fetch_runs() {
 #[test]
 fn an_index_begun_at_a_reclaim_floor_says_so() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "below");
-    w.publish("1.0.1.0.3", "above");
+    w.publish("1.0.1.0.64", "below");
+    w.publish("1.0.1.0.65", "above");
     w.floor = Some(w.position - 1);
     let floor = w.floor.unwrap();
     let world = shared(w);
@@ -1712,7 +1712,7 @@ fn an_index_begun_at_a_reclaim_floor_says_so() {
     let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
     consumer.poll().unwrap();
     assert_eq!(consumer.state(Who::Guest), State::AtTheFloor { floor });
-    assert_eq!(hits(&consumer, Who::Guest, "above"), ["1.0.1.0.3"]);
+    assert_eq!(hits(&consumer, Who::Guest, "above"), ["1.0.1.0.65"]);
     assert!(hits(&consumer, Who::Guest, "below").is_empty(), "a document with no feed entry above the floor never enters an index begun after it");
 }
 
@@ -1781,16 +1781,16 @@ fn reads_naming(dialer: &Scripted, doc: &str) -> usize {
 #[test]
 fn a_document_whose_extent_passes_the_ceiling_is_refused_unread() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "a short text");
-    w.extents.insert("1.0.1.0.2".to_string(), CEILING_BYTES + 1);
+    w.publish("1.0.1.0.64", "a short text");
+    w.extents.insert("1.0.1.0.64".to_string(), CEILING_BYTES + 1);
     let world = shared(w);
     let (b, dialer) = board(&world);
     let tmp = tempfile::tempdir().unwrap();
     let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
     consumer.poll().unwrap();
-    assert_eq!(reads_naming(&dialer, "1.0.1.0.2"), 0, "no part read");
+    assert_eq!(reads_naming(&dialer, "1.0.1.0.64"), 0, "no part read");
     assert!(hits(&consumer, Who::Guest, "short").is_empty());
-    assert_eq!(published_refusals(&consumer, &world), [("1.0.1.0.2".to_string(), "unit_past_the_ceiling".to_string())]);
+    assert_eq!(published_refusals(&consumer, &world), [("1.0.1.0.64".to_string(), "unit_past_the_ceiling".to_string())]);
     assert!(matches!(consumer.state(Who::Guest), State::PastTheCeiling { seen: 1, limit: CEILING_BYTES, .. }), "{:?}", consumer.state(Who::Guest));
     consumer.close().unwrap();
     let (b, _) = board(&world);
@@ -1804,16 +1804,16 @@ fn a_document_whose_extent_passes_the_ceiling_is_refused_unread() {
 #[test]
 fn a_delivery_past_the_width_asked_is_refused() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", &"overflowing words ".repeat(2_800));
-    w.extents.insert("1.0.1.0.2".to_string(), 5);
-    w.deliver_whole.insert("1.0.1.0.2".to_string());
+    w.publish("1.0.1.0.64", &"overflowing words ".repeat(2_800));
+    w.extents.insert("1.0.1.0.64".to_string(), 5);
+    w.deliver_whole.insert("1.0.1.0.64".to_string());
     let world = shared(w);
     let (b, _) = board(&world);
     let tmp = tempfile::tempdir().unwrap();
     let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
     consumer.poll().unwrap();
     assert!(hits(&consumer, Who::Guest, "overflowing").is_empty(), "the over-delivered text is never indexed");
-    assert_eq!(published_refusals(&consumer, &world), [("1.0.1.0.2".to_string(), "not_a_delivery".to_string())]);
+    assert_eq!(published_refusals(&consumer, &world), [("1.0.1.0.64".to_string(), "not_a_delivery".to_string())]);
 }
 
 /// A part that delivers FEWER positions than it asked — the document shrank
@@ -1823,14 +1823,14 @@ fn a_delivery_past_the_width_asked_is_refused() {
 #[test]
 fn a_part_short_of_the_width_asked_is_indexed_as_delivered() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "shrunken words");
-    w.extents.insert("1.0.1.0.2".to_string(), 50);
+    w.publish("1.0.1.0.64", "shrunken words");
+    w.extents.insert("1.0.1.0.64".to_string(), 50);
     let world = shared(w);
     let (b, _) = board(&world);
     let tmp = tempfile::tempdir().unwrap();
     let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
     consumer.poll().unwrap();
-    assert_eq!(hits(&consumer, Who::Guest, "shrunken"), ["1.0.1.0.2"]);
+    assert_eq!(hits(&consumer, Who::Guest, "shrunken"), ["1.0.1.0.64"]);
     assert!(published_refusals(&consumer, &world).is_empty());
 }
 
@@ -1845,17 +1845,17 @@ fn a_unit_whose_items_pass_the_ceiling_is_refused_as_its_charge_grows() {
     // components: each item charges ~1.9 MB, so the unit passes the ceiling
     // within fifty parts of the extent's sixty-four.
     let origin = format!("1{}", ".1".repeat(59_999));
-    w.publish("1.0.1.0.2", "");
-    w.extents.insert("1.0.1.0.2".to_string(), 64 * MAX_DELIVERY_ITEMS);
-    w.withheld_by.insert("1.0.1.0.2".to_string(), origin);
+    w.publish("1.0.1.0.64", "");
+    w.extents.insert("1.0.1.0.64".to_string(), 64 * MAX_DELIVERY_ITEMS);
+    w.withheld_by.insert("1.0.1.0.64".to_string(), origin);
     let world = shared(w);
     let (b, dialer) = board(&world);
     let tmp = tempfile::tempdir().unwrap();
     let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
     consumer.poll().unwrap();
-    let parts = reads_naming(&dialer, "1.0.1.0.2");
+    let parts = reads_naming(&dialer, "1.0.1.0.64");
     assert!(parts > 1 && parts < 64, "{parts} parts read");
-    assert_eq!(published_refusals(&consumer, &world), [("1.0.1.0.2".to_string(), "unit_past_the_ceiling".to_string())]);
+    assert_eq!(published_refusals(&consumer, &world), [("1.0.1.0.64".to_string(), "unit_past_the_ceiling".to_string())]);
     assert!(matches!(consumer.state(Who::Guest), State::PastTheCeiling { seen: 1, .. }), "{:?}", consumer.state(Who::Guest));
 }
 
@@ -1902,16 +1902,16 @@ fn a_ceiling_refusal_is_one_unit_whichever_ranges_record_it_and_clears_with_its_
 #[test]
 fn a_page_lands_each_document_before_reading_the_next() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "landed first");
-    w.publish("1.0.1.0.3", "never reached");
-    w.transport_fail.insert("1.0.1.0.3".to_string());
+    w.publish("1.0.1.0.64", "landed first");
+    w.publish("1.0.1.0.65", "never reached");
+    w.transport_fail.insert("1.0.1.0.65".to_string());
     let world = shared(w);
     let (b, _) = board(&world);
     let tmp = tempfile::tempdir().unwrap();
     let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
     let err = consumer.poll().expect_err("the transport broke");
     assert_eq!(err.exit_code(), 4, "{err}");
-    assert_eq!(hits(&consumer, Who::Guest, "landed"), ["1.0.1.0.2"]);
+    assert_eq!(hits(&consumer, Who::Guest, "landed"), ["1.0.1.0.64"]);
     assert!(matches!(consumer.state(Who::Guest), State::Building { .. }), "the page is not whole: {:?}", consumer.state(Who::Guest));
 }
 
@@ -1921,10 +1921,10 @@ fn a_page_lands_each_document_before_reading_the_next() {
 #[test]
 fn a_refusal_off_the_wires_spelling_is_recorded_as_unrecognized() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "refused at length");
-    w.publish("1.0.1.0.3", "refused by a word");
-    w.docs.get_mut("1.0.1.0.2").unwrap().refuse = Some(Box::leak("x".repeat(64 * 1024).into_boxed_str()));
-    w.docs.get_mut("1.0.1.0.3").unwrap().refuse = Some("withheld");
+    w.publish("1.0.1.0.64", "refused at length");
+    w.publish("1.0.1.0.65", "refused by a word");
+    w.docs.get_mut("1.0.1.0.64").unwrap().refuse = Some(Box::leak("x".repeat(64 * 1024).into_boxed_str()));
+    w.docs.get_mut("1.0.1.0.65").unwrap().refuse = Some("withheld");
     let world = shared(w);
     let (b, _) = board(&world);
     let tmp = tempfile::tempdir().unwrap();
@@ -1932,7 +1932,7 @@ fn a_refusal_off_the_wires_spelling_is_recorded_as_unrecognized() {
     consumer.poll().unwrap();
     assert_eq!(
         published_refusals(&consumer, &world),
-        [("1.0.1.0.2".to_string(), "unrecognized_refusal".to_string()), ("1.0.1.0.3".to_string(), "withheld".to_string())]
+        [("1.0.1.0.64".to_string(), "unrecognized_refusal".to_string()), ("1.0.1.0.65".to_string(), "withheld".to_string())]
     );
 }
 
@@ -1944,18 +1944,18 @@ fn a_refusal_off_the_wires_spelling_is_recorded_as_unrecognized() {
 fn a_dense_trunk_is_probed_by_doubling_then_bisecting() {
     let mut w = World::claimed();
     for k in 1..=1000 {
-        w.registered.insert(format!("1.0.1.0.4.{k}"));
+        w.registered.insert(format!("1.0.1.0.66.{k}"));
     }
-    w.docs.insert("1.0.1.0.4.1000".to_string(), Doc { text: b"the thousandth edition".to_vec(), refuse: None });
-    w.publish("1.0.1.0.4", "the bare address floats");
+    w.docs.insert("1.0.1.0.66.1000".to_string(), Doc { text: b"the thousandth edition".to_vec(), refuse: None });
+    w.publish("1.0.1.0.66", "the bare address floats");
     let world = shared(w);
     let (b, dialer) = board(&world);
     let tmp = tempfile::tempdir().unwrap();
     let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
     consumer.poll().unwrap();
     let answer = consumer.search(Who::Guest, "thousandth", &SearchOpts::default()).unwrap();
-    assert_eq!(answer.hits[0].member.as_ref().map(ToString::to_string).as_deref(), Some("1.0.1.0.4.1000"));
-    let probes = dialer.served.lock().unwrap().iter().filter(|s| s.line == "POST /op doc_metadata" && serde_json::from_slice::<Value>(&s.body).unwrap()["doc"].as_str().unwrap().starts_with("1.0.1.0.4.")).count();
+    assert_eq!(answer.hits[0].member.as_ref().map(ToString::to_string).as_deref(), Some("1.0.1.0.66.1000"));
+    let probes = dialer.served.lock().unwrap().iter().filter(|s| s.line == "POST /op doc_metadata" && serde_json::from_slice::<Value>(&s.body).unwrap()["doc"].as_str().unwrap().starts_with("1.0.1.0.66.")).count();
     assert!(probes <= 21, "{probes} probes");
 }
 
@@ -2025,7 +2025,7 @@ fn a_feed_page_that_moves_nothing_fails_the_poll() {
 #[test]
 fn a_second_floor_within_one_drain_ends_the_range_there() {
     let mut w = World::claimed();
-    w.publish("1.0.1.0.2", "beyond the second floor");
+    w.publish("1.0.1.0.64", "beyond the second floor");
     w.reclaim.extend([5, 9]);
     let world = shared(w);
     let (b, dialer) = board(&world);
@@ -2040,7 +2040,7 @@ fn a_second_floor_within_one_drain_ends_the_range_there() {
     consumer.poll().unwrap();
     let pages: Vec<String> = dialer.lines().into_iter().filter(|l| l.starts_with("GET /changes?")).collect();
     assert!(pages[0].starts_with("GET /changes?since=9"), "{pages:?}");
-    assert_eq!(hits(&consumer, Who::Guest, "beyond"), ["1.0.1.0.2"]);
+    assert_eq!(hits(&consumer, Who::Guest, "beyond"), ["1.0.1.0.64"]);
     assert_eq!(consumer.state(Who::Guest), State::AtTheFloor { floor: 9 }, "complete from the floor the drain ended at");
 }
 

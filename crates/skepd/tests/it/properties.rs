@@ -1457,7 +1457,7 @@ proptest! {
         position in any::<u64>(),
         chain in any::<[u8; 32]>(),
         account in 1u32..4,
-        doc in 1u32..4,
+        doc in prop::sample::select(vec![1u32, 64, 65]),
         value in prop::collection::vec(any::<u8>(), 0..6),
         base_extent in 0u64..9,
         moved in 0usize..6,
@@ -1468,7 +1468,7 @@ proptest! {
         ];
         let board = BoardTerm { log_position: position, chain };
         let (acct, document) = (address(&format!("1.0.{account}")), address(&format!("1.0.{account}.0.{doc}")));
-        let other = address(&format!("1.0.{account}.0.{}", doc + 20));
+        let other = address(&format!("1.0.{account}.0.{}", doc + 82));
         let frame = |alg, board, acct: &Address, document: &Address, body_moved| {
             composed_frame(alg, board, acct, document, &other, cell, &value, base_extent, body_moved)
         };
@@ -1482,7 +1482,7 @@ proptest! {
             1 => frame(ALG_MLDSA65_ED25519, BoardTerm { log_position: position.wrapping_add(1), chain }, &acct, &document, false),
             2 => frame(ALG_MLDSA65_ED25519, BoardTerm { log_position: position, chain: moved_chain }, &acct, &document, false),
             3 => frame(ALG_MLDSA65_ED25519, board, &address(&format!("1.0.{}", account + 10)), &document, false),
-            4 => frame(ALG_MLDSA65_ED25519, board, &acct, &address(&format!("1.0.{account}.0.{}", doc + 10)), false),
+            4 => frame(ALG_MLDSA65_ED25519, board, &acct, &address(&format!("1.0.{account}.0.{}", doc + 72)), false),
             _ => frame(ALG_MLDSA65_ED25519, board, &acct, &document, true),
         };
         prop_assert_ne!(&wrong, &right, "the vector moves the bytes");

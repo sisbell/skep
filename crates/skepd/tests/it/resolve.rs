@@ -940,11 +940,11 @@ fn a_cross_board_address_resolves_to_its_board_and_local_form_off_a_registry_rea
     let said = |address: &Address| address.to_string();
 
     // BOUND: the org's dial origin, and the address in its local form.
-    let bound = ask("1.5.0.1.0.2");
+    let bound = ask("1.5.0.1.0.64");
     assert_eq!(bound.opened, Opened::Bootstrapped, "no copy was held");
     assert_eq!(bound.root.as_ref().map(Origin::as_str), Some(format!("http://127.0.0.1:{port}").as_str()));
     assert_eq!(bound.head, head_position(port), "read to the registry's head");
-    assert_eq!((said(&bound.address), said(&bound.prefix), bound.local.as_ref().map(said)), ("1.5.0.1.0.2".to_string(), "1.5".to_string(), Some("1.0.1.0.2".to_string())));
+    assert_eq!((said(&bound.address), said(&bound.prefix), bound.local.as_ref().map(said)), ("1.5.0.1.0.64".to_string(), "1.5".to_string(), Some("1.0.1.0.64".to_string())));
     match &bound.resolution {
         Resolution::Bound { standing, endpoint, dial, members, .. } => {
             assert_eq!(standing.current.link, addr(&org.binding));
@@ -955,15 +955,15 @@ fn a_cross_board_address_resolves_to_its_board_and_local_form_off_a_registry_rea
         other => panic!("{} unexpected: {other:?}", other.face()),
     }
     // What the command prints of it: stdout's one line, and --json's object.
-    assert_eq!(bound.line().as_deref(), Some("https://acme.example 1.0.1.0.2"));
+    assert_eq!(bound.line().as_deref(), Some("https://acme.example 1.0.1.0.64"));
     let object = bound.object();
     let signed_by = |key: &SigningKey| Fingerprint::of(&public_key_of(key)).to_hex();
     let binding = json!({ "link": org.binding, "position": object["binding"]["position"], "home": CLAIMANT_DOC1, "account": org.account, "replaces": null, "honored": true, "verdict": "SIGNED", "signed_by": signed_by(&device_key()) });
     let expected = json!({
         "face": "BOUND",
-        "address": "1.5.0.1.0.2",
+        "address": "1.5.0.1.0.64",
         "prefix": "1.5",
-        "local": "1.0.1.0.2",
+        "local": "1.0.1.0.64",
         "account": org.account,
         "binding": binding,
         "history": [binding],
@@ -989,11 +989,11 @@ fn a_cross_board_address_resolves_to_its_board_and_local_form_off_a_registry_rea
     // NO NEGATIVE CACHE: unregistered, then registered, then asked again
     // over the same directory — the resolution judged first, so a copy
     // answered with no fresh read is caught as the stale face it gives.
-    let absent = ask("1.6.0.1.0.2");
+    let absent = ask("1.6.0.1.0.64");
     assert!(matches!(&absent.resolution, Resolution::Unregistered { prefix } if *prefix == addr("1.6")), "{:?}", absent.resolution);
-    assert_eq!((absent.line(), absent.object()), (None, json!({ "face": "UNREGISTERED", "address": "1.6.0.1.0.2", "prefix": "1.6" })));
+    assert_eq!((absent.line(), absent.object()), (None, json!({ "face": "UNREGISTERED", "address": "1.6.0.1.0.64", "prefix": "1.6" })));
     let six = register_org(port, &console, 6, "1.6", Some(&["https://six.example"]), 0);
-    let again = ask("1.6.0.1.0.2");
+    let again = ask("1.6.0.1.0.64");
     match &again.resolution {
         Resolution::Bound { standing, dial, .. } => {
             assert_eq!(standing.current.record.account, Some(addr(&six.account)));
@@ -1003,7 +1003,7 @@ fn a_cross_board_address_resolves_to_its_board_and_local_form_off_a_registry_rea
     }
     assert!(matches!(again.opened, Opened::Resumed { checked_rows } if checked_rows > 0), "resumed, never begun again: {:?}", again.opened);
     assert!(again.head > absent.head && again.head == head_position(port), "read to the registry's later head: {} then {}", absent.head, again.head);
-    assert_eq!(again.line().as_deref(), Some("https://six.example 1.0.1.0.2"));
+    assert_eq!(again.line().as_deref(), Some("https://six.example 1.0.1.0.64"));
 
     // A bare prefix: the same board, and no place on it.
     let bare = ask("1.5");
@@ -1011,9 +1011,9 @@ fn a_cross_board_address_resolves_to_its_board_and_local_form_off_a_registry_rea
     assert_eq!(bare.object()["local"], Value::Null);
 
     // A node field deeper than any standing here: resolved whole.
-    let deeper = ask("1.5.3.0.1.0.2");
+    let deeper = ask("1.5.3.0.1.0.64");
     assert!(matches!(&deeper.resolution, Resolution::HopNotMade { prefix, parent } if *prefix == addr("1.5.3") && matches!(**parent, Resolution::Bound { .. })), "{:?}", deeper.resolution);
-    assert_eq!((said(&deeper.prefix), deeper.local.as_ref().map(said), deeper.line()), ("1.5.3".to_string(), Some("1.0.1.0.2".to_string()), None));
+    assert_eq!((said(&deeper.prefix), deeper.local.as_ref().map(said), deeper.line()), ("1.5.3".to_string(), Some("1.0.1.0.64".to_string()), None));
     sd.shutdown();
 }
 

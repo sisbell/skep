@@ -158,7 +158,7 @@ fn the_count_by_home_sums_to_the_census_and_drops_the_excepted_homes_links() {
     assert_eq!(one_out, [public.clone(), vec![(b.clone(), 2)]].concat());
     // An excepted home the reader may not read, or that holds nothing on
     // the page, changes nothing.
-    let (same, _) = read(Some(&board.owner), 1_000, &[&board.stranger_draft, "1.0.1.0.9"]);
+    let (same, _) = read(Some(&board.owner), 1_000, &[&board.stranger_draft, "1.0.1.0.71"]);
     assert_eq!(same, owners);
 
     // A budget under the flood: the first homes whole, `exhausted: false`,
@@ -244,11 +244,11 @@ fn the_count_by_home_is_withheld_bounded_by_its_document_and_refuses_an_over_lon
     // The `except` bound: at the cap admitted, one past it refused at the
     // parse with the cap named.
     let cap = skep_links::MAX_SLOT_SPANS;
-    let at_cap: Vec<&str> = vec!["1.0.1.0.9"; cap];
+    let at_cap: Vec<&str> = vec!["1.0.1.0.71"; cap];
     let (at, _) = rows(&op(port, None, &frame(CLAIMANT_DOC1, 64, &at_cap)));
     let (free, _) = rows(&op(port, None, &frame(CLAIMANT_DOC1, 64, &[])));
     assert_eq!(at, free, "a list at the cap is admitted, a home holding nothing passed to no effect");
-    let over: Vec<&str> = vec!["1.0.1.0.9"; cap + 1];
+    let over: Vec<&str> = vec!["1.0.1.0.71"; cap + 1];
     let v = op(port, None, &frame(CLAIMANT_DOC1, 64, &over));
     let rej = expect_resp(&v, "rejected");
     assert_eq!((rej["code"].as_str(), rej["op"].as_str()), (Some("malformed"), Some("unparseable")), "{v}");

@@ -172,7 +172,7 @@ fn the_search_answer_is_built_as_its_declarations_say() {
         occurrences: 2,
         matched: vec![skep_search::Matched { word: "ac".into(), term: "ab".into() }],
     };
-    let place = Place { doc: address("1.0.1.0.2"), kind: Kind::Draft, label: Some("a first line".into()), standing: Standing::YoursToRead };
+    let place = Place { doc: address("1.0.1.0.64"), kind: Kind::Draft, label: Some("a first line".into()), standing: Standing::YoursToRead };
     let answer = SearchAnswer { hits: vec![hit], total: 1, truncated: false, more_terms: false, fuzzy_bounded: false, positions_bounded: false, places: vec![place], state: State::Complete { as_of: 7, floor: None } };
     let answer = answer_json(&answer);
     crate::shapes::assert_declared("SearchAnswer", &answer);
@@ -204,7 +204,7 @@ fn the_places_answer_is_built_as_its_declarations_say() {
     let docs = vec![
         Place { doc: address("1.0.9.0.1"), kind: Kind::Edition, label: Some("a first line".into()), standing: Standing::Public },
         Place { doc: address("1.0.10.0.1"), kind: Kind::Draft, label: Some("held words".into()), standing: held },
-        Place { doc: address("1.0.10.0.2"), kind: Kind::Edition, label: None, standing: Standing::Public },
+        Place { doc: address("1.0.10.0.64"), kind: Kind::Edition, label: None, standing: Standing::Public },
     ];
     let counts = BTreeMap::from([(address("1.0.10"), 2), (address("1.0.9"), 1)]);
     let answer = places_answer_json(&PlacesAnswer { docs, counts, state: State::Complete { as_of: 7, floor: None } });
@@ -978,7 +978,7 @@ impl Dialer for Moving {
 /// reads only named documents misses a write whose testimony the board lost).
 #[test]
 fn a_drafts_read_owes_the_shift_tests_of_the_documents_its_rows_named() {
-    let (named, other) = ("1.0.1.0.1", "1.0.1.0.2");
+    let (named, other) = ("1.0.1.0.1", "1.0.1.0.64");
     for (cell, docs, other_stale) in [("a row naming its document", json!([named]), false), ("a row of lost testimony", Value::Null, true)] {
         let script = move |since: u64, _: Option<u64>| if since < 6 { ok(json!({"changes": [{"at": 6, "op": "insert", "docs": docs.clone(), "key": "bare"}], "last": 6, "more": false})) } else { page(&[], since, false) };
         let entry = entry_over(Paging { script: Box::new(script), asked: Mutex::new(Vec::new()) });
@@ -1409,11 +1409,11 @@ fn a_drafts_read_stops_waiting_once_every_row_that_may_learn_a_writer_has_one() 
     let holds = Arc::clone(&shared.holds);
     let mut feeder = Feeder::new(&entry, shared);
     let waited = std::thread::scope(|s| {
-        let stuck = s.spawn(|| holds.send(&session, racing_insert("stuck", "1.0.1.0.2"), None).answered());
+        let stuck = s.spawn(|| holds.send(&session, racing_insert("stuck", "1.0.1.0.64"), None).answered());
         fake.reached_stuck();
         let raced = s.spawn(|| holds.send(&session, racing_insert("raced", "1.0.1.0.1"), None).answered());
         fake.committed(1);
-        fake.rows.lock().unwrap().push(json!({"at": 99, "op": "insert", "docs": ["1.0.1.0.3"], "key": "ff".repeat(32)}));
+        fake.rows.lock().unwrap().push(json!({"at": 99, "op": "insert", "docs": ["1.0.1.0.65"], "key": "ff".repeat(32)}));
         let started = Instant::now();
         feeder.read_drafts(&session);
         let waited = started.elapsed();

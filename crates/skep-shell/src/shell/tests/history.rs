@@ -50,14 +50,14 @@ fn the_row_reads_its_members_first_and_refuses_a_bare_session() {
     };
     assert_eq!(what(json!({"session": "s-gone", "at": 3, "as_of": 5})), "draft", "missing");
     assert_eq!(what(json!({"session": "s-gone", "draft": 7, "at": 3, "as_of": 5})), "draft", "no address");
-    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.4", "as_of": 5})), "at", "missing");
-    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.4", "at": "3", "as_of": 5})), "at", "another form");
-    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.4", "at": -1, "as_of": 5})), "at", "no non-negative integer");
-    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.4", "at": 3})), "as_of", "missing: the typed state is the page's");
-    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.4", "at": 3, "as_of": null})), "as_of", "`null` is no state");
-    let in_form = json!({"session": "s-gone", "draft": "1.0.2.0.4", "at": 3, "as_of": 5});
+    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.66", "as_of": 5})), "at", "missing");
+    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.66", "at": "3", "as_of": 5})), "at", "another form");
+    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.66", "at": -1, "as_of": 5})), "at", "no non-negative integer");
+    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.66", "at": 3})), "as_of", "missing: the typed state is the page's");
+    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.66", "at": 3, "as_of": null})), "as_of", "`null` is no state");
+    let in_form = json!({"session": "s-gone", "draft": "1.0.2.0.66", "at": 3, "as_of": 5});
     assert_eq!(shell.call("history.restore", &in_form).unwrap_err().name(), "session_ended", "in their form, the members pass to the session");
-    let keyless = shell.call("history.restore", &json!({"session": bare, "draft": "1.0.1.0.4", "at": 3, "as_of": 5})).unwrap_err();
+    let keyless = shell.call("history.restore", &json!({"session": bare, "draft": "1.0.1.0.66", "at": 3, "as_of": 5})).unwrap_err();
     assert_eq!((keyless.name(), keyless.to_value()["call"].as_str()), ("write_in_bare_session", Some("history.restore")), "{keyless}");
 }
 
@@ -86,14 +86,14 @@ fn the_past_states_read_takes_its_members_first_and_a_bare_session_reads_it() {
     };
     assert_eq!(what(json!({"session": "s-gone", "at": 3})), "draft", "missing");
     assert_eq!(what(json!({"session": "s-gone", "draft": 7, "at": 3})), "draft", "no address");
-    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.4"})), "at", "missing");
-    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.4", "at": "3"})), "at", "another form");
-    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.4", "at": -1})), "at", "no non-negative integer");
-    let in_form = json!({"session": "s-gone", "draft": "1.0.2.0.4", "at": 3});
+    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.66"})), "at", "missing");
+    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.66", "at": "3"})), "at", "another form");
+    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.66", "at": -1})), "at", "no non-negative integer");
+    let in_form = json!({"session": "s-gone", "draft": "1.0.2.0.66", "at": 3});
     assert_eq!(shell.call("history.past", &in_form).unwrap_err().name(), "session_ended", "in their form, the members pass to the session");
-    let no_account = shell.call("history.past", &json!({"session": accountless, "draft": "1.0.2.0.4", "at": 3})).unwrap_err();
+    let no_account = shell.call("history.past", &json!({"session": accountless, "draft": "1.0.2.0.66", "at": 3})).unwrap_err();
     assert_eq!(no_account.name(), "no_account", "refused before any dial: {no_account}");
-    let read = shell.call("history.past", &json!({"session": bare, "draft": "1.0.1.0.4", "at": 3})).unwrap_err();
+    let read = shell.call("history.past", &json!({"session": bare, "draft": "1.0.1.0.66", "at": 3})).unwrap_err();
     assert_eq!(read.name(), "unreachable", "the bare session's read dials: {read}");
 }
 
@@ -125,7 +125,7 @@ fn a_hold_standing_at_the_board_refuses_the_restore_before_any_read() {
     let session = register(&shell, "8e", Facts { principal: 2, account: Some("1.0.2".into()), kind: SessionKind::Signed { fingerprint, set_account: "1.0.2".into() } });
     shell.call("places", &json!({"guest": true, "board": board})).unwrap();
     let own = frames.lock().unwrap().len();
-    let restore = json!({"session": session, "draft": "1.0.2.0.4", "at": 3, "as_of": 5});
+    let restore = json!({"session": session, "draft": "1.0.2.0.66", "at": 3, "as_of": 5});
     shell.set_node_state(NodeState::Stopped);
     let refused = shell.call("history.restore", &restore).unwrap_err();
     let v = refused.to_value();
@@ -133,16 +133,16 @@ fn a_hold_standing_at_the_board_refuses_the_restore_before_any_read() {
     let under_the_stop = frames.lock().unwrap()[own..].to_vec();
     assert!(under_the_stop.is_empty(), "nothing read or sent under the stop: {under_the_stop:?}");
     // The past state's read asks no hold: it reads under the stop.
-    let past = shell.call("history.past", &json!({"session": session, "draft": "1.0.2.0.4", "at": 3})).unwrap_err();
+    let past = shell.call("history.past", &json!({"session": session, "draft": "1.0.2.0.66", "at": 3})).unwrap_err();
     assert_eq!(past.name(), "unreachable", "the read dials under the stop: {past}");
     let read = frames.lock().unwrap()[own..].to_vec();
-    assert!(read.contains(&doc_metadata("1.0.2.0.4")), "the read reached the board: {read:?}");
+    assert!(read.contains(&doc_metadata("1.0.2.0.66")), "the read reached the board: {read:?}");
     let own = frames.lock().unwrap().len();
     shell.set_node_state(NodeState::Running);
     let refused = shell.call("history.restore", &restore).unwrap_err();
     assert_eq!(refused.name(), "unreachable", "the node running, the reads dial: {refused}");
     let dialed = frames.lock().unwrap()[own..].to_vec();
-    assert!(dialed.contains(&doc_metadata("1.0.2.0.4")), "the draft's read reached the board: {dialed:?}");
+    assert!(dialed.contains(&doc_metadata("1.0.2.0.66")), "the draft's read reached the board: {dialed:?}");
 }
 
 /// Checks that a restore over the draft's held line is refused

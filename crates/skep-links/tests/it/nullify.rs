@@ -31,7 +31,7 @@ fn nullify_tombstones_its_target_and_accepts_its_own_fresh_address() {
     ));
     // P0.
     assert!(matches!(
-        w.nullify(P1, &a(&[1, 0, 1, 0, 7]), &la(1)),
+        w.nullify(P1, &a(&[1, 0, 1, 0, 69]), &la(1)),
         Err(TxnError::Rejected(NullifyError::HomeNotRegistered))
     ));
     // Happy path: the [R] tuple nullifies exactly the target root.

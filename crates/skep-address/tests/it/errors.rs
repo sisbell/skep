@@ -24,7 +24,7 @@ fn reported<E: Error + 'static>(e: E) -> String {
 /// met rather than merely reporting that one was.
 #[test]
 fn every_public_rejection_reports_itself() {
-    let elem = addr(&[1, 0, 2, 0, 5, 0, 1, 9]);
+    let elem = addr(&[1, 0, 2, 0, 67, 0, 1, 9]);
     let renderings = [
         reported(Tumbler::new(std::iter::empty::<Nat>()).unwrap_err()), // EmptySequence
         reported(validate(t(&[0])).unwrap_err()),                       // T4Error

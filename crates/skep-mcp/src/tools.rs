@@ -48,6 +48,7 @@ const DISPATCH_OPS: &[&str] = &[
     "delegate",
     "register_node",
     "fork",
+    "create_well_known_document",
     "next_account_prefix",
     "principal_prefix",
     "effective_owner",

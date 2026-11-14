@@ -767,7 +767,8 @@ fn the_testimony_names_the_key_that_signed_the_session() {
 
 /// wire.md §The change feed fixes `docs` as a table: the target doc for
 /// arrangement writes; a link write's HOME (`edit_link` both its homes,
-/// successor's first); the MINTED document for create/fork/version; `[]`
+/// successor's first); the MINTED document for create/fork/version and the
+/// mailbox's mint, `create_well_known_document`; `[]`
 /// for `delegate` and `register_node`. Four of the fourteen rows were
 /// watched, and `edit_link` — the one row with an order to get wrong — was
 /// not: `docs` is the field a client dispatches on to decide what to
@@ -952,15 +953,17 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
             serde_json::json!([doc_a]),
         ),
     ];
-    // The two minting rows name a document known only from the ack, so
+    // The three minting rows name a document known only from the ack, so
     // their expectation is built from it rather than stated up front. The
     // version is the CROSS-OWNER arm — a private copy of the claimant's
     // published home, minted into principal 1's own account — since a
     // version of one's own draft is versionless (PUB-2.9, the store's
-    // `private_source_versionless`; `tests/it/version_chain.rs`).
+    // `private_source_versionless`; `tests/it/version_chain.rs`). The
+    // well-known mint is the account's mailbox, its first call here.
     let minting = [
         ("version", format!(r#"{{"op":"version","d_src":"{CLAIMANT_DOC1}","published":false}}"#)),
         ("fork", r#"{"op":"fork"}"#.to_string()),
+        ("create_well_known_document", format!(r#"{{"op":"create_well_known_document","account":"{account}"}}"#)),
     ];
 
     fn op_of(what: &str) -> &str {

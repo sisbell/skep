@@ -39,9 +39,10 @@
 //!   consumer's document reads for the published index, and the grant reads
 //!   and the deposit's ordinal read where no token is given do — and
 //!   `H.1`'s pair read once per board (signed-ops D13); its child `frames`
-//!   spells every frame this crate sends and the frames of the reads it
-//!   lends an embedder, the paged link search among them (`window_four`,
-//!   `window_ftt`, with the mail type `T_MAIL`); its child `answers`
+//!   spells every frame this crate sends and the frames it lends an
+//!   embedder: the reads, the paged link search among them (`window_four`,
+//!   `window_ftt`, with the mail type `T_MAIL`), and one write no code of
+//!   the crate sends, the mailbox's mint (`create_mailbox`); its child `answers`
 //!   decodes the read answers the crate reads but the registry reads',
 //!   which `Board` decodes itself, and an envelope member a caller reads in
 //!   place. Beside those the crate lends an embedder readers no code of its

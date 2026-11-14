@@ -11,7 +11,7 @@
 //! a request the board gave no answer to and a dial that never left, each
 //! with its token — a second `write_busy` among them, held as a connection
 //! never made is; every hand's key a declared `HandKey` word; the
-//! five kinds are bursts and the eleven other
+//! five kinds are bursts and the fourteen other
 //! `WRITE_KINDS` are not; the five held states are the declared ones, a
 //! line's its cause's whatever refusal stands beside it, and the two acts of
 //! `resolve` the declared words and no other spelling; the whys a drop that
@@ -89,7 +89,7 @@ mod resend;
 mod write;
 mod writers;
 
-/// The five burst kinds are bursts; the thirteen other write kinds are not.
+/// The five burst kinds are bursts; the fourteen other write kinds are not.
 #[test]
 fn the_five_kinds_are_bursts_and_no_other_write_kind_is() {
     for op in BURST_KINDS {

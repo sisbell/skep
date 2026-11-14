@@ -132,6 +132,20 @@ pub fn stage(from: &str, id: Option<&str>) -> Value {
     with_id(json!({"op": "stage", "from": from}), id)
 }
 
+/// Builds `{"op":"create_well_known_document","account":…}` (wire.md
+/// §Namespace; the mailbox design §3).
+///
+/// It mints `account`'s mailbox, the private document at
+/// [`mailbox_of`](crate::address::mailbox_of): its owner's alone, and made
+/// once, a second call answered the same address with nothing committed.
+/// The op names the account and no slot, the mailbox being the one
+/// well-known document an owner creates; a builder for another slot is a
+/// later addition. No code of this crate sends the frame: it stands for an
+/// embedder, as [`T_MAIL`] does.
+pub fn create_mailbox(account: &str, id: Option<&str>) -> Value {
+    with_id(json!({"op": "create_well_known_document", "account": account}), id)
+}
+
 /// Builds `{"op":"retrieve_doc_v_span_set","doc":…}`.
 ///
 /// It reads the extents a deposit's next free content ordinal is read off,

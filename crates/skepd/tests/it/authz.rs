@@ -37,6 +37,11 @@ use skep_identity::{encode_retire, Fingerprint};
 //   * `register_node` takes NO principal in the store (provisioning is
 //     authentication-gated only) — every bound session may admit a fresh
 //     node. Recorded here as a reviewed fact of the local-trust scope.
+//   * `create_well_known_document` names its account, as
+//     `create_new_document` does, and the store gates it on that account's
+//     ω alone. It is safe to call again, so the owner's cell is `ok` on
+//     every walk: the first call mints the mailbox, and each later one is
+//     answered its address and commits nothing.
 //   * `version` and `copy`-from-foreign-source are un-OWNER-gated
 //     (denial-as-fork / transclusion is the medium) and, since PUB round 2
 //     lane 3.3c, SOURCE-gated at M10's door (PUB-6.23, PUB-6.38): a source
@@ -112,6 +117,8 @@ const MATRIX: &[Row] = &[
     Row { label: "delegate",              expect: [OK, "not_ancestor", "not_ancestor", "not_authorized", UNAUTHENTICATED, UNAUTHENTICATED] },
     Row { label: "register_node",         expect: [OK, OK,             OK,             OK,               UNAUTHENTICATED, UNAUTHENTICATED] },
     Row { label: "fork",                  expect: [OK, OK,             OK,             OK,               UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "create_well_known_document",
+                                          expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
     // ── arrangement writes (target: a document owned by `owner`) ──
     Row { label: "insert",                expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
     // ── the publish gate (RES-26): the same insert homed in the owner's
@@ -205,8 +212,9 @@ impl Counters {
 
 /// The persistent fixture — addresses survive restarts; tokens do not.
 struct Fixture {
-    /// The owner's account — the one every `create_new_document` and
-    /// `delegate` cell aims at, whoever the calling column is.
+    /// The owner's account — the one every `create_new_document`,
+    /// `create_well_known_document` and `delegate` cell aims at, whoever the
+    /// calling column is.
     owner_account: String,
     /// X's doc 1 — born PUBLISHED (RES-26's home-mint law) and never
     /// written by any cell: the publish row's target.
@@ -463,6 +471,9 @@ fn cell_frame(
             format!(r#"{{"op":"register_node","addr":"1.{}"}}"#, Counters::next(&counters.node))
         }
         "fork" => r#"{"op":"fork"}"#.to_string(),
+        "create_well_known_document" => {
+            format!(r#"{{"op":"create_well_known_document","account":"{}"}}"#, fixture.owner_account)
+        }
         "insert" => format!(
             r#"{{"op":"insert","doc":"{}","at":{{"subspace":"1","ordinal":"1"}},"values":["z"]}}"#,
             fixture.insert_doc
@@ -748,6 +759,7 @@ const CONTENT_MATRIX: &[ScopeRow] = &[
     ScopeRow { label: "delegate",                     expect: [OK,                      OK] },
     ScopeRow { label: "register_node",                expect: [OK,                      OK] },
     ScopeRow { label: "fork",                         expect: [OK,                      OK] },
+    ScopeRow { label: "create_well_known_document",   expect: [OK,                      OK] },
     ScopeRow { label: "insert",                       expect: [OK,                      OK] },
     ScopeRow { label: "insert (published doc 1)",     expect: [PUBLISHED_TARGET,        PUBLISHED_TARGET] },
     ScopeRow { label: "delete",                       expect: [OK,                      OK] },
@@ -992,6 +1004,7 @@ const LISTED_MATRIX: &[ListedRow] = &[
     ListedRow { label: "delegate",                     expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
     ListedRow { label: "register_node",                expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
     ListedRow { label: "fork",                         expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+    ListedRow { label: "create_well_known_document",   expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
     ListedRow { label: "insert",                       expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
     ListedRow { label: "insert (published doc 1)",     expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
     ListedRow { label: "delete",                       expect: [UNAUTHENTICATED, UNAUTHENTICATED] },

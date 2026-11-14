@@ -54,13 +54,14 @@ pub const MAX_INSERT_VALUES: usize = 1 << 18;
 /// out at its board from before its first dial until its answer is noted
 /// (`hold`'s `Holds::write_out`), so a drafts read waits for the writer of a
 /// row it meets first (skep #1000).
-pub const WRITE_KINDS: [&str; 18] = [
+pub const WRITE_KINDS: [&str; 19] = [
     "delegate",
     "register_node",
     "create_new_document",
     "fork",
     "version",
     "stage",
+    "create_well_known_document",
     "insert",
     "delete",
     "copy",

@@ -45,6 +45,7 @@ mod http_lifecycle;
 mod identity_slice;
 mod ispan_slot;
 mod link_age;
+mod mailbox;
 mod media;
 mod member_home;
 mod modes;

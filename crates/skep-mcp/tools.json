@@ -81,6 +81,22 @@
       }
     },
     {
+      "name": "create_well_known_document",
+      "description": "Create your own account's mailbox: the document at your account's well-known slot 2, the address <account>.0.2 (1.0.1.0.2 for the account 1.0.1). account is your own account (resolve it via principal_prefix or session_info): only an account's owner creates its mailbox. The mailbox is always PRIVATE and is created ONCE: a second call — from another session of yours, or repeated after an answer was lost — is answered the same address and changes nothing, so it is safe to call again. Mail needs no mailbox document: a link may point at <account>.0.2 before anything is created there, and mail addressed to you is found either way; the document is where your own links about your mail are kept, so create it just before the first of them. An account with no home page yet is refused mint_home_first: mint the home page first (create_new_document). Response: ack_addr with the mailbox's address; a second call's at is the position that call was judged at, not where the mailbox was minted.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "account": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Your own account's address: the account whose mailbox is created."
+          }
+        },
+        "required": ["account"],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "next_account_prefix",
       "description": "The next delegable prefix under parent (what delegate demands). Response: maybe_addr; addr null means an ineligible parent.",
       "inputSchema": {

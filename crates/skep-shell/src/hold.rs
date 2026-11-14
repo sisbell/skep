@@ -45,7 +45,7 @@
 //! the line takes the death's reason once the end derives it
 //! ([`Holds::note_death`]). A write the
 //! hold never holds is faced where a burst's would be held (§3c.4: "a
-//! non-burst write that fails … is faced at its act") — and the nine of
+//! non-burst write that fails … is faced at its act") — and the ten of
 //! them §3c.4 names ([`UNHOLDABLE_WRITES`]; `publication.confirm`'s send,
 //! `history.restore`'s write and the merge rows' writes take the list's
 //! door under their own ops) meeting a hold that stands at the board before
@@ -485,7 +485,7 @@ pub(crate) const WRITER_WAIT: Duration = Duration::from_secs(1);
 /// The burst machine's five kinds (§3c.4) — the ops the held store holds.
 const BURST_KINDS: [&str; 5] = ["insert", "delete", "copy", "reinstate", "rearrange"];
 
-/// The nine non-burst writes §3c.4 names, which a standing hold refuses.
+/// The ten non-burst writes §3c.4 names, which a standing hold refuses.
 ///
 /// Each arriving while the board is stopped, poisoned or its writes halted
 /// is refused at once with the hold's cause as its token, never held and
@@ -503,9 +503,14 @@ const BURST_KINDS: [&str; 5] = ["insert", "delete", "copy", "reinstate", "rearra
 /// cannot be held either — the page needs the new document's address before
 /// it can type into it — and dialed under a stopped node it failed
 /// `unreachable`, a network fault's face for a notebook its owner stopped
-/// (skep #868). Every other write outside the five bursts dials as it dials.
-pub const UNHOLDABLE_WRITES: [&str; 9] =
-    ["create_new_document", "fork", "version", "stage", "set_arrangement", "make_link", "nullify", "edit_link", "publish"];
+/// (skep #868); `create_well_known_document`, the mailbox's mint (the
+/// mailbox design §3), takes it as the mint does: an app sends it just
+/// ahead of the owner's first mark kept on the board, a `make_link`, so
+/// under a stopped node it is refused `stopped` as the mark behind it is,
+/// never dialed to fail `unreachable`. Every other write outside the five
+/// bursts dials as it dials.
+pub const UNHOLDABLE_WRITES: [&str; 10] =
+    ["create_new_document", "fork", "version", "stage", "create_well_known_document", "set_arrangement", "make_link", "nullify", "edit_link", "publish"];
 
 /// Returns whether `frame` is a burst: one of the five kinds.
 ///
@@ -4177,13 +4182,13 @@ impl Holds {
 
     /// Returns the refusal an unholdable write meets at a standing hold (§3c.4).
     ///
-    /// `op` is the write's kind. Where it is one of the nine
+    /// `op` is the write's kind. Where it is one of the ten
     /// ([`UNHOLDABLE_WRITES`]) and a hold stands at the board — the own node
     /// stopped, the write path poisoned, the writes halted, in that order —
     /// the write is refused at once under the cause's own name
     /// (`Name::STOPPED`, `Name::POISONED`, `Name::HALTED`), its detail the
     /// `op`, never held and never dialed; `None` where no hold stands or the
-    /// kind is not of the nine, the write then dialing as it dials — a board
+    /// kind is not of the ten, the write then dialing as it dials — a board
     /// that is unreachable is no hold of this kind. It is the third question
     /// of the shell's one write door (`Shell::write_door`), asked for every
     /// write the shell sends before any dial and any read the write makes —
@@ -6597,7 +6602,7 @@ pub(crate) fn minted_on<'a>(doc: &str, ack: &'a Value) -> Option<&'a str> {
 /// from its frame and its ack.
 fn written_docs<'a>(frame: &'a Value, ack: &'a Value) -> Vec<&'a str> {
     let members: &[&str] = match frame["op"].as_str() {
-        Some("create_new_document" | "fork" | "version" | "stage" | "publish") => return ack["addr"].as_str().into_iter().collect(),
+        Some("create_new_document" | "fork" | "version" | "stage" | "create_well_known_document" | "publish") => return ack["addr"].as_str().into_iter().collect(),
         Some("make_link" | "emit" | "nullify" | "assert_sup") => &["home"],
         Some("edit_link") => &["d_s", "d_a"],
         _ => &["doc"],

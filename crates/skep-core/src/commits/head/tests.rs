@@ -108,22 +108,6 @@ fn the_resume_counts_every_non_system_entry_and_times_the_last_system_one() {
     assert_eq!((r.commits_since_head, r.last_head_millis), (0, None), "nothing above the head");
 }
 
-/// ROW 40's WORDS at fixed addresses: the draft minted, the address the
-/// frontier pins, the cause, and that the head goes on with the draft it
-/// minted.
-#[test]
-fn the_misminted_drafts_line_names_both_addresses_and_that_the_head_goes_on() {
-    let minted = Tumbler::new([1u32, 1, 0, 1, 0, 4].into_iter().map(Nat::from))
-        .ok()
-        .and_then(|t| validate(t).ok())
-        .expect("1.1.0.1.0.4 is T4-valid");
-    assert_eq!(
-        DraftMintedElsewhere { minted: &minted, expected: &staging_draft_address() }.to_string(),
-        "head writer: the staging draft minted at 1.1.0.1.0.4, not at 1.1.0.1.0.3 — another \
-         writer minted under the system account; the head goes on with the draft it minted"
-    );
-}
-
 /// ROW 38's TWO LINES at fixed inputs — the refusal with its position, the
 /// commit it was met at and the cause, where no head stands yet when it is
 /// tried again (every write's turn, and the daemon's retry within the

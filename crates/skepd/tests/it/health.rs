@@ -150,7 +150,10 @@ fn a_refused_head_is_a_condition_until_a_head_lands_and_the_standing_line_says_i
 /// finds the time writer due and the head not; the seam refuses the time
 /// record's insert — the producer `time`, its act, the cause, the position
 /// the record would have named, one attempt — the head writer unrefused
-/// beside it; and the next commit's retry lands the record and clears it.
+/// beside it; a second refusal of the same cause, at the next commit, is
+/// counted and not said again — two attempts at the later position, the
+/// stream holding the time writer's one line; and the next commit's retry
+/// lands the record and clears it.
 #[test]
 fn a_refused_time_record_is_a_condition_until_a_record_lands() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -181,11 +184,26 @@ fn a_refused_time_record_is_a_condition_until_a_record_lands() {
         "the time writer refused, the head writer not: {:?}",
         sd.daemon().lines_said()
     );
-    assert!(
-        sd.daemon().lines_said().iter().any(|l| l == &format!("failure: time writer: the time record at position {p} was refused at its insert (durability: the test seam's refusal); no record written this cycle")),
-        "the time writer's own line: {:?}",
+    let time_lines = |sd: &Skepd| -> Vec<String> {
+        sd.daemon().lines_said().into_iter().filter(|l| l.contains("time writer:")).collect()
+    };
+    let refused = format!(
+        "failure: time writer: the time record at position {p} was refused at its insert \
+         (durability: the test seam's refusal); no record written this cycle"
+    );
+    assert_eq!(time_lines(&sd), std::slice::from_ref(&refused), "the time writer's own line, said once");
+    // The same cause again: the hour stands due, so the next commit's turn
+    // tries the record again and the seam refuses its insert again — not
+    // re-said, counted, at the later position.
+    sd.daemon().refuse_the_next_head_once();
+    let p2 = commit(port, &owner);
+    assert_eq!(
+        conditions(port),
+        vec![condition("time", "insert", "durability", "the test seam's refusal", p2, 2)],
+        "two attempts, the later position: {:?}",
         sd.daemon().lines_said()
     );
+    assert_eq!(time_lines(&sd), [refused], "counted, not said again");
     // The retry at the next commit lands the record and clears the memo.
     commit(port, &owner);
     assert_eq!(conditions(port), Vec::<Value>::new(), "the record landed: cleared");

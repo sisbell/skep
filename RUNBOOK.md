@@ -1618,8 +1618,7 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
 
        Where the journal refuses one of the seed's commits the seed
        stops there, said once, the board serves on, and the next open
-       writes the rest — `{op}` the commit the refusal met
-       (`create_new_document` for the staging draft's mint, `insert` for
+       writes the rest — `{op}` the commit the refusal met (`insert` for
        the sections, `publish` for the member, `make_link` for a type's
        link), the type by its address and its name, the cause as a
        client would read it. Not the `registry seeding:` refusal below,
@@ -1638,13 +1637,12 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        ```
 
        Where the head writer refuses it, the open goes on and says,
-       `{op}` the head's commit the refusal met — `create_new_document`
-       for the staging draft's one mint, `insert` for the record,
-       `publish` for the shot into `H`, which leaves the record an
-       orphan in the draft:
+       `{op}` the head's commit the refusal met — `insert` for the
+       record, `publish` for the shot into `H`, which leaves the record
+       an orphan in the draft:
 
        ```
-       failure: head writer: the head at position {position} was refused at its {op} ({cause}); no head written this cycle; no head stands yet, so a claimed board refuses every attested write attestation_invalid:board_unavailable until one lands — tried again at every write's turn
+       failure: head writer: the head at position {position} was refused at its {op} ({cause}); no head written this cycle; no head stands yet, so a claimed board refuses every attested write attestation_invalid:board_unavailable until one lands — tried again at every write's turn, and on a claimed board by the daemon within a minute
        ```
 
        When a head next lands, the refusals are cleared once, with

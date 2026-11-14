@@ -410,10 +410,10 @@ fn a_refusal_at_the_sections_insert_leaves_the_next_open_the_whole_table() {
 }
 
 /// R5 — THE WRITER: every seed commit testifies `system`; the staging draft
-/// is `1.1.0.1.0.3`, unpublished, and no document is minted under the
-/// system account by the seed — the time document stands at doc 4,
-/// registered and published, as genesis seeds it, doc 5 is unregistered
-/// after the seed, and row 40's line is never said.
+/// is `1.1.0.1.0.3`, unpublished, the one document the seed's insert names,
+/// and no document is minted under the system account by the seed — the
+/// time document stands at doc 4, registered and published, as genesis
+/// seeds it, and doc 5 is unregistered after the seed.
 #[test]
 fn the_seed_writes_as_the_system_principal_through_the_one_staging_draft() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -421,7 +421,7 @@ fn the_seed_writes_as_the_system_principal_through_the_one_staging_draft() {
     seed(&wp);
     let snap = engine.kernel().snapshot();
     let m3 = snap.world().m3();
-    let draft = super::super::head::staging_draft_address();
+    let draft = skep_namespace::staging_draft();
     assert_eq!(draft.tumbler().to_string(), "1.1.0.1.0.3");
     assert!(m3.is_registered_document(&draft) && !m3.published(&draft), "the draft, private");
     let time = skep_namespace::time_document();
@@ -432,11 +432,15 @@ fn the_seed_writes_as_the_system_principal_through_the_one_staging_draft() {
     );
     let doc5 = crate::codec::wire_address("1.1.0.1.0.5").expect("an address");
     assert!(!m3.is_registered_document(&doc5), "the system principal minted no document");
-    assert!(
-        lines_said(&wp).iter().all(|l| !l.contains("staging draft minted at")),
-        "row 40's line never said: {:?}",
-        lines_said(&wp)
-    );
+    // The draft the seed wrote into, read off its insert's own entry, the
+    // feed's first.
+    match wp.feed.entries_above(0).first() {
+        Some((_, CommitMeta::Recorded { op, docs, .. })) => {
+            assert_eq!(op, "insert", "the seed's first commit is the sections' insert");
+            assert_eq!(docs, &[draft.to_string()], "the insert names the staging draft alone");
+        }
+        other => panic!("the seed's insert heads a fresh board's feed: {other:?}"),
+    }
     for (_, meta) in wp.feed.entries_above(0) {
         match meta {
             CommitMeta::Recorded { key, signed, .. } => {

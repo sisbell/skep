@@ -1,4 +1,4 @@
-//! The time record's schema and the lines, as pure values.
+//! The time record's schema and the line, as pure values.
 
 use super::*;
 use skep_address::Tumbler;
@@ -24,23 +24,15 @@ fn a_time_record_renders_in_schema_order_and_reads_back_as_itself() {
     assert_eq!(TimeRecord::parse(b"not json"), None);
 }
 
-/// The two lines render the ruled words.
+/// The line renders the ruled words.
 #[test]
-fn the_time_writers_lines_render_the_ruled_words() {
+fn the_time_writers_line_renders_the_ruled_words() {
     let line =
         TimeRefusedLine { position: 400, act: "publish", cause: "durability: the volume is full" };
     assert_eq!(
         line.to_string(),
         "time writer: the time record at position 400 was refused at its publish (durability: the \
          volume is full); no record written this cycle"
-    );
-    let minted = a(&[1, 1, 0, 1, 0, 5]);
-    let expected = time_document();
-    let line = DocumentMintedElsewhere { minted: &minted, expected: &expected };
-    assert_eq!(
-        line.to_string(),
-        "time writer: the time document minted at 1.1.0.1.0.5, not at 1.1.0.1.0.4 — another writer \
-         minted under the system account; the records go on in the document it minted"
     );
 }
 

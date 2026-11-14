@@ -1107,21 +1107,20 @@ impl Daemon {
     /// the daemon's own as the system account's principal. On every board,
     /// the link-type registry's seed (`skep-core`'s `commits/registry.rs`):
     /// what the registry document `1.1.0.1.0.1` lacks of the vocabulary is
-    /// written before this returns — every type on a fresh board (the staging
-    /// draft's mint, one insert of every section, one publish, one `defines`
-    /// link per type), the types a later build added on a board that stands,
-    /// nothing on a board that holds them all — so a fresh board's
+    /// written before this returns — every type on a fresh board (one insert
+    /// of every section, one publish, one `defines` link per type), the
+    /// types a later build added on a board that stands, nothing on a board
+    /// that holds them all — so a fresh board's
     /// [`Daemon::log_position`] stands past genesis at its first open. And on
     /// one kind of board: a claimed board whose head writer resumes no head
     /// from `H` — the crash window between the claim and its head, a claim
     /// whose `H.1` the head writer's driver refused while serving, or a board
     /// claimed under a build that wrote no head at the claim — has `H.1`
     /// written before this returns (`Daemon::write_the_claims_head_if_owed`;
-    /// signed ops): up to three commits (the staging draft's mint where the
-    /// seed has not made it, the record's insert, the publish into `H`). A
-    /// refusal of either fails nothing: it is surfaced on the operator
-    /// stream, the open returns `Ok`, the seed's rest waits for the next open
-    /// and the board answers attested writes
+    /// signed ops): two commits (the record's insert, the publish into
+    /// `H`). A refusal of either fails nothing: it is surfaced on the
+    /// operator stream, the open returns `Ok`, the seed's rest waits for the
+    /// next open and the board answers attested writes
     /// `attestation_invalid:board_unavailable` until a head lands — at the
     /// next write's turn or on the checkpoint thread's retry clock, which
     /// the refusal arms, whichever comes first.
@@ -1869,7 +1868,7 @@ impl Daemon {
     /// the change-feed entry, and announces the commit — and where that
     /// commit makes the published head due (wire.md §The other endpoints: 64
     /// commits since the last head, a moved checkpoint, or the hour), the
-    /// daemon's own head writer commits up to three writes of its own before
+    /// daemon's own head writer commits two writes of its own before
     /// the reply is built, so the journal can stand past the ack's `at` when
     /// this returns — and the credential write that claims the board is
     /// followed by its first head `H.1` in the same step, whatever the

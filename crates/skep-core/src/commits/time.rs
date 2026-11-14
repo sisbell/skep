@@ -3,11 +3,12 @@
 //!
 //! It is the board's own daemon writing the time document `T` =
 //! `1.1.0.1.0.4` ([`time_document`]) as a new published version per record,
-//! in-process as the system account's principal ([`SYSTEM_PRINCIPAL`]) with
-//! no session, on the write path's cadence — the sparse anchor the
-//! permanence record's D3 (c) names, a record of its own and never a member
-//! of the head (the owner's "b", 2026-10-22): two heads of one board at one
-//! position stay byte-identical, and the clock rides a document beside `H`.
+//! in-process as the system account's principal
+//! ([`SYSTEM_PRINCIPAL`](skep_namespace::SYSTEM_PRINCIPAL)) with no session,
+//! on the write path's cadence — the sparse anchor the permanence record's
+//! D3 (c) names, a record of its own and never a member of the head: two
+//! heads of one board at one position stay byte-identical, and the clock
+//! rides a document beside `H`.
 //!
 //! **What a record is.** One `skep-time` record (DOCTRINE D13: one JSON
 //! object naming its type) — `type`, `position`, `time`, in that order, no
@@ -19,21 +20,20 @@
 //! with, so the anchor at or below a position never stands above the line
 //! it stands in for. The schema is [`TimeRecord`]'s, on one card.
 //!
-//! **How it lands.** Per record, two commits — a third where the time
-//! document is minted first, and the staging draft ahead of that where none
-//! is held — under the same serialization lock the triggering write holds,
-//! each through the head writer's door and its helpers
-//! ([`HeadWriter::ensure_draft`](super::head::HeadWriter::ensure_draft), [`HeadWriter::commit_insert`](super::head::HeadWriter::commit_insert),
+//! **How it lands.** Per record, two commits under the same serialization
+//! lock the triggering write holds, each through the head writer's door and
+//! its helpers
+//! ([`HeadWriter::commit_insert`](super::head::HeadWriter::commit_insert),
 //! [`HeadWriter::commit_publish`](super::head::HeadWriter::commit_publish), [`HeadWriter::run_commit`](super::head::HeadWriter::run_commit)) with testimony
-//! [`SYSTEM_TESTIMONY`]: one `insert` of the record atom into the staging
-//! draft `1.1.0.1.0.3` the head writer and the registry seed share, then one
+//! [`SYSTEM_TESTIMONY`](super::head::SYSTEM_TESTIMONY): one `insert` of the
+//! record atom into the staging draft `1.1.0.1.0.3` ([`staging_draft`]) the
+//! head writer and the registry seed share, then one
 //! `publish` shot minting the next member of `T`'s trunk chain — `base` =
 //! `T`'s current trunk head with its extent set to that member's full
 //! content count, so nothing is carried and each member holds exactly its
-//! own record — exactly as a head lands in `H`. `T` is minted published by
-//! the first record's write, doc 4 of the system account by the chain's
-//! frontier (the draft stands at doc 3 first, whichever writer minted it),
-//! and found registered at every later open ([`find_time_document`]).
+//! own record — exactly as a head lands in `H`. `T` and the staging draft
+//! are seeded at genesis, `T` published and memberless until the first
+//! record lands and the draft private: this writer mints no document.
 //!
 //! **The cadence**, on the write path with no clock thread — evaluated after
 //! every write the write path's session door runs ([`TimeWriter::take_turn`],
@@ -59,9 +59,9 @@
 //! a record writes one at its first write after this build's first open,
 //! and a board younger than an hour holds none until its hour.
 //!
-//! **What a refusal does.** A driver refusal on any of the record's commits
-//! — the draft's mint, the document's mint, the record's insert or the
-//! shot's publish — is said once per cause on the operator stream
+//! **What a refusal does.** A driver refusal on either of the record's
+//! commits — the record's insert or the shot's publish — is said once per
+//! cause on the operator stream
 //! ([`TimeRefusedLine`]: the position the record would have named, the
 //! commit refused and the cause as the wire renders a rejection), the record
 //! skipped for this cycle, the last record and the origin as they were, and
@@ -85,16 +85,14 @@ use skep_address::{ordinal, shift, validate, Address, Nat};
 use skep_arrangement::{trunk_head, Base, HasM5, Run, Shot, ShotRun, VPos};
 use skep_content::{HasContent, Val};
 use skep_engine::{EngineStores, World};
-use skep_febe::{lower_txn, Op, OpKind, Rejection, Stores};
-use skep_namespace::{
-    first_version_address, system_account, time_document, HasM3, SYSTEM_PRINCIPAL,
-};
+use skep_febe::{OpKind, Rejection, Stores};
+use skep_namespace::{first_version_address, staging_draft, time_document, HasM3};
 use skep_util::notice::Class;
 
 use super::feed::Feed;
-use super::head::{malformed_run, render_cause, Refused, SYSTEM_TESTIMONY, TIME_BOUND_MILLIS};
+use super::head::{malformed_run, render_cause, TIME_BOUND_MILLIS};
 use super::sidecar::wall_clock_millis;
-use super::{write_meta, Commits, Lines, ProducerRefusal, RefusalMemo};
+use super::{Commits, Lines, ProducerRefusal, RefusalMemo};
 use crate::codec::op_name;
 use crate::serial::SerialGuard;
 
@@ -165,8 +163,6 @@ struct TimeState {
     /// The look is at open, at each evaluation, and after the record's own
     /// commits, so a write that landed nothing is told from a commit.
     last_seen_position: u64,
-    /// The time document, found at open or minted at the first record.
-    time_document: Option<Address>,
     /// The memo of the last refusal said: the commit refused, its cause, the
     /// position the record would have named and the attempts since the last
     /// landing ([`RefusalMemo`]).
@@ -195,15 +191,14 @@ impl TimeWriter {
     /// It reads `T`'s latest member off one snapshot — the record it holds
     /// becomes `last` whole, so a record written after a restart names no
     /// position already dated, and the hour is measured from the record's
-    /// own `time` — and the time document where an earlier uptime minted it.
-    /// With no record, the hour's origin is the feed's recorded time at the
-    /// first commit's position, the first line the feed holds, else the
-    /// open (the module doc's resume by reading). `lines` is the write
-    /// path's classed door, cloned in, for the one line this writer says.
+    /// own `time`. With no record, the hour's origin is the feed's recorded
+    /// time at the first commit's position, the first line the feed holds,
+    /// else the open (the module doc's resume by reading). `lines` is the
+    /// write path's classed door, cloned in, for the one line this writer
+    /// says.
     pub(super) fn open(stores: EngineStores, feed: &Feed, lines: &Lines) -> TimeWriter {
         let snap = stores.kernel().snapshot();
         let last = read_latest_record(snap.world());
-        let time_document = find_time_document(snap.world());
         let last_time_millis = match last {
             Some(record) => record.time,
             // The birth read. The feed is asked for the first line it holds
@@ -224,7 +219,6 @@ impl TimeWriter {
                 last,
                 last_time_millis,
                 last_seen_position: snap.seq().0,
-                time_document,
                 last_refusal: None,
             }),
             lines: lines.clone(),
@@ -285,22 +279,17 @@ impl TimeWriter {
 
     /// Writes one record: the atom into the staging draft, then the shot.
     ///
-    /// Its commits are the insert and the publish shot minting the next
-    /// member of `T`, the time document's mint ahead of them at the first
-    /// record ([`TimeWriter::ensure_document`]) and the staging draft's ahead
-    /// of that where none is held ([`HeadWriter::ensure_draft`](super::head::HeadWriter::ensure_draft)). `true` iff
+    /// Its two commits are the insert, into the staging draft
+    /// ([`staging_draft`]), and the publish shot minting the next member of
+    /// `T` ([`time_document`]), both documents seeded at genesis. `true` iff
     /// the shot committed — a failed publish leaves the atom an orphan in the
     /// draft, and the next commit retries.
     fn write_record(&self, wp: &Commits, serial: &SerialGuard<'_>, record: &TimeRecord) -> bool {
         let position = record.position;
         let refused =
             |act: &'static str, refusal: &Rejection| self.say_the_refusal_once(position, act, refusal);
-        let Some(draft) = wp.head_writer.ensure_draft(wp, serial, &refused) else {
-            return false;
-        };
-        let Some(doc) = self.ensure_document(wp, serial, &refused) else {
-            return false;
-        };
+        let draft = staging_draft();
+        let doc = time_document();
         let bytes = record.to_bytes();
         let next_ordinal = {
             let snap = self.stores.kernel().snapshot();
@@ -346,48 +335,6 @@ impl TimeWriter {
         wp.head_writer.commit_publish(wp, serial, doc, shot, &refused).is_some()
     }
 
-    /// Returns the time document, minting it now where none is held.
-    ///
-    /// It is the one found at open or minted by an earlier record this
-    /// uptime, else minted now under the system account, born published —
-    /// once for the life of the board where the mint lands at
-    /// [`time_document`], since every later open finds it there. The staging
-    /// draft is minted ahead of it by whichever writer first needed it, so
-    /// the mint lands at doc 4 by the chain's frontier; a mint that lands
-    /// elsewhere is said ([`DocumentMintedElsewhere`]) and the record goes on
-    /// with the document minted. A refusal of the mint is `refused`'s to say.
-    fn ensure_document(
-        &self,
-        wp: &Commits,
-        serial: &SerialGuard<'_>,
-        refused: Refused<'_>,
-    ) -> Option<Address> {
-        // Read in a statement of its own, so the state guard drops at the
-        // `;`: this lock is never to be held across a commit.
-        let found = self.state.lock().time_document.clone();
-        if found.is_some() {
-            return found;
-        }
-        let account = system_account();
-        let op = Op::CreateNewDocument { account: account.clone(), published: Some(true) };
-        let meta = write_meta(&op)?.attributed(SYSTEM_TESTIMONY.to_string(), None);
-        let stores = &self.stores;
-        let doc = wp.head_writer.run_commit(wp, serial, meta, refused, move || {
-            stores
-                .namespace()
-                .create_new_document(SYSTEM_PRINCIPAL, &account, Some(true))
-                .map_err(|e| lower_txn(OpKind::CreateNewDocument, e))
-        })?;
-        if doc != time_document() {
-            self.lines.say(
-                Class::Failure,
-                DocumentMintedElsewhere { minted: &doc, expected: &time_document() },
-            );
-        }
-        self.state.lock().time_document = Some(doc.clone());
-        Some(doc)
-    }
-
     /// Says the refusal line, once per commit and cause.
     ///
     /// `act` is the op of the record's commit the refusal was met at, as the
@@ -425,8 +372,7 @@ impl TimeWriter {
 /// In the operator stream's words: `time writer: the time record at position
 /// {p} was refused at its {op} ({cause}); no record written this cycle` —
 /// the position the record would have named, the commit the refusal met
-/// (the staging draft's or the time document's `create_new_document`, the
-/// record's `insert` or the shot's `publish`) and the cause as the head
+/// (the record's `insert` or the shot's `publish`) and the cause as the head
 /// writer's line renders one. A pure value the unit suite pins by
 /// `to_string()`; emitted under `Class::Failure`, once per commit and cause.
 struct TimeRefusedLine<'a> {
@@ -442,28 +388,6 @@ impl std::fmt::Display for TimeRefusedLine<'_> {
             "time writer: the time record at position {} was refused at its {} ({}); no record \
              written this cycle",
             self.position, self.act, self.cause
-        )
-    }
-}
-
-/// The time writer's other line: the time document minted elsewhere.
-///
-/// In the operator stream's words it says the time document minted somewhere
-/// other than the address the chain's frontier pins, the cause, and what
-/// still serves: the record goes on in the document it minted. A pure value
-/// the unit suite pins by `to_string()`; emitted under `Class::Failure`.
-struct DocumentMintedElsewhere<'a> {
-    minted: &'a Address,
-    expected: &'a Address,
-}
-
-impl std::fmt::Display for DocumentMintedElsewhere<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "time writer: the time document minted at {}, not at {} — another writer minted \
-             under the system account; the records go on in the document it minted",
-            self.minted, self.expected
         )
     }
 }
@@ -485,17 +409,6 @@ fn read_latest_record(world: &World) -> Option<TimeRecord> {
 fn read_record_member(world: &World, member: &Address) -> Option<TimeRecord> {
     let i_addr = world.m5().point(member, &VPos::content(Nat::from(1u32)))?;
     TimeRecord::parse(world.content().value_at(i_addr.tumbler())?.as_bytes())
-}
-
-/// Returns the time document an earlier uptime minted, if any.
-///
-/// It is [`time_document`] when that is a registered, published document —
-/// the only shape this writer ever gives it — else `None`, and the first
-/// record mints it.
-fn find_time_document(world: &World) -> Option<Address> {
-    let doc = time_document();
-    let m3 = world.m3();
-    (m3.is_registered_document(&doc) && m3.published(&doc)).then_some(doc)
 }
 
 /// Returns the hour of `position`: the newest time record at or below it.

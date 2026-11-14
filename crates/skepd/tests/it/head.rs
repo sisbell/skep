@@ -1007,17 +1007,18 @@ fn a_pending_region_resumes_the_count_off_the_seq_early_and_never_late() {
     sd.shutdown();
 }
 
-/// The staging draft is found at every open and never minted — doc 3 of the
-/// system account, seeded at genesis — on the first uptime and after a
-/// restart (PUB-6.65: the head reaches `H` and the system account's own
-/// staging draft and NO other document; the writer resumes by reading).
+/// The staging draft is never minted and never looked up — doc 3 of the
+/// system account, seeded at genesis, the one address every head inserts
+/// into — on the first uptime and after a restart (PUB-6.65: the head
+/// reaches `H` and the system account's own staging draft and NO other
+/// document; the writer resumes by reading `H`).
 /// Pinned by the journal's own arithmetic, in RECORDS as `/health` counts
 /// them: the board's FIRST head — the claim's own, `H.1` — costs exactly what
 /// a later head costs, on the same uptime and on the next, and the first
 /// time record beside a later head costs what every time record costs, so
 /// neither writer's first write carries a document's mint.
 #[test]
-fn a_restarted_writer_finds_the_seeded_staging_draft_and_mints_no_document() {
+fn a_restarted_writer_writes_into_the_seeded_staging_draft_and_mints_no_document() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut clock = clock_origin();
 
@@ -1032,7 +1033,7 @@ fn a_restarted_writer_finds_the_seeded_staging_draft_and_mints_no_document() {
         let claim_at = acked_at(&op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT)));
         let first_head_cost = health(port).0 - claim_at;
         // A later head on the SAME uptime, measured off its trigger's ack:
-        // the atom's insert and the publish shot, the draft found.
+        // the atom's insert and the publish shot, into the same draft.
         let owner = open_session(port, CLAIMANT_PRINCIPAL);
         let trigger = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
         let later_head_cost = health(port).0 - trigger;
@@ -1040,20 +1041,20 @@ fn a_restarted_writer_finds_the_seeded_staging_draft_and_mints_no_document() {
         (first_head_cost, later_head_cost)
     };
     // The staging draft and the time document both stand from genesis: the
-    // claim's `H.1` finds the draft and costs what a later head costs — the
-    // atom's insert and the publish shot — and never a document mint more.
-    // The forced hour brings the time writer's first record after the later
-    // head: the record's insert and publish, the head's own shape, into the
-    // document it finds.
+    // claim's `H.1` inserts into the draft and costs what a later head costs
+    // — the atom's insert and the publish shot — and never a document mint
+    // more. The forced hour brings the time writer's first record after the
+    // later head: the record's insert and publish, the head's own shape,
+    // into the seeded time document.
     assert_eq!(
         later_head_cost,
         first_head_cost + TIME_RECORD_RECORDS,
-        "the claim's H.1 and the next head both found the seeded draft, and the hour's first \
-         time record found its seeded document: neither minted one"
+        "the claim's H.1 and the next head both wrote into the seeded draft, and the hour's \
+         first time record into its seeded document: neither minted one"
     );
 
-    // The second uptime's head: the same, the draft found at open — and the
-    // time document found too, so its record costs no mint.
+    // The second uptime's head: the same, into the same draft — and its
+    // time record into the same document, so neither costs a mint.
     let sd = spawn(dir.path());
     let port = sd.port();
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
@@ -1062,7 +1063,7 @@ fn a_restarted_writer_finds_the_seeded_staging_draft_and_mints_no_document() {
     assert_eq!(
         second_uptime_head_cost,
         first_head_cost + TIME_RECORD_RECORDS,
-        "the second uptime's head minted no draft, and its time record no document: both found"
+        "the second uptime's head minted no draft, and its time record no document: both seeded"
     );
     sd.shutdown();
 }
@@ -1075,7 +1076,7 @@ fn a_restarted_writer_finds_the_seeded_staging_draft_and_mints_no_document() {
 /// registered and private, so the guest is `withheld`; `1.1.0.1.0.4` is the
 /// time document, published, so the guest reads it; and `1.1.0.1.0.5` was
 /// never minted, so the guest is told `doc_not_registered`. Named rather
-/// than measured: a writer that lost the draft it holds would mint a
+/// than measured: a writer that minted a draft of its own would leave a
 /// private document per head for as long as it runs, and no guest-visible
 /// entry would name one.
 #[test]
@@ -1592,7 +1593,7 @@ fn a_refused_first_head_is_written_at_the_next_turn_a_refused_writes_own_include
     // ROW 38 ON THE STREAM (H4): the refused `H.1` said ONCE, naming the
     // claim's position — the one the head would have named — the head's
     // commit the refusal met — the record's insert, the staging draft
-    // standing from the open's registry seed — as the wire names its op,
+    // standing from genesis — as the wire names its op,
     // and the seam's refusal as the wire renders a rejection, the code and
     // the detail, then what no head standing costs and when it is tried
     // again; no clearing yet, no head having landed.
@@ -1754,13 +1755,13 @@ fn a_healthy_board_and_a_refused_cadence_head_arm_no_retry() {
     sd.shutdown();
 }
 
-/// ROW 38 ON THE STREAM (`operations.md` §1.1 row 38; §4 row 31; the ops
-/// lanes' D16). H1 — ONCE PER CAUSE, WITH THE POSITION: a head due by the
-/// hour and refused by the driver (the seam, injected inside the driver as
-/// a `durability` rejection) is said once, naming the position the head
-/// would have named — the triggering write's own acked position — the
-/// head's commit the refusal met, its `insert` (the staging draft stands
-/// from the claim's head), and the refusal as the wire renders a rejection,
+/// ROW 38 ON THE STREAM (`operations.md` §1.1 row 38; §4 row 31). H1 — ONCE
+/// PER CAUSE, WITH THE POSITION: a head due by the hour and refused by the
+/// driver (the seam, injected inside the driver as a `durability`
+/// rejection) is said once, naming the position the head would have named
+/// — the triggering write's own acked position — the head's commit the
+/// refusal met, its `insert` (the staging draft stands from genesis), and
+/// the refusal as the wire renders a rejection,
 /// `({code}: {detail})`; the SAME cause at the same commit met again at the
 /// next landed commit (the trigger stays due) is not said again, while
 /// ANOTHER cause is, with its own position. H2 — THE CLEARING: when a head

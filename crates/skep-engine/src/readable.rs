@@ -528,8 +528,8 @@ mod tests {
     /// [`World::visible_to`] keys on whom a caller writes *as*, never on
     /// whether a session carries it — so a writer with no session that owns a
     /// draft reads it only by writing as its principal. The board's own daemon
-    /// is that writer (PUB-6.65): it mints its staging draft under the
-    /// genesis-seeded system account and publishes from it as
+    /// is that writer (PUB-6.65): its staging draft is seeded at genesis
+    /// under the system account, and it publishes from it as
     /// `SYSTEM_PRINCIPAL`, whose class reads the draft, where
     /// `Caller::System`'s guest class withholds it, the writer's own included.
     /// A writer that took "no session" to mean `Caller::System` would find its

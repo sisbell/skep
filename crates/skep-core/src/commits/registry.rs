@@ -32,12 +32,10 @@
 //! **How it lands.** The rows that lack a section are written as ONE member:
 //! their sections — each four newline-ended lines, the name alone on the
 //! first ([`skep_registry::Definition::section`]) — inserted per byte, as
-//! prose is, into the staging draft the head writer keeps (`1.1.0.1.0.3`,
-//! reused through [`super::head::HeadWriter::ensure_draft`]: the system
-//! principal mints no other draft, whichever of its three writers mints it
-//! first — its one other document, the time writer's, comes after it — and
-//! row 40's line is the fence), then one publish shot into `1.1.0.1.0.1`
-//! minting the next
+//! prose is, into the system account's staging draft (`1.1.0.1.0.3`,
+//! [`staging_draft`]: seeded at genesis, private, and the one draft the head
+//! writer and the time writer insert into too — the seed mints no
+//! document), then one publish shot into `1.1.0.1.0.1` minting the next
 //! member of its trunk chain, with `base` the current trunk head (the
 //! document itself while memberless) at extent 0, so every position the
 //! earlier members hold is carried into the new one after the new sections,
@@ -48,12 +46,12 @@
 //! `1.1.0.1.0.1`, `from` = the section's span in the member that holds it
 //! (resolve form), `to` = `{addrs: [the type]}` and `ty` = `{addrs: [the
 //! defines type]}` — `3.50`'s first, so its own link, typed by itself, stands
-//! before any link it types. On a fresh board that is one draft mint, one
-//! insert, one publish and one link per row.
+//! before any link it types. On a fresh board that is one insert, one
+//! publish and one link per row.
 //!
 //! **What a refusal does.** A driver refusal on any of the seed's commits —
-//! the draft's mint, the sections' insert, the member's publish or a row's
-//! link — ends the seed for this open: said ONCE on the operator stream as a
+//! the sections' insert, the member's publish or a row's link — ends the
+//! seed for this open: said ONCE on the operator stream as a
 //! failure naming the type whose commit the refusal met
 //! ([`TypeRefusedLine`]), with the cause as the wire renders a rejection
 //! (`head.rs`'s rendering, so the two spell one way), how many types stand
@@ -96,7 +94,7 @@ use skep_febe::RejectCode;
 use skep_febe::{lower_txn, Op, OpKind, Rejection, SlotArg, Stores};
 use skep_kernel::Snapshot;
 use skep_links::{enc, Endset, HasLinks};
-use skep_namespace::{ghost_home_document, HasM3, SYSTEM_PRINCIPAL};
+use skep_namespace::{ghost_home_document, staging_draft, HasM3, SYSTEM_PRINCIPAL};
 use skep_registry::{defines_type, vocabulary, Definition};
 use skep_util::notice::Class;
 
@@ -195,9 +193,7 @@ impl Commits {
             let refused = |act: &'static str, refusal: &Rejection| {
                 self.say_type_refused(first, act, refusal, standing, total)
             };
-            let Some(draft) = self.head_writer.ensure_draft(self, serial, &refused) else {
-                return seed.cut_short(written, stood, first);
-            };
+            let draft = staging_draft();
             let mut bytes: Vec<u8> = Vec::new();
             let mut offsets: Vec<(&'static Definition, u64, u64)> = Vec::new();
             for d in &unwritten {
@@ -334,9 +330,7 @@ struct Seed<'a> {
     wp: &'a Commits,
     serial: &'a SerialGuard<'a>,
     /// The seed's own commits attempted so far: the sections' insert, the
-    /// member's publish, then a link per row. The staging draft's mint is the
-    /// head writer's act ([`super::head::HeadWriter::ensure_draft`]) and is
-    /// not counted.
+    /// member's publish, then a link per row.
     commits: std::cell::Cell<usize>,
 }
 
@@ -508,10 +502,10 @@ fn content_span(start: u64, len: u64) -> Span {
 
 /// The seed's failure line: a type whose commit the driver refused.
 ///
-/// It is in the operator stream's words: the act refused — the staging
-/// draft's `create_new_document`, the sections' `insert`, the member's
-/// `publish` or the row's `make_link`, as the wire names the op — the type
-/// by its address and its name, the cause as the wire renders a rejection,
+/// It is in the operator stream's words: the act refused — the sections'
+/// `insert`, the member's `publish` or the row's `make_link`, as the wire
+/// names the op — the type by its address and its name, the cause as the
+/// wire renders a rejection,
 /// how many types stand, what waits and what still serves: `link-type
 /// registry: the {act} for the type {address} ({name}) was refused ({cause});
 /// {standing} of {total} types stand, the rest wait for the next open; the
@@ -585,10 +579,9 @@ pub fn unhide_every_type_from_the_seed(data_dir: &Path) {
 /// TEST HOOK: arms one driver refusal of the `nth` commit (from 1) the seed
 /// of the board at `data_dir` next attempts of its own — the sections'
 /// insert, the member's publish, then a link per row in the seed's order,
-/// the meta-type's first; the staging draft's mint ahead of them is the head
-/// writer's act and is not numbered — taken the way a real refusal is, so it
-/// rides the seed's whole refusal path, and disarmed as it fires. The seam
-/// beside the head writer's `refuse_next_head_once`. Not a stable API.
+/// the meta-type's first — taken the way a real refusal is, so it rides the
+/// seed's whole refusal path, and disarmed as it fires. The seam beside the
+/// head writer's `refuse_next_head_once`. Not a stable API.
 #[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 pub fn refuse_the_seeds_commit_once(data_dir: &Path, nth: usize) {

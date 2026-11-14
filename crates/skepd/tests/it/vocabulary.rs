@@ -400,8 +400,7 @@ fn a_seed_cut_short_by_a_refusal_is_said_once_and_finished_at_the_next_open() {
 /// under the system account, withheld from a guest on `doc_metadata` and
 /// `retrieve_v` alike, and no document is minted under the account across
 /// the seed and the claim's head: the time document `1.1.0.1.0.4` answers
-/// published, as genesis seeds it, `1.1.0.1.0.5` is unregistered, and row
-/// 40's line is never said.
+/// published, as genesis seeds it, and `1.1.0.1.0.5` is unregistered.
 #[test]
 fn the_seed_writes_as_the_system_principal_through_the_one_staging_draft() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -448,11 +447,6 @@ fn the_seed_writes_as_the_system_principal_through_the_one_staging_draft() {
         expect_resp(&fifth, "rejected")["code"].as_str(),
         Some("doc_not_registered"),
         "{fifth}"
-    );
-    assert!(
-        sd.daemon().lines_said().iter().all(|l| !l.contains("staging draft minted at")),
-        "row 40's line never said: {:?}",
-        sd.daemon().lines_said()
     );
     sd.shutdown();
 }

@@ -111,7 +111,6 @@ pub(crate) fn lower_read<E: Lower>(kind: OpKind, e: E) -> Rejection {
 ///
 /// **The door (the operations design §1.1 row 38).** It is public, so a
 /// caller that drives a store itself — the daemon's head writer, which meets
-/// `TxnError<CreateDocumentError>` at its staging draft's mint and
 /// `TxnError<InsertError>` and `TxnError<PublishError>` at the head atom's
 /// insert and publish — lowers what it holds exactly as the dispatch table
 /// lowers the same error for the front door, under the `OpKind` it names,

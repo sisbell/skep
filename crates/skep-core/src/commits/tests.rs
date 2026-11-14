@@ -1216,6 +1216,105 @@ fn mint_a_draft_attested(
     (addr, at.0)
 }
 
+/// Checks that the head and time writers write into the seeded documents.
+///
+/// The board is one whose registry seed never ran, so no commit of the
+/// system principal's stands before the writers' own: one commit of the
+/// test's, then the claim's step writes `H.1`
+/// (`Commits::write_first_head`), and an hour on, by the clock seam, the
+/// next commit's turn writes `H.2` and the time writer's `T.1` after it.
+/// The entries testifying `system` are then, in order, an insert and a
+/// publish for each of the three and never a `create_new_document`: each
+/// insert's `docs` the staging draft alone, each publish's the member it
+/// minted — `H.1`, `H.2`, `T.1` — and the staging draft it shot from. And
+/// the documents under the system account are the four genesis seeds with
+/// the bits genesis gave them, read off M3's own map, the test's two mints
+/// set aside. A writer handed any other address fails here: its insert is
+/// refused and no head lands, or its member is minted in another
+/// document's chain.
+#[test]
+fn the_head_and_time_writers_write_into_the_seeded_documents_and_mint_none() {
+    use skep_namespace::{
+        ghost_home_document, head_document, prefix_contains, staging_draft, system_account,
+        time_document, HasM3,
+    };
+
+    use super::head::{SYSTEM_TESTIMONY, TIME_BOUND_MILLIS};
+    use super::sidecar::{wall_clock_millis, CommitMeta};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let wp = open_the_write_path(dir.path(), &engine);
+    let stores = engine.stores();
+    assert_eq!(engine.kernel().current_seq().0, 0, "a fresh board, and no seed run on it");
+
+    // One commit of the test's own: a head names a position that moved.
+    let (first_mint, _) = mint_a_draft(&wp, &stores);
+    // The claim's step: `H.1`, whatever the cadence says.
+    {
+        let serial = wp.serial_lock();
+        assert_eq!(wp.write_first_head(&serial), FirstHead::Written, "H.1 lands at the claim's step");
+    }
+    // An hour on, on the one clock both writers read: the next commit's
+    // turn finds the head due by its hour, and the time writer after it.
+    wp.set_head_writer_clock_millis(wall_clock_millis() + 2 * TIME_BOUND_MILLIS);
+    let (second_mint, _) = mint_a_draft(&wp, &stores);
+
+    let draft = staging_draft().to_string();
+    let member = |doc: Address, k: u32| format!("{doc}.{k}");
+    let mut own = Vec::new();
+    let mut system = Vec::new();
+    for (at, meta) in wp.feed.entries_above(0) {
+        match meta {
+            CommitMeta::Recorded { op, docs, key, .. } if key.as_deref() == Some(SYSTEM_TESTIMONY) => {
+                system.push((op, docs));
+            }
+            CommitMeta::Recorded { op, docs, .. } => own.push((op, docs)),
+            other @ CommitMeta::Bare { .. } => {
+                panic!("a bare entry at {at} on a fresh board's own feed: {other:?}")
+            }
+        }
+    }
+    let mint = |doc: &Address| ("create_new_document".to_string(), vec![doc.to_string()]);
+    assert_eq!(own, [mint(&first_mint), mint(&second_mint)], "the test's own two mints, and no other");
+    let insert = || ("insert".to_string(), vec![draft.clone()]);
+    let publish = |minted: String| ("publish".to_string(), vec![minted, draft.clone()]);
+    assert_eq!(
+        system,
+        [
+            insert(),
+            publish(member(head_document(), 1)),
+            insert(),
+            publish(member(head_document(), 2)),
+            insert(),
+            publish(member(time_document(), 1)),
+        ],
+        "H.1's two commits, then the hour's two pairs — H.2's and T.1's: each insert into the \
+         staging draft alone, each publish from it into H or T, and no document minted"
+    );
+
+    let snap = engine.kernel().snapshot();
+    let account = system_account();
+    let documents: Vec<(Address, bool)> = snap
+        .world()
+        .m3()
+        .documents()
+        .filter(|(doc, _)| prefix_contains(&account, doc) && trunk_of(doc) == **doc)
+        .filter(|(doc, _)| **doc != first_mint && **doc != second_mint)
+        .map(|(doc, published)| (doc.clone(), published))
+        .collect();
+    assert_eq!(
+        documents,
+        [
+            (ghost_home_document(), true),
+            (head_document(), true),
+            (staging_draft(), false),
+            (time_document(), true),
+        ],
+        "the system account's documents are the four genesis seeds: the writers minted none"
+    );
+}
+
 /// Mints four drafts and tears `commits.log` back to the first.
 ///
 /// The answer is the four positions; the next open's region is the three

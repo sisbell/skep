@@ -53,9 +53,8 @@
 //!   publication bit (PUB-7.5; PUB-kickoff D1: one publication definition),
 //!   seeded at load and folded on every document-minting record (PUB-7.7).
 //!   The daemon's publication reads answer `doc ∉ exception_set` and nothing
-//!   else, but for the head writer's search for its staging draft, which
-//!   reads the bit itself; and the set's one enumeration ([`World::drafts`])
-//!   hands its entries out as [`Draft`] rows.
+//!   else; and the set's one enumeration ([`World::drafts`]) hands its
+//!   entries out as [`Draft`] rows.
 //! * **The read predicate** ([`World::readable`]; the `readable` module) —
 //!   the one function `readable(doc, principal) = published(doc) ∨ subtree ∨
 //!   grant_exists` (PUB-1.31), composing the exception set's clause, the

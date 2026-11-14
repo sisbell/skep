@@ -16,16 +16,14 @@
 //! navigation (PUB-6.65's recursion rule). `/health` is the live pair, `H` the
 //! durable record. The schema is [`HeadRecord`]'s, on one card.
 //!
-//! **How it lands.** Per head, two commits — three where the staging draft is
-//! minted first — under the same serialization lock the triggering write
-//! holds, each through the head writer's door ([`Commits::commit_recorded`])
-//! with testimony [`SYSTEM_TESTIMONY`]: (1) one `insert` of the head record
-//! atom into a private staging draft (minted once under the system account,
-//! `published: false`, and reused — across restarts too: it is
-//! [`staging_draft_address`], doc 3 of the system account, the one document
-//! the system principal ever mints, and a reopened writer finds it registered
-//! rather than minting another; the head reaches `H` and that draft and no
-//! other document), then (2) one `publish` shot minting the next member of
+//! **How it lands.** Per head, two commits under the same serialization lock
+//! the triggering write holds, each through the head writer's door
+//! ([`Commits::commit_recorded`]) with testimony [`SYSTEM_TESTIMONY`]: (1)
+//! one `insert` of the head record atom into the system account's staging
+//! draft ([`staging_draft`], `1.1.0.1.0.3`: seeded at genesis, private, and
+//! the one draft of every head on every uptime — the writer mints no
+//! document; the head reaches `H` and that draft and no other document),
+//! then (2) one `publish` shot minting the next member of
 //! `H`'s trunk chain — `base` = `H`'s current trunk head with its extent set
 //! to that member's full content count (so nothing is carried and each member
 //! holds exactly its own record; 0 at the first head, written while `H` is
@@ -75,10 +73,9 @@
 //! `position` and `chain` (the next head's `prev`; a head is owed only once
 //! the position moves past it) and its `base` (trigger (b)'s reference: a
 //! checkpoint taken after that head, before or after a restart, is named by
-//! the next head's `base`) — and finds the staging draft where it left it; a
-//! crash between the insert and the shot leaves an orphan atom in the draft
-//! and no member, and the next head's shot names the newer atom (PUB-2.26's
-//! no-residue).
+//! the next head's `base`). A crash between the insert and the shot leaves an
+//! orphan atom in the staging draft and no member, and the next head's shot
+//! names the newer atom (PUB-2.26's no-residue).
 //!
 //! **Resume from the feed.** The cadence's two counters are resumed at open
 //! from the change feed's testimony about the commits landed above the
@@ -108,8 +105,8 @@
 //! surfaced failure (I11 (c), PUB-5.75: never a board left silently
 //! headless): row 38's line names it (`operations.md` §1.1 row 38; §4 row 31)
 //! — the position the head would have named, the commit refused — the
-//! draft's mint, the record's insert or the shot's publish — and the refusal
-//! as the wire renders a rejection, its code and its detail through M10's own
+//! record's insert or the shot's publish — and the refusal as the wire
+//! renders a rejection, its code and its detail through M10's own
 //! lowering ([`lower_txn`]), never a store error's `Debug` — said once per
 //! cause: a memo of the last refusal said, its commit and its cause, is kept
 //! under the state lock, a refusal at that commit rendering as that one is
@@ -178,16 +175,17 @@
 //! **The door's other users.** The link-type registry's seed (`registry.rs`,
 //! this module's sibling) writes the registry document `1.1.0.1.0.1` at every
 //! open as the same principal with the same testimony, through the same
-//! helpers — [`HeadWriter::ensure_draft`], [`HeadWriter::commit_insert`],
-//! [`HeadWriter::commit_publish`] and [`HeadWriter::run_commit`], each
-//! `pub(super)` for it — and reuses the one staging draft; and the time
-//! writer (`time.rs`, the other sibling) writes the time document
-//! `1.1.0.1.0.4` on the write path's cadence through the same helpers, by
-//! the same hour bound ([`TIME_BOUND_MILLIS`]) read off this writer's own
-//! clock ([`HeadWriter::now_millis`]), so one seam drives both hours. The
-//! system principal mints no document but the draft and the time document,
-//! whichever writer mints the draft first, and row 40's line is the fence
-//! for all three. A refused commit of the seed's or the time writer's is its
+//! helpers — [`HeadWriter::commit_insert`], [`HeadWriter::commit_publish`]
+//! and [`HeadWriter::run_commit`], each `pub(super)` for it — and inserts
+//! into the same staging draft; and the time writer (`time.rs`, the other
+//! sibling) writes the time document `1.1.0.1.0.4` on the write path's
+//! cadence through the same helpers, by the same hour bound
+//! ([`TIME_BOUND_MILLIS`]) read off this writer's own clock
+//! ([`HeadWriter::now_millis`]), so one seam drives both hours. None of the
+//! three mints a document: the registry document, `H`, the staging draft and
+//! the time document are seeded at genesis
+//! ([`skep_namespace::M3State::genesis`]), and the three write into them
+//! alone. A refused commit of the seed's or the time writer's is its
 //! own to say, so the helpers take who says a refusal ([`Refused`]) rather
 //! than row 38's position. The head's own bytes are untouched by the time
 //! record: no timestamp rides `H`, so two heads of one board at one
@@ -198,7 +196,7 @@ use std::time::Instant;
 
 use parking_lot::Mutex;
 use serde_json::Value;
-use skep_address::{validate, Address, Nat, Tumbler};
+use skep_address::{Address, Nat};
 use skep_arrangement::{
     birth_version, trunk_head, AsOf, Base, Caller, Deposit, HasM5, Run, Shot, ShotRun, VPos,
 };
@@ -208,7 +206,7 @@ use skep_febe::{lower_txn, Codec, Op, OpKind, RejectCode, Rejection, Response, S
 use skep_identity::BoardTerm;
 use skep_kernel::Seq;
 use skep_links::{PublishDeposits, PublishTarget};
-use skep_namespace::{head_document, system_account, HasM3, SYSTEM_PRINCIPAL};
+use skep_namespace::{head_document, staging_draft, HasM3, SYSTEM_PRINCIPAL};
 use skep_util::json::{hex_string, parse_lower_hex};
 use skep_util::notice::Class;
 
@@ -327,8 +325,9 @@ impl Clock {
 ///
 /// It is everything the trigger reads and the head updates. Behind a
 /// [`Mutex`], but never held across a commit: the decision is taken under it
-/// and it is dropped before any head write, which takes it again for the
-/// staging draft ([`HeadWriter::ensure_draft`]); `parking_lot`'s lock is not
+/// and it is dropped before any head write, which takes it again where one
+/// of its commits is refused, to say the refusal
+/// ([`HeadWriter::say_the_refusal_once`]); `parking_lot`'s lock is not
 /// re-entrant, so holding it across the write would deadlock the write on
 /// itself.
 struct HeadState {
@@ -370,12 +369,6 @@ struct HeadState {
     /// one board at one position are byte-identical), so a bare or absent
     /// sidecar leaves this at open-time, the one origin then on record.
     last_head_millis: u64,
-    /// The staging draft, found at open or minted at first need.
-    ///
-    /// It is [`staging_draft_address`] once it is registered — or, where the
-    /// mint landed elsewhere (row 40), the draft minted; `None` only on a
-    /// board that has never written a head.
-    staging_draft: Option<Address>,
     /// The claim's head, owed (the module doc's section).
     ///
     /// Set where a first head — the claim's step's, the open's, or a turn's
@@ -545,7 +538,7 @@ impl HeadRecord {
 
 /// Who says a refused commit of the system principal's, and how.
 ///
-/// It is handed to [`HeadWriter::run_commit`] and the three helpers over it
+/// It is handed to [`HeadWriter::run_commit`] and the two helpers over it
 /// with the op refused, as the wire names it, and the refusal itself — the
 /// rejection M10's one table lowered, which each sayer renders as the wire
 /// renders one ([`render_cause`]) and keeps as its condition: the head
@@ -576,8 +569,8 @@ pub(super) struct HeadWriter {
     /// The classed door with the daemon's record ([`Lines`]).
     ///
     /// It is a clone handed at [`HeadWriter::open`] as `commits.log` holds
-    /// one: row 38's line, its clearing, the malformed run's and row 40's go
-    /// through it.
+    /// one: row 38's line, its clearing and the malformed run's go through
+    /// it.
     lines: Lines,
     /// The test seam behind `skepd::Daemon::refuse_the_next_head_once`.
     ///
@@ -596,15 +589,14 @@ pub(super) struct HeadWriter {
 impl HeadWriter {
     /// Opens the writer over `stores`, resuming by reading `H` and the feed.
     ///
-    /// It reads `H`'s latest member (PUB-6.65, I7 (a)): the record it holds
-    /// becomes `last_head` whole, so a head written after a restart carries
-    /// the right `prev`, does not re-name a position already published, and is
-    /// due by trigger (b) only for a checkpoint the last head did not name; and
-    /// the staging draft is found where an earlier uptime minted it. All off
-    /// one snapshot. And it reads the feed (the module doc's resume from the
-    /// feed): the entries above that position resume trigger (a)'s count and
-    /// trigger (c)'s origin — a lost sidecar's bare entries counting, and its
-    /// missing times leaving the origin at open.
+    /// It reads `H`'s latest member (PUB-6.65, I7 (a)) off one snapshot: the
+    /// record it holds becomes `last_head` whole, so a head written after a
+    /// restart carries the right `prev`, does not re-name a position already
+    /// published, and is due by trigger (b) only for a checkpoint the last
+    /// head did not name. And it reads the feed (the module doc's resume from
+    /// the feed): the entries above that position resume trigger (a)'s count
+    /// and trigger (c)'s origin — a lost sidecar's bare entries counting, and
+    /// its missing times leaving the origin at open.
     ///
     /// **While the walk's region is pending** (`operations.md` §3.3 step 2:
     /// "the head writer's resume counts commits off the kernel's seq while
@@ -621,13 +613,12 @@ impl HeadWriter {
     /// gate) and never a changed content (D1).
     ///
     /// `lines` is the write path's classed door, cloned in — the one record
-    /// the daemon shares — for the three lines this writer says.
+    /// the daemon shares — for the two lines this writer says.
     pub(super) fn open(stores: EngineStores, feed: &Feed, lines: &Lines) -> HeadWriter {
         let clock = Clock::new();
         let now = clock.now_millis();
         let snap = stores.kernel().snapshot();
         let last_head = read_latest_head(snap.world());
-        let staging_draft = find_staging_draft(snap.world());
         // The feed is the daemon's testimony about its own commits: every
         // entry above the position the last head named landed since that
         // head, the head's own commits among them, testifying
@@ -646,7 +637,6 @@ impl HeadWriter {
                 last_seen_position: snap.seq().0,
                 commits_since_head,
                 last_head_millis: resumed.last_head_millis.unwrap_or(now),
-                staging_draft,
                 first_head_owed: false,
                 last_refusal: None,
                 refusals: None,
@@ -905,29 +895,26 @@ impl HeadWriter {
             wp.checkpoint_signal().arm_head_retry();
         }
         // The head's own commits — a whole head's, or a refused one's partial
-        // (the draft mint, the orphaned insert) — moved the seq: the next
-        // evaluation measures "landed" from here, so they count nothing.
+        // (the orphaned insert) — moved the seq: the next evaluation measures
+        // "landed" from here, so they count nothing.
         state.last_seen_position = self.stores.kernel().snapshot().seq().0;
         landed
     }
 
     /// Writes one head: the record atom into the staging draft, then the shot.
     ///
-    /// Its two commits are the insert and the publish shot minting the next
-    /// member of `H`, the staging draft's mint ahead of them where none is
-    /// held ([`HeadWriter::ensure_draft`]). `true` iff both committed — a
-    /// failed publish leaves the atom an orphan in the draft (the resume
-    /// case), the last head and the counters stay as they were, and the next
-    /// commit retries.
+    /// Its two commits are the insert, into the staging draft genesis seeds
+    /// ([`staging_draft`]), and the publish shot minting the next member of
+    /// `H`. `true` iff both committed — a failed publish leaves the atom an
+    /// orphan in the draft (the resume case), the last head and the counters
+    /// stay as they were, and the next commit retries.
     fn write_head(&self, wp: &Commits, serial: &SerialGuard<'_>, record: &HeadRecord) -> bool {
         // The position the head names — what row 38's line names where any
         // of its commits is refused.
         let position = record.position;
         let refused =
             |act: &'static str, refusal: &Rejection| self.say_the_refusal_once(position, act, refusal);
-        let Some(draft) = self.ensure_draft(wp, serial, &refused) else {
-            return false;
-        };
+        let draft = staging_draft();
         let bytes = record.to_bytes();
 
         // The next free content position of the draft, and the atom there.
@@ -989,56 +976,6 @@ impl HeadWriter {
     /// spares. Under the state lock, held for the one store.
     pub(super) fn mark_own_commits_seen(&self) {
         self.state.lock().last_seen_position = self.stores.kernel().snapshot().seq().0;
-    }
-
-    /// Returns the staging draft, minting it now where none is held.
-    ///
-    /// It is the one found at open or minted by an earlier head this uptime,
-    /// else minted now under the system account (a private document,
-    /// `published: false`) — once for the life of the board where the mint
-    /// lands at [`staging_draft_address`], since every later open finds it
-    /// there ([`find_staging_draft`]). The registry seed and the time writer
-    /// take it too, so whichever of the three writes first mints it, and the
-    /// others find it held. A refusal of the mint is `refused`'s to say.
-    pub(super) fn ensure_draft(
-        &self,
-        wp: &Commits,
-        serial: &SerialGuard<'_>,
-        refused: Refused<'_>,
-    ) -> Option<Address> {
-        // Read in a statement of its own, so the state guard drops at the `;`:
-        // an `if let` keeps its scrutinee's temporaries alive through its
-        // body, and this lock is never to be held across a commit.
-        let found = self.state.lock().staging_draft.clone();
-        if found.is_some() {
-            return found;
-        }
-        let account = system_account();
-        let op = Op::CreateNewDocument { account: account.clone(), published: Some(false) };
-        let meta = write_meta(&op)?.attributed(SYSTEM_TESTIMONY.to_string(), None);
-        // The refusal lowered as the front door lowers the same error for a
-        // `create_new_document` (`lower_txn`, M10's one table).
-        let draft = self.run_commit(wp, serial, meta, refused, move || {
-            self.stores
-                .namespace()
-                .create_new_document(SYSTEM_PRINCIPAL, &account, Some(false))
-                .map_err(|e| lower_txn(OpKind::CreateNewDocument, e))
-        })?;
-        if draft != staging_draft_address() {
-            // The system principal mints the draft ahead of its one other
-            // document (the time document, which the time writer mints after
-            // this draft stands), so the first mint under its account is doc
-            // 3 by the seed's frontier; anything else means some other
-            // writer minted under the system account — surfaced, and the
-            // head goes on with the draft it did mint, which the line says
-            // (`operations.md` §1.1 row 40).
-            self.lines.say(
-                Class::Failure,
-                DraftMintedElsewhere { minted: &draft, expected: &staging_draft_address() },
-            );
-        }
-        self.state.lock().staging_draft = Some(draft.clone());
-        Some(draft)
     }
 
     /// Commits one `insert` of `values` into `draft` at `ordinal`, as the
@@ -1200,9 +1137,9 @@ impl HeadWriter {
     ///
     /// This is the line the module doc's account of a refusal names.
     /// `act` is the op of the head's commit the refusal was met at — the
-    /// staging draft's mint, the record's insert or the shot's publish, as
-    /// the wire names it — and `refusal` the rejection, rendered as the wire
-    /// renders one, `{code}: {detail}` ([`render_cause`]), or, where the
+    /// record's insert or the shot's publish, as the wire names it — and
+    /// `refusal` the rejection, rendered as the wire renders one,
+    /// `{code}: {detail}` ([`render_cause`]), or, where the
     /// shot's run would not build, `bad_run` with that error's own words
     /// ([`malformed_run`]). Compared under the state lock with the last one
     /// said: the same commit and cause is not said again; another is said
@@ -1315,13 +1252,12 @@ fn wire_code(refusal: &Rejection) -> String {
 ///
 /// It is `operations.md` §1.1 row 38's line (§4 row 31), in the operator
 /// stream's words: the position the head would have named, the head's
-/// commit the refusal met — the staging draft's `create_new_document`, the
-/// record's `insert` or the shot's `publish`, the last a refusal that
-/// leaves the insert's atom an orphan in the draft — and the cause as
-/// [`render_cause`] renders it, or, where the shot's run would not build,
-/// `bad_run` with that error's own words ([`malformed_run`]): `head writer:
-/// the head at position {p} was refused at its {op} ({cause}); no head
-/// written this cycle`.
+/// commit the refusal met — the record's `insert` or the shot's `publish`,
+/// the last a refusal that leaves the insert's atom an orphan in the draft
+/// — and the cause as [`render_cause`] renders it, or, where the shot's run
+/// would not build, `bad_run` with that error's own words
+/// ([`malformed_run`]): `head writer: the head at position {p} was refused
+/// at its {op} ({cause}); no head written this cycle`.
 ///
 /// Where no head stands yet, the line adds what that costs: `; no head
 /// stands yet, so a claimed board refuses every attested write
@@ -1391,28 +1327,6 @@ impl std::fmt::Display for RefusalsClearedLine {
     }
 }
 
-/// Row 40's line (`operations.md` §1.1 row 40): the draft minted elsewhere.
-///
-/// In the operator stream's words it says the staging draft minted somewhere
-/// other than the address the seed's frontier pins, the cause, and what still
-/// serves: the head goes on with the draft it minted. A pure value the unit
-/// suite pins by `to_string()`; emitted under `Class::Failure`.
-struct DraftMintedElsewhere<'a> {
-    minted: &'a Address,
-    expected: &'a Address,
-}
-
-impl std::fmt::Display for DraftMintedElsewhere<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "head writer: the staging draft minted at {}, not at {} — another writer minted \
-             under the system account; the head goes on with the draft it minted",
-            self.minted, self.expected
-        )
-    }
-}
-
 /// The cadence's two counters as a restart resumes them from the feed.
 ///
 /// They are read off the feed's entries above the last head's position (the
@@ -1431,10 +1345,10 @@ struct ResumedCadence {
     /// The head's own time: the last `"system"` entry's recorded `time`.
     ///
     /// That entry is the head's publish, or a later attempt's orphaned
-    /// insert or draft mint, either way the board's most recent head work —
-    /// else the first entry above the position carrying a time (a witness no
-    /// earlier than the head, so the hour fires no sooner than it is owed),
-    /// else `None`: open-time.
+    /// insert, either way the board's most recent head work — else the first
+    /// entry above the position carrying a time (a witness no earlier than
+    /// the head, so the hour fires no sooner than it is owed), else `None`:
+    /// open-time.
     last_head_millis: Option<u64>,
 }
 
@@ -1507,40 +1421,6 @@ pub(crate) fn board_term(world: &World) -> Option<BoardTerm> {
     let first_head = birth_version(world.m3(), &head_document())?;
     let rec = read_head_member(world, &first_head)?;
     Some(BoardTerm { log_position: rec.position, chain: rec.chain })
-}
-
-/// Returns the staging draft's address: doc 3 of the system account.
-///
-/// It is `1.1.0.1.0.3`: genesis registers doc 1 and doc 2
-/// ([`skep_namespace::M3State::genesis`]), the system principal holds no key
-/// and has no session, so the head writer, the registry seed and the time
-/// writer — which share this one draft through [`HeadWriter::ensure_draft`]
-/// — are the only writers under the account, and the first mint of any of
-/// them lands here by the document chain's frontier; the time writer's own
-/// document, minted after it, lands at doc 4
-/// ([`skep_namespace::time_document`]). Pinned so a reopened writer can find
-/// the draft (resume by reading) instead of minting a new private document
-/// per uptime.
-///
-/// # Panics
-///
-/// Panics if `1.1.0.1.0.3` is not a nonempty, T4-valid address; it is one,
-/// so neither `expect` fires.
-pub(super) fn staging_draft_address() -> Address {
-    let t = Tumbler::new([1u32, 1, 0, 1, 0, 3].into_iter().map(Nat::from))
-        .expect("a six-component sequence is nonempty");
-    validate(t).expect("the staging draft 1.1.0.1.0.3 is T4-valid by construction")
-}
-
-/// Returns the staging draft an earlier uptime minted, if any.
-///
-/// It is [`staging_draft_address`] when that is a registered, unpublished
-/// document — the only shape the head writer ever gives it — else `None`,
-/// and the first head mints it.
-fn find_staging_draft(world: &World) -> Option<Address> {
-    let draft = staging_draft_address();
-    let m3 = world.m3();
-    (m3.is_registered_document(&draft) && !m3.published(&draft)).then_some(draft)
 }
 
 #[cfg(test)]

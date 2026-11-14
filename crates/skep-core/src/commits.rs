@@ -31,10 +31,10 @@
 //! **And then the head writer's turn** (PUB-6.65). A session write, once
 //! recorded and announced, gives the published head writer (`head.rs`, this
 //! card's own child) its turn under the same guard. When the cadence is due,
-//! the writer commits up to three writes of the daemon's own — the staging
-//! draft's one-time mint, the record's insert, and the publish into `H` —
-//! before [`Commits::commit_under`] returns. So "after `commit_under`
-//! returns" means after this write and any head it triggered: a caller
+//! the writer commits two writes of the daemon's own — the record's insert
+//! and the publish into `H` — before [`Commits::commit_under`] returns. So
+//! "after `commit_under` returns" means after this write and any head it
+//! triggered: a caller
 //! reading the world then reads the head's records beside its own, and pays
 //! their fsyncs under whatever locks it holds, the credential write lock
 //! included. The head's own writes take `Commits::commit_recorded`, the
@@ -60,11 +60,11 @@
 //! `1.1.0.1.0.1` with what it lacks — one named section and one `defines`
 //! link for every type the build knows, every row on a fresh board and the
 //! missing ones on an upgraded or interrupted one — as the system principal,
-//! through the head writer's own helpers and the one staging draft it keeps,
-//! each commit riding `Commits::commit_recorded` as a head's does: recorded
-//! with the system testimony, announced, and giving the head writer no turn
-//! ([`Commits::seed_registry`]). A driver refusal ends the seed for that
-//! open, said once, and the board serves on; the next open finishes it.
+//! through the head writer's own helpers and the one staging draft genesis
+//! seeds, each commit riding `Commits::commit_recorded` as a head's does:
+//! recorded with the system testimony, announced, and giving the head writer
+//! no turn ([`Commits::seed_registry`]). A driver refusal ends the seed for
+//! that open, said once, and the board serves on; the next open finishes it.
 //!
 //! **And the halt** (SO-I5 (d): no signature the board keeps is lost by a
 //! crash, a power loss or a failed write). Below the reclaim floor the

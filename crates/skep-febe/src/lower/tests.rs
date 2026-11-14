@@ -700,22 +700,22 @@ fn the_durability_arm_carries_the_io_kind_and_no_other_arm_does() {
 }
 
 /// The operations design §1.1 row 38, THE DOOR LOWERS AS THE FRONT DOOR
-/// DOES: for each of the three store errors the daemon's head writer holds —
-/// the namespace's `CreateDocumentError` at its staging draft's mint, the
-/// arrangement's `InsertError` and `PublishError` at the head atom's insert
-/// and publish — a `TxnError::Rejected(e)` through the door is the
+/// DOES: for each of the two store errors the daemon's head writer holds —
+/// the arrangement's `InsertError` and `PublishError`, at the head atom's
+/// insert and publish — a `TxnError::Rejected(e)` through the door is the
 /// rejection the dispatch table would answer: the store's own refusal
 /// through the one table (its code and site) and the code's standing
-/// explanation as detail, `Gate`'s included; a `TxnError::Durability` through
-/// it carries the kind; and no detail is a `Debug` rendering — the error's
-/// own words, no variant name, no braces.
+/// explanation as detail, `Gate`'s included, which an insert carries up
+/// from M3's mint; a `TxnError::Durability` through it carries the kind;
+/// and no detail is a `Debug` rendering — the error's own words, no variant
+/// name, no braces.
 ///
 /// The door is reached as a dependent reaches it, through the crate root:
 /// `crate::lower_txn` resolves only through `lib.rs`'s re-export, which the
 /// compiler admits only for a `pub` item — so a door narrowed to the crate,
 /// or its re-export dropped, fails this build.
 #[test]
-fn the_door_lowers_the_head_writer_s_three_errors_as_the_table_does() {
+fn the_door_lowers_the_head_writer_s_two_errors_as_the_table_does() {
     fn as_the_table_does<E: Lower + Clone + std::fmt::Debug>(kind: OpKind, e: E) {
         let rendered = format!("{e:?}");
         let name = variant_name(&e);
@@ -736,44 +736,36 @@ fn the_door_lowers_the_head_writer_s_three_errors_as_the_table_does() {
         }
     }
 
-    // The staging draft's mint: M3's two arms, the wrapper's `Gate` carrying
-    // the one standing explanation in the table.
-    as_the_table_does(OpKind::CreateNewDocument, CreateDocumentError::NotOwner);
-    as_the_table_does(
-        OpKind::CreateNewDocument,
-        CreateDocumentError::Mint(MintError::Gate(skep_address::GateViolation)),
-    );
-    let gate = crate::lower_txn(
-        OpKind::CreateNewDocument,
-        TxnError::Rejected(CreateDocumentError::Mint(MintError::Gate(skep_address::GateViolation))),
-    );
-    assert_eq!(gate.code, RejectCode::Gate);
-    assert!(gate.detail.as_deref().is_some_and(|d| d.contains("operator condition")));
-
-    // The head atom's insert: a site-carrying refusal and a flat one.
+    // The head atom's insert: a site-carrying refusal, a flat one, and the
+    // wrapper's `Gate` — M3's mint refusal, carrying the one standing
+    // explanation in the table.
     as_the_table_does(OpKind::Insert, InsertError::NotOwner(doc()));
     as_the_table_does(OpKind::Insert, InsertError::PublishedTarget);
+    as_the_table_does(
+        OpKind::Insert,
+        InsertError::Mint(MintError::Gate(skep_address::GateViolation)),
+    );
     let not_owner =
         crate::lower_txn(OpKind::Insert, TxnError::Rejected(InsertError::NotOwner(doc())));
     assert_eq!(not_owner.site.expect("the failing document rides the site").addr, Some(doc()));
+    let gate = crate::lower_txn(
+        OpKind::Insert,
+        TxnError::Rejected(InsertError::Mint(MintError::Gate(skep_address::GateViolation))),
+    );
+    assert_eq!(gate.code, RejectCode::Gate);
+    assert!(gate.detail.as_deref().is_some_and(|d| d.contains("operator condition")));
 
     // The head's publish: the shot's withheld origin and a budget refusal.
     as_the_table_does(OpKind::Publish, PublishError::Withheld(doc()));
     as_the_table_does(OpKind::Publish, PublishError::TooManyValues);
 
-    // A full volume at any of the three commits: the code, the OS text as
-    // the detail — never `Custom { kind: StorageFull, … }` — and the kind.
-    let full = crate::lower_txn::<CreateDocumentError>(
-        OpKind::CreateNewDocument,
-        TxnError::Durability(storage_full()),
-    );
-    assert_eq!(full.code, RejectCode::Durability);
-    assert_eq!(full.detail.as_deref(), Some("no space left on device"));
-    assert_eq!(full.io_kind, Some(std::io::ErrorKind::StorageFull));
+    // A full volume at either commit: the code, the OS text as the detail
+    // — never `Custom { kind: StorageFull, … }` — and the kind.
     for rej in [
         crate::lower_txn::<InsertError>(OpKind::Insert, TxnError::Durability(storage_full())),
         crate::lower_txn::<PublishError>(OpKind::Publish, TxnError::Durability(storage_full())),
     ] {
+        assert_eq!(rej.code, RejectCode::Durability);
         assert_eq!(rej.io_kind, Some(std::io::ErrorKind::StorageFull));
         let d = rej.detail.expect("the I/O text rides the detail");
         assert_eq!(d, storage_full().to_string(), "the error's Display");

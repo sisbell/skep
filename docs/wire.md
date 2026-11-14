@@ -6598,7 +6598,7 @@ echoed here as the write halt is, so a client reading `H` or the
 vocabulary derives "stale" from the echo and never from silence. Each
 object carries `producer` (`head`, `time` or `registry`), `act` (the op
 of the producer's commit the refusal met, as this document names the
-op: `create_new_document`, `insert`, `publish` or `make_link`), `code`
+op: `insert`, `publish` or `make_link`), `code`
 (the refusal's code as §Rejection codes spells it) and `detail` (its
 detail, `null` where none rides), `position` (the committed position
 the refused shot was to stand above — the position the head or the time

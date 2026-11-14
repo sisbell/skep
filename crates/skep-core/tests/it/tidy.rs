@@ -38,7 +38,12 @@
 //! take `skep_util::file` for their read, cut, keep, append and rewrite, so
 //! no code line under `src/` opens a file `append(true)` or
 //! `create_new(true)` outside a test module or the test-hooks gate — the
-//! fourth, with no site allowed.
+//! fourth, with no site allowed. And NO CODE OF THE CRATE CREATES A
+//! DOCUMENT: the documents the daemon's own writers write into are seeded
+//! at genesis, and a session's mint goes through `skep-febe`'s dispatch, so
+//! no code line under `src/` calls the namespace's `.create_new_document(`
+//! outside a test module or the test-hooks gate — the fifth, with no site
+//! allowed.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -358,6 +363,73 @@ fn a_line_file_is_read_and_appended_through_the_support_crates_module() {
          store's logs and the client's files keep — never by an `append(true)` or a \
          `create_new(true)` of its own, which cuts no torn last line; these are not:\n{}",
         strays.join("\n")
+    );
+}
+
+/// NO CODE OF THE CRATE CREATES A DOCUMENT (ARCHITECTURE.md §The daemon's
+/// core): the head writer, the link-type registry's seed and the time
+/// writer write into documents genesis seeds — the staging draft, `H`, the
+/// registry document and `T` — and a session's mint goes through
+/// `skep-febe`'s dispatch, so no code line under `src/` calls the
+/// namespace's `.create_new_document(`. Not code here, as the fourth check
+/// reads it: a `tests.rs` file whole, an inline `mod tests {` from its line
+/// on, a comment line, and a line inside an item under the test-hooks gate.
+/// No site is allowed: the allow list is empty, and a hit is a fault. The
+/// control: the scan read the two writers' files, `src/commits/head.rs` and
+/// `src/commits/time.rs`, and in each read a line that names the writer's
+/// own seeded document — `head_document()`, `time_document()` — as it
+/// would read a fault there, code and ungated; so a scan that finds no
+/// file, or one whose exemptions have widened to the whole crate, fails
+/// here.
+#[test]
+fn no_code_line_of_the_crate_creates_a_document() {
+    const WRITERS: [(&str, &str); 2] =
+        [("src/commits/head.rs", "head_document()"), ("src/commits/time.rs", "time_document()")];
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = manifest.join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    files.sort();
+    let mut writers_read: HashSet<&str> = HashSet::new();
+    let mut faults = Vec::new();
+    for file in &files {
+        if file.file_name().is_some_and(|name| name == "tests.rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(file).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        let relative = file.strip_prefix(manifest).unwrap().display().to_string();
+        let writer = WRITERS.iter().copied().find(|(path, _)| *path == relative);
+        let end = lines.iter().position(|l| l.trim() == "mod tests {").unwrap_or(lines.len());
+        for (i, line) in lines[..end].iter().enumerate() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            let names_its_document = writer.is_some_and(|(_, seeded)| line.contains(seeded));
+            let creates = line.contains(".create_new_document(");
+            if !(names_its_document || creates) || enclosing_item_is_gated(&lines, i) {
+                continue;
+            }
+            if let (Some((path, _)), true) = (writer, names_its_document) {
+                writers_read.insert(path);
+            }
+            if creates {
+                faults.push(format!("{relative}:{}: `{}`", i + 1, line.trim()));
+            }
+        }
+    }
+    for (path, seeded) in WRITERS {
+        assert!(
+            writers_read.contains(path),
+            "{path} was not read naming `{seeded}` in code: the scan reads no line of the \
+             writer's, or the file has moved"
+        );
+    }
+    assert!(
+        faults.is_empty(),
+        "no code of this crate creates a document — the system account's documents are seeded at \
+         genesis, and a session's mint goes through `skep-febe`'s dispatch; these lines do:\n{}",
+        faults.join("\n")
     );
 }
 

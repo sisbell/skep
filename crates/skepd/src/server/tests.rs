@@ -1230,17 +1230,16 @@ fn the_two_refusal_lines_carry_their_ruled_words() {
 
 /// Checks that the configuration lines go through the classed door.
 ///
-/// Every line of the daemon's own section (CUT 1 (a)) — the warnings, the
-/// `auth:` line, the node prefix, the blocked list or its absence, the
-/// reissue's refusal — goes out through `Daemon::say` or
-/// `Daemon::say_lines`, which emit with the class word each takes, and none
-/// through the un-classed `line` or `lines`; the flip's line in `op.rs` and
-/// the checkpoint thread's refusal in `listen.rs` take the classed door too.
-/// They are read off the sources, since no suite captures the stream
-/// in-process; the class each line is emitted under is pinned through
-/// `Daemon::lines_said` by the integration suites. The head writer's row 40
-/// is held the same way by `skep-core`'s `commits/tests.rs`, beside the
-/// file it reads.
+/// Every line of the daemon's own section (PATTERNS SP-9, the one door to
+/// the operator's stream) — the warnings, the `auth:` line, the node
+/// prefix, the blocked list or its absence, the reissue's refusal — goes
+/// out through `Daemon::say` or `Daemon::say_lines`, which emit with the
+/// class word each takes, and none through the un-classed `line` or
+/// `lines`; the flip's line in `op.rs` and the checkpoint thread's refusal
+/// in `listen.rs` take the classed door too. They are read off the sources,
+/// since no suite captures the stream in-process; the class each line is
+/// emitted under is pinned through `Daemon::lines_said` by the integration
+/// suites.
 #[test]
 fn the_configuration_lines_go_through_the_classed_door_with_their_class_words() {
     let source = include_str!("../server.rs");

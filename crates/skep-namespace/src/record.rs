@@ -56,8 +56,11 @@ pub const BOOTSTRAP_PRINCIPAL: PrincipalId = PrincipalId(0);
 /// — a keyless account answers empty lists), and
 /// [`crate::Namespace::delegate`]'s id-freshness gate refuses this id
 /// `DuplicateId` because genesis has already registered it (§6/§7). So no
-/// principal but the one genesis seats ever bears it, and it can act only
-/// in-process, never over a session.
+/// principal but the one genesis seats ever bears it, and no signed session
+/// opens as it. It acts in-process with no session, as the board's own
+/// daemon's head writer, time writer and registry seed; and it acts over a
+/// bare session wherever the board honors a bare bind (AUTH-4.26), since
+/// the bare form binds whatever principal its body names.
 ///
 /// The value is a conspicuous reserved sentinel — `9 × 10^15`, just below the
 /// wire's `2^53 − 1` exact-integer cap (AUTH-5.20) yet far above any ordinary

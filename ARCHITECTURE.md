@@ -1639,7 +1639,7 @@ it:
    and the one staging draft they share) and the time writer
    (`commits/time.rs`, which writes through the same helpers and the same
    staging draft). The head writer, the seed and the time writer are the
-   only writers under the system account, and the staging draft
+   daemon's only writers under the system account, and the staging draft
    `1.1.0.1.0.3` and the time document `1.1.0.1.0.4` the two documents any
    of them mints. Beneath them, and reachable only from them:
    - `commits/feed.rs` — the change feed over its six files, with

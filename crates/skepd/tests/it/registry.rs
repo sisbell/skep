@@ -560,8 +560,8 @@ fn a_binding_on_the_unclaimed_board_is_refused_claim_first() {
 /// RECORD. On the UNCLAIMED board a bare session bound as the system
 /// principal inserting a binding atom into `1.1.0.1`'s doc 1 is refused
 /// `system_account_keyless` at the pre-claim gate — the arm that refuses a
-/// credential kind there, widened. On the CLAIMED board no session is the
-/// system principal's and the account holds no key, so no atom is ever read
+/// credential kind there, widened. On the CLAIMED board no signed session is
+/// the system principal's and the account holds no key, so no atom is ever read
 /// there: a binding link homed in that doc 1 from the registrar's console,
 /// naming a position in it, is refused `registry_form` — the record read
 /// finds no atom — before any trial; the trial would answer

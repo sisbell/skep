@@ -2828,8 +2828,9 @@ credential record's does: a record of the declared kind carrying no `sig`
 lands nowhere.
 
 Every publish-class write of the ten kinds on a claimed board is judged;
-the system account's own writes (the head document's, owned by
-`1.1.0.1`) are exempt by ownership and never dispatched. Every other
+the board's own daemon's writes as the system account's principal (the
+head document's, the time document's and the registry's, in documents
+`1.1.0.1` owns) are exempt by ownership and never dispatched. Every other
 write, and every write at or below the claim, is outside the check and
 answers as it does without one. Every credential deposit above the claim
 is judged at the record grade; the ceremony's own deposits, at or below
@@ -6114,9 +6115,12 @@ Each entry:
   UNSIGNED, with four values: the 64-hex fingerprint of the enrolled key
   whose signed session committed it; `"bare"` for a bare-session write;
   `"system"` for a write the board's own daemon makes in-process with no
-  session, as the system account's principal — the published head
-  document `H` and its staging draft, and no other write (§The other
-  endpoints, PUB-6.65); `null` ONLY for lost metadata (a bare entry, or a
+  session, as the system account's principal — its three producers' writes,
+  the published head document's writer's, the time writer's and the registry
+  seed's, on `H`, the time document `T`, the registry document `1.1.0.1.0.1`
+  and the staging draft they share, and no session's write, whichever
+  principal the session binds (§The other endpoints, §Registry, PUB-6.65);
+  `null` ONLY for lost metadata (a bare entry, or a
   record written before testimony existed) — never for a bare write, and
   never invented. ABSENT, never null, on a row whose entry carries a
   signature — in its marker slot (the row then carries `attest`, below) or
@@ -6129,7 +6133,7 @@ Each entry:
   writing session, the one asserted hand an orphan atom keeps when every
   link naming it is refused. Served on every other row too — draft writes,
   `delegate`, `register_node`, the claim ceremony's own rows and the
-  published head document's. Forward rule, pinned now: on a feed served by
+  daemon's own `system` rows. Forward rule, pinned now: on a feed served by
   a daemon that did not itself commit the entry (a future mirror), the
   field is ABSENT on unsigned rows too — a consumer written to the four
   values must not treat absence as a protocol violation (AUTH-6.16).
@@ -6148,7 +6152,7 @@ Each entry:
   renders undeterminable and never as unsigned; ABSENT on every other row:
   an unsigned entry, a credential record deposit's two rows (the deposit's
   slot is empty; its signature is the record's own `sig`, fetched with the
-  atom), the ceremony's rows, the head writer's `system` rows — and ABSENT
+  atom), the ceremony's rows, the daemon's own `system` rows — and ABSENT
   on a row whose `docs` your class REDUCES (the straddle renderings
   above), the third absence: there the entry may well be signed, and its
   verdict is undeterminable from your feed alone — save a `publish` row
@@ -6664,9 +6668,9 @@ newest head, and it does not. And a saved pair — a head's own `(position,
 chain)`, or a `/health` reading — is checked against the board's
 RECOMPUTATION at `GET /chain?at=<position>` (§Reading history), which a
 re-chained journal cannot pass while the byte compare of an untouched
-`H.k` still does. Each head shows on `/changes` as one public
-`publish` entry with `key: "system"`; the staging draft the record is composed
-in is a private document of the system account, masked at every class.
+`H.k` still does. Each head shows on `/changes` as one public `publish` entry
+with `key: "system"`; the staging draft the record is composed in is a private
+document of the system account, masked at every class but the system's.
 
 **The time document** — `1.1.0.1.0.4`, the version-chain document `T`,
 doc 4 of the system account, beside `H`. The board's OWN daemon writes `T`
@@ -6693,7 +6697,7 @@ is dated forever, to the hour. `T` is minted by the first record's write,
 published from birth and guest-readable (`retrieve_v` on the bare `T`
 floats to the latest record; `T.k` is pinned); each record shows on
 `/changes` as one public `publish` entry with `key: "system"`, its insert
-into the staging draft masked at every class.
+into the staging draft masked at every class but the system's.
 
 **`GET /`** (only in builds with the `client` feature — **default-off**
 by ruling (AUTH-4.57(e); R89, the client rule): a board-served page is

@@ -362,7 +362,8 @@ fn declared_record_atom(op: &Op) -> Option<DeclaredRecord<'_>> {
 /// — a read of the board's principal list Π and never address arithmetic —
 /// and by nothing served or testified. A `fork` or a `version` names the
 /// acting principal's own account, which is the system account's only for
-/// the system principal, which never passes dispatch.
+/// the system principal, which no signed session carries, and this check is
+/// a signed session's alone.
 fn system_owned(world: &World, op: &Op) -> bool {
     let m3 = world.m3();
     let system = system_account();

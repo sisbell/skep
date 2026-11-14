@@ -31,9 +31,15 @@
 //! statement of scope, kept by what this crate's own code sends through it
 //! — every frame of which [`frames`] spells, and whose read answers the
 //! child `answers` decodes, but for the registry reads' answers, which
-//! `Board` decodes itself, and an envelope member a caller reads in place;
-//! the one reader it lends an embedder is [`merge_marker`], a draft's merge
-//! marker off a `doc_metadata` answer the embedder dialed for itself.
+//! `Board` decodes itself, and an envelope member a caller reads in place.
+//! Beside those the crate lends an embedder readers no code of its own
+//! calls, each of an answer the embedder dialed for itself: [`merge_marker`],
+//! a draft's merge marker off a `doc_metadata` answer; [`homes`], the count
+//! by home's rows; [`history`], the retracted-links read's window; and
+//! [`link_page`], a windowed link read's page, with the two tests of where a
+//! link's stored slots lie that a reader of such a search keeps by,
+//! [`LinkValue::to_at_or_under`] and [`LinkValue::typed_at_or_under`], and
+//! [`ToFilter`] over the first.
 //! [`Board::board_term`] reads `H.1`'s pair, once per board
 //! (signed-ops D13), and `Board::board_head`, behind `acting`, is what
 //! every signed write of this crate reads before it is sent: that pair, a
@@ -64,8 +70,9 @@ pub(crate) mod fake;
 mod tests;
 
 pub use answers::{
-    edition_claims as edition_claim_rows, history, homes, link_value, merge_marker, EditionClaim,
-    History, HistoryRow, HomeCount, LinkSpan, LinkValue, MergeMarker,
+    edition_claims as edition_claim_rows, history, homes, link_page, link_value, merge_marker,
+    EditionClaim, History, HistoryRow, HomeCount, LinkPage, LinkSpan, LinkValue, MergeMarker,
+    ToFilter,
 };
 
 /// The enroll credential type address, the first of the three.

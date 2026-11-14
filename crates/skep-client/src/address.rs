@@ -3,12 +3,13 @@
 //! The spelling is the one the frames carry and the bindings file keeps.
 //! The grammar gives an account's parent account, which AUTH-5.21's walk
 //! climbs by; its first child, `inc(X, 1)`, the agents' home (AUTH-5.87);
-//! its doc 1 (AUTH-2.109); the document an element or link address lies
-//! in; the parse into `skep_address`'s `Address`, T4 checked; the text test
-//! a key file's `account` member is held to (§3.2); and the principal depth
-//! the namespace delegates to, which every walk upward from a board-named
-//! account is held to before its first read. Pure functions of their text,
-//! in every build.
+//! its doc 1 (AUTH-2.109); its mailbox, at the well-known slot
+//! [`MAILBOX_SLOT`] (the mailbox design §2); the document an element or link
+//! address lies in; the parse into `skep_address`'s `Address`, T4 checked;
+//! the text test a key file's `account` member is held to (§3.2); and the
+//! principal depth the namespace delegates to, which every walk upward from
+//! a board-named account is held to before its first read. Pure functions
+//! of their text, in every build.
 
 use skep_address::{validate, Address, Nat, Tumbler};
 
@@ -57,6 +58,27 @@ pub fn first_child(account: &str) -> String {
 /// Returns an account's doc 1 at its computable address (AUTH-2.109; M3's pin).
 pub fn doc_1_of(account: &str) -> String {
     format!("{account}.0.1")
+}
+
+/// The well-known slot of an account's mailbox: document 2.
+///
+/// The mailbox design §2: every account but the system account has one
+/// mailbox, at this document number.
+pub const MAILBOX_SLOT: u64 = 2;
+
+/// Returns an account's mailbox at its computable address.
+///
+/// The address is the account's own, then `.0.` and [`MAILBOX_SLOT`] (the
+/// mailbox design §2). It names a place whether or not a document stands
+/// there: mail points at it from the moment the account exists, and nothing
+/// in mail needs the mailbox document minted (§3). The answer is in the
+/// spelling the account came in — a board's own form of an account gives
+/// that board's own form of its mailbox, the global form the global one —
+/// and the text is not checked to be an account's. The system account has
+/// no mailbox: in its table the slot is the head document,
+/// `board::HEAD_DOCUMENT`, which `mailbox_of("1.1.0.1")` answers.
+pub fn mailbox_of(account: &str) -> String {
+    format!("{account}.0.{MAILBOX_SLOT}")
 }
 
 /// Parses an address in its dotted-decimal spelling.
@@ -118,6 +140,22 @@ mod tests {
         assert_eq!(parent_account("1.3.0.7"), None);
         assert_eq!(first_child("1.0.1"), "1.0.1.1");
         assert_eq!(doc_1_of("1.0.1"), "1.0.1.0.1");
+    }
+
+    /// An account's mailbox is its address, then `.0.` and the mailbox slot.
+    ///
+    /// The answer keeps the spelling the account came in, a board's own form
+    /// or the global one, and an agent's account has a mailbox as any other
+    /// has. The system account has none: there the slot is the head document.
+    #[test]
+    fn the_mailbox_of_an_account_is_its_slot_2_in_the_spelling_given() {
+        assert_eq!(mailbox_of("1.0.5"), "1.0.5.0.2", "a board's own form");
+        assert_eq!(mailbox_of("1.3.0.5"), "1.3.0.5.0.2", "the global form, node prefix `1.3`");
+        assert_eq!(mailbox_of("1.0.5.1.1"), "1.0.5.1.1.0.2", "an agent's account");
+        assert_eq!(MAILBOX_SLOT, 2);
+        assert_eq!(account_of(&mailbox_of("1.0.5")), Some("1.0.5".into()));
+        assert!(parse_address(&mailbox_of("1.0.5")).is_some(), "the answer is an address");
+        assert_eq!(mailbox_of("1.1.0.1"), crate::board::HEAD_DOCUMENT, "the system account's slot is its head document");
     }
 
     #[test]

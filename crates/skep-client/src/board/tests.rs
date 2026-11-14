@@ -57,7 +57,9 @@ fn the_frames_spell_the_wire() {
 /// wire.md's own request examples, spelled by the builders: each the line
 /// under its `<!-- wire: request … -->` marker — `find_links_v` over one
 /// span (§Link discovery reads), `find_links_ftt`'s four-set with a `from`
-/// list and an `empty` type, `count_v_by_home` with its `except`,
+/// list and an `empty` type, `window_ftt`'s all-`any` four-set past a cursor
+/// (and beside it, with no example of the wire's own, the mail search's
+/// paged form at the start), `count_v_by_home` with its `except`,
 /// `find_links_v_history` at the start, `project`, `edition_claims`,
 /// `out_claims` (the example's view is `audit`; this crate reads the active
 /// view, the one member that differs) and the `publish` example with every
@@ -71,6 +73,17 @@ fn the_builders_spell_the_wires_own_examples() {
         frames::find_links_four(frames::Slot::Any, frames::Slot::Spans(&from), frames::Slot::Any, frames::Slot::Empty),
         json!({"op":"find_links_ftt","q":{"from":[{"start":"1.0.1.0.1.0.1.1","width":"0.0.0.0.0.0.0.5"}],"home":"any","to":"any","ty":"empty"}})
     );
+    assert_eq!(
+        frames::window_four(frames::Slot::Any, frames::Slot::Any, frames::Slot::Any, frames::Slot::Any, Some("1.0.1.0.1.0.2.1"), 16),
+        json!({"cur":"1.0.1.0.1.0.2.1","n":16,"op":"window_ftt","q":{"from":"any","home":"any","to":"any","ty":"any"}})
+    );
+    // The mail search in pages: the start's cursor is spelled `null`, never
+    // left out, and the query is the unpaged read's own.
+    let mailbox = crate::address::mailbox_of("1.0.5");
+    let paged = frames::window_ftt(frames::T_MAIL, &mailbox, None, 16);
+    assert_eq!(paged, json!({"cur":null,"n":16,"op":"window_ftt","q":{"from":"any","home":"any","to":[{"start":"1.0.5.0.2","width":"0.0.0.0.1"}],"ty":[{"start":"1.1.0.1.0.1.0.3.15","width":"0.0.0.0.0.0.0.0.1"}]}}));
+    assert_eq!(paged["q"], frames::find_links_ftt(frames::T_MAIL, &mailbox)["q"], "the paged search asks the unpaged read's query");
+    assert_eq!(frames::window_ftt(frames::T_MAIL, &mailbox, Some("1.0.7.0.64.0.2.1"), 16)["cur"], "1.0.7.0.64.0.2.1");
     assert_eq!(frames::count_v_by_home("1.0.1.0.1", &[(1, 5)], 64, &["1.0.1.0.2"]), json!({"d":"1.0.1.0.1","except":["1.0.1.0.2"],"n":64,"op":"count_v_by_home","region":[{"start":"1.1","width":"0.5"}]}));
     assert!(frames::count_v_by_home("1.0.1.0.1", &[(1, 5)], 64, &[]).get("except").is_none(), "no `except` where none is named");
     assert_eq!(frames::find_links_v_history("1.0.1.0.1", &[(1, 5)], None, 16), json!({"cur":null,"d":"1.0.1.0.1","n":16,"op":"find_links_v_history","region":[{"start":"1.1","width":"0.5"}]}));
@@ -144,13 +157,15 @@ fn the_marker_read_decodes_the_boards_merge_member_and_absent_where_it_serves_no
 /// head-float: "`1.1.0.1.0.1.0.3.102.1`"), the held removal (the
 /// vocabulary's `3.24`), the read-with ("typed `3.71`") and the edition
 /// claim ("typed `3.14`"); the retraction class, the format's fifth
-/// reserved tumbler, beside them.
+/// reserved tumbler, beside them, and the mail type the paged mail search
+/// asks by (the vocabulary's `3.15`).
 #[test]
 fn the_type_constants_are_the_wires_spellings() {
     assert_eq!(frames::T_CORRESPONDENCE, "1.1.0.1.0.1.0.3.102.1");
     assert_eq!(frames::T_HELD_REMOVAL, "1.1.0.1.0.1.0.3.24");
     assert_eq!(frames::T_READ_WITH, "1.1.0.1.0.1.0.3.71");
     assert_eq!(frames::T_EDITION, "1.1.0.1.0.1.0.3.14");
+    assert_eq!(frames::T_MAIL, "1.1.0.1.0.1.0.3.15");
     assert_eq!(T_RETRACTION, "1.1.0.1.0.1.0.1.5");
     assert_eq!(frames::REGISTRY_DOCUMENT, "1.1.0.1.0.1");
     assert_eq!(frames::i_span("1.0.1.0.1.0.1.4", 2), json!({"start":"1.0.1.0.1.0.1.4","width":"0.0.0.0.0.0.0.2"}), "a slot's span: the width a displacement");

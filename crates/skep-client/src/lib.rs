@@ -14,10 +14,10 @@
 //!   the daemon's grammar (AUTH-4.2; AUTH RES-61) under a vector-agreement
 //!   test over the daemon's own admitted and refused strings (P5).
 //! * [`address`] — the address grammar over the wire's dotted spelling: an
-//!   account's parent, first child and doc 1, the document an address lies
-//!   in, the parse into `skep_address`'s `Address`, and the namespace's
-//!   principal depth every walk upward from a board-named account is held
-//!   to.
+//!   account's parent, first child, doc 1 and mailbox (the well-known slot
+//!   `MAILBOX_SLOT`), the document an address lies in, the parse into
+//!   `skep_address`'s `Address`, and the namespace's principal depth every
+//!   walk upward from a board-named account is held to.
 //! * `hex` (private) — lowercase hex, the one spelling every hex this crate
 //!   emits takes.
 //! * [`dial`] — the one outbound dialer (`Dialer`) and its plain-HTTP arm:
@@ -39,13 +39,21 @@
 //!   consumer's document reads for the published index, and the grant reads
 //!   and the deposit's ordinal read where no token is given do — and
 //!   `H.1`'s pair read once per board (signed-ops D13); its child `frames`
-//!   spells every frame this crate sends, its child `answers` decodes the
-//!   read answers the crate reads but the registry reads', which `Board`
-//!   decodes itself, and an envelope member a caller reads in place — and
-//!   lends an embedder one reader, `merge_marker`, a draft's merge marker
-//!   off a `doc_metadata` answer the embedder dialed (the merge bridge
-//!   lane) — and `Rejection::key` is the one token a refusal is dispatched
-//!   on (wire.md §Rejections).
+//!   spells every frame this crate sends and the frames of the reads it
+//!   lends an embedder, the paged link search among them (`window_four`,
+//!   `window_ftt`, with the mail type `T_MAIL`); its child `answers`
+//!   decodes the read answers the crate reads but the registry reads',
+//!   which `Board` decodes itself, and an envelope member a caller reads in
+//!   place. Beside those the crate lends an embedder readers no code of its
+//!   own calls, each of an answer the embedder dialed for itself:
+//!   `merge_marker`, a draft's merge marker off a `doc_metadata` answer;
+//!   `homes`, the count by home's rows; `history`, the retracted-links
+//!   read's window; and `link_page`, a windowed link read's page, with the
+//!   two tests of where a link's stored slots lie that a reader of such a
+//!   search keeps by, `LinkValue::to_at_or_under` and
+//!   `LinkValue::typed_at_or_under`, and `ToFilter` over the first.
+//!   `Rejection::key` is the one token a refusal is dispatched on (wire.md
+//!   §Rejections).
 //! * [`derive`](mod@derive) — the pure derivations over board reads: the
 //!   mode off `/health`'s pair (AUTH-5.86), AUTH-5.65's pre-check, the
 //!   three-state key diagnosis at the set AUTH-5.21's walk reaches

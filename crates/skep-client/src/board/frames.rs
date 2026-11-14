@@ -58,6 +58,16 @@ pub const T_READ_WITH: &str = "1.1.0.1.0.1.0.3.71";
 /// edition, `to` the `draft`) homed in it".
 pub const T_EDITION: &str = "1.1.0.1.0.1.0.3.14";
 
+/// The mail type (the registry's vocabulary, `3.15`; the mailbox design §4).
+///
+/// It is the type slot of a mail link — `from` what is mailed, `to` each
+/// reader's mailbox and, for a reply, the letter answered — and the `ty` the
+/// mail search and the thread search ask by (the mailbox design §5, §6). Its
+/// subtypes lie under it, so a search by it answers theirs too. No code of
+/// this crate reads mail: the constant stands for an embedder, the `ty` its
+/// [`window_ftt`] takes.
+pub const T_MAIL: &str = "1.1.0.1.0.1.0.3.15";
+
 /// The registry document the commons types are defined in (wire.md §Link
 /// discovery reads, "The name of a type").
 ///
@@ -263,6 +273,24 @@ impl Slot<'_> {
 /// (the wire's bound) and this crate sends none.
 pub fn find_links_four(home: Slot<'_>, from: Slot<'_>, to: Slot<'_>, ty: Slot<'_>) -> Value {
     json!({"op": "find_links_ftt", "q": {"home": home.wire(), "from": from.wire(), "to": to.wire(), "ty": ty.wire()}})
+}
+
+/// Builds the GENERAL windowed four-set query: up to `n` links past `cur`.
+///
+/// wire.md §Link discovery reads, `window_ftt`: [`find_links_four`]'s
+/// descriptor with a cursor and `n`, answered as a `page`. `cur` is the
+/// `next` of the page before — `None`, spelled `"cur": null`, at the start
+/// — and the board resumes strictly past it; any address is a cursor and
+/// the board checks none. `n` is sent as given: the board reads `0` as `1`,
+/// and neither its codec nor its window walk holds `n` to an upper bound,
+/// so a page's size is its caller's to choose. The cursor and `n` narrow the
+/// page and never the population, so the permit rule is
+/// [`find_links_four`]'s: a query constraining a `from` or a `to`, or a
+/// `home` naming one document, takes no permit, and the all-`"any"` four-set
+/// this builder can spell is a class scan, as one constraining `ty` alone is
+/// (the wire's bound).
+pub fn window_four(home: Slot<'_>, from: Slot<'_>, to: Slot<'_>, ty: Slot<'_>, cur: Option<&str>, n: u64) -> Value {
+    json!({"op": "window_ftt", "q": {"home": home.wire(), "from": from.wire(), "to": to.wire(), "ty": ty.wire()}, "cur": cur, "n": n})
 }
 
 /// Builds `{"op":"read_link","a":…}`.
@@ -706,6 +734,27 @@ pub fn unit_span(addr: &str) -> Value {
 /// (wire.md §Link discovery reads).
 pub fn find_links_ftt(ty: &str, to: &str) -> Value {
     json!({"op": "find_links_ftt", "q": {"home": "any", "from": "any", "to": unit_span(to), "ty": unit_span(ty)}})
+}
+
+/// Builds `window_ftt` over `ty` and `to`: [`find_links_ftt`]'s query, paged.
+///
+/// It is the mail search's shape and the thread search's (the mailbox
+/// design §5, §6): the `q` is [`find_links_ftt`]'s exactly, answered as a
+/// `page` of up to `n` links past `cur`. `cur` is the `next` of the page
+/// before — `None`, spelled `"cur": null`, at the start — and the read is
+/// drained by sending each page's `next` until one answers `exhausted`.
+/// `n` is sent as given: the board reads `0` as `1`, and neither its codec
+/// nor its window walk holds `n` to an upper bound. With `to` and `ty` both
+/// constrained it is no class scan and takes no permit, whatever `cur` and
+/// `n` say (wire.md §Link discovery reads: "Every other link read takes NO
+/// permit: a four-set constraining a `from` or a `to`, with or without
+/// `ty`"). The board matches both slots by overlap, so the page also names
+/// links whose stored `to` or type only contains the one asked: the reader
+/// keeps by the stored slots
+/// ([`LinkValue::to_at_or_under`](super::LinkValue::to_at_or_under),
+/// [`LinkValue::typed_at_or_under`](super::LinkValue::typed_at_or_under)).
+pub fn window_ftt(ty: &str, to: &str, cur: Option<&str>, n: u64) -> Value {
+    json!({"op": "window_ftt", "q": {"home": "any", "from": "any", "to": unit_span(to), "ty": unit_span(ty)}, "cur": cur, "n": n})
 }
 
 /// Builds `find_links_ftt` over `ty` and `from`.

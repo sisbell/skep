@@ -3,9 +3,12 @@
 //! The module is the read-side counterpart of [`frames`](super::frames),
 //! each answer shape this crate reads spelled once — a discovery's `addrs`,
 //! a `read_link`'s slots (the first starts, and whole as spans with the
-//! link's age, [`LinkValue`]), a `delivery`'s first value, a `span_set`'s
-//! content extent and a `runs` answer's I-map, the count by home's `homes`,
-//! the retracted-links read's `links` window and an `edition_claims`
+//! link's age, [`LinkValue`], with the two tests of where a stored slot
+//! lies, [`LinkValue::to_at_or_under`] and [`LinkValue::typed_at_or_under`],
+//! and [`ToFilter`] over the first), a `delivery`'s first value, a
+//! `span_set`'s content extent and a `runs` answer's I-map, the count by
+//! home's `homes`, the retracted-links read's `links` window, a windowed
+//! link read's `page` ([`link_page`]) and an `edition_claims`
 //! answer's rows, a draft's merge marker off a `doc_metadata` answer for an
 //! embedder ([`merge_marker`], the merge bridge lane), and behind `search`
 //! and `merge` a `delivery`'s typed items, its values and the origin of its
@@ -25,6 +28,9 @@
 #![cfg_attr(not(feature = "acting"), allow(dead_code))]
 
 use serde_json::Value;
+use skep_address::{subtree_of, Nat, Span, Tumbler};
+
+use crate::address::parse_address;
 
 /// Returns a discovery's addresses — the `addrs` answer — in the order served.
 ///
@@ -137,6 +143,97 @@ impl LinkValue {
     pub fn typed_exactly(&self, ty: &str) -> bool {
         self.ty.len() == 1 && self.ty[0].start == ty && self.ty[0].is_unit()
     }
+
+    /// Returns whether the stored type slot is one span at or under `ty`.
+    ///
+    /// The wire matches a type slot by overlap, so a search by a type
+    /// answers its subtypes' links, which lie under it, and also a link whose
+    /// type slot only contains it — one typed by the registry document, or
+    /// by the node. A row is kept only where its stored slot is one span
+    /// inside `ty`'s subtree, by [`to_at_or_under`](Self::to_at_or_under)'s
+    /// test of a span: the type asked, or types under it. A slot of two
+    /// spans names more than a type and fails, as does a pair that is no
+    /// span and a `ty` that is no address.
+    pub fn typed_at_or_under(&self, ty: &str) -> bool {
+        self.ty.len() == 1 && subtree_ends(ty).is_some_and(|sub| lies_within(&self.ty[0], &sub))
+    }
+
+    /// Returns whether some span of the stored `to` lies at or under `addr`.
+    ///
+    /// A span lies at or under an address where it is inside that address's
+    /// subtree: with `sub` the subtree's span (`skep_address::subtree_of`),
+    /// `sub.start() <= span.start()` and `span.reach() <= sub.reach()`. The
+    /// wire matches a `to` by overlap, so a search for an address also
+    /// answers a link whose stored `to` only contains it — one naming the
+    /// whole account, or the node — and this is the reader's own test of the
+    /// stored slot (the mailbox design §5): the mail search's of a mailbox,
+    /// the thread search's of a letter (§6). Every span of the slot is
+    /// asked, so a `to` naming many addresses passes for each of them. It is
+    /// never a prefix test of a span's start: a span that starts at `addr`
+    /// and runs on past its subtree lies outside it. A pair that is no span
+    /// — a start that is no address, a width that is no displacement the
+    /// start admits — is passed over, and an `addr` that is no address
+    /// answers false.
+    pub fn to_at_or_under(&self, addr: &str) -> bool {
+        subtree_ends(addr).is_some_and(|sub| self.to.iter().any(|span| lies_within(span, &sub)))
+    }
+}
+
+/// Returns the two ends of an address's subtree: its span's start and reach.
+///
+/// `None` where `addr` is no address.
+fn subtree_ends(addr: &str) -> Option<(Tumbler, Tumbler)> {
+    let sub = subtree_of(parse_address(addr)?.tumbler());
+    Some((sub.start().clone(), sub.reach()))
+}
+
+/// Returns whether a stored span lies inside the subtree `(start, reach)`.
+///
+/// The span's start is read as an address, as `parse_address` reads one,
+/// its width as a displacement of dotted naturals, and the two as
+/// `skep_address`'s `Span`. A pair that is no span — a start that is no
+/// address, a width off its spelling, a zero width, a width acting deeper
+/// than the start — answers false.
+fn lies_within(span: &LinkSpan, (start, reach): &(Tumbler, Tumbler)) -> bool {
+    let stored = || {
+        let width = span.width.split('.').map(|c| natural(c).map(Nat::from)).collect::<Option<Vec<Nat>>>()?;
+        Span::new(parse_address(&span.start)?.tumbler().clone(), Tumbler::new(width).ok()?).ok()
+    };
+    stored().is_some_and(|s| start <= s.start() && s.reach() <= *reach)
+}
+
+/// Which links of a `to` search a reader keeps.
+///
+/// The wire matches a `to` by overlap, so a search for an address answers
+/// the links whose stored `to` lies at or under it and those whose stored
+/// `to` only contains it. The filter is a value its caller passes and a
+/// reading of a link's stored slot: it writes nothing, and a link it leaves
+/// out can always be asked for, by [`ToFilter::Overlapping`] (the mailbox
+/// design §5, §10). It reads the `to` slot alone; a reader holding a row to
+/// a type asks [`LinkValue::typed_at_or_under`] beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum ToFilter {
+    /// Keeps a link where some span of its stored `to` lies at or under the
+    /// address asked ([`LinkValue::to_at_or_under`]).
+    #[default]
+    AtOrUnder,
+    /// Keeps every link the board answered, one whose stored `to` only
+    /// contains the address among them.
+    Overlapping,
+}
+
+impl ToFilter {
+    /// Returns whether the filter keeps `link`, read for `addr`.
+    ///
+    /// `link` is one the board answered a search for `addr` with, so
+    /// [`ToFilter::Overlapping`] keeps it untested.
+    pub fn keeps(self, link: &LinkValue, addr: &str) -> bool {
+        match self {
+            ToFilter::AtOrUnder => link.to_at_or_under(addr),
+            ToFilter::Overlapping => true,
+        }
+    }
 }
 
 /// Decodes a `read_link` answer: `Some(None)` for `link: null`, the absent
@@ -224,6 +321,39 @@ pub fn history(v: &Value) -> Option<History> {
         .map(|r| Some(HistoryRow { a: r["a"].as_str()?.to_string(), at: r["at"].as_u64(), retracted_at: r["retracted_at"].as_u64() }))
         .collect::<Option<Vec<_>>>()?;
     Some(History { links, next: v["next"].as_str().map(str::to_string), exhausted: v["exhausted"].as_bool()? })
+}
+
+/// One page of a windowed link read (wire.md §The response envelope, `page`).
+///
+/// It is the `window` of a `window_ftt` answer, its members under the
+/// wire's names. A read is drained by asking each next page past this one's
+/// `next`, until a page answers `exhausted`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkPage {
+    /// The links, in ascending address order strictly past the cursor.
+    pub batch: Vec<String>,
+    /// The cursor the next page is asked past.
+    ///
+    /// It is the batch's last address, or, where the batch is empty, the
+    /// cursor this page was asked past: `None` at the start of a read.
+    pub next: Option<String>,
+    /// Whether the window is terminal: it holds fewer links than were asked.
+    pub exhausted: bool,
+}
+
+/// Decodes a `page` answer — one window of a windowed link read.
+///
+/// `None` for a document that is no such answer, a batch entry that is no
+/// address's text, or a window without its `exhausted`. `next` is the
+/// answer's own member and never read off the batch: an empty window past a
+/// cursor carries that cursor, and one at the start carries none.
+pub fn link_page(v: &Value) -> Option<LinkPage> {
+    if v["resp"].as_str() != Some("page") {
+        return None;
+    }
+    let window = &v["window"];
+    let batch = window["batch"].as_array()?.iter().map(|a| a.as_str().map(str::to_string)).collect::<Option<Vec<_>>>()?;
+    Some(LinkPage { batch, next: window["next"].as_str().map(str::to_string), exhausted: window["exhausted"].as_bool()? })
 }
 
 /// One row of an `edition_claims` answer (wire.md §The response envelope):
@@ -780,8 +910,8 @@ mod tests {
     /// extent of a `span_set`; and, each the line under its `<!-- wire:
     /// response … -->` marker in §The response envelope, the `link_value`
     /// example with its age and the null form, the `homes` example, the
-    /// `links` window, the `edition_claims` row and the `doc_metadata`
-    /// example's `at`.
+    /// `links` window, the `page` window, the `edition_claims` row and the
+    /// `doc_metadata` example's `at`.
     #[test]
     fn the_reads_decode_the_wires_own_examples() {
         assert_eq!(addrs(&json!({"addrs":["1.0.1.0.1.0.2.1"],"as_of":9,"resp":"addrs"})), ["1.0.1.0.1.0.2.1"]);
@@ -808,6 +938,14 @@ mod tests {
         let window = history(&json!({"as_of":9,"exhausted":false,"links":[{"a":"1.0.1.0.1.0.2.1","at":5,"retracted_at":null},{"a":"1.0.1.0.1.0.2.2","at":6,"retracted_at":8}],"next":"1.0.1.0.1.0.2.2","resp":"links"})).expect("a links answer");
         assert_eq!(window.links, vec![HistoryRow { a: "1.0.1.0.1.0.2.1".into(), at: Some(5), retracted_at: None }, HistoryRow { a: "1.0.1.0.1.0.2.2".into(), at: Some(6), retracted_at: Some(8) }]);
         assert_eq!((window.next.as_deref(), window.exhausted), (Some("1.0.1.0.1.0.2.2"), false));
+        // `<!-- wire: response page -->`; an empty window keeps its cursor.
+        let page = link_page(&json!({"as_of":9,"resp":"page","window":{"batch":["1.0.1.0.1.0.2.1"],"exhausted":true,"next":"1.0.1.0.1.0.2.1"}})).expect("a page answer");
+        assert_eq!(page, LinkPage { batch: vec!["1.0.1.0.1.0.2.1".into()], next: Some("1.0.1.0.1.0.2.1".into()), exhausted: true });
+        let paged = |window: Value| link_page(&json!({"as_of":9,"resp":"page","window":window}));
+        assert_eq!(paged(json!({"batch":[],"exhausted":true,"next":null})), Some(LinkPage { batch: Vec::new(), next: None, exhausted: true }), "an empty window at the start");
+        assert_eq!(paged(json!({"batch":[],"exhausted":true,"next":"1.0.1.0.1.0.2.9"})).and_then(|p| p.next).as_deref(), Some("1.0.1.0.1.0.2.9"), "an empty window past a cursor");
+        assert_eq!(paged(json!({"batch":["1.0.1.0.1.0.2.1"],"exhausted":false,"next":null})).map(|p| p.next), Some(None), "`next` is the answer's own member");
+        assert_eq!((paged(json!({"batch":[],"next":null})), link_page(&json!({"as_of":9,"n":2,"resp":"count"}))), (None, None), "no `exhausted`; no page answer");
         // `<!-- wire: response edition_claims -->`.
         let claims = edition_claims(&json!({"as_of":9,"claims":[{"active":true,"claim":"1.0.1.0.5.0.2.1","home":"1.0.1.0.5","to":[{"start":"1.0.1.0.1","width":"0.0.0.0.1"}]}],"resp":"edition_claims"}));
         assert_eq!(claims, vec![EditionClaim { claim: "1.0.1.0.5.0.2.1".into(), home: "1.0.1.0.5".into(), to: vec![LinkSpan { start: "1.0.1.0.1".into(), width: "0.0.0.0.1".into() }], active: true }]);
@@ -903,5 +1041,58 @@ mod tests {
         assert_eq!(i_runs(&json!({"code":"image_too_large","op":"image","resp":"rejected"}), 5), None);
         let padded = json!({"resp":"runs","runs":[{"i_start":"1.0.1.0.1.0.1.01","width":"1"}]});
         assert_eq!(i_runs(&padded, 5), None, "a component off its one spelling");
+    }
+
+    /// A link whose `to` and type slots hold the unit span at each address.
+    fn link(to: &[&str], ty: &[&str]) -> LinkValue {
+        let unit = |a: &&str| LinkSpan { start: a.to_string(), width: format!("{}1", "0.".repeat(a.split('.').count() - 1)) };
+        LinkValue { from: Vec::new(), to: to.iter().map(unit).collect(), ty: ty.iter().map(unit).collect(), at: None }
+    }
+
+    /// The default keeps a link only where its `to` is at or under the address.
+    ///
+    /// One whose `to` only contains the address is left out, and kept when
+    /// asked for; a span that runs on past the subtree, or no span, is outside.
+    #[test]
+    fn a_link_is_kept_by_default_only_where_its_to_lies_at_or_under_the_address() {
+        let mailbox = "1.0.5.0.2";
+        let spanned = |start: &str, width: &str| LinkValue { to: vec![LinkSpan { start: start.into(), width: width.into() }], ..link(&[], &[]) };
+        assert_eq!(ToFilter::default(), ToFilter::AtOrUnder);
+        assert!([mailbox, "1.0.5.0.2.0.2.1", "1.0.5.0.2.1"].iter().all(|at| ToFilter::default().keeps(&link(&[at], &[]), mailbox)), "the mailbox, a link in it and a member of it");
+        for around in ["1.0.5", "1"] {
+            assert!(!ToFilter::default().keeps(&link(&[around], &[]), mailbox), "{around} only contains the mailbox");
+            assert!(ToFilter::Overlapping.keeps(&link(&[around], &[]), mailbox), "{around} is kept when asked for");
+        }
+        assert!(!spanned(mailbox, "0.0.0.0.2").to_at_or_under(mailbox), "a span from the mailbox that runs on past its subtree");
+        for outside in ["1.0.5.0.1", "1.0.5.0.64", "1.0.5.0.200", "1.0.6.0.2", "1.0.5.1.0.2"] {
+            assert!(!link(&[outside], &[]).to_at_or_under(mailbox), "{outside} lies outside the mailbox");
+        }
+        for (start, width) in [(mailbox, "0.0.0.0.0"), (mailbox, "0.0.0.0.0.0.1"), (mailbox, "0.0.0.0.01"), (mailbox, "x"), ("1..5", "0.0.1"), ("", "")] {
+            assert!(!spanned(start, width).to_at_or_under(mailbox), "{start:?} with {width:?} is no span");
+        }
+        assert!(!link(&[mailbox], &[]).to_at_or_under("1.x") && !link(&[], &[]).to_at_or_under(mailbox), "no address; an empty `to`");
+    }
+
+    /// A `to` naming many addresses lies at or under each of them and no other.
+    #[test]
+    fn a_to_naming_many_addresses_lies_at_or_under_each_and_no_other() {
+        let three = ["1.0.5.0.2", "1.0.6.0.2", "1.0.7.0.2"];
+        let many = link(&three, &[]);
+        assert!(three.iter().all(|mailbox| many.to_at_or_under(mailbox)), "each of the three mailboxes");
+        assert!(!many.to_at_or_under("1.0.8.0.2"), "a fourth, which the slot does not name");
+        let passage = LinkSpan { start: "1.0.6.0.64.0.1.3".into(), width: "0.0.0.0.0.0.0.4".into() };
+        let reply = LinkValue { to: vec![passage, many.to[0].clone()], ..link(&[], &[]) };
+        assert!(reply.to_at_or_under("1.0.5.0.2") && reply.to_at_or_under("1.0.6.0.64"), "a reply's `to`: the mailbox, and the letter a passage of which it answers");
+        assert!(!reply.to_at_or_under("1.0.6.0.2") && !reply.to_at_or_under("1.0.6.0.65"), "another mailbox; another letter");
+    }
+
+    /// A type slot lies at or under a type only as one span inside its subtree.
+    #[test]
+    fn a_type_slot_lies_at_or_under_a_type_only_as_one_span_inside_its_subtree() {
+        let (mail, urgent) = (crate::board::frames::T_MAIL, "1.1.0.1.0.1.0.3.15.1");
+        let typed = |ty: &[&str]| link(&[], ty).typed_at_or_under(mail);
+        assert!(typed(&[mail]) && typed(&[urgent]), "`mail`, and `urgent` under it");
+        assert!(!typed(&[crate::board::frames::REGISTRY_DOCUMENT]) && !typed(&["1"]), "the registry document and the node only contain it");
+        assert!(!typed(&[mail, urgent]) && !typed(&[]) && !link(&[], &[mail]).typed_at_or_under("1.x"), "two spans; none; a type that is no address");
     }
 }

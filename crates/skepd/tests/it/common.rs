@@ -98,7 +98,7 @@ pub const SEED_LINK_RECORDS: u64 = 3;
 ///
 /// The table is built at run time, so no `const` reads its length;
 /// `vocabulary.rs` holds this equal to it.
-pub const SEED_TYPES: u64 = 119;
+pub const SEED_TYPES: u64 = 124;
 
 /// A fresh board's first commit, and so the change feed's first line.
 pub const SEED_FIRST_AT: u64 = SEED_LEAD_RECORDS[0];
@@ -128,7 +128,7 @@ pub const SEED_LEAD_COMMITS: u64 = SEED_LEAD_RECORDS.len() as u64;
 
 // The positions the facts above give, spelled out: a changed fact fails the
 // build here until the positions it moves are spelled again.
-const _: () = assert!(SEED_FIRST_AT == 3 && SEED_PUBLISH_AT == 10 && SEED_HEAD == 367);
+const _: () = assert!(SEED_FIRST_AT == 3 && SEED_PUBLISH_AT == 10 && SEED_HEAD == 382);
 
 /// The positions of the seed's rows every class sees on a fresh board.
 ///

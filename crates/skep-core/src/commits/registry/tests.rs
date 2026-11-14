@@ -222,6 +222,32 @@ fn a_reopen_of_a_seeded_board_writes_nothing() {
     assert_eq!(engine.kernel().current_seq().0, position);
 }
 
+/// A RE-WORDED ROW STANDS: a row stands by its link — its `to` the row's
+/// address, its type `defines`, its `from` inside the registry document —
+/// and never by its words. So a build whose table words a row otherwise
+/// finds it standing on a board seeded under the earlier words and writes
+/// nothing for it: the board keeps the section it was seeded with.
+#[test]
+fn a_row_stands_by_its_link_whatever_words_the_table_holds_for_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (engine, wp) = open(dir.path());
+    seed(&wp);
+    let snap = engine.kernel().snapshot();
+    let (registry, defines) = (ghost_home_document(), defines_type());
+    let seeded = skep_registry::definition_at(&commons_type(&[15])).expect("mail");
+    let reworded = Definition {
+        purpose: "Other words.",
+        endsets: "from: other; to: words.",
+        ..seeded.clone()
+    };
+    assert_ne!(reworded.section(), seeded.section(), "the copy is the row under other words");
+    assert!(definition_stands(&snap, &registry, defines, seeded), "the row as seeded stands");
+    assert!(
+        definition_stands(&snap, &registry, defines, &reworded),
+        "and stands under other words"
+    );
+}
+
 /// R3 — AN ADDITION: a board seeded under the table less one row (the test
 /// seam hiding it) gains exactly that row's section and link at the next
 /// open under the whole table — one new member carrying every earlier

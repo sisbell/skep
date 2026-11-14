@@ -8,13 +8,14 @@ use crate::rows;
 /// Every type the brief's table names, by path, in the order the table
 /// holds them — the table transcribed once more, so a row dropped or
 /// renumbered in `vocabulary.rs` fails here by name.
-const PATHS: [&str; 119] = [
+const PATHS: [&str; 124] = [
     "1", "2", "3", "4", "5", "5.1", "5.2", "5.3", "5.4", "5.5", "5.6", "5.7", "5.8", "5.9", "5.10",
     "6", "6.1", "6.2", "6.3", "7", "8", "9", "9.1", "9.2", "9.3", "10", "10.1", "10.2", "10.3",
     "10.4", "11", "12", "13", "14", "14.1", "14.2", "14.3", "14.4", "14.5", "15", "15.1", "15.2",
     "15.3", "15.4", "16", "17", "18", "18.1", "18.2", "18.3", "19", "20", "21", "21.1", "21.2",
     "21.3", "21.4", "21.5", "21.6", "21.7", "21.8", "22", "23", "23.1", "23.2", "23.3", "23.4", "23.5", "23.6", "23.7", "24", "27", "27.1", "27.2", "27.2.1", "27.2.2", "27.3", "28", "30", "40", "41", "42",
-    "42.1", "42.2", "42.3", "43", "44", "44.1", "44.2", "45", "50", "55", "56", "57", "57.1",
+    "42.1", "42.2", "42.3", "43", "44", "44.1", "44.2", "45", "46", "46.1", "46.3", "46.4", "46.5",
+    "50", "55", "56", "57", "57.1",
     "57.2", "58", "58.1", "58.2", "58.3", "58.4", "58.5", "59", "60", "61", "70", "71", "88", "89", "90", "91", "100", "101", "102", "102.1", "103", "104", "104.1", "105",
 ];
 
@@ -23,15 +24,15 @@ const PATHS: [&str; 119] = [
 /// held removal now seeded, `3.25`, `3.26` and `3.29` still free — the
 /// registry-machinery reserve `3.51`–`3.54`, the proxy kind's `3.87`, the
 /// test-only `3.90.1`, the file-metadata family's reserved `3.27.4`, the
-/// literary set's free `3.106`, and the unallocated ranges' first ordinals
-/// (`3.71` read-with now seeded beside layout, the tier's next free `3.72`
-/// unnamed).
+/// reader-state family's reserved `3.46.2`, the literary set's free
+/// `3.106`, and the unallocated ranges' first ordinals (`3.71` read-with
+/// now seeded beside layout, the tier's next free `3.72` unnamed).
 const NOT_SEEDED: [&[u32]; 19] = [
     &[27, 4],
     &[25],
     &[26],
     &[29],
-    &[46],
+    &[46, 2],
     &[47],
     &[48],
     &[49],
@@ -156,9 +157,10 @@ fn the_registry_rows_are_in_the_table_as_rows_rs_spells_them() {
 /// WHAT IS NOT SEEDED answers no definition: the reserved ordinals beyond
 /// the built ones, the unallocated reserve, the proxy kind's `3.87`, the
 /// test-only `3.90.1`, the file-metadata family's reserved `3.27.4`, the
-/// literary set's free ordinals, and an address beneath or above a row —
-/// the inline family's eighth style and the counterpart's second subtype
-/// among the last.
+/// reader-state family's reserved `3.46.2`, the literary set's free
+/// ordinals, and an address beneath or above a row — the inline family's
+/// eighth style, the reader-state family's sixth state and the
+/// counterpart's second subtype among the last.
 #[test]
 fn nothing_is_named_at_an_ordinal_nobody_allocated() {
     for ordinals in NOT_SEEDED {
@@ -169,6 +171,8 @@ fn nothing_is_named_at_an_ordinal_nobody_allocated() {
     assert_eq!(definition_at(&subspace), None, "the subspace itself is no row");
     assert_eq!(definition_at(&commons_type(&[13, 1])), None, "beneath citation");
     assert_eq!(definition_at(&commons_type(&[23, 8])), None, "beneath inline, past its seven");
+    assert_eq!(definition_at(&commons_type(&[46, 2])), None, "beneath reader-state: kept for flagged");
+    assert_eq!(definition_at(&commons_type(&[46, 6])), None, "beneath reader-state, past spam");
     assert_eq!(definition_at(&commons_type(&[102, 2])), None, "beneath counterpart, past the correspondence");
 }
 
@@ -214,10 +218,119 @@ fn the_link_sets_rows_stand_at_their_pinned_addresses() {
     );
 }
 
+/// THE MAIL ROWS ADDRESS A MAILBOX: `mail` `3.15` and its four subtypes,
+/// read by address, each held to its name, its purpose and its endsets word
+/// for word — mail is addressed to a mailbox, a reply answers a letter or a
+/// passage of it, and `urgent`, `invitation` and `request` keep their own
+/// purposes — and no line of the family's sections says mail is sent, or
+/// that it goes to the recipient account.
+#[test]
+fn the_mail_rows_address_a_mailbox() {
+    let rows: [(&[u32], &str, &str, &str); 5] = [
+        (
+            &[15],
+            "mail",
+            "Mail: a message addressed to an account's mailbox.",
+            "from: the message's text; to: the recipient's mailbox, and for a reply the letter, or \
+             the passage of it, answered.",
+        ),
+        (&[15, 1], "urgent", "Mail marked urgent.", "from: the message's text; to: the recipient's mailbox."),
+        (
+            &[15, 2],
+            "invitation",
+            "Mail that invites its recipient.",
+            "from: the invitation's text; to: the recipient's mailbox.",
+        ),
+        (
+            &[15, 3],
+            "request",
+            "Mail that asks something of its recipient.",
+            "from: the request's text; to: the recipient's mailbox.",
+        ),
+        (
+            &[15, 4],
+            "broadcast",
+            "Mail addressed to many mailboxes at once.",
+            "from: the message's text; to: the recipients' mailboxes.",
+        ),
+    ];
+    for (ordinals, name, purpose, endsets) in rows {
+        let row = definition_at(&commons_type(ordinals))
+            .unwrap_or_else(|| panic!("3.{ordinals:?}: a row"));
+        assert_eq!(row.name, name, "3.{ordinals:?}: the name");
+        assert_eq!(row.purpose, purpose, "{name}: the purpose");
+        assert_eq!(row.endsets, endsets, "{name}: the endsets");
+    }
+    let family: Vec<&Definition> = vocabulary().iter().filter(|d| d.ordinals[0] == 15).collect();
+    assert_eq!(family.len(), rows.len(), "the family is the five rows held above");
+    for d in family {
+        for line in d.section().lines() {
+            assert!(!line.contains("sent"), "{}: mail is addressed, never sent: {line:?}", d.name);
+            assert!(
+                !line.contains("recipient account"),
+                "{}: mail goes to a mailbox: {line:?}",
+                d.name
+            );
+        }
+    }
+}
+
+/// THE READER-STATE FAMILY: the parent `reader-state` at `3.46` and its four
+/// states — `seen` `3.46.1`, `acknowledged` `3.46.3`, `important` `3.46.4`
+/// and `spam` `3.46.5` — read by address, each held to its name, its
+/// purpose and its endsets word for word, with `3.46.2` between them
+/// unwritten. `acknowledged` is a reader's state and `acknowledgment` `3.19`
+/// a credit for a part in a work: two names at two rows. And no row of the
+/// family is a mark: the account that records the state speaks in `from`,
+/// so no endsets line starts "from: empty", and no purpose or endsets line
+/// holds the word "mark".
+#[test]
+fn the_reader_state_rows_stand_under_their_names_and_are_no_marks() {
+    let rows: [(&[u32], &str, &str); 5] = [
+        (&[46], "reader-state", "A reader's own state for a mailing they received."),
+        (&[46, 1], "seen", "A mailing its reader has seen."),
+        (&[46, 3], "acknowledged", "A mailing its reader acknowledges receiving."),
+        (&[46, 4], "important", "A mailing its reader holds important."),
+        (&[46, 5], "spam", "A mailing its reader judges to be spam."),
+    ];
+    for (ordinals, name, purpose) in rows {
+        let row = definition_at(&commons_type(ordinals))
+            .unwrap_or_else(|| panic!("3.{ordinals:?}: a row"));
+        assert_eq!(row.name, name, "3.{ordinals:?}: the name");
+        assert_eq!(row.purpose, purpose, "{name}: the purpose");
+        assert_eq!(
+            row.endsets, "from: the account recording it; to: the mail link.",
+            "{name}: the endsets"
+        );
+    }
+    let name = |ordinals: &[u32]| definition_at(&commons_type(ordinals)).map(|d| d.name);
+    assert_eq!(
+        (name(&[46, 3]), name(&[19])),
+        (Some("acknowledged"), Some("acknowledgment")),
+        "a reader's state and a credit for a part in a work, under two names"
+    );
+    let family: Vec<&Definition> = vocabulary().iter().filter(|d| d.ordinals[0] == 46).collect();
+    assert_eq!(family.len(), rows.len(), "the family is the five rows held above");
+    for d in family {
+        assert!(
+            !d.endsets.starts_with("from: empty"),
+            "{}: the account speaks in `from`, so no mark",
+            d.name
+        );
+        for line in [d.purpose, d.endsets] {
+            assert!(
+                !line.contains("mark"),
+                "{}: the word is not used of a reader's state: {line:?}",
+                d.name
+            );
+        }
+    }
+}
+
 /// NO FORK ROW STANDS (B3-S10): the board records where a staged draft began
 /// in its own state, at the `stage` operation, and no link of a client's
 /// says it — nothing answers at `3.9.4`, no row is named `fork`, alternative
-/// keeps its three subtypes, and the table holds 119 rows, the seed's one
+/// keeps its three subtypes, and the table holds 124 rows, the seed's one
 /// link and one section per row.
 #[test]
 fn no_fork_row_stands_under_alternative() {
@@ -226,7 +339,7 @@ fn no_fork_row_stands_under_alternative() {
     assert!(vocabulary().iter().all(|d| d.name != "fork"), "no row named fork");
     assert_eq!(name(&[9]), Some("alternative"), "the parent keeps its own row");
     assert_eq!((name(&[9, 1]), name(&[9, 2]), name(&[9, 3])), (Some("draft"), Some("revision"), Some("branch")));
-    assert_eq!(vocabulary().len(), 119, "the table's rows");
+    assert_eq!(vocabulary().len(), 124, "the table's rows");
 }
 
 /// THE ENDSETS BY ROLE (the commons map's standing rule, F5): every mark —

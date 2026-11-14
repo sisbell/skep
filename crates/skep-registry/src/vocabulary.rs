@@ -20,7 +20,9 @@
 //! mode's two values, and the tree designation `3.28`; the core set the
 //! seeding plan curates (`3.5` to `3.21` with their subtypes, `3.30`, `3.40`
 //! to `3.45`, `3.50` the meta-type) with `3.4` correction in the plan's own
-//! slot; `3.70` layout, the presentation tier's first; Nelson's literary
+//! slot; `3.46` reader-state, the social extension's first, a reader's own
+//! state for a mailing, with sub-rows `3.46.1` and `3.46.3` to `3.46.5`;
+//! `3.70` layout, the presentation tier's first; Nelson's literary
 //! set `3.100` to `3.105` — title, author, counterpart, quote, jump with its
 //! one subtype modal, certification — as Literary Machines 4/52 to 4/55
 //! lists them (the owner, 2026-10-21); and the link-sets rows the commons
@@ -28,11 +30,11 @@
 //! emphasis family's parent, with its seven sub-types `3.23.1` to `3.23.7`,
 //! `3.24` the held removal, `3.71` read-with beside layout, and `3.102.1`
 //! the correspondence record, a subtype under counterpart. WHAT IT DOES
-//! NOT: the reserved ordinals of `3.22` to
-//! `3.29` and `3.46` to `3.49` beyond the built ones, `3.51` to `3.54` (the
-//! registry-machinery reserve, unallocated), `3.87` (reserved for the proxy
-//! kind), the test-only `3.90.1`, and every range the map marks
-//! unallocated — nothing is named at an ordinal nobody allocated.
+//! NOT: the reserved ordinals of `3.22` to `3.29` and `3.46` to `3.49`
+//! beyond the built ones, `3.46.2` (reserved for `flagged`), `3.51` to
+//! `3.54` (the registry-machinery reserve, unallocated), `3.87` (reserved
+//! for the proxy kind), the test-only `3.90.1`, and every range the map
+//! marks unallocated — nothing is named at an ordinal nobody allocated.
 //!
 //! THE ENDSETS ARE SAID BY ROLE (the commons map's standing rule THE
 //! ENDSETS, BY ROLE — F5, the owner 2026-10-27; the `3.27` family's rule
@@ -121,7 +123,7 @@ struct Spelling {
 }
 
 /// The rows, in path order.
-const SPELLINGS: [Spelling; 119] = [
+const SPELLINGS: [Spelling; 124] = [
     // ── the credential kinds (AUTH-7.1 horn B) ───────────────────────────
     Spelling {
         ordinals: &[1],
@@ -368,32 +370,33 @@ const SPELLINGS: [Spelling; 119] = [
     Spelling {
         ordinals: &[15],
         name: "mail",
-        purpose: "Mail: a message sent to an account.",
-        endsets: "from: the message's text; to: the recipient account.",
+        purpose: "Mail: a message addressed to an account's mailbox.",
+        endsets: "from: the message's text; to: the recipient's mailbox, and for a reply the \
+                  letter, or the passage of it, answered.",
     },
     Spelling {
         ordinals: &[15, 1],
         name: "urgent",
         purpose: "Mail marked urgent.",
-        endsets: "from: the message's text; to: the recipient account.",
+        endsets: "from: the message's text; to: the recipient's mailbox.",
     },
     Spelling {
         ordinals: &[15, 2],
         name: "invitation",
         purpose: "Mail that invites its recipient.",
-        endsets: "from: the invitation's text; to: the recipient account.",
+        endsets: "from: the invitation's text; to: the recipient's mailbox.",
     },
     Spelling {
         ordinals: &[15, 3],
         name: "request",
         purpose: "Mail that asks something of its recipient.",
-        endsets: "from: the request's text; to: the recipient account.",
+        endsets: "from: the request's text; to: the recipient's mailbox.",
     },
     Spelling {
         ordinals: &[15, 4],
         name: "broadcast",
-        purpose: "Mail sent to many recipients at once.",
-        endsets: "from: the message's text; to: the recipient accounts.",
+        purpose: "Mail addressed to many mailboxes at once.",
+        endsets: "from: the message's text; to: the recipients' mailboxes.",
     },
     Spelling {
         ordinals: &[16],
@@ -687,6 +690,38 @@ const SPELLINGS: [Spelling; 119] = [
         name: "tag",
         purpose: "An account tags a passage; the tag's word rides as a parameter span.",
         endsets: "from: the account; to: the passage tagged.",
+    },
+    // ── the social extension (3.46–3.49): the reader-state family; 3.46.2
+    //    is kept for `flagged` and holds no row ───────────────────────────
+    Spelling {
+        ordinals: &[46],
+        name: "reader-state",
+        purpose: "A reader's own state for a mailing they received.",
+        endsets: "from: the account recording it; to: the mail link.",
+    },
+    Spelling {
+        ordinals: &[46, 1],
+        name: "seen",
+        purpose: "A mailing its reader has seen.",
+        endsets: "from: the account recording it; to: the mail link.",
+    },
+    Spelling {
+        ordinals: &[46, 3],
+        name: "acknowledged",
+        purpose: "A mailing its reader acknowledges receiving.",
+        endsets: "from: the account recording it; to: the mail link.",
+    },
+    Spelling {
+        ordinals: &[46, 4],
+        name: "important",
+        purpose: "A mailing its reader holds important.",
+        endsets: "from: the account recording it; to: the mail link.",
+    },
+    Spelling {
+        ordinals: &[46, 5],
+        name: "spam",
+        purpose: "A mailing its reader judges to be spam.",
+        endsets: "from: the account recording it; to: the mail link.",
     },
     // ── the meta-type (3.50) ─────────────────────────────────────────────
     Spelling {

@@ -69,6 +69,7 @@ back — is this crate:
   type the plan does not), its purpose in a line and the shape of its
   endsets. The credential kinds `3.1`–`3.3`, the core set the seeding plan
   curates (`3.5`–`3.21` with their subtypes, `3.30`, `3.40`–`3.45`),
+  the reader-state family `3.46` with `3.46.1` and `3.46.3`–`3.46.5`,
   `replaces` `3.12`, the designations `3.22`, `3.27` and `3.28`, the
   meta-type `defines` `3.50`, the registry's twelve rows named as `rows`
   names them, the rail record `3.60`, the steward's classification `3.61`,

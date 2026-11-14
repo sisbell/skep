@@ -15,7 +15,10 @@
 //! on the seeded board, and the seed's layout every position pin derives from
 //! held equal to what a fresh board counts; R7 every pin the workspace holds
 //! in non-test code is a row of the table. R8, the open's line off the
-//! binary's stderr, is `open.rs`'s.
+//! binary's stderr, is `open.rs`'s. Two cells hold the reader-state family
+//! `3.46` beside them: with R3, a board seeded before the family gains its
+//! five rows at the next open; with R7, no source outside the table names
+//! an address of the family.
 
 use std::path::Path;
 
@@ -40,6 +43,10 @@ const STAGING_DRAFT: &str = "1.1.0.1.0.3";
 
 /// The time document: doc 4 of the system account.
 const TIME_DOCUMENT: &str = "1.1.0.1.0.4";
+
+/// The reader-state family's rows, by path: the parent `3.46` and its four
+/// states. `3.46.2` is reserved and holds no row.
+const READER_STATE: [&[u32]; 5] = [&[46], &[46, 1], &[46, 3], &[46, 4], &[46, 5]];
 
 /// A `retrieve_v` spec's span over a document's first content position.
 const FIRST_POSITION: &str = r#""span":{"start":"1.1","width":"0.1"}"#;
@@ -156,8 +163,14 @@ fn a_fresh_board_names_every_type_once_to_a_guest() {
     // `defines` itself is the first link written, typed by itself.
     assert_eq!(definition_links(port, None, &defines_type().to_string()), [format!("{REGISTRY}.0.2.1")]);
     // A type not in the table — the literary set's free `3.106`, the
-    // test-only `3.90.1`, an address beneath a row — answers none.
-    for absent in ["1.1.0.1.0.1.0.3.106", "1.1.0.1.0.1.0.3.90.1", "1.1.0.1.0.1.0.3.13.1"] {
+    // test-only `3.90.1`, an address beneath a row, the reader-state
+    // family's reserved `3.46.2` — answers none.
+    for absent in [
+        "1.1.0.1.0.1.0.3.106",
+        "1.1.0.1.0.1.0.3.90.1",
+        "1.1.0.1.0.1.0.3.13.1",
+        "1.1.0.1.0.1.0.3.46.2",
+    ] {
         assert!(definition_links(port, None, absent).is_empty(), "{absent}: no definition");
     }
     sd.shutdown();
@@ -259,6 +272,68 @@ fn a_board_seeded_under_a_smaller_table_gains_the_added_row_at_the_next_open() {
         assert_eq!(links.len(), 1, "{}: one link, never two", def.address);
         assert_eq!(from_text(port, None, &links[0]), def.section(), "{}: readable off the surface", def.address);
     }
+    sd.shutdown();
+}
+
+/// R3 FOR A FAMILY — THE READER-STATE ROWS: a board seeded under the table
+/// less the five rows of `3.46`, the parent and its four states hidden from
+/// its first open, gains the five at the next open under the whole table,
+/// and nothing else. The addition is one insert of the five sections, one
+/// publish and five links — 25 records — and the open's one line says
+/// `5 of N`. Each of the five then has one link whose `from` reads as its
+/// section, the family's reserved `3.46.2` has none, and every other row
+/// keeps the one link it had. A guest reads all of it: the cell opens no
+/// session as the system principal.
+#[test]
+fn a_board_seeded_before_the_reader_state_rows_gains_the_five_at_the_next_open() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let table = vocabulary();
+    let family: Vec<&Definition> = READER_STATE
+        .iter()
+        .map(|ordinals| {
+            definition_at(&skep_registry::commons_type(ordinals))
+                .unwrap_or_else(|| panic!("3.{ordinals:?} is a row of the table"))
+        })
+        .collect();
+    for def in &family {
+        hide_a_type_from_the_seed(dir.path(), def.address.clone());
+    }
+    let position = {
+        let sd = spawn_unclaimed(dir.path());
+        let port = sd.port();
+        assert_eq!(open_line(&sd, table.len() - 5, 0).len(), 1, "{:?}", seed_lines(&sd));
+        for def in &family {
+            let links = definition_links(port, None, &def.address.to_string());
+            assert!(links.is_empty(), "{}: a hidden row has no link: {links:?}", def.address);
+        }
+        let position = log_position(port);
+        assert_eq!(position, SEED_HEAD - 5 * SEED_LINK_RECORDS, "five links fewer");
+        sd.shutdown();
+        position
+    };
+    unhide_every_type_from_the_seed(dir.path());
+    let sd = spawn_unclaimed(dir.path());
+    let port = sd.port();
+    let said = seed_lines(&sd);
+    assert_eq!(said.len(), 1, "one line, and no failure: {said:?}");
+    assert_eq!(open_line(&sd, 5, table.len() - 5), said, "five types written, the rest stood");
+    assert_eq!(
+        log_position(port),
+        position + 25,
+        "one insert (3), one publish with its correspondence record (7), five links (15)"
+    );
+    for def in table {
+        let links = definition_links(port, None, &def.address.to_string());
+        assert_eq!(links.len(), 1, "{}: one link, never two", def.address);
+        assert_eq!(
+            from_text(port, None, &links[0]),
+            def.section(),
+            "{}: readable off the surface",
+            def.address
+        );
+    }
+    let reserved = definition_links(port, None, "1.1.0.1.0.1.0.3.46.2");
+    assert!(reserved.is_empty(), "the family's reserved 3.46.2 has no definition: {reserved:?}");
     sd.shutdown();
 }
 
@@ -466,27 +541,10 @@ fn every_pin_the_workspace_holds_is_a_row_of_the_table() {
     assert_eq!(row(&address(BLIND_KIND)), Some("blind-cell"), "the blind cell's kind, as the suites spell it");
 
     // Every literal in non-test source, workspace-wide.
-    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let mut literals = std::collections::BTreeSet::new();
-    let mut files = Vec::new();
-    for entry in std::fs::read_dir(&crates).expect("the crates directory") {
-        let src = entry.expect("an entry").path().join("src");
-        if src.is_dir() {
-            rust_files(&src, &mut files);
-        }
-    }
-    assert!(files.len() > 100, "the workspace's sources were walked: {}", files.len());
-    for file in &files {
-        let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let in_tests = name == "tests.rs" || file.iter().any(|c| c == "tests");
-        if in_tests {
-            continue;
-        }
-        let text = std::fs::read_to_string(file).expect("a source file");
-        let code = text.split("\nmod tests {").next().unwrap_or("");
-        let code = code.split("\n    mod tests {").next().unwrap_or("");
-        for literal in type_literals(code) {
-            literals.insert((literal, file.strip_prefix(&crates).expect("under crates").display().to_string()));
+    for (file, code) in non_test_sources() {
+        for literal in type_literals(&code) {
+            literals.insert((literal, file.clone()));
         }
     }
     assert!(literals.len() >= 10, "the pins were read: {literals:?}");
@@ -524,6 +582,160 @@ fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
             out.push(path);
         }
     }
+}
+
+/// Every crate's non-test source, as R7 walks it: each `.rs` file under a
+/// crate's `src` that is no `tests.rs` and lies under no `tests` directory,
+/// by its path under `crates/`, its text cut at its inline test module.
+fn non_test_sources() -> Vec<(String, String)> {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(&crates).expect("the crates directory") {
+        let src = entry.expect("an entry").path().join("src");
+        if src.is_dir() {
+            rust_files(&src, &mut files);
+        }
+    }
+    assert!(files.len() > 100, "the workspace's sources were walked: {}", files.len());
+    let mut sources = Vec::new();
+    for file in &files {
+        let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let in_tests = name == "tests.rs" || file.iter().any(|c| c == "tests");
+        if in_tests {
+            continue;
+        }
+        let text = std::fs::read_to_string(file).expect("a source file");
+        let code = text.split("\nmod tests {").next().unwrap_or("");
+        let code = code.split("\n    mod tests {").next().unwrap_or("");
+        let file = file.strip_prefix(&crates).expect("under crates").display().to_string();
+        sources.push((file, code.to_string()));
+    }
+    sources
+}
+
+/// THE READER-STATE FAMILY IS THE TABLE's ALONE: no source outside
+/// `skep-registry`'s vocabulary names an address at or under `3.46`. Over
+/// R7's walk no dotted literal names one — R7 itself passes such a literal,
+/// since it is a row — and over the same files, the table's own apart, none
+/// is spelled through a commons-type builder at the ordinal or as an address
+/// array through the type subspace. THE BOARD's HALF IS FOR GOOD: a board
+/// never asks for a reader's state link, writes one or derives one (the
+/// mailbox decision, item J), so no crate the daemon is built from names
+/// the family. THE CLIENTS' HALF HOLDS WHILE NO CLIENT WRITES ONE: it is
+/// lifted for the client crate that builds a reader's own setting, and for
+/// no other.
+#[test]
+fn no_source_outside_the_table_names_a_reader_state_address() {
+    // The readers see each form they are to refuse and pass its near misses.
+    for refused in [
+        "commons_type(&[46])",
+        "skep_registry::commons_type(&[46, 1])",
+        "commons_type( &[ 46 , 3 ] )",
+        "commons_type(46)",
+        "commons_subtype(&[46, 1])",
+        "Tumbler::new([1u32, 1, 0, 1, 0, 1, 0, 3, 46].map(Nat::from))",
+        "addr(&[1, 1, 0, 1, 0, 1, 0, 3, 46, 5])",
+    ] {
+        assert_eq!(reader_state_spellings(refused).len(), 1, "the reader sees {refused:?}");
+    }
+    for passed in [
+        "commons_type(&[45])",
+        "commons_type(&[460])",
+        "commons_type(ordinals)",
+        "commons_subtype(&[102, 46])",
+        "addr(&[1, 1, 0, 1, 0, 1, 0, 3, 4, 6])",
+        "addr(&[1, 1, 0, 1, 0, 1, 0, 3, 461])",
+        "addr(&[1, 0, 1, 0, 3, 46])",
+        "[45, 46, 47]",
+        "the rule AUTH-3.46",
+    ] {
+        assert!(reader_state_spellings(passed).is_empty(), "the reader passes {passed:?}");
+    }
+    for (literal, named) in [
+        ("1.1.0.1.0.1.0.3.46", true),
+        ("1.1.0.1.0.1.0.3.46.1", true),
+        ("1.1.0.1.0.1.0.3.45", false),
+        ("1.1.0.1.0.1.0.3.460", false),
+        ("1.1.0.1.0.1.0.3.4", false),
+    ] {
+        assert_eq!(
+            type_literals(&format!("the type `{literal}`.")),
+            [literal],
+            "R7's reader sees {literal}"
+        );
+        assert_eq!(names_reader_state(literal), named, "{literal}: at or under 3.46");
+    }
+
+    // The tree: the table's own file is walked and spells the family, and no
+    // other source does.
+    const TABLE: &str = "skep-registry/src/vocabulary.rs";
+    let sources = non_test_sources();
+    let table = sources.iter().find(|(file, _)| file == TABLE).map(|(_, code)| code.as_str());
+    assert!(
+        table.is_some_and(|code| code.contains("ordinals: &[46, 1],")),
+        "the walk reads the table's own file, where the family's rows are spelled: {TABLE}"
+    );
+    let mut literals = 0;
+    let mut named = Vec::new();
+    for (file, code) in &sources {
+        for literal in type_literals(code) {
+            literals += 1;
+            if names_reader_state(&literal) {
+                named.push(format!("{literal} in {file}"));
+            }
+        }
+        if file != TABLE {
+            named.extend(
+                reader_state_spellings(code).into_iter().map(|form| format!("{form} in {file}")),
+            );
+        }
+    }
+    assert!(literals >= 10, "the pins were read: {literals}");
+    assert!(
+        named.is_empty(),
+        "no source outside the table names a reader-state address — a board never asks for, writes \
+         or derives one, and no client writes one; these do:\n{}",
+        named.join("\n")
+    );
+}
+
+/// Whether `literal` is the reader-state family's parent `3.46` or an
+/// address under it.
+fn names_reader_state(literal: &str) -> bool {
+    literal
+        .strip_prefix("1.1.0.1.0.1.0.3.46")
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+}
+
+/// The spellings of a reader-state address `code` holds that are no dotted
+/// literal: a commons-type builder called at the family's ordinal —
+/// `skep-registry`'s `commons_type(&[46, …])`, the engine's twins
+/// `commons_type(46)` and `commons_subtype(&[46, …])` — and an address array
+/// through the commons type subspace to it, `[1, 1, 0, 1, 0, 1, 0, 3, 46,
+/// …]`. `code` is read with its white space and its integer suffixes taken
+/// out, and a longer number (`460`) is no match.
+fn reader_state_spellings(code: &str) -> Vec<&'static str> {
+    const FORMS: [&str; 4] =
+        ["commons_type(&[46", "commons_type(46", "commons_subtype(&[46", "[1,1,0,1,0,1,0,3,46"];
+    let joined: String = code.split_whitespace().collect();
+    let mut text = String::with_capacity(joined.len());
+    let mut rest = joined.as_str();
+    while let Some(c) = rest.chars().next() {
+        text.push(c);
+        rest = &rest[c.len_utf8()..];
+        if c.is_ascii_digit() {
+            let suffix =
+                ["u32", "u64", "usize"].into_iter().find(|suffix| rest.starts_with(suffix));
+            rest = &rest[suffix.map_or(0, str::len)..];
+        }
+    }
+    FORMS
+        .into_iter()
+        .filter(|form| {
+            text.match_indices(form)
+                .any(|(at, _)| !text[at + form.len()..].starts_with(|c: char| c.is_ascii_digit()))
+        })
+        .collect()
 }
 
 /// The table's own shape, as the wire reads it: a client that links

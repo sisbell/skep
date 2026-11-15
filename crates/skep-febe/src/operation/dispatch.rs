@@ -135,7 +135,9 @@ where
             // No principal: the node addr is supplied by provisioning, and
             // M3's `register_node` takes none. The step-(b) bound-session
             // gate applied, uniformly (§6) — and it is the whole authority
-            // check this path gets, here or in M3 (see `Op::RegisterNode`).
+            // check this path gets here or in M3: the daemon's admission
+            // gates the op to the board's registrar ahead of this call
+            // (REG-2.1; see `Op::RegisterNode`).
             Op::RegisterNode { addr } => {
                 let (addr, at) =
                     self.stores.namespace().register_node(addr).map_err(|e| lower_txn(kind, e))?;

@@ -225,9 +225,13 @@ where
 
     /// Opens a session bound to `BOOTSTRAP_PRINCIPAL`.
     ///
-    /// It is how the first `delegate`/`create`/`register_node` can happen.
-    /// Confinement is transport policy (§6): the transport must not expose
-    /// this beyond provisioning — it mints bootstrap authority ungated.
+    /// It is how the first `delegate` and `create` can happen, and at this
+    /// surface a `register_node`: M10 executes that op for any bound
+    /// session, and the daemon's admission, ahead of `execute`, admits it
+    /// from the board's registrar alone, never from this session (REG-2.1;
+    /// `Op::RegisterNode`). Confinement of the session itself is transport
+    /// policy (§6): the transport must not expose this beyond provisioning,
+    /// since the call mints bootstrap authority with no gate of its own.
     pub fn bootstrap_session(&self) -> SessionId {
         self.open_session(BOOTSTRAP_PRINCIPAL)
     }

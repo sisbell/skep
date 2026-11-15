@@ -171,15 +171,17 @@ pub enum Op {
     /// NodeBaptism admission (ASN-0047).
     ///
     /// The address is supplied by provisioning, not minted. A bound session
-    /// is the only authority gate on this path, and no module holds a
-    /// stronger one. Step (b) proves that some session is bound and nothing
-    /// further; `Namespace::register_node` takes no principal, so this arm
-    /// passes none, and `RegisterNodeError` carries no authority variant, so
-    /// M3 makes no ownership check and no check of the caller's tier either
-    /// — its one tier check is the address's own (`NotNode`). Any bound
+    /// is the only authority gate this surface and M3 hold on the path. Step
+    /// (b) proves that some session is bound and nothing further;
+    /// `Namespace::register_node` takes no principal, so this arm passes
+    /// none, and `RegisterNodeError` carries no authority variant, so M3
+    /// makes no ownership check and no check of the caller's tier either —
+    /// its one tier check is the address's own (`NotNode`). Any bound
     /// session, speaking for any principal, may therefore register a
-    /// node-tier entity — confining this to provisioning is policy nobody
-    /// enforces.
+    /// node-tier entity at this surface. Confining the op to the board's
+    /// registrar is the daemon's admission, which gates it ahead of
+    /// `execute` (REG-2.1; skep-core's `auth::policy`); a transport that
+    /// reaches `execute` without that admission admits any session's.
     RegisterNode { addr: Tumbler },
     /// Denial-as-fork (O10, account tier): a fresh empty document.
     ///

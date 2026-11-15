@@ -100,13 +100,15 @@ fn close_is_idempotent_and_the_dead_token_signals() {
 /// (AUTH-6.35), and that is what confines the idempotency memo to the session
 /// that wrote under it and a close to the binding it names. The memo is keyed
 /// by (session, `id`, op kind), which makes the session observable at the
-/// wire: two sessions of principal 0 sending two DIFFERENT `register_node`
-/// frames under ONE `id` each commit their own node — the second is never
+/// wire: two sessions of principal 0 sending two DIFFERENT `delegate`
+/// frames under ONE `id` each commit their own account — the second is never
 /// answered the first's memoized ack — and closing the first leaves the
 /// second writing. Principal 0 is the claimant's own bootstrap principal,
 /// opened by every device that signs as it, so a shared session would make
 /// one device's retry replay another's write and one device's close end
-/// every other's.
+/// every other's. The write is `delegate`, the one a bare principal-0
+/// session commits on a claimed board (`register_node` is the registrar's
+/// alone, REG-2.1).
 #[test]
 fn every_session_open_mints_its_own_m10_session_principal_zero_included() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -114,23 +116,35 @@ fn every_session_open_mints_its_own_m10_session_principal_zero_included() {
     let port = sd.port();
     let first = open_session(port, PRINCIPAL_ZERO);
     let second = open_session(port, PRINCIPAL_ZERO);
-    let node = |addr: &str| format!(r#"{{"op":"register_node","addr":"{addr}","id":"one-id"}}"#);
+    // The next top-level account, delegated under the id given or under none:
+    // the prefix asked for, and the answer.
+    let delegate = |session: &str, new_id: u64, id: &str| {
+        let prefix = next_prefix_under(port, Some(session), "1");
+        let v = op(
+            port,
+            Some(session),
+            &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":{new_id}{id}}}"#),
+        );
+        (prefix, v)
+    };
+    let one_id = r#","id":"one-id""#;
 
-    let v = op(port, Some(&first), &node("1.5"));
-    assert_eq!(expect_resp(&v, "ack_addr")["addr"].as_str(), Some("1.5"), "{v}");
-    let v = op(port, Some(&second), &node("1.6"));
+    let (first_account, v) = delegate(&first, 961, one_id);
+    assert_eq!(expect_resp(&v, "ack_addr")["addr"].as_str(), Some(first_account.as_str()), "{v}");
+    let (second_account, v) = delegate(&second, 962, one_id);
+    assert_ne!(second_account, first_account, "the premise: two frames, two accounts");
     assert_eq!(
         expect_resp(&v, "ack_addr")["addr"].as_str(),
-        Some("1.6"),
-        "the second session's frame commits its own node, never the first's memoized ack: {v}"
+        Some(second_account.as_str()),
+        "the second session's frame commits its own account, never the first's memoized ack: {v}"
     );
 
     let (st, _) = http(port, "POST", "/session/close", Some(&first), b"");
     assert_eq!(st, 204);
-    let v = op(port, Some(&second), r#"{"op":"register_node","addr":"1.7"}"#);
+    let (third_account, v) = delegate(&second, 963, "");
     assert_eq!(
         expect_resp(&v, "ack_addr")["addr"].as_str(),
-        Some("1.7"),
+        Some(third_account.as_str()),
         "closing the first session leaves the second writing: {v}"
     );
     sd.shutdown();

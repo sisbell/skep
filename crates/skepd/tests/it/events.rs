@@ -230,16 +230,17 @@ fn live_streams_are_budgeted_and_the_surplus_is_refused_cleanly() {
     // reset behind it fails the write after — so the loop commits as it
     // polls, driving that mechanism instead of racing the kernel for which
     // of the two closes each client happened to make. `register_node` is
-    // the commit: it needs a bound session and nothing else, so it can be
-    // repeated with a fresh node address as many times as the poll needs.
+    // the commit: it needs the registrar's session — the claimant's signed
+    // one — and no document, so it can be repeated with a fresh node address
+    // as many times as the poll needs.
     drop(held);
-    let boot = open_session(port, 0);
+    let registrar = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut node = 1_000u64;
     let mut reclaimed = Vec::new();
     while reclaimed.is_empty() && Instant::now() < deadline {
         node += 1;
-        let v = op(port, Some(&boot), &format!(r#"{{"op":"register_node","addr":"1.{node}"}}"#));
+        let v = op(port, Some(&registrar), &format!(r#"{{"op":"register_node","addr":"1.{node}"}}"#));
         assert!(v["at"].is_u64(), "the poll's commit must actually commit: {v}");
         reclaimed = raw_events(port).1;
     }

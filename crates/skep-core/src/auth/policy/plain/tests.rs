@@ -849,3 +849,133 @@ fn a_claimed_board_admits_the_well_known_mint_bare_and_keeps_its_two_tokens() {
         other => panic!("the owner's mint is acked: {other:?}"),
     }
 }
+
+/// Checks the registrar's gate on `register_node` (REG-2.1).
+///
+/// Through the whole admission, on [`TwoAccounts`]' board. Unclaimed, the
+/// pre-claim gate answers `claim_first` to every caller, bare and signed.
+/// Claimed by the maker, with a keyless account delegated beneath the
+/// maker's: the maker's own principal is admitted in a signed session under
+/// each key of its set, the anchor and the device key alike, with nothing
+/// for the marker slot and a presented `attest` dropped; a bare session
+/// answers `signed_session_required` whatever its principal, the maker's
+/// own included; and a signed session of any other principal answers
+/// `not_registrar`, permanent — the other account's, and the two the
+/// maker's own keys open, the bootstrap principal's and the keyless
+/// sub-account's, under a key of the claimant's set as under any other. A
+/// bare `delegate` from the bootstrap principal beside them stays outside
+/// the gate.
+#[test]
+fn register_node_is_admitted_to_the_registrars_signed_session_alone() {
+    use skep_febe::Disposition;
+
+    use crate::auth::CredentialLock;
+
+    let board = TwoAccounts::open();
+    let lock = CredentialLock::new();
+    let (maker, other) = (board.maker.0, board.other.0);
+    let node = Op::RegisterNode { addr: addr_of(&[1, 9]).tumbler().clone() };
+    let foreign = Fingerprint::parse_hex(&"ab".repeat(32)).expect("a fingerprint");
+
+    // Unclaimed: the board has no registrar, so no session admits a node.
+    {
+        let snap = board.engine.kernel().snapshot();
+        let world = snap.world();
+        assert!(world.identity().claimant().is_none(), "the premise: unclaimed");
+        for caller in [maker, other, BOOTSTRAP_PRINCIPAL] {
+            for signer in [None, Some(&foreign)] {
+                assert_eq!(
+                    plain_admission(&lock.read(), world, &node, caller, signer, None),
+                    Err(CredentialRefusal::ClaimFirst),
+                    "unclaimed: {caller:?}, signed: {}",
+                    signer.is_some()
+                );
+            }
+        }
+    }
+
+    board.claim();
+    let sub_id = PrincipalId(903);
+    let sub = exec(
+        &board.febe,
+        board.maker.1,
+        serde_json::json!({"op": "delegate", "new_prefix": "1.0.1.1", "new_id": sub_id.0}),
+    );
+    let snap = board.engine.kernel().snapshot();
+    let world = snap.world();
+    let claimant = world.identity().claimant().expect("the premise: claimed").clone();
+    assert_eq!(
+        world.m3().principal_prefix(maker),
+        Some(&claimant),
+        "the premise: the maker's account is the claimant"
+    );
+    assert!(
+        world.identity().key_set(&sub).is_empty(),
+        "the premise: the account beneath the claimant's holds no key of its own"
+    );
+    let keys: Vec<(Fingerprint, bool)> =
+        world.identity().key_set(&claimant).enrolled().map(|(fp, e)| (*fp, e.anchor)).collect();
+    assert_eq!(
+        (keys.len(), keys.iter().filter(|(_, anchor)| *anchor).count()),
+        (2, 1),
+        "the premise: the claimant's set holds an anchor and a device key"
+    );
+    let admission = |caller: PrincipalId, signer: Option<&Fingerprint>| {
+        plain_admission(&lock.read(), world, &node, caller, signer, None)
+    };
+
+    // The registrar: the claimant's own principal, under each key of its set.
+    for (fp, anchor) in &keys {
+        assert_eq!(
+            admission(maker, Some(fp)),
+            Ok(None),
+            "the registrar, signed by its {} key",
+            if *anchor { "anchor" } else { "device" }
+        );
+    }
+    // An `attest` presented beside the op is dropped, never verified.
+    let presented = Attestation::new(1, vec![0xAB; 8]).expect("a slot value");
+    assert_eq!(
+        plain_admission(&lock.read(), world, &node, maker, Some(&keys[0].0), Some(presented)),
+        Ok(None),
+        "the registrar's `register_node` fills no marker slot"
+    );
+
+    // A bare session, whatever its principal.
+    for caller in [maker, other, sub_id, BOOTSTRAP_PRINCIPAL] {
+        assert_eq!(
+            admission(caller, None),
+            Err(CredentialRefusal::SignedSessionRequired),
+            "bare: {caller:?}"
+        );
+    }
+
+    // A signed session of any principal but the registrar's, under a key of
+    // the claimant's set — which opens the bootstrap principal and the
+    // keyless sub-account — as under any other.
+    let not_registrar = CredentialRefusal::NotRegistrar;
+    for caller in [other, sub_id, BOOTSTRAP_PRINCIPAL] {
+        for fp in keys.iter().map(|(fp, _)| fp).chain([&foreign]) {
+            assert_eq!(
+                admission(caller, Some(fp)),
+                Err(not_registrar.clone()),
+                "signed, not the registrar: {caller:?}"
+            );
+        }
+    }
+    assert_eq!(
+        (not_registrar.token().as_str(), not_registrar.disposition()),
+        ("not_registrar", Disposition::Permanent)
+    );
+
+    // `delegate` from the bootstrap principal stays outside the gate.
+    let delegate = Op::Delegate {
+        new_prefix: addr_of(&[1, 0, 3]).tumbler().clone(),
+        new_id: PrincipalId(904),
+    };
+    assert_eq!(
+        plain_admission(&lock.read(), world, &delegate, BOOTSTRAP_PRINCIPAL, None, None),
+        Ok(None),
+        "a bare `delegate` from the bootstrap principal is admitted"
+    );
+}

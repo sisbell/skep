@@ -20,7 +20,14 @@ fn delegate_empty_account(port: u16, boot: &str, id: u64) -> (String, String) {
 
 /// The pre-claim admission gate (RES-27): an unclaimed daemon runs nothing
 /// but the ceremony — refuse cells before the claim, the ceremony's own
-/// accept cells inside `claim_board`, and ordinary ops after it.
+/// accept cells, and the same write after it. The write is `register_node`,
+/// so the cell holds the registrar's gate's answer on an unclaimed board too
+/// (REG-2.1): `claim_first` from the bare principal-0 session and from the
+/// claimant's own signed session alike — the one that is the registrar's
+/// once its claim lands — where a guest answers `unauthenticated` ahead of
+/// the gate. Once claimed the gate's other arm answers: the bare session is
+/// refused `signed_session_required`, and the registrar's session commits
+/// the node.
 #[test]
 fn pre_claim_gate_admits_only_the_ceremony() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -40,11 +47,159 @@ fn pre_claim_gate_admits_only_the_ceremony() {
     let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
     expect_resp(&v, "maybe_addr");
     // The accept cells ARE the ceremony (delegate-from-0, the home mint,
-    // the genesis insert + deposit, the signed claim).
-    claim_board(port);
-    // …and the same ordinary write commits once claimed.
+    // the genesis insert + deposit, the signed claim). Its first four steps
+    // key the claimant, whose signed session — opened here, below the claim
+    // — is refused the write as the bare one is: an unclaimed board has no
+    // registrar yet.
+    ceremony_before_the_claim(port);
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let before = head_position(port);
+    let v = op(port, Some(&signed), r#"{"op":"register_node","addr":"1.2"}"#);
+    assert_eq!(rejected_detail(&v), "credential_refused:claim_first", "signed, and unclaimed still");
+    assert_eq!(head_position(port), before, "a refused write commits nothing");
+    expect_resp(&op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT)), "ack_addr");
+    assert!(claimed(port), "the claim link flips the board claimed");
+    // …and once claimed the same write meets the gate's claimed arm: refused
+    // the bare session by its other token, committed from the registrar's.
     let v = op(port, Some(&boot), r#"{"op":"register_node","addr":"1.2"}"#);
-    expect_resp(&v, "ack_addr");
+    assert_eq!(rejected_detail(&v), "credential_refused:signed_session_required");
+    let v = op(port, Some(&signed), r#"{"op":"register_node","addr":"1.2"}"#);
+    assert_eq!(acked_addr(&v), "1.2", "the registrar's session, opened below the claim: {v}");
+    sd.shutdown();
+}
+
+/// Checks the registrar's gate on a claimed board (REG-2.1).
+///
+/// `register_node` admits a node address to the board, and only the
+/// registrar runs it: the claimant account's own principal in a signed
+/// session. Every other caller is answered by what it is, on a
+/// CLAIMED-PERMISSIVE board, where a bare session still binds: a guest
+/// `unauthenticated`, slot 0 of every write order and ahead of the gate; a
+/// bare session `credential_refused` with `signed_session_required`,
+/// whatever its principal — principal 0, the claimant's own, another
+/// account's; and a signed session that is not the registrar's
+/// `credential_refused` with `not_registrar`, permanent — another account's
+/// under its own key, and the two the claimant's own key opens by
+/// reference, principal 0 and a keyless account beneath the claimant's
+/// (AUTH-4.30 (i)): the gate reads the principal's own seat, never the set
+/// that authenticated it. The gate stands ahead of the store, so a refused
+/// caller is told nothing the store knows — a node past the depth cap and a
+/// node already admitted answer the caller's own token, never `too_deep` or
+/// `not_fresh` — and a refused call commits nothing: the head does not move
+/// across the whole column, and the address every cell named is still fresh
+/// when the registrar admits it.
+#[test]
+fn register_node_is_refused_every_session_but_the_registrars() {
+    const NOT_REGISTRAR: &str = "credential_refused:not_registrar";
+    const BARE: &str = "credential_refused:signed_session_required";
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let registrar = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    // Another account, keyed by a hire, and a keyless account beneath the
+    // claimant's, which the claimant's own key opens.
+    let member_key = distinct_key(71);
+    let (member, member_bare) = bootstrap_delegate(port, 971);
+    let member_signed = hire(port, &registrar, CLAIMANT_DOC1, &member, 971, &member_key);
+    let (beneath, _) = delegate_under(port, &open_session(port, CLAIMANT_PRINCIPAL), CLAIMANT_ACCOUNT, 972);
+    assert!(beneath.starts_with(&format!("{CLAIMANT_ACCOUNT}.")), "beneath the claimant's account: {beneath}");
+    assert_eq!(enrolled_count(port, &beneath), 0, "the premise: it holds no key of its own");
+    // One node the registrar admits first, for the cells about a node that
+    // stands; the column's own address stays fresh throughout.
+    let node = |addr: &str| format!(r#"{{"op":"register_node","addr":"{addr}"}}"#);
+    assert_eq!(acked_addr(&op(port, Some(&registrar), &node("1.61"))), "1.61");
+    let too_deep = vec!["1"; 33].join(".");
+
+    let callers: [(&str, Option<String>, &str); 7] = [
+        ("a guest", None, "unauthenticated"),
+        ("bare, principal 0", Some(open_session(port, 0)), BARE),
+        ("bare, the claimant's own principal", Some(open_session(port, CLAIMANT_PRINCIPAL)), BARE),
+        ("bare, another account's", Some(member_bare), BARE),
+        ("signed, another account's", Some(member_signed), NOT_REGISTRAR),
+        ("signed by the claimant's key, principal 0", Some(open_signed_session(port, 0, &device_key())), NOT_REGISTRAR),
+        (
+            "signed by the claimant's key, the keyless account beneath it",
+            Some(open_signed_session(port, 972, &device_key())),
+            NOT_REGISTRAR,
+        ),
+    ];
+    let before = head_position(port);
+    for (who, token, expected) in &callers {
+        for (what, addr) in [("a fresh node", "1.62"), ("a node that stands", "1.61"), ("a node past the depth cap", too_deep.as_str())] {
+            let v = op(port, token.as_deref(), &node(addr));
+            assert_eq!(verdict(&v), *expected, "{who}, {what}: {v}");
+            assert_eq!(v["disposition"].as_str(), Some("permanent"), "{who}, {what}: {v}");
+            assert_eq!(v["op"].as_str(), Some("register_node"), "{who}, {what}: {v}");
+        }
+    }
+    assert_eq!(head_position(port), before, "a refused register_node commits nothing");
+    // The refusal's whole shape: the family's, the token in `detail`.
+    let v = op(port, callers[4].1.as_deref(), &node("1.62"));
+    assert_eq!(
+        v,
+        serde_json::json!({"code": "credential_refused", "detail": "not_registrar", "disposition": "permanent", "op": "register_node", "resp": "rejected"}),
+        "the refusal as served"
+    );
+
+    // The registrar: admitted, the address the column named still fresh, and
+    // behind the gate the store's own codes answer.
+    let v = op(port, Some(&registrar), &node("1.62"));
+    assert_eq!(acked_addr(&v), "1.62", "the registrar's signed session admits the node: {v}");
+    assert_eq!(head_position(port), acked_at(&v), "…and it committed");
+    assert_eq!(verdict(&op(port, Some(&registrar), &node("1.62"))), "not_fresh", "the store's own code, behind the gate");
+    assert_eq!(verdict(&op(port, Some(&registrar), &node(&too_deep))), "too_deep");
+    sd.shutdown();
+}
+
+/// Checks that the registrar is the claimant's account under any key of its
+/// set (REG-2.1).
+///
+/// REG-4.109's labeled registrar device key is "a non-anchor member" of that
+/// set, so the claimant's signed session admits a node whether its anchor
+/// opened it, the ceremony's device key, or a second device key enrolled
+/// after the claim under a label of its own — the key an unattended console
+/// signs with — and from a content-scoped session too, the scope barring
+/// credential deposits and nothing else (AUTH-4.39). No key of the set is
+/// the registrar's alone, and none is shut out.
+#[test]
+fn the_registrar_admits_a_node_under_any_key_of_the_claimants_set() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let node = |addr: &str| format!(r#"{{"op":"register_node","addr":"{addr}"}}"#);
+    let admitted = |token: &str, addr: &str, who: &str| {
+        let v = op(port, Some(token), &node(addr));
+        assert_eq!(v["resp"].as_str(), Some("ack_addr"), "{who}: {v}");
+        assert_eq!(acked_addr(&v), addr, "{who}");
+    };
+
+    let anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
+    admitted(&anchor, "1.71", "the anchor's session");
+    let device = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    admitted(&device, "1.72", "the ceremony's device key's session");
+
+    // A second device key, enrolled into the claimant's own set from its
+    // device session under a label of its own.
+    let console_key = distinct_key(73);
+    let entry = Enrollment::new(public_key_of(&console_key), false, Some("registrar-console".into()))
+        .expect("a legal label");
+    let ordinal = next_content_ordinal(port, Some(&device), CLAIMANT_DOC1);
+    let record = land_claimant_record(port, &device, ordinal, &json_atom(&encode_enroll(&[entry])), T_ENROLL);
+    expect_resp(&deposit(port, &device, &record, T_ENROLL), "ack_addr");
+    let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
+    let enrolled = expect_resp(&v, "key_set")["enrolled"].as_array().expect("enrolled").clone();
+    let console_entry = enrolled
+        .iter()
+        .find(|e| e["fingerprint"].as_str() == Some(fingerprint_hex(&console_key).as_str()))
+        .unwrap_or_else(|| panic!("the console's key is enrolled: {v}"));
+    assert_eq!(console_entry["anchor"], serde_json::json!(false), "a non-anchor member: {v}");
+    assert_eq!(enrolled.len(), 3, "the anchor, the device key and the console's: {v}");
+    let console = open_signed_session(port, CLAIMANT_PRINCIPAL, &console_key);
+    admitted(&console, "1.73", "the second device key's session");
+
+    let content = open_content_session(port, CLAIMANT_PRINCIPAL, &console_key);
+    admitted(&content, "1.74", "a content-scoped session of the registrar's");
     sd.shutdown();
 }
 

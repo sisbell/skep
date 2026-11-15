@@ -499,19 +499,21 @@ fn an_id_on_a_read_frame_never_memoizes_the_answer() {
 /// wire.md §Operations: a node address "is capped at 32 components —
 /// deeper is `too_deep`". Both ends of that comparison at the wire, and
 /// the only place in this crate that produces the code at all — its wire
-/// name is otherwise emitted by `code_name` and read back by nothing.
+/// name is otherwise emitted by `code_name` and read back by nothing. The
+/// code is the store's, behind the registrar's gate, so the session is the
+/// registrar's: the claimant's signed one.
 #[test]
 fn the_node_depth_cap_is_exactly_32_components_on_the_wire() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
-    let boot = open_session(port, 0);
+    let registrar = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let node = |n: usize| vec!["1"; n].join(".");
 
-    let v = op(port, Some(&boot), &format!(r#"{{"op":"register_node","addr":"{}"}}"#, node(32)));
+    let v = op(port, Some(&registrar), &format!(r#"{{"op":"register_node","addr":"{}"}}"#, node(32)));
     assert_eq!(acked_addr(&v), node(32), "a node AT the depth cap registers");
 
-    let v = op(port, Some(&boot), &format!(r#"{{"op":"register_node","addr":"{}"}}"#, node(33)));
+    let v = op(port, Some(&registrar), &format!(r#"{{"op":"register_node","addr":"{}"}}"#, node(33)));
     let rej = expect_resp(&v, "rejected");
     assert_eq!(rej["op"].as_str(), Some("register_node"));
     assert_eq!(rej["code"].as_str(), Some("too_deep"), "the documented code: {v}");

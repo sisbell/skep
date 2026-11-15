@@ -558,22 +558,35 @@ fn i3_c_edit_link_takes_the_gate_on_the_claim_s_own_home() {
 
 /// I3.e — the domain is stated over every op, the ungated ones named and
 /// conceded (PUB-6.34): a bare `delegate` from principal 0 mints an account;
-/// a bare `register_node` admits a node; the new account's bare first mint is
-/// the content-empty home; and a bare `delegate` beneath one's own account is
-/// the never-keyed residue (PUB-1.42) — each admitted, none published-landing.
+/// the new account's bare first mint is the content-empty home; and a bare
+/// `delegate` beneath one's own account is the never-keyed residue
+/// (PUB-1.42) — each admitted, none published-landing. `register_node` is
+/// not among them: it is the registrar's alone (REG-2.1), so the bare
+/// sessions that delegate here — principal 0's, the new account's and the
+/// owner's own — are each refused it `signed_session_required`, nothing
+/// committed, and the owner's signed session, the registrar's, admits the
+/// node.
 #[test]
-fn i3_e_delegate_and_register_node_stand_outside_the_gate() {
+fn i3_e_delegate_stands_outside_the_gate_and_register_node_is_the_registrars() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
-    let (acct, sess) = bootstrap_delegate(port, 941);
+    let boot = open_session(port, 0);
+    let (acct, sess) = delegate_under(port, &boot, "1", 941);
     assert!(acct.starts_with("1.0."), "a top-level account: {acct}");
-    expect_resp(&op(port, Some(&sess), r#"{"op":"register_node","addr":"1.9"}"#), "ack_addr");
+    let node = r#"{"op":"register_node","addr":"1.9"}"#;
+    let before = head_position(port);
+    for (who, bare) in [("principal 0", &boot), ("the new account", &sess), ("the owner", &owner)] {
+        assert_eq!(verdict(&op(port, Some(bare), node)), GATED, "I3.e: {who}'s bare register_node");
+    }
+    assert_eq!(head_position(port), before, "a refused register_node commits nothing");
     let home = create_doc(port, &sess, &acct);
     assert_eq!(home, format!("{acct}.0.1"));
     let (nested, _) = delegate_under(port, &owner, CLAIMANT_ACCOUNT, 942);
     assert!(nested.starts_with(&format!("{CLAIMANT_ACCOUNT}.")), "beneath the owner's account: {nested}");
+    let registrar = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    assert_eq!(acked_addr(&op(port, Some(&registrar), node)), "1.9", "the registrar's signed session admits it");
     sd.shutdown();
 }
 

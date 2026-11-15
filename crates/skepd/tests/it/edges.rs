@@ -454,15 +454,17 @@ fn the_budgets_pair_is_said_at_the_65th_stream_and_at_the_first_admission_a_hold
     // commit wakes the parked subscriber, whose failed write ends it, and
     // the next admission reaps it (`events.rs` states why one commit does
     // not settle it). The clock is moved a whole hold-down before EVERY
-    // attempt, since a refused attempt restarts the hold-down.
+    // attempt, since a refused attempt restarts the hold-down. The commit is
+    // a `register_node`, from the one session that is admitted it: the
+    // registrar's, the claimant's signed one.
     drop(held.pop());
-    let boot = open_session(port, 0);
+    let registrar = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut node = 2_000u64;
     let _admitted = loop {
         sd.daemon().advance_edge_clock_ms(PAST_THE_HOLD_DOWN_MS);
         node += 1;
-        let v = op(port, Some(&boot), &format!(r#"{{"op":"register_node","addr":"1.{node}"}}"#));
+        let v = op(port, Some(&registrar), &format!(r#"{{"op":"register_node","addr":"1.{node}"}}"#));
         assert!(v["at"].is_u64(), "the poll's commit must actually commit: {v}");
         let (s, head) = raw_events(port);
         if head.starts_with(b"HTTP/1.1 200 ") {

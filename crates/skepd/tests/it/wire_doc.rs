@@ -630,6 +630,59 @@ fn doc_states_the_well_known_mint_its_refusals_and_its_feed_row() {
     );
 }
 
+/// The registrar's gate (REG-2.1) as the contract states it. `register_node`'s
+/// row says the op is the registrar's alone — the claimant account's own
+/// principal in a signed session, under any key of its set — and names each
+/// refused caller's answer by its token, the store's codes behind the gate;
+/// §Credential refusals carries the gate in a paragraph of its own, with
+/// `not_registrar`'s class and the sessions the claimant's own keys open
+/// that it refuses, and holds the op's own arm of the board-state gate on
+/// the claimed side and its name on the unclaimed one; and §Identity's modes
+/// carry the one write a signed session is not admitted for the asking. The
+/// daemon's answers are pinned in `auth_wire/gates.rs`, `register.rs` and
+/// `authz.rs`; this pins that the contract says so.
+#[test]
+fn doc_states_register_nodes_gate_and_each_refused_callers_answer() {
+    let row = op_row("register_node");
+    for fact in [
+        "It is THE REGISTRAR's ALONE (REG-2.1)",
+        "the CLAIMANT account's own principal in a SIGNED session",
+        "under any key of that account's set, from a full session or a content-scoped one",
+        "a guest, `unauthenticated`",
+        "on an UNCLAIMED board, `credential_refused:claim_first`, bare and signed sessions alike",
+        "a BARE session `credential_refused:signed_session_required`, whatever its principal",
+        "a SIGNED session that is not the registrar's `credential_refused:not_registrar`",
+        "stand behind the gate: the registrar alone is answered them",
+        "The op takes no `attest`",
+    ] {
+        assert!(row.contains(fact), "the register_node row says {fact:?}: {row}");
+    }
+    let refusals = prose("\n### Credential refusals", &["\n## Operations"]);
+    for fact in [
+        "**The registrar's gate** (`credential_refused`; REG-2.1)",
+        "under ANY key of that account's enrolled set",
+        "on an UNCLAIMED board, `claim_first`",
+        "from a BARE session on a claimed board, `signed_session_required`",
+        "`not_registrar` — from a SIGNED session on a claimed board that is not the registrar's",
+        "the gate reads the principal the session names, never the key set that opened it",
+        "PERMANENT like the family's: a session's principal is fixed at its open and a board's claimant never changes",
+        "A guest answers `unauthenticated` ahead of all three",
+        "ONE write is judged by none of this and takes the arm below, from every session: `register_node`",
+        "claimed, `register_node` alone — THE REGISTRAR'S ARM (REG-2.1; the registrar's gate, above)",
+        "every other write refuses, `register_node` among them",
+    ] {
+        assert!(refusals.contains(fact), "§Credential refusals says {fact:?}");
+    }
+    let modes = prose("\n### Identity — modes, principals, credentials", &["\n### The read predicate"]);
+    for fact in [
+        "bare writes landing in the published world and a bare `register_node` still refuse (`signed_session_required`)",
+        "`register_node` is the board's REGISTRAR's alone",
+        "a signed session of anyone else is refused `not_registrar`",
+    ] {
+        assert!(modes.contains(fact), "§Identity's modes say {fact:?}");
+    }
+}
+
 /// The any-principal discovery row (PUB-8.47) carries the facts a client
 /// builds on, each in the row itself: no argument, prefix order, empty for
 /// a guest, the served prefix the COVERED one and never the stored prefix,

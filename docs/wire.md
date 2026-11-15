@@ -161,11 +161,17 @@ is deliberately no `mode` field; clients derive it from the pair):
 * **CLAIMED-PERMISSIVE** — claimed, `--local-trust` on (the default). A
   bare session still binds on loopback: any local party may write as any
   principal. That is the default's disclosed cost, and the daemon warns
-  about it at startup and again at the claim flip. Credential deposits
-  and bare writes landing in the published world still refuse
-  (`signed_session_required`).
+  about it at startup and again at the claim flip. Credential deposits,
+  bare writes landing in the published world and a bare `register_node`
+  still refuse (`signed_session_required`).
 * **ENFORCING** — claimed, `--local-trust` off. Bare sessions are
   refused; only signed sessions write.
+
+One write is admitted from ONE account's signed sessions and no other's,
+in either claimed mode: `register_node` is the board's REGISTRAR's alone
+— the claimant account's own principal in a signed session — and a
+signed session of anyone else is refused `not_registrar` (§Credential
+refusals, the registrar's gate).
 
 The signed session is cryptographic identity — a challenge signed by a
 key enrolled for the account the session authenticates against
@@ -2839,6 +2845,35 @@ PERMANENT like the family's, naming the act that exists), beside
   asked to claim first and none is told `not_owner`. The act that exists
   is the mailbox of an account of your own.
 
+**The registrar's gate** (`credential_refused`; REG-2.1): `register_node`
+(§Namespace) admits a node address to the board, and only the board's
+REGISTRAR runs it — the CLAIMANT account's own principal in a SIGNED
+session, under ANY key of that account's enrolled set: an anchor, a
+device key, the labeled device key an unattended console signs with. A
+content-scoped session of the registrar's (§Sessions) is admitted as a
+full one is. Every other caller is answered by what it is, at the
+board-state gate of the write order below, and commits nothing:
+
+* on an UNCLAIMED board, `claim_first` — from bare and signed sessions
+  alike, the claimant-to-be's own included: a board with no claimant has
+  no registrar.
+* from a BARE session on a claimed board, `signed_session_required` —
+  whatever principal it binds, the claimant's own and principal `0`
+  included.
+* `not_registrar` — from a SIGNED session on a claimed board that is not
+  the registrar's: another account's; principal `0`'s; and one of a
+  keyless account beneath the claimant's. The last two are opened by the
+  claimant's own keys (§Sessions) and are refused all the same — the gate
+  reads the principal the session names, never the key set that opened
+  it. PERMANENT like the family's: a session's principal is fixed at its
+  open and a board's claimant never changes, so the same request is never
+  admitted; the act that exists is the registrar's own.
+
+A guest answers `unauthenticated` ahead of all three, as on every write.
+The gate stands ahead of the store, so a refused caller is told nothing
+of the address it named — not whether the node stands (`not_fresh`), not
+whether it is too deep (`too_deep`).
+
 **The media door's four tokens** (media lanes A and B; §Media under
 §Operations): `unbound_cell`, `unknown_cell_schema` and `lease_lapsed`,
 PERMANENT like the family's, and `index_rebuilding`, RETRY — the rebuild window's
@@ -2955,12 +2990,21 @@ resolves AFTER every token below.
      (`create_well_known_document`, private always), draft writes, bare
      reads, `delegate` and the home mint from a bare session are outside
      the gate; the home mint from a signed session is publish-class and
-     takes the check (§Namespace).
+     takes the check (§Namespace). ONE write is judged by none of this and
+     takes the arm below, from every session: `register_node`.
+   * claimed, `register_node` alone — THE REGISTRAR'S ARM (REG-2.1; the
+     registrar's gate, above): `signed_session_required` from a BARE
+     session, whatever its principal, and `not_registrar` from a SIGNED
+     session that is not the registrar's, the claimant account's own
+     principal under any key of its set. The registrar's `register_node`
+     is admitted and carries no `attest`: the op is none of the ten kinds,
+     and a member presented beside it is dropped, never verified.
    * unclaimed — `claim_first`: an unclaimed daemon admits only the
      ceremony's own shape — `delegate` from principal 0, a
      `create_new_document` into an account holding no documents, an
      `insert` into the caller's own doc 1 — from bare and signed
-     sessions alike; every other write refuses. Reads are untouched.
+     sessions alike; every other write refuses, `register_node` among
+     them. Reads are untouched.
 5. The `nullify` CLASS — three cells, one for each class of target link
    the write path recognizes off its own type-recognition input (the
    credential kinds, the GRANTS class, and PUB-6.64's audit-view classes;
@@ -3250,6 +3294,22 @@ provisioning path, so it is capped at 32 components — deeper is `too_deep`.
 → `ack_addr`. An `addr` that is not T4-valid is `not_valid`; one that is
 not a descendant of the bootstrap node `1` is
 `not_descendant_of_bootstrap`.
+
+It is THE REGISTRAR's ALONE (REG-2.1): the board admits a node from the
+CLAIMANT account's own principal in a SIGNED session — under any key of
+that account's set, from a full session or a content-scoped one — and
+from no one else. Every other caller is refused ahead of the store, by
+what it is, and nothing commits: a guest, `unauthenticated`; on an
+UNCLAIMED board, `credential_refused:claim_first`, bare and signed
+sessions alike; on a claimed board, a BARE session
+`credential_refused:signed_session_required`, whatever its principal,
+and a SIGNED session that is not the registrar's
+`credential_refused:not_registrar` — another account's, principal `0`'s,
+one of an account beneath the claimant's (§Credential refusals, the
+registrar's gate). Each is permanent. The store's own codes — `too_deep`,
+`not_valid`, `not_node`, `not_descendant_of_bootstrap`, and `not_fresh`
+for a node already admitted — stand behind the gate: the registrar alone
+is answered them. The op takes no `attest`.
 
 <!-- wire: request register_node -->
 ```json

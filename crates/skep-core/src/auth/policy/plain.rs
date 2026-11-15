@@ -4,7 +4,8 @@
 //! sole-writer fences of the two commons classes with one writer (the
 //! `replaces` class's and the correspondence class's, one producer), the
 //! claim-complementary board-state pair and the nullify class — with the
-//! publish-class classification (PUB-6.43) the pair reads and the
+//! publish-class classification (PUB-6.43) the pair reads, the registrar's
+//! gate on `register_node` its claimed arm holds (REG-2.1), and the
 //! type-recognition input the nullify class reads. Beside them stand a
 //! publication's two reads ahead of the lock, both off the snapshot the
 //! daemon takes before its permit: its price against the in-lock budgets
@@ -870,19 +871,22 @@ fn published(world: &World, doc: &Address) -> bool {
 
 /// Answers the plain path's admission at the two board-state gates (AUTH-3.78).
 ///
-/// It is dispatched on claimed-ness: once claimed, the publish-class gate
-/// (RES-26 — PUB's section "The public-permanent gate" —
-/// `signed_session_required`) and — behind it, on the same classification
-/// (signed ops; the design record §4.5 (1)–(2), §5.5) — the write-path
-/// check; unclaimed, the pre-claim admission gate (RES-27, `claim_first`).
-/// Exact under the read guard: the claim commits only under
+/// It is dispatched on claimed-ness: once claimed, the registrar's gate for
+/// a `register_node` ([`registrar_refusal`], REG-2.1) and, for every other
+/// write, the publish-class gate (RES-26 — PUB's section "The
+/// public-permanent gate" — `signed_session_required`) and — behind it, on
+/// the same classification (signed ops; the design record §4.5 (1)–(2),
+/// §5.5) — the write-path check; unclaimed, the pre-claim admission gate
+/// (RES-27, `claim_first`), which refuses a `register_node` from every
+/// session. Exact under the read guard: the claim commits only under
 /// `credential_lock.write()`.
 ///
 /// **The answer is what reaches the store.** `Ok(Some(a))` is an attestation
 /// the check verified, to be written into this write's marker slot;
 /// `Ok(None)` is a write that reaches the store with the marker slot empty —
 /// no `attest` demanded, or one dropped, never verified and never written:
-/// off the publish class (signed-ops D1); on the unclaimed board (A5: the
+/// off the publish class (signed-ops D1), the registrar's `register_node`
+/// among them, which no entry frame covers; on the unclaimed board (A5: the
 /// ceremony's own span, where an `attest` a cautious client attached could
 /// verify under no key); on the claimed board where the check stands aside
 /// — outside the checked set, at a credential or registry record deposit's
@@ -907,10 +911,12 @@ fn published(world: &World, doc: &Address) -> bool {
 ///
 /// # Errors
 ///
-/// On a claimed board, `signed_session_required` for a publish-class write
-/// from a bare session, then the write-path check's refusals
-/// ([`attestation_check`]); on an unclaimed board, the pre-claim gate's
-/// `system_account_keyless` or `claim_first` ([`pre_claim_gate`]).
+/// On a claimed board, for a `register_node`, the registrar's gate's
+/// `signed_session_required` or `not_registrar` ([`registrar_refusal`]) and
+/// nothing behind it; for any other write, `signed_session_required` for a
+/// publish-class write from a bare session, then the write-path check's
+/// refusals ([`attestation_check`]). On an unclaimed board, the pre-claim
+/// gate's `system_account_keyless` or `claim_first` ([`pre_claim_gate`]).
 fn board_state_admission(
     _lock: &LockRead<'_>,
     world: &World,
@@ -919,7 +925,16 @@ fn board_state_admission(
     signer: Option<&Fingerprint>,
     presented: Option<Attestation>,
 ) -> Result<Option<Attestation>, CredentialRefusal> {
-    if world.identity().claimant().is_some() {
+    if let Some(claimant) = world.identity().claimant() {
+        // The registrar's gate (REG-2.1), ahead of the publish class, which
+        // holds no row for the op: a `register_node` is judged here whole,
+        // and the `attest` a client attached to one is dropped, unverified.
+        if let Op::RegisterNode { .. } = op {
+            return match registrar_refusal(world, claimant, principal, signer) {
+                Some(r) => Err(r),
+                None => Ok(None),
+            };
+        }
         // A1: the check runs on a claimed board — every write reaching this
         // arm is above the claim entry, the claim having committed before
         // the snapshot it reads was taken.
@@ -936,6 +951,61 @@ fn board_state_admission(
             Some(r) => Err(r),
             None => Ok(None),
         }
+    }
+}
+
+/// Answers the registrar's gate on a claimed board's `register_node`.
+///
+/// The op admits a node address to the board, and only the registrar runs
+/// it (REG-2.1). The registrar is the claimant account's own principal —
+/// the one seated at `claimant`, M3's `principal_prefix` — in a signed
+/// session, whichever key of that account's set opened it: an anchor, a
+/// device key, or the labeled registrar device key an unattended console
+/// signs with (REG-4.108, REG-4.109). No key is compared here. The session
+/// layer keeps a signed binding live only while its key stands in the set
+/// that opens the principal's account, and the claimant's own principal
+/// opens under the claimant's own set. A content-scoped session of the
+/// registrar's is admitted as a full one is: the scope bars credential
+/// deposits and nothing else (AUTH-4.39).
+///
+/// The test is the principal's own seat, never the set that authenticated
+/// the session. The bootstrap principal, and a principal of a keyless
+/// account beneath the claimant's, both authenticate against the claimant's
+/// set (AUTH-4.30 (i)), and neither is the registrar: REG-2.1 names the
+/// binding-writing account's own session, and REG-4.110 tells the
+/// claimant's session from the bootstrap principal's.
+///
+/// REG-2.1 names the registrar by role, the binding-writing account: the
+/// registry board's claimant at the root, the delegating board's at depth,
+/// a fork's seat on a forked lineage. A daemon serves one board, so at the
+/// root and at every depth that role is this board's claimant, which is all
+/// this gate reads; REG-1.59 leaves the depth bound owed, and none is kept
+/// here. A fork's seat is known to the daemon as configuration alone, the
+/// blocked-prefix list's header (`BlockedHeader::binding_writer`), which
+/// this producer is not handed: on a forked lineage whose header names a
+/// seat, the gate admits the claimant and answers the seat `not_registrar`.
+///
+/// `None` admits. A caller refused is answered by what it is:
+///
+/// 1. a bare session, whatever its principal: `signed_session_required`;
+/// 2. a signed session of any principal but the registrar's:
+///    `not_registrar`.
+///
+/// An unclaimed board's `register_node` never reaches this gate:
+/// [`pre_claim_gate`] answers it `claim_first`.
+fn registrar_refusal(
+    world: &World,
+    claimant: &Address,
+    principal: PrincipalId,
+    signer: Option<&Fingerprint>,
+) -> Option<CredentialRefusal> {
+    if signer.is_none() {
+        return Some(CredentialRefusal::SignedSessionRequired);
+    }
+    if world.m3().principal_prefix(principal) == Some(claimant) {
+        None
+    } else {
+        Some(CredentialRefusal::NotRegistrar)
     }
 }
 
@@ -973,8 +1043,9 @@ fn board_state_admission(
 ///   (RES-3's owed input).
 ///
 /// A flagless `create` into an account holding documents, and a flagless
-/// `fork`, resolve draft (outside); `delegate`/`register_node` present no
-/// input form here.
+/// `fork`, resolve draft (outside); `delegate` presents no input form here.
+/// Neither does `register_node`, which never reaches this classification:
+/// the registrar's gate judges it ahead (`registrar_refusal`, REG-2.1).
 ///
 /// Registration and ω stand ahead (PUB-6.37, PUB-6.36 slot 1) on every arm
 /// that reads a home or a target — the homed writes, `edit_link`'s two
@@ -1156,7 +1227,9 @@ fn publish_class(world: &World, op: &Op, principal: PrincipalId, signed: bool) -
 /// since that account holds no key and the plant it would seed is the one
 /// `claim_residue` cannot count. The credential deposits' pre-claim cells
 /// are the precheck's slot (8), never this producer's. Everything else
-/// refuses `claim_first`, bare and signed sessions alike.
+/// refuses `claim_first`, bare and signed sessions alike — a `register_node`
+/// among them, the registrar's gate's answer on a board that has no
+/// registrar yet (REG-2.1).
 fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<CredentialRefusal> {
     let admitted = match op {
         Op::Delegate { .. } => principal == BOOTSTRAP_PRINCIPAL,
@@ -1186,6 +1259,10 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
             }
             own_doc_one
         }
+        // An unclaimed board has no registrar, so no session admits a node
+        // (REG-2.1): `claim_first`, as the wildcard below would answer.
+        // Spelled out rather than left to it, so the decision is read here.
+        Op::RegisterNode { .. } => false,
         // Fail-closed, which is why this arm may be a wildcard where
         // `deposits_credential_link`'s may not: a new op defaults to
         // `claim_first` and costs its author one decision, rather than

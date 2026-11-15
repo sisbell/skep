@@ -781,8 +781,12 @@ fn the_testimony_names_the_key_that_signed_the_session() {
 /// where the frame names none, a landing into a plain draft carrying its
 /// merge beside a null base — and NOTHING on any other row — `emit`'s among
 /// them, which mints a link too and carries no `link` (r6-2a names
-/// `make_link` alone). Every write here is a bare session's, so every row
-/// carries `key: "bare"` and no `attest`.
+/// `make_link` alone). Every write here is a bare session's but one, so
+/// every row but one carries `key: "bare"` and no `attest`. The one is
+/// `register_node`, the registrar's alone (REG-2.1): the claimant's signed
+/// session sends it, and its row carries the fingerprint of the key that
+/// opened that session — and no `attest` either, the op having no entry
+/// frame to sign.
 #[test]
 fn the_affected_docs_convention_holds_for_every_write_kind() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -969,8 +973,25 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
     fn op_of(what: &str) -> &str {
         what.split_whitespace().next().expect("row names its op")
     }
+    // The registrar's session, for the one row a bare session is refused:
+    // the claimant's, signed by the ceremony's device key, whose fingerprint
+    // is read off `key_set` as the wire publishes it.
+    let registrar = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
+    let registrar_key = v["enrolled"]
+        .as_array()
+        .expect("enrolled")
+        .iter()
+        .find(|e| e["anchor"] == Value::Bool(false))
+        .and_then(|e| e["fingerprint"].as_str())
+        .expect("the ceremony enrolls one non-anchor device key")
+        .to_string();
     for (what, frame, docs) in rows.drain(..) {
-        let (_, entry) = feed_entry(port, &s1, what, &frame);
+        let (writer, key) = match what {
+            "register_node" => (registrar.as_str(), registrar_key.as_str()),
+            _ => (s1.as_str(), "bare"),
+        };
+        let (_, entry) = feed_entry(port, writer, what, &frame);
         assert_eq!(entry["op"].as_str(), Some(op_of(what)), "{what}: the entry's op kind");
         assert_eq!(entry["docs"], docs, "{what}: the affected-docs convention");
         // The terms: `emit` and `assert_sup` mint a link and carry no
@@ -986,7 +1007,7 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
             assert!(entry["base"].is_null(), "{what}: no base named: {entry}");
             assert_eq!(entry["merge"], serde_json::json!({"head": doc_a, "sides": []}), "{what}: the request's merge: {entry}");
         }
-        assert_eq!(entry["key"].as_str(), Some("bare"), "{what}: a bare session's write");
+        assert_eq!(entry["key"].as_str(), Some(key), "{what}: the writing session's testimony");
         assert_absent(&entry, &["attest"], what);
     }
     for (what, frame) in minting {

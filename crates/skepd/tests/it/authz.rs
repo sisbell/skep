@@ -34,9 +34,15 @@ use skep_identity::{encode_retire, Fingerprint};
 //   * `delegate`'s pinned rejection order (M3 §6): a non-ancestor delegator
 //     is `not_ancestor` BEFORE authorization; an ancestor that is not
 //     ω(new_prefix) is `not_authorized` (the parent-of-owner cell).
-//   * `register_node` takes NO principal in the store (provisioning is
-//     authentication-gated only) — every bound session may admit a fresh
-//     node. Recorded here as a reviewed fact of the local-trust scope.
+//   * `register_node` takes NO principal in the store, so the store gates
+//     it on nothing; the daemon's admission does, ahead of the store
+//     (REG-2.1): only the registrar admits a node — the claimant account's
+//     own principal in a signed session. Every matrix column is someone
+//     else: the four bare columns answer `signed_session_required`, the
+//     guest and stale columns M10's `unauthenticated` ahead of the gate, and
+//     the content rows' two signed sessions of X's — not the claimant's —
+//     `not_registrar`. The success half is asserted beside each walk
+//     (`the_registrar_admits_a_node`).
 //   * `create_well_known_document` names its account, as
 //     `create_new_document` does, and the store gates it on that account's
 //     ω alone. It is safe to call again, so the owner's cell is `ok` on
@@ -90,8 +96,12 @@ const COLS: [&str; 6] =
 const OK: &str = "ok";
 const NOT_OWNER: &str = "not_owner";
 const UNAUTHENTICATED: &str = "unauthenticated";
-/// The RES-26 refusal, `code:detail` (the `auth_wire` convention).
+/// The RES-26 refusal, `code:detail` (the `auth_wire` convention) — and the
+/// registrar's gate's answer to a bare session (REG-2.1).
 const SIGNED_SESSION_REQUIRED: &str = "credential_refused:signed_session_required";
+/// The registrar's gate's answer to a signed session that is not the
+/// registrar's (REG-2.1): `register_node` from any account but the claimant's.
+const NOT_REGISTRAR: &str = "credential_refused:not_registrar";
 /// PUB-2.9's refusal (the store's, lane 3.1): the OWNER's `version` of its
 /// own private draft — the version chain is publication's own, so a draft
 /// is versionless; the foreign columns fork the same source into their
@@ -115,7 +125,12 @@ const MATRIX: &[Row] = &[
     // ── namespace writes ──                    owner sibling         child           parent            guest            stale
     Row { label: "create_new_document",   expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
     Row { label: "delegate",              expect: [OK, "not_ancestor", "not_ancestor", "not_authorized", UNAUTHENTICATED, UNAUTHENTICATED] },
-    Row { label: "register_node",         expect: [OK, OK,             OK,             OK,               UNAUTHENTICATED, UNAUTHENTICATED] },
+    // ── the registrar's gate (REG-2.1): no column is the claimant's signed
+    //    session, so every bare column is refused; M10 stands ahead for the
+    //    guest and the stale token ──
+    Row { label: "register_node",         expect: [SIGNED_SESSION_REQUIRED, SIGNED_SESSION_REQUIRED,
+                                                   SIGNED_SESSION_REQUIRED, SIGNED_SESSION_REQUIRED,
+                                                                                                         UNAUTHENTICATED, UNAUTHENTICATED] },
     Row { label: "fork",                  expect: [OK, OK,             OK,             OK,               UNAUTHENTICATED, UNAUTHENTICATED] },
     Row { label: "create_well_known_document",
                                           expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
@@ -626,6 +641,26 @@ fn signed_claimant_writes_its_published_doc1(port: u16, walk: &str) {
     assert_eq!(verdict(&v), OK, "{walk}: the same write, signed, lands: {v}");
 }
 
+/// The `register_node` row's registrar arm (REG-2.1): the write every matrix
+/// column is refused is accepted from the registrar's session — the
+/// claimant account's own principal, signed — and from no bare session of
+/// that same principal. Walked each life, as the publish row's signed arm
+/// is: the registrar is read off the registry, the claim and its keys, so a
+/// post-restart handshake must still sign in and admit a node.
+fn the_registrar_admits_a_node(port: u16, counters: &Counters, walk: &str) {
+    let frame = format!(r#"{{"op":"register_node","addr":"1.{}"}}"#, Counters::next(&counters.node));
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let v = op(port, Some(&bare), &frame);
+    assert_eq!(
+        verdict(&v),
+        SIGNED_SESSION_REQUIRED,
+        "{walk}: the claimant's bare register_node: {v}"
+    );
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let v = op(port, Some(&signed), &frame);
+    assert_eq!(verdict(&v), OK, "{walk}: the same node, from the registrar's signed session: {v}");
+}
+
 // ── the tests ────────────────────────────────────────────────────────────
 
 /// The matrix, walked twice around a restart. Life 0 exists only to mint a
@@ -656,6 +691,7 @@ fn authorization_matrix_holds_and_survives_restart() {
         let fixture = build_fixture(port, &boot, &tokens, &counters, true);
         walk_matrix(port, &fixture, &tokens, &stale0, &counters, &granted, "walk 1");
         signed_claimant_writes_its_published_doc1(port, "walk 1");
+        the_registrar_admits_a_node(port, &counters, "walk 1");
         let stale1 = tokens.owner.clone();
         sd.shutdown();
         (fixture, stale1)
@@ -673,6 +709,7 @@ fn authorization_matrix_holds_and_survives_restart() {
         let tokens = open_tokens(port);
         walk_matrix(port, &fixture, &tokens, &stale1, &counters, &granted, "walk 2 (post-restart)");
         signed_claimant_writes_its_published_doc1(port, "walk 2 (post-restart)");
+        the_registrar_admits_a_node(port, &counters, "walk 2 (post-restart)");
         sd.shutdown();
     }
 }
@@ -757,7 +794,9 @@ const CONTENT_MATRIX: &[ScopeRow] = &[
     // ── content × each content write: the full session's own verdict ──
     ScopeRow { label: "create_new_document",          expect: [OK,                      OK] },
     ScopeRow { label: "delegate",                     expect: [OK,                      OK] },
-    ScopeRow { label: "register_node",                expect: [OK,                      OK] },
+    // The owner is not the claimant: its signed sessions, of either scope,
+    // are not the registrar's (REG-2.1).
+    ScopeRow { label: "register_node",                expect: [NOT_REGISTRAR,           NOT_REGISTRAR] },
     ScopeRow { label: "fork",                         expect: [OK,                      OK] },
     ScopeRow { label: "create_well_known_document",   expect: [OK,                      OK] },
     ScopeRow { label: "insert",                       expect: [OK,                      OK] },

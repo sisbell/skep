@@ -396,7 +396,10 @@ pub enum CredentialRefusal {
     /// `create_new_document`. Token `mint_home_public` — the wire's, tabled
     /// beside `mint_home_first` (wire.md §Credential refusals).
     MintHomePublic,
-    /// Slot (7), and the plain path's publish-class gate (RES-26).
+    /// Slot (7), and the plain path's two gates that ask for a signed session.
+    ///
+    /// The two are the publish-class gate (RES-26) and the registrar's gate
+    /// on `register_node`, which answers this to a bare session (REG-2.1).
     SignedSessionRequired,
     /// Slot (8), and the plain path's pre-claim admission gate (RES-27).
     ClaimFirst,
@@ -409,6 +412,22 @@ pub enum CredentialRefusal {
     /// PUB-6.63's verbatim: "this board carries pre-claim residue — re-genesis
     /// before claiming."
     ClaimResidue,
+    /// The registrar's gate on `register_node` (REG-2.1).
+    ///
+    /// A `register_node` on a claimed board from a signed session that is
+    /// not the registrar's. The op admits a node address to the board, and
+    /// only the registrar runs it: the claimant account's own principal,
+    /// under any key of that account's set. Every other signed session
+    /// answers this — another account's, the bootstrap principal's, and one
+    /// of an account beneath the claimant's that the claimant's keys open.
+    /// The gate's two other answers are the family's board-state tokens: a
+    /// bare session answers [`CredentialRefusal::SignedSessionRequired`],
+    /// and an unclaimed board [`CredentialRefusal::ClaimFirst`]. Token
+    /// `not_registrar`; permanent, the family's: a session's principal is
+    /// fixed at its open and the claimant never moves once seated
+    /// (AUTH-2.101), so no committed state admits the same request, and the
+    /// act that exists is the registrar's own.
+    NotRegistrar,
     /// The write-path check's first refusal (signed ops; A1).
     ///
     /// It is the design record's §4.5 (1): a dispatched, publish-class write
@@ -612,6 +631,7 @@ impl CredentialRefusal {
             CredentialRefusal::SignedSessionRequired => "signed_session_required".into(),
             CredentialRefusal::ClaimFirst => "claim_first".into(),
             CredentialRefusal::ClaimResidue => "claim_residue".into(),
+            CredentialRefusal::NotRegistrar => "not_registrar".into(),
             CredentialRefusal::AttestationRequired => "attestation_required".into(),
             CredentialRefusal::RecordSigRequired => "record_sig_required".into(),
             CredentialRefusal::SystemAccountKeyless => "system_account_keyless".into(),
@@ -737,14 +757,18 @@ mod tests {
         // A sig-less record atom and the system account's credential
         // deposit are `Permanent` — no committed state admits the same bytes
         // (SO-I7 (f)) — and so is the system account's well-known mint,
-        // which no state admits either (the mailbox design §2).
+        // which no state admits either (the mailbox design §2), and a
+        // `register_node` from a signed session that is not the registrar's,
+        // whose principal no state makes the claimant's (REG-2.1).
         for refusal in [
             CredentialRefusal::RecordSigRequired,
             CredentialRefusal::SystemAccountKeyless,
             CredentialRefusal::SystemAccountNoWellKnown,
+            CredentialRefusal::NotRegistrar,
         ] {
             assert_eq!(refusal.disposition(), Permanent, "{}", refusal.token());
         }
+        assert_eq!(CredentialRefusal::NotRegistrar.token(), "not_registrar");
         assert_eq!(CredentialRefusal::RecordSigRequired.token(), "record_sig_required");
         assert_eq!(CredentialRefusal::SystemAccountKeyless.token(), "system_account_keyless");
         assert_eq!(

@@ -40,7 +40,7 @@ const WALKS: &[&str] = &["accept", "claim", "enroll", "handoff", "recover", "ret
 
 /// The compositions every walk runs over.
 const COMPOSITIONS: &[&str] =
-    &["backup", "deposit", "enumerate", "first_session", "handshake", "import", "payload", "preview", "reads", "trail"];
+    &["backup", "deposit", "enumerate", "first_session", "handshake", "import", "payload", "preview", "reads", "registry_record", "trail"];
 
 #[test]
 fn a_walk_names_no_other_walk_and_a_composition_names_none() {

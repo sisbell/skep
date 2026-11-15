@@ -4,8 +4,9 @@
 //! command line opens with its [`Command`], one of §2.1's thirteen,
 //! `merge`, the fourteenth (the merge record's §6), `share`, the
 //! fifteenth (PUB-5.29; PUB-5.108), `restore`, the sixteenth (B3-S7),
-//! `hint`, the seventeenth (REG-3.2), or `resolve`, the eighteenth
-//! (REG-3.7), and is judged against `GRAMMAR`, one
+//! `hint`, the seventeenth (REG-3.2), `resolve`, the eighteenth
+//! (REG-3.7), or `deposit`, the nineteenth (REG-1.9), and is judged against
+//! `GRAMMAR`, one
 //! row per command beside `HELP`, the text that documents it: a flag in no
 //! row, a flag of another command's, a missing value, a value that is
 //! empty or is itself one of the grammar's flags, a second value of a flag
@@ -104,14 +105,16 @@ fn version_line(program: &str) -> String {
     )
 }
 
-/// One of the eighteen commands: the verb a command line opens with.
+/// One of the nineteen commands: the verb a command line opens with.
 ///
-/// The eighteen are `client.md` §2.1's thirteen, `merge`, the fourteenth
+/// The nineteen are `client.md` §2.1's thirteen, `merge`, the fourteenth
 /// (the merge record's §6), `share`, the fifteenth (PUB-5.29; PUB-5.108),
 /// `restore`, the sixteenth (B3-S7; `client.md` §4b.1's `history.restore`
 /// row), `hint`, the seventeenth (REG-3.2: a registry's root hint, read
-/// off its board), and `resolve`, the eighteenth (REG-3.7: the board a
-/// cross-board address lives on, found through the registry). A command is
+/// off its board), `resolve`, the eighteenth (REG-3.7: the board a
+/// cross-board address lives on, found through the registry), and
+/// `deposit`, the nineteenth (REG-1.9: a board's endpoint, deposited at
+/// its node account). A command is
 /// what `GRAMMAR`'s rows are keyed by, and what `main` dispatches on, one
 /// arm each, which the compiler holds exhaustive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -134,6 +137,7 @@ pub enum Command {
     Restore,
     Hint,
     Resolve,
+    Deposit,
 }
 
 impl Command {
@@ -158,6 +162,7 @@ impl Command {
             Command::Restore => "restore",
             Command::Hint => "hint",
             Command::Resolve => "resolve",
+            Command::Deposit => "deposit",
         }
     }
 }
@@ -182,7 +187,7 @@ pub struct Line<C> {
     switches: Vec<String>,
 }
 
-/// The `skep` command's line: one of the eighteen, and its flags.
+/// The `skep` command's line: one of the nineteen, and its flags.
 pub type CommandLine = Line<Command>;
 
 /// The flags every command takes, each taking one value.
@@ -250,10 +255,10 @@ impl Form {
     }
 }
 
-/// The grammar: the eighteen commands, each with its flags and its forms.
+/// The grammar: the nineteen commands, each with its flags and its forms.
 ///
 /// The commands are `client.md` §2.1's in set, `merge`, `share`, `restore`,
-/// `hint` and `resolve`, each
+/// `hint`, `resolve` and `deposit`, each
 /// with the flags §2.2 gives it and `HELP` documents, and the rules its
 /// forms hold them to — the forms the record's synopses draw:
 /// `keygen --anchors` (§2.2), `claim`'s notebook walk or `--hosted` (§4.5),
@@ -279,12 +284,16 @@ impl Form {
 /// the order given, and `--fork`, once, in the one form the command has;
 /// `resolve`'s is `--address`, the cross-board address, and `--root-hint`,
 /// the registry's root-hint line, a setting (`Line::root_hint`), each once,
-/// in the one form the command has.
+/// in the one form the command has; `deposit`'s is `--account`, the node
+/// account, once, as `bind` takes it, and `--origin`, which repeats, each
+/// value an origin of the board in the order a reader tries them, in the
+/// one form the command has.
 /// That a side and `--doc` are required at `merge`, a reader at `share`,
-/// both flags at `restore`, the board at `hint` and the address and the
-/// root hint at `resolve`, is the command's
+/// both flags at `restore`, the board at `hint`, the address and the
+/// root hint at `resolve` and the account and an origin at `deposit`, is
+/// the command's
 /// judgment, as `retire` judges its `--fingerprint`: no form says "one of".
-const GRAMMAR: [Row<Command>; 18] = [
+const GRAMMAR: [Row<Command>; 19] = [
     Row {
         command: Command::Keygen,
         once: &[],
@@ -407,9 +416,10 @@ const GRAMMAR: [Row<Command>; 18] = [
     Row { command: Command::Restore, once: &["--draft", "--at"], repeated: &[], switches: &[], forms: &[] },
     Row { command: Command::Hint, once: &["--fork"], repeated: &["--also"], switches: &[], forms: &[] },
     Row { command: Command::Resolve, once: &["--address", "--root-hint"], repeated: &[], switches: &[], forms: &[] },
+    Row { command: Command::Deposit, once: &["--account"], repeated: &["--origin"], switches: &[], forms: &[] },
 ];
 
-/// The help text: the eighteen commands and the flags each takes.
+/// The help text: the nineteen commands and the flags each takes.
 ///
 /// Each command is as the design writes it, and the text is the grammar
 /// above, documented beside it.
@@ -497,22 +507,35 @@ usage: skep <command> [flags]
                unregistered, retired, bound and not reachable, the hop
                not made — is said on stderr, nothing on stdout, exit 3;
                --json one object on stdout at every state; no person door
+  deposit      tell the registry where your board is: deposit the endpoint
+               of a registered board at its node account (--account), on
+               the board that account is on (--board), naming the board's
+               own origin (--origin, repeated in the order a reader tries
+               them); the account's home page is made first where it is
+               missing, born published; a later deposit names the one it
+               replaces, and nothing is erased; the record is signed by a
+               key of the node account's own set, the board owner's — the
+               service that hosts a board holds no such key and signs
+               nothing; stdout carries the endpoint's address, and under
+               it the address of the one it replaces; no person door
 
 flags (a flag beats its env variable; a variable set empty is unset):
   --board <origin>      the board, a canonical origin (env SKEP_BOARD)
   --dir <path>          the key store (env SKEP_KEYSTORE; default ~/.skep)
   --key <path>          one key file, bypassing the store's lookup (env
                         SKEP_KEY): read at session, verify, bind,
-                        fingerprint, merge, share, restore and accept
-                        --reprint, an anchor file refused where the key
-                        signs; refused where enroll and retire sign, their
-                        walks taking none yet; not consulted elsewhere
+                        fingerprint, merge, share, restore, deposit and
+                        accept --reprint, an anchor file refused where the
+                        key signs; refused where enroll and retire sign,
+                        their walks taking none yet; not consulted elsewhere
   --principal <n>       the principal (env SKEP_PRINCIPAL), read at
                         session, verify, enroll, recover, retire, rotate,
                         handoff, merge, share and restore — where omitted,
                         the store's one binding at the board; at bind, the
                         reply's where omitted; at claim, the new account's
-                        id, 1 where omitted; not consulted elsewhere
+                        id, 1 where omitted; at deposit, the one the board
+                        seats at --account where omitted; not consulted
+                        elsewhere
   --label <text>        a byline (keygen, rotate, accept)
   --json                one JSON document on stdout (verify, health,
                         fingerprint, resolve; merge, share and restore
@@ -591,6 +614,13 @@ flags (a flag beats its env variable; a variable set empty is unset):
             origins in the order they are tried, then realm:<64 hex>)
             [--dir <path>] (the mirror is kept under the key store, in
             registry/<the realm's 64 hex>/)
+  deposit:  --board <origin> (the board the node account is on: the
+            registry's)  --account <address> (the node account, in that
+            board's own form)  --origin <origin>... (the origin your
+            board answers at, then each further one, in the order a
+            reader tries them: written as given, and none dialed)
+            [--principal <n>]  [--key <path>] (else the store's key for
+            that board and principal)
 
 exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
 4 transport. stdout carries data; stderr carries talk. A retirement's

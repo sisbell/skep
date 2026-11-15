@@ -13,7 +13,9 @@
 //!    session is publish-class whatever its flag (PUB-6.43's exemption is
 //!    the bare session's alone; PUB-8.21) and so carries the `attest` over
 //!    the empty body, signed by the session's own key ([`home_frame`]) —
-//!    resumed by the doc-1 read there.
+//!    resumed by the doc-1 read there, the metadata read in its three arms
+//!    ([`document_present`]; REG-1.52): no document mints, a published home
+//!    resumes, and a draft home halts naming its act.
 //! 2. The setup act, AUTH-5.87's ops (1) and (3) at `inc(account, 1)`, only
 //!    where `key_set(account)` itself enrolls a key (the rule's own binding
 //!    class; a topic or an agent space holds no set and reserves no agent
@@ -49,7 +51,7 @@ use skep_identity::{entry_body_empty, ContentFreeOp, DocTerm, Fingerprint};
 
 use super::attest_member;
 use crate::address::{doc_1_of, first_child, parse_address};
-use crate::board::{acked_addr, frames, Answer, Board, KeySetAnswer, Rejection, Scope};
+use crate::board::{acked_addr, answers, frames, Answer, Board, KeySetAnswer, Rejection, Scope};
 use crate::ceremony::handshake::{handshake, Session, Site};
 use crate::derive::{principal_of, walk_to_set, KeyDiagnosis};
 use crate::halt::Halt;
@@ -111,22 +113,62 @@ impl FirstSessionReads {
     }
 }
 
-/// Returns whether `doc` stands — the doc-1 resume read.
+/// Returns whether the home `doc` stands published — the doc-1 resume read.
 ///
-/// AUTH-2.109; AUTH-5.56 boundary 2: `retrieve_doc_v_span_set` answers a
-/// span set, or `doc_not_registered`.
+/// It is the metadata read, in three arms (REG-1.52; AUTH-2.109; AUTH-5.56
+/// boundary 2), made as a guest: `doc_not_registered` is no document, and
+/// the caller mints; `doc_metadata` naming the home published is the home
+/// standing, and the caller resumes; a draft halts. A guest is answered a
+/// draft as `withheld`, which is only ever a registered private document
+/// (wire.md §The read predicate), and a reader the draft is open to is
+/// answered `published: false`: both are the draft arm. A read that stops
+/// on any document at the address cannot tell the two homes apart, and a
+/// record deposited into a draft home commits where no guest and no mirror
+/// reads it.
 ///
 /// # Errors
 ///
-/// Any other rejection is the board's refusal; otherwise
-/// [`Board::guest`]'s errors.
+/// A draft home halts naming its act, the out-of-band report (REG-4.77): a
+/// conforming board mints every home published (PUB-8.20, PUB-8.21;
+/// REG-1.53), so no act of this client clears the state. A `doc_metadata`
+/// answer without its `published` bit is faced as a fault of the board; any
+/// other rejection is the board's refusal; otherwise [`Board::guest`]'s
+/// errors.
 pub fn document_present(board: &Board, doc: &str) -> Result<bool, Halt> {
-    let v = board.guest(&frames::span_set(doc))?;
+    let v = board.guest(&frames::doc_metadata(doc))?;
     match Rejection::of(&v) {
-        None => Ok(true),
+        None => match answers::published(&v) {
+            Some(true) => Ok(true),
+            Some(false) => Err(draft_home(doc, "`doc_metadata` answered `published: false`")),
+            None => Err(Halt::face(
+                format!("{doc} answered a shape this client does not know"),
+                format!("`doc_metadata` answered no `published` bit (wire.md §Namespace): {v}"),
+                "this is a fault in this client or the board; nothing was written",
+            )),
+        },
         Some(r) if r.key() == "doc_not_registered" => Ok(false),
+        Some(r) if r.key() == "withheld" => Err(draft_home(doc, "`doc_metadata` answered a guest `withheld`, which is only ever a registered private document")),
         Some(r) => Err(r.refused(&v)),
     }
+}
+
+/// Returns the halt a draft home comes to, its act named (REG-1.52).
+///
+/// `read` is what the metadata read answered. The act is the party's
+/// out-of-band report at the published contact of the door that admitted
+/// the account (REG-4.77): the state is the board's to repair, and a
+/// re-run reads the same draft.
+fn draft_home(doc: &str, read: &str) -> Halt {
+    Halt::face(
+        format!("the home {doc} is a DRAFT, and nothing is written into it"),
+        format!(
+            "{read}: every account's home is minted published by the board's own act (PUB-8.20, PUB-8.21; REG-1.53), so a draft \
+             home is a state no conforming board produces — and a record deposited into it would commit where no guest and no \
+             mirror reads it (REG-1.52)"
+        ),
+        "report it OUT OF BAND at the published contact of the door that admitted this account — the registry's policy document \
+         names it (REG-4.77) — or to the board's operator; no command lands from here, and running this again reads the same draft",
+    )
 }
 
 impl FirstSessionReads {
@@ -513,5 +555,72 @@ pub(crate) fn delegate_persisted(
             "re-run `skep claim`",
         )),
         _ => Err(r.refused(&v)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::board::fake::{self, Fake};
+
+    const ACCOUNT: &str = "1.0.2";
+    const HOME: &str = "1.0.2.0.1";
+
+    /// What a board answers the two reads of a home in one state.
+    ///
+    /// `metadata` answers `doc_metadata`, the resume read; `span_set` what
+    /// the same board answers `retrieve_doc_v_span_set`, the read that stops
+    /// on any document at the address. Any other read panics.
+    fn home(metadata: Value, span_set: Value) -> std::sync::Arc<Fake> {
+        Fake::new(move |req| match fake::frame(req)["op"].as_str() {
+            Some("doc_metadata") => fake::json(200, metadata.clone()),
+            Some("retrieve_doc_v_span_set") => fake::json(200, span_set.clone()),
+            other => panic!("the resume read sends no {other:?}"),
+        })
+    }
+
+    fn rejected(code: &str) -> Value {
+        json!({"code": code, "disposition": "permanent", "op": "doc_metadata", "resp": "rejected"})
+    }
+
+    fn metadata(published: bool) -> Value {
+        json!({"as_of": 9, "doc": HOME, "owner": ACCOUNT, "published": published, "resp": "doc_metadata"})
+    }
+
+    /// REG-1.52: the resume read is the metadata read, in three arms.
+    ///
+    /// No document, and the caller mints; a published home, and it resumes;
+    /// a draft home halts naming its act, the out-of-band report, whether
+    /// the draft answers its own reader `published: false` or a guest
+    /// `withheld` — where a read of the home's span set, which a draft open
+    /// to its reader answers as a published home does, would resume into a
+    /// deposit no guest reads. The read is `doc_metadata` and nothing else,
+    /// and the composition's reads halt on a draft before any session
+    /// opens, so nothing is minted. Any other refusal is the board's own,
+    /// and an answer without its bit a fault of the board.
+    #[test]
+    fn the_resume_read_is_the_metadata_read_in_three_arms() {
+        let span_set = json!({"as_of": 9, "resp": "span_set", "set": [{"start": "1.1", "width": "0.2"}]});
+        let absent = home(rejected("doc_not_registered"), rejected("doc_not_registered"));
+        assert_eq!(document_present(&fake::board(&absent), HOME), Ok(false), "no document: the caller mints");
+        assert_eq!(document_present(&fake::board(&home(metadata(true), span_set.clone())), HOME), Ok(true), "a published home: the caller resumes");
+        for (draft, read) in [(home(metadata(false), span_set.clone()), "`published: false`"), (home(rejected("withheld"), rejected("withheld")), "`withheld`")] {
+            let halt = document_present(&fake::board(&draft), HOME).expect_err("a draft home halts");
+            let Halt::Halt(face) = &halt else { panic!("a halt's face, never the board's refusal passed through: {halt}") };
+            assert_eq!(face.state, format!("the home {HOME} is a DRAFT, and nothing is written into it"));
+            assert!(face.cause.contains(read) && face.cause.contains("REG-1.52"), "{}", face.cause);
+            assert!(face.act.starts_with("report it OUT OF BAND at the published contact of the door that admitted this account") && face.act.contains("REG-4.77"), "the act named: {}", face.act);
+            assert_eq!(halt.exit_code(), 3);
+            let taken = FirstSessionReads::take(&fake::board(&draft), ACCOUNT, &Fingerprint::parse_hex(&"ab".repeat(32)).expect("a fingerprint"), None);
+            assert_eq!(taken, Err(halt), "the composition's reads halt on the draft");
+            assert_eq!(draft.log(), ["POST /op doc_metadata", "POST /op doc_metadata"], "and nothing follows them: no session, no mint");
+        }
+        assert_eq!(absent.log(), ["POST /op doc_metadata"], "the one read, and it is the metadata read");
+        let refused = document_present(&fake::board(&home(rejected("not_a_document"), span_set.clone())), HOME).expect_err("another refusal");
+        assert!(matches!(&refused, Halt::Refused(r) if r.token() == "not_a_document"), "the board's own refusal: {refused}");
+        let shapeless = document_present(&fake::board(&home(json!({"as_of": 9, "resp": "doc_metadata"}), span_set)), HOME).expect_err("no bit");
+        assert!(shapeless.exit_code() == 3 && shapeless.to_string().contains("a shape this client does not know"), "{shapeless}");
     }
 }

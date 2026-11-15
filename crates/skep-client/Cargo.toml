@@ -5,19 +5,20 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "The library every acting skep client embeds: the one outbound dialer, bare and signed sessions, the key store, the signing seam over the hybrid key, the reader's verifier, the claim ceremony and the compositions every later ceremony runs over, and the grant — a share, a privash, a revoke and the lists (client.md)"
+description = "The library every acting skep client embeds: the one outbound dialer, bare and signed sessions, the key store, the signing seam over the hybrid key, the reader's verifier, the claim ceremony and the compositions every later ceremony runs over — the registry record a node account deposits among them — and the grant — a share, a privash, a revoke and the lists (client.md)"
 readme = "README.md"
 
 [features]
 # `acting` — the ACTING half (client.md §1.1's graph): `sign`, `store`,
 # `ceremony`, `person`, `sheet`, the reader's `verify`, `share` — the grant
-# composed and read, which signs — the `skep-resolve` edge, and the wipe of
-# the seed and of the sheet's text of it. DEFAULT ON. It alone turns
-# `skep-signature`'s `sign` on; a daemon that embeds this crate's dialer
-# takes it with `default-features = false`, so its build graph holds no
-# signer (AUTH-2.2 under feature unification).
+# composed and read, which signs — the `skep-resolve` edge, the
+# `skep-registry` edge the registry record's composition takes its
+# canonical encoder by, and the wipe of the seed and of the sheet's text of
+# it. DEFAULT ON. It alone turns `skep-signature`'s `sign` on; a daemon
+# that embeds this crate's dialer takes it with `default-features = false`,
+# so its build graph holds no signer (AUTH-2.2 under feature unification).
 default = ["acting"]
-acting = ["skep-signature/sign", "dep:skep-resolve", "dep:getrandom", "dep:zeroize"]
+acting = ["skep-signature/sign", "dep:skep-resolve", "dep:skep-registry", "dep:getrandom", "dep:zeroize"]
 # `tls` — `https://` through rustls and the platform verifier (§9 item 12).
 # OFF here; the `skep` binary and the frontend's shell turn it on. The
 # sidecar image builds the binary `--no-default-features`.
@@ -77,6 +78,12 @@ skep-signature = { path = "../skep-signature" }
 # The registry walk, over this crate's one dialer: the shell dials the board
 # the registry names (P25). Behind `acting`; no cycle, no second trait.
 skep-resolve = { path = "../skep-resolve", optional = true }
+# The registry's two bodies under their one canonical rule (REG-1.86 (h)):
+# the record a node account deposits is composed by its `encode` and read
+# back by its `parse`, and no encoder or parser of a body is written here;
+# its rows give each kind's type address. Behind `acting`,
+# which signs the record; already in the graph through `skep-resolve`.
+skep-registry = { path = "../skep-registry", optional = true }
 # The search index a client embeds (search.md §1.2) — the engine the
 # `search` module feeds and queries. Behind `search`, OFF by default; a
 # NORMAL dependency pointing DOWN (skep-search stands before this crate in

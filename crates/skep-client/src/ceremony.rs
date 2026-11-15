@@ -12,8 +12,14 @@
 //!   the record grade (the sig-less record, its `record` frame, the hand's
 //!   `sig` at the act's grade), then the insert, the re-read `from`, the
 //!   link, AUTH-5.6's `id`, AUTH-5.17's reconcile and the base armed set.
+//! * [`registry_record`] — the one registry-record composition (REG-1.86;
+//!   REG-2.23): the canonical body, its `record` frame and the hand's
+//!   `sig`, the cap, the declared insert and its re-read `from`, the link —
+//!   and, for an endpoint, the read of the deposit a later one names
+//!   (REG-1.10).
 //! * [`first_session`] — the one first-signed-session composition
-//!   (AUTH-5.90 (iii); AUTH-5.87): two states, each resumed by reading.
+//!   (AUTH-5.90 (iii); AUTH-5.87): two states, each resumed by reading, the
+//!   doc-1 read the metadata read in its three arms (REG-1.52).
 //! * [`backup`] — the backup moment in AUTH-5.54's order (§4.2), at its
 //!   three sites (the claim, the door-side form, the handoff's recipient)
 //!   and the loss arm's cited steps 1–3.
@@ -73,6 +79,7 @@ pub(crate) mod import;
 pub(crate) mod payload;
 pub(crate) mod preview;
 pub(crate) mod reads;
+pub mod registry_record;
 pub mod trail;
 
 // The walks.

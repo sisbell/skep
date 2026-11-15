@@ -100,11 +100,14 @@
 //!   registry's head at every call (REG-3.7, REG-3.10), its answer a named
 //!   state (REG-3.80).
 //! * [`ceremony`] — the ceremonies in two layers: the compositions every
-//!   walk runs over (P28) — `handshake`, `deposit`, `first_session`,
-//!   `backup`, `payload`, `preview`, `enumerate`, `trail`, `import`, `reads`
-//!   — and the walks over them — `claim`, `enroll`, `recover`, `retire`,
-//!   `rotate`, `handoff`, `accept`. A walk names compositions and never
-//!   another walk.
+//!   walk runs over (P28) — `handshake`, `deposit`, `registry_record`,
+//!   `first_session`, `backup`, `payload`, `preview`, `enumerate`, `trail`,
+//!   `import`, `reads` — and the walks over them — `claim`, `enroll`,
+//!   `recover`, `retire`, `rotate`, `handoff`, `accept`. A walk names
+//!   compositions and never another walk. `registry_record` is the
+//!   registry record a node account deposits (REG-1.86), composed by
+//!   `skep_registry`'s encoder and signed by a key of the home's account:
+//!   an endpoint, naming the deposit it replaces (REG-1.9, REG-1.10).
 //! * [`share`] — the grant as this client composes and reads it (PUB-5.1,
 //!   PUB-5.15): `share`, one document or one account opened to one account;
 //!   `privash`, one draft opened to every account on the board and never a
@@ -150,7 +153,8 @@
 //! No async runtime, no HTTP crate, no argument-parsing crate (§1.1's
 //! dependency paragraph). The fence (§1.1): this crate reads no content save
 //! credential records — those the admitted read names, and the one a
-//! deposit reads back — the takedown record a block names, and `H.1`'s pair;
+//! deposit reads back — the endpoint records of the home an endpoint is
+//! deposited into, the takedown record a block names, and `H.1`'s pair;
 //! `Board::op` is a general frame pipe for its embedders. The fence is a
 //! statement about the default build: the `search` module, off by default,
 //! is §4e's consumer and makes its reads only where an embedder turns the

@@ -250,7 +250,8 @@ fn ordinal_at(board: &Board, token: Option<&Token>, doc: &str) -> Result<(u64, u
     }
 }
 
-fn closed_face(during: &str) -> Halt {
+/// Returns the face of the death signal met while `during`.
+pub(crate) fn closed_face(during: &str) -> Halt {
     Halt::face(
         format!("the session ended while {during}"),
         "the board answered `Skepd-Session: closed` (wire.md §Sessions: a close, a restart, a retirement, a genesis at the \
@@ -352,18 +353,49 @@ pub fn deposit(board: &Board, token: &Token, d: &Deposit<'_>) -> Result<DepositO
         }
     };
 
-    // The insert, declared under the record's class type, at the next free
-    // content ordinal and typed against the read that found it (`as_of`,
-    // skep #442); `published_target` or `arrangement_moved` — this client's
-    // own position arithmetic raced another deposit into the home — re-reads
-    // the ordinal and re-sends once under the same id (§5.3), and a second
-    // of either is the halt below.
-    let insert_id = format!("{}.insert", d.id);
+    // The insert, declared under the record's class type, and its re-read
+    // `from` (AUTH-5.5): the verified atom the link names.
     let link_id = format!("{}.link", d.id);
+    let atom = verified_atom(board, token, d.home, &record_text, ty, &format!("{}.insert", d.id))?;
+
+    // The link, carrying the same type (PUB-2.63).
+    let v = match board.op(Some(token), &frames::make_link(d.home, &[&atom], &[d.subject], ty, Some(&link_id)))? {
+        Answer::Closed => return Err(DepositHalt::SessionClosed(closed_face("linking the record"))),
+        Answer::Document(v) => v,
+    };
+    if let (Some(link), Some(at)) = (acked_addr(&v), crate::board::acked_at(&v)) {
+        return Ok(DepositOutcome::Deposited { atom, link: link.to_string(), at });
+    }
+    let Some(r) = Rejection::of(&v) else { return Err(shape_face(&v).into()) };
+    reconcile_or_face(board, d, &r, &v, &written)
+}
+
+/// Inserts `record` into `home` declared under `ty`, and reads it back.
+///
+/// It answers the verified atom a deposit's link names: the I-address the
+/// insert acked, where the bytes read back from it are the record written
+/// (AUTH-5.5; REG-2.23) — the half every member of the deposit class
+/// shares, the credential records and the registry's alike. The insert
+/// lands at the next free content ordinal, typed against the read that
+/// found it (`as_of`, skep #442). `published_target` or `arrangement_moved`
+/// — this client's own position arithmetic raced another deposit into the
+/// home — re-reads the ordinal and re-sends once under the same
+/// `insert_id` (§5.3). Before the claim nothing un-arranges the atom, and
+/// after it doc 1 is published, so a record that does not read back is this
+/// client's own fault.
+///
+/// # Errors
+///
+/// In order: the ordinal read's halts; the insert closed, an answer of a
+/// shape this client does not know, the insert's refusals faced
+/// (`insert_face`) and a second `published_target` or `arrangement_moved`;
+/// the read-back's halts, and a record that does not read back, which is
+/// never linked.
+pub(crate) fn verified_atom(board: &Board, token: &Token, home: &str, record: &str, ty: &str, insert_id: &str) -> Result<String, DepositHalt> {
     let mut atom = None;
     for _ in 0..2 {
-        let (ordinal, as_of) = ordinal_at(board, Some(token), d.home)?;
-        let frame = frames::insert_atom(d.home, ordinal, &record_text, ty, as_of, Some(&insert_id));
+        let (ordinal, as_of) = ordinal_at(board, Some(token), home)?;
+        let frame = frames::insert_atom(home, ordinal, record, ty, as_of, Some(insert_id));
         let v = match board.op(Some(token), &frame)? {
             Answer::Closed => return Err(DepositHalt::SessionClosed(closed_face("inserting the record"))),
             Answer::Document(v) => v,
@@ -385,31 +417,18 @@ pub fn deposit(board: &Board, token: &Token, d: &Deposit<'_>) -> Result<DepositO
             "this is this client's frame and never your act; nothing was written",
         )));
     };
-
-    // AUTH-5.5: the re-read `from` — the bytes at the minted address *are*
-    // the record written; pre-claim nothing un-arranges the atom, post-claim
-    // doc 1 is published, so a mismatch is this client's own fault.
-    if !read_back(board, Some(token), d.home, &atom, &record_text)? {
+    if !read_back(board, Some(token), home, &atom, record)? {
         return Err(DepositHalt::Other(Halt::face(
             "the record read back from its address is not the record written",
-            format!("the atom at {atom} in {} does not hold the bytes this client inserted (AUTH-5.5)", d.home),
+            format!("the atom at {atom} in {home} does not hold the bytes this client inserted (AUTH-5.5)"),
             "this is this client's frame; the inserted atom is inert prose in the home, and the deposit was not linked",
         )));
     }
-
-    // The link, carrying the same type (PUB-2.63).
-    let v = match board.op(Some(token), &frames::make_link(d.home, &[&atom], &[d.subject], ty, Some(&link_id)))? {
-        Answer::Closed => return Err(DepositHalt::SessionClosed(closed_face("linking the record"))),
-        Answer::Document(v) => v,
-    };
-    if let (Some(link), Some(at)) = (acked_addr(&v), crate::board::acked_at(&v)) {
-        return Ok(DepositOutcome::Deposited { atom, link: link.to_string(), at });
-    }
-    let Some(r) = Rejection::of(&v) else { return Err(shape_face(&v).into()) };
-    reconcile_or_face(board, d, &r, &v, &written)
+    Ok(atom)
 }
 
-fn shape_face(v: &Value) -> Halt {
+/// Returns the face of an answer that is neither an ack nor a rejection.
+pub(crate) fn shape_face(v: &Value) -> Halt {
     Halt::face("the board answered a shape this client does not know", format!("{v}"), "this is a fault in this client or the board; nothing further was written")
 }
 

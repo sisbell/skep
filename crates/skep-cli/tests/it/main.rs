@@ -18,12 +18,18 @@
 //! resolve` — each refusal, then an address resolved against a claimed
 //! board as its registry, the root hint read from its flag and from its
 //! variable, the mirror kept beside the keys and the store's own files
-//! untouched; `tidy` reads the crate's own source for the arrangement
+//! untouched; `deposit` drives the nineteenth, `skep deposit` — on an
+//! enforcing board, a node account made by the suite's own hands: the real
+//! `skep bind` minting its doc 1 from its first signed session, the command
+//! minting a missing home and depositing the endpoint a verifying mirror
+//! reads current, a later deposit naming the one it replaces, and each
+//! refusal; `tidy` reads the crate's own source for the arrangement
 //! `ARCHITECTURE.md` §The command states.
 
 mod ceremonies;
 mod cli;
 mod common;
+mod deposit;
 mod dev;
 mod hint;
 mod hostile;

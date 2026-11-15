@@ -148,8 +148,7 @@ pub fn create_mailbox(account: &str, id: Option<&str>) -> Value {
 
 /// Builds `{"op":"retrieve_doc_v_span_set","doc":…}`.
 ///
-/// It reads the extents a deposit's next free content ordinal is read off,
-/// and is the doc-1 resume read.
+/// It reads the extents a deposit's next free content ordinal is read off.
 pub fn span_set(doc: &str) -> Value {
     json!({"op": "retrieve_doc_v_span_set", "doc": doc})
 }
@@ -317,7 +316,9 @@ pub fn read_link(a: &str) -> Value {
 /// It reads the publication bit and the chain's facts of `doc` — a version
 /// member answers its document's state, an unregistered address
 /// `doc_not_registered`, which is how the feed consumer probes a trunk's
-/// members (`search.md` §2.4).
+/// members (`search.md` §2.4). It is the doc-1 resume read too (REG-1.52):
+/// a span-set read stops on any document at the address, where this one
+/// tells a published home from a draft.
 pub fn doc_metadata(doc: &str) -> Value {
     json!({"op": "doc_metadata", "doc": doc})
 }

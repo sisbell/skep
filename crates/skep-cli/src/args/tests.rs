@@ -38,6 +38,24 @@ fn a_command_line_parses_and_each_malformed_part_is_refused() {
     assert_eq!(c.principal().unwrap(), Some(7));
 }
 
+/// `deposit`'s row (REG-1.9): the node account once, as `bind` takes it,
+/// and the board's origins repeated, every value kept in the order given —
+/// the order the endpoint's body carries and a reader tries them in — with
+/// the settings every command takes; `hint`'s `--also` is no flag of it.
+#[test]
+fn deposit_takes_its_account_once_and_its_origins_in_the_order_given() {
+    let line = ["deposit", "--board", "http://127.0.0.1:8642", "--account", "1.0.2", "--origin", "https://acme.example", "--origin", "https://acme.example.net", "--principal", "931", "--key", "/k"];
+    let Parsed::CommandLine(c) = parse(argv(&line)).unwrap() else { panic!() };
+    assert_eq!((c.command, c.command.verb()), (Command::Deposit, "deposit"));
+    assert_eq!(c.value("--account"), Some("1.0.2"));
+    assert_eq!(c.values("--origin"), ["https://acme.example", "https://acme.example.net"], "--origin repeats, in order");
+    assert_eq!((c.principal().unwrap(), c.key_file().unwrap()), (Some(931), Some(PathBuf::from("/k"))));
+    assert_eq!(refusal(&["deposit", "--account", "1.0.2", "--account", "1.0.3"]), "`--account` is given at most once at `deposit`");
+    assert_eq!(refusal(&["deposit", "--also", "https://acme.example"]), "`--also` is not a flag of `deposit`");
+    assert_eq!(refusal(&["hint", "--origin", "https://acme.example"]), "`--origin` is not a flag of `hint`");
+    assert_eq!(GRAMMAR.len(), 19, "the nineteen commands, one row each");
+}
+
 /// A principal is an integer JSON carries exactly (AUTH-6.36): `2^53 − 1`
 /// reads, `2^53` and anything not an integer are none — at the flag as
 /// in a reply, through the one grammar.

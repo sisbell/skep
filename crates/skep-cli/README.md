@@ -1,6 +1,6 @@
 # skep-cli — the `skep` command, and the dev binary `skep-dev`
 
-The command over `skep-client` (`client.md` §1.2, §2), eighteen commands:
+The command over `skep-client` (`client.md` §1.2, §2), nineteen commands:
 `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
 the ceremonies `enroll`, `recover`, `retire`, `rotate`, `handoff`,
 `accept`, `merge` — the editor's act on a daughter over the library's
@@ -75,7 +75,26 @@ did not answer is exit 4 and one that refused exit 1; a copy that does not
 read, a root that does not answer for the copy held and a root of another
 realm than the hint's are halts naming the mirror's directory, exit 3.
 The command dials no org's board, so BOUND-BUT-DISCLAIMED and the
-live-enforcement face, read at that dial, are not answered. Flag
+live-enforcement face, read at that dial, are not answered. And
+`deposit`, over the library's `first_session` and `registry_record`
+compositions (REG-1.9): a registered board's node account tells the
+registry where its board is. `--account` names the node account, on the
+board that account is on (`--board`: the registry's), and each `--origin`
+an origin the board answers at, in the order a reader tries them — a
+canonical origin, written as given and never dialed. The session is the
+command's own, content-scoped, as the principal the board seats at the
+account (`--principal`, where given, must be that one), under the
+selected key: one of the node account's own set, the board owner's, never
+the service that hosts the board, which holds no such key and signs
+nothing (REG-4.120). The account's home page is read first, as a guest:
+missing, this session mints it, born published; published, the run
+resumes at the deposit; a draft, the run halts naming its act, an
+out-of-band report, before any session opens (REG-1.52). The endpoint
+then names, in `replaces`, the deposit current in that home — the latest
+that stood, a nullified one included, and none on the account's first —
+so a reader holds the new one current, and the one it replaces stays in
+the home (REG-1.10). Stdout carries `endpoint <address>`, and under it
+`replaces <address>` where it names one. No person door. Flag
 parsing by hand, one file
 per command, a `Person` over the terminal, stdout DATA and stderr TALK,
 §2.3's exit codes (0 done, 1 the board refused, 2 usage, 3 halt and
@@ -194,7 +213,7 @@ each kind is met, with the route it was met at, since a browser shows the
 page an origin refusal only as a CORS failure, and every one is counted
 to the stop.
 
-The eighteen commands stand: the dev binary is no command of `skep`, and
+The nineteen commands stand: the dev binary is no command of `skep`, and
 the sidecar image, built `--no-default-features --bin skep`, holds none of
 it and no `skepd` (the default build neither: `dev-hooks` alone links the
 daemon, which `scripts/gate-full.sh`'s isolation line and
@@ -217,8 +236,8 @@ variable the source reads to a row here.
 |---|---|---|---|---|---|
 | `--board` | `SKEP_BOARD` | none | a canonical origin, as the command reads it | every command but `keygen`, `fingerprint` and `resolve`, whose registry is the root hint's; asked at `accept` where absent | the board; the store keys each binding by the origin as written, so `localhost` is another board than `127.0.0.1` |
 | `--dir` | `SKEP_KEYSTORE` | `~/.skep`, under `HOME`, else `USERPROFILE` | the home an absolute path, else refused | every command but `health`, `hint`, `claim --hosted` and `session --close` | the key store: `keys/` (each file 0600, the directory 0700), `bindings` and `lock`; `resolve`'s registry mirror in `registry/<genesis>/` under it (the directories 0700, `feed.jsonl`, `fetched.jsonl` and `lock` 0600), which no reader of the store's keys or bindings opens; `skep-dev seed`'s manifest in `<store>-seed/` beside it |
-| `--key` | `SKEP_KEY` | none | the file, as the command reads it; an anchor's file refused where the key signs | `session`, `verify`, `bind`, `fingerprint`, `merge`, `share`, `restore`, `accept --reprint`; refused at `enroll` and `retire` | one key file, bypassing the store's lookup; at `fingerprint`, the one key listed |
-| `--principal` | `SKEP_PRINCIPAL` (`skep-mcp` reads it too) | the store's one binding at the board; at `bind`, the reply's; at `claim`, `1` | an integer from 0 to 2^53 − 1, as the command reads it | `session`, `verify`, `enroll`, `recover`, `retire`, `rotate`, `handoff`, `merge`, `share`, `restore`, `bind`, `claim` | the principal; at `claim`, the new account's id |
+| `--key` | `SKEP_KEY` | none | the file, as the command reads it; an anchor's file refused where the key signs | `session`, `verify`, `bind`, `fingerprint`, `merge`, `share`, `restore`, `deposit`, `accept --reprint`; refused at `enroll` and `retire` | one key file, bypassing the store's lookup; at `fingerprint`, the one key listed |
+| `--principal` | `SKEP_PRINCIPAL` (`skep-mcp` reads it too) | the store's one binding at the board; at `bind`, the reply's; at `claim`, `1`; at `deposit`, the one the board seats at `--account` | an integer from 0 to 2^53 − 1, as the command reads it | `session`, `verify`, `enroll`, `recover`, `retire`, `rotate`, `handoff`, `merge`, `share`, `restore`, `bind`, `claim`, `deposit` | the principal; at `claim`, the new account's id |
 | `--json` | — | off | — | `verify`, `health`, `fingerprint`, `resolve`; at `merge`, `share` and `restore` the answer is one JSON document always, and the flag changes nothing; at `hint` the answer is the one line always | one JSON document on stdout |
 | `--root-hint` | `SKEP_ROOT_HINT` | none: required at `resolve` (the hint a build ships with is decided at launch, REG-3.72) | one root-hint line as the resolver reads it — one or more canonical origins, `realm:<64 hex>`, and on a forked lineage `fork:<address>` — before any socket opens and before the mirror's directory is made | `resolve` | the registry an address is resolved through: its roots in the order they are tried, and its realm (REG-3.2); the line `skep hint` prints |
 | `--kind` | `SKEP_MERGE_KIND` | none: required at `merge` | an address, as the command reads it, before any socket opens | `merge` | the merge record kind's type address — the kind's commons row is interim and unpinned (the merge record's decision 9), so the caller names it |

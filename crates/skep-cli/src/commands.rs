@@ -1,12 +1,13 @@
-//! The eighteen commands, one file each beneath this one, and what they share.
+//! The nineteen commands, one file each beneath this one, and what they share.
 //!
 //! The commands are `client.md` §2.2's thirteen, each exactly as it writes
 //! it, `merge`, the fourteenth, as the merge record's §6 writes it,
 //! `share`, the fifteenth, as the grant rules write it (PUB-5.29;
 //! PUB-5.108), `restore`, the sixteenth, as B3-S7 draws it, `hint`, the
-//! seventeenth, the printer of a registry's root hint (REG-3.2), and
+//! seventeenth, the printer of a registry's root hint (REG-3.2),
 //! `resolve`, the eighteenth, the resolver of a cross-board address
-//! (REG-3.7) — each a
+//! (REG-3.7), and `deposit`, the nineteenth, the depositor of a board's
+//! endpoint at its node account (REG-1.9) — each a
 //! `pub fn` that `main` dispatches to and that answers
 //! `Ok` or the [`Stop`] it came to, every walk a library call. What they
 //! share among themselves alone is private here and so visible to each of
@@ -32,6 +33,7 @@
 mod accept;
 mod bind;
 mod claim;
+mod deposit;
 mod enroll;
 mod fingerprint;
 mod handoff;
@@ -51,6 +53,7 @@ mod verify;
 pub use accept::accept;
 pub use bind::bind;
 pub use claim::claim;
+pub use deposit::deposit;
 pub use enroll::enroll;
 pub use fingerprint::fingerprint;
 pub use handoff::handoff;

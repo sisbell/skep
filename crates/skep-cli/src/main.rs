@@ -6,7 +6,7 @@
 //! library walk with the terminal as its `Person`; `bind` and `keygen`
 //! sequence the library's compositions themselves.
 //!
-//! **The eighteen commands.** `keygen`, `claim`, `session`, `fingerprint`,
+//! **The nineteen commands.** `keygen`, `claim`, `session`, `fingerprint`,
 //! `verify`, `health`, `bind` — the ceremonies over the library's seams:
 //! `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept` — `merge`,
 //! the editor's act on a daughter over `skep_client::merge` (the merge
@@ -16,10 +16,14 @@
 //! account, a draft privashed, a share revoked and the grants listed, over
 //! `skep_client::share` (PUB-5.29; PUB-5.108) — `hint`, a registry's
 //! root hint read off its board as a guest and printed as one line, over
-//! `skep_client::resolve` (REG-3.2) — and `resolve`, the board a
+//! `skep_client::resolve` (REG-3.2) — `resolve`, the board a
 //! cross-board address lives on, found through the registry that hint
 //! names and a mirror of it kept beside the key store, over the same
-//! module (REG-3.7, REG-3.80).
+//! module (REG-3.7, REG-3.80) — and `deposit`, a registered board's
+//! endpoint deposited at its node account under that account's own key,
+//! its home page minted first where it is missing, over the library's
+//! `first_session` and `registry_record` compositions (REG-1.9, REG-1.51,
+//! REG-4.120).
 //!
 //! The modules are declared in dependency order, each naming only those
 //! above it (`tests/it/tidy.rs`); `ARCHITECTURE.md` §The command draws how
@@ -28,7 +32,7 @@
 
 #![forbid(unsafe_code)]
 
-// The eighteen `Command`s and the grammar — each command's flags and
+// The nineteen `Command`s and the grammar — each command's flags and
 // switches and the rules its forms hold them to, one row per command —
 // beside `HELP`, and the settings, each flag beating its environment
 // variable; and, in its `dev` module, the dev binary's grammar over the
@@ -43,7 +47,7 @@ mod terminal;
 // `finish`), data's two writers, and the plumbing from the flags to a
 // board, a store, a principal and a key.
 mod shared;
-// The eighteen commands, one file each beneath it, and what they share
+// The nineteen commands, one file each beneath it, and what they share
 // among themselves alone: the person doors' check, the payload's read, the
 // anchor boxes' default, the three facts' spelling, the whole-set compare.
 mod commands;
@@ -78,6 +82,7 @@ fn main() {
         Command::Restore => commands::restore(&line),
         Command::Hint => commands::hint(&line),
         Command::Resolve => commands::resolve(&line),
+        Command::Deposit => commands::deposit(&line),
     };
     exit(commands::finish(outcome));
 }

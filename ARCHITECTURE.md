@@ -279,7 +279,9 @@ foundation and on the stores above it.
   the board and never a guest (PUB-5.108, Nelson's term); `revoke`; and
   the grants issued, held and privashed read back. Of the
   skep crates it depends on `skep-address`,
-  `skep-identity`, `skep-signature`, `skep-resolve` and — optional, behind
+  `skep-identity`, `skep-signature`, `skep-resolve`, `skep-registry` —
+  under `acting`, for the registry record its ceremonies compose — and —
+  optional, behind
   `search` — `skep-search` alone — never `skepd`, which does not depend on
   it either (its suite spawns the daemon as a dev-dependency, and the
   daemon's suite takes it as one, for the mirror over `https`). Four
@@ -309,7 +311,7 @@ foundation and on the stores above it.
   (its suite spawns the daemon as a dev-dependency). No feature, no
   transport: the loopback server is `skep-cli`'s dev verb's, the native
   bridge the shell's. Its modules and rules: §The shell's core.
-- `skep-cli` — the `skep` command over `skep-client`, eighteen commands:
+- `skep-cli` — the `skep` command over `skep-client`, nineteen commands:
   `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
   `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`,
   `merge` and `restore`, the two over the library's `merge` feature, which
@@ -319,7 +321,9 @@ foundation and on the stores above it.
   registry's root hint, read off its board as a guest, and `resolve`,
   which finds the board a cross-board address lives on through that
   registry and a mirror of it kept beside the key store, the two over the
-  library's `resolve` module; flag
+  library's `resolve` module, and `deposit`, which deposits a registered
+  board's endpoint at its node account over the library's `first_session`
+  and `registry_record` compositions; flag
   parsing by hand, a `Person` over the terminal, stdout data and stderr
   talk — and the dev binary `skep-dev`, whose two verbs `seed` a running
   claimed board with a prose corpus (`skep-corpus`) and `serve` the
@@ -710,7 +714,9 @@ each ceremony:
   suite in `share/tests.rs` and its daemon suite in `tests/it/share.rs`.
 - `ceremony.rs` and `ceremony/`, in two layers. The COMPOSITIONS, each the
   one home of its frames, reads and refusals: `handshake.rs` the session
-  open, `deposit.rs` the credential write, `first_session.rs` an account's
+  open, `deposit.rs` the credential write, `registry_record.rs` the
+  registry record's write, over `skep-registry`'s encoder and parser,
+  `first_session.rs` an account's
   first signed session, `backup.rs` the backup moment, `payload.rs` the
   paste door, `preview.rs` the retirement preview, `enumerate.rs` the head
   invariant's closure and the by-reference cone, `trail.rs` the
@@ -797,7 +803,7 @@ Rules that hold across its files:
 
 | Feature | Default | Adds | Compiled by the gate |
 |---|---|---|---|
-| `acting` | on | `sign`, `sheet`, `store`, `person`, `derive::records`, `verify`, `resolve`, `ceremony`, `publication`; `skep-signature`'s `sign` | every default build; `scripts/gate-full.sh` checks the library without it (the reading half) and with it alone |
+| `acting` | on | `sign`, `sheet`, `store`, `person`, `derive::records`, `verify`, `resolve`, `ceremony`, `publication`; `skep-signature`'s `sign`; the `skep-resolve` and `skep-registry` edges | every default build; `scripts/gate-full.sh` checks the library without it (the reading half) and with it alone |
 | `tls` | off | the dialer's `https://` arm over rustls and the platform verifier | `skep-cli`'s default build and `skepd`'s test build, whose suite mirrors a board over it (`skep-cli`'s dev binary `skep-dev` needs none of it — a dev board is loopback, the dialer's plain arm, for `seed` and for `serve` alike; `serve` takes `search` through `skep-shell` and, under `skep-cli`'s `dev-hooks` alone, the daemon's `test-hooks`); `scripts/gate-full.sh` checks both of `skep-cli`'s binaries without it, and the sidecar image builds `--bin skep` so the dev binary stays out of it |
 | `test-hooks` | off | implies `acting`; `person::scripted`; and, beside `tls`, the dialer's test trust root | every test build (the crate's self dev-dependency, and `skep-cli`'s and `skepd`'s dev-dependencies, the two builds that take `tls` beside it and so compile the trust root); `scripts/gate-full.sh`'s `--features acting` check builds the library without it and its `skep-cli` `--bins` checks build the binaries without it, with `tls` and with none, and `tests/it/tidy.rs` checks both gates |
 | `search` | off | implies `acting`; the `search` module and the optional `skep-search` dependency | every test build of this crate (the self dev-dependency turns it on, so the search suites run under the workspace gate); `scripts/gate-full.sh` checks the library with it alone, and `tests/it/tidy.rs` checks that `pub mod search;` is gated and the feature off by default |
@@ -963,10 +969,10 @@ parses the command line, makes the library call — handing a walk the
 terminal as its `Person` — and renders the answer, DATA on stdout and TALK
 on stderr, with §2.3's exit code. Every ceremony is a library walk; `bind`
 and `keygen` sequence the library's compositions themselves, and so carry
-their own text. Its modules, in the order `src/main.rs` declares them,
-each naming only those above it:
+their own text, as `deposit` does. Its modules, in the order `src/main.rs`
+declares them, each naming only those above it:
 
-- `args.rs` `Command`, one of the eighteen, the verb `main` dispatches on;
+- `args.rs` `Command`, one of the nineteen, the verb `main` dispatches on;
   the grammar — one row per command and the rules its forms hold them to
   (`Form`), beside the flags every command takes (`GLOBAL`) — with `HELP`,
   the text that documents it; and `CommandLine`, one parsed command line
@@ -987,7 +993,7 @@ each naming only those above it:
   renders under a `Program`), `help`, and the plumbing from the flags to a
   board (`board_of`), a store (`store_of`), a principal
   (`principal_or_bound`) and a key (`select_key`, under `Purpose`).
-- `commands.rs` what the eighteen commands share among themselves alone:
+- `commands.rs` what the nineteen commands share among themselves alone:
   the `skep` `Program`'s `finish` and `help`; `require_terminal`, the
   check each `Door` makes; a payload read to its cap (`read_payload`,
   `MAX_PAYLOAD_BYTES`); the anchor boxes' per-run default (`BoxDefault`);
@@ -1053,7 +1059,9 @@ Rules that hold across its files:
 
 Its integration suite is one binary, `tests/it/`: `cli` and `ceremonies`,
 each driving the built `skep` through argv, stdin and stdout against a
-daemon spawned in-process; `hostile`, what arrives from outside the
+daemon spawned in-process; `deposit`, the nineteenth command against an
+enforcing board, its reader `skep-resolve`'s mirror, a dev-dependency;
+`hostile`, what arrives from outside the
 person's trust; `dev`, the dev binary driven against a corpus the suite
 builds under the system temp dir; `serve`, the dev provider driven as the
 page would drive it over loopback HTTP; and `tidy`, the arrangement above

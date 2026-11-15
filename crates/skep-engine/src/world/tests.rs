@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use skep_address::validate;
+use skep_arrangement::{AsOf, Base, DraftBase, SetArrangement, SetMerge};
 use skep_content::Val;
 use skep_links::{Caller, SlotArg};
 
@@ -47,17 +48,23 @@ fn the_world_serializes_its_slices_in_declaration_order() {
 /// Each slice's own checkpoint layout, at its TOP LEVEL, pinned to the
 /// World format count that names it. A slice's layout is a World layout
 /// ([`FormatStamp`]), and the author who changes one is a store's, with
-/// no edge to this file: count 1 names two layouts because a slice grew a
-/// field under it. This pin is where such a change meets the count — a
+/// no edge to this file: count 1 names eleven layouts because slices grew
+/// fields under it. This pin is where such a change meets the count — a
 /// field appended, removed, renamed or reordered on any slice fails here,
 /// and the failure says what it owes. The count is asserted beside the
 /// fields, so a bump that leaves this pin behind fails too.
 ///
 /// It cannot see BELOW a slice's top level: a nested type gaining a field
-/// moves the World's bytes with every name here unchanged, and that change
-/// still owes the bump by hand. Nor is the dump filter's field-set check a
-/// substitute: that one asks for a reduction's DISPOSITION, compiles with
-/// the `dump` feature alone, and is answered without touching the count.
+/// moves the World's bytes with every name here unchanged. A store that
+/// pins its slice's bytes whole meets that change in its own suite — M4's
+/// `the_slice_serializes_as_its_map_alone_in_tumbler_order` and M5's
+/// `the_slice_serializes_as_its_seven_maps_down_to_each_entry_s_fields`,
+/// each message naming the same debt, and `skep-identity`'s checkpoint
+/// encodings (AUTH-1.40) — and M3's and M7's nested forms are held by M2's
+/// golden where its fixture's ops reach them. Nor is the
+/// dump filter's field-set check a substitute: that one asks for a
+/// reduction's DISPOSITION, compiles with the `dump` feature alone, and is
+/// answered without touching the count.
 #[test]
 fn each_slice_serializes_the_fields_the_format_count_names() {
     const PINNED_COUNT: u64 = 0x534B_5057_0000_0001;
@@ -103,8 +110,58 @@ fn each_slice_serializes_the_fields_the_format_count_names() {
         assert_eq!(
             found, pinned,
             "{slice}'s checkpoint layout moved under WORLD_FORMAT {WORLD_FORMAT:#018x}: \
-             that is a World layout change — bump the count, then this pin"
+             that is a World layout change — bump the count, then this pin; or, under the \
+             owner's no-stamp ruling, name the change in FormatStamp's list of the layouts the \
+             count names, then this pin"
         );
+    }
+}
+
+/// Decodes `bytes` as a World and returns the store slice its refusal names.
+///
+/// The refusal must say the body is in another layout of this build's format
+/// (`slice`'s words) and name one of the four store slices; a body that
+/// decodes, or a refusal in other words, fails at the caller's line.
+#[track_caller]
+fn refused_in(bytes: &[u8], what: &str) -> &'static str {
+    let refusal = match bincode::deserialize::<World>(bytes) {
+        Ok(_) => panic!("{what}: the body decoded"),
+        Err(refusal) => refusal.to_string(),
+    };
+    assert!(
+        refusal.contains(&format!("a body in another layout of world format {WORLD_FORMAT:#018x}")),
+        "{what}: the refusal does not name another layout of this build's format: {refusal}"
+    );
+    ["namespace", "content", "arrangement", "links"]
+        .into_iter()
+        .find(|slice| refusal.contains(&format!("its {slice} slice does not decode")))
+        .unwrap_or_else(|| panic!("{what}: the refusal names no store slice: {refusal}"))
+}
+
+/// Each store slice's decode refusal names that slice by its field name.
+///
+/// Each decodes through a door that names it: a body cut one byte into a
+/// slice, every slice before it whole, is refused naming that slice by the
+/// field name the World's serde form gives it, and the format beside it.
+/// So the four names the doors spell are the four store fields
+/// `the_world_serializes_its_slices_in_declaration_order` pins, in that
+/// order. The identity slice has no such door: a body that ends in it reads
+/// as the absent slice (`identity::slice_or_absent`).
+#[test]
+fn a_body_that_stops_decoding_in_a_store_slice_is_refused_naming_it() {
+    let world = World::genesis();
+    let names = field_names(&world);
+    let slices = [
+        bincode::serialize(&world.namespace).expect("M3 serializes"),
+        bincode::serialize(&world.content).expect("M4 serializes"),
+        bincode::serialize(&world.arrangement).expect("M5 serializes"),
+        bincode::serialize(&world.links).expect("M7 serializes"),
+    ];
+    let mut whole = bincode::serialize(&FormatStamp).expect("the stamp serializes");
+    for (field, bytes) in names[1..5].iter().zip(&slices) {
+        let cut = [whole.as_slice(), &bytes[..1]].concat();
+        assert_eq!(refused_in(&cut, field), field.as_str(), "the body cut one byte into {field}");
+        whole.extend_from_slice(bytes);
     }
 }
 
@@ -502,7 +559,9 @@ fn written_before_the_birth_memo(world: &World) -> Vec<u8> {
 /// So the refusal is held on each shape that arithmetic branches on: no
 /// link; one link through its type count, through a `to` and through a
 /// `from`; and two links — each world's own bytes decoding beside it, so
-/// the cut and not the fixture is what refuses. Pinned because
+/// the cut and not the fixture is what refuses, and each refusal saying the
+/// body is in another layout of this format and naming the slice it stopped
+/// in. Pinned because
 /// `each_slice_serializes_the_fields_the_format_count_names` cannot see
 /// beneath a slice's top level: a change to `Link`, `Endset`, `Span`,
 /// `Tumbler` or `Nat`'s encoding that moved this arithmetic would otherwise
@@ -520,9 +579,9 @@ fn a_base_written_before_the_birth_memo_fails_to_decode() {
         let world = links_in_a_draft(shapes);
         bincode::deserialize::<World>(&bincode::serialize(&world).expect("a world serializes"))
             .expect("this build's own bytes decode");
-        assert!(
-            bincode::deserialize::<World>(&written_before_the_birth_memo(&world)).is_err(),
-            "{store}: a base written before the birth memo decoded, its links read as the memo"
+        refused_in(
+            &written_before_the_birth_memo(&world),
+            &format!("{store}: a base written before the birth memo, its links read as the memo"),
         );
     }
 }
@@ -567,7 +626,9 @@ fn written_before_the_position_map(world: &World, addresses: &[Address]) -> Vec<
 /// arithmetic: this build reads the content slice's bytes as the map, and
 /// every slice after it the bytes of the slice before, so the decode runs
 /// off the body's end — an unexpected end of file on every shape held here,
-/// never a decoded world. Held on genesis, where every slice is empty and
+/// never a decoded world, and a refusal that says the body is in another
+/// layout of this format and names the slice it stopped in. Held on
+/// genesis, where every slice is empty and
 /// the shifted read finds nothing to refuse until the body ends, and on the
 /// link worlds the birth-memo pin uses — each world's own bytes decoding
 /// beside it, so the cut and not the fixture is what refuses. The engine
@@ -579,9 +640,9 @@ fn a_base_written_before_the_position_map_fails_to_decode() {
     let genesis = World::genesis();
     bincode::deserialize::<World>(&bincode::serialize(&genesis).expect("a world serializes"))
         .expect("this build's own bytes decode");
-    assert!(
-        bincode::deserialize::<World>(&written_before_the_position_map(&genesis, &[])).is_err(),
-        "genesis written before the position map decoded"
+    refused_in(
+        &written_before_the_position_map(&genesis, &[]),
+        "genesis written before the position map",
     );
     let stores: [(&str, &[(bool, bool)]); 3] = [
         ("one link, `from` and `to` empty", &[(false, false)]),
@@ -594,9 +655,129 @@ fn a_base_written_before_the_position_map_fails_to_decode() {
         minted.extend((1..=shapes.len() as u32).map(|k| element(&draft, 2, k)));
         bincode::deserialize::<World>(&bincode::serialize(&world).expect("a world serializes"))
             .expect("this build's own bytes decode");
-        assert!(
-            bincode::deserialize::<World>(&written_before_the_position_map(&world, &minted)).is_err(),
-            "{store}: a base written before the position map decoded"
+        refused_in(
+            &written_before_the_position_map(&world, &minted),
+            &format!("{store}: a base written before the position map"),
+        );
+    }
+}
+
+/// Returns a world of staged drafts, with merges landed and links homed.
+///
+/// One draft is staged per entry of `landed`, a merge landed in each whose
+/// entry is `true`, and `links` links homed in the first. The drafts are
+/// staged from the birth version of the owner's memberless published
+/// edition, in mint order, so their draft-base entries lie in that order and
+/// are the map's only ones. Each landing sets its draft to an empty
+/// arrangement, the version at extent zero named as both its head and its
+/// base, and carries a merge of one side, which the fold stamps at the
+/// landing's commit.
+fn staged_drafts(landed: &[bool], links: u32) -> (World, Vec<Address>) {
+    let engine = mem_engine();
+    let acct = delegated_account(&engine, USER);
+    let (edition, _) = engine
+        .namespace()
+        .create_new_document(USER, &acct, Some(true))
+        .expect("a published edition, memberless");
+    let vstream = engine.vstream();
+    let (version, _) = vstream.version(USER, &edition, None).expect("the edition's birth version");
+    let drafts: Vec<Address> = landed
+        .iter()
+        .map(|_| vstream.stage(USER, &version).expect("a staging draft of the version").0)
+        .collect();
+    let base = Base { member: version, extent: Nat::from(0u32) };
+    let landing = SetArrangement {
+        runs: Vec::new(),
+        head: Some(base.clone()),
+        base: Some(base),
+        merge: Some(SetMerge { sides: vec![edition], at: None }),
+    };
+    for (draft, _) in drafts.iter().zip(landed).filter(|(_, land)| **land) {
+        vstream
+            .set_arrangement(skep_arrangement::Caller::Principal(USER), draft, &landing, AsOf::Unchecked)
+            .expect("a merge landed in the owner's staged draft");
+    }
+    let caller = Caller::Principal(USER);
+    let visibility = World::visible_to(caller);
+    let writer = engine.linkstore(&visibility);
+    for n in 1..=links {
+        let ty = SlotArg::Addrs(vec![element(&drafts[0], 3, n)]);
+        writer
+            .makelink(caller, &drafts[0], SlotArg::Addrs(Vec::new()), SlotArg::Addrs(Vec::new()), ty)
+            .expect("a link in the owner's own draft");
+    }
+    (engine.kernel().snapshot().world().clone(), drafts)
+}
+
+/// Returns `world`'s bytes as a build before the marker stamps wrote them.
+///
+/// Each draft-base entry is written without its stamps, the rest as this
+/// build writes it. The entries' bytes are hand-built from the public read,
+/// one per draft in `drafts`, in address order — a `Vec` of pairs encoding
+/// exactly as the map does — and pinned against the slice's own bytes first,
+/// so the shape is the old one and not a strawman.
+fn written_before_the_marker_stamps(world: &World, drafts: &[Address]) -> Vec<u8> {
+    let entries: Vec<(&Address, &DraftBase)> = drafts
+        .iter()
+        .map(|draft| (draft, world.arrangement.draft_base(draft).expect("a staged draft has a base")))
+        .collect();
+    let stamped = bincode::serialize(&entries).expect("the entries serialize");
+    let arrangement_bytes = bincode::serialize(&world.arrangement).expect("M5 serializes");
+    assert!(
+        arrangement_bytes.ends_with(&stamped),
+        "the draft bases' entries end M5's bytes, one per staged draft"
+    );
+    let unstamped = bincode::serialize(
+        &entries
+            .iter()
+            .map(|(draft, b)| (*draft, (&b.base, &b.extent, &b.source, &b.merge)))
+            .collect::<Vec<_>>(),
+    )
+    .expect("the entries serialize");
+    let stamp = bincode::serialize(&FormatStamp).expect("the stamp serializes");
+    let before = bincode::serialize(&(&world.namespace, &world.content)).expect("M3 and M4 serialize");
+    let after = bincode::serialize(&(&world.links, &world.identity)).expect("M7 and identity serialize");
+    [
+        stamp.as_slice(),
+        before.as_slice(),
+        &arrangement_bytes[..arrangement_bytes.len() - stamped.len()],
+        unstamped.as_slice(),
+        after.as_slice(),
+    ]
+    .concat()
+}
+
+/// A base written before the marker stamps is refused, never misread.
+///
+/// Such a base — the tenth layout count 1 names, under a current header,
+/// its draft bases holding an entry — fails to decode, refused naming the
+/// slice the decode stopped in and the layout: this build reads the eight
+/// bytes after each entry's marker as that entry's stamp count. Held on each
+/// shape that read branches on.
+/// An entry with another after it reads the next key's component count, and
+/// the markers it then reads run off the body's end. The last entry, with a
+/// link after it, reads M7's link count, and the one marker it then reads
+/// takes its first side from the link's key, an address T4 refuses. The last
+/// entry with no link after it reads a count of zero, so the arrangement
+/// slice decodes: the links slice then reads the identity slice's bytes and
+/// runs off the body's end. Each world's own bytes decode beside it, so the
+/// cut and not the fixture is what refuses. A body whose draft bases are
+/// empty needs no pin: it is this build's own, byte for byte.
+#[test]
+fn a_base_written_before_the_marker_stamps_fails_to_decode() {
+    let shapes: [(&str, &[bool], u32, &str); 3] = [
+        ("an entry with a marker, another after it", &[true, false], 1, "arrangement"),
+        ("the one entry, a link after it", &[true], 1, "arrangement"),
+        ("the one entry, no link after it", &[true], 0, "links"),
+    ];
+    for (shape, landed, links, slice) in shapes {
+        let (world, drafts) = staged_drafts(landed, links);
+        bincode::deserialize::<World>(&bincode::serialize(&world).expect("a world serializes"))
+            .expect("this build's own bytes decode");
+        assert_eq!(
+            refused_in(&written_before_the_marker_stamps(&world, &drafts), shape),
+            slice,
+            "{shape}: the slice the decode stopped in"
         );
     }
 }

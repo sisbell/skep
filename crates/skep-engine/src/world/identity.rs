@@ -167,9 +167,11 @@ pub(super) fn resolve(
 /// then resolves or refuses at load — and so realizes the spec's
 /// `#[serde(default)]` under this codec.
 ///
-/// A slice whose own layout moves meets `FormatStamp`'s rule before this arm:
-/// a slice's layout change is a World layout change and bumps the count, so
-/// such a body is refused at byte 0 and never reaches it.
+/// A slice whose own layout moves is a World layout change (`FormatStamp`'s
+/// card). Under a bumped count such a body is refused at byte 0 and never
+/// reaches this arm; under the no-stamp ruling it does reach it, and reads
+/// as `None` as a body written without the slice does, resolved or refused
+/// at load by the same rule.
 ///
 /// # Errors
 ///

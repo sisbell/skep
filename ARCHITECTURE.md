@@ -1287,8 +1287,9 @@ Rules that hold across its files:
 - **The slice's shape is its format.** `M5State`'s fields and `M5Rec`'s
   variants are appended, never inserted or reordered. Three checks pin it,
   none alone: `skep-kernel`'s goldens pin the bytes of the records their
-  ops reach, `state/tests.rs` pins the shot's record, and `skep-engine`'s
-  format-count test pins the slice's field order.
+  ops reach, `state/tests.rs` pins the slice's bytes down to each entry's
+  fields and the shot's, the base's and the restore's records, and
+  `skep-engine`'s format-count test pins the slice's field order.
 
 Its integration suite is one binary, `tests/it/`: one file per surface over
 the shared `common` world, and `tidy`, which checks the module tree, its

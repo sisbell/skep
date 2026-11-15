@@ -1207,6 +1207,14 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
       warning (at open): checkpoint.{n} is not a start point and was SKIPPED — {why}; the world was resolved from {base} and replayed forward from there
       ```
 
+      `{why}` is the checkpoint's own refusal. One written before a
+      change to the world's layout, which the world format does not
+      mark while every board is a development artifact (Upgrade,
+      step 4), reads `a body in another layout of world format
+      {format}, an older build's most often: its {slice} slice does
+      not decode under this build's layout (the decoder's words:
+      …)`. The board opened whole from `{base}`: nothing is to undo.
+
       And, after them, the corrupt runs the open read below its
       start point and passed over (`{runs} corrupt runs lie below …
       and were PASSED OVER — the first: …` where there are several):
@@ -2203,8 +2211,11 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
 
 2. **Build the new binary** (Start, step 1) and start it over the
    same directory. An upgrade is a new binary over the same files,
-   and their format stamps decide whether it opens; the change
-   feed's files and the blob store's two logs carry none (step 5).
+   and their format stamps decide whether it opens, as does the
+   world's layout: while every board is a development artifact, a
+   change to it lands under the same world format, and a checkpoint
+   written before the change is refused (step 4). The change feed's
+   files and the blob store's two logs carry no stamp (step 5).
    Its first line names the build, by version and commit, and the
    formats this build reads, so the stream says which binary opened
    the board, and the commit tells it from the one before:
@@ -2238,7 +2249,19 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    ```
 
    `checkpoint.{n}` is the newest retained checkpoint, the one the
-   open most wanted; `{cause}` is why it refused.
+   open most wanted; `{cause}` is why it refused. A checkpoint
+   written before a change to the world's layout carries the world
+   format this build reads and still does not decode, and its
+   `{cause}` says so, then the line ends on the one remedy:
+
+   ```
+   skepd: engine open: no retained checkpoint loads and genesis is unreachable; the newest refused: checkpoint.{n}: a body in another layout of world format {format}, an older build's most often: its {slice} slice does not decode under this build's layout (the decoder's words: {words}); there is no migration path — every board is a development artifact: delete the data directory and start over
+   ```
+
+   `{slice}` is where the decode stopped, not always the part that
+   changed. No copy helps here: one written by the same older build
+   is refused the same way, and the binary that wrote it still
+   reads it.
 
 5. **Never open a board directory with an older binary than the
    one that last served it.** The change feed's files carry no

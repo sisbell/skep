@@ -16,7 +16,7 @@ mod identity;
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use skep_address::{document_of, shift, Address, Nat};
 use skep_arrangement::{HasM5, M5Rec, M5State};
 use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent};
@@ -47,7 +47,9 @@ use crate::publication::{self, Drafts};
 /// pre-publication-bit layout above all (PUB-7.8) — is refused at byte 0 by a
 /// value comparison, before any slice's bytes are read as another's. Which
 /// bases reach that word at all, and what count 1 names for the rest, is
-/// `FormatStamp`'s card. The three skip-serialized fields —
+/// `FormatStamp`'s card. A body past that word that this build's layout does
+/// not read is refused naming the store slice its decode stopped in and the
+/// format (`slice`). The three skip-serialized fields —
 /// `identity_resolved`, `drafts` and `grants` — sit outside the surface: none
 /// occupies a byte. The identity slice is the last serialized field, and that
 /// is load-bearing too: a body written without it ends where it would begin,
@@ -139,9 +141,13 @@ use crate::publication::{self, Drafts};
 pub struct World {
     /// The checkpoint format this layout is — first, so it is read first.
     pub(crate) format: FormatStamp,
+    #[serde(deserialize_with = "namespace_slice")]
     pub(crate) namespace: M3State,
+    #[serde(deserialize_with = "content_slice")]
     pub(crate) content: ContentStore,
+    #[serde(deserialize_with = "arrangement_slice")]
     pub(crate) arrangement: M5State,
+    #[serde(deserialize_with = "links_slice")]
     pub(crate) links: LinkState,
     /// The identity slice (AUTH-2.79): the board's key table and claim.
     ///
@@ -217,52 +223,72 @@ impl fmt::Debug for World {
 ///
 /// The high 32 bits spell `SKPW`; the low 32 are the layout count, and `1`
 /// names every layout this crate has written (below). A slice's layout change
-/// is a World layout change: bump the count with it, and every older
-/// checkpoint refuses at this word instead of decoding one slice's bytes as
-/// another's. The author who changes a slice is a store's, with no edge to
-/// this file, so the rule is held where it meets them:
+/// is a World layout change, and the count moves with it once a served board
+/// exists: every older checkpoint then refuses at this word instead of
+/// decoding one slice's bytes as another's. While no served board exists the
+/// owner's no-stamp ruling holds instead: the change lands under the count
+/// that stands, the dev boards are re-seeded and the kernel's golden
+/// regenerated under the current stamps, and a body written before the change
+/// is refused at decode rather than misread — named by the store slice the
+/// decode stopped in and this format (`slice`), with the kernel's
+/// no-migration remedy at the end of the line an exhausted fallback chain
+/// writes (PUB-1.2). The author who changes a slice is a store's, with no
+/// edge to this file, so the rule is held where it meets them:
 /// `each_slice_serializes_the_fields_the_format_count_names` pins every
-/// slice's top-level fields to the count, and says what it cannot see below
-/// that level.
+/// slice's top-level fields to the count, and a store that pins its slice's
+/// bytes whole fails below that level: M4's map and M5's slice, each message
+/// naming this card's debt, and the identity slice's encodings (AUTH-1.40).
 ///
-/// `1` names eight layouts, each the one before it with one change: the first
-/// carries M3's publication bit; the second appends M5's birth memo to its
-/// slice, and the third the shot terms after it; the fourth appends the
+/// `1` names eleven layouts, each the one before it with one change: the
+/// first carries M3's publication bit; the second appends M5's birth memo to
+/// its slice, and the third the shot terms after it; the fourth appends the
 /// identity slice after M7's (AUTH-2.79); the fifth holds each of M4's
 /// entries as a value or a stretch — a tagged enum where a bare value stood —
 /// and gains the stretch record, [`Record::ContentStretch`]; the sixth
 /// appends the fork sources to the arrangement slice; the seventh appends
-/// the position map to the namespace slice; and the eighth appends the
-/// arranged-at positions to the arrangement slice. They stand under one
-/// count because no served board exists and the dev boards are re-seeded,
-/// the kernel's golden regenerated under the current stamps. No base any
-/// build wrote in the first reaches this word through a header this build
-/// loads: every one carries an M2 stamp older than this build's, which M2
-/// refuses at load by name, with the no-migration remedy (PUB-1.2). A body in
-/// a later layout but the sixth, under a current header, does reach the
-/// decoder and is not refused at this word, and each change it predates
-/// meets it further in. A body whose content entries are bare values fails at
-/// its first such entry, whose value's length prefix reads as an entry tag no
-/// variant or an overlong stretch (skep-content's suite pins both shapes);
-/// one that passes its content map — an empty one, or one of tagged entries
-/// — meets the arrangement slice short of its fork sources, or of its
-/// arranged-at positions, neither of which carries a default; a body
-/// written before the position map reads the content slice's
-/// bytes as that map and every slice after it as the one before, and runs
-/// off the body's end (`a_base_written_before_the_position_map_fails_to_decode`
-/// holds it on genesis and on worlds holding links); and the board then
-/// opens from genesis where its journal still reaches it, replaying its
-/// per-byte frames into one-byte values the readers serve as they serve any
-/// value. A body that ends where the identity slice
-/// would begin reads as `identity: None` (`World`'s field states the
-/// reading), and is resolved or refused at load by AUTH-2.83's rule rather
-/// than defaulted into a table — the one layout change this count names
-/// whose old bodies the spec gives a reading, though a slice-less body from
-/// any build meets the content and arrangement changes first. So the count
-/// names layouts beside the current one whose bodies reach the decoder, and
-/// the next World layout change bumps it. A body in the first layout under a
-/// current header — which only hand-built bytes produce — still fails to
-/// decode, and not by chance:
+/// the position map to the namespace slice; the eighth appends the
+/// arranged-at positions to the arrangement slice, and the ninth the draft
+/// bases after them (B3-S10). The last two change an entry beneath the
+/// arrangement slice's top level: the tenth gives each draft base the marker
+/// of the merge its draft carries, and the eleventh the markers stamped on
+/// that draft since its base last moved at a shot.
+///
+/// No base any build wrote in the first reaches this word through a header
+/// this build loads: every one carries an M2 stamp older than this build's,
+/// which M2 refuses at load by name, with the no-migration remedy (PUB-1.2).
+/// A body in a later layout but the eleventh, under a current header, does
+/// reach the decoder and is not refused at this word, and each change it
+/// predates meets it further in. A body whose content entries are bare
+/// values fails at its first such entry, whose value's length prefix reads as
+/// an entry tag no variant or an overlong stretch (skep-content's suite pins
+/// both shapes); one that passes its content map — an empty one, or one of
+/// tagged entries — meets the arrangement slice short of its fork sources,
+/// its arranged-at positions or its draft bases, none of which carries a
+/// default; a body written before the position map reads the content slice's
+/// bytes as that map and every slice after it as the one before, and runs off
+/// the body's end (`a_base_written_before_the_position_map_fails_to_decode`
+/// holds it on genesis and on worlds holding links). A body whose draft bases
+/// are empty is the eleventh's, byte for byte, whichever of the last three it
+/// was written in; one holding a draft-base entry written before the marker
+/// or the stamps reads the bytes after that entry's last field — the next
+/// entry's key, or M7's slice — as the fields it lacks. Where those are the
+/// stamps, the decode runs off the body's end or meets an address T4 refuses
+/// (`a_base_written_before_the_marker_stamps_fails_to_decode` holds each
+/// shape); skep-arrangement's suite refuses a lone entry written before
+/// either. Every such refusal names the slice the decode stopped in and this
+/// format, and the board then opens from an older base, or from genesis
+/// where its journal still reaches it, replaying its per-byte frames into
+/// one-byte values the readers serve as they serve any value.
+///
+/// A body that ends where the identity slice would begin reads as
+/// `identity: None` (`World`'s field states the reading), and is resolved or
+/// refused at load by AUTH-2.83's rule rather than defaulted into a table —
+/// the one layout change this count names whose old bodies the spec gives a
+/// reading, though a slice-less body from any build meets the content and
+/// arrangement changes first. So the count names layouts beside the current
+/// one whose bodies reach the decoder: the cost the no-stamp ruling accepts.
+/// A body in the first layout under a current header — which only hand-built
+/// bytes produce — still fails to decode, and not by chance:
 /// `a_base_written_before_the_birth_memo_fails_to_decode` states why, in the
 /// encodings of M5's and M7's slices, and pins the refusal on each shape it
 /// branches on, so a change beneath a slice's top level that moved the
@@ -307,6 +333,75 @@ impl<'de> Deserialize<'de> for FormatStamp {
             )))
         }
     }
+}
+
+/// Decodes one store slice of a checkpoint body, naming it in a refusal.
+///
+/// Each of [`World`]'s four store slices decodes through it, past the format
+/// word, so the body it reads carries this build's stamp — and M2 hands over
+/// only bytes that passed their header's checksum and hash. A slice that does
+/// not decode is therefore no damage: a build with another layout of this
+/// format wrote the body, an older one most often, as the no-stamp ruling
+/// lets it (`FormatStamp`'s card). The refusal says that first, then names
+/// the slice the decode stopped in — where it stopped, which need not be the
+/// slice whose layout moved, a misaligned body reading one slice's bytes as
+/// the next one's — then gives the decoder's own words, which tell two
+/// refusals in one slice apart. It names no remedy: the kernel writes the
+/// no-migration remedy after it where the fallback chain is exhausted, and
+/// keeps it off a base the open passed over (AUTH-2.86).
+///
+/// # Errors
+///
+/// The slice's own refusal, re-raised in those words as the codec's custom
+/// error, so the kernel still reads it as a body that would not decode.
+fn slice<'de, T, D>(name: &str, deserializer: D) -> Result<T, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    T::deserialize(deserializer).map_err(|refusal| {
+        serde::de::Error::custom(format_args!(
+            "a body in another layout of world format {WORLD_FORMAT:#018x}, an older build's \
+             most often: its {name} slice does not decode under this build's layout (the \
+             decoder's words: {refusal})"
+        ))
+    })
+}
+
+/// Decodes the namespace slice through [`slice`].
+///
+/// # Errors
+///
+/// [`slice`]'s refusal, naming `namespace`.
+fn namespace_slice<'de, D: Deserializer<'de>>(deserializer: D) -> Result<M3State, D::Error> {
+    slice("namespace", deserializer)
+}
+
+/// Decodes the content slice through [`slice`].
+///
+/// # Errors
+///
+/// [`slice`]'s refusal, naming `content`.
+fn content_slice<'de, D: Deserializer<'de>>(deserializer: D) -> Result<ContentStore, D::Error> {
+    slice("content", deserializer)
+}
+
+/// Decodes the arrangement slice through [`slice`].
+///
+/// # Errors
+///
+/// [`slice`]'s refusal, naming `arrangement`.
+fn arrangement_slice<'de, D: Deserializer<'de>>(deserializer: D) -> Result<M5State, D::Error> {
+    slice("arrangement", deserializer)
+}
+
+/// Decodes the links slice through [`slice`].
+///
+/// # Errors
+///
+/// [`slice`]'s refusal, naming `links`.
+fn links_slice<'de, D: Deserializer<'de>>(deserializer: D) -> Result<LinkState, D::Error> {
+    slice("links", deserializer)
 }
 
 /// The one central record enum: one variant per store record type.

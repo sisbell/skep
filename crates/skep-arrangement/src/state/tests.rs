@@ -1,7 +1,8 @@
 use num_traits::Zero;
+use skep_address::{Span, Tumbler};
 
 use super::*;
-use crate::testutil::{a, ca, doc1, doc2, la, n, pca, pdoc, run, vca, vdoc};
+use crate::testutil::{a, ca, doc1, doc2, la, n, nth_doc, pca, pdoc, run, vca, vdoc};
 use crate::vspace::VPos;
 
 fn place(s: &M5State, doc: &Address, at: u32, runs: Vec<Run>) -> M5State {
@@ -713,6 +714,75 @@ fn the_birth_extents_ride_the_checkpoint_because_nothing_can_rebuild_them() {
     assert_eq!(bincode::serialize(&again).expect("serializes"), bytes);
 }
 
+/// The account's fourth document: an alternative staged from `vdoc`.
+///
+/// It is `[1,0,1,0,nth_doc(4)]`.
+fn alternative() -> Address {
+    a(&[1, 0, 1, 0, nth_doc(4)])
+}
+
+/// A slice whose every collection holds entries, folded from records alone.
+///
+/// Two tests read its bytes: the hostile-count sweep writes over every count
+/// in them, and the byte pin holds them against a twin spelled from the
+/// literals below. doc1 holds two content runs and a link, and doc2 is its
+/// snapshot; two members are minted by shots, one carrying a base's extent
+/// and one the birth shape. Of the two draft bases, doc2's carries the
+/// marker of its first landing, put back after a second landing, with both
+/// stamps standing; the alternative's merge was withdrawn, its stamp kept.
+/// Every record folds at a position of its own but the staging pair, which
+/// is one commit, so the arranged-at entries and the markers' `at`s each
+/// read the commit that wrote them.
+fn every_field_held() -> M5State {
+    let first = Merge { sides: vec![vdoc()], head: doc1(), head_copied: n(4) };
+    let second = Merge { sides: vec![vdoc(), pca_member()], head: doc1(), head_copied: n(4) };
+    let withdrawn = Merge { sides: vec![], head: vdoc(), head_copied: n(2) };
+    let doc2_base = |merge: Option<Merge>| M5Rec::DraftBase {
+        draft: doc2(),
+        base: doc1(),
+        extent: n(4),
+        source: doc1(),
+        merge,
+    };
+    let alternative_base = |merge: Option<Merge>| M5Rec::DraftBase {
+        draft: alternative(),
+        base: vdoc(),
+        extent: n(2),
+        source: vdoc(),
+        merge,
+    };
+    let shot = |doc: Address, runs: Vec<Run>, placed: u32, base_extent: Option<u32>| {
+        M5Rec::ShotPlace {
+            doc,
+            runs,
+            terms: ShotTerms { placed: n(placed), base_extent: base_extent.map(n) },
+            draft: None,
+        }
+    };
+    [
+        (1, M5Rec::ContentPlace { doc: doc1(), at: n(1), runs: vec![run(&ca(1), 3)] }),
+        (2, M5Rec::ContentPlace { doc: doc1(), at: n(4), runs: vec![run(&vca(1), 1)] }),
+        (3, M5Rec::LinkSeat { doc: doc1(), link: la(1) }),
+        (4, shot(vdoc(), vec![run(&ca(1), 2)], 2, Some(1))),
+        (5, shot(pca_member(), vec![run(&pca(1), 1)], 1, None)),
+        (6, M5Rec::VersionSnapshot { source: doc1(), new: doc2() }),
+        (6, doc2_base(None)),
+        (8, doc2_base(Some(first.clone()))),
+        (11, doc2_base(Some(second))),
+        (13, M5Rec::MarkerRestore {
+            draft: doc2(),
+            base: doc1(),
+            extent: n(4),
+            source: doc1(),
+            marker: first.stamped(Seq(8)),
+        }),
+        (15, alternative_base(Some(withdrawn))),
+        (17, alternative_base(None)),
+    ]
+    .iter()
+    .fold(M5State::genesis(), |s, (at, rec)| s.apply_m5(Seq(*at), rec))
+}
+
 #[test]
 fn the_slice_decodes_or_refuses_whatever_count_its_bytes_declare() {
     // M2's HOSTILE-INPUT OBLIGATION on `WorldState`: a checkpoint body is
@@ -723,9 +793,11 @@ fn the_slice_decodes_or_refuses_whatever_count_its_bytes_declare() {
     // allocator cannot grant aborts the process where the load must refuse.
     // Every collection the slice holds — the arrangement map, each document's
     // content and link run-lists, R's map and each document's spans, the
-    // birth extents and the shot terms — decodes through `decode`'s doors,
-    // and every sequence beneath them (an address's components, a natural's
-    // digits) reserves cautiously. So `u64::MAX` written over ANY eight bytes
+    // birth extents, the shot terms, the fork sources, the arranged-at
+    // positions, the draft bases and each base's stamps — decodes through
+    // `decode`'s doors or reserves cautiously, and so does every sequence
+    // beneath them (a marker's sides, an address's components, a natural's
+    // digits). So `u64::MAX` written over ANY eight bytes
     // of a body holding every one of them is decoded or refused, and never
     // reserved for: a collection decoded by `im`'s own visitor fails here,
     // the empty count of a field added since included. It fails one of two
@@ -736,50 +808,24 @@ fn the_slice_decodes_or_refuses_whatever_count_its_bytes_declare() {
     // allocator cannot grant — and the process aborts, which nextest reports
     // against this test. A corpus seed for the fuzzing tier: this body, at
     // every offset, under every count.
-    let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
-    let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat {
-        doc: doc1(),
-        link: la(1),
-    });
-    let s = s.apply_m5(Seq(1), &M5Rec::ShotPlace {
-        doc: vdoc(),
-        runs: vec![run(&ca(1), 2)],
-        terms: ShotTerms {
-            placed: n(2),
-            base_extent: Some(n(1)),
-        },
-        draft: None,
-    });
-    let s = s.apply_m5(Seq(1), &M5Rec::ShotPlace {
-        doc: a(&[1, 0, 1, 0, 64, 1]),
-        runs: vec![run(&pca(1), 1)],
-        terms: ShotTerms {
-            placed: n(1),
-            base_extent: None,
-        },
-        draft: None,
-    });
+    //
     // The premise: every collection the slice decodes holds an entry, so the
     // sweep writes over each one's count and over the counts within it.
-    let s = s.apply_m5(Seq(1), &M5Rec::VersionSnapshot {
-        source: doc1(),
-        new: doc2(),
-    });
-    let s = s.apply_m5(Seq(1), &M5Rec::DraftBase {
-        draft: doc2(),
-        base: doc1(),
-        extent: n(3),
-        source: doc1(),
-        merge: Some(Merge { sides: vec![vdoc()], head: doc1(), head_copied: n(3) }),
-    });
+    let s = every_field_held();
     assert_eq!(s.arrangements.len(), 4);
     assert_eq!(s.link_run_count(&doc1()), 1);
-    assert_eq!(s.recorded_span_count(&doc1()), 1);
+    assert_eq!(s.recorded_span_count(&doc1()), 2);
     assert_eq!(s.birth_extents.len(), 2);
     assert_eq!(s.shot_terms.len(), 2);
     assert_eq!(s.fork_sources.len(), 1);
-    assert_eq!(s.draft_bases.len(), 1);
-    assert_eq!(s.draft_base(&doc2()).map(|b| b.stamped.len()), Some(1), "the entry's stamps");
+    assert_eq!(s.arranged_at.len(), 4);
+    assert_eq!(s.draft_bases.len(), 2);
+    assert_eq!(s.draft_base(&doc2()).map(|b| b.stamped.len()), Some(2), "the entry's stamps");
+    assert_eq!(
+        s.draft_base(&alternative()).map(|b| (b.merge.is_none(), b.stamped.len())),
+        Some((true, 1)),
+        "the withdrawn merge's stamp, standing"
+    );
     let bytes = bincode::serialize(&s).expect("state serializes");
     assert_eq!(
         bincode::deserialize::<M5State>(&bytes).expect("state deserializes"),
@@ -803,6 +849,118 @@ fn the_slice_decodes_or_refuses_whatever_count_its_bytes_declare() {
         refused_at.first(),
         Some(&0),
         "the arrangement map's count, the body's first eight bytes, is refused"
+    );
+}
+
+/// A run as the slice writes it: its start, then its width.
+type RawRun = (Tumbler, Nat);
+
+/// A document's arrangement as the slice writes it: content, then links.
+type RawArrangement = (Vec<RawRun>, Vec<RawRun>);
+
+/// A marker as the slice writes it.
+///
+/// Its sides, its head, the head's extent as read at the compose, then the
+/// position it was put at.
+type RawMarker = (Vec<Tumbler>, Tumbler, Nat, u64);
+
+/// A draft base as the slice writes it.
+///
+/// Its base, extent and source, then its marker and its stamps.
+type RawDraftBase = (Tumbler, Nat, Tumbler, Option<RawMarker>, Vec<RawMarker>);
+
+/// The slice's bytes down to each entry's fields, against a plain twin.
+///
+/// The twin is spelled in plain types from the fixture's literals, never
+/// read off the state. The bytes are a format: M2 hashes them into a
+/// checkpoint's header, the engine's `World` lays them down as one slice of
+/// its layout, and the engine's world dump renders them. The engine's own
+/// pin sees the slice's seven field names alone, so a field gained, lost or
+/// reordered *beneath* them — a draft base's marker or stamps, a marker's
+/// position, a shot's terms, a run — moves the World's bytes with every name
+/// unchanged. This pin sees it: the twin is the seven maps in declaration
+/// order, each a `Vec` of pairs in address order (bincode writes a map
+/// exactly so), every address its bare tumbler, every entry its fields in
+/// order — a document's arrangement its content runs then its link runs,
+/// R's spans each run's I-extent in placing order, a draft base its base,
+/// extent, source, marker and stamps. The twin decodes back to the fixture,
+/// so it is the slice's form and not merely bytes alike.
+#[test]
+fn the_slice_serializes_as_its_seven_maps_down_to_each_entry_s_fields() {
+    let tumbler = |address: Address| address.tumbler().clone();
+    let raw_run = |start: Address, width: u32| -> RawRun { (tumbler(start), n(width)) };
+    let extent = |start: Address, reach: Address| {
+        Span::from_endpoints(tumbler(start), reach.tumbler()).expect("a run's I-extent is a span")
+    };
+    let raw_marker = |sides: Vec<Address>, head: Address, copied: u32, at: u64| -> RawMarker {
+        (sides.into_iter().map(tumbler).collect(), tumbler(head), n(copied), at)
+    };
+    let arrangements: Vec<(Tumbler, RawArrangement)> = vec![
+        (tumbler(doc1()), (vec![raw_run(ca(1), 3), raw_run(vca(1), 1)], vec![raw_run(la(1), 1)])),
+        (tumbler(vdoc()), (vec![raw_run(ca(1), 2)], vec![])),
+        (tumbler(doc2()), (vec![raw_run(ca(1), 3), raw_run(vca(1), 1)], vec![])),
+        (tumbler(pca_member()), (vec![raw_run(pca(1), 1)], vec![])),
+    ];
+    let provenance: Vec<(Tumbler, Vec<Span>)> = vec![
+        (tumbler(doc1()), vec![extent(ca(1), ca(4)), extent(vca(1), vca(2))]),
+        (tumbler(vdoc()), vec![extent(ca(1), ca(3))]),
+        (tumbler(doc2()), vec![extent(ca(1), ca(4)), extent(vca(1), vca(2))]),
+        (tumbler(pca_member()), vec![extent(pca(1), pca(2))]),
+    ];
+    let birth_extents: Vec<(Tumbler, Nat)> =
+        vec![(tumbler(vdoc()), n(2)), (tumbler(pca_member()), n(1))];
+    let shot_terms: Vec<(Tumbler, (Nat, Option<Nat>))> = vec![
+        (tumbler(vdoc()), (n(2), Some(n(1)))),
+        (tumbler(pca_member()), (n(1), None)),
+    ];
+    let fork_sources: Vec<(Tumbler, Tumbler)> = vec![(tumbler(doc2()), tumbler(doc1()))];
+    let arranged_at: Vec<(Tumbler, u64)> = vec![
+        (tumbler(doc1()), 2),
+        (tumbler(vdoc()), 4),
+        (tumbler(doc2()), 6),
+        (tumbler(pca_member()), 5),
+    ];
+    let first = || raw_marker(vec![vdoc()], doc1(), 4, 8);
+    let draft_bases: Vec<(Tumbler, RawDraftBase)> = vec![
+        (
+            tumbler(doc2()),
+            (
+                tumbler(doc1()),
+                n(4),
+                tumbler(doc1()),
+                Some(first()),
+                vec![first(), raw_marker(vec![vdoc(), pca_member()], doc1(), 4, 11)],
+            ),
+        ),
+        (
+            tumbler(alternative()),
+            (tumbler(vdoc()), n(2), tumbler(vdoc()), None, vec![raw_marker(vec![], vdoc(), 2, 15)]),
+        ),
+    ];
+    let twin = bincode::serialize(&(
+        arrangements,
+        provenance,
+        birth_extents,
+        shot_terms,
+        fork_sources,
+        arranged_at,
+        draft_bases,
+    ))
+    .expect("the twin encodes");
+    let state = every_field_held();
+    assert!(
+        bincode::serialize(&state).expect("the slice serializes") == twin,
+        "M5's slice serialized as something other than its seven maps in declaration order, \
+         each in address order and each entry its fields as the twin spells them: those bytes \
+         are M2's hashed checkpoint body, a slice of the engine's World layout and the engine's \
+         world dump — a change to them owes the engine's WORLD_FORMAT bump (or, under the \
+         owner's no-stamp ruling, a line in its list of the layouts its count names) and a \
+         dump-filter disposition"
+    );
+    assert_eq!(
+        bincode::deserialize::<M5State>(&twin).expect("the twin decodes"),
+        state,
+        "the twin's bytes are the fixture's slice"
     );
 }
 

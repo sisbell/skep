@@ -2,7 +2,10 @@
 //! byte for byte.
 
 use skep_address::Span;
-use skep_arrangement::{reading_surface, seat_link, Deposit, HasM5, Shot, Vstream};
+use skep_arrangement::{
+    reading_surface, seat_link, Deposit, DraftBase, HasM5, Marker, SetArrangement, SetMerge, Shot,
+    Vstream,
+};
 use skep_kernel::Kernel;
 use skep_namespace::{HasM3, PrincipalId};
 use tempfile::tempdir;
@@ -13,10 +16,12 @@ use crate::common::*;
 fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
     // §10: M5 owns no recovery machinery — M2 loads the checkpoint
     // (deserializing the slice) and replays the tail through apply → apply_m5.
-    // The draft's insert and the edition's deposit ride the checkpoint path;
-    // the delete, the rearrangement, the seat, the fork, the post-fork source
-    // deposit and the shot ride the replay path — every `M5Rec` variant among
-    // them; the recovered slice is byte-identical.
+    // The draft's insert, the edition's deposit, a staging draft of the
+    // edition and a merge landed in it ride the checkpoint path; the merge
+    // taken out and put back, the delete, the rearrangement, the seat, the
+    // fork, the post-fork source deposit and the shot ride the replay path —
+    // every `M5Rec` variant among them; the recovered slice is
+    // byte-identical.
     //
     // The fork is the CROSS-OWNER one (principal 2's copy of the edition):
     // an owned fork would be the edition's first member, and the deposit
@@ -28,6 +33,8 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
     let fork = a(&[1, 0, 2, 0, 1]);
     let bytes_before;
     let arranged_before;
+    let staged;
+    let landed_at;
     {
         let k = Kernel::<World>::open(cfg_fsync(dir.path()), genesis()).expect("open");
         let vs = Vstream::new(&k);
@@ -35,7 +42,29 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
             .expect("insert commits");
         vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], declared(), now(&k))
             .expect("deposit commits");
+        // The staging draft of the memberless edition, and a merge landed in
+        // it: the draft set to the edition's last two positions, its base the
+        // edition at three, the marker stamped at the landing's own commit.
+        (staged, _) = vs.stage(PrincipalId(1), &pdoc()).expect("the staging draft");
+        let merged = |at| SetArrangement {
+            runs: vec![shot_run(&pdoc(), &pca(2), 2)],
+            head: Some(base(&pdoc(), 3)),
+            base: Some(base(&pdoc(), 3)),
+            merge: Some(SetMerge { sides: vec![doc2()], at }),
+        };
+        (landed_at, _) = vs.set_arrangement(P1, &staged, &merged(None), now(&k)).expect("the landing");
         k.checkpoint().expect("checkpoint");
+        // The merge taken out — the edition's text set back, the marker
+        // cleared and its stamp kept — and put back at the landing's
+        // position: a base record and a restore record, both replayed.
+        let taken_out = SetArrangement {
+            runs: vec![shot_run(&pdoc(), &pca(1), 3)],
+            head: None,
+            base: Some(base(&pdoc(), 3)),
+            merge: None,
+        };
+        vs.set_arrangement(P1, &staged, &taken_out, now(&k)).expect("the merge taken out");
+        vs.set_arrangement(P1, &staged, &merged(Some(landed_at)), now(&k)).expect("the merge put back");
         vs.delete(P1, &doc1(), vp(1, 2), n(1), now(&k)).expect("delete commits");
         vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"x"), val(b"y"), val(b"z")], Deposit::Undeclared, now(&k))
             .expect("the second draft takes three values");
@@ -71,10 +100,11 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
         bytes_before = bincode::serialize(s.world().m5()).expect("slice serializes");
         // The arranged-at positions (skep #442) as the live fold left them:
         // doc1's and pdoc's first entries rode the checkpoint path, the
-        // delete, the pivot, the fork, the post-fork deposit and the shot
-        // the replay path — each the position its own commit answered.
-        arranged_before =
-            [doc1(), doc2(), pdoc(), fork.clone(), vdoc()].map(|d| s.world().m5().arranged_at(&d));
+        // delete, the pivot, the fork, the post-fork deposit, the shot and
+        // the staging draft's two settings the replay path — each the
+        // position its own commit answered.
+        arranged_before = [doc1(), doc2(), pdoc(), fork.clone(), vdoc(), staged.clone()]
+            .map(|d| s.world().m5().arranged_at(&d));
         assert!(arranged_before.iter().all(Option::is_some), "{arranged_before:?}");
     }
     let k = Kernel::<World>::open(cfg_fsync(dir.path()), genesis()).expect("reopen");
@@ -85,9 +115,24 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
         bytes_before
     );
     assert_eq!(
-        [doc1(), doc2(), pdoc(), fork.clone(), vdoc()].map(|d| m5.arranged_at(&d)),
+        [doc1(), doc2(), pdoc(), fork.clone(), vdoc(), staged.clone()].map(|d| m5.arranged_at(&d)),
         arranged_before,
         "the arranged-at positions survive the checkpoint and the replay alike"
+    );
+    // The landing's marker, taken out and put back on the replay path,
+    // stands as the landing stamped it: its position the landing's, never
+    // the restore's own, its one stamp beside it.
+    let marker = Marker { sides: vec![doc2()], head: pdoc(), head_copied: n(3), at: landed_at };
+    assert_eq!(
+        m5.draft_base(&staged),
+        Some(&DraftBase {
+            base: pdoc(),
+            extent: n(3),
+            source: pdoc(),
+            merge: Some(marker.clone()),
+            stamped: vec![marker],
+        }),
+        "the restore replayed with the marker it carried"
     );
     assert_eq!(m5.content_count(&doc1()), n(2));
     assert_eq!(m5.point(&doc1(), &vp(1, 2)), Some(ca(3)));

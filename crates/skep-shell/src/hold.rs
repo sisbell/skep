@@ -1440,7 +1440,10 @@ enum LandingUnread {
     /// Its last `/health` found it silent, or a request of the hold's there
     /// pends its verdict, and the read is not made (§3c.5).
     Unanswered,
-    /// The board answered the read, or its site read, with no page.
+    /// The board answered the read, or a site read, with no page.
+    ///
+    /// Every reconstruction permit in use at the site read through `/op-at`
+    /// (`history_busy`; skep #985) is one too.
     Unread,
     /// A row could be the line's landing, and the read could not confirm it.
     Undecided,

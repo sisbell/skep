@@ -13,7 +13,13 @@
 //! its answers — deciding nothing, and a delivery past the values asked
 //! differing — with the narrative cells beside it; the first own row the
 //! landing with a later row of anyone's after it, and a landing past the
-//! first page found by reading on; a sibling's row of the head's kind at a
+//! first page found by reading on; a landing a later write moved — another
+//! hand's words put before it, or its words deleted — kept at its row by the
+//! resend and by the drop, its site read again through `/op-at` at the row's
+//! position, once a read and at the first row that asks, and each answer of
+//! that read meeting the resend and the drop as its kind says, a landing the
+//! journal has reclaimed held moved at its resend (skep #985); a sibling's
+//! row of the head's kind at a
 //! position this shell acked skipped, the head sent, and a sibling's ack
 //! during the dial leaving the base the line is held at where it was read,
 //! before the dial; the person's own later write on the document — a link,
@@ -376,23 +382,25 @@ fn an_earlier_runs_line_renumbered_at_the_join_dials_the_id_its_file_carried() {
     assert!(g.lines().is_empty(), "both kept");
 }
 
-/// Checks that a burst whose first dial landed unseen is held moved at resend.
+/// Checks that a landing the read cannot see is held moved at its resend.
 ///
 /// It is never kept by another dial's answer (skep #971). A burst's first
-/// dial goes out under the page's `id`, and its answer is
-/// lost: it landed, its row the person's own, and another writer has put
-/// words before its site since, so the read finds the row, a site that
-/// differs, and decides nothing, and the line is resent. The resend dials
-/// under the line's dial id, which meets no memo entry of the first dial's;
-/// the board judges it by the state the burst was typed against and refuses
-/// it as typed against an older one, and the shift, finding the burst's own
-/// words between its anchors, holds the line moved — its `sent` kept, the
-/// board's verdict on it, nothing kept and nothing sent past the resend (the
-/// mutant that resends under the page's `id` dials what a board's retry memo
-/// answers with the first dial's acknowledgment; the one that shifts past a
-/// cut span writes the person's words a second time).
+/// dial goes out under the page's `id`, and its answer is lost: it landed
+/// at 77, its row the person's own, another writer has put words before its
+/// site since, and the journal has reclaimed position 77, so the read finds
+/// the row, a site that differs now and no state of 77 to read it at again
+/// (`history_reclaimed`; skep #985), and decides nothing, and the line is
+/// resent. The resend dials under the line's dial id, which meets no memo
+/// entry of the first dial's; the board judges it by the state the burst was
+/// typed against and refuses it as typed against an older one, and the
+/// shift, finding the burst's own words between its anchors, holds the line
+/// moved — its `sent` kept, the board's verdict on it, nothing kept and
+/// nothing sent past the resend (the mutant that resends under the page's
+/// `id` dials what a board's retry memo answers with the first dial's
+/// acknowledgment; the one that shifts past a cut span writes the person's
+/// words a second time).
 #[test]
-fn a_burst_whose_first_dial_landed_unseen_is_held_moved_at_its_resend() {
+fn a_burst_whose_landing_the_journal_reclaimed_is_held_moved_at_its_resend() {
     let g = ground();
     let typed = g.fake.head();
     g.fake.op_lost_at.store(1, Ordering::SeqCst);
@@ -400,13 +408,17 @@ fn a_burst_whose_first_dial_landed_unseen_is_held_moved_at_its_resend() {
     let OpAnswer::Answered(Ok(held)) = g.holds.send(&g.session, frame, Some(anchors(Some(&i(1)), Some(&i(2))))) else { panic!("held, its answer lost") };
     assert_eq!((held["cause"].as_str(), g.lines()[0]["sent"].as_bool()), (Some("unreachable"), Some(true)), "{held}");
     // It landed at 77, between `a` and `b`; another writer's `XY` at 78 went
-    // before it.
+    // before it; and the journal has reclaimed 77, where the draft read
+    // `ahellob`.
     *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": g.own_key(), "docs": [DOC]}), json!({"at": 78, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
     *g.fake.text.lock().unwrap() = "XYahellob".into();
+    g.fake.text_at.lock().unwrap().insert(77, "ahellob".into());
+    *g.fake.at_refused.lock().unwrap() = Some((410, json!({"error": "history_reclaimed", "floor": 90})));
     *g.fake.image.lock().unwrap() = vec![run(&i(50), 2), run(&i(1), 1), run(&i(100), 5), run(&i(2), 1)];
     g.fake.move_arrangement(DOC, 78);
     let _ = g.states();
     g.holds.probe("b-1");
+    assert_eq!(*g.fake.at_site_reads.lock().unwrap(), [77], "the site asked as of the row's position, and reclaimed");
     let ids = dialed_ids(&g);
     assert!(ids.len() == 2 && ids[0] == "b-1" && ids[1].starts_with("shell:"), "the first dial under the page's `id`, the resend under the line's dial id: {ids:?}");
     let lines = g.lines();
@@ -2264,6 +2276,244 @@ fn a_drop_of_a_handed_over_line_whose_write_landed_keeps_it_and_sends_the_line_b
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), sends + 1, "the line behind is sent");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "and kept");
+}
+
+/// How a write after a landing moved the landed words, in the fake's state.
+#[derive(Debug, Clone, Copy)]
+enum WordsMoved {
+    /// Another hand's `XY` put before the words.
+    WordsBefore,
+    /// Another hand's delete of the words.
+    Deleted,
+}
+
+/// Arms the board with an insert landed at 77 that a later write moved.
+///
+/// It answers the insert's frame: `hello` between `DOC`'s `a` and `b`, its
+/// `id` `b-1`, typed
+/// against the board's head before either. Its row at 77 is the person's
+/// own, the draft reading `ahellob` as of 77 and its words standing at `100`
+/// there; another hand's row at 78 moved the words as `later` says, the
+/// draft reading `XYahellob` or `ab` now and its arrangement moved by it.
+fn a_landing_moved_since(g: &Ground, later: WordsMoved) -> Value {
+    let frame = with_id(insert_at(DOC, 2, json!(["hello"]), g.fake.head()), "b-1");
+    let (op, text, image) = match later {
+        WordsMoved::WordsBefore => ("insert", "XYahellob", vec![run(&i(50), 2), run(&i(1), 1), run(&i(100), 5), run(&i(2), 1)]),
+        WordsMoved::Deleted => ("delete", "ab", vec![run(&i(1), 2)]),
+    };
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": g.own_key(), "docs": [DOC]}), json!({"at": 78, "op": op, "key": "ff".repeat(32), "docs": [DOC]})];
+    *g.fake.text.lock().unwrap() = text.into();
+    g.fake.text_at.lock().unwrap().insert(77, "ahellob".into());
+    *g.fake.image.lock().unwrap() = image;
+    *g.fake.at_runs.lock().unwrap() = Some(vec![run(&i(100), 5)]);
+    g.fake.move_arrangement(DOC, 78);
+    g.fake.next_at.store(79, Ordering::SeqCst);
+    frame
+}
+
+/// Checks that a landing a later write moved is kept at its row's position.
+///
+/// It is §3c.5's (ii), the first own row consistent with the head its
+/// landing whatever follows it (skep #985). An insert of `hello` between
+/// `DOC`'s `a` and `b`, carrying its anchors, its answer lost, landed at
+/// 77, and another hand's write at 78 moved its words — put `XY` before
+/// them, or deleted them ([`a_landing_moved_since`]). The site holds other
+/// values now, so the read reads it again as the row at 77 left it, through
+/// `/op-at` at 77, finds `hello` there and keeps the line at 77 — its `held`
+/// event naming it, the page's `id`, the row's position and the address the
+/// `/op-at` image at 77 names, the position noted as an ack's is — nothing
+/// dialed, one site read and one address read through `/op-at`, each at 77
+/// (the mutant that reads the site as the document stands alone resends the
+/// line: held moved where the words stand between its anchors, and, where
+/// the later write deleted them, the shift exact and the words written a
+/// second time).
+#[test]
+fn a_landing_a_later_write_moved_is_kept_at_its_rows_position() {
+    for later in [WordsMoved::WordsBefore, WordsMoved::Deleted] {
+        let g = ground();
+        let frame = a_landing_moved_since(&g, later);
+        let k = g.hold_anchored(&frame, anchors(Some(&i(1)), Some(&i(2))), "unreachable", true)["held"].as_u64().unwrap();
+        let _ = held_events(&g);
+        assert_eq!(g.holds.probe("b-1"), Turn::Done, "{later:?}");
+        let landed = json!([{"held": k, "burst": "b-1", "at": 77, "addr": i(100)}]);
+        assert_eq!(named_kept(&held_events(&g)), [("kept", 0, Some(&landed))], "{later:?}: kept at the row's position, its words' address named");
+        assert_eq!((g.fake.sends(), g.lines().len()), (0, 0), "{later:?}: nothing dialed, no line left");
+        let reads = (g.fake.at_site_reads.lock().unwrap().clone(), g.fake.at_reads.lock().unwrap().clone());
+        assert_eq!(reads, (vec![77], vec![77]), "{later:?}: one site read and one address read through `/op-at`, each at 77");
+        assert_eq!((g.base_of(DOC), g.holds.last_arranged(&g.session, DOC), g.holds.acked("b-1", 77)), (77, Some(77), true), "{later:?}: noted as an ack is");
+    }
+}
+
+/// Checks that a drop keeps a line whose landing a later write moved.
+///
+/// The drop of a line that may have landed reads first (§3c.4; skep #866,
+/// #985): an insert landed at 77 and another hand's `XY` at 78 went before
+/// its words ([`a_landing_moved_since`]), its line handed over as
+/// `answers_lost` or holding marked `sent`. The drop reads the site again as
+/// the row at 77 left it, finds `hello` there and answers kept — nothing
+/// dropped and nothing dialed, the `held` event naming the line at 77 and
+/// its words' address (the mutant that reads the site as the document stands
+/// alone refuses the drop `landing_unread` `undecided`, and the person can
+/// neither discard the line nor see it kept).
+#[test]
+fn a_drop_keeps_a_line_whose_landing_a_later_write_moved() {
+    for kind in [Held::HandedOver, Held::Holding("unreachable")] {
+        let g = ground();
+        let frame = a_landing_moved_since(&g, WordsMoved::WordsBefore);
+        let k = held_as(&g, kind, &frame, true);
+        let _ = held_events(&g);
+        assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).map_err(|r| r.to_value()), Ok(Resolved::Kept), "{kind:?}");
+        let landed = json!([{"held": k, "burst": "b-1", "at": 77, "addr": i(100)}]);
+        assert_eq!(named_kept(&held_events(&g)), [("kept", 0, Some(&landed))], "{kind:?}: kept at the row's position, its words' address named");
+        assert_eq!((g.fake.sends(), g.lines().len()), (0, 0), "{kind:?}: nothing dialed, no line left");
+    }
+}
+
+/// What the board answers the read of a row's site through `/op-at`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AtSite {
+    /// `503 history_busy`: every reconstruction permit in use.
+    Busy,
+    /// No answer: the read times out.
+    Unanswered,
+    /// The death signal on the session's token.
+    Closed,
+    /// `410 history_reclaimed`: the journal has reclaimed the position.
+    Reclaimed,
+    /// `400 not_a_position`.
+    NotAPosition,
+    /// `400 beyond_head`.
+    BeyondHead,
+    /// A refusal of the route: `404 not_found`.
+    ///
+    /// It is what a board that serves no `/op-at` answers.
+    RouteRefused,
+    /// A delivery of other values than the head's.
+    Differs,
+}
+
+impl AtSite {
+    /// Every answer, in the order the cells walk them.
+    const ALL: [AtSite; 8] = [AtSite::Busy, AtSite::Unanswered, AtSite::Closed, AtSite::Reclaimed, AtSite::NotAPosition, AtSite::BeyondHead, AtSite::RouteRefused, AtSite::Differs];
+
+    /// Arms the fake board to answer the read so.
+    ///
+    /// It is armed past [`a_landing_moved_since`], whose state it amends.
+    fn arm(self, fake: &Fake) {
+        let refused = |status: u16, body: Value| *fake.at_refused.lock().unwrap() = Some((status, body));
+        match self {
+            AtSite::Busy => refused(503, json!({"error": "history_busy"})),
+            AtSite::Unanswered => fake.at_unanswered.store(true, Ordering::SeqCst),
+            AtSite::Closed => fake.at_closed.store(true, Ordering::SeqCst),
+            AtSite::Reclaimed => refused(410, json!({"error": "history_reclaimed", "floor": 90})),
+            AtSite::NotAPosition => refused(400, json!({"error": "not_a_position", "nearest": 76})),
+            AtSite::BeyondHead => refused(400, json!({"error": "beyond_head", "head": 76})),
+            AtSite::RouteRefused => refused(404, json!({"error": "not_found"})),
+            AtSite::Differs => {
+                fake.text_at.lock().unwrap().insert(77, "aotherb".into());
+            }
+        }
+    }
+
+    /// Returns whether the answer decides nothing of the landing.
+    ///
+    /// It is every reconstruction permit in use, no answer, or the death
+    /// signal; every other answer names no state of the position holding
+    /// the values.
+    fn decides_nothing(self) -> bool {
+        matches!(self, AtSite::Busy | AtSite::Unanswered | AtSite::Closed)
+    }
+}
+
+/// Checks how each answer of the site read through `/op-at` meets the resend.
+///
+/// An insert landed at 77 and another hand's `XY` at 78 went before its
+/// words ([`a_landing_moved_since`]), its line holding marked `sent`; the
+/// read's site read through `/op-at` at 77 is answered one way per cell
+/// (§3c.5; skep #863, #985). A read that decides nothing — every
+/// reconstruction permit in use, no answer, the death signal — sends
+/// nothing, the line standing as it stood, the board's silence ending the
+/// pass and holding the board unanswered. An answer that names no state of
+/// 77 holding the values — a reclaimed position, one the board names no
+/// state at, a refusal of the route, other values — is no landing
+/// confirmed: the line is sent again, as a site that differs sends it (the
+/// mutant that reads a busy board as other values sends a line that may
+/// have landed; the one that reads a refused route as a read deciding
+/// nothing stands the line at every probe, never handed over).
+#[test]
+fn each_answer_of_the_site_read_through_op_at_meets_the_resend_as_its_kind_says() {
+    for answer in AtSite::ALL {
+        let g = ground();
+        let frame = a_landing_moved_since(&g, WordsMoved::WordsBefore);
+        g.hold(&frame, "unreachable", true);
+        answer.arm(&g.fake);
+        let before = g.lines();
+        let turn = g.holds.probe("b-1");
+        assert_eq!(*g.fake.at_site_reads.lock().unwrap(), [77], "{answer:?}: one site read, at 77");
+        if answer.decides_nothing() {
+            assert_eq!((g.fake.sends(), g.lines()), (0, before), "{answer:?}: nothing sent, the line as it stood");
+            let silent = answer == AtSite::Unanswered;
+            assert_eq!((turn == Turn::Unanswered, g.holds.lock("b-1").answers()), (silent, !silent), "{answer:?}: the board's silence ends the pass and holds the board");
+        } else {
+            assert_eq!((g.fake.sends(), g.holds.lock("b-1").answers()), (1, true), "{answer:?}: undecided, the line sent again");
+        }
+    }
+}
+
+/// Checks how each answer of the site read through `/op-at` meets the drop.
+///
+/// An insert landed at 77 and another hand's `XY` at 78 went before its
+/// words ([`a_landing_moved_since`]), its line handed over as `answers_lost`;
+/// the drop reads first, and its site read through `/op-at` at 77 is
+/// answered one way per cell (§3c.4; skep #866, #985). Nothing is dropped
+/// and nothing dialed in any cell: every reconstruction permit in use
+/// refuses the drop `landing_unread` `unread`; no answer refuses it
+/// `unanswered`, the board held unanswered; the death signal answers the
+/// session's death; and an answer that names no state of 77 holding the
+/// values refuses it `undecided`, as a site that differs does (the mutant
+/// that reads such an answer as no landing drops words the board may hold).
+#[test]
+fn each_answer_of_the_site_read_through_op_at_meets_the_drop_as_its_kind_says() {
+    for answer in AtSite::ALL {
+        let g = ground();
+        let frame = a_landing_moved_since(&g, WordsMoved::WordsBefore);
+        let k = handed_over(&g, &frame, true);
+        answer.arm(&g.fake);
+        let why = match answer {
+            AtSite::Busy => Some("unread"),
+            AtSite::Unanswered => Some("unanswered"),
+            AtSite::Closed => None,
+            AtSite::Reclaimed | AtSite::NotAPosition | AtSite::BeyondHead | AtSite::RouteRefused | AtSite::Differs => Some("undecided"),
+        };
+        let want = why.map_or(Ok(Resolved::Died), |why| Err(json!({"kind": "shell", "name": "landing_unread", "held": k, "why": why})));
+        assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).map_err(|r| r.to_value()), want, "{answer:?}");
+        let site_reads = g.fake.at_site_reads.lock().unwrap().clone();
+        assert_eq!((g.fake.sends(), g.lines().len(), site_reads), (0, 1, vec![77]), "{answer:?}: nothing dropped or dialed, one site read at 77");
+        assert_eq!(g.holds.lock("b-1").answers(), answer != AtSite::Unanswered, "{answer:?}: a read unanswered holds the board unanswered");
+    }
+}
+
+/// Checks that a read makes one site read through `/op-at`, at one row.
+///
+/// It is the first row that asks (SP-23; skep #985). Two rows of the
+/// person's own inserts stand at 76 and 77, and the head's
+/// values stand at its site neither now nor as the row at 76 left it: the
+/// read reads the site through `/op-at` once, at 76, decides nothing and
+/// reads no row after it, the line sent again and kept (the mutant that
+/// reads the site at every row asks the board a reconstruction permit per
+/// row).
+#[test]
+fn a_read_makes_one_site_read_through_op_at_at_the_first_row_that_asks() {
+    let g = ground();
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", true);
+    let key = g.own_key();
+    let own = |at: u64| json!({"at": at, "op": "insert", "key": key, "docs": [DOC]});
+    *g.fake.rows.lock().unwrap() = vec![own(76), own(77)];
+    *g.fake.text.lock().unwrap() = "other".into();
+    g.fake.text_at.lock().unwrap().insert(76, "other".into());
+    g.holds.probe("b-1");
+    assert_eq!(*g.fake.at_site_reads.lock().unwrap(), [76], "one site read, at the first row that asks");
+    assert_eq!((g.fake.sends(), g.lines().len()), (1, 0), "undecided: the line sent again, and kept");
 }
 
 /// Checks that a drop whose line is sent back during its read drops nothing.

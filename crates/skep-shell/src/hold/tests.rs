@@ -38,8 +38,10 @@
 //! frame typed at the fake's head meets no refusal — the frames POSTed to
 //! `/op` recorded, a look taken as each is recorded, and a refusal or the
 //! death signal armed for a send, an insert's ack naming the address it
-//! minted where a cell arms it, and an `/op-at` image of the draft, no
-//! answer, the death signal or a refusal where a cell arms it — the holds
+//! minted where a cell arms it, and an `/op-at` read of the draft — its text
+//! as of the position asked where a cell sets it, read as the `/op` site read
+//! is, or its image — no answer, the death signal or a refusal where a cell
+//! arms it — the holds
 //! over it with a session opened as the shell opens one and every line the
 //! hold says on `Talk` recorded
 //! (`Ground`), the clock a line's deadline reads moved forward by a cell
@@ -585,9 +587,12 @@ impl<T: Clone> Armed<T> {
 /// rejection or a non-200 answered where one is armed — to every send, or to
 /// the next few alone, the death first and the non-200 next — and an insert's
 /// ack naming the address its words were minted at where a cell arms the fake
-/// to mint; an `/op-at` `image` answering the draft's image at the position
-/// asked, each asked position recorded, or no answer, the death signal, a
-/// refusal or the runs a cell arms in its place; the `/health`
+/// to mint; an `/op-at` `retrieve_v` answering the draft's text as of the
+/// position asked, where a cell sets it, else as it stands, as the `/op` site
+/// read answers it, and an `/op-at` `image` answering the draft's image at the
+/// position asked, the positions each kind asked recorded apart, or no answer,
+/// the death signal, a refusal or, for an `image`, the runs a cell arms in its
+/// place; the `/health`
 /// reads counted, one armed to panic once, and each held at a gate while it is
 /// shut; and its `/events` stream, none, a commit a millisecond without end
 /// where a cell arms one, or a live stream that says nothing where a cell arms
@@ -634,6 +639,11 @@ struct Fake {
     /// is out.
     at_changes: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     text: Mutex<String>,
+    /// The draft's text as of each position a cell sets.
+    ///
+    /// It is what an `/op-at` `retrieve_v` at that position reads; one at any
+    /// other position reads the text as it stands.
+    text_at: Mutex<HashMap<u64, String>>,
     site_unread: AtomicBool,
     site_closed: AtomicBool,
     over_deliver: AtomicBool,
@@ -704,8 +714,12 @@ struct Fake {
     minting: AtomicBool,
     /// The I-ordinal the next insert the fake mints takes its first.
     next_i: AtomicU64,
-    /// The position each `/op-at` read asked, in order.
+    /// The position each `/op-at` `image` asked, in order: the address reads.
     at_reads: Mutex<Vec<u64>>,
+    /// The position each `/op-at` `retrieve_v` asked, in order.
+    ///
+    /// They are the site reads as of a row's position.
+    at_site_reads: Mutex<Vec<u64>>,
     /// Every `/op-at` read goes unanswered (`DialError::Timeout`).
     at_unanswered: AtomicBool,
     /// Every `/op-at` read answers the death signal.
@@ -744,6 +758,7 @@ impl Fake {
             changes_reads: AtomicUsize::new(0),
             at_changes: Mutex::new(None),
             text: Mutex::new(String::new()),
+            text_at: Mutex::new(HashMap::new()),
             site_unread: AtomicBool::new(false),
             site_closed: AtomicBool::new(false),
             over_deliver: AtomicBool::new(false),
@@ -776,6 +791,7 @@ impl Fake {
             minting: AtomicBool::new(false),
             next_i: AtomicU64::new(100),
             at_reads: Mutex::new(Vec::new()),
+            at_site_reads: Mutex::new(Vec::new()),
             at_unanswered: AtomicBool::new(false),
             at_closed: AtomicBool::new(false),
             at_refused: Mutex::new(None),
@@ -828,6 +844,20 @@ impl Fake {
             v += w;
         }
         runs
+    }
+
+    /// Returns the answer a `retrieve_v` of `text` gets, as of `as_of`.
+    ///
+    /// It delivers the positions `spec` names, one position more where the
+    /// site is armed to deliver past them, or refuses `out_of_bounds` where
+    /// they pass the text: the one answer `/op` and `/op-at` give a site read.
+    fn delivery(&self, text: &str, spec: &Value, as_of: u64) -> Response {
+        let (from, width) = span(spec).unwrap_or((0, 0));
+        let width = width + usize::from(self.over_deliver.load(Ordering::SeqCst));
+        match text.get(from.saturating_sub(1)..from.saturating_sub(1) + width) {
+            Some(cut) if from > 0 => ok(json!({"resp": "delivery", "items": [{"content": cut}], "as_of": as_of})),
+            _ => ok(json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent", "op": "retrieve_v"})),
+        }
     }
 
     /// The `/health` gate shut: each read waits there until it opens.
@@ -983,12 +1013,7 @@ impl Dialer for Fake {
                     return Ok(closed());
                 }
                 let text = self.text.lock().unwrap().clone();
-                let (from, width) = span(&body["specs"][0]).unwrap_or((0, 0));
-                let width = width + usize::from(self.over_deliver.load(Ordering::SeqCst));
-                return Ok(match text.get(from.saturating_sub(1)..from.saturating_sub(1) + width) {
-                    Some(cut) if from > 0 => ok(json!({"resp": "delivery", "items": [{"content": cut}], "as_of": self.read_as_of()})),
-                    _ => ok(json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent", "op": "retrieve_v"})),
-                });
+                return Ok(self.delivery(&text, &body["specs"][0], self.read_as_of()));
             }
             if self.op_unreachable.load(Ordering::SeqCst) {
                 return Err(DialError::Connect("the board is not answering".into()));
@@ -1038,7 +1063,12 @@ impl Dialer for Fake {
         if req.method == Method::Post && req.path == "/op-at" {
             let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
             let at = body["at"].as_u64().unwrap_or(0);
-            self.at_reads.lock().unwrap().push(at);
+            let site = body["frame"]["op"].as_str() == Some("retrieve_v");
+            if site {
+                self.at_site_reads.lock().unwrap().push(at);
+            } else {
+                self.at_reads.lock().unwrap().push(at);
+            }
             if self.at_unanswered.load(Ordering::SeqCst) {
                 return Err(DialError::Timeout("the board takes the read and sends nothing".into()));
             }
@@ -1047,6 +1077,10 @@ impl Dialer for Fake {
             }
             if let Some((status, refusal)) = self.at_refused.lock().unwrap().clone() {
                 return Ok(respond(status, refusal));
+            }
+            if site {
+                let text = self.text_at.lock().unwrap().get(&at).cloned().unwrap_or_else(|| self.text.lock().unwrap().clone());
+                return Ok(self.delivery(&text, &body["frame"]["specs"][0], at));
             }
             let region = &body["frame"]["region"][0];
             let from = region["start"].as_str().and_then(|s| s.strip_prefix("1.")).and_then(|s| s.parse().ok()).unwrap_or(1);

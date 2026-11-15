@@ -102,7 +102,14 @@
 //! run (`answers_lost`), naming the last failure and the wall time since it,
 //! dialed never again until the person sends it; (ii)
 //! the in-flight burst landed, the head `done kept` and its
-//! position the document's base, as an ack's is (§3c.2). A head no dial of
+//! position the document's base, as an ack's is (§3c.2). An insert's landing
+//! is confirmed by its values at its site: read as the document stands, and,
+//! where they stand there no longer — a write since moved them — read again
+//! as the first row that could be the landing left it, through `/op-at` at
+//! that row's position (`Holds::site_at`; skep #985), so a landing whose
+//! words another writer has moved or deleted since is kept at its row, never
+//! sent again, save a landing the read cannot see, each named below with
+//! what its resend meets. A head no dial of
 //! which left is not read at all: it goes from the head. A row that is not
 //! the head's own landing is no verdict — the person's own later write, a
 //! sibling's, another hand's — and the head goes from the head; and a read
@@ -195,9 +202,16 @@
 //! and the shifts its call makes go out under the page's `id`, so a resend of
 //! a burst whose first dial landed meets no memo entry of it: the board
 //! judges it by the state it was typed against (`as_of`), as it judges every
-//! frame, and refuses it as typed against an older state, and its shift,
-//! finding the words the burst landed between its anchors where they stand,
-//! holds it moved — the outcome of every landing the read cannot see.
+//! frame, and refuses it as typed against an older state. Its shift holds it
+//! moved where the words the burst landed stand between its anchors; where a
+//! later write has taken them out from between the anchors, the anchors
+//! stand adjacent again, the shift is exact, and the words land a second
+//! time. Each is the outcome of a landing the read cannot see: one whose
+//! row's position the journal has reclaimed, one behind a hole in the feed's
+//! files, one behind an earlier row that could be the landing and is not —
+//! a write of the same kind by the session's key not through this shell, a
+//! commit whose testimony the board lost — or one whose `/op-at` read the
+//! board refuses.
 
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashSet};
@@ -710,9 +724,11 @@ pub(super) enum ReadOutcome {
     ///
     /// It is a row whose testimony the board lost, on a kind no site read
     /// confirms; a row of the session's own hand or of a lost testimony
-    /// whose site holds other values than the head's, the landing moved
-    /// since or no landing; or a `history_reclaimed`, no row read, the site
-    /// confirming nothing.
+    /// whose site holds other values than the head's both now and as the
+    /// row's own commit left it (`Holds::site_at`; skep #985), or whose
+    /// position names no state the board serves; a row with no position whose
+    /// site holds other values now; or a `history_reclaimed`, no row read,
+    /// the site confirming nothing.
     Undecided,
     /// The in-flight burst landed: the head is `done kept`.
     ///
@@ -728,15 +744,16 @@ pub(super) enum ReadOutcome {
     /// The board answered no page: nothing is decided.
     ///
     /// It answered a refusal (`feed_rebuilding`) or an answer no read takes
-    /// — or the site read the landing needed did — and the next probe reads
-    /// again.
+    /// — or a site read the landing needed did, every reconstruction permit
+    /// in use at one through `/op-at` (`history_busy`) among them — and the
+    /// next probe reads again.
     Unread,
     /// The board gave the read no answer: nothing is decided.
     ///
-    /// The read is the document's, or the site read the landing needed; the
+    /// The read is the document's, or a site read the landing needed; the
     /// pass ends there.
     Unanswered,
-    /// The death signal on the session's token met the read or its site read.
+    /// The death signal on the session's token met the read or a site read.
     ///
     /// Nothing is decided: it is the session's death and no verdict on the
     /// line (§3c.4).
@@ -778,15 +795,22 @@ enum Round {
 
 /// What one `retrieve_v` at a held burst's site says of its values.
 ///
-/// It is §3c.5's content confirm.
+/// It is §3c.5's content confirm, read on the document as it stands
+/// ([`Holds::site`]) or as of a row's position through `/op-at`
+/// ([`Holds::site_at`]; skep #985).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Site {
     /// The values read back equal: the burst stands there.
     ///
-    /// `as_of` is the position the read answered at, where it names one: the
-    /// state the address of the burst's words is read at (skep #969).
+    /// `as_of` is the position the read answered at, where it names one —
+    /// the row's own, through `/op-at`: the state the address of the burst's
+    /// words is read at (skep #969).
     Equal { as_of: Option<u64> },
     /// Other values, or none (the site out of the document's bounds).
+    ///
+    /// Through `/op-at`, it is every answer naming no state of the position
+    /// that holds the values: a rejection, a position faulted or reclaimed, a
+    /// refusal of the route.
     Differs,
     /// No read can decide.
     ///
@@ -794,6 +818,9 @@ enum Site {
     /// site.
     Unconfirmable,
     /// The board answered the read with no delivery: an answer no read takes.
+    ///
+    /// Through `/op-at`, every reconstruction permit in use (`history_busy`)
+    /// is one too.
     Unread,
     /// The board gave the read no answer (skep #863).
     Unanswered,
@@ -1404,22 +1431,37 @@ impl Holds {
     /// this shell — the `skep` command's — the set cannot tell apart, named as
     /// the residue. The site ([`Holds::site`])
     /// is the document's now, read once for the first row that asks for it:
-    /// an `insert` whose values stand at its site landed; one whose values do
-    /// not is no landing the read can confirm, so the read ends there
-    /// [`ReadOutcome::Undecided`]; a kind no read confirms trusts the own
+    /// an `insert` whose values stand at its site landed. One whose values do
+    /// not may have landed and been moved by a write since — another hand's
+    /// words put before it, its words deleted — so the site is read again as
+    /// that row's own commit left it, through `/op-at` at its position
+    /// ([`Holds::landing_as_of`]; skep #985): values that stand there are the
+    /// landing, at that row; values that do not, or an answer naming no state
+    /// of the position, are no landing the read can confirm, so the read ends
+    /// there [`ReadOutcome::Undecided`], no row after it read. A kind no read
+    /// confirms trusts the own
     /// hand and the op alone, and trusts a row whose hand is lost not at all,
     /// such a row leaving the read undecided where no later row is the
     /// landing. Every other row — the person's own later write of another
     /// kind, a sibling's, another hand's — is no verdict: whether the
     /// document moved is the board's (`arrangement_moved`,
-    /// [`Holds::send_line`]), not this read's. A page, or the site read, the
+    /// [`Holds::send_line`]), not this read's. A page, or a site read, the
     /// board gives no answer to is [`ReadOutcome::Unanswered`] (skep #863),
-    /// the death signal at either is [`ReadOutcome::Died`], and every other
-    /// answer that is no page [`ReadOutcome::Unread`]. A landing it finds of
-    /// an insert costs one read more, the `/op-at` image of its site that
-    /// names the address its words were minted at ([`Holds::landed`]; skep
-    /// #998). It is the resend's read and the drop's (`Holds::resolve`; skep
-    /// #866), made outside every lock.
+    /// the death signal at any is [`ReadOutcome::Died`], and every other
+    /// answer that is no page — every reconstruction permit in use at the
+    /// `/op-at` site read among them — [`ReadOutcome::Unread`]. It is the
+    /// resend's read and the drop's (`Holds::resolve`; skep #866), made
+    /// outside every lock.
+    ///
+    /// **Its cost** (SP-23): the `/changes` pages since `base`, read on until
+    /// a row decides it or no page is left; one live `retrieve_v` of the
+    /// head's site, for the first row that asks; where that site holds other
+    /// values, one `/op-at` `retrieve_v` at that row's position, a
+    /// reconstruction permit of the board's (wire.md §Reading history); and,
+    /// for an insert it finds landed, one `/op-at` `image` of its site, the
+    /// address its words were minted at ([`Holds::landed`]; skep #998). A
+    /// read takes two reconstruction permits at most, one after the other,
+    /// whatever the rows it reads.
     pub(super) fn read_outcome(&self, session: &SessionEntry, doc: &str, head: &HeldLine) -> ReadOutcome {
         let board_reference = session.board_reference.as_str();
         let mut query = ChangesQuery { since: head.base, under: Some(doc), drafts: true, limit: None };
@@ -1460,9 +1502,10 @@ impl Holds {
                     // A kind the site read cannot confirm trusts the op-and-hand
                     // match; a row whose hand the board lost has none to trust.
                     Site::Unconfirmable => (own, None),
-                    // The head's values do not stand at its site: the row is no
-                    // landing the read can confirm, nor any row after it.
-                    Site::Differs => return ReadOutcome::Undecided,
+                    // The head's values do not stand at its site now: the row
+                    // is the landing where they stood there as its own commit
+                    // left it, and no row after it is read.
+                    Site::Differs => return self.landing_as_of(session, doc, head, at),
                     Site::Unread => return ReadOutcome::Unread,
                     Site::Unanswered => return ReadOutcome::Unanswered,
                     Site::Died => return ReadOutcome::Died,
@@ -1477,6 +1520,30 @@ impl Holds {
             }
             query.since = page.last;
             query.limit = None;
+        }
+    }
+
+    /// Returns the outcome of a row whose site the head's values left (§3c.5).
+    ///
+    /// The row at `at` could be the head's landing, and the head's values do
+    /// not stand at its site now: a write since may have moved them (skep
+    /// #985). The site is read again as that row's own commit left it
+    /// ([`Holds::site_at`]), and values read back equal there are the
+    /// landing, kept at `at`, the address its words were minted at read at
+    /// `at` too ([`Holds::landed`]). A row with no position, values that do
+    /// not stand there either, and an answer naming no state of `at`, are no
+    /// landing the read can confirm ([`ReadOutcome::Undecided`]); a read that
+    /// decides nothing — no answer, every reconstruction permit in use, an
+    /// answer this client cannot read, the death signal — decides nothing
+    /// here either.
+    fn landing_as_of(&self, session: &SessionEntry, doc: &str, head: &HeldLine, at: Option<u64>) -> ReadOutcome {
+        let Some(at) = at else { return ReadOutcome::Undecided };
+        match self.site_at(session, doc, head, at) {
+            Site::Equal { .. } => self.landed(session, doc, head, Some(at), Some(at)),
+            Site::Differs | Site::Unconfirmable => ReadOutcome::Undecided,
+            Site::Unread => ReadOutcome::Unread,
+            Site::Unanswered => ReadOutcome::Unanswered,
+            Site::Died => ReadOutcome::Died,
         }
     }
 
@@ -1581,15 +1648,12 @@ impl Holds {
 
     /// Confirms an `insert`'s site by its content (§3c.5).
     ///
-    /// It makes one `retrieve_v` at the site, as wide as the values its frame
-    /// spells, the delivery read back as values and held to them, and the
-    /// position it answered at kept beside an equal one (skep #969).
+    /// It makes one `retrieve_v` at the site ([`insert_site`]), as wide as the
+    /// values its frame spells, on the document as it stands, the delivery
+    /// read back as values and held to them, and the position it answered at
+    /// kept beside an equal one (skep #969).
     fn site(&self, session: &SessionEntry, doc: &str, head: &HeldLine) -> Site {
-        if head.frame["op"].as_str() != Some("insert") {
-            return Site::Unconfirmable;
-        }
-        let ordinal = head.frame["at"]["ordinal"].as_str().and_then(|o| o.parse::<u64>().ok());
-        let (Ok(want), Some(from)) = (values_of(&head.frame["values"]), ordinal) else { return Site::Unconfirmable };
+        let Some((from, want)) = insert_site(&head.frame) else { return Site::Unconfirmable };
         match session.board.op(Some(&session.token), &frames::retrieve_v(doc, from, want.len() as u64)) {
             Ok(Answer::Document(v)) if Rejection::of(&v).is_none() => {
                 if delivers(&v, &want) {
@@ -1600,6 +1664,34 @@ impl Holds {
             }
             Ok(Answer::Document(_)) => Site::Differs,
             Ok(Answer::Closed) => Site::Died,
+            Err(h) if unanswered(&h) => Site::Unanswered,
+            Err(_) => Site::Unread,
+        }
+    }
+
+    /// Confirms an `insert`'s site by its content as of the position `at`.
+    ///
+    /// It is [`Holds::site`]'s `retrieve_v` made through `/op-at` at `at`,
+    /// the position of a row that could be the head's landing (§3c.5;
+    /// wire.md §Reading history): the document as that row's own commit left
+    /// it, before any write since moved its words (skep #985). Values read
+    /// back equal there are the burst standing there, at `at`. Every answer
+    /// the board gives that names no state of `at` holding them — other
+    /// values, a rejection, a position the journal has reclaimed
+    /// (`history_reclaimed`) or names no state at (`not_a_position`,
+    /// `beyond_head`), a refusal of the route — differs, so a board that
+    /// serves no such read leaves the line as the live site read leaves it;
+    /// every reconstruction permit in use (`history_busy`) and an answer this
+    /// client cannot read are no answer the read takes.
+    fn site_at(&self, session: &SessionEntry, doc: &str, head: &HeldLine, at: u64) -> Site {
+        let Some((from, want)) = insert_site(&head.frame) else { return Site::Unconfirmable };
+        match session.board.op_at(Some(&session.token), at, &frames::retrieve_v(doc, from, want.len() as u64)) {
+            Ok(AtAnswer::Document(v)) if Rejection::of(&v).is_none() && delivers(&v, &want) => Site::Equal { as_of: Some(at) },
+            Ok(AtAnswer::Busy) => Site::Unread,
+            Ok(AtAnswer::Closed) => Site::Died,
+            // The board answered, and named no state of `at` holding the
+            // values.
+            Ok(_) | Err(Halt::Refused(_)) => Site::Differs,
             Err(h) if unanswered(&h) => Site::Unanswered,
             Err(_) => Site::Unread,
         }
@@ -2186,6 +2278,21 @@ fn passed_over(head: &HeldLine, head_unreadable: bool) -> bool {
 /// the head unread.
 fn read_owed(head: &HeldLine, head_unreadable: bool) -> bool {
     head.reason.sent && !passed_over(head, head_unreadable)
+}
+
+/// Returns the site an insert's frame names, and the values it seats there.
+///
+/// It is the first content position the frame's `at` names and its values
+/// as the wire spells them (`wire::values_of`): the site the read's two site
+/// reads, [`Holds::site`] and [`Holds::site_at`], confirm (§3c.5). It
+/// answers none for a burst of another kind, or a frame whose site or values
+/// do not read.
+fn insert_site(frame: &Value) -> Option<(u64, Vec<Cow<'_, [u8]>>)> {
+    if frame["op"].as_str() != Some("insert") {
+        return None;
+    }
+    let from = frame["at"]["ordinal"].as_str().and_then(|o| o.parse::<u64>().ok())?;
+    Some((from, values_of(&frame["values"]).ok()?))
 }
 
 /// Returns whether `delivery` delivers `want`, value for value and no more.

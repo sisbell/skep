@@ -17,7 +17,10 @@
 //! kept off the read, sent once, the signed session's own attested row kept
 //! by the resend, a refused run with its `behind` lines and `resolve`'s two
 //! acts, the drop of a refused or moved line whose write landed unacked
-//! naming it in `may_have_landed` (skep #993), a burst typed against an
+//! naming it in `may_have_landed` (skep #993), the drop of a handed-over
+//! line and the resend of a holding one each keeping a landing a later write
+//! moved — a delete before its words, or of them — by the site read through
+//! `/op-at` at the landing's position (skep #985), a burst typed against an
 //! older state held moved with the board's
 //! verdict and nothing of it landing where it carries no anchors, a second
 //! device's hand on it named by its recorded label, and one
@@ -787,6 +790,95 @@ fn a_drop_of_a_handed_over_line_whose_write_landed_answers_kept() {
     let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 3)})).unwrap();
     assert_eq!(text_of(&read), "abc", "the words stand on the board: {read}");
     assert_eq!(changes_under(&entry.board, &entry.token, &draft, at).len(), 1, "written once");
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// Dials `frame` under `entry` past the shell's hold, and returns its position.
+///
+/// It dials as the `skep` command dials, the position the board took the
+/// write at answered: the write's answer is the hold's never, and the shell
+/// knows nothing of it.
+fn dial_past_the_hold(shell: &Shell, entry: &SessionEntry, frame: &Value) -> u64 {
+    let attested = entry.attest(&shell.store, frame, || entry.signing_term()).unwrap();
+    let Answer::Document(answer) = entry.board.op(Some(&entry.token), &attested).unwrap() else { panic!("the dial closed") };
+    answer["at"].as_u64().unwrap_or_else(|| panic!("the write lands, its answer the hold's never: {answer}"))
+}
+
+/// Checks that a drop of a handed-over line keeps a landing a write moved.
+///
+/// It is against the real board (§3c.4, §3c.5; skep #985). A write of the
+/// session's, dialed past the shell's hold, lands `bc` after the draft's `a`
+/// unacked; a delete of `a`, dialed so too and typed at the landing's
+/// position, moves `bc` to the draft's first positions, so the site the
+/// burst names holds other values now. The same burst held as a line the
+/// shell handed the person under `answers_lost`, `sent`, the person's
+/// `resolve(drop)` reads the site again through `/op-at` at the landing's
+/// position, finds `bc` there and answers `{kept: true}`: no line stands,
+/// the draft reads `bc`, and the board holds the two writes' rows alone (the
+/// mutant that reads the site as the draft stands alone refuses the drop
+/// `landing_unread` `undecided`).
+#[test]
+fn a_drop_of_a_handed_over_line_keeps_a_landing_a_later_write_moved() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let HeldGround { shell, session, draft, at, .. } = held_ground(&dir, &sd);
+    let entry = shell.sessions.get(&session).unwrap();
+    let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["bc"], "as_of": at});
+    let landed_at = dial_past_the_hold(&shell, &entry, &frame);
+    dial_past_the_hold(&shell, &entry, &json!({"op": "delete", "doc": draft, "p": {"subspace": "1", "ordinal": "1"}, "width": "1", "as_of": landed_at}));
+    let lost = Refusal::shell(Name::ANSWERS_LOST, json!({"last": "unreachable", "elapsed_ms": 120_000})).to_value();
+    let reason = Reason { sent: true, ..Reason::refused(Name::ANSWERS_LOST.as_str(), lost) };
+    let held = shell.holds.hold(&entry, Burst::admit(frame, &entry).unwrap(), reason, Some("unreachable".into()), at).answered().unwrap();
+    let k = held["held"].as_u64().unwrap();
+    assert_eq!(shell.call("resolve", &json!({"session": session, "held": k, "act": "drop"})).unwrap(), json!({"kept": true}));
+    assert!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty(), "the line kept, nothing left held");
+    let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 2)})).unwrap();
+    assert_eq!(text_of(&read), "bc", "the words stand on the board, moved: {read}");
+    assert_eq!(changes_under(&entry.board, &entry.token, &draft, at).len(), 2, "the landing and the delete, nothing written by the drop");
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a resend keeps a landing whose words a later write deleted.
+///
+/// It is against the real board (§3c.5; skep #985). A write of the
+/// session's, dialed past the shell's hold, lands `bc` after the draft's `a`
+/// unacked; a delete of `bc`, dialed so too and typed at the landing's
+/// position, takes the words out again. The same burst held as a line
+/// holding `unreachable`, `sent`, carrying `a`'s identity as its `before`
+/// anchor, the probe's read finds its site past the draft's end, reads it
+/// again through `/op-at` at the landing's position, finds `bc` there and
+/// keeps the line, its `held` event naming it at that position and the
+/// address the board's `/op-at` image of the site there names: nothing is
+/// dialed, the draft reads `a`, and the board holds the two writes' rows
+/// alone (the mutant that reads the site as the draft stands alone resends
+/// the line, the board refuses it as typed against an older state, and the
+/// shift — `a` alone, at the draft's end, the anchors adjacent — lands `bc`
+/// a second time, undoing the delete).
+#[test]
+fn a_resend_keeps_a_landing_whose_words_a_later_write_deleted() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let ground = held_ground(&dir, &sd);
+    let a = identity_of_a(&ground);
+    let HeldGround { shell, seen, board, session, draft, at } = ground;
+    let entry = shell.sessions.get(&session).unwrap();
+    let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["bc"], "as_of": at});
+    let landed_at = dial_past_the_hold(&shell, &entry, &frame);
+    let Ok(AtAnswer::Document(image)) = entry.board.op_at(Some(&entry.token), landed_at, &skep_client::board::frames::image(&draft, 2, 2)) else { panic!("the landing's image reads") };
+    dial_past_the_hold(&shell, &entry, &json!({"op": "delete", "doc": draft, "p": {"subspace": "1", "ordinal": "2"}, "width": "2", "as_of": landed_at}));
+    let anchors = Anchors::of(&json!({"before": a, "after": null})).expect("the anchors' form");
+    let burst = Burst::admit(frame, &entry).unwrap().with_anchors(Some(anchors));
+    let held = shell.holds.hold(&entry, burst, Reason::of("unreachable", true), Some("unreachable".into()), at).answered().unwrap();
+    let k = held["held"].as_u64().unwrap();
+    shell.holds.probe(&board);
+    let kept = wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept");
+    assert_eq!(kept.data["landed"], json!([{"held": k, "at": landed_at, "addr": image["runs"][0]["i_start"]}]), "the line kept at the landing's position: {}", kept.data);
+    assert!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty(), "no line stands");
+    let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 3)})).unwrap();
+    assert_eq!(text_of(&read), "a", "the delete stands, the words landed once: {read}");
+    assert_eq!(changes_under(&entry.board, &entry.token, &draft, at).len(), 2, "the landing and the delete, nothing resent");
     shell.shutdown();
     sd.shutdown();
 }

@@ -217,25 +217,28 @@
 //! publishes into another document is no landing's panel: a shot through it
 //! would publish the merge outside the document merged, so the row is refused
 //! `other_panel` naming the draft and the panel's `doc` or `mint`, every panel
-//! of the family as it stood. The panel the page left over the draft was read
-//! under one merge marker: none where it was opened before the compose, an
-//! earlier merge's where it was opened over one, and a re-open keeps the
-//! marker with the selection it read. Where the draft now carries another,
-//! the row keys the panel on the draft as it stands before the shot
-//! (`Shell::landing_panel`), as a confirm on a moved base keys it: the base
-//! read and typed again, the claim composed again from the marker, a panel
-//! of the whole draft re-taking what the draft arranges, the draft side
-//! named `also` as a panel the row opens itself names it, and the panel
-//! read again whole. A panel of the whole draft then goes on to the shot in
-//! the one call, what the merge changed being the person's own act, save
+//! of the family as it stood. Past that refusal the row reads the draft's
+//! merge marker and tests it against its composition before any keying
+//! (`shell/merge.rs`, **`merge.land`**; skep #992): a draft carrying another
+//! merge, or none, is refused before a panel is keyed or opened, so no panel
+//! is keyed on a merge the person did not compose. The panel the page left
+//! over the draft was read under one merge marker: none where it was opened
+//! before the compose, an earlier merge's where it was opened over one, and a
+//! re-open keeps the marker with the selection it read. Where that is not the
+//! marker the row tested, the row keys the panel on the draft as it stands
+//! before the shot (`Shell::landing_panel`), as a confirm on a moved base
+//! keys it: the base read and typed again, the claim composed again from the
+//! marker, a panel of the whole draft re-taking what the draft arranges, the
+//! draft side named `also` as a panel the row opens itself names it, and the
+//! panel read again whole. A panel of the whole draft then goes on to the shot
+//! in the one call, what the merge changed being the person's own act, save
 //! where the re-read's `came` names a link on a private row switched on: a
 //! row ON publishes every link it holds, and that one the panel never
 //! offered, so the re-statement goes first, `selection` and `parts` empty,
 //! the runs' indices no longer lining up (PUB-3.108). A selection the page
 //! passed stays held, and any difference, a moved base or standing among
 //! them, is re-stated with nothing sent. A panel read under the marker the
-//! draft carries lands as the open read it, its windows re-read where no
-//! merge was marked at the open.
+//! row tested lands as the open read it.
 //!
 //! **The family left behind** (skep #744): every draft `also` names, then —
 //! where the publication becomes the head, its standing `at_head` or
@@ -328,6 +331,14 @@ pub(super) struct PanelState {
 impl PanelState {
     fn draft(&self) -> &Address {
         &self.inputs.draft
+    }
+
+    /// Returns the merge marker the panel is keyed on.
+    ///
+    /// It is the one the draft carried when the selection was read; `None`
+    /// at an unmarked draft and at the mint form.
+    pub(super) fn marker(&self) -> Option<&MergeMarker> {
+        self.marker.as_ref()
     }
 
     /// Returns the refusal of a landing through this panel, `other_panel`.
@@ -658,7 +669,7 @@ impl Shell {
     ///
     /// The draft's `doc_metadata` read's (`metadata_read`), `shape` where
     /// its answer is no `doc_metadata` answer.
-    fn draft_marker(&self, session: &SessionEntry, draft: &Address) -> Result<Option<MergeMarker>, Refusal> {
+    pub(super) fn draft_marker(&self, session: &SessionEntry, draft: &Address) -> Result<Option<MergeMarker>, Refusal> {
         let v = self.metadata_read(session, draft)?;
         merge_marker(&v).ok_or_else(|| Refusal::shell(Name::SHAPE, json!({"op": "doc_metadata", "body": clipped(&v.to_string(), 200)})))
     }
@@ -1319,31 +1330,34 @@ impl Shell {
     /// `state` is the page's panel over the draft a composition landed in, as
     /// `Publications::stood_for` stood it over `trunk`, the composition's
     /// document, for `merge.land`; `side` is the composition's draft side,
-    /// where it has one; and the re-statement is the one the row answers in the
-    /// panel's place (the module doc, **The landing**). A panel read under the
-    /// merge marker the draft carries is left as it stands, the windows re-read
-    /// where no merge was marked at the open. A panel read under another is
-    /// keyed on the draft as it stands and read again whole, its answers
-    /// carried onto what it reads now, and stood for the row to confirm. Its
-    /// re-statement, the difference between the panel the page last held and
-    /// this one, is owed where the page passed the selection, and at a panel of
-    /// the whole draft only where the merge brought a link onto a private row
-    /// the page switched on (PUB-3.108). Nothing is sent here.
+    /// where it has one; `marker` is the merge marker the draft carries, read
+    /// by the row and tested to mark its composition before this keying (skep
+    /// #992); and the re-statement is the one the row answers in the panel's
+    /// place (the module doc, **The landing**). A panel read under `marker` is
+    /// left as it stands. A panel read under another is keyed on the draft as
+    /// it stands and read again whole, its answers carried onto what it reads
+    /// now, and stood for the row to confirm. Its re-statement, the difference
+    /// between the panel the page last held and this one, is owed where the
+    /// page passed the selection, and at a panel of the whole draft only where
+    /// the merge brought a link onto a private row the page switched on
+    /// (PUB-3.108). Nothing is sent here.
     ///
     /// # Errors
     ///
     /// In this order, each naming `merge.land`, the composition's reads
-    /// refused as `publication.open` refuses them: the marker's read
-    /// (`draft_marker`); then the windows' reads (`reread_windows`), or the
-    /// keying's — the base's and the standing's (`typed_base`),
-    /// `base_unrecorded` with the `publication` event's `refused` naming it,
-    /// the head probe's (`marker_claim`), `whole_draft`'s, the re-read's and
-    /// the pricing's.
+    /// refused as `publication.open` refuses them: the keying's — the base's
+    /// and the standing's (`typed_base`), `base_unrecorded` with the
+    /// `publication` event's `refused` naming it, the head probe's
+    /// (`marker_claim`), `whole_draft`'s, the re-read's and the pricing's.
     ///
     /// # Panics
     ///
     /// In a debug build, where `state` publishes into no document or another
-    /// than `trunk`: a panel `Publications::stood_for` did not stand for it.
+    /// than `trunk`: a panel `Publications::stood_for` did not stand for it;
+    /// and where `state` was read under `marker` with no merge landing
+    /// flagged, since every open, confirm and landing that reads a panel under
+    /// a marker flags one (`lib::Inputs::merge_landing`).
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn landing_panel(
         &self,
         session: &SessionEntry,
@@ -1352,22 +1366,18 @@ impl Shell {
         state: &mut PanelState,
         trunk: &Address,
         side: Option<&Address>,
+        marker: &MergeMarker,
     ) -> Result<Option<Value>, Refusal> {
         debug_assert_eq!(state.inputs.doc.as_ref(), Some(trunk), "a landing's panel publishes into the composition's document");
         let p = signed.publisher(session);
         let fault = |f: Fault| self.fault(session, "merge.land", f);
         let draft = state.draft().clone();
-        let marker = self.draft_marker(session, &draft)?;
-        if marker == state.marker {
-            if !state.inputs.merge_landing {
-                state.inputs.merge_landing = true;
-                Self::reread_windows(&p, state, fault)?;
-                self.publications.stand(key.clone(), state.clone());
-            }
+        if state.marker.as_ref() == Some(marker) {
+            debug_assert!(state.inputs.merge_landing, "a panel read under a merge marker is composed as a merge landing");
             return Ok(None);
         }
         let (base, standing) = self.typed_base_again(session, &p, "merge.land", trunk, &draft)?;
-        let mut inputs = self.inputs_keyed(session, state, trunk, base, marker.as_ref())?;
+        let mut inputs = self.inputs_keyed(session, state, trunk, base, Some(marker))?;
         inputs.merge_landing = true;
         if let Some(side) = side.filter(|side| !inputs.also.contains(side)) {
             inputs.also.push(side.clone());
@@ -1400,7 +1410,7 @@ impl Shell {
         state.enumeration = rr.enumeration;
         state.panel = rr.panel;
         state.inputs = inputs;
-        state.marker = marker;
+        state.marker = Some(marker.clone());
         state.standing = Some(standing);
         state.base = match widest(&p, &state.inputs, &state.enumeration, &state.panel) {
             // Nothing of the selection stands to price; the build then

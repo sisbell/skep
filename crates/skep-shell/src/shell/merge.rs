@@ -84,14 +84,28 @@
 //! as they stood. The way on is `publication.cancel` of that panel, a held
 //! one re-opened first, then `merge.land` again; confirming it instead
 //! publishes the draft as a document of its own, whose base no longer lies
-//! in the trunk's chain, and the row is then refused `base_unrecorded`. A
-//! panel the page opened
-//! under another merge marker than the draft now carries, before the
-//! compose or over an earlier merge, is first keyed on the draft as it
+//! in the trunk's chain, and the row is then refused `base_unrecorded`. The
+//! landing goes on only over a draft that still carries the composition's
+//! merge (skep #992): the draft's marker — read past that refusal where the
+//! page's panel stands, by the open where the row opens its own — must name
+//! the composition's side and its head (`Composition::marks`) before any
+//! panel is keyed on it. A draft carrying another merge — another hand's
+//! landing since the compose, on another device or by `skep merge`, or the
+//! same side composed on another head — or carrying none, a withdrawal
+//! since, is refused `no_merge` naming the draft: the page's panel, standing
+//! or held, made the standing one as the page left it and keyed on nothing,
+//! the panel the row opened dropped, nothing sent and no record written. The
+//! composition is dropped with it, the draft no longer carrying it, so a
+//! later `merge.undo` answers `no_merge` and never takes another hand's
+//! landing back. The marker so tested is the one the panel is keyed on, and
+//! the shot sends only under the panel it is handed, so the record written
+//! after the acknowledgment names the merge the member holds. A panel the
+//! page opened under another merge marker than the draft now carries, before
+//! the compose or over an earlier merge, is first keyed on the draft as it
 //! stands (`Shell::landing_panel`; `shell/publication.rs`, **The landing**),
 //! so the landing answers as it would over a panel opened on this draft and
-//! marker. The landing answers no window part for its caller: a part with
-//! no answer refuses the row `window_parts_owed` (the merge record's §1.5),
+//! marker. The landing answers no window part for its caller: a part with no
+//! answer refuses the row `window_parts_owed` (the merge record's §1.5),
 //! nothing sent, every part named whole by the library's one refusal
 //! (`owed_parts`), the same the `skep merge --publish` refusal comes from.
 //! So the claim is composed in one place, the panel's read of the marker at
@@ -152,16 +166,19 @@
 //! dying with it, dropped by the bus's watcher at `session-died` as the
 //! panels are, saying nothing: a composition's state crosses in its calls'
 //! answers alone, and the contract names no event for the family. `land`
-//! and `undo` with nothing standing answer `no_merge`. A landing into the
-//! draft the standing composition stands in, over that composition's marker
-//! as the compose read it there — its side among the marker's sides and its
-//! head the marker's — sets the composition aside by the marker's `at`, and
-//! the undo that puts that marker back stands it again: while the session
-//! lasts, undo after undo takes the draft's merges back a landing at a time
-//! (skep #981). Over any other marker — another hand's landing, or one the
-//! draft's stage copied while the composition stood in the draft it came
-//! from — nothing is set aside, so the undo that puts it back leaves nothing
-//! standing and the next `undo` answers `no_merge`.
+//! and `undo` with nothing standing answer `no_merge` naming the session, and
+//! `land` over a draft that no longer carries the standing composition's
+//! merge drops it, answering `no_merge` naming the draft (**`merge.land`**).
+//! A landing into the draft the standing composition stands in, over that
+//! composition's marker as the compose read it there — its side among the
+//! marker's sides and its head the marker's — sets the composition aside by
+//! the marker's `at`, and the undo that puts that marker back stands it
+//! again: while the session lasts, undo after undo takes the draft's merges
+//! back a landing at a time (skep #981). Over any other marker — another
+//! hand's landing, or one the draft's stage copied while the composition
+//! stood in the draft it came from — nothing is set aside, so the undo that
+//! puts it back leaves nothing standing and the next `undo` answers
+//! `no_merge`.
 //!
 //! **The door.** Every row meets the shell's one write door before any
 //! read it makes (`Shell::write_door`, through `Shell::signed`), with the
@@ -273,8 +290,10 @@ impl Composition {
     /// Returns whether `marker`, read on `draft`, marks this merge.
     ///
     /// It does where `draft` is the one the composition stands in and the
-    /// marker names its side and its head: the test by which
-    /// `merge.compose` re-opens a landing it finds.
+    /// marker names its side and its head: the test by which `merge.land`
+    /// lands only over a draft that still carries this merge
+    /// (`Shell::carried`; skep #992), and by which a later landing in the
+    /// draft sets this composition aside (`Merges::stand_over`).
     fn marks(&self, draft: &Address, marker: &MergeMarker) -> bool {
         self.into == *draft && marker.sides.contains(&self.form.side().to_string()) && marker.head == self.merged.inputs.head.to_string()
     }
@@ -625,6 +644,28 @@ impl Shell {
         }
     }
 
+    /// Returns `marker` where it marks the standing composition's merge.
+    ///
+    /// `marker` is the merge marker the draft the composition stands in
+    /// carries, as `merge.land` read it before any panel is keyed on it (the
+    /// module doc, **`merge.land`**; skep #992). It marks the merge where it
+    /// names the composition's side and its head (`Composition::marks`).
+    ///
+    /// # Errors
+    ///
+    /// Returns `no_merge` naming the draft where `marker` marks another merge
+    /// or the draft carries none, the composition `key` names taken out: the
+    /// draft no longer carries it.
+    fn carried<'m>(&self, key: &(String, u64), composition: &Composition, marker: Option<&'m MergeMarker>) -> Result<&'m MergeMarker, Refusal> {
+        match marker.filter(|m| composition.marks(&composition.into, m)) {
+            Some(marker) => Ok(marker),
+            None => {
+                self.merges.take(key);
+                Err(Refusal::shell(Name::NO_MERGE, json!({"draft": composition.into.to_string()})))
+            }
+        }
+    }
+
     // ── The rows ─────────────────────────────────────────────────────────
 
     /// Answers `merge.compose(session, {doc, alternative, into?})`, or THE
@@ -910,10 +951,16 @@ impl Shell {
     /// draft, standing or held, publishes into another document than the
     /// composition's or mints an edition — nothing read, every panel and the
     /// composition as they stood, the panel to be cancelled before the row
-    /// lands (`publication.cancel`, a held panel re-opened first); the
-    /// panel's open's where the shell opens one (`publication.open`'s steps
-    /// 4 to 6), or, where a panel stands or is held, its keying's on the
-    /// draft as it stands (`Shell::landing_panel`);
+    /// lands (`publication.cancel`, a held panel re-opened first); where a
+    /// panel stands or is held, the draft's marker read's — `unreadable` or
+    /// `no_such_document` naming the draft, the board's verdicts verbatim,
+    /// `unreachable`, `session_died`, `shape` naming `doc_metadata` — then
+    /// `no_merge` naming the draft where the marker marks no merge of the
+    /// composition's or the draft carries none, the composition dropped and
+    /// nothing keyed (skep #992), then its keying's on the draft as it stands
+    /// (`Shell::landing_panel`); or, where the shell opens one, the panel's
+    /// open's (`publication.open`'s steps 4 to 6), then `no_merge` naming the
+    /// draft as above, the panel opened dropped;
     /// `malformed_args` naming `answers` where one is no `⟨run⟩.⟨part⟩` of a
     /// part the panel holds or one the part does not admit; the words' reads
     /// of the window parts' refusal
@@ -950,10 +997,15 @@ impl Shell {
         // keyed on the draft as it stands where it was read under another
         // merge marker, or one opened here over the whole draft, the draft
         // side named `also`; a panel of the draft in another form refuses.
+        // Either is keyed only on a marker that marks the composition's
+        // merge, tested before any keying: the page's panel against the
+        // marker read now, the opened one against the marker its open read.
         let doc = &composition.merged.inputs.doc;
         let state = match self.publications.stood_for(&key, &into, doc, &session.reference)? {
             Some(mut state) => {
-                if let Some(restated) = self.landing_panel(&session, &signed, &key, &mut state, doc, side.as_ref())? {
+                let read = self.draft_marker(&session, &into)?;
+                let marker = self.carried(&key, &composition, read.as_ref())?;
+                if let Some(restated) = self.landing_panel(&session, &signed, &key, &mut state, doc, side.as_ref(), marker)? {
                     return Ok(restated);
                 }
                 state
@@ -964,6 +1016,7 @@ impl Shell {
                     Form::Daughter(_) => Vec::new(),
                 };
                 let (state, _) = self.open_panel(&session, &signed, OpenArgs { draft: into.clone(), also, doc: Some(doc.clone()), mint: None, claim: false, selection: None, notes: None, readable_drafts: None, published: None, merge_landing: true })?;
+                self.carried(&key, &composition, state.marker())?;
                 self.publications.stand(key.clone(), state.clone());
                 state
             }

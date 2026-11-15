@@ -17,7 +17,11 @@
 //! landed in a named draft, or again by the fresh path — the composition
 //! stood again the earlier merge's and landing with its record, and none
 //! stood again over a marker the draft's stage copied, over another hand's
-//! landing or past its session's end (skep #981); the
+//! landing or past its session's end (skep #981); a landing over a draft
+//! that no longer carries its merge — another device's landing in it, under
+//! the page's panel or the row's own, the same side marked on a newer head,
+//! or a withdrawal — refused `no_merge` naming the draft, nothing sent and
+//! the composition dropped (skep #992); the
 //! landing, the undo and the withdrawal refused `held_lines` over the
 //! draft's held lines, a burst held behind them, and the undo going out once
 //! the run is dropped; the rows refused `stopped` and `poisoned` under those
@@ -843,6 +847,110 @@ fn a_landing_over_another_hands_merge_in_the_draft_sets_nothing_aside() {
     };
     cell(false);
     cell(true);
+}
+
+/// What another hand did to L after the composition landed in it.
+#[derive(Debug, Clone, Copy)]
+enum SinceTheCompose {
+    /// A second device landed E.1.2's merge in L.
+    Landed,
+    /// The same, the page's panel over the whole of L opened before it.
+    LandedUnderThePagesPanel,
+    /// E.3 was published and E.1.1's merge on E.3 marked in L by hand.
+    MarkedOnANewerHead,
+    /// The second device withdrew L's merge.
+    Withdrawn,
+}
+
+/// Checks that a landing over a draft that no longer carries its merge is
+/// refused `no_merge` naming the draft (skep #992).
+///
+/// Four cells against the daemon. E.1.2 is published and E.1.1's merge is
+/// composed into L here; then another hand acts on L ([`SinceTheCompose`]).
+/// `merge.land` is refused exactly `no_merge` naming L — the board's position
+/// unmoved, the next trunk member unregistered, L's marker as the other hand
+/// left it — and the composition is gone: `merge.land` and `merge.undo` then
+/// answer `no_merge` naming the session, nothing sent. Where the row opened
+/// its own panel none stands after it, `publication.confirm` answering
+/// `no_panel`; the page's panel stands as the page left it, keyed on nothing,
+/// so its confirm re-states E.1.1's words gone from L, nothing sent (the
+/// mutants that publish the other hand's merge, or a withdrawn one, and
+/// record the composition as landed in it; that test the side alone and land
+/// E.1.1's merge on E.3; that keep the composition, whose undo takes the other
+/// device's landing back or answers for the withdrawn one; that stand the
+/// panel the row opened; and that key the page's panel on the other hand's
+/// marker before the test, whose confirm then publishes that merge).
+#[test]
+fn a_landing_over_a_draft_no_longer_carrying_its_merge_is_refused_naming_the_draft() {
+    let cell = |since: SinceTheCompose| {
+        let dir = TempDir::new().unwrap();
+        let sd = spawn(&dir.path().join("board"), true);
+        let g = ground(&dir, &sd);
+        let f = family(&g);
+        let e12 = another_daughter(&g, &f, " later");
+        let l = g.addr(frames::stage(&f.e2, None));
+        merged_into(&g, &f, &f.e11, &l);
+        let mut next = format!("{}.3", f.edition);
+        match since {
+            SinceTheCompose::Landed | SinceTheCompose::LandedUnderThePagesPanel => {
+                if matches!(since, SinceTheCompose::LandedUnderThePagesPanel) {
+                    let panel = page_panel(&g, &f, &l);
+                    assert_eq!(panel["count"]["supersede"], json!([f.e11]), "the premise: the page's panel read under E.1.1's merge: {panel}");
+                }
+                let second = second_device(&dir, &sd);
+                let landed = second.call("merge.compose", json!({"session": second.session, "doc": f.edition, "alternative": e12, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+                assert_eq!((landed["outcome"].as_str(), landed["into"].as_str()), (Some("landed"), Some(l.as_str())), "the premise: the device's landing in L: {landed}");
+                second.shell.shutdown();
+                assert_eq!(g.op(frames::doc_metadata(&l))["merge"]["sides"], json!([e12]), "{since:?}: the premise: L carries E.1.2's merge");
+            }
+            SinceTheCompose::MarkedOnANewerHead => {
+                let e3 = the_next_version(&g, &f);
+                let entry = g.shell.sessions.get(&g.session).unwrap();
+                let a = |s: &str| parse_address(s).unwrap();
+                let inputs = Inputs { doc: a(&f.edition), head: a(&e3), base: None, sides: vec![Side::Member(a(&f.e11))], options: skep_client::merge::Options::default(), kind: a(KIND) };
+                let merged = skep_client::merge::compose(&entry.board, Some(&entry.token), &inputs).unwrap_or_else(|r| panic!("{r:?}"));
+                mark(&g, &bare(&g, 1), &l, &merged, &f.e11);
+                let marker = g.op(frames::doc_metadata(&l))["merge"].clone();
+                assert_eq!((marker["sides"].clone(), marker["head"].as_str()), (json!([f.e11]), Some(e3.as_str())), "the premise: L carries E.1.1's merge on E.3: {marker}");
+                next = format!("{}.4", f.edition);
+            }
+            SinceTheCompose::Withdrawn => {
+                let second = second_device(&dir, &sd);
+                second.call("merge.withdraw", json!({"session": second.session, "draft": l})).unwrap_or_else(|r| panic!("{r}"));
+                second.shell.shutdown();
+                assert!(g.op(frames::doc_metadata(&l))["merge"].is_null(), "the premise: L carries no merge");
+            }
+        }
+        let marker = g.op(frames::doc_metadata(&l))["merge"].clone();
+        let before = g.position();
+        let refused = g.call("merge.land", json!({"session": g.session})).unwrap_err().to_value();
+        assert_eq!(refused, json!({"kind": "shell", "name": "no_merge", "draft": l}), "{since:?}: {refused}");
+        assert_eq!(g.position(), before, "{since:?}: nothing sent");
+        let entry = g.shell.sessions.get(&g.session).unwrap();
+        let Answer::Document(probe) = entry.board.op(Some(&entry.token), &frames::doc_metadata(&next)).unwrap() else { panic!("the session stands") };
+        assert_eq!(probe["code"].as_str(), Some("doc_not_registered"), "{since:?}: no member published: {probe}");
+        for call in ["merge.land", "merge.undo"] {
+            let refused = g.call(call, json!({"session": g.session})).unwrap_err();
+            let v = refused.to_value();
+            assert_eq!((refused.name(), v["session"].as_str()), ("no_merge", Some(g.session.as_str())), "{since:?}: {call}: the composition dropped: {v}");
+        }
+        let confirmed = g.call("publication.confirm", json!({"session": g.session}));
+        match since {
+            SinceTheCompose::LandedUnderThePagesPanel => {
+                let restated = confirmed.unwrap_or_else(|r| panic!("{r}"));
+                assert_eq!(restated["outcome"].as_str(), Some("restated"), "the page's panel as the page left it, keyed on nothing: {restated}");
+            }
+            _ => assert_eq!(confirmed.unwrap_err().name(), "no_panel", "{since:?}: the panel the row opened is not stood"),
+        }
+        assert_eq!(g.position(), before, "{since:?}: nothing sent");
+        assert_eq!(g.op(frames::doc_metadata(&l))["merge"], marker, "{since:?}: L's marker as the other hand left it");
+        g.shell.shutdown();
+        sd.shutdown();
+    };
+    cell(SinceTheCompose::Landed);
+    cell(SinceTheCompose::LandedUnderThePagesPanel);
+    cell(SinceTheCompose::MarkedOnANewerHead);
+    cell(SinceTheCompose::Withdrawn);
 }
 
 /// Checks that the landing, the undo and the withdrawal are refused over

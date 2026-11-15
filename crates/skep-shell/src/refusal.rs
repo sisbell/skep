@@ -361,20 +361,23 @@ impl Name {
     /// pieces resolve against, or they resolve to anchors of no form; `stop`
     /// where the shell's stop came before the burst's answer.
     pub const NOT_FOLLOWED: Name = Name("not_followed");
-    /// A `merge.land` or a `merge.undo` with no composition standing, or a
-    /// `merge.withdraw` of a draft carrying no merge.
+    /// A merge row with no merge to land, take back or take out.
     ///
-    /// None was composed under the session's board and principal, it was
-    /// landed or taken back — an undo standing none again where the marker
-    /// it put back is no landing's whose composition the shell set aside
-    /// (skep #981) — or it went with its session (the family's one
-    /// session rule; `client.md` §4b.1's merge row, "`no_merge` at `land`
-    /// with nothing composed"); at the withdrawal the draft carries no marker
+    /// At `merge.land` and `merge.undo` no composition stands: none was
+    /// composed under the session's board and principal, it was landed or
+    /// taken back — an undo standing none again where the marker it put back
+    /// is no landing's whose composition the shell set aside (skep #981) — or
+    /// it went with its session (the family's one session rule; `client.md`
+    /// §4b.1's merge row, "`no_merge` at `land` with nothing composed"). At
+    /// `merge.land` the draft the standing composition stands in carries
+    /// another merge or none — another hand's landing or withdrawal since the
+    /// compose — and the composition is dropped, nothing sent (skep #992). At
+    /// the withdrawal the draft carries no marker
     /// (`skep_client::merge::Refusal::NoMerge`); at a withdrawal's undo the
     /// position names no withdrawal of the draft
     /// (`skep_client::merge::Refusal::NoWithdrawal`; skep #870). The detail
-    /// names the `session`, or the `draft`, with the `withdrawal` named
-    /// beside it at a withdrawal's undo.
+    /// names the `session` where no composition stands, else the `draft`,
+    /// with the `withdrawal` named beside it at a withdrawal's undo.
     pub const NO_MERGE: Name = Name("no_merge");
     /// A `merge.land` over a panel of the draft in another form or document.
     ///

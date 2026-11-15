@@ -1,33 +1,45 @@
-//! THE GUEST-READING RESOLVE (REG-3.24, REG-3.33): a reader holding no
-//! mirror answers a prefix by SCANNING — every CANDIDATE BINDING of the
-//! board, REG-3.24's word: every binding-typed link, by its class — each
-//! link read, each atom fetched — inside the design and outside the
-//! availability claim, exactly as available as the root. It holds no
-//! positions, so no record it reads can be judged as of one: its verdicts
-//! are UNDETERMINABLE HERE. Built here to be PRICED ([`GuestCost`]), never
-//! to be the hot-loop reader. A child of `walk`: its answer renders through
-//! the walk's own faces ([`face_of`]).
+//! The guest-reading resolve answers a prefix with no mirror (REG-3.33).
 //!
-//! It folds what it reads into a [`Ledger`] — the rules alone — and never
+//! It scans every candidate binding, REG-3.24's word: every binding-typed
+//! link in the binding home, by its class, each link read and each atom
+//! fetched. The read is inside the design and outside the availability
+//! claim, exactly as available as the root. It holds no positions, so no
+//! record it reads can be judged as of one: every verdict it answers is
+//! [`Verdict::UndeterminableHere`]. It is built to be priced
+//! ([`GuestCost`]), never to be the hot-loop reader. A child of `walk`, it
+//! renders its answer through the walk's own faces ([`face_of`]).
+//!
+//! **The binding home** (REG-2.5, REG-2.6, REG-2.8; R5 (g)) is read first,
+//! off the board's one claim (AUTH-2.67, AUTH-2.68): the claimant's doc 1,
+//! as the mirror takes it, on the unforked lineage the mirror reads — neither
+//! reader builds a forked lineage's cut. Bindings are read from that home
+//! alone: a binding-typed record any other account deposits in its own doc 1
+//! is that account's content and no binding (REG-2.6), and is never read. A
+//! board holding no claim binds no prefix, so every prefix is unregistered
+//! there and no binding is scanned; a board serving two claims is refused,
+//! since a board admits one.
+//!
+//! What it reads is folded into a [`Ledger`] — the rules alone — and never
 //! into an [`Index`](crate::index::Index), whose one writer is the mirror's
-//! gate: every candidate binding the class scan lists, FROM EVERY HOME — the
-//! binding home's bindings and the records REG-2.6 calls no binding alike —
-//! each UNDETERMINABLE HERE. Neither the verdict nor the registrar's home
-//! (REG-2.8) admits what this resolve answers from.
+//! gate. The binding home's candidate bindings are folded in that home's
+//! link order, which is journal order within one home and so the folds' one
+//! precondition. No verdict admits what this resolve answers from; the
+//! binding home alone bounds it.
 
 use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
 
-use skep_address::Address;
+use skep_address::{document_of, Address};
 use skep_identity::{doc_1_of, Enrolled};
-use skep_registry::{parse, t_binding, t_endpoint, Body, BodyKind};
+use skep_registry::{commons_type, parse, t_binding, t_endpoint, Body, BodyKind};
 
 use super::face_of;
 use crate::board::{
     atom_of, content_extent, content_ordinal_in, image_frame, retrieve_frame, runs_of, span_set_frame,
-    v_ordinal_in, Board, BoardError,
+    v_ordinal_in, Board, BoardError, LinkSlots,
 };
 use crate::index::Ledger;
+use crate::mirror::account_of_document;
 use crate::origin::{NameResolver, Transports};
 use crate::state::{BindingRecord, EndpointRecord, Judged, Resolution, Verdict};
 
@@ -35,8 +47,10 @@ use crate::state::{BindingRecord, EndpointRecord, Judged, Resolution, Verdict};
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct GuestCost {
-    /// Candidate bindings the class scan listed: binding-typed links from
-    /// every home (REG-3.24).
+    /// Candidate bindings the scan listed in the binding home (REG-3.24).
+    ///
+    /// Each is a binding-typed link homed there (REG-2.5); a board with no
+    /// claim has none.
     pub candidate_bindings_scanned: u64,
     /// Atoms read.
     pub atoms_read: u64,
@@ -46,18 +60,28 @@ pub struct GuestCost {
     pub time: Duration,
 }
 
-/// THE GUEST-READING RESOLVE of `prefix` with NO mirror (REG-3.24, REG-3.33):
-/// every candidate binding of the board — every binding-typed link, by its
-/// class (`window_ftt` over the binding's type, paged) — each read, each
-/// atom fetched at its V-ordinal in the head and parsed; the prefix's
-/// candidate bindings in their home's link order (journal order within one
-/// home); the account's live key set; its endpoint deposits by the same scan
-/// over its doc 1; each honored deposit's standing on the board's active
-/// view, as the board itself reads it (REG-1.11). Every verdict
-/// UNDETERMINABLE HERE: no position is held to judge a record as of. Answers
-/// the face and the cost; refused only where the board refuses or cannot
-/// answer a read the scan makes, a class scan whose window does not advance
-/// among them ([`BoardError::Malformed`]).
+/// Resolves `prefix` with no mirror, as a guest reader (REG-3.33).
+///
+/// The binding home is read first, off the board's one claim
+/// (`binding_home`). Then every candidate binding in it (REG-3.24) — every
+/// binding-typed link homed there, by its class (`window_ftt` over the
+/// binding's type and that home, paged) — is read, its atom fetched at its
+/// V-ordinal in the head and parsed, in the home's link order: journal order
+/// within one home. Then the bound account's live key set is read, its
+/// endpoint deposits by the same scan over its doc 1, and each honored
+/// deposit's standing on the board's active view, as the board itself reads
+/// it (REG-1.11).
+///
+/// The answer is the face and the cost. Every verdict beside a record is
+/// [`Verdict::UndeterminableHere`]: no position is held to judge a record as
+/// of. A board holding no claim answers every prefix
+/// [`Resolution::Unregistered`], no binding scanned.
+///
+/// # Errors
+///
+/// A [`BoardError`] where the board refuses or cannot answer a read the
+/// scan makes, and [`BoardError::Malformed`] where it serves what no board
+/// admits: a class scan whose window does not advance, or two claims.
 pub fn guest_resolve(
     board: &Board,
     prefix: &Address,
@@ -67,10 +91,20 @@ pub fn guest_resolve(
     let t = Instant::now();
     let reads_before = board.reads().total();
     let mut cost = GuestCost::default();
+    let finish = |cost: &mut GuestCost| {
+        cost.reads = board.reads().total() - reads_before;
+        cost.time = t.elapsed();
+    };
+    let Some(binding_home) = binding_home(board)? else {
+        finish(&mut cost);
+        return Ok((Resolution::Unregistered { prefix: prefix.clone() }, cost));
+    };
     let mut ledger = Ledger::default();
-    // Every candidate binding on the board: every binding-typed link, by its
-    // class.
-    let mut links = scan_class(board, t_binding(), None)?;
+    // Every candidate binding: every binding-typed link in the binding home,
+    // by its class. A link the scan lists from another home is no candidate
+    // (REG-2.6), and is neither counted nor read.
+    let mut links = scan_class(board, t_binding(), Some(&binding_home))?;
+    links.retain(|link| document_of(link).as_ref() == Some(&binding_home));
     cost.candidate_bindings_scanned = links.len() as u64;
     links.sort_unstable();
     for link in &links {
@@ -87,10 +121,6 @@ pub fn guest_resolve(
             verdict: Verdict::UndeterminableHere,
         });
     }
-    let finish = |cost: &mut GuestCost| {
-        cost.reads = board.reads().total() - reads_before;
-        cost.time = t.elapsed();
-    };
     let Some(standing) = ledger.standing(prefix) else {
         finish(&mut cost);
         return Ok((Resolution::Unregistered { prefix: prefix.clone() }, cost));
@@ -130,6 +160,52 @@ pub fn guest_resolve(
     Ok((face_of(standing, keys, endpoint, any_honored, names, transports), cost))
 }
 
+/// Returns the binding home: the doc 1 of the board's one claimant (REG-2.5).
+///
+/// Every link the claim's class scan lists is read as far as the claim's
+/// type ([`Board::link_slots`]) and kept where it is claim-shaped
+/// ([`claim_home`]); on the unforked lineage the claimant's doc 1 is the
+/// binding home (R5 (g)). The answer is `None` where the board holds no
+/// claim, so no prefix is bound there.
+///
+/// # Errors
+///
+/// A [`BoardError`] where the board refuses or cannot answer the scan or a
+/// link's read, and [`BoardError::Malformed`] where two claim-shaped links
+/// stand: a board admits one claim (AUTH-2.67, AUTH-2.68), and this reader
+/// holds no positions to tell which came first.
+fn binding_home(board: &Board) -> Result<Option<Address>, BoardError> {
+    let claim = commons_type(&[3]);
+    let mut links = scan_class(board, &claim, None)?;
+    links.sort_unstable();
+    links.dedup();
+    let mut found: Option<(Address, Address)> = None;
+    for link in links {
+        let Some(slots) = board.link_slots(&link, &[&claim])? else { continue };
+        let Some(home) = claim_home(&link, &slots) else { continue };
+        if let Some((first, _)) = &found {
+            return Err(BoardError::Malformed(format!("two claims, {first} and {link}: a board admits one")));
+        }
+        found = Some((link, home));
+    }
+    Ok(found.map(|(_, home)| home))
+}
+
+/// Returns the doc 1 the claim-shaped link at `link` stands in.
+///
+/// The shape is the claim's (AUTH-2.48), the claim arm's first two
+/// conditions (AUTH-2.67): its type the claim's, its `to` empty, its `from`
+/// exactly the account its home belongs to, and that home the account's
+/// doc 1 (the home pin, AUTH-2.127). A link of any other shape honors no
+/// claim, and answers `None`.
+fn claim_home(link: &Address, slots: &LinkSlots) -> Option<Address> {
+    slots.ty.as_ref()?;
+    let home = document_of(link)?;
+    let account = account_of_document(&home)?;
+    let shaped = slots.to.is_empty() && slots.from == [account.clone()] && home == doc_1_of(&account);
+    shaped.then_some(home)
+}
+
 /// The addresses a class scan's window asks for — and so exactly how many an
 /// unexhausted window holds.
 const WINDOW: NonZeroUsize = NonZeroUsize::new(256).expect("a window asks for one address or more");
@@ -158,7 +234,7 @@ fn read_link(board: &Board, link: &Address, ty: &Address) -> Result<Option<(Addr
     if slots.ty.is_none() {
         return Ok(None);
     }
-    let Some(home) = skep_address::document_of(link) else { return Ok(None) };
+    let Some(home) = document_of(link) else { return Ok(None) };
     let Some(atom) = slots.from.first().cloned() else { return Ok(None) };
     Ok(Some((home, atom, slots.to)))
 }
@@ -195,165 +271,4 @@ fn live_keys(board: &Board, account: &Address) -> Result<Option<Vec<Enrolled>>, 
 }
 
 #[cfg(test)]
-mod tests {
-    use std::cell::Cell;
-    use std::io;
-    use std::net::IpAddr;
-    use std::rc::Rc;
-
-    use serde_json::{json, Value};
-    use skep_registry::{encode, Binding, Endpoint, Origins};
-    use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
-
-    use super::*;
-    use crate::board::unit_span_json;
-    use crate::http::{Method, Transport, TransportError};
-    use crate::parse_address;
-
-    fn a(s: &str) -> Address {
-        parse_address(s).unwrap()
-    }
-
-    /// A span over one address as `read_link` answers a slot.
-    fn span(start: &str) -> Value {
-        json!({ "start": start, "width": "0.1" })
-    }
-
-    /// A BOARD THE SUITE HOLDS FIXED, as the guest reads it over `/op` alone:
-    /// one candidate binding, the registrar's, binding `1.2` to `1.0.2`; that
-    /// account's one endpoint deposit in its doc 1, standing on the active
-    /// view; its live table one key; every atom at its home's head, at the
-    /// content ordinal it was minted at. Any other read is no read this board
-    /// answers.
-    struct Guest;
-
-    impl Transport for Guest {
-        fn exchange(&self, method: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
-            assert_eq!((method, path), (Method::Post, "/op"), "the guest reads /op alone");
-            let frame: Value = serde_json::from_slice(body).expect("a frame");
-            let window = |link: &str| json!({ "resp": "window", "window": { "batch": [link], "exhausted": true } });
-            let doc = frame["d"].as_str().or(frame["specs"][0]["doc"].as_str());
-            let answer = match (frame["op"].as_str(), frame["a"].as_str(), doc) {
-                (Some("window_ftt"), _, _) if frame["q"]["ty"][0] == unit_span_json(t_binding()) => window("1.0.1.0.1.0.2.1"),
-                (Some("window_ftt"), _, _) if frame["q"]["ty"][0] == unit_span_json(t_endpoint()) => {
-                    assert_eq!(frame["q"]["home"], json!([unit_span_json(&a("1.0.2.0.1"))]), "the scan over the account's doc 1");
-                    window("1.0.2.0.1.0.2.1")
-                }
-                (Some("read_link"), Some("1.0.1.0.1.0.2.1"), _) => json!({ "resp": "link", "link": { "slots": [
-                    [span("1.0.1.0.1.0.1.1")], [span("1.0.2")], [unit_span_json(t_binding())],
-                ] } }),
-                (Some("read_link"), Some("1.0.2.0.1.0.2.1"), _) => json!({ "resp": "link", "link": { "slots": [
-                    [span("1.0.2.0.1.0.1.1")], [], [unit_span_json(t_endpoint())],
-                ] } }),
-                (Some("image"), _, Some(home)) => json!({ "resp": "runs", "runs": [{ "i_start": format!("{home}.0.1.1"), "width": "1" }] }),
-                (Some("retrieve_v"), _, Some("1.0.1.0.1")) => {
-                    let binding = encode(&Body::Binding(Binding { prefix: a("1.2"), replaces: None }), None);
-                    json!({ "resp": "delivery", "items": [{ "atom": binding }] })
-                }
-                (Some("retrieve_v"), _, Some("1.0.2.0.1")) => {
-                    let origins = Origins::new(vec!["https://acme.example".to_string()]).expect("one origin");
-                    let endpoint = encode(&Body::Endpoint(Endpoint { origins, replaces: None }), None);
-                    json!({ "resp": "delivery", "items": [{ "atom": endpoint }] })
-                }
-                (Some("key_set"), _, _) if frame["account"] == "1.0.2" => {
-                    let key = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[2; 32]).expect("tag 1").public_key().clone();
-                    json!({ "resp": "key_set", "as_of": 9, "enrolled": [{ "alg": key.alg(), "key": key.to_hex(), "anchor": true }] })
-                }
-                (Some("find_links_ftt"), _, _) => {
-                    let active = json!({
-                        "home": [unit_span_json(&a("1.0.2.0.1"))], "from": [unit_span_json(&a("1.0.2.0.1.0.1.1"))],
-                        "to": "any", "ty": [unit_span_json(t_endpoint())],
-                    });
-                    assert_eq!(frame["q"], active, "the deposit asked of the board's active view");
-                    json!({ "resp": "addrs", "addrs": ["1.0.2.0.1.0.2.1"] })
-                }
-                _ => panic!("a read this board does not answer: {frame}"),
-            };
-            Ok((200, answer.to_string().into_bytes()))
-        }
-    }
-
-    /// A BOARD WHOSE CLASS SCAN ANSWERS `windows` in turn, each a batch, a
-    /// `next` and `exhausted`: every request recorded, and a request past
-    /// the last window a panic — so a scan that would page forever fails.
-    struct Windows {
-        windows: Vec<(Vec<String>, Option<String>, bool)>,
-        asked: Cell<usize>,
-    }
-
-    impl Transport for Windows {
-        fn exchange(&self, _: Method, _: &str, _: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
-            let (batch, next, exhausted) = self.windows.get(self.asked.get()).expect("a window this board serves").clone();
-            self.asked.set(self.asked.get() + 1);
-            let answer = json!({ "resp": "page", "window": { "batch": batch, "next": next, "exhausted": exhausted } });
-            Ok((200, answer.to_string().into_bytes()))
-        }
-    }
-
-    /// A WINDOW THAT DOES NOT ADVANCE IS REFUSED (skep-discovery's `Window`):
-    /// a scan pages through full windows, ascending, each past the cursor and
-    /// naming its last as `next`, to the exhausted one; a window that is not
-    /// the last and is short, re-serves the cursor, or names another `next`
-    /// is refused at once, never asked again.
-    #[test]
-    fn a_window_that_does_not_advance_is_refused() {
-        let n = WINDOW.get();
-        let links = |from: usize| (from..from + n).map(|k| format!("1.0.1.0.1.0.2.{k}")).collect::<Vec<_>>();
-        let scan = |windows: Vec<(Vec<String>, Option<String>, bool)>| {
-            let board = Rc::new(Windows { windows, asked: Cell::new(0) });
-            let scanned = scan_class(&Board::new(Box::new(board.clone())), t_binding(), None);
-            (scanned, board.asked.get())
-        };
-        let (first, second) = (links(1), links(1 + n));
-        let last_of = |batch: &[String]| batch.last().cloned();
-        let (scanned, asked) = scan(vec![(first.clone(), last_of(&first), false), (vec!["1.0.1.0.1.0.2.999".into()], None, true)]);
-        assert_eq!((scanned.map(|links| links.len()), asked), (Ok(n + 1), 2), "a full window, then the last");
-        for (window, case) in [
-            ((Vec::new(), None, false), "an empty window that is not the last"),
-            ((first[..n - 1].to_vec(), last_of(&first[..n - 1]), false), "a short window"),
-            ((first.clone(), Some(first[0].clone()), false), "a next that is not its last"),
-        ] {
-            let (scanned, asked) = scan(vec![window]);
-            assert!(matches!(scanned, Err(BoardError::Malformed(_))), "{case}");
-            assert_eq!(asked, 1, "{case}: never asked again");
-        }
-        let replayed = vec![(second.clone(), last_of(&second), false), (first.clone(), last_of(&first), false)];
-        let (scanned, asked) = scan(replayed);
-        assert!(matches!(scanned, Err(BoardError::Malformed(_))), "a window behind its cursor");
-        assert_eq!(asked, 2);
-    }
-
-    /// This resolver's own resolution of a name, fixed: `acme.example` at a
-    /// public address.
-    struct Names;
-
-    impl NameResolver for Names {
-        fn resolve(&self, _: &str) -> io::Result<Vec<IpAddr>> {
-            Ok(vec!["93.184.216.34".parse().unwrap()])
-        }
-    }
-
-    /// THE GUEST-READING RESOLVE JUDGES NO RECORD (REG-3.24, REG-3.33): it
-    /// holds no position to judge one as of, so the verdict beside every
-    /// record it answers from — the binding's and the endpoint's alike — is
-    /// UNDETERMINABLE HERE, never one manufactured from the input it lacks;
-    /// and a prefix no candidate binding names is UNREGISTERED.
-    #[test]
-    fn the_guest_reading_resolve_judges_every_record_undeterminable_here() {
-        let board = Board::new(Box::new(Guest));
-        let (face, cost) = guest_resolve(&board, &a("1.2"), &Names, &Transports::default()).expect("the guest resolve");
-        match face {
-            Resolution::Bound { standing, keys, endpoint, dial, .. } => {
-                assert_eq!(standing.current.link, a("1.0.1.0.1.0.2.1"));
-                assert!(standing.history.iter().all(|b| b.verdict == Verdict::UndeterminableHere), "{:?}", standing.history);
-                assert_eq!(endpoint.verdict, Verdict::UndeterminableHere);
-                assert_eq!(keys.map(|k| k.len()), Some(1), "the live table");
-                assert_eq!(dial.origin.as_str(), "https://acme.example");
-            }
-            other => panic!("{other:?}"),
-        }
-        assert_eq!((cost.candidate_bindings_scanned, cost.atoms_read), (1, 2));
-        let (face, _) = guest_resolve(&board, &a("1.3"), &Names, &Transports::default()).expect("the guest resolve");
-        assert_eq!(face, Resolution::Unregistered { prefix: a("1.3") });
-    }
-}
+mod tests;

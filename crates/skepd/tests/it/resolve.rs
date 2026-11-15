@@ -1,36 +1,48 @@
-//! THE VERIFYING RESOLVER AGAINST A LIVE BOARD — `skep-resolve` taken as a
-//! library by this suite, where boards are spawned and registered: THE
-//! REFERENCE CELL (the resolver's verdict on every row equals the daemon's
-//! admission; rm-2, REG-1.86 (e)), the SUPPRESS of a body the daemon never
-//! admitted and of one a seam tampered, THE COURIER VECTOR (REG-3.13; R5
-//! (b)), THE ROOT MOVE's resume and its refusals (REG-3.18, REG-3.19,
-//! REG-3.42), NO NEGATIVE CACHE (REG-3.10), THE CHAIN WALK's recovery of an
-//! un-arranged atom (REG-3.25), the end-to-end walk from the hint (REG-3.7),
-//! THE MIRROR OVER `https` (REG-3.2, REG-3.12) — an `https` root reached
-//! from genesis through the client's dialer, behind the suite's TLS front —
-//! THE ROOT HINT PRINTED (REG-3.2, REG-3.39) — the fixture board's line read
-//! off the board as a guest by the read `skep hint` prints, equal to the
-//! line this suite composes from its own keys, a cold mirror opened from it
-//! — A CROSS-BOARD ADDRESS RESOLVED (REG-1.63, REG-3.7, REG-3.10) — the call
-//! `skep resolve` makes, its node field the prefix and its local form the
-//! prefix swapped for `1`, the registry read afresh at every call over one
-//! held copy — the recording of the resolver crate's own fixture, and THE MEASUREMENTS
-//! (the registry seam investigation §3.1, §3.3, §3.4), reported and never
-//! asserted.
+//! Checks the verifying resolver against a live board.
+//!
+//! `skep-resolve` is taken as a library by this suite, where boards are
+//! spawned and registered. Its cells:
+//!
+//! - the reference cell: the resolver's verdict on every row equals the
+//!   daemon's admission (rm-2, REG-1.86 (e));
+//! - the suppress of a body the daemon never admitted, and of one a seam
+//!   tampered;
+//! - the courier vector (REG-3.13; R5 (b));
+//! - the root move's resume and its refusals (REG-3.18, REG-3.19,
+//!   REG-3.42);
+//! - no negative cache (REG-3.10);
+//! - the chain walk's recovery of an un-arranged atom (REG-3.25);
+//! - the end-to-end walk from the hint (REG-3.7);
+//! - the guest-reading resolve's binding home (REG-2.5, REG-2.6): the
+//!   binding-typed records an org deposits in its own doc 1 bind nothing,
+//!   for the guest as for the mirror;
+//! - the mirror over `https` (REG-3.2, REG-3.12): an `https` root reached
+//!   from genesis through the client's dialer, behind the suite's TLS front;
+//! - the root hint printed (REG-3.2, REG-3.39): the fixture board's line
+//!   read off the board as a guest by the read `skep hint` prints, equal to
+//!   the line this suite composes from its own keys, a cold mirror opened
+//!   from it;
+//! - a cross-board address resolved (REG-1.63, REG-3.7, REG-3.10): the call
+//!   `skep resolve` makes, its node field the prefix and its local form the
+//!   prefix swapped for `1`, the registry read afresh at every call over one
+//!   held copy;
+//! - the recording of the resolver crate's own fixture;
+//! - the measurements (the registry seam investigation §3.1, §3.3, §3.4),
+//!   reported and never asserted.
 //!
 //! Every board here is the suite's own claimed board: its registrar is the
 //! claimant, its console the claimant's signed session, its genesis set the
-//! ceremony's two keys — so one realm id names every board the suite spawns,
+//! ceremony's two keys. So one realm id names every board the suite spawns,
 //! and a board of another genesis is made by hand where a refusal needs one.
 //!
-//! And every one of them is ENFORCING ([`spawn_enforcing`]): local trust
+//! Every one of them is also enforcing ([`spawn_enforcing`]): local trust
 //! off and the claim ahead of the first write, so no bare session binds and
 //! only signed sessions write (wire.md §Identity; REG-1.32's "no permissive
 //! state"). An org's node account is `delegate`d from principal 0's signed
 //! session (REG-4.110), and the console asserts the mode as it opens
 //! ([`console`]), so a cell whose board is left permissive fails; the
 //! resolver reads as a guest, as on any board. The board of another genesis
-//! alone is no ENFORCING one: it is claimed by hand from an unclaimed start,
+//! alone is not enforcing: it is claimed by hand from an unclaimed start,
 //! and nothing is written on it past its claim.
 
 use crate::common;
@@ -895,6 +907,62 @@ fn one_org_registered_by_the_console_resolves_from_the_hint_by_a_cold_resolver()
         other => panic!("{other:?}"),
     }
     assert!(matches!(resolve_prefix(&mut mirror, "1.6"), Resolution::Unregistered { .. }));
+    sd.shutdown();
+}
+
+// ── the guest-reading resolve ──────────────────────────────────────────────
+
+/// Checks that the guest resolve reads bindings from the binding home alone.
+///
+/// The console registers org 5 at `1.5` and org 6 at `1.6`. Org 6 then
+/// deposits two binding-typed records into its own doc 1 from its own
+/// signed session, and the board admits both: one names org 5's binding in
+/// `replaces` and no account, the other allocates `1.77` to org 6's own
+/// account. Neither is a binding: resolution reads bindings from the
+/// binding home alone, the claimant's doc 1 (REG-2.5), and a binding-typed
+/// record any other account deposits in its own doc 1 is that account's
+/// content (REG-2.6).
+///
+/// So the guest resolve answers `1.5` bound to org 5's binding, dialing org
+/// 5's origin, and `1.77` unregistered, after scanning the claimant's two
+/// bindings and nothing of org 6's. A cold mirror of the same board answers
+/// both faces the same, with the same dial, and counts org 6's two records
+/// apart, as binding-typed records outside the home.
+#[test]
+fn the_guest_resolve_reads_bindings_from_the_binding_home_alone() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_enforcing(dir.path());
+    let port = sd.port();
+    let console = console(port);
+    let o5 = register_org(port, &console, 5, "1.5", Some(&["https://acme.example"]), 0);
+    let o6 = register_org(port, &console, 6, "1.6", Some(&["https://six.example"]), 0);
+    let records = [(binding_body("1.5", Some(&o5.binding)), Vec::new()), (binding_body("1.77", None), vec![o6.account.as_str()])];
+    for (body, to) in &records {
+        let (_, v) = deposit_registry_record(port, &o6.node_signed, &o6.doc1, T_BINDING, to, body);
+        assert_eq!(v["resp"].as_str(), Some("ack_addr"), "the board admits {body} into {}: {v}", o6.doc1);
+    }
+    let board = Board::new(skep_resolve::dial_http(&hint_for(port).origins()[0]).expect("http"));
+    let guest = |prefix: &str| {
+        guest_resolve(&board, &addr(prefix), &names(), &Transports::default())
+            .unwrap_or_else(|e| panic!("the guest resolve of {prefix}: {e}"))
+    };
+    let (bound, cost) = guest("1.5");
+    match &bound {
+        Resolution::Bound { standing, dial, .. } => {
+            assert_eq!(standing.current.link, addr(&o5.binding));
+            assert_eq!(dial.origin.as_str(), "https://acme.example");
+        }
+        other => panic!("1.5 is org 5's, and {} here: {other:?}", other.face()),
+    }
+    assert_eq!(cost.candidate_bindings_scanned, 2, "the claimant's two bindings, and nothing of org 6's");
+    let (allocated, _) = guest("1.77");
+    assert!(matches!(&allocated, Resolution::Unregistered { prefix } if *prefix == addr("1.77")), "{allocated:?}");
+    let mdir = tempfile::tempdir().expect("tempdir");
+    let mut mirror = cold_mirror(port, mdir.path());
+    let mirrored = resolve_prefix(&mut mirror, "1.5");
+    assert_eq!((mirrored.face(), dial_of(&mirrored)), (bound.face(), dial_of(&bound)), "the mirror's face and dial");
+    assert_eq!(resolve_prefix(&mut mirror, "1.77").face(), allocated.face());
+    assert_eq!(mirror.stats().binding_typed_outside_home, 2, "org 6's two records, counted apart");
     sd.shutdown();
 }
 

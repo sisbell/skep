@@ -121,10 +121,12 @@ parts, each under the design rule it realizes:
   address resolves to its parent prefix's standing (`Index::parent_prefix`)
   — held or retired, never a prefix whose bindings are all inert — and THE
   HOP NOT MADE (REG-3.82). The guest-reading resolve scans the atom of
-  every candidate binding — every binding-typed link, from every home
-  (REG-3.24) — with no mirror (REG-3.33), priced (`GuestCost`), its
-  verdicts undeterminable here: it folds what it reads into a ledger of the
-  rules alone and never into an index.
+  every candidate binding — every binding-typed link in the binding home,
+  the claimant's doc 1 read off the board's one claim (REG-2.5, REG-3.24)
+  — with no mirror (REG-3.33), priced (`GuestCost`), its verdicts
+  undeterminable here: a board with no claim binds no prefix, a board
+  serving two claims is refused, and what it reads is folded into a ledger
+  of the rules alone and never into an index.
 - **The origin checks** (`judge_member`, `walk_members`) — https or a
   self-authenticating origin per member (REG-3.34), each admitted kind by
   name (`MemberKind`: `Onion` the first) with its own transport

@@ -739,28 +739,79 @@ impl Judged {
     }
 }
 
+/// Where a kept line's write stands in the board's feed, as the shell knows it.
+///
+/// It is one of three (§4b.2's `held` event; skep #968, #998): the position
+/// the board took the write at, a position the write stands at or before,
+/// or neither. Only the first is a position the board took this shell's
+/// write at, the one the hold notes — among the board's acked positions, as
+/// a document's base and a drafts row's writer ([`Holds::keep_landing`]) —
+/// so [`KeptAt::at`] answers it alone, and a bound reaches the `held` event
+/// and nothing else: it is the board's head at a read, which can be another
+/// hand's write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeptAt {
+    /// The position the board took the write at.
+    ///
+    /// It is its ack's `at` (A-62, A-63), or the position of the row the
+    /// resend's read found it landed at.
+    At(u64),
+    /// A position the write stands at or before.
+    ///
+    /// No row named its position: the read met a reclaimed history, and the
+    /// site read that found the words standing answered at this position.
+    AtMost(u64),
+    /// Neither is known.
+    Unknown,
+}
+
+impl KeptAt {
+    /// Returns where a write stands, of its position and a bound.
+    ///
+    /// It is at `at` where that is known, else at or before `bound`, else
+    /// unknown: a bound stands only where no position does.
+    fn of(at: Option<u64>, bound: Option<u64>) -> KeptAt {
+        match (at, bound) {
+            (Some(at), _) => KeptAt::At(at),
+            (None, Some(bound)) => KeptAt::AtMost(bound),
+            (None, None) => KeptAt::Unknown,
+        }
+    }
+
+    /// Returns the position the board took the write at, where it is known.
+    fn at(self) -> Option<u64> {
+        match self {
+            KeptAt::At(at) => Some(at),
+            KeptAt::AtMost(_) | KeptAt::Unknown => None,
+        }
+    }
+}
+
 /// A held line that left the store kept, as the `held` event names it.
 ///
 /// It is how the page learns the ack of a line the shell sent after its `op`
 /// answered `held` (§4b.2's `held` event; skep #968): the line's ordinal,
 /// the one the `held` answer named; the envelope `id` its frame carried,
-/// where the page sent one (A-60); the position the board took it at, its
-/// ack's `at` (A-62, A-63) or the one the resend's read found it landed at,
-/// none where the read found it under a reclaimed history; and the first
-/// I-address an insert's `ack_addr` minted (A-63), none for the other kinds
-/// and for a landing the read found, which no ack names.
+/// where the page sent one (A-60); where its write stands ([`KeptAt`]) — the
+/// position the board took it at, its ack's `at` (A-62, A-63) or the one the
+/// resend's read found it landed at, or, where the read found it under a
+/// reclaimed history, `at_most`, the position the site read that found its
+/// words answered at; and the first I-address an insert's words were minted
+/// at, its `ack_addr`'s (A-63) or the one the read of a found landing names
+/// (`resend`'s `minted_at`), none for the other kinds and where neither
+/// names one (skep #998).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LandedLine {
     k: u64,
     burst: Option<String>,
-    at: Option<u64>,
+    kept: KeptAt,
     addr: Option<String>,
 }
 
 impl LandedLine {
-    /// Returns `line`'s entry, kept at `at`, `addr` the I-address it minted.
-    fn of(line: &HeldLine, at: Option<u64>, addr: Option<&str>) -> LandedLine {
-        LandedLine { k: line.k, burst: line.id.clone(), at, addr: addr.map(str::to_owned) }
+    /// Returns `line`'s entry, kept as `kept` says, minted at `addr`.
+    fn of(line: &HeldLine, kept: KeptAt, addr: Option<&str>) -> LandedLine {
+        LandedLine { k: line.k, burst: line.id.clone(), kept, addr: addr.map(str::to_owned) }
     }
 
     /// Returns the entry as the `held` event's `landed` carries it.
@@ -769,8 +820,10 @@ impl LandedLine {
         if let Some(burst) = &self.burst {
             v["burst"] = Value::from(burst.as_str());
         }
-        if let Some(at) = self.at {
-            v["at"] = Value::from(at);
+        match self.kept {
+            KeptAt::At(at) => v["at"] = Value::from(at),
+            KeptAt::AtMost(at_most) => v["at_most"] = Value::from(at_most),
+            KeptAt::Unknown => {}
         }
         if let Some(addr) = &self.addr {
             v["addr"] = Value::from(addr.as_str());
@@ -5344,8 +5397,10 @@ impl Holds {
     /// reason it was read under, taken by no send since: a landing found
     /// keeps the line `done kept` as the resend keeps a landed head
     /// ([`Holds::keep_landing`]), nothing dropped, the `held` event naming
-    /// the line and the position the read found it at (skep #968), the lines
-    /// behind it handed to the machine as a `send`'s are ([`Resolved::Kept`]);
+    /// the line, where the read found it (`KeptAt`) and the address its
+    /// words were minted at where the read names one (skep #968, #998), the
+    /// lines behind it handed to the machine as a `send`'s are
+    /// ([`Resolved::Kept`]);
     /// no row that could be its landing drops it, as every drop does; the
     /// death signal drops nothing ([`Resolved::Died`]); and where the read
     /// cannot tell — no answer, no page, a row that could be the landing and
@@ -5455,14 +5510,14 @@ impl Holds {
             }
             ReadOutcome::Unread => LandingUnread::Unread,
             ReadOutcome::Undecided => LandingUnread::Undecided,
-            ReadOutcome::Landed { at, minted } => {
+            ReadOutcome::Landed { kept, minted } => {
                 self.still_as_read(&mut board_hold, session, &read, outs)?;
-                self.keep_landing(&mut board_hold, principal, &read, at, minted.as_deref());
+                self.keep_landing(&mut board_hold, principal, &read, kept.at(), minted.as_deref());
                 let ph = board_hold.principals.get_mut(&principal).expect("the principal's hold, entered by its door");
                 // A pass under way walks the document again at its next turn.
                 ph.stopped_in_pass.remove(&read.doc);
                 ph.cut_in_pass.remove(&read.doc);
-                let owed = self.say_standing(session, ph, &read.doc, Some(&LandedLine::of(&read, at, None)));
+                let owed = self.say_standing(session, ph, &read.doc, Some(&LandedLine::of(&read, kept, minted.as_deref())));
                 return Ok((Resolved::Kept, owed));
             }
             ReadOutcome::NoLanding => {

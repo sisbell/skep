@@ -317,8 +317,9 @@ fn text_of(delivery: &Value) -> String {
 /// at the same port, whose open replays them: the resend's read finds the
 /// landed row, the site holds the burst's two values, the `held` event
 /// reaches `kept` and never `moved`, naming the line at the replayed row's
-/// position and no I-address, which no ack names (skep #968), the board
-/// holds the burst's row exactly once, and the file compacts away (the
+/// position and the I-address its words were minted at, which the `/op-at`
+/// image of its site names as the board holds it (skep #968, #998), the
+/// board holds the burst's row exactly once, and the file compacts away (the
 /// mutant that leaves `poisoned` at `sent: false`, and the one that holds
 /// the frame's one string to one position's value, face the person's own
 /// text `moved`).
@@ -361,7 +362,10 @@ fn a_poisoned_burst_lands_at_the_restart_and_is_kept() {
     // testimony — its hand and kind the reserved null — and the arrangement
     // alone could keep it.
     assert!(rows[2]["key"].is_null() && rows[2]["op"].is_null() && rows[2]["docs"].is_null(), "the replayed commit's testimony is lost: {:?}", rows[2]);
-    assert_eq!(kept.data["landed"], json!([{"held": held["held"], "at": rows[2]["at"]}]), "the line kept, at the replayed row's position: {}", kept.data);
+    let image = shell.call("op", &json!({"session": session2, "frame": skep_client::board::frames::image(&draft, 2, 2)})).unwrap();
+    assert_eq!(image["runs"].as_array().map(Vec::len), Some(1), "the burst's two values one run of the draft's own I-space: {image}");
+    let landed = json!([{"held": held["held"], "at": rows[2]["at"], "addr": image["runs"][0]["i_start"]}]);
+    assert_eq!(kept.data["landed"], landed, "the line kept, at the replayed row's position and the I-address its words stand at: {}", kept.data);
     shell.shutdown();
     sd.shutdown();
 }

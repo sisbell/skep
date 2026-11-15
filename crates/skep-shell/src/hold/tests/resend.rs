@@ -199,25 +199,31 @@ fn outcome_i_no_row_sends_from_the_head() {
 /// The in-flight burst (its line `sent: true`) landed — one row of the
 /// session's own hand, consistent, its five values read back equal at the
 /// site — so the head is `done kept` and nothing is re-sent, its `kept`
-/// event naming the line at its row's position and no I-address, which no
-/// ack names (skep #968) (the mutant that resends the head; the mutant that
+/// event naming the line at its row's position, no `at_most` beside it, and
+/// the I-address its words were minted at, which one `/op-at` image of its
+/// site at the site read's position names though no line's anchors name
+/// them (skep #968, #998) (the mutant that resends the head; the mutant that
 /// compares the frame's one string with one position's value faces the
 /// person's own text `moved`; the one that names no line leaves the page no
-/// position for the words it typed).
+/// position for the words it typed; the one that reads no address for an
+/// insert no anchor names leaves the page an image read of its own to make).
 #[test]
 fn outcome_ii_a_landed_burst_is_kept_not_resent() {
     let g = ground();
     *g.fake.text.lock().unwrap() = "hello".into();
+    *g.fake.image.lock().unwrap() = vec![run(&i(100), 5)];
     *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": g.own_key(), "docs": [DOC]})];
     g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", true);
+    let site_at = g.fake.head();
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 0, "the landed head is NOT re-sent: {:?}", g.fake.sends.lock().unwrap());
     assert!(g.lines().is_empty(), "the line is done kept");
+    assert_eq!(*g.fake.at_reads.lock().unwrap(), [site_at], "one address read, at the site read's position");
     let said = held_events(&g);
     let states: Vec<&str> = said.iter().filter_map(|e| e["state"].as_str()).collect();
     assert!(states.contains(&"kept") && !states.contains(&"moved"), "{states:?}");
     let kept = said.iter().find(|e| e["state"] == "kept").expect("the document kept");
-    assert_eq!(kept["landed"], json!([{"held": 1, "at": 77}]), "the line the read found landed, at its row's position: {kept}");
+    assert_eq!(kept["landed"], json!([{"held": 1, "at": 77, "addr": i(100)}]), "the line the read found landed, at its row's position and its words' address: {kept}");
 }
 
 /// Returns each `held` event's state, its count and the lines it names kept.
@@ -244,6 +250,26 @@ fn a_resent_lines_ack_names_the_line_on_its_held_event() {
     g.holds.probe("b-1");
     assert!(g.lines().is_empty(), "the line is kept");
     let landed = json!([{"held": k, "burst": "b-1", "at": 50, "addr": i(9)}]);
+    assert_eq!(named_kept(&held_events(&g)), [("holding", 1, None), ("sending", 1, None), ("kept", 0, Some(&landed))]);
+}
+
+/// Checks that a resend's ack naming an address of another place names none.
+///
+/// The address is read by the one reader of an insert's minted address
+/// (SP-18; skep #998). The board acks a resend of an insert on `DOC` with an
+/// `ack_addr` whose address lies in `OTHER`'s content I-space, where no
+/// insert on `DOC` mints: the line is kept, and its `held` event names the
+/// ack's position and no address, as its keep places nothing there (the
+/// mutant that names the ack's address unread hands the page one its keep
+/// refused).
+#[test]
+fn a_resends_ack_naming_an_address_of_another_place_names_none() {
+    let g = ground();
+    let k = g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false)["held"].as_u64().unwrap();
+    g.fake.op_rejected.next(1, json!({"resp": "ack_addr", "addr": format!("{OTHER}.0.1.9"), "at": 50}));
+    g.holds.probe("b-1");
+    assert!(g.lines().is_empty(), "the line is kept");
+    let landed = json!([{"held": k, "at": 50}]);
     assert_eq!(named_kept(&held_events(&g)), [("holding", 1, None), ("sending", 1, None), ("kept", 0, Some(&landed))]);
 }
 
@@ -792,25 +818,29 @@ fn a_read_the_board_refuses_decides_nothing() {
 ///
 /// No row can be read, so the arrangement alone decides the one question
 /// (§3c.5) — a `sent` head whose values read back equal at its site is (ii),
-/// kept and not re-sent, its `kept` event naming the line with no position,
-/// none read (skep #968); values that differ are no landing found, and the
-/// head is sent from the head and kept, never faced `moved` (the mutant that
-/// faces the difference `moved` marks text nothing moved as "not placed");
-/// a site read the board does not answer decides nothing and the line
-/// stands (the mutant that trusts an unread site keeps a burst that never
-/// landed).
+/// kept and not re-sent, its `kept` event naming the line with no `at`, none
+/// read, but `at_most`, the position the site read answered at, the landing
+/// at or before it, and the address its words were minted at (skep #968,
+/// #998); values that differ are no landing found, and the head is sent from
+/// the head and kept, never faced `moved` (the mutant that faces the
+/// difference `moved` marks text nothing moved as "not placed"); a site read
+/// the board does not answer decides nothing and the line stands (the mutant
+/// that trusts an unread site keeps a burst that never landed; the one that
+/// drops the bound leaves the page no read to settle the burst against).
 #[test]
 fn history_reclaimed_keeps_the_head_where_its_site_confirms_it_alone() {
     let reclaimed = || Some((410, json!({"error": "history_reclaimed", "floor": 90})));
     let g = ground();
     *g.fake.changes_refused.lock().unwrap() = reclaimed();
     *g.fake.text.lock().unwrap() = "hello".into();
+    *g.fake.image.lock().unwrap() = vec![run(&i(100), 5)];
     g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", true);
+    let site_at = g.fake.head();
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 0, "the landed head is not re-sent");
     assert!(g.lines().is_empty(), "the values at the site keep it");
-    let landed = json!([{"held": 1}]);
-    assert_eq!(named_kept(&held_events(&g)), [("holding", 1, None), ("kept", 0, Some(&landed))], "kept, the line named with no position");
+    let landed = json!([{"held": 1, "at_most": site_at, "addr": i(100)}]);
+    assert_eq!(named_kept(&held_events(&g)), [("holding", 1, None), ("kept", 0, Some(&landed))], "kept, the line named with the site read's position as its bound");
 
     let g = ground();
     *g.fake.changes_refused.lock().unwrap() = reclaimed();
@@ -829,6 +859,40 @@ fn history_reclaimed_keeps_the_head_where_its_site_confirms_it_alone() {
     assert_eq!(g.fake.sends(), 0);
     assert_eq!(g.lines()[0]["cause"], "unreachable", "an unread site decides nothing: the line stands");
     assert!(!g.states().contains(&"kept".to_string()));
+}
+
+/// Checks that a reclaimed-history landing's bound is said on the event alone.
+///
+/// The bound is the `at_most` of a landing found under a reclaimed history
+/// (skep #998). A refused run stands on `OTHER`, so the held file stands; a
+/// `sent` insert on `DOC` meets `history_reclaimed` and is kept by its site
+/// alone, the site read answering at the board's head. The kept line's entry
+/// names that position `at_most`, and no `at`; the position is the board's
+/// head at a read, which can be another hand's write, so it is no acked
+/// position, names no writer, raises no base and is no latest arrangement
+/// write, and the line's `done` carries no position (the mutant that notes
+/// the bound as an `at` skips another hand's row at that position as one this
+/// shell was answered for, and names this shell's session its writer).
+#[test]
+fn the_bound_of_a_landing_found_under_a_reclaimed_history_is_said_on_the_event_alone() {
+    let g = ground();
+    let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent", "op": "insert"});
+    g.hold_for(&insert(OTHER, json!(["r"]), g.fake.head()), Reason::refused("out_of_bounds", verdict)).unwrap();
+    let k = g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", true)["held"].as_u64().unwrap();
+    *g.fake.changes_refused.lock().unwrap() = Some((410, json!({"error": "history_reclaimed", "floor": 90})));
+    *g.fake.text.lock().unwrap() = "hello".into();
+    *g.fake.image.lock().unwrap() = vec![run(&i(100), 5)];
+    let bound = g.fake.head();
+    let _ = held_events(&g);
+    g.holds.probe("b-1");
+    let said = held_events(&g);
+    let landed: Vec<&Value> = said.iter().filter_map(|e| e.get("landed")).collect();
+    assert_eq!(landed, [&json!([{"held": k, "at_most": bound, "addr": i(100)}])], "the bound on the event: {said:?}");
+    assert!(!g.holds.acked("b-1", bound), "no acked position");
+    assert!(g.holds.written(&g.session, bound).is_none(), "no writer named");
+    assert_eq!((g.base_of(DOC), g.holds.last_arranged(&g.session, DOC)), (g.session.opened_at, None), "no base raised, no latest arrangement write");
+    let done = done_of(&g, k);
+    assert_eq!((done["as"].as_str(), done.get("at"), done.get("at_most"), done["addr"].as_str()), (Some("kept"), None, None, Some(i(100).as_str())), "the `done` carries no position: {done}");
 }
 
 /// Checks that a refusal held nowhere hands a resent line over at once.
@@ -2160,10 +2224,13 @@ fn every_read_answer_meets_the_drop_of_a_line_that_may_have_landed_as_the_table_
 /// dropped, the position noted as an ack's is — the document's base, the
 /// principal's latest arrangement write there, an acked position — and the
 /// `held` event saying the line behind `holding`, naming the line kept at
-/// that position (skep #968); the next probe sends and keeps that line. The
-/// mutant that drops unread drops both lines and the words the board holds;
-/// the one that drops the lines behind a kept line loses the person's later
-/// words; the one that names no line leaves the page no position for them.
+/// that position and the address its words were minted at, which the
+/// `/op-at` image of its site names though no line's anchors name them
+/// (skep #968, #998); the next probe sends and keeps that line. The mutant
+/// that drops unread drops both lines and the words the board holds; the one
+/// that drops the lines behind a kept line loses the person's later words;
+/// the one that names no line leaves the page no position for them; the one
+/// that names no address holds the page's next edit on its own image read.
 #[test]
 fn a_drop_of_a_handed_over_line_whose_write_landed_keeps_it_and_sends_the_line_behind() {
     let g = ground();
@@ -2178,6 +2245,7 @@ fn a_drop_of_a_handed_over_line_whose_write_landed_keeps_it_and_sends_the_line_b
     let key = g.own_key();
     *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": key, "docs": [DOC]})];
     *g.fake.text.lock().unwrap() = "hello".into();
+    *g.fake.image.lock().unwrap() = vec![run(&i(100), 5)];
     let _ = g.states();
     let (sends, reads) = (g.fake.sends(), g.fake.changes_reads.load(Ordering::SeqCst));
     assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Kept);
@@ -2191,7 +2259,7 @@ fn a_drop_of_a_handed_over_line_whose_write_landed_keeps_it_and_sends_the_line_b
     assert_eq!(said.len(), 1, "{said:?}");
     assert_held_event_declared(&said[0]);
     assert_eq!((said[0]["held"].as_u64(), said[0]["state"].as_str()), (Some(1), Some("holding")), "the document as it stands: {}", said[0]);
-    assert_eq!(said[0]["landed"], json!([{"held": k, "at": 77}]), "the line kept, at its row's position: {}", said[0]);
+    assert_eq!(said[0]["landed"], json!([{"held": k, "at": 77, "addr": i(100)}]), "the line kept, at its row's position and its words' address: {}", said[0]);
     assert_eq!((g.base_of(DOC), g.holds.last_arranged(&g.session, DOC), g.holds.acked("b-1", 77)), (77, Some(77), true), "noted as an ack is");
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), sends + 1, "the line behind is sent");
@@ -6201,18 +6269,21 @@ fn done_of(g: &Ground, k: u64) -> Value {
 /// The read finds the insert landed ([`held_a_named_landing`]) and — its
 /// words named — reads their address with one `image` of the site through
 /// `/op-at`, at the position the site read answered at: the line is kept,
-/// its `done` carrying the address, the pieces placed, and the burst naming
-/// them, refused as typed against an older state, is shifted by them, sent
-/// again and kept, the insert never sent twice (the mutant that keeps a
-/// found landing with no address drops the pieces, and the burst is held
-/// moved; the one that reads the address at the head reads past a write
-/// that moved the words since).
+/// its `done` and its `held` event's entry carrying the address (skep #998),
+/// the pieces placed, and the burst naming them, refused as typed against an
+/// older state, is shifted by them, sent again and kept, the insert never
+/// sent twice (the mutant that keeps a found landing with no address drops
+/// the pieces, and the burst is held moved; the one that reads the address
+/// at the head reads past a write that moved the words since; the one that
+/// names no address on the event leaves the page an image read of its own).
 #[test]
 fn a_landing_the_read_finds_places_the_pieces_naming_its_words_at_the_address_its_site_reads() {
     let g = ground();
     let k = held_a_named_landing(&g, g.fake.head());
     g.holds.probe("b-1");
     assert_eq!(*g.fake.at_reads.lock().unwrap(), [77], "one `/op-at` read, at the site read's position");
+    let named = held_events(&g).into_iter().filter_map(|e| e.get("landed").cloned()).find(|landed| landed[0]["held"] == k);
+    assert_eq!(named, Some(json!([{"held": k, "burst": "b-1", "at": 77, "addr": i(100)}])), "the line kept, at its row's position and its words' address");
     assert_eq!(sent_values(&g), ["!", "!"], "the burst naming the words, refused once and shifted; the insert never sent again");
     let sends = g.fake.sends.lock().unwrap().clone();
     assert_eq!(sends[1]["at"]["ordinal"].as_str(), Some("5"), "{sends:?}");
@@ -6284,8 +6355,11 @@ fn a_landing_whose_site_names_no_one_run_of_its_words_keeps_its_line_and_drops_t
 /// burst naming its words held behind it; the insert landed, and the
 /// person's drop reads first, finds it, reads its words' address through
 /// `/op-at` and keeps it: the burst naming them stands with its anchors
-/// placed (the mutant that keeps the drop's landing with no address drops
-/// the words' place the page named).
+/// placed, and the drop's `held` event names the line kept with that address
+/// beside its row's position (skep #998) (the mutant that keeps the drop's
+/// landing with no address drops the words' place the page named; the one
+/// that names no address on the event holds the page's undo on its own
+/// image read).
 #[test]
 fn a_drop_that_finds_its_line_landed_places_the_pieces_naming_its_words() {
     let g = ground();
@@ -6297,10 +6371,127 @@ fn a_drop_that_finds_its_line_landed_places_the_pieces_naming_its_words() {
     *g.fake.text.lock().unwrap() = "abcXYZ".into();
     *g.fake.image.lock().unwrap() = vec![run(&i(1), 3), run(&i(100), 3)];
     g.fake.next_at.store(78, Ordering::SeqCst);
+    let _ = held_events(&g);
     assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Kept);
     let lines = g.lines();
     assert_eq!((lines.len(), &lines[0]["anchors"]), (1, &json!({"before": i(100), "after": i(101)})), "{lines:?}");
     assert_eq!(*g.fake.at_reads.lock().unwrap(), [77], "one `/op-at` read, at the site read's position");
+    let said = held_events(&g);
+    let landed: Vec<&Value> = said.iter().filter_map(|e| e.get("landed")).collect();
+    assert_eq!(landed, [&json!([{"held": k, "burst": "b-1", "at": 77, "addr": i(100)}])], "the line kept, at its row's position and its words' address: {said:?}");
+}
+
+/// Holds, under `g`, a `sent` insert of `hello` on `DOC` whose write landed.
+///
+/// No line's anchors name its words. The board holds its row, the person's
+/// own, at 77, its values at its site and its words minted at `100`. It
+/// answers the line's ordinal.
+fn held_an_unnamed_landing(g: &Ground) -> u64 {
+    let k = g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", true)["held"].as_u64().unwrap();
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": g.own_key(), "docs": [DOC]})];
+    *g.fake.text.lock().unwrap() = "hello".into();
+    *g.fake.image.lock().unwrap() = vec![run(&i(100), 5)];
+    k
+}
+
+/// Checks that an unanswered address read still keeps an unnamed insert.
+///
+/// The insert is one no line's anchors name; the silence is the board's, at
+/// a read of the hold's (§3c.5; skep #863, #998). The read finds the insert
+/// landed ([`held_an_unnamed_landing`]), a line on `OTHER` standing behind
+/// it, and the board gives the address read no answer: the line is kept all
+/// the same, its `held` event naming it at its row's position and no
+/// address, and the board is held unanswered, so the pass ends there and
+/// `OTHER`'s line is dialed only at the next probe, the board answering. The
+/// person's drop of such a line keeps it so too, the board held unanswered
+/// (the mutant that holds the keep back for an address no anchor needs
+/// stands a landed line until the board answers; the one that leaves the
+/// board answering dials on into its silence).
+#[test]
+fn an_insert_no_anchor_names_is_kept_though_its_address_read_goes_unanswered() {
+    let g = ground();
+    let k = held_an_unnamed_landing(&g);
+    g.hold(&insert(OTHER, json!(["x"]), g.fake.head()), "unreachable", false);
+    g.fake.at_unanswered.store(true, Ordering::SeqCst);
+    let site_at = g.fake.head();
+    assert_eq!(g.holds.probe("b-1"), Turn::Unanswered, "the pass ends at the board's silence");
+    assert_eq!(*g.fake.at_reads.lock().unwrap(), [site_at], "one address read, at the site read's position");
+    let landed = json!([{"held": k, "at": 77}]);
+    assert_eq!(named_kept(&held_events(&g)), [("holding", 1, None), ("holding", 1, None), ("kept", 0, Some(&landed))], "kept, naming no address");
+    assert!(!g.holds.lock("b-1").answers(), "the board held unanswered until a `/health` answers");
+    let lines = g.lines();
+    assert_eq!((g.fake.sends(), lines.len(), lines[0]["doc"].as_str()), (0, 1, Some(OTHER)), "`OTHER`'s line not dialed into the silence: {lines:?}");
+    assert_eq!(g.holds.probe("b-1"), Turn::Done);
+    assert_eq!((sent_values(&g), g.lines().len()), (vec!["x".to_string()], 0), "the board answering, `OTHER`'s line sent and kept");
+
+    let g = ground();
+    let k = held_an_unnamed_landing(&g);
+    g.fake.at_unanswered.store(true, Ordering::SeqCst);
+    let _ = held_events(&g);
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Kept, "the drop keeps the line it read landed");
+    let landed = json!([{"held": k, "at": 77}]);
+    assert_eq!(named_kept(&held_events(&g)), [("kept", 0, Some(&landed))], "kept, naming no address");
+    assert!(!g.holds.lock("b-1").answers(), "the board held unanswered");
+}
+
+/// Checks that an address read deciding nothing still keeps an unnamed insert.
+///
+/// The insert is one no line's anchors name, kept with no address
+/// (skep #998). The read finds the insert landed
+/// ([`held_an_unnamed_landing`]), and the board answers the address read
+/// `history_busy`, or the death signal: the line is kept all the same, its
+/// `held` event naming it at its row's position and no address, and the
+/// board stands answering (the mutant that holds the keep back for an
+/// address no anchor needs stands a landed line for a read the page never
+/// asked for).
+#[test]
+fn an_insert_no_anchor_names_is_kept_with_no_address_where_its_address_read_decides_nothing() {
+    type Arm = fn(&Fake);
+    let busy: Arm = |fake| *fake.at_refused.lock().unwrap() = Some((503, json!({"error": "history_busy"})));
+    let closed: Arm = |fake| fake.at_closed.store(true, Ordering::SeqCst);
+    for (cell, arm) in [("history_busy", busy), ("the death signal", closed)] {
+        let g = ground();
+        let k = held_an_unnamed_landing(&g);
+        arm(&g.fake);
+        assert_eq!(g.holds.probe("b-1"), Turn::Done, "{cell}");
+        assert_eq!(g.fake.at_reads.lock().unwrap().len(), 1, "{cell}: the address read made once");
+        let landed = json!([{"held": k, "at": 77}]);
+        assert_eq!(named_kept(&held_events(&g)), [("holding", 1, None), ("kept", 0, Some(&landed))], "{cell}: kept, naming no address");
+        assert!(g.lines().is_empty() && g.holds.lock("b-1").answers(), "{cell}: the line kept, the board answering");
+    }
+}
+
+/// Checks that a burst naming a found landing's words is placed at the door.
+///
+/// Its pieces are placed from the principal's landed inserts (skep #969,
+/// #998). An insert of `XYZ` after `DOC`'s `c`, its `id` `b-1`, its answer
+/// lost and no line's anchors naming its words, is found landed by the read,
+/// which reads the address its words were minted at, `100`, and keeps it,
+/// naming the address on its `held` event. The page then types `!` between
+/// its `X` and its `Y`: the burst's pieces are placed at the door from the
+/// principal's landed inserts, and the board's refusal of it as typed
+/// against an older state is shifted within the call by the anchors so
+/// placed, the insert never sent (the mutant that reads no address for an
+/// insert no anchor names enters none among the landed inserts, and refuses
+/// the burst `no_such_burst`, though the words stand on the board).
+#[test]
+fn a_burst_naming_the_words_of_an_insert_the_read_found_landed_is_placed_at_the_door() {
+    let g = ground();
+    let typed = g.fake.head();
+    let k = g.hold_for(&with_id(insert_at(DOC, 4, json!(["XYZ"]), typed), "b-1"), Reason::of("unreachable", true)).unwrap()["held"].as_u64().unwrap();
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": g.own_key(), "docs": [DOC]})];
+    *g.fake.text.lock().unwrap() = "abcXYZ".into();
+    *g.fake.image.lock().unwrap() = vec![run(&i(1), 3), run(&i(100), 3)];
+    g.fake.move_arrangement(DOC, 77);
+    g.fake.next_at.store(78, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    let landed = json!([{"held": k, "burst": "b-1", "at": 77, "addr": i(100)}]);
+    assert_eq!(named_kept(&held_events(&g)), [("holding", 1, None), ("kept", 0, Some(&landed))], "kept off the read, its words' address named");
+    let placed = g.holds.send(&g.session, with_id(insert_at(DOC, 5, json!(["!"]), typed), "b-2"), Some(pieced(piece("b-1", 0), piece("b-1", 1)))).answered().unwrap();
+    assert_eq!(placed["resp"], "ack", "shifted through the insert's landing and acked within the call: {placed}");
+    let sends = g.fake.sends.lock().unwrap().clone();
+    assert_eq!((sends.len(), sends[1]["at"]["ordinal"].as_str()), (2, Some("5")), "the insert never sent, `!` refused once and shifted: {sends:?}");
+    assert!(g.lines().is_empty(), "nothing held");
 }
 
 /// Checks that the landed-insert record keeps the principal's newest

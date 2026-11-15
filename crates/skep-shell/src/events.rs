@@ -76,8 +76,11 @@ pub enum EventName {
     /// the resend's read judges only whether a line's own write landed
     /// (§3c.5). An event that says a line kept after its `op` answered
     /// `held` names it, `landed`: its ordinal, its frame's `id`, the position
-    /// the board took it at and, at an insert's ack, the I-address it minted
-    /// — the one place the page learns a resent line's ack (skep #968).
+    /// the board took it at — or, for a landing found under a reclaimed
+    /// history, `at_most`, the position it stands at or before — and, for an
+    /// insert, the I-address its words were minted at, its ack's or the one
+    /// the read of a found landing names — the one place the page learns a
+    /// resent line's ack (skep #968, #998).
     /// Emitted once per change of a document's state (skep #727): at a hold's
     /// start, at each line's resolution or drop, and at each state the resend
     /// moves a document through — the same state and count said again for

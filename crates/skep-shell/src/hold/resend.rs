@@ -161,14 +161,18 @@
 //! holds nowhere is handed to the person at once, a refused run under the
 //! board's token, since it cannot resolve (§3c.4). Each line the walk keeps,
 //! at its ack or found landed by the read, is named on its document's `held`
-//! event — its ordinal, its frame's `id`, the position the board took it at
-//! and, at an insert's ack, the I-address it minted (`LandedLine`;
-//! skep #968). A line kept whose words a later line's anchors name places
-//! them at that I-address (skep #969): its ack's, or, for a landing the read
-//! found, the one an `image` of its confirmed site through `/op-at` at the
-//! site read's position answers (`Holds::minted_at`) — a read that decides
-//! nothing deciding nothing of the line either, and one that names no single
-//! run of the words keeping the line with the naming lines' anchors dropped.
+//! event — its ordinal, its frame's `id`, the position the board took it at,
+//! or, for a landing found under a reclaimed history, the position it stands
+//! at or before (`KeptAt`), and, for an insert, the I-address its words were
+//! minted at (`LandedLine`; skep #968, #998). That I-address is its ack's,
+//! or, for a landing the read found, the one an `image` of its confirmed
+//! site through `/op-at` at the site read's position answers
+//! (`Holds::minted_at`), read for every insert the read finds landed; a line
+//! kept whose words a later line's anchors name places them there
+//! (skep #969). An address read that decides nothing decides nothing of
+//! such a line either, and keeps any other line with no address; one that
+//! names no single run of the words keeps the line with the naming lines'
+//! anchors dropped.
 //! A resend marks its line as one that may have landed before it dials, synced,
 //! and the line stays so through every resend short of its ack and through a
 //! move, so its next read takes a landing it finds as the line's own — after a
@@ -203,12 +207,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use skep_client::board::{acked_addr, acked_at, frames, Answer, AtAnswer, ChangesAnswer, ChangesQuery, Rejection};
+use skep_client::board::{acked_at, frames, Answer, AtAnswer, ChangesAnswer, ChangesQuery, Rejection};
 use skep_client::halt::Halt;
 
 use super::{
-    awaits_act, cause, line_state, millis, minted_by, unanswered, AttestedWhereOwed, BoardHold, BoardSlot, CutSend, Dialed, Hand, HandsFace, HandsRead, HeldState, Holds, Judged, KeptShift,
-    LandedLine, LineOut, MovedFace, Tested, Turn, Verdict, Written, HAND_OVER_DEADLINE, TURN_STEPS,
+    awaits_act, cause, line_state, millis, minted_by, unanswered, AttestedWhereOwed, BoardHold, BoardSlot, CutSend, Dialed, Hand, HandsFace, HandsRead, HeldState, Holds, Judged, KeptAt,
+    KeptShift, LandedLine, LineOut, MovedFace, Tested, Turn, Verdict, Written, HAND_OVER_DEADLINE, TURN_STEPS,
 };
 use crate::held::{i_address, Anchor, Anchors, HeldLine, Reason, SpanRun};
 use crate::refusal::{Name, Refusal};
@@ -710,13 +714,17 @@ pub(super) enum ReadOutcome {
     /// since or no landing; or a `history_reclaimed`, no row read, the site
     /// confirming nothing.
     Undecided,
-    /// The in-flight burst landed — the head is `done kept` with this `at`.
+    /// The in-flight burst landed: the head is `done kept`.
     ///
-    /// The position, where the read names one, becomes the document's base,
-    /// as an ack's does (§3c.2), and joins the board's acked positions.
-    /// `minted` is the first I-address the head's words stand at, read where
-    /// a line's anchors name them ([`Holds::minted_at`]; skep #969).
-    Landed { at: Option<u64>, minted: Option<String> },
+    /// `kept` is where its write stands ([`KeptAt`]): the position of the
+    /// row the read found it at, which becomes the document's base, as an
+    /// ack's does (§3c.2), and joins the board's acked positions; or, where
+    /// the read met a reclaimed history and named no row, the position the
+    /// site read that found its values answered at, a bound the `held` event
+    /// names alone (skep #998). `minted` is the first I-address the head's
+    /// words stand at, where the read names one ([`Holds::minted_at`]; skep
+    /// #969, #998).
+    Landed { kept: KeptAt, minted: Option<String> },
     /// The board answered no page: nothing is decided.
     ///
     /// It answered a refusal (`feed_rebuilding`) or an answer no read takes
@@ -1329,8 +1337,9 @@ impl Holds {
     /// it is tried again the probe the head reads. Whether a read is made is
     /// [`read_owed`]'s, which the walk counts it by.
     ///
-    /// A landed head's `held` event names it, at the position the read found
-    /// ([`LandedLine`]; skep #968), and no I-address: no ack names one.
+    /// A landed head's `held` event names it ([`LandedLine`]; skep #968,
+    /// #998): where the read found it ([`KeptAt`]), and the address its
+    /// words were minted at where the read names one ([`Holds::minted_at`]).
     fn resume_doc(&self, session: &SessionEntry, head: &HeldLine, head_unreadable: bool) -> Step {
         let (board_reference, principal, doc) = (session.board_reference.as_str(), session.facts.principal, head.doc.as_str());
         if passed_over(head, head_unreadable) {
@@ -1343,11 +1352,11 @@ impl Holds {
                 self.note_unanswered(&mut self.lock(board_reference), None);
                 Step::Unanswered
             }
-            ReadOutcome::Landed { at, minted } => {
-                self.keep_landing(&mut self.lock(board_reference), principal, head, at, minted.as_deref());
+            ReadOutcome::Landed { kept, minted } => {
+                self.keep_landing(&mut self.lock(board_reference), principal, head, kept.at(), minted.as_deref());
                 let lines = self.lines_on(board_reference, principal, doc);
                 let goes = lines.held > 0;
-                self.say_kept(session, doc, lines, &LandedLine::of(head, at, None));
+                self.say_kept(session, doc, lines, &LandedLine::of(head, kept, minted.as_deref()));
                 if goes {
                     Step::Goes
                 } else {
@@ -1406,9 +1415,11 @@ impl Holds {
     /// [`Holds::send_line`]), not this read's. A page, or the site read, the
     /// board gives no answer to is [`ReadOutcome::Unanswered`] (skep #863),
     /// the death signal at either is [`ReadOutcome::Died`], and every other
-    /// answer that is no page [`ReadOutcome::Unread`]. It is the resend's
-    /// read and the drop's (`Holds::resolve`; skep #866), made outside every
-    /// lock.
+    /// answer that is no page [`ReadOutcome::Unread`]. A landing it finds of
+    /// an insert costs one read more, the `/op-at` image of its site that
+    /// names the address its words were minted at ([`Holds::landed`]; skep
+    /// #998). It is the resend's read and the drop's (`Holds::resolve`; skep
+    /// #866), made outside every lock.
     pub(super) fn read_outcome(&self, session: &SessionEntry, doc: &str, head: &HeldLine) -> ReadOutcome {
         let board_reference = session.board_reference.as_str();
         let mut query = ChangesQuery { since: head.base, under: Some(doc), drafts: true, limit: None };
@@ -1473,13 +1484,14 @@ impl Holds {
     ///
     /// No row can be read, so the arrangement alone decides the one
     /// question: a `sent` head's values read back equal at its site is (ii),
-    /// kept with no position to name; any difference, or a kind no read
-    /// confirms, is no landing confirmed ([`ReadOutcome::Undecided`]), and
-    /// the resend sends the head from the head — the board judging its typed
-    /// state (`arrangement_moved`), as it judges every send; a site read the
-    /// board answers with no delivery decides nothing, the death signal at it
-    /// is the session's, and one it gives no answer to decides nothing and
-    /// ends the pass.
+    /// kept with no position of its own to name, at or before the one the
+    /// site read answered at ([`KeptAt::AtMost`]; skep #998); any
+    /// difference, or a kind no read confirms, is no landing confirmed
+    /// ([`ReadOutcome::Undecided`]), and the resend sends the head from the
+    /// head — the board judging its typed state (`arrangement_moved`), as it
+    /// judges every send; a site read the board answers with no delivery
+    /// decides nothing, the death signal at it is the session's, and one it
+    /// gives no answer to decides nothing and ends the pass.
     fn reclaimed_outcome(&self, session: &SessionEntry, doc: &str, head: &HeldLine) -> ReadOutcome {
         match self.site(session, doc, head) {
             Site::Equal { as_of } => self.landed(session, doc, head, None, as_of),
@@ -1492,21 +1504,33 @@ impl Holds {
 
     /// Returns the outcome of a head the read found landed at `at`.
     ///
-    /// Where a line's anchors name the head's words (skep #969), the address
-    /// they were minted at is read first, at `as_of`, the position the site
-    /// read answered at ([`Holds::minted_at`]): a read that decides nothing
-    /// is the outcome, so the head stands and is read again — the pieces
-    /// naming its words never dropped for a read the board left unanswered —
-    /// and a read that names no address keeps the head with none.
+    /// `as_of` is the position the site read that confirmed its values
+    /// answered at: the bound it is kept under where the read named no `at`
+    /// ([`KeptAt::of`]; skep #998). The address its words were minted at is
+    /// read first, at that position, for every insert ([`Holds::minted_at`];
+    /// skep #969, #998), and a read that names none keeps the head with none.
+    /// What a read that decides nothing does turns on whether a line's
+    /// anchors name the head's words, asked once the read has answered.
+    /// Where one does, it is the outcome: the head stands and is read again,
+    /// the pieces naming its words never dropped for an address the board
+    /// left unread. Where none does, the head is kept with no address, the
+    /// keep never held back for it: the board's silence at the read is noted
+    /// as at every request of the hold's (§3c.5; skep #863), and the death
+    /// signal is met again at the session's next request.
     fn landed(&self, session: &SessionEntry, doc: &str, head: &HeldLine, at: Option<u64>, as_of: Option<u64>) -> ReadOutcome {
-        let named = self.with_principal(&session.board_reference, session.facts.principal, |ph| ph.queue.is_named(head.k)).unwrap_or(false);
-        if !named {
-            return ReadOutcome::Landed { at, minted: None };
-        }
-        match self.minted_at(session, doc, head, as_of) {
-            Ok(minted) => ReadOutcome::Landed { at, minted },
+        let kept = KeptAt::of(at, as_of);
+        let decides_nothing = match self.minted_at(session, doc, head, as_of) {
+            Ok(minted) => return ReadOutcome::Landed { kept, minted },
             Err(decides_nothing) => decides_nothing,
+        };
+        let named = self.with_principal(&session.board_reference, session.facts.principal, |ph| ph.queue.is_named(head.k)).unwrap_or(false);
+        if named {
+            return decides_nothing;
         }
+        if decides_nothing == ReadOutcome::Unanswered {
+            self.note_unanswered(&mut self.lock(&session.board_reference), None);
+        }
+        ReadOutcome::Landed { kept, minted: None }
     }
 
     /// Reads the first I-address a landed insert's words stand at.
@@ -1518,7 +1542,11 @@ impl Holds {
     /// run of that width in the document's own content I-space, which an insert
     /// mints into; any other answer — a refusal, a reclaimed position, other
     /// runs, a site read that named no position — names none (`Ok(None)`). It
-    /// is made only where a line's anchors name the head's words (skep #969).
+    /// is made for every landing the read finds of an insert whose site read
+    /// named its position, whether or not a line's anchors name its words
+    /// ([`Holds::landed`]; skep #969, #998): the address places the pieces
+    /// that name them, enters the insert among the principal's landed
+    /// inserts, and rides the `held` event's `landed` entry.
     ///
     /// # Errors
     ///
@@ -1591,10 +1619,14 @@ impl Holds {
     /// `minted` is the first I-address its words stand at, where the read
     /// found one ([`Holds::minted_at`]): the pieces naming the words are
     /// placed there, and the insert is noted among the principal's landed
-    /// inserts, as an ack is (skep #969). It is the resend's keep of a head
-    /// ([`Holds::resume_doc`]) and the drop's, where the read the drop makes
-    /// first finds the line landed (`Holds::resolve`; skep #866), each caller
-    /// saying the `held` event that names the line kept at `at`
+    /// inserts, as an ack is (skep #969). `at` is the position the read found
+    /// the write at alone ([`KeptAt::at`]): a bound the write stands at or
+    /// before, under a reclaimed history, is no position this shell's write
+    /// was taken at, and none of these notes it (skep #998). It is the
+    /// resend's keep of a head ([`Holds::resume_doc`]) and the drop's, where
+    /// the read the drop makes first finds the line landed (`Holds::resolve`;
+    /// skep #866), each caller saying the `held` event that names the line
+    /// kept, where it stands and the address its words were minted at
     /// ([`LandedLine`]; skep #968).
     pub(super) fn keep_landing(&self, board_hold: &mut BoardHold, principal: u64, line: &HeldLine, at: Option<u64>, minted: Option<&str>) {
         if let Some(at) = at {
@@ -1685,7 +1717,9 @@ impl Holds {
     /// **The ack names the line.** An ack's `held` event names the line kept,
     /// the ack's position and an insert's minted I-address ([`LandedLine`];
     /// skep #968): the page's one word of a line's ack once its `op` answered
-    /// `held`.
+    /// `held`. The address is the one the keep places the line's named words
+    /// at, read through the one reader of an insert's minted address
+    /// ([`minted_by`]; SP-18), so an address of another place rides neither.
     ///
     /// **Under the line's dial id** (skep #971). Each dial this send makes,
     /// its shifts' among them ([`Dialing::Resend`]), goes out under the line's
@@ -1758,13 +1792,13 @@ impl Holds {
             match dialed {
                 Dialed::Acked(ack) => {
                     self.note_ack(session, &frame, &ack);
-                    let at = acked_at(&ack);
-                    self.keep(board_reference, principal, line.k, at, minted_by(&frame, &ack));
+                    let (at, minted) = (acked_at(&ack), minted_by(&frame, &ack));
+                    self.keep(board_reference, principal, line.k, at, minted);
                     // The line settled, it is let go before its face is told,
                     // so an act the face asks for takes it.
                     drop(out);
                     let rest = self.lines_on(board_reference, principal, &line.doc);
-                    self.say_kept(session, &line.doc, rest, &LandedLine::of(line, at, acked_addr(&ack)));
+                    self.say_kept(session, &line.doc, rest, &LandedLine::of(line, KeptAt::of(at, None), minted));
                     return Step::Goes;
                 }
                 Dialed::Held { reason, refusal } if reason.cause == cause::MOVED => {

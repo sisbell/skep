@@ -39,9 +39,9 @@
 //! `/op` recorded, a look taken as each is recorded, and a refusal or the
 //! death signal armed for a send, an insert's ack naming the address it
 //! minted where a cell arms it, and an `/op-at` image of the draft, no
-//! answer or a refusal where a cell arms it — the holds over it with a
-//! session opened as the shell opens one and every line the hold says on
-//! `Talk` recorded
+//! answer, the death signal or a refusal where a cell arms it — the holds
+//! over it with a session opened as the shell opens one and every line the
+//! hold says on `Talk` recorded
 //! (`Ground`), the clock a line's deadline reads moved forward by a cell
 //! where it waits past one (`Holds::advance`), a burst held through the
 //! hold's own door at the base a hold takes now, and each `held` event,
@@ -586,8 +586,8 @@ impl<T: Clone> Armed<T> {
 /// the next few alone, the death first and the non-200 next — and an insert's
 /// ack naming the address its words were minted at where a cell arms the fake
 /// to mint; an `/op-at` `image` answering the draft's image at the position
-/// asked, each asked position recorded, or no answer, a refusal or the runs a
-/// cell arms in its place; the `/health`
+/// asked, each asked position recorded, or no answer, the death signal, a
+/// refusal or the runs a cell arms in its place; the `/health`
 /// reads counted, one armed to panic once, and each held at a gate while it is
 /// shut; and its `/events` stream, none, a commit a millisecond without end
 /// where a cell arms one, or a live stream that says nothing where a cell arms
@@ -708,6 +708,8 @@ struct Fake {
     at_reads: Mutex<Vec<u64>>,
     /// Every `/op-at` read goes unanswered (`DialError::Timeout`).
     at_unanswered: AtomicBool,
+    /// Every `/op-at` read answers the death signal.
+    at_closed: AtomicBool,
     /// A refusal armed for every `/op-at` read, in its answer's place: a
     /// status and its body.
     at_refused: Mutex<Option<(u16, Value)>>,
@@ -775,6 +777,7 @@ impl Fake {
             next_i: AtomicU64::new(100),
             at_reads: Mutex::new(Vec::new()),
             at_unanswered: AtomicBool::new(false),
+            at_closed: AtomicBool::new(false),
             at_refused: Mutex::new(None),
             at_runs: Mutex::new(None),
         })
@@ -1038,6 +1041,9 @@ impl Dialer for Fake {
             self.at_reads.lock().unwrap().push(at);
             if self.at_unanswered.load(Ordering::SeqCst) {
                 return Err(DialError::Timeout("the board takes the read and sends nothing".into()));
+            }
+            if self.at_closed.load(Ordering::SeqCst) {
+                return Ok(closed());
             }
             if let Some((status, refusal)) = self.at_refused.lock().unwrap().clone() {
                 return Ok(respond(status, refusal));

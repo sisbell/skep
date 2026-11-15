@@ -4343,7 +4343,7 @@ fn an_event_naming_a_line_kept_is_said_though_its_pair_repeats() {
     let g = ground();
     let lines = |held: u64| LinesOn { held, unwritable: None };
     let emit = |state: HeldState| g.holds.emit_held(&g.session, DOC, lines(1), state, None, MovedFace::default());
-    let landed = |k: u64, at: u64| LandedLine { k, burst: Some("b-1".into()), at: Some(at), addr: Some(i(9)) };
+    let landed = |k: u64, at: u64| LandedLine { k, burst: Some("b-1".into()), kept: KeptAt::At(at), addr: Some(i(9)) };
     emit(HeldState::Sending);
     g.holds.say_kept(&g.session, DOC, lines(1), &landed(1, 50));
     emit(HeldState::Holding);
@@ -4355,7 +4355,7 @@ fn an_event_naming_a_line_kept_is_said_though_its_pair_repeats() {
     let entry = |k: u64, at: u64| json!([{"held": k, "burst": "b-1", "at": at, "addr": i(9)}]);
     let (first, second) = (entry(1, 50), entry(2, 51));
     assert_eq!(told, [("sending", None), ("sending", Some(&first)), ("holding", None), ("sending", Some(&second))], "each keep said, the pair after the last one remembered");
-    g.holds.say_kept(&g.session, DOC, lines(0), &LandedLine { k: 3, burst: None, at: Some(52), addr: None });
+    g.holds.say_kept(&g.session, DOC, lines(0), &LandedLine { k: 3, burst: None, kept: KeptAt::At(52), addr: None });
     assert_eq!(g.states(), ["kept"]);
     assert!(g.holds.last_emitted.lock().unwrap().is_empty(), "a keep that leaves no line clears the document's key");
 }

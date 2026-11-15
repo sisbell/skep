@@ -281,8 +281,8 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "LandedLine",
         open: false,
-        doc: "one held line that left the store kept, as the `held` event names it (§4b.2; skep #968): `held` the line's ordinal, the one the `op` call's `held` answer named; `burst` the envelope `id` the page sent on the frame (A-60), absent where it sent none; `at` the position the board took the line at — its ack's `at` (A-62, A-63), or the position the resend's read found its landing at — absent where the read found it under a reclaimed history; `addr` the first I-address an insert's `ack_addr` minted (A-63), absent for the other kinds and for a landing the read found, which no ack names: the page reads the image there for those",
-        fields: &[req("held", "number"), opt("burst", "string"), opt("at", "number"), opt("addr", "string")],
+        doc: "one held line that left the store kept, as the `held` event names it (§4b.2; skep #968, #998): `held` the line's ordinal, the one the `op` call's `held` answer named; `burst` the envelope `id` the page sent on the frame (A-60), absent where it sent none; `at` the position the board took the line at — its ack's `at` (A-62, A-63), or the position the resend's read found its landing at — absent where the read found it under a reclaimed history; `at_most`, present only where `at` is absent, the position the read that found the line's words standing answered at, the landing at or before it, so a read at or past it holds them — the bound of a landing found under a reclaimed history, never a position the board took this line at; `addr` the first I-address the line's words were minted at — an insert's `ack_addr` (A-63), or, for a landing the read found, the one an `image` of its site at that read's position names — absent for the other kinds and where neither names one: the page reads the image there for those",
+        fields: &[req("held", "number"), opt("burst", "string"), opt("at", "number"), opt("at_most", "number"), opt("addr", "string")],
     },
     Shape {
         name: "Hand",

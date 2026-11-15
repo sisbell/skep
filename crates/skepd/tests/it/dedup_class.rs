@@ -15,11 +15,14 @@
 //! (`skep-engine/tests/it/fires.rs`), and the guest's read of the results is
 //! pinned here. The dc-constraint witness cell has no gate to exercise: no
 //! dc-constraint query exists in `emit` as built (see the round's report).
+//!
+//! Every hit is answered `"committed": false` and every fresh mint without
+//! the member (skep #1043), and a re-retraction acks its incumbent so too.
 
 use crate::common;
 
 use common::*;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 /// The shipped `retired` class in the wire's endset form: the one Unary
 /// idem⊤ class the open `emit` surface may write under standard genesis
@@ -106,19 +109,38 @@ fn public_link(port: u16, signed: &str, ordinal: u64) -> String {
     ))
 }
 
-/// The tuple T `(retired, FROM, [])`, emitted into `home` by `token`; the
-/// acked address.
-fn emit_t(port: u16, token: &str, home: &str) -> String {
-    acked_addr(&op(
+/// Returns an `ack_addr`'s address and whether its write committed.
+///
+/// The ack of a write that committed carries no `committed` member; a dedup
+/// hit's carries `"committed": false` (wire.md §The response envelope), and
+/// any other value of the member is a fault.
+fn deposited(v: &Value) -> (String, bool) {
+    let committed = match v.get("committed") {
+        None => true,
+        Some(member) => {
+            assert_eq!(member, &json!(false), "the member rides only as `false`: {v}");
+            false
+        }
+    };
+    (acked_addr(v), committed)
+}
+
+/// The tuple T `(retired, FROM, [])`, emitted into `home` by `token`.
+///
+/// It answers the acked address and whether the emit committed.
+fn emit_t(port: u16, token: &str, home: &str) -> (String, bool) {
+    deposited(&op(
         port,
         Some(token),
         &format!(r#"{{"op":"emit","home":"{home}","ty":{RETIRED_TY},"from":"{FROM}","to":[]}}"#),
     ))
 }
 
-/// The claim `old → new`, asserted from `home` by `token`; the acked address.
-fn assert_sup(port: u16, token: &str, home: &str, old: &str, new: &str) -> String {
-    acked_addr(&op(
+/// The claim `old → new`, asserted from `home` by `token`.
+///
+/// It answers the acked address and whether the assertion committed.
+fn assert_sup(port: u16, token: &str, home: &str, old: &str, new: &str) -> (String, bool) {
+    deposited(&op(
         port,
         Some(token),
         &format!(r#"{{"op":"assert_sup","home":"{home}","old":"{old}","new":"{new}"}}"#),
@@ -143,7 +165,8 @@ fn read_link(port: u16, token: Option<&str>, a: &str) -> Value {
 /// earliest their class can read. And the coexistence pin (cell 4): the
 /// value-identical tuples stand on both sides of the boundary, each owner's
 /// re-emit acking its own side's earliest incumbent, each visible to its own
-/// reader and absent to the other.
+/// reader and absent to the other. Each fresh mint's ack carries no
+/// `committed` member, and each hit's `"committed": false`.
 #[test]
 fn a_draft_homed_incumbent_dedups_only_for_callers_who_can_read_the_draft() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -154,14 +177,16 @@ fn a_draft_homed_incumbent_dedups_only_for_callers_who_can_read_the_draft() {
     let draft = owner_draft(port, &owner);
 
     // The incumbent: the owner's tuple, homed in its private draft.
-    let incumbent = emit_t(port, &owner, &draft);
+    let (incumbent, committed) = emit_t(port, &owner, &draft);
+    assert!(committed, "the incumbent's emit committed");
     assert!(in_link_subspace_of(&incumbent, &draft), "the incumbent is draft-homed: {incumbent}");
 
     // NON-ENTITLED: a stranger without a grant cannot read the draft, so its
     // emit sees no incumbent — a fresh mint, acked in ITS OWN home.
     let (b_account, b) = stranger(port, 901);
     let b_home = own_draft(port, &b, &b_account);
-    let b_tuple = emit_t(port, &b, &b_home);
+    let (b_tuple, committed) = emit_t(port, &b, &b_home);
+    assert!(committed, "a fresh mint commits, and its ack carries no member");
     assert_ne!(b_tuple, incumbent, "never an ack naming an address inside the draft");
     assert!(in_link_subspace_of(&b_tuple, &b_home), "a fresh mint in the emitter's own home: {b_tuple}");
     assert!(!in_link_subspace_of(&b_tuple, &draft));
@@ -171,22 +196,23 @@ fn a_draft_homed_incumbent_dedups_only_for_callers_who_can_read_the_draft() {
     // class can read.
     let (sub_acct, sub) = sub_account(port, &owner, 905);
     let sub_home = own_draft(port, &sub, &sub_acct);
-    assert_eq!(emit_t(port, &sub, &sub_home), incumbent, "the subtree reader acks the draft's tuple");
+    assert_eq!(emit_t(port, &sub, &sub_home), (incumbent.clone(), false), "the subtree reader acks the draft's tuple, committing nothing");
 
     // GRANT-HOLDER: a stranger the owner granted the draft reads it — its
     // emit acks the draft's incumbent too.
     let (c_account, c) = stranger(port, 902);
     let c_home = own_draft(port, &c, &c_account);
-    assert_ne!(emit_t(port, &c, &c_home), incumbent, "before the grant: a stranger, fresh");
+    let (c_tuple, committed) = emit_t(port, &c, &c_home);
+    assert!(c_tuple != incumbent && committed, "before the grant: a stranger, fresh");
     deposit_grant(port, &signed, CLAIMANT_DOC1, &draft, Some(&c_account));
-    assert_eq!(emit_t(port, &c, &c_home), incumbent, "granted: the draft's incumbent is readable, and acked");
+    assert_eq!(emit_t(port, &c, &c_home), (incumbent.clone(), false), "granted: the draft's incumbent is readable, and acked");
 
     // COEXISTENCE (cell 4): both sides stand; each owner's re-emit acks the
     // earliest incumbent ITS class can read — the owner its draft's, the
     // stranger its own — and each tuple is readable to its own side, absent
     // to the other and to the guest (PUB-6.6).
-    assert_eq!(emit_t(port, &owner, &draft), incumbent, "the owner's re-emit acks the draft's");
-    assert_eq!(emit_t(port, &b, &b_home), b_tuple, "the stranger's re-emit acks its own");
+    assert_eq!(emit_t(port, &owner, &draft), (incumbent.clone(), false), "the owner's re-emit acks the draft's");
+    assert_eq!(emit_t(port, &b, &b_home), (b_tuple.clone(), false), "the stranger's re-emit acks its own");
     assert!(!read_link(port, Some(&owner), &incumbent).is_null(), "the owner reads its tuple");
     assert!(!read_link(port, Some(&b), &b_tuple).is_null(), "the stranger reads its tuple");
     assert!(read_link(port, Some(&b), &incumbent).is_null(), "the draft's tuple is absent to the stranger");
@@ -199,7 +225,7 @@ fn a_draft_homed_incumbent_dedups_only_for_callers_who_can_read_the_draft() {
 /// The `assert_sup` cell (PUB-6.25): the same claim tuple over two PUBLIC
 /// endpoints, incumbent draft-homed, × the classes — the non-entitled
 /// stranger mints its own claim in its own home, the subtree reader and the
-/// grant-holder ack the draft's.
+/// grant-holder ack the draft's, each hit `"committed": false`.
 #[test]
 fn a_draft_homed_claim_dedups_only_for_callers_who_can_read_the_draft() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -212,28 +238,30 @@ fn a_draft_homed_claim_dedups_only_for_callers_who_can_read_the_draft() {
     let new = public_link(port, &signed, 2);
 
     // The incumbent claim, homed in the owner's private draft.
-    let incumbent = assert_sup(port, &owner, &draft, &old, &new);
+    let (incumbent, committed) = assert_sup(port, &owner, &draft, &old, &new);
+    assert!(committed, "the incumbent claim committed");
     assert!(in_link_subspace_of(&incumbent, &draft), "the claim is draft-homed: {incumbent}");
 
     // NON-ENTITLED: a claim of its own, in its own home.
     let (b_account, b) = stranger(port, 911);
     let b_home = own_draft(port, &b, &b_account);
-    let b_claim = assert_sup(port, &b, &b_home, &old, &new);
+    let (b_claim, committed) = assert_sup(port, &b, &b_home, &old, &new);
+    assert!(committed, "a fresh claim commits");
     assert_ne!(b_claim, incumbent, "never an ack naming an address inside the draft");
     assert!(in_link_subspace_of(&b_claim, &b_home), "a fresh claim in the asserter's own home: {b_claim}");
-    assert_eq!(assert_sup(port, &b, &b_home, &old, &new), b_claim, "its re-assertion acks its own");
+    assert_eq!(assert_sup(port, &b, &b_home, &old, &new), (b_claim.clone(), false), "its re-assertion acks its own");
 
     // SUBTREE and GRANT-HOLDER: the draft's claim is readable, and acked.
     let (sub_acct, sub) = sub_account(port, &owner, 915);
     let sub_home = own_draft(port, &sub, &sub_acct);
-    assert_eq!(assert_sup(port, &sub, &sub_home, &old, &new), incumbent);
+    assert_eq!(assert_sup(port, &sub, &sub_home, &old, &new), (incumbent.clone(), false));
     let (c_account, c) = stranger(port, 912);
     let c_home = own_draft(port, &c, &c_account);
     deposit_grant(port, &signed, CLAIMANT_DOC1, &draft, Some(&c_account));
-    assert_eq!(assert_sup(port, &c, &c_home, &old, &new), incumbent);
+    assert_eq!(assert_sup(port, &c, &c_home, &old, &new), (incumbent.clone(), false));
 
     // The owner's re-assertion acks the draft's claim, the earliest it reads.
-    assert_eq!(assert_sup(port, &owner, &draft, &old, &new), incumbent);
+    assert_eq!(assert_sup(port, &owner, &draft, &old, &new), (incumbent.clone(), false));
 
     sd.shutdown();
 }
@@ -256,7 +284,7 @@ fn an_edit_link_ack_never_names_an_address_inside_a_draft() {
     let other = public_link(port, &signed, 2);
     // A draft-homed claim over the original — the only candidate a
     // mis-keyed dedup could ever find.
-    let draft_claim = assert_sup(port, &owner, &draft, &original, &other);
+    let (draft_claim, _) = assert_sup(port, &owner, &draft, &original, &other);
     assert!(in_link_subspace_of(&draft_claim, &draft));
 
     let (b_account, b) = stranger(port, 921);
@@ -290,6 +318,37 @@ fn an_edit_link_ack_never_names_an_address_inside_a_draft() {
     let ack = expect_resp(&v, "ack_edit");
     assert!(in_link_subspace_of(ack["claim"].as_str().expect("claim"), &draft));
     assert_ne!(ack["claim"].as_str().expect("claim"), draft_claim);
+
+    sd.shutdown();
+}
+
+/// The `nullify` cell (skep #1043): a re-retraction acks its incumbent.
+///
+/// The owner emits T into its draft and retracts it from there; the
+/// retraction commits, its ack carrying no `committed` member. Retracted
+/// again from the same home, the call is answered the same retraction with
+/// `"committed": false`, its `at` the head it was judged at, and the head
+/// stands: nothing committed (wire.md §Links (writes), `nullify`).
+#[test]
+fn a_re_retraction_acks_its_incumbent_and_says_it_committed_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let draft = owner_draft(port, &owner);
+    let (target, _) = emit_t(port, &owner, &draft);
+    let retract = format!(r#"{{"op":"nullify","home":"{draft}","target":"{target}"}}"#);
+
+    let first = op(port, Some(&owner), &retract);
+    let (retraction, committed) = deposited(&first);
+    assert!(committed, "the first retraction commits: {first}");
+    let head = head_position(port);
+    assert_eq!(acked_at(&first), head, "at the commit it made");
+
+    let again = op(port, Some(&owner), &retract);
+    assert_eq!(deposited(&again), (retraction, false), "the incumbent retraction, committing nothing: {again}");
+    assert_eq!(acked_at(&again), head, "at the head the call was judged at");
+    assert_eq!(head_position(port), head, "and the head stands");
 
     sd.shutdown();
 }

@@ -179,7 +179,12 @@ fn fixture(name: &str) -> Response {
         // `1.0.1.0.1.2` after `1.0.1.0.1.3` was published lands and names
         // the trunk's current head.
         "ack_head_moved" => Response::Ack { at: Seq(14), head_moved: Some(a(&[1, 0, 1, 0, 1, 3])) },
-        "ack_addr" => Response::AckAddr { addr: a(&[1, 0, 1, 0, 1, 0, 1, 1]), at: Seq(7) },
+        "ack_addr" => Response::AckAddr { addr: a(&[1, 0, 1, 0, 1, 0, 1, 1]), at: Seq(7), committed: true },
+        // A write that found its work done (skep #1043): the mailbox standing
+        // at `1.0.1.0.2`, answered at the head the call was judged at.
+        "ack_addr_committed_nothing" => {
+            Response::AckAddr { addr: a(&[1, 0, 1, 0, 2]), at: Seq(9), committed: false }
+        }
         "ack_edit" => Response::AckEdit {
             successor: a(&[1, 0, 1, 0, 1, 0, 2, 2]),
             claim: a(&[1, 0, 1, 0, 1, 0, 2, 3]),
@@ -574,9 +579,10 @@ fn doc_owner_of_address_row_states_the_allocation_test() {
 /// THE WELL-KNOWN MINT (the mailbox design §2, §3): §Namespace's
 /// `create_well_known_document` row states the mailbox it creates — the
 /// account's slot 2, private always, its owner's alone, once — its answer,
-/// what a second call is answered and what its `at` is, the members the op
-/// does not take, the bare session it is admitted from, its refusals by
-/// token, and that mail needs no mailbox document; §Credential refusals
+/// what a second call is answered — saying it committed nothing — and what
+/// its `at` is, the members the op does not take, the bare session it is
+/// admitted from, its refusals by token, and that mail needs no mailbox
+/// document; §Credential refusals
 /// carries the system account's token in a bullet of its own — whoever
 /// asks, on claimed and unclaimed boards alike — names the op in
 /// `mint_home_first`'s cell, and puts the mint outside the board-state
@@ -595,6 +601,7 @@ fn doc_states_the_well_known_mint_its_refusals_and_its_feed_row() {
         "takes no `published` and no `attest`",
         "admitted from a bare session on a claimed board as `stage` is",
         "is answered `ack_addr` with the SAME `addr` and commits nothing",
+        "It carries `\"committed\": false`, which the mint's acknowledgment never does",
         "Its `at` is the position the call was JUDGED at",
         "`credential_refused:system_account_no_well_known`, whoever asks",
         "`credential_refused:mint_home_first`",

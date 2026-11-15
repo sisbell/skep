@@ -180,6 +180,7 @@ fn supersede(engine: &Engine, home: &Address, old: &Address, new: &Address) -> A
         .assert_sup(caller, home, old, new)
         .expect("the owner supersedes its own claim")
         .0
+        .into_address()
 }
 
 fn row(claim: &Address, home: &Address, to: &Address, active: bool) -> EditionClaim {

@@ -1,14 +1,17 @@
 //! Idempotent dedup over a real kernel (InMemory): the value-keyed gates at
 //! the caller's visibility class — the earliest READABLE incumbent, a fresh
-//! mint beside a hidden one, `editlink` and `nullify` at any class — and the
+//! mint beside a hidden one, `editlink` and `nullify` at any class — the
 //! incumbent a hit returns: resurrection, the T1-least ACTIVE tuple of the
-//! class, and the open surface's deposits a hit may meet.
+//! class, and the open surface's deposits a hit may meet; and each managed
+//! write saying whether it committed, `Deposited::Fresh` exactly where the
+//! kernel's position moved.
 
 use crate::common;
 
 use common::*;
 use skep_address::{document_of, Address};
-use skep_links::{enc, HasLinks, Link, SlotArg, Tip, View};
+use skep_kernel::Seq;
+use skep_links::{enc, Deposited, HasLinks, Link, SlotArg, Tip, View};
 
 // ---- the value-keyed gates at the caller's visibility class (lane 3.3b) ----
 
@@ -29,7 +32,7 @@ fn a_dedup_hit_is_the_earliest_incumbent_the_caller_can_read() {
     let no_p1_docs = writer_at(&k, &hide_both);
 
     // The incumbent: P1's tuple, homed in doc1.
-    let (first, _) = all.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("incumbent");
+    let first = all.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("incumbent").fresh();
     assert_eq!(first, la(1));
 
     // A visibility class blind to doc1 mints the same value afresh, in its
@@ -39,7 +42,8 @@ fn a_dedup_hit_is_the_earliest_incumbent_the_caller_can_read() {
     let (second, seq) = no_doc1
         .emit(P1, &doc2(), &pred_def_ty(), &ca(1), &[])
         .expect("fresh beside an invisible incumbent");
-    assert_eq!(second, la2(1));
+    assert_eq!(second, Deposited::Fresh(la2(1)), "minted, and answered so");
+    let second = second.into_address();
     assert!(seq > before, "a fresh deposit commits");
     {
         // Both stand ACTIVE: value-identical tuples coexist across the
@@ -55,7 +59,7 @@ fn a_dedup_hit_is_the_earliest_incumbent_the_caller_can_read() {
     // T1-least (doc1's) …
     let before = k.current_seq();
     let (hit, seq) = all.emit(P1, &doc2(), &pred_def_ty(), &ca(1), &[]).expect("hit");
-    assert_eq!(hit, first);
+    assert_eq!(hit, Deposited::Incumbent(first.clone()), "the incumbent, answered as one");
     assert_eq!(seq, before);
     assert_eq!(k.current_seq(), before, "zero-step: nothing committed");
     // … the visibility class blind to doc1 acks doc2's, the earliest it can
@@ -63,28 +67,30 @@ fn a_dedup_hit_is_the_earliest_incumbent_the_caller_can_read() {
     let (hit, seq) = no_doc1
         .emit(P1, &doc2(), &pred_def_ty(), &ca(1), &[])
         .expect("a hit within the visibility class");
-    assert_eq!(hit, second);
+    assert_eq!(hit, Deposited::Incumbent(second.clone()));
     assert_eq!(seq, before);
     assert_eq!(k.current_seq(), before, "still zero-step");
     // … and, asked again, answers the same — deterministic given the
     // visibility class.
-    let (again, _) = no_doc1.emit(P1, &doc2(), &pred_def_ty(), &ca(1), &[]).expect("hit again");
+    let again = no_doc1.emit(P1, &doc2(), &pred_def_ty(), &ca(1), &[]).expect("hit again").incumbent();
     assert_eq!(again, second);
 
     // A visibility class blind to both of P1's homes mints a THIRD, in the
     // sibling's own home …
-    let (third, _) = no_p1_docs
+    let third = no_p1_docs
         .emit(P2, &sib_doc(), &pred_def_ty(), &ca(1), &[])
-        .expect("fresh in the sibling's home");
+        .expect("fresh in the sibling's home")
+        .fresh();
     assert_eq!(document_of(&third), Some(sib_doc()));
     assert!(k.current_seq() > before);
     // … while the sibling at the all-visible class acks doc1's tuple — an
     // address in a home it does not own, exactly what an entitled reader is
     // handed (PUB-6.26): the incumbent's ω is not consulted, its readability
     // is.
-    let (hit, _) = all
+    let hit = all
         .emit(P2, &sib_doc(), &pred_def_ty(), &ca(1), &[])
-        .expect("the entitled sibling's hit");
+        .expect("the entitled sibling's hit")
+        .incumbent();
     assert_eq!(hit, first);
 }
 
@@ -101,28 +107,31 @@ fn assert_sup_dedups_only_within_the_caller_s_visibility_class() {
     let all = writer(&k);
     let no_doc1 = writer_at(&k, &hide_doc1);
     let sup = supersedes_ty();
-    let (x, _) = all.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
-    let (y, _) = all.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
-    let (c1, _) = all.assert_sup(P1, &doc1(), &x, &y).expect("the claim, homed in doc1");
+    let x = all.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x").fresh();
+    let y = all.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y").fresh();
+    let c1 = all.assert_sup(P1, &doc1(), &x, &y).expect("the claim, homed in doc1").fresh();
 
     // Cross-home dedup within the all-visible class (Conflicts §9) …
-    let (hit, _) = all.assert_sup(P1, &doc2(), &x, &y).expect("cross-home hit");
+    let hit = all.assert_sup(P1, &doc2(), &x, &y).expect("cross-home hit").incumbent();
     assert_eq!(hit, c1);
     // … and not across the boundary: blind to doc1, the same (old, new) from
     // doc2 is a second, coexisting claim.
     let before = k.current_seq();
-    let (c2, seq) = no_doc1.assert_sup(P1, &doc2(), &x, &y).expect("a claim of its own");
+    let answer = no_doc1.assert_sup(P1, &doc2(), &x, &y).expect("a claim of its own");
+    let seq = answer.1;
+    let c2 = answer.fresh();
     assert_ne!(c2, c1);
     assert_eq!(document_of(&c2), Some(doc2()));
     assert!(seq > before, "a fresh claim commits");
 
     // Each visibility class acks the earliest claim it can read.
     let before = k.current_seq();
-    let (hit, _) = no_doc1
+    let hit = no_doc1
         .assert_sup(P1, &doc2(), &x, &y)
-        .expect("hit within the visibility class");
+        .expect("hit within the visibility class")
+        .incumbent();
     assert_eq!(hit, c2);
-    let (hit, _) = all.assert_sup(P1, &doc2(), &x, &y).expect("hit at the all-visible class");
+    let hit = all.assert_sup(P1, &doc2(), &x, &y).expect("hit at the all-visible class").incumbent();
     assert_eq!(hit, c1);
     assert_eq!(k.current_seq(), before, "both hits are zero-step");
 
@@ -148,8 +157,8 @@ fn editlink_s_acks_land_in_the_caller_s_homes_whatever_the_visibility_class() {
     let hide_doc1 = |_: &World, home: &Address| *home != doc1();
     let all = writer(&k);
     let no_doc1 = writer_at(&k, &hide_doc1);
-    let (x, _) = all.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
-    let (y, _) = all.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
+    let x = all.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x").fresh();
+    let y = all.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y").fresh();
     all.assert_sup(P1, &doc1(), &x, &y).expect("a doc1-homed claim over x");
     let successor_value = Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30));
     for w in [&all, &no_doc1] {
@@ -175,24 +184,26 @@ fn a_predicate_blind_to_the_caller_s_own_home_costs_nullify_a_fresh_retraction_n
     let hide_doc1 = |_: &World, home: &Address| *home != doc1();
     let all = writer(&k);
     let blind = writer_at(&k, &hide_doc1);
-    let (target, _) = all.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("target");
+    let target = all.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("target").fresh();
 
     // The control: at a visibility class that reads doc1, the second
     // retraction is a zero-step hit on the first.
-    let (r1, _) = all.nullify(P1, &doc1(), &target).expect("retract");
+    let r1 = all.nullify(P1, &doc1(), &target).expect("retract").fresh();
     let before = k.current_seq();
     let (hit, seq) = all
         .nullify(P1, &doc1(), &target)
         .expect("hit within the visibility class");
-    assert_eq!(hit, r1);
+    assert_eq!(hit, Deposited::Incumbent(r1.clone()), "the incumbent retraction, answered as one");
     assert_eq!(seq, before);
     assert_eq!(k.current_seq(), before, "zero-step: nothing committed");
 
     // Blind to doc1 — the home every [R] incumbent of this identity sits in —
     // the same retraction mints fresh: correct, and not zero-step.
-    let (r2, seq) = blind
+    let answer = blind
         .nullify(P1, &doc1(), &target)
         .expect("fresh beside a hidden incumbent");
+    let seq = answer.1;
+    let r2 = answer.fresh();
     assert_ne!(r2, r1);
     assert!(seq > before, "a fresh retraction commits");
     let snap = k.snapshot();
@@ -215,9 +226,10 @@ fn an_idem_top_duplicate_returns_the_incumbent_and_a_nullified_one_resurrects() 
     // nothing. Every registered class in this format is idem⊤, so the dedup
     // discipline is the managed surface's whole deposit behavior.
     let (a1, s1) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("first emit");
+    let Deposited::Fresh(a1) = a1 else { panic!("the first emit mints") };
     assert_eq!(k.current_seq(), s1);
     let (hit, seq) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("dedup hit");
-    assert_eq!(hit, a1);
+    assert_eq!(hit, Deposited::Incumbent(a1.clone()), "the incumbent, answered as one");
     assert_eq!(seq, s1);
     assert_eq!(k.current_seq(), s1); // zero-step: nothing committed
     // The open surface is the fresh-always contrast (ML0): the identical
@@ -230,7 +242,7 @@ fn an_idem_top_duplicate_returns_the_incumbent_and_a_nullified_one_resurrects() 
     // Resurrection (I2): dedup reads the ACTIVE view — a nullified incumbent
     // is invisible, so re-emitting lands at a fresh address; audit keeps both.
     w.nullify(P1, &doc1(), &a1).expect("nullify the idem⊤ tuple");
-    let (a3, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("re-emit");
+    let a3 = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("re-emit").fresh();
     assert_ne!(a3, a1);
     let snap = k.snapshot();
     let links = snap.world().links();
@@ -261,7 +273,11 @@ fn a_dedup_hit_returns_the_t1_least_active_tuple_of_the_class() {
     let (hit, seq) = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("dedup hit");
-    assert_eq!(hit, first, "the T1-least of the class's several active tuples");
+    assert_eq!(
+        hit,
+        Deposited::Incumbent(first.clone()),
+        "the T1-least of the class's several active tuples"
+    );
     assert_eq!(seq, before);
     assert_eq!(k.current_seq(), before, "zero-step: nothing committed");
 
@@ -269,9 +285,10 @@ fn a_dedup_hit_returns_the_t1_least_active_tuple_of_the_class() {
     // fresh deposit, which is what resurrection gives once none is left.
     w.nullify(P1, &doc1(), &first).expect("retract the incumbent");
     let before = k.current_seq();
-    let (hit, _) = w
+    let hit = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("the next active tuple of the class");
+        .expect("the next active tuple of the class")
+        .incumbent();
     assert_eq!(hit, second);
     assert_eq!(k.current_seq(), before, "still a hit, so still zero-step");
 }
@@ -296,9 +313,10 @@ fn makelink_into_a_registered_idem_top_class_deposits_and_never_dedups() {
             SlotArg::Addrs(vec![ra(1)]), // pred_def — registered Unary, idem⊤
         )
         .expect("the open surface has no registration or shape gate");
-    let (fresh, _) = w
+    let fresh = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("emit into the same class");
+        .expect("emit into the same class")
+        .fresh();
     assert_ne!(fresh, l, "a distinct I0 class, so the emit deposits fresh");
     let snap = k.snapshot();
     let links = snap.world().links();
@@ -328,7 +346,12 @@ fn an_emit_hit_may_return_a_link_its_own_shape_gate_would_have_refused() {
     let (hit, seq) = w
         .emit(P1, &doc1(), &pred_def_ty(), &doc1(), &[])
         .expect("the emit's own value is Unary-conformant");
-    assert_eq!(hit, l, "the MAKELINK deposit IS the incumbent this emit hits");
+    assert_eq!(
+        hit,
+        Deposited::Incumbent(l.clone()),
+        "the MAKELINK deposit IS the incumbent this emit hits"
+    );
+    let hit = hit.into_address();
     assert_eq!(seq, before, "zero-step: nothing committed");
     assert_eq!(k.current_seq(), before);
     let snap = k.snapshot();
@@ -340,8 +363,53 @@ fn an_emit_hit_may_return_a_link_its_own_shape_gate_would_have_refused() {
     );
     // The control: the same emit against a shape-conformant store deposits,
     // so the equality above is the dedup hit and not an absent write path.
-    let (fresh, _) = w
+    let fresh = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(3), &[])
-        .expect("a distinct I0 class");
+        .expect("a distinct I0 class")
+        .fresh();
     assert_ne!(fresh, hit);
+}
+
+// ---- what a managed write answers: committed, or the incumbent ----
+
+/// Checks that each managed write answers `Fresh` exactly where it committed.
+///
+/// `emit`, `nullify` and `assert_sup`, each called twice with one value:
+/// the first call answers [`Deposited::Fresh`], the kernel's position moved
+/// and the `Seq` beside it the commit's; the second answers
+/// [`Deposited::Incumbent`] with the first call's address, the position
+/// unmoved and the `Seq` the base the incumbent was found in — another
+/// write's position, which a daemon renders `"committed": false` (skep
+/// #1043). The mutant that answers a hit `Fresh` hands a client another
+/// write's position as one it committed; the one that answers a mint
+/// `Incumbent` hides a commit.
+#[test]
+fn each_managed_write_answers_fresh_exactly_where_it_committed() {
+    let k = kernel();
+    let w = writer(&k);
+    let x = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x").fresh();
+    let y = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y").fresh();
+    let z = w.emit(P1, &doc1(), &pred_def_ty(), &ca(3), &[]).expect("z").fresh();
+    type Call<'c> = Box<dyn Fn() -> (Deposited, Seq) + 'c>;
+    let calls: [(&str, Call<'_>); 3] = [
+        ("emit", Box::new(|| w.emit(P1, &doc1(), &pred_def_ty(), &ca(4), &[]).expect("emit"))),
+        ("nullify", Box::new(|| w.nullify(P1, &doc1(), &x).expect("nullify"))),
+        ("assert_sup", Box::new(|| w.assert_sup(P1, &doc1(), &y, &z).expect("assert_sup"))),
+    ];
+    for (op, call) in calls {
+        let before = k.current_seq();
+        let (first, at) = call();
+        assert!(matches!(first, Deposited::Fresh(_)), "{op}: the first call mints: {first:?}");
+        assert!(k.current_seq() > before, "{op}: and the position moved");
+        assert_eq!(at, k.current_seq(), "{op}: the Seq beside it is the commit's");
+        let committed = k.current_seq();
+        let (second, at) = call();
+        assert_eq!(
+            second,
+            Deposited::Incumbent(first.into_address()),
+            "{op}: the second call answers the first's tuple, as the incumbent"
+        );
+        assert_eq!(k.current_seq(), committed, "{op}: and nothing committed");
+        assert_eq!(at, committed, "{op}: the Seq beside it is the base it was found in");
+    }
 }

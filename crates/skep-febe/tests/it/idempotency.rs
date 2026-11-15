@@ -5,9 +5,10 @@
 //! fresh session or another kind executes afresh; since only the kind is
 //! matched, a different write of the same kind under a reused id is answered
 //! from the memo and runs nothing; a key past `MAX_REQ_ID_BYTES` is
-//! answered and not memoized; and the memo is bounded at the capacity the
+//! answered and not memoized; the memo is bounded at the capacity the
 //! front door's constructor was handed, the entry it drops the least
-//! recently used.
+//! recently used; and a retry of a write that committed nothing is told so,
+//! as the write was.
 
 use std::num::NonZeroUsize;
 
@@ -44,7 +45,7 @@ fn recall_answers_the_memoized_ack_ahead_of_execute_and_misses_as_execute_would(
     let before = fx.febe.log_position();
     assert_eq!(
         fx.febe.recall(fx.user, &id, OpKind::Insert),
-        Some(Response::AckAddr { addr, at }),
+        Some(Response::AckAddr { addr, at, committed: true }),
         "the committed write's ack, as the retry would be answered"
     );
     assert_eq!(fx.febe.log_position(), before, "a recall executes nothing");
@@ -299,4 +300,45 @@ fn a_front_door_built_at_two_evicts_the_first_entry_at_the_third() {
     let (addr, at) = ack_addr(ex_id(&fx.febe, fx.user, b"two", insert(b'b')));
     assert_ne!((addr, at), second, "the evicted entry's retry re-executes…");
     assert!(fx.febe.log_position() > before, "…and commits");
+}
+
+/// Checks that a retry of a write that committed nothing is told so.
+///
+/// An `emit` answered with the incumbent it deduplicated against —
+/// `committed: false`, `at` the base it was found in, another write's
+/// position — is memoized with its `committed`, so its retry under the same
+/// id and `recall` answer `committed: false` at that `at`, never the ack of a
+/// commit a client would count as its own; the emit that committed is
+/// replayed as committing (skep #1043; the mutant that drops the member at
+/// the memo answers the retry as a commit).
+#[test]
+fn a_retry_of_a_write_that_committed_nothing_is_told_it_committed_nothing() {
+    use skep_febe::{OpKind, ReqId, Response};
+
+    let fx = setup();
+    let d = create_doc(&fx);
+    let (start, _) = insert3(&fx, &d);
+    let emit = || Op::Emit { home: d.clone(), ty: pred_def_ty(), from: start.clone(), to: vec![] };
+    let Response::AckAddr { addr: incumbent, at: minted_at, committed: true } =
+        ex_id(&fx.febe, fx.user, b"emit-mint", emit())
+    else {
+        panic!("the first emit commits, and says so");
+    };
+    let hit = ex_id(&fx.febe, fx.user, b"emit-hit", emit());
+    let head = fx.febe.log_position();
+    let told = Response::AckAddr { addr: incumbent.clone(), at: head, committed: false };
+    assert_eq!(hit, told, "the hit: the incumbent at the base, committing nothing");
+
+    assert_eq!(ex_id(&fx.febe, fx.user, b"emit-hit", emit()), told, "the retry is told what the hit was");
+    assert_eq!(
+        fx.febe.recall(fx.user, &ReqId(b"emit-hit".to_vec()), OpKind::Emit),
+        Some(told),
+        "and so is the recall ahead of execute"
+    );
+    assert_eq!(
+        ex_id(&fx.febe, fx.user, b"emit-mint", emit()),
+        Response::AckAddr { addr: incumbent, at: minted_at, committed: true },
+        "the minting emit's retry replays its commit"
+    );
+    assert_eq!(fx.febe.log_position(), head, "no retry committed");
 }

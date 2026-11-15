@@ -502,7 +502,7 @@ fn a_memoized_ack_is_replayed_on_a_poisoned_kernel() {
     let node = || Op::RegisterNode { addr: tum(&[1, 5]) };
     let (committed, committed_at) =
         match febe.execute(s, Request { id: Some(id.clone()), ..Request::from(node()) }) {
-            Response::AckAddr { addr, at } => (addr, at),
+            Response::AckAddr { addr, at, committed: true } => (addr, at),
             _ => panic!("RegisterNode under the bootstrap session commits"),
         };
 
@@ -522,7 +522,7 @@ fn a_memoized_ack_is_replayed_on_a_poisoned_kernel() {
 
     // The retry of the committed one is answered from the memo instead.
     match febe.execute(s, Request { id: Some(id), ..Request::from(node()) }) {
-        Response::AckAddr { addr: replayed, at: replayed_at } => {
+        Response::AckAddr { addr: replayed, at: replayed_at, committed: true } => {
             assert_eq!(replayed, committed, "the replayed ack is the committed one");
             assert_eq!(replayed_at, committed_at, "…at the coordinate it committed");
         }
@@ -548,12 +548,12 @@ fn a_memoized_ack_outliving_its_binding_is_replayed_not_refused() {
         s,
         id.clone(),
         OpKind::Insert,
-        CommittedAck::Addr { addr: addr(&[1, 0, 1, 0, 1]), at: Seq(3) },
+        CommittedAck::Addr { addr: addr(&[1, 0, 1, 0, 1]), at: Seq(3), committed: true },
     );
     let before = febe.log_position();
 
     match febe.execute(s, Request { id: Some(id), ..Request::from(insert_op()) }) {
-        Response::AckAddr { addr: replayed, at } => {
+        Response::AckAddr { addr: replayed, at, committed: true } => {
             assert_eq!(replayed, addr(&[1, 0, 1, 0, 1]), "the memo answers ahead of the gate");
             assert_eq!(at, Seq(3), "…at the coordinate it committed");
         }
@@ -710,7 +710,7 @@ fn fragmented_draft(febe: &OperationSurface<World>, doublings: u32) -> Address {
     let owner = febe.open_session(DRAFT_OWNER);
     // Each edit is typed against the owner's own last ack on the draft
     // (skep #442): the mint's, then each write's in turn.
-    let Response::AckAddr { addr: doc, at: mut typed } =
+    let Response::AckAddr { addr: doc, at: mut typed, .. } =
         issue(owner, Op::CreateNewDocument { account, published: Some(false) })
     else {
         panic!("the owner mints a draft");
@@ -1047,7 +1047,7 @@ fn a_version_member_answers_its_trunks_birth_version() {
     let mint = |published: bool| {
         let op = Op::CreateNewDocument { account: account.clone(), published: Some(published) };
         match issue(owner, op) {
-            Response::AckAddr { addr, at } => (addr, at),
+            Response::AckAddr { addr, at, .. } => (addr, at),
             other => panic!("the owner mints a document: {other:?}"),
         }
     };

@@ -20,9 +20,9 @@ use skep_discovery::{
     in_claims_on, out_claims_on, project_on, retrieve_endsets_on, window_ftt_on, window_v_on,
     HomeCounts, LinkRows,
 };
-use skep_kernel::Attestation;
-use skep_links::{Invalid, LinkRec};
-use skep_namespace::{M3Rec, PrincipalId};
+use skep_kernel::{Attestation, Seq};
+use skep_links::{Deposited, Invalid, LinkRec};
+use skep_namespace::{M3Rec, PrincipalId, WellKnown};
 use skep_retrieval::{Query, MAX_DELIVERY_ITEMS};
 
 use super::door::{consult_read, home_readable};
@@ -122,7 +122,7 @@ where
                     .namespace_attested(attest)
                     .create_new_document(wc.principal, &account, published)
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at })
+                Ok(Response::AckAddr { addr, at, committed: true })
             }
             Op::Delegate { new_prefix, new_id } => {
                 let (addr, at) = self
@@ -130,7 +130,7 @@ where
                     .namespace()
                     .delegate(wc.principal, new_prefix, new_id)
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at })
+                Ok(Response::AckAddr { addr, at, committed: true })
             }
             // No principal: the node addr is supplied by provisioning, and
             // M3's `register_node` takes none. The step-(b) bound-session
@@ -139,7 +139,7 @@ where
             Op::RegisterNode { addr } => {
                 let (addr, at) =
                     self.stores.namespace().register_node(addr).map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at })
+                Ok(Response::AckAddr { addr, at, committed: true })
             }
             // Fork ≠ Version (§3): mints an empty account-tier document,
             // sharing no content; the content-sharing fork is Op::Version.
@@ -152,7 +152,7 @@ where
                     .namespace_attested(attest)
                     .fork(wc.principal, published)
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at })
+                Ok(Response::AckAddr { addr, at, committed: true })
             }
             // The well-known mint (the mailbox design §3): M3 mints the
             // account's mailbox at its slot, private, under ω judged inside
@@ -161,17 +161,17 @@ where
             // `create_new_document`'s do. The mint is never publish-class, so
             // the plain driver, as `delegate`'s and `register_node`'s: an
             // attestation the request carries is dropped here. A call that
-            // finds the mailbox standing needs no special case, as `emit`'s
-            // dedup hit needs none below: M3 answers the standing address
-            // beside the position it read, no commit made, and it is
-            // marshaled as the mint's own ack is.
+            // finds the mailbox standing is acknowledged as M3 answers it:
+            // the standing address beside the position it read, no commit
+            // made, and `committed: false` — as `emit`'s dedup hit is below.
             Op::CreateWellKnownDocument { account } => {
-                let (addr, at) = self
+                let (mailbox, at) = self
                     .stores
                     .namespace()
                     .create_well_known_document(wc.principal, &account)
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at })
+                let committed = matches!(mailbox, WellKnown::Minted(_));
+                Ok(Response::AckAddr { addr: mailbox.into_address(), at, committed })
             }
             // ── arrangement writes (→ M5; ω-gated in-store under the
             //    session caller; the version-chain refusals in-store too,
@@ -191,7 +191,7 @@ where
                     .vstream_attested(attest)
                     .insert(wc.caller(), &doc, at, values, deposit, AsOf::Typed(as_of))
                     .map_err(|e| lower_txn(kind, e))?; // returns post-commit
-                Ok(Response::AckAddr { addr: start, at: committed_at }) // the exact V1 coordinate
+                Ok(Response::AckAddr { addr: start, at: committed_at, committed: true }) // the exact V1 coordinate
             }
             Op::Delete { doc, p, width, as_of } => {
                 let at = self
@@ -257,7 +257,7 @@ where
                     // off its own working state (PUB-8.17/8.18).
                     .version(wc.principal, &d_src, published)
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at })
+                Ok(Response::AckAddr { addr, at, committed: true })
             }
             // The staging act (B3-S10): M5 mints the private draft in the
             // caller's own account, shares `from`'s surface into it and
@@ -272,7 +272,7 @@ where
                     .vstream()
                     .stage(wc.principal, &from)
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at })
+                Ok(Response::AckAddr { addr, at, committed: true })
             }
             // The shot (PUB-2.33, PUB-8.1), as THE PUBLICATION (the
             // link-sets design §5.7): M7's composite stages M5's shot — which
@@ -298,7 +298,7 @@ where
                     .linkstore_attested(&visibility, attest)
                     .publication(wc.caller(), &target, &shot, &places, &also_places, &deposits)
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at })
+                Ok(Response::AckAddr { addr, at, committed: true })
             }
             // ── link writes (→ M7; ω-gated in-store on each written home;
             //    the value-keyed gates at the session principal's visibility
@@ -318,35 +318,37 @@ where
                     }
                 }
                 .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at })
+                Ok(Response::AckAddr { addr, at, committed: true })
             }
-            // Idempotent zero-step ops need no special case (§3): a dedup hit
-            // returns (incumbent, base_seq) with no commit; marshaled
-            // identically to a miss (ASN-0134 §A1). The incumbent a hit names
-            // is one this principal can read (PUB-6.25, PUB-6.26).
+            // The idempotent zero-step ops (§3): a dedup hit answers the
+            // incumbent with the base `Seq` (ASN-0134 §A1) and commits
+            // nothing, and M7 says so (`Deposited::Incumbent`), which the ack
+            // carries as `committed: false` ([`deposit_ack`]). The incumbent
+            // a hit names is one this principal can read (PUB-6.25,
+            // PUB-6.26).
             Op::Emit { home, ty, from, to } => {
-                let (addr, at) = self
+                let deposited = self
                     .stores
                     .linkstore_attested(&visibility, attest)
                     .emit(wc.caller(), &home, &ty, &from, &to)
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at })
+                Ok(deposit_ack(deposited))
             }
             Op::Nullify { home, target } => {
-                let (addr, at) = self
+                let deposited = self
                     .stores
                     .linkstore_attested(&visibility, attest)
                     .nullify(wc.caller(), &home, &target)
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at })
+                Ok(deposit_ack(deposited))
             }
             Op::AssertSup { home, old, new } => {
-                let (addr, at) = self
+                let deposited = self
                     .stores
                     .linkstore_attested(&visibility, attest)
                     .assert_sup(wc.caller(), &home, &old, &new)
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at })
+                Ok(deposit_ack(deposited))
             }
             // The one read-assembled request (§4): the successor's content
             // V-specs resolve through M5 off a prior snapshot — deliberately
@@ -837,4 +839,16 @@ where
             | Op::EditLink { .. } => Err(rejection(kind, RejectCode::Malformed)),
         }
     }
+}
+
+/// Acknowledges a managed link write with what M7 deposited.
+///
+/// It is `emit`'s, `nullify`'s and `assert_sup`'s ack, naming the tuple's
+/// address either way: `committed` where this call minted it
+/// (`Deposited::Fresh`), whose `at` is its commit's, and not where it
+/// answered the incumbent (`Deposited::Incumbent`), whose `at` is the base
+/// that incumbent was found in (PUB-6.25; ASN-0134 §A1).
+fn deposit_ack((deposited, at): (Deposited, Seq)) -> Response {
+    let committed = matches!(deposited, Deposited::Fresh(_));
+    Response::AckAddr { addr: deposited.into_address(), at, committed }
 }

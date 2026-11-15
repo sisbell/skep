@@ -193,12 +193,14 @@ fn the_discovery_primitives_read_default_as_active() {
     // Audit branch and a nullified link reappears in a discovery result.
     let k = kernel();
     let w = writer(&k);
-    let (kept, _) = w
+    let kept = w
         .emit(P1, &doc1(), &pred_stable_ty(), &ca(1), &[])
-        .expect("kept");
-    let (gone, _) = w
+        .expect("kept")
+        .fresh();
+    let gone = w
         .emit(P1, &doc1(), &pred_stable_ty(), &ca(3), &[])
-        .expect("gone");
+        .expect("gone")
+        .fresh();
     w.nullify(P1, &doc1(), &gone).expect("nullify one");
     let snap = k.snapshot();
     let links = snap.world().links();
@@ -268,9 +270,10 @@ fn stab_matches_nothing_at_a_slot_the_link_does_not_have() {
     // slot 1.
     let k = kernel();
     let w = writer(&k);
-    let (l, _) = w
+    let l = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("a link to miss");
+        .expect("a link to miss")
+        .fresh();
     let snap = k.snapshot();
     let links = snap.world().links();
     let query = enc(&[ca(1)]);

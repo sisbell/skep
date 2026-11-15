@@ -51,8 +51,8 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     let t0 = link(&store, &doc2(), &[ca(1), ca(102)], &[ca(105)]);
     let t1 = link(&store, &doc2(), &[ca(3)], &[ca(103)]);
     // One supersession claim homed in each document, both with old = m0.
-    let (kept, _) = store.assert_sup(SYS, &doc1(), &m0, &m1).expect("assert_sup succeeds");
-    let (dropped, _) = store.assert_sup(SYS, &doc2(), &m0, &t0).expect("assert_sup succeeds");
+    let kept = store.assert_sup(SYS, &doc1(), &m0, &m1).expect("assert_sup succeeds").0.into_address();
+    let dropped = store.assert_sup(SYS, &doc2(), &m0, &t0).expect("assert_sup succeeds").0.into_address();
 
     let snap = k.snapshot();
     let cannot_read_doc2 = |d: &Address| *d != doc2();
@@ -190,6 +190,7 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     // retraction homed where it may not (ruling B (4); PUB-6.47), and the
     // retraction record, homed in doc2, is no row of its own.
     let (retraction, retracted_at) = store.nullify(SYS, &doc2(), &m1).expect("nullify succeeds");
+    let retraction = retraction.into_address();
     let snap = k.snapshot();
     let audit = |readable: &dyn Fn(&Address) -> bool| {
         find_links_v_history_on(&snap, &doc1(), &region, None, 64, readable).expect("find_links_v_history")
@@ -407,12 +408,16 @@ fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
     // The lineage pair asks of each candidate home once, ahead of its claims:
     // both claims naming `la(1)` as their `old` are homed in doc2, which is
     // asked once, not once a claim.
-    let (claim, _) = store
+    let claim = store
         .assert_sup(SYS, &doc2(), &la(1), &la(2))
-        .expect("assert_sup succeeds");
-    let (second, _) = store
+        .expect("assert_sup succeeds")
+        .0
+        .into_address();
+    let second = store
         .assert_sup(SYS, &doc2(), &la(1), &la2(1))
-        .expect("assert_sup succeeds");
+        .expect("assert_sup succeeds")
+        .0
+        .into_address();
     let snap = k.snapshot();
     assert_eq!(
         claims_of(in_claims_on(&snap, &la(1), View::Active, &recorder)),
@@ -626,9 +631,11 @@ fn claimed_in_doc2(claims: u32) -> Kernel<World> {
         .expect("assert_sup succeeds");
     for i in 0..claims {
         let theirs = link(&store, &doc2(), &[ca(1)], &[ca(1_000 + i)]);
-        let (superseding_e1, _) = store
+        let superseding_e1 = store
             .assert_sup(SYS, &doc2(), &e1, &theirs)
-            .expect("assert_sup succeeds");
+            .expect("assert_sup succeeds")
+            .0
+            .into_address();
         store
             .assert_sup(SYS, &doc2(), &theirs, &e2)
             .expect("assert_sup succeeds");
@@ -821,13 +828,17 @@ fn the_lineage_pair_asks_the_home_rule_of_the_claim_and_reads_its_endpoints_as_r
     let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
     let theirs = link(&store, &doc2(), &[ca(1)], &[ca(103)]);
     // Homed in doc1, naming a doc2 link as new …
-    let (kept, _) = store
+    let kept = store
         .assert_sup(SYS, &doc1(), &e1, &theirs)
-        .expect("assert_sup succeeds");
+        .expect("assert_sup succeeds")
+        .0
+        .into_address();
     // … and homed in doc2, naming only doc1 links.
-    let (dropped, _) = store
+    let dropped = store
         .assert_sup(SYS, &doc2(), &e1, &e2)
-        .expect("assert_sup succeeds");
+        .expect("assert_sup succeeds")
+        .0
+        .into_address();
     let snap = k.snapshot();
     assert_eq!(
         claims_of(in_claims_on(&snap, &e1, View::Active, &every_home)),

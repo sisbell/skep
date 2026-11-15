@@ -231,8 +231,11 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
     let k = kernel();
     let mut c = coord_with_guest(&k, refuse_doc2());
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel in doc1");
-    let (draft_marker, _) =
-        link_writer(&k).emit(Caller::System, &doc2(), &marker_ty(), &ca(1), &[]).expect("marker in doc2");
+    let draft_marker = link_writer(&k)
+        .emit(Caller::System, &doc2(), &marker_ty(), &ca(1), &[])
+        .expect("marker in doc2")
+        .0
+        .into_address();
     let trig = Trigger::Inline(
         c.type_check_trigger((v(1), Sort::Addr), not(is_k(&marker_ty(), var(1))))
             .expect("trigger"),
@@ -261,8 +264,11 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
     // stays in L_K (audit), doc2's never enters.
     let k = kernel();
     let c = coord_with_guest(&k, refuse_doc2());
-    let (l1, _) =
-        link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel in doc1");
+    let l1 = link_writer(&k)
+        .emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[])
+        .expect("rel in doc1")
+        .0
+        .into_address();
     link_writer(&k).nullify(Caller::System, &doc1(), &l1).expect("retract it");
     link_writer(&k).emit(Caller::System, &doc2(), &pred_stable_ty(), &ca(2), &[]).expect("rel in doc2");
     let in_audit = |a: &Address| {

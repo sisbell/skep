@@ -176,6 +176,29 @@ fn the_type_constants_are_the_wires_spellings() {
     assert_eq!(frames::end_span("1.0.1.0.1.0.1.4", 2), json!({"start":"1.0.1.0.1.0.1.4","width":"2"}), "a request end's span: the width a natural");
 }
 
+/// Checks that only an `ack_addr` saying so reads as committing nothing.
+///
+/// wire.md §The response envelope: an `ack_addr` carrying `"committed":
+/// false` committed nothing, and every other answer did or is no ack of this
+/// kind — the member absent, `true`, an `ack` or `ack_edit` with no such
+/// member, a rejection — so only the first reads as a write to note nothing
+/// for (the mutant that reads the member off any answer, or reads an absent
+/// one as `false`, has the hold note no write at all).
+#[test]
+fn an_ack_reads_as_committing_nothing_only_where_its_ack_addr_says_so() {
+    let ack_addr = |extra: Value| {
+        let mut v = json!({"resp": "ack_addr", "addr": "1.0.1.0.2", "at": 75});
+        v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        v
+    };
+    assert!(acked_nothing(&ack_addr(json!({"committed": false}))), "the no-commit ack");
+    assert!(!acked_nothing(&ack_addr(json!({}))), "the member absent: a commit");
+    assert!(!acked_nothing(&ack_addr(json!({"committed": true}))), "the member true");
+    assert!(!acked_nothing(&json!({"resp": "ack", "at": 75, "committed": false})), "an `ack` carries no such member");
+    assert!(!acked_nothing(&json!({"resp": "rejected", "code": "not_owner", "committed": false})), "a refusal is no ack");
+    assert_eq!(acked_at(&ack_addr(json!({"committed": false}))), Some(75), "its `at` still reads, for the caller to set aside");
+}
+
 /// wire.md §Rejections: a rejection's `site` — `addr` at `already_published`
 /// (the member), `index` at `kept_place_moved` and the deposit tokens, both
 /// absent where the code carries none.

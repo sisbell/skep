@@ -21,9 +21,10 @@ use skep_links::{emit_tuple, enc, EmitError, Endset, HasLinks, Pattern, RetractS
 fn emit_deposits_verbatim_reads_back_and_never_seats() {
     let k = kernel();
     let w = writer(&k);
-    let (a1, _) = w
+    let a1 = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("registered Unary emit succeeds");
+        .expect("registered Unary emit succeeds")
+        .fresh();
     assert_eq!(a1, la(1)); // first link minted on doc1's link chain
 
     let snap = k.snapshot();
@@ -229,9 +230,10 @@ fn emit_rejects_an_unregistered_home_on_the_dedup_hit_path() {
     // cannot observe the branch" a property rather than an intention.
     let k = kernel();
     let w = writer(&k);
-    let (incumbent, _) = w
+    let incumbent = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("incumbent");
+        .expect("incumbent")
+        .fresh();
     let before = k.current_seq();
     assert!(matches!(
         w.emit(P1, &a(&[1, 0, 1, 0, 69]), &pred_def_ty(), &ca(1), &[]),
@@ -240,9 +242,10 @@ fn emit_rejects_an_unregistered_home_on_the_dedup_hit_path() {
     assert_eq!(k.current_seq(), before);
     // The same tuple at a REGISTERED home dedups to the incumbent, so the
     // refusal above was the home check and not an absent key.
-    let (hit, _) = w
+    let hit = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("dedup hit");
+        .expect("dedup hit")
+        .incumbent();
     assert_eq!(hit, incumbent);
 }
 

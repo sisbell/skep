@@ -21,8 +21,8 @@ fn deposit_ops_reject_a_foreign_home_and_commit_nothing() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
     let w = writer(&k);
-    let (x, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
-    let (y, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
+    let x = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x").fresh();
+    let y = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y").fresh();
     let before = k.current_seq();
     assert!(matches!(
         w.makelink(
@@ -88,7 +88,7 @@ fn nullify_requires_owning_home_and_target_and_still_filters_the_active_view() {
     // audit view retains everything.
     let k = kernel();
     let w = writer(&k);
-    let (target, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("P1's tuple");
+    let target = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("P1's tuple").fresh();
     // Foreign target, owned home: NotOwner carrying the target link.
     assert!(matches!(
         w.nullify(P2, &sib_doc(), &target),
@@ -123,14 +123,15 @@ fn assert_sup_and_editlink_claim_over_links_the_caller_does_not_own() {
     let k = kernel();
     let w = writer(&k);
     let sup = supersedes_ty();
-    let (x, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
-    let (y, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
+    let x = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x").fresh();
+    let y = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y").fresh();
 
     // P2, from a home P2 owns, claims that one of P1's links supersedes
     // another — and the walk family reports it as fact.
-    let (c, _) = w
+    let c = w
         .assert_sup(P2, &sib_doc(), &x, &y)
-        .expect("ω on home only: the endpoints need not be the caller's");
+        .expect("ω on home only: the endpoints need not be the caller's")
+        .fresh();
     {
         let snap = k.snapshot();
         let links = snap.world().links();

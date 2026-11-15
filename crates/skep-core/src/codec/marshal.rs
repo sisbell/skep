@@ -554,8 +554,16 @@ pub(super) fn j_response(r: &Response) -> Value {
             }
             ("ack", pairs)
         }
-        Response::AckAddr { addr, at } => {
-            ("ack_addr", vec![("addr", j_addr(addr)), ("at", j_seq(*at))])
+        // `committed: false` rides only where the write found its work done
+        // and committed nothing — a dedup hit, a mailbox standing — its `at`
+        // then the base it was read at; absent on every ack that committed,
+        // whose bytes are as they were.
+        Response::AckAddr { addr, at, committed } => {
+            let mut pairs = vec![("addr", j_addr(addr)), ("at", j_seq(*at))];
+            if !committed {
+                pairs.push(("committed", Value::Bool(false)));
+            }
+            ("ack_addr", pairs)
         }
         Response::AckEdit { successor, claim, at } => (
             "ack_edit",

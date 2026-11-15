@@ -29,7 +29,7 @@ fn lineage_probes_flipped_slots_and_asks_residence_only_of_a_key_a_claim_names()
     let reads = Reads(&k);
     let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
-    let (claim, _) = store.assert_sup(SYS, &doc1(), &e1, &e2).expect("assert_sup succeeds");
+    let claim = store.assert_sup(SYS, &doc1(), &e1, &e2).expect("assert_sup succeeds").0.into_address();
 
     let expected = SupClaim {
         claim: claim.clone(),
@@ -186,9 +186,11 @@ fn lineage_attributes_a_claim_to_its_own_home_not_its_endpoints() {
     let reads = Reads(&k);
     let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
-    let (claim, _) = store
+    let claim = store
         .assert_sup(SYS, &doc2(), &e1, &e2)
-        .expect("assert_sup succeeds");
+        .expect("assert_sup succeeds")
+        .0
+        .into_address();
     assert_eq!(claim, la2(1), "the claim is minted in doc2's link chain");
 
     assert_eq!(
@@ -217,9 +219,11 @@ fn a_live_claim_names_a_nullified_endpoint_and_a_nullified_key_still_probes() {
     let reads = Reads(&k);
     let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
-    let (claim, _) = store
+    let claim = store
         .assert_sup(SYS, &doc1(), &e1, &e2)
-        .expect("assert_sup succeeds");
+        .expect("assert_sup succeeds")
+        .0
+        .into_address();
     store.nullify(SYS, &doc2(), &e2).expect("nullify succeeds");
 
     // The premise: the ENDPOINT is retracted, and the claim naming it is not.
@@ -258,17 +262,23 @@ fn lineage_reads_out_in_claim_address_order() {
         made.push(e);
     }
     // Two successors of one superseded link: two claims, both probed by in().
-    let (c1, _) = store
+    let c1 = store
         .assert_sup(SYS, &doc1(), &made[0], &made[1])
-        .expect("assert_sup succeeds");
-    let (c2, _) = store
+        .expect("assert_sup succeeds")
+        .0
+        .into_address();
+    let c2 = store
         .assert_sup(SYS, &doc1(), &made[0], &made[2])
-        .expect("assert_sup succeeds");
+        .expect("assert_sup succeeds")
+        .0
+        .into_address();
     // And a second claim naming made[2] as new, so the TO probe has an order
     // of its own to read out.
-    let (c3, _) = store
+    let c3 = store
         .assert_sup(SYS, &doc1(), &made[1], &made[2])
-        .expect("assert_sup succeeds");
+        .expect("assert_sup succeeds")
+        .0
+        .into_address();
     assert!(c1 < c2 && c2 < c3, "later claims mint later addresses");
 
     assert_eq!(
@@ -306,9 +316,11 @@ fn lineage_reads_out_supersession_claims_alone_among_the_links_naming_the_key() 
         std::slice::from_ref(&e1),
         std::slice::from_ref(&e2),
     );
-    let (claim, _) = store
+    let claim = store
         .assert_sup(SYS, &doc1(), &e1, &e2)
-        .expect("assert_sup succeeds");
+        .expect("assert_sup succeeds")
+        .0
+        .into_address();
 
     // The premise: a type-blind probe reaches the ordinary link as well as
     // the claim, so a read that asked the store rather than the class would
@@ -744,9 +756,11 @@ impl OneClaim {
             let store = LinkWriter::new(&k, &EVERYONE);
             let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
             let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
-            let (claim, _) = store
+            let claim = store
                 .assert_sup(SYS, &doc1(), &e1, &e2)
-                .expect("assert_sup succeeds");
+                .expect("assert_sup succeeds")
+                .0
+                .into_address();
             (e1, e2, claim)
         };
         let sup = k

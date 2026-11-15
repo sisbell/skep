@@ -59,8 +59,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   and `create_well_known_document` mints an account's mailbox for its
   ω at the account's well-known slot, document 2 (`MAILBOX_SLOT`; the
   place is `mailbox_address`, minted or not), private and moving no
-  count — once: a later call answers the same address and writes
-  nothing.
+  count — once: a later call answers the same address, writes
+  nothing, and says so (`WellKnown::Standing`).
 - **Allocation and entity reads** — is-this-allocated over every
   chain, M3's own allocation oracle, and node/account/document
   classification over the entity registry, the registration check

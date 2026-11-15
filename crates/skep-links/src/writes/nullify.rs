@@ -10,7 +10,7 @@ use skep_arrangement::Caller;
 use skep_kernel::{Seq, TxnError};
 use skep_namespace::M3Rec;
 
-use super::{deposit_lock_set, emit_core, home_gate, Gate, LinkWriter};
+use super::{deposit_lock_set, emit_core, home_gate, Deposited, Gate, LinkWriter};
 use crate::endset::{enc, Endset, Link};
 use crate::error::{NotBh4, NullifyError, RetractStaleError};
 use crate::registry::{registry, ShippedType};
@@ -90,10 +90,12 @@ where
     /// filter reads the active retired slice, so retiring is undoable by
     /// nullifying the retirement; nullifying is not undoable by anything.
     ///
-    /// Returns `(retraction, seq)`: the address of the `[R]` tuple itself —
-    /// not `target`, save in one case — or, on a dedup hit, the incumbent
-    /// retraction's, with the base `Seq`. (The born-nullified case is where
-    /// the two coincide: there `target` is the address this tuple occupies.)
+    /// Returns `(retraction, seq)`: [`Deposited::Fresh`] with the address of
+    /// the `[R]` tuple itself — not `target`, save in one case — and the
+    /// position it committed at, or, on a dedup hit, [`Deposited::Incumbent`]
+    /// with the incumbent retraction's address and the base `Seq`, nothing
+    /// committed. (The born-nullified case is where the tuple's address and
+    /// `target` coincide: there `target` is the address this tuple occupies.)
     ///
     /// # Errors
     ///
@@ -116,7 +118,7 @@ where
         caller: Caller,
         home: &Address,
         target: &Address,
-    ) -> Result<(Address, Seq), TxnError<NullifyError>> {
+    ) -> Result<(Deposited, Seq), TxnError<NullifyError>> {
         let value = retraction_tuple(home, target);
         let keys = deposit_lock_set(&value, home);
         // The attested arm (signed ops), as `emit`'s.
@@ -133,7 +135,7 @@ where
                     return Err(NullifyError::BadTarget); // P-tgt
                 }
             }
-            Ok(emit_core(stg, self.visibility, caller, home, value, Gate::Retraction)?.address())
+            Ok(emit_core(stg, self.visibility, caller, home, value, Gate::Retraction)?)
         })
     }
 
@@ -163,7 +165,10 @@ where
     /// "The same point on every re-run" is a property rather than a hope
     /// because the batch is issued in [`stale`](crate::LinkState::stale)'s
     /// order, which that read publishes as ascending by address. Results come
-    /// back in it, one `(retraction address, seq)` per nullified target.
+    /// back in it, one `(retraction, seq)` per nullified target, as
+    /// [`LinkWriter::nullify`] answers it — a [`Deposited::Incumbent`] where
+    /// that target's retraction from `d_retr` already stood when its
+    /// `nullify` ran.
     ///
     /// # Errors
     ///
@@ -198,7 +203,7 @@ where
         d_retr: &Address,
         ty: &Endset,
         horizon: u64,
-    ) -> Result<Vec<(Address, Seq)>, TxnError<RetractStaleError>> {
+    ) -> Result<Vec<(Deposited, Seq)>, TxnError<RetractStaleError>> {
         let stale: Vec<Address> = {
             let snap = self.kernel.snapshot();
             let world = snap.world();

@@ -10,7 +10,9 @@ use skep_arrangement::Caller;
 use skep_kernel::{Seq, TxnError};
 use skep_namespace::M3Rec;
 
-use super::{correspondence_class, deposit_lock_set, emit_core, replaces_class, Gate, LinkWriter};
+use super::{
+    correspondence_class, deposit_lock_set, emit_core, replaces_class, Deposited, Gate, LinkWriter,
+};
 use crate::budget::MAX_SLOT_SPANS;
 use crate::class::coverage_class;
 use crate::endset::{enc, Endset, Link};
@@ -60,8 +62,8 @@ where
     /// `Link[enc({from}), enc(to), ty]`: `|F| = 1` forced, `to`'s span count
     /// shape-checked, `ty` stored verbatim as e₃. Does not seat. idem⊤ ⇒
     /// dedup against the active view within the caller's visibility class
-    /// (PUB-6.25); a hit returns the incumbent with the base `Seq` and
-    /// commits nothing.
+    /// (PUB-6.25); a hit answers [`Deposited::Incumbent`] with the base `Seq`
+    /// and commits nothing.
     ///
     /// The shape gate counts `to`'s spans as a set — ASN-0126's `|G|`
     /// ([`Shape`](crate::Shape)). `enc(to)` yields one span per element and a
@@ -88,8 +90,10 @@ where
     /// to the module's format registry, race-free because that registry is a
     /// compiled constant (§3 step 1).
     ///
-    /// Returns `(tuple, seq)`: the address of the deposited tuple, or — on a
-    /// dedup hit — the incumbent's, with the base `Seq`.
+    /// Returns `(tuple, seq)`: [`Deposited::Fresh`] with the address of the
+    /// tuple this call deposited and the position it committed at, or — on a
+    /// dedup hit — [`Deposited::Incumbent`] with the incumbent's address and
+    /// the base `Seq`, nothing committed.
     ///
     /// # Errors
     ///
@@ -121,7 +125,7 @@ where
         ty: &Endset,
         from: &Address,
         to: &[Address],
-    ) -> Result<(Address, Seq), TxnError<EmitError>> {
+    ) -> Result<(Deposited, Seq), TxnError<EmitError>> {
         if !ty.is_address_denoting() {
             return Err(TxnError::Rejected(EmitError::NonAddressDenotingType));
         }
@@ -141,7 +145,7 @@ where
         // carries no attestation, else the same commit with its marker's
         // signature slot filled. A dedup hit commits nothing and fills none.
         self.kernel.transact_attested(&keys, self.attest, |stg| {
-            Ok(emit_core(stg, self.visibility, caller, home, value, Gate::Managed)?.address())
+            Ok(emit_core(stg, self.visibility, caller, home, value, Gate::Managed)?)
         })
     }
 }

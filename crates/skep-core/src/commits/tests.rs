@@ -836,7 +836,7 @@ fn durability_refusals_are_said_once_per_kind_and_the_landing_closes_the_stretch
                 .namespace()
                 .create_new_document(SYSTEM_PRINCIPAL, &account, Some(false))
                 .expect("the mint commits");
-            Response::AckAddr { addr, at }
+            Response::AckAddr { addr, at, committed: true }
         });
         assert!(matches!(resp, Response::AckAddr { .. }), "the mint is acked");
     };
@@ -856,7 +856,7 @@ fn durability_refusals_are_said_once_per_kind_and_the_landing_closes_the_stretch
     let replayed = {
         let serial = wp.serial_lock();
         let at = engine.kernel().current_seq();
-        wp.commit_under(&serial, mint_meta(), || Response::AckAddr { addr: account.clone(), at })
+        wp.commit_under(&serial, mint_meta(), || Response::AckAddr { addr: account.clone(), at, committed: true })
     };
     assert!(matches!(replayed, Response::AckAddr { .. }), "the replay is answered as it came");
     refuse(io::ErrorKind::StorageFull, "no room");
@@ -1224,9 +1224,9 @@ fn mint_a_draft_attested(
             .namespace_attested(slot)
             .create_new_document(SYSTEM_PRINCIPAL, &account, Some(false))
             .expect("the mint commits");
-        Response::AckAddr { addr, at }
+        Response::AckAddr { addr, at, committed: true }
     });
-    let Response::AckAddr { addr, at } = resp else { panic!("the mint is acked") };
+    let Response::AckAddr { addr, at, .. } = resp else { panic!("the mint is acked") };
     (addr, at.0)
 }
 
@@ -1334,17 +1334,19 @@ fn the_head_and_time_writers_write_into_the_seeded_documents_and_mint_none() {
 /// Over this suite's own kernel config ([`fsync_engine`]), every write
 /// through the session door: an account delegated to a principal of its own,
 /// its home, then `create_well_known_document` for it, a draft, and
-/// `create_well_known_document` again. The first is acked the mailbox — the
-/// account's document 2 — at the position it committed, and recorded: one
-/// row, `op` the wire name, `docs` the mailbox alone, no term. The second is
-/// acked the same address at the position it read, the draft's, and commits
-/// nothing: the journal's position stands, the draft's row stays the
-/// draft's, and no row is added, so the mailbox has one row. That row is its
+/// `create_well_known_document` again, each ack built as M10's dispatch
+/// builds it, `committed` the store's answer. The first is acked the mailbox
+/// — the account's document 2 — at the position it committed, and recorded:
+/// one row, `op` the wire name, `docs` the mailbox alone, no term. The second
+/// is acked the same address at the position it read, the draft's, and
+/// commits nothing, saying so: the journal's position stands, the draft's
+/// row stays the draft's, and no row is added, so the mailbox has one row.
+/// That row is its
 /// owner's: the owner's page carries it, and a stranger's and a guest's omit
 /// it, the mailbox being private.
 #[test]
 fn a_mailboxs_mint_is_one_row_however_often_it_is_asked() {
-    use skep_namespace::{mailbox_address, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL};
+    use skep_namespace::{mailbox_address, WellKnown, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL};
 
     use super::sidecar::CommitMeta;
 
@@ -1353,55 +1355,63 @@ fn a_mailboxs_mint_is_one_row_however_often_it_is_asked() {
     let wp = open_the_write_path(dir.path(), &engine);
     let stores = engine.stores();
     let owner = PrincipalId(41);
-    // One write through the session door, bare, answering its ack.
-    let through_the_door = |op: Op, execute: &dyn Fn() -> (Address, Seq)| -> (Address, u64) {
-        let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
-        let serial = wp.serial_lock();
-        let resp = wp.commit_under(&serial, meta, || {
-            let (addr, at) = execute();
-            Response::AckAddr { addr, at }
-        });
-        let Response::AckAddr { addr, at } = resp else { panic!("the write is acked") };
-        (addr, at.0)
-    };
+    // One write through the session door, bare, answering its ack and
+    // whether it committed.
+    let through_the_door =
+        |op: Op, execute: &dyn Fn() -> (Address, Seq, bool)| -> (Address, u64, bool) {
+            let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
+            let serial = wp.serial_lock();
+            let resp = wp.commit_under(&serial, meta, || {
+                let (addr, at, committed) = execute();
+                Response::AckAddr { addr, at, committed }
+            });
+            let Response::AckAddr { addr, at, committed } = resp else { panic!("the write is acked") };
+            (addr, at.0, committed)
+        };
     let prefix = crate::codec::wire_tumbler("1.0.1").expect("a tumbler");
-    let (account, _) =
+    let (account, ..) =
         through_the_door(Op::Delegate { new_prefix: prefix.clone(), new_id: owner }, &|| {
-            stores
+            let (addr, at) = stores
                 .namespace()
                 .delegate(BOOTSTRAP_PRINCIPAL, prefix.clone(), owner)
-                .expect("the delegation commits")
+                .expect("the delegation commits");
+            (addr, at, true)
         });
     let create = |published: Option<bool>| {
         through_the_door(Op::CreateNewDocument { account: account.clone(), published }, &|| {
-            stores
+            let (addr, at) = stores
                 .namespace()
                 .create_new_document(owner, &account, published)
-                .expect("the mint commits")
+                .expect("the mint commits");
+            (addr, at, true)
         })
     };
     let create_the_mailbox = || {
         through_the_door(Op::CreateWellKnownDocument { account: account.clone() }, &|| {
-            stores
+            let (mailbox, at) = stores
                 .namespace()
                 .create_well_known_document(owner, &account)
-                .expect("the owner's call is answered")
+                .expect("the owner's call is answered");
+            let committed = matches!(mailbox, WellKnown::Minted(_));
+            (mailbox.into_address(), at, committed)
         })
     };
     create(None);
-    let (mailbox, minted_at) = create_the_mailbox();
+    let (mailbox, minted_at, committed) = create_the_mailbox();
+    assert!(committed, "the mint committed, and says so");
     assert_eq!(Some(&mailbox), mailbox_address(&account).as_ref(), "the account's document 2");
     assert_eq!(
         engine.kernel().current_seq().0,
         minted_at,
         "the mint committed at its ack's position"
     );
-    let (draft, draft_at) = create(Some(false));
+    let (draft, draft_at, _) = create(Some(false));
     assert!(draft_at > minted_at, "the premise: a commit between the two calls");
     let rows_before = wp.feed.entries_above(0).len();
 
-    let (again, judged_at) = create_the_mailbox();
+    let (again, judged_at, committed) = create_the_mailbox();
     assert_eq!(again, mailbox, "the second call answers the same address");
+    assert!(!committed, "and says it committed nothing");
     assert_eq!(judged_at, draft_at, "at the position it read, not the mint's");
     assert_eq!(engine.kernel().current_seq().0, draft_at, "and commits nothing");
     assert_eq!(wp.feed.entries_above(0).len(), rows_before, "no row is added");
@@ -1445,6 +1455,58 @@ fn a_mailboxs_mint_is_one_row_however_often_it_is_asked() {
             "{stranger:?}: the row of a private mailbox is omitted"
         );
     }
+}
+
+/// Checks that an ack that committed nothing records nothing (skep #1043).
+///
+/// A write whose `ack_addr` says `committed: false` — here a
+/// `create_well_known_document` that finds the mailbox standing — names the
+/// position its call was judged at, another write's. `record` declines it as
+/// it declines a refusal: no row is entered there and nothing is announced,
+/// though no row holds that position yet. The account and its mailbox are
+/// committed off the door, so the feed's own refusal of a recorded position
+/// is not what declines it (the mutant that records the ack enters a row
+/// naming this call's op and testimony at another write's position, and
+/// announces it).
+#[test]
+fn an_ack_that_committed_nothing_records_nothing_at_the_position_it_names() {
+    use skep_namespace::{WellKnown, BOOTSTRAP_PRINCIPAL};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let wp = open_the_write_path(dir.path(), &engine);
+    let stores = engine.stores();
+    let owner = PrincipalId(41);
+    // Off the door: the account, its home and its mailbox, so the feed holds
+    // no row at the head the call below is judged at.
+    let prefix = crate::codec::wire_tumbler("1.0.1").expect("a tumbler");
+    let (account, _) =
+        stores.namespace().delegate(BOOTSTRAP_PRINCIPAL, prefix, owner).expect("the delegation commits");
+    stores.namespace().create_new_document(owner, &account, None).expect("the account's home");
+    let (minted, head) =
+        stores.namespace().create_well_known_document(owner, &account).expect("the mailbox mints");
+    assert!(matches!(minted, WellKnown::Minted(_)), "the premise: the mailbox minted");
+    let rows_before = wp.feed.entries_above(0).len();
+    let announced = wp.announced();
+
+    // Through the door, as M10's dispatch acks it: the mailbox standing.
+    let op = Op::CreateWellKnownDocument { account: account.clone() };
+    let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
+    let serial = wp.serial_lock();
+    let resp = wp.commit_under(&serial, meta, || {
+        let (mailbox, at) =
+            stores.namespace().create_well_known_document(owner, &account).expect("answered");
+        let committed = matches!(mailbox, WellKnown::Minted(_));
+        Response::AckAddr { addr: mailbox.into_address(), at, committed }
+    });
+    drop(serial);
+    let Response::AckAddr { at, committed: false, .. } = resp else {
+        panic!("acked as committing nothing")
+    };
+    assert_eq!(at, head, "at the position the call was judged at");
+    assert_eq!(engine.kernel().current_seq(), head, "nothing committed");
+    assert_eq!(wp.feed.entries_above(0).len(), rows_before, "no row is entered at another write's position");
+    assert_eq!(wp.announced(), announced, "and nothing is announced");
 }
 
 /// Mints four drafts and tears `commits.log` back to the first.
@@ -1868,7 +1930,7 @@ fn the_walks_fence_over_damage_lifts_once_the_segment_and_the_log_return() {
                     AsOf::Unchecked,
                 )
                 .expect("the insert commits");
-            Response::AckAddr { addr, at }
+            Response::AckAddr { addr, at, committed: true }
         });
         assert!(matches!(resp, Response::AckAddr { .. }), "the insert is acked");
     }
@@ -2016,7 +2078,7 @@ fn the_attest_stores_resident_slots_are_bounded_by_the_window_and_its_file_kept(
                     AsOf::Unchecked,
                 )
                 .expect("the insert commits");
-            Response::AckAddr { addr, at }
+            Response::AckAddr { addr, at, committed: true }
         });
         let Response::AckAddr { at, .. } = resp else { panic!("the insert is acked") };
         at.0
@@ -2126,7 +2188,7 @@ fn a_supersession_claims_row_reads_alike_after_a_restart_and_below_the_window() 
                 .linkstore(&visibility)
                 .makelink(caller, &doc, empty(), empty(), SlotArg::Addrs(vec![ty]))
                 .expect("the link commits");
-            Response::AckAddr { addr, at }
+            Response::AckAddr { addr, at, committed: true }
         });
         let Response::AckAddr { addr, .. } = resp else { panic!("the link is acked") };
         addr
@@ -2136,11 +2198,12 @@ fn a_supersession_claims_row_reads_alike_after_a_restart_and_below_the_window() 
     let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
     let serial = wp.serial_lock();
     let resp = wp.commit_under(&serial, meta, || {
-        let (addr, at) = stores
+        let (claim, at) = stores
             .linkstore(&visibility)
             .assert_sup(caller, &doc, &old, &new)
             .expect("the claim commits");
-        Response::AckAddr { addr, at }
+        let committed = matches!(claim, skep_links::Deposited::Fresh(_));
+        Response::AckAddr { addr: claim.into_address(), at, committed }
     });
     drop(serial);
     let Response::AckAddr { at, .. } = resp else { panic!("the claim is acked") };
@@ -2217,7 +2280,7 @@ fn a_baseless_landings_row_reads_alike_after_a_restart_and_below_the_window() {
             .vstream()
             .insert(caller, &draft, first, values, Deposit::Undeclared, AsOf::Unchecked)
             .expect("the insert commits");
-        Response::AckAddr { addr, at }
+        Response::AckAddr { addr, at, committed: true }
     });
     let Response::AckAddr { addr: typed, .. } = resp else { panic!("the insert is acked") };
     // The landing: the head and an empty side list, no base.

@@ -342,9 +342,11 @@ fn ftt_the_type_slot_answers_the_links_carrying_the_type() {
     let reads = Reads(&k);
     let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]); // the suite's relation type
     let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
-    let (claim, _) = store
+    let claim = store
         .assert_sup(SYS, &doc1(), &e1, &e2)
-        .expect("assert_sup succeeds");
+        .expect("assert_sup succeeds")
+        .0
+        .into_address();
     let sup = enc(&[ra(4)]); // Supersedes, as the fence test reads it off the store
     let of_type = |ty: Endset| FourSet {
         ty: SlotSpec::Spans(ty),

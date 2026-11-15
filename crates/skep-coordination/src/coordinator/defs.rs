@@ -493,7 +493,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // start is ever-registered now, and `def` is the content's own status,
         // checked at level 0.
         self.memo.fill(start, Ok(def));
-        Ok((tuple, seq))
+        Ok((tuple.into_address(), seq))
     }
 
     /// Resolves the def at `start`, then denotes it against `snap`.
@@ -734,7 +734,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             start,
             &[],
         )?;
-        Ok((tuple, seq))
+        Ok((tuple.into_address(), seq))
     }
 
     /// Returns whether an active `pd_stable` tuple names `start`.
@@ -795,7 +795,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 .addr
         };
         let (retraction, seq) = self.def_writer().nullify(Caller::System, home, &target)?;
-        Ok((retraction, seq))
+        Ok((retraction.into_address(), seq))
     }
 
     /// Returns the flat `expand(start)` of a checked def.

@@ -29,9 +29,10 @@ fn makelink_cannot_forge_a_retraction_of_a_foreign_link() {
     // re-derived at every replay.
     let k = kernel();
     let w = writer(&k);
-    let (victim, _) = w
+    let victim = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("P1's own tuple");
+        .expect("P1's own tuple")
+        .fresh();
     let before = k.current_seq();
     assert!(matches!(
         w.makelink(

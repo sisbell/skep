@@ -188,9 +188,11 @@ fn m8s_request_and_answer_types_are_reachable_through_this_crate() {
     let store = LinkWriter::new(&k, &EVERYONE);
     let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
-    let (claim, _) = store
+    let claim = store
         .assert_sup(SYS, &doc1(), &e1, &e2)
-        .expect("assert_sup succeeds");
+        .expect("assert_sup succeeds")
+        .0
+        .into_address();
     let snap = k.snapshot();
 
     // A descriptor narrowed past the wildcard: the slot's endset, and the

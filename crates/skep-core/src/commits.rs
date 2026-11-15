@@ -1386,27 +1386,27 @@ impl Commits {
     ///
     /// What this layer decides, over [`Feed::record`]'s own job of appending
     /// the lines, is whether there is anything to record: an ack carries the
-    /// committed position, while a rejection committed nothing. Runs under
-    /// the serialization lock. Exhaustive with no `_` arm, like the other
-    /// `Response` walks in this crate: a new answer shape carrying a
-    /// committed position must decide whether the change feed reports it,
-    /// and fails to compile until it does.
+    /// committed position, while a rejection committed nothing, and so did a
+    /// write whose `ack_addr` says `committed: false` — a dedup hit, a
+    /// mailbox found standing — whose `at` is the position its call was
+    /// judged at, some other write's. Neither is recorded or announced, so no
+    /// row carries this call's op, testimony or attestation at another
+    /// write's position. Runs under the serialization lock. Exhaustive with
+    /// no `_` arm, like the other `Response` walks in this crate: a new
+    /// answer shape carrying a committed position must decide whether the
+    /// change feed reports it, and fails to compile until it does.
     ///
     /// Returns the position [`Commits::commit_recorded`] announces, and in
     /// every case one `/changes` already carries — or, in a region the open
     /// left pending, carries once the walk lands it — which is the guarantee,
     /// rather than the narrower "the position whose record this call made".
-    /// Three paths reach it: a new commit, whose record this call makes; a
+    /// Two paths reach it: a new commit, whose record this call makes; and a
     /// position already recorded this uptime (an idempotency replay), which
     /// the feed declines and which was announced when it was first
-    /// committed; and one at or below the open-time head (`emit`'s incumbent
-    /// ack), which the feed also declines, which the file covered at open or
-    /// the walk behind the listener covers once it lands, and which the
-    /// monotone stream ignores because it sits at or below the position the
-    /// stream opened at. A failed append is the fourth: the line is lost but
-    /// the in-memory entry is not, so `/changes` answers that position this
+    /// committed. A failed append is the third: the line is lost but the
+    /// in-memory entry is not, so `/changes` answers that position this
     /// uptime and answers it bare after a restart. A failed attest store line
-    /// is the fifth, and halts the write path (the module doc; SO-I5 (d)):
+    /// is the fourth, and halts the write path (the module doc; SO-I5 (d)):
     /// this commit stands and is announced, and every later one is refused.
     ///
     /// The record is classified against the head as it stands after the
@@ -1438,7 +1438,8 @@ impl Commits {
         let WriteMeta { kind, docs, testimony, signed, terms, minting } = meta;
         let (at, minted) = match resp {
             Response::Ack { at, .. } => (*at, None),
-            Response::AckAddr { addr, at } => (*at, Some(addr)),
+            Response::AckAddr { committed: false, .. } => return None,
+            Response::AckAddr { addr, at, committed: true } => (*at, Some(addr)),
             Response::AckEdit { at, .. } => (*at, None),
             Response::Delivery { .. }
             | Response::IDelivery { .. }

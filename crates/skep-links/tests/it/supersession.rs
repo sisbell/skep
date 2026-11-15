@@ -23,8 +23,8 @@ fn assert_sup_claims_dedup_across_homes_and_a_retracted_claim_leaves_the_walk() 
     let k = kernel();
     let w = writer(&k);
     let sup = supersedes_ty();
-    let (x, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
-    let (y, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
+    let x = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x").fresh();
+    let y = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y").fresh();
     // Schema preconditions.
     assert!(matches!(
         w.assert_sup(P1, &doc1(), &x, &la(9)),
@@ -35,7 +35,7 @@ fn assert_sup_claims_dedup_across_homes_and_a_retracted_claim_leaves_the_walk() 
         Err(TxnError::Rejected(AssertSupError::SelfSupersession))
     ));
     // The claim: F = old, G = new; edges run old → new.
-    let (c1, _) = w.assert_sup(P1, &doc1(), &x, &y).expect("claim");
+    let c1 = w.assert_sup(P1, &doc1(), &x, &y).expect("claim").fresh();
     {
         let snap = k.snapshot();
         let links = snap.world().links();
@@ -61,7 +61,7 @@ fn assert_sup_claims_dedup_across_homes_and_a_retracted_claim_leaves_the_walk() 
     }
     // Dedup excludes home: the same (old, new) from ANOTHER home hits the
     // first claim (Conflicts §9).
-    let (hit, _) = w.assert_sup(P1, &doc2(), &x, &y).expect("cross-home duplicate");
+    let hit = w.assert_sup(P1, &doc2(), &x, &y).expect("cross-home duplicate").incumbent();
     assert_eq!(hit, c1);
     // Retraction stability: nullifying the claim removes the operative edge;
     // x becomes its own sink.
@@ -75,7 +75,7 @@ fn assert_sup_claims_dedup_across_homes_and_a_retracted_claim_leaves_the_walk() 
     // Claim resurrection + mutual standoff: re-assert (fresh claim — the
     // nullified one is invisible to dedup), then the reverse claim; the
     // closure then has no sink and current() legitimately returns 0 members.
-    let (c2, _) = w.assert_sup(P1, &doc1(), &x, &y).expect("re-assert");
+    let c2 = w.assert_sup(P1, &doc1(), &x, &y).expect("re-assert").fresh();
     assert_ne!(c2, c1);
     w.assert_sup(P1, &doc1(), &y, &x).expect("reverse claim");
     let snap = k.snapshot();
@@ -102,8 +102,8 @@ fn the_walk_halts_indeterminate_on_a_supersession_cycle() {
     let k = kernel();
     let w = writer(&k);
     let sup = supersedes_ty();
-    let (x, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
-    let (y, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
+    let x = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x").fresh();
+    let y = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y").fresh();
     w.assert_sup(P1, &doc1(), &x, &y).expect("x → y");
     w.assert_sup(P1, &doc1(), &y, &x)
         .expect("y → x closes the cycle");
@@ -141,9 +141,9 @@ fn nullifying_an_endpoint_leaves_its_claim_s_edge_operative() {
     let k = kernel();
     let w = writer(&k);
     let sup = supersedes_ty();
-    let (x, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
-    let (y, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
-    let (c, _) = w.assert_sup(P1, &doc1(), &x, &y).expect("claim");
+    let x = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x").fresh();
+    let y = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y").fresh();
+    let c = w.assert_sup(P1, &doc1(), &x, &y).expect("claim").fresh();
     w.nullify(P1, &doc1(), &y).expect("retract the successor");
     {
         let snap = k.snapshot();
@@ -177,7 +177,7 @@ fn editlink_commits_successor_and_claim_together_and_guards_the_successor_type()
     let w = writer(&k);
     let sup = supersedes_ty();
     let retraction = retraction_ty();
-    let (orig, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("orig");
+    let orig = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("orig").fresh();
 
     // One atomic composite: fresh successor + claim; original untouched.
     let successor_value = Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30));
@@ -222,7 +222,7 @@ fn editlink_commits_successor_and_claim_together_and_guards_the_successor_type()
 
     // A [K_sup]-typed successor is admitted iff schema-conforming (DC): both
     // endpoints resident, distinct, unit-depth single-addr F/G.
-    let (z, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(7), &[]).expect("z");
+    let z = w.emit(P1, &doc1(), &pred_def_ty(), &ca(7), &[]).expect("z").fresh();
     let conforming = Link::triple(enc([&orig]), enc([&z]), sup.clone());
     w.editlink(P1, &orig, conforming, &doc1(), &doc1())
         .expect("schema-conforming claim-typed successor");
@@ -278,9 +278,10 @@ fn editlink_deposits_the_successor_in_d_s_and_the_claim_in_d_a() {
     let k = kernel();
     let w = writer(&k);
     let sup = supersedes_ty();
-    let (orig, _) = w
+    let orig = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("orig");
+        .expect("orig")
+        .fresh();
     assert_eq!(orig, la(1)); // so doc1's next mint is la(2), doc2's first la2(1)
     let successor_value = Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30));
     let (edit, _) = w
@@ -312,9 +313,10 @@ fn editlink_locks_two_homes_in_one_canonical_order() {
     // ordering is invisible to the op.)
     let k = kernel();
     let w = writer(&k);
-    let (orig, _) = w
+    let orig = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("orig");
+        .expect("orig")
+        .fresh();
     assert_eq!(orig, la(1)); // doc1's next mint is la(2); doc2's first is la2(1)
     let successor_value = || Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30));
 
@@ -353,9 +355,10 @@ fn editlink_rejects_a_non_level_uniform_successor_type_slot() {
     // guard's coverage_class total, off the pinned off-contract panic.
     let k = kernel();
     let w = writer(&k);
-    let (orig, _) = w
+    let orig = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("orig");
+        .expect("orig")
+        .fresh();
     let successor_value = Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), skew());
     assert!(matches!(
         w.editlink(P1, &orig, successor_value, &doc1(), &doc1()),
@@ -372,9 +375,10 @@ fn editlink_rejects_a_non_level_uniform_span_in_any_slot() {
     // has a typed rejection.
     let k = kernel();
     let w = writer(&k);
-    let (orig, _) = w
+    let orig = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("orig");
+        .expect("orig")
+        .fresh();
     // `retired` is registered idem⊤, so the fold WOULD build a dedup key
     // over all three slots of this successor.
     let idem_top = enc(&[reserved().retired]);
@@ -411,10 +415,11 @@ fn editlink_rejects_a_claim_typed_successor_with_a_non_resident_endpoint() {
     let k = kernel();
     let w = writer(&k);
     let sup = supersedes_ty();
-    let (orig, _) = w
+    let orig = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("orig");
-    let (z, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(7), &[]).expect("z");
+        .expect("orig")
+        .fresh();
+    let z = w.emit(P1, &doc1(), &pred_def_ty(), &ca(7), &[]).expect("z").fresh();
     let ghost_endpoint = Link::triple(enc([&la(90)]), enc([&z]), sup.clone());
     assert!(matches!(
         w.editlink(P1, &orig, ghost_endpoint, &doc1(), &doc1()),
@@ -440,10 +445,11 @@ fn editlink_rejects_a_claim_typed_successor_whose_endpoint_denotes_several_addre
     let k = kernel();
     let w = writer(&k);
     let sup = supersedes_ty();
-    let (orig, _) = w
+    let orig = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("orig");
-    let (z, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(7), &[]).expect("z");
+        .expect("orig")
+        .fresh();
+    let z = w.emit(P1, &doc1(), &pred_def_ty(), &ca(7), &[]).expect("z").fresh();
     let multi_f = Link::triple(enc([&orig, &z]), enc([&z]), sup.clone());
     assert!(matches!(
         w.editlink(P1, &orig, multi_f, &doc1(), &doc1()),
@@ -478,21 +484,24 @@ fn current_discloses_every_operative_claim_targeting_a_sink() {
     let k = kernel();
     let w = writer(&k);
     let sup = supersedes_ty();
-    let (orig, _) = w
+    let orig = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("orig");
+        .expect("orig")
+        .fresh();
     let successor_value = Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30));
     let (Edit { successor: s1, claim: c1 }, _) = w
         .editlink(P1, &orig, successor_value, &doc1(), &doc1())
         .expect("editlink");
     // `outsider` is unreachable from orig, and its claim names the SINK as
     // successor.
-    let (outsider, _) = w
+    let outsider = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(8), &[])
-        .expect("outsider");
-    let (outside_claim, _) = w
+        .expect("outsider")
+        .fresh();
+    let outside_claim = w
         .assert_sup(P1, &doc1(), &outsider, &s1)
-        .expect("outsider → s1, asserted from outside the closure");
+        .expect("outsider → s1, asserted from outside the closure")
+        .fresh();
     let snap = k.snapshot();
     let links = snap.world().links();
     assert_eq!(
@@ -516,9 +525,10 @@ fn current_discloses_a_nullified_sink_with_its_own_activity() {
     // discloses the sink and carries its activity; the reader narrows.
     let k = kernel();
     let w = writer(&k);
-    let (orig, _) = w
+    let orig = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("orig");
+        .expect("orig")
+        .fresh();
     let successor_value = Link::triple(enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30));
     let (Edit { successor: s1, claim: c1 }, _) = w
         .editlink(P1, &orig, successor_value, &doc1(), &doc1())
@@ -543,9 +553,9 @@ fn a_node_whose_only_claim_is_retracted_is_its_own_sink() {
     // here the claim is nullified and the successor stands.
     let k = kernel();
     let w = writer(&k);
-    let (x, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
-    let (y, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
-    let (c, _) = w.assert_sup(P1, &doc1(), &x, &y).expect("claim");
+    let x = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x").fresh();
+    let y = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y").fresh();
+    let c = w.assert_sup(P1, &doc1(), &x, &y).expect("claim").fresh();
     {
         // The control: while the claim is operative, x is not a sink and y is.
         let snap = k.snapshot();
@@ -582,9 +592,9 @@ fn current_discloses_inbound_claims_by_denotation_never_by_coverage() {
     // discloses as its own sink; no claim names it.
     let k = kernel();
     let w = writer(&k);
-    let (x, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
-    let (y, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
-    let (c, _) = w.assert_sup(P1, &doc1(), &x, &y).expect("claim");
+    let x = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x").fresh();
+    let y = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y").fresh();
+    let c = w.assert_sup(P1, &doc1(), &x, &y).expect("claim").fresh();
     let snap = k.snapshot();
     let links = snap.world().links();
     // The control: the claim is operative and IS disclosed at the address it

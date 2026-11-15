@@ -22,7 +22,9 @@
 //! row of the head's kind at a
 //! position this shell acked skipped, the head sent, and a sibling's ack
 //! during the dial leaving the base the line is held at where it was read,
-//! before the dial; the person's own later write on the document — a link,
+//! before the dial; a call that committed nothing, answered at a held line's
+//! landing, leaving that landing found and kept (skep #1043); the person's
+//! own later write on the document — a link,
 //! this tab's or a sibling's, or a write of another kind not through this
 //! shell — leaving a held line holding, never `moved`, and a line behind a
 //! landing kept with no position sent, never `moved`; the order, the lines
@@ -1656,6 +1658,34 @@ fn a_siblings_row_of_the_heads_kind_at_an_acked_position_is_skipped_and_the_head
     assert_eq!(g.fake.sends(), 1, "the head is sent from the head: the sibling's row is no landing of its own");
     assert!(g.lines().is_empty(), "and kept");
     assert_eq!(g.states(), ["holding", "sending", "kept"]);
+}
+
+/// Checks that a no-commit ack at a held line's landing leaves it found.
+///
+/// It is skep #1043's resend case.
+/// A held `insert`, its answer lost, landed at 77 — the only row since its
+/// base, of the own hand and the head's kind — and a repeated
+/// `create_well_known_document` is then judged at that head: answered
+/// `"committed": false` at 77, the mailbox standing. The position is no
+/// write the shell made, so it enters no acked position, and the resend's
+/// read takes the row for the line's lost landing: kept, nothing sent twice
+/// (the mutant that notes the no-commit ack enters 77 among the acked
+/// positions, the read skips the landing, and the person's words are sent a
+/// second time).
+#[test]
+fn a_call_that_committed_nothing_at_a_held_lines_landing_leaves_the_landing_found() {
+    let g = ground();
+    *g.fake.text.lock().unwrap() = "hello".into();
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", true);
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": g.own_key(), "docs": [DOC]})];
+    g.fake.next_at.store(78, Ordering::SeqCst);
+    let mailbox = skep_client::address::mailbox_of("1.0.1");
+    let call = json!({"op": "create_well_known_document", "account": "1.0.1"});
+    g.holds.note_ack(&g.session, &call, &json!({"resp": "ack_addr", "addr": mailbox, "at": 77, "committed": false}));
+    assert!(!g.holds.acked("b-1", 77), "the no-commit ack enters no acked position");
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.sends(), 0, "the landing at 77 is found: never sent twice");
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "kept");
 }
 
 /// Checks that a sibling's ack during the dial does not raise the base the

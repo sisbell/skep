@@ -195,9 +195,10 @@ fn is_filtered_reads_the_active_retired_slice() {
     let retired = retired_ty();
     let rel = unregistered_ty(1);
     open_deposit(&w, &[ca(1)], &[ca(2)], &[unregistered_ta(1)]);
-    let (retirement, _) = w
+    let retirement = w
         .emit(P1, &doc1(), &retired, &ca(1), &[])
-        .expect("retire ca1");
+        .expect("retire ca1")
+        .fresh();
     {
         let snap = k.snapshot();
         let links = snap.world().links();
@@ -576,9 +577,10 @@ fn targets_keyed_joins_only_the_reverse_lookup_classes() {
     // home in F, so a join that read shape alone would reach it here.
     let k = kernel();
     let w = writer(&k);
-    let (target, _) = w
+    let target = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("target");
+        .expect("target")
+        .fresh();
     w.nullify(P1, &doc1(), &target).expect("retract it from doc1");
     let snap = k.snapshot();
     let links = snap.world().links();
@@ -603,9 +605,9 @@ fn age_answers_ungated_and_the_staleness_family_refuses_every_class() {
     let w = writer(&k);
     let sup = supersedes_ty();
     // Three tuples on doc2's chain: ordinals 1..3.
-    let (a1, _) = w.emit(P1, &doc2(), &pred_def_ty(), &ca(1), &[]).expect("a1");
-    let (a2, _) = w.emit(P1, &doc2(), &pred_def_ty(), &ca(2), &[]).expect("a2");
-    let (a3, _) = w.emit(P1, &doc2(), &pred_stable_ty(), &ca(3), &[]).expect("a3");
+    let a1 = w.emit(P1, &doc2(), &pred_def_ty(), &ca(1), &[]).expect("a1").fresh();
+    let a2 = w.emit(P1, &doc2(), &pred_def_ty(), &ca(2), &[]).expect("a2").fresh();
+    let a3 = w.emit(P1, &doc2(), &pred_stable_ty(), &ca(3), &[]).expect("a3").fresh();
     let (newest, _) = w
         .makelink(
             P1,

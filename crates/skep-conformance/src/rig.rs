@@ -186,7 +186,7 @@ impl Rig {
         // The mint's ack is the state the insert into the fresh document is
         // typed against (skep #442): the one state of it this writer has seen.
         let (doc, minted_at) = match exec(mint) {
-            Response::AckAddr { addr, at } => (addr, at),
+            Response::AckAddr { addr, at, .. } => (addr, at),
             other => return Err(format!("types-doc create failed: {}", brief(&other))),
         };
         let values: Vec<Val> =

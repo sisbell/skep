@@ -847,8 +847,9 @@ pub(super) struct CommitsLog {
     ///
     /// It is the fence between replayed history and this uptime's commits.
     /// An ack carrying a position at or below it (an idempotency-memo
-    /// replay, `emit`'s incumbent ack) is never a new commit and is never
-    /// re-recorded.
+    /// replay) is never a new commit and is never re-recorded; an ack that
+    /// committed nothing (`committed: false`) never reaches the log,
+    /// `Commits::record` declining it first.
     open_head: u64,
     /// Whether this open's purge rewrote the file, moving every offset.
     ///
@@ -1414,8 +1415,8 @@ impl CommitsLog {
     /// at, or that the line is held — when this call recorded a new
     /// position, `None` when it declined. Idempotent against replayed acks: a
     /// position at or below the open-time head, or one already recorded this
-    /// uptime, is an ack for an old commit (idempotency-memo hit, `emit`
-    /// incumbent) — re-recording it would invent a time.
+    /// uptime, is an ack for an old commit (an idempotency-memo hit) —
+    /// re-recording it would invent a time.
     ///
     /// **While the region is pending** (`pending`'s card; `operations.md`
     /// §3.3 step 2, "the walk accumulates in memory and lands by one whole

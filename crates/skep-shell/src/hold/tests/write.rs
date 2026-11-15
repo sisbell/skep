@@ -3,11 +3,12 @@
 //! The suite checks a `halted` hold before any dial `sent: false`; a burst
 //! held under the first hold that stands, over all eight cells of the
 //! three; the `base` a hold takes from every kind of ack, an ack read after
-//! a later one lowering it never; what the hold notes of a mailbox mint's
-//! second ack, whose `at` is the position its call was judged at; the
-//! position of the principal's latest
-//! arrangement write, a burst's or a `set_arrangement`'s alone, never a
-//! link's or a mint's, a landing the resend's read found, and a restore,
+//! a later one lowering it never; nothing noted of an ack that committed
+//! nothing — a mailbox mint's second, whose `at` is the position its call
+//! was judged at, a link write's dedup hit — nor a burst's writer record at
+//! that position overwritten (skep #1043); the position of the principal's
+//! latest arrangement write, a burst's or a `set_arrangement`'s alone, never
+//! a link's or a mint's, a landing the resend's read found, and a restore,
 //! noted as a `set_arrangement`'s ack; the refused
 //! run's `resolve(drop)`
 //! dropping it and every line held behind it on its own document alone,
@@ -354,49 +355,102 @@ fn a_restore_is_noted_as_an_acknowledged_set_arrangement_on_its_draft() {
     assert_eq!((g.holds.last_arranged(&g.session, DOC), g.base_of(DOC)), (None, 60), "another document noted nothing");
 }
 
-/// States what the hold notes of a mailbox mint's second acknowledgment.
+/// Checks that a mailbox mint's second acknowledgment is noted nowhere.
 ///
 /// `create_well_known_document` is acknowledged `ack_addr` at every call
 /// (wire.md §Namespace): the first at the position of the mint's commit, and
 /// a second — another device's, the loser of a race, a re-send with no `id`
 /// — with the same `addr` at the position the call was judged at, the
-/// board's head as it stood, where some other write committed. The hold
-/// notes the two alike (`note_ack`): each `at` enters the board's acked
-/// positions, takes the session as its writer, and is the base of the next
-/// hold on the mailbox, the document the ack's `addr` names
-/// (`written_docs`). So the second ack leaves the shell holding, as a write
-/// of its own, the position of a write it never made — here another hand's
-/// insert at 75 on a draft of the principal's — and a drafts read of the
-/// row at that position names this session its writer. The cell states what
-/// is noted, the seam between the board's second answer and the hold's
-/// record, and holds the hold to no rule about it (the mutant that leaves
-/// the op out of the mints `written_docs` reads names no document, the
-/// mailbox's base left at the session's open).
+/// board's head as it stood, where some other write committed, and with
+/// `"committed": false`. The hold notes the first (`note_ack`): its `at`
+/// enters the board's acked positions, takes the session as its writer, and
+/// is the base of the next hold on the mailbox, the document the ack's
+/// `addr` names (`written_docs`). The second it notes nowhere: another
+/// hand's insert at 75 on a draft of the principal's stays no position this
+/// shell acked, a drafts read of its row names no writer, and the mailbox's
+/// base stays the mint's (the mutant that notes the second ack as the first
+/// holds another hand's write as the session's own; the one that leaves the
+/// op out of the mints `written_docs` reads names no document, the mailbox's
+/// base left at the session's open).
 #[test]
-fn a_mailbox_mints_second_ack_is_noted_at_the_position_its_call_was_judged_at() {
+fn a_mailbox_mints_second_ack_which_committed_nothing_is_noted_nowhere() {
     let g = ground();
     let mailbox = skep_client::address::mailbox_of("1.0.1");
     let mint = json!({"op": "create_well_known_document", "account": "1.0.1"});
     let own = Some(Written { by: Some(g.session.reference.clone()), burst: None });
-    let call = |at: u64| {
-        g.fake.op_rejected.next(1, json!({"resp": "ack_addr", "addr": mailbox, "at": at}));
+    let call = |answer: Value| {
+        g.fake.op_rejected.next(1, answer);
         g.holds.send(&g.session, mint.clone(), None).answered().expect("acknowledged")
     };
     // The first call: the mint's own commit, at 70.
-    let first = call(70);
+    let first = call(json!({"resp": "ack_addr", "addr": mailbox, "at": 70}));
     assert_eq!((first["addr"].as_str(), g.base_of(&mailbox)), (Some(mailbox.as_str()), 70), "the base is noted on the document the ack's `addr` names");
     assert_eq!((g.holds.acked("b-1", 70), g.holds.written(&g.session, 70)), (true, own.clone()), "the mint's position, the session its writer");
     // Another hand's insert commits at 75, on a draft of the principal's;
     // the second call is judged at that head and answered the same address
-    // there.
+    // there, committing nothing.
     let another = json!({"at": 75, "op": "insert", "key": "5a".repeat(32), "docs": [OTHER]});
     assert_ne!(another["key"], g.own_key(), "the premise: the row is no write of the session's key");
-    let second = call(75);
-    assert_eq!((&second["addr"], g.fake.sends()), (&first["addr"], 2), "the same address, each call dialed");
-    assert_eq!(g.base_of(&mailbox), 75, "the mailbox's base is the position the second call was judged at");
-    assert_eq!((g.holds.acked("b-1", 75), g.holds.written(&g.session, 75)), (true, own.clone()), "another write's position, held as a write of the session's");
-    assert_eq!(g.holds.writers("b-1", 1, &[another]), [own], "a drafts read of the row at that position names this session its writer");
+    let second = call(json!({"resp": "ack_addr", "addr": mailbox, "at": 75, "committed": false}));
+    assert_eq!((&second["addr"], &second["committed"], g.fake.sends()), (&first["addr"], &json!(false), 2), "the same address, answered as committing nothing, each call dialed");
+    assert_eq!(g.base_of(&mailbox), 70, "the mailbox's base stays the mint's");
+    assert_eq!((g.holds.acked("b-1", 75), g.holds.written(&g.session, 75)), (false, None), "another write's position is no write of the session's");
+    assert_eq!(g.holds.writers("b-1", 1, &[another]), [None], "a drafts read of the row at that position names no writer");
     assert_eq!(g.base_of(OTHER), 0, "the document the other write was on is noted nothing");
+}
+
+/// Checks that a link write's ack that committed nothing notes nothing.
+///
+/// An `emit`, a `nullify` and an `assert_sup` answered with the incumbent
+/// each deduplicated against — `"committed": false`, `at` the position the
+/// call was judged at, another write's (wire.md §Links (writes)) — leave the
+/// board's acked positions, the writers recorded and the home's base as they
+/// stood; the same write's ack of a commit, the member absent, is noted as
+/// every ack is (the mutant that notes the hit enters another hand's
+/// position as the session's own, and a later held line on the home is read
+/// from above it).
+#[test]
+fn a_link_writes_ack_that_committed_nothing_notes_nothing() {
+    let g = writer_at(60);
+    let home = "1.0.1.0.67";
+    let frames = [
+        json!({"op": "emit", "home": home, "ty": [], "from": "1.0.1.0.67.0.1.1", "to": []}),
+        json!({"op": "nullify", "home": home, "target": "1.0.1.0.65.0.2.1"}),
+        json!({"op": "assert_sup", "home": home, "old": "1.0.1.0.65.0.2.1", "new": "1.0.1.0.67.0.2.1"}),
+    ];
+    for (at, frame) in (70..).zip(&frames) {
+        let op = frame["op"].as_str().unwrap();
+        g.holds.note_ack(&g.session, frame, &json!({"resp": "ack_addr", "addr": "1.0.1.0.67.0.2.1", "at": at, "committed": false}));
+        assert_eq!((g.holds.acked("b-1", at), g.holds.written(&g.session, at), g.base_of(home)), (false, None, 60), "{op}: the hit is noted nowhere");
+    }
+    // The control: the same write's ack of a commit is noted.
+    g.holds.note_ack(&g.session, &frames[0], &json!({"resp": "ack_addr", "addr": "1.0.1.0.67.0.2.1", "at": 80}));
+    let own = Some(Written { by: Some(g.session.reference.clone()), burst: None });
+    assert_eq!((g.holds.acked("b-1", 80), g.holds.written(&g.session, 80), g.base_of(home)), (true, own, 80), "the commit is noted");
+}
+
+/// Checks that a burst's writer record survives a no-commit ack there.
+///
+/// A burst carrying the page's `id` is acked at 80, its writer recorded with
+/// that `burst` (skep #1000); a repeated `create_well_known_document` is then
+/// judged at that same head and answered `"committed": false` at 80. The
+/// record at 80 stays the burst's, so the drafts row there keeps its
+/// `burst` (the mutant that notes the second ack overwrites it with a writer
+/// naming none).
+#[test]
+fn a_bursts_writer_record_survives_a_call_that_committed_nothing_at_its_position() {
+    let g = ground();
+    g.fake.next_at.store(80, Ordering::SeqCst);
+    let frame = with_id(insert(DOC, json!(["hello"]), g.fake.head()), "burst-1");
+    let OpAnswer::Answered(Ok(ack)) = g.holds.send_burst(&g.session, frame, None) else { panic!("acked") };
+    assert_eq!(ack["at"], 80, "the premise: the burst's ack at 80");
+    let burst = Some(Written { by: Some(g.session.reference.clone()), burst: Some("burst-1".to_string()) });
+    assert_eq!(g.holds.written(&g.session, 80), burst, "the premise: the burst's writer, its `id` beside it");
+    let mailbox = skep_client::address::mailbox_of("1.0.1");
+    g.fake.op_rejected.next(1, json!({"resp": "ack_addr", "addr": mailbox, "at": 80, "committed": false}));
+    let mint = json!({"op": "create_well_known_document", "account": "1.0.1"});
+    g.holds.send(&g.session, mint, None).answered().expect("acknowledged");
+    assert_eq!(g.holds.written(&g.session, 80), burst, "the call that committed nothing leaves the burst's record");
 }
 
 /// Checks that a refused run's drop drops its `behind` lines.

@@ -71,12 +71,16 @@ fn an_address_domain_enumerates_in_tumbler_order_across_class_slices() {
     let writer = link_writer(&k);
     // Retired heads the catalog's class order and PredStable ends it; doc2's
     // links are T1-greater than doc1's.
-    let (later, _) = writer
+    let later = writer
         .emit(Caller::System, &doc2(), &retired_ty(), &ca(1), &[])
-        .expect("a Retired link homed in doc2");
-    let (earlier, _) = writer
+        .expect("a Retired link homed in doc2")
+        .0
+        .into_address();
+    let earlier = writer
         .emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(2), &[])
-        .expect("a PredStable link homed in doc1");
+        .expect("a PredStable link homed in doc1")
+        .0
+        .into_address();
     assert!(earlier.tumbler() < later.tumbler());
     let id = c
         .register_rule(Rule {

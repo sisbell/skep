@@ -60,7 +60,7 @@ fn concurrent_writes_each_get_their_own_linearization_point() {
                             as_of: typed,
                         },
                     ) {
-                        Response::AckAddr { addr, at } => break (addr, at),
+                        Response::AckAddr { addr, at, .. } => break (addr, at),
                         Response::Rejected(rej) if rej.code == RejectCode::ArrangementMoved => {
                             assert_eq!(rej.site.as_ref().and_then(|s| s.as_of), Some(typed));
                             continue;

@@ -717,7 +717,7 @@ where
                     // As `nullify` deposits it: the Retraction gate, unseated.
                     // The plan found the target active, so no incumbent
                     // retraction stands; the address is taken either way.
-                    emit_core(stg, readable, caller, &home, value, Gate::Retraction)?.address();
+                    emit_core(stg, readable, caller, &home, value, Gate::Retraction)?.into_address();
                 }
                 PlannedDeposit::ReadWith { set, .. } => {
                     let from = enc([edition.unwrap_or(trunk)]);
@@ -751,9 +751,9 @@ where
 /// `Gate::Open` and seated, as `makelink` deposits a draft's own formatting
 /// (the link-sets design §2, B3-S13 (1)'s form); the retraction
 /// `retraction_tuple(home, old)` under `Gate::Retraction`, unseated, as
-/// `nullify` deposits it — `address`, as the `retract` arm takes it: the
-/// plan found the original active, so no incumbent stands, and the address
-/// is taken either way.
+/// `nullify` deposits it — `into_address`, as the `retract` arm takes it:
+/// the plan found the original active, so no incumbent stands, and the
+/// address is taken either way.
 ///
 /// # Errors
 ///
@@ -776,7 +776,7 @@ where
             let mark = emit_core(stg, readable, caller, home, value.clone(), Gate::Open)?.minted();
             seat(stg, home, &mark)?;
         }
-        emit_core(stg, readable, caller, home, retraction_tuple(home, old), Gate::Retraction)?.address();
+        emit_core(stg, readable, caller, home, retraction_tuple(home, old), Gate::Retraction)?.into_address();
     }
     Ok(())
 }

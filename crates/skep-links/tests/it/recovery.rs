@@ -16,9 +16,9 @@ fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
     let k = kernel();
     let w = writer(&k);
     let sup = supersedes_ty();
-    let (a1, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("idem⊤");
-    let (x, _) = w.emit(P1, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("x");
-    let (y, _) = w.emit(P1, &doc1(), &pred_stable_ty(), &ca(4), &[]).expect("y");
+    let a1 = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("idem⊤").fresh();
+    let x = w.emit(P1, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("x").fresh();
+    let y = w.emit(P1, &doc1(), &pred_stable_ty(), &ca(4), &[]).expect("y").fresh();
     let (_unregistered, _) = w
         .makelink(
             P1,
@@ -28,11 +28,11 @@ fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
             SlotArg::Addrs(vec![unregistered_ta(11)]),
         )
         .expect("an unregistered-class deposit, so its slice is rebuilt too");
-    let (c, _) = w.assert_sup(P1, &doc1(), &x, &y).expect("claim");
-    let (r1, _) = w.nullify(P1, &doc1(), &x).expect("nullify the claim's old endpoint");
+    let c = w.assert_sup(P1, &doc1(), &x, &y).expect("claim").fresh();
+    let r1 = w.nullify(P1, &doc1(), &x).expect("nullify the claim's old endpoint").fresh();
     // A second home's retraction of the same root: a distinct record, so the
     // retractions hint holds two addresses under `x`, in two homes.
-    let (r2, _) = w.nullify(P1, &doc2(), &x).expect("nullify it again from doc2");
+    let r2 = w.nullify(P1, &doc2(), &x).expect("nullify it again from doc2").fresh();
     assert_ne!(r1, r2);
 
     // The checkpoint wire format: serialize the world, deserialize (skip
@@ -95,7 +95,7 @@ fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
     // dedups the same idem⊤ emission to the ORIGINAL incumbent.
     let k2 = kernel_over(recovered);
     let w2 = writer(&k2);
-    let (again, _) = w2.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("dedup hit");
+    let again = w2.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("dedup hit").incumbent();
     assert_eq!(again, a1);
 }
 

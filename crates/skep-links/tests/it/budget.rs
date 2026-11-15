@@ -247,9 +247,10 @@ fn emit_rejects_a_ty_endset_past_the_span_budget() {
         "the span count does not change the class, which is why it needs its own bound"
     );
 
-    let (at_budget, _) = w
+    let at_budget = w
         .emit(P1, &doc1(), &wide_ty(budget), &ca(1), &[])
-        .expect("exactly the budget is admitted");
+        .expect("exactly the budget is admitted")
+        .fresh();
     {
         let snap = k.snapshot();
         let links = snap.world().links();
@@ -283,9 +284,10 @@ fn editlink_rejects_a_successor_slot_past_the_span_budget() {
     // `coverage_class`, and the fold's dedup key over all three again.
     let k = kernel();
     let w = writer(&k);
-    let (orig, _) = w
+    let orig = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("orig");
+        .expect("orig")
+        .fresh();
     let spans = |n: u32| -> Endset {
         (1..=n)
             .map(|i| skep_address::subtree_of(ca(i).tumbler()))

@@ -107,8 +107,11 @@ fn uv_drops_a_member_exactly_when_is_filtered_holds_of_it() {
         writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &x, &[]).expect("a member");
     }
     writer.emit(Caller::System, &doc1(), &retired_ty(), &ca(3), &[]).expect("retire ca3");
-    let (retirement, _) =
-        writer.emit(Caller::System, &doc1(), &retired_ty(), &ca(5), &[]).expect("retire ca5");
+    let retirement = writer
+        .emit(Caller::System, &doc1(), &retired_ty(), &ca(5), &[])
+        .expect("retire ca5")
+        .0
+        .into_address();
     writer.nullify(Caller::System, &doc1(), &retirement).expect("un-retire ca5");
     let at_default = |t: Term| decide_now(&k, &c, View::Default, t);
     for (x, filtered) in [(ca(3), true), (ca(5), false)] {
@@ -193,11 +196,14 @@ fn a_fixed_slice_atom_denotes_the_same_at_every_view() {
     let l2 = deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
     let writer = link_writer(&k);
     // A claim the audit slice keeps and the active slice does not …
-    let (claim, _) = writer.assert_sup(Caller::System, &doc1(), &l1, &l2).expect("l1 → l2");
+    let claim = writer.assert_sup(Caller::System, &doc1(), &l1, &l2).expect("l1 → l2").0.into_address();
     writer.nullify(Caller::System, &doc1(), &claim).expect("retract the claim");
     // … and a BH1 membership likewise.
-    let (retirement, _) =
-        writer.emit(Caller::System, &doc1(), &retired_ty(), &ca(5), &[]).expect("retire ca5");
+    let retirement = writer
+        .emit(Caller::System, &doc1(), &retired_ty(), &ca(5), &[])
+        .expect("retire ca5")
+        .0
+        .into_address();
     writer.nullify(Caller::System, &doc1(), &retirement).expect("un-retire ca5");
     for view in [View::Active, View::Audit, View::Default] {
         assert!(
@@ -292,7 +298,7 @@ fn a_nullified_claim_is_not_operative_so_the_walk_does_not_follow_it() {
     let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
     let l2 = deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
     let writer = link_writer(&k);
-    let (claim, _) = writer.assert_sup(Caller::System, &doc1(), &l1, &l2).expect("l1 → l2");
+    let claim = writer.assert_sup(Caller::System, &doc1(), &l1, &l2).expect("l1 → l2").0.into_address();
     assert!(decide_now(&k, &c, View::Active, tip_is(&sup, &l1, &l2)));
     assert_eq!(c.current_version(&l1, &k.snapshot()), Tip::Sink(l2.clone()));
 

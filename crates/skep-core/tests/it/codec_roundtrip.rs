@@ -1687,7 +1687,10 @@ fn all_responses() -> Vec<(&'static str, Response)> {
         // The landing's tell (skep #764): the trunk's current head beside the
         // position, on the one ack that carries it.
         ("ack", Response::Ack { at: Seq(9), head_moved: Some(a(&[1, 0, 1, 0, 1, 3])) }),
-        ("ack_addr", Response::AckAddr { addr: a(&[1, 0, 1, 0, 1, 0, 1, 1]), at: Seq(7) }),
+        ("ack_addr", Response::AckAddr { addr: a(&[1, 0, 1, 0, 1, 0, 1, 1]), at: Seq(7), committed: true }),
+        // A write that found its work done (skep #1043): the address standing,
+        // the base it was read at, and `committed: false` beside them.
+        ("ack_addr", Response::AckAddr { addr: a(&[1, 0, 1, 0, 2]), at: Seq(9), committed: false }),
         (
             "ack_edit",
             Response::AckEdit {
@@ -2047,6 +2050,35 @@ fn doc_metadata_marshals_its_source_as_an_address_or_null() {
     assert_eq!(acks.len(), 2);
     assert!(acks[0].get("head_moved").is_none(), "absent where no head moved: {}", acks[0]);
     assert_eq!(acks[1]["head_moved"], Value::String("1.0.1.0.1.3".into()), "{}", acks[1]);
+}
+
+/// An `ack_addr` says `committed: false` only where told (skep #1043).
+///
+/// The member is absent on the ack of a write that committed, whose object is
+/// `resp`, `addr` and `at` alone; and `false` on one that found its work
+/// done — a dedup hit, a mailbox standing — whose `at` a client must not
+/// count as a commit of its own (the mutant that writes the member on every
+/// ack changes every committed ack's bytes; the one that drops it hands the
+/// client another write's position as this call's).
+#[test]
+fn an_ack_addr_says_committed_false_only_where_nothing_committed() {
+    let codec = JsonCodec;
+    let acks: Vec<Value> = all_responses()
+        .into_iter()
+        .filter(|(n, _)| *n == "ack_addr")
+        .map(|(_, resp)| serde_json::from_slice(&codec.marshal(&resp)).expect("marshal emits JSON"))
+        .collect();
+    assert_eq!(acks.len(), 2);
+    assert_eq!(
+        acks[0],
+        serde_json::json!({"resp": "ack_addr", "addr": "1.0.1.0.1.0.1.1", "at": 7}),
+        "a commit's ack carries no member"
+    );
+    assert_eq!(
+        acks[1],
+        serde_json::json!({"resp": "ack_addr", "addr": "1.0.1.0.2", "at": 9, "committed": false}),
+        "the ack of a write that committed nothing says so"
+    );
 }
 
 /// The landing's frame (wire.md §Arrangement, `set_arrangement`; skep #764):

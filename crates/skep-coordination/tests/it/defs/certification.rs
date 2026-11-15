@@ -127,8 +127,11 @@ fn certify_stable_refuses_a_view_independent_def_the_store_can_falsify() {
     };
     let now = |p: &Address| c.evaluate_def(p, &[], View::Audit, &k.snapshot());
 
-    let (retirement, _) =
-        writer.emit(Caller::System, &doc1(), &retired_ty(), &ca(15), &[]).expect("retire ca15");
+    let retirement = writer
+        .emit(Caller::System, &doc1(), &retired_ty(), &ca(15), &[])
+        .expect("retire ca15")
+        .0
+        .into_address();
     let filtered = define(is_filtered(&retired_ty(), lit_addr(&ca(15))));
     assert_eq!(now(&filtered), Ok(Value::Bool(true)));
     assert!(matches!(c.certify_stable(&doc1(), &filtered), Err(CertifyError::StabilityUnproven)));
@@ -137,7 +140,7 @@ fn certify_stable_refuses_a_view_independent_def_the_store_can_falsify() {
 
     let l1 = deposit_rel(&k, PRED_STABLE, &ca(11), &ca(12));
     let l2 = deposit_rel(&k, PRED_STABLE, &ca(13), &ca(14));
-    let (claim, _) = writer.assert_sup(Caller::System, &doc1(), &l1, &l2).expect("l1 → l2");
+    let claim = writer.assert_sup(Caller::System, &doc1(), &l1, &l2).expect("l1 → l2").0.into_address();
     let chained = define(is_in_chain(&sup, lit_addr(&l1), lit_addr(&l2)));
     assert_eq!(now(&chained), Ok(Value::Bool(true)));
     assert!(matches!(c.certify_stable(&doc1(), &chained), Err(CertifyError::StabilityUnproven)));

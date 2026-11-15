@@ -19,7 +19,9 @@
 //! made, the library's write and none of this path's, noted so too
 //! ([`Holds::note_restored`]) — and entered in the board's acked
 //! positions, which the resend's read never takes for a line's lost landing
-//! ([`BoardHold::acked`]); a
+//! ([`BoardHold::acked`]), save an ack that committed nothing
+//! (`"committed": false`: a mailbox found standing, a link write's dedup
+//! hit), whose `at` is some other write's and which is noted nowhere; a
 //! reissue-class answer reissued within the call, a
 //! `write_busy` once after [`WRITE_BUSY_WAIT`], a first and second
 //! `durability` as-is, so the page meets the ack or the next refusal
@@ -317,7 +319,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use skep_client::board::{acked_addr, acked_at, Answer, Board, ChangesAnswer, ChangesQuery, Health, Rejection};
+use skep_client::board::{acked_addr, acked_at, acked_nothing, Answer, Board, ChangesAnswer, ChangesQuery, Health, Rejection};
 use skep_client::halt::Halt;
 use skep_client::history::Restored;
 use skep_client::sheet::render_inert;
@@ -4930,8 +4932,16 @@ impl Holds {
     /// and the frame's `id` where the frame is a burst carrying one — the
     /// page's, which the frame a resend notes keeps, never the dial id it went
     /// out under. No standing line is touched: a line held keeps the base it
-    /// was held at. A read, or a refusal, notes nothing.
+    /// was held at. A read, or a refusal, notes nothing — nor does an ack that
+    /// committed nothing ([`acked_nothing`]: a mailbox found standing, an
+    /// `emit`, `nullify` or `assert_sup` answered with its incumbent), whose
+    /// `at` is the position the call was judged at, some other write's: it
+    /// enters no acked position, names this session the writer of no row and
+    /// raises no base, and the call it answers is answered all the same.
     fn note_ack(&self, session: &SessionEntry, frame: &Value, ack: &Value) {
+        if acked_nothing(ack) {
+            return;
+        }
         let Some(at) = acked_at(ack) else { return };
         let landed = minted_by(frame, ack).map(|minted| (frame, minted));
         let written = Written::of(Some(session), frame["id"].as_str().filter(|_| is_burst(frame)));

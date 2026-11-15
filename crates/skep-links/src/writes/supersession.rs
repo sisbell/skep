@@ -12,7 +12,8 @@ use skep_kernel::{Seq, TxnError};
 use skep_namespace::{M3Rec, M3State};
 
 use super::{
-    correspondence_class, deposit_lock_set, emit_core, home_gate, replaces_class, Gate, LinkWriter,
+    correspondence_class, deposit_lock_set, emit_core, home_gate, replaces_class, Deposited, Gate,
+    LinkWriter,
 };
 use crate::budget::MAX_SLOT_SPANS;
 use crate::class::coverage_class;
@@ -98,9 +99,11 @@ where
     /// claim homed in a document the caller cannot read is invisible to the
     /// dedup, and the caller's own claim is minted beside it.
     ///
-    /// Returns `(claim, seq)`: the address of the `[K_sup]` claim — never an
-    /// endpoint — or, on a dedup hit, the incumbent claim's, with the base
-    /// `Seq`.
+    /// Returns `(claim, seq)`: [`Deposited::Fresh`] with the address of the
+    /// `[K_sup]` claim this call deposited — never an endpoint — and the
+    /// position it committed at, or, on a dedup hit, [`Deposited::Incumbent`]
+    /// with the incumbent claim's address and the base `Seq`, nothing
+    /// committed.
     ///
     /// Ownership is required on `home` and on nothing else: the caller need
     /// not own `old` or `new`, so a claim may be asserted over links owned by
@@ -132,7 +135,7 @@ where
         home: &Address,
         old: &Address,
         new: &Address,
-    ) -> Result<(Address, Seq), TxnError<AssertSupError>> {
+    ) -> Result<(Deposited, Seq), TxnError<AssertSupError>> {
         let value = supersession_claim(old, new);
         let keys = deposit_lock_set(&value, home);
         // The attested arm (signed ops), as `emit`'s.
@@ -145,7 +148,7 @@ where
                 // irreflexivity.
                 base.links().check_sup_schema(&value)?;
             }
-            Ok(emit_core(stg, self.visibility, caller, home, value, Gate::Managed)?.address())
+            Ok(emit_core(stg, self.visibility, caller, home, value, Gate::Managed)?)
         })
     }
 

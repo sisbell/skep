@@ -837,7 +837,9 @@ The optional envelope field `"id"` is a **per-session idempotency key** (any
 string, unique within your session). If a committed write's acknowledgment
 is lost and you repeat the identical request with the same `id` on the same
 session, the daemon returns the original acknowledgment instead of
-re-executing. It is a best-effort hint: it does not survive a daemon
+re-executing — whole, its `at` the original's, and an `ack_addr` that
+said `"committed": false` saying it again (§The response envelope). It
+is a best-effort hint: it does not survive a daemon
 restart, it is never applied to reads or rejections (a `reorder`/`retry`
 reissue always re-executes), an `id` reused across different op kinds
 misses, and a write answered `500 internal_panic` may have committed with
@@ -1141,6 +1143,21 @@ create_well_known_document / delegate / register_node.
 <!-- wire: response ack_addr -->
 ```json
 {"addr":"1.0.1.0.1.0.1.1","at":7,"resp":"ack_addr"}
+```
+
+A write that found its work done carries `committed`, `false`: an
+`emit`, `nullify` or `assert_sup` answered with the incumbent it
+deduplicated against (§Links (writes)), and a
+`create_well_known_document` that found the mailbox standing
+(§Namespace). Nothing committed: `addr` is the address that stands, and
+`at` the position the call was judged at — the board's head then, where
+some other write committed. A client counts no such `at` as a position
+it wrote at: the `/changes` row there is that other write's. The member
+is ABSENT on every `ack_addr` that committed:
+
+<!-- wire: response ack_addr_committed_nothing -->
+```json
+{"addr":"1.0.1.0.2","at":9,"committed":false,"resp":"ack_addr"}
 ```
 
 **`ack_edit`** — edit_link: the successor link and its supersession claim.
@@ -3340,11 +3357,14 @@ claimed board as `stage` is.
 
 A SECOND CALL — another device, the loser of a race, a re-send with no
 `id` after an acknowledgment was lost — is answered `ack_addr` with the
-SAME `addr` and commits nothing: no record, no feed row. Its `at` is the
-position the call was JUDGED at, at or after the mint's, and not the
-mint's own: it does not say where the mailbox was minted. A re-send
-under the first request's `id` is answered from the memo (§Correlation
-and idempotency): the first acknowledgment whole, its `at` the mint's.
+SAME `addr` and commits nothing: no record, no feed row. It carries
+`"committed": false`, which the mint's acknowledgment never does (§The
+response envelope). Its `at` is the position the call was JUDGED at, at
+or after the mint's, and not the mint's own: it does not say where the
+mailbox was minted, and it is some other write's position, never this
+call's. A re-send under the first request's `id` is answered from the
+memo (§Correlation and idempotency): the first acknowledgment whole, its
+`at` the mint's.
 
 Its refusals, in the order a caller meets them: a guest is
 `unauthenticated`; an `account` that is the system account `1.1.0.1` is
@@ -5261,7 +5281,9 @@ body's four rows over the tuple THE STORE DEPOSITS — the type slot row
 the `to` slot row one unit span per address and EMPTY (`0x03 ‖ be64(0)`)
 at a Unary class, the `replaces` row EMPTY (an `emit` carries no member)
 — so a reader composes it from `read_link` alone. A re-emit that acks an
-incumbent commits nothing and fills no slot.
+incumbent commits nothing, fills no slot and says so: its `ack_addr`
+carries `"committed": false`, its `at` the position the call was judged
+at (§The response envelope).
 
 The five reserved type addresses are GHOST TUMBLERS — compiled format
 constants at `1.1.0.1.0.1.0.1.x` for x = 1..5 (pred_def, pred_stable,
@@ -5293,7 +5315,9 @@ signature over the frame whose `doc` is `home`, `op` `nullify` and
 deposits — the type slot row the retraction class's one unit span, its
 reserved ghost tumbler `1.1.0.1.0.1.0.1.5`; the `from` slot row `home`'s
 unit span; the `to` slot row `target`'s; the `replaces` row EMPTY. A
-re-retraction that acks the incumbent commits nothing and fills no slot.
+re-retraction that acks the incumbent commits nothing, fills no slot and
+says so: its `ack_addr` carries `"committed": false`, its `at` the
+position the call was judged at (§The response envelope).
 On the change feed a retraction homed in a draft against a public link —
 the straddle below — serves its `attest` to the classes that read its
 home and withholds it from the rest (§The change feed).
@@ -5315,7 +5339,14 @@ signature over the frame whose `doc` is `home`, `op` `assert_sup` and
 `body` the `make_link` body's four rows over the claim the store deposits
 — the type slot row the supersedes class's one unit span, its reserved
 ghost tumbler `1.1.0.1.0.1.0.1.4`; the `from` slot row `old`'s unit span;
-the `to` slot row `new`'s; the `replaces` row EMPTY.
+the `to` slot row `new`'s; the `replaces` row EMPTY. Idempotent AT THE
+CALLER'S VISIBILITY CLASS, as `emit` is (PUB-6.25, PUB-6.26), over
+`old` and `new` from ANY home: a re-assert acks the EARLIEST incumbent
+claim the caller's class can read, commits nothing, fills no slot and
+says so — its `ack_addr` carries `"committed": false`, its `at` the
+position the call was judged at (§The response envelope) — and a claim
+homed where the caller may not read is invisible to the gate, so the
+call mints a claim of its own beside it.
 
 <!-- wire: request assert_sup -->
 ```json

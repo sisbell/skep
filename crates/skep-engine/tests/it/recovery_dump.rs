@@ -79,16 +79,20 @@ fn deposit_every_hint_family(engine: &Engine, doc: &Address, start: &Address) ->
     let sup_old = make_link((1, 1), (2, 1));
     let sup_new = make_link((2, 1), (1, 1));
     let nullified = make_link((1, 2), (1, 1));
-    let (sup_claim, _) = engine
+    let sup_claim = engine
         .linkstore(&visibility)
         .assert_sup(OWNER, doc, &sup_old, &sup_new)
-        .expect("assert_sup");
-    let (retraction, _) =
-        engine.linkstore(&visibility).nullify(OWNER, doc, &nullified).expect("nullify");
-    let (emitted, _) = engine
+        .expect("assert_sup")
+        .0
+        .into_address();
+    let retraction =
+        engine.linkstore(&visibility).nullify(OWNER, doc, &nullified).expect("nullify").0.into_address();
+    let emitted = engine
         .linkstore(&visibility)
         .emit(OWNER, doc, &pred_def_ty(), start, &[])
-        .expect("pred_def-typed emit");
+        .expect("pred_def-typed emit")
+        .0
+        .into_address();
     Deposited { sup_old, sup_new, nullified, sup_claim, retraction, emitted }
 }
 
@@ -213,8 +217,11 @@ fn a_retracted_supersession_claim_carries_no_edge() {
     let engine = Engine::open(mem_cfg()).expect("in-memory open");
     let (doc, old, new) = a_draft_with_two_links(&engine);
     let visibility = World::visible_to(OWNER);
-    let (claim, _) =
-        engine.linkstore(&visibility).assert_sup(OWNER, &doc, &old, &new).expect("assert_sup");
+    let claim = engine.linkstore(&visibility)
+        .assert_sup(OWNER, &doc, &old, &new)
+        .expect("assert_sup")
+        .0
+        .into_address();
     engine.linkstore(&visibility).nullify(OWNER, &doc, &claim).expect("retract the CLAIM");
 
     let text = engine.world_dump().into_string();
@@ -254,10 +261,12 @@ fn the_nullified_family_is_the_whole_tombstone_set_because_only_links_are_retrac
         );
     }
     let own_address = element(&doc, 2, 1); // the draft's first link address
-    let (retraction, _) = engine
+    let retraction = engine
         .linkstore(&visibility)
         .nullify(OWNER, &doc, &own_address)
-        .expect("a retraction of the address it will itself occupy");
+        .expect("a retraction of the address it will itself occupy")
+        .0
+        .into_address();
     assert_eq!(retraction, own_address, "born nullified: the retraction is its own target");
     let text = engine.world_dump().into_string();
     assert_entry(&text, "links.audit", &seq_of(&[&retraction]));
@@ -319,13 +328,16 @@ fn a_shipped_class_s_active_slice_and_active_projection_render_the_active_view()
             .emit(OWNER, &draft, &pred_stable, member, &[])
             .expect("a pred_stable tuple in the owner's own draft")
             .0
+            .into_address()
     };
     let (retracted_member, kept_member) = (element(&draft, 1, 1), element(&draft, 1, 2));
     let (retracted, kept) = (register(&retracted_member), register(&kept_member));
-    let (retraction, _) = engine
+    let retraction = engine
         .linkstore(&visibility)
         .nullify(OWNER, &draft, &retracted)
-        .expect("the owner retracts its own tuple");
+        .expect("the owner retracts its own tuple")
+        .0
+        .into_address();
 
     let text = engine.world_dump().into_string();
     assert_entry(

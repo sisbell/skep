@@ -193,7 +193,7 @@ mod tests {
             s1,
             id.clone(),
             OpKind::CreateNewDocument,
-            CommittedAck::Addr { addr: addr(&[1, 0, 1]), at: Seq(9) },
+            CommittedAck::Addr { addr: addr(&[1, 0, 1]), at: Seq(9), committed: true },
         );
         // The same id under a second session, deliberately: confinement is
         // what makes the two entries distinct.
@@ -201,13 +201,14 @@ mod tests {
             s2,
             id.clone(),
             OpKind::Fork,
-            CommittedAck::Addr { addr: addr(&[1, 0, 2]), at: Seq(10) },
+            CommittedAck::Addr { addr: addr(&[1, 0, 2]), at: Seq(10), committed: true },
         );
         // Same session + kind: hit, rebuilt equal.
         match memo.get(s1, &id, OpKind::CreateNewDocument) {
-            Some(CommittedAck::Addr { addr: replayed, at }) => {
+            Some(CommittedAck::Addr { addr: replayed, at, committed }) => {
                 assert_eq!(replayed, addr(&[1, 0, 1]));
                 assert_eq!(at, Seq(9));
+                assert!(committed);
             }
             _ => panic!("expected a memoized Addr ack"),
         }

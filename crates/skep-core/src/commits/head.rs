@@ -1117,7 +1117,10 @@ impl HeadWriter {
                 None => run(),
             };
             match outcome {
-                Ok((addr, at)) => Response::AckAddr { addr, at },
+                // Each driver the door runs — the record's insert, the
+                // shot's publication, the seed's make_link — commits or is
+                // refused.
+                Ok((addr, at)) => Response::AckAddr { addr, at, committed: true },
                 Err(refusal) => {
                     refused(op_name(kind), &refusal);
                     // A no-op answer `record` returns None for: nothing

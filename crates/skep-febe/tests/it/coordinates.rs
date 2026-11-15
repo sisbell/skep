@@ -46,25 +46,35 @@ fn every_write_acks_at_the_coordinate_it_committed() {
     assert_eq!(seen.len(), 16, "the fixture's chain is 16 of the write half's 17 operations: {seen:?}");
 }
 
+/// Checks that a deduplicated write acks at the base, committing nothing.
+///
 /// A1 on the zero-step write (`Response::AckAddr`): one answered with an
-/// incumbent it deduplicated against commits nothing, and acknowledges at the
-/// coordinate of the base it found that incumbent in — the committed head when
-/// it ran, NOT the incumbent's own commit — so a read at or past `at` reflects
-/// it. A write lands between the two emits, which is what tells those two
-/// coordinates apart.
+/// incumbent it deduplicated against commits nothing, says so —
+/// `committed: false`, where the write that minted the incumbent said
+/// `committed: true` — and acknowledges at the coordinate of the base it
+/// found that incumbent in — the committed head when it ran, NOT the
+/// incumbent's own commit — so a read at or past `at` reflects it, and a
+/// client counts `at` as no commit of its own. A write lands between the two
+/// emits, which is what tells those two coordinates apart.
 #[test]
 fn a_deduplicated_write_acknowledges_at_the_base_it_found_its_incumbent_in() {
     let fx = setup();
     let d = create_doc(&fx);
     let (start, _) = insert3(&fx, &d);
     let emit = || Op::Emit { home: d.clone(), ty: pred_def_ty(), from: start.clone(), to: vec![] };
-    let (incumbent, committed_at) = ack_addr(ex(&fx.febe, fx.user, emit()));
+    let Response::AckAddr { addr: incumbent, at: committed_at, committed: true } = ex(&fx.febe, fx.user, emit())
+    else {
+        panic!("the first emit commits, and says so");
+    };
     let _ = create_doc(&fx); // a later write moves the head past the incumbent's commit
     let head = fx.febe.log_position();
     assert!(head > committed_at, "premise: the head has moved past the incumbent");
-    let (again, at) = ack_addr(ex(&fx.febe, fx.user, emit()));
-    assert_eq!(again, incumbent, "the incumbent answers");
-    assert_eq!(at, head, "at the base it was found in, not the incumbent's commit");
+    assert_eq!(
+        ex(&fx.febe, fx.user, emit()),
+        Response::AckAddr { addr: incumbent, at: head, committed: false },
+        "the incumbent answers, at the base it was found in, not the incumbent's commit, \
+         committing nothing"
+    );
     assert_eq!(fx.febe.log_position(), head, "and nothing committed");
 }
 

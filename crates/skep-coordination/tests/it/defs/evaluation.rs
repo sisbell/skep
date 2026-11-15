@@ -18,9 +18,11 @@ use skep_links::Caller;
 fn a_stored_def_denotes_at_the_view_the_caller_names() {
     let k = kernel();
     let c = coord(&k);
-    let (l1, _) = link_writer(&k)
+    let l1 = link_writer(&k)
         .emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(5), &[])
-        .expect("a witness for ca5");
+        .expect("a witness for ca5")
+        .0
+        .into_address();
     let tt = c
         .type_check(vec![(v(1), Sort::Addr)], is_k(&pred_stable_ty(), var(1)))
         .expect("P(x) := is_K(pred_stable, x)");

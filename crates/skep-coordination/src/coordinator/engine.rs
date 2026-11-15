@@ -570,7 +570,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 writer.nullify(Caller::System, home, arg_addr).map_err(nullify_refusal)
             }
         };
-        deposited.map(|(effect, seq)| self.fired_or_deduped(&snap, effect, seq))
+        deposited.map(|(effect, seq)| self.fired_or_deduped(&snap, effect.into_address(), seq))
     }
 
     /// Returns the document a fire at guest class may not cross, or `None`.

@@ -18,7 +18,7 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   three fenced classes and always mints a fresh one; `emit`, `nullify`
   and `assert_sup` admit only registered types, check each type's
   shape, and answer a duplicate with the earliest incumbent the caller
-  can read.
+  can read, saying so (`Deposited`): such an answer commits nothing.
 - **Retraction and supersession** — `nullify` deposits a retraction
   link: its target leaves every active view and stays in the audit
   view and in `readlink`. `assert_sup` and `editlink` record what

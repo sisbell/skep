@@ -72,9 +72,11 @@
 //!
 //! * a write's `at` is the coordinate it committed at (A1/A7) — the operation
 //!   is in the log at that position and at every later one; a write answered
-//!   with an incumbent it deduplicated against commits nothing, and its `at`
-//!   is the coordinate of the base it found that incumbent in, where the
-//!   incumbent already stands ([`Response::AckAddr`]);
+//!   with an incumbent it deduplicated against, or a well-known mint that
+//!   found its slot filled, commits nothing and says so — `committed: false`
+//!   on [`Response::AckAddr`] — and its `at` is the coordinate of the base it
+//!   found that incumbent in, where the incumbent already stands: a position
+//!   some other write took, never one to count as this write's;
 //! * a read's `as_of` is the coordinate of the snapshot it answered from
 //!   (A2/V1) — the answer reflects every write committed at or before that
 //!   position, and none after it.

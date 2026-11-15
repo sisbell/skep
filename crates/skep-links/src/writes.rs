@@ -29,8 +29,9 @@
 //!
 //! Layout: this file is the handle and what its ops share — the visibility
 //! class, the deposit gate [`emit_core`] with its two disciplines and its §2
-//! error tables, the home doorkeeper, the dedup lock set and the two
-//! sole-writer commons classes, `replaces` and the correspondence. Each op
+//! error tables, [`Deposited`], what one deposit did, which `emit`, `nullify`
+//! and `assert_sup` answer, the home doorkeeper, the dedup lock set and the
+//! two sole-writer commons classes, `replaces` and the correspondence. Each op
 //! family is a child module — `writes/makelink.rs`,
 //! `writes/emit.rs`, `writes/nullify.rs`, `writes/supersession.rs` and
 //! `writes/publication.rs` —
@@ -307,24 +308,35 @@ enum Gate {
     Retraction,
 }
 
-/// What [`emit_core`] did, in two words.
+/// What a deposit did: minted its tuple, or found one of its identity standing.
 ///
-/// Two, because the choke point has two outcomes and an `Address` alone
-/// names both.
-enum Deposited {
-    /// Freshly minted: the M3 allocation and the `LinkRec` are staged.
+/// It is what [`LinkWriter::emit`], [`LinkWriter::nullify`] and
+/// [`LinkWriter::assert_sup`] answer beside the `Seq` (PUB-6.25, PUB-6.26):
+/// the address of the tuple of this identity either way, and whether this
+/// call committed it. Two outcomes, because an idem⊤ deposit has two and an
+/// `Address` alone names both; a caller that drops the variant reports
+/// another write's position as its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Deposited {
+    /// This call minted the tuple at this address, and committed it.
+    ///
+    /// The `Seq` beside it is the position the commit took.
     Fresh(Address),
-    /// The active incumbent of an idem⊤ class: nothing staged.
+    /// A tuple of this identity already stood at this address: the incumbent.
+    ///
+    /// It is the earliest active tuple of the identity homed where the caller
+    /// can read. Nothing was staged and nothing committed: the `Seq` beside it
+    /// is the base the incumbent was found in (M2's zero-step answer), a
+    /// position some other write took.
     Incumbent(Address),
 }
 
 impl Deposited {
-    /// Returns the address, whichever outcome.
+    /// Returns the tuple's address, whichever outcome, consuming the answer.
     ///
-    /// It is for a caller that stages nothing downstream naming it, and
-    /// reports it as "the address of the tuple of this identity" (`emit`,
-    /// `nullify`, `assert_sup`).
-    fn address(self) -> Address {
+    /// It is for a caller that reports it as "the address of the tuple of
+    /// this identity" and has read, or has no use for, which outcome it was.
+    pub fn into_address(self) -> Address {
         match self {
             Deposited::Fresh(addr) | Deposited::Incumbent(addr) => addr,
         }

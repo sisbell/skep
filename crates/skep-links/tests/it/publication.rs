@@ -2381,7 +2381,7 @@ fn a_retracted_original_is_skipped_and_a_copy_retracted_without_the_rider_leaves
     // The skip: L retracted on another device, then the request naming it
     // — the copy's entry skipped too, both already retracted — lands with
     // nothing written in the notes.
-    let retraction = w.nullify(P1, &doc2(), &l).expect("L retracted elsewhere").0;
+    let retraction = w.nullify(P1, &doc2(), &l).expect("L retracted elsewhere").fresh();
     assert_eq!(retraction, link_of(&doc2(), 3));
     let (e4, _) = publish(&k, &shot_off_head(&k, vec![]), &PublishDeposits { retract: vec![copy.clone()], ..originals(vec![(l.clone(), vec![])]) }).expect("the request lands");
     assert_eq!(e4, pmember(4));

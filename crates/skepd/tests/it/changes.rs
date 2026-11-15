@@ -1529,7 +1529,7 @@ fn pre_feature_positions_answer_bare_entries() {
             boot,
             &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":1}}"#),
         ) {
-            Response::AckAddr { addr, at } => {
+            Response::AckAddr { addr, at, .. } => {
                 assert_eq!(at.0, 2, "delegate commits at position 2; re-pin wire.md");
                 addr.tumbler().to_string()
             }
@@ -1540,7 +1540,7 @@ fn pre_feature_positions_answer_bare_entries() {
             s1,
             &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
         ) {
-            Response::AckAddr { addr, at } => {
+            Response::AckAddr { addr, at, .. } => {
                 assert_eq!(at.0, 3, "create commits at position 3; re-pin wire.md");
                 addr.tumbler().to_string()
             }

@@ -758,6 +758,19 @@ pub fn acked_head_moved(v: &Value) -> Option<&str> {
     (v["resp"].as_str() == Some("ack")).then(|| v["head_moved"].as_str()).flatten()
 }
 
+/// Returns whether the document is an `ack_addr` that committed nothing.
+///
+/// wire.md §The response envelope: a `create_well_known_document` that finds
+/// the mailbox standing, and an `emit`, `nullify` or `assert_sup` answered
+/// with the incumbent it deduplicated against, commit nothing; their
+/// `ack_addr` names the standing address and carries `"committed": false`,
+/// its `at` the position the call was judged at — some other write's, never
+/// one to note as this call's. The member is absent on every ack that
+/// committed, so `false` is the common answer.
+pub fn acked_nothing(v: &Value) -> bool {
+    v["resp"].as_str() == Some("ack_addr") && v["committed"].as_bool() == Some(false)
+}
+
 impl Board {
     /// Returns a board dialed and signed at one origin.
     ///

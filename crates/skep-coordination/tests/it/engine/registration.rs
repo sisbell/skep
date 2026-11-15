@@ -267,9 +267,11 @@ fn a_rule_domain_is_checked_to_the_nesting_cap() {
     on_the_default_stack(|| {
         let k = kernel();
         let mut c = coord(&k);
-        let (link, _) = link_writer(&k)
+        let link = link_writer(&k)
             .emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[])
-            .expect("one cataloged link, so L_dom has an element to pass through");
+            .expect("one cataloged link, so L_dom has an element to pass through")
+            .0
+            .into_address();
         // The outermost filter at level 0, filter k at level k, the innermost
         // `L_dom` at level n.
         let filters = |n: usize| (0..n).fold(Dom::LinkDom, |d, _| filter(d, 2, tru()));

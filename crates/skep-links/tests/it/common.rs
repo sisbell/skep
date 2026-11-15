@@ -7,7 +7,9 @@
 //! registry's population is exactly the shipped five, so a managed emit
 //! lands on a shipped Unary idem⊤ class and anything else is unregistered.
 //! The suite's kernels are here too: [`kernel`] and [`kernel_over`] in
-//! memory, and [`journaled`], the one kind that writes commit markers.
+//! memory, and [`journaled`], the one kind that writes commit markers; and
+//! [`Answered`], which reads a managed write's answer as fresh or as the
+//! incumbent, asserting which.
 
 use std::ops::Deref;
 
@@ -21,8 +23,8 @@ use skep_kernel::{
     WorldState,
 };
 use skep_links::{
-    enc, Caller, Endset, HasLinks, LinkRec, LinkState, LinkWriter, ReservedAddrs, SlotArg,
-    Visibility,
+    enc, Caller, Deposited, Endset, HasLinks, LinkRec, LinkState, LinkWriter, ReservedAddrs,
+    SlotArg, Visibility,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId, FIRST_ORDINARY_DOCUMENT};
 use tempfile::{tempdir, TempDir};
@@ -62,6 +64,38 @@ pub fn writer_at<'k>(
     visibility: &'k Visibility<'k, World>,
 ) -> LinkWriter<'k, World> {
     LinkWriter::new(k, visibility)
+}
+
+/// A managed write's answer, read as the test expects it.
+///
+/// It is `emit`'s, `nullify`'s and `assert_sup`'s `(Deposited, Seq)`. Each
+/// reader asserts the outcome before it hands back the address, so a
+/// deposit the test takes for fresh that met an incumbent, or the reverse,
+/// fails at the call that answered it rather than passing on the address
+/// alone, which the two outcomes share.
+pub trait Answered {
+    /// Returns the address this call minted, asserting it minted one.
+    fn fresh(self) -> Address;
+    /// Returns the incumbent's address, asserting nothing was committed.
+    fn incumbent(self) -> Address;
+}
+
+impl Answered for (Deposited, Seq) {
+    #[track_caller]
+    fn fresh(self) -> Address {
+        match self.0 {
+            Deposited::Fresh(addr) => addr,
+            Deposited::Incumbent(addr) => panic!("a fresh deposit was expected; the incumbent {addr:?} answered"),
+        }
+    }
+
+    #[track_caller]
+    fn incumbent(self) -> Address {
+        match self.0 {
+            Deposited::Incumbent(addr) => addr,
+            Deposited::Fresh(addr) => panic!("an incumbent was expected; {addr:?} was minted"),
+        }
+    }
 }
 
 // ───────────────────────── the assembled test world ─────────────────────────

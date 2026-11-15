@@ -1026,13 +1026,16 @@ fn a_retracted_public_claim_beside_an_operative_draft_claim() -> (World, Address
             .0
     };
     let (old, new) = (public_link(41), public_link(42));
-    let (public_claim, _) =
-        writer.assert_sup(caller, &home, &old, &new).expect("a claim in the published home");
+    let public_claim =
+        writer.assert_sup(caller, &home, &old, &new).expect("a claim in the published home").0.into_address();
     writer.nullify(caller, &home, &public_claim).expect("the owner retracts its own claim");
     // A retracted incumbent is invisible to the managed gate's dedup, so
     // the same edge asserted from the draft is a FRESH claim.
-    let (draft_claim, _) =
-        writer.assert_sup(caller, &draft, &old, &new).expect("the same edge, from the draft");
+    let draft_claim = writer
+        .assert_sup(caller, &draft, &old, &new)
+        .expect("the same edge, from the draft")
+        .0
+        .into_address();
     assert_eq!(document_of(&draft_claim), Some(draft), "a fresh draft claim, not a dedup hit");
     (engine.kernel().snapshot().world().clone(), public_claim)
 }
@@ -1145,14 +1148,18 @@ fn a_member_asserted_by_a_retracted_public_tuple_and_an_operative_draft_tuple(
     let writer = engine.linkstore(&visibility);
     let member = element(&home, 1, 1);
     let pred_stable = engine.registry().reserved_type(ShippedType::PredStable).clone();
-    let (public_tuple, _) = writer
+    let public_tuple = writer
         .emit(caller, &home, &pred_stable, &member, &[])
-        .expect("a registration in the published home");
+        .expect("a registration in the published home")
+        .0
+        .into_address();
     writer.nullify(caller, &home, &public_tuple).expect("the owner retracts its own tuple");
     // As above: the retracted incumbent is invisible to `emit`'s dedup.
-    let (draft_tuple, _) = writer
+    let draft_tuple = writer
         .emit(caller, &draft, &pred_stable, &member, &[])
-        .expect("the same registration, from the draft");
+        .expect("the same registration, from the draft")
+        .0
+        .into_address();
     assert_eq!(document_of(&draft_tuple), Some(draft), "a fresh draft tuple, not a dedup hit");
     (engine.kernel().snapshot().world().clone(), member)
 }

@@ -9,8 +9,8 @@
 //! made before the mint, found before and after it by a search that reads no
 //! mailbox; two sessions calling at once, answered one address over one
 //! commit; a later call answered at the position it was judged at,
-//! committing nothing; and the refusals an owner with no home page, an
-//! address of no account and an unclaimed board each meet.
+//! committing nothing and saying so; and the refusals an owner with no home
+//! page, an address of no account and an unclaimed board each meet.
 //!
 //! The suite spells no document number: an address a board hands out is
 //! [`nth_document`]'s, and a mailbox's is the namespace's own answer
@@ -228,7 +228,9 @@ fn a_mail_link_made_before_the_mint_is_found_before_and_after_it_by_a_search_tha
 /// Two sessions of the owner's send the op from one start line. Each is
 /// acknowledged the one address, at or after the mint's position; the log
 /// gains one commit — the owner's feed one row, the head standing at it —
-/// and the mailbox's metadata names that commit.
+/// and the mailbox's metadata names that commit. Exactly one ack carries no
+/// `committed` member, the mint's own at the mint's position, and the other
+/// says `"committed": false`.
 #[test]
 fn two_sessions_calling_at_once_are_answered_one_address_over_one_commit() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -272,18 +274,26 @@ fn two_sessions_calling_at_once_are_answered_one_address_over_one_commit() {
         assert!(acked_at(ack) >= minted_at, "at or after the mint's position: {ack}");
     }
     assert!(acks.iter().any(|ack| acked_at(ack) == minted_at), "one of the two is the mint's own acknowledgment: {acks:?}");
+    let minting: Vec<&Value> = acks.iter().filter(|ack| ack.get("committed").is_none()).collect();
+    assert_eq!(minting.len(), 1, "one call committed, the other found the mailbox standing: {acks:?}");
+    assert_eq!(acked_at(minting[0]), minted_at, "the committing ack is the mint's own: {acks:?}");
+    assert!(
+        acks.iter().any(|ack| ack["committed"] == json!(false)),
+        "the other says it committed nothing: {acks:?}"
+    );
     assert_eq!(doc_metadata(port, Some(&sessions[1]), &mailbox)["at"].as_u64(), Some(minted_at), "the mailbox was minted at that commit");
     sd.shutdown();
 }
 
 /// Checks the position a later call is answered at.
 ///
-/// The first call's `at` is the mint's commit. Once another write has moved
-/// the head, a second call — another session's, carrying no `id` — is
-/// answered the same `addr` with `at` the head it was judged at, not the
-/// mint's, and commits nothing: the head stands, and the feed holds the two
-/// rows it held. A re-send under the first request's `id`, on its session,
-/// is answered the first acknowledgment whole (wire.md §Namespace;
+/// The first call's `at` is the mint's commit, and its ack carries no
+/// `committed` member. Once another write has moved the head, a second call
+/// — another session's, carrying no `id` — is answered the same `addr` with
+/// `at` the head it was judged at, not the mint's, and `"committed": false`:
+/// it commits nothing, the head stands, and the feed holds the two rows it
+/// held. A re-send under the first request's `id`, on its session, is
+/// answered the first acknowledgment whole (wire.md §Namespace;
 /// §Correlation and idempotency). The mint moves no count: the account's
 /// next document takes the number it would have taken.
 #[test]
@@ -298,11 +308,13 @@ fn a_later_call_is_answered_the_same_address_at_the_position_it_was_judged_at() 
     let first = op(port, Some(&owner), &with_id);
     let minted_at = acked_at(&first);
     assert_eq!(acked_addr(&first), mailbox, "{first}");
+    assert!(first.get("committed").is_none(), "the mint committed: its ack carries no member: {first}");
     assert_eq!(owner_draft(port, &owner), nth_document(CLAIMANT_ACCOUNT, 2), "the mint moved no count");
     let head = head_position(port);
     assert!(head > minted_at, "the premise: a later write moved the head past the mint");
     let second = op(port, Some(&open_session(port, CLAIMANT_PRINCIPAL)), &mint_frame(CLAIMANT_ACCOUNT));
     assert_eq!((acked_addr(&second), acked_at(&second)), (mailbox, head), "the same address, at the position the call was judged at: {second}");
+    assert_eq!(second["committed"], json!(false), "and it says it committed nothing: {second}");
     assert_eq!(op(port, Some(&owner), &with_id), first, "a re-send under the first request's `id` is the first acknowledgment whole");
     assert_eq!(head_position(port), head, "neither call committed anything");
     let page = changes_page(port, Some(&owner), before);

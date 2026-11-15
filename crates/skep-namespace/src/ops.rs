@@ -8,9 +8,10 @@
 //! `W::Record: From<M3Rec>` bound, and returns `(Address, Seq)` — the new
 //! address plus `transact`'s committed `last_seq` (the linearization
 //! coordinate) — only after commit (commit-before-acknowledge). One op can
-//! find its work done: `create_well_known_document`, called where its slot
-//! already holds a document, stages nothing and returns that document's
-//! address with the committed position it read.
+//! find its work done, and says which it found: `create_well_known_document`
+//! returns `(WellKnown, Seq)`, and called where its slot already holds a
+//! document it stages nothing and returns that document's address as
+//! [`WellKnown::Standing`], with the committed position it read.
 
 use std::fmt;
 
@@ -240,14 +241,17 @@ where
     /// block, which the account's counter never hands out, born private (the
     /// mailbox design §2, §3). It mints the mailbox alone and takes no slot
     /// name; a slot name is an argument another well-known document's
-    /// creation adds beside `account`. Returns the mailbox's address and a
-    /// `Seq`, only after commit (commit-before-acknowledge).
+    /// creation adds beside `account`. Returns [`WellKnown::Minted`] with the
+    /// mailbox's address and the `Seq` it committed at, only after commit
+    /// (commit-before-acknowledge).
     ///
-    /// **Once.** Where the slot already holds a document the op answers that
-    /// document's address and stages nothing: no record is journaled, no
-    /// position is drawn, and the `Seq` beside the address is the committed
-    /// position the call read (M2's zero-step answer), never before the
-    /// mint's. So a second call — a retry whose acknowledgement was lost,
+    /// **Once.** Where the slot already holds a document the op answers
+    /// [`WellKnown::Standing`] with that document's address and stages
+    /// nothing: no record is journaled, no position is drawn, and the `Seq`
+    /// beside the address is the committed position the call read (M2's
+    /// zero-step answer), never before the mint's — a position some other
+    /// write took, which the variant tells a caller not to report as this
+    /// call's. So a second call — a retry whose acknowledgement was lost,
     /// another device, the loser of a race — is answered with the address
     /// the first was. The read of the slot and the mint are one critical
     /// section under the account's document-chain key, so two racing calls
@@ -271,7 +275,8 @@ where
     /// is the head document, which genesis seeds
     /// ([`crate::head_document`]), so called for
     /// [`crate::system_account`] by its principal the op finds the slot
-    /// filled, answers the head document's address and stages nothing. That
+    /// filled, answers the head document's address as standing and stages
+    /// nothing. That
     /// document is no mailbox — the system account has none (the mailbox
     /// design §2) — and the refusal is the daemon's door's: a credential
     /// refusal, made before any store is reached.
@@ -299,7 +304,7 @@ where
         &self,
         caller: PrincipalId,
         account: &Address,
-    ) -> Result<(Address, Seq), TxnError<CreateDocumentError>> {
+    ) -> Result<(WellKnown, Seq), TxnError<CreateDocumentError>> {
         // The account's document-chain key, the chain its well-known slots
         // lie on, and the principals key beside it, as `create_new_document`
         // holds them and for its reasons.
@@ -326,10 +331,10 @@ where
             // transaction. The mint's record is staged only where the slot
             // is empty — the fold fail-stops on a second record there.
             if m3.is_registered_document(&addr) {
-                return Ok(addr);
+                return Ok(WellKnown::Standing(addr));
             }
             stg.push(rec.into());
-            Ok(addr)
+            Ok(WellKnown::Minted(addr))
         })
     }
 
@@ -643,5 +648,34 @@ where
             return Err(TxnError::Rejected(CreateDocumentError::NotOwner));
         };
         self.create_new_document(caller, pfx, published)
+    }
+}
+
+/// What [`Namespace::create_well_known_document`] did at the slot.
+///
+/// The slot was empty and this call minted the document there, or a document
+/// already stood there and this call committed nothing; both answer the
+/// slot's address. Two outcomes, because the op has two and an `Address`
+/// alone names both: a caller that drops the variant takes the position the
+/// call was judged at — some other write's — for one this call committed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WellKnown {
+    /// This call minted the document at this address, and committed it.
+    ///
+    /// The `Seq` beside it is the position the commit took.
+    Minted(Address),
+    /// A document already stood at this address, and nothing was committed.
+    ///
+    /// The `Seq` beside it is the committed position the call read (M2's
+    /// zero-step answer), never before the mint's.
+    Standing(Address),
+}
+
+impl WellKnown {
+    /// Returns the slot's address, whichever outcome, consuming the answer.
+    pub fn into_address(self) -> Address {
+        match self {
+            WellKnown::Minted(addr) | WellKnown::Standing(addr) => addr,
+        }
     }
 }

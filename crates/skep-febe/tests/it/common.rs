@@ -415,7 +415,7 @@ pub fn ack(r: Response) -> Seq {
 
 pub fn ack_addr(r: Response) -> (Address, Seq) {
     match r {
-        Response::AckAddr { addr, at } => (addr, at),
+        Response::AckAddr { addr, at, .. } => (addr, at),
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
         other => panic!("expected AckAddr, got {other:?}"),
     }

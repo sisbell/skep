@@ -199,8 +199,11 @@ fn a_state_reading_scope_is_read_at_the_active_view() {
     let mut c = coord(&k);
     let writer = link_writer(&k);
     writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("a member");
-    let (retirement, _) =
-        writer.emit(Caller::System, &doc1(), &retired_ty(), &ca(1), &[]).expect("retire ca1");
+    let retirement = writer
+        .emit(Caller::System, &doc1(), &retired_ty(), &ca(1), &[])
+        .expect("retire ca1")
+        .0
+        .into_address();
     writer.nullify(Caller::System, &doc1(), &retirement).expect("un-retire ca1");
     c.register_rule(Rule {
         domain: Dom::MembersDom(concrete(&pred_stable_ty())),

@@ -214,20 +214,28 @@ pub enum Response {
     /// A write acknowledged with one address (A7).
     ///
     /// What `addr` names is the op's: the document minted
-    /// (create_new_document, fork); the document `version` minted — the next
-    /// member of the source's chain where the caller owns the source, a fresh
-    /// document in the caller's own account where it does not (PUB-2.14); the
-    /// chain member `publish` appended (PUB-2.37); the account delegated
-    /// (delegate); the node admitted (register_node); the I-address of the
-    /// first value placed (insert, whose values M5 places as one run from
-    /// there); the record (make_link, with or without its `replaces` link);
-    /// the tuple (emit), the retraction (nullify) or the claim (assert_sup)
-    /// deposited. `at` is the coordinate the write committed at — save that
-    /// those last three may instead answer, on a dedup hit, the incumbent this
-    /// principal can read (PUB-6.25, PUB-6.26): nothing commits, and `at` is
-    /// then the coordinate of the base the incumbent was found in ([the two
-    /// coordinates](crate#the-two-coordinates)).
-    AckAddr { addr: Address, at: Seq },
+    /// (create_new_document, fork); the account's mailbox
+    /// (create_well_known_document); the draft `stage` minted; the document
+    /// `version` minted — the next member of the source's chain where the
+    /// caller owns the source, a fresh document in the caller's own account
+    /// where it does not (PUB-2.14); the chain member `publish` appended
+    /// (PUB-2.37); the account delegated (delegate); the node admitted
+    /// (register_node); the I-address of the first value placed (insert, whose
+    /// values M5 places as one run from there); the record (make_link, with or
+    /// without its `replaces` link); the tuple (emit), the retraction
+    /// (nullify) or the claim (assert_sup) deposited. `at` is the coordinate
+    /// the write committed at, and `committed` is `true` — save that four ops
+    /// may instead find their work done and commit nothing: emit, nullify and
+    /// assert_sup on a dedup hit, answering the incumbent this principal can
+    /// read (PUB-6.25, PUB-6.26), and create_well_known_document where the
+    /// mailbox already stands, answering it. Each store says which it did
+    /// (M7's `Deposited`, M3's `WellKnown`). Then `committed` is `false`,
+    /// which the wire renders as `"committed": false` — the member absent on
+    /// every ack that committed — and `at` is the coordinate of the base the
+    /// incumbent was found in ([the two
+    /// coordinates](crate#the-two-coordinates)): a position some other write
+    /// took, which a client never counts as this write's.
+    AckAddr { addr: Address, at: Seq, committed: bool },
     /// editlink: the successor link and its supersession claim.
     AckEdit { successor: Address, claim: Address, at: Seq },
     /// RETRIEVEV delivery.
@@ -437,13 +445,15 @@ pub enum Response {
 /// `From` impl below — so a new acknowledging shape is a compile error at
 /// `to_ack` rather than a memo silently dropped. A `set_arrangement`'s tell
 /// rides its memo as it rode its ack: a retry answered from the memo is told
-/// what the original was told, never a head read since.
+/// what the original was told, never a head read since. So does an
+/// `AckAddr`'s `committed`: a retry of a write that found its work done is
+/// told it committed nothing, as the original was.
 #[derive(Clone)]
 pub(crate) enum CommittedAck {
     /// [`Response::Ack`].
     At { at: Seq, head_moved: Option<Address> },
-    /// [`Response::AckAddr`].
-    Addr { addr: Address, at: Seq },
+    /// [`Response::AckAddr`], whether it committed carried with it.
+    Addr { addr: Address, at: Seq, committed: bool },
     /// [`Response::AckEdit`].
     Edit { successor: Address, claim: Address, at: Seq },
 }
@@ -452,7 +462,7 @@ impl From<CommittedAck> for Response {
     fn from(ack: CommittedAck) -> Response {
         match ack {
             CommittedAck::At { at, head_moved } => Response::Ack { at, head_moved },
-            CommittedAck::Addr { addr, at } => Response::AckAddr { addr, at },
+            CommittedAck::Addr { addr, at, committed } => Response::AckAddr { addr, at, committed },
             CommittedAck::Edit { successor, claim, at } => {
                 Response::AckEdit { successor, claim, at }
             }
@@ -584,8 +594,8 @@ impl Response {
             Response::Ack { at, head_moved } => {
                 Some(CommittedAck::At { at: *at, head_moved: head_moved.clone() })
             }
-            Response::AckAddr { addr, at } => {
-                Some(CommittedAck::Addr { addr: addr.clone(), at: *at })
+            Response::AckAddr { addr, at, committed } => {
+                Some(CommittedAck::Addr { addr: addr.clone(), at: *at, committed: *committed })
             }
             Response::AckEdit { successor, claim, at } => Some(CommittedAck::Edit {
                 successor: successor.clone(),

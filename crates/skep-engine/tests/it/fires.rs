@@ -117,10 +117,12 @@ fn a_fire_is_never_absorbed_by_a_draft_homed_incumbent() {
 
     // The owner's own marker on the member, homed in its draft — the I0 class
     // the fire's value lands in already holds an active tuple.
-    let (incumbent, _) = engine
+    let incumbent = engine
         .linkstore(&World::visible_to(OWNER))
         .emit(OWNER, &draft, &retired, &member, &[])
-        .expect("the owner marks the member in its own draft");
+        .expect("the owner marks the member in its own draft")
+        .0
+        .into_address();
     assert_eq!(document_of(&incumbent), Some(draft.clone()));
     assert!(
         engine.kernel().snapshot().world().links().is_k(&retired, member.tumbler()),
@@ -182,15 +184,19 @@ fn a_principal_s_writer_dedups_against_its_own_draft_homed_incumbent() {
     let member = addr(&[1, 0, 1, 0, 1, 0, 1, 1]);
     let visibility = World::visible_to(OWNER);
 
-    let (first, _) = engine
+    let first = engine
         .linkstore(&visibility)
         .emit(OWNER, &draft, &retired, &member, &[])
-        .expect("the owner marks the member in its own draft");
+        .expect("the owner marks the member in its own draft")
+        .0
+        .into_address();
     let head = engine.kernel().current_seq();
-    let (again, _) = engine
+    let again = engine
         .linkstore(&visibility)
         .emit(OWNER, &draft, &retired, &member, &[])
-        .expect("the same tuple, emitted again");
+        .expect("the same tuple, emitted again")
+        .0
+        .into_address();
 
     assert_eq!(again, first, "the owner reads its own draft: the second emit is a dedup hit");
     assert_eq!(engine.kernel().current_seq(), head, "…and a hit commits nothing");
@@ -356,10 +362,12 @@ fn a_rule_whose_only_matching_tuple_is_draft_homed_does_not_fire() {
     let retired = engine.registry().reserved_type(ShippedType::Retired).clone();
 
     // The only pred_stable tuple on the member, homed in the owner's draft.
-    let (q, _) = engine
+    let q = engine
         .linkstore(&World::visible_to(OWNER))
         .emit(OWNER, &draft, &pred_stable, &member, &[])
-        .expect("the owner deposits the relation in its own draft");
+        .expect("the owner deposits the relation in its own draft")
+        .0
+        .into_address();
     assert_eq!(document_of(&q), Some(draft));
     assert!(
         engine.kernel().snapshot().world().links().is_k(&pred_stable, member.tumbler()),
@@ -486,19 +494,25 @@ fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
     let member_3 = addr(&[1, 0, 1, 0, 1, 0, 1, 3]);
     let visibility = World::visible_to(Caller::System);
     let system = engine.linkstore(&visibility);
-    let (p1, _) = system
+    let p1 = system
         .emit(Caller::System, &home, &pred_stable, &member_1, &[])
-        .expect("p1 in the published home");
-    let (p2, _) = system
+        .expect("p1 in the published home")
+        .0
+        .into_address();
+    let p2 = system
         .emit(Caller::System, &home, &pred_stable, &member_2, &[])
-        .expect("p2 in the published home");
+        .expect("p2 in the published home")
+        .0
+        .into_address();
     system
         .nullify(Caller::System, &home, &p2)
         .expect("p2 retracted — a public home's audit history");
-    let (q, _) = engine
+    let q = engine
         .linkstore(&World::visible_to(OWNER))
         .emit(OWNER, &draft, &pred_stable, &member_3, &[])
-        .expect("q in the owner's draft");
+        .expect("q in the owner's draft")
+        .0
+        .into_address();
     assert_eq!(document_of(&q), Some(draft));
 
     let mut coord = engine.coordinator();

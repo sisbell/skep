@@ -1058,6 +1058,7 @@ fn the_retracted_links_read_lists_every_link_ever_made_and_its_active_rows_are_f
     // retraction's position; the retraction record, homed in doc2 with its
     // FROM over doc2's content, touches nothing of doc1's region.
     let (r_doc2, first_at) = store.nullify(SYS, &doc2(), &e1).expect("nullify succeeds");
+    let r_doc2 = r_doc2.into_address();
     assert!(first_at > m1_at);
     let rows = reads.find_links_v_history(&doc1(), &whole, None, 64).expect("find_links_v_history");
     assert_eq!(rows_window(&rows).batch, vec![e1.clone(), m1.clone(), t0.clone()], "every link ever made on the region");
@@ -1074,6 +1075,7 @@ fn the_retracted_links_read_lists_every_link_ever_made_and_its_active_rows_are_f
     // covers doc1's content — so it is itself a row, active, at its own
     // position — and e1's `retracted_at` stays the EARLIEST.
     let (r_doc1, second_at) = store.nullify(SYS, &doc1(), &e1).expect("nullify succeeds");
+    let r_doc1 = r_doc1.into_address();
     assert!(second_at > first_at);
     let rows = reads.find_links_v_history(&doc1(), &whole, None, 64).expect("find_links_v_history");
     assert_eq!(rows_window(&rows).batch, vec![e1.clone(), m1.clone(), r_doc1.clone(), t0.clone()]);

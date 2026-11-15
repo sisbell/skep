@@ -35,8 +35,8 @@ fn nullify_tombstones_its_target_and_accepts_its_own_fresh_address() {
         Err(TxnError::Rejected(NullifyError::HomeNotRegistered))
     ));
     // Happy path: the [R] tuple nullifies exactly the target root.
-    let (target, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("emit");
-    let (r1, _) = w.nullify(P1, &doc1(), &target).expect("nullify");
+    let target = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("emit").fresh();
+    let r1 = w.nullify(P1, &doc1(), &target).expect("nullify").fresh();
     {
         let snap = k.snapshot();
         let links = snap.world().links();
@@ -57,13 +57,13 @@ fn nullify_tombstones_its_target_and_accepts_its_own_fresh_address() {
     }
     // idem⊤: re-retracting the same target from the same home dedups — and
     // deposits nothing, so the record beside the tombstone is still the one.
-    let (r2, _) = w.nullify(P1, &doc1(), &target).expect("re-nullify dedups");
+    let r2 = w.nullify(P1, &doc1(), &target).expect("re-nullify dedups").incumbent();
     assert_eq!(r2, r1);
     assert_eq!(retractions(k.snapshot().world().links(), &target), vec![r1.clone()]);
     // Born-nullified self-target: the target may be the address this call's
     // own retraction tuple would occupy (P-tgt's second disjunct) — doc2's
     // first link is la2(1).
-    let (born_nullified, _) = w.nullify(P1, &doc2(), &la2(1)).expect("self-targeting retraction");
+    let born_nullified = w.nullify(P1, &doc2(), &la2(1)).expect("self-targeting retraction").fresh();
     assert_eq!(born_nullified, la2(1));
     {
         let snap = k.snapshot();
@@ -80,9 +80,10 @@ fn nullify_tombstones_its_target_and_accepts_its_own_fresh_address() {
         w.nullify(P1, &doc1(), &la(4)),
         Err(TxnError::Rejected(NullifyError::BadTarget))
     ));
-    let (born_on_used_chain, _) = w
+    let born_on_used_chain = w
         .nullify(P1, &doc1(), &la(3))
-        .expect("self-targeting on a used chain");
+        .expect("self-targeting on a used chain")
+        .fresh();
     assert_eq!(born_on_used_chain, la(3));
     let snap = k.snapshot();
     assert!(snap.world().links().is_nullified(&la(3)));
@@ -117,11 +118,12 @@ fn nullify_from_a_second_home_deposits_a_distinct_retraction() {
     // (old, new) from another home dedups to the first claim.
     let k = kernel();
     let w = writer(&k);
-    let (target, _) = w
+    let target = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("target");
-    let (r1, _) = w.nullify(P1, &doc1(), &target).expect("retract from doc1");
-    let (r2, _) = w.nullify(P1, &doc2(), &target).expect("retract from doc2");
+        .expect("target")
+        .fresh();
+    let r1 = w.nullify(P1, &doc1(), &target).expect("retract from doc1").fresh();
+    let r2 = w.nullify(P1, &doc2(), &target).expect("retract from doc2").fresh();
     assert_ne!(r1, r2, "a second home's retraction is its own tuple");
     assert_eq!(r2, la2(1)); // doc2's own link chain
     let snap = k.snapshot();
@@ -145,7 +147,7 @@ fn retractions_of_costs_its_records_lifts_and_nothing_of_the_homes() {
     let cost = |flood: u32| -> (u64, u64, u64, u64) {
         let k = kernel();
         let w = writer(&k);
-        let (target, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("target");
+        let target = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("target").fresh();
         for i in 0..flood {
             deposit_in(&k, &doc1(), &[ca(1)], &[ca(100 + i)], &unregistered_ta(1));
             deposit_in(&k, &doc2(), &[ca(1)], &[ca(100 + i)], &unregistered_ta(1));
@@ -159,7 +161,7 @@ fn retractions_of_costs_its_records_lifts_and_nothing_of_the_homes() {
             bytes
         };
         let none_bytes = bytes_of(&never, 0);
-        let (r1, _) = w.nullify(P1, &doc1(), &target).expect("retract from doc1");
+        let r1 = w.nullify(P1, &doc1(), &target).expect("retract from doc1").fresh();
         let one_bytes = bytes_of(&target, 1);
         w.nullify(P1, &doc2(), &target).expect("retract from doc2");
         let two_bytes = bytes_of(&target, 2);
@@ -184,13 +186,15 @@ fn nullifying_a_retraction_restores_nothing() {
     // (is_filtered_reads_the_active_retired_slice), nullifying is not.
     let k = kernel();
     let w = writer(&k);
-    let (target, _) = w
+    let target = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("target");
-    let (r1, _) = w.nullify(P1, &doc1(), &target).expect("retract it");
-    let (r2, _) = w
+        .expect("target")
+        .fresh();
+    let r1 = w.nullify(P1, &doc1(), &target).expect("retract it").fresh();
+    let r2 = w
         .nullify(P1, &doc1(), &r1)
-        .expect("retract the retraction — an ordinary resident, owned target");
+        .expect("retract the retraction — an ordinary resident, owned target")
+        .fresh();
     assert_ne!(r2, r1, "a distinct I0 class, so the retraction lands fresh");
     let snap = k.snapshot();
     let links = snap.world().links();

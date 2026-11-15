@@ -154,7 +154,7 @@ pub use writes::{
     request_image, resolve_end, retraction_tuple, slot_endset, stage_correspondence,
     stage_publication, stored_span_bytes, stored_tumbler_bytes, supersession_claim,
     supersession_claim_in, AlsoPlaces,
-    DepositPlan, Edit, EndArg, LinkEntry, LinkWriter, MemberEnd, MemberSpan, NamedAddress, OriginalEntry,
+    DepositPlan, Deposited, Edit, EndArg, LinkEntry, LinkWriter, MemberEnd, MemberSpan, NamedAddress, OriginalEntry,
     PlannedClaim, PlannedDeposit, PlannedEnd, PlannedHome, PlannedOriginal, PublishDeposits, PublishTarget,
     ReadPrice, SlotArg,
     Visibility, CLAIM_BYTES, COPY_BYTES, COPY_FIXED_BYTES, CORRESPONDENCE_RECORD_BYTES,
@@ -184,6 +184,7 @@ const _: fn() = || {
     owed::<Tuple>();
     owed::<CurrentMember>();
     owed::<Edit>();
+    owed::<Deposited>();
     // Every rejection too: a caller that boxes one meets
     // `Box<dyn Error + Send + Sync>`, which is the crossing form.
     owed::<MakeLinkError>();

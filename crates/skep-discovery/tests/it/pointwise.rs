@@ -92,9 +92,11 @@ fn project_is_content_subspace_only_where_discoverability_reaches_the_link_subsp
     let m2 = link(&store, &doc1(), &[ca(2)], &[ca(102)]);
     // The claim's F and G cover m1 and m2 — link addresses makelink SEATED in
     // doc1's link runs, and nothing of doc1's content.
-    let (claim, _) = store
+    let claim = store
         .assert_sup(SYS, &doc1(), &m1, &m2)
-        .expect("assert_sup succeeds");
+        .expect("assert_sup succeeds")
+        .0
+        .into_address();
 
     assert!(reads.project(&claim, FROM, &doc1()).expect("project").is_empty());
     assert!(reads.project(&claim, TO, &doc1()).expect("project").is_empty());
@@ -133,7 +135,7 @@ fn addressably_discoverable_from_is_lp12_and_addressable_over_both_subspaces() {
             SlotArg::Resolve(vec![spec(&doc1(), 1, 2, 1)]),
         )
         .expect("makelink succeeds");
-    let (claim, _) = store.assert_sup(SYS, &doc2(), &m1, &m2).expect("assert_sup succeeds");
+    let claim = store.assert_sup(SYS, &doc2(), &m1, &m2).expect("assert_sup succeeds").0.into_address();
     assert_eq!(reads.addressably_discoverable_from(&claim, &doc1()), Ok(true));
     // The claim is homed in doc2 but reaches nothing arranged there
     // (assert_sup never seats).

@@ -197,7 +197,8 @@ mod record;
 // `state/query.rs` (§C: every other query but the opening slots and the
 // mailbox's slot, which `ns` builds).
 mod state;
-// The `Namespace` handle: the five entity operations, each one transaction.
+// The `Namespace` handle: the five entity operations, each one transaction,
+// and `WellKnown`, what the well-known mint found at its slot.
 mod ops;
 
 pub use error::{CreateDocumentError, DelegateError, MintError, RegisterNodeError};
@@ -206,7 +207,7 @@ pub use ns::{
     first_document_address, first_version_address, mailbox_address, FIRST_ORDINARY_DOCUMENT,
     MAILBOX_SLOT,
 };
-pub use ops::Namespace;
+pub use ops::{Namespace, WellKnown};
 pub use record::{
     Allocation, M3Rec, Principal, PrincipalId, RangeAllocation, BOOTSTRAP_PRINCIPAL,
     SYSTEM_PRINCIPAL,

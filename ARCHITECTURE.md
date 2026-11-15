@@ -791,8 +791,9 @@ Rules that hold across its files:
   but the close rides `Board::authed`, and every read answer is decoded by
   `board/answers.rs`.
 - **One home per composition.** Every signed session opens through
-  `handshake.rs`, every credential record is written by `deposit.rs`, and
-  an account's first signed session runs `first_session.rs`; a walk states
+  `handshake.rs`, every credential record is written by `deposit.rs`,
+  every registry record is written by `registry_record.rs`, and an
+  account's first signed session runs `first_session.rs`; a walk states
   only what its site adds.
 - **The ceremony is layered.** Nothing outside `ceremony/` names it;
   inside, a walk names compositions and never another walk, and a

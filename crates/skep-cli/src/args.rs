@@ -5,8 +5,9 @@
 //! `merge`, the fourteenth (the merge record's §6), `share`, the
 //! fifteenth (PUB-5.29; PUB-5.108), `restore`, the sixteenth (B3-S7),
 //! `hint`, the seventeenth (REG-3.2), `resolve`, the eighteenth
-//! (REG-3.7), `deposit`, the nineteenth (REG-1.9), or `hire`, the
-//! twentieth (AUTH-5.58), and is judged against
+//! (REG-3.7), `deposit`, the nineteenth (REG-1.9), `hire`, the
+//! twentieth (AUTH-5.58), or `register`, the twenty-first (REG-4.67), and
+//! is judged against
 //! `GRAMMAR`, one
 //! row per command beside `HELP`, the text that documents it: a flag in no
 //! row, a flag of another command's, a missing value, a value that is
@@ -106,17 +107,19 @@ fn version_line(program: &str) -> String {
     )
 }
 
-/// One of the twenty commands: the verb a command line opens with.
+/// One of the twenty-one commands: the verb a command line opens with.
 ///
-/// The twenty are `client.md` §2.1's thirteen, `merge`, the fourteenth
+/// The twenty-one are `client.md` §2.1's thirteen, `merge`, the fourteenth
 /// (the merge record's §6), `share`, the fifteenth (PUB-5.29; PUB-5.108),
 /// `restore`, the sixteenth (B3-S7; `client.md` §4b.1's `history.restore`
 /// row), `hint`, the seventeenth (REG-3.2: a registry's root hint, read
 /// off its board), `resolve`, the eighteenth (REG-3.7: the board a
 /// cross-board address lives on, found through the registry),
 /// `deposit`, the nineteenth (REG-1.9: a board's endpoint, deposited at
-/// its node account), and `hire`, the twentieth (AUTH-5.58: an agent
-/// hired, the owner's side of the ceremony). A command is
+/// its node account), `hire`, the twentieth (AUTH-5.58: an agent
+/// hired, the owner's side of the ceremony), and `register`, the
+/// twenty-first (REG-4.67: an applicant's registration request, its keys
+/// made and the request signed on the applicant's own device). A command is
 /// what `GRAMMAR`'s rows are keyed by, and what `main` dispatches on, one
 /// arm each, which the compiler holds exhaustive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -141,6 +144,7 @@ pub enum Command {
     Resolve,
     Deposit,
     Hire,
+    Register,
 }
 
 impl Command {
@@ -167,6 +171,7 @@ impl Command {
             Command::Resolve => "resolve",
             Command::Deposit => "deposit",
             Command::Hire => "hire",
+            Command::Register => "register",
         }
     }
 }
@@ -191,7 +196,7 @@ pub struct Line<C> {
     switches: Vec<String>,
 }
 
-/// The `skep` command's line: one of the twenty, and its flags.
+/// The `skep` command's line: one of the twenty-one, and its flags.
 pub type CommandLine = Line<Command>;
 
 /// The flags every command takes, each taking one value.
@@ -237,9 +242,15 @@ enum Form {
     OnceWithin(&'static str, &'static str),
     /// The flag is given at most this many times.
     ///
-    /// The backup moment exports two anchors, and reads a label and a
-    /// destination for each (§4.2).
+    /// The backup moment exports two anchors a pair, and reads a label and
+    /// a destination for each (§4.2): two at a single-pair door, four at a
+    /// fresh registration's two pairs (REG-4.103).
     AtMost(&'static str, usize),
+    /// Inside the second flag's form, the first is given this often at most.
+    ///
+    /// A registration whose board carries on generates the node pair
+    /// alone, two anchors (REG-4.104).
+    AtMostWithin(&'static str, &'static str, usize),
 }
 
 impl Form {
@@ -253,16 +264,19 @@ impl Form {
             Form::Apart(a, b) if line.given(a) && line.given(b) => format!("`{a}` and `{b}` belong to two forms of `{command}`: give one"),
             Form::OnceWithin(flag, opener) if line.values(flag).len() > 1 && line.given(opener) => format!("`{flag}` is given at most once at `{command} {opener}`"),
             Form::AtMost(flag, most) if line.values(flag).len() > most => format!("`{flag}` is given at most {most} times at `{command}`"),
+            Form::AtMostWithin(flag, opener, most) if line.values(flag).len() > most && line.given(opener) => {
+                format!("`{flag}` is given at most {most} times at `{command} {opener}`")
+            }
             _ => return None,
         };
         Some(Usage(text))
     }
 }
 
-/// The grammar: the twenty commands, each with its flags and its forms.
+/// The grammar: the twenty-one commands, each with its flags and its forms.
 ///
 /// The commands are `client.md` §2.1's in set, `merge`, `share`, `restore`,
-/// `hint`, `resolve`, `deposit` and `hire`, each
+/// `hint`, `resolve`, `deposit`, `hire` and `register`, each
 /// with the flags §2.2 gives it and `HELP` documents, and the rules its
 /// forms hold them to — the forms the record's synopses draw:
 /// `keygen --anchors` (§2.2), `claim`'s notebook walk or `--hosted` (§4.5),
@@ -296,14 +310,20 @@ impl Form {
 /// agent's account a re-hire replaces, each once, with its two arms apart
 /// — the custody pair, the default, with the backup moment's `--anchor-out`
 /// and `--paper` as `claim` and `accept` take them, or its decline,
-/// `--anchorless` (AUTH-5.58 step 3).
+/// `--anchorless` (AUTH-5.58 step 3); `register`'s is `--door`, the door
+/// identifier, once, and `--existing-board`, the switch that makes the
+/// request the board-carries-on row's, with the backup moment's
+/// `--anchor-label`, `--anchor-out` and `--paper` as `keygen --anchors`
+/// takes them — four of each at most, the org root pair's a and b and then
+/// the node pair's, and two inside `--existing-board`, the node pair's
+/// alone (REG-4.103, REG-4.104).
 /// That a side and `--doc` are required at `merge`, a reader at `share`,
 /// both flags at `restore`, the board at `hint`, the address and the
-/// root hint at `resolve`, the account and an origin at `deposit` and the
-/// payload at `hire`, is
+/// root hint at `resolve`, the account and an origin at `deposit`, the
+/// payload at `hire` and the door at `register`, is
 /// the command's
 /// judgment, as `retire` judges its `--fingerprint`: no form says "one of".
-const GRAMMAR: [Row<Command>; 20] = [
+const GRAMMAR: [Row<Command>; 21] = [
     Row {
         command: Command::Keygen,
         once: &[],
@@ -434,9 +454,21 @@ const GRAMMAR: [Row<Command>; 20] = [
         switches: &["--anchorless", "--paper"],
         forms: &[Form::Apart("--anchorless", "--anchor-out"), Form::Apart("--anchorless", "--paper"), Form::AtMost("--anchor-out", 2)],
     },
+    Row {
+        command: Command::Register,
+        once: &["--door"],
+        repeated: &["--anchor-label", "--anchor-out"],
+        switches: &["--existing-board", "--paper"],
+        forms: &[
+            Form::AtMostWithin("--anchor-label", "--existing-board", 2),
+            Form::AtMostWithin("--anchor-out", "--existing-board", 2),
+            Form::AtMost("--anchor-label", 4),
+            Form::AtMost("--anchor-out", 4),
+        ],
+    },
 ];
 
-/// The help text: the twenty commands and the flags each takes.
+/// The help text: the twenty-one commands and the flags each takes.
 ///
 /// Each command is as the design writes it, and the text is the grammar
 /// above, documented beside it.
@@ -550,17 +582,37 @@ usage: skep <command> [flags]
                this one replaces, and a key that account already held is
                refused; a run that stopped part way is resumed by
                running it again, and makes no second account
+  register     ask a registry for your org's place in it (a person door):
+               make the keys on this device and print the signed request
+               the registry's door takes — your org's own root pair and
+               its node pair, four anchor sheets, each written, read back
+               and verified before anything is printed, beside this
+               store's device key: the one it holds is named and no second
+               is made, and where it holds none one is made after the
+               sheets; --existing-board is for an org that already has
+               its board: the node pair alone, two sheets, and the device
+               key that board's key set already holds, taken as this
+               store's own and not checked; --door names the one door the
+               request is for and is checked for its form alone — no
+               board is read, no connection opened, nothing written to
+               any board; file one sheet of each pair to a place, never
+               both sheets of one; stdout carries the request as one line
+               to pipe, copy or redirect, never edited, and each key's
+               name and fingerprint are said beside it for the comparison
+               with whoever approves it; a request serves its one door,
+               and its sheets belong to that one application
 
 flags (a flag beats its env variable; a variable set empty is unset):
   --board <origin>      the board, a canonical origin (env SKEP_BOARD)
   --dir <path>          the key store (env SKEP_KEYSTORE; default ~/.skep)
   --key <path>          one key file, bypassing the store's lookup (env
                         SKEP_KEY): read at session, verify, bind,
-                        fingerprint, merge, share, restore, deposit and
-                        accept --reprint, an anchor file refused where the
-                        key signs; refused where enroll, retire and hire
-                        sign, their walks taking none yet; not consulted
-                        elsewhere
+                        fingerprint, merge, share, restore, deposit,
+                        register and accept --reprint, an anchor file
+                        refused where the key signs; at register it names
+                        the device key, where the store holds several;
+                        refused where enroll, retire and hire sign, their
+                        walks taking none yet; not consulted elsewhere
   --principal <n>       the principal (env SKEP_PRINCIPAL), read at
                         session, verify, enroll, recover, retire, rotate,
                         handoff, hire, merge, share and restore — where
@@ -571,7 +623,9 @@ flags (a flag beats its env variable; a variable set empty is unset):
                         id, 1 where omitted; at deposit, the one the board
                         seats at --account where omitted; not consulted
                         elsewhere
-  --label <text>        a byline (keygen, rotate, accept)
+  --label <text>        a byline (keygen, rotate, accept; at register, of
+                        the device key it makes, refused where the store
+                        already holds one)
   --json                one JSON document on stdout (verify, health,
                         fingerprint, resolve; merge, share and restore
                         print one always, so the flag changes nothing
@@ -659,6 +713,14 @@ flags (a flag beats its env variable; a variable set empty is unset):
   hire:     --payload <file|->  [--replaces <address>], and the custody
             pair ([--anchor-out <dir>]... (two at most)  [--paper]) or its
             decline (--anchorless)
+  register: --door <identifier> (one quoted string, as the door
+            publishes it: realm:<64 lowercase hex> door:<address>, with
+            fork:<address> between the two on a forked lineage)
+            [--existing-board]  [--label <l>] (the device key's, where
+            one is made)  [--key <path>] (the device key, named)
+            [--paper]  [--anchor-label <l>]...  [--anchor-out <dir>]...
+            (four of each at most, in the order org root a, org root b,
+            node a, node b; with --existing-board two, node a and node b)
 
 exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
 4 transport. stdout carries data; stderr carries talk. A retirement's

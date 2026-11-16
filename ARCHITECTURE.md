@@ -314,10 +314,12 @@ foundation and on the stores above it.
   (its suite spawns the daemon as a dev-dependency). No feature, no
   transport: the loopback server is `skep-cli`'s dev verb's, the native
   bridge the shell's. Its modules and rules: §The shell's core.
-- `skep-cli` — the `skep` command over `skep-client`, twenty commands:
+- `skep-cli` — the `skep` command over `skep-client`, twenty-one commands:
   `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
   `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`, `hire`,
   the owner's side of the hire ceremony over the library's `hire` walk,
+  `register`, an applicant's registration request over the library's
+  `registration` composition,
   `merge` and `restore`, the two over the library's `merge` feature, which
   this crate alone turns on, `share`, which shares a draft or an
   account with one account, privashes a draft, revokes a share and lists
@@ -726,6 +728,9 @@ each ceremony:
   one home of its frames, reads and refusals: `handshake.rs` the session
   open, `deposit.rs` the credential write, `registry_record.rs` the
   registry record's write, over `skep-registry`'s encoder and parser,
+  `registration.rs` an applicant's registration request, composed, signed
+  and checked over `skep-registry`'s encoder and parser and
+  `skep-identity`'s admission frame, and written by no code of this crate,
   `first_session.rs` an account's
   first signed session, `backup.rs` the backup moment, `payload.rs` the
   paste door, `preview.rs` the retirement preview, `enumerate.rs` the head
@@ -802,9 +807,10 @@ Rules that hold across its files:
   `board/answers.rs`.
 - **One home per composition.** Every signed session opens through
   `handshake.rs`, every credential record is written by `deposit.rs`,
-  every registry record is written by `registry_record.rs`, and an
-  account's first signed session runs `first_session.rs`; a walk states
-  only what its site adds.
+  every registry record is written by `registry_record.rs`, every
+  registration request is composed and signed by `registration.rs`, which
+  writes none, and an account's first signed session runs
+  `first_session.rs`; a walk states only what its site adds.
 - **The ceremony is layered.** Nothing outside `ceremony/` names it;
   inside, a walk names compositions and never another walk, and a
   composition names no walk. `tests/it/tidy.rs` checks it.
@@ -980,10 +986,11 @@ parses the command line, makes the library call — handing a walk the
 terminal as its `Person` — and renders the answer, DATA on stdout and TALK
 on stderr, with §2.3's exit code. Every ceremony is a library walk; `bind`
 and `keygen` sequence the library's compositions themselves, and so carry
-their own text, as `deposit` does. Its modules, in the order `src/main.rs`
-declares them, each naming only those above it:
+their own text, as `deposit` does; `register` hands the terminal to one
+composition and prints what it answers. Its modules, in the order
+`src/main.rs` declares them, each naming only those above it:
 
-- `args.rs` `Command`, one of the twenty, the verb `main` dispatches on;
+- `args.rs` `Command`, one of the twenty-one, the verb `main` dispatches on;
   the grammar — one row per command and the rules its forms hold them to
   (`Form`), beside the flags every command takes (`GLOBAL`) — with `HELP`,
   the text that documents it; and `CommandLine`, one parsed command line
@@ -1004,7 +1011,7 @@ declares them, each naming only those above it:
   renders under a `Program`), `help`, and the plumbing from the flags to a
   board (`board_of`), a store (`store_of`), a principal
   (`principal_or_bound`) and a key (`select_key`, under `Purpose`).
-- `commands.rs` what the twenty commands share among themselves alone:
+- `commands.rs` what the twenty-one commands share among themselves alone:
   the `skep` `Program`'s `finish` and `help`; `require_terminal`, the
   check each `Door` makes; a payload read to its cap (`read_payload`,
   `MAX_PAYLOAD_BYTES`); the anchor boxes' per-run default (`BoxDefault`);
@@ -1049,11 +1056,11 @@ Rules that hold across its files:
   `answer`, which locks stdin for that line alone, and the only other
   reads are a `-` argument's, whole, in `read_payload` and
   `session --close -`. `tests/it/tidy.rs` checks it.
-- **A person door checks for a terminal first.** The nine doors —
+- **A person door checks for a terminal first.** The ten doors —
   `claim`'s notebook arm, `keygen --anchors`, `enroll` without `--reply`,
   `recover`, `retire`, `rotate`, `handoff --payload`, `accept` without
-  `--reprint` and `hire` — each call `require_terminal` before anything is
-  generated;
+  `--reprint`, `hire` and `register` — each call `require_terminal` before
+  anything is generated;
   the check is the CLI's, never a walk's (§2.4).
 - **The settings are `args.rs`'s, and every one is tabled.** Every
   `SKEP_*` variable is read there and nowhere else, and every variable the
@@ -1075,6 +1082,11 @@ daemon spawned in-process; `deposit`, the nineteenth command against an
 enforcing board, its reader `skep-resolve`'s mirror, a dev-dependency;
 `hire`, the twentieth, its line and its door, one run typed at a
 pseudo-terminal, and `bind` refused at the account it makes;
+`register`, the twenty-first, with no daemon: its line and its door, a
+door identifier that is none, and its runs typed at a pseudo-terminal,
+each printed request verified as a reader verifies it through
+`skep-registry`'s parser, a dev-dependency, with `keygen --anchors`
+unchanged beside it;
 `hostile`, what arrives from outside the
 person's trust; `dev`, the dev binary driven against a corpus the suite
 builds under the system temp dir; `serve`, the dev provider driven as the

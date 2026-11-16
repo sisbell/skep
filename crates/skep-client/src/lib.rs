@@ -103,9 +103,10 @@
 //!   state (REG-3.80).
 //! * [`ceremony`] — the ceremonies in two layers: the compositions every
 //!   walk runs over (P28) — `handshake`, `deposit`, `registry_record`,
-//!   `first_session`, `backup`, `payload`, `preview`, `enumerate`, `trail`,
-//!   `import`, `reads` — and the walks over them — `claim`, `enroll`,
-//!   `recover`, `retire`, `rotate`, `handoff`, `accept`, `hire`. A walk
+//!   `registration`, `first_session`, `backup`, `payload`, `preview`,
+//!   `enumerate`, `trail`, `import`, `reads` — and the walks over them —
+//!   `claim`, `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`,
+//!   `hire`. A walk
 //!   names compositions and never another walk. `hire` is the owner's side
 //!   of the hire ceremony (AUTH-5.58): an agent's account made beneath the
 //!   owner's agent space, its first key record composed by the owner
@@ -114,6 +115,12 @@
 //!   registry record a node account deposits (REG-1.86), composed by
 //!   `skep_registry`'s encoder and signed by a key of the home's account:
 //!   an endpoint, naming the deposit it replaces (REG-1.9, REG-1.10).
+//!   `registration` is an applicant's registration request (REG-4.67): the
+//!   keys a door asks for made with no board and no account — the device
+//!   key named or generated, the backup moment's node arm over the pairs
+//!   the request generates — and the request that carries them, framed,
+//!   signed once by the device key and checked; composed here, and written
+//!   by another hand.
 //! * [`share`] — the grant as this client composes and reads it (PUB-5.1,
 //!   PUB-5.15): `share`, one document or one account opened to one account;
 //!   `privash`, one draft opened to every account on the board and never a

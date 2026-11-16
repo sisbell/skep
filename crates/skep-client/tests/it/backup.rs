@@ -451,3 +451,336 @@ fn the_store_is_refused_as_a_destination_however_the_path_reaches_it() {
     }
     assert!(files_in(&store.join("keys")).is_empty() && !elsewhere.exists(), "nothing written");
 }
+
+// ── THE NODE ARM (REG-4.103, REG-4.104): a registration's pairs ───────────
+
+fn registration(board_carries_on: bool) -> Venue {
+    Venue::Registration { board_carries_on }
+}
+
+/// The label boxes a moment asked, as the transcript holds them.
+fn boxes(person: &Scripted) -> Vec<&String> {
+    person.transcript.iter().filter(|l| l.starts_with("PUBLIC label [")).collect()
+}
+
+/// Where the first line holding `needle` stands in the transcript.
+fn said_at(person: &Scripted, needle: &str) -> usize {
+    person.transcript.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("`{needle}` missing from\n{}", person.transcript.join("\n")))
+}
+
+/// The cross-pair filing rule's sentence, as every saying of it carries it.
+const CROSS_PAIR: &str = "EACH PLACE HOLDS ONE SHEET OF EACH PAIR, NEVER BOTH SHEETS OF ONE";
+
+/// FENCE 1 (REG-4.103) — A FRESH REGISTRATION'S MOMENT RUNS OVER
+/// BOTH PAIRS: four anchor boxes asked, each saying which pair its sheet
+/// belongs to; four files exported, the org root pair's two ahead of the
+/// node pair's, each to its own destination and each read back as the key
+/// the outcome names, an anchor carrying no address, principal or origin;
+/// the three statements once at the head, (b) counting four; and the
+/// keep-the-papers line once, AUTH-5.44's create-org arm said of both pairs.
+#[test]
+fn a_fresh_registrations_moment_runs_over_both_pairs_four_boxes_four_files_each_read_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let places: Vec<PathBuf> = ["one", "two", "three", "four"].iter().map(|p| dir.path().join(p)).collect();
+    let mut person = Scripted::new(vec![Script::LabelDefault; 4]);
+    let out = backup_moment(&mut person, &registration(false), &options(places.clone(), false, None)).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
+    assert_eq!(out.anchors.len(), 4, "two pairs, four anchors");
+    let asked = boxes(&person);
+    assert_eq!(asked.len(), 4, "four anchor boxes:\n{}", person.transcript.join("\n"));
+    let titles = ["name the org root pair's sheet a", "name the org root pair's sheet b", "name the node pair's sheet a", "name the node pair's sheet b"];
+    for (i, (asked, title)) in asked.iter().zip(titles).enumerate() {
+        assert!(asked.starts_with(&format!("PUBLIC label [{title}]: ")), "box {i}: {asked}");
+        let pair = if i < 2 { "This sheet belongs to your ORG'S OWN ROOT pair" } else { "This sheet belongs to your org's NODE IDENTITY's pair" };
+        assert!(asked.contains(pair), "box {i} says which pair its sheet belongs to: {asked}");
+        assert!(asked.contains("the only mark on it that says WHICH account it opens") && asked.contains("tell the four sheets apart"), "{asked}");
+        assert!(asked.contains("rides onto a public thread, approved or DENIED, forever"), "the consequence at this door: {asked}");
+    }
+    for (anchor, place) in out.anchors.iter().zip(&places) {
+        let path = anchor.file.clone().expect("the file stands");
+        assert_eq!(path.parent(), Some(place.as_path()), "each anchor at its own destination, in the moment's order");
+        let file = KeyFile::parse(&std::fs::read(&path).unwrap()).expect("a key file that reads back");
+        assert!(file.anchor);
+        assert_eq!((file.fingerprint, &file.public, file.label.as_deref()), (anchor.fingerprint, &anchor.public, Some(anchor.label.as_str())));
+        assert_eq!((file.account, file.principal, file.origin), (None, None, None), "a registration's artifact lacks the three facts (AUTH-5.38)");
+        assert_eq!(anchor.print, None);
+    }
+    let distinct: std::collections::HashSet<_> = out.anchors.iter().map(|a| a.fingerprint).collect();
+    assert_eq!(distinct.len(), 4, "four keys");
+    assert!(!out.one_place);
+    let count = |needle: &str| person.transcript.iter().filter(|l| l.contains(needle)).count();
+    assert_eq!((count("[AUTH-5.54 (a)]"), count("[AUTH-5.54 (b)]"), count("[AUTH-5.54 (c)]")), (1, 1, 1), "the three statements once, at the head");
+    assert!(person.said("this registration founds TWO such key sets") && person.said("(b) FOUR FILES, TWO PLACES YOU CONTROL"), "{}", person.transcript.join("\n"));
+    assert!(said_at(&person, "[AUTH-5.54 (c)]") < said_at(&person, "PUBLIC label ["), "the statements ahead of the boxes");
+    assert_eq!(count("[AUTH-5.40]: anchor file written: "), 4, "four exports");
+    assert_eq!(count("[AUTH-5.44 (create-org)]"), 1, "the keep-the-papers line once");
+    let keep = &person.transcript[said_at(&person, "[AUTH-5.44 (create-org)]")];
+    assert!(keep.contains("keep the anchor files — all four, one sheet of each pair to a place") && keep.contains("lose both sheets of a pair") && keep.contains("the other pair's account stands"), "said of both pairs: {keep}");
+    assert_eq!(person.transcript.iter().position(|l| l.contains("[AUTH-5.44 (create-org)]")), Some(person.transcript.len() - 1), "and last, every sheet verified");
+    assert!(!person.said("are in this one place"), "four places, no pair in one");
+}
+
+/// A person who removes a named anchor's file at the dismissal — after
+/// every export of the run and ahead of every re-import — in each of the
+/// first `runs` runs: the file the `nth` ladder words of that run named.
+struct AtDismissal {
+    inner: Scripted,
+    nth: usize,
+    runs: usize,
+    named: Vec<PathBuf>,
+    removed: Vec<PathBuf>,
+}
+
+impl AtDismissal {
+    fn new(script: Vec<Script>, nth: usize, runs: usize) -> AtDismissal {
+        AtDismissal { inner: Scripted::new(script), nth, runs, named: Vec::new(), removed: Vec::new() }
+    }
+}
+
+impl Person for AtDismissal {
+    fn say(&mut self, m: Public<Statement>) {
+        if m.0.rule == "AUTH-5.40" && m.0.text.starts_with("anchor file written: ") {
+            self.named.push(ladder_path(&m.0.text));
+        }
+        self.inner.say(m);
+    }
+    fn label(&mut self, m: Public<LabelBox>) -> Result<String, Abandoned> {
+        self.inner.label(m)
+    }
+    fn ask(&mut self, m: Public<Question>) -> Result<String, Abandoned> {
+        self.inner.ask(m)
+    }
+    fn yes_no(&mut self, m: Public<Question>) -> Result<bool, Abandoned> {
+        self.inner.yes_no(m)
+    }
+    fn sheet(&mut self, m: Secret<Sheet>) -> Result<(), Abandoned> {
+        self.inner.sheet(m)
+    }
+    fn dismiss(&mut self) {
+        if self.removed.len() < self.runs {
+            let file = self.named[self.nth].clone();
+            std::fs::remove_file(&file).expect("remove the named anchor's file");
+            self.removed.push(file);
+        }
+        self.named.clear();
+        self.inner.dismiss()
+    }
+    fn retype(&mut self, m: Secret<Retype>) -> Result<Retyped, Abandoned> {
+        self.inner.retype(m)
+    }
+    fn destination(&mut self, m: Secret<Destination>) -> Result<PathBuf, Abandoned> {
+        self.inner.destination(m)
+    }
+    fn confirm_typed(&mut self, m: Consent<Confirmation>) -> Result<String, Abandoned> {
+        self.inner.confirm_typed(m)
+    }
+    fn import(&mut self, m: Secret<Import>) -> Result<Imported, Abandoned> {
+        self.inner.import(m)
+    }
+    fn kept_or_placed(&mut self, m: Secret<HandedPath>) -> Result<KeptOrPlaced, Abandoned> {
+        self.inner.kept_or_placed(m)
+    }
+}
+
+/// FENCE 1 (REG-4.103; §4.1 S3) — NOTHING IS ANSWERED BEFORE ALL FOUR
+/// VERIFY, AND A FAILED READ-BACK TAKES EVERY FILE OF THE RUN: the fourth
+/// sheet — the node pair's b — gone before its re-import in every run, the
+/// three before it having read back, the moment destroys all four files of
+/// each run, both pairs', saying each removal, re-runs under fresh pairs,
+/// and after three runs answers nothing: a halt naming `skep register`, and
+/// not one anchor file left. With the fourth gone in the first run alone,
+/// the second run's four stand and are the outcome, the first run's all
+/// destroyed. (The mutant that skips the fourth re-import answers an anchor
+/// whose file is gone; the one that destroys the failing pair's files alone
+/// leaves the org root pair's on the media.)
+#[test]
+fn a_fourth_sheet_that_does_not_read_back_destroys_every_file_of_the_run_and_answers_nothing() {
+    let files_under = |places: &[PathBuf]| -> usize { places.iter().map(|p| files_in(p).len()).sum() };
+    // The paper path, every re-type declined: the file is each anchor's
+    // verified artifact, read back from the path it was written to.
+    let script = |runs: usize| [vec![Script::LabelDefault; 4], vec![Script::RetypeDeclined; 4 * runs]].concat();
+
+    // Every run's fourth file gone: three runs, then the halt.
+    let dir = tempfile::tempdir().unwrap();
+    let places: Vec<PathBuf> = ["one", "two", "one", "two"].iter().map(|p| dir.path().join(p)).collect();
+    let mut person = AtDismissal::new(script(3), 3, 3);
+    let err = backup_moment(&mut person, &registration(false), &options(places.clone(), true, None)).expect_err("every run's fourth read-back fails: nothing is answered");
+    let t = person.inner.transcript.join("\n");
+    let text = err.to_string();
+    assert!(text.contains("could not complete") && text.contains("re-run `skep register`"), "the venue's own command: {text}");
+    assert_eq!(person.removed.len(), 3, "the fourth file of each of three runs:\n{t}");
+    for (run, gone) in person.removed.iter().enumerate() {
+        assert!(gone.file_name().unwrap().to_string_lossy().contains("node-identity-sheet-b"), "the node pair's b: {}", gone.display());
+        assert!(t.contains(&format!("the anchor file {} did not read back as the key it names (never a verified artifact): every file of this run, both pairs', is destroyed next, each said, and the moment re-runs (attempt {})", gone.display(), run + 1)), "{t}");
+    }
+    let destroyed: Vec<&String> = person.inner.transcript.iter().filter(|l| l.starts_with("PUBLIC say [§4.1 S3]: the anchor file ") && l.ends_with(" is destroyed")).collect();
+    assert_eq!(destroyed.len(), 12, "each of the four files of each run said destroyed:\n{t}");
+    for sheet in ["org-root-sheet-a", "org-root-sheet-b", "node-identity-sheet-a", "node-identity-sheet-b"] {
+        assert_eq!(destroyed.iter().filter(|l| l.contains(sheet)).count(), 3, "{sheet}, once a run:\n{t}");
+    }
+    assert_eq!(files_under(&places[..2]), 0, "not one anchor file left, of either pair");
+    assert_eq!(person.inner.transcript.iter().filter(|l| l.contains("the moment re-runs from step 1 under fresh pairs")).count(), 3, "{t}");
+    assert_eq!(person.inner.transcript.iter().filter(|l| l.contains("[AUTH-5.54 (a)]")).count(), 1, "the statements once, at the head");
+    assert!(!person.inner.said("[AUTH-5.44 (create-org)]"), "no keep-the-papers line of a run that verified nothing:\n{t}");
+    // The three before it read back in each run, ahead of the fourth's
+    // failure: each is said the verified artifact, its print declined.
+    assert_eq!(person.inner.transcript.iter().filter(|l| l.contains("the print is UNVERIFIED")).count(), 9, "{t}");
+
+    // The first run's fourth alone: the second run completes.
+    let dir = tempfile::tempdir().unwrap();
+    let places: Vec<PathBuf> = ["one", "two", "one", "two"].iter().map(|p| dir.path().join(p)).collect();
+    let mut person = AtDismissal::new(script(2), 3, 1);
+    let out = backup_moment(&mut person, &registration(false), &options(places.clone(), true, None)).unwrap_or_else(|h| panic!("{h}\n{}", person.inner.transcript.join("\n")));
+    assert_eq!(out.anchors.len(), 4);
+    assert_eq!(files_under(&places[..2]), 4, "the second run's four stand, the first run's four are gone");
+    for anchor in &out.anchors {
+        let path = anchor.file.clone().expect("the second run's file stands");
+        assert!(!person.removed.contains(&path));
+        assert_eq!(KeyFile::parse(&std::fs::read(&path).unwrap()).expect("reads back").fingerprint, anchor.fingerprint);
+        assert_eq!(anchor.print, Some(Print::Unverified), "declined: the file is the verified artifact");
+    }
+    assert_eq!(person.inner.transcript.iter().filter(|l| l.ends_with(" is destroyed")).count(), 4, "the first run's four:\n{}", person.inner.transcript.join("\n"));
+    assert_eq!(person.inner.transcript.iter().filter(|l| l.contains("[AUTH-5.44 (create-org)]")).count(), 1, "the line once, of the run that verified");
+    assert_eq!(person.inner.sheets.len(), 8, "four sheets a run");
+    assert_eq!(person.inner.dismissed, 2, "one dismissal a run, after all four sheets");
+}
+
+/// FENCE 2 (REG-4.103) — EACH BOX'S OFFERED DEFAULT NAMES ITS PAIR
+/// AND ITS SHEET: four distinct defaults on a fresh registration — the org
+/// root's sheet a and b, the node identity's sheet a and b — and two where
+/// the board carries on, the node identity's alone; the host, the date and
+/// the per-run token stand ahead of them, as at every door.
+#[test]
+fn each_registration_box_offers_a_default_naming_its_pair_and_its_sheet() {
+    let tails = ["-org-root-sheet-a", "-org-root-sheet-b", "-node-identity-sheet-a", "-node-identity-sheet-b"];
+    for (board_carries_on, expected) in [(false, &tails[..]), (true, &tails[2..])] {
+        let dir = tempfile::tempdir().unwrap();
+        let places: Vec<PathBuf> = (0..expected.len()).map(|i| dir.path().join(i.to_string())).collect();
+        let mut person = Scripted::new(vec![Script::LabelDefault; expected.len()]);
+        let out = backup_moment(&mut person, &registration(board_carries_on), &options(places, false, None)).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
+        assert_eq!(out.anchors.len(), expected.len(), "the count is of what the request generates (REG-4.104)");
+        assert_eq!(boxes(&person).len(), expected.len());
+        let labels: Vec<&str> = out.anchors.iter().map(|a| a.label.as_str()).collect();
+        let token = labels[0].strip_prefix("testhost-2026-10-04-").and_then(|rest| rest.split('-').next()).expect("the host, the date and the run's token").to_string();
+        assert_eq!(token.len(), 4, "{labels:?}");
+        for (label, tail) in labels.iter().zip(expected) {
+            assert_eq!(*label, format!("testhost-2026-10-04-{token}{tail}"), "the default names the pair and the sheet within it");
+        }
+        let distinct: std::collections::HashSet<&&str> = labels.iter().collect();
+        assert_eq!(distinct.len(), expected.len(), "{labels:?}");
+        if board_carries_on {
+            assert!(labels.iter().all(|l| !l.contains("org-root")), "no box and no sheet of the org root's pair: {labels:?}");
+            assert!(boxes(&person).iter().all(|b| b.contains("Your org root's own pair is the one your board already has")), "{:?}", boxes(&person));
+            assert!(person.said("(b) TWO FILES, TWO PLACES YOU CONTROL: this registration makes one pair, the node identity's"), "{}", person.transcript.join("\n"));
+        }
+    }
+}
+
+/// FENCE 2 (REG-4.103) — THE CROSS-PAIR FILING RULE IS SAID AT THE
+/// FILING BEAT AND AGAIN AFTER THE LABELS: each place holds one sheet of
+/// each pair, never both sheets of one — once beside statement (b), ahead of
+/// the first box, and once after the last box and ahead of the first export,
+/// naming the sheets by the names the boxes just fixed. Where the board
+/// carries on, both sayings say the two new sheets go one to each place the
+/// org root's own sheets already occupy. A single-pair venue says neither.
+#[test]
+fn the_cross_pair_filing_rule_is_said_at_the_filing_beat_and_again_after_the_labels() {
+    for board_carries_on in [false, true] {
+        let anchors = if board_carries_on { 2 } else { 4 };
+        let dir = tempfile::tempdir().unwrap();
+        let places: Vec<PathBuf> = (0..anchors).map(|i| dir.path().join(i.to_string())).collect();
+        let names = ["red", "green", "blue", "grey"];
+        let mut person = Scripted::new(names[..anchors].iter().map(|n| Script::Label((*n).into())).collect());
+        backup_moment(&mut person, &registration(board_carries_on), &options(places, false, None)).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
+        let t = &person.transcript;
+        let rule: Vec<usize> = t.iter().enumerate().filter(|(_, l)| l.starts_with("PUBLIC say [REG-4.103]: ") && l.contains(CROSS_PAIR)).map(|(n, _)| n).collect();
+        assert_eq!(rule.len(), 2, "said twice:\n{}", t.join("\n"));
+        let asked: Vec<usize> = t.iter().enumerate().filter(|(_, l)| l.starts_with("PUBLIC label [")).map(|(n, _)| n).collect();
+        assert_eq!(rule[0], said_at(&person, "[AUTH-5.54 (b)]") + 1, "at the filing beat: beside statement (b)");
+        assert!(rule[0] < asked[0], "ahead of the first box");
+        assert!(asked[anchors - 1] < rule[1] && rule[1] < said_at(&person, "[AUTH-5.40]"), "again after the labels, ahead of the first export:\n{}", t.join("\n"));
+        let (beat, again) = (&t[rule[0]], &t[rule[1]]);
+        assert!(beat.contains("THE FILING RULE IS CROSS-PAIR") && again.contains("THE FILING RULE AGAIN, now the sheets are named"), "{beat}\n{again}");
+        if board_carries_on {
+            assert!(beat.contains("the two new sheets go ONE TO EACH PLACE those sheets already occupy, and never both to one place"), "{beat}");
+            assert!(again.contains("`red` goes to one of the places those sheets already occupy and `green` to the other, ONE TO EACH PLACE"), "{again}");
+            assert!(beat.contains("your org root's own two sheets are already filed") && again.contains("your org root's own two sheets are already filed"), "{beat}\n{again}");
+        } else {
+            assert!(beat.contains("one org root sheet and one node sheet in each of your two places"), "{beat}");
+            assert!(again.contains("`red` with `blue` in one place, `green` with `grey` in the other; never `red` beside `green`, and never `blue` beside `grey`"), "the names the boxes just fixed: {again}");
+            assert!(!beat.contains("already filed") && !again.contains("already occupy"), "{beat}\n{again}");
+        }
+    }
+    // One pair has no second pair to file across: the door-side moment says
+    // (b) and no cross-pair rule.
+    let dir = tempfile::tempdir().unwrap();
+    let mut person = Scripted::new(vec![Script::LabelDefault, Script::LabelDefault]);
+    backup_moment(&mut person, &Venue::DoorSide, &options(vec![dir.path().join("a"), dir.path().join("b")], false, None)).expect("the moment");
+    assert!(!person.said("REG-4.103") && !person.said("CROSS-PAIR"), "{}", person.transcript.join("\n"));
+}
+
+/// FENCE 2 (REG-4.103) — THE ONE-PLACE SENTENCE IS PER PAIR: both
+/// sheets of one pair in one place are warned, naming the pair; one sheet of
+/// each pair in one place is the rule followed and is never warned. Four
+/// sheets filed across two places say nothing; filed by pair — the sort the
+/// labels teach — both pairs are warned; and where the board carries on the
+/// warning says where the new sheets go.
+#[test]
+fn both_sheets_of_one_pair_in_one_place_are_warned_and_one_of_each_pair_is_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let (one, two) = (dir.path().join("one"), dir.path().join("two"));
+    let run = |board_carries_on: bool, places: Vec<&PathBuf>, case: &str| {
+        let sub = dir.path().join(case);
+        let places: Vec<PathBuf> = places.into_iter().map(|p| sub.join(p.file_name().unwrap())).collect();
+        let mut person = Scripted::new(vec![Script::LabelDefault; places.len()]);
+        let out = backup_moment(&mut person, &registration(board_carries_on), &options(places, false, None)).unwrap_or_else(|h| panic!("{case}: {h}\n{}", person.transcript.join("\n")));
+        let warned: Vec<String> = person.transcript.iter().filter(|l| l.contains("are in this one place")).cloned().collect();
+        (out.one_place, warned)
+    };
+    // The rule followed: each place holds one sheet of each pair.
+    let (one_place, warned) = run(false, vec![&one, &two, &one, &two], "across");
+    assert!(!one_place && warned.is_empty(), "one of each pair in one place is not warned: {warned:?}");
+    let (one_place, warned) = run(false, vec![&one, &two, &two, &one], "across-swapped");
+    assert!(!one_place && warned.is_empty(), "{warned:?}");
+    // Filed by pair: both pairs warned, each by name.
+    let (one_place, warned) = run(false, vec![&one, &one, &two, &two], "by-pair");
+    assert!(one_place);
+    assert_eq!(warned.len(), 2, "{warned:?}");
+    assert!(warned[0].starts_with("PUBLIC say [REG-4.103]: both sheets of the org root pair are in this one place") && warned[1].starts_with("PUBLIC say [REG-4.103]: both sheets of the node pair are in this one place"), "{warned:?}");
+    assert!(warned[0].contains("each place holds one sheet of each pair, never both sheets of one"), "{warned:?}");
+    // One pair across, the other in one place: that pair alone.
+    let (one_place, warned) = run(false, vec![&one, &two, &one, &one], "node-together");
+    assert!(one_place);
+    assert_eq!(warned.len(), 1, "{warned:?}");
+    assert!(warned[0].contains("both sheets of the node pair"), "{warned:?}");
+    // The board carries on: the node pair's two.
+    let (one_place, warned) = run(true, vec![&one, &two], "carries-on-apart");
+    assert!(!one_place && warned.is_empty(), "{warned:?}");
+    let (one_place, warned) = run(true, vec![&one, &one], "carries-on-together");
+    assert!(one_place);
+    assert_eq!(warned.len(), 1, "{warned:?}");
+    assert!(warned[0].contains("both sheets of the node pair") && warned[0].contains("the two new sheets go one to each place your org root's own sheets already occupy"), "{warned:?}");
+}
+
+/// The registration's moment where the board carries on (REG-4.104): the
+/// node pair alone — two boxes, two files, each read back — and the
+/// keep-the-papers line the node pair's, naming the org root's own two
+/// sheets as untouched and never to be destroyed for these (REG-4.101).
+#[test]
+fn a_registration_whose_board_carries_on_makes_the_node_pair_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let places = vec![dir.path().join("one"), dir.path().join("two")];
+    let mut person = Scripted::new(vec![Script::LabelDefault, Script::LabelDefault]);
+    let out = backup_moment(&mut person, &registration(true), &options(places.clone(), false, None)).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
+    assert_eq!((out.anchors.len(), boxes(&person).len()), (2, 2), "two boxes, two sheets");
+    assert_eq!(boxes(&person).iter().filter(|b| b.contains("NODE IDENTITY's pair")).count(), 2);
+    for (anchor, place) in out.anchors.iter().zip(&places) {
+        let file = KeyFile::parse(&std::fs::read(anchor.file.as_ref().expect("the file stands")).unwrap()).expect("reads back");
+        assert_eq!((file.fingerprint, file.anchor), (anchor.fingerprint, true));
+        assert_eq!(anchor.file.as_ref().and_then(|p| p.parent()), Some(place.as_path()));
+    }
+    assert!(person.said("said here of the node account this registration asks for"), "statement (a), keyed to the node account alone");
+    let keep = &person.transcript[said_at(&person, "[AUTH-5.44 (create-org)]")];
+    assert!(keep.contains("one to each place your org root's own sheets already occupy") && keep.contains("NODE IDENTITY"), "{keep}");
+    assert!(keep.contains("Your org root's own two sheets are untouched by this registration") && keep.contains("never destroy them for these"), "{keep}");
+    assert_eq!(person.transcript.iter().filter(|l| l.contains("[AUTH-5.44 (create-org)]")).count(), 1);
+}

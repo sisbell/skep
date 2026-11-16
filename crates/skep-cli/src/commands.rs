@@ -1,4 +1,5 @@
-//! The twenty commands, one file each beneath this one, and what they share.
+//! The twenty-one commands, one file each beneath this one, and what they
+//! share.
 //!
 //! The commands are `client.md` §2.2's thirteen, each exactly as it writes
 //! it, `merge`, the fourteenth, as the merge record's §6 writes it,
@@ -7,8 +8,9 @@
 //! seventeenth, the printer of a registry's root hint (REG-3.2),
 //! `resolve`, the eighteenth, the resolver of a cross-board address
 //! (REG-3.7), `deposit`, the nineteenth, the depositor of a board's
-//! endpoint at its node account (REG-1.9), and `hire`, the twentieth, the
-//! owner's side of the hire ceremony (AUTH-5.58) — each a
+//! endpoint at its node account (REG-1.9), `hire`, the twentieth, the
+//! owner's side of the hire ceremony (AUTH-5.58), and `register`, the
+//! twenty-first, an applicant's registration request (REG-4.67) — each a
 //! `pub fn` that `main` dispatches to and that answers
 //! `Ok` or the [`Stop`] it came to, every walk a library call. What they
 //! share among themselves alone is private here and so visible to each of
@@ -44,6 +46,7 @@ mod hire;
 mod keygen;
 mod merge;
 mod recover;
+mod register;
 mod resolve;
 mod restore;
 mod retire;
@@ -65,6 +68,7 @@ pub use hire::hire;
 pub use keygen::keygen;
 pub use merge::merge;
 pub use recover::recover;
+pub use register::register;
 pub use resolve::resolve;
 pub use restore::restore;
 pub use retire::retire;
@@ -120,7 +124,7 @@ pub fn help() -> Result<(), Stop> {
 
 /// A person door: its `form` and the `moments` a person answers there.
 ///
-/// The doors are §2.4's; `ARCHITECTURE.md` §The command lists the nine.
+/// The doors are §2.4's; `ARCHITECTURE.md` §The command lists the ten.
 /// The form is as a command line spells it, and the moments are in §2.4's
 /// and §6's words — each named, so neither stands in the other's place.
 #[derive(Clone, Copy, Debug)]

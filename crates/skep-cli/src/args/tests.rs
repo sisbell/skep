@@ -53,7 +53,42 @@ fn deposit_takes_its_account_once_and_its_origins_in_the_order_given() {
     assert_eq!(refusal(&["deposit", "--account", "1.0.2", "--account", "1.0.3"]), "`--account` is given at most once at `deposit`");
     assert_eq!(refusal(&["deposit", "--also", "https://acme.example"]), "`--also` is not a flag of `deposit`");
     assert_eq!(refusal(&["hint", "--origin", "https://acme.example"]), "`--origin` is not a flag of `hint`");
-    assert_eq!(GRAMMAR.len(), 20, "the twenty commands, one row each");
+    assert_eq!(GRAMMAR.len(), 21, "the twenty-one commands, one row each");
+}
+
+/// `register`'s row (REG-4.67; REG-4.104): the door identifier once, a
+/// value that holds a space as one argument; `--existing-board`, the switch
+/// that makes the request the board-carries-on row's; and the backup
+/// moment's flags as `keygen --anchors` takes them — a label and a
+/// destination for each anchor, four of each at most at a fresh
+/// registration's two pairs and two inside `--existing-board`, the node
+/// pair's alone — beside `--label` and `--key`, which every command takes.
+/// No `--out` names a file: the request is stdout's.
+#[test]
+fn register_takes_its_door_once_and_a_label_and_a_place_for_each_anchor_its_kind_makes() {
+    let door = "realm:9f2a000000000000000000000000000000000000000000000000000000c41d door:1.1.0.1";
+    let four = ["register", "--door", door, "--label", "laptop", "--anchor-label", "ra", "--anchor-label", "rb", "--anchor-label", "na", "--anchor-label", "nb", "--anchor-out", "/1", "--anchor-out", "/2", "--anchor-out", "/1", "--anchor-out", "/2", "--paper", "--dir", "/s"];
+    let Parsed::CommandLine(c) = parse(argv(&four)).unwrap() else { panic!() };
+    assert_eq!((c.command, c.command.verb()), (Command::Register, "register"));
+    assert_eq!(c.value("--door"), Some(door), "the identifier is one value, its space within it");
+    assert_eq!(c.values("--anchor-label"), ["ra", "rb", "na", "nb"], "in the order org root a, org root b, node a, node b");
+    assert_eq!(c.values("--anchor-out"), ["/1", "/2", "/1", "/2"]);
+    assert!(c.switch("--paper") && !c.switch("--existing-board"));
+    assert_eq!(c.value("--label"), Some("laptop"));
+    let Parsed::CommandLine(c) = parse(argv(&["register", "--door", door, "--existing-board", "--anchor-label", "na", "--anchor-label", "nb", "--anchor-out", "/1", "--anchor-out", "/2", "--key", "/k"])).unwrap() else { panic!() };
+    assert!(c.switch("--existing-board"), "the board-carries-on row's form");
+    assert_eq!(c.key_file().unwrap(), Some(PathBuf::from("/k")), "the device key, named");
+    let five = |flag: &'static str| [&["register", "--door", door][..], &[flag, "1", flag, "2", flag, "3", flag, "4", flag, "5"]].concat();
+    assert_eq!(refusal(&five("--anchor-label")), "`--anchor-label` is given at most 4 times at `register`");
+    assert_eq!(refusal(&five("--anchor-out")), "`--anchor-out` is given at most 4 times at `register`");
+    let three = |flag: &'static str| [&["register", "--door", door, "--existing-board"][..], &[flag, "1", flag, "2", flag, "3"]].concat();
+    assert_eq!(refusal(&three("--anchor-label")), "`--anchor-label` is given at most 2 times at `register --existing-board`");
+    assert_eq!(refusal(&three("--anchor-out")), "`--anchor-out` is given at most 2 times at `register --existing-board`");
+    assert_eq!(refusal(&["register", "--door", door, "--door", door]), "`--door` is given at most once at `register`");
+    assert_eq!(refusal(&["register", "--door", door, "--out", "/f"]), "unknown argument `--out`", "the request is printed, never written to a named file");
+    assert_eq!(refusal(&["register", "--door", door, "--anchors"]), "`--anchors` is not a flag of `register`", "`keygen`'s form opener is `keygen`'s");
+    assert_eq!(refusal(&["keygen", "--door", door]), "`--door` is not a flag of `keygen`");
+    assert_eq!(refusal(&["keygen", "--anchors", "--existing-board"]), "`--existing-board` is not a flag of `keygen`");
 }
 
 /// `hire`'s row (AUTH-5.58): the agent's key record once, a file or `-` as
@@ -170,6 +205,7 @@ fn a_flag_outside_its_form_is_refused_and_two_forms_together() {
                 Form::Within(a, b) | Form::Apart(a, b) => (vec![a, b], None),
                 Form::OnceWithin(a, b) => (vec![a, b], Some(a)),
                 Form::AtMost(a, _) => (vec![a], Some(a)),
+                Form::AtMostWithin(a, b, _) => (vec![a, b], Some(a)),
             };
             for flag in named {
                 assert!(row.once.contains(&flag) || row.repeated.contains(&flag) || row.switches.contains(&flag), "`{flag}`, named by {form:?}, is a flag of `{}`", row.command);

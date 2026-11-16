@@ -1260,6 +1260,7 @@ dependencies = [
  "skep-corpus",
  "skep-http",
  "skep-identity",
+ "skep-registry",
  "skep-resolve",
  "skep-shell",
  "skep-signature",

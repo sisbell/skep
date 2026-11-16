@@ -17,13 +17,20 @@
 //!   `sig`, the cap, the declared insert and its re-read `from`, the link —
 //!   and, for an endpoint, the read of the deposit a later one names
 //!   (REG-1.10).
+//! * [`registration`] — the one registration-request composition
+//!   (REG-4.67; REG-1.86): an applicant's own side, with no board and no
+//!   account — the door identifier's form, the device key named or
+//!   generated, the backup moment's node arm, the enrolments, the frame and
+//!   its one signature, and the check of what it made. It composes and never
+//!   writes: the request is deposited by another hand.
 //! * [`first_session`] — the one first-signed-session composition
 //!   (AUTH-5.90 (iii); AUTH-5.87): two states, each resumed by reading, the
 //!   doc-1 read the metadata read in its three arms (REG-1.52), the second
 //!   state never run at an agent's account, which holds no agent space.
 //! * [`backup`] — the backup moment in AUTH-5.54's order (§4.2), at its
-//!   four sites (the claim, the door-side form, the handoff's recipient,
-//!   the hire's custody pair) and the loss arm's cited steps 1–3.
+//!   five sites (the claim, the door-side form, the handoff's recipient,
+//!   the hire's custody pair, the registration's pairs) and the loss arm's
+//!   cited steps 1–3.
 //! * `payload` — the paste door: a canonical record carried in from the
 //!   device that generated it, parsed and nothing else (AUTH-2.130), an
 //!   anchor-flagged entry refused where the door enrolls device keys alone,
@@ -86,6 +93,7 @@ pub(crate) mod import;
 pub(crate) mod payload;
 pub(crate) mod preview;
 pub(crate) mod reads;
+pub mod registration;
 pub mod registry_record;
 pub mod trail;
 

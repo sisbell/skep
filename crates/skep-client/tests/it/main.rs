@@ -6,7 +6,11 @@
 //! dir, as skep-mcp's suite does, and drive THE LIBRARY — the walks with the
 //! scripted `Person`, the compositions by their own calls; another hand is
 //! the wire transcript re-driven (`common`'s `wire_*`), never a ceremony.
-//! Two need no daemon: `backup`, the moment alone, and `tidy`, which reads
+//! Three need no daemon: `backup`, the moment alone; `registration`, the
+//! applicant's registration request — the door identifier judged first, the
+//! device key named or generated, the moment's node arm, the enrolments and
+//! the one signature over the frame — which reads and writes no board; and
+//! `tidy`, which reads
 //! the crate's own source for the arrangement it promises. `search` drives
 //! the `search` module — the feature the self dev-dependency turns on —
 //! over a claimed board, its fixture its own; `merge` drives the `merge`
@@ -41,6 +45,7 @@ mod loss;
 mod merge;
 mod publication;
 mod recover;
+mod registration;
 mod removals;
 mod restore;
 mod retire;

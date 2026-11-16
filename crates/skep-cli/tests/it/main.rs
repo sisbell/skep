@@ -26,8 +26,14 @@
 //! refusal; `hire` drives the twentieth, `skep hire` — its line read whole
 //! ahead of its door, the door refused without a terminal, one run typed at
 //! a pseudo-terminal from the standing statements to the agent's principal,
-//! and `skep bind` refused at the account a hire made; `tidy` reads the
-//! crate's own source for the arrangement
+//! and `skep bind` refused at the account a hire made; `register` drives
+//! the twenty-first, `skep register`, with no daemon at all — its line read
+//! ahead of its door, the door refused without a terminal, a door
+//! identifier that is none halting before anything is asked or written, one
+//! fresh registration typed at a pseudo-terminal from an empty store to the
+//! request on stdout, verified as a reader verifies it, the board that
+//! carries on, and `skep keygen --anchors` unchanged beside it; `tidy` reads
+//! the crate's own source for the arrangement
 //! `ARCHITECTURE.md` §The command states.
 
 mod ceremonies;
@@ -39,6 +45,7 @@ mod hint;
 mod hire;
 mod hostile;
 mod merge;
+mod register;
 mod resolve;
 mod restore;
 mod serve;

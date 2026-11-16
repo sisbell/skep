@@ -12,7 +12,7 @@
 //! ahead of the genesis, its hand this store's own only where that can be said,
 //! and a retirement read naming the position it read whatever its hand; a
 //! principal's supplement following its standing sessions, a key's diagnosis
-//! named by the list it stands in, a session's key attesting the ten kinds with
+//! named by the list it stands in, a session's key attesting the eleven kinds with
 //! an entry frame alone and a write going out under a signed session alone, a
 //! frame no attest is owed for borrowed as it stands, never copied, and the
 //! board term a signed write signs over read only where the board's head record
@@ -577,7 +577,7 @@ fn a_keys_diagnosis_is_named_by_the_list_it_stands_in() {
     assert_eq!((refused.name(), refused.to_value()["kind"].as_str()), ("not_enrolled", Some("halt")), "{refused}");
 }
 
-/// Checks that a session's key attests the ten kinds with an entry frame.
+/// Checks that a session's key attests the eleven kinds with an entry frame.
 ///
 /// A signed session names the key that opened it, its own key
 /// (`SessionEntry::key`), for an `insert` and none for a `delete`; a bare
@@ -594,6 +594,7 @@ fn a_sessions_key_attests_the_checked_kinds_alone() {
     let signed = sessions.register(&at("b-1", nowhere()), signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
     let SessionKind::Signed { fingerprint, .. } = &signed.facts.kind else { panic!("a signed session holds a key") };
     assert_eq!((signed.attesting_key("insert"), signed.attesting_key("delete")), (Some(fingerprint), None));
+    assert_eq!(signed.attesting_key("create_well_known_document"), Some(fingerprint), "the eleventh kind, a well-known creation");
     let facts = Facts { principal: 2, account: Some("1.0.2".into()), kind: SessionKind::Bare };
     let bare = sessions.register(&at("b-1", nowhere()), Open { token: Token::parse(&"8e".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut Recorded::default());
     assert_eq!((bare.attesting_key("insert"), bare.attesting_key("delete")), (None, None));

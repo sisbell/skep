@@ -22,9 +22,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   One chain steps over a block: an account's documents are numbered 1
   and then from `FIRST_ORDINARY_DOCUMENT`, 64, on. Numbers 2–63 are
   reserved for well-known documents in every account and the counter
-  never hands one out; a document stands at 2, 3 or 4 only where a
+  never hands one out; a document stands at 2, 3, 4 or 5 only where a
   record placed it there, once, as genesis places the system account's
-  three and `create_well_known_document` an account's mailbox, and a
+  three and `create_well_known_document` an account's four — its
+  mailbox, its bio, its link page and its policy document — and a
   number of the block that holds none reads unregistered.
   The content chain also mints a RANGE — `count` consecutive addresses
   in one record, the addresses `count` single mints would have issued,
@@ -56,11 +57,19 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   is its allocation; `register_node` admits a node address
   provisioning chose, granting no ownership; `fork` creates a
   document in the caller's own account, as `create_new_document` does;
-  and `create_well_known_document` mints an account's mailbox for its
-  ω at the account's well-known slot, document 2 (`MAILBOX_SLOT`; the
-  place is `mailbox_address`, minted or not), private and moving no
-  count — once: a later call answers the same address, writes
-  nothing, and says so (`WellKnown::Standing`).
+  and `create_well_known_document` creates one of an account's
+  well-known documents for its ω at the slot the call names
+  (`WellKnownSlot`; the place is `well_known_address`, created or
+  not), in the slot's own state and holding nothing — the mailbox,
+  document 2 (`MAILBOX_SLOT`, `mailbox_address`), private; the bio, 3
+  (`BIO_SLOT`), the link page, 4 (`LINK_PAGE_SLOT`), and the account's
+  policy document, 5 (`POLICY_SLOT`), published, each taking its first
+  version from an ordinary publication, and each signed where the
+  handle carries an attestation — moving no count, and once per slot:
+  a later call at that slot answers the same address, writes nothing,
+  and says so (`WellKnown::Standing`). The system account is refused
+  at every slot (`CreateDocumentError::SystemAccountNoWellKnown`): its
+  slots are its own, seeded at genesis.
 - **Allocation and entity reads** — is-this-allocated over every
   chain, M3's own allocation oracle, and node/account/document
   classification over the entity registry, the registration check

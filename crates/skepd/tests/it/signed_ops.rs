@@ -1,6 +1,7 @@
 //! SIGNED OPS — THE SEAM (the seam build 2026-09-25) AND THE WIDENING: one
-//! signed write, end to end, for each of the ten op kinds of the checked set
-//! — the three mints, `insert`, `publish`, `make_link`, `emit`, `nullify`,
+//! signed write, end to end, for each of the eleven op kinds of the checked
+//! set — the three mints, the well-known creation, `insert`, `publish`,
+//! `make_link`, `emit`, `nullify`,
 //! `assert_sup`, `edit_link` — under the two tags: the hybrid key enrolled,
 //! the entry frame composed and signed by the test signer, the `attest`
 //! member on the wire, the claimed-board check before the transaction, the
@@ -261,8 +262,9 @@ fn filled_slots(sd: &skepd::Skepd, lo: u64, hi: u64) -> Vec<u64> {
 /// request is refused the same, the client's next act a re-composed one);
 /// the wrong width → `:malformed` (permanent, the same); a bare session →
 /// `signed_session_required` as before; an
-/// unknown `alg` token → unparseable; the member on an op outside the ten
-/// (a `delete`) → unparseable (the unknown-field rule); and a signed write
+/// unknown `alg` token → unparseable; the member on an op outside the
+/// checked set (a `delete`) → unparseable (the unknown-field rule); and a
+/// signed write
 /// OUTSIDE the publish class carrying an `attest` → admitted with the member
 /// dropped.
 #[test]
@@ -342,7 +344,7 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     empty["attest"]["sig"] = Value::String(String::new());
     let v = op_as_written(port, Some(&signed), &empty.to_string());
     assert_eq!(v["op"].as_str(), Some("unparseable"), "{v}");
-    // The member on an op outside the ten: unknown field.
+    // The member on an op outside the checked set: unknown field.
     let v = op_as_written(
         port,
         Some(&signed),
@@ -560,11 +562,12 @@ fn a_tag_3_key_attests_a_write_as_a_tag_1_key_does() {
     assert_eq!(slot.sig(), &sig[..], "and the blob attached, whole");
 }
 
-/// THE TEN OPS END TO END (SO-I4: every publishing act above the claim is
+/// THE ELEVEN OPS END TO END (SO-I4: every publishing act above the claim is
 /// signed): each publish-class kind, from the claimant's signed session into
 /// its published world — a `create_new_document` born published (not the
 /// account's first), a `fork` born published, a `version` of the published
-/// edition, an `emit` of the retired class, a `nullify`, an `assert_sup` and
+/// edition, a `create_well_known_document` of the account's policy document,
+/// an `emit` of the retired class, a `nullify`, an `assert_sup` and
 /// an `edit_link` over ghost links in doc 1 — answers `attestation_required`
 /// unattested and commits attested with its own slot holding the attached
 /// blob; `make_link` (a grant) and `publish` (a shot) as before; `insert` —
@@ -579,7 +582,7 @@ fn a_tag_3_key_attests_a_write_as_a_tag_1_key_does() {
 /// order the design states: the check before the transaction, the store's
 /// gates inside it.
 #[test]
-fn the_ten_ops_commit_attested_where_the_check_demands_it() {
+fn the_eleven_ops_commit_attested_where_the_check_demands_it() {
     let dir = tempdir().unwrap();
     let sd = spawn(dir.path());
     let port = sd.port();
@@ -607,6 +610,13 @@ fn the_ten_ops_commit_attested_where_the_check_demands_it() {
     demanded(&fork_frame(Some(true)), "fork");
     let member = acked_addr(&demanded(&version_frame(&edition, None), "version"));
     assert_eq!(member, format!("{edition}.1"), "the version is the edition's first member");
+    // The well-known creation: the account's policy document, created
+    // published at its slot — the EMPTY body over the slot's own address.
+    let policy = acked_addr(&demanded(
+        &format!(r#"{{"op":"create_well_known_document","account":"{CLAIMANT_ACCOUNT}","slot":5}}"#),
+        "create_well_known_document",
+    ));
+    assert_eq!(policy, format!("{CLAIMANT_ACCOUNT}.0.5"), "the policy document stands at its slot");
 
     // The other link writes, over ghost links in the published doc 1.
     let (l1, l2, l3) = (
@@ -701,6 +711,34 @@ fn a_mints_frame_composed_from_the_minted_document_is_the_frame_composed_from_th
             entry_frame(ALG_MLDSA65_ED25519, board, &addr(&account), DocTerm::One(&addr(&account)), &body);
         assert_eq!(frame_from_store, frame_from_request, "{op_token:?}: one preimage, from the request and from the store");
         assert!(verifies(&frame_from_store, slot.sig()), "{op_token:?}: the marker's attestation verifies over it");
+    }
+    // THE WELL-KNOWN CREATION's frame is checkable from the created document
+    // too, and names it: the verifier holds the document's address off the
+    // feed's `docs`, its account by ω, and composes the EMPTY body under the
+    // op's own token over THAT ADDRESS — the one cell of the four whose
+    // `doc` is the document made, its address being a function of the
+    // request — never over the parent account.
+    for slot in [3u64, 4, 5] {
+        let frame = format!(r#"{{"op":"create_well_known_document","account":"{CLAIMANT_ACCOUNT}","slot":{slot}}}"#);
+        let parsed: Value = serde_json::from_str(&frame).unwrap();
+        let frame_from_request = entry_frame_for(port, &signed, CLAIMANT_PRINCIPAL, &parsed).expect("composable");
+        let v = op(port, Some(&signed), &frame);
+        let created = acked_addr(&v);
+        let at = acked_at(&v);
+        let slot_of_row = sd.daemon().attestation_at(Seq(at)).unwrap().expect("attested");
+        let page = json(&http(port, "GET", &format!("/changes?since={}", at - 1), None, b"").1);
+        assert_eq!(page["changes"][0]["docs"], serde_json::json!([created]), "slot {slot}: a guest's feed names the created document: {page}");
+        let (account, _) = effective_owner(port, None, &created).expect("the created document's owner");
+        assert_eq!(account, CLAIMANT_ACCOUNT, "slot {slot}: ω over the created document is its account");
+        let body = entry_body_empty(ContentFreeOp::CreateWellKnownDocument);
+        let board = board_term(port).expect("H.1");
+        let frame_from_store =
+            entry_frame(ALG_MLDSA65_ED25519, board, &addr(&account), DocTerm::One(&addr(&created)), &body);
+        assert_eq!(frame_from_store, frame_from_request, "slot {slot}: one preimage, from the request and from the store");
+        assert!(verifies(&frame_from_store, slot_of_row.sig()), "slot {slot}: the marker's attestation verifies over it");
+        let over_the_account =
+            entry_frame(ALG_MLDSA65_ED25519, board, &addr(&account), DocTerm::One(&addr(&account)), &body);
+        assert!(!verifies(&over_the_account, slot_of_row.sig()), "slot {slot}: never the frame over the parent account");
     }
 }
 
@@ -2515,8 +2553,11 @@ fn extent(start: &str, width: u64) -> Span {
 /// type, its claim homed in `1.0.1.0.1` — the pair's row as its `doc`. Each
 /// comes under its NAME — its op and, after a comma, what marks the instance
 /// out (`insert, undeclared`; `record, enroll`) — the one label both goldens
-/// report it by.
-fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 14] {
+/// report it by. The last is the eleventh kind's cell: a
+/// `create_well_known_document` of the account's policy document, the EMPTY
+/// body under the op's own token over the slot document's own address
+/// `1.0.1.0.5`.
+fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 15] {
     let (account, doc, other) = (addr("1.0.1"), addr("1.0.1.0.1"), addr("1.0.1.0.64"));
     let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
     let insert = entry_body_insert(None, [&b"a"[..], &b"b"[..]]);
@@ -2597,6 +2638,9 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 14] {
         entry_body_empty(ContentFreeOp::Fork),
         entry_body_empty(ContentFreeOp::Version),
     );
+    // The well-known creation: the slot document's own address as its `doc`.
+    let (well_known, policy) =
+        (entry_body_empty(ContentFreeOp::CreateWellKnownDocument), addr("1.0.1.0.5"));
     let deposits = publish_deposits(publish.clone(), &other, &doc);
     let frame = |name: &'static str, body: &EntryBody, term: DocTerm<'_>| {
         (name, entry_frame(alg, board, &account, term, body))
@@ -2616,6 +2660,7 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 14] {
         frame("assert_sup", &assert_sup, DocTerm::One(&doc)),
         frame("emit, the to empty", &emit, DocTerm::One(&doc)),
         frame("edit_link, the pair row", &edit, DocTerm::Pair { d_s: &other, d_a: &doc }),
+        frame("create_well_known_document, the policy slot", &well_known, DocTerm::One(&policy)),
     ]
 }
 
@@ -2674,10 +2719,11 @@ fn publish_deposits(shot: EntryBody, other: &skep_address::Address, doc: &skep_a
 /// body, `be32(0)` with the member present, over the parent account; the
 /// stored tuple's four rows for `nullify`, `assert_sup` and `emit`; the
 /// successor's four rows, the claim's `from` and the pair's row for
-/// `edit_link`.
+/// `edit_link`; and the well-known creation's — the EMPTY body under its
+/// own token, its `doc` the slot document's own address.
 #[test]
 fn the_entry_frames_bytes_per_op_are_pinned() {
-    let [(_, insert), (_, link), (_, publish), (_, deposits), (_, enrol), (_, retire), (_, claim), (_, create), (_, fork), (_, version), (_, nullify), (_, assert_sup), (_, emit), (_, edit)] =
+    let [(_, insert), (_, link), (_, publish), (_, deposits), (_, enrol), (_, retire), (_, claim), (_, create), (_, fork), (_, version), (_, nullify), (_, assert_sup), (_, emit), (_, edit), (_, well_known)] =
         fixed_frames(ALG_MLDSA65_ED25519);
     // The members every frame shares: the framing tag, then `alg`, `board`
     // and `account`; then `doc` — the document, the parent account at the
@@ -2865,6 +2911,13 @@ fn the_entry_frames_bytes_per_op_are_pinned() {
         want.extend(member(b""));
         assert_eq!(frame, want, "{token}: the EMPTY body over the parent account");
     }
+    // THE WELL-KNOWN CREATION: `doc` the slot document's own address,
+    // `1.0.1.0.5` — never the parent account — then the op's own token and
+    // the EMPTY body, the member present, `be32(0)`.
+    let mut want = [head.clone(), member(b"1.0.1.0.5")].concat();
+    want.extend(member(b"create_well_known_document"));
+    want.extend(member(b""));
+    assert_eq!(well_known, want, "create_well_known_document: the slot's own address, its own token, the EMPTY body");
     // THE OTHER LINK WRITES: the stored tuple's four rows, each slot a unit
     // span — the type the class's reserved ghost address — under the op's
     // own token.

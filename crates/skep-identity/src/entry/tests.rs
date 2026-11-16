@@ -277,19 +277,53 @@ fn the_window_row_is_the_start_delimited_then_the_width() {
     );
 }
 
-/// THE EMPTY BODY: the three mints sign no bytes, each under its own op's
-/// token.
+/// THE EMPTY BODY: the three mints and the well-known creation sign no
+/// bytes, each under its own op's token — four tokens, no two alike, so a
+/// well-known creation is never framed as a `create_new_document`.
 #[test]
 fn the_mints_share_the_empty_body_under_each_ops_own_token() {
-    for (op, token) in [
+    let cells = [
         (ContentFreeOp::CreateNewDocument, "create_new_document"),
         (ContentFreeOp::Fork, "fork"),
         (ContentFreeOp::Version, "version"),
-    ] {
+        (ContentFreeOp::CreateWellKnownDocument, "create_well_known_document"),
+    ];
+    for (op, token) in cells {
         let body = entry_body_empty(op);
         assert!(body.as_bytes().is_empty(), "{token}: the EMPTY body");
         assert_eq!(body.op(), token);
     }
+    let tokens: std::collections::BTreeSet<&str> = cells.iter().map(|(_, token)| *token).collect();
+    assert_eq!(tokens.len(), cells.len(), "each content-free op under a token of its own");
+}
+
+/// THE WELL-KNOWN CREATION'S FRAME names its slot: the empty body under the
+/// op's own token over the slot document's own address, so the frames of two
+/// slots of one account differ, each differs from the frame over the parent
+/// account, and none is the bytes a `create_new_document` signs over any of
+/// those addresses.
+#[test]
+fn a_well_known_creations_frame_names_its_slot_and_its_own_token() {
+    let term = BoardTerm { log_position: 7, chain: [0x5A; 32] };
+    let account = addr(&[1, 0, 1]);
+    let frame = |doc: &Address, op: ContentFreeOp| {
+        entry_frame("mldsa65-ed25519", term, &account, DocTerm::One(doc), &entry_body_empty(op))
+    };
+    let slots: Vec<Address> = (2u32..=5).map(|slot| addr(&[1, 0, 1, 0, slot])).collect();
+    let mut seen = std::collections::BTreeSet::new();
+    for doc in slots.iter().chain([&account]) {
+        let creation = frame(doc, ContentFreeOp::CreateWellKnownDocument);
+        assert!(seen.insert(creation.clone()), "{doc}: two addresses spelled one frame");
+        assert_ne!(
+            creation,
+            frame(doc, ContentFreeOp::CreateNewDocument),
+            "{doc}: the creation is framed under its own token"
+        );
+    }
+    // The fifth member is the token and the fourth the slot's address.
+    let policy = frame(&slots[3], ContentFreeOp::CreateWellKnownDocument);
+    let needle = [&[0u8, 0, 0, 9][..], b"1.0.1.0.5", &[0, 0, 0, 26][..], b"create_well_known_document", &[0, 0, 0, 0][..]].concat();
+    assert!(policy.ends_with(&needle), "the frame ends: the slot's address, the token, the empty body");
 }
 
 /// THE `insert` BODY: the declared type's spelling, delimited — empty where
@@ -788,8 +822,8 @@ fn the_frame_is_framed_under_the_entry_tag_over_six_members() {
         framed_members([b"mldsa65-ed25519", &board, b"1.0.1", b"1.0.1.0.1", b"insert", b"B"])
     );
     // Every body, under its own token, each over the `doc` term its grammar
-    // takes: the pair's row for the edit, the parent account for a mint, a
-    // document for every other.
+    // takes: the pair's row for the edit, the parent account for a mint, the
+    // slot document for a well-known creation, a document for every other.
     let unit = [unit_span(&addr(&[1, 0, 1, 0, 1, 0, 2, 1]))];
     let slots = LinkSlots { from: EntrySlot(&unit), to: EntrySlot(&[]), ty: EntrySlot(&unit) };
     let ty = addr(&[1, 1, 0, 1, 0, 1, 0, 3, 1]);
@@ -797,6 +831,7 @@ fn the_frame_is_framed_under_the_entry_tag_over_six_members() {
         entry_body_empty(ContentFreeOp::CreateNewDocument),
         entry_body_empty(ContentFreeOp::Fork),
         entry_body_empty(ContentFreeOp::Version),
+        entry_body_empty(ContentFreeOp::CreateWellKnownDocument),
         entry_body_insert(None, [&b"a"[..]]),
         entry_body_make_link(slots),
         entry_body_make_link_replacing(slots, &doc),
@@ -814,6 +849,7 @@ fn the_frame_is_framed_under_the_entry_tag_over_six_members() {
         }),
     ];
     // The pair's row as the `doc` member, whole, where the op names two homes.
+    let policy = addr(&[1, 0, 1, 0, 5]);
     let d_s = addr(&[1, 0, 1, 0, 64]);
     let pair = DocTerm::Pair { d_s: &d_s, d_a: &doc };
     for body in &bodies {
@@ -823,6 +859,8 @@ fn the_frame_is_framed_under_the_entry_tag_over_six_members() {
             "create_new_document" | "fork" | "version" => {
                 (DocTerm::One(&account), b"1.0.1".to_vec())
             }
+            // A well-known creation's is the SLOT DOCUMENT the act creates.
+            "create_well_known_document" => (DocTerm::One(&policy), b"1.0.1.0.5".to_vec()),
             _ => (DocTerm::One(&doc), b"1.0.1.0.1".to_vec()),
         };
         assert_eq!(

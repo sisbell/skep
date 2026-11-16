@@ -81,5 +81,6 @@ mod vectors;
 mod version_chain;
 mod vocabulary;
 mod volume;
+mod well_known;
 mod wire_doc;
 mod write_pool;

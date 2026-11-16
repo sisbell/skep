@@ -214,8 +214,9 @@ pub enum Response {
     /// A write acknowledged with one address (A7).
     ///
     /// What `addr` names is the op's: the document minted
-    /// (create_new_document, fork); the account's mailbox
-    /// (create_well_known_document); the draft `stage` minted; the document
+    /// (create_new_document, fork); the account's document at the
+    /// well-known slot named — its mailbox, bio, link page or policy
+    /// document (create_well_known_document); the draft `stage` minted; the document
     /// `version` minted — the next member of the source's chain where the
     /// caller owns the source, a fresh document in the caller's own account
     /// where it does not (PUB-2.14); the chain member `publish` appended
@@ -228,7 +229,7 @@ pub enum Response {
     /// may instead find their work done and commit nothing: emit, nullify and
     /// assert_sup on a dedup hit, answering the incumbent this principal can
     /// read (PUB-6.25, PUB-6.26), and create_well_known_document where the
-    /// mailbox already stands, answering it. Each store says which it did
+    /// slot's document already stands, answering it. Each store says which it did
     /// (M7's `Deposited`, M3's `WellKnown`). Then `committed` is `false`,
     /// which the wire renders as `"committed": false` — the member absent on
     /// every ack that committed — and `at` is the coordinate of the base the

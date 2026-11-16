@@ -120,7 +120,7 @@ fn the_content_chain_of_the_ghost_home_document_never_issues_a_ghost_tumbler() {
     // ANOTHER document under the account carries no floor: its content chain
     // starts at 1 like any other — the region is five content addresses of
     // one document, not a rule about the prefix. Genesis seeds the account's
-    // doc 1 and fills its three named slots, so the account's next mint (as
+    // doc 1 and fills three of its named slots, so the account's next mint (as
     // its own principal, the system's) is its second document, past the
     // reserved block.
     let (next_doc, _) = ns

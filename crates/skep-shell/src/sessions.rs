@@ -234,7 +234,7 @@ impl SessionEntry {
     /// Returns the key a write of `op` under this session is attested with.
     ///
     /// It is the key that opened it ([`SessionEntry::key`]), where the
-    /// session holds one and `op` is one of the ten kinds that have an entry
+    /// session holds one and `op` is one of the eleven kinds that have an entry
     /// frame (`attest::in_checked_set`); none otherwise. It is what
     /// [`SessionEntry::attest`] signs with, and what the burst's door keeps
     /// an attest's room for (`Burst::admit`).

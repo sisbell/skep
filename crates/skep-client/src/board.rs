@@ -761,7 +761,7 @@ pub fn acked_head_moved(v: &Value) -> Option<&str> {
 /// Returns whether the document is an `ack_addr` that committed nothing.
 ///
 /// wire.md §The response envelope: a `create_well_known_document` that finds
-/// the mailbox standing, and an `emit`, `nullify` or `assert_sup` answered
+/// its slot's document standing, and an `emit`, `nullify` or `assert_sup` answered
 /// with the incumbent it deduplicated against, commit nothing; their
 /// `ack_addr` names the standing address and carries `"committed": false`,
 /// its `at` the position the call was judged at — some other write's, never

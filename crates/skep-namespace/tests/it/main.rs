@@ -24,3 +24,4 @@ mod ownership;
 mod publication;
 mod recovery;
 mod register_node;
+mod well_known;

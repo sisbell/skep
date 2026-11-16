@@ -12,6 +12,9 @@
 //! COMPOSER's CONTRACT: a death signal at one of its reads the session's
 //! end, and a board's refusal of one its verdict verbatim, never the
 //! composer's own refusal; a frame past its precondition stopped loudly.
+//! And THE WELL-KNOWN CREATION's CELL: the bytes the composer signs for a
+//! `create_well_known_document`, at every slot, the very bytes
+//! `skep-client`'s composer signs.
 
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -46,7 +49,7 @@ fn the_trunk_is_the_document_field_cut_to_its_first_component() {
 /// THE COMPOSER reads a frame as the wire spells it: an insert's `values`
 /// the wire's forms refuse are its halt, each fault faced in its own words;
 /// a V-spec's span reads as `(from, width)`; an I-address splits at its last
-/// component; the ten kinds are the checked set, each named by its own
+/// component; the eleven kinds are the checked set, each named by its own
 /// spelling, a frame of them wanting the shell's attest where none rides it;
 /// and a run `image` answers is a content extent, its width zeros but at its
 /// last component.
@@ -60,7 +63,8 @@ fn the_composer_reads_a_frame_as_the_wire_spells_it() {
     assert_eq!(split_i("1.0.1.0.1.0.1.4"), Some(("1.0.1.0.1.0.1", 4)));
     assert_eq!(split_i("1.0.1.0.1.0.1.x"), None);
     assert!(in_checked_set("publish") && !in_checked_set("delete"));
-    assert_eq!(CheckedKind::ALL.map(CheckedKind::as_str), ["create_new_document", "fork", "version", "insert", "publish", "make_link", "emit", "nullify", "assert_sup", "edit_link"]);
+    assert_eq!(CheckedKind::ALL.map(CheckedKind::as_str), ["create_new_document", "fork", "version", "create_well_known_document", "insert", "publish", "make_link", "emit", "nullify", "assert_sup", "edit_link"]);
+    assert!(in_checked_set("create_well_known_document") && wants_attest(&json!({"op": "create_well_known_document", "account": "1.0.1", "slot": 2})), "the eleventh kind, at every slot");
     assert!(CheckedKind::ALL.into_iter().all(|kind| CheckedKind::named(kind.as_str()) == Some(kind)));
     assert!(wants_attest(&json!({"op": "publish"})));
     assert!(!wants_attest(&json!({"op": "publish", "attest": {"alg": "x", "sig": "00"}})), "a page-supplied attest stands as it is");
@@ -698,7 +702,7 @@ fn a_boards_refusal_at_a_read_is_its_verdict_verbatim() {
 
 /// THE COMPOSER's PRECONDITION is its caller's — discharged by
 /// `SessionEntry::attest` through `wants_attest` — so a frame outside the
-/// ten kinds reaching `attach` is a bug of this crate's, stopped loudly and
+/// eleven kinds reaching `attach` is a bug of this crate's, stopped loudly and
 /// never answered as attached.
 #[test]
 #[should_panic(expected = "wants_attest")]
@@ -708,7 +712,7 @@ fn attach_stops_a_frame_past_its_precondition() {
 }
 
 /// THE COMPOSER's PRECONDITION's other half: an `attest` already riding a
-/// frame of the ten kinds is the page's, the board's to judge, so a frame
+/// frame of the eleven kinds is the page's, the board's to judge, so a frame
 /// carrying one reaching `attach` is stopped as loudly — never signed over
 /// (the mutant that drops the precondition's check composes and replaces
 /// the page's attest with the shell's).
@@ -717,4 +721,108 @@ fn attach_stops_a_frame_past_its_precondition() {
 fn attach_stops_a_frame_whose_attest_rides_already() {
     let g = Ground::over(Fake::default());
     let _ = g.composer().attach(&mut json!({"op": "insert", "doc": "1.0.1.0.1", "values": ["a"], "attest": {"alg": "x", "sig": "00"}}));
+}
+
+/// A signer that keeps every payload it is handed, beside the key it signs
+/// with: what a composer signed, byte for byte.
+struct Recording {
+    key: Box<dyn Signer>,
+    signed: Mutex<Vec<Vec<u8>>>,
+}
+
+impl Recording {
+    fn over(key: Box<dyn Signer>) -> Recording {
+        Recording { key, signed: Mutex::new(Vec::new()) }
+    }
+
+    /// The payloads signed since the last take, in order.
+    fn take(&self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut *self.signed.lock().unwrap())
+    }
+}
+
+impl Signer for Recording {
+    fn public_key(&self) -> &skep_identity::PublicKey {
+        self.key.public_key()
+    }
+
+    fn sign(&self, payload: &[u8]) -> Vec<u8> {
+        self.signed.lock().unwrap().push(payload.to_vec());
+        self.key.sign(payload)
+    }
+}
+
+/// THE WELL-KNOWN CREATION's CELL (wire.md §Credential refusals; the
+/// eleventh kind): the composer signs a `create_well_known_document` over
+/// the empty body under the op's own token, the frame's `doc` THE SLOT
+/// DOCUMENT's OWN ADDRESS, `<account>.0.<slot>` — at every slot, the
+/// mailbox's among them, where the board drops the attest unread — reading
+/// nothing from the board. The bytes are the ones the frame's own builder
+/// spells, never the frame over the parent account, never another slot's,
+/// and never under `create_new_document`'s token; and they are the very
+/// bytes `skep-client`'s composer signs for the same request, so the two
+/// frames are one, `attest` and all (one frame, two composers). A frame
+/// with no `slot`, or a `slot` no well-known document has, is one the board
+/// refuses at its parse: the composer halts on it and nothing is signed.
+#[test]
+fn a_well_known_creation_is_signed_over_its_slots_own_address_as_the_client_signs_it() {
+    use skep_client::address::{well_known_of, MAILBOX_SLOT, WELL_KNOWN_SLOTS};
+
+    let g = Ground::over(Fake::default());
+    let key = Recording::over(Box::new(signer_from_seed(&[7; 32])));
+    let board_term = BoardTerm { log_position: 1, chain: [0xab; 32] };
+    let composer = Composer { board: &g.board, token: &g.token, signer: &key, account: "1.0.1", board_term };
+    let alg = key.public_key().alg().to_string();
+    let own = parse_address("1.0.1").unwrap();
+    // The creation is the owner's of ITS OWN account here, and of another it
+    // names: the frame's `account` member is the session's, its `doc` the
+    // named account's slot.
+    for named in ["1.0.1", "1.0.1.4"] {
+        let spelled = |doc: &str, op: ContentFreeOp| {
+            entry_frame(&alg, board_term, &own, DocTerm::One(&parse_address(doc).unwrap()), &entry_body_empty(op))
+        };
+        for slot in WELL_KNOWN_SLOTS {
+            let mut frame = json!({"op": "create_well_known_document", "account": named, "slot": slot});
+            assert!(wants_attest(&frame), "slot {slot}: the shell attests every slot");
+            composer.attach(&mut frame).unwrap();
+            let signed = key.take();
+            let document = well_known_of(named, slot);
+            assert_eq!(signed, [spelled(&document, ContentFreeOp::CreateWellKnownDocument)], "slot {slot} of {named}: the empty body, the op's own token, over {document}");
+            assert_ne!(signed[0], spelled(named, ContentFreeOp::CreateWellKnownDocument), "slot {slot}: never the parent account");
+            assert_ne!(signed[0], spelled(&document, ContentFreeOp::CreateNewDocument), "slot {slot}: never `create_new_document`'s token");
+            for other in WELL_KNOWN_SLOTS.into_iter().filter(|other| *other != slot) {
+                assert_ne!(signed[0], spelled(&well_known_of(named, other), ContentFreeOp::CreateWellKnownDocument), "slot {slot}: never slot {other}'s frame");
+            }
+            assert_eq!(frame["attest"]["alg"], alg.as_str());
+            // The client's composer, over the same request: the same bytes
+            // signed, and the same frame. It composes the three published
+            // slots' frames; the mailbox's it sends unsigned.
+            if slot == MAILBOX_SLOT {
+                assert!(skep_client::ceremony::well_known_frame(board_term, "1.0.1", named, slot, &key, None).is_err(), "the client signs no mailbox");
+                assert!(key.take().is_empty());
+                continue;
+            }
+            let clients = skep_client::ceremony::well_known_frame(board_term, "1.0.1", named, slot, &key, None).unwrap();
+            assert_eq!(key.take(), signed, "slot {slot} of {named}: the client's composer signs the same bytes");
+            assert_eq!(clients, frame, "slot {slot} of {named}: one frame, two composers");
+        }
+    }
+    assert!(g.fake.dialed().is_empty(), "the creation's frame is composed from the request alone: {:?}", g.fake.dialed());
+
+    // A frame the board refuses at its parse is one the composer halts on.
+    for refused in [
+        json!({"op": "create_well_known_document", "account": "1.0.1"}),
+        json!({"op": "create_well_known_document", "account": "1.0.1", "slot": 6}),
+        json!({"op": "create_well_known_document", "account": "1.0.1", "slot": 1}),
+        json!({"op": "create_well_known_document", "account": "1.0.1", "slot": 64}),
+        json!({"op": "create_well_known_document", "account": "1.0.1", "slot": "5"}),
+        json!({"op": "create_well_known_document", "slot": 5}),
+        json!({"op": "create_well_known_document", "account": "1.x", "slot": 5}),
+    ] {
+        let mut frame = refused.clone();
+        let halt = composer.attach(&mut frame).expect_err("a frame the composer cannot make");
+        assert!(matches!(halt, Unattested::Refused(_)), "{refused}: {halt}");
+        assert_eq!(frame, refused, "{refused}: nothing is attached");
+        assert!(key.take().is_empty(), "{refused}: nothing is signed");
+    }
 }

@@ -419,8 +419,8 @@ fn a_slot_record_folds_with_either_bit_and_keeps_the_bit_it_carried() {
             "a slot's record moved the count of {acct}"
         );
     }
-    // The walk: each account's doc 1, then its three slots with the bit each
-    // carried — the two accounts' eight documents, ahead of genesis's four.
+    // The walk: each account's doc 1, then its four slots with the bit each
+    // carried — the two accounts' ten documents, ahead of genesis's four.
     let expected: Vec<(Address, bool)> = accounts
         .iter()
         .flat_map(|(acct, bit)| {

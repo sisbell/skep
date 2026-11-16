@@ -576,57 +576,109 @@ fn doc_owner_of_address_row_states_the_allocation_test() {
     }
 }
 
-/// THE WELL-KNOWN MINT (the mailbox design §2, §3): §Namespace's
-/// `create_well_known_document` row states the mailbox it creates — the
-/// account's slot 2, private always, its owner's alone, once — its answer,
+/// THE WELL-KNOWN CREATION (the mailbox design §2, §3; REG-4.131):
+/// §Namespace's `create_well_known_document` row states the well-known
+/// documents it creates — the mailbox at 2, private, and the bio at 3, the
+/// link page at 4 and the account's policy document at 5, each published
+/// and empty, its owner's alone, once — that `slot` is required, its answer,
+/// the first words of a published slot's document by an ordinary
+/// publication, the signature a published slot's creation carries on a
+/// claimed board and the address it names, what an `attest` at slot 2 meets,
 /// what a second call is answered — saying it committed nothing — and what
-/// its `at` is, the members the op does not take, the bare session it is
-/// admitted from, its refusals by token, and that mail needs no mailbox
-/// document; §Credential refusals
-/// carries the system account's token in a bullet of its own — whoever
-/// asks, on claimed and unclaimed boards alike — names the op in
-/// `mint_home_first`'s cell, and puts the mint outside the board-state
-/// gate; and §The change feed lists the op among the mints whose row names
-/// the minted document. The daemon's answers are pinned in skep-core's and
-/// skep-febe's suites; this pins that the contract says so.
+/// its `at` is, the member the op does not take, its refusals by token in
+/// their order, and that mail needs no mailbox document; its two request
+/// examples are the slot-2 frame and the attested slot-5 frame, byte for
+/// byte; §Credential refusals carries the system account's token in a
+/// bullet of its own — whoever asks, at every slot, on claimed and
+/// unclaimed boards alike — names the op in `mint_home_first`'s cell, puts
+/// a published slot's creation among the board-state gate's inputs and the
+/// mailbox's outside it; and §The change feed lists the op among the mints
+/// whose row names the minted document. The daemon's answers are pinned in
+/// skep-core's and skep-febe's suites and in `well_known.rs`; this pins
+/// that the contract says so.
 #[test]
-fn doc_states_the_well_known_mint_its_refusals_and_its_feed_row() {
+fn doc_states_the_well_known_creation_its_slots_its_refusals_and_its_feed_row() {
     let row = op_row("create_well_known_document");
     for fact in [
-        "`<account>.0.2`",
-        "PRIVATE, ALWAYS",
-        "OWNER's ALONE and is created ONCE",
-        "names the account and no slot",
-        "→ `ack_addr` (the mailbox's address)",
-        "takes no `published` and no `attest`",
+        "CREATE ONE OF THE ACCOUNT'S WELL-KNOWN DOCUMENTS",
+        "the address `<account>.0.<slot>`. `slot` is REQUIRED, a number",
+        "| `2` | the account's MAILBOX — `1.0.1.0.2` for the account `1.0.1` | PRIVATE |",
+        "| `3` | the account's BIO | PUBLISHED |",
+        "| `4` | the account's LINK PAGE | PUBLISHED |",
+        "| `5` | the account's POLICY DOCUMENT | PUBLISHED |",
+        "The slot fixes the document's state, and no member of the request changes it",
+        "Each is created EMPTY",
+        "is the account OWNER's ALONE and is created ONCE",
+        "→ `ack_addr` (the document's address)",
+        "takes its FIRST WORDS by an ordinary publication",
+        "a `publish` naming the document as `doc` lands its first version, `<account>.0.<slot>.1`",
+        "ON A CLAIMED BOARD the creation at slot 3, 4 or 5 is PUBLISH-CLASS",
+        "its `doc` THE SLOT DOCUMENT's OWN ADDRESS, `<account>.0.<slot>`",
+        "a frame signed for one slot verifies at no other",
+        "never framed under `create_new_document`'s token",
+        "The creation at slot 2 is never publish-class",
         "admitted from a bare session on a claimed board as `stage` is",
+        "sent at slot 2 is no unknown field: it is ADMITTED AND DROPPED",
+        "The op takes no `published`",
+        "No creation moves a count",
         "is answered `ack_addr` with the SAME `addr` and commits nothing",
-        "It carries `\"committed\": false`, which the mint's acknowledgment never does",
+        "carries `\"committed\": false`, which the creation's acknowledgment never does",
         "Its `at` is the position the call was JUDGED at",
-        "`credential_refused:system_account_no_well_known`, whoever asks",
-        "`credential_refused:mint_home_first`",
+        "The test is per slot",
+        "a request with no `slot`, or with a `slot` that names none of the four — `1`, `6`, `63`, `64`, a string — is `malformed`",
+        "`credential_refused:system_account_no_well_known`, whoever asks and at every slot",
+        "`credential_refused:mint_home_first` at every slot",
         "`credential_refused:claim_first`",
+        "`credential_refused:signed_session_required` from a bare session, `credential_refused:attestation_required` with no `attest`, `credential_refused:attestation_invalid:signature`",
         "`not_owner`",
         "`not_an_account`",
         "MAIL NEEDS NO MAILBOX DOCUMENT",
     ] {
         assert!(row.contains(fact), "the create_well_known_document row says {fact:?}: {row}");
     }
+    assert!(!row.contains("names the account and no slot"), "the row no longer says the op names no slot");
+    // The row's two examples, byte for byte: the mailbox's frame, and the
+    // policy document's with its `attest`.
+    let examples: Vec<String> = blocks()
+        .into_iter()
+        .filter(|(kind, name, _)| kind == "request" && name == "create_well_known_document")
+        .map(|(_, _, body)| body.trim().to_string())
+        .collect();
+    assert_eq!(
+        examples,
+        [
+            r#"{"account":"1.0.1","op":"create_well_known_document","slot":2}"#,
+            r#"{"account":"1.0.1","attest":{"alg":"mldsa65-ed25519","sig":"00"},"op":"create_well_known_document","slot":5}"#,
+        ],
+        "the row's request examples"
+    );
+    for example in &examples {
+        assert!(row.contains(example.as_str()), "the example stands in the op's own row: {example}");
+    }
     let refusals = prose("\n### Credential refusals", &["\n## Operations"]);
     for fact in [
         "* `system_account_no_well_known` — a `create_well_known_document`",
+        "at EVERY `slot`",
         "it has no well-known document to create",
+        "its number 5 holds no document, ever",
         "Refused WHOEVER ASKS",
         "on claimed and unclaimed boards alike: it stands in the MINT class",
-        "a `fork`, a `version` or a `stage` by a principal whose account's space has never held a document, and a `create_well_known_document` (§Namespace) by the owner of the `account` it names",
-        "the well-known mint (`create_well_known_document`, private always)",
+        "a `fork`, a `version` or a `stage` by a principal whose account's space has never held a document, and a `create_well_known_document` (§Namespace) by the owner of the `account` it names, at any `slot`, where that account holds no document",
+        "a `create_well_known_document` by the account's owner at a slot whose document is created PUBLISHED — the bio's (3), the link page's (4), the policy document's (5)",
+        "the mailbox's creation (`create_well_known_document` at slot 2, the one slot whose document is private)",
     ] {
         assert!(refusals.contains(fact), "§Credential refusals says {fact:?}");
     }
+    assert!(!refusals.contains("`create_well_known_document`, private always"), "§Credential refusals no longer calls the creation private always");
+    let envelope = prose("\n## The response envelope", &["\n## Rejections"]);
+    assert!(
+        envelope.contains("`create_well_known_document` that found its slot's document standing"),
+        "§The response envelope names the creation's second call by its slot"
+    );
     let feed = prose("\n## The change feed", &["\n## The other endpoints"]);
     assert!(
         feed.contains("the **minted** document for `create_new_document`/`fork`/`version`/`stage`/`create_well_known_document`"),
-        "§The change feed lists the well-known mint among the mints"
+        "§The change feed lists the well-known creation among the mints"
     );
 }
 
@@ -1205,21 +1257,23 @@ fn doc_states_the_staged_bytes_term_of_the_publication_price() {
     assert!(shot.contains("| `publication_over_budget` | permanent | — | the request's in-lock reads are priced past `MAX_PUBLICATION_READS`, or the bytes its commit would stage past the kernel's `MAX_TXN_BYTES`"), "the table row's second cause");
 }
 
-/// THE TEN CELLS AND THE STORED SLOT ROW (SO-I6 (a), (h); SO-I7 (f)):
-/// §Credential refusals names the ten kinds the check runs on and states
+/// THE ELEVEN CELLS AND THE STORED SLOT ROW (SO-I6 (a), (h); SO-I7 (f)):
+/// §Credential refusals names the eleven kinds the check runs on and states
 /// the frame's rows once — the stored slot row under `0x03`, its EMPTY
 /// spelling, the address-list row, the pair's row, the EMPTY body — and
 /// that the armed set gained no cause; each op's paragraph carries its
-/// `attest` statement (the mints' EMPTY body over the parent account,
+/// `attest` statement (the mints' EMPTY body over the parent account, the
+/// well-known creation's over the slot document's own address,
 /// `nullify`'s and `assert_sup`'s class constants, `edit_link`'s pair and
 /// fifth row); and §The change feed states the third absence. The daemon's
 /// bytes are pinned in `signed_ops.rs` and `feed_class.rs`; this pins that
 /// the contract says so.
 #[test]
-fn doc_states_the_ten_cells_and_the_stored_slot_row() {
+fn doc_states_the_eleven_cells_and_the_stored_slot_row() {
     let refusals = prose("\n### Credential refusals", &["\n## Operations"]);
     for fact in [
-        "publish-class write of the TEN KINDS that have an entry frame",
+        "publish-class write of the ELEVEN KINDS that have an entry frame",
+        "`create_new_document`, `fork`, `version`, `create_well_known_document`, `insert`, `publish`, `make_link`, `emit`, `nullify`, `assert_sup`, `edit_link`",
         "`delete`, `copy`, `reinstate` and `rearrange` have no frame",
         "**The entry frame's rows**",
         "THE PAIR'S ROW, its two homes as an address-list row of two: `0x01 ‖ be64(2) ‖ be32(len) ‖ d_s ‖ be32(len) ‖ d_a`",
@@ -1227,9 +1281,11 @@ fn doc_states_the_ten_cells_and_the_stored_slot_row() {
         "`0x03 ‖ be64(n) ‖ per span: be32(len) ‖ start ‖ be32(len) ‖ width`",
         "the EMPTY slot has one spelling, `0x03 ‖ be64(0)`",
         "THE ADDRESS-LIST ROW, `0x01 ‖ be64(n) ‖ each address be32(len) ‖ dotted decimal` — never a link slot's row",
-        "THE EMPTY BODY, the three mints': the member PRESENT and empty, `be32(0)` in the frame",
-        "the widening to the ten kinds added no cause",
-        "Every publish-class write of the ten kinds on a claimed board is judged",
+        "THE EMPTY BODY, the three mints' and the well-known creation's: the member PRESENT and empty, `be32(0)` in the frame, each under its op's own token",
+        "a mint's `doc` the parent account, the creation's THE SLOT DOCUMENT's OWN ADDRESS, `<account>.0.<slot>`",
+        "the widening to the eleven kinds added no cause",
+        "Every publish-class write of the eleven kinds on a claimed board is judged",
+        "the op is none of the eleven kinds",
     ] {
         assert!(refusals.contains(fact), "§Credential refusals says {fact:?}");
     }

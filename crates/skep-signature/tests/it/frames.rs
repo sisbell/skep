@@ -1,4 +1,4 @@
-//! THE FIXED FRAMES the suites sign and pin: the fourteen entry frames at
+//! THE FIXED FRAMES the suites sign and pin: the fifteen entry frames at
 //! fixed instances (`fixed_frames`), each under its name, and the two
 //! helpers that spell their addresses and extents.
 //!
@@ -33,7 +33,7 @@ pub fn extent(start: &str, width: u64) -> skep_address::Span {
         .unwrap()
 }
 
-/// The fourteen fixed instances every golden signs, on a board whose `H.1`
+/// The fifteen fixed instances every golden signs, on a board whose `H.1`
 /// pair is `(12, 0xAB…)`, by account `1.0.1`: the frames of an `insert`
 /// (undeclared, two values), a `make_link` (three slots as stored: a unit
 /// type span, a unit `from`, the `to` EMPTY), a `publish` (three values
@@ -60,8 +60,12 @@ pub fn extent(start: &str, width: u64) -> skep_address::Span {
 /// member's positions 1–3 by the member-position row, `to` the member by
 /// tag beside `1.0.1.0.64`'s unit span; a retraction of `1.0.1.0.64.0.2.1`
 /// homed in `1.0.1.0.64`; and a read-with from `1.0.1.0.1` to `1.0.1.0.64`
-/// homed there — in the signed order, the member's home first.
-pub fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 14] {
+/// homed there — in the signed order, the member's home first. The
+/// fifteenth, the eleventh kind's cell: a `create_well_known_document` of
+/// the account's policy document, the EMPTY body under the op's own token
+/// over the slot document's own address `1.0.1.0.5` — never the parent
+/// account, and never `create_new_document`'s token.
+pub fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 15] {
     let (account, doc, other) = (addr("1.0.1"), addr("1.0.1.0.1"), addr("1.0.1.0.64"));
     let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
     let insert = entry_body_insert(None, [&b"a"[..], &b"b"[..]]);
@@ -148,6 +152,9 @@ pub fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 14] {
         entry_body_empty(ContentFreeOp::Fork),
         entry_body_empty(ContentFreeOp::Version),
     );
+    // The well-known creation: the slot document's own address as its `doc`.
+    let (well_known, policy) =
+        (entry_body_empty(ContentFreeOp::CreateWellKnownDocument), addr("1.0.1.0.5"));
     let deposits = publish_deposits(publish.clone(), &other, &doc);
     let frame = |name: &'static str, body: &skep_identity::EntryBody, term: DocTerm<'_>| {
         (name, entry_frame(alg, board, &account, term, body))
@@ -167,6 +174,7 @@ pub fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 14] {
         frame("assert_sup", &assert_sup, DocTerm::One(&doc)),
         frame("emit, the to empty", &emit, DocTerm::One(&doc)),
         frame("edit_link, the pair row", &edit, DocTerm::Pair { d_s: &other, d_a: &doc }),
+        frame("create_well_known_document, the policy slot", &well_known, DocTerm::One(&policy)),
     ]
 }
 
@@ -176,7 +184,7 @@ pub fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 14] {
 /// row the trunk's address, the kind byte `0x05`, the supersedes class's
 /// unit span, the daughter's unit span, `to` the member BY TAG, the
 /// `replaces` row EMPTY. Not among `fixed_frames`: its preimage is pinned
-/// by name in `golden.rs`'s table of the shapes the fourteen leave out.
+/// by name in `golden.rs`'s table of the shapes the fifteen leave out.
 pub fn publish_supersede(
     shot: skep_identity::EntryBody,
     doc: &skep_address::Address,

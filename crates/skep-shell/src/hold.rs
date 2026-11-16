@@ -20,8 +20,9 @@
 //! ([`Holds::note_restored`]) — and entered in the board's acked
 //! positions, which the resend's read never takes for a line's lost landing
 //! ([`BoardHold::acked`]), save an ack that committed nothing
-//! (`"committed": false`: a mailbox found standing, a link write's dedup
-//! hit), whose `at` is some other write's and which is noted nowhere; a
+//! (`"committed": false`: a well-known document found standing, a link
+//! write's dedup hit), whose `at` is some other write's and which is noted
+//! nowhere; a
 //! reissue-class answer reissued within the call, a
 //! `write_busy` once after [`WRITE_BUSY_WAIT`], a first and second
 //! `durability` as-is, so the page meets the ack or the next refusal
@@ -505,11 +506,14 @@ const BURST_KINDS: [&str; 5] = ["insert", "delete", "copy", "reinstate", "rearra
 /// cannot be held either — the page needs the new document's address before
 /// it can type into it — and dialed under a stopped node it failed
 /// `unreachable`, a network fault's face for a notebook its owner stopped
-/// (skep #868); `create_well_known_document`, the mailbox's mint (the
-/// mailbox design §3), takes it as the mint does: an app sends it just
-/// ahead of the owner's first mark kept on the board, a `make_link`, so
-/// under a stopped node it is refused `stopped` as the mark behind it is,
-/// never dialed to fail `unreachable`. Every other write outside the five
+/// (skep #868); `create_well_known_document`, the creation of a well-known
+/// document at its slot (the mailbox design §3), takes it as the mint does,
+/// at every slot: an app sends the mailbox's just ahead of the owner's
+/// first mark kept on the board, a `make_link`, and a bio's, a link page's
+/// or a policy document's just ahead of the `stage` that begins its first
+/// version, so under a stopped node it is refused `stopped` as the write
+/// behind it is, never dialed to fail `unreachable`. Every other write
+/// outside the five
 /// bursts dials as it dials.
 pub const UNHOLDABLE_WRITES: [&str; 10] =
     ["create_new_document", "fork", "version", "stage", "create_well_known_document", "set_arrangement", "make_link", "nullify", "edit_link", "publish"];
@@ -4933,7 +4937,8 @@ impl Holds {
     /// page's, which the frame a resend notes keeps, never the dial id it went
     /// out under. No standing line is touched: a line held keeps the base it
     /// was held at. A read, or a refusal, notes nothing — nor does an ack that
-    /// committed nothing ([`acked_nothing`]: a mailbox found standing, an
+    /// committed nothing ([`acked_nothing`]: a well-known document found
+    /// standing, an
     /// `emit`, `nullify` or `assert_sup` answered with its incumbent), whose
     /// `at` is the position the call was judged at, some other write's: it
     /// enters no acked position, names this session the writer of no row and

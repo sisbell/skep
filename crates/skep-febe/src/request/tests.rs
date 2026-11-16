@@ -47,7 +47,13 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         (Op::Delegate { new_prefix: tum(&[1, 0, 1]), new_id: PrincipalId(1) }, false),
         (Op::RegisterNode { addr: tum(&[1, 1]) }, false),
         (Op::Fork { published: None }, false),
-        (Op::CreateWellKnownDocument { account: addr(&[1, 0, 1]) }, false),
+        (
+            Op::CreateWellKnownDocument {
+                account: addr(&[1, 0, 1]),
+                slot: skep_namespace::WellKnownSlot::Mailbox,
+            },
+            false,
+        ),
         (Op::NextAccountPrefix { parent: addr(&[1]) }, true),
         (Op::PrincipalPrefix { id: PrincipalId(1) }, true),
         (Op::EffectiveOwner { addr: addr(&[1, 0, 1, 1]) }, true),
@@ -173,7 +179,7 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
 /// identity, `reinstate`, the sixteenth — the replacement act's record;
 /// the staging act, `stage`, the seventeenth — B3-S10; the landing,
 /// `set_arrangement`, the eighteenth — the landing lane, skep #764;
-/// the well-known mint, `create_well_known_document`, the nineteenth —
+/// the well-known creation, `create_well_known_document`, the nineteenth —
 /// the mailbox design §3;
 /// the doc-metadata read and the edition-claim lookup joining the
 /// twenty-four reads, lane 3.4; the owner-of-address read the

@@ -1,10 +1,11 @@
-//! §B create_well_known_document: an account's mailbox, minted at its
-//! well-known slot 2 (the mailbox design §2, §3) — the address the slot has
-//! before anything stands there, where the mint lands and with which bit,
-//! that it moves no count, that it happens once, who may ask, where each
-//! answer is decided, which of its two answers — minted or standing — each
-//! call gives, and what the op answers for an account with no document and
-//! for the system account.
+//! §B create_well_known_document at the mailbox's slot: an account's
+//! mailbox, minted at its well-known slot 2 (the mailbox design §2, §3) —
+//! the address the slot has before anything stands there, where the mint
+//! lands and with which bit, that it moves no count, that it happens once,
+//! who may ask, where each answer is decided, which of its two answers —
+//! minted or standing — each call gives, and what the op answers for an
+//! account with no document and for the system account. The other three
+//! slots, and what holds of every slot alike, are `well_known.rs`'s.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Barrier;
@@ -17,7 +18,7 @@ use skep_kernel::{Attestation, Kernel};
 use skep_namespace::{
     first_document_address, head_document, mailbox_address, system_account, CreateDocumentError,
     HasM3, M3State, MintError, Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL,
-    FIRST_ORDINARY_DOCUMENT, MAILBOX_SLOT, SYSTEM_PRINCIPAL, WellKnown,
+    FIRST_ORDINARY_DOCUMENT, MAILBOX_SLOT, SYSTEM_PRINCIPAL, WellKnown, WellKnownSlot,
 };
 use tempfile::tempdir;
 
@@ -100,7 +101,7 @@ fn the_mailbox_lands_at_slot_2_private_whether_the_count_stands_at_1_or_past_the
         );
 
         let (mailbox, at) = ns
-            .create_well_known_document(ID1, &acct)
+            .create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
             .expect("the account's owner mints its mailbox");
         assert_eq!(mailbox, WellKnown::Minted(a(&[1, 0, 1, 0, 2])), "{later} later documents");
         let mailbox = mailbox.into_address();
@@ -151,7 +152,7 @@ fn the_counters_next_is_the_same_before_and_after_the_mint() {
         assert_eq!(next_before, nth_document(&acct, handed_out + 1));
 
         let mailbox = ns
-            .create_well_known_document(ID1, &acct)
+            .create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
             .expect("the mailbox mints")
             .0
             .into_address();
@@ -192,7 +193,7 @@ fn a_second_call_answers_the_same_address_and_stages_nothing() {
         let (k, acct) = account_with_documents(later);
         let ns = Namespace::new(&k);
         let (first, minted) = ns
-            .create_well_known_document(ID1, &acct)
+            .create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
             .expect("the first call mints");
         let mailbox = mailbox_address(&acct).expect("an account's slot");
         assert_eq!(first, WellKnown::Minted(mailbox.clone()), "the first call mints, and says so");
@@ -200,7 +201,7 @@ fn a_second_call_answers_the_same_address_and_stages_nothing() {
         let left_by_the_mint = k.snapshot().world().m3().clone();
 
         let (again, at) = ns
-            .create_well_known_document(ID1, &acct)
+            .create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
             .expect("the second call is answered, not refused");
         assert_eq!(again, WellKnown::Standing(mailbox.clone()), "the second finds it standing, and says so");
         assert_eq!(at, minted, "the zero-step answer is the committed position the call read");
@@ -218,7 +219,7 @@ fn a_second_call_answers_the_same_address_and_stages_nothing() {
         assert!(later_commit > minted);
         let standing = k.snapshot().world().m3().clone();
         let (third, at) = ns
-            .create_well_known_document(ID1, &acct)
+            .create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
             .expect("a later call is answered");
         assert_eq!(third, WellKnown::Standing(mailbox.clone()));
         assert_eq!(at, later_commit, "the position of the unrelated commit, said to be no mint");
@@ -264,7 +265,7 @@ fn racing_calls_for_one_mailbox_stage_one_record() {
                 scope.spawn(move || {
                     start.wait();
                     let (mailbox, at) = Namespace::new(k)
-                        .create_well_known_document(id, acct)
+                        .create_well_known_document(id, acct, WellKnownSlot::Mailbox)
                         .expect("every racer is answered");
                     (acct.clone(), mailbox, at)
                 })
@@ -336,14 +337,14 @@ fn a_caller_who_is_not_the_effective_owner_is_refused_before_anything_is_read() 
     // A registered account whose slot is empty.
     for stranger in strangers {
         assert_eq!(
-            rejected(ns.create_well_known_document(stranger, &acct)),
+            rejected(ns.create_well_known_document(stranger, &acct, WellKnownSlot::Mailbox)),
             CreateDocumentError::NotOwner,
             "{stranger:?} is not ω of {acct}"
         );
     }
     // ω of a sub-account is the principal seated at it, never its parent's.
     assert_eq!(
-        rejected(ns.create_well_known_document(ID1, &sub)),
+        rejected(ns.create_well_known_document(ID1, &sub, WellKnownSlot::Mailbox)),
         CreateDocumentError::NotOwner
     );
     // The mint's gate is read only for ω. An unregistered account, a node
@@ -358,13 +359,13 @@ fn a_caller_who_is_not_the_effective_owner_is_refused_before_anything_is_read() 
     ] {
         for stranger in [UNKNOWN_ID, ID2] {
             assert_eq!(
-                rejected(ns.create_well_known_document(stranger, target)),
+                rejected(ns.create_well_known_document(stranger, target, WellKnownSlot::Mailbox)),
                 CreateDocumentError::NotOwner,
                 "{stranger:?} at {target}"
             );
         }
         assert_eq!(
-            rejected(ns.create_well_known_document(owner, target)),
+            rejected(ns.create_well_known_document(owner, target, WellKnownSlot::Mailbox)),
             CreateDocumentError::Mint(MintError::NotAnAccount),
             "ω at {target}"
         );
@@ -377,18 +378,18 @@ fn a_caller_who_is_not_the_effective_owner_is_refused_before_anything_is_read() 
     // Nor does a stranger learn whether the mailbox stands: with it minted,
     // the owner is answered its address and a stranger the same refusal.
     let (mailbox, minted) = ns
-        .create_well_known_document(ID1, &acct)
+        .create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
         .expect("the owner mints");
     let mailbox = mailbox.into_address();
     for stranger in strangers {
         assert_eq!(
-            rejected(ns.create_well_known_document(stranger, &acct)),
+            rejected(ns.create_well_known_document(stranger, &acct, WellKnownSlot::Mailbox)),
             CreateDocumentError::NotOwner,
             "{stranger:?} with the mailbox standing"
         );
     }
     assert_eq!(
-        ns.create_well_known_document(ID1, &acct).expect("the owner"),
+        ns.create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox).expect("the owner"),
         (WellKnown::Standing(mailbox), minted)
     );
     assert_eq!(k.current_seq(), minted);
@@ -434,7 +435,7 @@ fn every_answer_is_decided_inside_the_ops_own_transaction() {
         .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 2]), ID2)
         .expect("a second account");
     let incumbent = ns
-        .create_well_known_document(ID2, &minted_acct)
+        .create_well_known_document(ID2, &minted_acct, WellKnownSlot::Mailbox)
         .expect("the second account's mailbox stands")
         .0
         .into_address();
@@ -448,30 +449,30 @@ fn every_answer_is_decided_inside_the_ops_own_transaction() {
     };
 
     assert_eq!(
-        rejected(ns.create_well_known_document(ID2, &acct)),
+        rejected(ns.create_well_known_document(ID2, &acct, WellKnownSlot::Mailbox)),
         CreateDocumentError::NotOwner,
         "a caller that is not ω: the premise"
     );
     decided_inside(
         "a caller that is not ω",
-        panic_of_a_nested_call(&k, || ns.create_well_known_document(ID2, &acct)),
+        panic_of_a_nested_call(&k, || ns.create_well_known_document(ID2, &acct, WellKnownSlot::Mailbox)),
     );
 
     let unregistered = a(&[1, 0, 9]);
     assert_eq!(
-        rejected(ns.create_well_known_document(BOOTSTRAP_PRINCIPAL, &unregistered)),
+        rejected(ns.create_well_known_document(BOOTSTRAP_PRINCIPAL, &unregistered, WellKnownSlot::Mailbox)),
         CreateDocumentError::Mint(MintError::NotAnAccount),
         "an unregistered account: the premise"
     );
     decided_inside(
         "an unregistered account",
         panic_of_a_nested_call(&k, || {
-            ns.create_well_known_document(BOOTSTRAP_PRINCIPAL, &unregistered)
+            ns.create_well_known_document(BOOTSTRAP_PRINCIPAL, &unregistered, WellKnownSlot::Mailbox)
         }),
     );
 
     assert_eq!(
-        ns.create_well_known_document(ID2, &minted_acct)
+        ns.create_well_known_document(ID2, &minted_acct, WellKnownSlot::Mailbox)
             .expect("a standing mailbox is answered")
             .0,
         WellKnown::Standing(incumbent),
@@ -479,13 +480,13 @@ fn every_answer_is_decided_inside_the_ops_own_transaction() {
     );
     decided_inside(
         "a standing mailbox",
-        panic_of_a_nested_call(&k, || ns.create_well_known_document(ID2, &minted_acct)),
+        panic_of_a_nested_call(&k, || ns.create_well_known_document(ID2, &minted_acct, WellKnownSlot::Mailbox)),
     );
 
     let before = k.current_seq();
     decided_inside(
         "an empty slot",
-        panic_of_a_nested_call(&k, || ns.create_well_known_document(ID1, &acct)),
+        panic_of_a_nested_call(&k, || ns.create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)),
     );
     assert_eq!(k.current_seq(), before, "the nested call minted");
     assert!(!k.snapshot().world().m3().is_registered_document(&slot(&acct, MAILBOX_SLOT)));
@@ -510,7 +511,7 @@ fn after_the_mint_slot_2_is_a_registered_document_and_slots_3_4_and_5_are_not() 
         }
 
         let mailbox = Namespace::new(&k)
-            .create_well_known_document(ID1, &acct)
+            .create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
             .expect("the mailbox mints")
             .0
             .into_address();
@@ -553,38 +554,31 @@ fn after_the_mint_slot_2_is_a_registered_document_and_slots_3_4_and_5_are_not() 
     }
 }
 
-/// Called for the system account, the op stages nothing and answers the
-/// head document's address, as standing. The system account has no mailbox:
-/// its document 2 is the head document, which genesis seeds, so the op finds
-/// the slot filled. It holds no guard of its own — refusing the call is the
-/// daemon's door's — and this pins what stands behind that door: an answer
-/// that changes nothing, on a slice that stays genesis's, with the head
-/// document published as it was born. A caller who is not the system
-/// principal is refused as on any account.
+/// Called for the system account at the mailbox's slot, the op refuses and
+/// stages nothing, whoever calls. The system account has no mailbox: its
+/// document 2 is the head document, which genesis seeds, and without the
+/// guard the op would find that slot filled and answer the head document's
+/// address as a mailbox standing. The refusal is the store's own, behind the
+/// daemon's door, and it leaves the slice genesis's, the head document
+/// published as it was born.
 #[test]
-fn called_for_the_system_account_it_answers_the_head_document_and_stages_nothing() {
+fn called_for_the_system_account_it_refuses_and_the_head_document_stands_untouched() {
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
     let before = k.current_seq();
 
-    let (answered, at) = ns
-        .create_well_known_document(SYSTEM_PRINCIPAL, &system_account())
-        .expect("the system account's call is answered, not refused");
-    assert_eq!(answered, WellKnown::Standing(head_document()), "found standing, and said so");
-    let answered = answered.into_address();
-    assert_eq!(answered, a(&[1, 1, 0, 1, 0, 2]));
-    assert_eq!(at, before, "the zero-step answer is the committed position the call read");
-    assert_eq!(k.current_seq(), before, "the call drew a position");
+    for caller in [SYSTEM_PRINCIPAL, BOOTSTRAP_PRINCIPAL, ID1] {
+        assert_eq!(
+            rejected(ns.create_well_known_document(caller, &system_account(), WellKnownSlot::Mailbox)),
+            CreateDocumentError::SystemAccountNoWellKnown,
+            "{caller:?}: refused whoever calls, the account's own principal included"
+        );
+    }
+    assert_eq!(k.current_seq(), before, "a refused call drew a position");
     let m3 = k.snapshot().world().m3().clone();
-    assert!(m3 == M3State::genesis(), "the call folded a record");
+    assert!(m3 == M3State::genesis(), "a refused call folded a record");
     assert!(m3.published(&head_document()), "the head document is no private mailbox");
     assert_eq!(m3.minted_at(&head_document()), Some(Seq(0)));
-
-    assert_eq!(
-        rejected(ns.create_well_known_document(BOOTSTRAP_PRINCIPAL, &system_account())),
-        CreateDocumentError::NotOwner
-    );
-    assert_eq!(k.current_seq(), before);
 }
 
 /// On an account with no document the op mints the slot: it asks for no
@@ -603,7 +597,7 @@ fn on_an_account_with_no_document_the_slot_mints_and_the_next_create_is_still_it
     assert!(!k.snapshot().world().m3().has_documents(&acct));
 
     let (mailbox, minted) = ns
-        .create_well_known_document(ID1, &acct)
+        .create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
         .expect("the slot mints on an account with no document");
     assert_eq!(mailbox, WellKnown::Minted(a(&[1, 0, 1, 0, 2])));
     let mailbox = mailbox.into_address();
@@ -633,7 +627,7 @@ fn on_an_account_with_no_document_the_slot_mints_and_the_next_create_is_still_it
     assert_eq!(m3.minted_at(&mailbox), Some(minted));
     let standing = k.current_seq();
     assert_eq!(
-        ns.create_well_known_document(ID1, &acct).expect("the incumbent"),
+        ns.create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox).expect("the incumbent"),
         (WellKnown::Standing(mailbox), standing)
     );
 }
@@ -657,7 +651,7 @@ fn an_attested_handles_mailbox_mint_leaves_its_signature_slot_empty() {
         .create_new_document(ID1, &acct, None)
         .expect("the create commits");
     let (mailbox, minted) = Namespace::attested(&k, Some(&attestation))
-        .create_well_known_document(ID1, &acct)
+        .create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
         .expect("the mailbox commits");
     let mailbox = mailbox.into_address();
     assert!(minted > created);
@@ -695,7 +689,7 @@ fn the_mailbox_replays_from_the_journal_and_a_call_after_the_reopen_mints_nothin
         ns.create_new_document(ID1, &acct, None)
             .expect("a second document");
         let (mailbox, minted) = ns
-            .create_well_known_document(ID1, &acct)
+            .create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
             .expect("the mailbox mints");
         (acct, mailbox.into_address(), minted, k.snapshot().world().m3().clone())
     };
@@ -713,7 +707,7 @@ fn the_mailbox_replays_from_the_journal_and_a_call_after_the_reopen_mints_nothin
 
     assert_eq!(
         Namespace::new(&k)
-            .create_well_known_document(ID1, &acct)
+            .create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
             .expect("a call after the reopen is answered"),
         (WellKnown::Standing(mailbox), minted)
     );

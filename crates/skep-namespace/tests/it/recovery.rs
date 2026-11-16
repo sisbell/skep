@@ -154,9 +154,11 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     payload.downcast_ref::<String>().cloned().unwrap_or_default()
 }
 
-/// Genesis fills all three of the system account's named slots, so the once
-/// rule is what keeps a system document from being placed while a board
-/// runs: a record at the head document, the staging draft or the time
+/// Genesis fills three of the system account's named slots, so there the
+/// once rule is what keeps a system document from being placed while a
+/// board runs (at its slot 5, which genesis leaves empty, the op's own
+/// refusal of the account is): a record at the head document, the staging
+/// draft or the time
 /// document, with either bit, fail-stops the fold on genesis, naming the
 /// slot. No rule about the account's kind is asked for.
 #[test]

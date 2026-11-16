@@ -752,3 +752,81 @@ fn a_drafts_entry_names_the_session_that_wrote_it_past_that_sessions_end() {
     shell.shutdown();
     sd.shutdown();
 }
+
+/// Checks a well-known creation through the shell, slot by slot.
+///
+/// Against the real daemon, on a claimed board, a signed session sends
+/// `create_well_known_document` through `op`, and the shell attests it at
+/// every slot — the kind is of the checked set. At the mailbox's slot the
+/// board admits the request and drops the signature unverified: the mailbox
+/// lands private, and its row, read under the session's token, carries the
+/// session's testimony and no `attest`. At the policy document's slot the
+/// creation is publish-class and the shell's signature is the one the board
+/// verifies — over the slot document's own address — so the document lands
+/// published and empty, a guest reads it, and its row, read as a guest,
+/// carries the `attest` and no testimony. A second call at either slot is
+/// answered the same address with `"committed": false` and adds no row (the
+/// mutant that leaves the kind out of the shell's checked set sends slot 5
+/// unsigned and meets the board's `attestation_required`; the one that signs
+/// over the parent account meets `attestation_invalid`).
+#[test]
+fn a_well_known_creation_through_the_shell_is_signed_and_lands_in_its_slots_own_state() {
+    use skep_client::address::{well_known_of, MAILBOX_SLOT, POLICY_SLOT};
+
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (shell, _) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    let board = shell.board_references().remove(0);
+    let opened = shell.call("session", &json!({"board": board})).unwrap();
+    let (session, opened_at) = (opened["session"].as_str().unwrap().to_string(), opened["opened_at"].as_u64().unwrap());
+    let library = Board::new(Origin::parse(&origin).unwrap(), skep_client::PlainHttp::new());
+    let token = shell.sessions.get(&session).unwrap().token.clone();
+    let create = |slot: u64| shell.call("op", &json!({"session": session, "frame": {"op": "create_well_known_document", "account": "1.0.1", "slot": slot}}));
+    let rows = |reader: Option<&Token>, doc: &str, drafts: bool| -> Vec<Value> {
+        match library.changes(reader, &ChangesQuery { since: opened_at, under: Some(doc), drafts, limit: None }).unwrap() {
+            ChangesAnswer::Page(page) => page.changes,
+            _ => panic!("no page under {doc} since {opened_at}"),
+        }
+    };
+    let metadata = |reader: Option<&Token>, doc: &str| match library.op(reader, &frames::doc_metadata(doc)).unwrap() {
+        skep_client::board::Answer::Document(v) => v,
+        skep_client::board::Answer::Closed => panic!("the session ended at the metadata read"),
+    };
+
+    // The mailbox: attested by the shell, admitted, the signature dropped.
+    let mailbox = well_known_of("1.0.1", MAILBOX_SLOT);
+    let minted = create(MAILBOX_SLOT).unwrap_or_else(|refused| panic!("the mailbox's creation is admitted: {refused}"));
+    assert_eq!((minted["addr"].as_str(), minted.get("committed")), (Some(mailbox.as_str()), None), "{minted}");
+    assert_eq!(metadata(Some(&token), &mailbox)["published"], false, "the mailbox is private");
+    assert_eq!(metadata(None, &mailbox)["code"], "withheld", "a guest is withheld it");
+    let row = rows(Some(&token), &mailbox, true);
+    assert_eq!(row.len(), 1, "one row: {row:?}");
+    assert_eq!((row[0]["op"].as_str(), row[0]["at"].as_u64()), (Some("create_well_known_document"), minted["at"].as_u64()), "{row:?}");
+    assert!(row[0].get("attest").is_none(), "the signature the shell attached was dropped: {row:?}");
+    assert!(row[0]["key"].as_str().is_some_and(|key| key != "bare"), "the row testifies the signed session's key: {row:?}");
+
+    // The policy document: the shell's signature is the one the board checks.
+    let policy = well_known_of("1.0.1", POLICY_SLOT);
+    let created = create(POLICY_SLOT).unwrap_or_else(|refused| panic!("the shell signs the policy document's creation: {refused}"));
+    assert_eq!((created["addr"].as_str(), created.get("committed")), (Some(policy.as_str()), None), "{created}");
+    let meta = metadata(None, &policy);
+    assert_eq!((meta["published"].as_bool(), meta["owner"].as_str(), meta["birth"].is_null()), (Some(true), Some("1.0.1"), true), "a guest reads it, published and empty: {meta}");
+    let row = rows(None, &policy, false);
+    assert_eq!(row.len(), 1, "a guest's page carries the creation's row: {row:?}");
+    assert_eq!((row[0]["op"].as_str(), row[0]["at"].as_u64()), (Some("create_well_known_document"), created["at"].as_u64()), "{row:?}");
+    assert!(row[0]["attest"].is_object() && row[0].get("key").is_none(), "the row reads signed: {row:?}");
+
+    // Once per slot: a second call commits nothing and adds no row.
+    for (slot, doc) in [(MAILBOX_SLOT, &mailbox), (POLICY_SLOT, &policy)] {
+        let again = create(slot).unwrap_or_else(|refused| panic!("a second call is answered: {refused}"));
+        assert_eq!((again["addr"].as_str(), &again["committed"]), (Some(doc.as_str()), &json!(false)), "slot {slot}: {again}");
+    }
+    assert_eq!(rows(Some(&token), &mailbox, true).len() + rows(None, &policy, false).len(), 2, "no second call added a row");
+    shell.shutdown();
+    sd.shutdown();
+}

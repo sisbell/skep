@@ -30,7 +30,10 @@
 //! placed against the `delegate`, the custody pair or its decline, the
 //! paste's tests, the owner's own genesis, the mint and the principal, each
 //! resume, the re-hire — and beside it the agent's own sessions, a rotation
-//! at the agent and the stop at an account a hire made.
+//! at the agent and the stop at an account a hire made; `well_known` drives
+//! the creation of an account's well-known documents on an enforcing board
+//! — each slot in its own state, the published three signed, once apiece —
+//! and the refusals that reach its caller.
 
 mod backup;
 mod claim;
@@ -54,3 +57,4 @@ mod search;
 mod share;
 mod tidy;
 mod verifier;
+mod well_known;

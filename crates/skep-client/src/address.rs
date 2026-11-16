@@ -3,8 +3,11 @@
 //! The spelling is the one the frames carry and the bindings file keeps.
 //! The grammar gives an account's parent account, which AUTH-5.21's walk
 //! climbs by; its first child, `inc(X, 1)`, the agents' home (AUTH-5.87);
-//! its doc 1 (AUTH-2.109); its mailbox, at the well-known slot
-//! [`MAILBOX_SLOT`] (the mailbox design §2); the number its documents are
+//! its doc 1 (AUTH-2.109); its four well-known documents, each at a slot of
+//! its own — the mailbox at [`MAILBOX_SLOT`], the bio at [`BIO_SLOT`], the
+//! link page at [`LINK_PAGE_SLOT`] and the account's policy document at
+//! [`POLICY_SLOT`] (the mailbox design §2; REG-4.131); the number its
+//! documents are
 //! counted from past doc 1, [`FIRST_ORDINARY_DOCUMENT`]; the document an
 //! element or link address lies in; the parse into `skep_address`'s
 //! `Address`, T4 checked;
@@ -66,8 +69,9 @@ pub fn doc_1_of(account: &str) -> String {
 ///
 /// It is the first document number an account's counter hands out after its
 /// doc 1: an account's documents are numbered 1 and then from here on, and
-/// the numbers between are reserved for well-known documents, the mailbox's
-/// [`MAILBOX_SLOT`] among them (the mailbox design §2). So an account's
+/// the numbers between are reserved for well-known documents, the four
+/// slots from [`MAILBOX_SLOT`] to [`POLICY_SLOT`] among them (the mailbox
+/// design §2). So an account's
 /// second document stands at `<account>.0.` and this number. The namespace's
 /// constant is the one spelling of the number (`skep-namespace/src/ns.rs`);
 /// this crate does not link that one, so it holds this copy for the tools
@@ -83,6 +87,48 @@ pub const FIRST_ORDINARY_DOCUMENT: u64 = 64;
 /// not link, and its suite holds the two equal.
 pub const MAILBOX_SLOT: u64 = 2;
 
+/// The well-known slot of an account's bio: document 3.
+///
+/// The mailbox design §2: a published document others' apps read at a
+/// computed address, with no lookup. It is `skep-namespace`'s `BIO_SLOT`,
+/// reproduced as [`MAILBOX_SLOT`] is, and this crate's suite holds the two
+/// equal.
+pub const BIO_SLOT: u64 = 3;
+
+/// The well-known slot of an account's link page: document 4.
+///
+/// The mailbox design §2: the account's public link page, published as the
+/// bio is. It is `skep-namespace`'s `LINK_PAGE_SLOT`, reproduced as
+/// [`MAILBOX_SLOT`] is, and this crate's suite holds the two equal.
+pub const LINK_PAGE_SLOT: u64 = 4;
+
+/// The well-known slot of an account's policy document: document 5.
+///
+/// It is the account's policy document, published: at a registry's door
+/// account, the admission policy an applicant reads as a guest (REG-4.131).
+/// It is `skep-namespace`'s `POLICY_SLOT`, reproduced as [`MAILBOX_SLOT`]
+/// is, and this crate's suite holds the two equal.
+pub const POLICY_SLOT: u64 = 5;
+
+/// The four well-known slots, in the order of their numbers.
+///
+/// They are every number a `create_well_known_document` may name (wire.md
+/// §Namespace): the board refuses any other at its parse.
+pub const WELL_KNOWN_SLOTS: [u64; 4] = [MAILBOX_SLOT, BIO_SLOT, LINK_PAGE_SLOT, POLICY_SLOT];
+
+/// Returns the address of an account's document at the well-known slot `slot`.
+///
+/// The address is the account's own, then `.0.` and the slot's number (the
+/// mailbox design §2). It names a place whether or not a document stands
+/// there, in the spelling the account came in, and it is the address the
+/// signature over the slot's creation names (wire.md §Credential refusals).
+/// Neither text is checked: the account to be an account's, nor `slot` to be
+/// one of [`WELL_KNOWN_SLOTS`]. For the system account the slots are its own
+/// table, no account's well-known documents.
+pub fn well_known_of(account: &str, slot: u64) -> String {
+    format!("{account}.0.{slot}")
+}
+
 /// Returns an account's mailbox at its computable address.
 ///
 /// The address is the account's own, then `.0.` and [`MAILBOX_SLOT`] (the
@@ -95,7 +141,7 @@ pub const MAILBOX_SLOT: u64 = 2;
 /// no mailbox: in its table the slot is the head document,
 /// `board::HEAD_DOCUMENT`, which `mailbox_of("1.1.0.1")` answers.
 pub fn mailbox_of(account: &str) -> String {
-    format!("{account}.0.{MAILBOX_SLOT}")
+    well_known_of(account, MAILBOX_SLOT)
 }
 
 /// Parses an address in its dotted-decimal spelling.
@@ -247,6 +293,36 @@ mod tests {
             let minted = skep_namespace::mailbox_address(&parsed).expect("an account has a mailbox slot");
             assert_eq!(mailbox_of(account), minted.to_string(), "{account}");
         }
+    }
+
+    /// The four well-known slots are the namespace's own, held, number by
+    /// number and as a set.
+    ///
+    /// Where a number moves on either side alone, or the namespace names a
+    /// slot this crate does not, this fails and names it, so the address
+    /// this crate computes for a slot — the one a creation's signature
+    /// names — is the one the board creates the document at, for an
+    /// account, an agent's account and an account under another node alike.
+    #[test]
+    fn the_well_known_slots_are_the_namespaces_own() {
+        use skep_namespace::WellKnownSlot;
+        assert_eq!(BIO_SLOT, u64::from(skep_namespace::BIO_SLOT));
+        assert_eq!(LINK_PAGE_SLOT, u64::from(skep_namespace::LINK_PAGE_SLOT));
+        assert_eq!(POLICY_SLOT, u64::from(skep_namespace::POLICY_SLOT));
+        assert_eq!(WELL_KNOWN_SLOTS, WellKnownSlot::ALL.map(|slot| u64::from(slot.number())), "every slot the namespace names, and no other");
+        for number in 0..=FIRST_ORDINARY_DOCUMENT + 1 {
+            let named = u32::try_from(number).ok().and_then(WellKnownSlot::named);
+            assert_eq!(WELL_KNOWN_SLOTS.contains(&number), named.is_some(), "document number {number}");
+        }
+        for account in ["1.0.5", "1.3.0.5", "1.0.5.1.1"] {
+            let parsed = parse_address(account).expect("an account's address");
+            for slot in WellKnownSlot::ALL {
+                let created = skep_namespace::well_known_address(&parsed, slot).expect("an account has the slot");
+                assert_eq!(well_known_of(account, u64::from(slot.number())), created.to_string(), "{account} {slot:?}");
+            }
+        }
+        assert_eq!(well_known_of("1.0.5", POLICY_SLOT), "1.0.5.0.5");
+        assert!(WELL_KNOWN_SLOTS.iter().all(|slot| 1 < *slot && *slot < FIRST_ORDINARY_DOCUMENT));
     }
 
     /// The namespace's depth admits its last component and refuses one past.

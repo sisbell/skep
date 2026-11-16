@@ -5,16 +5,18 @@
 //! it has checked, composing every axis of that frame itself — the `board`
 //! term from its own read of the board it dials, the account from the
 //! session — and never a preimage the page supplies". For a frame of the
-//! ten kinds that have an entry frame ([`CheckedKind`]; wire.md §Credential
-//! refusals) — `create_new_document`, `fork`, `version`, `insert`,
-//! `publish`, `make_link`, `emit`, `nullify`, `assert_sup`, `edit_link` —
+//! eleven kinds that have an entry frame ([`CheckedKind`]; wire.md
+//! §Credential refusals) — `create_new_document`, `fork`, `version`,
+//! `create_well_known_document`, `insert`, `publish`, `make_link`, `emit`,
+//! `nullify`, `assert_sup`, `edit_link` —
 //! the attest is the entry frame under `H.1`'s pair, the session's account,
 //! the frame's `doc` term and the body the kind's grammar spells, signed by
 //! the session's key, attached as the frame's `attest` member. The wire's
 //! own rule is to attach when in doubt: the publish class is the daemon's
 //! classification, and an `attest` on a write outside it is dropped unread,
-//! so every write of the ten kinds under a signed session is attested, a
-//! draft's included — save a frame an `attest` already rides
+//! so every write of the eleven kinds under a signed session is attested, a
+//! draft's included, and a well-known creation at every slot, the private
+//! mailbox's among them — save a frame an `attest` already rides
 //! ([`wants_attest`]) and a write at a board no one has claimed that serves
 //! no `H.1` to sign over; a head record that stands and cannot be read, or a
 //! claimed board that serves none, refuses the write `head_unreadable`, never
@@ -55,7 +57,7 @@ use std::ops::Range;
 
 use serde_json::{json, Value};
 use skep_address::{Address, Nat, Span, Tumbler};
-use skep_client::address::document_of;
+use skep_client::address::{document_of, well_known_of, WELL_KNOWN_SLOTS};
 use skep_client::board::{frames, Answer, Board, Rejection, Token, T_SUPERSEDES};
 use skep_client::dial::MAX_ANSWER_BYTES;
 use skep_client::halt::Halt;
@@ -78,9 +80,9 @@ use crate::wire::{bounded_address, delivered_values, values_of, within_component
 /// `retraction_tuple`).
 const T_RETRACTION: &str = "1.1.0.1.0.1.0.1.5";
 
-/// A kind of the checked set: one of the ten that have an entry frame.
+/// A kind of the checked set: one of the eleven that have an entry frame.
 ///
-/// The ten (wire.md §Credential refusals) are read off a frame's op by
+/// The eleven (wire.md §Credential refusals) are read off a frame's op by
 /// [`CheckedKind::named`] alone, so the composer's dispatch is one arm per
 /// kind, which the compiler holds exhaustive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,6 +90,7 @@ enum CheckedKind {
     CreateNewDocument,
     Fork,
     Version,
+    CreateWellKnownDocument,
     Insert,
     Publish,
     MakeLink,
@@ -98,11 +101,12 @@ enum CheckedKind {
 }
 
 impl CheckedKind {
-    /// The ten, in the wire's order.
-    const ALL: [CheckedKind; 10] = [
+    /// The eleven, in the wire's order.
+    const ALL: [CheckedKind; 11] = [
         CheckedKind::CreateNewDocument,
         CheckedKind::Fork,
         CheckedKind::Version,
+        CheckedKind::CreateWellKnownDocument,
         CheckedKind::Insert,
         CheckedKind::Publish,
         CheckedKind::MakeLink,
@@ -118,6 +122,7 @@ impl CheckedKind {
             CheckedKind::CreateNewDocument => "create_new_document",
             CheckedKind::Fork => "fork",
             CheckedKind::Version => "version",
+            CheckedKind::CreateWellKnownDocument => "create_well_known_document",
             CheckedKind::Insert => "insert",
             CheckedKind::Publish => "publish",
             CheckedKind::MakeLink => "make_link",
@@ -128,7 +133,7 @@ impl CheckedKind {
         }
     }
 
-    /// Returns the kind the wire spells `op`, where it is one of the ten.
+    /// Returns the kind the wire spells `op`, where it is one of the eleven.
     fn named(op: &str) -> Option<CheckedKind> {
         CheckedKind::ALL.into_iter().find(|kind| kind.as_str() == op)
     }
@@ -169,14 +174,14 @@ const MAX_REINSERTED_VALUES: u64 = 1 << 17;
 /// hold.
 const MAX_COPIED_POSITIONS: u64 = (MAX_FRAME_BYTES / 4) as u64;
 
-/// Returns whether `op` is one of the ten kinds that have an entry frame.
+/// Returns whether `op` is one of the eleven kinds that have an entry frame.
 pub fn in_checked_set(op: &str) -> bool {
     CheckedKind::named(op).is_some()
 }
 
 /// Returns the kind of `frame` the shell composes an attest for.
 ///
-/// Its op is one of the ten, no `attest` riding it — the one reader of the
+/// Its op is one of the eleven, no `attest` riding it — the one reader of the
 /// composer's precondition, which [`wants_attest`] and [`Composer::attach`]
 /// share.
 fn wanted_kind(frame: &Value) -> Option<CheckedKind> {
@@ -185,7 +190,7 @@ fn wanted_kind(frame: &Value) -> Option<CheckedKind> {
 
 /// Returns whether the shell composes an attest for `frame`.
 ///
-/// It does where its op is one of the ten kinds and no `attest` rides it
+/// It does where its op is one of the eleven kinds and no `attest` rides it
 /// already — a page-supplied attest is left as it stands, the board's to
 /// judge, since the shell signs only what it composed.
 pub fn wants_attest(frame: &Value) -> bool {
@@ -1138,14 +1143,15 @@ impl Composer<'_> {
     ///
     /// Returns a halt where the frame lacks a member its kind's grammar names
     /// or names an address the composer cannot spell, and whatever
-    /// [`insert_terms`], [`Composer::slot`], [`Composer::publish_body`] and
-    /// [`Composer::deposit_rows`] refuse.
+    /// [`well_known_term`], [`insert_terms`], [`Composer::slot`],
+    /// [`Composer::publish_body`] and [`Composer::deposit_rows`] refuse.
     fn doc_term_and_body(&self, kind: CheckedKind, frame: &Value) -> Result<(OwnedDocTerm, EntryBody), Unattested> {
         let one = |text: &str, what: &str| -> Result<OwnedDocTerm, Halt> { Ok(OwnedDocTerm::One(addr(text, what)?)) };
         Ok(match kind {
             CheckedKind::CreateNewDocument => (one(member(frame, "account")?, "account")?, entry_body_empty(ContentFreeOp::CreateNewDocument)),
             CheckedKind::Fork => (one(self.account, "account")?, entry_body_empty(ContentFreeOp::Fork)),
             CheckedKind::Version => (one(self.account, "account")?, entry_body_empty(ContentFreeOp::Version)),
+            CheckedKind::CreateWellKnownDocument => (OwnedDocTerm::One(well_known_term(frame)?), entry_body_empty(ContentFreeOp::CreateWellKnownDocument)),
             CheckedKind::Insert => {
                 let (trunk, body) = insert_terms(frame)?;
                 (OwnedDocTerm::One(trunk), body)
@@ -1216,7 +1222,7 @@ impl Composer<'_> {
     ///
     /// Panics where its precondition, the caller's, is broken — discharged
     /// by `SessionEntry::attest` through [`wants_attest`]: the frame's op one
-    /// of the ten kinds, no `attest` riding it; a frame outside it is a bug of
+    /// of the eleven kinds, no `attest` riding it; a frame outside it is a bug of
     /// this crate's, and `attach` panics naming the obligation.
     pub fn attach(&self, frame: &mut Value) -> Result<(), Unattested> {
         let kind = wanted_kind(frame).expect("Composer::attach's precondition: wants_attest admitted the frame");
@@ -1227,6 +1233,33 @@ impl Composer<'_> {
         frame["attest"] = json!({"alg": alg, "sig": sig_hex(&self.signer.sign(&bytes))});
         Ok(())
     }
+}
+
+/// Returns a `create_well_known_document` frame's `doc` term: the slot
+/// document's own address.
+///
+/// It is `<account>.0.<slot>`, the frame's `account` then `.0.` and its
+/// `slot` — the document the creation makes, as the board composes the term
+/// it verifies (wire.md §Credential refusals, the creation's cell): the
+/// address is a function of the request, so it is signed before the commit,
+/// and a frame signed for one slot verifies at no other. The term is the
+/// same at every slot, the mailbox's among them, where the board drops the
+/// attest unread.
+///
+/// # Errors
+///
+/// Returns a halt where the frame carries no `account`, where its `slot` is
+/// no well-known slot's number (`skep-client`'s `WELL_KNOWN_SLOTS`, which
+/// its suite holds equal to the namespace's four) — a frame the board
+/// refuses at its parse whatever it carries — or where the two spell no
+/// address.
+fn well_known_term(frame: &Value) -> Result<Address, Halt> {
+    let account = member(frame, "account")?;
+    let slot = frame["slot"]
+        .as_u64()
+        .filter(|slot| WELL_KNOWN_SLOTS.contains(slot))
+        .ok_or_else(|| fault("the frame's `slot` names no well-known slot", "a well-known creation names its slot by number: 2 the mailbox, 3 the bio, 4 the link page, 5 the policy document (wire.md §Namespace)"))?;
+    addr(&well_known_of(account, slot), "account")
 }
 
 /// Returns a `publish` frame's `doc` term (the link-sets design §5.7): the

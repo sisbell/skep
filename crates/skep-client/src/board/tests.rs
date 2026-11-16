@@ -60,8 +60,9 @@ fn the_frames_spell_the_wire() {
 /// list and an `empty` type, `window_ftt`'s all-`any` four-set past a cursor
 /// (and beside it, with no example of the wire's own, the mail search's
 /// paged form at the start), the mailbox's mint,
-/// `create_well_known_document` (§Namespace), whose frame serializes to the
-/// example's line byte for byte, `count_v_by_home` with its `except`,
+/// `create_well_known_document` (§Namespace) at slot 2, whose frame
+/// serializes to the example's line byte for byte, and the same op at
+/// another slot, `count_v_by_home` with its `except`,
 /// `find_links_v_history` at the start, `project`, `edition_claims`,
 /// `out_claims` (the example's view is `audit`; this crate reads the active
 /// view, the one member that differs) and the `publish` example with every
@@ -87,7 +88,15 @@ fn the_builders_spell_the_wires_own_examples() {
     assert_eq!(paged["q"], frames::find_links_ftt(frames::T_MAIL, &mailbox)["q"], "the paged search asks the unpaged read's query");
     assert_eq!(frames::window_ftt(frames::T_MAIL, &mailbox, Some("1.0.7.0.64.0.2.1"), 16)["cur"], "1.0.7.0.64.0.2.1");
     // The mailbox's mint: the example's own line, as the frame serializes.
-    assert_eq!(frames::create_mailbox("1.0.1", None).to_string(), r#"{"account":"1.0.1","op":"create_well_known_document"}"#);
+    assert_eq!(frames::create_mailbox("1.0.1", None).to_string(), r#"{"account":"1.0.1","op":"create_well_known_document","slot":2}"#);
+    assert_eq!(frames::create_mailbox("1.0.1", None), frames::create_well_known_document("1.0.1", crate::address::MAILBOX_SLOT, None, None), "the mailbox's frame is the creation's at slot 2, with no attest");
+    assert_eq!(frames::create_well_known_document("1.0.1", 4, None, Some("x")).to_string(), r#"{"account":"1.0.1","id":"x","op":"create_well_known_document","slot":4}"#);
+    let attest = json!({"alg": "mldsa65-ed25519", "sig": "00"});
+    assert_eq!(
+        frames::create_well_known_document("1.0.1", 5, Some(attest), None).to_string(),
+        r#"{"account":"1.0.1","attest":{"alg":"mldsa65-ed25519","sig":"00"},"op":"create_well_known_document","slot":5}"#,
+        "the policy document's creation, as wire.md's attested example spells it"
+    );
     assert_eq!(frames::count_v_by_home("1.0.1.0.1", &[(1, 5)], 64, &["1.0.1.0.64"]), json!({"d":"1.0.1.0.1","except":["1.0.1.0.64"],"n":64,"op":"count_v_by_home","region":[{"start":"1.1","width":"0.5"}]}));
     assert!(frames::count_v_by_home("1.0.1.0.1", &[(1, 5)], 64, &[]).get("except").is_none(), "no `except` where none is named");
     assert_eq!(frames::find_links_v_history("1.0.1.0.1", &[(1, 5)], None, 16), json!({"cur":null,"d":"1.0.1.0.1","n":16,"op":"find_links_v_history","region":[{"start":"1.1","width":"0.5"}]}));
@@ -475,4 +484,85 @@ fn a_page_or_a_fits_that_moves_its_reader_nowhere_is_refused() {
     }
     assert_eq!(fits(99, Some(100)).unwrap(), ChangesAnswer::TooLarge { fits: 99 });
     assert_eq!(fits(255, None).unwrap(), ChangesAnswer::TooLarge { fits: 255 });
+}
+
+/// A signer that keeps every payload it is handed, beside the key it signs
+/// with: what a composer signed, byte for byte.
+#[cfg(feature = "acting")]
+struct Recording {
+    key: skep_signature::HybridSigner,
+    signed: Mutex<Vec<Vec<u8>>>,
+}
+
+#[cfg(feature = "acting")]
+impl crate::sign::Signer for Recording {
+    fn public_key(&self) -> &PublicKey {
+        crate::sign::Signer::public_key(&self.key)
+    }
+
+    fn sign(&self, payload: &[u8]) -> Vec<u8> {
+        self.signed.lock().unwrap().push(payload.to_vec());
+        crate::sign::Signer::sign(&self.key, payload)
+    }
+}
+
+/// THE WELL-KNOWN CREATION's FRAME (wire.md §Namespace; §Credential
+/// refusals, the creation's cell): the mailbox's frame sends `"slot": 2`
+/// and no `attest`; the signed frame of a published slot — the bio's, the
+/// link page's, the policy document's — sends its `slot` and an `attest`
+/// whose signature is over the empty body under the op's own token, the
+/// frame's `account` the session's own and its `doc` THE SLOT DOCUMENT's OWN
+/// ADDRESS, `<account>.0.<slot>` — never the parent account, never another
+/// slot's address, never `create_new_document`'s token — and verifies under
+/// the signer's key. The composer signs no mailbox and no number no slot
+/// has: each is this client's own fault, nothing composed.
+#[cfg(feature = "acting")]
+#[test]
+fn a_published_slots_creation_frame_carries_its_slot_and_an_attest_over_the_slots_address() {
+    use skep_identity::{entry_body_empty, entry_frame, ContentFreeOp, DocTerm};
+
+    use crate::address::{parse_address, well_known_of, BIO_SLOT, LINK_PAGE_SLOT, MAILBOX_SLOT, POLICY_SLOT};
+    use crate::ceremony::well_known_frame;
+    use crate::sign::Signer;
+
+    let key = Recording {
+        key: skep_signature::HybridSigner::from_seed(skep_signature::TAG_MLDSA65_ED25519, &[7; 32]).expect("tag 1"),
+        signed: Mutex::new(Vec::new()),
+    };
+    let term = BoardTerm { log_position: 12, chain: [7; 32] };
+    let alg = key.public_key().alg().to_string();
+    assert_eq!(frames::create_mailbox("1.0.1", None)["slot"], MAILBOX_SLOT, "the mailbox's frame names its slot");
+    assert!(frames::create_mailbox("1.0.1", None).get("attest").is_none(), "and carries no attest");
+
+    // The session's own account, and an account it names beside its own.
+    for (own, account) in [("1.0.1", "1.0.1"), ("1.0.1", "1.0.1.2")] {
+        let spelled = |doc: &str, op: ContentFreeOp| {
+            let (own, doc) = (parse_address(own).unwrap(), parse_address(doc).unwrap());
+            entry_frame(&alg, term, &own, DocTerm::One(&doc), &entry_body_empty(op))
+        };
+        for slot in [BIO_SLOT, LINK_PAGE_SLOT, POLICY_SLOT] {
+            let frame = well_known_frame(term, own, account, slot, &key, Some("w-1")).expect("a published slot's frame");
+            assert_eq!((frame["op"].as_str(), frame["account"].as_str(), frame["slot"].as_u64(), frame["id"].as_str()), (Some("create_well_known_document"), Some(account), Some(slot), Some("w-1")));
+            assert_eq!(frame.as_object().map(|members| members.len()), Some(5), "the op, the account, the slot, the id and the attest: {frame}");
+            let signed = std::mem::take(&mut *key.signed.lock().unwrap());
+            let document = well_known_of(account, slot);
+            assert_eq!(signed, [spelled(&document, ContentFreeOp::CreateWellKnownDocument)], "slot {slot} of {account}: signed over {document}");
+            assert_ne!(signed[0], spelled(account, ContentFreeOp::CreateWellKnownDocument), "slot {slot}: never the parent account");
+            assert_ne!(signed[0], spelled(&document, ContentFreeOp::CreateNewDocument), "slot {slot}: never `create_new_document`'s token");
+            // The member is the wire's: the key's token, and a signature
+            // that verifies over those bytes and over no other slot's.
+            assert_eq!(frame["attest"]["alg"], alg.as_str());
+            let sig = crate::hex::decode(frame["attest"]["sig"].as_str().expect("the signature's hex")).expect("hex");
+            assert_eq!(skep_signature::verify(key.tag(), key.public_key(), &signed[0], &sig), Ok(()), "slot {slot}: the attest verifies over the slot's frame");
+            for other in [BIO_SLOT, LINK_PAGE_SLOT, POLICY_SLOT].into_iter().filter(|other| *other != slot) {
+                let elsewhere = spelled(&well_known_of(account, other), ContentFreeOp::CreateWellKnownDocument);
+                assert!(skep_signature::verify(key.tag(), key.public_key(), &elsewhere, &sig).is_err(), "a frame signed for slot {slot} verifies at slot {other}");
+            }
+        }
+    }
+    for refused in [MAILBOX_SLOT, 1, 6, 63, 64] {
+        assert!(well_known_frame(term, "1.0.1", "1.0.1", refused, &key, None).is_err(), "document {refused} is no published well-known slot");
+    }
+    assert!(well_known_frame(term, "1.x", "1.0.1", POLICY_SLOT, &key, None).is_err(), "an account that is no address");
+    assert!(key.signed.lock().unwrap().is_empty(), "a frame not composed signs nothing");
 }

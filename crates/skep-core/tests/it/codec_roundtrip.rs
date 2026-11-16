@@ -21,7 +21,7 @@ use skep_links::{
     EndArg, Endset, Invalid, Link, LinkEntry, MemberSpan, NamedAddress, PublishDeposits,
     PublishTarget, View, MAX_SLOT_SPANS,
 };
-use skep_namespace::PrincipalId;
+use skep_namespace::{PrincipalId, WellKnownSlot};
 use skep_retrieval::{
     CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, RegionSpec, Spec, SpanFault,
 };
@@ -118,10 +118,13 @@ fn all_requests() -> Vec<Request> {
         rq(None, Op::RegisterNode { addr: t(&[1, 1]) }),
         rq(None, Op::Fork { published: None }),
         rq(None, Op::Fork { published: Some(true) }),
-        // The well-known mint (wire.md §Namespace): its one argument, with
-        // and without the idempotency id.
-        rq(None, Op::CreateWellKnownDocument { account: a(&[1, 0, 1]) }),
-        rq(Some("mailbox-1"), Op::CreateWellKnownDocument { account: a(&[1, 0, 1]) }),
+        // The well-known creation (wire.md §Namespace): its two arguments,
+        // at each of the four slots, with and without the idempotency id.
+        rq(None, Op::CreateWellKnownDocument { account: a(&[1, 0, 1]), slot: WellKnownSlot::Mailbox }),
+        rq(Some("mailbox-1"), Op::CreateWellKnownDocument { account: a(&[1, 0, 1]), slot: WellKnownSlot::Mailbox }),
+        rq(None, Op::CreateWellKnownDocument { account: a(&[1, 0, 1]), slot: WellKnownSlot::Bio }),
+        rq(None, Op::CreateWellKnownDocument { account: a(&[1, 0, 1]), slot: WellKnownSlot::LinkPage }),
+        rq(Some("policy-1"), Op::CreateWellKnownDocument { account: a(&[1, 0, 1]), slot: WellKnownSlot::Policy }),
         rq(None, Op::NextAccountPrefix { parent: a(&[1]) }),
         rq(None, Op::PrincipalPrefix { id: PrincipalId(2) }),
         // The owner-of-address read (AUTH-6.37): an ACCOUNT-tier address, and
@@ -2225,14 +2228,14 @@ fn documented_reject_codes() -> Vec<String> {
     out
 }
 
-/// The full `RejectCode` wire-name table — all 94 codes, pinned.
+/// The full `RejectCode` wire-name table — all 97 codes, pinned.
 /// `code_name` is exhaustive over the enum, so the compiler forces a new
 /// variant to be NAMED; this forces the name to be the one wire.md
 /// publishes, and the harvest above forces the table to hold every code
 /// the document lists save the one the daemon originates itself.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 96] = [
+    let table: [(RejectCode, &str); 97] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
@@ -2248,6 +2251,7 @@ fn reject_code_names_are_pinned() {
         (RejectCode::EndpointNotResident, "endpoint_not_resident"),
         (RejectCode::NotOwner, "not_owner"),
         (RejectCode::NotAnAccount, "not_an_account"),
+        (RejectCode::SystemAccountNoWellKnown, "system_account_no_well_known"),
         (RejectCode::Gate, "gate"),
         (RejectCode::DelegatorUnknown, "delegator_unknown"),
         (RejectCode::DuplicateId, "duplicate_id"),
@@ -3047,58 +3051,96 @@ fn a_stage_takes_its_source_alone_and_refuses_a_flag_and_an_attest() {
     assert!(detail.contains("missing field 'from'"), "{detail}");
 }
 
-/// The well-known mint's frame (wire.md §Namespace,
-/// `create_well_known_document`): one argument, the account whose mailbox it
-/// creates, required, parsed and marshaled canonically, the idempotency `id`
-/// riding it as it rides any write; and no flag, no attest and no slot — the
-/// mailbox is always private, the op is outside the checked set and it names
-/// no slot — so `published`, `attest` and `slot` on it are unknown fields,
-/// refused as any member an op does not take (never-silent). The attest sent
-/// is one a checked-set op parses, so the refusal is the unknown-field
-/// rule's and never the member's own grammar's.
+/// The well-known creation's frame (wire.md §Namespace,
+/// `create_well_known_document`): two arguments, both required — the account,
+/// and the slot of the well-known document it creates there, a number —
+/// parsed and marshaled canonically, the idempotency `id` riding it as it
+/// rides any write, and the `attest` member admitted on it at every slot,
+/// the op being of the checked set. A frame with no `slot` is refused as a
+/// missing field, and never read as the mailbox's; a `slot` that names no
+/// well-known slot — doc 1's number, a number of the reserved block past the
+/// named four, an ordinary document's, a string, a fraction, a negative, a
+/// list — is refused at the field. No flag: the slot fixes the document's
+/// state, so `published` on it is an unknown field, refused as any member an
+/// op does not take (never-silent).
 #[test]
-fn a_well_known_mint_takes_its_account_alone_and_refuses_a_flag_an_attest_and_a_slot() {
+fn a_well_known_creation_requires_its_account_and_its_slot_and_admits_an_attest() {
     let codec = JsonCodec;
-    let frame = r#"{"account":"1.0.1","op":"create_well_known_document"}"#;
-    let req = parse_ok(&codec, frame.as_bytes());
-    assert_eq!(req.op, Op::CreateWellKnownDocument { account: a(&[1, 0, 1]) });
-    assert_eq!(req.id, None);
-    assert_eq!(req.attest, None, "no attest rides a well-known mint");
-    assert_eq!(
-        String::from_utf8(codec.marshal_request(&req)).expect("utf-8"),
-        frame,
-        "the canonical form: the one argument, then the op"
-    );
-    let keyed = r#"{"account":"1.0.1","id":"mailbox-1","op":"create_well_known_document"}"#;
+    for (number, slot) in [
+        (2, WellKnownSlot::Mailbox),
+        (3, WellKnownSlot::Bio),
+        (4, WellKnownSlot::LinkPage),
+        (5, WellKnownSlot::Policy),
+    ] {
+        let frame = format!(r#"{{"account":"1.0.1","op":"create_well_known_document","slot":{number}}}"#);
+        let req = parse_ok(&codec, frame.as_bytes());
+        assert_eq!(req.op, Op::CreateWellKnownDocument { account: a(&[1, 0, 1]), slot });
+        assert_eq!(req.id, None);
+        assert_eq!(req.attest, None, "{frame}: no attest was sent");
+        assert_eq!(
+            String::from_utf8(codec.marshal_request(&req)).expect("utf-8"),
+            frame,
+            "the canonical form: the account, the op, then the slot"
+        );
+        // The attest rides it at every slot, parsed and unverified: the
+        // check, never the grammar, decides what a slot's creation owes.
+        let attested = format!(
+            r#"{{"account":"1.0.1","attest":{{"alg":"mldsa65-ed25519","sig":"00"}},"op":"create_well_known_document","slot":{number}}}"#
+        );
+        let req = parse_ok(&codec, attested.as_bytes());
+        assert_eq!(req.op, Op::CreateWellKnownDocument { account: a(&[1, 0, 1]), slot });
+        let attest = req.attest.as_ref().unwrap_or_else(|| panic!("{attested}: the attest is admitted"));
+        assert_eq!((attest.sig_alg(), attest.sig()), (1, &[0u8][..]), "{attested}");
+        assert_eq!(
+            String::from_utf8(codec.marshal_request(&req)).expect("utf-8"),
+            attested,
+            "the attested form round-trips byte for byte"
+        );
+    }
+    let keyed = r#"{"account":"1.0.1","id":"mailbox-1","op":"create_well_known_document","slot":2}"#;
     let req = parse_ok(&codec, keyed.as_bytes());
     assert_eq!(req.id, Some(ReqId(b"mailbox-1".to_vec())), "the optional idempotency id");
     assert_eq!(String::from_utf8(codec.marshal_request(&req)).expect("utf-8"), keyed);
 
-    // The premise: this attest is whole, and a checked-set mint carries it.
-    let attest = r#""attest":{"alg":"mldsa65-ed25519","sig":"00"}"#;
-    let checked = format!(r#"{{"account":"1.0.1","op":"create_new_document",{attest}}}"#);
-    assert!(parse_ok(&codec, checked.as_bytes()).attest.is_some(), "{checked}");
-    for (member, extra) in [
-        ("published", r#""published":false"#),
-        ("published", r#""published":true"#),
-        ("attest", attest),
-        ("slot", r#""slot":2"#),
-        ("slot", r#""slot":"mailbox""#),
+    // The slot is required: a frame without one is no mailbox's by default.
+    let e = codec
+        .parse(br#"{"account":"1.0.1","op":"create_well_known_document"}"#)
+        .expect_err("the slot is required");
+    let detail = e.detail.expect("a parse failure names what failed");
+    assert!(detail.contains("missing field 'slot'"), "{detail}");
+    // …and names one of the four: every other value is refused at the field.
+    for bad in [
+        "0", "1", "6", "7", "62", "63", "64", "65", "4294967298", "18446744073709551615", "-2", "2.0",
+        "2.5", r#""2""#, r#""mailbox""#, r#""policy""#, "true", "null", "[5]", r#"{"slot":5}"#,
     ] {
-        let with = format!(r#"{{"account":"1.0.1","op":"create_well_known_document",{extra}}}"#);
-        let e = codec.parse(with.as_bytes()).expect_err("an unknown member is refused");
+        let with = format!(r#"{{"account":"1.0.1","op":"create_well_known_document","slot":{bad}}}"#);
+        let e = codec.parse(with.as_bytes()).expect_err("a slot no well-known document has is refused");
         let detail = e.detail.expect("a parse failure names what failed");
-        assert!(detail.contains(&format!("unknown field '{member}'")), "{with}: {detail}");
+        assert!(
+            detail.contains("field 'slot'") || detail.contains("missing field 'slot'"),
+            "{with}: {detail}"
+        );
     }
     let e = codec
-        .parse(br#"{"op":"create_well_known_document"}"#)
+        .parse(br#"{"account":"1.0.1","op":"create_well_known_document","slot":6}"#)
+        .expect_err("document 6 names no slot");
+    assert!(e.detail.expect("named").contains("field 'slot': 6 is no well-known slot"), "the number is named");
+    // No flag: the slot fixes the state.
+    for extra in [r#""published":false"#, r#""published":true"#] {
+        let with = format!(r#"{{"account":"1.0.1","op":"create_well_known_document","slot":5,{extra}}}"#);
+        let e = codec.parse(with.as_bytes()).expect_err("an unknown member is refused");
+        let detail = e.detail.expect("a parse failure names what failed");
+        assert!(detail.contains("unknown field 'published'"), "{with}: {detail}");
+    }
+    let e = codec
+        .parse(br#"{"op":"create_well_known_document","slot":2}"#)
         .expect_err("the account is required");
     let detail = e.detail.expect("a parse failure names what failed");
     assert!(detail.contains("missing field 'account'"), "{detail}");
     // The account is an address, as `create_new_document`'s is: no tumbler
     // that fails T4 parses into one.
     let e = codec
-        .parse(br#"{"account":"1.0.0.1","op":"create_well_known_document"}"#)
+        .parse(br#"{"account":"1.0.0.1","op":"create_well_known_document","slot":2}"#)
         .expect_err("an account that is no address is refused");
     let detail = e.detail.expect("a parse failure names what failed");
     assert!(detail.contains("field 'account'"), "{detail}");

@@ -19,16 +19,19 @@ use skep_address::{parent, validate, Address, Level, Tumbler};
 use skep_kernel::{Attestation, Kernel, Seq, TxnError, WorldState};
 
 use crate::error::{CreateDocumentError, DelegateError, RegisterNodeError};
+use crate::ns::WellKnownSlot;
 use crate::record::{M3Rec, Principal, PrincipalId};
 use crate::state::{
-    bootstrap_root, prefix_contains, M3State, MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS,
+    bootstrap_root, prefix_contains, system_account, M3State, MAX_NODE_COMPONENTS,
+    MAX_PRINCIPAL_COMPONENTS,
 };
 use crate::HasM3;
 
 /// M3's transact-driving op handle over M2 (§B).
 ///
 /// It is a thin borrow of the engine's kernel and, on an attested handle, of
-/// the attestation `create_new_document` and `fork` commit under. The pure
+/// the attestation `create_new_document`, `fork` and a published
+/// `create_well_known_document` commit under. The pure
 /// mints and queries live on [`M3State`] (reached through [`HasM3`]); this
 /// type owns only the five entity operations M10 dispatches.
 ///
@@ -38,8 +41,9 @@ use crate::HasM3;
 /// **Precondition.** An op is not called from inside a `transact` closure on
 /// the same kernel: it opens a transaction of its own, and M2 answers the
 /// nested one with a panic naming that obligation. The calls exempt are
-/// those refused before any transaction opens: an op's pre-work, and
-/// `fork`'s unknown id.
+/// those refused before any transaction opens: an op's pre-work —
+/// `create_well_known_document`'s refusal of the system account among it —
+/// and `fork`'s unknown id.
 ///
 /// **Precedence.** Every `TxnError` other than `Rejected` is M2's, passed
 /// through unchanged, and it speaks in M2's stated order around this
@@ -53,23 +57,26 @@ use crate::HasM3;
 /// and `Durability`.
 pub struct Namespace<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
-    /// The attestation two of its document mints commit under (signed ops).
+    /// The attestation its document mints commit under (signed ops).
     ///
-    /// They are [`Namespace::create_new_document`] and [`Namespace::fork`],
-    /// which opens that same transaction — the two ops of this surface in
-    /// the daemon's checked set (skep-core's `in_checked_set`, the writes an
-    /// attestation is admitted on), a mint born published signing an empty
-    /// body over its parent account: handed to the kernel's
+    /// They are [`Namespace::create_new_document`], [`Namespace::fork`],
+    /// which opens that same transaction, and
+    /// [`Namespace::create_well_known_document`] at a slot whose document is
+    /// created published — the three ops of this surface in the daemon's
+    /// checked set (skep-core's `in_checked_set`, the writes an attestation
+    /// is admitted on), each signing an empty body: a mint born published
+    /// over its parent account, a well-known creation over the slot
+    /// document's own address. The value is handed to the kernel's
     /// `transact_attested` arm at the one transaction each opens, filling
     /// that commit marker's signature slot; `None` — the plain handle every
     /// other constructor site builds — leaves that signature slot empty. A
     /// borrow, so the handle stays `Copy` and the value cannot outlive the
     /// caller that owns it; that an attested handle serves one call is its
     /// producer's obligation, which [`Namespace::attested`] states.
-    /// `delegate`, `register_node` and `create_well_known_document` lie
-    /// outside the checked set and take the plain arm whatever this field
-    /// holds — the last mints a document too, an account's mailbox, but a
-    /// private one, and a private mint signs nothing.
+    /// `delegate` and `register_node` lie outside the checked set and take
+    /// the plain arm whatever this field holds, and so does
+    /// `create_well_known_document` at the mailbox's slot: that document is
+    /// private, and a private mint signs nothing.
     attest: Option<&'k Attestation>,
 }
 
@@ -81,9 +88,10 @@ impl<'k, W: WorldState> Namespace<'k, W> {
         Namespace::attested(kernel, None)
     }
 
-    /// Returns a handle that commits its two checked-set mints under `attest`.
+    /// Returns a handle that commits its checked-set mints under `attest`.
     ///
-    /// They are `create_new_document` and `fork`: this is the attested
+    /// They are `create_new_document`, `fork` and a published
+    /// `create_well_known_document`: this is the attested
     /// constructor (signed ops; the attestation rides the handle, as M5's
     /// `Vstream::attested` and M7's `LinkWriter::attested` carry theirs). Its
     /// callers are the signature slot's producer set (the signed-ops design
@@ -92,16 +100,18 @@ impl<'k, W: WorldState> Namespace<'k, W> {
     ///
     /// **Precondition.** One call per attested handle is the producer's
     /// obligation, and the type does not hold it. An attestation signs one
-    /// act — this principal, this kind of mint, against this parent account,
-    /// over an empty body and no minted address — while every
-    /// `create_new_document` and `fork` the handle makes, or a copy of it
-    /// makes, the handle being `Copy`, commits under the one value it carries.
-    /// A second mint by another principal, of the other kind or into another
-    /// account carries a signature over a frame not its own, which no verifier
-    /// of that entry can verify; a second mint that matches all three frames
-    /// the same bytes, so it commits an act its principal never sent under a
-    /// signature that verifies. M10's `dispatch_write` builds one handle per
-    /// call, for the one mint the daemon's check admitted the value for.
+    /// act — this principal, this kind of mint, against this parent account
+    /// or, at a well-known creation, this slot's address, over an empty body
+    /// and no minted address — while every `create_new_document`, `fork` and
+    /// published `create_well_known_document` the handle makes, or a copy of
+    /// it makes, the handle being `Copy`, commits under the one value it
+    /// carries. A second mint by another principal, of another kind or
+    /// against another address carries a signature over a frame not its own,
+    /// which no verifier of that entry can verify; a second mint that matches
+    /// all three frames the same bytes, so it commits an act its principal
+    /// never sent under a signature that verifies. M10's `dispatch_write`
+    /// builds one handle per call, for the one mint the daemon's check
+    /// admitted the value for.
     pub fn attested(kernel: &'k Kernel<W>, attest: Option<&'k Attestation>) -> Namespace<'k, W> {
         Namespace { kernel, attest }
     }
@@ -112,8 +122,8 @@ impl<'k, W: WorldState> Namespace<'k, W> {
 /// That is the kernel it borrows, whose own `Debug` reports the coordinate,
 /// the poison flag, the checkpoint-due flag and the configuration, lock-free,
 /// and nothing of the world; and whether it carries an attestation — the one
-/// fact about the handle that changes what `create_new_document` and `fork`
-/// commit, as M5's `Vstream` prints its own — but never the attestation's
+/// fact about the handle that changes what its checked-set mints commit, as
+/// M5's `Vstream` prints its own — but never the attestation's
 /// bytes, a blob as wide as M2's `MAX_SIG_BYTES` that is no thing to print
 /// into a diagnostic. Written out because a derive would also bound the impl
 /// on `W: Debug`, which no `WorldState` owes.
@@ -234,77 +244,104 @@ where
         })
     }
 
-    /// Mints `account`'s mailbox at its well-known slot, once.
+    /// Creates `account`'s document at the well-known slot `slot`, once.
     ///
-    /// The mailbox is the account's document [`crate::MAILBOX_SLOT`],
-    /// `A·0·2` ([`crate::mailbox_address`]): a named slot of the reserved
-    /// block, which the account's counter never hands out, born private (the
-    /// mailbox design §2, §3). It mints the mailbox alone and takes no slot
-    /// name; a slot name is an argument another well-known document's
-    /// creation adds beside `account`. Returns [`WellKnown::Minted`] with the
-    /// mailbox's address and the `Seq` it committed at, only after commit
-    /// (commit-before-acknowledge).
+    /// The document is `A·0·n`, `n` the slot's number
+    /// ([`crate::well_known_address`]): a named slot of the reserved block,
+    /// which the account's counter never hands out. It is created in the
+    /// slot's own state ([`WellKnownSlot::born_published`]; the mailbox
+    /// design §2, §3; REG-4.131) — the mailbox private; the bio, the link
+    /// page and the account's policy document published — and holds
+    /// nothing. No argument chooses the state: a document is published or
+    /// private from its mint on (PUB-1.9), so a public page at a fixed
+    /// address is created published, and takes its first version from an
+    /// ordinary `publish` naming it, as an account's doc 1 does. Returns
+    /// [`WellKnown::Minted`] with the document's address and the `Seq` it
+    /// committed at, only after commit (commit-before-acknowledge).
     ///
-    /// **Once.** Where the slot already holds a document the op answers
-    /// [`WellKnown::Standing`] with that document's address and stages
-    /// nothing: no record is journaled, no position is drawn, and the `Seq`
-    /// beside the address is the committed position the call read (M2's
-    /// zero-step answer), never before the mint's — a position some other
-    /// write took, which the variant tells a caller not to report as this
-    /// call's. So a second call — a retry whose acknowledgement was lost,
-    /// another device, the loser of a race — is answered with the address
-    /// the first was. The read of the slot and the mint are one critical
-    /// section under the account's document-chain key, so two racing calls
-    /// stage one record. The fold refuses a second record at a filled slot,
-    /// on every build ([`M3State::apply_m3`]), and that read is what keeps a
-    /// repeated call from staging one.
+    /// **Once, per slot.** Where the slot already holds a document the op
+    /// answers [`WellKnown::Standing`] with that document's address and
+    /// stages nothing: no record is journaled, no position is drawn, and the
+    /// `Seq` beside the address is the committed position the call read
+    /// (M2's zero-step answer), never before the mint's — a position some
+    /// other write took, which the variant tells a caller not to report as
+    /// this call's. So a second call — a retry whose acknowledgement was
+    /// lost, another device, the loser of a race — is answered with the
+    /// address the first was. The test is of the slot asked for and no
+    /// other: a document standing at one slot answers nothing for another,
+    /// which is created as if the first were not there. The read of the slot
+    /// and the mint are one critical section under the account's
+    /// document-chain key, so two racing calls at one slot stage one record.
+    /// The fold refuses a second record at a filled slot, on every build
+    /// ([`M3State::apply_m3`]), and that read is what keeps a repeated call
+    /// from staging one.
     ///
     /// **No count moves.** The record is an ordinary [`M3Rec::Allocate`] at
-    /// the slot: it registers the mailbox, writes its bit and its position,
+    /// the slot: it registers the document, writes its bit and its position,
     /// and leaves the account's counter where it stood, so the account's
     /// next [`Namespace::create_new_document`] answers the number it would
     /// have answered. Nor does the op ask for the account's doc 1: on an
     /// account that holds no document it mints the slot,
     /// [`M3State::has_documents`] still answers `false`, and the account's
     /// next flagless create is still its doc 1, born published (PUB-8.21).
-    /// Refusing a mailbox ahead of the home page (the mailbox design §3) is
-    /// the daemon's door's, not this transaction's, as the explicit-`false`
-    /// first mint is (PUB-8.20).
+    /// Refusing a well-known document ahead of the home page (the mailbox
+    /// design §3) is the daemon's door's, not this transaction's, as the
+    /// explicit-`false` first mint is (PUB-8.20).
     ///
-    /// **The system account.** The op holds no guard for it. Its document 2
-    /// is the head document, which genesis seeds
-    /// ([`crate::head_document`]), so called for
-    /// [`crate::system_account`] by its principal the op finds the slot
-    /// filled, answers the head document's address as standing and stages
-    /// nothing. That
-    /// document is no mailbox — the system account has none (the mailbox
-    /// design §2) — and the refusal is the daemon's door's: a credential
-    /// refusal, made before any store is reached.
+    /// **The system account.** The op refuses it at every slot,
+    /// [`CreateDocumentError::SystemAccountNoWellKnown`], whoever calls and
+    /// before any transaction opens. That account's slots are its own table
+    /// — the head document, the staging draft and the time document, which
+    /// genesis seeds, and nothing at 5 (the mailbox design §2) — and the
+    /// fold judges a slot's number, never the account it lies in, so with no
+    /// guard here a call by its principal at [`WellKnownSlot::Policy`] would
+    /// place a document no table names, and at the three filled slots would
+    /// answer a system document's address as the account's well-known one.
+    /// The daemon's door refuses the same request first, under the same
+    /// name; this guard is the store's own.
     ///
-    /// **The plain arm.** The transaction commits with its marker's
-    /// signature slot empty whatever the handle carries: a private mint is
-    /// outside the daemon's checked set, as `delegate` and `register_node`
-    /// are.
+    /// **The attested arm (signed ops).** At a slot whose document is
+    /// created published the transaction commits under the handle's
+    /// attestation where it carries one — a published creation is a
+    /// publish-class act, signed over the slot document's own address — and
+    /// with its commit marker's signature slot empty otherwise, as
+    /// [`Namespace::create_new_document`]'s does. At the mailbox's slot it
+    /// commits with the signature slot empty whatever the handle carries: a
+    /// private mint is outside the publish class, as `delegate` and
+    /// `register_node` are, and signs nothing.
     ///
     /// # Errors
     ///
-    /// [`CreateDocumentError`], in the order and for the reasons
-    /// [`Namespace::create_new_document`] gives. `NotOwner` if ω(`account`)
-    /// is absent or names another principal: judged first, inside the op's
+    /// [`CreateDocumentError`], in its declared order.
+    /// `SystemAccountNoWellKnown` where `account` is the system account, at
+    /// every slot: pre-work, `TxnError::Rejected` with no transaction
+    /// opened, so it speaks ahead of M2's `Poisoned` (the precedence
+    /// [`Namespace`] states). Then, in the order and for the reasons
+    /// [`Namespace::create_new_document`] gives: `NotOwner` if ω(`account`)
+    /// is absent or names another principal, judged first inside the op's
     /// one transaction, so no delegation of `account` lands between the
     /// authorization and the mint, and a caller who is not the effective
     /// owner learns nothing from the refusal — not whether the account is
-    /// registered, nor whether its mailbox stands. With auth passed,
-    /// `Mint(MintError::NotAnAccount)` where `account` is no registered
-    /// account, an unregistered address and a registered non-account alike
-    /// (P8). Both come back as `TxnError::Rejected`; the kernel's own
-    /// failures come back as `transact` returns them, in the order
-    /// [`Namespace`] states.
+    /// registered, nor whether a document stands at the slot. With auth
+    /// passed, `Mint(MintError::NotAnAccount)` where `account` is no
+    /// registered account, an unregistered address and a registered
+    /// non-account alike (P8). Both come back as `TxnError::Rejected`; the
+    /// kernel's own failures come back as `transact` returns them, in the
+    /// order [`Namespace`] states.
     pub fn create_well_known_document(
         &self,
         caller: PrincipalId,
         account: &Address,
+        slot: WellKnownSlot,
     ) -> Result<(WellKnown, Seq), TxnError<CreateDocumentError>> {
+        // Pre-work: the system account creates no well-known document, at
+        // any slot and for any caller. Read off the argument alone, so the
+        // refusal discloses a constant and opens no transaction.
+        if *account == system_account() {
+            return Err(TxnError::Rejected(
+                CreateDocumentError::SystemAccountNoWellKnown,
+            ));
+        }
         // The account's document-chain key, the chain its well-known slots
         // lie on, and the principals key beside it, as `create_new_document`
         // holds them and for its reasons.
@@ -312,9 +349,16 @@ where
             M3State::document_lock_key(account),
             M3State::principals_lock_key(),
         ];
-        // The plain arm: this mint is private, and the handle's attestation,
-        // where it carries one, signs a mint born published.
-        self.kernel.transact(&keys, |stg| {
+        // The attested arm at a slot created published, the plain arm at the
+        // mailbox's: the handle's attestation, where it carries one, signs a
+        // published creation and never a private mint. The kernel's arm is
+        // `transact` itself under `None`.
+        let attest = if slot.born_published() {
+            self.attest
+        } else {
+            None
+        };
+        self.kernel.transact_attested(&keys, attest, |stg| {
             // ω first, off the base, as `create_new_document` reads it and
             // stale-safe for the reason stated there: nothing is staged
             // ahead of the mint, so the base is the state the mint's account
@@ -324,12 +368,14 @@ where
                 return Err(CreateDocumentError::NotOwner);
             }
             let m3 = stg.working().m3();
-            let (addr, rec) = m3.mint_mailbox(account)?;
+            let (addr, rec) = m3.mint_well_known(account, slot)?;
             // The incumbent, off working state under the held chain key: a
             // slot that holds a document is answered as it stands and
             // nothing is pushed, which makes this M2's zero-step
-            // transaction. The mint's record is staged only where the slot
-            // is empty — the fold fail-stops on a second record there.
+            // transaction. The test is of this slot's own address, so a
+            // document at another slot answers nothing here. The mint's
+            // record is staged only where the slot is empty — the fold
+            // fail-stops on a second record there.
             if m3.is_registered_document(&addr) {
                 return Ok(WellKnown::Standing(addr));
             }

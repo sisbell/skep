@@ -4,10 +4,11 @@
 //! transactions its handle states — and this is the one place all three are
 //! observed at once. M10 holds no copy of the checked set — skepd's name for
 //! the writes an attestation is admitted on — so the set is pinned here, over
-//! the seventeen writes a draft takes; the partition's other two,
-//! `set_arrangement` and `create_well_known_document`, are outside the
-//! checked set as `stage` is and take no `attest` member at all (wire.md
-//! §Arrangement, §Namespace), so no commit of either is observed here.
+//! the seventeen writes a draft takes and, beside them, the well-known
+//! creation at each of its four slots; the partition's last,
+//! `set_arrangement`, is outside the checked set as `stage` is and takes no
+//! `attest` member at all (wire.md §Arrangement), so no commit of it is
+//! observed here.
 
 use std::sync::Arc;
 
@@ -21,11 +22,15 @@ use tempfile::tempdir;
 /// THE CHECKED SET, at the seam where it is observable (SO-I4: every
 /// publishing act above the claim is signed): every one of the sixteen
 /// writes carries one attestation, and it lands in the commit marker of the
-/// TEN publish-class kinds alone — `create_new_document`, `fork`, `version`,
-/// `insert`, `publish`, `make_link`, `emit`, `nullify`, `assert_sup`,
-/// `edit_link` — every other write (`delete`, `copy`, `reinstate`,
-/// `rearrange`, `delegate`, `register_node`) committing an empty signature
-/// slot. Over a journaled kernel, since an in-memory one keeps no marker;
+/// ELEVEN publish-class kinds alone — `create_new_document`, `fork`,
+/// `version`, `create_well_known_document`, `insert`, `publish`,
+/// `make_link`, `emit`, `nullify`, `assert_sup`, `edit_link` — every other
+/// write (`delete`, `copy`, `reinstate`, `rearrange`, `delegate`,
+/// `register_node`) committing an empty signature slot. The eleventh is
+/// signed by its slot: a creation at the bio's, the link page's or the
+/// policy document's slot lands the attestation, and one at the mailbox's,
+/// whose document is private, commits an empty slot whatever the request
+/// carried. Over a journaled kernel, since an in-memory one keeps no marker;
 /// and each write must commit a transaction of its own, or the marker read
 /// at its `at` would be another write's. Sixteen run as the fixture's one
 /// chain (`commit_every_write`), the staging act among them — a stage's
@@ -33,7 +38,7 @@ use tempfile::tempdir;
 /// request carried; the seventeenth, the write by identity, is committed
 /// beside it over a draft of its own.
 #[test]
-fn an_attestation_lands_in_the_marker_of_the_ten_publish_class_kinds_alone() {
+fn an_attestation_lands_in_the_marker_of_the_eleven_publish_class_kinds_alone() {
     let dir = tempdir().expect("a temporary directory");
     let kernel = journaled_kernel(dir.path());
     let fx = fixture_on(surface_over(Arc::clone(&kernel)));
@@ -94,7 +99,7 @@ fn an_attestation_lands_in_the_marker_of_the_ten_publish_class_kinds_alone() {
         );
         seen.push(kind);
     });
-    assert_eq!(seen.len(), 16, "the fixture's chain is 16 of the partition's 19 writes (reinstate above; set_arrangement and create_well_known_document outside the checked set, neither observed here): {seen:?}");
+    assert_eq!(seen.len(), 16, "the fixture's chain is 16 of the partition's 19 writes (reinstate above, create_well_known_document below; set_arrangement outside the checked set, not observed here): {seen:?}");
     let empty: Vec<&OpKind> = seen
         .iter()
         .filter(|k| matches!(k, OpKind::Delete | OpKind::Copy | OpKind::Reinstate | OpKind::Rearrange | OpKind::Delegate | OpKind::RegisterNode | OpKind::Stage))
@@ -104,4 +109,22 @@ fn an_attestation_lands_in_the_marker_of_the_ten_publish_class_kinds_alone() {
         6,
         "the chain's six unsigned kinds each committed once (the seventh, reinstate, above): {seen:?}"
     );
+
+    // The eleventh kind, the well-known creation, at each of its slots: the
+    // attestation rides every request, and the store signs the creation of
+    // a published document and never the private mailbox's.
+    for slot in skep_namespace::WellKnownSlot::ALL {
+        let before = fx.febe.log_position();
+        let create = Op::CreateWellKnownDocument { account: fx.account.clone(), slot };
+        let (_, at) = ack_addr(
+            fx.febe
+                .execute(fx.user, Request { attest: Some(attestation.clone()), ..Request::from(create) }),
+        );
+        assert!(at > before, "{slot:?}: the creation committed a transaction of its own");
+        assert_eq!(
+            kernel.attestation_at(at).expect("a journaled kernel reads its own markers"),
+            slot.born_published().then(|| attestation.clone()),
+            "{slot:?}: a published slot's creation is signed, the mailbox's never"
+        );
+    }
 }

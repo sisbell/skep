@@ -69,11 +69,12 @@
 //!   document chain issues its doc 1 and then document
 //!   [`FIRST_ORDINARY_DOCUMENT`] and on: the numbers between are the
 //!   reserved block of well-known slots, in every account, which the
-//!   counter never issues. A named slot of the block — document 2, 3 or 4 —
-//!   holds a document only where a record placed one there, once, and such
-//!   a record moves no count; the system account's three are in genesis's
-//!   seed, and an account's mailbox, its document [`MAILBOX_SLOT`], is
-//!   placed by [`Namespace::create_well_known_document`]. Two of the chains
+//!   counter never issues. A named slot of the block — document 2, 3, 4
+//!   or 5 — holds a document only where a record placed one there, once,
+//!   and such a record moves no count; the system account's three are in
+//!   genesis's seed, and an account's four — its mailbox, its bio, its link
+//!   page and its policy document ([`WellKnownSlot`]) — are each placed by
+//!   [`Namespace::create_well_known_document`]. Two of the chains
 //!   issue elements — a document's content chain and its link chain — and
 //!   no third does: the allocator refuses to issue any other element, so no
 //!   element in any other subspace is ever minted, and subspace 3, where
@@ -83,9 +84,11 @@
 //!   [`Namespace::delegate`] \[ASN-0042 O15/O17c\],
 //!   [`Namespace::register_node`] \[ASN-0047 NodeBaptism\],
 //!   [`Namespace::fork`] \[ASN-0042 O10, account-tier case\], and
-//!   [`Namespace::create_well_known_document`], which mints an account's
-//!   mailbox at its well-known slot, private, once \[the mailbox design
-//!   §3\].
+//!   [`Namespace::create_well_known_document`], which creates one of an
+//!   account's well-known documents at its slot, once, in the slot's own
+//!   state — the mailbox private; the bio, the link page and the policy
+//!   document published, each empty \[the mailbox design §2, §3;
+//!   REG-4.131\].
 //! * **Queries** (§C) — pure reads off any M2 snapshot: allocation and
 //!   entity membership (exact chain membership, §2), the ω authorization
 //!   predicate [`M3State::is_effective_owner`] beside the three readers of
@@ -104,13 +107,14 @@
 //!   [`M3State::published`] and its enumeration [`M3State::documents`] —
 //!   the engine's one definition of a document's publication state, the
 //!   bit its own allocation record journaled \[PUB-7.8, PUB-7.10;
-//!   PUB-kickoff D1\] — plus four registry-free address answers:
+//!   PUB-kickoff D1\] — plus five registry-free address answers:
 //!   [`prefix_contains`], which answers where an address *sits* and never
 //!   who may write it; the two slots a chain opens at,
 //!   [`first_document_address`] for an account's document chain and
-//!   [`first_version_address`] for a document's version chain; and
-//!   [`mailbox_address`], the well-known slot an account's mailbox
-//!   occupies, minted or not.
+//!   [`first_version_address`] for a document's version chain;
+//!   [`well_known_address`], the address one of an account's well-known
+//!   slots occupies, created or not; and [`mailbox_address`], that answer
+//!   at the mailbox's slot.
 //! * **The ghost region** — the first [`GHOST_POSITIONS`] content addresses
 //!   of [`ghost_home_document`], spelled by [`ghost_position`]: five ghost
 //!   tumblers that are compiled format constants, which M7's
@@ -137,8 +141,9 @@
 //!   [`Namespace::create_new_document`] or [`Namespace::fork`] yields a second
 //!   empty document, a retried [`Namespace::delegate`] or
 //!   [`Namespace::register_node`] is refused, and a retried
-//!   [`Namespace::create_well_known_document`] is answered with the mailbox
-//!   the first attempt minted and stages nothing; each op's doc says which —
+//!   [`Namespace::create_well_known_document`] is answered with the document
+//!   the first attempt created at that slot and stages nothing; each op's
+//!   doc says which —
 //!   `fork`'s through the op it reduces to — and, where a retry is refused,
 //!   how to tell it from a lost race or why that need not be told;
 //! * address algebra (M1 — M3 holds none of its own) and
@@ -182,7 +187,7 @@ mod error;
 // Namespaces — ASN-0040's `(p, d)`, spelled `(anchor, g)` here: the frontier
 // and lock key, built only here; the chain-family rule; a chain's slots by
 // ordinal; its opening slots; a document chain's reserved block, and the
-// mailbox's slot in it.
+// well-known slots named in it.
 mod ns;
 // The ghost region: the five reserved type addresses M7 reads, and the floor
 // that keeps the allocator past them.
@@ -195,7 +200,7 @@ mod record;
 // the two registry caps; beneath it `state/mint.rs` (§A: the lock keys, the
 // seven mints and the two peeks, each a mint without its record) and
 // `state/query.rs` (§C: every other query but the opening slots and the
-// mailbox's slot, which `ns` builds).
+// well-known slots, which `ns` builds).
 mod state;
 // The `Namespace` handle: the five entity operations, each one transaction,
 // and `WellKnown`, what the well-known mint found at its slot.
@@ -204,8 +209,8 @@ mod ops;
 pub use error::{CreateDocumentError, DelegateError, MintError, RegisterNodeError};
 pub use ghost::{ghost_home_document, ghost_position, GHOST_POSITIONS};
 pub use ns::{
-    first_document_address, first_version_address, mailbox_address, FIRST_ORDINARY_DOCUMENT,
-    MAILBOX_SLOT,
+    first_document_address, first_version_address, mailbox_address, well_known_address,
+    WellKnownSlot, BIO_SLOT, FIRST_ORDINARY_DOCUMENT, LINK_PAGE_SLOT, MAILBOX_SLOT, POLICY_SLOT,
 };
 pub use ops::{Namespace, WellKnown};
 pub use record::{

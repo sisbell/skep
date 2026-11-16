@@ -750,23 +750,32 @@ fn refusals_arrive_typed_classified_and_localized() {
     assert_eq!(rej.disposition, Disposition::Permanent);
 }
 
-/// THE WELL-KNOWN MINT (the mailbox design §3): `create_well_known_document`
-/// mints the account's mailbox at its slot 2 — `ack_addr`, a PRIVATE
-/// document; a second call is answered `ack_addr` with the SAME address at
-/// the position it was judged at and commits nothing, the log position
-/// unmoved; and the store's two refusals arrive lowered as
-/// `create_new_document`'s are, nothing committed — `not_owner`, PERMANENT,
-/// for every caller who is not the account's effective owner, whether the
-/// account is registered or not, and `not_an_account`, REORDER, for an
-/// address that is no registered account, asked by the principal that owns
-/// the space it names. M10 holds neither of the daemon's two refusals: the
-/// account here has no home page when its mailbox is minted, and its next
-/// flagless create is still its home, born published.
+/// THE WELL-KNOWN CREATION (the mailbox design §2, §3; REG-4.131):
+/// `create_well_known_document` creates the account's document at the slot
+/// it names — `ack_addr`, in the slot's own state: the mailbox at 2 a
+/// PRIVATE document, the bio at 3, the link page at 4 and the policy
+/// document at 5 each PUBLISHED, and each holding nothing, no member on its
+/// chain. A second call at a slot is answered `ack_addr` with the SAME
+/// address at the position it was judged at and commits nothing, the log
+/// position unmoved, and a document at one slot answers nothing for another;
+/// and the store's refusals arrive lowered as `create_new_document`'s are,
+/// nothing committed, at every slot — `not_owner`, PERMANENT, for every
+/// caller who is not the account's effective owner, whether the account is
+/// registered or not, and `not_an_account`, REORDER, for an address that is
+/// no registered account, asked by the principal that owns the space it
+/// names — with the store's own refusal of the system account,
+/// `system_account_no_well_known`, PERMANENT, whoever asks. M10 holds
+/// neither of the daemon's two refusals of its own: the account here has no
+/// home page when its mailbox is minted, and its next flagless create is
+/// still its home, born published.
 #[test]
-fn a_well_known_mint_lands_once_and_the_stores_refusals_arrive_lowered() {
+fn a_well_known_creation_lands_once_per_slot_and_the_stores_refusals_arrive_lowered() {
+    use skep_namespace::{well_known_address, WellKnownSlot};
     let fx = setup();
-    let mint =
-        |account: &skep_address::Address| Op::CreateWellKnownDocument { account: account.clone() };
+    let create = |account: &skep_address::Address, slot: WellKnownSlot| {
+        Op::CreateWellKnownDocument { account: account.clone(), slot }
+    };
+    let mint = |account: &skep_address::Address| create(account, WellKnownSlot::Mailbox);
 
     let before = fx.febe.log_position();
     let (mailbox, minted_at) = ack_addr(ex(&fx.febe, fx.user, mint(&fx.account)));
@@ -794,6 +803,25 @@ fn a_well_known_mint_lands_once_and_the_stores_refusals_arrive_lowered() {
     assert_eq!(fx.febe.log_position(), home_at, "nothing committed");
     assert_eq!(judged_at, home_at, "the position the call read");
 
+    // The three published slots, with the mailbox standing: each is created
+    // at its own address, published and holding nothing, and once.
+    for slot in [WellKnownSlot::Bio, WellKnownSlot::Policy, WellKnownSlot::LinkPage] {
+        let expected = well_known_address(&fx.account, slot).expect("an account's slot");
+        let before = fx.febe.log_position();
+        let (created, at) = ack_addr(ex(&fx.febe, fx.user, create(&fx.account, slot)));
+        assert_eq!(created, expected, "{slot:?}: its own address, whatever stands at another slot");
+        assert!(at > before, "{slot:?}: the creation commits a transaction of its own");
+        let (doc, published, _owner, birth, ..) =
+            doc_metadata(ex(&fx.febe, fx.user, Op::DocMetadata { doc: created.clone() }));
+        assert_eq!(doc, created);
+        assert!(published, "{slot:?}: created published, the slot's own state");
+        assert_eq!(birth, None, "{slot:?}: it holds no version");
+        let standing = fx.febe.log_position();
+        let (again, judged_at) = ack_addr(ex(&fx.febe, fx.user, create(&fx.account, slot)));
+        assert_eq!((again, judged_at), (created, standing), "{slot:?}: the second call");
+        assert_eq!(fx.febe.log_position(), standing, "{slot:?}: nothing committed");
+    }
+
     // Not the owner: a seated stranger, the principal seated above the
     // account, and anyone naming an address that is no account at all.
     let (prefix, _) = maybe_addr(ex(&fx.febe, fx.boot, Op::NextAccountPrefix { parent: node1() }));
@@ -806,28 +834,41 @@ fn a_well_known_mint_lands_once_and_the_stores_refusals_arrive_lowered() {
     let stranger = fx.febe.open_session(PrincipalId(8));
     let unregistered = addr(&[1, 0, 77]);
     let standing = fx.febe.log_position();
-    for (session, account, who) in [
-        (stranger, &fx.account, "a seated stranger"),
-        (fx.boot, &fx.account, "the principal seated above the account"),
-        (fx.user, &other_account, "an owner naming another's account"),
-        (fx.user, &unregistered, "a non-owner naming an unregistered account"),
-    ] {
-        let rej = rejected(ex(&fx.febe, session, mint(account)));
-        assert_eq!(rej.op, OpKind::CreateWellKnownDocument, "{who}");
-        assert_eq!(rej.code, RejectCode::NotOwner, "{who}");
-        assert_eq!(rej.disposition, Disposition::Permanent, "{who}");
-        assert!(rej.site.is_none(), "{who}: M3's refusal is fieldless");
-    }
-    // No account: an unregistered address, and a registered document's,
-    // each asked by its effective owner.
-    for (session, account, what) in [
-        (fx.boot, &unregistered, "an unregistered account address"),
-        (fx.user, &mailbox, "a document's address"),
-    ] {
-        let rej = rejected(ex(&fx.febe, session, mint(account)));
-        assert_eq!(rej.op, OpKind::CreateWellKnownDocument, "{what}");
-        assert_eq!(rej.code, RejectCode::NotAnAccount, "{what}");
-        assert_eq!(rej.disposition, Disposition::Reorder, "{what}");
+    for slot in WellKnownSlot::ALL {
+        for (session, account, who) in [
+            (stranger, &fx.account, "a seated stranger"),
+            (fx.boot, &fx.account, "the principal seated above the account"),
+            (fx.user, &other_account, "an owner naming another's account"),
+            (fx.user, &unregistered, "a non-owner naming an unregistered account"),
+        ] {
+            let rej = rejected(ex(&fx.febe, session, create(account, slot)));
+            assert_eq!(rej.op, OpKind::CreateWellKnownDocument, "{who} at {slot:?}");
+            assert_eq!(rej.code, RejectCode::NotOwner, "{who} at {slot:?}");
+            assert_eq!(rej.disposition, Disposition::Permanent, "{who} at {slot:?}");
+            assert!(rej.site.is_none(), "{who}: M3's refusal is fieldless");
+        }
+        // No account: an unregistered address, and a registered document's,
+        // each asked by its effective owner.
+        for (session, account, what) in [
+            (fx.boot, &unregistered, "an unregistered account address"),
+            (fx.user, &mailbox, "a document's address"),
+        ] {
+            let rej = rejected(ex(&fx.febe, session, create(account, slot)));
+            assert_eq!(rej.op, OpKind::CreateWellKnownDocument, "{what} at {slot:?}");
+            assert_eq!(rej.code, RejectCode::NotAnAccount, "{what} at {slot:?}");
+            assert_eq!(rej.disposition, Disposition::Reorder, "{what} at {slot:?}");
+        }
+        // The system account: the store's own refusal, under the name the
+        // daemon's door refuses the same request by, whoever asks — its own
+        // principal, which the store would otherwise answer, among them.
+        let system = fx.febe.open_session(skep_namespace::SYSTEM_PRINCIPAL);
+        for (session, who) in [(system, "the system principal"), (fx.boot, "the bootstrap principal"), (fx.user, "a user")] {
+            let rej = rejected(ex(&fx.febe, session, create(&skep_namespace::system_account(), slot)));
+            assert_eq!(rej.op, OpKind::CreateWellKnownDocument, "{who} at {slot:?}");
+            assert_eq!(rej.code, RejectCode::SystemAccountNoWellKnown, "{who} at {slot:?}");
+            assert_eq!(rej.disposition, Disposition::Permanent, "{who} at {slot:?}");
+            assert!(rej.site.is_none(), "{who}: M3's refusal is fieldless");
+        }
     }
     assert_eq!(fx.febe.log_position(), standing, "no refusal commits");
 }

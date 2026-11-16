@@ -967,7 +967,7 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
     let minting = [
         ("version", format!(r#"{{"op":"version","d_src":"{CLAIMANT_DOC1}","published":false}}"#)),
         ("fork", r#"{"op":"fork"}"#.to_string()),
-        ("create_well_known_document", format!(r#"{{"op":"create_well_known_document","account":"{account}"}}"#)),
+        ("create_well_known_document", format!(r#"{{"op":"create_well_known_document","account":"{account}","slot":2}}"#)),
     ];
 
     fn op_of(what: &str) -> &str {

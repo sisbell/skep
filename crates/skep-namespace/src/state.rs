@@ -16,18 +16,18 @@
 //! * [`mint`] — §A: the lock keys a transaction holds, the seven mints, and
 //!   the two peeks, each a mint without its record.
 //! * [`query`] — §C: every other query but the addresses `ns` builds (the
-//!   opening slots and the mailbox's) — entity membership (§2), the two chain-end reads that read a
-//!   frontier directly, the publication reads, the principal registry and
-//!   the ω resolver (§5), and `prefix_contains`.
+//!   opening slots and the well-known slots') — entity membership (§2), the
+//!   two chain-end reads that read a frontier directly, the publication
+//!   reads, the principal registry and the ω resolver (§5), and
+//!   `prefix_contains`.
 //!
 //! The unit tests for the slice and both children are `state/tests.rs`.
 
 // §A: the lock keys a transaction holds, the seven mints, the two peeks.
 mod mint;
 // §C: every other query but the addresses `ns` builds (the opening slots
-// and the mailbox's) —
-// membership, two chain-end reads, the publication reads, the principal
-// registry and ω.
+// and the well-known slots') — membership, two chain-end reads, the
+// publication reads, the principal registry and ω.
 mod query;
 
 pub use query::prefix_contains;
@@ -487,7 +487,7 @@ impl M3State {
     /// `Π = { [1] → BOOTSTRAP_PRINCIPAL, [1.1.0.1] → SYSTEM_PRINCIPAL }`, the
     /// account chain `([1.1], 2)` at 1 and the document chain
     /// `([1.1.0.1], 2)` at 1 as well — the account's doc 1 counted, its
-    /// docs 2, 3 and 4 standing at its three named slots, which move no
+    /// docs 2, 3 and 4 standing at three of its named slots, which move no
     /// count — three of the four born published and one, the staging draft,
     /// born unpublished. `pub` — the engine seeds
     /// `Kernel::open(cfg, genesis-World)` with it; "load empty journal" and
@@ -506,7 +506,7 @@ impl M3State {
     /// allocation [`crate::Namespace::create_new_document`] mints first
     /// there, doc 1 ([`ghost_home_document`], the commons registry's future
     /// home) — and then three allocations no op stages, one at each of the
-    /// account's named slots (the mailbox design §2): doc 2
+    /// account's named slots but the last (the mailbox design §2): doc 2
     /// ([`head_document`] `H`), born published as doc 1 is (PUB-1.25's
     /// genesis/commons-seeded row); doc 3 ([`staging_draft`]), born
     /// unpublished (PUB-6.65); and doc 4 ([`time_document`] `T`), born
@@ -519,9 +519,13 @@ impl M3State {
     /// each fill a named slot that held nothing. The account's counter then
     /// stands where every account's does once it holds its doc 1: its next
     /// mint is document [`FIRST_ORDINARY_DOCUMENT`]. And no later record
-    /// places a system document: all three named slots are filled, and the
-    /// fold refuses a second record at a filled one. A document added to the
-    /// seed is one more record.
+    /// places a system document: its three slots are filled, and the fold
+    /// refuses a second record at a filled one; its slot 5 holds nothing,
+    /// the system account's table naming no document there, and the one op
+    /// that stages a slot's record refuses that account at every slot
+    /// ([`crate::Namespace::create_well_known_document`]), the fold judging
+    /// a slot's number and never whose account it lies in. A document added
+    /// to the seed is one more record.
     ///
     /// What the seed leaves alone: node `[1]`'s own account chain — the
     /// seeded account chain is `([1.1], 2)`, not `([1], 2)` — so
@@ -601,14 +605,15 @@ impl M3State {
     /// for the ghost content namespace — `ghost_floor` — and for an account's
     /// document chain that holds its doc 1, where it is
     /// [`FIRST_ORDINARY_DOCUMENT`] less one). Or it is an `Allocate` at a
-    /// named slot of a document chain's reserved block — document number 2, 3
-    /// or 4 — and the slot holds no document (the mailbox design §2). A
+    /// named slot of a document chain's reserved block — document number 2,
+    /// 3, 4 or 5 — and the slot holds no document (the mailbox design §2). A
     /// mint's record is of the first kind wherever it is staged as
     /// [`M3Rec::Allocate`] requires — against the working state the mint
     /// read: a mint extends a registered parent and issues exactly its
-    /// chain's next address in that state, past the floor — save the
-    /// mailbox's mint, whose record is of the second kind, at slot 2.
-    /// Genesis's seed holds three of the second kind, the system account's. That the parent
+    /// chain's next address in that state, past the floor — save a
+    /// well-known slot's mint, whose record is of the second kind, at the
+    /// slot it names. Genesis's seed holds three of the second kind, the
+    /// system account's. That the parent
     /// is registered (P8) is the mints' gate and no part of this domain: an
     /// `Allocate` under an unregistered parent folds like any other, and that
     /// is the state [`M3State::has_documents`] and [`M3State::latest_version`]
@@ -747,8 +752,9 @@ impl M3State {
                     // number its counter handed out — so the slot's whole
                     // state is the bit and the position written below, and
                     // membership reads the slot off the publication map.
-                    // Neither check reads the bit, and neither asks for the
-                    // account's doc 1.
+                    // Neither check reads the bit — a slot's document is
+                    // private or published as its producer stamped it — and
+                    // neither asks for the account's doc 1.
                     assert!(
                         is_named_slot(&n),
                         "an Allocate in the reserved block names a well-known slot: {addr} is none of them"

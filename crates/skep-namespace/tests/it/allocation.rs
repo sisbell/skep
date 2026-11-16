@@ -313,7 +313,8 @@ fn the_first_ordinary_document_is_number_64() {
 /// No mint answers a document number of the reserved block (the mailbox
 /// design §2), held as a law over a generated run rather than at one
 /// account. Eight accounts — six under the bootstrap node, a sub-account, and
-/// the system account, whose doc 1 and three named slots genesis seeded —
+/// the system account, whose doc 1 and three of its named slots genesis
+/// seeded —
 /// take four hundred steps a fixed generator picks: a document minted
 /// through one of the three doors that mint one — the create op, `fork`, and
 /// the bare mint a cross-owner version makes — or a record that fills the
@@ -342,8 +343,9 @@ fn no_mint_ever_answers_a_document_number_of_the_reserved_block() {
         .delegate(PrincipalId(11), t(&[1, 0, 1, 1]), PrincipalId(20))
         .expect("a sub-account");
     accounts.push((sub_acct, PrincipalId(20), 0, Vec::new()));
-    // Genesis handed the system account its doc 1 and filled its three slots.
-    accounts.push((system_account(), SYSTEM_PRINCIPAL, 1, NAMED_SLOTS.to_vec()));
+    // Genesis handed the system account its doc 1 and filled three of its
+    // slots; its slot 5 is left for a record of the run to fill.
+    accounts.push((system_account(), SYSTEM_PRINCIPAL, 1, SEEDED_SYSTEM_SLOTS.to_vec()));
 
     let mut state = 0x9E37_79B9u32;
     for step in 0..400 {
@@ -652,7 +654,7 @@ fn membership_is_exact_chain_membership() {
 /// unregistered at all three membership reads, so nothing mints under one.
 /// One record then fills one named slot: that slot is registered and is a
 /// home like any document, and no other number is. In the system account
-/// genesis filled the three named slots, and those three alone read
+/// genesis filled three of the named slots, and those three alone read
 /// registered, before its counter passes the block and after.
 #[test]
 fn a_number_of_the_reserved_block_is_registered_only_where_a_record_placed_a_document() {
@@ -714,8 +716,8 @@ fn a_number_of_the_reserved_block_is_registered_only_where_a_record_placed_a_doc
             let placed = slot(&system_account(), number);
             assert_eq!(
                 m3.is_registered_document(&placed),
-                NAMED_SLOTS.contains(&number),
-                "{placed}: genesis fills the system account's named slots and no other"
+                SEEDED_SYSTEM_SLOTS.contains(&number),
+                "{placed}: genesis fills the system account's three slots and no other"
             );
         }
     }

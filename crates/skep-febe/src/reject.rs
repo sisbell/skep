@@ -252,6 +252,17 @@ pub enum RejectCode {
     NotOwner,
     /// A document mint's target is not a registered account.
     NotAnAccount,
+    /// A well-known creation names the system account, which creates none.
+    ///
+    /// It is M3's own refusal (`CreateDocumentError`'s first variant), under
+    /// the name the daemon's door refuses the same request by, its
+    /// `system_account_no_well_known` token: the system account's slots are
+    /// its own table, seeded at genesis (the mailbox design §2). The door
+    /// answers first on every dispatched path, so a client meets the door's
+    /// refusal and never this code, which answers a caller that reaches the
+    /// store without that door. Permanent by the catch-all: no state admits
+    /// the request.
+    SystemAccountNoWellKnown,
     /// The inc gate refused a mint, a defect no store state reaches.
     Gate,
     /// The delegator id names no principal.

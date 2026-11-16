@@ -1,7 +1,7 @@
 //! THE GOLDENS (the frozen-tag rule's pin), beside the one implementation
 //! they pin: per tag, one seed through the KDF to both public keys and the
 //! fingerprint; a signature over each fixed entry frame (`frames.rs`), under
-//! its name — the ten publish-class kinds, the `publish` with its deposit
+//! its name — the eleven publish-class kinds, the `publish` with its deposit
 //! rows, and the `record` grammar at three kinds; tag 1's signatures byte-stable (FIPS 204's deterministic variant),
 //! tag 3's under the fixtures' seeded stream; the preimage of every fixed
 //! frame and of the shapes of a cell they leave out; the hybrid cross-check;
@@ -40,7 +40,7 @@ pub const GOLDEN_SEED: [u8; 32] = [
 
 /// The seed of the fixtures' stream the tag-3 golden signatures draw their
 /// per-signature seeds from — `GOLDEN_SEED`'s bytes reused, so those
-/// fourteen pins depend on the key seed twice: through the key and through
+/// fifteen pins depend on the key seed twice: through the key and through
 /// the stream.
 const GOLDEN_STREAM_SEED: [u8; 32] = GOLDEN_SEED;
 
@@ -80,7 +80,7 @@ struct TagGolden {
     ed_pk: &'static str,
     raw_key: &'static str,
     fingerprint: &'static str,
-    sigs: [&'static str; 14],
+    sigs: [&'static str; 15],
 }
 
 /// One fixed frame, signed: the name `fixed_frames` gives it, the frame's
@@ -151,7 +151,7 @@ fn check_golden(g: &TagGolden) {
 }
 
 /// TAG 1's GOLDEN: the KEY-DERIVATION golden (seed → KDF → both public
-/// keys → fingerprint) and the fourteen fixed frames' signatures,
+/// keys → fingerprint) and the fifteen fixed frames' signatures,
 /// byte-stable under FIPS 204's deterministic variant and Ed25519's own
 /// determinism.
 #[test]
@@ -177,13 +177,14 @@ fn golden_tag_1_mldsa65_ed25519() {
             "4979c2918ea65effe9786f37f0c17507542552fa3f77905d872bd3b0c11ddeb4",
             "06f50a012118fb622aa0e929e669b08dbf63dbf1f2e4385ed2647528e1905ad2",
             "c2277b652a1d3a00a8fbfb33bfa5ef2d64eb190a398d1c557166afd76713afa6",
+            "0afdbe5d7de3f30602326b297b787b3966c93f601d7e12a0b80bb7435eb3fca6",
         ],
     });
 }
 
 /// TAG 3's GOLDEN (the PREVIEW): the KEY-DERIVATION golden — `fn-dsa`
 /// 0.4.0's keygen from the KDF's PQ half seed IS the tag's frozen keygen
-/// rule — and the fourteen signatures under the fixtures' seeded stream
+/// rule — and the fifteen signatures under the fixtures' seeded stream
 /// (FN-DSA signing is randomized by the draft's own rule; what the tag
 /// freezes is the key, the frame and the verify, and that stream makes the
 /// bytes reproducible here).
@@ -210,6 +211,7 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
             "8dbf24acd9767066804d04d1bc1c4d7b5e7e5cbce18bb36ce3d44b4c4ee5af01",
             "4a517922b4cae6aec6a0665cc0913fc1d27cc084a3e340ad3116d5ad57f1622f",
             "4829e32bc8198d4dc4d0879979a09eb8c1f2b73b87b28e7d32779d7101155493",
+            "05bd0cc9e1e7cd14921b80dd3b840bf6709a942e55f698756cef7073821fd75b",
         ],
     });
 }
@@ -220,17 +222,19 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
 /// not signatures, since tag 3's signing is randomized), byte-asserted, so a
 /// member silently absent from a body — the base member of a `publish`, for
 /// one — fails the build here, whatever the signatures over it do. The
-/// fourteen fixed frames (`frames.rs`) cover `insert` (undeclared),
+/// fifteen fixed frames (`frames.rs`) cover `insert` (undeclared),
 /// `make_link` WITHOUT its `replaces` row over unit spans and the EMPTY `to`,
 /// `publish` with a value stretch, a window and the base group FILLED, that
 /// `publish` with three DEPOSIT ROWS behind it (lane S3), the
 /// three `record`s (rows 3 and 4 EMPTY), the three EMPTY bodies over the
-/// parent account, the three other link writes over the stored link and the
-/// `edit_link` with its pair's row and resolved extents; this table adds the
+/// parent account, the three other link writes over the stored link, the
+/// `edit_link` with its pair's row and resolved extents and the well-known
+/// creation's EMPTY body under its own token over the slot document's
+/// address; this table adds the
 /// shapes they leave out — an `insert` DECLARED under a type, a `make_link`
 /// WITH its `replaces` row, a `make_link` whose `to` is a RESOLVED content
 /// extent (the slot a V-spec stores as, §7.6's vector (vii)), the `publish`
-/// BIRTH SHAPE with the EMPTY group — and pins the fourteen beside them under
+/// BIRTH SHAPE with the EMPTY group — and pins the fifteen beside them under
 /// their own names, so one table names every cell, at each shape it is pinned
 /// at, with its preimage's length, and no two shapes share a name: a name
 /// picks out one row. The frames are the twins skepd pins byte for byte
@@ -274,7 +278,7 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
     // lane, brief A): the fixed `publish` shot — three values, a window of
     // two, the base `1.0.1.0.1.1` at three — with the daughter
     // `1.0.1.0.1.1.1` superseded by the member the commit mints, homed in
-    // the trunk `1.0.1.0.1`; a NEW row, the fourteen's pins unmoved.
+    // the trunk `1.0.1.0.1`; a NEW row, the fixed frames' pins unmoved.
     let base_member = addr("1.0.1.0.1.1");
     let shot = entry_body_publish(
         [
@@ -289,15 +293,15 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
         Some(skep_identity::ShotBase { member: &base_member, extent: 3 }),
     );
     let supersede = publish_supersede(shot, &doc, &addr("1.0.1.0.1.1.1"));
-    let [insert, link, publish, deposits, enroll, retire, claim, create, fork, version, nullify, assert_sup, emit, edit] =
+    let [insert, link, publish, deposits, enroll, retire, claim, create, fork, version, nullify, assert_sup, emit, edit, well_known] =
         fixed_frames(alg);
-    // The fourteen come under `fixed_frames`' own names, the names the
+    // The fifteen come under `fixed_frames`' own names, the names the
     // signature goldens report them by; the shapes they leave out are named
     // here.
     let named = |(name, bytes): (&'static str, Vec<u8>), len: usize, hash: &'static str| {
         (name, bytes, len, hash)
     };
-    let shapes: [(&str, Vec<u8>, usize, &str); 19] = [
+    let shapes: [(&str, Vec<u8>, usize, &str); 20] = [
         named(insert, 134, "d84853b3c36c8bf452ec57e662c57911eae550193a6c9cf6e8c468ecf118efe2"),
         ("insert, declared", frame(&declared), 146, "199775c4e92c52b6b49b7fb702de449690f2b6be837b5f72d07cb640176aed26"),
         named(link, 207, "c31ac3319996a82e6900d2571724d5b8ae69616fd2c3f785535bb09f63e880f5"),
@@ -317,6 +321,7 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
         named(assert_sup, 265, "9fd23e8ac0bb18347353b830fbc5bbbd0f68a268bd45451651c18d854aff54cc"),
         named(emit, 210, "0b4462a4042c48f57d85c50e24480618660814e2147197b918f86450f49ebe1a"),
         named(edit, 337, "56362c0541c074b2a6519d9665105b32dd4323192e278825b7f06fc34b5d1e7a"),
+        named(well_known, 132, "d19a27d1724e9ba2981e9dc8ca160efc6fbbbe64efd4f279b1f6b6573ed7349d"),
     ];
     let names: BTreeSet<&str> = shapes.iter().map(|(name, ..)| *name).collect();
     assert_eq!(

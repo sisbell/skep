@@ -1388,7 +1388,8 @@ impl Commits {
     /// the lines, is whether there is anything to record: an ack carries the
     /// committed position, while a rejection committed nothing, and so did a
     /// write whose `ack_addr` says `committed: false` — a dedup hit, a
-    /// mailbox found standing — whose `at` is the position its call was
+    /// well-known document found standing — whose `at` is the position its
+    /// call was
     /// judged at, some other write's. Neither is recorded or announced, so no
     /// row carries this call's op, testimony or attestation at another
     /// write's position. Runs under the serialization lock. Exhaustive with
@@ -2383,11 +2384,14 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
             meta(OpKind::RegisterNode, AffectedDocs::Named(Vec::new()), absent, no_cell)
         }
         Op::Fork { .. } => meta(OpKind::Fork, AffectedDocs::Minted, absent, no_cell),
-        // The well-known mint's row names the mailbox it minted, known only
-        // from the ack, and carries no term and no cell. A call that finds
-        // the mailbox standing commits nothing: its ack names the position
-        // it read, one the feed already carries, so the record declines it
-        // and the mailbox has one row, its mint's.
+        // The well-known creation's row names the document it created,
+        // known only from the ack, and carries no term and no cell: a
+        // mailbox, which is private, so its row is masked from everyone but
+        // its owner; or a bio, a link page or a policy document, which is
+        // published, so its row is served to every class. A call that finds
+        // the slot's document standing commits nothing: its ack names the
+        // position it read, one the feed already carries, so the record
+        // declines it and the document has one row, its creation's.
         Op::CreateWellKnownDocument { .. } => {
             meta(OpKind::CreateWellKnownDocument, AffectedDocs::Minted, absent, no_cell)
         }

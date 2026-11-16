@@ -620,11 +620,12 @@ fn every_write_under_a_bound_session_is_answered_and_its_refusals_name_it() {
 
 /// THE ATTESTATION'S PATH (`Request::attest`): the value a request carries
 /// reaches every M3, M5 and M7 driver its write acquires, once — the
-/// attested namespace driver of `create_new_document` and `fork` among them
+/// attested namespace driver of `create_new_document`, `fork` and
+/// `create_well_known_document` among them, the last at every slot, which
+/// of its creations the value signs being M3's to say (the mailbox's never)
 /// — and neither `delegate` nor `register_node`, whose driver takes none,
-/// nor `create_well_known_document`, whose mailbox is never publish-class
-/// and whose namespace driver is the plain one, nor `stage`, whose draft is
-/// never publish-class and whose driver is the plain one.
+/// nor `stage`, whose draft is never publish-class and whose driver is the
+/// plain one.
 /// M10 keeps no copy of which transactions it signs — each store states
 /// that on its handle — and `tests/it/attestation.rs` pins which commits it
 /// lands in. EDITLINK goes with an empty successor: the partition's own
@@ -663,10 +664,7 @@ fn an_attestation_reaches_every_store_driver_a_write_acquires() {
         let reached = std::mem::take(&mut *carried.lock());
         let plain_driver = matches!(
             kind,
-            OpKind::Delegate
-                | OpKind::RegisterNode
-                | OpKind::CreateWellKnownDocument
-                | OpKind::Stage
+            OpKind::Delegate | OpKind::RegisterNode | OpKind::Stage
         );
         let expected = if plain_driver { Vec::new() } else { vec![attestation.clone()] };
         assert_eq!(reached, expected, "{kind:?}");

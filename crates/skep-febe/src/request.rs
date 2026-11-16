@@ -10,7 +10,7 @@ use skep_content::Val;
 use skep_discovery::{Cursor, FourSet};
 use skep_kernel::{Attestation, Seq};
 use skep_links::{AlsoPlaces, Endset, PublishDeposits, PublishTarget, SlotArg, View};
-use skep_namespace::PrincipalId;
+use skep_namespace::{PrincipalId, WellKnownSlot};
 use skep_retrieval::{RegionSpec, Spec};
 
 /// One parsed FEBE request: its operation, idempotency key and attestation.
@@ -195,21 +195,28 @@ pub enum Op {
     /// empty account is refused `mint_home_first` at the daemon (PUB-8.22)
     /// before the flag is read.
     Fork { published: Option<bool> },
-    /// The well-known mint (the mailbox design §3): `account`'s mailbox.
+    /// The well-known creation: one of `account`'s well-known documents.
     ///
-    /// It creates the account's document at its well-known slot 2, always
-    /// private, once: `Namespace::create_well_known_document` answers a later
-    /// call with the same address and commits nothing. `account` is named,
-    /// as [`Op::CreateNewDocument`]'s is, and M3 judges its owner inside the
-    /// mint's own transaction; M10 decides nothing about ownership. No slot
-    /// is named, the mailbox being the one well-known document an owner
-    /// creates: a slot name is a member another such document's creation
-    /// adds beside `account`. Never publish-class: no `attest` rides it, and
-    /// the codec refuses the member as it refuses `published`. Its two
-    /// refusals ahead of the store — the system account's, which has no
-    /// well-known document to create, and an account's whose home page is
-    /// not yet minted — are the daemon's door's alone, never this type's.
-    CreateWellKnownDocument { account: Address },
+    /// It creates the account's document at the well-known slot `slot`
+    /// names (the mailbox design §2, §3; REG-4.131) — the mailbox, the bio,
+    /// the link page or the account's policy document — once, holding
+    /// nothing: `Namespace::create_well_known_document` answers a later call
+    /// at that slot with the same address and commits nothing. `account` is
+    /// named, as [`Op::CreateNewDocument`]'s is, and M3 judges its owner
+    /// inside the creation's own transaction; M10 decides nothing about
+    /// ownership. `slot` is M3's own type, so a request names one of the
+    /// four slots or does not parse into this variant, and the slot fixes
+    /// the state the document is created in — the mailbox private, the
+    /// other three published. No `published` flag rides the op: the codec
+    /// refuses the member. At a published slot the creation is publish-class
+    /// on a claimed board and its `attest` signs the slot document's own
+    /// address; at the mailbox's slot it is never publish-class, and an
+    /// `attest` a request carries there is dropped unread. The refusal of an
+    /// account whose home page is not yet minted is the daemon's door's
+    /// alone, never this type's; the system account's, which has no
+    /// well-known document to create, is the door's first and the store's
+    /// own behind it.
+    CreateWellKnownDocument { account: Address, slot: WellKnownSlot },
     // ── namespace reads (→ M3) ──
     /// M3's next-form delegable prefix — what [`Op::Delegate`] demands (§2).
     NextAccountPrefix { parent: Address },

@@ -45,7 +45,8 @@ use skep_identity::{encode_retire, Fingerprint};
 //     (`the_registrar_admits_a_node`).
 //   * `create_well_known_document` names its account, as
 //     `create_new_document` does, and the store gates it on that account's
-//     ω alone. It is safe to call again, so the owner's cell is `ok` on
+//     ω alone. The row names the mailbox's slot, the one a bare session
+//     creates. It is safe to call again, so the owner's cell is `ok` on
 //     every walk: the first call mints the mailbox, and each later one is
 //     answered its address and commits nothing.
 //   * `version` and `copy`-from-foreign-source are un-OWNER-gated
@@ -487,7 +488,7 @@ fn cell_frame(
         }
         "fork" => r#"{"op":"fork"}"#.to_string(),
         "create_well_known_document" => {
-            format!(r#"{{"op":"create_well_known_document","account":"{}"}}"#, fixture.owner_account)
+            format!(r#"{{"op":"create_well_known_document","account":"{}","slot":2}}"#, fixture.owner_account)
         }
         "insert" => format!(
             r#"{{"op":"insert","doc":"{}","at":{{"subspace":"1","ordinal":"1"}},"values":["z"]}}"#,

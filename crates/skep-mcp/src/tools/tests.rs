@@ -163,7 +163,7 @@ fn wire_frame_makes_the_name_the_op_and_the_arguments_the_frame() {
 ///
 /// Fifty-one wire ops — every op of wire.md §Operations but `publish`, the
 /// six the first catalog lacked among them, the count by home, the
-/// retracted-links read, the landing and the mailbox's mint — and fifteen
+/// retracted-links read, the landing and the well-known creation — and fifteen
 /// adapter tools, the `publication` family's four among them and the read
 /// of a draft's standing beside them; no name twice across the two,
 /// each wire op a `Tool::Op` of its own name with no members list, each
@@ -265,6 +265,40 @@ fn each_adapter_tools_schema_names_exactly_the_members_its_row_takes() {
             None => assert!(opts.is_null(), "{name}: no opts schema where the row takes none"),
         }
     }
+}
+
+/// The well-known creation's schema requires its slot and is closed.
+///
+/// `create_well_known_document` takes the account and the slot, both
+/// required, and no other member (wire.md §Namespace): the board refuses a
+/// frame without `slot` and one whose `slot` names no well-known slot, so
+/// the schema an agent is told to send by requires the member, names the
+/// four numbers the namespace's slots carry and no other, and admits no
+/// member beside the two — no `published` flag, the slot fixing the
+/// document's state. The card names each slot's document and its state, and
+/// the frame the dispatch makes of the arguments carries the slot through
+/// as the number sent.
+#[test]
+fn the_well_known_creations_schema_requires_its_slot_and_refuses_an_unknown_member() {
+    let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    let entry = catalog.tools.iter().find(|t| t["name"] == "create_well_known_document").expect("the tool is catalogued");
+    let schema = &entry["inputSchema"];
+    let required: BTreeSet<&str> = schema["required"].as_array().expect("the required list").iter().filter_map(Value::as_str).collect();
+    assert_eq!(required, BTreeSet::from(["account", "slot"]), "the account and the slot are both required");
+    let named: BTreeSet<&str> = schema["properties"].as_object().expect("a schema's properties").keys().map(String::as_str).collect();
+    assert_eq!(named, required, "the schema names the two members and no other");
+    assert_eq!(schema["additionalProperties"], false, "the schema is closed: an unknown member is refused");
+    let slot = &schema["properties"]["slot"];
+    assert_eq!(slot["type"], "integer", "the slot rides as a number");
+    let slots: Vec<u64> = slot["enum"].as_array().expect("the slots the schema admits").iter().filter_map(Value::as_u64).collect();
+    assert_eq!(slots, skep_client::address::WELL_KNOWN_SLOTS, "the four well-known slots, and no other number");
+    let card = entry["description"].as_str().expect("the card");
+    for said in ["slot is REQUIRED", "2 your mailbox", "3 your bio", "4 your public link page", "5 your account's policy document", "always PRIVATE", "PUBLISHED and EMPTY", "mint_home_first", "committed: false"] {
+        assert!(card.contains(said), "the card says `{said}`: {card}");
+    }
+    let args = serde_json::json!({"account": "1.0.1", "slot": 5});
+    let frame = wire_frame("create_well_known_document", args.as_object().expect("an object").clone());
+    assert_eq!(frame, serde_json::json!({"op": "create_well_known_document", "account": "1.0.1", "slot": 5}));
 }
 
 /// The embedded catalog states the adapter's own facts as the code holds them.

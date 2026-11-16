@@ -53,10 +53,12 @@ use skep_engine::World;
 /// Reached for a publish-class write from a signed session on a claimed
 /// board, the check answers in this order:
 ///
-/// 1. The checked set — [`crate::codec::in_checked_set`]: the ten
+/// 1. The checked set — [`crate::codec::in_checked_set`]: the eleven
 ///    publish-class op kinds — `create_new_document`, `fork`, `version`,
-///    `insert`, `publish`, `make_link`, `emit`, `nullify`, `assert_sup`,
-///    `edit_link` — each with its cell of the entry frame (signed-ops D24);
+///    `create_well_known_document`, `insert`, `publish`, `make_link`,
+///    `emit`, `nullify`, `assert_sup`, `edit_link` — each with its cell of
+///    the entry frame (signed-ops D24; the well-known creation's cell the
+///    empty body over the slot document's own address);
 ///    `delete`, `copy`, `reinstate` and `rearrange` carry no `attest` (the
 ///    codec refuses the member there) and have no cell, the store refusing
 ///    each into a published document, so no publish-class entry of their
@@ -138,7 +140,9 @@ use skep_engine::World;
 ///    so no slot is composed over an arrangement the principal may not read;
 ///    an `edit_link` whose successor M10's own build refuses — an ill-formed
 ///    spec, an unregistered source, a slot past a budget — passes unattested
-///    to that refusal; a principal with no account answers
+///    to that refusal; a `create_well_known_document` whose `account` is no
+///    account's address names no slot and passes unattested to the store's
+///    `not_an_account`; a principal with no account answers
 ///    `attestation_invalid:not_enrolled_at_position`. A write passed through
 ///    unattested here drops the member it presented — never verified, never
 ///    written — and is one the store or the door refuses, each passing arm's
@@ -209,7 +213,8 @@ pub(super) fn attestation_check(
             };
         }
         Err(ComposeFault::PastBodyBudget) => return Err(invalid(AttestFault::FrameTooLarge)),
-        // A write the store or the door refuses whatever it carries: the walk
+        // A write the store or the door refuses whatever it carries: a
+        // well-known creation names an address no slot stands under, the walk
         // finds no value, a term names what no store holds, the staging
         // draft's runs pass the store's re-insert budget, a link slot passes
         // M7's budgets, a V-spec names a source the door withholds, M10's
@@ -220,7 +225,8 @@ pub(super) fn attestation_check(
         // the door's own answer is owed, so the write passes through
         // unattested to it.
         Err(
-            ComposeFault::MissingValue
+            ComposeFault::NoSlotAddress
+            | ComposeFault::MissingValue
             | ComposeFault::Unspellable
             | ComposeFault::PastReinsertBudget
             | ComposeFault::SlotTooLarge
@@ -365,7 +371,9 @@ fn declared_record_atom(op: &Op) -> Option<DeclaredRecord<'_>> {
 /// and by nothing served or testified. A `fork` or a `version` names the
 /// acting principal's own account, which is the system account's only for
 /// the system principal, which no signed session carries, and this check is
-/// a signed session's alone.
+/// a signed session's alone. A `create_well_known_document` takes no
+/// exemption: the system account creates no well-known document, and the
+/// plain path's mint slot refuses the request ahead of this check.
 fn system_owned(world: &World, op: &Op) -> bool {
     let m3 = world.m3();
     let system = system_account();

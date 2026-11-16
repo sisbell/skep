@@ -60,17 +60,20 @@ where
     /// only two spellings; a third would make one concept read as two.
     ///
     /// **The attestation (signed ops).** It rides every M5 and M7 driver a
-    /// write acquires (save `stage`'s, which takes the plain M5 driver), and the M3 driver of `create_new_document` and `fork`
+    /// write acquires (save `stage`'s, which takes the plain M5 driver), and
+    /// the M3 driver of `create_new_document`, `fork` and
+    /// `create_well_known_document`
     /// — [`Stores::namespace_attested`], [`Stores::vstream_attested`] and
     /// [`Stores::linkstore_attested`] — and which of a store's transactions it
     /// signs is that store's alone, stated on its handle's `attest` field: a
     /// handle built with a value fills no signature slot outside the
     /// transactions its store signs. So this table holds no copy of the
     /// checked set — skepd's name for the writes an attestation is admitted
-    /// on, the ten publish-class kinds — and widening it is the stores' and
-    /// the transport's work. `delegate`, `register_node` and
-    /// `create_well_known_document` acquire the plain namespace driver, so
-    /// there it is dropped. Nothing is classified, verified or filtered
+    /// on, the eleven publish-class kinds — and widening it is the stores'
+    /// and the transport's work. `delegate` and `register_node` acquire the
+    /// plain namespace driver, so there it is dropped; and M3 drops it at a
+    /// `create_well_known_document` naming the mailbox's slot, whose
+    /// document is private. Nothing is classified, verified or filtered
     /// here: the value arrives admitted by the dispatched write path's
     /// check, or not at all.
     ///
@@ -156,24 +159,28 @@ where
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at, committed: true })
             }
-            // The well-known mint (the mailbox design §3): M3 mints the
-            // account's mailbox at its slot, private, under ω judged inside
-            // the mint's own transaction — this door decides nothing of
-            // ownership, and the store's refusals lower as
-            // `create_new_document`'s do. The mint is never publish-class, so
-            // the plain driver, as `delegate`'s and `register_node`'s: an
-            // attestation the request carries is dropped here. A call that
-            // finds the mailbox standing is acknowledged as M3 answers it:
-            // the standing address beside the position it read, no commit
-            // made, and `committed: false` — as `emit`'s dedup hit is below.
-            Op::CreateWellKnownDocument { account } => {
-                let (mailbox, at) = self
+            // The well-known creation (the mailbox design §2, §3;
+            // REG-4.131): M3 creates the account's document at the slot the
+            // op names, in the slot's own state and holding nothing, under ω
+            // judged inside the creation's own transaction — this door
+            // decides nothing of ownership or of the state, and the store's
+            // refusals lower as `create_new_document`'s do, its refusal of
+            // the system account among them. The attested driver, as
+            // `create_new_document`'s: which creation the attestation signs
+            // is M3's to say — one at a published slot, never the mailbox's,
+            // where a value the request carried is dropped unwritten. A call
+            // that finds the slot's document standing is acknowledged as M3
+            // answers it: the standing address beside the position it read,
+            // no commit made, and `committed: false` — as `emit`'s dedup hit
+            // is below.
+            Op::CreateWellKnownDocument { account, slot } => {
+                let (document, at) = self
                     .stores
-                    .namespace()
-                    .create_well_known_document(wc.principal, &account)
+                    .namespace_attested(attest)
+                    .create_well_known_document(wc.principal, &account, slot)
                     .map_err(|e| lower_txn(kind, e))?;
-                let committed = matches!(mailbox, WellKnown::Minted(_));
-                Ok(Response::AckAddr { addr: mailbox.into_address(), at, committed })
+                let committed = matches!(document, WellKnown::Minted(_));
+                Ok(Response::AckAddr { addr: document.into_address(), at, committed })
             }
             // ── arrangement writes (→ M5; ω-gated in-store under the
             //    session caller; the version-chain refusals in-store too,

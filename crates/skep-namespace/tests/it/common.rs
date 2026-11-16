@@ -84,7 +84,12 @@ pub fn nth_document(account: &Address, k: u32) -> Address {
 
 /// The named slots of an account's reserved block, by document number: the
 /// well-known slots a record may fill, once each.
-pub const NAMED_SLOTS: [u32; 3] = [2, 3, 4];
+pub const NAMED_SLOTS: [u32; 4] = [2, 3, 4, 5];
+
+/// The system account's slots genesis seeds, by document number: its head
+/// document, its staging draft and its time document. Its slot 5 is named
+/// and holds nothing.
+pub const SEEDED_SYSTEM_SLOTS: [u32; 3] = [2, 3, 4];
 
 /// The document at `account`'s slot `number`, a document number of its
 /// reserved block: an address that names the slot whether or not anything

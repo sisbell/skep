@@ -1680,7 +1680,7 @@ fn a_call_that_committed_nothing_at_a_held_lines_landing_leaves_the_landing_foun
     *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": g.own_key(), "docs": [DOC]})];
     g.fake.next_at.store(78, Ordering::SeqCst);
     let mailbox = skep_client::address::mailbox_of("1.0.1");
-    let call = json!({"op": "create_well_known_document", "account": "1.0.1"});
+    let call = json!({"op": "create_well_known_document", "account": "1.0.1", "slot": 2});
     g.holds.note_ack(&g.session, &call, &json!({"resp": "ack_addr", "addr": mailbox, "at": 77, "committed": false}));
     assert!(!g.holds.acked("b-1", 77), "the no-commit ack enters no acked position");
     g.holds.probe("b-1");

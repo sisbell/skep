@@ -14,8 +14,10 @@
 //!   the daemon's grammar (AUTH-4.2; AUTH RES-61) under a vector-agreement
 //!   test over the daemon's own admitted and refused strings (P5).
 //! * [`address`] — the address grammar over the wire's dotted spelling: an
-//!   account's parent, first child, doc 1 and mailbox (the well-known slot
-//!   `MAILBOX_SLOT`), the document an address lies in, the parse into
+//!   account's parent, first child, doc 1 and its four well-known documents
+//!   (the slots `MAILBOX_SLOT`, `BIO_SLOT`, `LINK_PAGE_SLOT` and
+//!   `POLICY_SLOT`, at `well_known_of`), the document an address lies in,
+//!   the parse into
 //!   `skep_address`'s `Address`, and the namespace's principal depth every
 //!   walk upward from a board-named account is held to.
 //! * `hex` (private) — lowercase hex, the one spelling every hex this crate
@@ -41,8 +43,10 @@
 //!   `H.1`'s pair read once per board (signed-ops D13); its child `frames`
 //!   spells every frame this crate sends and the frames it lends an
 //!   embedder: the reads, the paged link search among them (`window_four`,
-//!   `window_ftt`, with the mail type `T_MAIL`), and one write no code of
-//!   the crate sends, the mailbox's mint (`create_mailbox`); its child `answers`
+//!   `window_ftt`, with the mail type `T_MAIL`), and the creation of a
+//!   well-known document, slot named (`create_well_known_document`; the
+//!   mailbox's, `create_mailbox`, which no code of the crate sends); its
+//!   child `answers`
 //!   decodes the read answers the crate reads but the registry reads',
 //!   which `Board` decodes itself, and an envelope member a caller reads in
 //!   place. Beside those the crate lends an embedder readers no code of its
@@ -120,7 +124,10 @@
 //!   key named or generated, the backup moment's node arm over the pairs
 //!   the request generates — and the request that carries them, framed,
 //!   signed once by the device key and checked; composed here, and written
-//!   by another hand.
+//!   by another hand. At the module's root, beside the one composer of an
+//!   `attest`, stands `create_well_known_document`: an account's document
+//!   created at one of its well-known slots, signed where the slot's
+//!   document is published (`well_known_frame`), and safe to repeat.
 //! * [`share`] — the grant as this client composes and reads it (PUB-5.1,
 //!   PUB-5.15): `share`, one document or one account opened to one account;
 //!   `privash`, one draft opened to every account on the board and never a

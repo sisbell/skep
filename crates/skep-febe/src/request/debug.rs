@@ -32,8 +32,8 @@ impl fmt::Debug for Op {
                 f.debug_struct("RegisterNode").field("addr", addr).finish()
             }
             Op::Fork { published } => f.debug_struct("Fork").field("published", published).finish(),
-            Op::CreateWellKnownDocument { account } => {
-                f.debug_struct("CreateWellKnownDocument").field("account", account).finish()
+            Op::CreateWellKnownDocument { account, slot } => {
+                f.debug_struct("CreateWellKnownDocument").field("account", account).field("slot", slot).finish()
             }
             Op::NextAccountPrefix { parent } => {
                 f.debug_struct("NextAccountPrefix").field("parent", parent).finish()

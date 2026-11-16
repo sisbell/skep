@@ -37,6 +37,10 @@ fn each_body_carries_the_wire_name_of_its_op() {
         (entry_body_empty(ContentFreeOp::CreateNewDocument), OpKind::CreateNewDocument),
         (entry_body_empty(ContentFreeOp::Fork), OpKind::Fork),
         (entry_body_empty(ContentFreeOp::Version), OpKind::Version),
+        (
+            entry_body_empty(ContentFreeOp::CreateWellKnownDocument),
+            OpKind::CreateWellKnownDocument,
+        ),
         (entry_body_insert(None, std::iter::empty()), OpKind::Insert),
         (entry_body_make_link(slots), OpKind::MakeLink),
         (entry_body_emit(slots), OpKind::Emit),
@@ -147,6 +151,78 @@ fn an_op_outside_the_checked_set_stops_compose_loudly() {
         as_of: Seq(7),
     };
     let _ = compose(world, &delete, BOOTSTRAP_PRINCIPAL, board);
+}
+
+/// Checks the well-known creation's cell: its frame names its slot.
+///
+/// The frame composed for a `create_well_known_document` is the empty body
+/// under the op's own token over the slot document's own address,
+/// `<account>.0.<slot>`, at every slot — the address M3 computes from the
+/// request's account and slot, registry-free, so before anything stands
+/// there. It is never the frame over the parent account, the mints' term,
+/// which every slot of the account would share; never another slot's; and
+/// never under `create_new_document`'s token. An `account` of another tier
+/// anchors no document chain and so names no slot: the composer answers
+/// the fault the check passes through to the store's `not_an_account`,
+/// never a frame over the address as sent.
+#[test]
+fn a_well_known_creations_frame_names_the_slot_documents_own_address() {
+    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
+    use skep_namespace::{WellKnownSlot, BOOTSTRAP_PRINCIPAL};
+
+    let engine = skep_engine::Engine::open(KernelConfig {
+        durability: Durability::InMemory,
+        checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
+    })
+    .expect("in-memory genesis cannot fail");
+    let snap = engine.kernel().snapshot();
+    let world = snap.world();
+    let own = world.m3().principal_prefix(BOOTSTRAP_PRINCIPAL).expect("genesis seats principal 0").clone();
+    let board = BoardTerm { log_position: 1, chain: [7; 32] };
+    let alg = "mldsa65-ed25519";
+    let address = |text: &str| crate::codec::wire_address(text).expect("a test address");
+    let account = address("1.0.7");
+    let spelled = |doc: &Address, op: ContentFreeOp| {
+        entry_frame(alg, board, &own, DocTerm::One(doc), &entry_body_empty(op))
+    };
+    let composed = |slot: WellKnownSlot| {
+        let op = Op::CreateWellKnownDocument { account: account.clone(), slot };
+        match compose(world, &op, BOOTSTRAP_PRINCIPAL, board) {
+            Ok(frame) => frame.to_bytes(alg),
+            Err(fault) => panic!("{slot:?}: the creation's frame composes: {fault:?}"),
+        }
+    };
+    for slot in WellKnownSlot::ALL {
+        let document = address(&format!("1.0.7.0.{}", slot.number()));
+        let frame = composed(slot);
+        assert_eq!(
+            frame,
+            spelled(&document, ContentFreeOp::CreateWellKnownDocument),
+            "{slot:?}: the empty body, the op's own token, over {document}"
+        );
+        assert_ne!(
+            frame,
+            spelled(&account, ContentFreeOp::CreateWellKnownDocument),
+            "{slot:?}: never the parent account"
+        );
+        assert_ne!(
+            frame,
+            spelled(&document, ContentFreeOp::CreateNewDocument),
+            "{slot:?}: never `create_new_document`'s token"
+        );
+        for other in WellKnownSlot::ALL.into_iter().filter(|other| *other != slot) {
+            assert_ne!(frame, composed(other), "{slot:?}: never {other:?}'s frame");
+        }
+    }
+    // No slot stands under a node's address or a document's.
+    for no_account in [address("1"), address("1.0.7.0.1")] {
+        let op = Op::CreateWellKnownDocument { account: no_account.clone(), slot: WellKnownSlot::Policy };
+        assert!(
+            matches!(compose(world, &op, BOOTSTRAP_PRINCIPAL, board), Err(ComposeFault::NoSlotAddress)),
+            "{no_account}: an address that anchors no document chain names no slot"
+        );
+    }
 }
 
 /// Checks that the publish body's grain is per value, whatever M4 holds.

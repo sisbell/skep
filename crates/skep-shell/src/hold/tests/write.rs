@@ -376,7 +376,7 @@ fn a_restore_is_noted_as_an_acknowledged_set_arrangement_on_its_draft() {
 fn a_mailbox_mints_second_ack_which_committed_nothing_is_noted_nowhere() {
     let g = ground();
     let mailbox = skep_client::address::mailbox_of("1.0.1");
-    let mint = json!({"op": "create_well_known_document", "account": "1.0.1"});
+    let mint = json!({"op": "create_well_known_document", "account": "1.0.1", "slot": 2});
     let own = Some(Written { by: Some(g.session.reference.clone()), burst: None });
     let call = |answer: Value| {
         g.fake.op_rejected.next(1, answer);
@@ -448,7 +448,7 @@ fn a_bursts_writer_record_survives_a_call_that_committed_nothing_at_its_position
     assert_eq!(g.holds.written(&g.session, 80), burst, "the premise: the burst's writer, its `id` beside it");
     let mailbox = skep_client::address::mailbox_of("1.0.1");
     g.fake.op_rejected.next(1, json!({"resp": "ack_addr", "addr": mailbox, "at": 80, "committed": false}));
-    let mint = json!({"op": "create_well_known_document", "account": "1.0.1"});
+    let mint = json!({"op": "create_well_known_document", "account": "1.0.1", "slot": 2});
     g.holds.send(&g.session, mint, None).answered().expect("acknowledged");
     assert_eq!(g.holds.written(&g.session, 80), burst, "the call that committed nothing leaves the burst's record");
 }
@@ -2440,7 +2440,7 @@ fn the_ten_unholdable_writes_are_refused_under_a_standing_hold_and_dialed_elsewh
             json!({"op": "fork", "published": true}),
             json!({"op": "version", "d_src": DOC}),
             json!({"op": "stage", "from": DOC}),
-            json!({"op": "create_well_known_document", "account": "1.0.1"}),
+            json!({"op": "create_well_known_document", "account": "1.0.1", "slot": 2}),
             json!({"op": "set_arrangement", "doc": DOC, "runs": [{"origin": DOC, "i_start": format!("{DOC}.0.1.1"), "width": "1"}], "as_of": 1}),
             json!({"op": "make_link", "home": OTHER, "from": {"addrs": [OTHER]}, "to": {"addrs": []}, "ty": {"addrs": [citation]}}),
             json!({"op": "nullify", "home": OTHER, "target": format!("{OTHER}.0.2.1")}),

@@ -33,9 +33,9 @@ use skep_address::GateViolation;
 /// has a typed rejection for its one refusal, and the peek
 /// `next_account_prefix`, which answers the `None` as its own, so a fifth
 /// variant would be a permanently dead arm in M5's, M7's and M10's
-/// vocabularies. The mailbox's, which `create_well_known_document` calls,
-/// keeps `mint_document`'s gate and answers its leaf, `NotAnAccount`, so it
-/// adds none either; it never answers `Gate`.
+/// vocabularies. A well-known slot's, which `create_well_known_document`
+/// calls, keeps `mint_document`'s gate and answers its leaf, `NotAnAccount`,
+/// so it adds none either; it never answers `Gate`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MintError {
     /// The home is not a registered Document (P6/C2/L1a).
@@ -48,8 +48,8 @@ pub enum MintError {
     SourceNotRegistered,
     /// A document mint's target is not a registered Account (P8/CND.pre).
     ///
-    /// `mint_document` earns it, and the mailbox's mint by the same gate. It
-    /// covers both unregistered and non-account.
+    /// `mint_document` earns it, and a well-known slot's mint by the same
+    /// gate. It covers both unregistered and non-account.
     NotAnAccount,
     /// M1's TA5a inc gate refused (B6).
     ///
@@ -92,16 +92,33 @@ impl Error for MintError {
 /// (§B). "Not an account" and "not registered" both surface via
 /// `Mint(MintError::NotAnAccount)`.
 ///
-/// The variants are declared in the pinned order all three evaluate them:
-/// `NotOwner` before `Mint`. ω is read first and the mint's structural gate
-/// only after, so a caller who is not the effective owner of the target
-/// learns nothing about whether the target exists — the same probe returns
-/// `NotOwner` to a stranger and `Mint(NotAnAccount)` to ω. `fork` inherits
-/// the order by reducing to `create_new_document`, and
+/// The variants are declared in the pinned order the ops evaluate them:
+/// `SystemAccountNoWellKnown`, which `create_well_known_document` alone
+/// answers, off its argument and ahead of any transaction; then `NotOwner`
+/// before `Mint`, the order all three keep. ω is read first and the mint's
+/// structural gate only after, so a caller who is not the effective owner
+/// of the target learns nothing about whether the target exists — the same
+/// probe returns `NotOwner` to a stranger and `Mint(NotAnAccount)` to ω.
+/// `fork` inherits the order by reducing to `create_new_document`, and
 /// `create_well_known_document` keeps it in a transaction of its own, where
-/// the stranger learns nothing of the account's mailbox either.
+/// the stranger learns nothing of the account's well-known documents
+/// either. The first variant discloses nothing: it is a function of the
+/// request alone, the same for every caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CreateDocumentError {
+    /// The target is the system account, which creates no well-known document.
+    ///
+    /// `create_well_known_document` alone answers it, for
+    /// [`system_account`](crate::system_account) at every slot, whoever
+    /// calls: that account's slots are its own table — the head document,
+    /// the staging draft and the time document, which genesis seeds, and
+    /// nothing at 5 — and no system document is placed while a board runs
+    /// (the mailbox design §2). Judged off the argument, ahead of any
+    /// transaction. The daemon's door answers the same refusal first, under
+    /// the same name (`system_account_no_well_known`); this is the store's
+    /// own guard behind it, since the fold admits a record at a named slot
+    /// whatever account it lies in.
+    SystemAccountNoWellKnown,
     /// Refused for want of effective ownership ω (O5).
     ///
     /// Authorization is by ω (longest match), never bare prefix containment.
@@ -115,8 +132,8 @@ pub enum CreateDocumentError {
     /// The op's mint failed structurally.
     ///
     /// `create_new_document` and `fork` mint through `mint_document`, and
-    /// `create_well_known_document` through the mailbox's mint, which keeps
-    /// that mint's gate, so only two [`MintError`] leaves can come out of
+    /// `create_well_known_document` through a well-known slot's mint, which
+    /// keeps that mint's gate, so only two [`MintError`] leaves can come out of
     /// it: `NotAnAccount`, and `Gate`, which no state reaches (see
     /// [`MintError`]) yet the type still carries. A caller matching on this
     /// owes `HomeNotRegistered` and `SourceNotRegistered` no handling:
@@ -128,6 +145,9 @@ pub enum CreateDocumentError {
 impl fmt::Display for CreateDocumentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            CreateDocumentError::SystemAccountNoWellKnown => {
+                "the system account creates no well-known document: its slots are its own, seeded at genesis (the mailbox design §2)"
+            }
             CreateDocumentError::NotOwner => {
                 "caller is not the effective owner (ω) of the target account, or — from fork, which has no target — its id names no principal at all (O5; ω arbitrates, never bare containment)"
             }

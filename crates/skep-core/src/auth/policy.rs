@@ -488,17 +488,18 @@ pub enum CredentialRefusal {
     /// The system account creates no well-known document.
     ///
     /// A `create_well_known_document` naming the system account `1.1.0.1`,
-    /// whoever sends it. That account's well-known documents stand from
-    /// genesis at their fixed addresses, and its document 2 is the head
-    /// document, no mailbox (the mailbox design §2): the store, asked by
-    /// the system principal, would find that slot filled and answer the head
-    /// document's address as a mailbox's. Refused in the plain path's mint
+    /// whoever sends it and whatever slot it names. That account's slots are
+    /// its own table: its documents 2, 3 and 4 — the head document, the
+    /// staging draft and the time document — stand from genesis at their
+    /// fixed addresses, and its document 5 is named by nothing and never
+    /// created (the mailbox design §2). Refused in the plain path's mint
     /// slot, ahead of the board-state pair, so on claimed and unclaimed
     /// boards alike, and read off the op's `account` alone: it discloses a
-    /// constant and no state. Token `system_account_no_well_known`, spelled
-    /// beside `system_account_keyless`, and permanent, the family's: no
-    /// committed state admits the same request; the act that exists is the
-    /// mailbox of an account of one's own.
+    /// constant and no state. The store keeps a guard of its own behind
+    /// this one, under the same name. Token `system_account_no_well_known`,
+    /// spelled beside `system_account_keyless`, and permanent, the family's:
+    /// no committed state admits the same request; the act that exists is a
+    /// well-known document of an account of one's own.
     SystemAccountNoWellKnown,
     /// The write-path check's second refusal (§4.5 (2)).
     ///
@@ -754,7 +755,7 @@ mod tests {
         assert_eq!(CredentialRefusal::ClaimFirst.disposition(), Permanent);
         // A sig-less record atom and the system account's credential
         // deposit are `Permanent` — no committed state admits the same bytes
-        // (SO-I7 (f)) — and so is the system account's well-known mint,
+        // (SO-I7 (f)) — and so is the system account's well-known creation,
         // which no state admits either (the mailbox design §2), and a
         // `register_node` from a signed session that is not the registrar's,
         // whose principal no state makes the claimant's (REG-2.1).

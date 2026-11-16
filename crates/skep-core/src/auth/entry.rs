@@ -23,7 +23,10 @@
 //!   lands in for the three mints — the request's `account` at
 //!   `create_new_document`, the principal's own at `fork` and at `version`
 //!   (never the trunk of `d_src`, which would put ω(`doc`) off `account` at
-//!   a cross-owner version);
+//!   a cross-owner version); and the slot document's own address,
+//!   `<account>.0.<slot>`, for a `create_well_known_document` — computed
+//!   from the request by M3's `well_known_address`, so known before the
+//!   commit, and the one address the creation makes;
 //! * `op` — the op-kind token as the wire spells it, which the body's
 //!   [`EntryBody`] carries (`each_body_carries_the_wire_name_of_its_op`
 //!   holds it to the codec's own `op_name`) — and, at a credential or
@@ -31,7 +34,8 @@
 //!   ([`compose_record`]: skep-identity's [`RecordFrame`] over the fold's
 //!   own reading of the link's address — its home, and the home's account
 //!   by ω);
-//! * `body` — per op cell: empty for the three mints; the declared type and
+//! * `body` — per op cell: empty for the three mints and for the
+//!   well-known creation, each under its own token; the declared type and
 //!   the values for `insert`; for the link writes the stored link's slots as
 //!   the transaction will deposit them (the design record §2.5's slot row):
 //!   a `make_link`'s three slots resolved through M7's own [`slot_endset`]
@@ -80,8 +84,9 @@
 //!   request carrying no deposit spells today's body byte for byte, and so
 //!   does one carrying the rider alone.
 //!
-//! Nine bodies the daemon does not compose. Each is answered as the
-//! [`ComposeFault`] that names its reason, and no more: what the write is
+//! Nine bodies the daemon does not compose, and one `doc` term. Each is
+//! answered as the [`ComposeFault`] that names its reason, and no more: what
+//! the write is
 //! then owed — passed through to the store's or the door's own refusal, or
 //! refused as its own cause — is the check's to decide, and is stated there
 //! alone (`policy/attestation.rs`'s `attestation_check`, its doc item 6).
@@ -134,6 +139,9 @@
 //!   snapshot — the
 //!   store refuses the same request by the same function, with the same
 //!   fault, and answers it as the typed rejection naming the entry.
+//! * the `doc` of a `create_well_known_document` whose `account` is no
+//!   account's address ([`ComposeFault::NoSlotAddress`]): no slot stands
+//!   under another tier, and the store refuses the write `not_an_account`.
 
 use std::num::NonZeroU64;
 
@@ -155,7 +163,7 @@ use skep_links::{
     supersession_claim, DepositPlan, Endset, Link, NamedAddress, PlanFault, PlannedDeposit,
     PlannedEnd, PlannedHome, PublishDeposits, PublishTarget, SlotArg,
 };
-use skep_namespace::{HasM3, PrincipalId};
+use skep_namespace::{well_known_address, HasM3, PrincipalId};
 
 use crate::commits::board_term;
 use skep_engine::World;
@@ -164,7 +172,8 @@ use skep_engine::World;
 ///
 /// It is parity with the request-body cap,
 /// [`crate::limits::MAX_REQUEST_BODY`]. The checked set's other ops compose
-/// their bodies out of the request: the three mints' are empty, `insert`'s
+/// their bodies out of the request: the three mints' and the well-known
+/// creation's are empty, `insert`'s
 /// values and the link writes' slot arguments ride in the frame, so the
 /// transport's cap bounds them already, and the slots a `make_link`, an
 /// `emit` and an `edit_link` build from them are held to the per-slot
@@ -196,6 +205,12 @@ const MAX_SHOT_BODY_BYTES: usize = crate::limits::MAX_REQUEST_BODY;
 pub(super) enum ComposeFault {
     /// The principal has no account prefix — no `account` term.
     NoAccount,
+    /// A `create_well_known_document` whose `account` is no account's address.
+    ///
+    /// Only an account anchors a document chain, so an address of another
+    /// tier names no slot and the frame has no `doc` to spell: a write the
+    /// store refuses `not_an_account` whatever it carries.
+    NoSlotAddress,
     /// A `publish`'s copied run names an address with no value in the snapshot.
     ///
     /// It is a shot the store's own existence walk refuses `dangling_source`.
@@ -333,7 +348,8 @@ fn stored_slot(
 /// # Errors
 ///
 /// Why the frame cannot be composed: [`ComposeFault::NoAccount`] where the
-/// principal has no account prefix, read first; then a `make_link`'s slot
+/// principal has no account prefix, read first; then a well-known creation's
+/// [`ComposeFault::NoSlotAddress`], a `make_link`'s slot
 /// faults ([`stored_slot`]), an `emit`'s [`ComposeFault::SlotTooLarge`], an
 /// `edit_link`'s [`ComposeFault::UnreadableSlotSource`] or
 /// [`ComposeFault::SuccessorRefused`], and a `publish`'s
@@ -379,6 +395,17 @@ pub(super) fn compose(
         Op::Version { .. } => {
             (FrameDocTerm::One(account.clone()), entry_body_empty(ContentFreeOp::Version))
         }
+        // The well-known creation: the empty body, under its own token, over
+        // the slot document's own address — the one address the creation
+        // makes, computed from the request's account and slot, so the frame
+        // stays position-free and a signature made for one slot verifies at
+        // no other. Never the parent account, which every slot of it shares.
+        Op::CreateWellKnownDocument { account: parent, slot } => (
+            FrameDocTerm::One(
+                well_known_address(parent, *slot).ok_or(ComposeFault::NoSlotAddress)?,
+            ),
+            entry_body_empty(ContentFreeOp::CreateWellKnownDocument),
+        ),
         Op::Insert { doc, values, deposit, .. } => {
             let declared = match deposit {
                 Deposit::Declared(ty) => Some(ty),

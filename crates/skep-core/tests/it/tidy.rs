@@ -384,7 +384,7 @@ fn creates_a_document(line: &str) -> bool {
 /// core): the head writer, the link-type registry's seed and the time
 /// writer write into documents genesis seeds — the staging draft, `H`, the
 /// registry document and `T` — and a session's mint goes through
-/// `skep-febe`'s dispatch, a mailbox's as an ordinary document's, so no
+/// `skep-febe`'s dispatch, a well-known document's as an ordinary one's, so no
 /// code line under `src/` calls either of the namespace's two creations,
 /// `.create_new_document(` or `.create_well_known_document(`
 /// ([`DOCUMENT_CREATIONS`]). Not code here, as the fourth check reads it: a
@@ -398,7 +398,7 @@ fn creates_a_document(line: &str) -> bool {
 /// file, or one whose exemptions have widened to the whole crate, fails
 /// here. And the scan's reading of a line faults a call of each creation as
 /// a session's dispatch spells it, and passes the lines of this crate that
-/// name the mailbox's creation without calling it — its wire name in the
+/// name the well-known creation without calling it — its wire name in the
 /// codec's two tables, its variant in a match; so a scan that has lost
 /// either creation, or that reads a name as a call, fails here too.
 #[test]
@@ -408,16 +408,16 @@ fn no_code_line_of_the_crate_creates_a_document() {
     for call in [
         "let (addr, at) = self.stores.namespace_attested(attest).create_new_document(p, &a, None)",
         "                    .create_new_document(wc.principal, &account, published)",
-        "let (addr, at) = self.stores.namespace().create_well_known_document(p, &account)",
-        "                    .create_well_known_document(wc.principal, &account)",
+        "let (addr, at) = self.stores.namespace_attested(attest).create_well_known_document(p, &account, slot)",
+        "                    .create_well_known_document(wc.principal, &account, slot)",
     ] {
         assert!(creates_a_document(call), "the scan reads no creation in `{call}`");
     }
     for named in [
         r#"        OpKind::CreateWellKnownDocument => "create_well_known_document","#,
-        r#"        "create_well_known_document" => {"#,
-        "            Op::CreateWellKnownDocument { account: fields.addr(\"account\")? }",
-        "        Op::CreateWellKnownDocument { .. } => false,",
+        r#"        "create_well_known_document" => Op::CreateWellKnownDocument {"#,
+        "        Op::CreateWellKnownDocument { account, slot } => {",
+        "        Op::CreateWellKnownDocument { .. } => {",
     ] {
         assert!(!creates_a_document(named), "the scan reads a creation in `{named}`");
     }

@@ -874,7 +874,7 @@ re-exports counted as the module it is brought from (held by
   `document_address`, the write kinds (`WRITE_KINDS`) `shell.rs` and
   `hold.rs` both read, and the value forms both ways (`values_of`,
   `delivered_values`).
-- `attest.rs` `Composer`: the entry frame for the ten kinds, every axis
+- `attest.rs` `Composer`: the entry frame for the eleven kinds, every axis
   from the shell's own reads, through `skep-identity`'s builders.
 - `held.rs` the HELD-BURST STORE (`client.md` §3c): one append-only file per
   (board, principal); `HeldQueue`, a principal's queue — its memory, the

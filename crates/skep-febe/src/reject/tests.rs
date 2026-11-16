@@ -214,6 +214,7 @@ fn documented_disposition(c: RejectCode) -> Disposition {
         | RejectCode::TxnOverBudget
         | RejectCode::NotRegistered
         | RejectCode::NotOwner
+        | RejectCode::SystemAccountNoWellKnown
         | RejectCode::Gate
         | RejectCode::DelegatorUnknown
         | RejectCode::DuplicateId
@@ -322,7 +323,7 @@ fn documented_disposition(c: RejectCode) -> Disposition {
 /// Every code, in declaration order — the domain the policy is total
 /// over. A newly added code lands here and in
 /// [`documented_disposition`].
-const ALL_CODES: [RejectCode; 95] = [
+const ALL_CODES: [RejectCode; 96] = [
     RejectCode::Unauthenticated,
     RejectCode::Malformed,
     RejectCode::Durability,
@@ -338,6 +339,7 @@ const ALL_CODES: [RejectCode; 95] = [
     RejectCode::EndpointNotResident,
     RejectCode::NotOwner,
     RejectCode::NotAnAccount,
+    RejectCode::SystemAccountNoWellKnown,
     RejectCode::Gate,
     RejectCode::DelegatorUnknown,
     RejectCode::DuplicateId,

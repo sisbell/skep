@@ -1159,7 +1159,7 @@ create_well_known_document / delegate / register_node.
 A write that found its work done carries `committed`, `false`: an
 `emit`, `nullify` or `assert_sup` answered with the incumbent it
 deduplicated against (§Links (writes)), and a
-`create_well_known_document` that found the mailbox standing
+`create_well_known_document` that found its slot's document standing
 (§Namespace). Nothing committed: `addr` is the address that stands, and
 `at` the position the call was judged at — the board's head then, where
 some other write committed. A client counts no such `at` as a position
@@ -2704,9 +2704,10 @@ bare session depositing a credential on a claimed board, for example:
 
 **The two attestation codes** (signed ops; the write-path check, which
 runs on every CLAIMED board, with no operator switch, on a dispatched
-publish-class write of the TEN KINDS that have an entry frame —
-`create_new_document`, `fork`, `version`, `insert`, `publish`,
-`make_link`, `emit`, `nullify`, `assert_sup`, `edit_link` — ABOVE the
+publish-class write of the ELEVEN KINDS that have an entry frame —
+`create_new_document`, `fork`, `version`, `create_well_known_document`,
+`insert`, `publish`, `make_link`, `emit`, `nullify`, `assert_sup`,
+`edit_link` — ABOVE the
 claim entry, from a signed session, BEFORE the transaction — beside the
 publish-class gate below, after it, and ahead of the store's own gates
 (`delete`, `copy`, `reinstate` and `rearrange` have no frame: a published
@@ -2799,13 +2800,16 @@ optional row names, the base group's member, the pair's row. THE
 OPTIONAL-ADDRESS ROW, one length-delimited group, EMPTY (`be32(0)`) where
 no address is named, else the address as an address-list row of one. THE
 VALUE-SEQUENCE ROW, `be64(count)` then each value `be32(len) ‖ bytes`. THE
-EMPTY BODY, the three mints': the member PRESENT and empty, `be32(0)` in
-the frame. Each op's `doc` and `body` are stated at the op: the mints'
-(§Namespace, `version` under §Arrangement), `insert`'s and `publish`'s
+EMPTY BODY, the three mints' and the well-known creation's: the member
+PRESENT and empty, `be32(0)` in the frame, each under its op's own token.
+Each op's `doc` and `body` are stated at the op: the mints' and the
+well-known creation's (§Namespace, `version` under §Arrangement) — a
+mint's `doc` the parent account, the creation's THE SLOT DOCUMENT's OWN
+ADDRESS, `<account>.0.<slot>` — `insert`'s and `publish`'s
 (§Arrangement), the five link writes' (§Links (writes)), the record
 grade's (§The claim ceremony and credentials). The armed set of
 `attestation_invalid`'s causes above is the whole of it: the widening to
-the ten kinds added no cause.
+the eleven kinds added no cause.
 
 **Round 7's two refusals** (signed ops; `credential_refused`, PERMANENT
 like the family's, each naming the act that exists):
@@ -2839,16 +2843,19 @@ PERMANENT like the family's, naming the act that exists), beside
 `system_account_keyless`:
 
 * `system_account_no_well_known` — a `create_well_known_document`
-  (§Namespace) whose `account` is the system account `1.1.0.1`. The
-  system account's documents stand from the board's birth, at their
-  fixed addresses, so it has no well-known document to create: its
-  document 2 is the head document (§The other endpoints), no mailbox.
+  (§Namespace) whose `account` is the system account `1.1.0.1`, at
+  EVERY `slot`. The system account's documents stand from the board's
+  birth, at their fixed addresses, so it has no well-known document to
+  create: its document 2 is the head document (§The other endpoints),
+  no mailbox, its documents 3 and 4 the board's own staging draft and
+  time document, and its number 5 holds no document, ever.
   Refused WHOEVER ASKS — the token reads the request's `account` and
   nothing of the caller, the system account's own principal included —
   on claimed and unclaimed boards alike: it stands in the MINT class of
   the write order below, ahead of the board-state gate, so no caller is
-  asked to claim first and none is told `not_owner`. The act that exists
-  is the mailbox of an account of your own.
+  asked to claim first, to sign or to attach an `attest`, and none is
+  told `not_owner`. The act that exists is a well-known document of an
+  account of your own.
 
 **The registrar's gate** (`credential_refused`; REG-2.1): `register_node`
 (§Namespace) admits a node address to the board, and only the board's
@@ -2901,7 +2908,7 @@ takes this family's `record_sig_required` at its `insert`, as a
 credential record's does: a record of the declared kind carrying no `sig`
 lands nowhere.
 
-Every publish-class write of the ten kinds on a claimed board is judged;
+Every publish-class write of the eleven kinds on a claimed board is judged;
 the board's own daemon's writes as the system account's principal (the
 head document's, the time document's and the registry's, in documents
 `1.1.0.1` owns) are exempt by ownership and never dispatched. Every other
@@ -2923,9 +2930,10 @@ resolves AFTER every token below.
    * `mint_home_first` — MINT-FIRST: a `fork`, a `version` or a `stage`
      by a principal whose account's space has never held a document, and
      a `create_well_known_document` (§Namespace) by the owner of the
-     `account` it names, where that account holds no document. Mint the
+     `account` it names, at any `slot`, where that account holds no
+     document. Mint the
      home first (`create_new_document`, which becomes the account's
-     doc 1). The well-known mint's cell answers the account's OWNER
+     doc 1). The well-known creation's cell answers the account's OWNER
      alone: anyone else answers `not_owner` instead, and is never told
      whether the account is empty.
    * `mint_home_public` — the first-mint publication door (PUB-8.20): an
@@ -2973,6 +2981,12 @@ resolves AFTER every token below.
      ALONE (RES-311): from a SIGNED session it is publish-class whatever
      its flag, the flagless first mint being the home born published
      (PUB-8.21), and takes the write-path check (§Credential refusals);
+     a `create_well_known_document` by the account's owner at a slot
+     whose document is created PUBLISHED — the bio's (3), the link
+     page's (4), the policy document's (5); the slot's own state is the
+     input, no member of the request, and no first-mint exemption
+     reaches it, an account with no home being refused in the MINT class
+     above (§Namespace);
      a flagless `version` of a **published** source (the inherit
      resolving published); an
      `insert`/`delete`/`copy`/`reinstate`/`rearrange`
@@ -2992,8 +3006,9 @@ resolves AFTER every token below.
      target stands ahead of the gate, so a caller owning either alone
      answers `not_owner` and is never told what is published. Signed
      sessions, draft mints (flagless or `published:false`, into an account
-     holding a document), the well-known mint
-     (`create_well_known_document`, private always), draft writes, bare
+     holding a document), the mailbox's creation
+     (`create_well_known_document` at slot 2, the one slot whose document
+     is private), draft writes, bare
      reads, `delegate` and the home mint from a bare session are outside
      the gate; the home mint from a signed session is publish-class and
      takes the check (§Namespace). ONE write is judged by none of this and
@@ -3003,7 +3018,7 @@ resolves AFTER every token below.
      session, whatever its principal, and `not_registrar` from a SIGNED
      session that is not the registrar's, the claimant account's own
      principal under any key of its set. The registrar's `register_node`
-     is admitted and carries no `attest`: the op is none of the ten kinds,
+     is admitted and carries no `attest`: the op is none of the eleven kinds,
      and a member presented beside it is dropped, never verified.
    * unclaimed — `claim_first`: an unclaimed daemon admits only the
      ceremony's own shape — `delegate` from principal 0, a
@@ -3408,54 +3423,112 @@ read on every device and by every reader of the draft; the shot's own
 `base` is still the request's statement (§Arrangement, `publish`), and
 nothing compares the two.
 
-**`create_well_known_document`** — CREATE THE ACCOUNT'S MAILBOX: mint the
-document at `account`'s well-known slot 2 — the address `<account>.0.2`,
-`1.0.1.0.2` for the account `1.0.1` — PRIVATE, ALWAYS. It is the account
-OWNER's ALONE and is created ONCE. The mailbox is the one well-known
-document an owner creates, so the op names the account and no slot.
-→ `ack_addr` (the mailbox's address).
+**`create_well_known_document`** — CREATE ONE OF THE ACCOUNT'S WELL-KNOWN
+DOCUMENTS: create the document at one of `account`'s four well-known
+slots, the address `<account>.0.<slot>`. `slot` is REQUIRED, a number, and
+names which:
+
+| `slot` | the document | created |
+|---|---|---|
+| `2` | the account's MAILBOX — `1.0.1.0.2` for the account `1.0.1` | PRIVATE |
+| `3` | the account's BIO | PUBLISHED |
+| `4` | the account's LINK PAGE | PUBLISHED |
+| `5` | the account's POLICY DOCUMENT | PUBLISHED |
+
+The slot fixes the document's state, and no member of the request changes
+it: a document is published or private from its creation on, so a public
+page at a fixed address is created published. Each is created EMPTY — it
+holds no content and no version — is the account OWNER's ALONE and is
+created ONCE. → `ack_addr` (the document's address).
 
 <!-- wire: request create_well_known_document -->
 ```json
-{"account":"1.0.1","op":"create_well_known_document"}
+{"account":"1.0.1","op":"create_well_known_document","slot":2}
 ```
 
-The mint moves no count: the account's next `create_new_document`
-answers the number it would have answered. It is never publish-class and
-takes no `published` and no `attest` (each member is an unknown field on
-it, refused as on `stage`), and it is admitted from a bare session on a
-claimed board as `stage` is.
+A PUBLISHED slot's document takes its FIRST WORDS by an ordinary
+publication, as an account's home page does: `stage` with `from` the
+document gives a private draft whose recorded base is the document itself
+(its chain holding no member yet), and a `publish` naming the document as
+`doc` lands its first version, `<account>.0.<slot>.1` (§Arrangement);
+every later version is the same act. Between its creation and that
+publication the document is published and holds nothing: every reader is
+answered its metadata, `published` and no `birth`, and an empty content.
 
-A SECOND CALL — another device, the loser of a race, a re-send with no
-`id` after an acknowledgment was lost — is answered `ack_addr` with the
-SAME `addr` and commits nothing: no record, no feed row. It carries
-`"committed": false`, which the mint's acknowledgment never does (§The
-response envelope). Its `at` is the position the call was JUDGED at, at
-or after the mint's, and not the mint's own: it does not say where the
-mailbox was minted, and it is some other write's position, never this
-call's. A re-send under the first request's `id` is answered from the
-memo (§Correlation and idempotency): the first acknowledgment whole, its
-`at` the mint's.
+ON A CLAIMED BOARD the creation at slot 3, 4 or 5 is PUBLISH-CLASS: it is
+refused `credential_refused:signed_session_required` from a bare session,
+and from a signed one it carries the `attest` member — the entry signature
+(§Credential refusals) over the EMPTY body under this op's own token,
+`create_well_known_document`, the frame's `account` the session's own and
+its `doc` THE SLOT DOCUMENT's OWN ADDRESS, `<account>.0.<slot>`. That
+address is a function of the request, so a client signs before the commit
+with no round trip, and a frame signed for one slot verifies at no other:
+it is never the parent account a mint signs over, and never framed under
+`create_new_document`'s token. A second creation at a slot commits
+nothing, so no second act signs those bytes to effect.
 
-Its refusals, in the order a caller meets them: a guest is
-`unauthenticated`; an `account` that is the system account `1.1.0.1` is
-`credential_refused:system_account_no_well_known`, whoever asks; the
+<!-- wire: request create_well_known_document attested -->
+```json
+{"account":"1.0.1","attest":{"alg":"mldsa65-ed25519","sig":"00"},"op":"create_well_known_document","slot":5}
+```
+
+(The example's `sig` is cut to one byte; the production row's is 6,746
+hex.)
+
+The creation at slot 2 is never publish-class: the mailbox is private, so
+it is admitted from a bare session on a claimed board as `stage` is, and
+signs nothing. The op is of the checked set at every slot, so an `attest`
+sent at slot 2 is no unknown field: it is ADMITTED AND DROPPED — never
+verified, never written, the commit's signature slot left empty — as on
+any write outside the publish class. The op takes no `published` (an
+unknown field on it, refused as on `stage`): the slot is the one input.
+
+No creation moves a count: the account's next `create_new_document`
+answers the number it would have answered.
+
+A SECOND CALL at a slot — another device, the loser of a race, a re-send
+with no `id` after an acknowledgment was lost — is answered `ack_addr`
+with the SAME `addr` and commits nothing: no record, no feed row. It
+carries `"committed": false`, which the creation's acknowledgment never
+does (§The response envelope). Its `at` is the position the call was
+JUDGED at, at or after the creation's, and not the creation's own: it
+does not say where the document was created, and it is some other write's
+position, never this call's. A re-send under the first request's `id` is
+answered from the memo (§Correlation and idempotency): the first
+acknowledgment whole, its `at` the creation's. The test is per slot: a
+document standing at one slot answers nothing for another, which is
+created as if the first were not there.
+
+Its refusals, in the order a caller meets them: a request with no `slot`,
+or with a `slot` that names none of the four — `1`, `6`, `63`, `64`, a
+string — is `malformed`, the frame unparsed (`op: unparseable`), before
+anything else is asked; a guest is `unauthenticated`; an `account` that is
+the system account `1.1.0.1` is
+`credential_refused:system_account_no_well_known`, whoever asks and at
+every slot; the
 owner of an account that holds no document is
-`credential_refused:mint_home_first` — mint the home page first
-(`create_new_document`), so the home page stays every account's first
-document; on an unclaimed board every call past those is
-`credential_refused:claim_first`; a caller who does not own `account` is
-`not_owner`, and is told nothing of the account; and an `account` that
-names no registered account is `not_an_account`, answered to the one
-caller who owns the space it names (§Credential refusals, for the
-tokens and their order).
+`credential_refused:mint_home_first` at every slot — mint the home page
+first (`create_new_document`), so the home page stays every account's
+first document; on an unclaimed board every call past those is
+`credential_refused:claim_first`; on a claimed board the owner's creation
+at slot 3, 4 or 5 then meets the publish class's own three, as a mint
+born published does — `credential_refused:signed_session_required` from a
+bare session, `credential_refused:attestation_required` with no `attest`,
+`credential_refused:attestation_invalid:signature` where the `attest`
+does not verify over the slot's own frame; a caller who does not own
+`account` is `not_owner`, and is told nothing of the account; and an
+`account` that names no registered account is `not_an_account`, answered
+to the one caller who owns the space it names (§Credential refusals, for
+the tokens and their order).
 
 MAIL NEEDS NO MAILBOX DOCUMENT. The address stands from the moment the
 account does: a link may point at `<account>.0.2` while nothing is
 minted there, so reaching a person, the search for their mail, a reply
 and a thread all work for an account that never created its mailbox.
 The document is where its owner's own links about their mail are kept,
-and a client creates it just before the first of them.
+and a client creates it just before the first of them. So with every
+slot: `<account>.0.3`, `.0.4` and `.0.5` name their places before
+anything is created there, and answer `doc_not_registered` until it is.
 
 **`next_account_prefix`** — the next delegable prefix under `parent`
 (what `delegate` demands). → `maybe_addr` (`null` = ineligible parent, or a
@@ -5187,12 +5260,14 @@ body-bearing rows' schemas and their parse; the door's console, its
 intake scribe and its sign-up page — the admitted homes, the freshness
 set, the shape guard ahead of a request's bytes, the verification of a
 request's own signature, the vouch's count and every approval; the
-creation of a door's policy document; the takedown record and its lift
+writing of a door's policy (its document, the door account's document 5,
+is created by `create_well_known_document`, §Namespace, and holds nothing
+until a policy is published into it); the takedown record and its lift
 (the blocked-prefix list reads the version address a takedown record
 would carry, and that record is not written here); the fork and the
-realm. The checked set of the write-path check is UNCHANGED: the ten
-kinds, a registry deposit's two positions taking the record grade in
-their place.
+realm. The checked set of the write-path check is UNCHANGED by it: the
+eleven kinds, a registry deposit's two positions taking the record grade
+in their place.
 
 ### Links (writes)
 

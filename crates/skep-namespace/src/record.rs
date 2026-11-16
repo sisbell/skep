@@ -276,15 +276,15 @@ pub enum M3Rec {
     /// and the chain is exactly the one whose `*_lock_key` its mint pairs
     /// with: frontier key and lock key are one key. One `Allocate` moves
     /// none: a record at a named slot of a document chain's reserved block,
-    /// document 2, 3 or 4 of an account, places a document there and leaves
-    /// the chain's count where it stood. No mint that reads a frontier
-    /// returns such a record — the counter steps over the block
+    /// document 2, 3, 4 or 5 of an account, places a document there and
+    /// leaves the chain's count where it stood. No mint that reads a
+    /// frontier returns such a record — the counter steps over the block
     /// ([`crate::FIRST_ORDINARY_DOCUMENT`]). It has two producers: genesis's
-    /// seed, which holds the system account's three, and the mailbox's mint,
-    /// whose record [`crate::Namespace::create_well_known_document`] stages
-    /// at an account's document [`crate::MAILBOX_SLOT`]. The fold admits one
-    /// where the slot holds no document and refuses a second
-    /// ([`M3State::apply_m3`]).
+    /// seed, which holds the system account's three, and a well-known slot's
+    /// mint, whose record [`crate::Namespace::create_well_known_document`]
+    /// stages at the slot it is asked for ([`crate::WellKnownSlot`]), stamped
+    /// with that slot's own state. The fold admits one where the slot holds
+    /// no document and refuses a second ([`M3State::apply_m3`]).
     ///
     /// **Where it may be staged.** This is the caller's half of every mint, and
     /// an obligation M3 checks only by its consequence, since the record
@@ -310,11 +310,11 @@ pub enum M3Rec {
     /// chain. A stale record whose chain has not moved still carries the next
     /// ordinal, and folds as the mint it is.
     ///
-    /// The one mint that half does not bind is the mailbox's, whose record is
-    /// a named slot's: its address is fixed and no frontier's next, so its
-    /// caller's half is its own — in the transaction whose working state the
-    /// mint was called on, under the account's document-chain key, and only
-    /// where the slot holds no document. Dropped, it leaves the slot empty
+    /// The one mint that half does not bind is a well-known slot's, whose
+    /// record is a named slot's: its address is fixed and no frontier's
+    /// next, so its caller's half is its own — in the transaction whose
+    /// working state the mint was called on, under the account's
+    /// document-chain key, and only where the slot holds no document. Dropped, it leaves the slot empty
     /// for a later call to fill. Staged where the slot holds a document, it
     /// is refused as a stale record is — the fold's once rule panics at the
     /// push, on every build — so no second record touches the document that

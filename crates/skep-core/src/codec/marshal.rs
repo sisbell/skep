@@ -228,11 +228,12 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         ),
         Op::RegisterNode { addr } => (op_name(OpKind::RegisterNode), vec![("addr", j_tum(addr))]),
         Op::Fork { published } => (op_name(OpKind::Fork), published_pair(published)),
-        // The well-known mint names its account and nothing else: no flag,
-        // the mailbox being private always, and no slot.
-        Op::CreateWellKnownDocument { account } => {
-            (op_name(OpKind::CreateWellKnownDocument), vec![("account", j_addr(account))])
-        }
+        // The well-known creation names its account and its slot, the slot
+        // by its document number: no flag, the slot fixing the state.
+        Op::CreateWellKnownDocument { account, slot } => (
+            op_name(OpKind::CreateWellKnownDocument),
+            vec![("account", j_addr(account)), ("slot", j_u64(u64::from(slot.number())))],
+        ),
         Op::NextAccountPrefix { parent } => {
             (op_name(OpKind::NextAccountPrefix), vec![("parent", j_addr(parent))])
         }
@@ -1559,6 +1560,11 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::EndpointNotResident => "endpoint_not_resident",
         RejectCode::NotOwner => "not_owner",
         RejectCode::NotAnAccount => "not_an_account",
+        // M3's own refusal of the system account at a well-known creation,
+        // under the name the door's credential refusal carries as its
+        // token (§Credential refusals): the door answers first on every
+        // dispatched path, so no frame through `/op` is answered this code.
+        RejectCode::SystemAccountNoWellKnown => "system_account_no_well_known",
         RejectCode::Gate => "gate",
         RejectCode::DelegatorUnknown => "delegator_unknown",
         RejectCode::DuplicateId => "duplicate_id",

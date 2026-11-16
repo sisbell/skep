@@ -387,6 +387,7 @@ fn flat_variants_lower_to_the_same_named_code() {
     same_name(MintError::SourceNotRegistered);
     same_name(MintError::NotAnAccount);
     same_name(MintError::Gate(skep_address::GateViolation));
+    same_name(CreateDocumentError::SystemAccountNoWellKnown);
     same_name(CreateDocumentError::NotOwner);
     same_name(DelegateError::NotValid);
     same_name(DelegateError::NotAccountTier);

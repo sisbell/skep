@@ -684,10 +684,12 @@ fn a_board_with_a_homeless_account() -> (TwoAccounts, Address, PrincipalId) {
     (board, homeless, homeless_id)
 }
 
-/// Checks the well-known mint's door on an unclaimed board (the mailbox
+/// Checks the well-known creation's door on an unclaimed board (the mailbox
 /// design §2, §3).
 ///
-/// Through the whole admission, on a board where the pre-claim gate answers
+/// At every slot alike — the mailbox's, the bio's, the link page's and the
+/// policy document's. Through the whole admission, on a board where the
+/// pre-claim gate answers
 /// `claim_first` to every write it does not know: a mint naming the system
 /// account answers `system_account_no_well_known`, permanent, whoever names
 /// it — an account holder, the owner of an account with no document, the
@@ -702,7 +704,7 @@ fn a_board_with_a_homeless_account() -> (TwoAccounts, Address, PrincipalId) {
 #[test]
 fn the_well_known_mints_door_answers_its_two_tokens_ahead_of_the_pre_claim_gate() {
     use skep_febe::{Disposition, RejectCode, Request, Response};
-    use skep_namespace::SYSTEM_PRINCIPAL;
+    use skep_namespace::{WellKnownSlot, SYSTEM_PRINCIPAL};
 
     use crate::auth::CredentialLock;
 
@@ -717,64 +719,75 @@ fn the_well_known_mints_door_answers_its_two_tokens_ahead_of_the_pre_claim_gate(
     let lock = CredentialLock::new();
     let (maker, other) = (board.maker.0, board.other.0);
     let own = addr_of(&[1, 0, 1]);
-    let mint = |account: &Address| Op::CreateWellKnownDocument { account: account.clone() };
-    let admission = |account: &Address, caller: PrincipalId| {
-        plain_admission(&lock.read(), world, &mint(account), caller, None, None)
-    };
-    let door = |account: &Address, caller: PrincipalId| {
-        well_known_mint_refusal(&lock.read(), world, &mint(account), caller)
-    };
-
-    // The system account: its token, whoever names it.
     let no_well_known = CredentialRefusal::SystemAccountNoWellKnown;
-    for caller in [maker, other, homeless_id, SYSTEM_PRINCIPAL, BOOTSTRAP_PRINCIPAL] {
-        assert_eq!(
-            admission(&system_account(), caller),
-            Err(no_well_known.clone()),
-            "{caller:?} naming the system account"
-        );
-    }
     assert_eq!(no_well_known.token(), "system_account_no_well_known");
     assert_eq!(no_well_known.disposition(), Disposition::Permanent);
-    // An account with no document: its owner is told to mint the home first.
-    assert_eq!(
-        admission(&homeless, homeless_id),
-        Err(CredentialRefusal::MintHomeFirst),
-        "the owner of an account holding no document"
-    );
-    // An account holding its home: the mint slot passes, and the pre-claim
-    // gate's wildcard answers.
-    assert_eq!(door(&own, maker), None, "the owner of an account holding its home");
-    assert_eq!(
-        admission(&own, maker),
-        Err(CredentialRefusal::ClaimFirst),
-        "an unclaimed board admits no well-known mint"
-    );
-    // A stranger naming the empty account: nothing here, so the answer is
-    // the one a stranger naming a full account meets — and `not_owner` is
-    // the store's.
-    for stranger in [maker, other] {
-        assert_eq!(door(&homeless, stranger), None, "{stranger:?} naming another's empty account");
-        assert_eq!(
-            admission(&homeless, stranger),
-            admission(&own, other),
-            "{stranger:?}: the answer tells nothing of the account"
-        );
-    }
-    let before = board.febe.log_position();
-    match board.febe.execute(board.other.1, Request::from(mint(&homeless))) {
-        Response::Rejected(rej) => assert_eq!(rej.code, RejectCode::NotOwner, "{rej:?}"),
-        other => panic!("a stranger's mint is refused: {other:?}"),
-    }
-    assert_eq!(board.febe.log_position(), before, "the refusal commits nothing");
-    // The address of no registered account: the store's `not_an_account`,
-    // never `mint_home_first`.
     let unregistered = addr_of(&[1, 0, 9]);
     assert!(
         world.m3().is_effective_owner(BOOTSTRAP_PRINCIPAL, &unregistered),
         "the premise: the bootstrap principal owns the space"
     );
-    assert_eq!(door(&unregistered, BOOTSTRAP_PRINCIPAL), None, "an unregistered account");
+    for slot in WellKnownSlot::ALL {
+        let mint = |account: &Address| Op::CreateWellKnownDocument { account: account.clone(), slot };
+        let admission = |account: &Address, caller: PrincipalId| {
+            plain_admission(&lock.read(), world, &mint(account), caller, None, None)
+        };
+        let door = |account: &Address, caller: PrincipalId| {
+            well_known_mint_refusal(&lock.read(), world, &mint(account), caller)
+        };
+
+        // The system account: its token, whoever names it.
+        for caller in [maker, other, homeless_id, SYSTEM_PRINCIPAL, BOOTSTRAP_PRINCIPAL] {
+            assert_eq!(
+                admission(&system_account(), caller),
+                Err(no_well_known.clone()),
+                "{slot:?}: {caller:?} naming the system account"
+            );
+        }
+        // An account with no document: its owner is told to mint the home
+        // first.
+        assert_eq!(
+            admission(&homeless, homeless_id),
+            Err(CredentialRefusal::MintHomeFirst),
+            "{slot:?}: the owner of an account holding no document"
+        );
+        // An account holding its home: the mint slot passes, and the
+        // pre-claim gate's wildcard answers.
+        assert_eq!(door(&own, maker), None, "{slot:?}: the owner of an account holding its home");
+        assert_eq!(
+            admission(&own, maker),
+            Err(CredentialRefusal::ClaimFirst),
+            "{slot:?}: an unclaimed board admits no well-known creation"
+        );
+        // A stranger naming the empty account: nothing here, so the answer
+        // is the one a stranger naming a full account meets — and
+        // `not_owner` is the store's.
+        for stranger in [maker, other] {
+            assert_eq!(
+                door(&homeless, stranger),
+                None,
+                "{slot:?}: {stranger:?} naming another's empty account"
+            );
+            assert_eq!(
+                admission(&homeless, stranger),
+                admission(&own, other),
+                "{slot:?}: {stranger:?}: the answer tells nothing of the account"
+            );
+        }
+        let before = board.febe.log_position();
+        match board.febe.execute(board.other.1, Request::from(mint(&homeless))) {
+            Response::Rejected(rej) => assert_eq!(rej.code, RejectCode::NotOwner, "{slot:?}: {rej:?}"),
+            other => panic!("{slot:?}: a stranger's creation is refused: {other:?}"),
+        }
+        assert_eq!(board.febe.log_position(), before, "the refusal commits nothing");
+        // The address of no registered account: the store's
+        // `not_an_account`, never `mint_home_first`.
+        assert_eq!(
+            door(&unregistered, BOOTSTRAP_PRINCIPAL),
+            None,
+            "{slot:?}: an unregistered account"
+        );
+    }
     // Every other op is another producer's.
     let fork = Op::Fork { published: None };
     assert_eq!(
@@ -784,23 +797,32 @@ fn the_well_known_mints_door_answers_its_two_tokens_ahead_of_the_pre_claim_gate(
     );
 }
 
-/// Checks the well-known mint's door on a claimed board (the mailbox design
-/// §2, §3).
+/// Checks the well-known creation's door on a claimed board (the mailbox
+/// design §2, §3; PUB-6.43).
 ///
-/// The board claimed by the maker through M10, a bare session asking: the
-/// system account's token answers as on the unclaimed board, whoever names
-/// it, and the owner of the account holding no document answers
-/// `mint_home_first`; where the mint slot answers nothing the admission
-/// admits the mint with nothing for its marker slot — the mailbox is private,
-/// so the publish-class gate stands aside for a bare session, as for a
-/// `stage` — for the maker naming its own account, whose mailbox M10 then
-/// mints at slot 2, and for a stranger naming the empty account, whom M10's
-/// store answers `not_owner`.
+/// The board claimed by the maker through M10. At every slot the system
+/// account's token answers as on the unclaimed board, whoever names it, and
+/// the owner of the account holding no document answers `mint_home_first`.
+/// Where the mint slot answers nothing the board-state pair reads the slot's
+/// own state. The mailbox is private, so the publish-class gate stands aside:
+/// a bare session's creation is admitted with nothing for its marker slot, as
+/// a `stage` is, and a signed session's too, an `attest` it presents dropped
+/// unverified — M10 then mints the mailbox at slot 2. The bio, the link page
+/// and the policy document are created published, so their creation is
+/// publish-class for the account's owner: a bare session answers
+/// `signed_session_required`, and a signed one reaches the write-path check,
+/// which on this board, where no head is written, answers
+/// `attestation_invalid:board_unavailable` ahead of asking for the member. A
+/// stranger naming another's account is told nothing here at any slot, and
+/// M10's store answers `not_owner`.
 #[test]
-fn a_claimed_board_admits_the_well_known_mint_bare_and_keeps_its_two_tokens() {
+fn a_claimed_board_reads_the_slots_own_state_and_keeps_the_two_tokens_at_every_slot() {
     use skep_febe::{RejectCode, Request, Response};
-    use skep_namespace::{mailbox_address, SYSTEM_PRINCIPAL};
+    use skep_identity::Fingerprint;
+    use skep_kernel::Attestation;
+    use skep_namespace::{mailbox_address, WellKnownSlot, SYSTEM_PRINCIPAL};
 
+    use crate::auth::policy::AttestFault;
     use crate::auth::CredentialLock;
 
     let (board, homeless, homeless_id) = a_board_with_a_homeless_account();
@@ -810,39 +832,85 @@ fn a_claimed_board_admits_the_well_known_mint_bare_and_keeps_its_two_tokens() {
     let lock = CredentialLock::new();
     let (maker, other) = (board.maker.0, board.other.0);
     let own = addr_of(&[1, 0, 1]);
-    let mint = |account: &Address| Op::CreateWellKnownDocument { account: account.clone() };
-    let admission = |account: &Address, caller: PrincipalId| {
-        plain_admission(&lock.read(), world, &mint(account), caller, None, None)
-    };
+    // A signed session's two marks, as the gate reads them: the key that
+    // opened it, by fingerprint, and the member a frame presented.
+    let key = Fingerprint::parse_hex(&"07".repeat(32)).expect("a fingerprint's hex");
+    let presented = || Attestation::new(1, vec![0xA5; 8]).expect("a tag over a blob");
 
-    for caller in [maker, other, homeless_id, SYSTEM_PRINCIPAL] {
+    for slot in WellKnownSlot::ALL {
+        let mint = |account: &Address| Op::CreateWellKnownDocument { account: account.clone(), slot };
+        let admission = |account: &Address, caller: PrincipalId| {
+            plain_admission(&lock.read(), world, &mint(account), caller, None, None)
+        };
+        let signed = |account: &Address, caller: PrincipalId, attest: Option<Attestation>| {
+            plain_admission(&lock.read(), world, &mint(account), caller, Some(&key), attest)
+        };
+
+        for caller in [maker, other, homeless_id, SYSTEM_PRINCIPAL] {
+            assert_eq!(
+                admission(&system_account(), caller),
+                Err(CredentialRefusal::SystemAccountNoWellKnown),
+                "{slot:?}: {caller:?} naming the system account"
+            );
+            assert_eq!(
+                signed(&system_account(), caller, Some(presented())),
+                Err(CredentialRefusal::SystemAccountNoWellKnown),
+                "{slot:?}: {caller:?} naming the system account, signed"
+            );
+        }
         assert_eq!(
-            admission(&system_account(), caller),
-            Err(CredentialRefusal::SystemAccountNoWellKnown),
-            "{caller:?} naming the system account"
+            admission(&homeless, homeless_id),
+            Err(CredentialRefusal::MintHomeFirst),
+            "{slot:?}: the owner of an account holding no document"
         );
+        assert_eq!(
+            signed(&homeless, homeless_id, Some(presented())),
+            Err(CredentialRefusal::MintHomeFirst),
+            "{slot:?}: the same owner in a signed session: the home first, whatever it signs"
+        );
+        if slot.born_published() {
+            assert_eq!(
+                admission(&own, maker),
+                Err(CredentialRefusal::SignedSessionRequired),
+                "{slot:?}: the owner, bare: a published creation is publish-class"
+            );
+            for attest in [None, Some(presented())] {
+                assert_eq!(
+                    signed(&own, maker, attest),
+                    Err(CredentialRefusal::AttestationInvalid(AttestFault::BoardUnavailable)),
+                    "{slot:?}: the owner, signed: the write-path check is reached"
+                );
+            }
+        } else {
+            assert_eq!(
+                admission(&own, maker),
+                Ok(None),
+                "{slot:?}: the owner, bare: admitted, its marker slot empty"
+            );
+            for attest in [None, Some(presented())] {
+                assert_eq!(
+                    signed(&own, maker, attest),
+                    Ok(None),
+                    "{slot:?}: the owner, signed: admitted, an `attest` dropped unverified"
+                );
+            }
+        }
+        for attest in [None, Some(presented())] {
+            assert_eq!(admission(&homeless, other), Ok(None), "{slot:?}: a stranger, bare");
+            assert_eq!(
+                signed(&homeless, other, attest),
+                Ok(None),
+                "{slot:?}: a stranger: nothing here, `not_owner` downstream"
+            );
+        }
+        match board.febe.execute(board.other.1, Request::from(mint(&homeless))) {
+            Response::Rejected(rej) => assert_eq!(rej.code, RejectCode::NotOwner, "{slot:?}: {rej:?}"),
+            other => panic!("{slot:?}: a stranger's creation is refused: {other:?}"),
+        }
     }
-    assert_eq!(
-        admission(&homeless, homeless_id),
-        Err(CredentialRefusal::MintHomeFirst),
-        "the owner of an account holding no document"
-    );
-    assert_eq!(
-        admission(&own, maker),
-        Ok(None),
-        "the owner, bare: admitted, its marker slot empty"
-    );
-    assert_eq!(
-        admission(&homeless, other),
-        Ok(None),
-        "a stranger: nothing here, `not_owner` downstream"
-    );
 
-    match board.febe.execute(board.other.1, Request::from(mint(&homeless))) {
-        Response::Rejected(rej) => assert_eq!(rej.code, RejectCode::NotOwner, "{rej:?}"),
-        other => panic!("a stranger's mint is refused: {other:?}"),
-    }
-    match board.febe.execute(board.maker.1, Request::from(mint(&own))) {
+    let mailbox = Op::CreateWellKnownDocument { account: own.clone(), slot: WellKnownSlot::Mailbox };
+    match board.febe.execute(board.maker.1, Request::from(mailbox)) {
         Response::AckAddr { addr, .. } => {
             assert_eq!(Some(addr), mailbox_address(&own), "the mailbox, at slot 2")
         }

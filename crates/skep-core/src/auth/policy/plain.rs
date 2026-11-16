@@ -662,21 +662,24 @@ fn first_mint_private_refusal(
 
 // ── well_known_mint_refusal — the well-known mint's door ─────────────────
 
-/// Answers the well-known mint's two refusals ahead of the store.
+/// Answers the well-known creation's two refusals ahead of the store.
 ///
-/// They are a `create_well_known_document`'s alone, and the store holds a
-/// guard for neither (the mailbox design §2, §3):
+/// They are a `create_well_known_document`'s alone, at every slot it names
+/// (the mailbox design §2, §3):
 ///
 /// 1. `system_account_no_well_known`, where the op's `account` is the system
-///    account, whoever calls. That account has no well-known document to
-///    create: its own stand from genesis, and its document 2 is the head
-///    document, no mailbox. Asked by the system principal, the store would
-///    find that slot filled and answer the head document's address. The arm
-///    reads the op and no world, so what it discloses is a constant.
+///    account, whoever calls and whatever the slot. That account has no
+///    well-known document to create: its slots are its own table — the head
+///    document, the staging draft and the time document, which stand from
+///    genesis, and nothing at 5. The store refuses the same request by a
+///    guard of its own (M3's `CreateDocumentError::SystemAccountNoWellKnown`);
+///    this arm answers first, under the credential family's shape. It reads
+///    the op and no world, so what it discloses is a constant.
 /// 2. `mint_home_first`, where the caller is the effective owner of
 ///    `account`, the account is registered, and it holds no document: the
-///    home page stays every account's first document. On such an account
-///    the store would mint the slot.
+///    home page stays every account's first document, ahead of its mailbox,
+///    its bio, its link page and its policy document alike. On such an
+///    account the store would create the slot, holding no guard for it.
 ///
 /// The second arm takes [`first_mint_private_refusal`]'s form and not
 /// [`mint_home_refusal`]'s, because this op names its account where a
@@ -701,7 +704,7 @@ fn well_known_mint_refusal(
     op: &Op,
     principal: PrincipalId,
 ) -> Option<CredentialRefusal> {
-    let Op::CreateWellKnownDocument { account } = op else {
+    let Op::CreateWellKnownDocument { account, .. } = op else {
         return None;
     };
     if *account == system_account() {
@@ -1056,6 +1059,16 @@ fn registrar_refusal(
 ///   PUB-6.43's own row for the one op whose effect and record home part
 ///   (RES-3's owed input).
 ///
+/// * a `create_well_known_document` reads the slot's own state — the input
+///   PUB-6.43's table takes for a document created at a fixed slot, where a
+///   mint's is its flag: a creation at a slot whose document is created
+///   published (the bio, the link page, the account's policy document) lands
+///   in the published world, so a bare session is refused and a signed one
+///   takes the check; the mailbox's is private (outside). No first-mint
+///   exemption reaches it: an account holding no document is refused
+///   `mint_home_first` ahead of this gate, so a well-known creation is never
+///   the mechanical home.
+///
 /// A flagless `create` into an account holding documents, and a flagless
 /// `fork`, resolve draft (outside); `delegate` presents no input form here.
 /// Neither does `register_node`, which never reaches this classification:
@@ -1213,14 +1226,23 @@ fn publish_class(world: &World, op: &Op, principal: PrincipalId, signed: bool) -
         // this gate into an empty account as a `fork` is. Spelled out rather
         // than left to the wildcard, so the decision is read here.
         Op::Stage { .. } => false,
-        // The well-known mint creates an account's mailbox, private always
-        // (the mailbox design §3), so it never lands in the published world
-        // and is never this gate's input: admitted from a bare session on a
-        // claimed board as a `stage` is, and refused ahead of this gate, in
-        // the mint slot, for the system account and for an account holding
-        // no home page. Spelled out rather than left to the wildcard, so
-        // the decision is read here.
-        Op::CreateWellKnownDocument { .. } => false,
+        // The well-known creation's input is the slot's own state, M3's
+        // table and no member of the request: the bio, the link page and the
+        // account's policy document are created published, so their
+        // creation lands in the published world and takes the gate where
+        // the caller owns the account — ω first, as the `create` arm takes
+        // it, so a caller who does not falls through to execute's own
+        // `not_owner` and is told nothing here. The mailbox is created
+        // private (the mailbox design §3), so its creation never lands in
+        // the published world and is never this gate's input: admitted from
+        // a bare session on a claimed board as a `stage` is, an `attest` it
+        // carries dropped unverified. Every slot's creation is refused ahead
+        // of this gate, in the mint slot, for the system account and for an
+        // account holding no home page — so none is a first mint, and the
+        // bare session's first-mint exemption never reaches one.
+        Op::CreateWellKnownDocument { account, slot } => {
+            m3.is_effective_owner(principal, account) && slot.born_published()
+        }
         // `fork` with a non-`true` flag — a draft — and every op with no
         // input form here.
         _ => false,

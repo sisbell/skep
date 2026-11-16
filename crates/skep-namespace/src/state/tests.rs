@@ -254,7 +254,9 @@ fn an_unnamed_number_of_the_block_is_no_member_whatever_the_maps_hold() {
     let mut s = M3State::genesis();
     let last_named = a(&[1, 1, 0, 1, 0, 4]);
     assert!(s.is_registered_document(&last_named), "the control: a named slot genesis filled");
-    for number in 5..FIRST_ORDINARY_DOCUMENT {
+    // The first number no slot names: one past the policy document's.
+    let first_unnamed = crate::POLICY_SLOT + 1;
+    for number in first_unnamed..FIRST_ORDINARY_DOCUMENT {
         let unnamed = a(&[1, 1, 0, 1, 0, number]);
         s.publication.insert(unnamed.clone(), true);
         s.minted_at.insert(unnamed.clone(), Seq(0));
@@ -265,7 +267,7 @@ fn an_unnamed_number_of_the_block_is_no_member_whatever_the_maps_hold() {
     // …and no count makes one a member either: the interval is never asked
     // about the block.
     s.frontiers.insert(document_ns(&acct), Nat::from(FIRST_ORDINARY_DOCUMENT + 10));
-    for number in 5..FIRST_ORDINARY_DOCUMENT {
+    for number in first_unnamed..FIRST_ORDINARY_DOCUMENT {
         assert!(!s.is_allocated(&a(&[1, 1, 0, 1, 0, number])), "document {number}");
     }
     assert!(s.is_registered_document(&last_named));

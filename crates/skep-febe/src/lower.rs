@@ -168,6 +168,14 @@ impl Lower for MintError {
 impl Lower for CreateDocumentError {
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
         match self {
+            // The store's own refusal of the system account at a well-known
+            // creation, under the name the daemon's door refuses the same
+            // request by: the door answers first on every dispatched path,
+            // so this leaf is met only by a caller that reaches the store
+            // without that door.
+            CreateDocumentError::SystemAccountNoWellKnown => {
+                (RejectCode::SystemAccountNoWellKnown, None)
+            }
             CreateDocumentError::NotOwner => (RejectCode::NotOwner, None),
             CreateDocumentError::Mint(m) => m.lower(),
         }

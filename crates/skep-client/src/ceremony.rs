@@ -74,14 +74,29 @@
 //! (`first_session`'s two — the first of them `hire`'s step 5 too —
 //! `handoff`'s beat (b)), publish-class above the claim (PUB-6.43).
 //!
+//! **The well-known creation.** One write stands at this module's root, no
+//! composition's and no walk's: [`create_well_known_document`], an account's
+//! document created at one of its well-known slots — the mailbox, the bio,
+//! the link page or the policy document (wire.md §Namespace) — with
+//! [`well_known_frame`], the signed frame a published slot's creation
+//! sends, its `attest` composed by that same composer over the slot
+//! document's own address. It is here so a ceremony that needs a slot's
+//! document made calls one function, and so no second `entry_frame` call
+//! enters the ceremonies.
+//!
 //! No journal: every walk resumes by reading the board (§4.4; P4).
 
 use serde_json::{json, Value};
 use skep_address::Address;
-use skep_identity::{entry_frame, BoardTerm, DocTerm, EntryBody};
+use skep_identity::{entry_body_empty, entry_frame, BoardTerm, ContentFreeOp, DocTerm, EntryBody};
 
+use crate::address::{parse_address, well_known_of, MAILBOX_SLOT, WELL_KNOWN_SLOTS};
+use crate::board::{acked_addr, acked_nothing, frames, Answer, Board, Rejection};
+use crate::halt::Halt;
 use crate::person::{Person, Public, Statement};
 use crate::sign::{sig_hex, Signer};
+
+use handshake::Session;
 
 // The compositions.
 pub mod backup;
@@ -126,4 +141,115 @@ fn attest_member(term: BoardTerm, account: &Address, doc: DocTerm<'_>, body: &En
     let alg = signer.public_key().alg();
     let bytes = entry_frame(alg, term, account, doc, body);
     json!({"alg": alg, "sig": sig_hex(&signer.sign(&bytes))})
+}
+
+/// One well-known creation's answer: the slot's document, and whose act it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WellKnownDocument {
+    /// The slot document's address, `<account>.0.<slot>`, as the board
+    /// answered it.
+    pub addr: String,
+    /// Whether this call created the document.
+    ///
+    /// `false` where it already stood: the board answered the standing
+    /// address and committed nothing (wire.md §The response envelope,
+    /// `"committed": false`). A re-send under the creating call's own `id`
+    /// on its session is that call again — the board answers its first
+    /// acknowledgment whole (wire.md §Correlation and idempotency) — so it
+    /// reads `true`.
+    pub created: bool,
+}
+
+/// Returns a published slot's creation frame for `account`, attested.
+///
+/// It is `frames::create_well_known_document` at `slot` — the bio's, the
+/// link page's or the policy document's — carrying the `attest` a published
+/// creation owes on a claimed board (PUB-6.43; wire.md §Namespace): the
+/// entry signature over the empty body under the op's own token, the
+/// frame's `account` the session's own, `own`, and its `doc` the slot
+/// document's own address, `<account>.0.<slot>`, signed by `signer`, the
+/// session's key — as the daemon composes the frame it verifies, and as the
+/// shell's composer does. The address is a function of the request, so the
+/// frame is composed before the commit, and one signed for a slot verifies
+/// at no other. `term` is `H.1`'s pair, the caller's read.
+///
+/// # Errors
+///
+/// A `slot` that is no published well-known slot — the mailbox's, whose
+/// creation signs nothing (`frames::create_mailbox`), or a number no slot
+/// has — and an address that does not parse: each this client's own frame,
+/// nothing sent.
+pub fn well_known_frame(term: BoardTerm, own: &str, account: &str, slot: u64, signer: &dyn Signer, id: Option<&str>) -> Result<Value, Halt> {
+    if slot == MAILBOX_SLOT || !WELL_KNOWN_SLOTS.contains(&slot) {
+        return Err(Halt::face(
+            format!("document {slot} of {account} is no published well-known slot"),
+            "a signed well-known creation is the bio's (3), the link page's (4) or the policy document's (5); the mailbox's (2) is private and signs nothing (wire.md §Namespace)",
+            "this is this client's frame; nothing was written",
+        ));
+    }
+    let frame_fault = || Halt::face("the well-known creation's frame could not be composed", "an address of the creation did not parse", "this is this client's frame; nothing was written");
+    let own = parse_address(own).ok_or_else(frame_fault)?;
+    let document = parse_address(&well_known_of(account, slot)).ok_or_else(frame_fault)?;
+    let attest = attest_member(term, &own, DocTerm::One(&document), &entry_body_empty(ContentFreeOp::CreateWellKnownDocument), signer);
+    Ok(frames::create_well_known_document(account, slot, Some(attest), id))
+}
+
+/// Creates `account`'s document at the well-known slot `slot`, once.
+///
+/// It sends `create_well_known_document` under `session` (wire.md
+/// §Namespace): at the mailbox's slot the plain frame, which signs nothing
+/// and a bare session may send; at the bio's, the link page's and the
+/// policy document's the attested frame ([`well_known_frame`]), which a
+/// claimed board takes from a signed session alone. The document is created
+/// in the slot's own state — the mailbox private, the other three published
+/// — and holds nothing: a published slot's first words arrive by an
+/// ordinary `stage` from it and a `publish` naming it as `doc`. A slot is
+/// created once, so the call is safe to repeat: where the document already
+/// stands the board answers its address and commits nothing, and the answer
+/// says so ([`WellKnownDocument::created`]). `id` is the idempotency id the
+/// frame carries.
+///
+/// # Errors
+///
+/// A board with no `H.1` yet halts at a published slot, nothing sent;
+/// [`well_known_frame`]'s halts; an `attestation_*` refusal is faced as
+/// this client's own frame; the session closed, any other refusal — the
+/// board's `mint_home_first`, `signed_session_required`, `not_owner`,
+/// `system_account_no_well_known` among them, verbatim — an answer that is
+/// no `ack_addr`, and the reads' errors halt.
+pub fn create_well_known_document(board: &Board, session: &Session<'_>, account: &str, slot: u64, signer: &dyn Signer, id: &str) -> Result<WellKnownDocument, Halt> {
+    let frame = if slot == MAILBOX_SLOT {
+        frames::create_mailbox(account, Some(id))
+    } else {
+        let Some(term) = board.board_term()? else {
+            return Err(Halt::face(
+                format!("this board has no H.1 yet, so document {slot} of {account} cannot be created from this session"),
+                "a published well-known creation carries an `attest` naming `H.1`'s pair as its board term, and the board answers no head",
+                "retry once the board has written its head; nothing was written",
+            ));
+        };
+        well_known_frame(term, session.account(), account, slot, signer, Some(id))?
+    };
+    let v = match session.op(&frame)? {
+        Answer::Closed => {
+            return Err(Halt::face(
+                "the session ended at the well-known creation",
+                "the board answered `Skepd-Session: closed`",
+                "re-run: the creation is made once, and a second call is answered the standing document",
+            ))
+        }
+        Answer::Document(v) => v,
+    };
+    match Rejection::of(&v) {
+        None => match acked_addr(&v) {
+            Some(addr) => Ok(WellKnownDocument { addr: addr.to_string(), created: !acked_nothing(&v) }),
+            None => Err(Halt::face("the board answered the well-known creation with no address", v.to_string(), "this answer is not the wire's `ack_addr`; nothing is assumed written")),
+        },
+        Some(r) if r.key().starts_with("attestation_") => Err(Halt::face(
+            "the board judged the well-known creation's attest and refused",
+            format!("{}: the frame this client composed did not verify under the set that opens the account as of the base, or the board had no head", r.token()),
+            "this is this client's frame and never your act; `board_unavailable` is a reorder — retry once the head is written",
+        )),
+        Some(r) => Err(r.refused(&v)),
+    }
 }

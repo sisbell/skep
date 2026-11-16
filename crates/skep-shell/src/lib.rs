@@ -45,7 +45,7 @@
 //!   the wire's value forms both ways with the insert's value budget.
 //! * `attest` — the attest a signed session composes for the checked set
 //!   (the shell signs where signed ops requires): the entry frame over the
-//!   ten kinds that have one, each axis composed by the shell from its own
+//!   eleven kinds that have one, each axis composed by the shell from its own
 //!   reads and never from a preimage the page supplies — and the board's
 //!   budgets the composer keeps as the board keeps them: its wire lists, a
 //!   tumbler's components, an insert's values, a slot's spans, a shot's

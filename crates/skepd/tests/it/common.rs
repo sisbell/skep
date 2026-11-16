@@ -1695,9 +1695,10 @@ pub fn open_session(port: u16, principal: u64) -> String {
 ///
 /// THE TEST SIGNER SITS HERE (signed ops; the placement investigation §4.3):
 /// where `token` is a session a seed carrier opened ([`register_signer`])
-/// and the frame's op is one of the checked set's ten kinds (`signer.rs`'s
-/// `CHECKED_SET`: the three mints, `insert`, `publish` and the link
-/// writes) — the frame is sent with its `attest` member composed and
+/// and the frame's op is one of the checked set's eleven kinds (`signer.rs`'s
+/// `CHECKED_SET`: the three mints, the well-known creation, `insert`,
+/// `publish` and the link writes) — the frame is sent with its `attest`
+/// member composed and
 /// signed by that seed's hybrid key ([`attach_attest`]);
 /// every other frame, and every frame under a bare or foreign token, is
 /// sent as written. A cell that must send a WRONG or ABSENT `attest`, or one

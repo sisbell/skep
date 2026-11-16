@@ -340,7 +340,21 @@ fn the_document_ns_check_is_the_document_chain_family() {
         assert_eq!(is_reserved_slot(&n), reserved, "{number}");
         assert_eq!(is_named_slot(&n), 1 < number && number <= LAST_NAMED_SLOT, "{number}");
         assert!(!is_named_slot(&n) || is_reserved_slot(&n), "{number}: a named slot is reserved");
+        // The type names exactly the numbers the fold's test admits, so a
+        // slot of the type is never a record the fold fail-stops on, and no
+        // named number is one the op cannot be asked for.
+        assert_eq!(
+            WellKnownSlot::named(number).map(WellKnownSlot::number),
+            is_named_slot(&n).then_some(number),
+            "{number}: the slot type and the fold's named-slot test disagree"
+        );
     }
+    assert_eq!(
+        WellKnownSlot::ALL.map(WellKnownSlot::number),
+        [MAILBOX_SLOT, BIO_SLOT, LINK_PAGE_SLOT, POLICY_SLOT],
+        "the four slots, in the order of their numbers"
+    );
+    assert_eq!(POLICY_SLOT, LAST_NAMED_SLOT, "the policy document's is the last named slot");
     for huge in [Nat::from(u64::from(u32::MAX)) + 3u32, Nat::from(u64::MAX) + 2u32] {
         assert!(!is_reserved_slot(&huge) && !is_named_slot(&huge));
     }

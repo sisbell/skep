@@ -17,9 +17,11 @@
 //! published to callers outside M3 ([`first_document_address`],
 //! [`first_version_address`]), and the reserved block of an account's
 //! document chain: the number its counter resumes at after doc 1
-//! ([`FIRST_ORDINARY_DOCUMENT`]), the named slots below it, the mailbox's
-//! among them ([`MAILBOX_SLOT`], [`mailbox_address`]), and the test that
-//! tells a document chain's key from every other (`is_document_ns`).
+//! ([`FIRST_ORDINARY_DOCUMENT`]), the named slots below it as a type and
+//! as their numbers ([`WellKnownSlot`]; [`MAILBOX_SLOT`], [`BIO_SLOT`],
+//! [`LINK_PAGE_SLOT`], [`POLICY_SLOT`]), the address each occupies
+//! ([`well_known_address`], [`mailbox_address`]), and the test that tells a
+//! document chain's key from every other (`is_document_ns`).
 
 use num_traits::{ToPrimitive, Zero};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -433,15 +435,17 @@ pub fn first_document_address(account: &Address) -> Option<Address> {
 /// [`M3State::apply_m3`]: crate::M3State::apply_m3
 pub const FIRST_ORDINARY_DOCUMENT: u32 = 64;
 
-/// The last of the reserved block's named slots, which are 2, 3 and 4.
+/// The last of the reserved block's named slots, which are 2, 3, 4 and 5.
 ///
 /// A named slot is a document number that means one well-known document in
 /// every account of a kind: in the system account the head document, the
-/// staging draft and the time document, which genesis seeds; in every other
-/// account the mailbox ([`MAILBOX_SLOT`]), the bio and the link page (the
-/// mailbox design §2). The slots past it, up to [`FIRST_ORDINARY_DOCUMENT`],
-/// are reserved and named by nothing, so no record is admitted there.
-const LAST_NAMED_SLOT: u32 = 4;
+/// staging draft and the time document, which genesis seeds at 2, 3 and 4,
+/// its 5 named by nothing and never filled; in every other account the
+/// mailbox, the bio, the link page and the account's policy document
+/// ([`WellKnownSlot`]; the mailbox design §2; REG-4.131). The slots past it,
+/// up to [`FIRST_ORDINARY_DOCUMENT`], are reserved and named by nothing, so
+/// no record is admitted there.
+const LAST_NAMED_SLOT: u32 = 5;
 
 /// The well-known slot of an account's mailbox: document 2.
 ///
@@ -452,7 +456,8 @@ const LAST_NAMED_SLOT: u32 = 4;
 /// the number is the head document, which genesis seeds ([`head_document`]). No
 /// counter hands the number out ([`FIRST_ORDINARY_DOCUMENT`]), so a document
 /// stands at it only where a record placed one, and a mailbox's record is
-/// the one [`crate::Namespace::create_well_known_document`] stages.
+/// the one [`crate::Namespace::create_well_known_document`] stages at
+/// [`WellKnownSlot::Mailbox`].
 ///
 /// It is the one spelling of the number. `skep-client`, which does not link
 /// this crate, holds a copy its suite holds equal to this (its `address`
@@ -461,36 +466,185 @@ const LAST_NAMED_SLOT: u32 = 4;
 /// [`head_document`]: crate::head_document
 pub const MAILBOX_SLOT: u32 = 2;
 
-// The mailbox's slot is one of the named slots, held at compile time: the
-// fold admits a record in the reserved block at a named slot alone, so a
-// slot moved past them would make the mailbox's own mint a fold panic.
-const _: () = assert!(1 < MAILBOX_SLOT && MAILBOX_SLOT <= LAST_NAMED_SLOT);
-
-/// Returns the address an account's mailbox occupies, minted or not.
+/// The well-known slot of an account's bio: document 3.
 ///
-/// It is slot [`MAILBOX_SLOT`] of the `(account, 2)` chain, `A·0·2`: the
-/// account's well-known slot 2 (the mailbox design §2). `None` unless
+/// In every account but the system account it is the account's bio, a
+/// published document others' apps read at a computed address, with no
+/// lookup (the mailbox design §2). In the system account the number is the
+/// staging draft, which genesis seeds ([`staging_draft`]). A bio's record is
+/// the one [`crate::Namespace::create_well_known_document`] stages at
+/// [`WellKnownSlot::Bio`].
+///
+/// It is the one spelling of the number, and `skep-client` holds a copy its
+/// suite holds equal to this, as it holds [`MAILBOX_SLOT`]'s.
+///
+/// [`staging_draft`]: crate::staging_draft
+pub const BIO_SLOT: u32 = 3;
+
+/// The well-known slot of an account's link page: document 4.
+///
+/// In every account but the system account it is the account's public link
+/// page, a published document read at a computed address as the bio is (the
+/// mailbox design §2). In the system account the number is the time
+/// document, which genesis seeds ([`time_document`]). A link page's record
+/// is the one [`crate::Namespace::create_well_known_document`] stages at
+/// [`WellKnownSlot::LinkPage`].
+///
+/// It is the one spelling of the number, and `skep-client` holds a copy its
+/// suite holds equal to this, as it holds [`MAILBOX_SLOT`]'s.
+///
+/// [`time_document`]: crate::time_document
+pub const LINK_PAGE_SLOT: u32 = 4;
+
+/// The well-known slot of an account's policy document: document 5.
+///
+/// In every account but the system account it is the account's policy
+/// document, published: at a registry's door account, the admission policy
+/// an applicant reads as a guest (REG-4.131), and any account's owner may
+/// create its own. The system account names nothing at the number and
+/// holds no document there. A policy document's record is the one
+/// [`crate::Namespace::create_well_known_document`] stages at
+/// [`WellKnownSlot::Policy`].
+///
+/// It is the one spelling of the number, and `skep-client` holds a copy its
+/// suite holds equal to this, as it holds [`MAILBOX_SLOT`]'s.
+pub const POLICY_SLOT: u32 = 5;
+
+// Each well-known slot is one of the named slots, held at compile time: the
+// fold admits a record in the reserved block at a named slot alone, so a
+// slot moved past them would make that slot's own creation a fold panic.
+const _: () = assert!(1 < MAILBOX_SLOT && MAILBOX_SLOT <= LAST_NAMED_SLOT);
+const _: () = assert!(1 < BIO_SLOT && BIO_SLOT <= LAST_NAMED_SLOT);
+const _: () = assert!(1 < LINK_PAGE_SLOT && LINK_PAGE_SLOT <= LAST_NAMED_SLOT);
+const _: () = assert!(1 < POLICY_SLOT && POLICY_SLOT <= LAST_NAMED_SLOT);
+
+/// One of an account's well-known slots, by name.
+///
+/// They are the named slots of the reserved block as every account but the
+/// system account reads them (the mailbox design §2; REG-4.131), and the
+/// slot argument of [`crate::Namespace::create_well_known_document`]: a
+/// value of this type names a slot the fold admits a record at, so no
+/// number of the block that is no named slot reaches the fold, which
+/// fail-stops on one ([`M3State::apply_m3`]).
+///
+/// Each slot fixes the state its document is created in, and no request
+/// chooses it ([`WellKnownSlot::born_published`]):
+///
+/// | slot       | number             | the document                  | created   |
+/// |------------|--------------------|-------------------------------|-----------|
+/// | `Mailbox`  | [`MAILBOX_SLOT`]   | the account's mailbox         | private   |
+/// | `Bio`      | [`BIO_SLOT`]       | the account's bio             | published |
+/// | `LinkPage` | [`LINK_PAGE_SLOT`] | the account's link page       | published |
+/// | `Policy`   | [`POLICY_SLOT`]    | the account's policy document | published |
+///
+/// A document's publication state is written once, at its mint (PUB-1.9),
+/// so a slot's document is published or private for life: a public page at
+/// a fixed address is created published, holding nothing, and takes its
+/// first version from an ordinary `publish` naming it, as an account's doc 1
+/// does.
+///
+/// Not `#[non_exhaustive]`: a consumer's exhaustive match is what makes a
+/// slot added here be given its wire number and its state wherever one is
+/// read.
+///
+/// [`M3State::apply_m3`]: crate::M3State::apply_m3
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WellKnownSlot {
+    /// The account's mailbox, document [`MAILBOX_SLOT`], created private.
+    Mailbox,
+    /// The account's bio, document [`BIO_SLOT`], created published.
+    Bio,
+    /// The account's link page, document [`LINK_PAGE_SLOT`], created published.
+    LinkPage,
+    /// The account's policy document, document [`POLICY_SLOT`], created
+    /// published.
+    Policy,
+}
+
+impl WellKnownSlot {
+    /// Every well-known slot, in the order of their numbers.
+    pub const ALL: [WellKnownSlot; 4] = [
+        WellKnownSlot::Mailbox,
+        WellKnownSlot::Bio,
+        WellKnownSlot::LinkPage,
+        WellKnownSlot::Policy,
+    ];
+
+    /// Returns the slot's document number.
+    pub const fn number(self) -> u32 {
+        match self {
+            WellKnownSlot::Mailbox => MAILBOX_SLOT,
+            WellKnownSlot::Bio => BIO_SLOT,
+            WellKnownSlot::LinkPage => LINK_PAGE_SLOT,
+            WellKnownSlot::Policy => POLICY_SLOT,
+        }
+    }
+
+    /// Returns the slot `number` names, where it names one.
+    ///
+    /// `None` for every other number: doc 1, a number of the reserved block
+    /// that no slot is named at, and every ordinary document's.
+    pub fn named(number: u32) -> Option<WellKnownSlot> {
+        WellKnownSlot::ALL
+            .into_iter()
+            .find(|slot| slot.number() == number)
+    }
+
+    /// Returns whether the slot's document is created published.
+    ///
+    /// It is the slot's own state, the table on [`WellKnownSlot`]: the
+    /// mailbox is private, and the bio, the link page and the policy
+    /// document are published. The bit is the one the slot's mint stamps
+    /// on its record, where every other document mint stamps the bit its
+    /// caller resolved.
+    pub const fn born_published(self) -> bool {
+        match self {
+            WellKnownSlot::Mailbox => false,
+            WellKnownSlot::Bio | WellKnownSlot::LinkPage | WellKnownSlot::Policy => true,
+        }
+    }
+}
+
+/// Returns the address `slot` occupies in `account`, created or not.
+///
+/// It is the slot's number on the `(account, 2)` chain, `A·0·n`: one of the
+/// account's well-known slots (the mailbox design §2). `None` unless
 /// `account` is account-tier, because no other tier anchors a document
 /// chain, which is [`first_document_address`]'s reason too.
 ///
 /// Registry-free, like [`first_document_address`]: it names the *slot* and
 /// claims nothing about what is in it, nor that `account` is registered. A
-/// mailbox's address stands from the moment its account's does — mail points
-/// at it, and nothing in mail needs the document minted (the mailbox design
-/// §3) — so the slot is public for a caller that names the place before the
-/// document exists, or without it. Whether a document stands there is
+/// slot's address stands from the moment its account's does, so it is
+/// public for a caller that names the place before the document exists, or
+/// without it: mail points at a mailbox's whether or not the document is
+/// minted (the mailbox design §3), and the signature over a slot's creation
+/// names this address before the commit. Whether a document stands there is
 /// [`M3State::is_registered_document`] of this address, and what places one
 /// is [`crate::Namespace::create_well_known_document`]. For the system
-/// account the slot is no mailbox: this answers its head document
-/// ([`head_document`]).
+/// account the slots are no account's well-known documents: this answers
+/// its head document, its staging draft, its time document, and at
+/// [`WellKnownSlot::Policy`] an address nothing is created at.
 ///
 /// [`M3State::is_registered_document`]: crate::M3State::is_registered_document
-/// [`head_document`]: crate::head_document
-pub fn mailbox_address(account: &Address) -> Option<Address> {
+pub fn well_known_address(account: &Address, slot: WellKnownSlot) -> Option<Address> {
     (account.level() == Level::Account).then(|| {
-        nth_in(&document_ns(account), &Nat::from(MAILBOX_SLOT))
+        nth_in(&document_ns(account), &Nat::from(slot.number()))
             .expect("an Account anchor is not Element-level, so TA5a admits k = 2")
     })
+}
+
+/// Returns the address an account's mailbox occupies, minted or not.
+///
+/// It is [`well_known_address`] at [`WellKnownSlot::Mailbox`], `A·0·2`, with
+/// that function's answers: `None` unless `account` is account-tier, and for
+/// the system account its head document ([`head_document`]), no mailbox.
+/// Kept by name because mail names the place without the slot: a mailbox's
+/// address stands from the moment its account's does, and nothing in mail
+/// needs the document minted (the mailbox design §3).
+///
+/// [`head_document`]: crate::head_document
+pub fn mailbox_address(account: &Address) -> Option<Address> {
+    well_known_address(account, WellKnownSlot::Mailbox)
 }
 
 /// Returns whether `key` names an account's document chain, `(A, 2)`.
@@ -520,7 +674,8 @@ pub(crate) fn is_reserved_slot(n: &Nat) -> bool {
 /// Returns whether `n` is one of the reserved block's named slots.
 ///
 /// That is a number past doc 1 and no greater than `LAST_NAMED_SLOT`: the
-/// slots a record may fill, once each.
+/// slots a record may fill, once each. They are the numbers
+/// [`WellKnownSlot`] names, which the suite holds equal to this test.
 pub(crate) fn is_named_slot(n: &Nat) -> bool {
     n.to_u32().is_some_and(|n| 1 < n && n <= LAST_NAMED_SLOT)
 }

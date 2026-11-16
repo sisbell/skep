@@ -72,7 +72,7 @@ use skep_links::{
     member_end, request_image, AlsoPlaces, EndArg, Endset, LinkEntry, MemberSpan, NamedAddress,
     OriginalEntry, PublishDeposits, PublishTarget, View, MAX_SLOT_SPANS,
 };
-use skep_namespace::PrincipalId;
+use skep_namespace::{PrincipalId, WellKnownSlot};
 use skep_retrieval::{RegionSpec, Spec};
 use skep_util::json::{hex_nibble, obj};
 
@@ -254,7 +254,7 @@ impl Codec for JsonCodec {
     /// Parses a frame as presented: M10's seam, and not the daemon's.
     ///
     /// It is the door the round-trip oracle and tests parse through: a
-    /// frame's `attest` member (admitted on the checked set alone — the ten
+    /// frame's `attest` member (admitted on the checked set alone — the eleven
     /// publish-class kinds `in_checked_set` states — under a `SIG_ALGS` row's
     /// token) rides in [`Request::attest`] parsed and unverified. M10's card
     /// makes that field the signature the daemon's write-path check
@@ -298,7 +298,7 @@ impl JsonCodec {
     /// it, each place a content position beside a draft-native run (the
     /// form [`Fields::places`] hands on), carries an `id`, if
     /// any, that is UTF-8, which a `ReqId` this codec parsed always is, and
-    /// carries an `attest`, if any, only on an op of the checked set (the ten
+    /// carries an `attest`, if any, only on an op of the checked set (the eleven
     /// publish-class kinds `in_checked_set` states and the parse side admits
     /// the member on), under a marker tag a `SIG_ALGS` row names, which an
     /// `Attestation` this codec parsed always is. Under all of that,
@@ -625,15 +625,20 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
         },
         "register_node" => Op::RegisterNode { addr: fields.tum("addr")? },
         "fork" => Op::Fork { published: fields.published()? },
-        // The well-known mint (wire.md §Namespace,
-        // `create_well_known_document`): one argument, the account whose
-        // mailbox it creates, required. No `published` — the mailbox is
-        // private always — no `attest`, the op being outside the checked
-        // set, and no slot name: each of the three on this op is an unknown
-        // field `finish` refuses.
-        "create_well_known_document" => {
-            Op::CreateWellKnownDocument { account: fields.addr("account")? }
-        }
+        // The well-known creation (wire.md §Namespace,
+        // `create_well_known_document`): two arguments, both required — the
+        // account, and the slot of the well-known document it creates there,
+        // by number. A frame without `slot` is a missing field, and one
+        // whose `slot` names no well-known slot is refused at the field
+        // ([`Fields::well_known_slot`]), so no request reaches the store
+        // naming a number no slot has. No `published`: the slot fixes the
+        // state, and the member is an unknown field `finish` refuses. The
+        // op is of the checked set, so `attest` is admitted on it, at every
+        // slot.
+        "create_well_known_document" => Op::CreateWellKnownDocument {
+            account: fields.addr("account")?,
+            slot: fields.well_known_slot("slot")?,
+        },
         "next_account_prefix" => Op::NextAccountPrefix { parent: fields.addr("parent")? },
         "principal_prefix" => Op::PrincipalPrefix { id: PrincipalId(fields.u64("principal")?) },
         "effective_owner" => Op::EffectiveOwner { addr: fields.addr("addr")? },
@@ -817,14 +822,19 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
 /// Returns whether `kind` is of the checked set.
 ///
 /// The checked set is the op kinds the write-path check reaches, and so the
-/// ops an entry frame is composed for: the ten publish-class kinds (the ten
-/// cells signed-ops D24 pins) — `create_new_document`, `fork`, `version`,
+/// ops an entry frame is composed for: the eleven publish-class kinds (the
+/// ten cells signed-ops D24 pins, and the well-known creation's) —
+/// `create_new_document`, `fork`, `version`, `create_well_known_document`,
 /// `insert`, `publish`, `make_link`, `emit`, `nullify`, `assert_sup`,
-/// `edit_link`. The four other publish-class-capable kinds — `delete`,
+/// `edit_link`. The set is per kind: a `create_well_known_document` is of it
+/// at every slot, so the codec admits its `attest` at the mailbox's slot
+/// too, where the creation is private, the publish-class gate answers no,
+/// and the member is dropped unverified, as it is on a draft's `fork`. The
+/// four other publish-class-capable kinds — `delete`,
 /// `copy`, `reinstate`, `rearrange` — have no cell: the store refuses every
 /// one of them into a published document (`published_target`) and no
 /// publish-class write of their kind commits above the claim, so the gate's
-/// fourteen inputs are the check's ten. This is the daemon's one statement
+/// fifteen inputs are the check's eleven. This is the daemon's one statement
 /// of it: the codec admits a request's `attest` member exactly on these, the
 /// check demands and verifies one exactly on these, and `auth::entry::compose`
 /// has an arm exactly for these. The acting hand *attests*; the check admits
@@ -842,6 +852,7 @@ pub(crate) fn in_checked_set(kind: OpKind) -> bool {
         OpKind::CreateNewDocument
             | OpKind::Fork
             | OpKind::Version
+            | OpKind::CreateWellKnownDocument
             | OpKind::Insert
             | OpKind::Publish
             | OpKind::MakeLink
@@ -964,6 +975,16 @@ impl Fields {
 
     fn usize(&mut self, k: &'static str) -> PResult<usize> {
         self.field(k, p_usize)
+    }
+
+    /// Takes a required well-known slot, by its document number.
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] where the field is missing or names no well-known slot
+    /// ([`p_well_known_slot`]).
+    fn well_known_slot(&mut self, k: &'static str) -> PResult<WellKnownSlot> {
+        self.field(k, p_well_known_slot)
     }
 
     fn nat(&mut self, k: &'static str) -> PResult<Nat> {
@@ -1812,6 +1833,30 @@ fn p_u64(v: &Value) -> PResult<u64> {
 
 fn p_usize(v: &Value) -> PResult<usize> {
     usize::try_from(p_u64(v)?).map_err(|_| PErr("integer exceeds this platform's usize".into()))
+}
+
+/// Parses a well-known slot off its document number.
+///
+/// The number is a JSON integer, as the wire writes every count that is no
+/// natural of unbounded width, and it names one of the slots M3 names
+/// ([`WellKnownSlot`]): 2, the mailbox; 3, the bio; 4, the link page; 5,
+/// the account's policy document. The type is M3's, so the numbers a frame
+/// may carry are the numbers the store's fold admits a record at, by one
+/// table.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no non-negative JSON integer — a string, a
+/// fraction, a negative — or is a number no well-known slot has: doc 1's, a
+/// number of the reserved block no slot is named at, an ordinary
+/// document's.
+fn p_well_known_slot(v: &Value) -> PResult<WellKnownSlot> {
+    let number = p_u64(v)?;
+    u32::try_from(number).ok().and_then(WellKnownSlot::named).ok_or_else(|| {
+        PErr(format!(
+            "{number} is no well-known slot (2 the mailbox, 3 the bio, 4 the link page, 5 the policy document)"
+        ))
+    })
 }
 
 /// Parses a principal id about to be *registered*.

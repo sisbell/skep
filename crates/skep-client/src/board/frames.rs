@@ -132,18 +132,44 @@ pub fn stage(from: &str, id: Option<&str>) -> Value {
     with_id(json!({"op": "stage", "from": from}), id)
 }
 
-/// Builds `{"op":"create_well_known_document","account":…}` (wire.md
-/// §Namespace; the mailbox design §3).
+/// Builds `{"op":"create_well_known_document","account":…,"slot":2}`
+/// (wire.md §Namespace; the mailbox design §3).
 ///
 /// It mints `account`'s mailbox, the private document at
 /// [`mailbox_of`](crate::address::mailbox_of): its owner's alone, and made
 /// once, a second call answered the same address with nothing committed.
-/// The op names the account and no slot, the mailbox being the one
-/// well-known document an owner creates; a builder for another slot is a
-/// later addition. No code of this crate sends the frame: it stands for an
-/// embedder, as [`T_MAIL`] does.
+/// It is [`create_well_known_document`] at the mailbox's slot,
+/// [`MAILBOX_SLOT`](crate::address::MAILBOX_SLOT), with no `attest`: the
+/// mailbox is private, so its creation is no publish-class act and signs
+/// nothing, from a bare session and a signed one alike. No code of this
+/// crate sends the frame: it stands for an embedder, as [`T_MAIL`] does.
 pub fn create_mailbox(account: &str, id: Option<&str>) -> Value {
-    with_id(json!({"op": "create_well_known_document", "account": account}), id)
+    create_well_known_document(account, crate::address::MAILBOX_SLOT, None, id)
+}
+
+/// Builds `{"op":"create_well_known_document","account":…,"slot":…}`
+/// (wire.md §Namespace), with its `attest` member where the caller composed
+/// one.
+///
+/// It creates `account`'s document at the well-known slot `slot` names, at
+/// [`well_known_of`](crate::address::well_known_of): the mailbox at 2,
+/// private; the bio at 3, the link page at 4 and the account's policy
+/// document at 5, each published and empty, its first words arriving by an
+/// ordinary `stage` and `publish` naming it. `slot` is required on the wire
+/// and rides as a number; the board refuses any but the four
+/// ([`WELL_KNOWN_SLOTS`](crate::address::WELL_KNOWN_SLOTS)) at its parse.
+/// Made once per slot: a second call is answered the same address with
+/// nothing committed. On a claimed board the creation at 3, 4 or 5 is
+/// publish-class — a signed session, and an `attest` over the slot
+/// document's own address under this op's token (wire.md §Credential
+/// refusals), which the `acting` half composes (`ceremony`'s
+/// `well_known_frame`); at 2 an `attest` is dropped unread.
+pub fn create_well_known_document(account: &str, slot: u64, attest: Option<Value>, id: Option<&str>) -> Value {
+    let mut frame = with_id(json!({"op": "create_well_known_document", "account": account, "slot": slot}), id);
+    if let Some(a) = attest {
+        frame["attest"] = a;
+    }
+    frame
 }
 
 /// Builds `{"op":"retrieve_doc_v_span_set","doc":…}`.

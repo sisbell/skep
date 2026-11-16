@@ -45,8 +45,10 @@
 //!   home's account, never the depositing principal's — [`RecordFrame`]),
 //!   `doc` (per op cell, the address the entry writes into — an `insert`'s
 //!   or a `publish`'s target as its trunk, a link write's or a record's home,
-//!   and at the three mints the parent account the minted document lands in,
-//!   never `version`'s `d_src`; one address at every cell but `edit_link`'s,
+//!   at the three mints the parent account the minted document lands in,
+//!   never `version`'s `d_src`, and at a well-known creation the slot
+//!   document's own address, which is computed and so known before the
+//!   commit; one address at every cell but `edit_link`'s,
 //!   whose two homes are the pair's row, below), and every address inside a
 //!   body: the dotted-decimal ASCII rendering M1's `Display` gives a tumbler
 //!   (`1.0.1.0.1`) — lossless by T3, and the one spelling of the address
@@ -130,7 +132,7 @@
 //!   child module `publication`, beside its builder.
 //!
 //! **The bodies, per grammar.** Each is an [`EntryBody`], the token paired
-//! with its body, so a body is never framed under another token. The ten
+//! with its body, so a body is never framed under another token. The eleven
 //! publish-class op kinds each have a cell; `delete`, `copy` and `rearrange`
 //! have none, since the store refuses every one of them into a published
 //! document and the frame's domain holds no entry of those kinds. Each body's
@@ -138,8 +140,8 @@
 //! public rustdoc shows; the `publish` body's is argued in full in its child
 //! module, beside its builder:
 //!
-//! * `create_new_document`, `fork`, `version` — [`entry_body_empty`], under
-//!   each op's own token ([`ContentFreeOp`]);
+//! * `create_new_document`, `fork`, `version`, `create_well_known_document`
+//!   — [`entry_body_empty`], under each op's own token ([`ContentFreeOp`]);
 //! * `insert` — [`entry_body_insert`];
 //! * `make_link` — [`entry_body_make_link`], or
 //!   [`entry_body_make_link_replacing`] where the op names a `replaces`
@@ -248,7 +250,8 @@ pub fn entry_frame(
 ///
 /// It is the design record's "address term": one address for every op but
 /// one — an `insert`'s or a `publish`'s target as its trunk, a link write's
-/// home, a mint's parent account (never `version`'s `d_src`), a record's home
+/// home, a mint's parent account (never `version`'s `d_src`), a well-known
+/// creation's slot document, a record's home
 /// — spelled as the address row; and for `edit_link`, the one op that writes
 /// two homes, the successor's and the supersession claim's, spelled as the
 /// pair's row, `0x01 ‖ be64(2) ‖ be32(len) ‖ d_s ‖ be32(len) ‖ d_a`. The two
@@ -261,6 +264,9 @@ pub fn entry_frame(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocTerm<'a> {
     /// One address — a document, or a mint's parent account: the address row.
+    ///
+    /// A well-known creation's is the document the creation makes, the slot's
+    /// own address.
     One(&'a Address),
     /// An `edit_link`'s two homes: the pair's row.
     Pair {
@@ -361,8 +367,9 @@ impl fmt::Debug for BoardTerm {
 /// cannot be framed under another grammar's token, and a `publish` body
 /// cannot be finished over fewer pieces than its builder was offered. The
 /// tokens are the op-kind names as the wire spells them —
-/// `create_new_document`, `fork`, `version`, `insert`, `make_link`, `emit`,
-/// `nullify`, `assert_sup`, `edit_link`, `publish` — and the record grade's
+/// `create_new_document`, `fork`, `version`, `create_well_known_document`,
+/// `insert`, `make_link`, `emit`, `nullify`, `assert_sup`, `edit_link`,
+/// `publish` — and the record grade's
 /// `record`, spelled here, once each, in the one private match over the
 /// grammars they select, because they are members of a signed preimage that
 /// a reader beside the table recomposes from this crate.
@@ -396,7 +403,8 @@ impl EntryBody {
 /// two — the question [`entry_frame`] asks of every body it frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Grammar {
-    /// The three mints' empty body ([`entry_body_empty`]).
+    /// The three mints' and the well-known creation's empty body
+    /// ([`entry_body_empty`]).
     ///
     /// Each is under its op's own token.
     ContentFree(ContentFreeOp),
@@ -430,6 +438,9 @@ impl Grammar {
             Grammar::ContentFree(ContentFreeOp::CreateNewDocument) => "create_new_document",
             Grammar::ContentFree(ContentFreeOp::Fork) => "fork",
             Grammar::ContentFree(ContentFreeOp::Version) => "version",
+            Grammar::ContentFree(ContentFreeOp::CreateWellKnownDocument) => {
+                "create_well_known_document"
+            }
             Grammar::Insert => "insert",
             Grammar::MakeLink => "make_link",
             Grammar::Emit => "emit",
@@ -663,12 +674,18 @@ fn push_window(out: &mut Vec<u8>, start: &[u8], width: u64) {
     out.extend_from_slice(&width.to_be_bytes());
 }
 
-/// The three content-free ops: the mints whose cell is the empty body.
+/// The four content-free ops: the writes whose cell is the empty body.
 ///
-/// Each, at [`entry_body_empty`], selects its own `op` token, the op-kind
-/// token as the wire spells it, so a `fork`'s empty body is never framed as
-/// a `version`'s. Which of the three a write is, and that it is one of them
-/// at all, is the caller's to say — this crate spells what it is handed.
+/// They are the three mints and the well-known creation. Each, at
+/// [`entry_body_empty`], selects its own `op` token, the op-kind token as
+/// the wire spells it, so a `fork`'s empty body is never framed as a
+/// `version`'s, nor a well-known creation's as a `create_new_document`'s.
+/// Which of the four a write is, and that it is one of them at all, is the
+/// caller's to say — this crate spells what it is handed.
+///
+/// Not `#[non_exhaustive]`: a consumer's exhaustive match is what makes a
+/// kind added here be given its token and its `doc` term wherever a frame
+/// is composed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ContentFreeOp {
     /// `create_new_document` — a mint born published.
@@ -677,6 +694,14 @@ pub enum ContentFreeOp {
     Fork,
     /// `version` — the content-sharing fork, owned or cross-owner alike.
     Version,
+    /// `create_well_known_document` — a well-known document created
+    /// published at its slot, holding nothing.
+    ///
+    /// Its frame's `doc` is the slot document's own address, where a mint's
+    /// is its parent account: the address is computed from the account and
+    /// the slot, so the signer names it before the commit, and a signature
+    /// made for one slot verifies at no other.
+    CreateWellKnownDocument,
 }
 
 /// Returns the empty body, under `op`'s token.
@@ -691,6 +716,13 @@ pub enum ContentFreeOp {
 /// minted address, a daemon fact the frame cannot carry. So two such acts by
 /// one principal on one board sign identical bytes, which is the residue of
 /// keeping the three ops signed, and `version`'s `d_src` enters no row.
+///
+/// A well-known creation signs it over the slot document's own address,
+/// `<account>.0.<slot>`: that address is a function of the request, no
+/// daemon fact, so the frame names the one document the act creates and
+/// stays position-free. A creation happens once per slot, so no second act
+/// signs those bytes to effect, and a frame signed for one slot names
+/// another address than any other slot's.
 pub fn entry_body_empty(op: ContentFreeOp) -> EntryBody {
     EntryBody { grammar: Grammar::ContentFree(op), bytes: Vec::new() }
 }

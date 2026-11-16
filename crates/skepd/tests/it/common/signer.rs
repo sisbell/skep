@@ -2,8 +2,9 @@
 //! FRONTEND's stand-in: a token → (principal, seed) registry the two
 //! session-opening helpers fill, and the composition of the ENTRY frame from
 //! the frame a suite is about to post — `board` read off `H.1`, `account` off
-//! `principal_prefix`, `doc` and `body` per op cell of the ten: the three
-//! mints' EMPTY body over the parent account; a link write's slots AS THE
+//! `principal_prefix`, `doc` and `body` per op cell of the eleven: the three
+//! mints' EMPTY body over the parent account; a well-known creation's EMPTY
+//! body over the slot document's own address; a link write's slots AS THE
 //! STORE WILL HOLD THEM — an address-form slot spelled as its unit spans, a
 //! V-spec slot RESOLVED through the wire's own `image` read over its source
 //! before signing (the read that answers a V-span's I-extents; see
@@ -776,12 +777,13 @@ fn base_of(frame: &Value) -> Option<Option<(Address, u64)>> {
     }
 }
 
-/// The ten op-kind tokens the checked set admits an `attest` on — the ones
+/// The eleven op-kind tokens the checked set admits an `attest` on — the ones
 /// [`entry_frame_for`] composes a frame for.
-const CHECKED_SET: [&str; 10] = [
+const CHECKED_SET: [&str; 11] = [
     "create_new_document",
     "fork",
     "version",
+    "create_well_known_document",
     "insert",
     "publish",
     "make_link",
@@ -793,7 +795,7 @@ const CHECKED_SET: [&str; 10] = [
 
 /// The ENTRY frame for `frame` as `principal` would sign it on this board,
 /// or `None` where a member cannot be composed (no `H.1` yet, an unreadable
-/// copied origin or slot source, an op outside the ten). Every address the
+/// copied origin or slot source, an op outside the eleven). Every address the
 /// frame names is PARSED before it is framed, so `entry_frame` spells the
 /// address and not the string the frame happened to carry; every link slot
 /// is composed AS THE STORE WILL HOLD IT ([`signer_slot`]).
@@ -815,6 +817,15 @@ pub fn entry_frame_for(port: u16, token: &str, principal: u64, frame: &Value) ->
         ),
         "fork" => (account.clone(), entry_body_empty(ContentFreeOp::Fork)),
         "version" => (account.clone(), entry_body_empty(ContentFreeOp::Version)),
+        // The well-known creation: the EMPTY body, under its own token, over
+        // THE SLOT DOCUMENT's OWN ADDRESS, `<account>.0.<slot>` — the
+        // request's `account` and `slot`, never the parent account — at
+        // every slot, the mailbox's among them, where the board drops the
+        // member unread.
+        "create_well_known_document" => (
+            parse_addr(&format!("{}.0.{}", frame["account"].as_str()?, frame["slot"].as_u64()?))?,
+            entry_body_empty(ContentFreeOp::CreateWellKnownDocument),
+        ),
         "insert" => {
             let doc = parse_addr(&trunk_of_str(frame["doc"].as_str()?))?;
             let declared = match frame.get("deposit").and_then(Value::as_str) {

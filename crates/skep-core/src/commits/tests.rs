@@ -241,18 +241,22 @@ fn each_write_states_which_addresses_may_hold_a_cell() {
     let stage = write_meta(&Op::Stage { from: doc.clone() }).expect("a write");
     assert_eq!(stage.kind, OpKind::Stage);
     assert!(matches!(stage.docs, AffectedDocs::Minted), "the minted draft, off the ack");
-    // A well-known mint's row names the mailbox it minted — known only from
-    // the ack, never the account the frame names — with no term and no cell.
+    // A well-known creation's row names the document it created — known only
+    // from the ack, never the account the frame names — with no term and no
+    // cell, at every slot.
     let account = crate::codec::wire_address("1.0.1").expect("a test address");
-    let mailbox = write_meta(&Op::CreateWellKnownDocument { account }).expect("a write");
-    assert_eq!(mailbox.kind, OpKind::CreateWellKnownDocument);
-    assert!(
-        matches!(mailbox.docs, AffectedDocs::Minted),
-        "the minted mailbox, off the ack: {:?}",
-        mailbox.docs
-    );
-    assert!(matches!(mailbox.terms, RowTerms::Absent), "{:?}", mailbox.terms);
-    assert!(matches!(mailbox.minting, Minting::None), "{:?}", mailbox.minting);
+    for slot in skep_namespace::WellKnownSlot::ALL {
+        let created = write_meta(&Op::CreateWellKnownDocument { account: account.clone(), slot })
+            .expect("a write");
+        assert_eq!(created.kind, OpKind::CreateWellKnownDocument, "{slot:?}");
+        assert!(
+            matches!(created.docs, AffectedDocs::Minted),
+            "{slot:?}: the created document, off the ack: {:?}",
+            created.docs
+        );
+        assert!(matches!(created.terms, RowTerms::Absent), "{slot:?}: {:?}", created.terms);
+        assert!(matches!(created.minting, Minting::None), "{slot:?}: {:?}", created.minting);
+    }
     let publish = Op::Publish {
         target: PublishTarget::Document(doc),
         shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: Vec::new() },
@@ -362,7 +366,10 @@ fn each_write_states_the_terms_its_row_carries() {
         deposit: Deposit::Undeclared,
         as_of: Seq(7),
     };
-    let well_known = Op::CreateWellKnownDocument { account: addr("1.0.1") };
+    let well_known = Op::CreateWellKnownDocument {
+        account: addr("1.0.1"),
+        slot: skep_namespace::WellKnownSlot::Policy,
+    };
     for (op, name) in [
         (emit, "emit"),
         (assert_sup, "assert_sup"),
@@ -1343,10 +1350,16 @@ fn the_head_and_time_writers_write_into_the_seeded_documents_and_mint_none() {
 /// row stays the draft's, and no row is added, so the mailbox has one row.
 /// That row is its
 /// owner's: the owner's page carries it, and a stranger's and a guest's omit
-/// it, the mailbox being private.
+/// it, the mailbox being private. The bio, the link page and the policy
+/// document are created published, so the row of each creation is served to
+/// every class — the owner's page, a stranger's and a guest's alike — one
+/// row apiece, a second call at each adding none.
 #[test]
 fn a_mailboxs_mint_is_one_row_however_often_it_is_asked() {
-    use skep_namespace::{mailbox_address, WellKnown, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL};
+    use skep_namespace::{
+        mailbox_address, well_known_address, WellKnown, WellKnownSlot, BOOTSTRAP_PRINCIPAL,
+        SYSTEM_PRINCIPAL,
+    };
 
     use super::sidecar::CommitMeta;
 
@@ -1386,16 +1399,17 @@ fn a_mailboxs_mint_is_one_row_however_often_it_is_asked() {
             (addr, at, true)
         })
     };
-    let create_the_mailbox = || {
-        through_the_door(Op::CreateWellKnownDocument { account: account.clone() }, &|| {
-            let (mailbox, at) = stores
+    let create_at = |slot: WellKnownSlot| {
+        through_the_door(Op::CreateWellKnownDocument { account: account.clone(), slot }, &|| {
+            let (document, at) = stores
                 .namespace()
-                .create_well_known_document(owner, &account)
+                .create_well_known_document(owner, &account, slot)
                 .expect("the owner's call is answered");
-            let committed = matches!(mailbox, WellKnown::Minted(_));
-            (mailbox.into_address(), at, committed)
+            let committed = matches!(document, WellKnown::Minted(_));
+            (document.into_address(), at, committed)
         })
     };
+    let create_the_mailbox = || create_at(WellKnownSlot::Mailbox);
     create(None);
     let (mailbox, minted_at, committed) = create_the_mailbox();
     assert!(committed, "the mint committed, and says so");
@@ -1455,6 +1469,28 @@ fn a_mailboxs_mint_is_one_row_however_often_it_is_asked() {
             "{stranger:?}: the row of a private mailbox is omitted"
         );
     }
+
+    // The three published slots: each creation is one row, served to every
+    // class, and a second call at the slot adds none.
+    for slot in [WellKnownSlot::Bio, WellKnownSlot::LinkPage, WellKnownSlot::Policy] {
+        let (document, created_at, committed) = create_at(slot);
+        assert!(committed, "{slot:?}: the creation committed, and says so");
+        assert_eq!(Some(&document), well_known_address(&account, slot).as_ref(), "{slot:?}");
+        let rows_before = wp.feed.entries_above(0).len();
+        let (again, judged_at, committed) = create_at(slot);
+        assert_eq!((again, judged_at, committed), (document.clone(), created_at, false), "{slot:?}");
+        assert_eq!(wp.feed.entries_above(0).len(), rows_before, "{slot:?}: no row is added");
+
+        let snap = engine.kernel().snapshot();
+        assert!(snap.world().published(&document), "{slot:?}: created published");
+        for reader in [Some(owner), Some(SYSTEM_PRINCIPAL), None] {
+            let row = served(page_from(&wp, &FeedClass::of(snap.world(), reader), 0))
+                .remove(&created_at)
+                .unwrap_or_else(|| panic!("{slot:?}: {reader:?}'s page carries the creation's row"));
+            assert_eq!(row["op"], "create_well_known_document", "{slot:?} {reader:?}: {row}");
+            assert_eq!(row["docs"], serde_json::json!([document.to_string()]), "{slot:?}: {row}");
+        }
+    }
 }
 
 /// Checks that an ack that committed nothing records nothing (skep #1043).
@@ -1483,19 +1519,24 @@ fn an_ack_that_committed_nothing_records_nothing_at_the_position_it_names() {
     let (account, _) =
         stores.namespace().delegate(BOOTSTRAP_PRINCIPAL, prefix, owner).expect("the delegation commits");
     stores.namespace().create_new_document(owner, &account, None).expect("the account's home");
-    let (minted, head) =
-        stores.namespace().create_well_known_document(owner, &account).expect("the mailbox mints");
+    let mailbox_slot = skep_namespace::WellKnownSlot::Mailbox;
+    let (minted, head) = stores
+        .namespace()
+        .create_well_known_document(owner, &account, mailbox_slot)
+        .expect("the mailbox mints");
     assert!(matches!(minted, WellKnown::Minted(_)), "the premise: the mailbox minted");
     let rows_before = wp.feed.entries_above(0).len();
     let announced = wp.announced();
 
     // Through the door, as M10's dispatch acks it: the mailbox standing.
-    let op = Op::CreateWellKnownDocument { account: account.clone() };
+    let op = Op::CreateWellKnownDocument { account: account.clone(), slot: mailbox_slot };
     let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
     let serial = wp.serial_lock();
     let resp = wp.commit_under(&serial, meta, || {
-        let (mailbox, at) =
-            stores.namespace().create_well_known_document(owner, &account).expect("answered");
+        let (mailbox, at) = stores
+            .namespace()
+            .create_well_known_document(owner, &account, mailbox_slot)
+            .expect("answered");
         let committed = matches!(mailbox, WellKnown::Minted(_));
         Response::AckAddr { addr: mailbox.into_address(), at, committed }
     });

@@ -1,7 +1,9 @@
 //! The mailbox's mint over the wire (the mailbox design §3).
 //!
-//! `create_well_known_document {account}` mints the account's mailbox, the
-//! private document at its well-known slot, once. Over a real board the
+//! `create_well_known_document {account, slot: 2}` mints the account's
+//! mailbox, the private document at its well-known slot, once (the other
+//! three slots, and what holds of every slot, are `well_known.rs`'s). Over a
+//! real board the
 //! suite holds what a board shows of it: the mint's feed row, shown to its
 //! owner's class and omitted for a guest and a stranger; what `doc_metadata`
 //! answers a stranger at the address, minted and unminted; the system
@@ -36,9 +38,9 @@ fn mailbox_of(account: &str) -> String {
     skep_namespace::mailbox_address(&account).expect("an account has a mailbox slot").to_string()
 }
 
-/// Returns the op's frame naming `account`.
+/// Returns the op's frame naming `account` and the mailbox's slot.
 fn mint_frame(account: &str) -> String {
-    format!(r#"{{"op":"create_well_known_document","account":"{account}"}}"#)
+    format!(r#"{{"op":"create_well_known_document","account":"{account}","slot":{}}}"#, skep_namespace::MAILBOX_SLOT)
 }
 
 /// Returns the mail type's address, read off the registry's table by name.
@@ -304,7 +306,7 @@ fn a_later_call_is_answered_the_same_address_at_the_position_it_was_judged_at() 
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
     let mailbox = mailbox_of(CLAIMANT_ACCOUNT);
     let before = head_position(port);
-    let with_id = format!(r#"{{"op":"create_well_known_document","account":"{CLAIMANT_ACCOUNT}","id":"mailbox-1"}}"#);
+    let with_id = format!(r#"{{"op":"create_well_known_document","account":"{CLAIMANT_ACCOUNT}","id":"mailbox-1","slot":2}}"#);
     let first = op(port, Some(&owner), &with_id);
     let minted_at = acked_at(&first);
     assert_eq!(acked_addr(&first), mailbox, "{first}");

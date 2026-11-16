@@ -113,15 +113,18 @@ pub struct AuthOptions {
     /// supplied at every start as `configured` is and never a journaled
     /// genesis fact, which is what lets the same board answer to a successor
     /// under a fresh prefix — taken by a reconfigure and restart (REG-1.70).
-    /// In no record, journal, sidecar or fold. The one thing this daemon
+    /// In no record, journal, sidecar or fold. The two things the daemon
     /// decides by it: the blocked-prefix list's off-board test
     /// (`BlockedPrefixes::installed_under`) — whether the list's configured
     /// operator account is an account of this board — read against this
     /// prefix and never against the local root `1`, under which every
     /// address in the registry's global form would read as this board's own
-    /// (REG-1.66). `None` is a board that has not been told its prefix: the
-    /// notebook, or a hosted board mis-launched — and that test is then off,
-    /// every operator reading as on-board, the start-up log saying so.
+    /// (REG-1.66); and, at its start, whether the board is the registry
+    /// root, `1.1`, which starts only where its journal is never reclaimed
+    /// (REG-3.15; skepd's `JournalReclamation::refuse_a_reclaiming_root`).
+    /// `None` is a board that has not been told its prefix: the notebook, or
+    /// a hosted board mis-launched — and that test is then off, every
+    /// operator reading as on-board, the start-up log saying so.
     ///
     /// The form is [`NodePrefix`]'s, carried by the type: a `Some` is a node
     /// address strictly under the root because nothing else can be built.

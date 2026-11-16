@@ -99,14 +99,15 @@
 //! the change feed holds after each landing; two retained by default, the
 //! journal reclaimed below the oldest — the cadence's count, the retained
 //! count and the reclamation the start's three settings, `never` keeping
-//! the journal whole): genesis on a
-//! fresh data dir, recovery on an existing one. The only files the daemon
-//! writes itself — its core's code writes them, and they are the daemon's
-//! files — are the change feed's: `commits.log` — the wire-v6
-//! commit-metadata sidecar — its four derived sidecars (`feed-index.log`,
-//! `feed-offsets.log`, `feed-masked.log`, `feed-streams.log`; wire v7.8,
-//! PUB-7.19), the attest store `feed-attest.log` (wire v7.11; signed ops),
-//! and, transiently while any of them is compacted, its `.compact` twin.
+//! the journal whole and the registry root's board `1.1` started under it
+//! alone, REG-3.15): genesis on a fresh data dir, recovery on an existing
+//! one. The only files the daemon writes itself — its core's code writes
+//! them, and they are the daemon's files — are the change feed's:
+//! `commits.log` — the wire-v6 commit-metadata sidecar — its four derived
+//! sidecars (`feed-index.log`, `feed-offsets.log`, `feed-masked.log`,
+//! `feed-streams.log`; wire v7.8, PUB-7.19), the attest store
+//! `feed-attest.log` (wire v7.11; signed ops), and, transiently while any
+//! of them is compacted, its `.compact` twin.
 //! None persists anything about the world (two daemons replaying one
 //! journal still converge byte-identically): the sidecar is the daemon's
 //! own testimony about when and for whom it committed, the same standing
@@ -181,8 +182,9 @@ pub use skep_core::auth::{
 pub use skep_core::codec::JsonCodec;
 pub use server::{
     bind, body_cap, embed, serve, serve_bound, Body, Daemon, DaemonError, EmbedError, Fetch,
-    HttpRequest, IndexNotReady, JournalReclamation, Listener, Peer, Reply, Routed, Skepd,
-    StartOptions, DEFAULT_PORT, DEFAULT_WORKERS, MIN_WORKERS, UNIVERSAL_HEADERS,
+    HttpRequest, IndexNotReady, JournalReclamation, Listener, Peer, ReclaimingRoot, Reply, Routed,
+    Skepd, StartOptions, DEFAULT_PORT, DEFAULT_WORKERS, MIN_WORKERS, REGISTRY_ROOT_PREFIX,
+    UNIVERSAL_HEADERS,
 };
 /// Which arm of the parse set a setting, `skep-util`'s, re-exported too.
 ///
@@ -374,6 +376,7 @@ const _: fn() = || {
     assert_send_sync::<MediaOptions>();
     assert_send_sync::<StartOptions>();
     assert_send_sync::<JournalReclamation>();
+    assert_send_sync::<ReclaimingRoot>();
     assert_send_sync::<Origin>();
     assert_send_sync::<NotCanonical>();
     assert_send_sync::<NodePrefix>();

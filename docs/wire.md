@@ -824,11 +824,15 @@ is EGRESS AND ASSERTION CONFIG (REG-1.69): per daemon, supplied at
 launch as `--origin` is, in no record, journal, sidecar or fold, and
 never a journaled genesis fact — a board carries on under a fresh
 prefix by a reconfigure and restart (REG-1.70), the journal untouched.
-What this daemon decides by it today is ONE thing: the blocked-prefix
-list's off-board test (§Sessions) — whether the list's configured
-operator account is an account of this board — runs against this
-prefix and never against the local `1`, under which every address in
-the registry's global form would read as this board's own. The
+What this daemon decides by it is TWO things. The blocked-prefix list's
+off-board test (§Sessions) — whether the list's configured operator
+account is an account of this board — runs against this prefix and
+never against the local `1`, under which every address in the
+registry's global form would read as this board's own. And a daemon
+started at `1.1` is the REGISTRY ROOT, the registry's own board, by
+that prefix alone (REG-1.69), which keeps its journal from genesis: it
+starts under `--reclaim-journal never` alone, and under any other word
+the start is refused before anything is served (REG-3.15). The
 daemon's start-up log names the prefix in force or its absence; with
 none supplied that test is off, every operator reads as on-board, and a
 hosted board must supply one.

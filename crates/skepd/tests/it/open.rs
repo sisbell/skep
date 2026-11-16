@@ -805,6 +805,44 @@ fn a_misspelled_variable_stops_the_start_before_the_directory_is_touched() {
     assert!(!dir.exists(), "nothing created under the data directory");
 }
 
+/// Checks that the registry root's start under the reclaiming default
+/// stops, touching nothing (REG-3.15).
+///
+/// The real binary given `--create --node-prefix 1.1` and no word, every
+/// variable cleared so none can supply `never`, writes one line — the
+/// refusal's words, then `--help` named — exits 2 and creates nothing under
+/// the data directory, where it would otherwise begin the registry's board
+/// with its journal reclaimed below the oldest checkpoint at every landing.
+/// The child runs under the [`Spawned`] guard on an ephemeral port, so a
+/// binary that starts after all fails this claim at [`PATIENCE`] and is
+/// killed, never left serving.
+#[test]
+fn the_registry_root_under_the_reclaiming_default_stops_before_the_directory_is_touched() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("board");
+    let mut cmd = skepd_bare(&dir, &["--port", "0", "--create", "--node-prefix", "1.1"]);
+    cmd.env_clear();
+    let mut child = Spawned::launch(&mut cmd);
+    let status = child.wait_within(PATIENCE);
+    let mut stderr = String::new();
+    child.child.stderr.take().expect("piped").read_to_string(&mut stderr).expect("read stderr");
+    let mut stdout = String::new();
+    child.child.stdout.take().expect("piped").read_to_string(&mut stdout).expect("read stdout");
+    assert_eq!(status.code(), Some(2), "a usage refusal; stderr: {stderr:?}");
+    let root: skepd::NodePrefix =
+        skepd::REGISTRY_ROOT_PREFIX.parse().expect("the registry root's prefix");
+    let words = skepd::JournalReclamation::BelowOldestCheckpoint
+        .refuse_a_reclaiming_root(Some(&root))
+        .expect_err("the registry root under the reclaiming word");
+    assert_eq!(
+        stderr,
+        format!("skepd: {words}; skepd --help prints the usage\n"),
+        "one line on a stderr that is no terminal, in the refusal's words"
+    );
+    assert!(stdout.is_empty(), "nothing on stdout: {stdout:?}");
+    assert!(!dir.exists(), "nothing created under the data directory");
+}
+
 /// §3.4 STEP 6's GAP, CLOSED — THE VERSION LINE FIRST: the child's FIRST
 /// stderr line is `open: version {v} ({commit}); this build reads journal
 /// format {SKJ4}, checkpoint format {SKC4} and world format {0x…}; built

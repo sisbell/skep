@@ -105,9 +105,14 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   and `--reclaim-journal`, each with its `SKEPD_` variable, `never` keeping
   the journal whole so every past state stays readable — read once at the
   open, said there on one line and persisted nowhere, so a board restarted
-  without a word runs at the default (`StartOptions`). So is the start's
-  word: the binary begins a board only under
-  `--create` and refuses a directory holding none without it, and a
+  without a word runs at the default (`StartOptions`) — save board `1.1`,
+  the registry root, which keeps its journal from genesis and starts under
+  `never` alone, the binary's parse (exit 2) and the library's open
+  refusing it under any other word before anything under the data
+  directory is touched (REG-3.15; `ReclaimingRoot`,
+  `REGISTRY_ROOT_PREFIX`). So is the start's word: the binary begins a
+  board only under `--create` and refuses a directory holding none
+  without it, and a
   journal tail that is not a crash's halts the open — the kernel's
   refusal, with the flag's spelling after it — until one start passes
   `--cut-damaged-tail` (`SKEPD_CUT_DAMAGED_TAIL=true`), which keeps every

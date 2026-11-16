@@ -25,13 +25,15 @@ use crate::codec::wire_address;
 /// assigned), an account or document address, or text no tumbler spells.
 ///
 /// **Why the type and not a precondition.** It is the off-board test's
-/// comparand (`BlockedPrefixes::installed_under`) and nothing else, and
-/// that test is `prefix_contains(node_prefix, operator)` — address
-/// arithmetic, which *answers* for any address at all and so cannot refuse
-/// a prefix that is not one. An account address there — the obvious slip,
-/// the operator field it is compared against being one — or the root would
-/// yield an off-board verdict meaning nothing, and a wrong verdict either
-/// lifts a standing takedown block or makes the served board's claimant
+/// comparand (`BlockedPrefixes::installed_under`), this crate's one reader
+/// of it — the daemon above compares it with the registry root's `1.1` at
+/// its start, by address (REG-3.15) — and that test is
+/// `prefix_contains(node_prefix, operator)`: address arithmetic, which
+/// *answers* for any address at all and so cannot refuse a prefix that is
+/// not one. An account address there — the obvious slip, the operator
+/// field it is compared against being one — or the root would yield an
+/// off-board verdict meaning nothing, and a wrong verdict either lifts a
+/// standing takedown block or makes the served board's claimant
 /// blockable, the two cells REG-4.198 rules out. So the form is checked
 /// where a value is made rather than where it is used, and the daemon that
 /// holds one holds a prefix.

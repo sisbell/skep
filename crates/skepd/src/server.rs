@@ -43,24 +43,25 @@
 //! checkpoints by default, the journal reclaimed below the oldest of them —
 //! the cadence's count, the retained count and the reclamation are the
 //! start's three settings ([`StartOptions`]), read once at the open, said
-//! there and persisted nowhere — genesis on a fresh store, recovery on an
+//! there and persisted nowhere, the registry root's board `1.1` opened under
+//! `never` alone (REG-3.15; [`JournalReclamation::refuse_a_reclaiming_root`],
+//! the open's first check) — genesis on a fresh store, recovery on an
 //! existing one, both inside `Engine::open`. The journal's reclamation
-//! bounds the board's
-//! STATES alone: the change feed's files are kept whole from genesis
-//! (wire.md §The change feed, Retention), the daemon holding a window of
-//! recent positions in memory and reading the rest from disk by position,
-//! so no landing rewrites a feed file. Beside the kernel's files and the
-//! blob store's (under `blobs/`, opened through `MediaGate::open_with`), the
-//! only files the daemon writes are the change feed's: the commit-metadata
-//! sidecar `commits.log`, its four derived sidecars (`feed-index.log`,
-//! `feed-offsets.log`, `feed-masked.log`, `feed-streams.log`), the attest
-//! store `feed-attest.log` — the marker slot mirrored per attested commit,
-//! primary state below the reclaim floor as the five beside it now are —
-//! and, transiently while the walk's landing rewrites any, its `.compact`
-//! twin — all opened here through `Commits::open` and owned by
-//! `skep-core`'s `commits/sidecar.rs` and `commits/feed/`; nothing here
-//! writes any file of the world's, which is why two daemons replaying one
-//! journal still converge byte-identically.
+//! bounds the board's STATES alone: the change feed's files are kept whole
+//! from genesis (wire.md §The change feed, Retention), the daemon holding a
+//! window of recent positions in memory and reading the rest from disk by
+//! position, so no landing rewrites a feed file. Beside the kernel's files
+//! and the blob store's (under `blobs/`, opened through
+//! `MediaGate::open_with`), the only files the daemon writes are the change
+//! feed's: the commit-metadata sidecar `commits.log`, its four derived
+//! sidecars (`feed-index.log`, `feed-offsets.log`, `feed-masked.log`,
+//! `feed-streams.log`), the attest store `feed-attest.log` — the marker
+//! slot mirrored per attested commit, primary state below the reclaim floor
+//! as the five beside it now are — and, transiently while the walk's
+//! landing rewrites any, its `.compact` twin — all opened here through
+//! `Commits::open` and owned by `skep-core`'s `commits/sidecar.rs` and
+//! `commits/feed/`; nothing here writes any file of the world's, which is
+//! why two daemons replaying one journal still converge byte-identically.
 //!
 //! **Identity is the AUTH session layer** (`skep-core`'s `auth/`):
 //! `GET /challenge` and `POST /session` mint a session by one of two arms —
@@ -261,7 +262,8 @@ use std::sync::{Arc, OnceLock};
 
 use skep_core::auth::session::CHALLENGE_TTL_MS;
 use skep_core::auth::{
-    startup_warnings, AuthOptions, AuthStart, AuthState, PortAlreadyBound, Reissue, MAX_LIVE_NONCES,
+    startup_warnings, AuthOptions, AuthStart, AuthState, NodePrefix, PortAlreadyBound, Reissue,
+    MAX_LIVE_NONCES,
 };
 use skep_core::codec::JsonCodec;
 use crate::history::History;
@@ -411,13 +413,23 @@ const BOARD_HTML: &str = include_str!("../../../clients/board.html");
 
 /// The `Daemon::open` failure: which subsystem refused, not a disposition.
 ///
-/// Four of the five are uniform operator-intervention conditions (report
+/// Five of the six are uniform operator-intervention conditions (report
 /// and stop, never retry) and `Engine` is not. A caller that means to retry
 /// reads the wrapped error and never this enum alone, which cannot tell a
 /// failure a retry clears from one it does not.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum DaemonError {
+    /// The registry root's start under a reclaiming word (REG-3.15).
+    ///
+    /// The start's node prefix is the registry root's, `1.1`, and its
+    /// journal's reclamation any word but `never`: [`ReclaimingRoot`],
+    /// which [`JournalReclamation::refuse_a_reclaiming_root`] answers. It is
+    /// the open's first check, made from the two options alone, so the
+    /// refusal leaves the directory as it found it. The operator's
+    /// configuration and not the directory's state: start again under
+    /// `never`, and no retry clears it.
+    ReclaimingRoot(ReclaimingRoot),
     /// The engine could not genesis or recover.
     ///
     /// It carries M2's [`OpenError`](crate::OpenError) verbatim, re-exported
@@ -491,6 +503,7 @@ impl std::fmt::Display for DaemonError {
                 }
                 Ok(())
             }
+            DaemonError::ReclaimingRoot(e) => write!(f, "{e}"),
             DaemonError::Sidecar(e) => write!(f, "change-feed sidecar: {e}"),
             DaemonError::BlockedPrefixes(e) => write!(f, "blocked-prefix list: {e}"),
             DaemonError::Media(e) => write!(f, "blob store: {e}"),
@@ -530,9 +543,11 @@ fn damaged_tail_in(e: &EngineError) -> bool {
 /// threaded into the kernel's cadence and its journal's two policies, read
 /// once at the open, said there on one line and persisted nowhere: a start
 /// that names none runs at the defaults, so a board run under `never` and
-/// restarted without the word reclaims at its next landing. Built from its
-/// defaults and set: `#[non_exhaustive]`, so a knob added here arrives at
-/// its default, which [`StartOptions::default`] is the one home of.
+/// restarted without the word reclaims at its next landing — at every
+/// prefix but the registry root's, where a start without it is refused
+/// ([`JournalReclamation::refuse_a_reclaiming_root`]; REG-3.15). Built from
+/// its defaults and set: `#[non_exhaustive]`, so a knob added here arrives
+/// at its default, which [`StartOptions::default`] is the one home of.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StartOptions {
@@ -613,7 +628,8 @@ pub enum JournalReclamation {
     /// the oldest of them stands too, so a history read there folds from
     /// genesis through it and every landing's line reads `nothing
     /// reclaimed`. One start's word: a restart without it reclaims at its
-    /// next landing what this start kept.
+    /// next landing what this start kept, and at the registry root's prefix
+    /// it is the one word a start is admitted under (REG-3.15).
     Never,
 }
 
@@ -631,6 +647,40 @@ impl JournalReclamation {
             JournalReclamation::BelowOldestCheckpoint => Reclaim::BelowOldestRetained,
             JournalReclamation::Never => Reclaim::Never,
         }
+    }
+
+    /// Refuses this word at the registry root's prefix unless it is `never`.
+    ///
+    /// The registry root keeps its journal from genesis for as long as it
+    /// serves the realm, and a board started at [`REGISTRY_ROOT_PREFIX`] is
+    /// the registry root by that prefix alone (REG-3.15, REG-1.69): so at
+    /// that prefix every word but `never` is refused, and at any other
+    /// prefix, or none, either word is admitted. The prefix is compared as
+    /// the address it parses to, never as text, so `1.01` is the root's and
+    /// `1.1.3`, a subnode beneath it, is another board's. The rule's one
+    /// statement: the binary's parse makes it before the port is bound, and
+    /// the open makes it before anything under the data directory is
+    /// touched, so an embedder's start at the root is held to it too.
+    ///
+    /// # Errors
+    ///
+    /// [`ReclaimingRoot`] where `prefix` is the registry root's and this
+    /// word is not [`JournalReclamation::Never`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`REGISTRY_ROOT_PREFIX`] is not a node prefix; it is one,
+    /// which the unit suite pins, so the `expect` never fires.
+    pub fn refuse_a_reclaiming_root(
+        self,
+        prefix: Option<&NodePrefix>,
+    ) -> Result<(), ReclaimingRoot> {
+        let root: NodePrefix =
+            REGISTRY_ROOT_PREFIX.parse().expect("the registry root's prefix is a node prefix");
+        if self != JournalReclamation::Never && prefix == Some(&root) {
+            return Err(ReclaimingRoot);
+        }
+        Ok(())
     }
 }
 
@@ -664,14 +714,54 @@ impl fmt::Display for JournalReclamation {
     }
 }
 
+/// The registry root's node prefix, `1.1` (REG-1.69).
+///
+/// The registry's own board is started at it, and a daemon started at it
+/// is the registry root by that prefix alone, with no start word and no
+/// mark on the volume saying so. It is the text the check of the root's
+/// retention ([`JournalReclamation::refuse_a_reclaiming_root`]) parses and
+/// compares a start's prefix with, and the one its refusal names.
+pub const REGISTRY_ROOT_PREFIX: &str = "1.1";
+
+/// The registry root's start under a reclaiming word, refused (REG-3.15).
+///
+/// It is [`JournalReclamation::refuse_a_reclaiming_root`]'s refusal: a
+/// start at [`REGISTRY_ROOT_PREFIX`] under any word but `never`, keyed on
+/// that prefix alone, so a test board started at `1.1` is held to it as the
+/// realm's is. It renders `--node-prefix 1.1: board 1.1 is the registry
+/// root, which keeps its journal from genesis (REG-3.15); start it with
+/// --reclaim-journal never (or SKEPD_RECLAIM_JOURNAL=never)` — the binary's
+/// refusal of its command line, exit 2, and [`DaemonError::ReclaimingRoot`]'s
+/// words. It carries nothing, the prefix and the act being one each, and
+/// only the check makes one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ReclaimingRoot;
+
+impl fmt::Display for ReclaimingRoot {
+    /// Writes the refusal, the prefix and the word from their constants.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (root, never) = (REGISTRY_ROOT_PREFIX, JournalReclamation::NEVER);
+        write!(
+            f,
+            "--node-prefix {root}: board {root} is the registry root, which keeps its journal \
+             from genesis (REG-3.15); start it with --reclaim-journal {never} (or \
+             SKEPD_RECLAIM_JOURNAL={never})"
+        )
+    }
+}
+
+impl std::error::Error for ReclaimingRoot {}
+
 /// The open's line for the three checkpoint settings in force.
 ///
-/// It is said once per open, after the directory's line and the two
-/// refusals that touch nothing under the directory — the blocked-prefix
-/// list's and the blob store's — and before the engine opens under them
-/// (`operations.md` §3.1 step 3), so a start the engine refuses shows the
-/// settings it was refused under and a start the list refuses says the
-/// version, the directory and the refusal alone. It renders
+/// It is said once per open, after the directory's line and the three
+/// refusals that touch nothing under the directory — the registry root's
+/// retention, the blocked-prefix list's and the blob store's — and before
+/// the engine opens under them (`operations.md` §3.1 step 3), so a start
+/// the engine refuses shows the settings it was refused under and a start
+/// one of the three refuses says the version, the directory and the refusal
+/// alone. It renders
 /// `checkpoint settings: a checkpoint every {n} commits (--checkpoint-every),
 /// {k} retained (--retain-checkpoints), the journal reclaimed below the
 /// oldest retained checkpoint (--reclaim-journal below-oldest-checkpoint);
@@ -716,6 +806,7 @@ impl std::error::Error for DaemonError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             DaemonError::Engine(e) => Some(e),
+            DaemonError::ReclaimingRoot(e) => Some(e),
             DaemonError::Sidecar(e) => Some(e),
             DaemonError::BlockedPrefixes(e) => Some(e),
             DaemonError::Media(e) => Some(e),
@@ -1203,11 +1294,15 @@ impl Daemon {
     ///
     /// # Errors
     ///
-    /// [`DaemonError::Registry`] where the seeding check refuses the genesis,
-    /// then [`DaemonError::BlockedPrefixes`] where the supply file `opts`
-    /// names cannot be read, is not a list, or is past the channel's byte
-    /// cap — both before anything under `data_dir` is touched — then the rest
-    /// of [`Daemon::open`]'s, in its order.
+    /// [`DaemonError::ReclaimingRoot`] where `opts` names the registry root's
+    /// prefix, `1.1`, which this door refuses at every open: it opens under
+    /// the start's defaults, the reclaiming word among them (REG-3.15), so
+    /// the root's board opens through [`Daemon::open_started`] under `never`.
+    /// Then [`DaemonError::Registry`] where the seeding check refuses the
+    /// genesis, then [`DaemonError::BlockedPrefixes`] where the supply file
+    /// `opts` names cannot be read, is not a list, or is past the channel's
+    /// byte cap — all three before anything under `data_dir` is touched —
+    /// then the rest of [`Daemon::open`]'s, in its order.
     pub fn open_with(data_dir: impl AsRef<Path>, opts: AuthOptions) -> Result<Daemon, DaemonError> {
         Self::open_configured(data_dir, opts, MediaOptions::default())
     }
@@ -1243,8 +1338,10 @@ impl Daemon {
     /// # Errors
     ///
     /// [`Daemon::open_with`]'s: the [`DaemonError`] naming the subsystem
-    /// that refused — [`DaemonError::Engine`] carrying the kernel's refusal
-    /// of a damaged tail where the cut was not accepted, and
+    /// that refused — first [`DaemonError::ReclaimingRoot`] where `opts`
+    /// names the registry root's prefix and `start` any word but `never`
+    /// (REG-3.15), [`DaemonError::Engine`] carrying the kernel's refusal of
+    /// a damaged tail where the cut was not accepted, and
     /// [`DaemonError::Media`] where `blobs/` holds a link or a special file,
     /// refused ahead of the engine's open.
     pub fn open_started(
@@ -1292,17 +1389,19 @@ impl Daemon {
     ///
     /// # Errors
     ///
-    /// In the order this body meets them: [`DaemonError::Registry`] where
-    /// the seeding check refuses the genesis and
-    /// [`DaemonError::BlockedPrefixes`] where the supply file `opts` names
-    /// cannot be read as a list, both before anything under `data_dir` is
-    /// touched; then [`DaemonError::Media`] where `blobs/` holds a link or a
-    /// special file, decided by reading alone and so ahead of the engine's
-    /// open (`operations.md` §3.1 step 3); then [`DaemonError::Engine`]
-    /// where the engine cannot genesis or recover — a damaged journal tail
-    /// among its refusals, unless `start` accepts the cut —
-    /// [`DaemonError::Media`] where the blob store cannot be opened, and
-    /// [`DaemonError::Sidecar`] where the change feed cannot be.
+    /// In the order this body meets them: [`DaemonError::ReclaimingRoot`]
+    /// where `opts` names the registry root's prefix and `start` any word
+    /// but `never` (REG-3.15), [`DaemonError::Registry`] where the seeding
+    /// check refuses the genesis and [`DaemonError::BlockedPrefixes`] where
+    /// the supply file `opts` names cannot be read as a list, all three
+    /// before anything under `data_dir` is touched; then
+    /// [`DaemonError::Media`] where `blobs/` holds a link or a special file,
+    /// decided by reading alone and so ahead of the engine's open
+    /// (`operations.md` §3.1 step 3); then [`DaemonError::Engine`] where the
+    /// engine cannot genesis or recover — a damaged journal tail among its
+    /// refusals, unless `start` accepts the cut — [`DaemonError::Media`]
+    /// where the blob store cannot be opened, and [`DaemonError::Sidecar`]
+    /// where the change feed cannot be.
     fn open_under_started(
         data_dir: &Path,
         opts: AuthOptions,
@@ -1321,6 +1420,18 @@ impl Daemon {
         // the operator stream that names the directory, which a collector
         // keys on, and the tell that an open has begun where it is long.
         say_open_line(DataDirLine(data_dir));
+        // The registry root's retention (REG-3.15): a start at `1.1` under
+        // any word but `never` is refused here, first — the operator's
+        // configuration, decided from the two options alone — before the
+        // kernel is configured, the seeding check runs or the list is read,
+        // so the refusal follows the version and the directory alone and
+        // nothing under the directory is touched (PATTERNS SP-8). The
+        // binary's parse refuses the same start before its bind; this is
+        // the library's door to it, an embedder's start among them.
+        start
+            .reclaim_journal
+            .refuse_a_reclaiming_root(opts.node_prefix.as_ref())
+            .map_err(DaemonError::ReclaimingRoot)?;
         // The cadence: every `checkpoint_every` commits (the start's;
         // `CHECKPOINT_EVERY_COMMITS` by default) or the byte bound,
         // whichever first, deferred — a crossing sets the kernel's due flag
@@ -1358,18 +1469,18 @@ impl Daemon {
         // board record, nothing written, no engine opened.
         skep_core::auth::policy::genesis_seeding_check().map_err(DaemonError::Registry)?;
         // The blocked-prefix list, read before the directory is touched
-        // (PATTERNS P13; AUTH-4.70): the open's one refusal that is the
-        // operator's configuration and not the directory's state, decidable
-        // from the file alone — so it is answered here, before the engine's
-        // open creates the directory, takes `kernel.lock`, removes a stray
-        // `checkpoint.tmp`, cuts the journal's tail or begins a board, and
-        // before the blob store and the change feed repair their files. Each
-        // of those is said once, by the open that makes it, so a start
-        // refused after them would spend those lines on a start that serves
-        // nothing, and the start that serves once the list is mended would
-        // have none left to say. The install waits for the recovered world
-        // below, whose claimant the list is compared against (AUTH-4.36
-        // step 4b).
+        // (PATTERNS SP-8; AUTH-4.70): with the registry root's above, the
+        // open's refusals that are the operator's configuration and not the
+        // directory's state, this one decidable from the file alone — so it
+        // is answered here, before the engine's open creates the directory,
+        // takes `kernel.lock`, removes a stray `checkpoint.tmp`, cuts the
+        // journal's tail or begins a board, and before the blob store and
+        // the change feed repair their files. Each of those is said once, by
+        // the open that makes it, so a start refused after them would spend
+        // those lines on a start that serves nothing, and the start that
+        // serves once the list is mended would have none left to say. The
+        // install waits for the recovered world below, whose claimant the
+        // list is compared against (AUTH-4.36 step 4b).
         let auth_start = AuthStart::read(opts).map_err(DaemonError::BlockedPrefixes)?;
         // The blob store's read-only refusal, ahead of the engine's open
         // (`operations.md` §3.1 step 3, PATTERNS P13: the refusal at the
@@ -1395,14 +1506,14 @@ impl Daemon {
                 .any(|name| std::fs::symlink_metadata(root.join(name)).is_ok())
         };
         // The three checkpoint settings in force, said before the engine
-        // opens under them and after the two refusals that touch nothing
-        // under the directory (the list's, the store's), so a start those
-        // refuse says the version, the directory and the refusal alone:
-        // the cadence's count, the retained count and the journal's
-        // reclamation — the start's, each the default where the start named
-        // none — so a start the engine refuses shows what it was refused
-        // under, and a board run a month under `never` and restarted
-        // without the word reads here that it reclaims again.
+        // opens under them and after the three refusals that touch nothing
+        // under the directory (the registry root's, the list's, the
+        // store's), so a start those refuse says the version, the directory
+        // and the refusal alone: the cadence's count, the retained count and
+        // the journal's reclamation — the start's, each the default where
+        // the start named none — so a start the engine refuses shows what it
+        // was refused under, and a board run a month under `never` and
+        // restarted without the word reads here that it reclaims again.
         say_open_line(CheckpointSettingsLine { start: &start });
         // The engine's open, timed: the daemon's own `Instant` around the
         // call, the figure the recovery's landing carries.

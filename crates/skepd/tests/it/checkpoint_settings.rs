@@ -25,6 +25,10 @@
 //! * THE CEILING: under a cadence of eight and two retained, a torn
 //!   `commits.log` is re-covered behind the listener over at most sixteen
 //!   boundaries — the retained window — the rest fenced at the floor.
+//! * THE REGISTRY ROOT (REG-3.15): opened at the library's doors directly,
+//!   with no spawn, board `1.1` opens under `never` alone — the reclaiming
+//!   word refused at every door before the data directory is made — and
+//!   every other prefix opens under the default.
 //!
 //! Every landing a claim drives comes by the cadence itself, one commit at
 //! a time, so the counts are the kernel's; no suite captures the operator
@@ -38,7 +42,10 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use skepd::{JournalReclamation, Skepd, StartOptions};
+use skepd::{
+    AuthOptions, Daemon, DaemonError, EmbedError, JournalReclamation, MediaOptions, NodePrefix,
+    Skepd, StartOptions, DEFAULT_WORKERS,
+};
 
 use crate::common::{
     acked_addr, acked_at, get, http, json, op, open_session, spawn,
@@ -473,4 +480,51 @@ fn the_walk_behind_the_listener_re_covers_at_most_the_retained_window() {
     assert_eq!(st, 200, "a page from the floor serves: {v}");
     assert_eq!(v["last"].as_u64(), Some(head), "…to the head: {v}");
     sd.shutdown();
+}
+
+/// THE REGISTRY ROOT OPENS UNDER `never` ALONE, AT EVERY LIBRARY DOOR
+/// (REG-3.15, REG-1.69): `Daemon::open_started` with the node prefix `1.1`
+/// — and `1.01`, the same address — under the default start refuses
+/// `DaemonError::ReclaimingRoot` and leaves the data directory unmade, and
+/// so do `Daemon::open_with`, which opens under the default start, and
+/// `skepd::embed`, whose open is `open_configured`'s, refusing
+/// `EmbedError::Open` at its first attempt; under `never` the root's board
+/// opens, and `1.1.3`, a subnode beneath the root's, and `1.2`, other
+/// boards, open under the default.
+#[test]
+fn the_registry_root_opens_under_never_alone_at_every_library_door() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let at = |text: &str| {
+        let mut opts = AuthOptions::default();
+        opts.node_prefix = Some(text.parse::<NodePrefix>().expect("a node prefix"));
+        opts
+    };
+    let refused = |what: &str, opened: Result<Daemon, DaemonError>, dir: &Path| {
+        assert!(matches!(opened, Err(DaemonError::ReclaimingRoot(_))), "{what}: {opened:?}");
+        assert!(!dir.exists(), "{what}: nothing made under the data directory");
+    };
+    for root in ["1.1", "1.01"] {
+        let dir = tmp.path().join(format!("started-{root}"));
+        let opened =
+            Daemon::open_started(&dir, at(root), MediaOptions::default(), StartOptions::default());
+        refused(&format!("open_started at {root}"), opened, &dir);
+    }
+    let dir = tmp.path().join("with");
+    refused("open_with at 1.1", Daemon::open_with(&dir, at("1.1")), &dir);
+    let dir = tmp.path().join("embedded");
+    match skepd::embed(&dir, 0, |_| at("1.1"), MediaOptions::default(), DEFAULT_WORKERS) {
+        Err(EmbedError::Open(DaemonError::ReclaimingRoot(_))) => {}
+        other => panic!("embed at 1.1: {:?}", other.map(|sd| sd.shutdown())),
+    }
+    assert!(!dir.exists(), "embed at 1.1: nothing made under the data directory");
+
+    let never = settings(1024, 2, JournalReclamation::Never);
+    let dir = tmp.path().join("root-under-never");
+    Daemon::open_started(&dir, at("1.1"), MediaOptions::default(), never)
+        .expect("the registry root opens under never");
+    for other in ["1.1.3", "1.2"] {
+        let dir = tmp.path().join(format!("other-{other}"));
+        Daemon::open_started(&dir, at(other), MediaOptions::default(), StartOptions::default())
+            .unwrap_or_else(|e| panic!("{other} is another board's prefix: {e}"));
+    }
 }

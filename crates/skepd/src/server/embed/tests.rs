@@ -47,6 +47,16 @@ fn only_the_locks_would_block_is_retried() {
         )))),
         "a chain that carries no io::Error is a fault"
     );
+    let root: crate::NodePrefix =
+        crate::REGISTRY_ROOT_PREFIX.parse().expect("the registry root's prefix");
+    let reclaiming = crate::JournalReclamation::BelowOldestCheckpoint
+        .refuse_a_reclaiming_root(Some(&root))
+        .expect_err("the registry root under the reclaiming word");
+    assert!(
+        !lost_the_lock_race(&DaemonError::ReclaimingRoot(reclaiming)),
+        "the registry root under a reclaiming word is the operator's configuration, answered at \
+         once"
+    );
 }
 
 /// EACH REFUSAL NAMES ITS STEP, ahead of the step's own words — so a face

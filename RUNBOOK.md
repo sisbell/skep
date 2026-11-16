@@ -1094,7 +1094,14 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
      The three are read at every start and kept nowhere, so a board
      run under `never` and restarted without the word reclaims at
      its next landing; the open names the three in force (step 3,
-     item 4).
+     item 4). Board `1.1`, the registry root, keeps its journal from
+     genesis and starts under `never` alone: a start with
+     `--node-prefix 1.1` under the default or any other word is
+     refused, exit 2, before the data directory is touched:
+
+     ```
+     skepd: --node-prefix 1.1: board 1.1 is the registry root, which keeps its journal from genesis (REG-3.15); start it with --reclaim-journal never (or SKEPD_RECLAIM_JOURNAL=never); skepd --help prints the usage
+     ```
    - `--local-trust` or `--no-local-trust`
      (`SKEPD_LOCAL_TRUST=true|false`): whether bare, unsigned
      sessions from this machine are honoured once the board is
@@ -1120,7 +1127,17 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
      (step 8).
    - `--node-prefix <PREFIX>` (`SKEPD_NODE_PREFIX`): the board's
      node prefix, `1.N`. Without it the blocked-prefix list's
-     off-board test is off.
+     off-board test is off. A daemon started at `1.1` is the
+     registry root, the registry's own board, by that prefix alone,
+     however it is spelled (`1.01` is `1.1`; `1.1.3`, beneath it, is
+     another board): it keeps its journal from genesis, so it starts
+     under `--reclaim-journal never` (`SKEPD_RECLAIM_JOURNAL=never`)
+     alone, and under the default or any other word it is refused,
+     exit 2, before the data directory is touched:
+
+     ```
+     skepd: --node-prefix 1.1: board 1.1 is the registry root, which keeps its journal from genesis (REG-3.15); start it with --reclaim-journal never (or SKEPD_RECLAIM_JOURNAL=never); skepd --help prints the usage
+     ```
    - `--cut-damaged-tail` (`SKEPD_CUT_DAMAGED_TAIL=true|false`):
      accept, for this one start, the cut of a journal tail the open
      refuses as damage (step 3, item 8), every byte of it kept

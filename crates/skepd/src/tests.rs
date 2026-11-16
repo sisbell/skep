@@ -635,6 +635,205 @@ fn the_checkpoint_variables_seed_the_flags_and_meet_the_same_refusals() {
     }
 }
 
+/// The registry root's refusal at the parse (REG-3.15).
+///
+/// It is what the binary writes after `skepd: ` and exits 2 on, restated
+/// here so a moved word in the library's rendering is a red claim.
+const ROOT_REFUSED: &str = "--node-prefix 1.1: board 1.1 is the registry root, which keeps its \
+                            journal from genesis (REG-3.15); start it with --reclaim-journal \
+                            never (or SKEPD_RECLAIM_JOURNAL=never)";
+
+/// THE REGISTRY ROOT STARTS UNDER `never` ALONE (REG-3.15, REG-1.69):
+/// `--node-prefix 1.1` under the default word, under `--reclaim-journal
+/// below-oldest-checkpoint`, and spelled `1.01`, the same address, is
+/// refused after the flag loop in the refusal's words — ahead of the
+/// missing data directory's refusal, as a usage refusal ahead of the
+/// board's judgement; under `never` it parses, and so do no prefix, `1.2`
+/// and `1.1.3`, a subnode beneath the root's, under the default and either
+/// word. The help says it at both settings' rows, the prefix rendered from
+/// its constant.
+#[test]
+fn the_registry_roots_prefix_parses_under_never_alone() {
+    for line in [
+        &["--data-dir", "/tmp/x", "--node-prefix", "1.1"][..],
+        &[
+            "--data-dir",
+            "/tmp/x",
+            "--node-prefix",
+            "1.1",
+            "--reclaim-journal",
+            "below-oldest-checkpoint",
+        ],
+        &[
+            "--data-dir",
+            "/tmp/x",
+            "--reclaim-journal",
+            "below-oldest-checkpoint",
+            "--node-prefix",
+            "1.01",
+        ],
+        &["--node-prefix", "1.1"],
+    ] {
+        assert_eq!(parse_args(argv(line)).err().as_deref(), Some(ROOT_REFUSED), "{line:?}");
+    }
+    let never = parse_args(argv(&[
+        "--data-dir",
+        "/tmp/x",
+        "--node-prefix",
+        "1.1",
+        "--reclaim-journal",
+        "never",
+    ]))
+    .expect("the registry root under never")
+    .expect("a run");
+    assert_eq!(never.reclaim_journal, JournalReclamation::Never);
+    assert_eq!(never.node_prefix.map(|p| p.to_string()).as_deref(), Some("1.1"));
+    for prefix in [None, Some("1.2"), Some("1.1.3")] {
+        for word in [None, Some("below-oldest-checkpoint"), Some("never")] {
+            let mut line = vec!["--data-dir", "/tmp/x"];
+            line.extend(prefix.into_iter().flat_map(|p| ["--node-prefix", p]));
+            line.extend(word.into_iter().flat_map(|w| ["--reclaim-journal", w]));
+            let a = parse_args(argv(&line))
+                .unwrap_or_else(|e| panic!("{line:?} is another board's start: {e}"))
+                .expect("a run");
+            assert_eq!(a.reclaim_journal.to_string(), word.unwrap_or("below-oldest-checkpoint"));
+        }
+    }
+    let folded = usage().split_whitespace().collect::<Vec<_>>().join(" ");
+    for rendered in [
+        format!(
+            "Board {REGISTRY_ROOT_PREFIX}, the registry root, keeps its journal from genesis and \
+             starts under never alone: a start with --node-prefix {REGISTRY_ROOT_PREFIX} under the \
+             default or any other word is refused (exit 2)"
+        ),
+        format!(
+            "runs against it; and {REGISTRY_ROOT_PREFIX}, the registry's own board (the registry \
+             root, under the root 1), starts under --reclaim-journal never alone. Without a prefix \
+             that test is OFF"
+        ),
+    ] {
+        assert!(folded.contains(&rendered), "the help renders {rendered:?}: {folded}");
+    }
+}
+
+/// THE VARIABLES MEET THE SAME REFUSAL (REG-3.15): `SKEPD_NODE_PREFIX=1.1`
+/// with no word is refused in the parse's words, and a flag's `never`
+/// beside it parses; beside `SKEPD_RECLAIM_JOURNAL=below-oldest-checkpoint`
+/// it is refused; beside `SKEPD_RECLAIM_JOURNAL=never` it parses, a flag's
+/// reclaiming word beating the variable's `never` is refused, and a flag's
+/// other prefix beating the variable's root parses; and the variable's
+/// reclaiming word beside the flag's `1.1` is refused. Judged in children
+/// of this test binary, as the checkpoint variables' claims are, every
+/// child printing the line its parent asserts, so a child that ran nothing
+/// fails the claim.
+#[test]
+fn the_registry_roots_variables_meet_the_same_refusal() {
+    const CHILD: &str = "SKEPD_TEST_REGISTRY_ROOT_CHILD";
+    let held = |arm: &str| format!("the registry root's {arm} child held its claims");
+    let refused = |line: &[&str]| parse_args(argv(line)).err();
+    let parsed = |line: &[&str]| {
+        parse_args(argv(line))
+            .unwrap_or_else(|e| panic!("{line:?} parses: {e}"))
+            .expect("a run")
+            .reclaim_journal
+    };
+    match std::env::var(CHILD).as_deref() {
+        Ok(arm @ "prefix") => {
+            assert_eq!(
+                refused(&["--data-dir", "/tmp/x"]).as_deref(),
+                Some(ROOT_REFUSED),
+                "the variable's 1.1 under no word"
+            );
+            assert_eq!(
+                parsed(&["--data-dir", "/tmp/x", "--reclaim-journal", "never"]),
+                JournalReclamation::Never,
+                "the variable's 1.1 under the flag's never"
+            );
+            println!("{}", held(arm));
+            return;
+        }
+        Ok(arm @ "reclaiming") => {
+            assert_eq!(
+                refused(&["--data-dir", "/tmp/x"]).as_deref(),
+                Some(ROOT_REFUSED),
+                "the variables' 1.1 under their reclaiming word"
+            );
+            println!("{}", held(arm));
+            return;
+        }
+        Ok(arm @ "never") => {
+            assert_eq!(
+                parsed(&["--data-dir", "/tmp/x"]),
+                JournalReclamation::Never,
+                "the variables' 1.1 under their never"
+            );
+            assert_eq!(
+                refused(&["--data-dir", "/tmp/x", "--reclaim-journal", "below-oldest-checkpoint"])
+                    .as_deref(),
+                Some(ROOT_REFUSED),
+                "the flag's reclaiming word beats the variable's never"
+            );
+            assert_eq!(
+                parsed(&[
+                    "--data-dir",
+                    "/tmp/x",
+                    "--node-prefix",
+                    "1.2",
+                    "--reclaim-journal",
+                    "below-oldest-checkpoint",
+                ]),
+                JournalReclamation::BelowOldestCheckpoint,
+                "the flag's other prefix beats the variable's root, under a reclaiming word"
+            );
+            println!("{}", held(arm));
+            return;
+        }
+        Ok(arm @ "word") => {
+            assert_eq!(
+                refused(&["--data-dir", "/tmp/x", "--node-prefix", "1.1"]).as_deref(),
+                Some(ROOT_REFUSED),
+                "the flag's 1.1 under the variable's reclaiming word"
+            );
+            println!("{}", held(arm));
+            return;
+        }
+        _ => {}
+    }
+    let exe = std::env::current_exe().expect("the test binary");
+    for (arm, set) in [
+        ("prefix", &[(SKEPD_NODE_PREFIX.var, "1.1")][..]),
+        (
+            "reclaiming",
+            &[
+                (SKEPD_NODE_PREFIX.var, "1.1"),
+                (SKEPD_RECLAIM_JOURNAL.var, "below-oldest-checkpoint"),
+            ],
+        ),
+        ("never", &[(SKEPD_NODE_PREFIX.var, "1.1"), (SKEPD_RECLAIM_JOURNAL.var, "never")]),
+        ("word", &[(SKEPD_RECLAIM_JOURNAL.var, "below-oldest-checkpoint")]),
+    ] {
+        let out = std::process::Command::new(&exe)
+            .args([
+                "tests::the_registry_roots_variables_meet_the_same_refusal",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env_remove(SKEPD_NODE_PREFIX.var)
+            .env_remove(SKEPD_RECLAIM_JOURNAL.var)
+            .env(CHILD, arm)
+            .envs(set.iter().copied())
+            .output()
+            .expect("run the child");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && stdout.contains(&held(arm)),
+            "the {arm} child's claims failed or never ran:\n{stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
 /// Checks that `--allow-preview-keys` is off unless given (AUTH-1.44).
 ///
 /// It is a bare flag, seeded by no environment variable, so a served

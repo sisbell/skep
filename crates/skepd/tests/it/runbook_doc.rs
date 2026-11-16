@@ -526,6 +526,52 @@ fn runbook_names_every_variable_the_daemon_reads_and_refuses_any_other() {
     );
 }
 
+/// §3 START, STEP 2 — THE REGISTRY ROOT STARTS UNDER `never` ALONE
+/// (REG-3.15): the `--reclaim-journal` entry and the `--node-prefix` entry
+/// each say board `1.1` keeps its journal from genesis and is refused under
+/// any other word, exit 2, before the data directory is touched, and each
+/// quotes the refusal as the binary writes it off a terminal — the words
+/// rendered through the library's own refusal and the prefix through its
+/// constant, never a literal here.
+#[test]
+fn runbook_says_the_registry_root_starts_under_never_alone_and_quotes_its_refusal() {
+    use skepd::{JournalReclamation, NodePrefix, REGISTRY_ROOT_PREFIX};
+
+    let root: NodePrefix = REGISTRY_ROOT_PREFIX.parse().expect("the registry root's prefix");
+    let words = JournalReclamation::BelowOldestCheckpoint
+        .refuse_a_reclaiming_root(Some(&root))
+        .expect_err("the registry root under the reclaiming word");
+    let line = format!("skepd: {words}; skepd --help prints the usage");
+    let refused = "refused, exit 2, before the data directory is touched:";
+    for (entry, rule) in [
+        (
+            "- `--reclaim-journal <POLICY>`",
+            format!(
+                "Board `{REGISTRY_ROOT_PREFIX}`, the registry root, keeps its journal from genesis \
+                 and starts under `never` alone: a start with `--node-prefix \
+                 {REGISTRY_ROOT_PREFIX}` under the default or any other word is {refused}"
+            ),
+        ),
+        (
+            "- `--node-prefix <PREFIX>`",
+            format!(
+                "A daemon started at `{REGISTRY_ROOT_PREFIX}` is the registry root, the \
+                 registry's own board, by that prefix alone"
+            ),
+        ),
+    ] {
+        let text = passage("\n## 3. Start", entry, &["\n   - `"]);
+        let prose = collapsed(&text);
+        assert!(prose.contains(&rule), "the entry {entry} says {rule:?}:\n{text}");
+        assert!(
+            prose.contains("keeps its journal from genesis") && prose.contains(refused),
+            "the entry {entry} says the root keeps its journal and the start is refused:\n{text}"
+        );
+        let (quoted, _) = fenced(&text);
+        assert_eq!(quoted.trim(), line, "the entry {entry} quotes the refusal as written");
+    }
+}
+
 /// §2 RESTORE's LEAD AND §1 STEP 8 — THE JOURNAL DAMAGE A HISTORY READ MEETS
 /// (RUNBOOK §2): the lead quotes the line the daemon says once, under
 /// `failure:`, with its wait for a checkpoint above damage at rest, and the

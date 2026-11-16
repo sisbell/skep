@@ -98,6 +98,12 @@ const INDEX_POLL: Duration = Duration::from_millis(5);
 /// no port answers the same options at every call. `media` is the media
 /// resource's configuration, the upload setting among it.
 ///
+/// **The registry root.** The open is [`Daemon::open_configured`]'s, under
+/// the start's defaults, the reclaiming word among them, so options naming
+/// the registry root's prefix, `1.1`, are refused at the first attempt
+/// (REG-3.15): the root's board starts through [`Daemon::open_started`]
+/// under `never` and [`serve_bound`].
+///
 /// **The retry, bounded.** The open is retried — twelve attempts, 25 ms
 /// apart (`OPEN_ATTEMPTS`, `OPEN_RETRY_PAUSE`), the listener dropped and
 /// bound afresh each time — only where the first [`io::Error`] on the
@@ -114,7 +120,9 @@ const INDEX_POLL: Duration = Duration::from_millis(5);
 ///
 /// Failure names its step ([`EmbedError`]): the bind's `io::Error` —
 /// `AddrInUse` where another process holds a fixed port, at any attempt's
-/// bind, nothing opened; the open's [`DaemonError`]; the serve's
+/// bind, nothing opened; the open's [`DaemonError`],
+/// [`DaemonError::ReclaimingRoot`] among them where `auth` names the
+/// registry root's prefix; the serve's
 /// `io::Error`, a refused worker thread, the start retired and the directory
 /// released.
 ///

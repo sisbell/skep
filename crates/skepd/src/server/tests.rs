@@ -1022,6 +1022,72 @@ fn the_checkpoint_settings_line_names_the_three_in_force() {
     assert_eq!(defaults.retain_checkpoints, RETAINED_CHECKPOINTS);
 }
 
+/// THE REGISTRY ROOT KEEPS ITS JOURNAL (REG-3.15, REG-1.69): the one check
+/// refuses a start whose node prefix is the address `1.1` — `1.01` is one
+/// of its spellings — under any word but `never`, and admits every other
+/// prefix, a subnode beneath the root's and `1.11` among them, and no
+/// prefix, under either word. The refusal renders the binary's line, the
+/// open's arm says the same words with the refusal as its `source`, and the
+/// open's body makes the check after the directory's line and before the
+/// kernel's configuration, the seeding check, the list's read, the store's
+/// refusal and the engine's open.
+#[test]
+fn a_start_at_the_registry_root_is_refused_unless_it_never_reclaims() {
+    let words = "--node-prefix 1.1: board 1.1 is the registry root, which keeps its journal from \
+                 genesis (REG-3.15); start it with --reclaim-journal never (or \
+                 SKEPD_RECLAIM_JOURNAL=never)";
+    let prefix = |text: &str| text.parse::<NodePrefix>().expect("a node prefix");
+    assert_eq!(prefix(REGISTRY_ROOT_PREFIX), prefix("1.1"), "the constant is the address 1.1");
+    let both = [JournalReclamation::BelowOldestCheckpoint, JournalReclamation::Never];
+    for root in ["1.1", "1.01"] {
+        let refused =
+            JournalReclamation::BelowOldestCheckpoint.refuse_a_reclaiming_root(Some(&prefix(root)));
+        assert_eq!(refused, Err(ReclaimingRoot), "{root} under the reclaiming word is refused");
+        assert_eq!(refused.map_err(|e| e.to_string()), Err(words.to_string()), "in its words");
+        assert_eq!(
+            JournalReclamation::Never.refuse_a_reclaiming_root(Some(&prefix(root))),
+            Ok(()),
+            "{root} under never is admitted"
+        );
+    }
+    for other in ["1.1.3", "1.2", "1.3", "1.10", "1.11"] {
+        for word in both {
+            assert_eq!(
+                word.refuse_a_reclaiming_root(Some(&prefix(other))),
+                Ok(()),
+                "{other} is another board, admitted under {word}"
+            );
+        }
+    }
+    for word in both {
+        assert_eq!(word.refuse_a_reclaiming_root(None), Ok(()), "no prefix, admitted under {word}");
+    }
+    let arm = DaemonError::ReclaimingRoot(ReclaimingRoot);
+    assert_eq!(arm.to_string(), words, "the open's arm says the refusal's words");
+    assert!(
+        std::error::Error::source(&arm)
+            .is_some_and(|e| e.downcast_ref::<ReclaimingRoot>().is_some()),
+        "and its source is the refusal"
+    );
+    let source = include_str!("../server.rs");
+    let start = source.find("fn open_under_started(").expect("the open's body");
+    let end =
+        source[start..].find("fn write_the_claims_head_if_owed(").expect("the next fn") + start;
+    let body = &source[start..end];
+    let at = |what: &str| body.find(what).unwrap_or_else(|| panic!("{what} in the open's body"));
+    let check = at(".refuse_a_reclaiming_root(opts.node_prefix.as_ref())");
+    assert!(at("say_open_line(DataDirLine(") < check, "the check follows the directory's line");
+    for later in [
+        "KernelConfig {",
+        "genesis_seeding_check()",
+        "AuthStart::read(",
+        "Store::refuse_links_and_special_files(",
+        "Engine::open(",
+    ] {
+        assert!(check < at(later), "the registry root's check precedes {later}");
+    }
+}
+
 /// THE SERVED PAGE's PARAGRAPH of the module doc says what `GET /` serves:
 /// the read-only GUEST READER — no key, token or session — and no longer an
 /// acting client that generates keys and opens signed sessions, which the

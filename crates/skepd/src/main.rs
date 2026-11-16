@@ -64,7 +64,7 @@ use skep_util::source::Source;
 use skepd::{
     bind, serve_bound, tools, AuthOptions, Daemon, JournalReclamation, MediaOptions, NodePrefix,
     Origin, StartOptions, DEFAULT_LIMIT_FLOOR_BYTES, DEFAULT_LIMIT_SHARE, DEFAULT_PORT,
-    DEFAULT_WORKERS, DESIGNATION, MIN_WORKERS, STORE_DIR,
+    DEFAULT_WORKERS, DESIGNATION, MIN_WORKERS, REGISTRY_ROOT_PREFIX, STORE_DIR,
 };
 
 /// The bind's default: the loopback address (AUTH-4.57 (a)).
@@ -643,7 +643,11 @@ usage: skepd --data-dir <DIR> [--create] [--bind <ADDR>] [--port <PORT>]
                      checkpoints stand, so every past state stays readable
                      at the journal's cost on disk. Read at every start,
                      like the two above: a board run under never and
-                     restarted without it reclaims at its next landing
+                     restarted without it reclaims at its next landing.
+                     Board {registry_root}, the registry root, keeps its journal
+                     from genesis and starts under never alone: a start
+                     with --node-prefix {registry_root} under the default or any
+                     other word is refused (exit 2)
   --local-trust      honor bare (unsigned) loopback sessions after the
                      board is claimed
   --no-local-trust   refuse every bare session once the board is claimed
@@ -705,9 +709,11 @@ usage: skepd --data-dir <DIR> [--create] [--bind <ADDR>] [--port <PORT>]
                      and restart. What it decides here: the blocked-
                      prefix list's off-board test — whether the list's
                      configured operator account is an account of this
-                     board — runs against it. Without it that test is
-                     OFF (every operator reads as this board's own): a
-                     hosted board must supply one
+                     board — runs against it; and {registry_root}, the registry's own
+                     board (the registry root, under the root 1), starts
+                     under --reclaim-journal never alone. Without a
+                     prefix that test is OFF (every operator reads as
+                     this board's own): a hosted board must supply one
   --help             this text
   --version          this binary's version and the commit it was built from
 
@@ -747,6 +753,7 @@ The wire protocol is specified in skep/docs/wire.md.",
         checkpoint_every = start.checkpoint_every,
         retain_checkpoints = start.retain_checkpoints,
         reclaim_journal = start.reclaim_journal,
+        registry_root = REGISTRY_ROOT_PREFIX,
     )
 }
 
@@ -1050,7 +1057,9 @@ fn parse_tool(mut it: impl Iterator<Item = String>, tool: Tool) -> Result<Option
 /// value that does not parse, `--version` past the first argument, or an
 /// unknown argument; then a worker count under [`MIN_WORKERS`], a checkpoint
 /// cadence of zero commits and a retained count of zero, each named with
-/// what the setting admits; then a missing data directory.
+/// what the setting admits; then the registry root's prefix under any
+/// reclamation but `never` ([`JournalReclamation::refuse_a_reclaiming_root`],
+/// REG-3.15), in the refusal's own words; then a missing data directory.
 fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
     refuse_unknown_variables()?;
     let mut data_dir = std::env::var_os(SKEPD_DATA_DIR).map(PathBuf::from);
@@ -1222,6 +1231,16 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
             defaults.retain_checkpoints
         ));
     };
+    // The registry root's retention (REG-3.15): a start at `1.1` under any
+    // word but `never` — the reclaiming default among them — is refused
+    // here, for the flags and the variables alike, as a usage refusal
+    // before the board is judged, the port bound or the board opened. The
+    // rule is the library's, stated once, and the open makes the same
+    // check for every other door.
+    let reclaim_journal = reclaim_journal.unwrap_or(defaults.reclaim_journal);
+    reclaim_journal
+        .refuse_a_reclaiming_root(node_prefix.value.as_ref())
+        .map_err(|e| e.to_string())?;
     Ok(Some(Args {
         data_dir: data_dir
             .ok_or_else(|| format!("--data-dir (or {SKEPD_DATA_DIR}) is required"))?,
@@ -1249,7 +1268,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
         checkpoint_every,
         retain_checkpoints,
         // The reclaiming arm unless the flag or the variable said `never`.
-        reclaim_journal: reclaim_journal.unwrap_or(defaults.reclaim_journal),
+        reclaim_journal,
         create,
     }))
 }

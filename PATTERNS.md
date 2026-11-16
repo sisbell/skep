@@ -105,8 +105,8 @@ says "from" it at its end.
   acts on, a log of another build, before it touches the directory, and
   a refusal made after the first write names what that write left.
   **Holds it:** `skep_kernel::kernel` (the open's order), `skep_blobs::store` (the two read-only doors), skepd `server` (the start's order) and `skep_core::auth::blocked` (the list read first), `skep_provision::args` and `skep_provision::statedir` (a start refuses what would fail later).
-  **Checked by:** `crates/skepd/tests/it/open.rs` (`a_misspelled_variable_stops_the_start_before_the_directory_is_touched`, `a_link_under_blobs_is_refused_before_the_engines_open_touches_the_directory`, `a_held_port_refuses_in_milliseconds_with_the_bind_line_and_creates_no_directory`); `crates/skep-blobs/tests/it/reopen.rs` (`a_link_at_a_name_open_acts_on_fails_the_open_and_touches_nothing`).
-  **Closed:** #245, #381, #408, #484, #485. From P13.
+  **Checked by:** `crates/skepd/tests/it/open.rs` (`a_misspelled_variable_stops_the_start_before_the_directory_is_touched`, `a_link_under_blobs_is_refused_before_the_engines_open_touches_the_directory`, `a_held_port_refuses_in_milliseconds_with_the_bind_line_and_creates_no_directory`, `the_registry_root_under_the_reclaiming_default_stops_before_the_directory_is_touched`); `crates/skepd/tests/it/checkpoint_settings.rs` (`the_registry_root_opens_under_never_alone_at_every_library_door`); `crates/skep-blobs/tests/it/reopen.rs` (`a_link_at_a_name_open_acts_on_fails_the_open_and_touches_nothing`).
+  **Closed:** #245, #381, #408, #484, #485, #1058. From P13.
 
 ## What is said, and by whom
 

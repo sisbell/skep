@@ -1,9 +1,11 @@
 //! The write path's type-recognition input — PUB-6.30, PUB-6.64.
 //!
 //! The fold's credential kinds widened by the grants class and PUB-6.64's
-//! audit-view classes (PUB-kickoff D3) — the registry's three among them,
-//! the binding, the takedown record and the policy link with their subtype
-//! rows by prefix (REG-1.44, REG-1.46) — for the one question the write path
+//! audit-view classes (PUB-kickoff D3) — the registry's among them: the
+//! binding, the takedown record and the policy link with their subtype
+//! rows by prefix, and the registration's request rows, answer rows and
+//! approval link, each at its own row (REG-1.44, REG-1.46) — for the one
+//! question the write path
 //! asks that the fold does not: which refusal a `nullify`'s target class
 //! earns. It reads the fold's recognition — [`TypeAddrs::kind_of`] and
 //! [`single_address`], in `crate::shape` — and changes none of it; nothing
@@ -22,8 +24,9 @@ use crate::shape::{single_address, sole_span, CredentialKind, TypeAddrs};
 /// [`AuditClass::requires_published_home`] and
 /// [`AuditClass::requires_published_new`] answers, which the compiler
 /// demands, and its entry in this type's own list of classes, which it does
-/// not — and one address at [`WriteTypes::new`], which refuses a builder that
-/// gives a class none, with no edit to any rule that reads them. Which type
+/// not — and an address at [`WriteTypes::new`], one or more, which refuses a
+/// builder that gives a class none, with no edit to any rule that reads
+/// them. Which type
 /// address each class sits at is the caller's to supply (the commons ledger's
 /// numbers, pinned in the engine; M7's own reserved tumbler for the
 /// supersession claim) — this crate is parametric over them exactly as it is
@@ -142,6 +145,24 @@ pub enum AuditClass {
     /// (`skep_engine::types::t_correspondence`); the parent `3.102` is an
     /// ordinary type, no class address being it.
     Correspondence,
+    /// The registry's registration records read on the audit view: a
+    /// request in each of its kinds, the answers on its thread, and the
+    /// approval link.
+    ///
+    /// It is REG-1.39's fifth member (REG-1.43, REG-1.46): a request and
+    /// every answer are read at their own positions with the attestations,
+    /// and the approval link with them, so a retraction of one clears
+    /// nothing a reader weighs and a correction is a further answer. One
+    /// class at several addresses, each a leaf row's own and never a parent
+    /// row's or the kind's (REG-1.22): the request's kinds `3.54.1.1` and
+    /// `3.54.1.2`, the answers `3.54.2.1` to `3.54.2.3` and the approval
+    /// `3.54.4`. The registration's vouch, `3.54.3`, is no member: read on
+    /// the active view, its own `nullify` lands and is its withdrawal
+    /// (REG-1.45, REG-4.185) — which is why the class sits at no address
+    /// above its rows, where a prefix would take the vouch with it. Each
+    /// record is homed in a doc 1 by rule, so membership waits on no home
+    /// read.
+    Registration,
 }
 
 impl AuditClass {
@@ -154,7 +175,7 @@ impl AuditClass {
     /// [`AuditClass::requires_published_new`], whose exhaustive matches are
     /// where a new class first fails to compile, so the class joins it in
     /// that edit.
-    const ALL: [AuditClass; 12] = [
+    const ALL: [AuditClass; 13] = [
         AuditClass::SuccessorOf,
         AuditClass::DelegatorEndorsement,
         AuditClass::ConsumptionMarker,
@@ -167,6 +188,7 @@ impl AuditClass {
         AuditClass::PolicyLink,
         AuditClass::Supersession,
         AuditClass::Correspondence,
+        AuditClass::Registration,
     ];
 
     /// Returns whether membership needs the link's own home published.
@@ -192,7 +214,8 @@ impl AuditClass {
             | AuditClass::TakedownRecord
             | AuditClass::PolicyLink
             | AuditClass::Supersession
-            | AuditClass::Correspondence => false,
+            | AuditClass::Correspondence
+            | AuditClass::Registration => false,
         }
     }
 
@@ -231,7 +254,8 @@ impl AuditClass {
             | AuditClass::Binding
             | AuditClass::TakedownRecord
             | AuditClass::PolicyLink
-            | AuditClass::Correspondence => false,
+            | AuditClass::Correspondence
+            | AuditClass::Registration => false,
         }
     }
 }
@@ -297,8 +321,9 @@ impl WriteTypes {
     /// # Panics
     ///
     /// Panics where `audit` does not give every [`AuditClass`] an address. A
-    /// slot answers [`TargetClass::AuditView`] for a class only if the class
-    /// was given one here, so [`TargetClass`]'s "`None` is an ordinary link"
+    /// class may be given several, one pair apiece — the registration's
+    /// leaf rows are — and a slot answers [`TargetClass::AuditView`] for a
+    /// class only if the class was given one here, so [`TargetClass`]'s "`None` is an ordinary link"
     /// holds only over a complete list: a class left out would answer `None`
     /// for every one of its slots, and the `nullify` PUB-6.64 refuses would be
     /// admitted.

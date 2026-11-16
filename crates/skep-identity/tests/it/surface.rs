@@ -24,8 +24,8 @@ use skep_identity::{
     RefusedCause, SigAlgRow, Until, Values, ALGS,
     ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ED25519_KEY_LEN, ENROLL_TYPE, ENTRY_TAG,
     FNDSA512_PREVIEW_ED25519_KEY_LEN, FNDSA512_PREVIEW_KEY_LEN, KEY_TAG, MAX_RECORD_BYTES,
-    MLDSA65_ED25519_KEY_LEN, MLDSA65_KEY_LEN, NODE_HELLO_TAG, RETIRE_TYPE, SESSION_TAG,
-    SESSION_TAG_V2, SIG_ALGS, TAGS,
+    MLDSA65_ED25519_KEY_LEN, MLDSA65_KEY_LEN, NODE_HELLO_TAG, REALM_TAG, REGISTRATION_TAG,
+    RETIRE_TYPE, SESSION_TAG, SESSION_TAG_V2, SIG_ALGS, TAGS,
 };
 
 /// AUTH-1.18/AUTH-1.21 — the record cap's VALUE, not merely its name: 128 KiB,
@@ -598,27 +598,39 @@ fn tags_are_skep_prefixed_and_prefix_free() {
             }
         }
     }
-    // The five declared constants are the table, in declaration order — the
-    // fifth the ENTRY frame's (signed ops).
-    assert_eq!(TAGS.len(), 5);
-    assert_eq!(TAGS[0], KEY_TAG);
-    assert_eq!(TAGS[1], SESSION_TAG);
-    assert_eq!(TAGS[2], SESSION_TAG_V2);
-    assert_eq!(TAGS[3], NODE_HELLO_TAG);
-    assert_eq!(TAGS[4], ENTRY_TAG);
+    // The declared constants are the table, in AUTH-1.11's declaration
+    // order — the fifth the ENTRY frame's (signed ops), then the two the
+    // registry's design chose: the realm fingerprint's and the admission
+    // frame's.
+    assert_eq!(
+        TAGS,
+        [
+            KEY_TAG,
+            SESSION_TAG,
+            SESSION_TAG_V2,
+            NODE_HELLO_TAG,
+            ENTRY_TAG,
+            REALM_TAG,
+            REGISTRATION_TAG
+        ]
+    );
+    assert!(TAGS.contains(&REALM_TAG) && TAGS.contains(&REGISTRATION_TAG));
 }
 
-/// AUTH-1.11 — the five declared tags' BYTES, not merely their properties.
+/// AUTH-1.11 — the declared tags' BYTES, not merely their properties.
 /// A tag IS the domain separator, so its bytes are the protocol: a changed
 /// tag silently invalidates every signature made under the old one, and
 /// moves every fingerprint. [`KEY_TAG`] sits inside every fingerprint
-/// (AUTH-1.8), and the other four separate signatures made and checked
-/// outside this crate — skepd's session layer frames the handshake under
-/// [`SESSION_TAG`] and [`SESSION_TAG_V2`], every entry signer and verifier
-/// frames under [`ENTRY_TAG`] through `entry_frame`, and bebe consumes
-/// [`NODE_HELLO_TAG`] (AUTH-2.118). `tags_are_skep_prefixed_and_prefix_free`
+/// (AUTH-1.8), and the others separate what is signed or hashed outside this
+/// crate — skepd's session layer frames the handshake under [`SESSION_TAG`]
+/// and [`SESSION_TAG_V2`], every entry signer and verifier frames under
+/// [`ENTRY_TAG`] through `entry_frame`, bebe consumes [`NODE_HELLO_TAG`]
+/// (AUTH-2.118), the resolver hashes a realm id's genesis set under
+/// [`REALM_TAG`] (REG-3.39) — the bytes every root hint's realm term already
+/// stands on — and an applicant signs a registration request under
+/// [`REGISTRATION_TAG`] (REG-4.67). `tags_are_skep_prefixed_and_prefix_free`
 /// keeps holding after any rename that stays `skep-`-prefixed and
-/// prefix-free, so this is where a changed tag is discovered: all five, in
+/// prefix-free, so this is where a changed tag is discovered: every one, in
 /// the one test named for them.
 #[test]
 fn the_declared_tag_bytes_are_pinned() {
@@ -627,6 +639,8 @@ fn the_declared_tag_bytes_are_pinned() {
     assert_eq!(SESSION_TAG_V2.as_bytes(), b"skep-session-v2".as_slice());
     assert_eq!(NODE_HELLO_TAG.as_bytes(), b"skep-node-hello-v1".as_slice());
     assert_eq!(ENTRY_TAG.as_bytes(), b"skep-entry-v1".as_slice());
+    assert_eq!(REALM_TAG.as_bytes(), b"skep-realm-v1".as_slice());
+    assert_eq!(REGISTRATION_TAG.as_bytes(), b"skep-registration-v1".as_slice());
 }
 
 /// AUTH-2.90/AUTH-2.96 — the frozen `ALGS` token set by VALUE, both rows. A

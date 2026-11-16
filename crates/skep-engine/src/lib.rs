@@ -96,8 +96,8 @@
 //!   and `replaces` classes the grant fold reads, the edition class the
 //!   edition-claim lookup reads, the audit-view classes the daemon's write
 //!   path refuses a `nullify` at (PUB-6.30, PUB-6.64), and the registry's
-//!   twelve rows — `skep-registry`'s table, read through the ledger's
-//!   readers (REG-1.14, REG-1.15). None is a registered M7 type, and genesis
+//!   rows — `skep-registry`'s table, read through the ledger's readers
+//!   (REG-1.14, REG-1.15). None is a registered M7 type, and genesis
 //!   seeds nothing at any of them: a commons row is a compiled address, never
 //!   a record.
 //! * **The world dump** ([`dump`], behind the `dump` feature) — a

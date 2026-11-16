@@ -1396,48 +1396,125 @@ fn doc_states_the_blind_cell_and_the_fetch() {
 }
 
 /// THE REGISTRY SECTION (the registry's stable core): §Registry states the
-/// twelve rows with their addresses and the "Deposits" column, the deposit
-/// class's four members, the two bodies' canonical forms with the spec's
-/// examples IN CANONICAL FORM and the spaced spelling as what the parse
-/// refuses, the cap, the vector set by path, the record grade's reach — a
-/// deposit's two positions — the registry sequence's order and its refusal
-/// table under the one code, the audit-view refusal's three members with
-/// the endpoint outside, the seeding check's three arms, the interim pins
-/// and what the build does not carry; §The claim ceremony and credentials
-/// points at the four members, §Credential refusals lists the registry's
-/// three classes and points at the family, §Rejection codes points at the
-/// code. The daemon's answers are pinned end to end in `registry.rs` and
-/// `nullify_class.rs`; this pins that the contract says so, and that the
-/// vector set the section names pins the same cap and holds the section's
-/// two examples as admitted bodies.
+/// rows with their addresses and the "Deposits" column — THE TABLE AND THE
+/// CODE's AGREEING ROW FOR ROW, in the table's order and none short, a
+/// row's Deposits cell saying it carries them exactly where the code's row
+/// does, and each registration row named as the vocabulary names it — the
+/// deposit class's members, the set's own, in its order; the bodies'
+/// canonical forms, a row of the bodies' table for every body the code
+/// parses and its `type` string the row's; the spec's examples IN CANONICAL
+/// FORM and the spaced spelling as what the parse refuses; the cap per
+/// kind; the vector sets by path; the door's policy document; the record
+/// grade's reach — a deposit's two positions — the registry sequence's
+/// order and its refusal table under the one code, the audit-view refusal's
+/// members with the endpoint and the vouch outside, the seeding check's
+/// three arms, the family's tokens and what the build does not carry; §The
+/// claim ceremony and credentials points at the members, §Credential
+/// refusals lists the registry's classes and points at the family,
+/// §Rejection codes points at the code. The daemon's answers are pinned end
+/// to end in `registry.rs`, `registration.rs` and `nullify_class.rs`; this
+/// pins that the contract says so, and that the vector sets the section
+/// names pin the same caps and hold the section's two examples as admitted
+/// bodies.
 #[test]
 fn doc_states_the_registry_rows_the_bodies_and_the_refusals() {
-    let registry = prose(
-        "\n### Registry — the twelve rows, the two bodies and the record grade",
-        &["\n### Links (writes)"],
+    let head = "\n### Registry — the rows, the bodies and the record grade";
+    let registry = prose(head, &["\n### Links (writes)"]);
+    // The section as written, line by line, for its tables.
+    let text = wire_md();
+    let raw = text.split(head).nth(1).expect("the section's head stands");
+    let raw = raw.split("\n### Links (writes)").next().expect("the section's end");
+
+    // THE TABLE, ROW FOR ROW AGAINST THE CODE: every line of the table the
+    // section opens with, in order, is a row of `skep_registry::rows()`.
+    let table: Vec<Vec<&str>> = raw
+        .split("| Address | Row | Deposits |")
+        .nth(1)
+        .expect("the rows' table")
+        .lines()
+        .skip(2)
+        .take_while(|line| line.starts_with('|'))
+        .map(|line| line.trim_matches('|').split(" | ").map(str::trim).collect())
+        .collect();
+    let rows = skep_registry::rows();
+    assert_eq!(table.len(), rows.len(), "the table holds a line a row, none short and none over");
+    for (line, row) in table.iter().zip(rows) {
+        let [address, what, deposits] = line.as_slice() else { panic!("three cells: {line:?}") };
+        assert_eq!(*address, format!("`{}`", row.address), "the table's order is the code's");
+        assert_eq!(
+            deposits.starts_with("on "),
+            row.carries_deposits(),
+            "{address}: the Deposits cell {deposits:?}"
+        );
+        assert_eq!(deposits.starts_with("NONE on "), !row.carries_deposits(), "{address}");
+        if row.of.kind() == skep_registry::Kind::Registration {
+            let name = skep_registry::definition_at(&row.address).expect("a named row").name;
+            assert!(what.contains(&format!("named `{name}`")), "{address}: {what:?} names {name}");
+        }
+    }
+    let parents: Vec<&str> =
+        table.iter().filter(|line| line[1].contains("a PARENT ROW")).map(|line| line[0]).collect();
+    assert_eq!(parents, ["`1.1.0.1.0.1.0.3.54.1`", "`1.1.0.1.0.1.0.3.54.2`"], "the parent rows");
+    assert!(
+        registry.contains(
+            "| `1.1.0.1.0.1.0.3.58.1` | the policy link's OWN reading | on this row |"
+        ),
+        "the policy link's own reading stands as it stood"
     );
+
+    // THE DEPOSIT CLASS's MEMBERS, as the door's own set spells them.
+    let members = registry
+        .split("**The deposit class's members.**")
+        .nth(1)
+        .and_then(|rest| rest.split("the atom-bearing kinds").next())
+        .expect("the members' sentence");
+    let spelled: Vec<&str> = members
+        .split('`')
+        .filter(|token| token.starts_with("1.1.0.1.0.1.0.3."))
+        .collect();
+    let door: Vec<String> =
+        skep_arrangement::deposit_class_types().iter().map(|ty| ty.to_string()).collect();
+    assert_eq!(spelled, door, "the section's members are the door's set, in its order");
+
+    // THE BODIES' TABLE: a row for every body the code parses, its `type`
+    // the string its registry row holds.
+    let mut parsed = vec!["binding", "endpoint"];
+    parsed.extend(
+        skep_registry::RegistrationKind::ALL.iter().map(|k| k.row().type_value.expect("a type")),
+    );
+    for ty in &parsed {
+        assert!(registry.contains(&format!("| `\"{ty}\"` |")), "the bodies' table has a row typed {ty}");
+    }
+    let bodies_rows = raw
+        .split("| row | `type` | members, in order |")
+        .nth(1)
+        .expect("the bodies' table")
+        .lines()
+        .skip(2)
+        .take_while(|line| line.starts_with('|'))
+        .count();
+    assert_eq!(bodies_rows, parsed.len(), "a row a parsed body, and no other");
+
     for fact in [
-        "| `1.1.0.1.0.1.0.3.55` | the BINDING — the registration record | on the bare ordinal (one reading) |",
-        "| `1.1.0.1.0.1.0.3.56` | the ENDPOINT | on the bare ordinal (one reading); no subtype row |",
-        "| `1.1.0.1.0.1.0.3.57` | the TAKEDOWN RECORD — the kind | NONE on the bare ordinal (two readings) |",
-        "| `1.1.0.1.0.1.0.3.57.1` | the takedown record's own BASE reading | on this row |",
-        "| `1.1.0.1.0.1.0.3.57.2` | LIFTED | on this row |",
-        "| `1.1.0.1.0.1.0.3.58` | the POLICY LINK — the kind | NONE on the bare ordinal (five readings) |",
-        "| `1.1.0.1.0.1.0.3.58.1` | the policy link's OWN reading | on this row |",
-        "| `1.1.0.1.0.1.0.3.58.2` | the DISAVOWAL | on this row |",
-        "| `1.1.0.1.0.1.0.3.58.3` | an expulsion's GROUND RECORD | on this row |",
-        "| `1.1.0.1.0.1.0.3.58.4` | a succession's GROUND RECORD | on this row |",
-        "| `1.1.0.1.0.1.0.3.58.5` | the ORG-CHOSEN SUCCESSION POLICY | on this row |",
-        "| `1.1.0.1.0.1.0.3.59` | `successor-of` — the succession claim | on the bare ordinal (one reading) |",
-        "**The deposit class's four members.**",
+        "**The rows**",
+        "**The deposit class's members.**",
+        "**The bodies**",
         "`parse(b)` answers a record only where `b == encode(parse(b))`",
         r#"{"type":"binding","prefix":"1.5"}"#,
         r#"{"type":"endpoint","origins":["https://acme.example","https://acme.example.net","http://<acme's onion host>.onion"]}"#,
         "are what the parse REFUSES",
-        "16 KiB",
+        r#"framed("skep-registration-v1", [door, fresh, shape, node, board])"#,
+        "NO member is a JSON number but a PRINCIPAL",
+        "the three TOGETHER or not at all",
         "crates/skep-registry/tests/vectors/records.json",
+        "`registration.json`",
+        "**The door's policy document**",
+        "crates/skep-registry/tests/vectors/policy.json",
         "**The record grade for registry records**",
         "BOTH of the deposit's positions",
+        "**The registry sequence and its refusals.**",
+        "THE BOARD'S OWN BINDING-WRITING ACCOUNT",
+        "A REQUEST'S SHAPE",
         "| `claim_first` | permanent |",
         "| `signed_session_required` | permanent |",
         "| `not_doc_one` | permanent |",
@@ -1448,23 +1525,57 @@ fn doc_states_the_registry_rows_the_bodies_and_the_refusals() {
         r#"{"code":"registry_refused","detail":"registry_form","disposition":"permanent","op":"make_link","resp":"rejected"}"#,
         "**The audit-view refusal**",
         "The ENDPOINT is NOT a member",
+        "THE VOUCH is NOT a member",
         "**The seeding check**",
-        "**INTERIM PINS**",
+        "**The body cap is a term of the format, per kind**",
+        "64 KiB, 65,536 bytes, for a registration REQUEST of either kind, and 16 KiB, 16,384 bytes, for every other body",
+        "**The family's tokens are pinned**",
         "What this build does NOT carry, by name",
         "The checked set of the write-path check is UNCHANGED",
     ] {
         assert!(registry.contains(fact), "§Registry says {fact:?}");
     }
-    let fixture: Value = serde_json::from_str(
-        &std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../skep-registry/tests/vectors/records.json"),
+    // No stale tally and no interim head stands in the section.
+    for stale in ["twelve", "five kinds", "seven subtype", "the reserve's ordinals", "INTERIM", "four members"] {
+        assert!(!registry.contains(stale), "§Registry no longer says {stale:?}");
+    }
+    // THE AUDIT MEMBERS: each registration row the section names as a
+    // member is a request row, an answer row or the approval — never a
+    // parent's or the kind's address, and never the vouch's.
+    let audit = registry
+        .split("**The audit-view refusal**")
+        .nth(1)
+        .and_then(|rest| rest.split("**The seeding check**").next())
+        .expect("the audit paragraph");
+    for member in ["…3.54.1.1", "…3.54.1.2", "…3.54.2.1", "…3.54.2.2", "…3.54.2.3", "…3.54.4"] {
+        assert!(audit.contains(&format!("`{member}`")), "the audit paragraph names {member}");
+    }
+    for no_member in ["`…3.54`", "`…3.54.1`", "`…3.54.2`", "`…3.54.3`"] {
+        assert!(!audit.contains(no_member), "the audit paragraph names no member at {no_member}");
+    }
+
+    let fixture = |name: &str| -> Value {
+        serde_json::from_str(
+            &std::fs::read_to_string(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../skep-registry/tests/vectors")
+                    .join(name),
+            )
+            .unwrap_or_else(|e| panic!("the vector set {name} the section names exists: {e}")),
         )
-        .expect("the vector set the section names exists"),
-    )
-    .expect("the vector set is JSON");
-    assert_eq!(fixture["cap"].as_u64(), Some(16_384));
-    let vectors = fixture["vectors"].as_array().expect("vectors");
+        .expect("the vector set is JSON")
+    };
+    let records = fixture("records.json");
+    assert_eq!(records["cap"].as_u64(), Some(16_384));
+    assert_eq!(skep_registry::MAX_REGISTRY_RECORD_BYTES, 16_384);
+    assert_eq!(skep_registry::MAX_REGISTRATION_REQUEST_BYTES, 65_536);
+    let registration = fixture("registration.json");
+    for kind in skep_registry::RegistrationKind::ALL {
+        let ty = kind.row().type_value.expect("a type");
+        assert_eq!(registration["caps"][ty].as_u64(), Some(kind.cap() as u64), "{ty}: its cap");
+    }
+    assert!(fixture("policy.json")["vectors"].as_array().is_some_and(|v| !v.is_empty()));
+    let vectors = records["vectors"].as_array().expect("vectors");
     for example in [
         r#"{"type":"binding","prefix":"1.5"}"#,
         r#"{"type":"endpoint","origins":["https://acme.example","https://acme.example.net","http://<acme's onion host>.onion"]}"#,
@@ -1477,15 +1588,17 @@ fn doc_states_the_registry_rows_the_bodies_and_the_refusals() {
     let credentials =
         prose("\n### The claim ceremony and credentials", &["\n### Correlation and idempotency"]);
     assert!(
-        credentials.contains("four members, stated once at §Registry"),
-        "§The claim ceremony and credentials points at the deposit class's four members"
+        credentials.contains("its members stated once at §Registry under §Operations"),
+        "§The claim ceremony and credentials points at the deposit class's members"
     );
     let refusals = prose("\n### Credential refusals", &["\n## Operations"]);
     for fact in [
         "the binding (`1.1.0.1.0.1.0.3.55`)",
         "the takedown record (`1.1.0.1.0.1.0.3.57`)",
         "the policy link (`1.1.0.1.0.1.0.3.58`)",
+        "the registration's request rows, answer rows and approval link, each at its own address (`1.1.0.1.0.1.0.3.54.1.1`",
         "the endpoint (`1.1.0.1.0.1.0.3.56`) OUTSIDE",
+        "the registration's vouch (`1.1.0.1.0.1.0.3.54.3`) OUTSIDE",
         "**The registry sequence's family**",
         "`registry_refused`",
     ] {

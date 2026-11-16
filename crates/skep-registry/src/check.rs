@@ -10,16 +10,20 @@
 //!    the arm was minted on and never its bound, and the sharpest
 //!    non-credential case is a foreign row placed inside the policy link's
 //!    kind — the mail type's, were an allocation to put it there. The
-//!    registry's own subtype rows nest under their kinds by design and are
-//!    no collision.
+//!    registry's own subtype rows nest under their kinds by design, and
+//!    under their parent rows where a subtype is one, and are no collision.
 //! 2. COMPLETENESS (REG-1.29): every kind and every subtype the kinds' home
 //!    names (REG-1.14, REG-1.15) has a row — a subtype's row being a row at
-//!    a prefix UNDER its own kind's row (REG-1.20); a list missing one
-//!    refuses, so a missing row never surfaces at that subtype's first
-//!    deposit.
-//! 3. THE COUNT (REG-1.25): the kind rows against the registry range's five
-//!    ordinals `3.55`–`3.59` — at most five, each a bare ordinal inside the
-//!    range, no two at one ordinal.
+//!    a prefix UNDER the row it stands directly beneath (REG-1.20): its own
+//!    kind's, or its PARENT ROW's where it is a row under a row, the arm
+//!    recursing as REG-1.18's test does and a parent row owing its own row
+//!    like any other; a list missing one refuses, so a missing row never
+//!    surfaces at that subtype's first deposit.
+//! 3. THE COUNT (REG-1.25): the kind rows against the registry range's
+//!    ordinals, `3.54`–`3.59` as the list stands — no more kind rows than
+//!    the range has ordinals, each a bare ordinal inside the range, no two
+//!    at one ordinal. The kinds are counted off the list and against no
+//!    written number.
 //!
 //! The order the arms run in, the refusal that speaks where several hold and
 //! what the hand owes on one are [`seeding_check`]'s contract, stated there.
@@ -37,7 +41,8 @@ pub enum SeedingRefusal {
     /// subtrees meet.
     Disjointness { registry: Address, foreign: Address },
     /// The completeness arm: the row the list does not hold — a kind's own,
-    /// or a subtype's under the kind its subtype names.
+    /// or a subtype's under the row it stands directly beneath, the kind its
+    /// subtype names or its parent row ([`RowOf::above`]).
     Completeness { missing: RowOf },
     /// The count arm: more kind rows than the registry range's ordinals, or
     /// — with `row` named — a kind row that is no bare ordinal inside the
@@ -66,12 +71,10 @@ impl fmt::Display for SeedingRefusal {
                 f,
                 "the registry row {registry} and the foreign commons row {foreign} meet at the subtree grain"
             ),
-            SeedingRefusal::Completeness { missing: RowOf::Kind(kind) } => {
-                write!(f, "{} has no row", kind.name())
-            }
-            SeedingRefusal::Completeness { missing: RowOf::Subtype(subtype) } => {
-                write!(f, "{} has no row under {}", subtype.name(), subtype.kind().name())
-            }
+            SeedingRefusal::Completeness { missing } => match missing.above() {
+                None => write!(f, "{} has no row", missing.name()),
+                Some(above) => write!(f, "{} has no row under {}", missing.name(), above.name()),
+            },
             SeedingRefusal::Count { kind_row_count, row: None } => write!(
                 f,
                 "{kind_row_count} kind rows against the registry range's {} ordinals 3.{}-3.{}",
@@ -108,12 +111,15 @@ impl std::error::Error for SeedingRefusal {}
 /// other, an entry AT a row's address included — with the first row of
 /// `rows` it meets. COMPLETENESS names the first kind of [`Kind::ALL`] with
 /// no row of its own, and only where every kind has one, the first subtype
-/// of [`Subtype::ALL`] with no row of its own strictly under its kind's —
-/// the FIRST row that kind has in `rows`. THE COUNT names an excess of kind
-/// rows over the registry range's five ordinals, `3.55`–`3.59`, ahead of any
-/// one row, then the first kind row of `rows` that is no bare ordinal of
-/// that range — no address [`crate::commons_type`] spells from one of its
-/// ordinals alone — or stands at one an earlier kind row took.
+/// of [`Subtype::ALL`] with no row of its own strictly under the row it
+/// stands directly beneath ([`RowOf::above`]) — its kind's, or its parent
+/// row's — the FIRST row that kind or that parent has in `rows`; a parent
+/// stands ahead of the rows beneath it in `Subtype::ALL`, so a parent row
+/// missing or misplaced speaks ahead of any row under it. THE COUNT names an
+/// excess of kind rows over the registry range's ordinals, `3.54`–`3.59`,
+/// ahead of any one row, then the first kind row of `rows` that is no bare
+/// ordinal of that range — no address [`crate::commons_type`] spells from
+/// one of its ordinals alone — or stands at one an earlier kind row took.
 ///
 /// WHAT THE HAND OWES IN `foreign`: REG-1.31's domain, every address in it
 /// read as foreign. A registry row spelled a second time — the insert door's
@@ -139,23 +145,30 @@ pub fn seeding_check<'a>(
         }
     }
     // 2 — COMPLETENESS: every kind's own row, then every subtype's row at a
-    // prefix under its kind's.
+    // prefix under the row it stands directly beneath — its kind's, or its
+    // parent row's (REG-1.29: the arm recurses to a row under a parent row).
     let row_of = |of: RowOf| rows.iter().find(|r| r.of == of);
-    for kind in Kind::ALL {
+    for &kind in Kind::ALL {
         if row_of(RowOf::Kind(kind)).is_none() {
             return Err(SeedingRefusal::Completeness { missing: RowOf::Kind(kind) });
         }
     }
-    for subtype in Subtype::ALL {
-        let kind_row =
-            row_of(RowOf::Kind(subtype.kind())).expect("every kind's row stands, checked above");
+    for &subtype in Subtype::ALL {
+        let of = RowOf::Subtype(subtype);
+        let above = of.above().expect("a subtype row stands beneath a row");
+        // Every kind's row stands, checked above, and a parent row is listed
+        // ahead of the rows beneath it; a list that held neither is short
+        // the row above, which is then the one named.
+        let Some(above_row) = row_of(above) else {
+            return Err(SeedingRefusal::Completeness { missing: above });
+        };
         let present = rows.iter().any(|r| {
-            r.of == RowOf::Subtype(subtype)
-                && r.address != kind_row.address
-                && is_prefix(kind_row.address.tumbler(), r.address.tumbler())
+            r.of == of
+                && r.address != above_row.address
+                && is_prefix(above_row.address.tumbler(), r.address.tumbler())
         });
         if !present {
-            return Err(SeedingRefusal::Completeness { missing: RowOf::Subtype(subtype) });
+            return Err(SeedingRefusal::Completeness { missing: of });
         }
     }
     // 3 — THE COUNT: the kind rows against the registry range's ordinals.

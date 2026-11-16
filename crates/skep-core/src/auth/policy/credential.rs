@@ -573,7 +573,7 @@ fn names_system_account(world: &World, dep: &DepositSpans) -> bool {
 /// and reaches no claimed board's record grade, so it is *unrepresentable*
 /// here rather than asserted away: a `Claim` arm, and an
 /// `attestation_required` answered for one, cannot be written. The
-/// disavowal's kind joins at its RES; the registry's two kinds are their own
+/// disavowal's kind joins at its RES; the registry's kinds are their own
 /// sequence's (`policy/registry.rs`), whose trial is [`verify_record_sig`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RecordKind {

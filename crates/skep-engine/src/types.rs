@@ -3,9 +3,10 @@
 //! They are never keyed on as registered M7 types, so `TypeRegistry` is
 //! untouched by every one of them. Each is an element of the ghost document's
 //! subspace 3 —
-//! `1.1.0.1.0.1 · 0 · 3 · ordinal`, or one component deeper for a registry
-//! subtype row — the core vocabulary's home (`commons-map.md`), where the
-//! credential types (`3.{1,2,3}`) sit first.
+//! `1.1.0.1.0.1 · 0 · 3 · ordinal`, one component deeper for a registry
+//! subtype row and two for a row under a registry parent row — the core
+//! vocabulary's home (`commons-map.md`), where the credential types
+//! (`3.{1,2,3}`) sit first.
 //!
 //! The credential types are pinned here too, since the World seats the
 //! identity fold (AUTH-2.79): enroll `3.1`, retire `3.2` and claim `3.3`
@@ -16,8 +17,9 @@
 //! set the insert door tests a deposit declaration's class type against
 //! (PUB-2.11; RES-249, RES-261), M5 sitting below this crate — and the
 //! ledger's tests hold M5's set to be exactly the pins it spells again,
-//! member for member, and prefix-free against every other, so a pin that
-//! joins cannot land on, above or beneath a deposit-class type unnoticed.
+//! member for member, and prefix-free against every other but the registry
+//! rows a member nests under by design, so a pin that joins cannot land on,
+//! above or beneath a deposit-class type unnoticed.
 //!
 //! The consumers are the engine's own reads ([`IDENTITY_TYPES`] for the
 //! identity slice; [`t_grant`] and [`t_replaces`] for the grant fold,
@@ -48,18 +50,21 @@
 //! correspondence built by `commons_subtype` as `commons_type` builds a
 //! type's.
 //!
-//! The registry's twelve rows (REG-1.14, REG-1.15; commons-map's table of
-//! them) are `skep-registry`'s table, read through readers here —
-//! [`t_binding`] … [`t_succession_policy`] — so one ledger names every
+//! The registry's rows (REG-1.14, REG-1.15; commons-map's table of them)
+//! are `skep-registry`'s table, read through readers here —
+//! [`t_registration`] … [`t_succession_policy`] — so one ledger names every
 //! commons pin the engine or the daemon keys on; [`t_successor_of`] stays
 //! the engine's own pin, the registry's fourth kind, and the tests hold it
 //! equal to the crate's row. The insert door's deposit class spells the
-//! binding and the endpoint a second time, M5 sitting below this crate, and
-//! the daemon's suite holds those equal as it holds the credential pair. The
-//! registry's subtype rows nest under their kinds by prefix (REG-1.20) — the
-//! one prefix relation the ledger's guarantee below admits, by design: a
-//! consumer recognizing a kind's subtypes by prefix reads a subtype row as
-//! its kind's member, which is what REG-1.21 wants of it.
+//! registry's parsed rows a second time — the binding, the endpoint and the
+//! registration's six deposit-carrying rows — M5 sitting below this crate,
+//! and the ledger's tests and the daemon's suite hold those equal as they
+//! hold the credential pair. The registry's subtype rows nest under their
+//! kinds by prefix, and a row under a parent row under that parent
+//! (REG-1.20) — the one prefix relation the ledger's guarantee below
+//! admits, by design: a consumer recognizing a kind's subtypes by prefix
+//! reads a subtype row as its kind's member, which is what REG-1.21 wants
+//! of it.
 //!
 //! A pin is held, not manufactured per call: each reader below hands back a
 //! borrow of one process-wide value, so the ledger is one instance and not
@@ -72,8 +77,8 @@
 //!
 //! **The guarantee.** The ledger maintains it, and it is the reason a pin is
 //! a decision about all of them: the pins are pairwise distinct and pairwise
-//! prefix-free — but for a registry subtype row under its own kind's row,
-//! the nesting the registry designs. A consumer that recognizes a class's
+//! prefix-free — but for a registry subtype row under its own kind's row
+//! and under its own parent row, the nesting the registry designs. A consumer that recognizes a class's
 //! subtypes by prefix — the daemon's write path does, at every pin it
 //! refuses a `nullify` at — relies on it, so a pin sitting under another's
 //! prefix makes one class swallow the other and silently widens or narrows a
@@ -212,7 +217,7 @@ pub fn t_edition() -> &'static Address {
 /// It is `1.1.0.1.0.1.0.3.59` (PUB-7.63; PUB-6.64's member), and the
 /// registry's fourth kind, the succession claim at the fork's seat
 /// (REG-1.14), pinned where the build has it: commons-map's table of the
-/// registry's twelve rows reads `3.59` as this pin, and the ledger's tests
+/// registry's rows reads `3.59` as this pin, and the ledger's tests
 /// hold it equal to `skep-registry`'s own row
 /// ([`skep_registry::t_successor_of`]).
 ///
@@ -224,6 +229,84 @@ pub fn t_successor_of() -> &'static Address {
 }
 
 // ── the registry's rows (REG-1.14, REG-1.15), `skep-registry`'s table ────
+
+/// Returns the registration's kind: `1.1.0.1.0.1.0.3.54`.
+///
+/// No deposit rides the bare ordinal (four readings, REG-1.18): a door's
+/// admission records are read through the rows under it (REG-4.67). No
+/// class sits at it — the write path refuses a `nullify` at the request
+/// rows, the answer rows and the approval, each at its own address, and
+/// admits the vouch's (REG-1.46).
+pub fn t_registration() -> &'static Address {
+    skep_registry::t_registration()
+}
+
+/// Returns the registration's request: `1.1.0.1.0.1.0.3.54.1`.
+///
+/// It is a parent row: its kinds are rows beneath it, and no deposit rides
+/// it (REG-1.18).
+pub fn t_request() -> &'static Address {
+    skep_registry::t_request()
+}
+
+/// Returns the request's fresh kind: `1.1.0.1.0.1.0.3.54.1.1`.
+///
+/// The insert door's deposit class holds it, the registry sequence verifies
+/// its record's `sig` (REG-1.23), and the write path refuses a `nullify` at
+/// it (REG-1.43, REG-1.46).
+pub fn t_request_fresh() -> &'static Address {
+    skep_registry::t_request_fresh()
+}
+
+/// Returns the request's board-carries-on kind: `1.1.0.1.0.1.0.3.54.1.2`.
+///
+/// It is held as the fresh kind is, at its own address.
+pub fn t_request_board_carries_on() -> &'static Address {
+    skep_registry::t_request_board_carries_on()
+}
+
+/// Returns the registration's reply: `1.1.0.1.0.1.0.3.54.2`.
+///
+/// It is a parent row: its answers are rows beneath it, and no deposit
+/// rides it (REG-1.18).
+pub fn t_reply() -> &'static Address {
+    skep_registry::t_reply()
+}
+
+/// Returns the approved answer: `1.1.0.1.0.1.0.3.54.2.1`.
+///
+/// The insert door's deposit class holds it, and the write path refuses a
+/// `nullify` at it: a correction is a further answer (REG-1.43).
+pub fn t_reply_approved() -> &'static Address {
+    skep_registry::t_reply_approved()
+}
+
+/// Returns the refused answer: `1.1.0.1.0.1.0.3.54.2.2`.
+pub fn t_reply_refused() -> &'static Address {
+    skep_registry::t_reply_refused()
+}
+
+/// Returns the denied answer: `1.1.0.1.0.1.0.3.54.2.3`.
+pub fn t_reply_denied() -> &'static Address {
+    skep_registry::t_reply_denied()
+}
+
+/// Returns the vouch: `1.1.0.1.0.1.0.3.54.3`.
+///
+/// The insert door's deposit class holds it; its `nullify` is admitted —
+/// the vouch is read on the active view, its voucher's own retraction its
+/// withdrawal (REG-1.45, REG-4.185).
+pub fn t_vouch() -> &'static Address {
+    skep_registry::t_vouch()
+}
+
+/// Returns the approval: `1.1.0.1.0.1.0.3.54.4`.
+///
+/// It is a link-alone row, tying the account a registrar made to the
+/// request it answers; the write path refuses a `nullify` at it (REG-1.43).
+pub fn t_approval() -> &'static Address {
+    skep_registry::t_approval()
+}
 
 /// Returns the binding: `1.1.0.1.0.1.0.3.55`.
 ///

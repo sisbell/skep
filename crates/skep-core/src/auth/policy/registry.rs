@@ -1,10 +1,11 @@
 //! The registry sequence's producers: the record grade for registry records.
 //!
 //! Its parts (signed ops, 2b; REG-1.86 (e); SO-I4, SO-I2) are the
-//! registry's two record-deposit kinds ([`RegistryKind`],
-//! [`registry_deposit_kind`]), the route of their links
-//! ([`deposits_registry_link`], the credential route's sibling, the two sets
-//! disjoint by construction), the sequence's ordered admission
+//! registry's record-deposit kinds ([`RegistryKind`],
+//! [`registry_deposit_kind`]) — the binding, the endpoint and the
+//! registration kind's six deposit-carrying rows (REG-1.23) — the route of
+//! their links ([`deposits_registry_link`], the credential route's sibling,
+//! the two sets disjoint by construction), the sequence's ordered admission
 //! ([`registry_admission`]) and its refusal vocabulary ([`RegistryRefusal`])
 //! — and, beside them, the seeding check as the genesis hand runs it
 //! ([`genesis_seeding_check`]), over the parent's whole domain as this
@@ -17,11 +18,29 @@
 //! kinds), and its `make_link`, routed here, where the record's own `sig` is
 //! verified under the set that opens its home — the claimant's for a binding
 //! in the registrar's doc 1, the node account's own for an endpoint in its
+//! doc 1, the writing hand's own for a request, an answer or a vouch in its
 //! doc 1 — and the link commits with its marker slot empty by route
 //! (REG-1.86 (e): "at both of the deposit's positions"). `replaces` rides
-//! *inside* the signed body for these two kinds (REG-1.86 (g)) and no
-//! `replaces` link is written by either: the link's own `replaces` member
-//! is a form fault.
+//! *inside* the signed body where a kind carries one (REG-1.86 (g)) and no
+//! `replaces` link is written by any: the link's own `replaces` member is a
+//! form fault.
+//!
+//! The sequence does for each registration row what it does for a binding
+//! (REG-1.23): the home is a doc 1, the body's `type` agrees with the slot,
+//! the body is canonical and under its row's cap, and the `sig` verifies
+//! under the set that opens the home's account. What differs is the `to`
+//! and one check more. A request's and a vouch's `to` is the board's own
+//! binding-writing account — this board's claimant, as the registrar's gate
+//! reads it (`plain.rs`'s `registrar_refusal`) — and an answer's is one
+//! address, of which the board checks no more: whether it names a request
+//! is the reader's (REG-4.78, REG-4.81, REG-4.185). And of a request the
+//! board checks that the row its link is typed is the row its signed
+//! `shape` names (REG-4.104), since a link's type is the writing hand's and
+//! the applicant's signature does not cover it. The registration's approval
+//! link, a link alone, is no kind here: it deposits no atom and takes the
+//! plain path at the entry grade. Whether a request's home is an admitted
+//! one, and the shape guard ahead of its bytes, stay the console's
+//! (REG-4.78).
 
 use skep_address::{Address, Span};
 use skep_engine::types::{t_binding, t_endpoint};
@@ -29,34 +48,97 @@ use skep_febe::{Disposition, Op};
 use skep_identity::{record_bytes, single_address, Fingerprint, HasIdentity, Inert, PayloadError};
 use skep_links::SlotArg;
 use skep_namespace::HasM3;
-use skep_registry::{BodyKind, SeedingRefusal};
+use skep_registry::{BodyKind, RegistrationKind, SeedingRefusal};
 
 use super::credential::{verify_record_sig, RecordTrial};
 use super::{addr_spans, homed_in_doc_one, AttestFault, CredentialRefusal};
 use crate::auth::LockRead;
 use skep_engine::World;
 
-/// The registry's record-deposit kinds: the binding and the endpoint.
+/// The registry's record-deposit kinds: the binding, the endpoint and the
+/// registration's deposit-carrying rows.
 ///
-/// They are the two kinds whose body the daemon parses and whose record
-/// carries a `sig` (REG-1.14's first two, the deposit class's third and
-/// fourth members). The five other body-bearing rows and the three
-/// link-alone rows answer no kind here: a declared `insert` under one of
-/// them into a published document is refused `published_target` at M5's
-/// door, as a declaration under any type outside the deposit class is, and
-/// a bare `make_link` typed one is an ordinary link write on the plain path.
+/// They are the kinds whose body the daemon parses and whose record carries
+/// a `sig` (REG-1.23): REG-1.14's first two, and the six rows a
+/// registration's records ride — a request's two kinds, the three answers
+/// and the vouch — each a member of the insert door's deposit class. The
+/// five other body-bearing rows and the link-alone rows answer no kind
+/// here, nor do the rows that carry no deposit — the bare ordinals of the
+/// kinds that read more than one way and the registration's parent rows
+/// `request` and `reply`: a declared `insert` under one of them into a
+/// published document is refused `published_target` at M5's door, as a
+/// declaration under any type outside the deposit class is, and a bare
+/// `make_link` typed one — the registration's approval among them — is an
+/// ordinary link write on the plain path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RegistryKind {
+    /// The binding.
     Binding,
+    /// The endpoint.
     Endpoint,
+    /// A deposit-carrying row of the registration kind.
+    Registration(RegistrationKind),
 }
 
 impl RegistryKind {
-    /// Returns the body this kind's record carries, the parse's own kind.
-    pub(super) fn body_kind(self) -> BodyKind {
+    /// Parses the record `bytes` spell under this kind, the parse's own.
+    ///
+    /// # Errors
+    ///
+    /// The parser's refusal, its cause the one the daemon joins to
+    /// `malformed_record`: the binding's and the endpoint's parse for those
+    /// two, the registration's for its six.
+    pub(super) fn parse(self, bytes: &[u8]) -> Result<ParsedRecord, skep_registry::ParseRefusal> {
         match self {
-            RegistryKind::Binding => BodyKind::Binding,
-            RegistryKind::Endpoint => BodyKind::Endpoint,
+            RegistryKind::Binding => {
+                skep_registry::parse(BodyKind::Binding, bytes).map(ParsedRecord::Plain)
+            }
+            RegistryKind::Endpoint => {
+                skep_registry::parse(BodyKind::Endpoint, bytes).map(ParsedRecord::Plain)
+            }
+            RegistryKind::Registration(kind) => {
+                skep_registry::parse_registration(kind, bytes).map(ParsedRecord::Registration)
+            }
+        }
+    }
+}
+
+/// A registry record as its kind's parse answered it.
+///
+/// It is what the two readers of a registry record's bytes take: the entry
+/// check's exemption of the record's atom reads whether it carries a `sig`,
+/// and the registry sequence the `sig`, the sig-less projection it was made
+/// over, and a request's signed `shape`.
+pub(super) enum ParsedRecord {
+    /// A binding or an endpoint.
+    Plain(skep_registry::Record),
+    /// A record of a registration row.
+    Registration(skep_registry::RegistrationRecord),
+}
+
+impl ParsedRecord {
+    /// Returns the `sig` member, where the record carries one.
+    pub(super) fn sig(&self) -> Option<&str> {
+        match self {
+            ParsedRecord::Plain(record) => record.sig.as_deref(),
+            ParsedRecord::Registration(record) => record.sig.as_deref(),
+        }
+    }
+
+    /// Returns the sig-less canonical projection the `sig` ranges over.
+    fn canonical_sigless(&self) -> String {
+        match self {
+            ParsedRecord::Plain(record) => record.canonical_sigless(),
+            ParsedRecord::Registration(record) => record.canonical_sigless(),
+        }
+    }
+
+    /// Returns a request's signed `shape` member, for a request of either
+    /// kind; `None` for every other record.
+    fn shape(&self) -> Option<&str> {
+        match self {
+            ParsedRecord::Plain(_) => None,
+            ParsedRecord::Registration(record) => record.body.request().map(|r| r.shape),
         }
     }
 }
@@ -64,12 +146,15 @@ impl RegistryKind {
 /// Returns the registry's record-deposit kind that `ty` names, if any.
 ///
 /// `Some(kind)` where `ty` — a type slot in M7's deposited form — names one
-/// of the two kinds by exact unit-subtree equality on the kind's bare
-/// ordinal (REG-1.21: a kind is recognized at the type slot as a kind is,
-/// and the precheck matches by unit-subtree equality, AUTH-2.22): one span,
-/// `Equal` to the subtree of the row's own address, [`single_address`]'s
-/// reading. A subtype or any other row answers `None`. Read by every arm
-/// that tells a registry deposit apart: the entry check's exemption of the
+/// of the kinds by exact unit-subtree equality on the row's own address
+/// (REG-1.21: a row is recognized at the type slot as a kind is, and the
+/// precheck matches by unit-subtree equality, AUTH-2.22): one span, `Equal`
+/// to the subtree of the row's own address, [`single_address`]'s reading —
+/// the binding's or the endpoint's bare ordinal, or a registration row that
+/// carries a body, at whatever depth it sits (`RegistrationKind::at`). A row
+/// above one of those — the registration's kind row, its parent rows — a
+/// row beneath one, and any other row answer `None`. Read by every arm that
+/// tells a registry deposit apart: the entry check's exemption of the
 /// record's atom, the pre-claim gate's refusal of a registry-kind deposit
 /// into the system account, and the route of its link to the registry
 /// sequence — stated once so the readers cannot part.
@@ -82,7 +167,7 @@ pub(super) fn registry_deposit_kind<'s>(
     } else if named == *t_endpoint() {
         Some(RegistryKind::Endpoint)
     } else {
-        None
+        RegistrationKind::at(&named).map(RegistryKind::Registration)
     }
 }
 
@@ -202,8 +287,12 @@ pub enum RegistryRefusal {
     /// more than one address — or, for a binding, one that is no registered
     /// account on this board (REG-2.20; a targetless binding is the one
     /// spelling of "no account", REG-2.21), or, for an endpoint, any address
-    /// at all (its carriage: a link from the atom, no target). Token
-    /// `registry_form`, permanent.
+    /// at all (its carriage: a link from the atom, no target); for a
+    /// registration request or a vouch, anything but the board's own
+    /// binding-writing account (REG-4.78, REG-4.185); for an answer, no
+    /// address at all (REG-4.81). And a request whose link is typed another
+    /// row than its signed `shape` names (REG-4.104). Token `registry_form`,
+    /// permanent.
     Form,
     /// The record value: the atom's bytes are no record of the slot's kind.
     ///
@@ -288,7 +377,8 @@ fn home_of(op: &Op) -> Option<&Address> {
 /// Returns the deposit where `op` has the form's shape half, else `None`.
 ///
 /// The shape is an address-form `make_link` with no `replaces` member,
-/// `from` one address, `to` empty or one address, typed a registry kind.
+/// `from` one address, `to` empty or one address, typed a registry kind —
+/// one address, the row's own, so the frame names it.
 fn deposit_of(op: &Op) -> Option<RegistryDeposit<'_>> {
     let Op::MakeLink { home, from, to, ty, replaces: None } = op else { return None };
     let (SlotArg::Addrs(from), SlotArg::Addrs(to), SlotArg::Addrs(ty)) = (from, to, ty) else {
@@ -324,18 +414,27 @@ fn deposit_of(op: &Op) -> Option<RegistryDeposit<'_>> {
 /// 1. The home pin — the link's home is a doc 1 (`homed_in_doc_one`), else
 ///    `not_doc_one`.
 /// 2. The form — an address-form `make_link` with no `replaces` member, its
-///    `from` one atom (REG-2.23), its `to` empty or one address; a binding's
-///    target a registered account on this board, M3's seat read answering
-///    exactly it (REG-2.20) or none (REG-2.21); an endpoint's target none
-///    (REG-2.26's carriage) — else `registry_form`.
+///    `from` one atom (REG-2.23), its `to` empty or one address, and the
+///    `to` the row's: a binding's a registered account on this board, M3's
+///    seat read answering exactly it (REG-2.20) or none (REG-2.21); an
+///    endpoint's none (REG-2.26's carriage); a registration request's and a
+///    vouch's the board's own binding-writing account, this board's
+///    claimant, and no other (REG-4.78, REG-4.185); an answer's one address
+///    — the board checks that it is one and no more, whether it names a
+///    request being the reader's (REG-4.81) — else `registry_form`.
 /// 3. The record value — the atom's bytes off the link's `from`, the record
 ///    grade's one read ([`record_bytes`]), parsed by the kind the slot names
-///    under the canonical rule; a refusal `malformed_record:<cause>` — a
-///    `type` that is not the slot's kind among them. A `from` the read
-///    cannot walk — a position outside the home, an unoccupied one — is
-///    the form's fault; bytes past the read's own cap are the parser's.
-/// 4. No `sig` → `attestation_required`.
-/// 5. The trial — the blob, the frame, the candidates and the trial, the
+///    under the canonical rule and under that kind's cap; a refusal
+///    `malformed_record:<cause>` — a `type` that is not the slot's row among
+///    them. A `from` the read cannot walk — a position outside the home, an
+///    unoccupied one — is the form's fault; bytes past the read's own cap
+///    are the parser's.
+/// 4. A request's shape — the row its link is typed is the row its signed
+///    `shape` names, by the row's ordinal path (REG-4.104; REG-1.86 (c)),
+///    else `registry_form`: a payload a transcribing hand typed another row
+///    is refused here, ahead of every approval.
+/// 5. No `sig` → `attestation_required`.
+/// 6. The trial — the blob, the frame, the candidates and the trial, the
 ///    credential record grade's own steps (`verify_record_sig`), each fault
 ///    answered `attestation_invalid:<cause>`: the `record` frame over the
 ///    home's account (ω over the home), the home, the type address and the
@@ -350,7 +449,7 @@ fn deposit_of(op: &Op) -> Option<RegistryDeposit<'_>> {
 /// # Panics
 ///
 /// Panics in a debug build where the home the pin found as a doc 1 has no
-/// owner, a premise broken (step 5).
+/// owner, a premise broken (step 6).
 pub fn registry_admission(
     _lock: &LockRead<'_>,
     world: &World,
@@ -358,9 +457,9 @@ pub fn registry_admission(
     signer: Option<&Fingerprint>,
 ) -> Result<(), RegistryRefusal> {
     // 0 — above the claim, from a signed session.
-    if world.identity().claimant().is_none() {
+    let Some(claimant) = world.identity().claimant() else {
         return Err(RegistryRefusal::ClaimFirst);
-    }
+    };
     if signer.is_none() {
         return Err(RegistryRefusal::SignedSessionRequired);
     }
@@ -371,17 +470,31 @@ pub fn registry_admission(
     }
     // 2 — the form: the shape, then the target by kind.
     let dep = deposit_of(op).ok_or(RegistryRefusal::Form)?;
-    match (dep.kind, dep.to) {
-        (RegistryKind::Binding, None) => {}
+    let target_is_the_rows = match (dep.kind, dep.to) {
+        (RegistryKind::Binding, None) => true,
         (RegistryKind::Binding, Some(account)) => {
-            let seated =
-                world.m3().account_seat(account).is_some_and(|(prefix, _)| prefix == account);
-            if !seated {
-                return Err(RegistryRefusal::Form);
-            }
+            world.m3().account_seat(account).is_some_and(|(prefix, _)| prefix == account)
         }
-        (RegistryKind::Endpoint, None) => {}
-        (RegistryKind::Endpoint, Some(_)) => return Err(RegistryRefusal::Form),
+        (RegistryKind::Endpoint, to) => to.is_none(),
+        // A request of either kind and a vouch name the board's own
+        // binding-writing account, which a daemon knows as its claimant.
+        (
+            RegistryKind::Registration(
+                RegistrationKind::Fresh | RegistrationKind::BoardCarriesOn | RegistrationKind::Vouch,
+            ),
+            to,
+        ) => to == Some(claimant),
+        // An answer names one address, the request's link's: that it is one
+        // is all the board checks.
+        (
+            RegistryKind::Registration(
+                RegistrationKind::Approved | RegistrationKind::Refused | RegistrationKind::Denied,
+            ),
+            to,
+        ) => to.is_some(),
+    };
+    if !target_is_the_rows {
+        return Err(RegistryRefusal::Form);
     }
     // 3 — the record value, by the kind the slot names, read over the world
     // as the fold's ctx (the engine's `FoldCtx for World`).
@@ -392,13 +505,18 @@ pub fn registry_admission(
         }
         Err(_) => return Err(RegistryRefusal::Form),
     };
-    let record = skep_registry::parse(dep.kind.body_kind(), &bytes)
-        .map_err(RegistryRefusal::MalformedRecord)?;
-    // 4 — no `sig` at all.
-    let Some(sig) = record.sig.as_deref() else {
+    let record = dep.kind.parse(&bytes).map_err(RegistryRefusal::MalformedRecord)?;
+    // 4 — a request's signed `shape` names the row its link is typed.
+    if let (RegistryKind::Registration(kind), Some(shape)) = (dep.kind, record.shape()) {
+        if shape != kind.row().ordinal_path() {
+            return Err(RegistryRefusal::Form);
+        }
+    }
+    // 5 — no `sig` at all.
+    let Some(sig) = record.sig() else {
         return Err(RegistryRefusal::AttestationRequired);
     };
-    // 5 — the trial under the set that opens the home's account. The home
+    // 6 — the trial under the set that opens the home's account. The home
     // has an owner — the home pin found its doc 1 by ω — so an absence is a
     // premise broken, answered fail-closed and asserted.
     let Some(home_account) = world.m3().effective_owner_prefix(dep.home) else {
@@ -427,8 +545,8 @@ pub fn registry_admission(
 ///
 /// It is every commons row the build holds that the registry does not
 /// itself allocate: the build's one commons table,
-/// [`skep_registry::vocabulary`], less the registry's twelve rows, each
-/// entry borrowed from the table. The table holds the twelve a second time,
+/// [`skep_registry::vocabulary`], less the registry's rows, each
+/// entry borrowed from the table. The table holds the rows a second time,
 /// at the addresses `rows.rs` spells and under their own names, and holds
 /// each address once (its unit suite), so the filter — equality on a
 /// registry row, [`skep_registry::row_at`] — sets apart that second
@@ -481,11 +599,31 @@ mod tests {
     /// They are disjoint by construction: over every registry row, the three
     /// credential pins and the ordinal `…3.4`, no type slot answers both
     /// `record_deposit_kind` and `registry_deposit_kind`; the registry set
-    /// holds the binding and the endpoint alone; and a `make_link` so typed
-    /// is routed to exactly one sequence.
+    /// holds the binding, the endpoint and the registration's six
+    /// deposit-carrying rows, each at its own address — and no row above
+    /// one, the registration's kind row and its parent rows `request` and
+    /// `reply`, nor its approval, a link alone, nor a row beneath a member;
+    /// and a `make_link` so typed is routed to exactly one sequence.
     #[test]
     fn the_registry_set_and_the_credential_set_are_disjoint() {
+        use skep_engine::types::{
+            t_reply_approved, t_reply_denied, t_reply_refused, t_request_board_carries_on,
+            t_request_fresh, t_vouch,
+        };
         let doc = addr_of(&[1, 0, 1, 0, 1]);
+        let members = [
+            (t_binding(), RegistryKind::Binding),
+            (t_endpoint(), RegistryKind::Endpoint),
+            (t_request_fresh(), RegistryKind::Registration(RegistrationKind::Fresh)),
+            (
+                t_request_board_carries_on(),
+                RegistryKind::Registration(RegistrationKind::BoardCarriesOn),
+            ),
+            (t_reply_approved(), RegistryKind::Registration(RegistrationKind::Approved)),
+            (t_reply_refused(), RegistryKind::Registration(RegistrationKind::Refused)),
+            (t_reply_denied(), RegistryKind::Registration(RegistrationKind::Denied)),
+            (t_vouch(), RegistryKind::Registration(RegistrationKind::Vouch)),
+        ];
         let mut types: Vec<Address> =
             skep_registry::rows().iter().map(|r| r.address.clone()).collect();
         types.extend([
@@ -493,18 +631,16 @@ mod tests {
             t_retire().clone(),
             t_claim().clone(),
             addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 4]),
+            addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 54, 1, 1, 1]),
+            addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 54, 1, 3]),
+            addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 55, 1]),
         ]);
+        let mut routed = 0;
         for ty in types {
             let slot = addr_spans(std::slice::from_ref(&ty));
             let (credential, registry) = (record_deposit_kind(&slot), registry_deposit_kind(&slot));
             assert!(!(credential.is_some() && registry.is_some()), "{}", ty.tumbler());
-            let expected = if ty == *t_binding() {
-                Some(RegistryKind::Binding)
-            } else if ty == *t_endpoint() {
-                Some(RegistryKind::Endpoint)
-            } else {
-                None
-            };
+            let expected = members.iter().find(|(member, _)| **member == ty).map(|(_, kind)| *kind);
             assert_eq!(registry, expected, "{}", ty.tumbler());
             let link = Op::MakeLink {
                 home: doc.clone(),
@@ -515,13 +651,26 @@ mod tests {
             };
             assert_eq!(deposits_registry_link(&link), registry.is_some(), "{}", ty.tumbler());
             assert!(!(deposits_registry_link(&link) && deposits_credential_link(&link)));
+            routed += registry.is_some() as usize;
+        }
+        assert_eq!(routed, members.len(), "every member is a row of the table, and routed");
+        // The registry set is the insert door's set less the credential
+        // pair: a row the door admits an atom under is a row whose link the
+        // sequence takes, and no other.
+        let door: Vec<&Address> = deposit_class_types()
+            .iter()
+            .filter(|ty| skep_registry::row_at(ty).is_some())
+            .collect();
+        assert_eq!(door.len(), members.len());
+        for (member, _) in members {
+            assert!(door.contains(&member), "{member} is a member of the insert door's set");
         }
     }
 
     /// Checks that the shipped domain passes the seeding check.
     ///
     /// The domain is every row of the commons table but the registry's
-    /// twelve, and holds no registry row (REG-1.31); the mail type `3.15` and
+    /// own, and holds no registry row (REG-1.31); the mail type `3.15` and
     /// the media cell kinds `3.88` and `3.89`, each read off the table by its
     /// name, stand in it; and the check over it passes, so a daemon opens
     /// (REG-1.32).
@@ -531,7 +680,7 @@ mod tests {
         assert_eq!(
             domain.len(),
             skep_registry::vocabulary().len() - skep_registry::rows().len(),
-            "the table's rows less the registry's twelve"
+            "the table's rows less the registry's own"
         );
         assert!(domain.iter().all(|a| skep_registry::row_at(a).is_none()));
         for (ordinal, name) in [(15, "mail"), (88, "blind-cell"), (89, "picture-cell")] {

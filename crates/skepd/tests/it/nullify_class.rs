@@ -571,6 +571,90 @@ fn the_registry_classes_refuse_a_nullify_and_the_endpoints_commits() {
     sd.shutdown();
 }
 
+/// REG-1.43 to REG-1.46 — THE REGISTRATION's RECORDS REST ON THE AUDIT VIEW,
+/// AND ITS VOUCH ON THE ACTIVE ONE. A `nullify` of a REQUEST of either kind
+/// by its writer, of each of the three ANSWERS and of the APPROVAL link by
+/// the registrar — each by the owner of its own home — is refused
+/// `nullify_audit_view`, permanent, the link standing and nothing
+/// committed: they are read at their own positions with the attestations,
+/// and a correction is a further answer. THE VOUCH's `nullify` from its own
+/// home COMMITS — it is its voucher's withdrawal (REG-4.185) — which is why
+/// the class sits at each row's own address and at no address above them,
+/// where a prefix would take the vouch with it. And the rows that carry no
+/// deposit are no members (REG-1.22, REG-1.46): a link typed the kind's own
+/// row or a parent row, which names no record, is retracted by its owner.
+#[test]
+fn the_registration_rows_refuse_a_nullify_and_the_vouchs_lands() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let console = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let (writer_account, _) = bootstrap_delegate(port, 972);
+    let writer = hire(port, &console, CLAIMANT_DOC1, &writer_account, 972, &distinct_key(72));
+    let writer_doc1 = create_doc(port, &writer, &writer_account);
+    let record = |signed: &str, home: &str, ty: &str, to: &str, body: String| -> String {
+        let (_, v) = deposit_registry_record(port, signed, home, ty, &[to], &body);
+        acked_addr(expect_resp(&v, "ack_addr"))
+    };
+    let shape = |ty: &str| ty.strip_prefix("1.1.0.1.0.1.0.").expect("a commons type").to_string();
+    let request = |ty: &str| record(&writer, &writer_doc1, ty, CLAIMANT_ACCOUNT, request_body(ty, &shape(ty)));
+    let fresh = request(T_REQUEST_FRESH);
+    let carries_on = request(T_REQUEST_BOARD_CARRIES_ON);
+    let answer = |ty: &str| record(&console, CLAIMANT_DOC1, ty, &fresh, answer_body(ty));
+    let (approved, refused, denied) =
+        (answer(T_REPLY_APPROVED), answer(T_REPLY_REFUSED), answer(T_REPLY_DENIED));
+    let vouch = record(&writer, &writer_doc1, T_VOUCH, CLAIMANT_ACCOUNT, vouch_body(None));
+    let approval = typed_link_addr(port, &console, CLAIMANT_DOC1, &[&approved], &[&fresh], T_APPROVAL);
+
+    let before = head(port);
+    for (what, owner, home, target) in [
+        ("a fresh request", &writer, writer_doc1.as_str(), &fresh),
+        ("a board-carries-on request", &writer, writer_doc1.as_str(), &carries_on),
+        ("the approved answer", &console, CLAIMANT_DOC1, &approved),
+        ("the refused answer", &console, CLAIMANT_DOC1, &refused),
+        ("the denied answer", &console, CLAIMANT_DOC1, &denied),
+        ("the approval link", &console, CLAIMANT_DOC1, &approval),
+    ] {
+        let v = nullify(port, Some(owner), home, target);
+        assert_eq!(verdict(&v), "credential_refused:nullify_audit_view", "{what}: {v}");
+        assert_eq!(v["disposition"].as_str(), Some("permanent"), "{what}: {v}");
+        assert!(link_resident(port, None, target), "{what}: nothing was retracted");
+    }
+    assert_eq!(head(port), before, "the refusals commit nothing");
+
+    // The links of one type standing on the ACTIVE view, as a guest finds
+    // them.
+    let active = |ty: &str| -> Vec<String> {
+        let v = op(
+            port,
+            None,
+            &format!(
+                r#"{{"op":"find_links_ftt","q":{{"home":"any","from":"any","to":"any","ty":[{{"start":"{ty}","width":"0.0.0.0.0.0.0.0.0.1"}}]}}}}"#
+            ),
+        );
+        expect_resp(&v, "addrs")["addrs"]
+            .as_array()
+            .expect("addrs")
+            .iter()
+            .map(|a| a.as_str().expect("an address").to_string())
+            .collect()
+    };
+
+    // THE VOUCH: its own `nullify` from its own home lands, its withdrawal —
+    // the vouch leaves the active view, where it is read.
+    assert_eq!(active(T_VOUCH), std::slice::from_ref(&vouch));
+    expect_resp(&nullify(port, Some(&writer), &writer_doc1, &vouch), "ack_addr");
+    assert!(active(T_VOUCH).is_empty(), "the vouch is withdrawn");
+
+    // No member by the leaf row's grain: a link typed the kind's own row or
+    // a parent row names no record, and its owner's `nullify` lands.
+    for row in [T_REGISTRATION, T_REQUEST, T_REPLY] {
+        let plain = typed_link_addr(port, &console, CLAIMANT_DOC1, &[CLAIMANT_DOC1], &[], row);
+        expect_resp(&nullify(port, Some(&console), CLAIMANT_DOC1, &plain), "ack_addr");
+    }
+    sd.shutdown();
+}
+
 /// THE SUPERSESSION CLAIM (PUB-6.64; the link-sets wire-lane decision 3 and
 /// sweep-4 O6 (b)): a claim whose `new` is homed in a PUBLISHED document and
 /// whose `old` is its maker's OWN joins PUB-6.64's class — a fact of its

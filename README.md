@@ -41,7 +41,7 @@ beside them, the differential-conformance harness.
 | `skep-febe` | M10 — the operation surface (`Operation<W>`), codec seam |
 | `skep-identity` | AUTH — credential records, key sets, the identity fold (pure) |
 | `skep-signature` | signed ops — the hybrid signature: key derivation, signing, verify |
-| `skep-registry` | the registry's commons rows and binding/endpoint bodies (pure values) |
+| `skep-registry` | the registry's commons rows, its record bodies and the door's policy document (pure values) |
 | `skep-blobs` | the blob store: deposited files, partial uploads, upload records, leases |
 | `skep-util` | the support crate below the daemon and the media crate: the counting permit pool, the operator's notice line, the JSON determinism helpers |
 | `skep-corpus` | the prose corpus a dev board is seeded from and the search budgets are measured over: a git repository read at one pinned commit through `git` alone, and the one deterministic cut into documents of 1–10 KiB — no skep crate, nothing but `std` and a `git` child process |

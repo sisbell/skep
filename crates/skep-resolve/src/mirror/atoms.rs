@@ -109,9 +109,10 @@ impl Mirror {
     /// head's whole image); THE CHAIN WALK down the home's members
     /// (REG-3.25); the position read off the feed (REG-3.26); else `None` —
     /// and `None` where no board is held. Kept ([`Mirror::keep_atom`]) under
-    /// `cap`, the largest record of its kind: a registry body's
-    /// (`MAX_REGISTRY_RECORD_BYTES`) or a credential record's
-    /// (`MAX_RECORD_BYTES`).
+    /// `cap`, the largest record of its kind: a binding's or an endpoint's
+    /// body (`MAX_REGISTRY_RECORD_BYTES`, the cap of every registry body but
+    /// a registration request's, which the mirror does not read) or a
+    /// credential record's (`MAX_RECORD_BYTES`).
     pub(super) fn fetch_atom_off_board(&mut self, at: u64, home: &Address, addr: &Address, cap: usize) -> Result<Option<String>, MirrorError> {
         if self.board.is_none() {
             return Ok(None);

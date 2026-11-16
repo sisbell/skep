@@ -60,7 +60,8 @@
 //! * `skep-resolve`, the registry resolver, takes the same table from here,
 //!   folded over the credential records its mirror holds, judges each
 //!   registry record's `sig` under the set that opens its home's account as
-//!   of the record's position, and finds an account's doc 1.
+//!   of the record's position, finds an account's doc 1, and frames a realm
+//!   id's genesis set under the realm tag.
 //! * `skep-cli`, the `skep` command, names keys by their fingerprints and
 //!   spells the enrollment records its key commands print.
 //! * `skep-shell`, the shell's core, composes the entry frames its signed
@@ -100,7 +101,8 @@
 //! [`HasIdentity`] for a host that seats the slice (AUTH-2.60);
 //! [`NODE_HELLO_TAG`] for bebe (AUTH-2.118); the tables and constants the
 //! spec declares as this crate's surface — [`ALGS`] and its [`AlgRow`]
-//! (AUTH-1.5), [`TAGS`], [`KEY_TAG`] and [`ENTRY_TAG`] (AUTH-1.11, AUTH-1.17),
+//! (AUTH-1.5), [`TAGS`], [`KEY_TAG`], [`ENTRY_TAG`], [`REALM_TAG`] and
+//! [`REGISTRATION_TAG`] (AUTH-1.11, AUTH-1.17),
 //! [`ENROLL_TYPE`] and [`RETIRE_TYPE`] (AUTH-1.18); and the five `*_KEY_LEN`
 //! constants the design record declares beside them (AUTH-1.5's cite). One
 //! item the spec declares crate-private is published too: [`doc_1_of`]
@@ -134,6 +136,12 @@
 //!   ops);
 //! * `framing`: framing and the tag set — [`Tag`], [`framed`], [`TAGS`]
 //!   (AUTH-1.11–1.17);
+//! * `admission`: the admission frame under [`REGISTRATION_TAG`] and its
+//!   terms, the syntax of a registration request — [`AdmissionFrame`], the
+//!   door identifier [`DoorId`], the freshness value [`Freshness`], the
+//!   thread's key [`thread_key`] and the signer's test [`enrolled_signer`]
+//!   (AUTH-1.11; REG-4.67, REG-4.73, REG-4.74, REG-4.78, REG-4.84,
+//!   REG-1.86); it verifies no signature and keeps no state;
 //! * `entry`: the entry frame under [`ENTRY_TAG`] — the bytes a publish-class
 //!   entry's signature, or a record's `sig`, is made over: [`entry_frame`],
 //!   its terms [`BoardTerm`] and [`DocTerm`], and the [`EntryBody`] each
@@ -159,7 +167,7 @@
 //!   [`LinkDeposit`], [`single_address`] (AUTH-2.20–2.28);
 //! * `write_types`: the write path's type-recognition input —
 //!   [`WriteTypes`]/[`TargetClass`]/[`AuditClass`] (PUB-6.30, PUB-6.64,
-//!   REG-1.44, REG-1.46; PUB-kickoff D3): the grant and audit-view classes a
+//!   REG-1.43, REG-1.44, REG-1.46; PUB-kickoff D3): the grant and audit-view classes a
 //!   `nullify` is refused at, read off the fold's recognition with `kind_of`
 //!   untouched;
 //! * `seam`: the fold seam — [`Values`], [`FoldCtx`], [`Owner`]
@@ -225,6 +233,7 @@
 
 #![forbid(unsafe_code)]
 
+mod admission;
 mod entry;
 mod framing;
 mod key;
@@ -238,6 +247,7 @@ mod table;
 mod verdict;
 mod write_types;
 
+pub use admission::{enrolled_signer, thread_key, AdmissionFrame, DoorId, Freshness};
 pub use entry::{
     entry_body_assert_sup, entry_body_edit_link, entry_body_emit, entry_body_empty,
     entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_nullify,
@@ -247,7 +257,8 @@ pub use entry::{
     RecordRows, ShotBase, ShotSegmentPiece, SlotElement,
 };
 pub use framing::{
-    framed, Tag, ENTRY_TAG, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS,
+    framed, Tag, ENTRY_TAG, KEY_TAG, NODE_HELLO_TAG, REALM_TAG, REGISTRATION_TAG, SESSION_TAG,
+    SESSION_TAG_V2, TAGS,
 };
 pub use key::{
     AlgRow, Fingerprint, HybridBlob, ParseKeyError, PublicKey, SigAlgRow, ALGS,

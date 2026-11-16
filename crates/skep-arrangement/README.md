@@ -100,8 +100,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   refuses every in-place edit (`PublishedTarget`, PUB-2.11) except an
   `insert` DECLARED under a type
   the deposit class holds (`deposit_class_types` — ENROLL, RETIRE, the
-  registry's BINDING and its ENDPOINT today, the four atom-bearing kinds
-  whose records the daemon parses) at `n_C + 1` of the arrangement
+  registration's six deposit-carrying rows, and the registry's BINDING and
+  its ENDPOINT today, the atom-bearing kinds whose records the daemon
+  parses, each at its own address) at `n_C + 1` of the arrangement
   `deposit_surface` names (the
   chain's head, or the document's own while it has no member) — the one
   way content enters an account's born-published home; `version` refuses a

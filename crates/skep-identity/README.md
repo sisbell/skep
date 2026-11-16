@@ -43,11 +43,21 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   table of the two hybrid signature schemes, a hybrid key's two halves,
   and a signature blob's spelling in hex; declarations only — making and
   checking signatures is [skep-signature](../skep-signature)'s.
+- **The admission frame** — the syntax of a registration request, the
+  payload an applicant with keys and no account signs for a door:
+  `AdmissionFrame`, the bytes the one signature is made over under the
+  registration tag; `DoorId`, the door identifier's one spelling;
+  `Freshness`, the freshness value's form and its comparison;
+  `thread_key`, the key a request's thread is found by; and
+  `enrolled_signer`, the test that every enrolment a request carries
+  enrols the key that signed it. Syntax only: the signature is checked
+  where [skep-signature](../skep-signature) is linked.
 - **Write-path type classes** — the credential kinds widened by the
   grants and audit-view classes — the registry's binding, takedown
   record and policy link among them, each with its subtype rows by
-  prefix — for the daemon's `nullify` refusals; recognition only,
-  never fold state.
+  prefix, and the registration's request rows, answer rows and approval
+  link, each at its own row — for the daemon's `nullify` refusals;
+  recognition only, never fold state.
 
 Pure enough for a mirror or an audit tool to embed directly. The
 engine seats the fold as its world's identity slice; skepd, the

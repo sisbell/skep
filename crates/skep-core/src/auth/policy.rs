@@ -14,7 +14,8 @@
 //!   it, and the record grade's check inside slot (7), whose trial the
 //!   registry sequence shares;
 //! - `registry` — the registry sequence's (the record grade for registry
-//!   records, 2b): the registry's two record-deposit kinds, the route of
+//!   records, 2b): the registry's record-deposit kinds — the binding, the
+//!   endpoint and the registration's deposit-carrying rows — the route of
 //!   their links, the admission's ordered producers under the credential
 //!   lock's read arm, and the seeding check the open runs ahead of every
 //!   genesis;
@@ -160,17 +161,17 @@ fn slotarg_kind(s: &SlotArg) -> Option<CredentialKind> {
 /// defect arm, which in a release build commits the deposit with no `sig`
 /// verified — and exempts its atom from the entry check with no record grade
 /// behind it. Each joins with its own classify and the precheck its record
-/// needs: the registry's two record-deposit kinds, the binding and the
-/// endpoint, joined as a second set with a sequence of their own
-/// ([`registry_deposit_kind`], `policy/registry.rs`; the record grade for
-/// registry records, 2b), the two sets disjoint by construction and this one
-/// asked first at the route; the disavowal's (`…3.58.2`, the registry's
+/// needs: the registry's record-deposit kinds — the binding, the endpoint
+/// and the registration's deposit-carrying rows — joined as a second set
+/// with a sequence of their own ([`registry_deposit_kind`],
+/// `policy/registry.rs`; the record grade for registry records, 2b), the two
+/// sets disjoint by construction and this one asked first at the route; the disavowal's (`…3.58.2`, the registry's
 /// subtype row) joins the same way where its schema lands. The claim is a
 /// member though a claim carries no record, because the fold folds it: on a
 /// published document — the only place the entry check runs — a declared
 /// claim atom is refused at M5's door, whose deposit class holds the kinds
-/// that deposit an atom (enroll, retire, the binding, the endpoint), and a
-/// claim's link above the claim is `already_claimed` at slot (3), before the
+/// that deposit an atom (enroll, retire and the registry's parsed rows), and
+/// a claim's link above the claim is `already_claimed` at slot (3), before the
 /// record grade runs.
 ///
 /// Private to this module and its children, where its readers live;
@@ -669,8 +670,9 @@ mod tests {
     /// Checks that the record-deposit set is the fold's kinds.
     ///
     /// Every arm reads it: over the three credential kinds, the ordinal
-    /// `…3.4` (which the fold does not fold) and the registry's two kinds (a
-    /// second set, never this one), [`record_deposit_kind`] answers what the
+    /// `…3.4` (which the fold does not fold) and the registry's kinds — the
+    /// binding, the endpoint and two of the registration's rows (a second
+    /// set, never this one), [`record_deposit_kind`] answers what the
     /// engine's [`IDENTITY_TYPES`] answers, and a `make_link`, an `emit` and
     /// an `edit_link` successor so typed are routed to the credential
     /// sequence exactly where it answers `Some`. The route rests on that
@@ -683,14 +685,10 @@ mod tests {
         let disavowal = addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 4]);
         let binding = addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 55]);
         let endpoint = addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 56]);
-        for ty in [
-            t_enroll().clone(),
-            t_retire().clone(),
-            t_claim().clone(),
-            disavowal,
-            binding,
-            endpoint,
-        ] {
+        let fresh = addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 54, 1, 1]);
+        let vouch = addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 54, 3]);
+        let registry = [disavowal, binding, endpoint, fresh, vouch];
+        for ty in [t_enroll().clone(), t_retire().clone(), t_claim().clone()].into_iter().chain(registry) {
             let slot = addr_spans(std::slice::from_ref(&ty));
             let folded = IDENTITY_TYPES.kind_of(&slot);
             assert_eq!(
@@ -817,16 +815,21 @@ mod tests {
     /// credential pins, which the fold hook classifies the pair's
     /// `make_link` by — and the two are pinned equal here, member for member
     /// in the set's order, enroll then retire (PUB-2.11, PUB-2.63; RES-249,
-    /// RES-261), the set's two further members being the registry's binding
-    /// and endpoint, the engine ledger's rows, which the registry sequence
-    /// classifies by (REG-1.37 as the record grade for registry records
-    /// re-reads it). The engine's own ledger holds the same equality; this
-    /// is the daemon's reading of it, at the door where a declared type
-    /// enters: if this fails, an enrollment a client declares as the fold
-    /// will classify it is refused `published_target` at the store — or
-    /// admitted there and typed as nothing the fold honors.
+    /// RES-261), the set's further members being the registry's parsed rows
+    /// — the registration's six deposit-carrying rows, the binding and the
+    /// endpoint — the engine ledger's rows, which the registry sequence
+    /// classifies by (REG-1.23; REG-1.37 as the record grade for registry
+    /// records re-reads it). The engine's own ledger holds the same
+    /// equality; this is the daemon's reading of it, at the door where a
+    /// declared type enters: if this fails, an enrollment a client declares
+    /// as the fold will classify it is refused `published_target` at the
+    /// store — or admitted there and typed as nothing the fold honors.
     #[test]
     fn the_deposit_class_types_are_the_engines_enroll_and_retire_pins() {
+        use skep_engine::types::{
+            t_binding, t_endpoint, t_reply_approved, t_reply_denied, t_reply_refused,
+            t_request_board_carries_on, t_request_fresh, t_vouch,
+        };
         let spelled: Vec<Vec<Nat>> = skep_arrangement::deposit_class_types()
             .iter()
             .map(|ty| ty.tumbler().iter().cloned().collect())
@@ -837,8 +840,14 @@ mod tests {
             [
                 row(t_enroll()),
                 row(t_retire()),
-                row(skep_engine::types::t_binding()),
-                row(skep_engine::types::t_endpoint()),
+                row(t_request_fresh()),
+                row(t_request_board_carries_on()),
+                row(t_reply_approved()),
+                row(t_reply_refused()),
+                row(t_reply_denied()),
+                row(t_vouch()),
+                row(t_binding()),
+                row(t_endpoint()),
             ]
         );
         assert_eq!(t_enroll().tumbler().to_string(), "1.1.0.1.0.1.0.3.1");

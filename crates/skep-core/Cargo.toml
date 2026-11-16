@@ -55,10 +55,11 @@ skep-discovery = { path = "../skep-discovery" }
 # engine's — the World's identity slice (AUTH-2.79) — which the session
 # layer reads.
 skep-identity = { path = "../skep-identity" }
-# THE REGISTRY'S CORE AS VALUES: the twelve commons rows, the binding and
-# endpoint bodies under one canonical rule, and the seeding check — read
-# by the registry sequence's parse (`auth/policy/registry.rs`) and run by
-# the daemon's open ahead of every genesis.
+# THE REGISTRY'S CORE AS VALUES: the commons rows, the binding's, the
+# endpoint's and the registration kind's bodies under one canonical rule,
+# and the seeding check — read by the registry sequence's parse
+# (`auth/policy/registry.rs`) and run by the daemon's open ahead of every
+# genesis.
 skep-registry = { path = "../skep-registry" }
 # THE MEDIA RESOURCE (media lanes A and B), the crate beside the commits:
 # the cell index the commits enter at every commit that mints a cell, and

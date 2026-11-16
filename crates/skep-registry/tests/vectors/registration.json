@@ -1,0 +1,1732 @@
+{
+  "note": "THE VECTOR SET of the registration kind's six bodies -- the request's two kinds, fresh and board-carries-on, the three answers, approved, refused and denied, and the vouch (REG-1.86; the canonical rule) -- in the one scheme of records.json, the binding's and the endpoint's set beside this one: every parser of the bodies runs these in its own gate. The rule is the arbiter: parse(b) answers a record only where b == encode(parse(b)). `kind` is the kind the caller names, the link's type slot, spelled as its row's type string; `parse` is the parse's answer, `ok` (admitted: the bytes ARE the canonical form) or the refusal's cause as skep-registry's ParseRefusal::token spells it, which the daemon joins to its malformed_record token; on an admitted body `canonical_sigless` is the sig-less canonical projection a record-grade signature ranges over and `sig` the sig member as found (null where absent). A body carried as `bytes_hex` is bytes that are no UTF-8 string. A body carried as `bytes_filled` is its `head`, then its `fill` repeated, then its `tail`, the fill's run as long as makes the whole body `len` bytes -- the cap's vectors, whose bytes are long and all one character; where such a body is admitted its sig member is that run, `sig_filled`. The cap is per kind, `caps`, with the sig member inside it, counted in the body's UTF-8 bytes: 64 KiB for a request of either kind and 16 KiB for every other body, each a term of the format (REG-1.86 (h)). The parse checks each member's FORM and never its admissibility: a `why` says where a body that parses is refused by a later reader -- the board at its registry sequence, or a console.",
+  "caps": {
+    "fresh": 65536,
+    "board-carries-on": 65536,
+    "approved": 16384,
+    "refused": 16384,
+    "denied": 16384,
+    "vouch": 16384
+  },
+  "vectors": [
+    {
+      "name": "fresh_canonical",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "sig": null,
+      "why": "the fresh body in canonical form, unsigned: type, then the row's own members in the row's order"
+    },
+    {
+      "name": "fresh_with_sig",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\",\"sig\":\"c0ffee\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "sig": "c0ffee",
+      "why": "the fresh body with the writing hand's sig, the last member"
+    },
+    {
+      "name": "fresh_spaced",
+      "kind": "fresh",
+      "bytes": "{\"type\": \"fresh\", \"door\": \"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\", \"fresh\": \"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\", \"shape\": \"3.54.1.1\", \"node\": \"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\", \"board\": \"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\", \"signer\": \"abababababababababababababababababababababababababababababababab\", \"signature\": \"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_canonical",
+      "why": "the fresh body with a space after each colon and comma, as a specification prints it: the members pass and the bytes are not their re-encoding"
+    },
+    {
+      "name": "fresh_typed_another_row",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"vouch\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "wrong_type",
+      "why": "the fresh row's members under another row's type string, 'vouch': no record of the kind the slot names"
+    },
+    {
+      "name": "fresh_typed_its_parent",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"request\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "wrong_type",
+      "why": "the fresh row's members typed its parent row's name, 'request': a parent row is the type of no body (REG-1.86 (a))"
+    },
+    {
+      "name": "fresh_with_a_member_its_row_does_not_name",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\",\"note\":\"x\"}",
+      "parse": "unknown_member",
+      "why": "a member the fresh row does not name"
+    },
+    {
+      "name": "fresh_sig_not_a_string",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\",\"sig\":true}",
+      "parse": "not_a_string:sig",
+      "why": "sig, where present, is a string: a sig of another JSON type is a fault of the body's form"
+    },
+    {
+      "name": "fresh_no_type",
+      "kind": "fresh",
+      "bytes": "{\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "wrong_type",
+      "why": "no type member at all"
+    },
+    {
+      "name": "board_carries_on_canonical",
+      "kind": "board-carries-on",
+      "bytes": "{\"type\":\"board-carries-on\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"board-carries-on\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "sig": null,
+      "why": "the board-carries-on body in canonical form, unsigned: type, then the row's own members in the row's order"
+    },
+    {
+      "name": "board_carries_on_with_sig",
+      "kind": "board-carries-on",
+      "bytes": "{\"type\":\"board-carries-on\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\",\"sig\":\"c0ffee\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"board-carries-on\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "sig": "c0ffee",
+      "why": "the board-carries-on body with the writing hand's sig, the last member"
+    },
+    {
+      "name": "board_carries_on_spaced",
+      "kind": "board-carries-on",
+      "bytes": "{\"type\": \"board-carries-on\", \"door\": \"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\", \"fresh\": \"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\", \"shape\": \"3.54.1.2\", \"node\": \"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\", \"signer\": \"abababababababababababababababababababababababababababababababab\", \"signature\": \"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_canonical",
+      "why": "the board-carries-on body with a space after each colon and comma, as a specification prints it: the members pass and the bytes are not their re-encoding"
+    },
+    {
+      "name": "board_carries_on_typed_another_row",
+      "kind": "board-carries-on",
+      "bytes": "{\"type\":\"vouch\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "wrong_type",
+      "why": "the board-carries-on row's members under another row's type string, 'vouch': no record of the kind the slot names"
+    },
+    {
+      "name": "board_carries_on_typed_its_parent",
+      "kind": "board-carries-on",
+      "bytes": "{\"type\":\"request\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "wrong_type",
+      "why": "the board-carries-on row's members typed its parent row's name, 'request': a parent row is the type of no body (REG-1.86 (a))"
+    },
+    {
+      "name": "board_carries_on_with_a_member_its_row_does_not_name",
+      "kind": "board-carries-on",
+      "bytes": "{\"type\":\"board-carries-on\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\",\"note\":\"x\"}",
+      "parse": "unknown_member",
+      "why": "a member the board-carries-on row does not name"
+    },
+    {
+      "name": "board_carries_on_sig_not_a_string",
+      "kind": "board-carries-on",
+      "bytes": "{\"type\":\"board-carries-on\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\",\"sig\":true}",
+      "parse": "not_a_string:sig",
+      "why": "sig, where present, is a string: a sig of another JSON type is a fault of the body's form"
+    },
+    {
+      "name": "board_carries_on_no_type",
+      "kind": "board-carries-on",
+      "bytes": "{\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "wrong_type",
+      "why": "no type member at all"
+    },
+    {
+      "name": "approved_canonical",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "sig": null,
+      "why": "the approved body in canonical form, unsigned: type, then the row's own members in the row's order"
+    },
+    {
+      "name": "approved_with_sig",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\",\"sig\":\"c0ffee\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "sig": "c0ffee",
+      "why": "the approved body with the writing hand's sig, the last member"
+    },
+    {
+      "name": "approved_spaced",
+      "kind": "approved",
+      "bytes": "{\"type\": \"approved\", \"prefix\": \"1.5\", \"node_address\": \"1.0.7\", \"node_principal\": 7402918836251, \"collection_interval\": \"1209600\", \"disposition\": \"retirement\", \"policy\": \"1.0.1.0.5.2\"}",
+      "parse": "not_canonical",
+      "why": "the approved body with a space after each colon and comma, as a specification prints it: the members pass and the bytes are not their re-encoding"
+    },
+    {
+      "name": "approved_typed_another_row",
+      "kind": "approved",
+      "bytes": "{\"type\":\"vouch\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "wrong_type",
+      "why": "the approved row's members under another row's type string, 'vouch': no record of the kind the slot names"
+    },
+    {
+      "name": "approved_typed_its_parent",
+      "kind": "approved",
+      "bytes": "{\"type\":\"reply\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "wrong_type",
+      "why": "the approved row's members typed its parent row's name, 'reply': a parent row is the type of no body (REG-1.86 (a))"
+    },
+    {
+      "name": "approved_with_a_member_its_row_does_not_name",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\",\"note\":\"x\"}",
+      "parse": "unknown_member",
+      "why": "a member the approved row does not name"
+    },
+    {
+      "name": "approved_sig_not_a_string",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\",\"sig\":true}",
+      "parse": "not_a_string:sig",
+      "why": "sig, where present, is a string: a sig of another JSON type is a fault of the body's form"
+    },
+    {
+      "name": "approved_no_type",
+      "kind": "approved",
+      "bytes": "{\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "wrong_type",
+      "why": "no type member at all"
+    },
+    {
+      "name": "refused_canonical",
+      "kind": "refused",
+      "bytes": "{\"type\":\"refused\",\"fault\":\"freshness-spent\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"refused\",\"fault\":\"freshness-spent\"}",
+      "sig": null,
+      "why": "the refused body in canonical form, unsigned: type, then the row's own members in the row's order"
+    },
+    {
+      "name": "refused_with_sig",
+      "kind": "refused",
+      "bytes": "{\"type\":\"refused\",\"fault\":\"freshness-spent\",\"sig\":\"c0ffee\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"refused\",\"fault\":\"freshness-spent\"}",
+      "sig": "c0ffee",
+      "why": "the refused body with the writing hand's sig, the last member"
+    },
+    {
+      "name": "refused_spaced",
+      "kind": "refused",
+      "bytes": "{\"type\": \"refused\", \"fault\": \"freshness-spent\"}",
+      "parse": "not_canonical",
+      "why": "the refused body with a space after each colon and comma, as a specification prints it: the members pass and the bytes are not their re-encoding"
+    },
+    {
+      "name": "refused_typed_another_row",
+      "kind": "refused",
+      "bytes": "{\"type\":\"vouch\",\"fault\":\"freshness-spent\"}",
+      "parse": "wrong_type",
+      "why": "the refused row's members under another row's type string, 'vouch': no record of the kind the slot names"
+    },
+    {
+      "name": "refused_typed_its_parent",
+      "kind": "refused",
+      "bytes": "{\"type\":\"reply\",\"fault\":\"freshness-spent\"}",
+      "parse": "wrong_type",
+      "why": "the refused row's members typed its parent row's name, 'reply': a parent row is the type of no body (REG-1.86 (a))"
+    },
+    {
+      "name": "refused_with_a_member_its_row_does_not_name",
+      "kind": "refused",
+      "bytes": "{\"type\":\"refused\",\"fault\":\"freshness-spent\",\"note\":\"x\"}",
+      "parse": "unknown_member",
+      "why": "a member the refused row does not name"
+    },
+    {
+      "name": "refused_sig_not_a_string",
+      "kind": "refused",
+      "bytes": "{\"type\":\"refused\",\"fault\":\"freshness-spent\",\"sig\":true}",
+      "parse": "not_a_string:sig",
+      "why": "sig, where present, is a string: a sig of another JSON type is a fault of the body's form"
+    },
+    {
+      "name": "refused_no_type",
+      "kind": "refused",
+      "bytes": "{\"fault\":\"freshness-spent\"}",
+      "parse": "wrong_type",
+      "why": "no type member at all"
+    },
+    {
+      "name": "denied_canonical",
+      "kind": "denied",
+      "bytes": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"2\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"2\"}",
+      "sig": null,
+      "why": "the denied body in canonical form, unsigned: type, then the row's own members in the row's order"
+    },
+    {
+      "name": "denied_with_sig",
+      "kind": "denied",
+      "bytes": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"2\",\"sig\":\"c0ffee\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"2\"}",
+      "sig": "c0ffee",
+      "why": "the denied body with the writing hand's sig, the last member"
+    },
+    {
+      "name": "denied_spaced",
+      "kind": "denied",
+      "bytes": "{\"type\": \"denied\", \"policy\": \"1.0.1.0.5.2\", \"clause\": \"2\"}",
+      "parse": "not_canonical",
+      "why": "the denied body with a space after each colon and comma, as a specification prints it: the members pass and the bytes are not their re-encoding"
+    },
+    {
+      "name": "denied_typed_another_row",
+      "kind": "denied",
+      "bytes": "{\"type\":\"vouch\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"2\"}",
+      "parse": "wrong_type",
+      "why": "the denied row's members under another row's type string, 'vouch': no record of the kind the slot names"
+    },
+    {
+      "name": "denied_typed_its_parent",
+      "kind": "denied",
+      "bytes": "{\"type\":\"reply\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"2\"}",
+      "parse": "wrong_type",
+      "why": "the denied row's members typed its parent row's name, 'reply': a parent row is the type of no body (REG-1.86 (a))"
+    },
+    {
+      "name": "denied_with_a_member_its_row_does_not_name",
+      "kind": "denied",
+      "bytes": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"2\",\"note\":\"x\"}",
+      "parse": "unknown_member",
+      "why": "a member the denied row does not name"
+    },
+    {
+      "name": "denied_sig_not_a_string",
+      "kind": "denied",
+      "bytes": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"2\",\"sig\":true}",
+      "parse": "not_a_string:sig",
+      "why": "sig, where present, is a string: a sig of another JSON type is a fault of the body's form"
+    },
+    {
+      "name": "denied_no_type",
+      "kind": "denied",
+      "bytes": "{\"policy\":\"1.0.1.0.5.2\",\"clause\":\"2\"}",
+      "parse": "wrong_type",
+      "why": "no type member at all"
+    },
+    {
+      "name": "vouch_canonical",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"]}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"]}",
+      "sig": null,
+      "why": "the vouch body in canonical form, unsigned: type, then the row's own members in the row's order"
+    },
+    {
+      "name": "vouch_with_sig",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"],\"sig\":\"c0ffee\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"]}",
+      "sig": "c0ffee",
+      "why": "the vouch body with the writing hand's sig, the last member"
+    },
+    {
+      "name": "vouch_spaced",
+      "kind": "vouch",
+      "bytes": "{\"type\": \"vouch\", \"fingerprints\": [\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"]}",
+      "parse": "not_canonical",
+      "why": "the vouch body with a space after each colon and comma, as a specification prints it: the members pass and the bytes are not their re-encoding"
+    },
+    {
+      "name": "vouch_typed_another_row",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"refused\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"]}",
+      "parse": "wrong_type",
+      "why": "the vouch row's members under another row's type string, 'refused': no record of the kind the slot names"
+    },
+    {
+      "name": "vouch_with_a_member_its_row_does_not_name",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"],\"note\":\"x\"}",
+      "parse": "unknown_member",
+      "why": "a member the vouch row does not name"
+    },
+    {
+      "name": "vouch_sig_not_a_string",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"],\"sig\":true}",
+      "parse": "not_a_string:sig",
+      "why": "sig, where present, is a string: a sig of another JSON type is a fault of the body's form"
+    },
+    {
+      "name": "vouch_no_type",
+      "kind": "vouch",
+      "bytes": "{\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"]}",
+      "parse": "wrong_type",
+      "why": "no type member at all"
+    },
+    {
+      "name": "vouch_typed_a_parent",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"reply\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"]}",
+      "parse": "wrong_type",
+      "why": "a vouch's members typed a parent row's name: no body is typed reply or request"
+    },
+    {
+      "name": "typed_the_kind",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"registration\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "wrong_type",
+      "why": "the kind's own name is the type of no body: no deposit rides the bare ordinal"
+    },
+    {
+      "name": "fresh_without_door",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "missing_member:door",
+      "why": "a fresh body without its required member door"
+    },
+    {
+      "name": "fresh_without_fresh",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "missing_member:fresh",
+      "why": "a fresh body without its required member fresh"
+    },
+    {
+      "name": "fresh_without_shape",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "missing_member:shape",
+      "why": "a fresh body without its required member shape"
+    },
+    {
+      "name": "fresh_without_node",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "missing_member:node",
+      "why": "a fresh body without its required member node"
+    },
+    {
+      "name": "fresh_without_board",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "missing_member:board",
+      "why": "a fresh body without its required member board"
+    },
+    {
+      "name": "fresh_without_signer",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "missing_member:signer",
+      "why": "a fresh body without its required member signer"
+    },
+    {
+      "name": "fresh_without_signature",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\"}",
+      "parse": "missing_member:signature",
+      "why": "a fresh body without its required member signature"
+    },
+    {
+      "name": "board_carries_on_without_door",
+      "kind": "board-carries-on",
+      "bytes": "{\"type\":\"board-carries-on\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "missing_member:door",
+      "why": "a board-carries-on body without its required member door"
+    },
+    {
+      "name": "board_carries_on_without_fresh",
+      "kind": "board-carries-on",
+      "bytes": "{\"type\":\"board-carries-on\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "missing_member:fresh",
+      "why": "a board-carries-on body without its required member fresh"
+    },
+    {
+      "name": "board_carries_on_without_shape",
+      "kind": "board-carries-on",
+      "bytes": "{\"type\":\"board-carries-on\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "missing_member:shape",
+      "why": "a board-carries-on body without its required member shape"
+    },
+    {
+      "name": "board_carries_on_without_node",
+      "kind": "board-carries-on",
+      "bytes": "{\"type\":\"board-carries-on\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "missing_member:node",
+      "why": "a board-carries-on body without its required member node"
+    },
+    {
+      "name": "board_carries_on_without_signer",
+      "kind": "board-carries-on",
+      "bytes": "{\"type\":\"board-carries-on\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "missing_member:signer",
+      "why": "a board-carries-on body without its required member signer"
+    },
+    {
+      "name": "board_carries_on_without_signature",
+      "kind": "board-carries-on",
+      "bytes": "{\"type\":\"board-carries-on\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\"}",
+      "parse": "missing_member:signature",
+      "why": "a board-carries-on body without its required member signature"
+    },
+    {
+      "name": "approved_without_prefix",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "missing_member:prefix",
+      "why": "a approved body without its required member prefix"
+    },
+    {
+      "name": "approved_without_node_address",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "missing_member:node_address",
+      "why": "a approved body without its required member node_address"
+    },
+    {
+      "name": "approved_without_node_principal",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "missing_member:node_principal",
+      "why": "a approved body without its required member node_principal"
+    },
+    {
+      "name": "approved_without_collection_interval",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "missing_member:collection_interval",
+      "why": "a approved body without its required member collection_interval"
+    },
+    {
+      "name": "approved_without_disposition",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "missing_member:disposition",
+      "why": "a approved body without its required member disposition"
+    },
+    {
+      "name": "approved_without_policy",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\"}",
+      "parse": "missing_member:policy",
+      "why": "a approved body without its required member policy"
+    },
+    {
+      "name": "refused_without_fault",
+      "kind": "refused",
+      "bytes": "{\"type\":\"refused\"}",
+      "parse": "missing_member:fault",
+      "why": "a refused body without its required member fault"
+    },
+    {
+      "name": "denied_without_policy",
+      "kind": "denied",
+      "bytes": "{\"type\":\"denied\",\"clause\":\"2\"}",
+      "parse": "missing_member:policy",
+      "why": "a denied body without its required member policy"
+    },
+    {
+      "name": "denied_without_clause",
+      "kind": "denied",
+      "bytes": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "missing_member:clause",
+      "why": "a denied body without its required member clause"
+    },
+    {
+      "name": "vouch_without_fingerprints",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\"}",
+      "parse": "missing_member:fingerprints",
+      "why": "a vouch body without its required member fingerprints"
+    },
+    {
+      "name": "fresh_door_not_a_string",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":true,\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_a_string:door",
+      "why": "door must be a string; a boolean is another JSON type"
+    },
+    {
+      "name": "fresh_fresh_not_a_string",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":true,\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_a_string:fresh",
+      "why": "fresh must be a string; a boolean is another JSON type"
+    },
+    {
+      "name": "fresh_shape_not_a_string",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":true,\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_a_string:shape",
+      "why": "shape must be a string; a boolean is another JSON type"
+    },
+    {
+      "name": "fresh_node_not_a_string",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":true,\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_a_string:node",
+      "why": "node must be a string; a boolean is another JSON type"
+    },
+    {
+      "name": "fresh_board_not_a_string",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":true,\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_a_string:board",
+      "why": "board must be a string; a boolean is another JSON type"
+    },
+    {
+      "name": "fresh_signer_not_a_string",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":true,\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_a_string:signer",
+      "why": "signer must be a string; a boolean is another JSON type"
+    },
+    {
+      "name": "fresh_signature_not_a_string",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":true}",
+      "parse": "not_a_string:signature",
+      "why": "signature must be a string; a boolean is another JSON type"
+    },
+    {
+      "name": "board_carries_on_door_not_a_string",
+      "kind": "board-carries-on",
+      "bytes": "{\"type\":\"board-carries-on\",\"door\":true,\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_a_string:door",
+      "why": "door must be a string; a boolean is another JSON type"
+    },
+    {
+      "name": "board_carries_on_node_not_a_string",
+      "kind": "board-carries-on",
+      "bytes": "{\"type\":\"board-carries-on\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":true,\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_a_string:node",
+      "why": "node must be a string; a boolean is another JSON type"
+    },
+    {
+      "name": "approved_prefix_not_a_string",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":true,\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_a_string:prefix",
+      "why": "prefix must be a string; a boolean is another JSON type"
+    },
+    {
+      "name": "approved_node_address_not_a_string",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":true,\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_a_string:node_address",
+      "why": "node_address must be a string; a boolean is another JSON type"
+    },
+    {
+      "name": "approved_collection_interval_not_a_string",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":true,\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_a_string:collection_interval",
+      "why": "collection_interval must be a string; a boolean is another JSON type"
+    },
+    {
+      "name": "approved_disposition_not_a_string",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":true,\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_a_string:disposition",
+      "why": "disposition must be a string; a boolean is another JSON type"
+    },
+    {
+      "name": "approved_policy_not_a_string",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":true}",
+      "parse": "not_a_string:policy",
+      "why": "policy must be a string; a boolean is another JSON type"
+    },
+    {
+      "name": "refused_fault_not_a_string",
+      "kind": "refused",
+      "bytes": "{\"type\":\"refused\",\"fault\":true}",
+      "parse": "not_a_string:fault",
+      "why": "fault must be a string; a boolean is another JSON type"
+    },
+    {
+      "name": "denied_policy_not_a_string",
+      "kind": "denied",
+      "bytes": "{\"type\":\"denied\",\"policy\":true,\"clause\":\"2\"}",
+      "parse": "not_a_string:policy",
+      "why": "policy must be a string; a boolean is another JSON type"
+    },
+    {
+      "name": "denied_clause_not_a_string",
+      "kind": "denied",
+      "bytes": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":true}",
+      "parse": "not_a_string:clause",
+      "why": "clause must be a string; a boolean is another JSON type"
+    },
+    {
+      "name": "approved_door_origin_not_a_string",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"board_address\":\"1.0.1\",\"board_principal\":88213,\"board_origin\":\"https://legal.acme.example\",\"door_origin\":[\"https://acme.example\"],\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_a_string:door_origin",
+      "why": "door_origin, where present, is a string"
+    },
+    {
+      "name": "approved_board_origin_not_a_string",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"board_address\":\"1.0.1\",\"board_principal\":88213,\"board_origin\":null,\"door_origin\":\"https://acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_a_string:board_origin",
+      "why": "board_origin is a string; null is another JSON type"
+    },
+    {
+      "name": "approved_node_principal_a_string",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":\"7402918836251\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_a_number:node_principal",
+      "why": "a principal is a JSON number (REG-1.86 (d)); the digits as a string are another JSON type"
+    },
+    {
+      "name": "approved_board_principal_a_string",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"board_address\":\"1.0.1\",\"board_principal\":\"88213\",\"board_origin\":\"https://legal.acme.example\",\"door_origin\":\"https://acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_a_number:board_principal",
+      "why": "the board's principal is a JSON number as the node's is"
+    },
+    {
+      "name": "vouch_fingerprints_not_an_array",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\"}",
+      "parse": "not_strings:fingerprints",
+      "why": "fingerprints is an array of strings; one string is not"
+    },
+    {
+      "name": "vouch_fingerprints_entry_not_a_string",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",true]}",
+      "parse": "not_strings:fingerprints",
+      "why": "every entry of fingerprints is a string"
+    },
+    {
+      "name": "vouch_replaces_not_a_string",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"],\"replaces\":true}",
+      "parse": "not_a_string:replaces",
+      "why": "replaces, where present, is a string"
+    },
+    {
+      "name": "approved_node_principal_at_the_top_of_the_range",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":9007199254740991,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":9007199254740991,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "sig": null,
+      "why": "a principal at the top of the exactly-representable range, 2^53 - 1 (AUTH-5.20)"
+    },
+    {
+      "name": "approved_node_principal_zero",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":0,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":0,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "sig": null,
+      "why": "zero is inside the range"
+    },
+    {
+      "name": "approved_node_principal_past_the_range",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":9007199254740992,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "number",
+      "why": "a principal one past the exactly-representable range: no number of the form"
+    },
+    {
+      "name": "approved_board_principal_at_the_top_of_the_range",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"board_address\":\"1.0.1\",\"board_principal\":9007199254740991,\"board_origin\":\"https://legal.acme.example\",\"door_origin\":\"https://acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"board_address\":\"1.0.1\",\"board_principal\":9007199254740991,\"board_origin\":\"https://legal.acme.example\",\"door_origin\":\"https://acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "sig": null,
+      "why": "the board's principal at the top of the range"
+    },
+    {
+      "name": "approved_board_principal_past_the_range",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"board_address\":\"1.0.1\",\"board_principal\":9007199254740992,\"board_origin\":\"https://legal.acme.example\",\"door_origin\":\"https://acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "number",
+      "why": "the board's principal one past the range"
+    },
+    {
+      "name": "approved_node_principal_past_a_machine_word",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":18446744073709551616,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "number",
+      "why": "a principal past 2^64 - 1, which the value stage reads as a float"
+    },
+    {
+      "name": "approved_node_principal_negative",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":-1,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "number",
+      "why": "a negative number is no principal"
+    },
+    {
+      "name": "approved_node_principal_a_fraction",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7.0,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "number",
+      "why": "a fraction is no principal, whatever it equals"
+    },
+    {
+      "name": "approved_node_principal_in_exponent_form",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7e3,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "number",
+      "why": "exponent form is no principal's spelling"
+    },
+    {
+      "name": "approved_node_principal_negative_zero",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":-0,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "number",
+      "why": "negative zero is a float to the value stage, and no principal"
+    },
+    {
+      "name": "approved_collection_interval_a_number",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":1209600,\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "number",
+      "why": "every count and interval is a string of decimal digits: a number at any member but a principal refuses the body"
+    },
+    {
+      "name": "approved_a_number_at_an_unknown_member",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\",\"realm\":5}",
+      "parse": "number",
+      "why": "the number scan runs over the whole value, ahead of the member set"
+    },
+    {
+      "name": "fresh_a_number_at_fresh",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":5,\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "number",
+      "why": "a request carries no number at all"
+    },
+    {
+      "name": "fresh_node_principal_is_no_member_and_a_number",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\",\"node_principal\":7}",
+      "parse": "number",
+      "why": "a principal's member admits a number under the approved answer alone: under a request it is a number like any other"
+    },
+    {
+      "name": "refused_a_number_at_fault",
+      "kind": "refused",
+      "bytes": "{\"type\":\"refused\",\"fault\":1}",
+      "parse": "number",
+      "why": "a refused answer carries no number"
+    },
+    {
+      "name": "denied_clause_a_number",
+      "kind": "denied",
+      "bytes": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":2}",
+      "parse": "number",
+      "why": "a clause's position is a string of decimal digits, never a JSON number"
+    },
+    {
+      "name": "vouch_a_number_in_fingerprints",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",7]}",
+      "parse": "number",
+      "why": "a number nested in an array refuses the body wherever it stands"
+    },
+    {
+      "name": "approved_node_principal_nested",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":[7402918836251],\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "number",
+      "why": "a number is admitted standing directly at a principal's member, never nested under it"
+    },
+    {
+      "name": "fresh_shape_naming_the_other_request_row",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "sig": null,
+      "why": "the parse reads shape as a string and checks no agreement: a shape naming the other request row PARSES, and the BOARD refuses the record at its link, the row the link is typed being another than its signed shape names (REG-1.23, REG-4.104)"
+    },
+    {
+      "name": "fresh_shape_naming_a_parent_row",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "sig": null,
+      "why": "a shape naming the parent row parses; the board refuses it"
+    },
+    {
+      "name": "fresh_shape_any_string",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"the fresh kind\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"the fresh kind\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "sig": null,
+      "why": "shape's form at the parse is a string; what it names is the board's to check"
+    },
+    {
+      "name": "fresh_without_board_is_no_fresh_body",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "missing_member:board",
+      "why": "a fresh body whose members are the board-carries-on row's, board absent, is refused at the parse"
+    },
+    {
+      "name": "board_carries_on_with_board",
+      "kind": "board-carries-on",
+      "bytes": "{\"type\":\"board-carries-on\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "unknown_member",
+      "why": "a board-carries-on body that carries board is refused as a fresh body lacking it is: board is no member of its row"
+    },
+    {
+      "name": "fresh_signature_in_capitals",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0F1E2D3C0F1E2D3C0F1E2D3C0F1E2D3C0F1E2D3C0F1E2D3C0F1E2D3C0F1E2D3C\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0F1E2D3C0F1E2D3C0F1E2D3C0F1E2D3C0F1E2D3C0F1E2D3C0F1E2D3C0F1E2D3C\"}",
+      "sig": null,
+      "why": "signature is hex digits of either case; its case is unpinned"
+    },
+    {
+      "name": "fresh_signature_of_any_width",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"abc\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"abc\"}",
+      "sig": null,
+      "why": "the parse checks no width on signature: the verifier holds it to the signer's algorithm"
+    },
+    {
+      "name": "fresh_signature_empty",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"\"}",
+      "sig": null,
+      "why": "no hex digit at all is still hex digits of no width; it verifies under no key"
+    },
+    {
+      "name": "fresh_signature_not_hex",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1g\"}",
+      "parse": "not_hex:signature",
+      "why": "a character that is no hex digit"
+    },
+    {
+      "name": "fresh_fresh_in_capitals",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_hex:fresh",
+      "why": "fresh is 64 lowercase hex characters (REG-4.84): upper-case hex is not the freshness value's one spelling"
+    },
+    {
+      "name": "fresh_fresh_of_63_characters",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_hex:fresh",
+      "why": "fresh is 64 lowercase hex characters (REG-4.84): 63 characters"
+    },
+    {
+      "name": "fresh_fresh_of_65_characters",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_hex:fresh",
+      "why": "fresh is 64 lowercase hex characters (REG-4.84): 65 characters"
+    },
+    {
+      "name": "fresh_fresh_not_hex",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"ge5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_hex:fresh",
+      "why": "fresh is 64 lowercase hex characters (REG-4.84): a character that is no hex digit"
+    },
+    {
+      "name": "fresh_fresh_empty",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_hex:fresh",
+      "why": "fresh is 64 lowercase hex characters (REG-4.84): the empty string"
+    },
+    {
+      "name": "fresh_signer_in_capitals",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_hex:signer",
+      "why": "signer is a fingerprint, 64 lowercase hex characters"
+    },
+    {
+      "name": "fresh_signer_short",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"ababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_hex:signer",
+      "why": "62 characters"
+    },
+    {
+      "name": "board_carries_on_fresh_in_capitals",
+      "kind": "board-carries-on",
+      "bytes": "{\"type\":\"board-carries-on\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_hex:fresh",
+      "why": "the board-carries-on kind holds fresh to the same form"
+    },
+    {
+      "name": "fresh_door_any_string",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d  door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d  door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "sig": null,
+      "why": "the parse reads door as a string: a door that is not this door's own string, a second space between its terms here, PARSES, and its reader refuses it as framed for another door (REG-4.74, REG-4.85)"
+    },
+    {
+      "name": "fresh_node_any_string",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"no enrolment at all\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"no enrolment at all\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "sig": null,
+      "why": "the parse reads node as a string; whether it is an enrolment the console honors is the console's (REG-4.95 step 2)"
+    },
+    {
+      "name": "fresh_with_replaces",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\",\"replaces\":\"1.0.1.0.1.0.2.3\"}",
+      "parse": "unknown_member",
+      "why": "no replaces rides a request of either kind (REG-1.86 (g))"
+    },
+    {
+      "name": "fresh_board_before_node",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_canonical",
+      "why": "the members in another order: board ahead of node"
+    },
+    {
+      "name": "fresh_sig_not_last",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"sig\":\"c0ffee\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_canonical",
+      "why": "sig ahead of signature: sig is the last member"
+    },
+    {
+      "name": "fresh_door_twice",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_canonical",
+      "why": "a member spelled twice: the value stage keeps the last, the members pass and the bytes are not their re-encoding"
+    },
+    {
+      "name": "fresh_trailing_newline",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}\n",
+      "parse": "not_canonical",
+      "why": "a newline after the closing brace"
+    },
+    {
+      "name": "fresh_node_with_a_solidus_escape",
+      "kind": "fresh",
+      "bytes": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep\\/enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep\\/enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "parse": "not_canonical",
+      "why": "a string in an escape the canonical form never writes"
+    },
+    {
+      "name": "approved_with_a_realm_member",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\",\"realm\":\"9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d\"}",
+      "parse": "unknown_member",
+      "why": "NO REALM MEMBER: an answer read on the board is no realm supply (REG-4.203)"
+    },
+    {
+      "name": "approved_with_a_prose_member",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\",\"text\":\"welcome\"}",
+      "parse": "unknown_member",
+      "why": "NO PROSE MEMBER"
+    },
+    {
+      "name": "approved_with_replaces",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\",\"replaces\":\"1.0.1.0.1.0.2.3\"}",
+      "parse": "unknown_member",
+      "why": "no replaces rides an answer: a correction is a further answer (REG-1.43)"
+    },
+    {
+      "name": "approved_the_node_pair_alone",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "sig": null,
+      "why": "the root's approved answer: the node account's pair alone"
+    },
+    {
+      "name": "approved_the_boards_three_members_together",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"board_address\":\"1.0.1\",\"board_principal\":88213,\"board_origin\":\"https://legal.acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"board_address\":\"1.0.1\",\"board_principal\":88213,\"board_origin\":\"https://legal.acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "sig": null,
+      "why": "at depth: the board's address, principal and origin together"
+    },
+    {
+      "name": "approved_the_boards_three_members_and_the_door_origin",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"board_address\":\"1.0.1\",\"board_principal\":88213,\"board_origin\":\"https://legal.acme.example\",\"door_origin\":\"https://acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"board_address\":\"1.0.1\",\"board_principal\":88213,\"board_origin\":\"https://legal.acme.example\",\"door_origin\":\"https://acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "sig": null,
+      "why": "at depth, with the delegating board's origin"
+    },
+    {
+      "name": "approved_the_boards_three_members_with_sig",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"board_address\":\"1.0.1\",\"board_principal\":88213,\"board_origin\":\"https://legal.acme.example\",\"door_origin\":\"https://acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\",\"sig\":\"c0ffee\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"board_address\":\"1.0.1\",\"board_principal\":88213,\"board_origin\":\"https://legal.acme.example\",\"door_origin\":\"https://acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "sig": "c0ffee",
+      "why": "the same, signed"
+    },
+    {
+      "name": "approved_door_origin_without_a_board",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"door_origin\":\"https://acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"door_origin\":\"https://acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "sig": null,
+      "why": "door_origin rides the node pair alone too: a board-carries-on registration's answer at depth carries one pair and the delegating board's origin (REG-4.90)"
+    },
+    {
+      "name": "approved_board_address_alone",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"board_address\":\"1.0.1\",\"door_origin\":\"https://acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "missing_member:board_principal",
+      "why": "the board's three members ride together or not at all: one or two of the three is no approved body"
+    },
+    {
+      "name": "approved_board_principal_alone",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"board_principal\":88213,\"door_origin\":\"https://acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "missing_member:board_address",
+      "why": "the board's three members ride together or not at all: one or two of the three is no approved body"
+    },
+    {
+      "name": "approved_board_origin_alone",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"board_origin\":\"https://legal.acme.example\",\"door_origin\":\"https://acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "missing_member:board_address",
+      "why": "the board's three members ride together or not at all: one or two of the three is no approved body"
+    },
+    {
+      "name": "approved_board_address_and_principal",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"board_address\":\"1.0.1\",\"board_principal\":88213,\"door_origin\":\"https://acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "missing_member:board_origin",
+      "why": "the board's three members ride together or not at all: one or two of the three is no approved body"
+    },
+    {
+      "name": "approved_board_address_and_origin",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"board_address\":\"1.0.1\",\"board_origin\":\"https://legal.acme.example\",\"door_origin\":\"https://acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "missing_member:board_principal",
+      "why": "the board's three members ride together or not at all: one or two of the three is no approved body"
+    },
+    {
+      "name": "approved_board_principal_and_origin",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"board_principal\":88213,\"board_origin\":\"https://legal.acme.example\",\"door_origin\":\"https://acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "missing_member:board_address",
+      "why": "the board's three members ride together or not at all: one or two of the three is no approved body"
+    },
+    {
+      "name": "approved_disposition_neither_value",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "unknown_value:disposition",
+      "why": "disposition is retirement or retirement-and-teardown"
+    },
+    {
+      "name": "approved_disposition_retirement_and_teardown",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "sig": null,
+      "why": "the disposition's second value"
+    },
+    {
+      "name": "approved_collection_interval_with_a_unit",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"14d\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_digits:collection_interval",
+      "why": "collection_interval is a string of decimal digits, at least one"
+    },
+    {
+      "name": "approved_collection_interval_empty",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_digits:collection_interval",
+      "why": "collection_interval is a string of decimal digits, at least one"
+    },
+    {
+      "name": "approved_collection_interval_signed",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"+1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_digits:collection_interval",
+      "why": "collection_interval is a string of decimal digits, at least one"
+    },
+    {
+      "name": "approved_collection_interval_with_a_space",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600 \",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_digits:collection_interval",
+      "why": "collection_interval is a string of decimal digits, at least one"
+    },
+    {
+      "name": "approved_collection_interval_a_fraction",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1.5\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_digits:collection_interval",
+      "why": "collection_interval is a string of decimal digits, at least one"
+    },
+    {
+      "name": "approved_collection_interval_with_a_leading_zero",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"0086400\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"0086400\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "sig": null,
+      "why": "the digits stand as written: the parse holds a count to decimal digits and to no one spelling of its number"
+    },
+    {
+      "name": "approved_prefix_no_address",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"<an address>\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_an_address:prefix",
+      "why": "prefix is an address in dotted decimal"
+    },
+    {
+      "name": "approved_prefix_zero_padded",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.05\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_an_address:prefix",
+      "why": "prefix in a spelling that is not the address's one rendering"
+    },
+    {
+      "name": "approved_node_address_no_address",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"<an address>\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_an_address:node_address",
+      "why": "node_address is an address in dotted decimal"
+    },
+    {
+      "name": "approved_node_address_zero_padded",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.05\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_an_address:node_address",
+      "why": "node_address in a spelling that is not the address's one rendering"
+    },
+    {
+      "name": "approved_policy_no_address",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"<an address>\"}",
+      "parse": "not_an_address:policy",
+      "why": "policy is an address in dotted decimal"
+    },
+    {
+      "name": "approved_policy_zero_padded",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.05\"}",
+      "parse": "not_an_address:policy",
+      "why": "policy in a spelling that is not the address's one rendering"
+    },
+    {
+      "name": "approved_board_address_no_address",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"board_address\":\"1.0\",\"board_principal\":88213,\"board_origin\":\"https://legal.acme.example\",\"door_origin\":\"https://acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_an_address:board_address",
+      "why": "board_address is an address; 1.0 ends on a separator"
+    },
+    {
+      "name": "approved_members_out_of_order",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"node_address\":\"1.0.7\",\"prefix\":\"1.5\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_canonical",
+      "why": "node_address ahead of prefix"
+    },
+    {
+      "name": "approved_door_origin_ahead_of_the_board",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.3\",\"node_address\":\"1.0.9\",\"node_principal\":5120007,\"door_origin\":\"https://acme.example\",\"board_address\":\"1.0.1\",\"board_principal\":88213,\"board_origin\":\"https://legal.acme.example\",\"collection_interval\":\"1209600\",\"disposition\":\"retirement-and-teardown\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_canonical",
+      "why": "door_origin ahead of the board's three members"
+    },
+    {
+      "name": "approved_node_principal_zero_padded",
+      "kind": "approved",
+      "bytes": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":07,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_json",
+      "why": "a number with a leading zero is no JSON"
+    },
+    {
+      "name": "refused_not_this_door",
+      "kind": "refused",
+      "bytes": "{\"type\":\"refused\",\"fault\":\"not-this-door\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"refused\",\"fault\":\"not-this-door\"}",
+      "sig": null,
+      "why": "the refused answer with the fault not-this-door"
+    },
+    {
+      "name": "refused_freshness_spent",
+      "kind": "refused",
+      "bytes": "{\"type\":\"refused\",\"fault\":\"freshness-spent\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"refused\",\"fault\":\"freshness-spent\"}",
+      "sig": null,
+      "why": "the refused answer with the fault freshness-spent"
+    },
+    {
+      "name": "refused_enrolment_not_honored",
+      "kind": "refused",
+      "bytes": "{\"type\":\"refused\",\"fault\":\"enrolment-not-honored\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"refused\",\"fault\":\"enrolment-not-honored\"}",
+      "sig": null,
+      "why": "the refused answer with the fault enrolment-not-honored"
+    },
+    {
+      "name": "refused_any_other_fault",
+      "kind": "refused",
+      "bytes": "{\"type\":\"refused\",\"fault\":\"not-welcome\"}",
+      "parse": "unknown_value:fault",
+      "why": "fault takes its three values and no other"
+    },
+    {
+      "name": "refused_fault_in_capitals",
+      "kind": "refused",
+      "bytes": "{\"type\":\"refused\",\"fault\":\"Freshness-Spent\"}",
+      "parse": "unknown_value:fault",
+      "why": "a value is one spelling"
+    },
+    {
+      "name": "refused_with_a_second_member",
+      "kind": "refused",
+      "bytes": "{\"type\":\"refused\",\"fault\":\"freshness-spent\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "unknown_member",
+      "why": "fault, and NO OTHER MEMBER: a refusal cites no clause"
+    },
+    {
+      "name": "refused_with_replaces",
+      "kind": "refused",
+      "bytes": "{\"type\":\"refused\",\"fault\":\"freshness-spent\",\"replaces\":\"1.0.1.0.1.0.2.3\"}",
+      "parse": "unknown_member",
+      "why": "no replaces rides an answer"
+    },
+    {
+      "name": "denied_policy_and_clause",
+      "kind": "denied",
+      "bytes": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"2\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"2\"}",
+      "sig": null,
+      "why": "the denied answer: the policy version cited and the clause's position"
+    },
+    {
+      "name": "denied_clause_any_position",
+      "kind": "denied",
+      "bytes": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"0\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"0\"}",
+      "sig": null,
+      "why": "the parse checks the form, never that the position exists: clause 0 parses and cites nothing"
+    },
+    {
+      "name": "denied_clause_past_a_machine_word",
+      "kind": "denied",
+      "bytes": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"18446744073709551616\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"18446744073709551616\"}",
+      "sig": null,
+      "why": "a digit string has no bound but the cap"
+    },
+    {
+      "name": "denied_clause_a_word",
+      "kind": "denied",
+      "bytes": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"two\"}",
+      "parse": "not_digits:clause",
+      "why": "clause is a string of decimal digits"
+    },
+    {
+      "name": "denied_clause_empty",
+      "kind": "denied",
+      "bytes": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"\"}",
+      "parse": "not_digits:clause",
+      "why": "clause is a string of decimal digits"
+    },
+    {
+      "name": "denied_clause_signed",
+      "kind": "denied",
+      "bytes": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"-2\"}",
+      "parse": "not_digits:clause",
+      "why": "clause is a string of decimal digits"
+    },
+    {
+      "name": "denied_clause_with_a_point",
+      "kind": "denied",
+      "bytes": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"2.0\"}",
+      "parse": "not_digits:clause",
+      "why": "clause is a string of decimal digits"
+    },
+    {
+      "name": "denied_policy_no_address",
+      "kind": "denied",
+      "bytes": "{\"type\":\"denied\",\"policy\":\"the policy\",\"clause\":\"2\"}",
+      "parse": "not_an_address:policy",
+      "why": "policy is a version address"
+    },
+    {
+      "name": "denied_with_a_finding",
+      "kind": "denied",
+      "bytes": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"2\",\"finding\":\"spam\"}",
+      "parse": "unknown_member",
+      "why": "a citation: NO finding class and never prose about the applicant (REG-4.99)"
+    },
+    {
+      "name": "denied_clause_ahead_of_policy",
+      "kind": "denied",
+      "bytes": "{\"type\":\"denied\",\"clause\":\"2\",\"policy\":\"1.0.1.0.5.2\"}",
+      "parse": "not_canonical",
+      "why": "the members in another order"
+    },
+    {
+      "name": "vouch_first",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"]}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"]}",
+      "sig": null,
+      "why": "a first vouch: the thread's key, no replaces"
+    },
+    {
+      "name": "vouch_with_replaces",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"],\"replaces\":\"1.0.1.0.1.0.2.9\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"],\"replaces\":\"1.0.1.0.1.0.2.9\"}",
+      "sig": null,
+      "why": "a re-vouch names the vouch it follows by its link's address"
+    },
+    {
+      "name": "vouch_with_replaces_and_sig",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"],\"replaces\":\"1.0.1.0.1.0.2.9\",\"sig\":\"c0ffee\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"],\"replaces\":\"1.0.1.0.1.0.2.9\"}",
+      "sig": "c0ffee",
+      "why": "replaces, then sig"
+    },
+    {
+      "name": "vouch_fingerprints_out_of_order",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"]}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"vouch\",\"fingerprints\":[\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"]}",
+      "sig": null,
+      "why": "the parse checks each entry's form and no order: a list out of order PARSES and keys no request, the match array equality at the reader (REG-4.185)"
+    },
+    {
+      "name": "vouch_fingerprints_repeating",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"]}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"]}",
+      "sig": null,
+      "why": "a list repeating a fingerprint PARSES and keys no request"
+    },
+    {
+      "name": "vouch_one_fingerprint",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\"]}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\"]}",
+      "sig": null,
+      "why": "a partial overlap, the device key alone, is a vouch of a different key and of no request holding the others"
+    },
+    {
+      "name": "vouch_no_fingerprint",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[]}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"vouch\",\"fingerprints\":[]}",
+      "sig": null,
+      "why": "an empty array is an array of strings, each of its none in form: it parses and keys no request"
+    },
+    {
+      "name": "vouch_fingerprint_in_capitals",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"]}",
+      "parse": "not_hex:fingerprints",
+      "why": "every fingerprint is 64 lowercase hex characters: upper-case hex"
+    },
+    {
+      "name": "vouch_fingerprint_short",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"]}",
+      "parse": "not_hex:fingerprints",
+      "why": "every fingerprint is 64 lowercase hex characters: 63 characters"
+    },
+    {
+      "name": "vouch_fingerprint_not_hex",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"]}",
+      "parse": "not_hex:fingerprints",
+      "why": "every fingerprint is 64 lowercase hex characters: no hex digits"
+    },
+    {
+      "name": "vouch_replaces_no_address",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"],\"replaces\":\"<the vouch it follows>\"}",
+      "parse": "not_an_address:replaces",
+      "why": "replaces is a link's address"
+    },
+    {
+      "name": "vouch_with_a_payload",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"],\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\"}",
+      "parse": "unknown_member",
+      "why": "the fingerprints are the vouch's whole content: NO payload rides beside them"
+    },
+    {
+      "name": "vouch_with_a_voucher",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"],\"voucher\":\"1.0.3\"}",
+      "parse": "unknown_member",
+      "why": "the voucher is the vouch's home and never a member"
+    },
+    {
+      "name": "vouch_replaces_ahead_of_fingerprints",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"replaces\":\"1.0.1.0.1.0.2.9\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"]}",
+      "parse": "not_canonical",
+      "why": "replaces follows the row's own member"
+    },
+    {
+      "name": "vouch_sig_ahead_of_replaces",
+      "kind": "vouch",
+      "bytes": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"],\"sig\":\"c0ffee\",\"replaces\":\"1.0.1.0.1.0.2.9\"}",
+      "parse": "not_canonical",
+      "why": "sig is the last member"
+    },
+    {
+      "name": "not_an_object",
+      "kind": "refused",
+      "bytes": "[\"refused\"]",
+      "parse": "not_an_object",
+      "why": "a JSON value that is no object"
+    },
+    {
+      "name": "not_json",
+      "kind": "refused",
+      "bytes": "{\"type\":\"refused\",\"fault\":\"freshness-spent\"",
+      "parse": "not_json",
+      "why": "an unclosed object"
+    },
+    {
+      "name": "not_utf8",
+      "kind": "refused",
+      "bytes_hex": "7b2274797065223a2272656675736564222c226661756c74223a22ff227d",
+      "parse": "not_utf8",
+      "why": "a byte no UTF-8 text holds"
+    },
+    {
+      "name": "leading_byte_order_mark",
+      "kind": "refused",
+      "bytes_hex": "efbbbf7b2274797065223a2272656675736564222c226661756c74223a2266726573686e6573732d7370656e74227d",
+      "parse": "not_json",
+      "why": "a byte-order mark ahead of the value: a decoder that drops it would admit a body this parse refuses"
+    },
+    {
+      "name": "fresh_at_the_request_cap",
+      "kind": "fresh",
+      "bytes_filled": {
+        "head": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\",\"sig\":\"",
+        "fill": "a",
+        "tail": "\"}",
+        "len": 65536
+      },
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "sig_filled": true,
+      "why": "a fresh request of exactly 65,536 bytes, its sig counted inside the cap"
+    },
+    {
+      "name": "fresh_one_past_the_request_cap",
+      "kind": "fresh",
+      "bytes_filled": {
+        "head": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\",\"sig\":\"",
+        "fill": "a",
+        "tail": "\"}",
+        "len": 65537
+      },
+      "parse": "past_cap",
+      "why": "one byte more: a fresh request of 65,537 bytes is parsed by no reader"
+    },
+    {
+      "name": "fresh_past_the_other_bodies_cap",
+      "kind": "fresh",
+      "bytes_filled": {
+        "head": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\",\"sig\":\"",
+        "fill": "a",
+        "tail": "\"}",
+        "len": 16385
+      },
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"fresh\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.1\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"board\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"11ee\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"board anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "sig_filled": true,
+      "why": "a fresh request of 16,385 bytes: past every other body's cap and inside its own"
+    },
+    {
+      "name": "board_carries_on_at_the_request_cap",
+      "kind": "board-carries-on",
+      "bytes_filled": {
+        "head": "{\"type\":\"board-carries-on\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\",\"sig\":\"",
+        "fill": "a",
+        "tail": "\"}",
+        "len": 65536
+      },
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"board-carries-on\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "sig_filled": true,
+      "why": "a board-carries-on request of exactly 65,536 bytes, its sig counted inside the cap"
+    },
+    {
+      "name": "board_carries_on_one_past_the_request_cap",
+      "kind": "board-carries-on",
+      "bytes_filled": {
+        "head": "{\"type\":\"board-carries-on\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\",\"sig\":\"",
+        "fill": "a",
+        "tail": "\"}",
+        "len": 65537
+      },
+      "parse": "past_cap",
+      "why": "one byte more: a board-carries-on request of 65,537 bytes is parsed by no reader"
+    },
+    {
+      "name": "board_carries_on_past_the_other_bodies_cap",
+      "kind": "board-carries-on",
+      "bytes_filled": {
+        "head": "{\"type\":\"board-carries-on\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\",\"sig\":\"",
+        "fill": "a",
+        "tail": "\"}",
+        "len": 16385
+      },
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"board-carries-on\",\"door\":\"realm:9f2a6c1d3e5b7a90c2d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2c41d door:1.1.0.1\",\"fresh\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"shape\":\"3.54.1.2\",\"node\":\"{\\\"type\\\":\\\"skep-enroll\\\",\\\"keys\\\":[{\\\"alg\\\":\\\"mldsa65-ed25519\\\",\\\"key\\\":\\\"00ff\\\",\\\"anchor\\\":true,\\\"label\\\":\\\"node anchor 1\\\"}]}\",\"signer\":\"abababababababababababababababababababababababababababababababab\",\"signature\":\"0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c0f1e2d3c\"}",
+      "sig_filled": true,
+      "why": "a board-carries-on request of 16,385 bytes: past every other body's cap and inside its own"
+    },
+    {
+      "name": "approved_at_the_cap",
+      "kind": "approved",
+      "bytes_filled": {
+        "head": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\",\"sig\":\"",
+        "fill": "a",
+        "tail": "\"}",
+        "len": 16384
+      },
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\"}",
+      "sig_filled": true,
+      "why": "a approved body of exactly 16,384 bytes"
+    },
+    {
+      "name": "approved_one_past_the_cap",
+      "kind": "approved",
+      "bytes_filled": {
+        "head": "{\"type\":\"approved\",\"prefix\":\"1.5\",\"node_address\":\"1.0.7\",\"node_principal\":7402918836251,\"collection_interval\":\"1209600\",\"disposition\":\"retirement\",\"policy\":\"1.0.1.0.5.2\",\"sig\":\"",
+        "fill": "a",
+        "tail": "\"}",
+        "len": 16385
+      },
+      "parse": "past_cap",
+      "why": "one byte past 16,384: the request's larger cap is the request's alone"
+    },
+    {
+      "name": "refused_at_the_cap",
+      "kind": "refused",
+      "bytes_filled": {
+        "head": "{\"type\":\"refused\",\"fault\":\"freshness-spent\",\"sig\":\"",
+        "fill": "a",
+        "tail": "\"}",
+        "len": 16384
+      },
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"refused\",\"fault\":\"freshness-spent\"}",
+      "sig_filled": true,
+      "why": "a refused body of exactly 16,384 bytes"
+    },
+    {
+      "name": "refused_one_past_the_cap",
+      "kind": "refused",
+      "bytes_filled": {
+        "head": "{\"type\":\"refused\",\"fault\":\"freshness-spent\",\"sig\":\"",
+        "fill": "a",
+        "tail": "\"}",
+        "len": 16385
+      },
+      "parse": "past_cap",
+      "why": "one byte past 16,384: the request's larger cap is the request's alone"
+    },
+    {
+      "name": "denied_at_the_cap",
+      "kind": "denied",
+      "bytes_filled": {
+        "head": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"2\",\"sig\":\"",
+        "fill": "a",
+        "tail": "\"}",
+        "len": 16384
+      },
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"2\"}",
+      "sig_filled": true,
+      "why": "a denied body of exactly 16,384 bytes"
+    },
+    {
+      "name": "denied_one_past_the_cap",
+      "kind": "denied",
+      "bytes_filled": {
+        "head": "{\"type\":\"denied\",\"policy\":\"1.0.1.0.5.2\",\"clause\":\"2\",\"sig\":\"",
+        "fill": "a",
+        "tail": "\"}",
+        "len": 16385
+      },
+      "parse": "past_cap",
+      "why": "one byte past 16,384: the request's larger cap is the request's alone"
+    },
+    {
+      "name": "vouch_at_the_cap",
+      "kind": "vouch",
+      "bytes_filled": {
+        "head": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"],\"sig\":\"",
+        "fill": "a",
+        "tail": "\"}",
+        "len": 16384
+      },
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"]}",
+      "sig_filled": true,
+      "why": "a vouch body of exactly 16,384 bytes"
+    },
+    {
+      "name": "vouch_one_past_the_cap",
+      "kind": "vouch",
+      "bytes_filled": {
+        "head": "{\"type\":\"vouch\",\"fingerprints\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b\",\"2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c\",\"3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d\",\"4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e\"],\"sig\":\"",
+        "fill": "a",
+        "tail": "\"}",
+        "len": 16385
+      },
+      "parse": "past_cap",
+      "why": "one byte past 16,384: the request's larger cap is the request's alone"
+    }
+  ]
+}

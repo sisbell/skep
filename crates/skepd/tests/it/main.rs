@@ -59,6 +59,7 @@ mod publish;
 mod read_surface;
 mod readme_doc;
 mod register;
+mod registration;
 mod registry;
 mod reinstate;
 mod resolve;

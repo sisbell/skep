@@ -55,13 +55,13 @@ const NESTED_PRINCIPAL: u64 = 932;
 /// the credential record grade's cell as it stands (REG-1.1, REG-4.110; the
 /// `hire` shape) — and the node account's own signed session. No act here
 /// rides a bare session, so the walk runs on an ENFORCING board.
-struct Board {
-    console: String,
-    node_account: String,
-    node_signed: String,
+pub(crate) struct Board {
+    pub(crate) console: String,
+    pub(crate) node_account: String,
+    pub(crate) node_signed: String,
 }
 
-fn registrar_board(port: u16) -> Board {
+pub(crate) fn registrar_board(port: u16) -> Board {
     let console = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let node_account = signed_bootstrap_delegate(port, NODE_PRINCIPAL);
     let node_signed =
@@ -72,7 +72,7 @@ fn registrar_board(port: u16) -> Board {
 /// A response's verdict with the daemon's two families spelled alike —
 /// `credential_refused:<token>`, `registry_refused:<token>` — as
 /// [`verdict`] spells the first.
-fn family_verdict(v: &Value) -> String {
+pub(crate) fn family_verdict(v: &Value) -> String {
     match (v["resp"].as_str(), v["code"].as_str(), v["detail"].as_str()) {
         (Some("rejected"), Some(code), Some(detail)) => format!("{code}:{detail}"),
         _ => verdict(v),
@@ -81,7 +81,7 @@ fn family_verdict(v: &Value) -> String {
 
 /// The text a JSON string fragment spells — [`json_atom`]'s inverse, so a
 /// signed atom's fragment can be landed as given.
-fn unquote(fragment: &str) -> String {
+pub(crate) fn unquote(fragment: &str) -> String {
     serde_json::from_str::<Value>(fragment)
         .ok()
         .and_then(|v| v.as_str().map(str::to_owned))
@@ -91,7 +91,7 @@ fn unquote(fragment: &str) -> String {
 /// An atom's text inserted DECLARED under `ty` at `home`'s next free
 /// position from `signed`, AS GIVEN — no re-signing — the insert's answer
 /// unjudged.
-fn land(port: u16, signed: &str, home: &str, ty: &str, text: &str) -> Value {
+pub(crate) fn land(port: u16, signed: &str, home: &str, ty: &str, text: &str) -> Value {
     let ordinal = next_content_ordinal(port, Some(signed), home);
     op(
         port,
@@ -105,12 +105,19 @@ fn land(port: u16, signed: &str, home: &str, ty: &str, text: &str) -> Value {
 
 /// The `make_link` typed `ty` from `from` to `to`, homed in `home`, from
 /// `signed` — unjudged.
-fn link(port: u16, signed: &str, home: &str, from: &[&str], to: &[&str], ty: &str) -> Value {
+pub(crate) fn link(
+    port: u16,
+    signed: &str,
+    home: &str,
+    from: &[&str],
+    to: &[&str],
+    ty: &str,
+) -> Value {
     op(port, Some(signed), &typed_link_frame(home, from, to, ty))
 }
 
 /// The one address a stored link's slot names, or none.
-fn slot_addrs(link: &Value, slot: usize) -> Vec<String> {
+pub(crate) fn slot_addrs(link: &Value, slot: usize) -> Vec<String> {
     link["slots"][slot]
         .as_array()
         .map(|spans| spans.iter().filter_map(|s| s["start"].as_str().map(str::to_owned)).collect())
@@ -164,7 +171,7 @@ fn next_prefix(index: &BTreeMap<String, (String, Option<String>)>) -> String {
 /// `published` passed affirmatively; a PUBLISHED document: resume at the
 /// deposit; a DRAFT document: refuse LOUDLY — the state the base cannot
 /// produce. The doc 1's address.
-fn mint_doc_one_if_absent(port: u16, signed: &str, account: &str) -> String {
+pub(crate) fn mint_doc_one_if_absent(port: u16, signed: &str, account: &str) -> String {
     let doc1 = format!("{account}.0.1");
     let v = op(port, Some(signed), &doc_metadata_frame(&doc1));
     match v["resp"].as_str() {
@@ -707,13 +714,16 @@ fn a_declared_insert_under_an_unpinned_registry_row_is_refused_at_the_door() {
 
 /// REG-1.28 to REG-1.32 — THE SEEDING CHECK as the daemon's genesis hand
 /// runs it: the shipped lists pass over the domain the daemon reads — the
-/// commons table (`vocabulary`) less the registry's twelve rows, set apart
+/// commons table (`vocabulary`) less the registry's rows, set apart
 /// by equality (`row_at`), the mail type, the credential kinds, the
 /// engine's pins and the media cell kinds among it — so every board in
 /// this suite is a genesis that completed; and each arm refuses a list this
 /// cell builds, through the check function: a foreign row placed inside the
-/// policy link's kind (disjointness), the LIFTED row dropped
-/// (completeness), a sixth kind row (the count). The daemon's lists are
+/// policy link's kind and one inside the registration's (disjointness), the
+/// LIFTED row dropped and a row under `reply` dropped (completeness), a row
+/// under `request` moved off its parent (completeness, the arm recursing),
+/// one kind row more than the range has ordinals and a kind row off the
+/// range (the count). The daemon's lists are
 /// compiled constants with no hook to mutate them, so no daemon is opened
 /// over a failing list here: the refusal's rendering, which the open's
 /// error carries, is pinned on the function's answer.
@@ -728,15 +738,17 @@ fn the_seeding_check_passes_the_shipped_lists_and_refuses_each_arm_on_a_mutated_
     assert_eq!(
         domain.len(),
         vocabulary().len() - rows().len(),
-        "the commons table less the registry's twelve"
+        "the commons table less the registry's own rows"
     );
     assert_eq!(seeding_check(rows(), &domain), Ok(()));
 
-    let mut collided = domain.clone();
-    collided.push(addr("1.1.0.1.0.1.0.3.58.6"));
-    let refusal = seeding_check(rows(), &collided).unwrap_err();
-    assert!(matches!(refusal, SeedingRefusal::Disjointness { .. }), "{refusal}");
-    assert!(refusal.to_string().contains("1.1.0.1.0.1.0.3.58.6"), "{refusal}");
+    for foreign in ["1.1.0.1.0.1.0.3.58.6", "1.1.0.1.0.1.0.3.54.9", "1.1.0.1.0.1.0.3.54.1.7"] {
+        let mut collided = domain.clone();
+        collided.push(addr(foreign));
+        let refusal = seeding_check(rows(), &collided).unwrap_err();
+        assert!(matches!(refusal, SeedingRefusal::Disjointness { .. }), "{refusal}");
+        assert!(refusal.to_string().contains(foreign), "{refusal}");
+    }
 
     let incomplete: Vec<Row> = rows()
         .iter()
@@ -749,15 +761,69 @@ fn the_seeding_check_passes_the_shipped_lists_and_refuses_each_arm_on_a_mutated_
         SeedingRefusal::Completeness { missing: RowOf::Subtype(Subtype::TakedownLifted) }
     );
 
-    let mut sixth: Vec<Row> = rows().to_vec();
-    sixth.push(Row {
+    // A list short one of the registration's rows, and a row under a
+    // parent row moved off its parent — under its kind still, and beside
+    // the parent it belongs under.
+    let short: Vec<Row> = rows()
+        .iter()
+        .filter(|r| r.of != RowOf::Subtype(Subtype::ReplyDenied))
+        .cloned()
+        .collect();
+    assert_eq!(
+        seeding_check(&short, &domain).unwrap_err(),
+        SeedingRefusal::Completeness { missing: RowOf::Subtype(Subtype::ReplyDenied) }
+    );
+    let off_its_parent: Vec<Row> = rows()
+        .iter()
+        .cloned()
+        .map(|mut r| {
+            if r.of == RowOf::Subtype(Subtype::RequestFresh) {
+                r.address = addr("1.1.0.1.0.1.0.3.54.2.9");
+            }
+            r
+        })
+        .collect();
+    let refusal = seeding_check(&off_its_parent, &domain).unwrap_err();
+    assert_eq!(
+        refusal,
+        SeedingRefusal::Completeness { missing: RowOf::Subtype(Subtype::RequestFresh) }
+    );
+    assert_eq!(
+        refusal.to_string(),
+        "completeness: the request's fresh kind has no row under the request"
+    );
+
+    let kinds = Kind::ALL.len();
+    let mut one_more: Vec<Row> = rows().to_vec();
+    one_more.push(Row {
         of: RowOf::Kind(Kind::Binding),
-        address: addr("1.1.0.1.0.1.0.3.54"),
+        address: addr("1.1.0.1.0.1.0.3.53"),
         type_value: Some("binding"),
     });
-    let refusal = seeding_check(&sixth, &domain).unwrap_err();
-    assert_eq!(refusal, SeedingRefusal::Count { kind_row_count: 6, row: None });
+    let refusal = seeding_check(&one_more, &domain).unwrap_err();
+    assert_eq!(refusal, SeedingRefusal::Count { kind_row_count: kinds + 1, row: None });
     assert_eq!(refusal.arm(), "count");
+    let off_the_range: Vec<Row> = rows()
+        .iter()
+        .cloned()
+        .map(|mut r| {
+            if r.of == RowOf::Kind(Kind::Endpoint) {
+                r.address = addr("1.1.0.1.0.1.0.3.60");
+            }
+            r
+        })
+        .collect();
+    // `3.60` is the rail record's, a row of the domain: taken out of it so
+    // the count arm speaks, the disjointness arm aside.
+    let without_the_rail: Vec<Address> =
+        domain.iter().filter(|a| **a != addr("1.1.0.1.0.1.0.3.60")).cloned().collect();
+    assert_eq!(
+        seeding_check(&off_the_range, &without_the_rail).unwrap_err(),
+        SeedingRefusal::Count {
+            kind_row_count: kinds,
+            row: Some(addr("1.1.0.1.0.1.0.3.60"))
+        }
+    );
     sd.shutdown();
 }
 

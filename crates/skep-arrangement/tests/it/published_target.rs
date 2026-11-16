@@ -226,8 +226,9 @@ fn the_declaration_names_the_class_and_the_door_admits_a_held_type_alone() {
     // PUB-2.11 / PUB-2.64 (RES-249, RES-261): the declaration carries the
     // record class's TYPE, and a declared insert on a published target is
     // admitted only where that type is one the deposit class holds —
-    // `deposit_class_types`, today the four atom-bearing kinds; ENROLL's and
-    // RETIRE's are deposited here, and the generated law below asks all four.
+    // `deposit_class_types`, today the atom-bearing kinds whose records the
+    // daemon parses; ENROLL's and RETIRE's are deposited here, and the
+    // generated law below asks every member.
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let (enroll_start, _) = vs
@@ -244,7 +245,11 @@ fn the_declaration_names_the_class_and_the_door_admits_a_held_type_alone() {
     // (`3.3`) — deposit no atom, and the deposit class never holds their
     // types; a SUBTYPE beneath a member is no member, membership being
     // equality; and an address that is no type at all — the target itself,
-    // its own content, an account — is none either. Each answers as an
+    // its own content, an account — is none either. And the registry rows
+    // that carry no deposit are no members, whatever nests under them: the
+    // registration's kind row (`3.54`), its parent rows `request` (`3.54.1`)
+    // and `reply` (`3.54.2`), under which the members sit, and its approval
+    // (`3.54.4`), a link alone (REG-1.18, REG-1.23). Each answers as an
     // undeclared append does.
     let commons = |ordinal: u32| a(&[1, 1, 0, 1, 0, 1, 0, 3, ordinal]);
     let before = k.current_seq();
@@ -255,6 +260,11 @@ fn the_declaration_names_the_class_and_the_door_admits_a_held_type_alone() {
         ("the claim link's type", commons(3)),
         ("a subtype beneath ENROLL", a(&[1, 1, 0, 1, 0, 1, 0, 3, 1, 1])),
         ("the first unallocated commons ordinal", commons(4)),
+        ("the registration's kind row", commons(54)),
+        ("the registration's parent row `request`", a(&[1, 1, 0, 1, 0, 1, 0, 3, 54, 1])),
+        ("the registration's parent row `reply`", a(&[1, 1, 0, 1, 0, 1, 0, 3, 54, 2])),
+        ("the registration's approval, a link alone", a(&[1, 1, 0, 1, 0, 1, 0, 3, 54, 4])),
+        ("a row under `request` no lane has landed", a(&[1, 1, 0, 1, 0, 1, 0, 3, 54, 1, 3])),
         ("the target itself", pdoc()),
         ("the target's own content", pca(1)),
         ("an account", a(&[1, 0, 1])),
@@ -306,9 +316,11 @@ fn the_door_admits_a_declared_type_exactly_when_it_equals_a_held_type() {
     // of every address one step from a member in the tumbler tree, generated
     // rather than chosen: each T4-valid PREFIX of each of the set's members
     // (its type subspace, the ghost home document, that document's account,
-    // its node), each member, each member's first CHILD, and the commons
-    // ordinals beside the members — at the one position a published document
-    // admits a deposit. A door testing containment in either direction, or
+    // its node — and, for a member that is a row nested under rows, each row
+    // above it: the registration's kind row and its parent rows `request`
+    // and `reply`, which carry no deposit), each member, each member's first
+    // CHILD, and the commons rows beside the members — at the one position a
+    // published document admits a deposit. A door testing containment in either direction, or
     // the document or subspace a type lies in, admits one of these; a door
     // holding only part of the set refuses one of its members.
     let k = mem_kernel();
@@ -325,14 +337,21 @@ fn the_door_admits_a_declared_type_exactly_when_it_equals_a_held_type() {
         let child = Tumbler::new(comps.iter().cloned().chain([n(1)])).expect("nonempty");
         family.push(validate(child).expect("a member's child is T4-valid"));
     }
-    family.extend([3, 4, 54, 57].map(|ordinal| a(&[1, 1, 0, 1, 0, 1, 0, 3, ordinal])));
+    family.extend([3, 4, 53, 57].map(|ordinal| a(&[1, 1, 0, 1, 0, 1, 0, 3, ordinal])));
+    family.push(a(&[1, 1, 0, 1, 0, 1, 0, 3, 54, 4]));
     family.sort();
     family.dedup();
+    let members = deposit_class_types().len();
     assert_eq!(
         family.len(),
-        17,
-        "five shared prefixes, four members, four children, four siblings"
+        5 + 3 + 2 * members + 5,
+        "five shared prefixes, the three registration rows the members nest under, each member \
+         and its child, five siblings"
     );
+    for above in [&[54][..], &[54, 1], &[54, 2]] {
+        let row: Vec<u32> = [1, 1, 0, 1, 0, 1, 0, 3].into_iter().chain(above.iter().copied()).collect();
+        assert!(family.contains(&a(&row)), "3.{above:?} is asked, a row above a member");
+    }
     let mut admitted: Vec<Address> = Vec::new();
     for ty in &family {
         let held = deposit_class_types().contains(ty);

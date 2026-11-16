@@ -14,9 +14,11 @@ use skep_arrangement::AsOf;
 use skep_arrangement::{deposit_class_types, Caller, Deposit, HasM5};
 use skep_content::{HasContent, Val};
 use skep_engine::types::{
-    pins_outside_the_registry, t_binding, t_disavowal, t_endpoint, t_expulsion_ground,
-    t_policy_link, t_policy_link_own, t_succession_ground, t_succession_policy, t_successor_of,
-    t_takedown, t_takedown_base, t_takedown_lifted,
+    pins_outside_the_registry, t_approval, t_binding, t_disavowal, t_endpoint,
+    t_expulsion_ground, t_policy_link, t_policy_link_own, t_registration, t_reply,
+    t_reply_approved, t_reply_denied, t_reply_refused, t_request, t_request_board_carries_on,
+    t_request_fresh, t_succession_ground, t_succession_policy, t_successor_of, t_takedown,
+    t_takedown_base, t_takedown_lifted, t_vouch,
 };
 use skep_engine::{Engine, Seq, World};
 use skep_febe::{Disposition, Op, OperationSurface, RejectCode, Request, Response, SessionId};
@@ -326,18 +328,29 @@ fn the_format_pins_its_five_reserved_addresses() {
     }
 }
 
-/// REG-1.24, REG-1.32 — THE TWELVE ROWS ARE PRESENT at every board as the
-/// ledger's pins, at the addresses commons-map pins, each the one row
-/// `skep-registry`'s table holds: five kinds at `3.55`–`3.59`, seven subtype
-/// rows under their kinds. A commons row is a compiled address and never a
-/// record, so genesis seeds nothing at any of them — nothing is allocated
-/// at a row on a fresh board, and the ghost document is born empty as the
-/// cell above shows; `successor-of`, the engine's own pin, is held equal to
-/// the table's `3.59`.
+/// REG-1.24, REG-1.32 — THE REGISTRY'S ROWS ARE PRESENT at every board as
+/// the ledger's pins, at the addresses commons-map pins, each the one row
+/// `skep-registry`'s table holds, row for row and none short: the kinds at
+/// `3.54`–`3.59`, the subtype rows under their kinds, and under the
+/// registration's `request` and `reply` the rows beneath those. A commons
+/// row is a compiled address and never a record, so genesis seeds nothing
+/// at any of them — nothing is allocated at a row on a fresh board, and the
+/// ghost document is born empty as the cell above shows; `successor-of`,
+/// the engine's own pin, is held equal to the table's `3.59`.
 #[test]
-fn the_registrys_twelve_rows_are_the_ledgers_pins_at_the_maps_addresses() {
+fn the_registrys_rows_are_the_ledgers_pins_at_the_maps_addresses() {
     type Reader = fn() -> &'static Address;
-    let readers: [(Reader, &str); 12] = [
+    let readers: &[(Reader, &str)] = &[
+        (t_registration, "54"),
+        (t_request, "54.1"),
+        (t_request_fresh, "54.1.1"),
+        (t_request_board_carries_on, "54.1.2"),
+        (t_reply, "54.2"),
+        (t_reply_approved, "54.2.1"),
+        (t_reply_refused, "54.2.2"),
+        (t_reply_denied, "54.2.3"),
+        (t_vouch, "54.3"),
+        (t_approval, "54.4"),
         (t_binding, "55"),
         (t_endpoint, "56"),
         (t_takedown, "57"),
@@ -351,6 +364,7 @@ fn the_registrys_twelve_rows_are_the_ledgers_pins_at_the_maps_addresses() {
         (t_succession_policy, "58.5"),
         (t_successor_of, "59"),
     ];
+    assert_eq!(readers.len(), skep_registry::rows().len(), "one reader per row of the table");
     let engine = mem_engine();
     let snap = engine.kernel().snapshot();
     let m3 = snap.world().m3();
@@ -365,8 +379,9 @@ fn the_registrys_twelve_rows_are_the_ledgers_pins_at_the_maps_addresses() {
 
 /// REG-1.30 to REG-1.32 — THE SEEDING CHECK over what the engine sees: the
 /// registry's rows against the ledger's pins outside the registry and M5's
-/// deposit-class set, with the set's two registry members set aside — they
-/// are the rows spelled a second time, held equal above, and no foreign row.
+/// deposit-class set, with the set's registry members set aside — they are
+/// the rows spelled a second time, held equal by the ledger's own tests,
+/// and no foreign row.
 /// The three arms pass over this domain; each arm's refusal is proved on a
 /// list the registry crate's own suite builds, and the daemon's check runs
 /// over the build's whole commons table less the registry's rows, a domain

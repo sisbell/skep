@@ -66,12 +66,30 @@ pub const T_SUPERSEDES: &str = "1.1.0.1.0.1.0.1.4";
 /// predicate).
 pub const T_GRANT: &str = "1.1.0.1.0.1.0.3.90";
 
-/// The registry's two record-deposit kinds (REG-1.14; `skep_registry`'s
-/// table, the engine's ledger): the BINDING `3.55` and the ENDPOINT `3.56`
-/// of the ghost document's type subspace, spelled as a client names them —
-/// the deposit class's third and fourth members (wire.md §Registry).
+/// The registry's two first record-deposit kinds (REG-1.14;
+/// `skep_registry`'s table, the engine's ledger): the BINDING `3.55` and the
+/// ENDPOINT `3.56` of the ghost document's type subspace, spelled as a
+/// client names them — members of the deposit class (wire.md §Registry).
 pub const T_BINDING: &str = "1.1.0.1.0.1.0.3.55";
 pub const T_ENDPOINT: &str = "1.1.0.1.0.1.0.3.56";
+
+/// The REGISTRATION kind's ten rows (REG-1.14, REG-1.15; commons-map's
+/// table), spelled as a client names them: the kind `3.54`; the REQUEST
+/// `3.54.1`, a parent row, with its kinds FRESH and BOARD-CARRIES-ON beneath
+/// it; the REPLY `3.54.2`, a parent row, with its answers APPROVED, REFUSED
+/// and DENIED beneath it; the VOUCH `3.54.3`; and the APPROVAL `3.54.4`, a
+/// link alone. The six that carry a deposit — the request's two kinds, the
+/// three answers and the vouch — are members of the deposit class.
+pub const T_REGISTRATION: &str = "1.1.0.1.0.1.0.3.54";
+pub const T_REQUEST: &str = "1.1.0.1.0.1.0.3.54.1";
+pub const T_REQUEST_FRESH: &str = "1.1.0.1.0.1.0.3.54.1.1";
+pub const T_REQUEST_BOARD_CARRIES_ON: &str = "1.1.0.1.0.1.0.3.54.1.2";
+pub const T_REPLY: &str = "1.1.0.1.0.1.0.3.54.2";
+pub const T_REPLY_APPROVED: &str = "1.1.0.1.0.1.0.3.54.2.1";
+pub const T_REPLY_REFUSED: &str = "1.1.0.1.0.1.0.3.54.2.2";
+pub const T_REPLY_DENIED: &str = "1.1.0.1.0.1.0.3.54.2.3";
+pub const T_VOUCH: &str = "1.1.0.1.0.1.0.3.54.3";
+pub const T_APPROVAL: &str = "1.1.0.1.0.1.0.3.54.4";
 
 /// The records of each commit the registry seed makes ahead of its links.
 ///
@@ -99,7 +117,7 @@ pub const SEED_LINK_RECORDS: u64 = 3;
 ///
 /// The table is built at run time, so no `const` reads its length;
 /// `vocabulary.rs` holds this equal to it.
-pub const SEED_TYPES: u64 = 124;
+pub const SEED_TYPES: u64 = 134;
 
 /// A fresh board's first commit, and so the change feed's first line.
 pub const SEED_FIRST_AT: u64 = SEED_LEAD_RECORDS[0];
@@ -129,7 +147,7 @@ pub const SEED_LEAD_COMMITS: u64 = SEED_LEAD_RECORDS.len() as u64;
 
 // The positions the facts above give, spelled out: a changed fact fails the
 // build here until the positions it moves are spelled again.
-const _: () = assert!(SEED_FIRST_AT == 3 && SEED_PUBLISH_AT == 10 && SEED_HEAD == 382);
+const _: () = assert!(SEED_FIRST_AT == 3 && SEED_PUBLISH_AT == 10 && SEED_HEAD == 412);
 
 /// The positions of the seed's rows every class sees on a fresh board.
 ///
@@ -659,17 +677,148 @@ pub fn endpoint_body(origins: &[&str], replaces: Option<&str>) -> String {
     )
 }
 
+/// A REGISTRATION REQUEST's body in its canonical form (REG-1.86;
+/// `skep_registry`'s encoder), of the kind the row `ty` names — fresh, with
+/// a board root's enrolment, or board-carries-on, without — its signed
+/// `shape` as given, so a cell can name another row than the one its link
+/// is typed. The members the board reads no further than their form — the
+/// door, the freshness value, the enrolments, the signer and the
+/// applicant's signature — are fixed stand-ins: the applicant's signature
+/// is a console's to verify, never the board's.
+pub fn request_body(ty: &str, shape: &str) -> String {
+    let hex64 = |byte: &str| skep_registry::Hex64::new(byte.repeat(32)).expect("64 lowercase hex");
+    let door = format!("realm:{} door:{CLAIMANT_ACCOUNT}", "9f".repeat(32));
+    let node = r#"{"type":"skep-enroll","node":true}"#.to_string();
+    let signature = skep_registry::HexDigits::new("0f1e2d3c").expect("hex");
+    let body = match ty {
+        T_REQUEST_FRESH => skep_registry::RegistrationBody::Fresh(skep_registry::Fresh {
+            door,
+            fresh: hex64("5e"),
+            shape: shape.to_string(),
+            node,
+            board: r#"{"type":"skep-enroll","board":true}"#.to_string(),
+            signer: hex64("ab"),
+            signature,
+        }),
+        T_REQUEST_BOARD_CARRIES_ON => {
+            skep_registry::RegistrationBody::BoardCarriesOn(skep_registry::BoardCarriesOn {
+                door,
+                fresh: hex64("5f"),
+                shape: shape.to_string(),
+                node,
+                signer: hex64("ab"),
+                signature,
+            })
+        }
+        other => panic!("{other} is no request row"),
+    };
+    skep_registry::encode_registration(&body, None)
+}
+
+/// An ANSWER's body in its canonical form (REG-1.86), of the row `ty`
+/// names: the root's approved answer — the node account's pair alone — a
+/// refusal for a spent freshness value, or a denial citing a clause.
+pub fn answer_body(ty: &str) -> String {
+    let address = |s: &str| skep_resolve::parse_address(s).expect("an address");
+    let digits = |s: &str| skep_registry::Digits::new(s).expect("decimal digits");
+    let body = match ty {
+        T_REPLY_APPROVED => skep_registry::RegistrationBody::Approved(skep_registry::Approved {
+            prefix: address("1.5"),
+            node_address: address("1.0.7"),
+            node_principal: skep_registry::Principal::new(7_402_918_836_251).expect("a principal"),
+            board: None,
+            door_origin: None,
+            collection_interval: digits("1209600"),
+            disposition: skep_registry::Disposition::Retirement,
+            policy: address("1.0.1.0.5.2"),
+        }),
+        T_REPLY_REFUSED => skep_registry::RegistrationBody::Refused(skep_registry::Refused {
+            fault: skep_registry::Fault::FreshnessSpent,
+        }),
+        T_REPLY_DENIED => skep_registry::RegistrationBody::Denied(skep_registry::Denied {
+            policy: address("1.0.1.0.5.2"),
+            clause: digits("2"),
+        }),
+        other => panic!("{other} is no answer row"),
+    };
+    skep_registry::encode_registration(&body, None)
+}
+
+/// A VOUCH's body in its canonical form (REG-1.86): two fingerprints, and
+/// `replaces` where a re-vouch names the vouch it follows.
+pub fn vouch_body(replaces: Option<&str>) -> String {
+    let fingerprints =
+        ["0a", "1b"].map(|b| skep_registry::Hex64::new(b.repeat(32)).expect("a fingerprint"));
+    skep_registry::encode_registration(
+        &skep_registry::RegistrationBody::Vouch(skep_registry::Vouch {
+            fingerprints: fingerprints.to_vec(),
+            replaces: replaces.map(|s| skep_resolve::parse_address(s).expect("an address")),
+        }),
+        None,
+    )
+}
+
+/// A REGISTRATION RECORD's body — a request's, an answer's or the vouch's,
+/// in `skep_registry`'s canonical form — SIGNED at the record grade by
+/// `signer` for a deposit homed in `home`, typed `ty`, naming `to`
+/// (REG-1.23; REG-1.86 (e)): the atom's TEXT, the body carrying, as its
+/// `sig`, the hybrid blob's hex over [`record_frame_for`]'s frame with the
+/// body's sig-less canonical projection as its body-bytes row, as
+/// [`signed_registry_text`] signs a binding. `None` where the frame cannot
+/// be composed, where `ty` is no body-bearing registration row, or where
+/// `body` is no record of that row under the canonical rule.
+pub fn signed_registration_text(
+    port: u16,
+    signer: &HybridSigner,
+    home: &str,
+    ty: &str,
+    to: &[&str],
+    body: &str,
+) -> Option<String> {
+    let kind = skep_registry::RegistrationKind::at(&skep_resolve::parse_address(ty)?)?;
+    let record = skep_registry::parse_registration(kind, body.as_bytes()).ok()?;
+    let alg = SigAlgRow::of_tag(signer.tag())?.token;
+    let canonical = record.canonical_sigless();
+    let frame = record_frame_for(port, alg, home, ty, to, canonical.as_bytes())?;
+    Some(skep_registry::encode_registration(&record.body, Some(&hex(&signer.sign(&frame)))))
+}
+
+/// A registry record's ATOM (its JSON fragment) SIGNED for the deposit its
+/// caller is about to make, under the key that opened `token`: a
+/// registration row's through [`signed_registration_text`], every other
+/// kind's through [`signed_atom`] — which returns the atom as given where
+/// nothing can be signed, as this does.
+pub fn signed_registry_atom(
+    port: u16,
+    token: &str,
+    home: &str,
+    ty: &str,
+    to: &[&str],
+    body: &str,
+) -> String {
+    let registration = signer_of(token).and_then(|(_, seed)| {
+        let signer = HybridSigner::from_seed(FIXTURE_TAG, &seed)?;
+        signed_registration_text(port, &signer, home, ty, to, body)
+    });
+    match registration {
+        Some(text) => json_atom(&text),
+        None => signed_atom(port, token, home, ty, to, &json_atom(body)),
+    }
+}
+
 /// A REGISTRY RECORD DEPOSIT (REG-2.18, REG-2.19, REG-2.23; the record grade
 /// for registry records): `body` — a binding's or an endpoint's canonical
-/// text — SIGNED at the record grade under the key that opened `signed`
-/// ([`signed_atom`]: the body's sig-less projection framed over `home`, `ty`
-/// and `to`), inserted DECLARED under `ty` at `home`'s next free content
-/// position, then the `make_link` typed `ty` from the atom's verified
-/// I-address — the insert's own ack — to `to`: the account bound for a
-/// binding, none for a targetless one or an endpoint. Answers `(the atom's
-/// address, the link's answer)`, the link UNJUDGED so a refusal cell reads
-/// its token; the insert is asserted, every refusal a cell pins being the
-/// link's unless the cell lands the atom itself.
+/// text, or a registration row's — SIGNED at the record grade under the key
+/// that opened `signed` ([`signed_registry_atom`]: the body's sig-less
+/// projection framed over `home`, `ty` and `to`), inserted DECLARED under
+/// `ty` at `home`'s next free content position, then the `make_link` typed
+/// `ty` from the atom's verified I-address — the insert's own ack — to
+/// `to`: the account bound for a binding, none for a targetless one or an
+/// endpoint, the board's binding-writing account for a request or a vouch,
+/// the request's link for an answer. Answers `(the atom's address, the
+/// link's answer)`, the link UNJUDGED so a refusal cell reads its token;
+/// the insert is asserted, every refusal a cell pins being the link's
+/// unless the cell lands the atom itself.
 pub fn deposit_registry_record(
     port: u16,
     signed: &str,
@@ -678,7 +827,7 @@ pub fn deposit_registry_record(
     to: &[&str],
     body: &str,
 ) -> (String, Value) {
-    let atom = signed_atom(port, signed, home, ty, to, &json_atom(body));
+    let atom = signed_registry_atom(port, signed, home, ty, to, body);
     let ordinal = next_content_ordinal(port, Some(signed), home);
     let v = op(
         port,

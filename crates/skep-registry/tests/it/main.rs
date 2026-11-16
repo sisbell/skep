@@ -3,5 +3,7 @@
 
 mod body;
 mod check;
+mod policy;
+mod registration;
 mod rows;
 mod tidy;

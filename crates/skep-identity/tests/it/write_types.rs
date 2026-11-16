@@ -34,14 +34,29 @@ const T_SUPERSESSION: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 1, 4];
 // ordinals deep, as the real one is (`3.102.1` under counterpart): no
 // placeholder above sits at `…0.2.102`, so it is prefix-free against all.
 const T_CORRESPONDENCE: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 102, 1];
+// The registration class's placeholders are its LEAF rows' shapes, as the
+// real ones are (REG-1.22, REG-1.46): the request's two kinds and the
+// reply's three answers, each a row under a parent row, three ordinals
+// deep, and the approval, two deep. No placeholder sits at the kind
+// `…0.2.54`, at a parent row `…0.2.54.1` or `…0.2.54.2`, or at the vouch
+// `…0.2.54.3`, so the six are prefix-free against all and one another.
+const T_REGISTRATION_ROWS: [&[u32]; 6] = [
+    &[1, 1, 0, 1, 0, 1, 0, 2, 54, 1, 1],
+    &[1, 1, 0, 1, 0, 1, 0, 2, 54, 1, 2],
+    &[1, 1, 0, 1, 0, 1, 0, 2, 54, 2, 1],
+    &[1, 1, 0, 1, 0, 1, 0, 2, 54, 2, 2],
+    &[1, 1, 0, 1, 0, 1, 0, 2, 54, 2, 3],
+    &[1, 1, 0, 1, 0, 1, 0, 2, 54, 4],
+];
 
 fn credential() -> TypeAddrs {
     TypeAddrs::new(addr(T_ENROLL), addr(T_RETIRE), addr(T_CLAIM))
 }
 
-/// The list in PUB-6.64's order.
+/// The list in PUB-6.64's order, the registration class last, one pair a
+/// leaf row.
 fn audit_list() -> Vec<(AuditClass, skep_address::Address)> {
-    vec![
+    let mut list = vec![
         (AuditClass::SuccessorOf, addr(T_SUCCESSOR_OF)),
         (AuditClass::DelegatorEndorsement, addr(T_ENDORSE)),
         (AuditClass::ConsumptionMarker, addr(T_CONSUMPTION_MARKER)),
@@ -54,7 +69,9 @@ fn audit_list() -> Vec<(AuditClass, skep_address::Address)> {
         (AuditClass::PolicyLink, addr(T_POLICY_LINK)),
         (AuditClass::Supersession, addr(T_SUPERSESSION)),
         (AuditClass::Correspondence, addr(T_CORRESPONDENCE)),
-    ]
+    ];
+    list.extend(T_REGISTRATION_ROWS.map(|row| (AuditClass::Registration, addr(row))));
+    list
 }
 
 fn write_types() -> WriteTypes {
@@ -221,7 +238,10 @@ fn the_declared_order_of_the_classes_decides_nothing() {
         T_POLICY_LINK,
         T_SUPERSESSION,
         T_CORRESPONDENCE,
-    ] {
+    ]
+    .into_iter()
+    .chain(T_REGISTRATION_ROWS)
+    {
         let subtype: Vec<u32> = class_addr.iter().copied().chain([1]).collect();
         for slot in [vec![unit(class_addr)], vec![unit(&subtype)]] {
             let answer = declared.target_class(&slot);
@@ -328,6 +348,60 @@ fn a_subtype_by_prefix_is_a_member_of_its_class() {
         "two levels down"
     );
     assert_eq!(t.target_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 1, 7])]), None, "no credential subtypes");
+}
+
+/// REG-1.22, REG-1.43, REG-1.46 — THE REGISTRATION CLASS SITS AT ITS LEAF
+/// ROWS: one class given several addresses, a pair apiece — each request
+/// kind, each answer and the approval link answers it, and so does an
+/// address beneath one — while the kind's own row, the parent rows
+/// `request` and `reply`, a row under a parent that the class was given no
+/// address for, and THE VOUCH answer none: the vouch is read on the active
+/// view and its `nullify` lands, which is why the class sits at no address
+/// above its rows, where a prefix would take the vouch with it.
+#[test]
+fn the_registration_class_sits_at_its_leaf_rows_and_never_takes_the_vouch() {
+    let t = write_types();
+    let registration = Some(TargetClass::AuditView(AuditClass::Registration));
+    for row in T_REGISTRATION_ROWS {
+        assert_eq!(t.target_class(&[unit(row)]), registration, "{row:?}");
+        let beneath: Vec<u32> = row.iter().copied().chain([1]).collect();
+        assert_eq!(t.target_class(&[unit(&beneath)]), registration, "beneath {row:?}");
+    }
+    for (ordinary, what) in [
+        (&[1u32, 1, 0, 1, 0, 1, 0, 2, 54][..], "the kind's own row"),
+        (&[1, 1, 0, 1, 0, 1, 0, 2, 54, 1], "the parent row `request`"),
+        (&[1, 1, 0, 1, 0, 1, 0, 2, 54, 2], "the parent row `reply`"),
+        (&[1, 1, 0, 1, 0, 1, 0, 2, 54, 3], "the vouch"),
+        (&[1, 1, 0, 1, 0, 1, 0, 2, 54, 3, 1], "beneath the vouch"),
+        (&[1, 1, 0, 1, 0, 1, 0, 2, 54, 1, 3], "a row under `request` no lane has landed"),
+        (&[1, 1, 0, 1, 0, 1, 0, 2, 54, 2, 4], "a row under `reply` no lane has landed"),
+        (&[1, 1, 0, 1, 0, 1, 0, 2, 54, 5], "a fifth row under the kind"),
+    ] {
+        assert_eq!(t.target_class(&[unit(ordinary)]), None, "{what}");
+    }
+    // A class is complete with one address: a list short one of the six
+    // still builds, and that row's slot is then an ordinary link — the
+    // builder's list is what holds each row, the completeness assertion
+    // holding only that the class has an address at all.
+    let short: Vec<_> =
+        audit_list().into_iter().filter(|(_, a)| *a != addr(T_REGISTRATION_ROWS[3])).collect();
+    let short = WriteTypes::new(credential(), addr(T_GRANT), short);
+    assert_eq!(short.target_class(&[unit(T_REGISTRATION_ROWS[3])]), None);
+    assert_eq!(short.target_class(&[unit(T_REGISTRATION_ROWS[2])]), registration);
+    // And the class at the kind's own row would take the vouch: refused at
+    // no construction, since nothing else sits under it here, which is the
+    // reason the builder gives the leaf rows.
+    let mut at_the_kind: Vec<_> = audit_list()
+        .into_iter()
+        .filter(|(class, _)| *class != AuditClass::Registration)
+        .collect();
+    at_the_kind.push((AuditClass::Registration, addr(&[1, 1, 0, 1, 0, 1, 0, 2, 54])));
+    let at_the_kind = WriteTypes::new(credential(), addr(T_GRANT), at_the_kind);
+    assert_eq!(
+        at_the_kind.target_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 54, 3])]),
+        registration,
+        "a class at the kind takes the vouch by prefix"
+    );
 }
 
 /// `kind_of` UNCHANGED: on every slot — a credential unit, a credential

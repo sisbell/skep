@@ -474,7 +474,7 @@ pub enum DaemonError {
     /// The registry's seeding check refused the genesis (REG-1.28 to REG-1.32).
     ///
     /// One of its three arms — disjointness, completeness, the count — fired
-    /// over the registry's twelve rows and every other commons row this build
+    /// over the registry's rows and every other commons row this build
     /// holds, the refusal naming the arm. Run ahead of `Engine::open` on
     /// every open, so a refusal is a genesis that does not complete: nothing
     /// is written and no engine is opened. A build fault, never a data dir's:
@@ -1462,8 +1462,8 @@ impl Daemon {
             salt,
         };
         // The seeding check, this daemon its hand (REG-1.28, REG-1.32): the
-        // registry's three arms over its twelve rows and every other commons
-        // row this build holds, ahead of the engine on every open — a fresh
+        // registry's three arms over its rows and every other commons row
+        // this build holds, ahead of the engine on every open — a fresh
         // data dir's genesis and a reopen's re-genesis alike — so a refusal
         // is a genesis that does not complete: no claim, no session and no
         // board record, nothing written, no engine opened.

@@ -297,7 +297,8 @@ struct DeclaredRecord<'a> {
 ///
 /// It is the record grade's parse, 2a, and for registry records 2b's.
 /// `Some` iff `op` is an `insert` declared under a kind of the
-/// record-deposit set — the credential set's, or the registry's two
+/// record-deposit set — the credential set's, or the registry's: the
+/// binding, the endpoint and the registration's deposit-carrying rows
 /// ([`registry_deposit_kind`]: the exemption widened to the registry's
 /// kinds) — its type read as a type slot through the one spelling of `enc`,
 /// as every classification here reads one — whose one value parses as a
@@ -309,7 +310,7 @@ struct DeclaredRecord<'a> {
 /// declared under no record kind, more or fewer than one value, or bytes
 /// that are no record of the kind — prose, a record of another kind, a
 /// record past [`skep_identity::MAX_RECORD_BYTES`] or a registry body past
-/// its own cap (`too_large` at the parse's own head, as at the read, which
+/// its kind's own cap (`too_large` at the parse's own head, as at the read, which
 /// is also what bounds this parse of a value no read has capped, under the
 /// serialization lock). A claim's kind answers `None`: a claim carries no
 /// record (AUTH-2.48) and a declared claim atom is refused at M5's door, so
@@ -347,11 +348,12 @@ fn declared_record_atom(op: &Op) -> Option<DeclaredRecord<'_>> {
         };
         return Some(DeclaredRecord { doc, carries_sig });
     }
-    // The registry's two kinds (2b): the body under the canonical rule, by
-    // the kind the declaration names.
+    // The registry's kinds (2b): the body under the canonical rule, by the
+    // kind the declaration names — the binding's, the endpoint's, or a
+    // registration row's.
     let kind = registry_deposit_kind(&slot)?;
-    let record = skep_registry::parse(kind.body_kind(), atom.as_bytes()).ok()?;
-    Some(DeclaredRecord { doc, carries_sig: record.sig.is_some() })
+    let record = kind.parse(atom.as_bytes()).ok()?;
+    Some(DeclaredRecord { doc, carries_sig: record.sig().is_some() })
 }
 
 /// Answers A3's test: whether the system account owns every `doc` in the frame.

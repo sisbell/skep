@@ -338,6 +338,106 @@ fn a_board_seeded_before_the_reader_state_rows_gains_the_five_at_the_next_open()
     sd.shutdown();
 }
 
+/// The registration kind's ten rows, by their ordinals: the kind, its parent
+/// rows `request` and `reply` with the rows beneath each, the vouch and the
+/// approval (REG-1.14, REG-1.15).
+const REGISTRATION: [&[u32]; 10] = [
+    &[54],
+    &[54, 1],
+    &[54, 1, 1],
+    &[54, 1, 2],
+    &[54, 2],
+    &[54, 2, 1],
+    &[54, 2, 2],
+    &[54, 2, 3],
+    &[54, 3],
+    &[54, 4],
+];
+
+/// REG-1.32 — A BOARD SEEDED BEFORE THE REGISTRATION KIND GAINS ITS TEN ROWS
+/// AT THE NEXT OPEN AND KEEPS ITS OTHERS: a kind or subtype row added later
+/// is an image fact, a pin of a newer image seeded at that board's next
+/// open. A board whose first open ran under the table less the ten rows —
+/// the kind `3.54`, its parent rows, the rows beneath them, the vouch and
+/// the approval hidden from it — stands ten links short of a fresh board's
+/// head; the next open under the whole table writes the ten sections in one
+/// insert, publishes them and links each — 40 records — and its one line
+/// says `10 of N`. Each of the ten then has one `defines` link whose `from`
+/// reads as its section, the map's words; every other row keeps the one
+/// link it had, never two; the reserve's other ordinals `3.51` to `3.53`
+/// and the ordinals no row takes under the kind have none; and the board
+/// stands where a fresh board of this build stands, `SEED_HEAD`, its head
+/// moved by the ten rows.
+#[test]
+fn a_board_seeded_before_the_registration_rows_gains_the_ten_at_the_next_open() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let table = vocabulary();
+    let family: Vec<&Definition> = REGISTRATION
+        .iter()
+        .map(|ordinals| {
+            definition_at(&skep_registry::commons_type(ordinals))
+                .unwrap_or_else(|| panic!("3.{ordinals:?} is a row of the table"))
+        })
+        .collect();
+    let rows = family.len() as u64;
+    for def in &family {
+        hide_a_type_from_the_seed(dir.path(), def.address.clone());
+    }
+    let position = {
+        let sd = spawn_unclaimed(dir.path());
+        let port = sd.port();
+        assert_eq!(open_line(&sd, table.len() - family.len(), 0).len(), 1, "{:?}", seed_lines(&sd));
+        for def in &family {
+            let links = definition_links(port, None, &def.address.to_string());
+            assert!(links.is_empty(), "{}: a hidden row has no link: {links:?}", def.address);
+        }
+        let position = log_position(port);
+        assert_eq!(position, SEED_HEAD - rows * SEED_LINK_RECORDS, "ten links fewer: the head before the kind");
+        sd.shutdown();
+        position
+    };
+    unhide_every_type_from_the_seed(dir.path());
+    let sd = spawn_unclaimed(dir.path());
+    let port = sd.port();
+    let said = seed_lines(&sd);
+    assert_eq!(said.len(), 1, "one line, and no failure: {said:?}");
+    assert_eq!(open_line(&sd, family.len(), table.len() - family.len()), said, "ten types written, the rest stood");
+    assert_eq!(
+        log_position(port),
+        position + 3 + 7 + rows * SEED_LINK_RECORDS,
+        "one insert (3), one publish with its correspondence record (7), ten links (30)"
+    );
+    for def in table {
+        let links = definition_links(port, None, &def.address.to_string());
+        assert_eq!(links.len(), 1, "{}: one link, never two", def.address);
+        assert_eq!(
+            from_text(port, None, &links[0]),
+            def.section(),
+            "{}: readable off the surface",
+            def.address
+        );
+    }
+    for def in &family {
+        let links = definition_links(port, None, &def.address.to_string());
+        let section = from_text(port, None, &links[0]);
+        assert_eq!(section.lines().next(), Some(def.name), "{}: the name alone on the first line", def.address);
+    }
+    for unnamed in ["51", "52", "53", "54.5", "54.1.3", "54.2.4"] {
+        let links = definition_links(port, None, &format!("1.1.0.1.0.1.0.3.{unnamed}"));
+        assert!(links.is_empty(), "3.{unnamed} names nothing: {links:?}");
+    }
+    sd.shutdown();
+
+    // A fresh board of this build stands at the new figure: every row of the
+    // table, the ten among them, a link each.
+    let fresh = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_unclaimed(fresh.path());
+    assert_eq!(vocabulary().len() as u64, SEED_TYPES, "the layout's size is the table's");
+    assert_eq!(log_position(sd.port()), SEED_HEAD, "a fresh board's head");
+    assert_eq!(SEED_HEAD, 412, "the head a fresh board stands at, moved by the ten rows");
+    sd.shutdown();
+}
+
 /// R4 — CUT SHORT: a refusal injected on the seed's fifth commit of its own
 /// — the third link, `3.2`'s, after the insert, the publish, `defines`' and
 /// `3.1`'s — is said once as a failure naming the type; the board serves;
@@ -494,7 +594,7 @@ fn the_claim_lands_twelve_records_above_the_seed_and_the_feed_lists_the_seed_fir
 }
 
 /// R7 — THE PINS EQUAL THE TABLE: every commons type address the workspace
-/// pins in code is a row — the engine's ledger, the registry's twelve, the
+/// pins in code is a row — the engine's ledger, the registry's rows, the
 /// link store's `replaces`, the media crate's picture kind and the blind
 /// kind the suites spell, each read as a value where this crate can see it;
 /// and every `1.1.0.1.0.1.0.3.<path>` literal in a crate's non-test source
@@ -505,7 +605,7 @@ fn every_pin_the_workspace_holds_is_a_row_of_the_table() {
     use skep_engine::types;
 
     let row = |a: &skep_address::Address| definition_at(a).map(|d| d.name);
-    let typed: [(&str, &skep_address::Address); 26] = [
+    let typed: &[(&str, &skep_address::Address)] = &[
         ("enroll", types::t_enroll()),
         ("retire", types::t_retire()),
         ("claim", types::t_claim()),
@@ -518,6 +618,16 @@ fn every_pin_the_workspace_holds_is_a_row_of_the_table() {
         ("rail-record", types::t_rail_record()),
         ("steward-classification", types::t_steward_classification()),
         ("replaces", types::t_replaces()),
+        ("registration", types::t_registration()),
+        ("request", types::t_request()),
+        ("fresh", types::t_request_fresh()),
+        ("board-carries-on", types::t_request_board_carries_on()),
+        ("reply", types::t_reply()),
+        ("approved", types::t_reply_approved()),
+        ("refused", types::t_reply_refused()),
+        ("denied", types::t_reply_denied()),
+        ("vouch", types::t_vouch()),
+        ("approval", types::t_approval()),
         ("binding", types::t_binding()),
         ("endpoint", types::t_endpoint()),
         ("takedown-record", types::t_takedown()),
@@ -533,7 +643,7 @@ fn every_pin_the_workspace_holds_is_a_row_of_the_table() {
         ("correspondence", types::t_correspondence()),
         ("held-removal", types::t_held_removal()),
     ];
-    for (name, pin) in typed {
+    for &(name, pin) in typed {
         assert_eq!(row(pin), Some(name), "the engine's pin {pin} is the row named {name}");
     }
     for r in skep_registry::rows() {

@@ -8,26 +8,31 @@ use crate::rows;
 /// Every type the brief's table names, by path, in the order the table
 /// holds them — the table transcribed once more, so a row dropped or
 /// renumbered in `vocabulary.rs` fails here by name.
-const PATHS: [&str; 124] = [
+const PATHS: &[&str] = &[
     "1", "2", "3", "4", "5", "5.1", "5.2", "5.3", "5.4", "5.5", "5.6", "5.7", "5.8", "5.9", "5.10",
     "6", "6.1", "6.2", "6.3", "7", "8", "9", "9.1", "9.2", "9.3", "10", "10.1", "10.2", "10.3",
     "10.4", "11", "12", "13", "14", "14.1", "14.2", "14.3", "14.4", "14.5", "15", "15.1", "15.2",
     "15.3", "15.4", "16", "17", "18", "18.1", "18.2", "18.3", "19", "20", "21", "21.1", "21.2",
     "21.3", "21.4", "21.5", "21.6", "21.7", "21.8", "22", "23", "23.1", "23.2", "23.3", "23.4", "23.5", "23.6", "23.7", "24", "27", "27.1", "27.2", "27.2.1", "27.2.2", "27.3", "28", "30", "40", "41", "42",
     "42.1", "42.2", "42.3", "43", "44", "44.1", "44.2", "45", "46", "46.1", "46.3", "46.4", "46.5",
-    "50", "55", "56", "57", "57.1",
+    "50", "54", "54.1", "54.1.1", "54.1.2", "54.2", "54.2.1", "54.2.2", "54.2.3", "54.3", "54.4",
+    "55", "56", "57", "57.1",
     "57.2", "58", "58.1", "58.2", "58.3", "58.4", "58.5", "59", "60", "61", "70", "71", "88", "89", "90", "91", "100", "101", "102", "102.1", "103", "104", "104.1", "105",
 ];
 
 /// The ordinals the table must NOT name: the reserved structural and
 /// social extensions beyond the built ones — `3.23` inline and `3.24` the
 /// held removal now seeded, `3.25`, `3.26` and `3.29` still free — the
-/// registry-machinery reserve `3.51`–`3.54`, the proxy kind's `3.87`, the
-/// test-only `3.90.1`, the file-metadata family's reserved `3.27.4`, the
-/// reader-state family's reserved `3.46.2`, the literary set's free
-/// `3.106`, and the unallocated ranges' first ordinals (`3.71` read-with
-/// now seeded beside layout, the tier's next free `3.72` unnamed).
-const NOT_SEEDED: [&[u32]; 19] = [
+/// registry-machinery reserve's unallocated `3.51`–`3.53` (REG-1.24: `3.54`
+/// is the registration kind's, and the reserve's others name nothing), the
+/// ordinals under the registration no row takes yet — past its approval,
+/// past the request's two kinds and past the reply's three answers — the
+/// proxy kind's `3.87`, the test-only `3.90.1`, the file-metadata family's
+/// reserved `3.27.4`, the reader-state family's reserved `3.46.2`, the
+/// literary set's free `3.106`, and the unallocated ranges' first ordinals
+/// (`3.71` read-with now seeded beside layout, the tier's next free `3.72`
+/// unnamed).
+const NOT_SEEDED: &[&[u32]] = &[
     &[27, 4],
     &[25],
     &[26],
@@ -39,7 +44,9 @@ const NOT_SEEDED: [&[u32]; 19] = [
     &[51],
     &[52],
     &[53],
-    &[54],
+    &[54, 5],
+    &[54, 1, 3],
+    &[54, 2, 4],
     &[62],
     &[80],
     &[87],
@@ -133,11 +140,13 @@ fn every_subtype_row_nests_under_a_type_the_table_holds() {
     }
 }
 
-/// THE REGISTRY'S TWELVE ROWS ARE IN THE TABLE at the addresses `rows.rs`
-/// spells, and with the `type` string a body-bearing row carries where the
-/// row has one — the body's `type` and the vocabulary's name being one word
-/// for the binding, the endpoint, the takedown's base reading, the
-/// disavowal and the three ground and policy records.
+/// THE REGISTRY'S ROWS ARE IN THE TABLE at the addresses `rows.rs` spells,
+/// every one, and with the `type` string a body-bearing row carries where
+/// the row has one — the body's `type` and the vocabulary's name being one
+/// word for the binding, the endpoint, the takedown's base reading, the
+/// disavowal, the three ground and policy records and the registration's
+/// six bodies — and the table names nothing else inside the registry range
+/// (REG-1.24): a row at or under `3.54`–`3.59` is a row of `rows.rs`.
 #[test]
 fn the_registry_rows_are_in_the_table_as_rows_rs_spells_them() {
     for r in rows() {
@@ -147,11 +156,113 @@ fn the_registry_rows_are_in_the_table_as_rows_rs_spells_them() {
             assert_eq!(d.name, type_value, "{}: the body's type string is the name", r.address);
         }
     }
+    let in_the_range: Vec<&Definition> =
+        vocabulary().iter().filter(|d| rows::REGISTRY_RANGE.contains(&d.ordinals[0])).collect();
+    assert_eq!(in_the_range.len(), rows().len(), "the range holds the registry's rows alone");
+    for d in in_the_range {
+        assert!(crate::row_at(&d.address).is_some(), "{}: a row of rows.rs", d.address);
+    }
+    assert_eq!(definition_at(rows::t_registration()).map(|d| d.name), Some("registration"));
+    assert_eq!(definition_at(rows::t_request()).map(|d| d.name), Some("request"));
+    assert_eq!(definition_at(rows::t_reply()).map(|d| d.name), Some("reply"));
+    assert_eq!(definition_at(rows::t_approval()).map(|d| d.name), Some("approval"));
     assert_eq!(definition_at(rows::t_successor_of()).map(|d| d.name), Some("successor-of"));
     assert_eq!(definition_at(rows::t_takedown_record()).map(|d| d.name), Some("takedown-record"));
     assert_eq!(definition_at(rows::t_takedown_lifted()).map(|d| d.name), Some("lifted"));
     assert_eq!(definition_at(rows::t_policy_link()).map(|d| d.name), Some("policy-link"));
     assert_eq!(definition_at(rows::t_policy_link_own()).map(|d| d.name), Some("policy"));
+}
+
+/// THE REGISTRATION FAMILY IS THE COMMONS MAP'S, WORD FOR WORD (REG-1.14,
+/// REG-1.15, REG-1.26; the map's table of the family's names, purposes and
+/// endsets, the owner's words, permanent once a board writes them): the ten
+/// rows at `3.54` and under it, read by address, each held to its name, its
+/// purpose and its endsets as the map prints them — a row that carries no
+/// deposit saying so in its purpose and leading its endsets "from and to:",
+/// a record row's endsets reading "from: …; to: …". A name may repeat under
+/// a different parent, which gives it its context: `request` repeats mail's
+/// `3.15.3` and `approval` an assignment's `3.18.3`.
+#[test]
+fn the_registration_rows_are_the_commons_maps_word_for_word() {
+    let the_map: [(&[u32], &str, &str, &str); 10] = [
+        (
+            &[54],
+            "registration",
+            "The records of a board's request to join a registry; read through the rows under it; no deposit rides the kind itself.",
+            "from and to: as the rows under it say.",
+        ),
+        (
+            &[54, 1],
+            "request",
+            "A board's request to join; read through its kinds below; no deposit rides this row itself.",
+            "from and to: as the rows under it say.",
+        ),
+        (
+            &[54, 1, 1],
+            "fresh",
+            "A request from an org with no board yet: it asks for its account and its board.",
+            "from: the record's atom; to: the account that writes this board's bindings.",
+        ),
+        (
+            &[54, 1, 2],
+            "board-carries-on",
+            "A request from an org that keeps its own board: it asks for its account alone.",
+            "from: the record's atom; to: the account that writes this board's bindings.",
+        ),
+        (
+            &[54, 2],
+            "reply",
+            "The registry's answer to a request; read through its answers below; no deposit rides this row itself.",
+            "from and to: as the rows under it say.",
+        ),
+        (
+            &[54, 2, 1],
+            "approved",
+            "The request is approved: the new account's address and number.",
+            "from: the record's atom; to: the request answered.",
+        ),
+        (
+            &[54, 2, 2],
+            "refused",
+            "The request is refused for a fault in it, never a judgment of the person.",
+            "from: the record's atom; to: the request answered.",
+        ),
+        (
+            &[54, 2, 3],
+            "denied",
+            "An officer denies the request, citing a clause of the door's policy.",
+            "from: the record's atom; to: the request answered.",
+        ),
+        (
+            &[54, 3],
+            "vouch",
+            "One account speaking for an applicant.",
+            "from: the record's atom; to: the account that writes this board's bindings.",
+        ),
+        (
+            &[54, 4],
+            "approval",
+            "Ties the account a registrar made to the request it answers; a link alone.",
+            "from: the genesis the approval wrote; to: the request answered.",
+        ),
+    ];
+    for (ordinals, name, purpose, endsets) in the_map {
+        let row = definition_at(&commons_type(ordinals))
+            .unwrap_or_else(|| panic!("3.{ordinals:?}: a row"));
+        assert_eq!(row.name, name, "3.{ordinals:?}: the name");
+        assert_eq!(row.purpose, purpose, "{name}: the purpose");
+        assert_eq!(row.endsets, endsets, "{name}: the endsets");
+        let registry_row = crate::row_at(&row.address).expect("a row of rows.rs");
+        assert_eq!(
+            row.endsets.starts_with("from and to:"),
+            !registry_row.carries_deposits(),
+            "{name}: a row that carries no deposit leads its endsets \"from and to:\""
+        );
+    }
+    let family: Vec<&Definition> = vocabulary().iter().filter(|d| d.ordinals[0] == 54).collect();
+    assert_eq!(family.len(), the_map.len(), "the family is the rows held above");
+    let name = |ordinals: &[u32]| definition_at(&commons_type(ordinals)).map(|d| d.name);
+    assert_eq!((name(&[15, 3]), name(&[18, 3])), (Some("request"), Some("approval")));
 }
 
 /// WHAT IS NOT SEEDED answers no definition: the reserved ordinals beyond
@@ -163,7 +274,7 @@ fn the_registry_rows_are_in_the_table_as_rows_rs_spells_them() {
 /// counterpart's second subtype among the last.
 #[test]
 fn nothing_is_named_at_an_ordinal_nobody_allocated() {
-    for ordinals in NOT_SEEDED {
+    for &ordinals in NOT_SEEDED {
         assert_eq!(definition_at(&commons_type(ordinals)), None, "3.{ordinals:?} is not seeded");
     }
     let subspace = Tumbler::new([1u32, 1, 0, 1, 0, 1, 0, 3].map(Nat::from)).expect("nonempty");
@@ -330,8 +441,8 @@ fn the_reader_state_rows_stand_under_their_names_and_are_no_marks() {
 /// NO FORK ROW STANDS (B3-S10): the board records where a staged draft began
 /// in its own state, at the `stage` operation, and no link of a client's
 /// says it — nothing answers at `3.9.4`, no row is named `fork`, alternative
-/// keeps its three subtypes, and the table holds 124 rows, the seed's one
-/// link and one section per row.
+/// keeps its three subtypes, and the table holds one row a path of this
+/// suite's transcription, the seed's one link and one section per row.
 #[test]
 fn no_fork_row_stands_under_alternative() {
     let name = |ordinals: &[u32]| definition_at(&commons_type(ordinals)).map(|d| d.name);
@@ -339,7 +450,7 @@ fn no_fork_row_stands_under_alternative() {
     assert!(vocabulary().iter().all(|d| d.name != "fork"), "no row named fork");
     assert_eq!(name(&[9]), Some("alternative"), "the parent keeps its own row");
     assert_eq!((name(&[9, 1]), name(&[9, 2]), name(&[9, 3])), (Some("draft"), Some("revision"), Some("branch")));
-    assert_eq!(vocabulary().len(), 124, "the table's rows");
+    assert_eq!(vocabulary().len(), PATHS.len(), "the table's rows");
 }
 
 /// THE ENDSETS BY ROLE (the commons map's standing rule, F5): every mark —

@@ -1,0 +1,386 @@
+{
+  "note": "THE VECTOR SET of the door's policy document (REG-1.86; REG-4.131), in the registry bodies' one scheme: the document's WHOLE CONTENT is one object, type admission-policy, under the canonical rule -- parse(b) answers a policy only where b == encode(parse(b)) -- and it is no deposit: it carries no sig and no kind. `parse` is the parse's answer, `ok` or the refusal's cause as skep-registry's ParseRefusal::token spells it; on an admitted document `approval_hand` is what its READER answers for the approval's hand: `officer`, `unattended` (auto, honored only where admission is open), or null where the approval value is one the parser does not know, which opens no approval (REG-4.108). No size bound is pinned for the document.",
+  "vectors": [
+    {
+      "name": "open_auto",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "ok",
+      "approval_hand": "unattended",
+      "why": "the registry's own door: open admission, approved by its unattended console"
+    },
+    {
+      "name": "open_officer",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"officer\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "ok",
+      "approval_hand": "officer",
+      "why": "an open door an officer approves at"
+    },
+    {
+      "name": "invitation_only_officer",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"invitation-only\",\"approval\":\"officer\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "ok",
+      "approval_hand": "officer",
+      "why": "an invitation-only door"
+    },
+    {
+      "name": "invitation_only_auto_fails_closed",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"invitation-only\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "ok",
+      "approval_hand": "officer",
+      "why": "the parser admits auto with any admission; the READER honors it only where admission is open and otherwise fails closed to the officer's hand (REG-4.108)"
+    },
+    {
+      "name": "n_vouches_officer",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"n-vouches\",\"vouches\":\"3\",\"approval\":\"officer\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "ok",
+      "approval_hand": "officer",
+      "why": "an n-vouches door: vouches, the N, rides beside its mode"
+    },
+    {
+      "name": "n_vouches_auto_fails_closed",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"n-vouches\",\"vouches\":\"3\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "ok",
+      "approval_hand": "officer",
+      "why": "auto under n-vouches reads as the officer's hand"
+    },
+    {
+      "name": "a_third_approval_value_opens_no_approval",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"steward\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "ok",
+      "approval_hand": null,
+      "why": "a value the parser does not know opens NO approval: the document parses, and its reader finds no hand"
+    },
+    {
+      "name": "approval_empty_opens_no_approval",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "ok",
+      "approval_hand": null,
+      "why": "the empty string is a value the parser does not know"
+    },
+    {
+      "name": "approval_in_capitals_opens_no_approval",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"Auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "ok",
+      "approval_hand": null,
+      "why": "a value is one spelling: Auto is not auto"
+    },
+    {
+      "name": "no_intake_home",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "ok",
+      "approval_hand": "unattended",
+      "why": "a door with no scribe names no intake home"
+    },
+    {
+      "name": "two_intake_homes",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\",\"1.0.1.5\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "ok",
+      "approval_hand": "unattended",
+      "why": "the scribe accounts' addresses, in the document's order"
+    },
+    {
+      "name": "no_grounds",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[]}",
+      "parse": "ok",
+      "approval_hand": "unattended",
+      "why": "a document that states no ground parses; an act that needs one finds none"
+    },
+    {
+      "name": "with_sponsors_at_depth",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"sponsors\":\"members\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "ok",
+      "approval_hand": "unattended",
+      "why": "sponsors rides at depth only, a string at its position ahead of grounds; its values are the depth door's lane's and unpinned"
+    },
+    {
+      "name": "strings_past_ascii",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"Zoë — registrar\",\"grounds\":[\"§1 “No spam”\"]}",
+      "parse": "ok",
+      "approval_hand": "unattended",
+      "why": "text past ASCII stands as itself"
+    },
+    {
+      "name": "digits_as_written",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"003600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "ok",
+      "approval_hand": "unattended",
+      "why": "the digits stand as written"
+    },
+    {
+      "name": "members_in_another_order",
+      "bytes": "{\"type\":\"admission-policy\",\"approval\":\"auto\",\"admission\":\"open\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "not_canonical",
+      "why": "the whole object in another member order: approval ahead of admission"
+    },
+    {
+      "name": "grounds_ahead_of_contact",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"],\"contact\":\"registrar@registry.example, or by post\"}",
+      "parse": "not_canonical",
+      "why": "grounds ahead of contact"
+    },
+    {
+      "name": "spaced",
+      "bytes": "{\"type\": \"admission-policy\", \"admission\": \"open\", \"approval\": \"auto\", \"intake\": [\"1.0.1.4\"], \"intake_rate\": \"60\", \"intake_window\": \"3600\", \"intake_per_device\": \"3\", \"collection_interval\": \"1209600\", \"stale_request_interval\": \"2592000\", \"transcription_interval\": \"3600\", \"contact\": \"registrar@registry.example, or by post\", \"grounds\": [\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "not_canonical",
+      "why": "the document spaced, as a specification prints it"
+    },
+    {
+      "name": "trailing_newline",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}\n",
+      "parse": "not_canonical",
+      "why": "a newline after the closing brace"
+    },
+    {
+      "name": "with_a_sig_member",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"],\"sig\":\"c0ffee\"}",
+      "parse": "unknown_member",
+      "why": "a document, not a deposit: it carries NO sig member"
+    },
+    {
+      "name": "with_an_unknown_member",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"],\"fee\":\"100\"}",
+      "parse": "unknown_member",
+      "why": "a member the document does not name"
+    },
+    {
+      "name": "with_replaces",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"],\"replaces\":\"1.0.1.0.5.1\"}",
+      "parse": "unknown_member",
+      "why": "no replaces accompanies a revision: publishing the next version is the revision (REG-4.132)"
+    },
+    {
+      "name": "vouches_with_open",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"vouches\":\"3\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "unknown_member",
+      "why": "vouches is PRESENT ONLY with n-vouches: beside open it is a member the document does not name"
+    },
+    {
+      "name": "vouches_with_invitation_only",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"invitation-only\",\"vouches\":\"3\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "unknown_member",
+      "why": "vouches beside invitation-only"
+    },
+    {
+      "name": "n_vouches_without_vouches",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"n-vouches\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "missing_member:vouches",
+      "why": "an n-vouches door states its N"
+    },
+    {
+      "name": "vouches_not_digits",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"n-vouches\",\"vouches\":\"three\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "not_digits:vouches",
+      "why": "the N is a string of decimal digits"
+    },
+    {
+      "name": "vouches_a_number",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"n-vouches\",\"vouches\":3,\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "number",
+      "why": "no member of the document is a JSON number"
+    },
+    {
+      "name": "admission_unknown",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"closed\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "unknown_value:admission",
+      "why": "admission is invitation-only, n-vouches or open"
+    },
+    {
+      "name": "wrong_type",
+      "bytes": "{\"type\":\"policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "wrong_type",
+      "why": "the document names itself admission-policy"
+    },
+    {
+      "name": "typed_a_registry_row",
+      "bytes": "{\"type\":\"approved\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "wrong_type",
+      "why": "a registry row's type string is not the document's"
+    },
+    {
+      "name": "no_type",
+      "bytes": "{\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "wrong_type",
+      "why": "no type member"
+    },
+    {
+      "name": "without_admission",
+      "bytes": "{\"type\":\"admission-policy\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "missing_member:admission",
+      "why": "the document without its member admission"
+    },
+    {
+      "name": "without_approval",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "missing_member:approval",
+      "why": "the document without its member approval"
+    },
+    {
+      "name": "without_intake",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "missing_member:intake",
+      "why": "the document without its member intake"
+    },
+    {
+      "name": "without_intake_rate",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "missing_member:intake_rate",
+      "why": "the document without its member intake_rate"
+    },
+    {
+      "name": "without_intake_window",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "missing_member:intake_window",
+      "why": "the document without its member intake_window"
+    },
+    {
+      "name": "without_intake_per_device",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "missing_member:intake_per_device",
+      "why": "the document without its member intake_per_device"
+    },
+    {
+      "name": "without_collection_interval",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "missing_member:collection_interval",
+      "why": "the document without its member collection_interval"
+    },
+    {
+      "name": "without_stale_request_interval",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "missing_member:stale_request_interval",
+      "why": "the document without its member stale_request_interval"
+    },
+    {
+      "name": "without_transcription_interval",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "missing_member:transcription_interval",
+      "why": "the document without its member transcription_interval"
+    },
+    {
+      "name": "without_contact",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "missing_member:contact",
+      "why": "the document without its member contact"
+    },
+    {
+      "name": "without_grounds",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\"}",
+      "parse": "missing_member:grounds",
+      "why": "the document without its member grounds"
+    },
+    {
+      "name": "intake_rate_not_digits",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"1h\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "not_digits:intake_rate",
+      "why": "intake_rate is a string of decimal digits"
+    },
+    {
+      "name": "intake_window_not_digits",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"1h\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "not_digits:intake_window",
+      "why": "intake_window is a string of decimal digits"
+    },
+    {
+      "name": "intake_per_device_not_digits",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"1h\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "not_digits:intake_per_device",
+      "why": "intake_per_device is a string of decimal digits"
+    },
+    {
+      "name": "collection_interval_not_digits",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1h\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "not_digits:collection_interval",
+      "why": "collection_interval is a string of decimal digits"
+    },
+    {
+      "name": "stale_request_interval_not_digits",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"1h\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "not_digits:stale_request_interval",
+      "why": "stale_request_interval is a string of decimal digits"
+    },
+    {
+      "name": "transcription_interval_not_digits",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"1h\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "not_digits:transcription_interval",
+      "why": "transcription_interval is a string of decimal digits"
+    },
+    {
+      "name": "collection_interval_a_number",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":1209600,\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "number",
+      "why": "an interval is a string of digits, never a JSON number"
+    },
+    {
+      "name": "intake_not_an_array",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":\"1.0.1.4\",\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "not_strings:intake",
+      "why": "intake is an array of strings"
+    },
+    {
+      "name": "intake_entry_no_address",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"the scribe\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "not_an_address:intake",
+      "why": "each intake home is an address"
+    },
+    {
+      "name": "intake_entry_zero_padded",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.04\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "not_an_address:intake",
+      "why": "an address in its one spelling"
+    },
+    {
+      "name": "grounds_not_an_array",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":\"No spam.\"}",
+      "parse": "not_strings:grounds",
+      "why": "grounds is an array of strings"
+    },
+    {
+      "name": "grounds_entry_not_a_string",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No spam.\",true]}",
+      "parse": "not_strings:grounds",
+      "why": "each ground is a string"
+    },
+    {
+      "name": "contact_not_a_string",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":[\"a\",\"b\"],\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "not_a_string:contact",
+      "why": "contact is a string"
+    },
+    {
+      "name": "approval_not_a_string",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":true,\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "not_a_string:approval",
+      "why": "approval is a string"
+    },
+    {
+      "name": "sponsors_not_a_string",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"sponsors\":[\"members\"],\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"]}",
+      "parse": "not_a_string:sponsors",
+      "why": "sponsors, where present, is one string"
+    },
+    {
+      "name": "sponsors_after_grounds",
+      "bytes": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"registrar@registry.example, or by post\",\"grounds\":[\"No machine-rate sponsoring.\",\"One registration a board.\"],\"sponsors\":\"members\"}",
+      "parse": "not_canonical",
+      "why": "sponsors stands ahead of grounds"
+    },
+    {
+      "name": "not_an_object",
+      "bytes": "[]",
+      "parse": "not_an_object",
+      "why": "a JSON value that is no object"
+    },
+    {
+      "name": "empty",
+      "bytes": "",
+      "parse": "not_json",
+      "why": "no bytes at all"
+    },
+    {
+      "name": "not_utf8",
+      "bytes_hex": "7b2274797065223a2261646d697373696f6e2d706f6c696379222c2261646d697373696f6e223a22ff227d",
+      "parse": "not_utf8",
+      "why": "a byte no UTF-8 text holds"
+    }
+  ]
+}

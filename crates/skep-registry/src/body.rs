@@ -1,4 +1,4 @@
-//! THE TWO BODIES THIS CRATE PINS — the BINDING's and the ENDPOINT's
+//! THE TWO BODIES THIS MODULE PINS — the BINDING's and the ENDPOINT's
 //! (REG-1.86's table, its first two rows) — under THE CANONICAL RULE: the
 //! credential records' admission sentence applied to a flat one-object body,
 //! `parse(b)` answering a record only where `b == encode(parse(b))`. So each
@@ -29,7 +29,22 @@
 //! included: a body past it is refused before any tree is built, since a
 //! JSON parser builds its whole tree before the first schema check. What it
 //! is priced against — a signed body's size, and what a hostile body costs a
-//! reader — the constant's own doc states.
+//! reader — the constant's own doc states. The cap is per kind (REG-1.86
+//! (h)): this one is every body's but a registration request's, whose own
+//! is `registration.rs`'s.
+//!
+//! THE CANONICAL MACHINERY IS ONE, AND SHARED: the stages every body of the
+//! crate passes ahead of its own members — the cap, the text, the value,
+//! the object (`object_under`), the number scan
+//! (`holds_a_refused_number`), the member set (`names_only`) — the member
+//! readers (`string_member`, `address_member`, `strings_member`), the one
+//! spelling of an address (`address_of`) and the encoder's two writers
+//! (`push_member_opening`, `escape_json_string`), with the refusals
+//! [`ParseRefusal`] and the members' one table of names [`Member`]. The
+//! registration kind's six bodies (`registration.rs`) and the door's policy
+//! document (`policy.rs`) are parsed and encoded through them, each a type
+//! of its own, so one rule admits every body and no second parser spells
+//! it.
 //!
 //! The other five body-bearing rows — the takedown record's base reading,
 //! the disavowal, the two ground records, the org-chosen succession policy,
@@ -46,7 +61,10 @@ use crate::rows::Kind;
 
 /// The most bytes a registry record body may carry, `sig` included, a body
 /// past it refused ([`ParseRefusal::PastCap`]) before any parse — 16 KiB, a
-/// term of the format, a wire constant (REG-1.86 (h)): a `sig` under
+/// term of the format, a wire constant (REG-1.86 (h)), and the cap of every
+/// body but a registration REQUEST's, whose own is
+/// [`crate::MAX_REGISTRATION_REQUEST_BYTES`]: the binding's, the endpoint's,
+/// the registration's three answers' and its vouch's. A `sig` under
 /// `mldsa65-ed25519` is 6,746 bytes of hex on its own, so a signed binding
 /// is near seven kilobytes and a signed endpoint with a long list of
 /// origins stays under this with room. The cap counts every byte, `sig`
@@ -69,7 +87,7 @@ use crate::rows::Kind;
 /// cost 34 ms, some thirty times this cap's.
 pub const MAX_REGISTRY_RECORD_BYTES: usize = 16 * 1024;
 
-/// The two kinds whose bodies this crate parses — the kind the caller names
+/// The two kinds whose bodies this module parses — the kind the caller names
 /// for a parse, read off the link's type slot (REG-1.86 (a)) and never off
 /// the body: the body's own `type` member is what [`parse`] holds AGAINST
 /// the kind named, so nothing here maps a `type` string to a kind.
@@ -219,12 +237,14 @@ impl Record {
 }
 
 /// A body member beside `type` (REG-1.86's table), by the one name a body
-/// spells it under: the name [`parse`] reads the member by, [`encode`]
-/// writes it under, and a refusal names — `type` aside, which opens every
-/// body and whose every fault is [`ParseRefusal::WrongType`].
+/// spells it under: the name a parse reads the member by, an encoder writes
+/// it under, and a refusal names — `type` aside, which opens every body and
+/// whose every fault is [`ParseRefusal::WrongType`]. One table for every
+/// body of the crate: the binding's and the endpoint's, the registration
+/// kind's six and the door's policy document's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Member {
-    /// `prefix` — the binding's own member.
+    /// `prefix` — the binding's own member, and the approved answer's.
     Prefix,
     /// `origins` — the endpoint's own member.
     Origins,
@@ -232,74 +252,192 @@ pub enum Member {
     Replaces,
     /// `sig` — the signature, where the record is signed.
     Sig,
+    /// `door` — a request's door identifier.
+    Door,
+    /// `fresh` — a request's freshness value.
+    Fresh,
+    /// `shape` — a request's own row, by its ordinal path.
+    Shape,
+    /// `node` — a request's node account enrolment.
+    Node,
+    /// `board` — a fresh request's board root enrolment.
+    Board,
+    /// `signer` — the fingerprint of the key that signed a request's frame.
+    Signer,
+    /// `signature` — the applicant's signature over a request's frame.
+    Signature,
+    /// `node_address` — the approved answer's node account address.
+    NodeAddress,
+    /// `node_principal` — the approved answer's node account principal id.
+    NodePrincipal,
+    /// `board_address` — the approved answer's board root address.
+    BoardAddress,
+    /// `board_principal` — the approved answer's board root principal id.
+    BoardPrincipal,
+    /// `board_origin` — the approved answer's provisioned board's origin.
+    BoardOrigin,
+    /// `door_origin` — the approved answer's delegating board's origin.
+    DoorOrigin,
+    /// `collection_interval` — the approved answer's, and the policy's.
+    CollectionInterval,
+    /// `disposition` — the approved answer's disposition.
+    Disposition,
+    /// `policy` — the policy version an approved or a denied answer cites.
+    Policy,
+    /// `fault` — the refused answer's fault.
+    Fault,
+    /// `clause` — the denied answer's clause, by position.
+    Clause,
+    /// `fingerprints` — the vouch's thread key.
+    Fingerprints,
+    /// `admission` — the policy's admission mode.
+    Admission,
+    /// `vouches` — the policy's N, under n-vouches.
+    Vouches,
+    /// `approval` — the policy's approval hand.
+    Approval,
+    /// `intake` — the policy's intake homes.
+    Intake,
+    /// `intake_rate` — the policy's requests per window.
+    IntakeRate,
+    /// `intake_window` — the policy's window, in whole seconds.
+    IntakeWindow,
+    /// `intake_per_device` — the policy's requests per window for one key.
+    IntakePerDevice,
+    /// `stale_request_interval` — the policy's stale-request interval.
+    StaleRequestInterval,
+    /// `transcription_interval` — the policy's transcription interval.
+    TranscriptionInterval,
+    /// `contact` — the policy's out-of-band contact.
+    Contact,
+    /// `sponsors` — the policy's sponsoring class, at depth.
+    Sponsors,
+    /// `grounds` — the policy's citable clauses.
+    Grounds,
 }
 
 impl Member {
-    /// The member's name as a body spells it: what [`parse`] reads the
-    /// member by, what [`encode`] writes it under, and the tail of its
-    /// refusal's token ([`ParseRefusal::token`]).
+    /// The member's name as a body spells it: what a parse reads the member
+    /// by, what an encoder writes it under, and the tail of its refusal's
+    /// token ([`ParseRefusal::token`]).
     pub(crate) fn name(self) -> &'static str {
         match self {
             Member::Prefix => "prefix",
             Member::Origins => "origins",
             Member::Replaces => "replaces",
             Member::Sig => "sig",
+            Member::Door => "door",
+            Member::Fresh => "fresh",
+            Member::Shape => "shape",
+            Member::Node => "node",
+            Member::Board => "board",
+            Member::Signer => "signer",
+            Member::Signature => "signature",
+            Member::NodeAddress => "node_address",
+            Member::NodePrincipal => "node_principal",
+            Member::BoardAddress => "board_address",
+            Member::BoardPrincipal => "board_principal",
+            Member::BoardOrigin => "board_origin",
+            Member::DoorOrigin => "door_origin",
+            Member::CollectionInterval => "collection_interval",
+            Member::Disposition => "disposition",
+            Member::Policy => "policy",
+            Member::Fault => "fault",
+            Member::Clause => "clause",
+            Member::Fingerprints => "fingerprints",
+            Member::Admission => "admission",
+            Member::Vouches => "vouches",
+            Member::Approval => "approval",
+            Member::Intake => "intake",
+            Member::IntakeRate => "intake_rate",
+            Member::IntakeWindow => "intake_window",
+            Member::IntakePerDevice => "intake_per_device",
+            Member::StaleRequestInterval => "stale_request_interval",
+            Member::TranscriptionInterval => "transcription_interval",
+            Member::Contact => "contact",
+            Member::Sponsors => "sponsors",
+            Member::Grounds => "grounds",
         }
     }
 }
 
 /// Why bytes are no record of the kind named — each its own cause, joined to
 /// the daemon's refusal token by [`ParseRefusal::token`] — listed in the order of
-/// [`parse`]'s stages, the members' causes answered member by member in the
-/// order `parse` states.
+/// a parse's stages, the members' causes answered member by member in the
+/// order each parse states. One vocabulary for every body of the crate:
+/// [`parse`]'s, [`crate::parse_registration`]'s and [`crate::parse_policy`]'s.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseRefusal {
-    /// Past [`MAX_REGISTRY_RECORD_BYTES`]: parsed by no reader at all.
+    /// Past the kind's cap ([`MAX_REGISTRY_RECORD_BYTES`], or a registration
+    /// request's own): parsed by no reader at all.
     PastCap,
     /// The bytes are no UTF-8 text.
     NotUtf8,
     /// The text is no JSON value — a trailing non-whitespace byte included —
-    /// or one [`parse`]'s value stage declines to read: a value nested deeper
+    /// or one a parse's value stage declines to read: a value nested deeper
     /// than it reads, a number too large for a 64-bit float, an escaped
     /// unpaired surrogate, a byte-order mark ahead of the value.
     NotJson,
     /// A JSON value that is no object.
     NotAnObject,
-    /// A JSON number somewhere in the value the parse read (REG-1.86 (d)):
-    /// the whole value's range, tested before any member is read. A number
-    /// only in an occurrence the value stage did not keep — the earlier of a
-    /// member spelled twice — is no `number`: the body answers the first
-    /// stage its kept members fault at, [`ParseRefusal::NotCanonical`] where
-    /// they fault at none. One too large for a 64-bit float, which the value
+    /// A JSON number the body's form does not admit (REG-1.86 (d)), read
+    /// over the whole value before any member is read: any number at all
+    /// but a PRINCIPAL's — the approved answer's `node_principal` and
+    /// `board_principal`, each standing directly at its member — and a
+    /// principal that is no non-negative integer inside the
+    /// exactly-representable range (AUTH-5.20). A number only in an
+    /// occurrence the value stage did not keep — the earlier of a member
+    /// spelled twice — is no `number`: the body answers the first stage its
+    /// kept members fault at, [`ParseRefusal::NotCanonical`] where they
+    /// fault at none. One too large for a 64-bit float, which the value
     /// stage reads as no value at all, is [`ParseRefusal::NotJson`] wherever
     /// it stands.
     Number,
     /// The `type` member is absent, no string, or not the string of the
-    /// kind the caller named: a record of that kind it is not (REG-1.86 (a)).
+    /// kind the caller named: a record of that kind it is not (REG-1.86 (a))
+    /// — another row's name, and a parent row's (`"request"`, `"reply"`),
+    /// which is the `type` of no body, among them.
     WrongType,
-    /// A member beside the row's own, `replaces` and `sig` ("NOTHING ELSE").
+    /// A member beside the row's own, `replaces` where the row carries one,
+    /// and `sig` ("NOTHING ELSE").
     UnknownMember,
-    /// A member the row requires is absent: `prefix` or `origins`.
+    /// A member the row requires is absent.
     MissingMember(Member),
-    /// A member that must be a string is not: `prefix`, `replaces`, `sig`.
+    /// A member that must be a string is not.
     NotAString(Member),
     /// A member that must parse as an address in dotted decimal does not —
-    /// `prefix`, `replaces` — the one spelling of that address included
-    /// (no zero-padded component, no sign, every component a decimal
-    /// natural, the whole T4-valid).
+    /// an entry of an array of addresses among them — the one spelling of
+    /// that address included (no zero-padded component, no sign, every
+    /// component a decimal natural, the whole T4-valid).
     NotAnAddress(Member),
     /// `origins` is no array of strings.
     OriginsNotStrings,
     /// `origins` is empty: "AT LEAST ONE entry", and `[]` is a body no
     /// reader holds.
     EmptyOrigins,
+    /// A member that must be a JSON number — a principal — is another type.
+    NotANumber(Member),
+    /// A member that must be hex is not: sixty-four lowercase hex characters
+    /// for a freshness value or a fingerprint — `fresh`, `signer`, an entry
+    /// of `fingerprints` — and hex digits of either case, any count, for
+    /// `signature`.
+    NotHex(Member),
+    /// A member that must be a string of decimal digits, at least one, is
+    /// not: a count, an interval, a clause's position.
+    NotDigits(Member),
+    /// A member that takes one of its row's stated values holds another:
+    /// `disposition`, `fault`, `admission`.
+    UnknownValue(Member),
+    /// A member that must be an array of strings is not: `fingerprints`,
+    /// `intake`, `grounds`.
+    NotStrings(Member),
     /// The members each pass and the bytes are still not the canonical
     /// re-encoding of what they spell: whitespace outside strings, between
     /// the tokens or around the object; another member order; a member twice
-    /// (the occurrence the value stage kept passing); a non-shortest escape.
-    /// Whitespace is the one thing outside the object the value stage reads
-    /// past: any other byte after the closing brace is
-    /// [`ParseRefusal::NotJson`].
+    /// (the occurrence the value stage kept passing); a non-shortest escape;
+    /// a principal in another spelling of its number. Whitespace is the one
+    /// thing outside the object the value stage reads past: any other byte
+    /// after the closing brace is [`ParseRefusal::NotJson`].
     NotCanonical,
 }
 
@@ -320,6 +458,11 @@ impl ParseRefusal {
             ParseRefusal::NotAnAddress(m) => format!("not_an_address:{}", m.name()),
             ParseRefusal::OriginsNotStrings => "origins_not_strings".into(),
             ParseRefusal::EmptyOrigins => "empty_origins".into(),
+            ParseRefusal::NotANumber(m) => format!("not_a_number:{}", m.name()),
+            ParseRefusal::NotHex(m) => format!("not_hex:{}", m.name()),
+            ParseRefusal::NotDigits(m) => format!("not_digits:{}", m.name()),
+            ParseRefusal::UnknownValue(m) => format!("unknown_value:{}", m.name()),
+            ParseRefusal::NotStrings(m) => format!("not_strings:{}", m.name()),
             ParseRefusal::NotCanonical => "not_canonical".into(),
         }
     }
@@ -397,13 +540,8 @@ impl std::error::Error for ParseRefusal {}
 /// Past those choices `not_json` is RFC 8259's grammar, and every other
 /// refusal is this schema's.
 pub fn parse(kind: BodyKind, bytes: &[u8]) -> Result<Record, ParseRefusal> {
-    if bytes.len() > MAX_REGISTRY_RECORD_BYTES {
-        return Err(ParseRefusal::PastCap);
-    }
-    let text = std::str::from_utf8(bytes).map_err(|_| ParseRefusal::NotUtf8)?;
-    let value: Value = serde_json::from_str(text).map_err(|_| ParseRefusal::NotJson)?;
-    let Value::Object(mut object) = value else { return Err(ParseRefusal::NotAnObject) };
-    if object.values().any(holds_a_number) {
+    let (text, mut object) = object_under(MAX_REGISTRY_RECORD_BYTES, bytes)?;
+    if holds_a_refused_number(&object, &[]) {
         return Err(ParseRefusal::Number);
     }
     if object.get("type").and_then(Value::as_str) != Some(kind.type_value()) {
@@ -413,18 +551,13 @@ pub fn parse(kind: BodyKind, bytes: &[u8]) -> Result<Record, ParseRefusal> {
         BodyKind::Binding => Member::Prefix,
         BodyKind::Endpoint => Member::Origins,
     };
-    let known = [own, Member::Replaces, Member::Sig];
-    if object.keys().any(|k| k != "type" && !known.iter().any(|m| m.name() == k)) {
+    if !names_only(&object, &[own, Member::Replaces, Member::Sig]) {
         return Err(ParseRefusal::UnknownMember);
     }
     // The strings the record keeps — `sig` and the origins — are moved out of
     // the tree the parse owns; an address member is read where it stands.
     let replaces = address_member(&object, Member::Replaces)?;
-    let sig = match object.remove(Member::Sig.name()) {
-        None => None,
-        Some(Value::String(s)) => Some(s),
-        Some(_) => return Err(ParseRefusal::NotAString(Member::Sig)),
-    };
+    let sig = string_member(&mut object, Member::Sig)?;
     let body = match kind {
         BodyKind::Binding => {
             let prefix = address_member(&object, Member::Prefix)?
@@ -458,6 +591,65 @@ pub fn parse(kind: BodyKind, bytes: &[u8]) -> Result<Record, ParseRefusal> {
     Ok(Record { body, sig })
 }
 
+/// The largest JSON number a body may carry: `2^53 − 1`, the top of the
+/// exactly-representable range the wire's numbers take (AUTH-5.20; REG-1.86
+/// (d)). A principal id — the one number any body carries — is drawn inside
+/// it, and one past it is no number of the form ([`ParseRefusal::Number`]).
+pub const MAX_EXACT_NUMBER: u64 = (1 << 53) - 1;
+
+/// Whether `n` lies inside the exactly-representable range — the one test
+/// of it: the number scan's of a principal, and `Principal::new`'s.
+pub(crate) fn exactly_representable(n: u64) -> bool {
+    n <= MAX_EXACT_NUMBER
+}
+
+/// The stages every body passes ahead of its own members, under `cap`: the
+/// cap, the text, the value, the object — the bytes as their text, and the
+/// object's members as the value stage kept them.
+///
+/// `cap` is the most bytes the body may be, every byte counted; a parse
+/// with no cap hands in `usize::MAX`.
+///
+/// # Errors
+///
+/// In order: [`ParseRefusal::PastCap`] past the cap, before any tree is
+/// built; [`ParseRefusal::NotUtf8`]; [`ParseRefusal::NotJson`], the value
+/// stage's own choices among them ([`parse`]'s doc); and
+/// [`ParseRefusal::NotAnObject`].
+pub(crate) fn object_under(
+    cap: usize,
+    bytes: &[u8],
+) -> Result<(&str, serde_json::Map<String, Value>), ParseRefusal> {
+    if bytes.len() > cap {
+        return Err(ParseRefusal::PastCap);
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| ParseRefusal::NotUtf8)?;
+    let value: Value = serde_json::from_str(text).map_err(|_| ParseRefusal::NotJson)?;
+    let Value::Object(object) = value else { return Err(ParseRefusal::NotAnObject) };
+    Ok((text, object))
+}
+
+/// Whether the object holds a JSON number its form does not admit (REG-1.86
+/// (d)) — the number scan, over the whole value and ahead of every member.
+///
+/// A number is admitted at one place alone: standing directly at a member
+/// of `principals`, a non-negative integer no greater than
+/// [`MAX_EXACT_NUMBER`]. Every other number refuses: one at any other
+/// member, one nested in an array or an object wherever it stands, and a
+/// principal that is negative, a fraction, in exponent form or past the
+/// range. A body whose row carries no principal hands in no member.
+pub(crate) fn holds_a_refused_number(
+    object: &serde_json::Map<String, Value>,
+    principals: &[Member],
+) -> bool {
+    object.iter().any(|(name, value)| match value {
+        Value::Number(n) if principals.iter().any(|m| m.name() == name) => {
+            !n.as_u64().is_some_and(exactly_representable)
+        }
+        other => holds_a_number(other),
+    })
+}
+
 /// Whether any value in the tree is a JSON number (REG-1.86 (d)).
 fn holds_a_number(v: &Value) -> bool {
     match v {
@@ -468,11 +660,59 @@ fn holds_a_number(v: &Value) -> bool {
     }
 }
 
+/// Whether the object names `type` and members of `known` alone — the
+/// member set's test ("NOTHING ELSE", REG-1.86).
+pub(crate) fn names_only(object: &serde_json::Map<String, Value>, known: &[Member]) -> bool {
+    object.keys().all(|k| k == "type" || known.iter().any(|m| m.name() == k))
+}
+
+/// A string member, moved out of the tree: the string it holds, `None`
+/// where the body carries no such member. Whether that absence is a fault
+/// is the caller's.
+///
+/// # Errors
+///
+/// [`ParseRefusal::NotAString`] where the member is another JSON type.
+pub(crate) fn string_member(
+    object: &mut serde_json::Map<String, Value>,
+    member: Member,
+) -> Result<Option<String>, ParseRefusal> {
+    match object.remove(member.name()) {
+        None => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s)),
+        Some(_) => Err(ParseRefusal::NotAString(member)),
+    }
+}
+
+/// An array-of-strings member, moved out of the tree: its strings in their
+/// order, `None` where the body carries no such member. Whether that
+/// absence, or an empty array, is a fault is the caller's.
+///
+/// # Errors
+///
+/// [`ParseRefusal::NotStrings`] where the member is no array, or an entry
+/// of it is no string.
+pub(crate) fn strings_member(
+    object: &mut serde_json::Map<String, Value>,
+    member: Member,
+) -> Result<Option<Vec<String>>, ParseRefusal> {
+    let Some(value) = object.remove(member.name()) else { return Ok(None) };
+    let Value::Array(items) = value else { return Err(ParseRefusal::NotStrings(member)) };
+    items
+        .into_iter()
+        .map(|item| match item {
+            Value::String(s) => Ok(s),
+            _ => Err(ParseRefusal::NotStrings(member)),
+        })
+        .collect::<Result<Vec<String>, ParseRefusal>>()
+        .map(Some)
+}
+
 /// An address member: the [`Address`] its string spells in its one
 /// spelling ([`address_of`]), `None` where the body carries no such member.
 /// Whether that absence is a fault is the caller's, as REG-1.86's table
 /// makes it: `prefix` is required, `replaces` is not.
-fn address_member(
+pub(crate) fn address_member(
     object: &serde_json::Map<String, Value>,
     member: Member,
 ) -> Result<Option<Address>, ParseRefusal> {
@@ -484,12 +724,12 @@ fn address_member(
 }
 
 /// The address `s` spells in dotted decimal, where `s` is that address's
-/// ONE spelling — its own rendering, the one [`encode`] writes an address
+/// ONE spelling — its own rendering, the one an encoder writes an address
 /// member as — else `None`. The rendering compare is the whole test: a
 /// component is read by `Nat`'s parse, which admits a sign, `_` separators
 /// and zero padding, and a rendering writes none of them; T4 validity is
 /// `validate`'s.
-fn address_of(s: &str) -> Option<Address> {
+pub(crate) fn address_of(s: &str) -> Option<Address> {
     let comps: Option<Vec<Nat>> = s.split('.').map(|c| c.parse::<Nat>().ok()).collect();
     let tumbler = Tumbler::new(comps?).ok()?;
     validate(tumbler).ok().filter(|address| address.to_string() == s)
@@ -542,9 +782,9 @@ pub fn encode(body: &Body, sig: Option<&str>) -> String {
 
 /// A member's opening in the canonical form (REG-1.86 (h)), `,"<name>":` —
 /// the comma ahead of it and its name as [`Member::name`] spells it, the
-/// name [`parse`] reads the member by — so the two sides of the canonical
+/// name a parse reads the member by — so the two sides of the canonical
 /// rule spell every member alike.
-fn push_member_opening(member: Member, out: &mut String) {
+pub(crate) fn push_member_opening(member: Member, out: &mut String) {
     out.push_str(",\"");
     out.push_str(member.name());
     out.push_str("\":");
@@ -554,7 +794,7 @@ fn push_member_opening(member: Member, out: &mut String) {
 /// `"` and `\` escaped, the five named C0 controls by their short escapes,
 /// the remaining C0 controls as `\u00xx` in lowercase hex, and nothing else
 /// escaped.
-fn escape_json_string(s: &str, out: &mut String) {
+pub(crate) fn escape_json_string(s: &str, out: &mut String) {
     out.push('"');
     for c in s.chars() {
         match c {

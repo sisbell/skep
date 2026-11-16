@@ -49,8 +49,8 @@
 //! then verifies the record ([`crate::verify`]) and folds it into the index
 //! ([`crate::index`]). Every read is the board's own journal (R5 (a)).
 //!
-//! THE JOURNAL COPY (the copy's on-disk form, an interim pin), under the
-//! caller's directory, two files of JSON lines, begun together by a new base
+//! THE JOURNAL COPY (the copy's on-disk form), under the caller's
+//! directory, two files of JSON lines, begun together by a new base
 //! and appended to by a held one — so a cache that outlived its feed copy is
 //! never read as this base's own. No line reaches either file before the
 //! realm is compared at the claim's row (REG-3.42): until then every line

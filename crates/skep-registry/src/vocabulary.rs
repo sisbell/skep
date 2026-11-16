@@ -12,7 +12,7 @@
 //! WHAT THE TABLE HOLDS: every address the build pins in code — the
 //! credential kinds `3.1` to `3.3`, `replaces` `3.12`, the edition class
 //! `3.14`, the journal designation `3.22`, endorse `3.42`, the registry's
-//! twelve rows `3.55` to `3.59` as `rows.rs` spells them, the rail record
+//! rows `3.54` to `3.59` as `rows.rs` spells them, the rail record
 //! `3.60`, the steward's classification `3.61`, the two media cell kinds
 //! `3.88` and `3.89`, the grant `3.90` and the consumption marker `3.91` —
 //! the two designations the map pins and no code names yet, the file
@@ -32,7 +32,7 @@
 //! the correspondence record, a subtype under counterpart. WHAT IT DOES
 //! NOT: the reserved ordinals of `3.22` to `3.29` and `3.46` to `3.49`
 //! beyond the built ones, `3.46.2` (reserved for `flagged`), `3.51` to
-//! `3.54` (the registry-machinery reserve, unallocated), `3.87` (reserved
+//! `3.53` (the registry-machinery reserve, unallocated), `3.87` (reserved
 //! for the proxy kind), the test-only `3.90.1`, and every range the map
 //! marks unallocated — nothing is named at an ordinal nobody allocated.
 //!
@@ -64,7 +64,7 @@
 //!
 //! THE ADDRESSES are spelled through [`commons_type`], the one spelling of
 //! the type subspace in this crate: a row is an element at positive
-//! ordinals, T4-valid by construction, and the registry's twelve are held
+//! ordinals, T4-valid by construction, and the registry's rows are held
 //! equal to [`crate::rows()`]'s by the unit suite beside this file.
 
 use std::sync::LazyLock;
@@ -88,7 +88,8 @@ pub struct Definition {
     /// the row's ordinals.
     pub address: Address,
     /// The row's path under `1.1.0.1.0.1.0.3`: one ordinal for a type, the
-    /// type's then the subtype's for a subtype (`[14, 2]` for `3.14.2`).
+    /// type's then the subtype's for a subtype (`[14, 2]` for `3.14.2`), and
+    /// one more for a row under a subtype (`[54, 1, 1]` for `3.54.1.1`).
     pub ordinals: &'static [u32],
     /// The type's name: one lowercase token.
     pub name: &'static str,
@@ -123,7 +124,7 @@ struct Spelling {
 }
 
 /// The rows, in path order.
-const SPELLINGS: [Spelling; 124] = [
+const SPELLINGS: &[Spelling] = &[
     // ── the credential kinds (AUTH-7.1 horn B) ───────────────────────────
     Spelling {
         ordinals: &[1],
@@ -731,7 +732,74 @@ const SPELLINGS: [Spelling; 124] = [
                   type seeded, and the type of its own definition.",
         endsets: "from: the type's section in this document; to: the type's address.",
     },
-    // ── the registry's twelve rows (REG-1.14, REG-1.15), as rows.rs spells them
+    // ── the registry's rows (REG-1.14, REG-1.15), as rows.rs spells them; the
+    //    registration family's names, purposes and endsets are commons-map's,
+    //    word for word (REG RES-272) ─────────────────────────────────────────
+    Spelling {
+        ordinals: &[54],
+        name: "registration",
+        purpose: "The records of a board's request to join a registry; read through the rows \
+                  under it; no deposit rides the kind itself.",
+        endsets: "from and to: as the rows under it say.",
+    },
+    Spelling {
+        ordinals: &[54, 1],
+        name: "request",
+        purpose: "A board's request to join; read through its kinds below; no deposit rides \
+                  this row itself.",
+        endsets: "from and to: as the rows under it say.",
+    },
+    Spelling {
+        ordinals: &[54, 1, 1],
+        name: "fresh",
+        purpose: "A request from an org with no board yet: it asks for its account and its \
+                  board.",
+        endsets: "from: the record's atom; to: the account that writes this board's bindings.",
+    },
+    Spelling {
+        ordinals: &[54, 1, 2],
+        name: "board-carries-on",
+        purpose: "A request from an org that keeps its own board: it asks for its account \
+                  alone.",
+        endsets: "from: the record's atom; to: the account that writes this board's bindings.",
+    },
+    Spelling {
+        ordinals: &[54, 2],
+        name: "reply",
+        purpose: "The registry's answer to a request; read through its answers below; no \
+                  deposit rides this row itself.",
+        endsets: "from and to: as the rows under it say.",
+    },
+    Spelling {
+        ordinals: &[54, 2, 1],
+        name: "approved",
+        purpose: "The request is approved: the new account's address and number.",
+        endsets: "from: the record's atom; to: the request answered.",
+    },
+    Spelling {
+        ordinals: &[54, 2, 2],
+        name: "refused",
+        purpose: "The request is refused for a fault in it, never a judgment of the person.",
+        endsets: "from: the record's atom; to: the request answered.",
+    },
+    Spelling {
+        ordinals: &[54, 2, 3],
+        name: "denied",
+        purpose: "An officer denies the request, citing a clause of the door's policy.",
+        endsets: "from: the record's atom; to: the request answered.",
+    },
+    Spelling {
+        ordinals: &[54, 3],
+        name: "vouch",
+        purpose: "One account speaking for an applicant.",
+        endsets: "from: the record's atom; to: the account that writes this board's bindings.",
+    },
+    Spelling {
+        ordinals: &[54, 4],
+        name: "approval",
+        purpose: "Ties the account a registrar made to the request it answers; a link alone.",
+        endsets: "from: the genesis the approval wrote; to: the request answered.",
+    },
     Spelling {
         ordinals: &[55],
         name: "binding",

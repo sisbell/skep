@@ -17,9 +17,10 @@ use std::sync::LazyLock;
 use skep_address::{document_of, validate, Address};
 use skep_arrangement::{trunk_of, Caller, Deposit};
 use skep_engine::types::{
-    t_binding, t_consumption_marker, t_correspondence, t_endorse, t_grant,
-    t_journal_designation, t_policy_link, t_rail_record, t_replaces, t_steward_classification,
-    t_successor_of, t_takedown, IDENTITY_TYPES,
+    t_approval, t_binding, t_consumption_marker, t_correspondence, t_endorse, t_grant,
+    t_journal_designation, t_policy_link, t_rail_record, t_replaces, t_reply_approved,
+    t_reply_denied, t_reply_refused, t_request_board_carries_on, t_request_fresh,
+    t_steward_classification, t_successor_of, t_takedown, IDENTITY_TYPES,
 };
 use skep_febe::Op;
 use skep_identity::{
@@ -56,12 +57,19 @@ use skep_engine::World;
 /// marker `3.91`, the journal designation `3.22`, the rail record `3.60`, the
 /// steward's classification link `3.61` — each cited to its commons row
 /// there — the `replaces` link `3.12` (PUB-5.15, RES-310), and the
-/// registry's three audit-view kinds (REG-1.44, REG-1.46: "adds members to
+/// registry's audit-view members (REG-1.44, REG-1.46: "adds members to
 /// that class list and no code") — the binding `3.55`, the takedown record
 /// `3.57` and the policy link `3.58`, each at its kind's address so every
-/// subtype row under the last two is a member by prefix (REG-1.21); the
+/// subtype row under the last two is a member by prefix (REG-1.21), and the
+/// registration's records read on the audit view (REG-1.43), one class at
+/// six addresses, each a leaf row's own and never a parent row's or the
+/// kind's (REG-1.22): the request's kinds `3.54.1.1` and `3.54.1.2`, the
+/// answers `3.54.2.1` to `3.54.2.3` and the approval link `3.54.4`. The
 /// endpoint `3.56` is not listed, read on the active view with its org's own
-/// `nullify` effective (REG-1.11). One member is no commons pin: the
+/// `nullify` effective (REG-1.11), and neither is the registration's vouch
+/// `3.54.3`, whose own `nullify` is its withdrawal (REG-1.45, REG-4.185) —
+/// the reason the registration class sits at no address above its rows,
+/// where a prefix would take the vouch with it. One member is no commons pin: the
 /// supersession claim's type is M7's own reserved ghost tumbler
 /// `1.1.0.1.0.1.0.1.4`, read from M7's registry ([`supersedes_type`]) and
 /// spelled nowhere else. The last is the ledger's one two-ordinal pin
@@ -98,6 +106,12 @@ fn write_types() -> &'static WriteTypes {
                 (AuditClass::PolicyLink, t_policy_link().clone()),
                 (AuditClass::Supersession, supersedes_type()),
                 (AuditClass::Correspondence, t_correspondence().clone()),
+                (AuditClass::Registration, t_request_fresh().clone()),
+                (AuditClass::Registration, t_request_board_carries_on().clone()),
+                (AuditClass::Registration, t_reply_approved().clone()),
+                (AuditClass::Registration, t_reply_refused().clone()),
+                (AuditClass::Registration, t_reply_denied().clone()),
+                (AuditClass::Registration, t_approval().clone()),
             ],
         )
     });

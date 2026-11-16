@@ -4,8 +4,8 @@
 
 use skep_address::{validate, Address, Nat, Tumbler};
 use skep_registry::{
-    commons_type, rows, seeding_check, t_binding, t_policy_link, t_successor_of, t_takedown_record,
-    Kind, Row, RowOf, SeedingRefusal, Subtype,
+    commons_type, rows, seeding_check, t_binding, t_policy_link, t_registration, t_successor_of,
+    t_takedown_record, Kind, Row, RowOf, SeedingRefusal, Subtype,
 };
 
 /// The rows commons-map's disjointness paragraph lists as built or placed
@@ -75,8 +75,11 @@ fn the_shipped_rows_are_disjoint_from_every_other_row_the_map_lists() {
 /// REG-1.30 — the disjointness arm, both directions: a foreign row placed
 /// inside the policy link's kind (the mail type, REG-1.31's sharpest case),
 /// a foreign row under the binding, a foreign row AT a registry row (the
-/// first row to meet it in table order is named — the kind above it), and
-/// a foreign row ABOVE the registry's whole block.
+/// first row to meet it in table order is named — the kind above it), a
+/// foreign row under the registration's kind — beside its rows, beneath a
+/// parent row, beneath a row under a parent and AT one of its rows, the
+/// kind's own row the first to meet each — and a foreign row ABOVE the
+/// registry's whole block.
 #[test]
 fn the_disjointness_arm_refuses_a_foreign_row_inside_above_or_at_a_registry_row() {
     for (ordinals, registry) in [
@@ -84,6 +87,11 @@ fn the_disjointness_arm_refuses_a_foreign_row_inside_above_or_at_a_registry_row(
         (&[55, 1][..], t_binding()),
         (&[57, 2][..], t_takedown_record()),
         (&[59][..], t_successor_of()),
+        (&[54, 9][..], t_registration()),
+        (&[54, 1, 7][..], t_registration()),
+        (&[54, 2, 1, 1][..], t_registration()),
+        (&[54, 3][..], t_registration()),
+        (&[54][..], t_registration()),
     ] {
         let f = commons_type(ordinals);
         assert_eq!(
@@ -99,7 +107,7 @@ fn the_disjointness_arm_refuses_a_foreign_row_inside_above_or_at_a_registry_row(
             .expect("an address");
     assert_eq!(
         seeding_check(rows(), std::iter::once(&subspace)),
-        Err(SeedingRefusal::Disjointness { registry: t_binding().clone(), foreign: subspace })
+        Err(SeedingRefusal::Disjointness { registry: t_registration().clone(), foreign: subspace })
     );
     // The operator's sentence names the registry's row and the foreign one,
     // each a commons row.
@@ -143,16 +151,97 @@ fn the_completeness_arm_refuses_a_missing_kind_or_subtype_row() {
     ));
 }
 
-/// REG-1.29 — EVERY row's absence refuses, naming that row: for each of the
-/// twelve, the shipped table without it answers the completeness arm with
-/// exactly that row missing, in the operator's sentence (REG-1.33: the
-/// sentence is what a repair in the image is read off). One sentence per row
-/// of the table, in its order, so a row the table gains (REG-1.15) owes a
-/// line here; and a kind or a subtype the arm's own lists (`Kind::ALL`,
-/// `Subtype::ALL`) leave out answers `Ok` where this test reads a refusal.
+/// REG-1.29, REG-1.20 — THE ARM RECURSES TO A ROW UNDER A PARENT ROW: a row
+/// under `request` or `reply` is a row at a prefix under ITS PARENT'S row,
+/// as a subtype's is one under its kind's, so one that stands under its
+/// kind and off its parent — under the other parent row, beside the
+/// parents under the kind alone, or under a row that is no parent — is no
+/// row of that subtype; and a parent row moved carries the rows beneath it
+/// off their prefix, the first of them the one named.
 #[test]
-fn the_completeness_arm_names_each_of_the_twelve_rows_missing() {
-    let missing: [(RowOf, &str); 12] = [
+fn the_completeness_arm_refuses_a_row_under_a_parent_row_off_its_parent() {
+    let fresh = RowOf::Subtype(Subtype::RequestFresh);
+    let denied = RowOf::Subtype(Subtype::ReplyDenied);
+    for (of, to) in [
+        (fresh, &[54, 2, 9][..]),
+        (fresh, &[54, 9]),
+        (fresh, &[54, 3, 1]),
+        (denied, &[54, 1, 9]),
+        (denied, &[54, 9]),
+        (denied, &[54, 4, 1]),
+    ] {
+        let refusal = seeding_check(&moved(of, to), std::iter::empty()).unwrap_err();
+        assert_eq!(refusal, SeedingRefusal::Completeness { missing: of }, "{of:?} at 3.{to:?}");
+    }
+    let off_its_parent = seeding_check(&moved(fresh, &[54, 2, 9]), std::iter::empty()).unwrap_err();
+    assert_eq!(
+        off_its_parent.to_string(),
+        "completeness: the request's fresh kind has no row under the request"
+    );
+    // A parent row moved — still under its kind, so it is a row of the
+    // request — leaves its kinds off its prefix.
+    let moved_parent = moved(RowOf::Subtype(Subtype::Request), &[54, 9]);
+    assert_eq!(
+        seeding_check(&moved_parent, std::iter::empty()),
+        Err(SeedingRefusal::Completeness { missing: fresh })
+    );
+    // And a parent row off its own kind is no row of the parent.
+    let parent_off_its_kind = moved(RowOf::Subtype(Subtype::Reply), &[57, 9]);
+    assert_eq!(
+        seeding_check(&parent_off_its_kind, std::iter::empty()),
+        Err(SeedingRefusal::Completeness { missing: RowOf::Subtype(Subtype::Reply) })
+    );
+}
+
+/// REG-1.29 — EVERY row's absence refuses, naming that row: for each row of
+/// the table, the shipped table without it answers the completeness arm with
+/// exactly that row missing, in the operator's sentence (REG-1.33: the
+/// sentence is what a repair in the image is read off) — a row under a
+/// parent row named under its parent, every other subtype under its kind.
+/// One sentence per row of the table, in its order, so a row the table gains
+/// (REG-1.15) owes a line here; and a kind or a subtype the arm's own lists
+/// (`Kind::ALL`, `Subtype::ALL`) leave out answers `Ok` where this test
+/// reads a refusal.
+#[test]
+fn the_completeness_arm_names_each_row_missing() {
+    let missing: &[(RowOf, &str)] = &[
+        (RowOf::Kind(Kind::Registration), "completeness: the registration has no row"),
+        (
+            RowOf::Subtype(Subtype::Request),
+            "completeness: the request has no row under the registration",
+        ),
+        (
+            RowOf::Subtype(Subtype::RequestFresh),
+            "completeness: the request's fresh kind has no row under the request",
+        ),
+        (
+            RowOf::Subtype(Subtype::RequestBoardCarriesOn),
+            "completeness: the request's board-carries-on kind has no row under the request",
+        ),
+        (
+            RowOf::Subtype(Subtype::Reply),
+            "completeness: the reply has no row under the registration",
+        ),
+        (
+            RowOf::Subtype(Subtype::ReplyApproved),
+            "completeness: the approved answer has no row under the reply",
+        ),
+        (
+            RowOf::Subtype(Subtype::ReplyRefused),
+            "completeness: the refused answer has no row under the reply",
+        ),
+        (
+            RowOf::Subtype(Subtype::ReplyDenied),
+            "completeness: the denied answer has no row under the reply",
+        ),
+        (
+            RowOf::Subtype(Subtype::Vouch),
+            "completeness: the vouch has no row under the registration",
+        ),
+        (
+            RowOf::Subtype(Subtype::Approval),
+            "completeness: the approval has no row under the registration",
+        ),
         (RowOf::Kind(Kind::Binding), "completeness: the binding has no row"),
         (RowOf::Kind(Kind::Endpoint), "completeness: the endpoint has no row"),
         (RowOf::Kind(Kind::TakedownRecord), "completeness: the takedown record has no row"),
@@ -192,7 +281,7 @@ fn the_completeness_arm_names_each_of_the_twelve_rows_missing() {
         rows().iter().map(|r| r.of).eq(missing.iter().map(|(of, _)| *of)),
         "one sentence per row of the table, in its order"
     );
-    for (of, sentence) in missing {
+    for &(of, sentence) in missing {
         let Err(refusal) = seeding_check(&without(of), std::iter::empty()) else {
             panic!("the table without {of:?} seeds");
         };
@@ -201,75 +290,126 @@ fn the_completeness_arm_names_each_of_the_twelve_rows_missing() {
     }
 }
 
-/// REG-1.20 — a subtype's row is UNDER its kind's row and never AT it: each
-/// of the seven, moved onto its own kind's bare ordinal — the equal case of
-/// "a prefix under", a tumbler being a prefix of itself — is no row of that
-/// subtype, so its deposits never ride an ordinal REG-1.18 keeps bare.
+/// REG-1.20 — a subtype's row is UNDER the row it stands beneath and never
+/// AT it: each subtype row, moved onto its own kind's bare ordinal — the
+/// equal case of "a prefix under", a tumbler being a prefix of itself — is
+/// no row of that subtype, so its deposits never ride an ordinal REG-1.18
+/// keeps bare; and a row under a parent row, moved onto ITS PARENT'S own
+/// address, is no row of it either, a parent row's address carrying no
+/// deposit as a kind's bare ordinal carries none.
 #[test]
-fn the_completeness_arm_refuses_a_subtype_row_on_its_kinds_own_ordinal() {
+fn the_completeness_arm_refuses_a_subtype_row_on_the_address_of_the_row_above_it() {
     let subtypes: Vec<Subtype> = rows().iter().filter_map(|r| r.of.subtype()).collect();
-    assert_eq!(subtypes.len(), 7);
-    for subtype in subtypes {
-        let on_its_kind: Vec<Row> = rows()
+    assert_eq!(subtypes.len(), Subtype::ALL.len());
+    let on = |subtype: Subtype, address: &skep_address::Address| -> Vec<Row> {
+        rows()
             .iter()
             .map(|r| {
                 let mut r = r.clone();
                 if r.of == RowOf::Subtype(subtype) {
-                    r.address = subtype.kind().row().address.clone();
+                    r.address = address.clone();
                 }
                 r
             })
-            .collect();
+            .collect()
+    };
+    for subtype in subtypes {
         assert_eq!(
-            seeding_check(&on_its_kind, std::iter::empty()),
+            seeding_check(&on(subtype, &subtype.kind().row().address), std::iter::empty()),
             Err(SeedingRefusal::Completeness { missing: RowOf::Subtype(subtype) }),
             "{subtype:?} on its kind's own ordinal"
         );
+        if let Some(parent) = subtype.parent() {
+            assert_eq!(
+                seeding_check(&on(subtype, &parent.row().address), std::iter::empty()),
+                Err(SeedingRefusal::Completeness { missing: RowOf::Subtype(subtype) }),
+                "{subtype:?} on its parent row's own address"
+            );
+        }
     }
 }
 
-/// REG-1.25 — the count arm: a sixth kind row, a kind row at `3.54` — the
-/// reserve's, outside the registry range (REG-1.24) — a kind row beneath its
-/// own ordinal, `3.55.1`, and two kind rows at one ordinal.
+/// REG-1.25 — the count arm, the kinds counted off the list and against no
+/// written number: one kind row more than the registry range has ordinals,
+/// a kind row at `3.53` — the reserve's, outside the registry range
+/// (REG-1.24) — one past the range at `3.60`, a kind row beneath its own
+/// ordinal, `3.55.1`, and two kind rows at one ordinal.
 #[test]
-fn the_count_arm_holds_the_kind_rows_to_the_registry_ranges_five_ordinals() {
-    let mut sixth: Vec<Row> = rows().to_vec();
-    sixth.push(Row {
+fn the_count_arm_holds_the_kind_rows_to_the_registry_ranges_ordinals() {
+    let kinds = Kind::ALL.len();
+    let mut one_more: Vec<Row> = rows().to_vec();
+    one_more.push(Row {
         of: RowOf::Kind(Kind::Binding),
-        address: commons_type(&[54]),
+        address: commons_type(&[53]),
         type_value: Some("binding"),
     });
-    let refusal = seeding_check(&sixth, std::iter::empty()).unwrap_err();
-    assert_eq!(refusal, SeedingRefusal::Count { kind_row_count: 6, row: None });
+    let refusal = seeding_check(&one_more, std::iter::empty()).unwrap_err();
+    assert_eq!(refusal, SeedingRefusal::Count { kind_row_count: kinds + 1, row: None });
     assert_eq!(
         refusal.to_string(),
-        "count: 6 kind rows against the registry range's 5 ordinals 3.55-3.59"
+        format!(
+            "count: {} kind rows against the registry range's {kinds} ordinals 3.54-3.59",
+            kinds + 1
+        )
     );
-    // The operator's sentence names the range the row is outside: `3.54`
-    // is the reserve's and no ordinal of the registry range.
-    let outside = moved(RowOf::Kind(Kind::Binding), &[54]);
-    let refusal = seeding_check(&outside, std::iter::empty()).unwrap_err();
+    // The operator's sentence names the range the row is outside: `3.53`
+    // is the reserve's and no ordinal of the registry range, and `3.60` is
+    // past it.
+    for off_the_range in [53, 60] {
+        let outside = moved(RowOf::Kind(Kind::Binding), &[off_the_range]);
+        let refusal = seeding_check(&outside, std::iter::empty()).unwrap_err();
+        assert_eq!(
+            refusal,
+            SeedingRefusal::Count {
+                kind_row_count: kinds,
+                row: Some(commons_type(&[off_the_range]))
+            }
+        );
+        assert_eq!(
+            refusal.to_string(),
+            format!(
+                "count: of {kinds} kind rows, 1.1.0.1.0.1.0.3.{off_the_range} is no bare ordinal \
+                 of the registry range 3.54-3.59 left to it"
+            )
+        );
+    }
+    // The registration's own kind row off the range is refused as any
+    // kind's is: the whole family moved one ordinal down, to `3.53` and
+    // under it, keeps every row under the row above it — completeness
+    // passes — and the count names the kind's row.
+    let family_at_53: Vec<Row> = rows()
+        .iter()
+        .map(|r| {
+            let mut r = r.clone();
+            if r.of.kind() == Kind::Registration {
+                let mut ordinals: Vec<u32> = r
+                    .ordinal_path()
+                    .split('.')
+                    .skip(1)
+                    .map(|o| o.parse().expect("an ordinal"))
+                    .collect();
+                ordinals[0] = 53;
+                r.address = commons_type(&ordinals);
+            }
+            r
+        })
+        .collect();
     assert_eq!(
-        refusal,
-        SeedingRefusal::Count { kind_row_count: 5, row: Some(commons_type(&[54])) }
-    );
-    assert_eq!(
-        refusal.to_string(),
-        "count: of 5 kind rows, 1.1.0.1.0.1.0.3.54 is no bare ordinal of the registry range \
-         3.55-3.59 left to it"
+        seeding_check(&family_at_53, std::iter::empty()),
+        Err(SeedingRefusal::Count { kind_row_count: kinds, row: Some(commons_type(&[53])) })
     );
     // A kind row BENEATH its own ordinal — inside the range, and no bare
     // ordinal of it: the count reads the bare ordinal, never a prefix.
     let beneath = moved(RowOf::Kind(Kind::Binding), &[55, 1]);
     assert_eq!(
         seeding_check(&beneath, std::iter::empty()),
-        Err(SeedingRefusal::Count { kind_row_count: 5, row: Some(commons_type(&[55, 1])) })
+        Err(SeedingRefusal::Count { kind_row_count: kinds, row: Some(commons_type(&[55, 1])) })
     );
     let doubled = moved(RowOf::Kind(Kind::Endpoint), &[55]);
     let refusal = seeding_check(&doubled, std::iter::empty()).unwrap_err();
     assert_eq!(
         refusal,
-        SeedingRefusal::Count { kind_row_count: 5, row: Some(commons_type(&[55])) }
+        SeedingRefusal::Count { kind_row_count: kinds, row: Some(commons_type(&[55])) }
     );
     assert_eq!(refusal.arm(), "count");
     assert!(refusal.to_string().starts_with("count:"), "{refusal}");
@@ -283,7 +423,7 @@ fn the_arms_run_in_order() {
     let mut faulty = without(RowOf::Subtype(Subtype::Disavowal));
     faulty.push(Row {
         of: RowOf::Kind(Kind::Binding),
-        address: commons_type(&[54]),
+        address: commons_type(&[53]),
         type_value: Some("binding"),
     });
     let foreign = commons_type(&[55, 1]);
@@ -322,8 +462,9 @@ fn within_an_arm_the_first_fault_in_the_stated_order_speaks() {
             "successor-of and {other:?} missing"
         );
     }
+    let kinds = Kind::ALL.len();
     let second_policy_link =
-        Row { of: RowOf::Kind(Kind::PolicyLink), address: commons_type(&[54]), type_value: None };
+        Row { of: RowOf::Kind(Kind::PolicyLink), address: commons_type(&[53]), type_value: None };
     let mut ahead = rows().to_vec();
     ahead.insert(0, second_policy_link.clone());
     assert_eq!(
@@ -335,18 +476,19 @@ fn within_an_arm_the_first_fault_in_the_stated_order_speaks() {
     behind.push(second_policy_link);
     assert_eq!(
         seeding_check(&behind, std::iter::empty()),
-        Err(SeedingRefusal::Count { kind_row_count: 6, row: None }),
-        "the same row behind it: the readings stand under the first, and six kind rows count"
+        Err(SeedingRefusal::Count { kind_row_count: kinds + 1, row: None }),
+        "the same row behind it: the readings stand under the first, and one kind row too many \
+         counts"
     );
     let mut two_outside = moved(RowOf::Kind(Kind::Endpoint), &[53]);
     for r in &mut two_outside {
         if r.of == RowOf::Kind(Kind::SuccessorOf) {
-            r.address = commons_type(&[54]);
+            r.address = commons_type(&[52]);
         }
     }
     assert_eq!(
         seeding_check(&two_outside, std::iter::empty()),
-        Err(SeedingRefusal::Count { kind_row_count: 5, row: Some(commons_type(&[53])) }),
+        Err(SeedingRefusal::Count { kind_row_count: kinds, row: Some(commons_type(&[53])) }),
         "two kind rows outside the range: the first of the list is named"
     );
     // The count's two faults in one list — a kind row at an ordinal an
@@ -361,22 +503,23 @@ fn within_an_arm_the_first_fault_in_the_stated_order_speaks() {
         }
         assert_eq!(
             seeding_check(&two_faults, std::iter::empty()),
-            Err(SeedingRefusal::Count { kind_row_count: 5, row: Some(commons_type(&[named])) }),
+            Err(SeedingRefusal::Count { kind_row_count: kinds, row: Some(commons_type(&[named])) }),
             "the endpoint at 3.{endpoint_at}, successor-of at 3.{successor_of_at}"
         );
     }
 }
 
-/// REG-1.14's five kinds and REG-1.15's seven subtype rows in the rules' own
-/// order — every kind ahead of any subtype, as the completeness arm reads
-/// them — transcribed from the rules and never read off `Kind::ALL` or
-/// `Subtype::ALL`.
-const IN_THE_RULES_ORDER: [RowOf; 12] = [
+/// REG-1.14's kinds and REG-1.15's subtype rows in the rules' own order —
+/// every kind ahead of any subtype, as the completeness arm reads them, a
+/// parent row ahead of the rows beneath it — transcribed from the rules and
+/// never read off `Kind::ALL` or `Subtype::ALL`.
+const IN_THE_RULES_ORDER: &[RowOf] = &[
     RowOf::Kind(Kind::Binding),
     RowOf::Kind(Kind::Endpoint),
     RowOf::Kind(Kind::TakedownRecord),
     RowOf::Kind(Kind::SuccessorOf),
     RowOf::Kind(Kind::PolicyLink),
+    RowOf::Kind(Kind::Registration),
     RowOf::Subtype(Subtype::TakedownBase),
     RowOf::Subtype(Subtype::TakedownLifted),
     RowOf::Subtype(Subtype::PolicyLinkOwn),
@@ -384,13 +527,24 @@ const IN_THE_RULES_ORDER: [RowOf; 12] = [
     RowOf::Subtype(Subtype::ExpulsionGround),
     RowOf::Subtype(Subtype::SuccessionGround),
     RowOf::Subtype(Subtype::SuccessionPolicy),
+    RowOf::Subtype(Subtype::Request),
+    RowOf::Subtype(Subtype::RequestFresh),
+    RowOf::Subtype(Subtype::RequestBoardCarriesOn),
+    RowOf::Subtype(Subtype::Reply),
+    RowOf::Subtype(Subtype::ReplyApproved),
+    RowOf::Subtype(Subtype::ReplyRefused),
+    RowOf::Subtype(Subtype::ReplyDenied),
+    RowOf::Subtype(Subtype::Vouch),
+    RowOf::Subtype(Subtype::Approval),
 ];
 
 /// REG-1.33 — WHICH ROW COMPLETENESS NAMES, over every pair a list can miss:
 /// the earlier of the two in the rules' order, so the operator's one
-/// sentence names the same row whatever else the image lacks. Every row of
-/// the table owes a line here (REG-1.15). `within_an_arm_…` holds the two
-/// pairs a table-order reading gets wrong; this holds all sixty-six.
+/// sentence names the same row whatever else the image lacks — a parent row
+/// ahead of a row beneath it, where both are missing. Every row of the
+/// table owes a line here (REG-1.15). `within_an_arm_…` holds the two pairs
+/// a table-order reading gets wrong; this holds every pair, and the lists
+/// the arm reads are this transcription, in its order.
 #[test]
 fn the_completeness_arm_names_the_earlier_of_any_two_missing_rows() {
     assert!(
@@ -398,6 +552,12 @@ fn the_completeness_arm_names_the_earlier_of_any_two_missing_rows() {
             && rows().iter().all(|r| IN_THE_RULES_ORDER.contains(&r.of)),
         "one line per row of the table"
     );
+    let listed: Vec<RowOf> = Kind::ALL
+        .iter()
+        .map(|k| RowOf::Kind(*k))
+        .chain(Subtype::ALL.iter().map(|s| RowOf::Subtype(*s)))
+        .collect();
+    assert_eq!(listed, IN_THE_RULES_ORDER, "the arm's lists are the rules' order");
     let mut pairs = 0;
     for (i, first) in IN_THE_RULES_ORDER.iter().enumerate() {
         for second in &IN_THE_RULES_ORDER[i + 1..] {
@@ -411,5 +571,6 @@ fn the_completeness_arm_names_the_earlier_of_any_two_missing_rows() {
             pairs += 1;
         }
     }
-    assert_eq!(pairs, 66, "every pair of the twelve, once");
+    let n = IN_THE_RULES_ORDER.len();
+    assert_eq!(pairs, n * (n - 1) / 2, "every pair of the rows, once");
 }

@@ -10,8 +10,8 @@
 //! the fork point rides in the hint and is compared by no check of this
 //! crate.
 //!
-//! THE ONE LINE (the hint's one-line syntax, an interim pin): whitespace-
-//! separated terms — one or more origins in the order they are tried, the
+//! THE ONE LINE (the hint's one-line syntax): whitespace-separated terms —
+//! one or more origins in the order they are tried, the
 //! realm id's genesis fingerprint as `realm:<64 lowercase hex>`, and on a
 //! forked lineage its fork point as `fork:<address>` (REG-3.40). Pointing a
 //! world at a forked registry is editing this one line (REG-3.2).
@@ -23,22 +23,23 @@
 //! THE GENESIS FINGERPRINT'S FORM (REG-3.39: "the FINGERPRINT of the registry
 //! root's GENESIS key set — its initial set, never its living one";
 //! AUTH-2.119: the form is built on the framing rule, over the genesis set in
-//! FINGERPRINT ORDER — RES-1 — under a tag the registry's design is to
-//! declare; an interim pin here, the design having pinned no tag yet):
-//! SHA-256 over the bytes `skep-realm-v1` then, per enrolled key of the
-//! genesis set in ascending fingerprint order, the key's fingerprint as a
-//! four-byte big-endian length and its thirty-two digest bytes — the framing
-//! rule's layout, spelled here because the tag is not among the declared ones
-//! and a foreign crate frames under none. Two implementers that frame or order
-//! the set differently mint different genesis fingerprints and fail every
-//! check, which is why the order is ruled and the form is stated once, here.
+//! FINGERPRINT ORDER — RES-1 — under the realm tag AUTH-1.11 declares):
+//! SHA-256 over `framed(REALM_TAG, fingerprints)` — the bytes
+//! `skep-realm-v1` then, per enrolled key of the genesis set in ascending
+//! fingerprint order, the key's fingerprint as a four-byte big-endian length
+//! and its thirty-two digest bytes — the framing rule's layout, read through
+//! the declared tag (`skep-identity`'s `REALM_TAG`), so the preimage is
+//! framed by the one function every tag frames by. Two implementers that
+//! frame or order the set differently mint different genesis fingerprints
+//! and fail every check, which is why the order is ruled and the form is
+//! stated once, here.
 
 use std::fmt;
 use std::str::FromStr;
 
 use sha2::{Digest, Sha256};
 use skep_address::Address;
-use skep_identity::Fingerprint;
+use skep_identity::{framed, Fingerprint, REALM_TAG};
 
 use crate::origin::Origin;
 use crate::parse_address;
@@ -69,13 +70,8 @@ impl RealmId {
         let mut ordered: Vec<&Fingerprint> = genesis_set.iter().collect();
         ordered.sort();
         ordered.dedup();
-        let mut hasher = Sha256::new();
-        hasher.update(b"skep-realm-v1");
-        for fp in ordered {
-            hasher.update((fp.as_bytes().len() as u32).to_be_bytes());
-            hasher.update(fp.as_bytes());
-        }
-        let digest = hasher.finalize();
+        let fields: Vec<&[u8]> = ordered.iter().map(|fp| fp.as_bytes().as_slice()).collect();
+        let digest = Sha256::digest(framed(REALM_TAG, &fields));
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         Fingerprint::parse_hex(&hex).expect("a SHA-256 digest is 64 hex characters")
     }
@@ -352,7 +348,9 @@ mod tests {
     /// THE GENESIS FINGERPRINT'S FORM, as the module doc states it and no
     /// other: SHA-256 over `skep-realm-v1`, then each fingerprint of the set
     /// in ascending order, a four-byte big-endian length before its
-    /// thirty-two bytes — the empty set's the tag's hash alone.
+    /// thirty-two bytes — the empty set's the tag's hash alone — spelled
+    /// here by hand, against the declared tag's framing the code reads it
+    /// through.
     #[test]
     fn the_genesis_fingerprint_is_the_form_the_module_doc_states() {
         let stated = |set: &[Fingerprint]| -> [u8; 32] {
@@ -367,6 +365,22 @@ mod tests {
         };
         assert_eq!(RealmId::genesis_fingerprint(&[]).as_bytes(), &stated(&[]), "the empty set");
         assert_eq!(RealmId::genesis_fingerprint(&[fp(2), fp(1)]).as_bytes(), &stated(&[fp(1), fp(2)]), "in ascending order");
+    }
+
+    /// THE REALM ID's BYTES ARE PINNED (REG-3.39; T-R5): the genesis
+    /// fingerprint of three fixed genesis sets, byte for byte, each digest
+    /// computed outside this crate from the form the module doc states — so
+    /// reading the preimage through the declared tag moves no byte of any
+    /// realm id a hint already carries.
+    #[test]
+    fn the_realm_id_of_a_fixed_genesis_set_is_pinned_byte_for_byte() {
+        for (set, hex) in [
+            (vec![], "7510060f3b516ab9f75ac3cb2bf20903663a66cbd45eaef0b78afee78e7d14c8"),
+            (vec![fp(2), fp(1)], "7780b29948abb4d0155974777846187c153371647a31bed8f0e64dc0a902d80e"),
+            (vec![fp(0xab)], "6aa37b3592afc49fa52bfbb86d9649165373ade23f311a12e9b20336b0b1da2e"),
+        ] {
+            assert_eq!(RealmId::genesis_fingerprint(&set).to_hex(), hex, "{set:?}");
+        }
     }
 
     /// The genesis fingerprint is over the SET: the same fingerprints in any

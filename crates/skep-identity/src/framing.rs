@@ -1,8 +1,9 @@
 //! Framing and the tag set — AUTH-1.11–1.17.
 //!
 //! Framing is the domain separation of what is hashed or signed under a
-//! declared tag: a key's fingerprint, a session handshake, a node hello, and
-//! an entry's or a record's frame. Declaring a constant beside [`framed`] is
+//! declared tag: a key's fingerprint, a session handshake, a node hello, an
+//! entry's or a record's frame, a realm id's genesis set and an admission
+//! request. Declaring a constant beside [`framed`] is
 //! the only way to hold a [`Tag`] (AUTH-1.13), and [`framed`] debug-asserts
 //! membership in [`TAGS`] (AUTH-1.14) — the two mechanisms close two
 //! different directions (AUTH-1.16): nothing undeclared can be framed, and
@@ -16,9 +17,11 @@ use core::fmt;
 /// The field is private, with no public constructor (AUTH-1.13): a foreign
 /// crate cannot frame under an undeclared tag — consumers (bebe's
 /// `NODE_HELLO_TAG`, AUTH-2.118) hold the declared constants only. Tags
-/// chosen in other documents (the invite payload's, the realm fingerprint's
-/// — AUTH-1.17) are declared here when chosen: the constant and its row in
-/// [`TAGS`], one edit in one place.
+/// chosen in other documents (AUTH-1.17) are declared here when chosen: the
+/// constant and its row in [`TAGS`], one edit in one place — the entry
+/// frame's ([`ENTRY_TAG`]), the realm fingerprint's ([`REALM_TAG`]) and the
+/// admission request's ([`REGISTRATION_TAG`]) so far, the invite payload's
+/// when its document chooses one.
 ///
 /// `Copy`, because a tag is two words that [`framed`] only reads: a caller
 /// binds a declared constant, or walks [`TAGS`], and frames under what it
@@ -89,12 +92,43 @@ pub const NODE_HELLO_TAG: Tag = Tag(b"skep-node-hello-v1");
 /// the `op` member's token tells the two grades apart.
 pub const ENTRY_TAG: Tag = Tag(b"skep-entry-v1");
 
+/// The realm fingerprint's tag, a tag chosen in another document.
+///
+/// It is declared in AUTH-1.11's block as AUTH-1.17 binds one (the registry's
+/// design; REG-3.39). It frames the preimage of a realm id's genesis
+/// fingerprint: `framed(REALM_TAG, fingerprints)`, one field per key of the
+/// registry root's genesis set, each the key's thirty-two fingerprint bytes,
+/// in ascending fingerprint order (AUTH-2.119), hashed with SHA-256. The
+/// resolver composes and hashes it (`skep-resolve`'s `RealmId`); nothing in
+/// this crate does, the tag being declared here because every tag is.
+pub const REALM_TAG: Tag = Tag(b"skep-realm-v1");
+
+/// The admission frame's tag, a tag chosen in another document.
+///
+/// It is declared in AUTH-1.11's block as AUTH-1.17 binds one (the registry's
+/// design; REG-4.67). It frames the bytes an applicant's device key signs a
+/// registration request over —
+/// `framed(REGISTRATION_TAG, [door, fresh, shape, node, board])`, composed by
+/// [`crate::AdmissionFrame`], the `board` field left out where the
+/// applicant's board carries on — so a signature made over a request
+/// verifies as no session's, no entry's and no record's, and one made for
+/// one door verifies at no other.
+pub const REGISTRATION_TAG: Tag = Tag(b"skep-registration-v1");
+
 /// The declared tag set (AUTH-1.11).
 ///
 /// Every tag begins `skep-` and no tag is a prefix of another (AUTH-1.15);
 /// the conformance assertion ranging over this value is the I2 obligation
 /// AUTH-2.93 pins.
-pub const TAGS: &[Tag] = &[KEY_TAG, SESSION_TAG, SESSION_TAG_V2, NODE_HELLO_TAG, ENTRY_TAG];
+pub const TAGS: &[Tag] = &[
+    KEY_TAG,
+    SESSION_TAG,
+    SESSION_TAG_V2,
+    NODE_HELLO_TAG,
+    ENTRY_TAG,
+    REALM_TAG,
+    REGISTRATION_TAG,
+];
 
 /// Returns `tag ‖ (per field f, in order: be32(len(f)) ‖ f)` (AUTH-1.12).
 ///
@@ -105,7 +139,9 @@ pub const TAGS: &[Tag] = &[KEY_TAG, SESSION_TAG, SESSION_TAG_V2, NODE_HELLO_TAG,
 ///
 /// Panics where a field is 2^32 bytes or longer — a length `be32` cannot
 /// write — naming the obligation. A longer field is a caller's bug and not
-/// an outcome: no field the workspace frames reaches it. The
+/// an outcome: no field the workspace frames reaches it. An admission
+/// frame's fields are a request's members, held to the request's own body
+/// cap before they are framed. The
 /// largest is an entry body, and each grammar's is held to a bound of its
 /// own before it is framed: an `insert`'s values, and every address a
 /// request names, by the daemon's request cap; a link write's slots as

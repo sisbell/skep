@@ -45,7 +45,8 @@ const IO_TIMEOUT: Duration = Duration::from_secs(60);
 /// the status line, the headers and the page's envelope. Every other answer
 /// the fold reads whole is smaller by construction: a registry or credential
 /// link is one atom and at most one address (the daemon's shape check,
-/// wire.md §Registry), a record at most `MAX_REGISTRY_RECORD_BYTES` (16 KiB),
+/// wire.md §Registry), a binding's or an endpoint's record — the registry
+/// records the fold reads — at most `MAX_REGISTRY_RECORD_BYTES` (16 KiB),
 /// a key set at most sixteen keys, a doc 1's image at most `MAX_IMAGE_RUNS`
 /// runs. Raising the board's page budget raises this.
 const MAX_ANSWER_BYTES: usize = 2 * 1024 * 1024 + 4 * 1024;

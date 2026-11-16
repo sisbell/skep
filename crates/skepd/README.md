@@ -154,8 +154,9 @@ verify runs at three doors, each in the core's session layer: the signed
 session's handshake; the entry signature a
 publish-class write carries in its `attest`, checked before the
 transaction; and, above the claim, the `sig` a credential record — or a
-registry record, the binding and the endpoint of
-[skep-registry](../skep-registry) — carries inside its own atom, checked
+registry record: the binding, the endpoint and the registration's
+requests, answers and vouch of [skep-registry](../skep-registry) —
+carries inside its own atom, checked
 in the credential or the registry sequence at the record's `make_link`
 under the key set that opens the record's home — a record carrying none
 is refused at its own `insert`, before it lands. The open runs the

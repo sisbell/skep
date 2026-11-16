@@ -8,13 +8,14 @@ type Reader = fn() -> &'static Address;
 
 /// THE LEDGER as the tests walk it: each pin's reader, with the commons
 /// ordinals its own doc cites — one for a kind's row, the kind's then
-/// the subtype's for a registry subtype row. ONE list, because a pin's
+/// the subtype's for a registry subtype row, and one more for a row under
+/// a registry parent row. ONE list, because a pin's
 /// obligations are the ledger's rather than that pin's — three hand-kept
 /// lists would be three places to be forgotten, and a pin absent from
 /// all of them reaches the daemon's refusal set with nothing here
 /// failing. So this is the single gate the next pin passes
 /// through, and each test below is one question asked of every row.
-const PINS: [(Reader, &str); 26] = [
+const PINS: &[(Reader, &str)] = &[
     (t_enroll, "1"),
     (t_retire, "2"),
     (t_claim, "3"),
@@ -27,6 +28,16 @@ const PINS: [(Reader, &str); 26] = [
     (t_rail_record, "60"),
     (t_steward_classification, "61"),
     (t_replaces, "12"),
+    (t_registration, "54"),
+    (t_request, "54.1"),
+    (t_request_fresh, "54.1.1"),
+    (t_request_board_carries_on, "54.1.2"),
+    (t_reply, "54.2"),
+    (t_reply_approved, "54.2.1"),
+    (t_reply_refused, "54.2.2"),
+    (t_reply_denied, "54.2.3"),
+    (t_vouch, "54.3"),
+    (t_approval, "54.4"),
     (t_binding, "55"),
     (t_endpoint, "56"),
     (t_takedown, "57"),
@@ -43,19 +54,22 @@ const PINS: [(Reader, &str); 26] = [
     (t_held_removal, "24"),
 ];
 
-/// Whether `a` is a registry row — one of `skep-registry`'s twelve.
+/// Whether `a` is a registry row — one of `skep-registry`'s table.
 fn is_registry_row(a: &Address) -> bool {
     skep_registry::row_at(a).is_some()
 }
 
 /// The pairs the registry's own nesting admits (REG-1.20): each subtype
-/// row under its own kind's row, and nothing else.
+/// row under its own kind's row, each row under a parent row under that
+/// parent's row too, and nothing else.
 fn nested_pairs() -> Vec<(&'static Address, &'static Address)> {
     skep_registry::rows()
         .iter()
-        .filter_map(|r| {
-            let subtype = r.of.subtype()?;
-            Some((&subtype.kind().row().address, &r.address))
+        .flat_map(|r| {
+            let subtype = r.of.subtype();
+            let kind = subtype.map(|s| (&s.kind().row().address, &r.address));
+            let parent = subtype.and_then(|s| s.parent()).map(|p| (&p.row().address, &r.address));
+            kind.into_iter().chain(parent)
         })
         .collect()
 }
@@ -64,14 +78,25 @@ fn nested_pairs() -> Vec<(&'static Address, &'static Address)> {
 /// distinct and — since a consumer recognizes a class's SUBTYPES by
 /// prefix — pairwise prefix-free, so no class swallows another; the ONE
 /// prefix relation admitted is a registry subtype row under its own
-/// kind's row, the nesting the registry designs (REG-1.20) — so every
-/// registry row stays prefix-free against every pin outside the
-/// registry's table, and the kinds against each other.
+/// kind's row, and under its own parent row where it is a row under a
+/// row, the nesting the registry designs (REG-1.20) — so every registry
+/// row stays prefix-free against every pin outside the registry's table,
+/// the kinds against each other, and a row against every registry row
+/// that is neither its kind nor its parent.
 #[test]
 fn the_commons_pins_are_pairwise_prefix_free_but_for_the_registrys_own_nesting() {
-    let pins: Vec<&'static Address> = PINS.into_iter().map(|(read, _)| read()).collect();
+    let pins: Vec<&'static Address> = PINS.iter().map(|(read, _)| read()).collect();
     let nested = nested_pairs();
-    assert_eq!(nested.len(), 7, "seven subtype rows nest under their kinds");
+    let (subtypes, under_a_parent) = (
+        skep_registry::Subtype::ALL.len(),
+        skep_registry::Subtype::ALL.iter().filter(|s| s.parent().is_some()).count(),
+    );
+    assert!(under_a_parent > 0, "the registration's rows under `request` and `reply`");
+    assert_eq!(
+        nested.len(),
+        subtypes + under_a_parent,
+        "every subtype row nests under its kind, and a row under a parent row under that too"
+    );
     for (i, a) in pins.iter().enumerate() {
         for b in &pins[i + 1..] {
             assert_ne!(a, b, "{} is pinned twice", a.tumbler());
@@ -88,38 +113,77 @@ fn the_commons_pins_are_pairwise_prefix_free_but_for_the_registrys_own_nesting()
 }
 
 /// The deposit class's types — M5's set: the credential types ENROLL
-/// and RETIRE, and the registry's binding and endpoint, each spelled a
-/// second time below this crate — are EXACTLY the four pins the set
-/// spells again, member for member and in the set's order (PUB-2.11,
-/// PUB-2.63; RES-249, RES-261): the two credential pins the fold hook
-/// classifies a record's `make_link` by, so a record atom declared under
-/// one is the class its pair's link folds as, and the two registry rows
-/// the daemon's registry sequence reads. No member is any OTHER pin —
-/// which would make a typed-link class with no atom (the grant, the
-/// edition claim, `successor-of`) a member the insert door admits a
-/// declared deposit under — and none sits above or beneath one, which
-/// would make the daemon's prefix-recognizing write path read a credential
-/// as that pin's class or subtype. Walked off the same ONE list, so the
-/// next pin meets the set where it joins.
+/// and RETIRE, and the registry's rows whose bodies the daemon parses —
+/// the registration's six deposit-carrying rows, the binding and the
+/// endpoint — each spelled a second time below this crate — are EXACTLY
+/// the pins the set spells again, member for member and in the set's order
+/// (PUB-2.11, PUB-2.63; RES-249, RES-261; REG-1.23): the two credential
+/// pins the fold hook classifies a record's `make_link` by, so a record
+/// atom declared under one is the class its pair's link folds as, and the
+/// registry rows the daemon's registry sequence reads. No member is any
+/// OTHER pin — which would make a typed-link class with no atom (the
+/// grant, the edition claim, `successor-of`, the registration's approval)
+/// or a row that carries no deposit (a kind's bare ordinal, a parent row)
+/// a member the insert door admits a declared deposit under. THE
+/// CREDENTIAL HALF IS STRICT: enroll and retire sit above and beneath no
+/// pin at all, which would make the daemon's prefix-recognizing write path
+/// read a credential as that pin's class or subtype. THE REGISTRY HALF
+/// ADMITS ITS OWN NESTING AND NO OTHER: a registry member is prefix-free
+/// against every pin but the registry rows it nests under by design — its
+/// kind's row, and its parent row's — so the request's fresh kind sits
+/// under `request` and under the registration and beside everything else.
+/// Walked off the same ONE list, so the next pin meets the set where it
+/// joins.
 #[test]
-fn the_deposit_class_types_are_the_four_pins_they_spell_again_and_prefix_free_otherwise() {
+fn the_deposit_class_types_are_the_pins_they_spell_again_and_prefix_free_otherwise() {
     let spelled: Vec<&Address> = skep_arrangement::deposit_class_types().iter().collect();
+    let parsed_rows = [
+        t_request_fresh(),
+        t_request_board_carries_on(),
+        t_reply_approved(),
+        t_reply_refused(),
+        t_reply_denied(),
+        t_vouch(),
+        t_binding(),
+        t_endpoint(),
+    ];
+    let expected: Vec<&Address> = [t_enroll(), t_retire()].into_iter().chain(parsed_rows).collect();
     assert_eq!(
-        spelled,
-        [t_enroll(), t_retire(), t_binding(), t_endpoint()],
-        "the set is the two credential pins then the two registry rows, in that order"
+        spelled, expected,
+        "the set is the two credential pins, then the registry's parsed rows in the table's order"
     );
+    // The registry's members are its deposit-carrying rows whose body the
+    // registry crate parses: the binding's and the endpoint's, and each row
+    // a registration kind names — never a row that carries no deposit.
+    for row in parsed_rows {
+        let row = skep_registry::row_at(row).expect("a registry row");
+        assert!(row.carries_deposits() && row.type_value.is_some(), "{}", row.address);
+        let parsed = skep_registry::RegistrationKind::at(&row.address).is_some()
+            || [t_binding(), t_endpoint()].contains(&&row.address);
+        assert!(parsed, "{}: a row whose body is parsed", row.address);
+    }
+    let nested = nested_pairs();
     for ty in skep_arrangement::deposit_class_types() {
+        let credential = [t_enroll(), t_retire()].contains(&ty);
         for (read, _) in PINS {
             let pin = read();
             if pin == ty {
                 continue;
             }
+            let related =
+                is_prefix(ty.tumbler(), pin.tumbler()) || is_prefix(pin.tumbler(), ty.tumbler());
+            let own_nesting = !credential && nested.contains(&(pin, ty));
             assert!(
-                !is_prefix(ty.tumbler(), pin.tumbler()) && !is_prefix(pin.tumbler(), ty.tumbler()),
+                !related || own_nesting,
                 "the deposit-class type {} and the pin {} are prefix-related",
                 ty.tumbler(),
                 pin.tumbler()
+            );
+            assert!(
+                !is_prefix(ty.tumbler(), pin.tumbler()),
+                "the pin {} sits beneath the deposit-class type {}: a member is a leaf",
+                pin.tumbler(),
+                ty.tumbler()
             );
         }
     }
@@ -175,7 +239,7 @@ fn every_pin_is_a_ghost_subspace_3_element() {
 }
 
 /// THE REGISTRY'S ROWS ARE THE CRATE'S TABLE (the module doc): the
-/// eleven readers hand back the crate's own held rows, `t_successor_of`
+/// readers hand back the crate's own held rows, `t_successor_of`
 /// — the engine's own pin, the registry's fourth kind — EQUALS the
 /// crate's `3.59`, and the class pins outside the registry are exactly
 /// the ledger's rows the crate's table does not hold, the three
@@ -191,7 +255,7 @@ fn the_registry_rows_are_the_crates_table_and_successor_of_is_held_equal() {
     assert!(std::ptr::eq(t_binding(), skep_registry::t_binding()), "one held row, not a copy");
     let credential = [t_enroll(), t_retire(), t_claim()];
     let outside: Vec<&Address> = PINS
-        .into_iter()
+        .iter()
         .map(|(read, _)| read())
         .filter(|a| !is_registry_row(a) && !credential.contains(a))
         .collect();

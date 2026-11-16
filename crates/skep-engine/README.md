@@ -40,10 +40,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   surface to filter by home.
 - **The commons type pins** — the `types` module: every commons type
   address the engine or the daemon keys on as a value, in one ledger
-  — prefix-free but for the registry's own nesting, its twelve rows
-  read off [skep-registry](../skep-registry)'s table (five kinds at
-  `3.55`–`3.59`, seven subtype rows under their kinds) beside the
-  grant, the edition, the audit-view classes and `replaces`.
+  — prefix-free but for the registry's own nesting, its rows read off
+  [skep-registry](../skep-registry)'s table (the kinds at `3.54`–`3.59`,
+  the subtype rows under their kinds, and the rows under the
+  registration's `request` and `reply`) beside the grant, the edition,
+  the audit-view classes and `replaces`.
 - **`Engine`** — `Engine::open`, genesis-or-recover in one call; the
   M9 `Coordinator` assembly (`Engine::coordinator`); and the
   `Stores<World>` factory the operation surface injects.

@@ -29,13 +29,15 @@ above it.
 **The foundation**
 - `skep-address` — tumblers, addresses and span algebra. Pure values; it
   depends on no other skep crate.
-- `skep-registry` — the registry's stable core as values: the twelve
-  commons rows the registry allocates (five kinds, seven subtype rows) at
-  the addresses commons-map pins, the binding and endpoint bodies under
-  one canonical rule, the seeding check's three arms, and the vector set
-  every parser of the bodies is held to. Of the skep crates it depends
-  only on `skep-address`; it knows no engine, no daemon and no signature
-  library. Its rules: §The registry rows and bodies.
+- `skep-registry` — the registry's stable core as values: the commons rows
+  the registry allocates (its kinds and their subtype rows) at the
+  addresses commons-map pins, the bodies the daemon parses — the
+  binding's, the endpoint's and the registration kind's — and the door's
+  policy document under one canonical rule, the seeding check's three
+  arms, and the vector sets every parser of the bodies is held to. Of the
+  skep crates it depends only on `skep-address`; it knows no engine, no
+  daemon and no signature library. Its rules: §The registry rows and
+  bodies.
 - `skep-kernel` — transactions, the journal, checkpoints and recovery. It
   knows nothing of what a transaction means; the world it stores is a
   type parameter the engine supplies. Its modules and rules: §The kernel.
@@ -158,9 +160,10 @@ foundation and on the stores above it.
   index, and every link read takes the caller's reader predicate. Its
   modules and rules: §The link reads.
 - `skep-coordination` — predicate definitions and the coordinator.
-- `skep-identity` — credential records, key sets, the identity fold, and
-  the signature-filtered key table a verifying reader keeps beside the fold,
-  its signature check handed in by the caller (`table`). Pure; of the skep
+- `skep-identity` — credential records, key sets, the identity fold, the
+  signature-filtered key table a verifying reader keeps beside the fold,
+  its signature check handed in by the caller (`table`), and the syntax of
+  a registration request's admission frame (`admission`). Pure; of the skep
   crates it depends only on `skep-address`. The engine depends on it:
   `World` seats the fold as its identity slice, stepped at each credential
   deposit's commit and checkpointed with the world (AUTH-2.79); the client
@@ -522,15 +525,18 @@ Its rules of mechanism: SP-10, SP-14, SP-19.
 `skep-registry` holds what the registry's two halves — the daemon that
 verifies and commits a registry deposit, and a resolver that reads it back
 — both read and neither owns. Its modules: `rows.rs` is the one table of
-the twelve commons rows the registry allocates — five kinds on the
-reserve's ordinals `3.55`–`3.59` of the ghost home document's type
-subspace and seven subtype rows nested under their kinds by prefix — read
-through one held pin per row; `body.rs` the binding's and the endpoint's
-bodies, their one parser under the canonical rule, their encoder and the
-cap; `check.rs` the seeding check's three arms and the refusal that names
-the arm; `vocabulary.rs` the one table of every link type the build names
-in the commons, which the daemon's open seeds the registry document from
-and a client reads a type's name by.
+the commons rows the registry allocates — its kinds on the registry
+range's ordinals of the ghost home document's type subspace and their
+subtype rows nested under them by prefix, a row under a parent row
+included — read through one held pin per row; `body.rs` the binding's and
+the endpoint's bodies, their one parser under the canonical rule, their
+encoder and the cap, and the canonical machinery every body of the crate
+is parsed and encoded through; `registration.rs` the registration kind's
+bodies, types of their own over that machinery; `policy.rs` the door's
+policy document as a parsed value; `check.rs` the seeding check's three
+arms and the refusal that names the arm; `vocabulary.rs` the one table of
+every link type the build names in the commons, which the daemon's open
+seeds the registry document from and a client reads a type's name by.
 
 Rules that hold across its files:
 
@@ -539,18 +545,21 @@ Rules that hold across its files:
   the engine's ledger reads the rows through this crate's pins, and the
   daemon's write-path classes read them through the ledger. The
   vocabulary's table holds every registry row at `rows.rs`'s address.
-- **The canonical rule is the parser.** `body::parse` is the one parser of
-  the bodies, and the vector set under `tests/vectors/` is what every
-  parser of the bodies is held to — this crate's, and any other a reader
-  of the bodies builds (`skep-resolve` builds none: it calls
-  `skep_registry::parse`).
+- **The canonical rule is the parser.** Each body has one parser —
+  `body::parse` the binding's and the endpoint's, `registration`'s the
+  registration kind's, `policy`'s the door's policy document's — all
+  through `body.rs`'s machinery, and the vector sets under
+  `tests/vectors/` are what every parser of the bodies is held to — this
+  crate's, and any other a reader of the bodies builds (`skep-resolve`
+  builds none: it calls `skep_registry::parse`).
 - **The check runs on lists.** `seeding_check` takes the registry's rows
   and the foreign rows as lists, and the daemon runs the check over the
   whole domain it can see ahead of every genesis.
 
 Its integration suite is one binary, `tests/it/`: `rows`, `check`, `body`
-with its child `body/laws.rs`, and `tidy`. Its unit suites sit inline
-beside their code and hold only what that code's privates can show.
+with its child `body/laws.rs`, `registration`, `policy` and `tidy`. Its
+unit suites sit inline beside their code and hold only what that code's
+privates can show.
 
 Its rules of mechanism: SP-18, SP-25.
 
@@ -1718,8 +1727,10 @@ the rest of `auth/policy/*`, `commits/tests.rs` (which opens one too),
 `commits/feed/window/tests.rs` and `codec/tests.rs`. Its integration
 suites — the session layer, the commits and the head over a served daemon
 — are `skepd`'s (`tests/it`), which spawn the daemon they drive; its own
-`tests/it/` is `codec_roundtrip`, the wire grammar's round trips, and
-`tidy`.
+`tests/it/` is `codec_roundtrip`, the wire grammar's round trips,
+`admission_frame`, a registration request's signature checked where the
+frame's syntax, the request's body and the signature library are all
+linked, and `tidy`.
 
 Its rules of mechanism: SP-1, SP-2, SP-3, SP-5, SP-8, SP-9, SP-11, SP-12,
 SP-13, SP-17, SP-19, SP-24, SP-25, SP-26, SP-28.

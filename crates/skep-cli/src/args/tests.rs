@@ -53,7 +53,32 @@ fn deposit_takes_its_account_once_and_its_origins_in_the_order_given() {
     assert_eq!(refusal(&["deposit", "--account", "1.0.2", "--account", "1.0.3"]), "`--account` is given at most once at `deposit`");
     assert_eq!(refusal(&["deposit", "--also", "https://acme.example"]), "`--also` is not a flag of `deposit`");
     assert_eq!(refusal(&["hint", "--origin", "https://acme.example"]), "`--origin` is not a flag of `hint`");
-    assert_eq!(GRAMMAR.len(), 19, "the nineteen commands, one row each");
+    assert_eq!(GRAMMAR.len(), 20, "the twenty commands, one row each");
+}
+
+/// `hire`'s row (AUTH-5.58): the agent's key record once, a file or `-` as
+/// `enroll` takes it, and the account a re-hire replaces once; the custody
+/// pair's destinations, two at most, and `--paper`, as `claim` takes them;
+/// and the pair's decline, `--anchorless`, apart from both — two arms, never
+/// one line. `keygen`'s `--anchor-label` is no flag of it: the pair's boxes
+/// are typed.
+#[test]
+fn hire_takes_its_payload_and_one_arm_the_pair_or_its_decline() {
+    let line = ["hire", "--board", "http://127.0.0.1:8642", "--payload", "-", "--replaces", "1.0.1.1.3", "--anchor-out", "/a", "--anchor-out", "/b", "--paper", "--principal", "1"];
+    let Parsed::CommandLine(c) = parse(argv(&line)).unwrap() else { panic!() };
+    assert_eq!((c.command, c.command.verb()), (Command::Hire, "hire"));
+    assert_eq!((c.value("--payload"), c.value("--replaces")), (Some("-"), Some("1.0.1.1.3")));
+    assert_eq!(c.values("--anchor-out"), ["/a", "/b"]);
+    assert!(c.switch("--paper") && !c.switch("--anchorless"));
+    let Parsed::CommandLine(c) = parse(argv(&["hire", "--payload", "/p", "--anchorless"])).unwrap() else { panic!() };
+    assert!(c.switch("--anchorless"), "the decline's arm");
+    assert_eq!(refusal(&["hire", "--payload", "/p", "--anchorless", "--anchor-out", "/a"]), "`--anchorless` and `--anchor-out` belong to two forms of `hire`: give one");
+    assert_eq!(refusal(&["hire", "--payload", "/p", "--anchorless", "--paper"]), "`--anchorless` and `--paper` belong to two forms of `hire`: give one");
+    assert_eq!(refusal(&["hire", "--payload", "/p", "--anchor-out", "/a", "--anchor-out", "/b", "--anchor-out", "/c"]), "`--anchor-out` is given at most 2 times at `hire`");
+    assert_eq!(refusal(&["hire", "--payload", "/a", "--payload", "/b"]), "`--payload` is given at most once at `hire`");
+    assert_eq!(refusal(&["hire", "--anchor-label", "x"]), "`--anchor-label` is not a flag of `hire`");
+    assert_eq!(refusal(&["hire", "--yes"]), "`--yes` is not a flag of `hire`", "the choice's answer is typed, never a flag");
+    assert_eq!(refusal(&["enroll", "--anchorless"]), "`--anchorless` is not a flag of `enroll`");
 }
 
 /// A principal is an integer JSON carries exactly (AUTH-6.36): `2^53 − 1`

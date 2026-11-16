@@ -7,7 +7,8 @@
 //! fingerprint prefix of at least one R42 group, §9 item 35; AUTH-5.41), or
 //! neither — "I hold neither" an answer, the no-artifact face (AUTH-5.16's
 //! first arm with its destroyed / findable fork and the three acts that
-//! exist elsewhere, forked by cell). Fingerprint first (AUTH-5.39):
+//! exist elsewhere, forked by cell; its agent form naming the fresh hire,
+//! which `hire` performs). Fingerprint first (AUTH-5.39):
 //! re-derived from the seed and compared against the artifact's — the typed
 //! arm's fingerprint prefix off the print, the file arm's `KeyFile::parse`,
 //! which refuses a file whose members do not re-derive from its seed — then
@@ -299,7 +300,10 @@ pub fn no_artifact_face(person: &mut dyn Person, cx: &ImportContext<'_>) -> Halt
                 "AUTH-5.16's AGENT form: the two papers are the OWNER's custody pair (AUTH-5.62) and there is no person working on under them — the AGENT keeps working under its working key and the OWNER has lost R39's one roster act; the anchors still enrolled: {}",
                 anchors.join(", ")
             ),
-            "the acts that exist are AUTH-5.64's anchorless arm's, none on this account: a fresh hire on a clean host, the old account named as permanent LIVE residue, then the disavowal and the report; the roster act and its fetch channel land with the attendant campaign — this client does not perform them",
+            format!(
+                "the acts that exist are AUTH-5.64's anchorless arm's, none on this account: a fresh hire on a clean host — `skep hire --replaces {}`, run by the owner, the new agent named apart from this one — the old account named as permanent LIVE residue, then the disavowal and the report; the roster act that re-keys an agent in place, and its fetch channel, land with the attendant campaign — this client performs the hire, and neither of those",
+                cx.set_account
+            ),
         );
     }
     say(

@@ -19,14 +19,17 @@
 //!   (REG-1.10).
 //! * [`first_session`] — the one first-signed-session composition
 //!   (AUTH-5.90 (iii); AUTH-5.87): two states, each resumed by reading, the
-//!   doc-1 read the metadata read in its three arms (REG-1.52).
+//!   doc-1 read the metadata read in its three arms (REG-1.52), the second
+//!   state never run at an agent's account, which holds no agent space.
 //! * [`backup`] — the backup moment in AUTH-5.54's order (§4.2), at its
-//!   three sites (the claim, the door-side form, the handoff's recipient)
-//!   and the loss arm's cited steps 1–3.
+//!   four sites (the claim, the door-side form, the handoff's recipient,
+//!   the hire's custody pair) and the loss arm's cited steps 1–3.
 //! * `payload` — the paste door: a canonical record carried in from the
 //!   device that generated it, parsed and nothing else (AUTH-2.130), an
 //!   anchor-flagged entry refused where the door enrolls device keys alone,
-//!   and the comparison beat (AUTH-5.32; R48).
+//!   and the comparison beat (AUTH-5.32; R48); and the hire's own tests of
+//!   an agent's key record — the flag, exactly one device-flagged entry, a
+//!   label that is not empty — with its comparison (AUTH-5.58 step 4).
 //! * `preview` — `preview(removed)`, the one retirement preview (AUTH-5.46).
 //! * `enumerate` — the head invariant's enumeration (AUTH-5.59's head) and
 //!   the by-reference cone (AUTH-5.89).
@@ -47,6 +50,10 @@
 //!   (§4a.8 T0–T5).
 //! * [`handoff`] — the giver's walk, G0–G6 (§4c.2).
 //! * [`accept`] — the recipient's beat (§4c.1).
+//! * [`hire`] — the owner's side of the hire ceremony, AUTH-5.58's steps 2–7
+//!   in the rule's own order: the agent's account delegated beneath the
+//!   agent space, its first key record composed by the owner beside a
+//!   custody pair, its home minted, and only then its principal.
 //!
 //! **The rule between the layers.** A walk names compositions and never
 //! another walk — what two walks share is a composition — and a composition
@@ -57,8 +64,8 @@
 //! **The attest.** Every `attest` a composition or a walk attaches is
 //! composed by [`attest_member`], the ceremony's one `entry_frame` call
 //! (P28): the trail's `assert_sup`, and the home mints from a signed session
-//! (`first_session`'s two, `handoff`'s beat (b)), publish-class above the
-//! claim (PUB-6.43).
+//! (`first_session`'s two — the first of them `hire`'s step 5 too —
+//! `handoff`'s beat (b)), publish-class above the claim (PUB-6.43).
 //!
 //! No journal: every walk resumes by reading the board (§4.4; P4).
 
@@ -87,6 +94,7 @@ pub mod accept;
 pub mod claim;
 pub mod enroll;
 pub mod handoff;
+pub mod hire;
 pub mod recover;
 pub mod retire;
 pub mod rotate;

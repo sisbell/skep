@@ -1,6 +1,6 @@
 # skep-cli — the `skep` command, and the dev binary `skep-dev`
 
-The command over `skep-client` (`client.md` §1.2, §2), nineteen commands:
+The command over `skep-client` (`client.md` §1.2, §2), twenty commands:
 `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
 the ceremonies `enroll`, `recover`, `retire`, `rotate`, `handoff`,
 `accept`, `merge` — the editor's act on a daughter over the library's
@@ -94,7 +94,42 @@ then names, in `replaces`, the deposit current in that home — the latest
 that stood, a nullified one included, and none on the account's first —
 so a reader holds the new one current, and the one it replaces stays in
 the home (REG-1.10). Stdout carries `endpoint <address>`, and under it
-`replaces <address>` where it names one. No person door. Flag
+`replaces <address>` where it names one. No person door. And `hire`, the
+library's `hire` walk (AUTH-5.58, the owner's side): an owner hires an
+agent. The agent's key is made on the agent's own host, `skep keygen
+--payload` there, and its one-entry record comes to this command as
+`--payload`. The command first says what the agent will be able to do
+under the owner's account, and what no act of the owner's takes back.
+It then makes the agent's account, the next one beneath the space for the
+owner's agents, and with it two custody sheets for the owner to keep,
+exported to `--anchor-out` (one directory per sheet) and under `--paper`
+printed too; the owner names each sheet at its box. The owner compares
+the fingerprint the command shows with the one the agent's host shows and
+types its first group. Only then is the agent's first key record
+written — the owner's own record, holding the agent's key and the two
+sheets' keys, signed by the owner's key, in the home page of the space
+for the owner's agents — and the agent's home page made, from a session
+one of the two sheets opens. Last, stdout carries the agent's `account`,
+`principal` and `origin`, and under them `key <fingerprint>`: the
+principal is the number the agent's program takes as its
+`SKEP_PRINCIPAL`, beside the board and its own key store. An agent's
+program takes those as settings and never runs `skep bind`, which refuses
+at an agent's account. `--anchorless` hires with no custody sheets: what
+that costs is stated after the account is made and ahead of the key
+record, and taken by a typed answer; the agent's home page is then the
+agent's own to make, the first act of its first session. `--replaces
+<address>` names the agent's account this one replaces: a key that
+account ever held is refused, and the sheets' boxes show its labels so
+the new ones are named apart. A record carrying an anchor-flagged entry,
+more or fewer than one device key, or a key with no label is refused
+after the account is made and before the key record: the account stands
+empty, and running the command again resumes at it and makes no second.
+A run that ended after the key record and before the agent's home page
+is not resumed: the command stops, writes nothing, prints no principal
+and names the act left. The owner's key is the store's for the board and
+principal, and a key file (`--key`, `SKEP_KEY`) is refused. After a second
+hire the store holds a line for an agent's account beside the owner's
+own, so the owner's later commands name `--principal`. A person door. Flag
 parsing by hand, one file
 per command, a `Person` over the terminal, stdout DATA and stderr TALK,
 §2.3's exit codes (0 done, 1 the board refused, 2 usage, 3 halt and
@@ -213,7 +248,7 @@ each kind is met, with the route it was met at, since a browser shows the
 page an origin refusal only as a CORS failure, and every one is counted
 to the stop.
 
-The nineteen commands stand: the dev binary is no command of `skep`, and
+The twenty commands stand: the dev binary is no command of `skep`, and
 the sidecar image, built `--no-default-features --bin skep`, holds none of
 it and no `skepd` (the default build neither: `dev-hooks` alone links the
 daemon, which `scripts/gate-full.sh`'s isolation line and
@@ -236,8 +271,8 @@ variable the source reads to a row here.
 |---|---|---|---|---|---|
 | `--board` | `SKEP_BOARD` | none | a canonical origin, as the command reads it | every command but `keygen`, `fingerprint` and `resolve`, whose registry is the root hint's; asked at `accept` where absent | the board; the store keys each binding by the origin as written, so `localhost` is another board than `127.0.0.1` |
 | `--dir` | `SKEP_KEYSTORE` | `~/.skep`, under `HOME`, else `USERPROFILE` | the home an absolute path, else refused | every command but `health`, `hint`, `claim --hosted` and `session --close` | the key store: `keys/` (each file 0600, the directory 0700), `bindings` and `lock`; `resolve`'s registry mirror in `registry/<genesis>/` under it (the directories 0700, `feed.jsonl`, `fetched.jsonl` and `lock` 0600), which no reader of the store's keys or bindings opens; `skep-dev seed`'s manifest in `<store>-seed/` beside it |
-| `--key` | `SKEP_KEY` | none | the file, as the command reads it; an anchor's file refused where the key signs | `session`, `verify`, `bind`, `fingerprint`, `merge`, `share`, `restore`, `deposit`, `accept --reprint`; refused at `enroll` and `retire` | one key file, bypassing the store's lookup; at `fingerprint`, the one key listed |
-| `--principal` | `SKEP_PRINCIPAL` (`skep-mcp` reads it too) | the store's one binding at the board; at `bind`, the reply's; at `claim`, `1`; at `deposit`, the one the board seats at `--account` | an integer from 0 to 2^53 − 1, as the command reads it | `session`, `verify`, `enroll`, `recover`, `retire`, `rotate`, `handoff`, `merge`, `share`, `restore`, `bind`, `claim`, `deposit` | the principal; at `claim`, the new account's id |
+| `--key` | `SKEP_KEY` | none | the file, as the command reads it; an anchor's file refused where the key signs | `session`, `verify`, `bind`, `fingerprint`, `merge`, `share`, `restore`, `deposit`, `accept --reprint`; refused at `enroll`, `retire` and `hire` | one key file, bypassing the store's lookup; at `fingerprint`, the one key listed |
+| `--principal` | `SKEP_PRINCIPAL` (`skep-mcp` reads it too) | the store's one binding at the board; at `bind`, the reply's; at `claim`, `1`; at `deposit`, the one the board seats at `--account` | an integer from 0 to 2^53 − 1, as the command reads it | `session`, `verify`, `enroll`, `recover`, `retire`, `rotate`, `handoff`, `hire`, `merge`, `share`, `restore`, `bind`, `claim`, `deposit` | the principal; at `claim`, the new account's id; at `hire`, the owner's, never the agent's, which the command prints |
 | `--json` | — | off | — | `verify`, `health`, `fingerprint`, `resolve`; at `merge`, `share` and `restore` the answer is one JSON document always, and the flag changes nothing; at `hint` the answer is the one line always | one JSON document on stdout |
 | `--root-hint` | `SKEP_ROOT_HINT` | none: required at `resolve` (the hint a build ships with is decided at launch, REG-3.72) | one root-hint line as the resolver reads it — one or more canonical origins, `realm:<64 hex>`, and on a forked lineage `fork:<address>` — before any socket opens and before the mirror's directory is made | `resolve` | the registry an address is resolved through: its roots in the order they are tried, and its realm (REG-3.2); the line `skep hint` prints |
 | `--kind` | `SKEP_MERGE_KIND` | none: required at `merge` | an address, as the command reads it, before any socket opens | `merge` | the merge record kind's type address — the kind's commons row is interim and unpinned (the merge record's decision 9), so the caller names it |

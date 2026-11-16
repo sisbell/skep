@@ -16,7 +16,12 @@
 //! from the print), fingerprint first then the client-local sign-and-verify
 //! (step 5; AUTH-5.39), AUTH-5.41 where both exist, the keep-the-papers
 //! line keyed per site (AUTH-5.44; §4.2 step 10) — and only then the
-//! caller's genesis (step 6). A file-path read-back that fails re-runs from
+//! caller's genesis (step 6). At the hire the pair is an agent's custody
+//! pair, the owner's to keep (`Venue::Hire`; AUTH-5.58 step 3; AUTH-5.62),
+//! and the material the re-import read is handed to the walk, which opens
+//! the agent's first session with it and drops it when that session's one
+//! act ends (`backup_moment_holding`; AUTH-5.58 step 5). A file-path
+//! read-back that fails re-runs from
 //! step 1 under a fresh pair, every file of the pair destroyed (§4.1 S3) —
 //! each removal's answer read, a file the volume refuses to unlink said
 //! standing by its path, never "destroyed", as every removal of an anchor
@@ -65,6 +70,34 @@ pub enum Venue {
     /// label rides the genesis into the giver's doc 1, AUTH-5.42), the line
     /// AUTH-5.44's handoff form verbatim, the org-door artifact line dropped.
     Handoff { facts: Facts, operator: String },
+    /// `hire`'s step 3 (AUTH-5.58): an agent's custody pair, the owner's.
+    ///
+    /// The artifact carries the agent's address, its principal and the
+    /// origin (AUTH-5.38), knowable because the hire's `delegate` stands
+    /// ahead of the moment; the two boxes are the sheets' only source for
+    /// their labels, their copy naming what the field must tell apart — this
+    /// agent's sheets from every other agent's, and at a re-hire from the
+    /// account it replaces (`replaces`; AUTH-5.58 step 3) — and the line is
+    /// AUTH-5.44's hire form, in the owner's own facts.
+    Hire { facts: Facts, replaces: Option<Replaced> },
+}
+
+/// The account a re-hire replaces, as the hire's label boxes name it.
+///
+/// AUTH-5.58 step 3: a re-hire is named distinguishably from the account it
+/// replaces, and no mechanism can close this — labels are uncorrectable and
+/// never an identity — so the door copy does: the boxes show the
+/// predecessor's own labels and say the new ones must read apart from them.
+/// Nothing refuses a label that matches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Replaced {
+    /// The predecessor's account.
+    pub account: String,
+    /// The labels its first key record carries, as the board serves them.
+    ///
+    /// They are its sheets' and its working key's; each is rendered inert
+    /// where it is shown.
+    pub labels: Vec<String>,
 }
 
 /// The moment's inputs.
@@ -139,6 +172,11 @@ fn statements(person: &mut dyn Person, venue: &Venue, paper: bool) {
         Venue::Notebook { .. } => String::new(),
         Venue::DoorSide => " — on the board you are joining another party runs the daemon: it can read what you write there before you publish it and withhold or delay it; anything it writes in your name carries no signature of yours, and the app you install shows it as unsigned; it never learns your keys and can never act as you anywhere else; on that board it can still retire your keys and continue as you, which every copy that checks signatures will show was not you; your way back is a fresh account, and the board is portable (AUTH-5.43's create-org sibling; AUTH-4.54)".to_string(),
         Venue::Handoff { operator, .. } => format!(" — {operator}"),
+        Venue::Hire { facts, .. } => format!(
+            " — at this hire the account is your AGENT's, {}: these two sheets are its senior credential, whoever holds one \
+             outranks the agent's own key, and you hold no other key of it (AUTH-5.62)",
+            facts.account
+        ),
     };
     say(
         person,
@@ -192,13 +230,17 @@ fn anchor_box(person: &mut dyn Person, venue: &Venue, which: &str, default: Stri
         Venue::Notebook { .. } => "at this notebook the name is readable by anything on the machine (AUTH-5.85's reader clause)",
         Venue::DoorSide => "at the door this payload serves the name rides onto a public thread, approved or DENIED, forever",
         Venue::Handoff { .. } => "at this door the name rides the genesis record into the GIVER's own doc 1, on a board you may not be able to read, under a byline you can never correct (AUTH-5.42)",
+        Venue::Hire { .. } => "at this door the name rides the genesis record into the home document of the space for your agents, where it sits beside every OTHER agent's sheets forever, uncorrectable and never an identity — and the account it names never goes away: name it so this agent's sheets read apart from every other agent's (AUTH-5.58 step 3)",
     };
-    let statements = vec![
+    let mut statements = vec![
         "This names the SHEET and never where you keep it — the one human-navigable field on an otherwise machine-facing paper, so you can tell the two sheets apart.".to_string(),
         "It is public forever and uncorrectable: fixing a typo costs a keypair.".to_string(),
         "This is not the device's name and not your own: the display name is a separate, changeable label collected elsewhere.".to_string(),
         consequence.to_string(),
     ];
+    if let Venue::Hire { replaces: Some(replaced), .. } = venue {
+        statements.push(replaced_line(replaced));
+    }
     loop {
         let text = person
             .label(Public(LabelBox { title: format!("name anchor {which}"), statements: statements.clone(), default: Some(default.clone()) }))
@@ -208,6 +250,58 @@ fn anchor_box(person: &mut dyn Person, venue: &Venue, which: &str, default: Stri
             Err(fault) => say(person, "AUTH-1.24", format!("that name is refused at the box: {fault}; name the sheet again")),
         }
     }
+}
+
+/// Returns the re-hire's line at a label box (AUTH-5.58 step 3).
+///
+/// It shows the labels the account being replaced carries, each rendered
+/// inert, and says the new name must read apart from them. It is door copy
+/// and no test: nothing refuses a name that matches.
+fn replaced_line(replaced: &Replaced) -> String {
+    let labels = if replaced.labels.is_empty() {
+        "no label this board serves".to_string()
+    } else {
+        replaced.labels.iter().map(|l| format!("`{}`", crate::sheet::render_inert(l))).collect::<Vec<_>>().join(", ")
+    };
+    format!(
+        "This hire REPLACES {}, whose sheets and key carry {labels}: that account never goes away, so name this sheet to read apart \
+         from them — a pile of sheets under names that read alike leaves the address and the principal as the only tell, and \
+         nothing here refuses a name that matches.",
+        replaced.account
+    )
+}
+
+/// Returns AUTH-5.44's keep-the-papers line in its hire form.
+///
+/// The line is in the owner's own facts — the sheets are an agent's custody
+/// and not the owner's way back into anything of their own — and names what
+/// the sheets substitute for: the agent's working key, the one artifact with
+/// no backup (AUTH-5.62), a copy of whose file is a second copy of the
+/// agent's identity (AUTH-5.40's ladder). `noun` is `sheets` ahead of the
+/// export, and after it what the run exported; `account` the agent's
+/// address, once the hire's `delegate` has named it.
+///
+/// AUTH-5.44's string names a third act the sheets alone open, reading the
+/// agent's drafts. It is not said: the owner's account contains the
+/// agent's, so the owner reads those drafts by the rule from their own
+/// session, on both arms (AUTH-5.62 (iv); PUB-1.32). And where the string
+/// says the sheets re-key the agent, the line says which of the pair's acts
+/// this client performs: the stop, and a fresh hire in the re-key's place.
+pub(crate) fn hire_keep_line(noun: &str, account: Option<&str>) -> String {
+    let agent = match account {
+        Some(account) => format!("this agent ({account})"),
+        None => "this agent".to_string(),
+    };
+    format!(
+        "keep both {noun} — they are the only way to open a session as {agent}, and so the only way to re-key it or retire its \
+         keys; lose both and no act of yours ever reaches this account again, while the agent keeps working. This agent's own key is \
+         UNBACKED BY DESIGN — no ceremony here backs it up and no copy of it is a custody artifact: if it is lost, these {noun} are \
+         what re-key this agent. A copy of the agent's key file — its host's backup, a restored image — is a SECOND COPY OF THIS \
+         AGENT'S IDENTITY, on the ladder's worst rung: the agent host's backups are credential material (AUTH-5.40). In this version \
+         the act a sheet performs is the STOP — `skep recover --anchor <sheet>` at the agent's principal, answered \"an agent's\": \
+         its working keys retired, nothing enrolled (AUTH-5.64) — and its replacement is a fresh hire, `skep hire --replaces <its \
+         address>`; a fresh key on this same account is not yet a command."
+    )
 }
 
 /// Returns the ladder words at the file's path (AUTH-5.40).
@@ -308,6 +402,9 @@ pub fn anchor_file_name(label: &Label, fp: &Fingerprint) -> String {
 
 /// Runs the moment.
 ///
+/// The material its re-import reads is dropped as each anchor is verified,
+/// before the moment returns.
+///
 /// # Errors
 ///
 /// An abandoned box, destination, sheet, re-type or offer halts; so do a
@@ -315,6 +412,41 @@ pub fn anchor_file_name(label: &Label, fp: &Fingerprint) -> String {
 /// that cannot be written, and a typed seed that derives the key but does
 /// not sign; and three runs in a row whose read-back fails halt the moment.
 pub fn backup_moment(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions) -> Result<BackupOutcome, Halt> {
+    moment(person, venue, opts, false).map(|(outcome, _)| outcome)
+}
+
+/// Runs the moment, keeping the material its re-import read of anchor a.
+///
+/// AUTH-5.58 step 5: the hire's custody-anchor session "rides the material
+/// step 3's backup moment re-imported (AUTH-5.54 step 4), the hire being
+/// the ceremony that import was for" — never a fresh import, which would
+/// send the owner back to two sheets filed apart minutes earlier. The
+/// signer answered is anchor a's as the re-import read it — the file read
+/// back from the path it was written to, or under `--paper` the 64 hex
+/// typed from the print — verified as the moment verifies it. The caller
+/// holds it to the end of the ceremony it was read for and drops it there,
+/// with the session it opens (AUTH-5.54 step 3's mirror); anchor b's is
+/// dropped inside the moment, as every other venue's are.
+///
+/// # Errors
+///
+/// [`backup_moment`]'s.
+///
+/// # Panics
+///
+/// Panics if the moment answers no material for an anchor it verified;
+/// every verified anchor's signer is held to the end of its run, so the
+/// `expect` never fires.
+pub fn backup_moment_holding(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions) -> Result<(BackupOutcome, HybridSigner), Halt> {
+    moment(person, venue, opts, true).map(|(outcome, held)| (outcome, held.expect("anchor a's re-imported material is held where the caller asks for it")))
+}
+
+/// Runs the moment, answering anchor a's re-imported material under `hold`.
+///
+/// # Errors
+///
+/// [`backup_moment`]'s.
+fn moment(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, hold: bool) -> Result<(BackupOutcome, Option<HybridSigner>), Halt> {
     // Step 1 (the head): the three statements, before any generation.
     statements(person, venue, opts.paper);
     // Step 2: the two boxes, between the statements and the export.
@@ -334,11 +466,11 @@ pub fn backup_moment(person: &mut dyn Person, venue: &Venue, opts: &BackupOption
         labels.push(label);
     }
     let facts = match venue {
-        Venue::Notebook { facts } | Venue::Handoff { facts, .. } => Some(facts),
+        Venue::Notebook { facts } | Venue::Handoff { facts, .. } | Venue::Hire { facts, .. } => Some(facts),
         Venue::DoorSide => None,
     };
     for attempt in 0..3 {
-        match run_once(person, venue, opts, &labels, facts, attempt)? {
+        match run_once(person, venue, opts, &labels, facts, attempt, hold)? {
             Some(outcome) => return Ok(outcome),
             None => say(person, "§4.1 S3", "the moment re-runs from step 1 under a fresh pair"),
         }
@@ -349,6 +481,7 @@ pub fn backup_moment(person: &mut dyn Person, venue: &Venue, opts: &BackupOption
         Venue::Notebook { .. } => "`skep claim`",
         Venue::DoorSide => "`skep keygen --anchors`",
         Venue::Handoff { .. } => "`skep accept`",
+        Venue::Hire { .. } => "`skep hire`",
     };
     Err(Halt::face(
         "the backup moment could not complete",
@@ -438,7 +571,9 @@ pub(crate) fn export_pair(person: &mut dyn Person, opts: &BackupOptions, labels:
 /// The steps are [`export_pair`], then the re-import, the offer and the
 /// per-site line; `None` where the file path's read-back failed — every
 /// file the pair wrote destroyed, each removal said, one the volume
-/// refuses said standing — and the moment re-runs.
+/// refuses said standing — and the moment re-runs. Under `hold` the
+/// material the re-import read of anchor a is answered beside the outcome;
+/// otherwise each anchor's is dropped as it is verified.
 ///
 /// # Errors
 ///
@@ -449,19 +584,34 @@ pub(crate) fn export_pair(person: &mut dyn Person, opts: &BackupOptions, labels:
 ///
 /// Panics if an exported anchor has no file; [`export_pair`] gives each one
 /// a file, so the `expect` never fires.
-fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels: &[Label], facts: Option<&Facts>, attempt: usize) -> Result<Option<BackupOutcome>, Halt> {
+#[allow(clippy::too_many_arguments)]
+fn run_once(
+    person: &mut dyn Person,
+    venue: &Venue,
+    opts: &BackupOptions,
+    labels: &[Label],
+    facts: Option<&Facts>,
+    attempt: usize,
+    hold: bool,
+) -> Result<Option<(BackupOutcome, Option<HybridSigner>)>, Halt> {
     let BackupOutcome { anchors: exported, one_place } = export_pair(person, opts, labels, facts)?;
     // Steps 7–9: re-import, fingerprint first, the client-local verify.
     let mut anchors = Vec::new();
+    let mut held: Option<HybridSigner> = None;
     for (i, mut artifact) in exported.iter().cloned().enumerate() {
         let path = artifact.file.clone().expect("an exported anchor's file stands");
+        // The material the re-import reads: the print's where it passed its
+        // re-type, else the file's. Anchor a's is kept under `hold`; every
+        // other is dropped as soon as it is verified, ahead of the offer.
+        let mut material: Option<HybridSigner> = None;
         if opts.paper {
-            let passed = retype_from_print(person, &artifact.label, i, &artifact.fingerprint)?.is_some();
-            artifact.print = Some(if passed { Print::Verified } else { Print::Unverified });
+            material = retype_from_print(person, &artifact.label, i, &artifact.fingerprint)?;
+            artifact.print = Some(if material.is_some() { Print::Verified } else { Print::Unverified });
         }
         if artifact.print != Some(Print::Verified) {
             // The file read back from the path it wrote — the disk channel.
-            if read_back_from_file(&path, &artifact.public, &artifact.fingerprint).is_none() {
+            material = read_back_from_file(&path, &artifact.public, &artifact.fingerprint);
+            if material.is_none() {
                 say(person, "§4.1 S3", format!("the anchor file {} did not read back as the key it names (never a verified artifact): the pair's files are destroyed next, each said, and the moment re-runs (attempt {})", path.display(), attempt + 1));
                 // Each file's removal read and said: the pair opens nothing,
                 // and a file the volume keeps is a findable paper.
@@ -470,6 +620,11 @@ fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels
                 }
                 return Ok(None);
             }
+        }
+        if hold && i == 0 {
+            held = material;
+        } else {
+            drop(material);
         }
         // Step 9: AUTH-5.41 where both exist and the print passed — offer to
         // destroy the file, never the act unasked; the removal's answer read,
@@ -536,8 +691,11 @@ fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels
                 facts.account
             ),
         ),
+        // The hire form, in the owner's own facts (AUTH-5.44): the sheets are
+        // an agent's custody, and what they substitute for is named.
+        Venue::Hire { facts, .. } => say(person, "AUTH-5.44 (hire)", hire_keep_line(noun, Some(&facts.account))),
     }
-    Ok(Some(BackupOutcome { anchors, one_place }))
+    Ok(Some((BackupOutcome { anchors, one_place }, held)))
 }
 
 /// Asks the paper re-type for anchor `i` (AUTH-5.41: "the 64 hex typed once").

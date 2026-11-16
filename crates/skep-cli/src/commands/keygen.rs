@@ -2,14 +2,17 @@
 //!
 //! Its byline is fixed at the box — AUTH-5.42's statements, AUTH-1.24's
 //! domain — and the custody line written beside its path; `--payload`
-//! prints its enrollment record, and `--anchors`, a person door, runs the
-//! door-side backup moment for the hosted signup's three-key payload
-//! (AUTH-5.57 step 2). With `bind`, one of the two ceremonies that sequence
-//! the library's compositions themselves rather than calling a walk — the
-//! store's `generate`, its lookup, `backup_moment` at the door side,
-//! `encode_enroll` — and so the carrier of this form's own text: the box's
-//! statements by venue, the custody line, the abandonment's disposition,
-//! and the one-door line.
+//! prints its enrollment record — the one-entry record an added device
+//! carries to `skep enroll`, and an agent's host hands up to its owner's
+//! `skep hire`, the fingerprint printed under it the one the owner
+//! compares (AUTH-5.58 steps 1 and 4) — and `--anchors`, a person door,
+//! runs the door-side backup moment for the hosted signup's three-key
+//! payload (AUTH-5.57 step 2). With `bind`, one of the two ceremonies that
+//! sequence the library's compositions themselves rather than calling a
+//! walk — the store's `generate`, its lookup, `backup_moment` at the door
+//! side, `encode_enroll` — and so the carrier of this form's own text: the
+//! box's statements by venue, the custody line, the abandonment's
+//! disposition, and the one-door line.
 //!
 //! **The order.** The device-name box, then at the door side the backup
 //! moment, then the device key's generation — so a moment stopped short
@@ -54,13 +57,18 @@ fn device_box_statements(door_side: bool) -> Vec<String> {
 /// Returns the key file's custody line beside its path.
 ///
 /// The custody is §3a's (§9 items 4, 5, 38: the ladder alone until the
-/// store-location spike answers).
+/// store-location spike answers). Its last clause is the hire's: the key
+/// may be an agent's working key, whose account's anchors are its owner's
+/// custody pair and never this machine's (AUTH-5.62), and which no
+/// ceremony backs up (AUTH-5.44).
 fn custody_line(path: &Path) -> String {
     format!(
         "key file written: {} — the seed rests in this file and the filesystem's modes are its whole protection (0600 under 0700): a \
          same-user process reads it and a disk image carries it; your anchors, where the account this key joins holds them, are what \
          its loss recovers from (`skep recover`); an account founded from this key's own one-key record holds none, and there the one \
-         way back is the enroll hop from another signed-in device",
+         way back is the enroll hop from another signed-in device; and where this is an AGENT's working key no ceremony backs it up at \
+         all — its account's two custody sheets are its owner's, never on this machine, and a copy of this file is a second copy of \
+         the agent's identity",
         path.display()
     )
 }
@@ -168,7 +176,9 @@ pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
             talk("this three-key payload serves ONE door, the hosted signup — never the enroll hop, whose `skep enroll` refuses every anchor-flagged entry at the paste");
         } else {
             // A key this command made was never made at `skep accept`, so the
-            // handoff recipient's clause is `fingerprint`'s alone.
+            // handoff recipient's clause is `fingerprint`'s alone. The line
+            // names the hire's arm too: the payload is what an agent's host
+            // hands up to the owner's `skep hire` (AUTH-5.58 step 1).
             talk(format!("this key is not enrolled anywhere yet. {OUTSTANDING_ACT} Where no board has been claimed from this store at all: `skep claim`."));
         }
     }

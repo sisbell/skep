@@ -21,7 +21,12 @@
 //! and a cut connection — over a claimed permissive board; `restore` drives
 //! the `history` module — a draft put back to a past state, the records'
 //! mapping across a publication, the refusals at a moved draft, a reclaimed
-//! position and a marked draft — over the merge suite's rig.
+//! position and a marked draft — over the merge suite's rig; `hire` drives
+//! the hire's owner side on an enforcing board — the standing statements
+//! placed against the `delegate`, the custody pair or its decline, the
+//! paste's tests, the owner's own genesis, the mint and the principal, each
+//! resume, the re-hire — and beside it the agent's own sessions, a rotation
+//! at the agent and the stop at an account a hire made.
 
 mod backup;
 mod claim;
@@ -30,6 +35,7 @@ mod cut_short;
 mod enroll;
 mod handoff;
 mod handshake;
+mod hire;
 mod hosted;
 mod loss;
 mod merge;

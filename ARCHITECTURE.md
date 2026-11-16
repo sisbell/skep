@@ -311,9 +311,10 @@ foundation and on the stores above it.
   (its suite spawns the daemon as a dev-dependency). No feature, no
   transport: the loopback server is `skep-cli`'s dev verb's, the native
   bridge the shell's. Its modules and rules: §The shell's core.
-- `skep-cli` — the `skep` command over `skep-client`, nineteen commands:
+- `skep-cli` — the `skep` command over `skep-client`, twenty commands:
   `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
-  `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`,
+  `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`, `hire`,
+  the owner's side of the hire ceremony over the library's `hire` walk,
   `merge` and `restore`, the two over the library's `merge` feature, which
   this crate alone turns on, `share`, which shares a draft or an
   account with one account, privashes a draft, revokes a share and lists
@@ -725,7 +726,7 @@ each ceremony:
   notebook walk, its hosted arm in `claim/hosted.rs`; `enroll.rs`;
   `recover.rs` the device arm, its loss arm in `recover/loss.rs`;
   `retire.rs`; `rotate.rs`; `handoff.rs` the giver's walk; `accept.rs`
-  the recipient's beat.
+  the recipient's beat; `hire.rs` the owner's side of the hire ceremony.
 - Under `search` (default off; the design's `client.md` §4e) — THE SHELL's
   HALF of search over `skep-search`, standing BESIDE the ceremonies and
   naming none: `search.rs` the module and its rules; `search/directory.rs`
@@ -973,7 +974,7 @@ and `keygen` sequence the library's compositions themselves, and so carry
 their own text, as `deposit` does. Its modules, in the order `src/main.rs`
 declares them, each naming only those above it:
 
-- `args.rs` `Command`, one of the nineteen, the verb `main` dispatches on;
+- `args.rs` `Command`, one of the twenty, the verb `main` dispatches on;
   the grammar — one row per command and the rules its forms hold them to
   (`Form`), beside the flags every command takes (`GLOBAL`) — with `HELP`,
   the text that documents it; and `CommandLine`, one parsed command line
@@ -994,7 +995,7 @@ declares them, each naming only those above it:
   renders under a `Program`), `help`, and the plumbing from the flags to a
   board (`board_of`), a store (`store_of`), a principal
   (`principal_or_bound`) and a key (`select_key`, under `Purpose`).
-- `commands.rs` what the nineteen commands share among themselves alone:
+- `commands.rs` what the twenty commands share among themselves alone:
   the `skep` `Program`'s `finish` and `help`; `require_terminal`, the
   check each `Door` makes; a payload read to its cap (`read_payload`,
   `MAX_PAYLOAD_BYTES`); the anchor boxes' per-run default (`BoxDefault`);
@@ -1039,10 +1040,11 @@ Rules that hold across its files:
   `answer`, which locks stdin for that line alone, and the only other
   reads are a `-` argument's, whole, in `read_payload` and
   `session --close -`. `tests/it/tidy.rs` checks it.
-- **A person door checks for a terminal first.** The eight doors —
+- **A person door checks for a terminal first.** The nine doors —
   `claim`'s notebook arm, `keygen --anchors`, `enroll` without `--reply`,
-  `recover`, `retire`, `rotate`, `handoff --payload` and `accept` without
-  `--reprint` — each call `require_terminal` before anything is generated;
+  `recover`, `retire`, `rotate`, `handoff --payload`, `accept` without
+  `--reprint` and `hire` — each call `require_terminal` before anything is
+  generated;
   the check is the CLI's, never a walk's (§2.4).
 - **The settings are `args.rs`'s, and every one is tabled.** Every
   `SKEP_*` variable is read there and nowhere else, and every variable the
@@ -1062,6 +1064,8 @@ Its integration suite is one binary, `tests/it/`: `cli` and `ceremonies`,
 each driving the built `skep` through argv, stdin and stdout against a
 daemon spawned in-process; `deposit`, the nineteenth command against an
 enforcing board, its reader `skep-resolve`'s mirror, a dev-dependency;
+`hire`, the twentieth, its line and its door, one run typed at a
+pseudo-terminal, and `bind` refused at the account it makes;
 `hostile`, what arrives from outside the
 person's trust; `dev`, the dev binary driven against a corpus the suite
 builds under the system temp dir; `serve`, the dev provider driven as the

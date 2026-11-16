@@ -160,6 +160,12 @@ pub enum Site {
     /// It includes the one the giver opens by reference as the giving
     /// account.
     Giver,
+    /// The owner's two sessions at the hire (AUTH-5.58 steps 2 and 5).
+    ///
+    /// They are the session as the agent space, opened by reference with a
+    /// key of the owner's own set, and the session as the agent, opened by
+    /// the custody anchor the walk's own genesis enrolled.
+    Hire,
 }
 
 /// Faces the three-state key diagnosis of `fp` (`client.md` §2.2 `verify`).
@@ -236,6 +242,13 @@ pub fn key_face(board: &Board, walk: &Walk, fp: &Fingerprint, own: &[(Fingerprin
                 Site::Hosted => "this is exactly the arrival the hosted reply's first act exists to produce: this account is not \
                      yours to keep (AUTH-5.53) — never a re-run"
                     .to_string(),
+                Site::Hire => format!(
+                    "a hire is made by a key of the owner's own set, which opens the space for its agents by reference, and the \
+                     agent's doc 1 is minted by the custody anchor the hire's own genesis enrolled (AUTH-5.58 steps 2 and 5): the \
+                     set at {} lists neither, so this is another account's key or the genesis did not land as composed — run `skep \
+                     hire` again, which reads what stands before it writes",
+                    walk.set_account
+                ),
             };
             Err(Halt::face(
                 format!("this account's records do not list this key: {fp} is in neither list of the set at {}", walk.set_account),
@@ -446,13 +459,14 @@ mod tests {
         let set = KeySet { enrolled: vec![EnrolledKey { fingerprint: Fingerprint::of(&other), key: other, anchor: false }], ..KeySet::default() };
         let walk = Walk { account: "1.0.1".into(), set_account: "1.0.1".into(), set, visited: vec!["1.0.1".into()] };
         let fp = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
-        let acts: [(&[Site], &str); 6] = [
+        let acts: [(&[Site], &str); 7] = [
             (&[Site::Session, Site::Tail], "then `skep recover`)"),
             (&[Site::Recover], "THE WRONG SHEET (AUTH-5.25 (iii))"),
             (&[Site::Giver], "a handoff is made by a key of the set that opens the account above the subdivision"),
             (&[Site::Claim], "NO COMMAND IN THIS VERSION PERFORMS IT"),
             (&[Site::Setup], "sent not at all (P13)"),
             (&[Site::Hosted], "not yours to keep (AUTH-5.53) — never a re-run"),
+            (&[Site::Hire], "a hire is made by a key of the owner's own set"),
         ];
         for (sites, act) in acts {
             for site in sites {

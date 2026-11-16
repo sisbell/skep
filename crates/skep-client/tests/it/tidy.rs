@@ -36,7 +36,7 @@
 use std::path::{Path, PathBuf};
 
 /// The walks, one gesture each.
-const WALKS: &[&str] = &["accept", "claim", "enroll", "handoff", "recover", "retire", "rotate"];
+const WALKS: &[&str] = &["accept", "claim", "enroll", "handoff", "hire", "recover", "retire", "rotate"];
 
 /// The compositions every walk runs over.
 const COMPOSITIONS: &[&str] =

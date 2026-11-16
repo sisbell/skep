@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "skep — the command over skep-client: nineteen commands, client.md §2.1's thirteen, merge, share, restore, hint, resolve and deposit, flag parsing by hand, one file per command, a Person over the terminal, stdout DATA and stderr TALK (client.md §1.2, §2); and beside it skep-dev, the dev binary whose two verbs seed a running claimed board with a prose corpus and serve the shell's core (skep-shell) to a page over loopback"
+description = "skep — the command over skep-client: twenty commands, client.md §2.1's thirteen, merge, share, restore, hint, resolve, deposit and hire, flag parsing by hand, one file per command, a Person over the terminal, stdout DATA and stderr TALK (client.md §1.2, §2); and beside it skep-dev, the dev binary whose two verbs seed a running claimed board with a prose corpus and serve the shell's core (skep-shell) to a page over loopback"
 readme = "README.md"
 
 [[bin]]
@@ -15,8 +15,9 @@ path = "src/main.rs"
 # The dev binary beside `skep`: `skep-dev seed` fills a running, claimed
 # board with a prose corpus — editions, citation links, second versions,
 # drafts, a second account — and `skep-dev serve` serves the shell's core
-# (`skep-shell`) to a page in a browser over loopback. The nineteen
-# commands stand; this is no twentieth. A plain second target, built by
+# (`skep-shell`) to a page in a browser over loopback. The twenty
+# commands stand, and this binary adds none to them: its verbs are its
+# own. A plain second target, built by
 # every `--bins` and by the package's default build; the sidecar image
 # names `--bin skep`, so its image holds the command alone. `test = false`:
 # the two binaries compile the same `args`, `terminal` and `shared`
@@ -62,7 +63,11 @@ dev-hooks = ["dep:skepd"]
 # nineteenth, `skep deposit`, is over the library's `first_session` and
 # `registry_record` compositions, which `acting` holds with its
 # `skep-registry` edge: it writes a node account's home page and its
-# endpoint record, and reads that account's endpoint records alone.
+# endpoint record, and reads that account's endpoint records alone. The
+# twentieth, `skep hire`, is over the library's `hire` walk, which
+# `acting` holds: it writes an agent's account, its first key record and
+# its home page, and reads the credential records of the agents beneath
+# the owner's agent space.
 skep-client = { path = "../skep-client", features = ["merge"] }
 skep-identity = { path = "../skep-identity" }
 # The address vocabulary the dev binary signs with: a citation link's

@@ -4,15 +4,16 @@
 //! — the mode off `/health`'s pair (AUTH-5.86), AUTH-5.65's pre-check in
 //! both arms, the three-state key diagnosis at the set AUTH-5.21's walk
 //! reaches (AUTH-4.30 (i); every unseeded account answers empty by law,
-//! AUTH-6.19), the principal of an address (AUTH-6.37), and AUTH-5.66's
-//! `closed` predicate. The one admitted read — the account's credential
-//! records — is [`records`], behind `acting`.
+//! AUTH-6.19), the principal of an address (AUTH-6.37), the address test
+//! that tells a hired agent's account ([`hirer_of`]; AUTH-5.87), and
+//! AUTH-5.66's `closed` predicate. The one admitted read — the account's
+//! credential records — is [`records`], behind `acting`.
 
 use std::fmt;
 
 use skep_identity::Fingerprint;
 
-use crate::address::{parent_account, within_principal_depth, MAX_PRINCIPAL_COMPONENTS};
+use crate::address::{first_child, parent_account, within_principal_depth, MAX_PRINCIPAL_COMPONENTS};
 use crate::board::{Board, Health, KeySet, KeySetAnswer};
 use crate::halt::{clipped, Halt};
 use crate::origin::Origin;
@@ -288,6 +289,33 @@ pub fn principal_of(board: &Board, addr: &str) -> Result<Option<u64>, Halt> {
     Ok(board.effective_owner(addr)?.filter(|o| o.prefix == addr).map(|o| o.principal))
 }
 
+/// Returns the account that hired `account`, where `account` is a hire's.
+///
+/// An account is a hire's where its parent is the first sub-account — the
+/// agent space, `inc(S, 1)` — of the nearest keyed account `S` above it
+/// (AUTH-5.58 step 2; AUTH-5.87). The walk is AUTH-4.30 (i)'s, from the
+/// account's parent upward ([`walk_to_set`]): the board measures a genesis
+/// at the same terminus and tells a hire by the same address test
+/// (AUTH-3.21), so the client asks the board's own question of the same
+/// reads. The account's own set is never read: an agent's
+/// account holds a set of its own, as a handoff's recipient's does, and
+/// only the address tells the two apart. `None` for every other account — a
+/// top-level one, a subdivision that is no child of an agent space, an
+/// account with no keyed account above it — and for a spawned worker, whose
+/// parent is an agent and no agent space.
+///
+/// # Errors
+///
+/// [`walk_to_set`]'s halts, from the account's parent.
+pub fn hirer_of(board: &Board, account: &str) -> Result<Option<String>, Halt> {
+    let Some(parent) = parent_account(account) else { return Ok(None) };
+    let above = walk_to_set(board, &parent)?;
+    if above.terminus_empty() {
+        return Ok(None);
+    }
+    Ok((parent == first_child(&above.set_account)).then_some(above.set_account))
+}
+
 /// The arms of AUTH-5.66's `closed` predicate.
 ///
 /// The predicate is a pure function over the key this process already
@@ -390,6 +418,44 @@ mod tests {
                 assert_eq!(on_closed(&fp, &signed, &health(Some("1.0.1"), false, answered), &walk), expected, "the key {diagnosis}, the origin listed: {listed}");
             }
         }
+    }
+
+    /// A hire's account is told by its address, never by its own set.
+    ///
+    /// AUTH-5.87; AUTH-5.58 step 2: the account's parent is the first
+    /// sub-account of the nearest keyed account above it. A child of the
+    /// agent space is a hire's, whether or not it is keyed yet; a handoff's
+    /// recipient, a topic beneath one, a top-level account and a child with
+    /// no keyed account above it are none; and a worker, whose parent is an
+    /// agent and no agent space, is none either. The account's own set is
+    /// never read.
+    #[test]
+    fn a_hires_account_is_a_child_of_the_agent_space_of_the_nearest_keyed_account_above() {
+        let key = skep_signature::HybridSigner::from_seed(skep_signature::TAG_MLDSA65_ED25519, &[4; 32]).expect("tag 1").public_key().clone();
+        let holding = json!({"as_of": 9, "resp": "key_set", "retired": [], "enrolled": [{"alg": key.alg(), "key": key.to_hex(), "fingerprint": Fingerprint::of(&key).to_hex(), "anchor": false}]});
+        let empty = json!({"as_of": 9, "enrolled": [], "resp": "key_set", "retired": []});
+        let keyed_at = |keyed: &'static [&'static str]| {
+            let (holding, empty) = (holding.clone(), empty.clone());
+            Fake::new(move |req| {
+                let f = fake::frame(req);
+                assert_eq!(f["op"], "key_set", "the test reads `key_set` alone");
+                fake::json(200, if keyed.contains(&f["account"].as_str().unwrap()) { holding.clone() } else { empty.clone() })
+            })
+        };
+        let owner = keyed_at(&["1.0.1", "1.0.1.2", "1.0.1.1.3"]);
+        let board = fake::board(&owner);
+        assert_eq!(hirer_of(&board, "1.0.1.1.3").unwrap().as_deref(), Some("1.0.1"), "an agent beneath the owner's agent space");
+        assert_eq!(hirer_of(&board, "1.0.1.1.4").unwrap().as_deref(), Some("1.0.1"), "a hire's address before its genesis");
+        assert_eq!(hirer_of(&board, "1.0.1.2").unwrap(), None, "a handoff's recipient holds a set and is no agent");
+        assert_eq!(hirer_of(&board, "1.0.1.2.1.7").unwrap().as_deref(), Some("1.0.1.2"), "the recipient's own hire");
+        assert_eq!(hirer_of(&board, "1.0.1.3.5").unwrap(), None, "a topic's child is no hire");
+        assert_eq!(hirer_of(&board, "1.0.1.1").unwrap(), None, "the agent space itself is no agent");
+        assert_eq!(hirer_of(&board, "1.0.1.1.3.1").unwrap(), None, "a worker's parent is an agent, and no agent space");
+        let sent = owner.sent.lock().unwrap().iter().filter(|(_, r)| fake::frame(r)["account"] == "1.0.1.1.3").count();
+        assert_eq!(sent, 1, "the agent's own set is read for the worker beneath it alone, never for the agent");
+        let unread = Fake::unread();
+        assert_eq!(hirer_of(&fake::board(&unread), "1.0.1").unwrap(), None, "a top-level account, with no read");
+        assert_eq!(hirer_of(&fake::board(&keyed_at(&[])), "1.0.1.1.3").unwrap(), None, "no keyed account stands above it");
     }
 
     /// Returns `1.0.1` deepened to `n` components, each added one a 1.

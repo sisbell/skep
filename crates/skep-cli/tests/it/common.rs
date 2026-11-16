@@ -5,8 +5,8 @@
 //! setting's variable ([`VARIABLES`]) and of `HOME` ([`scrub`], which every
 //! suite's runs share), stdin fed, stdout and stderr captured —
 //! or one of them closed, its reader gone before the run writes, or all
-//! three a pseudo-terminal; and [`tree`], a directory's state, for the
-//! commands that write nothing.
+//! three a pseudo-terminal, its prompts unanswered or typed at; and
+//! [`tree`], a directory's state, for the commands that write nothing.
 
 #![allow(dead_code)]
 
@@ -255,6 +255,45 @@ pub fn on_a_terminal(inner: &str) -> String {
     }
     let out = scrub(&mut cmd).stdin(Stdio::null()).output().expect("script(1): the pseudo-terminal these runs need");
     String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// [`on_a_terminal`], with `typed` written to the pseudo-terminal as a
+/// person types it: each line answers the run's next prompt, read by the
+/// terminal's own line discipline. So a person door can be walked to its
+/// end, and the one place `skep`'s `Person` over the terminal is driven
+/// whole is here.
+///
+/// The terminal's input stays open until the run is over — `done`, a file
+/// `inner` writes last, stands, or script(1) has exited, or two minutes
+/// have passed — and only then ends: script(1) hands the terminal its end
+/// of input as soon as its own input ends, and on macOS ahead of lines
+/// still unread, which a run would meet as a person gone at its first
+/// prompt. What the run wrote is read as it is written, so a long walk's
+/// talk never fills the pipe it is read from.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub fn on_a_terminal_typing(inner: &str, typed: &str, done: &Path) -> String {
+    let mut cmd = Command::new("script");
+    if cfg!(target_os = "macos") {
+        cmd.args(["-q", "/dev/null", "/bin/sh", "-c", inner]);
+    } else {
+        cmd.args(["-q", "-e", "-c", inner, "/dev/null"]).env("SHELL", "/bin/sh");
+    }
+    let mut child = scrub(&mut cmd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().expect("script(1): the pseudo-terminal these runs need");
+    let mut keyboard = child.stdin.take().expect("stdin");
+    keyboard.write_all(typed.as_bytes()).expect("type the answers");
+    let mut screen = child.stdout.take().expect("stdout");
+    let reader = std::thread::spawn(move || {
+        let mut seen = Vec::new();
+        let _ = screen.read_to_end(&mut seen);
+        seen
+    });
+    let started = std::time::Instant::now();
+    while !done.exists() && started.elapsed() < Duration::from_secs(120) && matches!(child.try_wait(), Ok(None)) {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    drop(keyboard);
+    let _ = child.wait();
+    String::from_utf8_lossy(&reader.join().expect("the screen's reader")).into_owned()
 }
 
 /// `program` with `args` under `/bin/sh`'s file-size limit of `blocks`

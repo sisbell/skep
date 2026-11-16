@@ -1,4 +1,4 @@
-//! The nineteen commands, one file each beneath this one, and what they share.
+//! The twenty commands, one file each beneath this one, and what they share.
 //!
 //! The commands are `client.md` §2.2's thirteen, each exactly as it writes
 //! it, `merge`, the fourteenth, as the merge record's §6 writes it,
@@ -6,8 +6,9 @@
 //! PUB-5.108), `restore`, the sixteenth, as B3-S7 draws it, `hint`, the
 //! seventeenth, the printer of a registry's root hint (REG-3.2),
 //! `resolve`, the eighteenth, the resolver of a cross-board address
-//! (REG-3.7), and `deposit`, the nineteenth, the depositor of a board's
-//! endpoint at its node account (REG-1.9) — each a
+//! (REG-3.7), `deposit`, the nineteenth, the depositor of a board's
+//! endpoint at its node account (REG-1.9), and `hire`, the twentieth, the
+//! owner's side of the hire ceremony (AUTH-5.58) — each a
 //! `pub fn` that `main` dispatches to and that answers
 //! `Ok` or the [`Stop`] it came to, every walk a library call. What they
 //! share among themselves alone is private here and so visible to each of
@@ -39,6 +40,7 @@ mod fingerprint;
 mod handoff;
 mod health;
 mod hint;
+mod hire;
 mod keygen;
 mod merge;
 mod recover;
@@ -59,6 +61,7 @@ pub use fingerprint::fingerprint;
 pub use handoff::handoff;
 pub use health::health;
 pub use hint::hint;
+pub use hire::hire;
 pub use keygen::keygen;
 pub use merge::merge;
 pub use recover::recover;
@@ -117,7 +120,7 @@ pub fn help() -> Result<(), Stop> {
 
 /// A person door: its `form` and the `moments` a person answers there.
 ///
-/// The doors are §2.4's; `ARCHITECTURE.md` §The command lists the eight.
+/// The doors are §2.4's; `ARCHITECTURE.md` §The command lists the nine.
 /// The form is as a command line spells it, and the moments are in §2.4's
 /// and §6's words — each named, so neither stands in the other's place.
 #[derive(Clone, Copy, Debug)]
@@ -322,12 +325,18 @@ fn binding_said(store: &FileStore, line: &str) -> String {
 /// The outstanding act of a key enrolled nowhere: AUTH-5.32's pending state.
 ///
 /// It names the state, conditioned on the walk because one payload serves
-/// two (§2.2): the line `keygen --payload` prints at exit, and the one
-/// `fingerprint` carries beside every unbound key, "the same conditioned
-/// outstanding-act line". Each site adds the clauses its own state makes
-/// true.
+/// three (§2.2; AUTH-5.58 step 1): the line `keygen --payload` prints at
+/// exit, and the one `fingerprint` carries beside every unbound key, "the
+/// same conditioned outstanding-act line". Each site adds the clauses its
+/// own state makes true. The third walk is the hire's: the key is an
+/// agent's working key, its payload goes up to the owner who hires it, and
+/// what comes back is a principal the agent's program takes as a setting —
+/// never three facts for `skep bind`, which refuses at an agent's account.
 const OUTSTANDING_ACT: &str = "Where it ADDS a device: take this payload to a device already signed in, run `skep enroll` there, and bring its three \
-     facts back to `skep bind` here. Where it REPLACES a machine: `skep rotate --payload` there instead, then `skep bind` here.";
+     facts back to `skep bind` here. Where it REPLACES a machine: `skep rotate --payload` there instead, then `skep bind` here. Where it \
+     is an AGENT's working key: hand this payload to the owner hiring the agent, who runs `skep hire --payload` with it and compares \
+     this key's fingerprint with this machine's; the principal that command prints is this agent's `SKEP_PRINCIPAL`, a setting of the \
+     agent's program beside its board and this key store — an agent runs no `skep bind`.";
 
 /// Returns what this device holds for the whole-set compare.
 ///

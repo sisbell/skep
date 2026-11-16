@@ -19,7 +19,14 @@
 //! 2. The setup act, AUTH-5.87's ops (1) and (3) at `inc(account, 1)`, only
 //!    where `key_set(account)` itself enrolls a key (the rule's own binding
 //!    class; a topic or an agent space holds no set and reserves no agent
-//!    space — AUTH-6.19's signal read at the account itself, P17): op (1) the
+//!    space — AUTH-6.19's signal read at the account itself, P17) and the
+//!    account is no hire's: an agent's account holds a set of its own and
+//!    the rule excludes it by name ("an agent holds no agent space; its
+//!    first child is its first worker"), so its own set never tells it from
+//!    an account the rule binds, and its address does
+//!    (`derive::hirer_of`, the board's own test of a hire, AUTH-3.21) — at
+//!    such an account the state is sent not at all and none of its reads is
+//!    made, whichever walk runs the composition: op (1) the
 //!    `delegate` of `inc(account, 1)` and no other address under a
 //!    client-minted random `new_id` (AUTH-5.20) persisted before the frame as
 //!    a binding line (§4.3's persist-first rule, P4's one named exception),
@@ -53,7 +60,7 @@ use super::attest_member;
 use crate::address::{doc_1_of, first_child, parse_address};
 use crate::board::{acked_addr, answers, frames, Answer, Board, KeySetAnswer, Rejection, Scope};
 use crate::ceremony::handshake::{handshake, Session, Site};
-use crate::derive::{principal_of, walk_to_set, KeyDiagnosis};
+use crate::derive::{hirer_of, principal_of, walk_to_set, KeyDiagnosis};
 use crate::halt::Halt;
 use crate::sign::{fresh_principal_id, Signer};
 use crate::store::{Binding, FileStore, KeyStore};
@@ -69,7 +76,17 @@ pub struct FirstSessionReads {
     pub home_present: bool,
     /// The class test: `key_set(account)` itself enrolls a key.
     pub set_nonempty: bool,
+    /// The account that hired this one, where this account is an agent's.
+    ///
+    /// An agent holds no agent space (AUTH-5.87): where this is `Some`, the
+    /// setup state is owed never and sent never, and the four members below
+    /// that describe it are unread — `None` and `false`. It is the address
+    /// test of `derive::hirer_of`, never the account's own set.
+    pub hired_by: Option<String>,
     /// `inc(account, 1)` — the agent space (AUTH-5.87).
+    ///
+    /// At an agent's account the address is its first worker's (AUTH-5.63),
+    /// and no agent space.
     pub agent_space: String,
     /// The principal seated at the agent space where it is a seat, else none.
     ///
@@ -87,7 +104,7 @@ pub struct FirstSessionReads {
     /// Op (3)'s pre-check (P13) of the given key.
     ///
     /// It is the key's diagnosis at the set that opens the agent space;
-    /// `None` where the account holds no set of its own.
+    /// `None` where the account holds no set of its own, or is an agent's.
     pub key_opens_agent_space: Option<KeyDiagnosis>,
 }
 
@@ -99,10 +116,19 @@ impl FirstSessionReads {
 
     /// Returns whether the setup act is owed.
     ///
-    /// It is owed where the account holds a set of its own and either op (1)
-    /// or op (3) stands undone.
+    /// It is owed where the account holds a set of its own, is no hired
+    /// agent's (AUTH-5.87), and either op (1) or op (3) stands undone.
     pub fn setup_owed(&self) -> bool {
-        self.set_nonempty && (self.agent_space_principal.is_none() || !self.agent_space_home_present)
+        self.binds_an_agent_space() && (self.agent_space_principal.is_none() || !self.agent_space_home_present)
+    }
+
+    /// Returns whether AUTH-5.87 binds this account to an agent space.
+    ///
+    /// It does where the account holds a set of its own and is no hire's:
+    /// a topic and an agent space hold no set, and an agent holds a set and
+    /// no agent space.
+    pub fn binds_an_agent_space(&self) -> bool {
+        self.set_nonempty && self.hired_by.is_none()
     }
 
     /// Returns whether any act is owed — `bind`'s selector (§2.2).
@@ -177,6 +203,9 @@ impl FirstSessionReads {
     /// `key` is the key op (3)'s session would open under; `store` where a
     /// persisted `new_id` may stand.
     ///
+    /// At an agent's account the setup state's reads are not made
+    /// (`hired_by`).
+    ///
     /// # Errors
     ///
     /// `account` answering `not_an_account` halts, as do the reads' own
@@ -195,6 +224,24 @@ impl FirstSessionReads {
             }
         };
         let agent_space = first_child(account);
+        // An agent holds no agent space (AUTH-5.87), told by its address as
+        // the board tells a hire (AUTH-3.21): none of the setup state's
+        // reads is made beneath it.
+        let hired_by = if set_nonempty { hirer_of(board, account)? } else { None };
+        if hired_by.is_some() {
+            return Ok(FirstSessionReads {
+                account: account.to_string(),
+                home,
+                home_present,
+                set_nonempty,
+                hired_by,
+                agent_space,
+                agent_space_principal: None,
+                agent_space_home_present: false,
+                persisted_new_id: None,
+                key_opens_agent_space: None,
+            });
+        }
         let agent_space_principal = principal_of(board, &agent_space)?;
         let agent_space_home_present = document_present(board, &doc_1_of(&agent_space))?;
         let persisted_new_id = persisted(board, store, &agent_space);
@@ -215,6 +262,7 @@ impl FirstSessionReads {
             home,
             home_present,
             set_nonempty,
+            hired_by: None,
             agent_space,
             agent_space_principal,
             agent_space_home_present,
@@ -290,8 +338,9 @@ pub fn first_session(
     };
     // (1) The doc-1 mint, resumed by the doc-1 read.
     done.minted_home = mint_home(board, reads, session, key)?;
-    // (2) The setup act, where the account holds a set of its own.
-    if !reads.set_nonempty {
+    // (2) The setup act, where the account holds a set of its own and is no
+    // agent's (AUTH-5.87: an agent holds no agent space).
+    if !reads.binds_an_agent_space() {
         return Ok(done);
     }
     if reads.agent_space_principal.is_some() && reads.agent_space_home_present {
@@ -348,7 +397,9 @@ pub fn first_session(
 /// the agent's doc 1 too, while AUTH-5.87 excludes an agent's account by
 /// name ("an agent holds no agent space; its first child is its first
 /// worker") so ops (1) and (3) would delegate the agent's first child from
-/// the owner's anchor session, permanently. The mint is attested under
+/// the owner's anchor session, permanently; and the hire's step 5, the
+/// agent's doc 1 minted from the custody anchor's session ahead of the
+/// wake (AUTH-5.58 step 5; AUTH-5.61). The mint is attested under
 /// `signer`, the session's own key ([`home_frame`]). It answers whether the
 /// home was minted here.
 ///

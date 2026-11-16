@@ -23,7 +23,11 @@
 //! `skep bind` minting its doc 1 from its first signed session, the command
 //! minting a missing home and depositing the endpoint a verifying mirror
 //! reads current, a later deposit naming the one it replaces, and each
-//! refusal; `tidy` reads the crate's own source for the arrangement
+//! refusal; `hire` drives the twentieth, `skep hire` — its line read whole
+//! ahead of its door, the door refused without a terminal, one run typed at
+//! a pseudo-terminal from the standing statements to the agent's principal,
+//! and `skep bind` refused at the account a hire made; `tidy` reads the
+//! crate's own source for the arrangement
 //! `ARCHITECTURE.md` §The command states.
 
 mod ceremonies;
@@ -32,6 +36,7 @@ mod common;
 mod deposit;
 mod dev;
 mod hint;
+mod hire;
 mod hostile;
 mod merge;
 mod resolve;

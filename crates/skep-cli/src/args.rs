@@ -5,7 +5,8 @@
 //! `merge`, the fourteenth (the merge record's §6), `share`, the
 //! fifteenth (PUB-5.29; PUB-5.108), `restore`, the sixteenth (B3-S7),
 //! `hint`, the seventeenth (REG-3.2), `resolve`, the eighteenth
-//! (REG-3.7), or `deposit`, the nineteenth (REG-1.9), and is judged against
+//! (REG-3.7), `deposit`, the nineteenth (REG-1.9), or `hire`, the
+//! twentieth (AUTH-5.58), and is judged against
 //! `GRAMMAR`, one
 //! row per command beside `HELP`, the text that documents it: a flag in no
 //! row, a flag of another command's, a missing value, a value that is
@@ -105,16 +106,17 @@ fn version_line(program: &str) -> String {
     )
 }
 
-/// One of the nineteen commands: the verb a command line opens with.
+/// One of the twenty commands: the verb a command line opens with.
 ///
-/// The nineteen are `client.md` §2.1's thirteen, `merge`, the fourteenth
+/// The twenty are `client.md` §2.1's thirteen, `merge`, the fourteenth
 /// (the merge record's §6), `share`, the fifteenth (PUB-5.29; PUB-5.108),
 /// `restore`, the sixteenth (B3-S7; `client.md` §4b.1's `history.restore`
 /// row), `hint`, the seventeenth (REG-3.2: a registry's root hint, read
 /// off its board), `resolve`, the eighteenth (REG-3.7: the board a
-/// cross-board address lives on, found through the registry), and
+/// cross-board address lives on, found through the registry),
 /// `deposit`, the nineteenth (REG-1.9: a board's endpoint, deposited at
-/// its node account). A command is
+/// its node account), and `hire`, the twentieth (AUTH-5.58: an agent
+/// hired, the owner's side of the ceremony). A command is
 /// what `GRAMMAR`'s rows are keyed by, and what `main` dispatches on, one
 /// arm each, which the compiler holds exhaustive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -138,6 +140,7 @@ pub enum Command {
     Hint,
     Resolve,
     Deposit,
+    Hire,
 }
 
 impl Command {
@@ -163,6 +166,7 @@ impl Command {
             Command::Hint => "hint",
             Command::Resolve => "resolve",
             Command::Deposit => "deposit",
+            Command::Hire => "hire",
         }
     }
 }
@@ -187,7 +191,7 @@ pub struct Line<C> {
     switches: Vec<String>,
 }
 
-/// The `skep` command's line: one of the nineteen, and its flags.
+/// The `skep` command's line: one of the twenty, and its flags.
 pub type CommandLine = Line<Command>;
 
 /// The flags every command takes, each taking one value.
@@ -255,10 +259,10 @@ impl Form {
     }
 }
 
-/// The grammar: the nineteen commands, each with its flags and its forms.
+/// The grammar: the twenty commands, each with its flags and its forms.
 ///
 /// The commands are `client.md` §2.1's in set, `merge`, `share`, `restore`,
-/// `hint`, `resolve` and `deposit`, each
+/// `hint`, `resolve`, `deposit` and `hire`, each
 /// with the flags §2.2 gives it and `HELP` documents, and the rules its
 /// forms hold them to — the forms the record's synopses draw:
 /// `keygen --anchors` (§2.2), `claim`'s notebook walk or `--hosted` (§4.5),
@@ -287,13 +291,19 @@ impl Form {
 /// in the one form the command has; `deposit`'s is `--account`, the node
 /// account, once, as `bind` takes it, and `--origin`, which repeats, each
 /// value an origin of the board in the order a reader tries them, in the
-/// one form the command has.
+/// one form the command has; `hire`'s is `--payload`, the agent's key
+/// record, a file or `-` as `enroll` takes it, and `--replaces`, the
+/// agent's account a re-hire replaces, each once, with its two arms apart
+/// — the custody pair, the default, with the backup moment's `--anchor-out`
+/// and `--paper` as `claim` and `accept` take them, or its decline,
+/// `--anchorless` (AUTH-5.58 step 3).
 /// That a side and `--doc` are required at `merge`, a reader at `share`,
 /// both flags at `restore`, the board at `hint`, the address and the
-/// root hint at `resolve` and the account and an origin at `deposit`, is
+/// root hint at `resolve`, the account and an origin at `deposit` and the
+/// payload at `hire`, is
 /// the command's
 /// judgment, as `retire` judges its `--fingerprint`: no form says "one of".
-const GRAMMAR: [Row<Command>; 19] = [
+const GRAMMAR: [Row<Command>; 20] = [
     Row {
         command: Command::Keygen,
         once: &[],
@@ -417,9 +427,16 @@ const GRAMMAR: [Row<Command>; 19] = [
     Row { command: Command::Hint, once: &["--fork"], repeated: &["--also"], switches: &[], forms: &[] },
     Row { command: Command::Resolve, once: &["--address", "--root-hint"], repeated: &[], switches: &[], forms: &[] },
     Row { command: Command::Deposit, once: &["--account"], repeated: &["--origin"], switches: &[], forms: &[] },
+    Row {
+        command: Command::Hire,
+        once: &["--payload", "--replaces"],
+        repeated: &["--anchor-out"],
+        switches: &["--anchorless", "--paper"],
+        forms: &[Form::Apart("--anchorless", "--anchor-out"), Form::Apart("--anchorless", "--paper"), Form::AtMost("--anchor-out", 2)],
+    },
 ];
 
-/// The help text: the nineteen commands and the flags each takes.
+/// The help text: the twenty commands and the flags each takes.
 ///
 /// Each command is as the design writes it, and the text is the grammar
 /// above, documented beside it.
@@ -518,6 +535,21 @@ usage: skep <command> [flags]
                service that hosts a board holds no such key and signs
                nothing; stdout carries the endpoint's address, and under
                it the address of the one it replaces; no person door
+  hire         hire an agent (a person door): make its account beneath
+               the space for your agents and write its first key record
+               — the agent's own working key, read from --payload as
+               `skep keygen --payload` printed it on the agent's host,
+               beside two custody sheets this command makes for you to
+               keep; what the agent will be able to do is stated first;
+               you compare the key's fingerprint with the agent's host
+               and type its first group; the agent's home page is then
+               made, and only then its principal printed — the number
+               the agent's program takes as a setting; --anchorless hires
+               with no custody sheets, once its costs are stated and
+               typed; --replaces <address> names the agent's account
+               this one replaces, and a key that account already held is
+               refused; a run that stopped part way is resumed by
+               running it again, and makes no second account
 
 flags (a flag beats its env variable; a variable set empty is unset):
   --board <origin>      the board, a canonical origin (env SKEP_BOARD)
@@ -526,12 +558,15 @@ flags (a flag beats its env variable; a variable set empty is unset):
                         SKEP_KEY): read at session, verify, bind,
                         fingerprint, merge, share, restore, deposit and
                         accept --reprint, an anchor file refused where the
-                        key signs; refused where enroll and retire sign,
-                        their walks taking none yet; not consulted elsewhere
+                        key signs; refused where enroll, retire and hire
+                        sign, their walks taking none yet; not consulted
+                        elsewhere
   --principal <n>       the principal (env SKEP_PRINCIPAL), read at
                         session, verify, enroll, recover, retire, rotate,
-                        handoff, merge, share and restore — where omitted,
-                        the store's one binding at the board; at bind, the
+                        handoff, hire, merge, share and restore — where
+                        omitted, the store's one binding at the board (a
+                        store that has hired holds its agents' lines too,
+                        and then names its own); at bind, the
                         reply's where omitted; at claim, the new account's
                         id, 1 where omitted; at deposit, the one the board
                         seats at --account where omitted; not consulted
@@ -621,6 +656,9 @@ flags (a flag beats its env variable; a variable set empty is unset):
             reader tries them: written as given, and none dialed)
             [--principal <n>]  [--key <path>] (else the store's key for
             that board and principal)
+  hire:     --payload <file|->  [--replaces <address>], and the custody
+            pair ([--anchor-out <dir>]... (two at most)  [--paper]) or its
+            decline (--anchorless)
 
 exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
 4 transport. stdout carries data; stderr carries talk. A retirement's

@@ -58,8 +58,10 @@
 //! * [`derive`](mod@derive) — the pure derivations over board reads: the
 //!   mode off `/health`'s pair (AUTH-5.86), AUTH-5.65's pre-check, the
 //!   three-state key diagnosis at the set AUTH-5.21's walk reaches
-//!   (AUTH-4.30 (i)), the principal of an address (AUTH-6.37), AUTH-5.66's
-//!   `closed` predicate, and — behind `acting` — `derive::records`, the one
+//!   (AUTH-4.30 (i)), the principal of an address (AUTH-6.37), the address
+//!   test that tells a hired agent's account (`derive::hirer_of`;
+//!   AUTH-5.87), AUTH-5.66's `closed` predicate, and — behind `acting` —
+//!   `derive::records`, the one
 //!   admitted read of an account's credential records (AUTH-5.68,
 //!   AUTH-2.113).
 //!
@@ -103,8 +105,12 @@
 //!   walk runs over (P28) — `handshake`, `deposit`, `registry_record`,
 //!   `first_session`, `backup`, `payload`, `preview`, `enumerate`, `trail`,
 //!   `import`, `reads` — and the walks over them — `claim`, `enroll`,
-//!   `recover`, `retire`, `rotate`, `handoff`, `accept`. A walk names
-//!   compositions and never another walk. `registry_record` is the
+//!   `recover`, `retire`, `rotate`, `handoff`, `accept`, `hire`. A walk
+//!   names compositions and never another walk. `hire` is the owner's side
+//!   of the hire ceremony (AUTH-5.58): an agent's account made beneath the
+//!   owner's agent space, its first key record composed by the owner
+//!   beside a custody pair, its home minted, and only then its principal.
+//!   `registry_record` is the
 //!   registry record a node account deposits (REG-1.86), composed by
 //!   `skep_registry`'s encoder and signed by a key of the home's account:
 //!   an endpoint, naming the deposit it replaces (REG-1.9, REG-1.10).

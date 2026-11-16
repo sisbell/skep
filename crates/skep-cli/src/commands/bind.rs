@@ -5,7 +5,9 @@
 //! wrote the account's first set, the account's first signed session run
 //! where one is owed, the binding line written and said as the store reads
 //! it back — naming a key this store holds, a key file from outside it
-//! refused before anything is. With `keygen`, one of the two ceremonies
+//! refused before anything is; and a hired agent's account refused before
+//! any of it, an agent's program taking those facts as settings and landing
+//! none. With `keygen`, one of the two ceremonies
 //! that sequence the library's compositions themselves rather than calling
 //! a walk.
 
@@ -14,7 +16,7 @@ use std::fmt;
 use skep_client::board::{Board, Scope};
 use skep_client::ceremony::first_session::{first_session, FirstSessionReads};
 use skep_client::ceremony::handshake::{handshake, key_face, Site};
-use skep_client::derive::{origin_arm, principal_of, walk_to_set};
+use skep_client::derive::{hirer_of, origin_arm, principal_of, walk_to_set};
 use skep_client::dial::plaintext_non_loopback_warning;
 use skep_client::halt::Halt;
 use skep_client::sheet::{render_inert, Facts};
@@ -255,6 +257,31 @@ fn landing() -> Result<Option<Landing>, Halt> {
     }
 }
 
+/// Returns the halt `bind` comes to at a hired agent's account.
+///
+/// An agent's program takes its board, its principal and its key store as
+/// settings, so nothing is landed for it here: no landing is compared — the
+/// owner's custody pair stands in an agent's first set by design, and the
+/// whole-set compare would read it as keys the agent did not send — no
+/// first signed session runs, since an agent holds no agent space
+/// (AUTH-5.87), and no binding line is written. `account` is the pasted
+/// account as a halt echoes it, and `owner` the account that hired it.
+fn agents_account(account: &str, owner: &str, principal: u64) -> Halt {
+    Halt::face(
+        format!("`skep bind` is not an agent's door: {account} is a hired agent's account"),
+        format!(
+            "it is a child of the agent space of {owner}, the nearest keyed account above it (AUTH-5.87; AUTH-5.58): an agent's \
+             program takes its board, its principal and its key store as settings, and nothing is landed for it — no first set is \
+             compared here, no first signed session runs and no binding line is written; nothing was written"
+        ),
+        format!(
+            "give the agent's program its three settings — this board's origin, the principal {principal} that `skep hire` printed \
+             (`SKEP_PRINCIPAL`) and its key store — and start it: its first signed session proves its key, which `skep verify \
+             --principal {principal}` from that store checks by hand"
+        ),
+    )
+}
+
 pub fn bind(c: &CommandLine) -> Result<(), Stop> {
     let board = board_of(c)?;
     let store = store_of(c)?;
@@ -290,6 +317,12 @@ pub fn bind(c: &CommandLine) -> Result<(), Stop> {
             )
             .into())
         }
+    }
+    // A hired agent's account is not this door's (AUTH-5.87; AUTH-5.58):
+    // told by its address, as the board tells a hire, ahead of the key's
+    // selection, the compare, any session and the binding line.
+    if let Some(owner) = hirer_of(&board, &account)? {
+        return Err(agents_account(&pasted, &owner, principal).into());
     }
     let key = select_key(key_file.as_deref(), &store, &board, principal, Purpose::Sign)?;
     // The binding line this command appends, and the first session's

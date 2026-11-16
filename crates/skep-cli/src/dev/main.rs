@@ -13,8 +13,9 @@
 //! claimant, which reads alone, or signed with a dev key, which writes too,
 //! and — behind the `dev-hooks` feature no shipped build enables — the
 //! daemon run in-process with its test hooks so its fault states are forced
-//! live. The nineteen commands of `skep` stand: this is no twentieth, and
-//! the sidecar image, built `--bin skep`, holds none of it.
+//! live. The twenty commands of `skep` stand, and this binary adds none to
+//! them: its two verbs are the dev binary's own, and the sidecar image,
+//! built `--bin skep`, holds none of it.
 //!
 //! The root declares `args`, `terminal` and `shared` from the `skep` root's
 //! own files, so the settings (`--board`, `--dir`, `--key`, `--principal`

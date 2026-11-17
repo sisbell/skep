@@ -26,9 +26,9 @@ use crate::common;
 
 use common::*;
 use skep_febe::{
-    consult_read, enc, validate, Address, DeliveryItem, EditionClaim, FourSet, Op, OpKind,
-    RegionSpec, RejectCode, Response, SlotArg, SlotSpec, Span, SpanSet, Spec, Tumbler, View, FROM,
-    TO,
+    consult_read, enc, validate, Address, DeliveryItem, Deposit, EditionClaim, Flagged, FourSet,
+    LineNumbers, Op, OpKind, RegionSpec, RejectCode, Response, SlotArg, SlotSpec, Span, SpanSet,
+    Spec, Tumbler, Val, View, FROM, TO,
 };
 
 /// One link whose endsets cover `covered`'s content, homed in `home` — the
@@ -107,6 +107,7 @@ fn a_read_is_withheld_naming_its_first_unreadable_document() {
     let cases: Vec<(Op, &Address)> = vec![
         (Op::RetrieveDocVSpan { doc: d1.clone() }, &d1),
         (Op::RetrieveDocVSpanSet { doc: d1.clone() }, &d1),
+        (Op::LineNumbers { doc: d1.clone(), positions: vec![vp(1, 1)], lines: vec![nat(1)] }, &d1),
         (Op::ShowOrigin { doc: d1.clone(), span: first_span() }, &d1),
         // Two named documents: the first DECLARED one speaks, either way round.
         (Op::ShowDeletions { d_a: d1.clone(), d_b: d2.clone() }, &d1),
@@ -853,6 +854,72 @@ fn a_delivery_masks_an_unreadable_origin_in_place() {
             "run {i} is `readable_doc`'s own content and survives: {item:?}"
         );
     }
+}
+
+/// A line read masks per run, as the delivery does (PUB-6.41).
+///
+/// A run whose origin the caller may not read counts no line break and flags
+/// each number it lies at or before — never a rejection, and never a number
+/// the caller could not count in the delivery it is served. The readable
+/// document is `a`, a line break, one line break transcluded from a document
+/// the stranger may not read, then `c`.
+#[test]
+fn a_line_read_counts_no_line_break_of_an_unreadable_origin_and_flags_its_numbers() {
+    let (fx, unreadable) = setup_with_unreadable();
+    let insert = |doc: &Address, text: &[u8]| {
+        let values = text.iter().map(|&b| Val::new(vec![b])).collect();
+        let (deposit, as_of) = (Deposit::Undeclared, head(&fx));
+        ack_addr(ex(
+            &fx.febe,
+            fx.user,
+            Op::Insert { doc: doc.clone(), at: vp(1, 1), values, deposit, as_of },
+        ));
+    };
+    let readable_doc = create_doc(&fx);
+    insert(&readable_doc, b"a\nc");
+    let unreadable_origin = create_doc(&fx);
+    insert(&unreadable_origin, b"\n");
+    let specs = vec![vspec(&unreadable_origin, 1, 1)];
+    ack(ex(
+        &fx.febe,
+        fx.user,
+        Op::Copy { doc: readable_doc.clone(), at: vp(1, 3), specs, as_of: head(&fx) },
+    ));
+    unreadable.lock().expect("no poisoning").push(unreadable_origin);
+    let other = fx.febe.open_session(OTHER);
+    let ask = || Op::LineNumbers {
+        doc: readable_doc.clone(),
+        positions: vec![vp(1, 2), vp(1, 3), vp(1, 4)],
+        lines: vec![nat(2), nat(3)],
+    };
+    let numbers = |r: Response| match r {
+        Response::LineNumbers { numbers, .. } => numbers,
+        other => panic!("expected LineNumbers, got {other:?}"),
+    };
+    fn flagged<T>(number: T, masked: bool) -> Flagged<T> {
+        Flagged { number, masked }
+    }
+
+    // The owner reads both origins: `a`, two line breaks, `c` — three lines.
+    assert_eq!(
+        numbers(ex(&fx.febe, fx.user, ask())),
+        LineNumbers {
+            positions: vec![flagged(nat(1), false), flagged(nat(2), false), flagged(nat(3), false)],
+            lines: vec![Some(flagged(vp(1, 3), false)), Some(flagged(vp(1, 4), false))],
+            count: flagged(nat(3), false),
+        }
+    );
+    // The stranger is served `a`, a line break, a withheld run of one, `c`:
+    // two lines, the transcluded line break counted nowhere, and every
+    // number at or past the withheld run flagged.
+    assert_eq!(
+        numbers(ex(&fx.febe, other, ask())),
+        LineNumbers {
+            positions: vec![flagged(nat(1), false), flagged(nat(2), true), flagged(nat(2), true)],
+            lines: vec![Some(flagged(vp(1, 3), true)), None],
+            count: flagged(nat(2), true),
+        }
+    );
 }
 
 // ───────────────────────────────── 5. the guest ─────────────────────────────

@@ -1,5 +1,6 @@
 //! The derive policy, the marshaling seam M10 codes against: results and
-//! errors serialize (`CorrPair`/`CompareReport` field by field), every
+//! errors serialize (`CorrPair`/`CompareReport`/`LineNumbers` field by
+//! field), every
 //! rejection is a `std::error::Error`, requests and fault vocabularies key a
 //! map, the answer collections behave like std's, and the handle and its
 //! answers cross threads.
@@ -18,7 +19,8 @@ use skep_arrangement::AsOf;
 use skep_arrangement::VSpec;
 use skep_retrieval::{
     CompareError, CompareReport, Deletions, DeletionsError, Delivery, DeliveryItem, ExtentError,
-    FindError, Operand, OriginError, Query, RegionSpec, RetrieveError, SpanFault, Spec,
+    FindError, LineNumbers, LinesError, Operand, OriginError, Query, RegionSpec, RetrieveError,
+    SpanFault, Spec,
 };
 
 use crate::common::*;
@@ -80,6 +82,25 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
     assert!(!bincode::serialize(&pair.u1.ordinal).expect("Nat serializes").is_empty());
     assert!(!bincode::serialize(&pair.d2).expect("Address serializes").is_empty());
     assert!(!bincode::serialize(&pair.width).expect("Nat serializes").is_empty());
+    // LineNumbers the same way: a line's start is a VPos, so the answer
+    // marshals field by field, and a line and the count — each a flagged
+    // Nat — serialize whole, as the line read's rejection does.
+    let numbers = ok_of(q.line_numbers(&doc1(), &[vp(1, 1)], &[n(1)]));
+    assert!(!bincode::serialize(&numbers.positions)
+        .expect("flagged lines serialize")
+        .is_empty());
+    assert!(!bincode::serialize(&numbers.count)
+        .expect("the count serializes")
+        .is_empty());
+    let start = numbers.lines[0].as_ref().expect("line 1 starts");
+    assert!(!bincode::serialize(&start.number.ordinal)
+        .expect("Nat serializes")
+        .is_empty());
+    assert_eq!(numbers.clone(), numbers);
+    let refused = err_of(q.line_numbers(&doc1(), &[vp(2, 1)], &[]));
+    assert!(!bincode::serialize(&refused)
+        .expect("LinesError serializes")
+        .is_empty());
     // Withholding Serialize is not withholding everything else: a consumer
     // can clone a report, compare two of them, and print one in a failure
     // message. `assert_eq!` on M6's results and errors compiles from a
@@ -154,6 +175,9 @@ fn every_rejection_is_a_std_error() {
         Box::new(e)
     }
     assert!(!boxed(ExtentError::DocNotRegistered).to_string().is_empty());
+    assert!(!boxed(LinesError::RangeNotPresent { index: 0 })
+        .to_string()
+        .is_empty());
     assert!(!boxed(RetrieveError::MalformedSpec {
         index: 0,
         fault: SpanFault::StartTooShallow,
@@ -308,5 +332,7 @@ fn the_query_handle_and_its_answers_cross_threads() {
     is_send_sync::<Delivery>();
     is_send_sync::<CompareReport>();
     is_send_sync::<Deletions>();
+    is_send_sync::<LineNumbers>();
     is_send_sync::<RetrieveError>();
+    is_send_sync::<LinesError>();
 }

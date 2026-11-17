@@ -138,6 +138,10 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         (Op::ContentFrontier { doc: doc() }, true),
         (Op::RetrieveDocVSpan { doc: doc() }, true),
         (Op::RetrieveDocVSpanSet { doc: doc() }, true),
+        (
+            Op::LineNumbers { doc: doc(), positions: vec![vpos()], lines: vec![Nat::from(1u32)] },
+            true,
+        ),
         (Op::ShowOrigin { doc: doc(), span: vspan() }, true),
         (Op::ShowDeletions { d_a: doc(), d_b: doc() }, true),
         (
@@ -174,7 +178,7 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
 }
 
 /// §1: the read/write partition is exhaustive and two-sided
-/// (`is_write == !is_read`), with 32 reads and 19 writes (the publish
+/// (`is_write == !is_read`), with 33 reads and 19 writes (the publish
 /// shot joining the fourteen of the design, lane 3.2; the write by
 /// identity, `reinstate`, the sixteenth — the replacement act's record;
 /// the staging act, `stage`, the seventeenth — B3-S10; the landing,
@@ -187,13 +191,14 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
 /// twenty-eighth, PUB-8.47; the read by identity and the content-frontier
 /// read the twenty-ninth and thirtieth, AUTH-6.38–6.40; the count by home
 /// the thirty-first, the link-sets design's W10 (a); the retracted-links
-/// read the thirty-second, the design's lane 7).
+/// read the thirty-second, the design's lane 7; the line read the
+/// thirty-third, skep #1075).
 #[test]
 fn partition_matches_the_design_grouping() {
     let ops = all_ops();
-    assert_eq!(ops.len(), 51);
+    assert_eq!(ops.len(), 52);
     let reads = ops.iter().filter(|(_, r)| *r).count();
-    assert_eq!(reads, 32);
+    assert_eq!(reads, 33);
     for (op, expect_read) in &ops {
         assert_eq!(op.is_read(), *expect_read);
         assert_eq!(op.is_write(), !*expect_read);
@@ -215,7 +220,7 @@ fn kind_is_injective_and_never_unparseable() {
         assert_ne!(kind, OpKind::Unparseable);
         assert!(seen.insert(kind), "{kind:?} is produced by two variants");
     }
-    assert_eq!(seen.len(), 51);
+    assert_eq!(seen.len(), 52);
 }
 
 /// [`SuccessorSpec`] is a VALUE, and the comparison macros are what a

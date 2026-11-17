@@ -360,8 +360,8 @@ impl History {
 /// caller an acknowledgment for a write that did not happen, carrying a
 /// position that names nothing ([`stamp_as_of`] leaves acks alone). The
 /// route's own guard asks M10's read/write partition directly
-/// (`Op::is_read`), which `skep_core::commits::write_meta` restates at 16
-/// writes of 46 — the enum's variant count, which moves with `Op` and which
+/// (`Op::is_read`), which `skep_core::commits::write_meta` restates at 19
+/// writes of 52 — the enum's variant count, which moves with `Op` and which
 /// the codec suite's op-name table is held to — and warns can drift; so the
 /// assert below is what makes this premise loud for the reader auditing
 /// exactly that drift.

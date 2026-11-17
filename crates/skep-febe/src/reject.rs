@@ -142,9 +142,10 @@ pub struct FaultSite {
     /// It counts within the innermost container the other fields name: within
     /// the slot where `slot` is present, else within the region `region` (and,
     /// for COMPARE, `operand`) names, else within the request's own top-level
-    /// list — RETRIEVEV's `specs` or RETRIEVEI's `spans`. So the fields are
-    /// read together, and an `index` alone always has exactly one container.
-    /// Filled by M6's per-spec and per-span refusals, by M10's successor guard
+    /// list — RETRIEVEV's `specs`, RETRIEVEI's `spans` or the line read's
+    /// `positions`. So the fields are read together, and an `index` alone
+    /// always has exactly one container. Filled by M6's per-spec, per-span
+    /// and per-position refusals, by M10's successor guard
     /// for a per-spec refusal, by the doc-argument consult's refusal of a
     /// RETRIEVEI span's shape, by the publication's two re-window refusals
     /// (`KeptPlaceMoved`: the `runs` entry whose place the draft `addr`
@@ -627,8 +628,10 @@ pub enum RejectCode {
     //    to two world-sized scans, and one for RETRIEVEV, whose delivery is
     //    sized by a virtual extent no request field prices; every one but
     //    `TooManyPairs` also refuses its operation's run-list walk past M6's
-    //    walk budget. This crate raises `TooManyItems` for RETRIEVEI too, on
-    //    its spans' widths) ──
+    //    walk budget, and `TooManyItems` is the line read's walk refusal as
+    //    well. The line read's two position faults are `NotContentSubspace`
+    //    and `RangeNotPresent`, by index. This crate raises `TooManyItems`
+    //    for RETRIEVEI too, on its spans' widths) ──
     /// A span's start subspace is neither the content nor the link subspace.
     NoSuchSubspace,
     /// A real subspace has no occupied positions.
@@ -636,6 +639,9 @@ pub enum RejectCode {
     /// A span's depth is not its subspace's common depth.
     DepthIncompatible,
     /// A span names positions not all currently bound.
+    ///
+    /// Also a line read's listed position outside its document's positions
+    /// and the one past its end, by `site.index`.
     RangeNotPresent,
     /// A span fails span well-formedness; `site.fault` says how.
     MalformedSpan,
@@ -645,7 +651,7 @@ pub enum RejectCode {
     TooManyPairs,
     /// A FINDDOCSCONTAINING resolution or walk exceeds its budget.
     TooMuchCoverage,
-    /// A delivery, or the walk behind it, exceeds its budget.
+    /// A delivery, or the walk behind it or a line read, exceeds its budget.
     TooManyItems,
     // ── M8 link discovery read (the last two are M8's own budget refusals —
     //    one for the arrangement runs a request materializes or joins

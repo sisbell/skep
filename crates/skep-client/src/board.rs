@@ -35,7 +35,8 @@
 //! Beside those the crate lends an embedder readers no code of its own
 //! calls, each of an answer the embedder dialed for itself: [`merge_marker`],
 //! a draft's merge marker off a `doc_metadata` answer; [`homes`], the count
-//! by home's rows; [`history`], the retracted-links read's window; and
+//! by home's rows; [`line_numbers`], the line read's numbers; [`history`],
+//! the retracted-links read's window; and
 //! [`link_page`], a windowed link read's page, with the two tests of where a
 //! link's stored slots lie that a reader of such a search keeps by,
 //! [`LinkValue::to_at_or_under`] and [`LinkValue::typed_at_or_under`], and
@@ -70,9 +71,8 @@ pub(crate) mod fake;
 mod tests;
 
 pub use answers::{
-    edition_claims as edition_claim_rows, history, homes, link_page, link_value, merge_marker,
-    EditionClaim, History, HistoryRow, HomeCount, LinkPage, LinkSpan, LinkValue, MergeMarker,
-    ToFilter,
+    edition_claims as edition_claim_rows, history, homes, line_numbers, link_page, link_value, merge_marker, EditionClaim, Flagged, History, HistoryRow, HomeCount, LineNumbers, LinkPage, LinkSpan,
+    LinkValue, MergeMarker, ToFilter,
 };
 
 /// The enroll credential type address, the first of the three.

@@ -62,7 +62,8 @@ fn the_frames_spell_the_wire() {
 /// paged form at the start), the mailbox's mint,
 /// `create_well_known_document` (§Namespace) at slot 2, whose frame
 /// serializes to the example's line byte for byte, and the same op at
-/// another slot, `count_v_by_home` with its `except`,
+/// another slot, `count_v_by_home` with its `except`, `line_numbers`
+/// (§Content & provenance reads) with both its lists, byte for byte,
 /// `find_links_v_history` at the start, `project`, `edition_claims`,
 /// `out_claims` (the example's view is `audit`; this crate reads the active
 /// view, the one member that differs) and the `publish` example with every
@@ -99,6 +100,10 @@ fn the_builders_spell_the_wires_own_examples() {
     );
     assert_eq!(frames::count_v_by_home("1.0.1.0.1", &[(1, 5)], 64, &["1.0.1.0.64"]), json!({"d":"1.0.1.0.1","except":["1.0.1.0.64"],"n":64,"op":"count_v_by_home","region":[{"start":"1.1","width":"0.5"}]}));
     assert!(frames::count_v_by_home("1.0.1.0.1", &[(1, 5)], 64, &[]).get("except").is_none(), "no `except` where none is named");
+    // The line read: the example's own line, as the frame serializes, and
+    // the canonical empty lists where nothing is asked but the count.
+    assert_eq!(frames::line_numbers("1.0.1.0.1", &[3], &[2, 9]).to_string(), r#"{"doc":"1.0.1.0.1","lines":["2","9"],"op":"line_numbers","positions":[{"ordinal":"3","subspace":"1"}]}"#);
+    assert_eq!(frames::line_numbers("1.0.1.0.1", &[], &[]).to_string(), r#"{"doc":"1.0.1.0.1","lines":[],"op":"line_numbers","positions":[]}"#);
     assert_eq!(frames::find_links_v_history("1.0.1.0.1", &[(1, 5)], None, 16), json!({"cur":null,"d":"1.0.1.0.1","n":16,"op":"find_links_v_history","region":[{"start":"1.1","width":"0.5"}]}));
     assert_eq!(frames::find_links_v_history("1.0.1.0.1", &[(1, 5)], Some("1.0.1.0.1.0.2.2"), 16)["cur"], "1.0.1.0.1.0.2.2");
     assert_eq!(frames::project("1.0.1.0.1.0.2.1", 2, "1.0.1.0.64"), json!({"a":"1.0.1.0.1.0.2.1","d":"1.0.1.0.64","op":"project","slot":2}));

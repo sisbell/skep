@@ -1,24 +1,59 @@
-//! §A RETRIEVEV (ASN-0115): resolve, then dereference — the one operation
-//! that delivers bytes, and so the one impl block bounded by `HasContent`.
+//! §A The two operations that open M4, in the one impl block bounded by
+//! `HasContent`: RETRIEVEV (ASN-0115), which resolves and then dereferences
+//! and is the one operation that delivers bytes, and the line read, which
+//! asks M4 its line-break counts and reads no value.
 
 use std::sync::Arc;
 
-use num_traits::ToPrimitive;
-use skep_address::Address;
-use skep_arrangement::reading_surface;
-use skep_content::{HasContent, Piece};
+use num_traits::{One, ToPrimitive, Zero};
+use skep_address::{ordinal, Address, Nat};
+use skep_arrangement::{ordinal_vspan, reading_surface, Run, VPos};
+use skep_content::{ContentStore, HasContent, Piece};
+use skep_namespace::M3State;
 
 use super::{run_origin, Query, RetrievalWorld};
 use crate::budget::{Count, OverBudget, MAX_DELIVERY_ITEMS, MAX_WALK_STEPS};
-use crate::error::RetrieveError;
-use crate::types::{Delivery, DeliveryItem, Spec};
+use crate::error::{LinesError, RetrieveError};
+use crate::types::{Delivery, DeliveryItem, Flagged, LineNumbers, Spec};
 use crate::vspan::{gate_vspan, walk_price, Subspace};
 
-/// RETRIEVEV alone opens M4, so RETRIEVEV alone names it: `HasContent` is
-/// this impl block's bound and nowhere else's, which is what makes the other
-/// six operations' value-blindness structural rather than a rule their cards
-/// ask a maintainer to keep — and `tests/it/tidy.rs` holds it, failing on any
-/// other file under `src/` that names the content store.
+/// Returns whether a run of `origin` is withheld from the reader.
+///
+/// The one masking test both operations here apply to a run (PUB-6.41): its
+/// origin is no registered document, or `readable` refuses it. The registry
+/// is asked first, since `readable` is contracted to registered documents
+/// (PUB-6.37), so an unregistered origin is withheld with the predicate
+/// unconsulted.
+fn withheld(m3: &M3State, origin: &Address, readable: &dyn Fn(&Address) -> bool) -> bool {
+    !m3.is_registered_document(origin) || !readable(origin)
+}
+
+/// Returns the line breaks among `run`'s first `k` positions.
+///
+/// `below` is M4's count below the run's first address. The first `k`
+/// positions of a run are a run, whose reach is the address `k` positions
+/// in, so the count is one read of M4 and the address arithmetic stays M5's.
+///
+/// **Precondition.** `k` is at most the run's width.
+///
+/// # Panics
+///
+/// Panics if M5 refuses a positive-width run at a start a run already
+/// stands at, which no input reaches.
+fn breaks_within(content: &ContentStore, run: &Run, below: u64, k: &Nat) -> u64 {
+    if k.is_zero() {
+        return 0;
+    }
+    let first_k = Run::new(run.i_start().clone(), k.clone())
+        .expect("a run's start opens a run of any positive width");
+    content.line_breaks_before(&first_k.reach()) - below
+}
+
+/// RETRIEVEV and the line read alone open M4, so they alone name it:
+/// `HasContent` is this impl block's bound and nowhere else's, which is what
+/// makes the other six operations' value-blindness structural rather than a
+/// rule their cards ask a maintainer to keep — and `tests/it/tidy.rs` holds
+/// it, failing on any other file under `src/` that names the content store.
 impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// RETRIEVEV (ASN-0115) — resolve, then dereference, in order (the
     /// load-bearing two-phase factoring): resolve V-spans to I-addresses
@@ -170,7 +205,7 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
                 // is masked as one withheld item at its own position — never
                 // coalesced with a neighbour (PUB-6.58).
                 let origin = run_origin(&run);
-                if !m3.is_registered_document(&origin) || !readable(&origin) {
+                if withheld(m3, &origin, readable) {
                     items_produced.admit(1).map_err(over)?;
                     out.push(DeliveryItem::Withheld { origin, width: run.width().clone() });
                     continue;
@@ -230,5 +265,218 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
             }
         }
         Ok(Delivery(out)) // empty spec-set ⇒ Ok(Delivery(vec![]))
+    }
+
+    /// Returns the line read's numbers, as a reader of everything counts.
+    ///
+    /// It is [`Query::line_numbers_masked`] under the all-true predicate, so
+    /// the one run it withholds is a run whose origin is no registered
+    /// document. It serves the callers that read for no principal.
+    ///
+    /// # Errors
+    ///
+    /// As [`Query::line_numbers_masked`].
+    pub fn line_numbers(
+        &self,
+        doc: &Address,
+        positions: &[VPos],
+        lines: &[Nat],
+    ) -> Result<LineNumbers, LinesError> {
+        self.line_numbers_masked(doc, positions, lines, &|_| true)
+    }
+
+    /// Returns the line of each position, each line's start and the count.
+    ///
+    /// The line read answers three questions of one document's content, in
+    /// numbers alone: which line each of `positions` lies on, where each of
+    /// `lines` starts, and how many lines the document holds.
+    /// [`LineNumbers`] states the rule that counts a line.
+    ///
+    /// The arrangement numbered is `doc`'s reading surface (crate doc, *Which
+    /// arrangement an operation answers from*): the gate runs on the address
+    /// named, the surface answers, and a position is a position of the
+    /// surface.
+    ///
+    /// **Masking** (PUB-6.41). Each run is tested as RETRIEVEV tests it,
+    /// against its origin document, and a withheld run counts no line break.
+    /// Its width is no secret, a delivery showing it, but where its line
+    /// breaks fall would be, so the numbers are the ones the reader counts in
+    /// the delivery it is served, and each carries the flag [`Flagged`]
+    /// states. The named document's own readability is M10's doc-argument
+    /// consult (PUB-6.12). The predicate is consulted only after the gate and
+    /// the walk budget have passed the request, once per run of a registered
+    /// origin.
+    ///
+    /// **Cost** (SP-23). The gate reads the surface's content count, which
+    /// M5 sums over its runs. The walk then pulls each content run once from
+    /// M5's lazy resolution, whatever the lists hold, and asks M4 two counts
+    /// of each run it may read, one more for each listed position and each
+    /// listed line, and one for the document's last position. The lists are
+    /// each sorted once, by what they ask, and the read holds them, the
+    /// answers and the run in hand. It bounds neither list: capping them is
+    /// the transport's.
+    ///
+    /// # Errors
+    ///
+    /// In this order, the first that holds answering:
+    ///
+    /// 1. [`LinesError::DocNotRegistered`] where `doc` is no registered
+    ///    document.
+    /// 2. For each position in request order,
+    ///    [`LinesError::NotContentSubspace`] where it names any subspace but
+    ///    the content one, then [`LinesError::RangeNotPresent`] where its
+    ///    ordinal is zero or past the content count plus one.
+    /// 3. [`LinesError::TooManyItems`] where the surface's content runs are
+    ///    priced past the walk budget, before the first is pulled.
+    ///
+    /// # Panics
+    ///
+    /// Panics if M4's two line reads disagree about a run's line breaks, if
+    /// M5 refuses a run of the first positions of one it resolved, or if the
+    /// walk passes a position the gate admitted: states no input reaches.
+    pub fn line_numbers_masked(
+        &self,
+        doc: &Address,
+        positions: &[VPos],
+        lines: &[Nat],
+        readable: &dyn Fn(&Address) -> bool,
+    ) -> Result<LineNumbers, LinesError> {
+        let w = self.0.world();
+        let (m3, m5, content) = (w.m3(), w.m5(), w.content());
+        if !m3.is_registered_document(doc) {
+            return Err(LinesError::DocNotRegistered);
+        }
+        // Gated on the address named; every arrangement read below is the
+        // surface's.
+        let surface = reading_surface(m3, doc);
+        let one = Nat::one();
+        let count = Subspace::Content.count(m5, &surface);
+        let past_end = &count + &one;
+        for (index, at) in positions.iter().enumerate() {
+            if !at.is_content() {
+                return Err(LinesError::NotContentSubspace { index });
+            }
+            if at.ordinal.is_zero() || at.ordinal > past_end {
+                return Err(LinesError::RangeNotPresent { index });
+            }
+        }
+        // The surface's whole content extent, the one span the read walks:
+        // `None` where the surface holds no content, which walks nothing.
+        let extent = ordinal_vspan(Subspace::Content.anchor(), count);
+        // One walk, priced before its first run is pulled: the extent
+        // reaches past every run, so its price is the surface's run count
+        // (MAX_WALK_STEPS' card).
+        let mut steps_priced = Count::against(MAX_WALK_STEPS);
+        if let Some(extent) = &extent {
+            steps_priced
+                .admit(walk_price(m5, &surface, extent))
+                .map_err(|OverBudget| LinesError::TooManyItems)?;
+        }
+
+        // Each list in the order the walk meets what it asks, answered into
+        // its request-order slot as the walk passes it.
+        let mut by_ordinal: Vec<usize> = (0..positions.len()).collect();
+        by_ordinal.sort_by(|&a, &b| positions[a].ordinal.cmp(&positions[b].ordinal));
+        let mut by_line: Vec<usize> = (0..lines.len()).collect();
+        by_line.sort_by(|&a, &b| lines[a].cmp(&lines[b]));
+        let mut asked_positions = by_ordinal.into_iter().peekable();
+        let mut asked_lines = by_line.into_iter().peekable();
+        let mut position_lines: Vec<Option<Flagged<Nat>>> = vec![None; positions.len()];
+        let mut line_starts: Vec<Option<Flagged<VPos>>> = vec![None; lines.len()];
+
+        // Line 0 names no line and is answered none. Line 1 opens at the
+        // first run's first position, as every later line opens one position
+        // past a line break: `opening` holds the asked lines whose line break
+        // the walk has passed and whose first position it has yet to reach.
+        while asked_lines.next_if(|&i| lines[i].is_zero()).is_some() {}
+        let mut opening: Vec<usize> = Vec::new();
+        while let Some(i) = asked_lines.next_if(|&i| lines[i] == one) {
+            opening.push(i);
+        }
+        // The V-ordinal the run in hand opens at, the line breaks counted
+        // below it, and whether a withheld run lies at or below it.
+        let mut opens_at = Nat::one();
+        let mut breaks = Nat::zero();
+        let mut masked = false;
+        // The run the walk last pulled, where it may be read and holds a line
+        // break, with M4's count below its start and its own count: what the
+        // end rule asks once the walk is over.
+        let mut last: Option<(Run, u64, u64)> = None;
+        for run in extent
+            .iter()
+            .flat_map(|extent| m5.iter_resolve(&surface, extent))
+        {
+            let reach = &opens_at + run.width();
+            // A withheld run lies at its own first position, so the flag
+            // moves before anything at or past that position is answered.
+            let hidden = withheld(m3, &run_origin(&run), readable);
+            masked |= hidden;
+            for i in opening.drain(..) {
+                let number = VPos::content(opens_at.clone());
+                line_starts[i] = Some(Flagged { number, masked });
+            }
+            // M4's count below the run's start, and the run's own line
+            // breaks: none of either where the run is withheld.
+            let below = (!hidden).then(|| content.line_breaks_before(run.i_start().tumbler()));
+            let own = below.map_or(0, |below| content.line_breaks_before(&run.reach()) - below);
+            while let Some(i) = asked_positions.next_if(|&i| positions[i].ordinal < reach) {
+                // A position inside a withheld run is on the line the run
+                // starts on.
+                let within = below.map_or(0, |below| {
+                    breaks_within(content, &run, below, &(&positions[i].ordinal - &opens_at))
+                });
+                let number = &breaks + Nat::from(within) + &one;
+                position_lines[i] = Some(Flagged { number, masked });
+            }
+            let counted = &breaks + Nat::from(own);
+            // Line `N` opens one position past line break `N − 1`. Every
+            // asked line still waiting has its line break past `breaks`, so
+            // the ones at or below `counted` have theirs in this run, at the
+            // zero-based place `N − 2 − breaks` of the run's own.
+            while let Some(i) = asked_lines.next_if(|&i| lines[i] <= &counted + &one) {
+                let nth = u64::try_from(&lines[i] - &one - &one - &breaks)
+                    .expect("a place below one run's u64 count of line breaks");
+                let at = content
+                    .nth_line_break_from(run.i_start().tumbler(), nth)
+                    .expect("a run holds each line break M4 counts between its ends");
+                let start = &opens_at + (ordinal(&at) - ordinal(run.i_start().tumbler())) + &one;
+                if start < reach {
+                    let number = VPos::content(start);
+                    line_starts[i] = Some(Flagged { number, masked });
+                } else {
+                    // The line break is the run's last position: the line
+                    // opens at the next run's first, and takes its flag there.
+                    opening.push(i);
+                }
+            }
+            breaks = counted;
+            opens_at = reach;
+            last = below.filter(|_| own > 0).map(|below| (run, below, own));
+        }
+
+        // The end. A position still asked is the one past the last, where an
+        // insert would land. A line still asked names none: its line break is
+        // the document's last position, or the document holds too few.
+        for i in asked_positions {
+            let number = &breaks + &one;
+            position_lines[i] = Some(Flagged { number, masked });
+        }
+        let ends_in_a_line_break = last.is_some_and(|(run, below, own)| {
+            own - breaks_within(content, &run, below, &(run.width() - &one)) == 1
+        });
+        let unbroken_tail = opens_at > one && !ends_in_a_line_break;
+        let number = if unbroken_tail {
+            &breaks + &one
+        } else {
+            breaks
+        };
+        Ok(LineNumbers {
+            positions: position_lines
+                .into_iter()
+                .map(|line| line.expect("the gate admits only positions the walk answers"))
+                .collect(),
+            lines: line_starts,
+            count: Flagged { number, masked },
+        })
     }
 }

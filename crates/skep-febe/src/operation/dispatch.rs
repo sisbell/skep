@@ -397,6 +397,7 @@ where
             | Op::ContentFrontier { .. }
             | Op::RetrieveDocVSpan { .. }
             | Op::RetrieveDocVSpanSet { .. }
+            | Op::LineNumbers { .. }
             | Op::ShowOrigin { .. }
             | Op::ShowDeletions { .. }
             | Op::Compare { .. }
@@ -627,6 +628,16 @@ where
             Op::RetrieveDocVSpanSet { doc } => {
                 let set = Query::new(&snap).doc_vspanset(&doc).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::SpanSet { set, as_of })
+            }
+            // The line read: `doc` was consulted above; the runs its reading
+            // surface windows are masked here through the threaded predicate
+            // (PUB-6.41), a masked run counting no line break and flagging
+            // each number it lies at or before.
+            Op::LineNumbers { doc, positions, lines } => {
+                let numbers = Query::new(&snap)
+                    .line_numbers_masked(&doc, &positions, &lines, &readable)
+                    .map_err(|e| lower_read(kind, e))?;
+                Ok(Response::LineNumbers { numbers, as_of })
             }
             Op::ShowOrigin { doc, span } => {
                 let addrs = Query::new(&snap)

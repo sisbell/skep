@@ -7,7 +7,8 @@
 //! shares; `tidy` checks the module map — every file declared, each `src/`
 //! declaration with its line, the order, and each item named by its home
 //! module — that one file alone names the content store, that one alone
-//! compares a count to a budget, and that no query asks M5 an eager read;
+//! compares a count to a budget, that no query asks M5 an eager read, and
+//! that each budgeted query prices the walks it pulls;
 //! each other module holds the claims about one operation, or about one rule
 //! that crosses the operations, and the module names are the table of
 //! contents.
@@ -21,6 +22,7 @@ mod deletions;
 mod extent;
 mod find;
 mod head_float;
+mod lines;
 mod origin;
 mod query;
 mod retrieve;

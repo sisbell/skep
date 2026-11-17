@@ -562,6 +562,26 @@ pub enum Op {
     RetrieveDocVSpan { doc: Address },
     /// RETRIEVEDOCVSPANSET (ASN-0113).
     RetrieveDocVSpanSet { doc: Address },
+    /// The line read: `doc`'s line numbers, with no text moved.
+    ///
+    /// It answers the line each of `positions` lies on, the position each of
+    /// `lines` starts at, and `doc`'s line count, counted off M4's line-break
+    /// counts along the document's reading surface. M6's `LineNumbers`
+    /// states the rule that counts a line, and its `LinesError` what is
+    /// refused: a position outside the content subspace, or outside the
+    /// document's positions and the one past its end, by index. A listed
+    /// line that names none is answered as none, never refused.
+    ///
+    /// `doc` is the doc-argument (PUB-6.1): unreadable ⟹ `withheld` before
+    /// dispatch. A run whose origin the caller may not read is neither
+    /// dropped nor raised as a rejection: it counts no line break, and each
+    /// number it lies at or before carries the masked flag (PUB-6.41), so a
+    /// number is the caller's own count and never a name two readers share.
+    ///
+    /// **Size.** One walk of the document's content runs, whatever the two
+    /// lists hold, held to M6's walk budget and refused whole past it
+    /// (`TooManyItems`). The lists' own length is the transport's to cap.
+    LineNumbers { doc: Address, positions: Vec<VPos>, lines: Vec<Nat> },
     /// SHOWORIGIN, V-arity (ASN-0077).
     ShowOrigin { doc: Address, span: Span },
     /// SHOWDELETIONS (ASN-0075).
@@ -922,6 +942,8 @@ pub enum OpKind {
     RetrieveDocVSpan,
     /// The kind of [`Op::RetrieveDocVSpanSet`].
     RetrieveDocVSpanSet,
+    /// The kind of [`Op::LineNumbers`].
+    LineNumbers,
     /// The kind of [`Op::ShowOrigin`].
     ShowOrigin,
     /// The kind of [`Op::ShowDeletions`].
@@ -1009,6 +1031,7 @@ impl Op {
             | Op::ContentFrontier { .. }
             | Op::RetrieveDocVSpan { .. }
             | Op::RetrieveDocVSpanSet { .. }
+            | Op::LineNumbers { .. }
             | Op::ShowOrigin { .. }
             | Op::ShowDeletions { .. }
             | Op::Compare { .. }
@@ -1093,6 +1116,7 @@ impl Op {
             Op::ContentFrontier { .. } => OpKind::ContentFrontier,
             Op::RetrieveDocVSpan { .. } => OpKind::RetrieveDocVSpan,
             Op::RetrieveDocVSpanSet { .. } => OpKind::RetrieveDocVSpanSet,
+            Op::LineNumbers { .. } => OpKind::LineNumbers,
             Op::ShowOrigin { .. } => OpKind::ShowOrigin,
             Op::ShowDeletions { .. } => OpKind::ShowDeletions,
             Op::Compare { .. } => OpKind::Compare,
@@ -1150,7 +1174,9 @@ impl Op {
     pub fn doc_arguments(&self) -> Vec<&Address> {
         match self {
             Op::RetrieveV { specs } => specs.iter().map(|s| &s.doc).collect(),
-            Op::RetrieveDocVSpan { doc } | Op::RetrieveDocVSpanSet { doc } => vec![doc],
+            Op::RetrieveDocVSpan { doc }
+            | Op::RetrieveDocVSpanSet { doc }
+            | Op::LineNumbers { doc, .. } => vec![doc],
             Op::ShowOrigin { doc, .. } => vec![doc],
             Op::ShowDeletions { d_a, d_b } => vec![d_a, d_b],
             Op::Compare { rho1, rho2 } => rho1.iter().chain(rho2).map(|r| &r.doc).collect(),
@@ -1274,6 +1300,7 @@ impl Op {
             | Op::RetrieveV { .. }
             | Op::RetrieveDocVSpan { .. }
             | Op::RetrieveDocVSpanSet { .. }
+            | Op::LineNumbers { .. }
             | Op::ShowOrigin { .. }
             | Op::ShowDeletions { .. }
             | Op::Compare { .. }
@@ -1428,6 +1455,7 @@ impl Op {
             | Op::ContentFrontier { .. }
             | Op::RetrieveDocVSpan { .. }
             | Op::RetrieveDocVSpanSet { .. }
+            | Op::LineNumbers { .. }
             | Op::ShowOrigin { .. }
             | Op::ShowDeletions { .. }
             | Op::Compare { .. }

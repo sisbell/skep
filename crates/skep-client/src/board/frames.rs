@@ -179,6 +179,20 @@ pub fn span_set(doc: &str) -> Value {
     json!({"op": "retrieve_doc_v_span_set", "doc": doc})
 }
 
+/// Builds `{"op":"line_numbers","doc":…,"positions":[…],"lines":[…]}`.
+///
+/// wire.md §Content & provenance reads: the line read — the line each
+/// content ordinal of `positions` lies on, the position each line of `lines`
+/// starts at, and `doc`'s line count, in numbers and no text. Both lists
+/// ride always, empty where nothing is asked, as the board's canonical frame
+/// carries them; each is one wire list
+/// ([`MAX_WIRE_LIST`](crate::publication::MAX_WIRE_LIST)), refused past it.
+pub fn line_numbers(doc: &str, positions: &[u64], lines: &[u64]) -> Value {
+    let positions: Vec<Value> = positions.iter().map(|&ordinal| place(ordinal)).collect();
+    let lines: Vec<String> = lines.iter().map(u64::to_string).collect();
+    json!({"op": "line_numbers", "doc": doc, "positions": positions, "lines": lines})
+}
+
 /// Builds `retrieve_v` over content ordinals `from ..` of `doc`.
 ///
 /// It reads `width` of them.

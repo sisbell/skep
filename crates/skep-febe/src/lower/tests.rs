@@ -211,8 +211,9 @@ fn content_error_collapses_wholesale() {
 
 /// §5: M6's variant-carried localization survives into the site — `index`
 /// and `fault` from RETRIEVEV's spec fault, `operand`/`region`/`index` from
-/// COMPARE's, and `addr` from a multi-document `DocNotRegistered(Address)` —
-/// and `slot`, which only M10's successor guard fills, stays empty.
+/// COMPARE's, `addr` from a multi-document `DocNotRegistered(Address)`, and
+/// `index` alone from the line read's two position faults — and `slot`,
+/// which only M10's successor guard fills, stays empty.
 #[test]
 fn m6_faults_thread_their_site() {
     let (code, site) =
@@ -240,6 +241,20 @@ fn m6_faults_thread_their_site() {
     let (code, site) = FindError::DocNotRegistered(doc()).lower();
     assert_eq!(code, RejectCode::DocNotRegistered);
     assert_eq!(site.expect("localized").addr, Some(doc()));
+
+    // The line read's position faults name their entry of `positions` and
+    // nothing else; its registry and budget refusals carry no site.
+    let at_4 = Some(FaultSite { index: Some(4), ..FaultSite::default() });
+    assert_eq!(
+        LinesError::NotContentSubspace { index: 4 }.lower(),
+        (RejectCode::NotContentSubspace, at_4.clone())
+    );
+    assert_eq!(
+        LinesError::RangeNotPresent { index: 4 }.lower(),
+        (RejectCode::RangeNotPresent, at_4)
+    );
+    assert_eq!(LinesError::DocNotRegistered.lower(), (RejectCode::DocNotRegistered, None));
+    assert_eq!(LinesError::TooManyItems.lower(), (RejectCode::TooManyItems, None));
 }
 
 /// PUB-8.4/PUB-8.5, at the lowering: the shot's `withheld` carries the
@@ -619,6 +634,10 @@ fn flat_variants_lower_to_the_same_named_code() {
         RejectCode::MalformedSpan,
     );
     same_name(RetrieveError::TooManyItems);
+    same_name(LinesError::DocNotRegistered);
+    same_name(LinesError::NotContentSubspace { index: 0 });
+    same_name(LinesError::RangeNotPresent { index: 0 });
+    same_name(LinesError::TooManyItems);
     same_name(ExtentError::DocNotRegistered);
     same_name(OriginError::DocNotRegistered);
     same_name(OriginError::NoSuchSubspace);

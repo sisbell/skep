@@ -23,7 +23,8 @@ use skep_links::{
 };
 use skep_namespace::{PrincipalId, WellKnownSlot};
 use skep_retrieval::{
-    CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, RegionSpec, Spec, SpanFault,
+    CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Flagged, LineNumbers, RegionSpec,
+    SpanFault, Spec,
 };
 use skep_core::codec::JsonCodec;
 
@@ -556,6 +557,10 @@ fn all_requests() -> Vec<Request> {
         rq(None, Op::ContentFrontier { doc: d1() }),
         rq(None, Op::RetrieveDocVSpan { doc: d1() }),
         rq(None, Op::RetrieveDocVSpanSet { doc: d1() }),
+        // The line read: with both lists, and with neither — the canonical
+        // form carries the empty lists.
+        rq(None, Op::LineNumbers { doc: d1(), positions: vec![vp(1, 3)], lines: vec![n(2), n(9)] }),
+        rq(None, Op::LineNumbers { doc: d1(), positions: vec![], lines: vec![] }),
         rq(None, Op::ShowOrigin { doc: d1(), span: cspan(1, 5) }),
         rq(None, Op::ShowDeletions { d_a: d1(), d_b: d2() }),
         rq(
@@ -664,6 +669,7 @@ const OP_NAMES: &[&str] = &[
     "content_frontier",
     "retrieve_doc_v_span",
     "retrieve_doc_v_span_set",
+    "line_numbers",
     "show_origin",
     "show_deletions",
     "compare",
@@ -724,28 +730,29 @@ fn op_index(kind: OpKind) -> usize {
         OpKind::ContentFrontier => 26,
         OpKind::RetrieveDocVSpan => 27,
         OpKind::RetrieveDocVSpanSet => 28,
-        OpKind::ShowOrigin => 29,
-        OpKind::ShowDeletions => 30,
-        OpKind::Compare => 31,
-        OpKind::FindDocsContaining => 32,
-        OpKind::Image => 33,
-        OpKind::FindLinksV => 34,
-        OpKind::FindLinksFtt => 35,
-        OpKind::CountV => 36,
-        OpKind::CountFtt => 37,
-        OpKind::WindowV => 38,
-        OpKind::WindowFtt => 39,
-        OpKind::CountVByHome => 40,
-        OpKind::FindLinksVHistory => 41,
-        OpKind::RetrieveEndsets => 42,
-        OpKind::Project => 43,
-        OpKind::DiscoverableFrom => 44,
-        OpKind::DeleteOrphans => 45,
-        OpKind::InClaims => 46,
-        OpKind::OutClaims => 47,
-        OpKind::DocMetadata => 48,
-        OpKind::EditionClaims => 49,
-        OpKind::UniversalGrants => 50,
+        OpKind::LineNumbers => 29,
+        OpKind::ShowOrigin => 30,
+        OpKind::ShowDeletions => 31,
+        OpKind::Compare => 32,
+        OpKind::FindDocsContaining => 33,
+        OpKind::Image => 34,
+        OpKind::FindLinksV => 35,
+        OpKind::FindLinksFtt => 36,
+        OpKind::CountV => 37,
+        OpKind::CountFtt => 38,
+        OpKind::WindowV => 39,
+        OpKind::WindowFtt => 40,
+        OpKind::CountVByHome => 41,
+        OpKind::FindLinksVHistory => 42,
+        OpKind::RetrieveEndsets => 43,
+        OpKind::Project => 44,
+        OpKind::DiscoverableFrom => 45,
+        OpKind::DeleteOrphans => 46,
+        OpKind::InClaims => 47,
+        OpKind::OutClaims => 48,
+        OpKind::DocMetadata => 49,
+        OpKind::EditionClaims => 50,
+        OpKind::UniversalGrants => 51,
         OpKind::Unparseable => unreachable!("`Op::kind` never answers `Unparseable`"),
     }
 }
@@ -1719,6 +1726,24 @@ fn all_responses() -> Vec<(&'static str, Response)> {
             "span_set",
             Response::SpanSet { set: [ispan()].into_iter().collect::<SpanSet>(), as_of: Seq(9) },
         ),
+        // The line read: a line, a start beside a line that names none, and
+        // the count; the same answer masked; and an empty document's.
+        ("line_numbers", Response::LineNumbers { numbers: line_numbers(false), as_of: Seq(9) }),
+        (
+            "line_numbers_masked",
+            Response::LineNumbers { numbers: line_numbers(true), as_of: Seq(9) },
+        ),
+        (
+            "line_numbers_empty",
+            Response::LineNumbers {
+                numbers: LineNumbers {
+                    positions: Vec::new(),
+                    lines: Vec::new(),
+                    count: Flagged { number: n(0), masked: false },
+                },
+                as_of: Seq(9),
+            },
+        ),
         ("addrs", Response::Addrs { addrs: vec![link1()], as_of: Seq(9) }),
         ("maybe_addr", Response::MaybeAddr { addr: Some(a(&[1, 0, 2])), as_of: Seq(9) }),
         ("maybe_addr_none", Response::MaybeAddr { addr: None, as_of: Seq(9) }),
@@ -2163,6 +2188,85 @@ fn a_set_arrangement_takes_its_three_optional_members_and_refuses_a_merge_withou
     assert!(e.detail.expect("named").contains("missing field 'as_of'"));
     let e = codec.parse(br#"{"op":"set_arrangement","doc":"1.0.1.0.65","as_of":7}"#).expect_err("runs is required");
     assert!(e.detail.expect("named").contains("missing field 'runs'"));
+}
+
+/// Returns the line read's answer to wire.md's own example request.
+///
+/// Over `a\nb\n`, asked position 3 and lines 2 and 9: line 2, a start at
+/// position 3 and no line 9, two lines — every number flagged where `masked`.
+fn line_numbers(masked: bool) -> LineNumbers {
+    LineNumbers {
+        positions: vec![Flagged { number: n(2), masked }],
+        lines: vec![Some(Flagged { number: vp(1, 3), masked }), None],
+        count: Flagged { number: n(2), masked },
+    }
+}
+
+/// The line read marshals its numbers and bounds its two lists.
+///
+/// Each number is a decimal string beside its flag, and a line that names
+/// none is `null` in its place: the response is wire.md's own example, byte
+/// for byte, and its masked twin differs in the three flags alone. A
+/// request's two lists are each one wire list: absent, `null` and the empty
+/// list are one request, whose canonical form carries `[]`; a list at the
+/// cap parses and one past it is refused at the parse with the cap named;
+/// and an entry that is no position, or no natural, is refused by its index.
+#[test]
+fn the_line_read_marshals_its_numbers_and_bounds_its_two_lists() {
+    let codec = JsonCodec;
+    let marshaled = |numbers| {
+        String::from_utf8(codec.marshal(&Response::LineNumbers { numbers, as_of: Seq(9) }))
+            .expect("the marshal is UTF-8")
+    };
+    let plain = r#"{"as_of":9,"count":{"masked":false,"n":"2"},"lines":[{"masked":false,"start":{"ordinal":"3","subspace":"1"}},null],"positions":[{"line":"2","masked":false}],"resp":"line_numbers"}"#;
+    assert_eq!(marshaled(line_numbers(false)), plain);
+    assert_eq!(marshaled(line_numbers(true)), plain.replace("false", "true"));
+
+    let bare = br#"{"op":"line_numbers","doc":"1.0.1.0.1"}"#;
+    let with_null = br#"{"op":"line_numbers","doc":"1.0.1.0.1","lines":null,"positions":null}"#;
+    let with_empty = br#"{"op":"line_numbers","doc":"1.0.1.0.1","lines":[],"positions":[]}"#;
+    let canonical = codec.marshal_request(&parse_ok(&codec, bare));
+    assert_eq!(canonical, codec.marshal_request(&parse_ok(&codec, with_null)));
+    assert_eq!(canonical, codec.marshal_request(&parse_ok(&codec, with_empty)));
+    assert_eq!(
+        String::from_utf8(canonical).expect("the canonical form is UTF-8"),
+        r#"{"doc":"1.0.1.0.1","lines":[],"op":"line_numbers","positions":[]}"#,
+        "the canonical form carries both empty lists"
+    );
+
+    let frame = |positions: usize, lines: usize| {
+        let positions = vec![r#"{"ordinal":"1","subspace":"1"}"#; positions].join(",");
+        let lines = vec![r#""1""#; lines].join(",");
+        format!(
+            r#"{{"op":"line_numbers","doc":"1.0.1.0.1","lines":[{lines}],"positions":[{positions}]}}"#
+        )
+    };
+    match parse_ok(&codec, frame(MAX_SLOT_SPANS, MAX_SLOT_SPANS).as_bytes()).op {
+        Op::LineNumbers { positions, lines, .. } => {
+            assert_eq!((positions.len(), lines.len()), (MAX_SLOT_SPANS, MAX_SLOT_SPANS));
+        }
+        other => panic!("parsed to another op: {other:?}"),
+    }
+    for (over, field) in
+        [(frame(MAX_SLOT_SPANS + 1, 0), "positions"), (frame(0, MAX_SLOT_SPANS + 1), "lines")]
+    {
+        let refused = codec.parse(over.as_bytes()).expect_err("one past the cap");
+        let detail = refused.detail.expect("the refusal names the cap");
+        assert!(detail.contains(field) && detail.contains("wire cap"), "{detail}");
+    }
+    for (bad, field) in [
+        (
+            r#"{"op":"line_numbers","doc":"1.0.1.0.1","positions":[{"ordinal":"1","subspace":"1"},"1.1"]}"#,
+            "positions",
+        ),
+        (r#"{"op":"line_numbers","doc":"1.0.1.0.1","lines":["1","-1"]}"#, "lines"),
+    ] {
+        let refused = codec.parse(bad.as_bytes()).expect_err("an entry of the wrong shape");
+        let detail = refused.detail.expect("the refusal names the entry");
+        assert!(detail.contains(field) && detail.contains("[1]"), "refused by its index: {detail}");
+    }
+    let e = codec.parse(br#"{"op":"line_numbers","lines":["1"]}"#).expect_err("doc is required");
+    assert!(e.detail.expect("named").contains("missing field 'doc'"));
 }
 
 /// Marshal determinism: same value twice → byte-equal; two independent

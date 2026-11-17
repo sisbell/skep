@@ -228,6 +228,7 @@ pub fn deposits_registry_link(op: &Op) -> bool {
         | Op::ContentFrontier { .. }
         | Op::RetrieveDocVSpan { .. }
         | Op::RetrieveDocVSpanSet { .. }
+        | Op::LineNumbers { .. }
         | Op::ShowOrigin { .. }
         | Op::ShowDeletions { .. }
         | Op::Compare { .. }

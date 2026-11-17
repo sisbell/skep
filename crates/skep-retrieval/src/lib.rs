@@ -1,16 +1,18 @@
 //! # skep-retrieval — M6: Content Retrieval & Query
 //!
 //! M6 is the system's **read-only observer over documents**. It owns
-//! the seven content/provenance queries — RETRIEVEV [ASN-0115],
+//! the eight content/provenance queries — RETRIEVEV [ASN-0115],
 //! RETRIEVEDOCVSPAN [ASN-0112], RETRIEVEDOCVSPANSET [ASN-0113], SHOWORIGIN
 //! (V-arity) [ASN-0077], SHOWDELETIONS [ASN-0075], COMPARE [ASN-0122],
-//! FINDDOCSCONTAINING [ASN-0124] — and turns the authoritative state held
+//! FINDDOCSCONTAINING [ASN-0124], and the line read
+//! ([`Query::line_numbers`]) — and turns the authoritative state held
 //! below it (M3's registry, M4's content, M5's arrangements and provenance
 //! relation R) into delivered values, extents, origins, deletion sets,
-//! correspondence reports, and containment answers. Every operation is a
-//! **pure function of one consistent M2 snapshot**: it resolves through M5's
-//! arrangements, fetches bytes from M4, projects origin via M1, reads R
-//! through M5, and gates on M3's registry — and writes nothing, ever.
+//! correspondence reports, containment answers, and line numbers. Every
+//! operation is a **pure function of one consistent M2 snapshot**: it
+//! resolves through M5's arrangements, fetches bytes from M4 or asks it its
+//! line-break counts, projects origin via M1, reads R through M5, and gates
+//! on M3's registry — and writes nothing, ever.
 //!
 //! One thing well: *observe documents over a single pinned snapshot —
 //! resolve, fetch, project, classify, compose — never mutate.*
@@ -28,14 +30,14 @@
 //! no operation here will accept as a document.
 //! Which of the two a given document is belongs to M3; which of the two
 //! answers M6 gives back is M6's own, and it is the first thing each of the
-//! seven operations decides.
+//! eight operations decides.
 //!
 //! SHOWORIGIN is the one exception, and it is the specification's: an
 //! occupied subspace is WF_V(iii)'s own precondition, so the V-arity has no
 //! empty form to contribute and answers a registered-empty document with
 //! `EmptySubspace` — an inadmissible request, never an empty success. The
-//! other six contribute `⟨⟩`, an empty delivery, empty halves, an empty
-//! report or `[]`.
+//! other seven contribute `⟨⟩`, an empty delivery, empty halves, an empty
+//! report, `[]`, or the line read's count of no lines.
 //!
 //! ## Which arrangement an operation answers from
 //!
@@ -50,16 +52,16 @@
 //! in M5, in that one function; M6 re-derives nothing about trunks, heads or
 //! publication — it asks, and reads the arrangement it is told.
 //!
-//! Five operations float: RETRIEVEV, both extent queries, SHOWORIGIN, and
-//! COMPARE, whose feet still NAME the address asked about while the positions
-//! they carry are the surface's. Two do not: SHOWDELETIONS and
-//! FINDDOCSCONTAINING read R and the arrangement of the address named. So a
-//! bare published address with a head answers RETRIEVEV from the head and
-//! FINDDOCSCONTAINING from itself — the seam the PUB lane's report records,
-//! and one each card states on its own side.
+//! Six operations float: RETRIEVEV, the line read, both extent queries,
+//! SHOWORIGIN, and COMPARE, whose feet still NAME the address asked about
+//! while the positions they carry are the surface's. Two do not:
+//! SHOWDELETIONS and FINDDOCSCONTAINING read R and the arrangement of the
+//! address named. So a bare published address with a head answers RETRIEVEV
+//! from the head and FINDDOCSCONTAINING from itself — the seam the PUB lane's
+//! report records, and one each card states on its own side.
 //!
 //! REGISTERED-EMPTY FOLLOWS THE FLOAT. The empty form the section above names
-//! is decided of the arrangement an operation READS — for the five that
+//! is decided of the arrangement an operation READS — for the six that
 //! float, the reading surface, not the address named: a bare published
 //! address whose own arrangement holds nothing answers its head's content
 //! once it has a head, and SHOWORIGIN's `EmptySubspace` is the surface's
@@ -71,15 +73,16 @@
 //! M6 owns **no authoritative and no derived-authoritative state**: no
 //! `WorldState` slice, no journal record, no `apply`/`rebuild_derived` fold,
 //! no lock-key space tag. It is a pure consumer of `HasM3 + HasM5` — and of
-//! `HasContent` in RETRIEVEV alone, which is the only operation that delivers
-//! bytes — generic over `W`, naming no concrete `World`/`Record`, so it
-//! trivially satisfies the Engine Composition Contract. Its whole "data
-//! model" is the borrowed [`Snapshot`], the returned value types, and
-//! per-query transients dropped at return.
+//! `HasContent` in two operations alone, RETRIEVEV, the only one that
+//! delivers bytes, and the line read, which asks M4 its line-break counts —
+//! generic over `W`, naming no concrete `World`/`Record`, so it trivially
+//! satisfies the Engine Composition Contract. Its whole "data model" is the
+//! borrowed [`Snapshot`], the returned value types, and per-query transients
+//! dropped at return.
 //!
 //! ## What M6 refuses for size, and what it does not
 //!
-//! Four of the seven operations cost what their answer costs, or what the
+//! Four of the eight operations cost what their answer costs, or what the
 //! documents they name cost, and M6 bounds neither: capping request size,
 //! rate and concurrency for a route carrying a read is M10's, as the request
 //! lifecycle's owner. One of the four says so on its own card, because its
@@ -121,11 +124,18 @@
 //! request for its size, though none is ever refused for what it names. A
 //! caller so refused splits the request.
 //!
+//! The line read is held to that walk budget and carries no other. It walks
+//! its document's content runs once, whatever its two lists hold, so its
+//! price is the reading surface's content run count, and a step of its walk
+//! is two reads of M4's line-break counts where a step of the other three's
+//! is a comparison. Nothing in its request narrows that price: a caller so
+//! refused asks a version whose arrangement holds fewer runs.
+//!
 //! The four numbers are published, so a caller sizes a request against them
 //! rather than transcribing them; the walk budget is not — as M8's is not, no
 //! answer here reporting the run counts it prices — and its refusal renders
 //! it. All of them are refusals rather than truncations, so every request
-//! these three operations answer is answered completely. What no number here
+//! these four operations answer is answered completely. What no number here
 //! bounds is the WORLD's own size — `|R|`, a candidate's fragmentation, the
 //! provenance record and the extents behind a two-address SHOWDELETIONS —
 //! which stays with rate and concurrency, M10's.
@@ -148,8 +158,10 @@
 //! * authorization / owner resolution (`effective_owner`) — M10's. M6
 //!   DECIDES no readability and APPLIES one: the predicate M10 threads into
 //!   [`Query::retrieve_v_masked`] (per run, against the run's origin, withheld
-//!   at the run's own position) and [`Query::find_docs_containing_filtered`]
-//!   (per container, at its identity, dropped). The named documents' own
+//!   at the run's own position), [`Query::line_numbers_masked`] (per run, by
+//!   the same test, a withheld run counting no line break) and
+//!   [`Query::find_docs_containing_filtered`] (per container, at its
+//!   identity, dropped). The named documents' own
 //!   readability is M10's pre-dispatch consult. The other five take no
 //!   predicate and answer WHOLE for readable arguments (PUB-6.15) — the
 //!   extents COUNT the positions a masked-origin run occupies and are never
@@ -174,8 +186,8 @@
 
 // The request budgets and their argument — COMPARE's operand and pair
 // budgets, FINDDOCSCONTAINING's coverage budget, RETRIEVEV's delivery budget,
-// and the walk budget all three price their spans against — and the `Count`
-// that takes every count against them.
+// and the walk budget those three price their spans against and the line
+// read its one walk — and the `Count` that takes every count against them.
 mod budget;
 // The typed rejections, one enum per operation, and the two fault
 // vocabularies they carry.
@@ -185,15 +197,18 @@ mod types;
 // How M6 reads one request V-span: `Subspace`, the span gate, and the price
 // of its walk against the walk budget (`walk_price`).
 mod vspan;
-// `Query` and what its operations share; one file per operation beneath.
+// `Query` and what its operations share; the operations' files beneath.
 mod query;
 
 pub use budget::{
     MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS, MAX_DELIVERY_ITEMS, MAX_FIND_COVERAGE_SPANS,
 };
 pub use error::{
-    CompareError, DeletionsError, ExtentError, FindError, Operand, OriginError, RetrieveError,
-    SpanFault,
+    CompareError, DeletionsError, ExtentError, FindError, LinesError, Operand, OriginError,
+    RetrieveError, SpanFault,
 };
 pub use query::{Query, RetrievalWorld};
-pub use types::{CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, RegionSpec, Spec};
+pub use types::{
+    CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Flagged, LineNumbers, RegionSpec,
+    Spec,
+};

@@ -415,6 +415,40 @@ fn doc_metadata_is_dispatched_with_the_source_a_fork_was_born_sharing() {
     assert!(mcp.finish().success());
 }
 
+/// `line_numbers` is dispatched, and numbers a draft as the board counts it.
+///
+/// Over a draft holding `a`, a line break, `b` and a line break: positions
+/// 1, 3 and 5 lie on lines 1, 2 and 3, the last the position one past the
+/// end; lines 1 and 2 start at positions 1 and 3 and line 3 names none, the
+/// draft ending in a line break; the count is two; and no number is masked,
+/// the session reading its own draft. Neither list sent, the count is still
+/// answered. An unregistered document and a position past the end are the
+/// daemon's own rejections, as data, the second naming the position.
+#[test]
+fn line_numbers_is_dispatched_and_numbers_a_draft_as_the_board_counts_it() {
+    let fixture = Fixture::new("line-numbers");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+    let doc = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+    let typed = mcp.position();
+    let at = |ordinal: u64| json!({"subspace": "1", "ordinal": ordinal.to_string()});
+    mcp.acked("insert", json!({"as_of": typed, "doc": doc, "at": at(1), "values": ["a\nb\n"]}));
+    let v = mcp.call_json("line_numbers", json!({"doc": doc, "positions": [at(1), at(3), at(5)], "lines": ["1", "2", "3"]}));
+    assert_eq!(v["resp"], "line_numbers", "{v}");
+    assert_eq!(v["positions"], json!([{"line": "1", "masked": false}, {"line": "2", "masked": false}, {"line": "3", "masked": false}]), "{v}");
+    assert_eq!(v["lines"], json!([{"masked": false, "start": at(1)}, {"masked": false, "start": at(3)}, null]), "{v}");
+    assert_eq!(v["count"], json!({"masked": false, "n": "2"}), "{v}");
+    let v = mcp.call_json("line_numbers", json!({"doc": doc}));
+    assert_eq!((&v["count"], &v["positions"], &v["lines"]), (&json!({"masked": false, "n": "2"}), &json!([]), &json!([])), "the count alone: {v}");
+    let v = mcp.call_json("line_numbers", json!({"doc": "1.0.1.0.71"}));
+    assert_eq!(v["kind"], "refused", "{v}");
+    assert_eq!(v["body"]["code"], "doc_not_registered", "the daemon's own rejection, verbatim: {v}");
+    assert_eq!(v["body"]["op"], "line_numbers", "{v}");
+    let v = mcp.call_json("line_numbers", json!({"doc": doc, "positions": [at(1), at(9)]}));
+    assert_eq!((v["kind"].as_str(), v["body"]["code"].as_str(), v["body"]["site"]["index"].as_u64()), (Some("refused"), Some("range_not_present"), Some(1)), "{v}");
+    assert!(mcp.finish().success());
+}
+
 /// `stage` IS DISPATCHED (the staging act, B3-S10): its `from_` is the
 /// wire's `from`, mapped back by the adapter, and the one call mints the
 /// agent's private draft of the claimant's published doc 1 in its own

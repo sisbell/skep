@@ -10,6 +10,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `Bytes` item, an atom as its own `Content` item, a link position as
   its address; `retrieve_v_masked` withholds each run whose origin the
   caller's predicate cannot read.
+- **`line_numbers`** — a document's line numbers, with no text moved:
+  the line each listed position lies on, the position each listed line
+  starts at, and the line count, counted from the content store's
+  line-break counts; `line_numbers_masked` counts no line break of a run
+  the caller's predicate cannot read, and flags each number such a run
+  lies at or before.
 - **`doc_vspan` / `doc_vspanset`** — a document's extents: its bounding
   span, or one exact span per occupied subspace.
 - **`show_origin_v`** — the documents a span's content originated in,
@@ -23,9 +29,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   the caller's predicate cannot read.
 
 Read-only by construction: no transaction, no lock, no write path —
-every query pins one immutable snapshot. `retrieve_v`, `compare` and
-`find_docs_containing` refuse a request past their budgets rather than
-answer part of it.
+every query pins one immutable snapshot. `retrieve_v`, `line_numbers`,
+`compare` and `find_docs_containing` refuse a request past their budgets
+rather than answer part of it.
 
 ## License
 

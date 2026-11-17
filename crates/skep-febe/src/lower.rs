@@ -32,7 +32,9 @@ use skep_links::{
     PublicationError, SupersedeCause,
 };
 use skep_namespace::{CreateDocumentError, DelegateError, MintError, RegisterNodeError};
-use skep_retrieval::{CompareError, DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
+use skep_retrieval::{
+    CompareError, DeletionsError, ExtentError, FindError, LinesError, OriginError, RetrieveError,
+};
 
 use crate::reject::{FaultSite, RejectCode, Rejection};
 use crate::request::OpKind;
@@ -752,6 +754,24 @@ impl Lower for RetrieveError {
             // position in it, so it carries no site — `TooMuchCoverage`'s
             // position exactly.
             RetrieveError::TooManyItems => (RejectCode::TooManyItems, None),
+        }
+    }
+}
+
+impl Lower for LinesError {
+    fn lower(self) -> (RejectCode, Option<FaultSite>) {
+        let at = |index: usize| Some(FaultSite { index: Some(index), ..FaultSite::default() });
+        match self {
+            // Payload-free upstream, as the extents' is: the document is the
+            // request's one argument.
+            LinesError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
+            // The two position faults name the offending entry of the
+            // request's `positions` list.
+            LinesError::NotContentSubspace { index } => (RejectCode::NotContentSubspace, at(index)),
+            LinesError::RangeNotPresent { index } => (RejectCode::RangeNotPresent, at(index)),
+            // The walk budget names the document's own fragmentation and no
+            // position in the request, so it carries no site.
+            LinesError::TooManyItems => (RejectCode::TooManyItems, None),
         }
     }
 }

@@ -247,7 +247,7 @@ pub fn deep_span(subspace: u32) -> Span {
 }
 
 /// Unwrap Ok — `Result::expect` under one name, so the unwrap and its failure
-/// message are uniform across all seven operations, and `#[track_caller]` as
+/// message are uniform across all eight operations, and `#[track_caller]` as
 /// `expect` itself is, so a failure is reported at the test's line and not at
 /// this one. The `Debug` bound is what makes a failure name WHICH rejection
 /// fired rather than only that one did: every M6 error renders, and a suite

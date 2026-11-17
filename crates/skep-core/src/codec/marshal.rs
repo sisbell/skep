@@ -19,7 +19,9 @@ use skep_febe::{
 use skep_identity::{KeySet, SigAlgRow};
 use skep_kernel::{Attestation, Seq};
 use skep_links::{EndArg, Endset, Invalid, Link, LinkEntry, NamedAddress, OriginalEntry, PublishTarget, View};
-use skep_retrieval::{CorrPair, Deletions, DeliveryItem, Operand, RegionSpec, SpanFault, Spec};
+use skep_retrieval::{
+    CorrPair, Deletions, DeliveryItem, Flagged, Operand, RegionSpec, SpanFault, Spec,
+};
 use skep_util::json::{hex_string, obj};
 
 use super::to_bytes;
@@ -456,6 +458,16 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         Op::RetrieveDocVSpanSet { doc } => {
             (op_name(OpKind::RetrieveDocVSpanSet), vec![("doc", j_addr(doc))])
         }
+        // The canonical form carries both lists always, the empty list where
+        // the request named none, as `count_v_by_home`'s carries `except`.
+        Op::LineNumbers { doc, positions, lines } => (
+            op_name(OpKind::LineNumbers),
+            vec![
+                ("doc", j_addr(doc)),
+                ("positions", j_vposes(positions)),
+                ("lines", Value::Array(lines.iter().map(j_nat).collect())),
+            ],
+        ),
         Op::ShowOrigin { doc, span } => {
             (op_name(OpKind::ShowOrigin), vec![("doc", j_addr(doc)), ("span", j_span(span))])
         }
@@ -587,6 +599,26 @@ pub(super) fn j_response(r: &Response) -> Value {
         }
         Response::SpanSet { set, as_of } => {
             ("span_set", vec![("set", j_spanset(set)), ("as_of", j_seq(*as_of))])
+        }
+        // The line read (wire.md §Content & provenance reads): one item for
+        // each listed position and each listed line, in request order — a
+        // line and its flag; a starting position and its flag, or `null`, a
+        // payload option, where the number names no line — and the count
+        // with its flag. Each number rides as every natural does.
+        Response::LineNumbers { numbers, as_of } => {
+            let positions = numbers.positions.iter().map(|at| j_flagged("line", at, j_nat));
+            let lines = numbers.lines.iter().map(|line| {
+                line.as_ref().map_or(Value::Null, |start| j_flagged("start", start, j_vpos))
+            });
+            (
+                "line_numbers",
+                vec![
+                    ("positions", Value::Array(positions.collect())),
+                    ("lines", Value::Array(lines.collect())),
+                    ("count", j_flagged("n", &numbers.count, j_nat)),
+                    ("as_of", j_seq(*as_of)),
+                ],
+            )
         }
         Response::Addrs { addrs, as_of } => {
             ("addrs", vec![("addrs", j_addrs(addrs)), ("as_of", j_seq(*as_of))])
@@ -1216,6 +1248,14 @@ fn j_window(w: &Window) -> Value {
     ])
 }
 
+/// Renders one number of the line read with its flag, under `key`.
+///
+/// The shape is `{<key>: <number>, "masked": <bool>}`, the number as
+/// `number` renders it.
+fn j_flagged<T>(key: &'static str, flagged: &Flagged<T>, number: impl Fn(&T) -> Value) -> Value {
+    obj(vec![(key, number(&flagged.number)), ("masked", Value::Bool(flagged.masked))])
+}
+
 /// Renders the count by home's rows: `[{"home": <address>, "n": <count>}]`,
 /// in the order the read answered them.
 fn j_home_counts(homes: &[(Address, usize)]) -> Value {
@@ -1485,6 +1525,7 @@ pub fn op_name(k: OpKind) -> &'static str {
         OpKind::ContentFrontier => "content_frontier",
         OpKind::RetrieveDocVSpan => "retrieve_doc_v_span",
         OpKind::RetrieveDocVSpanSet => "retrieve_doc_v_span_set",
+        OpKind::LineNumbers => "line_numbers",
         OpKind::ShowOrigin => "show_origin",
         OpKind::ShowDeletions => "show_deletions",
         OpKind::Compare => "compare",

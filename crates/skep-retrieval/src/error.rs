@@ -1,4 +1,4 @@
-//! §Errors — the typed rejections of M6's seven operations (all surfaced
+//! §Errors — the typed rejections of M6's eight operations (all surfaced
 //! verbatim by M10 — never a silent skip).
 //!
 //! WHICH REFUSAL SPEAKS, in three clauses a caller may rely on.
@@ -16,6 +16,11 @@
 //! one document and one span, so its six variants read WF_V's conjuncts i,
 //! ii/iv, iii, v, vi in sequence with no request-order clause to compose
 //! against.
+//!
+//! The line read's gate keeps both clauses over its list of positions: the
+//! first faulty position in request order speaks, by its `index`, and within
+//! one position the checks run as [`LinesError`] declares them, content
+//! residence ahead of range.
 //!
 //! THE BUDGET REFUSALS LOCATE NO SPAN — `TooManyBlocks` names only the
 //! operand it refuses, the others nothing. `TooManyItems`, `TooManyBlocks`,
@@ -35,9 +40,9 @@
 //! `gate_vspan`, where it is tested.
 //!
 //! Derive policy, in two classes that take different derives for a reason.
-//! The six OPERATION enums are the `E` of a public `Result`, and derive
+//! The seven OPERATION enums are the `E` of a public `Result`, and derive
 //! `Clone + Debug + PartialEq + Eq + Serialize`. [`SpanFault`] and [`Operand`]
-//! are classification VOCABULARIES that travel as payload inside those six,
+//! are classification VOCABULARIES that travel as payload inside those seven,
 //! so they take the derives M1 gives its own — `Level`, `Class`, `SpanRel` —
 //! adding `Copy` and `Hash`: a consumer that keys by one cannot supply the
 //! impl (both the trait and the type are foreign to it), and M10's `FaultSite`
@@ -50,14 +55,15 @@
 //! and bincode numbers them in declaration order, so reordering the variants
 //! is observable to a serde consumer — a promise the derive makes whether or
 //! not one exists, and none ships (the marshaling clause below). Not `Hash` on
-//! the six either — no consumer keys by a rejection, and M10 converts each to
-//! its own `Rejection` at the seam.
+//! the seven either — no consumer keys by a rejection, and M10 converts each
+//! to its own `Rejection` at the seam.
 //!
 //! `DocNotRegistered` carries the offending document wherever
 //! the interface declares a payload (RETRIEVEV/SHOWDELETIONS/COMPARE/
 //! FINDDOCSCONTAINING); the interface declares ExtentError's and OriginError's
 //! as payload-free — the document is recoverable from the single-document
-//! request — and the interface is the verbatim binding.
+//! request — and the interface is the verbatim binding. [`LinesError`]'s is
+//! payload-free for the same reason: its request names one document.
 //!
 //! WHERE THE DOCUMENT SITS. A registry rejection carries no index, and the
 //! first clause above is what locates it: the offending spec or region is the
@@ -67,7 +73,7 @@
 //! the before-is-clean promise is one a caller can act on rather than only
 //! read.
 //!
-//! All six carry the workspace's shape for a typed rejection —
+//! All seven carry the workspace's shape for a typed rejection —
 //! `Debug + Display + std::error::Error`, each a LEAF with no `source()`,
 //! because no M6 variant wraps another error — so a caller boxes one, `?`s it
 //! into a `Box<dyn Error>` or an `anyhow` chain, and reads its message like
@@ -80,7 +86,7 @@
 //! document in M1's dotted-decimal form wherever the variant carries one.
 //!
 //! [`SpanFault`] and [`Operand`] deliberately stop at `Debug + Display`: they
-//! are payload INSIDE those six and are never the `E` of a public `Result`,
+//! are payload INSIDE those seven and are never the `E` of a public `Result`,
 //! so an `Error` impl there would only invite a `source()` that double-prints
 //! the message its carrier already interpolates.
 
@@ -161,6 +167,45 @@ pub enum RetrieveError {
     /// extent is virtual, so one spec may name a delivery no request field
     /// prices; a refusal, never a truncation, so R3, R5 and R8 hold verbatim
     /// for every delivery answered.
+    TooManyItems,
+}
+
+/// The line read's rejection: the document, a listed position, or the walk.
+///
+/// A position is refused, never clipped to the nearest one the document
+/// holds, as SHOWORIGIN_V refuses a span it cannot wholly resolve; `index`
+/// names the offending entry of the request's position list, the first in
+/// request order, and within one position residence is judged ahead of range.
+/// A listed line faults nothing: one that names no line is answered as none.
+///
+/// The last is the budget refusal, and the only rejection here that names
+/// nothing the gate faults. It names the walk budget it refuses at.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub enum LinesError {
+    /// The document is not a registered document.
+    DocNotRegistered,
+    /// The position at `index` names a subspace other than the content one.
+    ///
+    /// The link subspace has no lines, and a foreign numeral selects nothing.
+    NotContentSubspace {
+        /// The position's place in the request's list.
+        index: usize,
+    },
+    /// The position at `index` lies outside `1 ..= n + 1`.
+    ///
+    /// `n` is the content count of the document's reading surface, so the
+    /// range is every position the surface binds and the one an insert at
+    /// the end would land on. Ordinal zero is no position.
+    RangeNotPresent {
+        /// The position's place in the request's list.
+        index: usize,
+    },
+    /// The walk of the surface's runs is priced past the walk budget.
+    ///
+    /// The read walks the reading surface's content runs once, whatever its
+    /// lists hold, so the price is that surface's run count (crate doc,
+    /// *What M6 refuses for size*). A refusal, never a truncation: no number
+    /// is answered from a walk cut short.
     TooManyItems,
 }
 
@@ -315,6 +360,31 @@ impl fmt::Display for RetrieveError {
     }
 }
 impl Error for RetrieveError {}
+
+impl fmt::Display for LinesError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LinesError::DocNotRegistered => {
+                f.write_str("line_numbers: doc is not a registered document")
+            }
+            LinesError::NotContentSubspace { index } => write!(
+                f,
+                "line_numbers: position {index} is not in the content subspace"
+            ),
+            LinesError::RangeNotPresent { index } => write!(
+                f,
+                "line_numbers: position {index} lies outside the document's positions and \
+                 the one past its end (never clipped)"
+            ),
+            LinesError::TooManyItems => write!(
+                f,
+                "line_numbers: the document's runs are priced past {MAX_WALK_STEPS} run-list \
+                 steps; ask a version of fewer runs"
+            ),
+        }
+    }
+}
+impl Error for LinesError {}
 
 impl fmt::Display for ExtentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

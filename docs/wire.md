@@ -264,6 +264,10 @@ How a masked read answers:
 * **A delivery masks per run**: a published arrangement that windows a
   draft you may not read delivers the `withheld` item at that run's own
   position (§Value encodings); extents are never shrunk.
+* **A line read masks per run too**: `line_numbers` counts NO line break
+  of a run you may not read, and flags `masked` on each number such a run
+  lies at or before, so its numbers are the ones you would count in the
+  delivery you are served (§Content & provenance reads).
 * The namespace reads (`next_account_prefix`, `principal_prefix`,
   `effective_owner`) are exempt — registry data, served to every class
   (AUTH-6.37) — and so is `key_set` (§Identity reads), which reads
@@ -1227,6 +1231,32 @@ count rides the wire.
 {"as_of":9,"next":"5","resp":"frontier"}
 ```
 
+**`line_numbers`** — line_numbers (§Content & provenance reads): the line
+read's numbers, each a natural as every count rides the wire, each beside
+`masked` — `true` where a run you may not read lies at or before what the
+number numbers, its line breaks then counted nowhere. `positions` is one
+`{line, masked}` for each position asked, and `lines` one `{start,
+masked}` for each line asked — `start` the V-position the line begins at
+— or `null`, in the line's own place, where the number names no line of
+the document; both in request order, a repeated entry answered each time
+it is asked. `count` is `{n, masked}`, the document's line count, always
+present. This example asks position 3 and lines 2 and 9 of a document
+holding `a`, a line break, `b`, a line break:
+
+<!-- wire: response line_numbers -->
+```json
+{"as_of":9,"count":{"masked":false,"n":"2"},"lines":[{"masked":false,"start":{"ordinal":"3","subspace":"1"}},null],"positions":[{"line":"2","masked":false}],"resp":"line_numbers"}
+```
+
+The same request from a reader who may not read the run at that
+document's first position: the run holds no line break here, so the
+numbers agree, and it lies before every one of them, so each is flagged:
+
+<!-- wire: response line_numbers_masked -->
+```json
+{"as_of":9,"count":{"masked":true,"n":"2"},"lines":[{"masked":true,"start":{"ordinal":"3","subspace":"1"}},null],"positions":[{"line":"2","masked":true}],"resp":"line_numbers"}
+```
+
 **`span_set`** — retrieve_doc_v_span / retrieve_doc_v_span_set / project.
 
 <!-- wire: response span_set -->
@@ -1982,7 +2012,12 @@ no span; one code for both causes, told apart by the store's message;
 permanent — no retry shrinks a slot).
 
 Content/provenance reads: `no_such_subspace`, `empty_subspace`,
-`depth_incompatible`, `range_not_present`, `malformed_span`, and M6's
+`depth_incompatible`, `range_not_present` (also a line read's listed
+position at ordinal 0 or more than one past its document's end, never
+clipped — `site.index` its place in the request's list of positions, as
+it is for the arrangement's `not_content_subspace`, which a line read
+answers for a listed position outside the content subspace),
+`malformed_span`, and M6's
 four budget refusals — `too_many_blocks` (a compare operand passes
 `MAX_COMPARE_OPERAND_BLOCKS` = 4096 on either of its two counts: more
 spans handed to the arrangement, one resolution walk apiece whatever it
@@ -2007,6 +2042,10 @@ span opening past the arranged end, whatever it yields, and that whole
 count for a span the arrangement's span reader declines (a
 depth-incompatible one), though it resolves to nothing; so a request of
 spans that each degrade to nothing can still be refused for its size.
+A fourth is held to the same number: a line read answers `too_many_items`
+where its document holds more content runs than that. It walks them once,
+whatever its two lists hold, so its price is the document's run count and
+no narrower request passes — the act is a version of fewer runs.
 All permanent — no retry shrinks the request.
 
 Link-discovery reads: `not_a_link`, `bad_region`, `image_too_large` (a
@@ -2578,7 +2617,7 @@ hole.
 **Head-float** (PUB-2.49, PUB-2.50, PUB-2.53). Every arrangement reader
 of a bare DOCUMENT address answers the document's trunk HEAD — the
 latest trunk member — and never the pre-chain arrangement a shot
-superseded: `retrieve_v`, `retrieve_doc_v_span`,
+superseded: `retrieve_v`, `line_numbers`, `retrieve_doc_v_span`,
 `retrieve_doc_v_span_set`, `show_origin`, `compare`, the whole region
 family — `image`, `find_links_v`, `count_v`, `window_v`,
 `count_v_by_home`, `find_links_v_history`, `retrieve_endsets` — and the
@@ -5723,6 +5762,61 @@ count; content before links), empty for a registered-empty document.
 <!-- wire: request retrieve_doc_v_span_set -->
 ```json
 {"doc":"1.0.1.0.1","op":"retrieve_doc_v_span_set"}
+```
+
+**`line_numbers`** — THE LINE READ: `doc`'s line numbers, and no text.
+Three questions of one document's content, any of them alone: the line
+each of `positions` lies on, the position each of `lines` starts at, and
+the document's line count, which is always answered. `positions` is a
+list of content V-positions, each in `insert`'s `at` form, and `lines` a
+list of naturals; each is optional — absent, `null` and `[]` are one
+request — and each is ONE WIRE LIST, held to the codec's wire-list cap,
+`MAX_SLOT_SPANS` = 4096 entries, and refused past it at the parse as
+every over-long list is, `malformed` under the op `unparseable`.
+→ `line_numbers`, one item for each entry, in request order.
+
+THE RULE. A LINE BREAK is a content position whose value is the single
+byte `0x0A`: one byte of a per-byte run. Nothing else is one — not `\r`,
+not U+2028, and never an atom, whatever its bytes: an atom is one
+position, and holds no line break. Line 1 starts at position 1, and line
+N one position past line break N − 1. Text after the last line break is a
+line, and a document that ENDS in a line break has NO empty last line: its
+line count is its line breaks, where any other non-empty document's is
+its line breaks plus one. An empty document has no line, and the link
+subspace has none.
+
+A position is answered from 1 to ONE PAST THE END — the position an
+insert at the end would land on, which is on the line after the last
+where the document ends in a line break, on the last line where it does
+not, and on line 1 of an empty document. Any other position is REFUSED,
+never clipped: one outside the content subspace is `not_content_subspace`,
+and one at ordinal 0 or further past the end is `range_not_present`, each
+with `site.index` its place in `positions`, the first faulty one in
+request order speaking (§Rejection codes). A line faults nothing: line 0,
+and every line past the count, is answered `null` in its place.
+
+`doc` is a document argument — unreadable is `withheld`, unregistered is
+`doc_not_registered` — and a bare published address answers its trunk
+head, as `retrieve_v` does (§The publish shot and head-float). THE NUMBERS
+ARE MASKED AS A DELIVERY IS (§The read predicate): a run whose origin you
+may not read counts NO line break — its width is already yours to see,
+and numbering lines through it would say where each line break inside it
+falls — so every number is the one you would count in the delivery
+`retrieve_v` serves you, and each carries `masked`, `true` where such a
+run lies at or before what it numbers: at or before the position asked,
+at or before the position a line starts at, and anywhere in the document
+for the count. A position inside such a run is on the line the run starts
+on. A line number is therefore YOUR VIEW and never a name: hand another
+reader a position with its `as_of`, or a permanent address.
+
+The read moves no text and walks the document's runs ONCE, whatever its
+two lists hold; a document of more content runs than the walk budget is
+refused whole (`too_many_items`, §Rejection codes). Served on `/op-at` as
+every read is, numbering the document as it stood (§Reading history).
+
+<!-- wire: request line_numbers -->
+```json
+{"doc":"1.0.1.0.1","lines":["2","9"],"op":"line_numbers","positions":[{"ordinal":"3","subspace":"1"}]}
 ```
 
 **`show_origin`** — the origin documents of the positions in `span` of

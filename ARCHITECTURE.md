@@ -148,13 +148,14 @@ foundation and on the stores above it.
   index; the type registry, a compiled constant. Its modules and rules:
   §The link store.
 - `skep-retrieval` — the content and provenance queries: delivery by
-  V-span (RETRIEVEV), a document's extents, the origins of a span
-  (SHOWORIGIN), what one document deleted that another still holds
-  (SHOWDELETIONS), the shared content of two regions (COMPARE), and the
-  documents holding some content now (FINDDOCSCONTAINING). It owns no
-  slice and no index and writes nothing; delivery and containment each
-  have a door that takes the caller's reader predicate. Its modules and
-  rules: §The content queries.
+  V-span (RETRIEVEV), a document's line numbers (the line read), a
+  document's extents, the origins of a span (SHOWORIGIN), what one
+  document deleted that another still holds (SHOWDELETIONS), the shared
+  content of two regions (COMPARE), and the documents holding some
+  content now (FINDDOCSCONTAINING). It owns no
+  slice and no index and writes nothing; delivery, the line read and
+  containment each have a door that takes the caller's reader predicate.
+  Its modules and rules: §The content queries.
 - `skep-discovery` — the link reads: which links reach a document's content
   (the region family) or match a four-set description (the descriptor
   family), counted and paged; projection and discoverability; the
@@ -1437,16 +1438,16 @@ Its rules of mechanism: SP-21, SP-29.
 
 ## The content queries, `skep-retrieval`
 
-`skep-retrieval` holds the seven queries the code map lists, and owns
+`skep-retrieval` holds the eight queries the code map lists, and owns
 nothing: no slice, no journal record, no fold, no index. Each is a method
 on `Query`, which borrows the one `&Snapshot` its caller pins and holds
 nothing else — no `Kernel` — so nothing here writes. The queries compose
 `skep-namespace`'s registry, `skep-arrangement`'s reading surface,
-resolutions and provenance reads, and, for RETRIEVEV alone,
-`skep-content`'s values; two of them take the caller's reader predicate at
-a door of their own. `skep-febe`'s dispatch is the one production caller;
-`skepd`'s codec and the conformance harness name the request and answer
-types.
+resolutions and provenance reads, and, for RETRIEVEV and the line read
+alone, `skep-content`'s store; three of them take the caller's reader
+predicate at a door of their own. `skep-febe`'s dispatch is the one
+production caller; `skepd`'s codec and the conformance harness name the
+request and answer types.
 
 Its modules are declared in `src/lib.rs` in dependency order, each with a
 line saying what it holds, and `src/query.rs` declares its six children
@@ -1458,15 +1459,16 @@ and `vspan.rs` are what the queries share. `query.rs` is the `Query`
 handle and the two projections more than one query asks; beneath it,
 `query/retrieve.rs`, `query/extent.rs`, `query/origin.rs`,
 `query/deletions.rs`, `query/compare.rs` and `query/find.rs` each hold one
-query's `impl` block — `extent.rs` the two extent queries' — and the
-helpers no other query uses.
+query's `impl` block — `retrieve.rs` RETRIEVEV's and the line read's, one
+block, `extent.rs` the two extent queries' — and the helpers no other
+query uses.
 
 Rules that hold across its files:
 
 - **One file reads values.** Only `query/retrieve.rs` names
-  `skep-content`'s store: `HasContent` bounds RETRIEVEV's `impl` block and
-  no other, so the other six queries answer from addresses, counts and
-  provenance alone. `types.rs` names that crate's `Val`, the item a
+  `skep-content`'s store: `HasContent` bounds the `impl` block RETRIEVEV
+  and the line read share and no other, so the other six queries answer
+  from addresses, counts and provenance alone. `types.rs` names that crate's `Val`, the item a
   delivery carries, and nothing else of it. `tests/it/tidy.rs` checks that
   no other file names the store.
 - **The budgets are `budget.rs`'s.** Every count goes through `budget.rs`'s
@@ -1477,9 +1479,9 @@ Rules that hold across its files:
   `resolve`, `project`.
 
 Its integration suite is one binary, `tests/it/`: one file per query
-surface over the shared `common` world — `retrieve`, `extent`, `origin`,
-`deletions`, `compare` with its refusals in `compare_refusals`, and
-`find`; `query`, `head_float`, `traits` and `walk_budget`, what crosses the
+surface over the shared `common` world — `retrieve`, `lines`, `extent`,
+`origin`, `deletions`, `compare` with its refusals in `compare_refusals`,
+and `find`; `query`, `head_float`, `traits` and `walk_budget`, what crosses the
 queries; and `tidy`, which checks the module map, the first rule and the
 third.
 

@@ -408,6 +408,7 @@ impl Op {
             | Op::ContentFrontier { .. }
             | Op::RetrieveDocVSpan { .. }
             | Op::RetrieveDocVSpanSet { .. }
+            | Op::LineNumbers { .. }
             | Op::ShowOrigin { .. }
             | Op::ShowDeletions { .. }
             | Op::Compare { .. }
@@ -488,6 +489,7 @@ impl Op {
             | Op::ContentFrontier { .. }
             | Op::RetrieveDocVSpan { .. }
             | Op::RetrieveDocVSpanSet { .. }
+            | Op::LineNumbers { .. }
             | Op::ShowOrigin { .. }
             | Op::ShowDeletions { .. }
             | Op::Compare { .. }
@@ -570,6 +572,7 @@ impl Op {
             | Op::ContentFrontier { .. }
             | Op::RetrieveDocVSpan { .. }
             | Op::RetrieveDocVSpanSet { .. }
+            | Op::LineNumbers { .. }
             | Op::ShowOrigin { .. }
             | Op::ShowDeletions { .. }
             | Op::Compare { .. }

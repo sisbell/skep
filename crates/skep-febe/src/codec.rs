@@ -95,6 +95,15 @@ pub trait Codec {
     /// response-size cap here can sum its items' lengths before it builds a
     /// byte of the rendering.
     ///
+    /// [`Op::LineNumbers`] walks every content run of the document it names,
+    /// whatever its two lists hold, and asks M4 two counts a run: a cost set
+    /// by the document's fragmentation, stored state the frame does not
+    /// show. M6 holds that walk to its walk budget
+    /// (`RejectCode::TooManyItems`). What is left to this layer is the two
+    /// lists: each is answered entry for entry and costs one more read of
+    /// M4 an entry, so a per-array cap bounds the request and the answer
+    /// together.
+    ///
     /// The FTT descriptor family ([`Op::FindLinksFtt`] and its two siblings)
     /// has no field to cap. A four-set of `Any` slots constrains nothing M7
     /// can index, so the matcher materializes an address per active link in
@@ -152,6 +161,7 @@ pub trait Codec {
     /// [`Op::MakeLink`]: crate::Op::MakeLink
     /// [`Op::Publish`]: crate::Op::Publish
     /// [`Op::RetrieveV`]: crate::Op::RetrieveV
+    /// [`Op::LineNumbers`]: crate::Op::LineNumbers
     /// [`Op::FindLinksFtt`]: crate::Op::FindLinksFtt
     /// [`Op::UniversalGrants`]: crate::Op::UniversalGrants
     /// [`MAX_REQ_ID_BYTES`]: crate::MAX_REQ_ID_BYTES

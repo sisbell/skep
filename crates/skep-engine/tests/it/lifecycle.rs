@@ -9,14 +9,14 @@
 use crate::common;
 
 use common::*;
-use skep_address::Address;
+use skep_address::{Address, Nat};
 use skep_arrangement::AsOf;
-use skep_arrangement::{deposit_class_types, Deposit};
+use skep_arrangement::{deposit_class_types, Deposit, VPos};
 use skep_content::Val;
 use skep_discovery::findlinks_v_on;
 use skep_engine::{Engine, World};
 use skep_links::{HasLinks, SlotArg};
-use skep_retrieval::{Query, Spec};
+use skep_retrieval::{Flagged, LineNumbers, Query, Spec};
 use tempfile::tempdir;
 
 /// The TOTAL predicate, admitting every home: this lifecycle is a harness,
@@ -25,16 +25,49 @@ fn every_home(_: &Address) -> bool {
     true
 }
 
+/// Returns the line read's request over `text`, and the answer owed it.
+///
+/// The request lists every position up to one past the end and every line
+/// up to one past the count. The answer is a count over the bytes a reader
+/// of everything is delivered: a position lies on the line one more than the
+/// line breaks below it, a line starts at the first position lying on it,
+/// and text after the last line break is a line.
+fn lines_counted(text: &[u8]) -> (Vec<VPos>, Vec<Nat>, LineNumbers) {
+    let line_of = |at: usize| 1 + text[..at - 1].iter().filter(|&&b| b == b'\n').count();
+    let count = line_of(text.len() + 1) - usize::from(text.last().is_none_or(|&b| b == b'\n'));
+    let flagged = |number: usize| Flagged { number: Nat::from(number), masked: false };
+    let positions: Vec<usize> = (1..=text.len() + 1).collect();
+    let lines: Vec<usize> = (0..=count + 1).collect();
+    let answer = LineNumbers {
+        positions: positions.iter().map(|&at| flagged(line_of(at))).collect(),
+        lines: lines
+            .iter()
+            .map(|&line| (1..=text.len()).find(|&at| line_of(at) == line))
+            .map(|start| {
+                start.map(|at| Flagged { number: VPos::content(Nat::from(at)), masked: false })
+            })
+            .collect(),
+        count: flagged(count),
+    };
+    let positions = positions.into_iter().map(|at| VPos::content(Nat::from(at))).collect();
+    (positions, lines.into_iter().map(Nat::from).collect(), answer)
+}
+
 /// The drivers, folds, lifts and accessors compose over ONE world, and the
 /// observable state that composition produced comes back after the journal is
-/// reopened: the same content, the same version, the same link, and the same
-/// log position, replayed rather than remembered.
+/// reopened: the same content, the same line numbers, the same version, the
+/// same link, and the same log position, replayed rather than remembered.
+/// The line numbers are M4's line-break counts read through M6, which no
+/// dump shows: before the reopen and after it they are a count over the
+/// delivered text.
 #[test]
 fn a_cross_store_lifecycle_survives_a_journal_reopen() {
     let dir = tempdir().expect("tempdir");
     // Three per-byte values, one insert: one stretch in M4, delivered as one
-    // byte-run item.
-    let expected = vec![b"xyz".to_vec()];
+    // byte-run item. The middle one is a line break, so the document is two
+    // lines.
+    let expected = vec![b"x\nz".to_vec()];
+    let (positions, lines, numbered) = lines_counted(&expected.concat());
 
     let (doc, version_member, link, last_seq);
     {
@@ -57,7 +90,7 @@ fn a_cross_store_lifecycle_survives_a_journal_reopen() {
                 OWNER,
                 &doc,
                 vp(1, 1),
-                vec![Val::new(vec![b'x']), Val::new(vec![b'y']), Val::new(vec![b'z'])],
+                vec![Val::new(vec![b'x']), Val::new(vec![b'\n']), Val::new(vec![b'z'])],
                 Deposit::Declared(deposit_class_types()[0].clone()),
                 AsOf::Typed(engine.kernel().current_seq()),
             )
@@ -73,6 +106,8 @@ fn a_cross_store_lifecycle_survives_a_journal_reopen() {
                 .retrieve_v(&[Spec { doc: doc.clone(), span: vspan(1, 1, 3) }])
                 .unwrap_or_else(|e| panic!("retrieve failed: {e}"));
             assert_eq!(delivered_bytes(&delivery), expected);
+            // The line read, off the same snapshot: a count over that text.
+            assert_eq!(q.line_numbers(&doc, &positions, &lines), Ok(numbered.clone()));
         }
 
         // M7+M3+M5 composite: an open content link over the inserted content.
@@ -112,6 +147,11 @@ fn a_cross_store_lifecycle_survives_a_journal_reopen() {
                 .retrieve_v(&[Spec { doc: version_member.clone(), span: vspan(1, 1, 3) }])
                 .unwrap_or_else(|e| panic!("retrieve of the version failed: {e}"));
             assert_eq!(delivered_bytes(&delivery), expected, "the version shares the content");
+            assert_eq!(
+                q.line_numbers(&version_member, &positions, &lines),
+                Ok(numbered.clone()),
+                "and so its line numbers"
+            );
         }
 
         // The same I-addresses arranged in the version make the link
@@ -145,6 +185,11 @@ fn a_cross_store_lifecycle_survives_a_journal_reopen() {
                 .retrieve_v(&[Spec { doc: (*d).clone(), span: vspan(1, 1, 3) }])
                 .unwrap_or_else(|e| panic!("retrieve after recovery failed: {e}"));
             assert_eq!(delivered_bytes(&delivery), expected);
+            assert_eq!(
+                q.line_numbers(d, &positions, &lines),
+                Ok(numbered.clone()),
+                "a reopened world numbers its lines as the one that wrote them did"
+            );
         }
         assert!(snap.world().links().readlink(&link).is_some());
 

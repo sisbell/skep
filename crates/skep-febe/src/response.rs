@@ -12,7 +12,7 @@ use skep_discovery::{Cursor, LinkRow, OrphanReport, SupClaim, Window};
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link};
 use skep_namespace::PrincipalId;
-use skep_retrieval::{CompareReport, Deletions, Delivery};
+use skep_retrieval::{CompareReport, Deletions, Delivery, LineNumbers};
 
 use crate::reject::Rejection;
 
@@ -177,12 +177,13 @@ pub enum TimeSource {
 /// Not `Clone`, and not for a bound's sake — every payload clones. Nothing
 /// needs to duplicate an answer: the one thing that outlives its request is
 /// the small `CommittedAck` an acknowledged write yields, which the retry memo
-/// holds in place of the whole `Response` (§7). Not `Hash`, on six payload
+/// holds in place of the whole `Response` (§7). Not `Hash`, on seven payload
 /// leaves that lack it: the content store's `Val`, which an [`IItem`]
-/// carries; M6's [`DeliveryItem`], [`Deletions`] and [`CorrPair`]; and M7's
-/// [`Invalid`] and [`Link`]. M1's `Address` is not among them — it carries a
-/// hand-written `Hash`, identity being the tumbler — which is why
-/// [`EditionClaim`], [`BirthVersion`] and [`UniversalGrant`] have one.
+/// carries; M6's [`DeliveryItem`], [`Deletions`], [`CorrPair`] and
+/// [`LineNumbers`]; and M7's [`Invalid`] and [`Link`]. M1's `Address` is not
+/// among them — it carries a hand-written `Hash`, identity being the tumbler
+/// — which is why [`EditionClaim`], [`BirthVersion`] and [`UniversalGrant`]
+/// have one.
 ///
 /// [`Deletions`]: skep_retrieval::Deletions
 /// [`CorrPair`]: skep_retrieval::CorrPair
@@ -255,6 +256,15 @@ pub enum Response {
     Frontier { next: Nat, as_of: Seq },
     /// vspan/vspanset/project.
     SpanSet { set: SpanSet, as_of: Seq },
+    /// line_numbers: the line read's numbers.
+    ///
+    /// They are M6's [`LineNumbers`], whose relations hold of `numbers` as
+    /// that type states them: one answer for each listed position and each
+    /// listed line, in request order, `None` in the place of a line that
+    /// names none; the line count; and beside each number the flag that a
+    /// run withheld from the caller lies at or before what it numbers
+    /// (PUB-6.41).
+    LineNumbers { numbers: LineNumbers, as_of: Seq },
     /// origins/docs-containing/findlinks.
     Addrs { addrs: Vec<Address>, as_of: Seq },
     /// next-account-prefix / principal-prefix (`None` = absent/ineligible).
@@ -486,15 +496,16 @@ impl Response {
     pub fn as_of(&self) -> Option<Seq> {
         // One catalogue, written here and in `as_of_mut`: the coordinate law
         // (`every_read_reports_the_committed_head_as_its_as_of`) asks both of
-        // twenty-one of the twenty-three read shapes — every one but the
+        // twenty-two of the twenty-four read shapes — every one but the
         // read by identity's and the content frontier's — and counts the
         // shapes it visits, so the two cannot come to classify one of those
-        // twenty-one differently.
+        // twenty-two differently.
         match self {
             Response::Delivery { as_of, .. }
             | Response::IDelivery { as_of, .. }
             | Response::Frontier { as_of, .. }
             | Response::SpanSet { as_of, .. }
+            | Response::LineNumbers { as_of, .. }
             | Response::Addrs { as_of, .. }
             | Response::MaybeAddr { as_of, .. }
             | Response::EffectiveOwner { as_of, .. }
@@ -533,6 +544,7 @@ impl Response {
             | Response::IDelivery { as_of, .. }
             | Response::Frontier { as_of, .. }
             | Response::SpanSet { as_of, .. }
+            | Response::LineNumbers { as_of, .. }
             | Response::Addrs { as_of, .. }
             | Response::MaybeAddr { as_of, .. }
             | Response::EffectiveOwner { as_of, .. }
@@ -607,6 +619,7 @@ impl Response {
             | Response::IDelivery { .. }
             | Response::Frontier { .. }
             | Response::SpanSet { .. }
+            | Response::LineNumbers { .. }
             | Response::Addrs { .. }
             | Response::MaybeAddr { .. }
             | Response::EffectiveOwner { .. }

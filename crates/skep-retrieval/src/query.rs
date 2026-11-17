@@ -1,5 +1,5 @@
-//! The [`Query`] handle and what its seven operations share; one file per
-//! operation beneath. Every operation begins by reading its slices off the
+//! The [`Query`] handle and what its eight operations share; their files
+//! beneath. Every operation begins by reading its slices off the
 //! single pinned snapshot, runs its gate (typed rejection), then composes
 //! upstream primitives. Which arrangement it then reads — the named
 //! address's reading surface, or the named address's own — is the crate
@@ -9,11 +9,12 @@
 //! Layout: this file is the handle — [`Query`] over one borrowed
 //! [`Snapshot`], and [`RetrievalWorld`], the bound every observation reads
 //! under — and the two projections more than one operation asks:
-//! [`run_origin`] (RETRIEVEV's masked form, SHOWORIGIN) and
+//! [`run_origin`] (RETRIEVEV's masked form, the line read's, SHOWORIGIN) and
 //! [`sorted_addr_set`] (SHOWORIGIN, SHOWDELETIONS). Each operation is a
 //! child module holding its own `impl` block and the helpers no other
-//! operation uses; it sees this file's private items — the snapshot a
-//! `Query` holds among them — and none of its siblings'.
+//! operation uses — save the two that open M4, which share one module and
+//! one block; it sees this file's private items — the snapshot a `Query`
+//! holds among them — and none of its siblings'.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -23,7 +24,8 @@ use skep_arrangement::{HasM5, Run};
 use skep_kernel::{Seq, Snapshot, WorldState};
 use skep_namespace::HasM3;
 
-// RETRIEVEV (ASN-0115): the one impl block bounded by `HasContent`.
+// RETRIEVEV (ASN-0115) and the line read: the one impl block bounded by
+// `HasContent`.
 mod retrieve;
 // RETRIEVEDOCVSPAN / RETRIEVEDOCVSPANSET, and their D-SEQ★ tripwire.
 mod extent;
@@ -41,14 +43,15 @@ mod find;
 /// its own (Engine Composition Contract — M6 contributes no slice, no record
 /// variant, no accessor trait, no fold).
 ///
-/// M4 is deliberately absent. Six of the seven operations answer from
+/// M4 is deliberately absent. Six of the eight operations answer from
 /// addresses, counts and provenance without ever dereferencing a byte —
 /// COMPARE's join is keyed on address equality, the extents are counts,
 /// SHOWORIGIN projects, and SHOWDELETIONS and FINDDOCSCONTAINING read R — so a
 /// content store is not among their collaborators, and under this bound it is
-/// not in their scope either. RETRIEVEV is the one operation that delivers
-/// bytes, and it declares `HasContent` on its own impl block, which is where
-/// that obligation belongs.
+/// not in their scope either. RETRIEVEV, the one operation that delivers
+/// bytes, and the line read, which asks M4 its line-break counts, declare
+/// `HasContent` on the impl block they share, which is where that obligation
+/// belongs.
 pub trait RetrievalWorld: WorldState + HasM3 + HasM5 {}
 impl<W: WorldState + HasM3 + HasM5> RetrievalWorld for W {}
 

@@ -42,8 +42,9 @@
 //!   and the deposit's ordinal read where no token is given do — and
 //!   `H.1`'s pair read once per board (signed-ops D13); its child `frames`
 //!   spells every frame this crate sends and the frames it lends an
-//!   embedder: the reads, the paged link search among them (`window_four`,
-//!   `window_ftt`, with the mail type `T_MAIL`), and the creation of a
+//!   embedder: the reads, the paged link search (`window_four`,
+//!   `window_ftt`, with the mail type `T_MAIL`) and the line read
+//!   (`line_numbers`) among them, and the creation of a
 //!   well-known document, slot named (`create_well_known_document`; the
 //!   mailbox's, `create_mailbox`, which no code of the crate sends); its
 //!   child `answers`
@@ -52,7 +53,8 @@
 //!   place. Beside those the crate lends an embedder readers no code of its
 //!   own calls, each of an answer the embedder dialed for itself:
 //!   `merge_marker`, a draft's merge marker off a `doc_metadata` answer;
-//!   `homes`, the count by home's rows; `history`, the retracted-links
+//!   `homes`, the count by home's rows; `line_numbers`, the line read's
+//!   numbers; `history`, the retracted-links
 //!   read's window; and `link_page`, a windowed link read's page, with the
 //!   two tests of where a link's stored slots lie that a reader of such a
 //!   search keeps by, `LinkValue::to_at_or_under` and

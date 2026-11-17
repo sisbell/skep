@@ -20,7 +20,8 @@
 //! a check gone blind fails rather than passing a clean tree.
 //!
 //! The M4 rule is held over every code line under `src/`, tests included:
-//! only `query/retrieve.rs` names the content store. The scan also asserts
+//! only `query/retrieve.rs`, RETRIEVEV's file and the line read's, names the
+//! content store. The scan also asserts
 //! that it found the site the rule allows, so a scan that matches nothing
 //! fails rather than passing a clean tree.
 //!
@@ -35,6 +36,9 @@
 //! FINDDOCSCONTAINING's filter asks `arranges_any` — because the eager twins
 //! answer the same and materialize what the lazy ones hold back. That scan
 //! asserts it found each lazy read where it belongs.
+//!
+//! And the walk rule: each file of a budgeted query admits one walk's price
+//! for each walk it pulls.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -126,13 +130,14 @@ fn every_module_names_only_itself_and_modules_declared_above_it() {
     );
 }
 
-/// RETRIEVEV alone opens M4: `HasContent` bounds its impl block and nothing
-/// else, so the other six operations are value-blind by construction rather
-/// than by a rule their cards ask a maintainer to keep. The compiler keeps
-/// that only for as long as no second bound names the trait, and it accepts a
-/// second as readily as the first, so the rule is held here: no file under
-/// `src/` but `query/retrieve.rs` names the content store — `HasContent`, the
-/// accessor that reaches it, or `ContentStore`, the store itself.
+/// RETRIEVEV and the line read alone open M4: `HasContent` bounds the impl
+/// block they share and nothing else, so the other six operations are
+/// value-blind by construction rather than by a rule their cards ask a
+/// maintainer to keep. The compiler keeps that only for as long as no second
+/// bound names the trait, and it accepts a second as readily as the first, so
+/// the rule is held here: no file under `src/` but `query/retrieve.rs` names
+/// the content store — `HasContent`, the accessor that reaches it, or
+/// `ContentStore`, the store itself.
 #[test]
 fn only_retrieve_names_the_content_store() {
     let (retrieve, elsewhere): (Vec<_>, Vec<_>) = scan(names_the_content_store)
@@ -146,7 +151,8 @@ fn only_retrieve_names_the_content_store() {
     );
     assert!(
         !retrieve.is_empty(),
-        "RETRIEVEV's impl block names it, so a scan that finds nothing there is broken"
+        "RETRIEVEV's and the line read's impl block names it, so a scan that finds nothing \
+         there is broken"
     );
 }
 
@@ -250,6 +256,43 @@ fn every_query_asks_m5_only_its_lazy_reads() {
                 .iter()
                 .any(|(hit, _)| hit == Path::new(file)),
             "{file} asks M5 `{read}`, so a scan that finds no such call there is broken"
+        );
+    }
+}
+
+/// Each budgeted query admits a walk's price for each walk it pulls.
+///
+/// RETRIEVEV, the line read, COMPARE and FINDDOCSCONTAINING hold the walk
+/// their spans ask of M5 to the walk budget: each admits `walk_price` of a
+/// span against its count before `iter_resolve` pulls that span. A suite
+/// prices a request of each of three past the budget. The line read's price
+/// is its surface's run count, which no fixture takes there, so no
+/// behavioural test tells a line read that prices its walk from one that
+/// does not, and the pairing is held here: each of the three files admits
+/// one price for each `iter_resolve` it calls. `query/origin.rs` pulls
+/// SHOWORIGIN's walk, which carries no budget, and is not among them.
+#[test]
+fn each_budgeted_query_admits_a_walks_price_for_each_walk_it_pulls() {
+    for (file, walks) in [
+        ("query/compare.rs", 1),
+        ("query/find.rs", 1),
+        ("query/retrieve.rs", 2),
+    ] {
+        let in_file = |pred: &dyn Fn(&str) -> bool| {
+            scan(pred)
+                .iter()
+                .filter(|(hit, _)| hit == Path::new(file))
+                .count()
+        };
+        assert_eq!(
+            in_file(&|code| calls(code, "iter_resolve")),
+            walks,
+            "{file} pulls {walks} walk(s), so a scan that finds another number is broken"
+        );
+        assert_eq!(
+            in_file(&|code| code.contains(".admit(walk_price(")),
+            walks,
+            "{file} admits one walk's price against the walk budget for each walk it pulls"
         );
     }
 }

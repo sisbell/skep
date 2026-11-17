@@ -84,10 +84,10 @@ use marshal::{j_response, req_pairs};
 ///
 /// Every attacker-sized list on the request surface (span regions, spec and
 /// region lists, address lists, v-spec lists, `rearrange` cuts, the shot
-/// runs of `reinstate` and `publish`, `retrieve_i`'s spans, `emit`'s type
-/// endset, and the query endsets of the ftt family) meets it there, at one
-/// door — save `insert`'s `values`, whose minted values [`MAX_INSERT_VALUES`]
-/// bounds instead.
+/// runs of `reinstate` and `publish`, `retrieve_i`'s spans, `line_numbers`'
+/// positions and lines, `emit`'s type endset, and the query endsets of the
+/// ftt family) meets it there, at one door — save `insert`'s `values`, whose
+/// minted values [`MAX_INSERT_VALUES`] bounds instead.
 ///
 /// Not a round number: it is M7's published per-slot budget
 /// ([`MAX_SLOT_SPANS`]), whose argument transfers verbatim. That argument
@@ -757,6 +757,15 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
         "content_frontier" => Op::ContentFrontier { doc: fields.addr("doc")? },
         "retrieve_doc_v_span" => Op::RetrieveDocVSpan { doc: fields.addr("doc")? },
         "retrieve_doc_v_span_set" => Op::RetrieveDocVSpanSet { doc: fields.addr("doc")? },
+        // The line read (wire.md §Content & provenance reads): `doc`, and two
+        // wire lists under the list cap, each optional as `count_v_by_home`'s
+        // `except` is — the positions asked, each in `insert`'s `at` form,
+        // and the lines asked, each a natural.
+        "line_numbers" => Op::LineNumbers {
+            doc: fields.addr("doc")?,
+            positions: fields.list_opt("positions", p_vpos)?,
+            lines: fields.list_opt("lines", p_nat)?,
+        },
         "show_origin" => Op::ShowOrigin { doc: fields.addr("doc")?, span: fields.span("span")? },
         "show_deletions" => {
             Op::ShowDeletions { d_a: fields.addr("d_a")?, d_b: fields.addr("d_b")? }
@@ -1012,9 +1021,28 @@ impl Fields {
     /// A [`PErr`] where a present value is no array, is past the cap, or
     /// holds an element that is no address ([`p_list`], [`p_addr`]).
     fn addrs_opt(&mut self, k: &'static str) -> PResult<Vec<Address>> {
+        self.list_opt(k, p_addr)
+    }
+
+    /// Takes an optional wire list, each element parsed by `f`.
+    ///
+    /// Absent and explicit `null` alike are the empty list (`take_opt`'s
+    /// rule), and a present one is a wire list under [`MAX_WIRE_LIST`] —
+    /// `count_v_by_home`'s `except`, and `line_numbers`' `positions` and
+    /// `lines`.
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] where a present value is no array, is past the cap, or
+    /// holds an element `f` refuses ([`p_list`]).
+    fn list_opt<T>(
+        &mut self,
+        k: &'static str,
+        f: impl Fn(&Value) -> PResult<T>,
+    ) -> PResult<Vec<T>> {
         match self.take_opt(k) {
             None => Ok(Vec::new()),
-            Some(v) => p_list(&v, p_addr).map_err(|e| PErr(format!("field '{k}': {e}"))),
+            Some(v) => p_list(&v, f).map_err(|e| PErr(format!("field '{k}': {e}"))),
         }
     }
 

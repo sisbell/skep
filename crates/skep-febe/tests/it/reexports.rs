@@ -152,6 +152,8 @@ fn a_response_payload_is_named_spelling_one_crate() {
     let _: Option<CompareReport> = None; // M6 — `Response::Compare`…
     let _: Option<CorrPair> = None; // …and what is inside it
     let _: Option<Deletions> = None; // M6 — `Response::Deletions`
+    let _: Option<LineNumbers> = None; // M6 — `Response::LineNumbers`…
+    let _: Option<Flagged<Nat>> = None; // …and what is inside it
     // The two M6 shapes a `FaultSite` carries: M10's own rejection type
     // is unreadable without them.
     let _: Option<Operand> = None;

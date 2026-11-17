@@ -145,6 +145,12 @@ impl fmt::Debug for Op {
             Op::RetrieveDocVSpanSet { doc } => {
                 f.debug_struct("RetrieveDocVSpanSet").field("doc", doc).finish()
             }
+            Op::LineNumbers { doc, positions, lines } => f
+                .debug_struct("LineNumbers")
+                .field("doc", doc)
+                .field("positions", positions)
+                .field("lines", lines)
+                .finish(),
             Op::ShowOrigin { doc, span } => {
                 f.debug_struct("ShowOrigin").field("doc", doc).field("span", span).finish()
             }

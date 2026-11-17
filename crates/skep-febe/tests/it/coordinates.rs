@@ -80,10 +80,10 @@ fn a_deduplicated_write_acknowledges_at_the_base_it_found_its_incumbent_in() {
 
 /// A2/V1: `as_of` on EVERY read is the coordinate of the snapshot the answer
 /// came from. Nothing writes during the loop, so the committed head taken
-/// once ahead of it is that coordinate for all 30 — a read that reports
+/// once ahead of it is that coordinate for all 31 — a read that reports
 /// anything else is telling the client it has seen a position it has not.
 ///
-/// The 30 answer in all twenty-one read shapes, so the law is also the one
+/// The 31 answer in all twenty-two read shapes, so the law is also the one
 /// check on [`Response::as_of`] and [`Response::as_of_mut`]: each is asked of
 /// every read shape and must answer the head, so a shape either accessor
 /// moved into its `None` arm — a stamp a historical door would then skip —
@@ -134,6 +134,7 @@ fn every_read_reports_the_committed_head_as_its_as_of() {
         Op::RetrieveV { specs: vec![Spec { doc: draft.clone(), span: vspan(1, 1, 3) }] },
         Op::RetrieveDocVSpan { doc: draft.clone() },
         Op::RetrieveDocVSpanSet { doc: draft.clone() },
+        Op::LineNumbers { doc: draft.clone(), positions: vec![vp(1, 1)], lines: vec![nat(1)] },
         Op::ShowOrigin { doc: version.clone(), span: vspan(1, 1, 1) },
         Op::ShowDeletions { d_a: draft.clone(), d_b: version.clone() },
         Op::Compare {
@@ -164,7 +165,7 @@ fn every_read_reports_the_committed_head_as_its_as_of() {
     ];
 
     let kinds: Vec<OpKind> = reads.iter().map(Op::kind).collect();
-    assert_eq!(kinds.len(), 30, "the read half of the partition is 30 operations");
+    assert_eq!(kinds.len(), 31, "this law visits 31 of the read half's operations");
     for (i, a) in kinds.iter().enumerate() {
         for b in &kinds[i + 1..] {
             assert_ne!(a, b, "{a:?} is covered twice");
@@ -184,6 +185,6 @@ fn every_read_reports_the_committed_head_as_its_as_of() {
         );
         shapes.insert(std::mem::discriminant(&r));
     }
-    assert_eq!(shapes.len(), 21, "the 30 reads answer in every one of the twenty-one read shapes");
+    assert_eq!(shapes.len(), 22, "the 31 reads answer in every one of the twenty-two read shapes");
     assert_eq!(fx.febe.log_position(), head, "no read moves the log");
 }

@@ -4,10 +4,11 @@
 //! budget, [`MAX_FIND_COVERAGE_SPANS`]; RETRIEVEV's delivery budget,
 //! [`MAX_DELIVERY_ITEMS`] per spec-set; and the walk budget,
 //! [`MAX_WALK_STEPS`], on the run-list steps the spans of one COMPARE operand,
-//! FINDDOCSCONTAINING request or RETRIEVEV spec-set may make M5 walk — and the
-//! [`Count`] every count against them is taken through. The three operations
-//! count against them and the rejections render them, so the numbers, their
-//! argument and the count that enforces them live here, apart from all four.
+//! FINDDOCSCONTAINING request or RETRIEVEV spec-set, or the one span of a
+//! line read, may make M5 walk — and the [`Count`] every count against them
+//! is taken through. The four operations count against them and the
+//! rejections render them, so the numbers, their argument and the count that
+//! enforces them live here, apart from all of them.
 //! [`MAX_COMPARE_OPERAND_BLOCKS`]'s card is the one statement of why the
 //! operand budget is counted twice, of why the coverage budget, which takes
 //! its number by definition, is too, and of which budgets move with that
@@ -35,11 +36,12 @@
 ///
 /// ONE NUMBER, THREE BUDGETS. FINDDOCSCONTAINING's coverage budget,
 /// [`MAX_FIND_COVERAGE_SPANS`], is this number by definition, and the walk
-/// budget that RETRIEVEV, COMPARE and FINDDOCSCONTAINING price their spans
-/// against is its square (crate doc, *What M6 refuses for size*) — RETRIEVEV,
-/// which has no other tie to COMPARE, included. So an edit of this line is an
-/// edit of those two as well, the walk's by the square, and is argued for
-/// them too: the walk budget's own argument — order a second of one worker —
+/// budget that RETRIEVEV, COMPARE, FINDDOCSCONTAINING and the line read price
+/// their spans against is its square (crate doc, *What M6 refuses for size*)
+/// — RETRIEVEV and the line read, which have no other tie to COMPARE,
+/// included. So an edit of this line is an edit of those two as well, the
+/// walk's by the square, and is argued for them too: the walk budget's own
+/// argument — order a second of one worker —
 /// is made at `2^24`, which is this number's square at `2^12`, and an
 /// assertion beside the walk budget holds it at that value when the crate
 /// compiles, so an edit of this line fails the build there, where the walk
@@ -161,8 +163,9 @@ pub const MAX_FIND_COVERAGE_SPANS: usize = MAX_COMPARE_OPERAND_BLOCKS;
 pub const MAX_DELIVERY_ITEMS: usize = 1 << 17;
 
 /// The most run-list steps the spans of one request may make M5 walk — per
-/// COMPARE operand, per FINDDOCSCONTAINING request, per RETRIEVEV spec-set —
-/// priced over the whole request before its first span is walked.
+/// COMPARE operand, per FINDDOCSCONTAINING request, per RETRIEVEV spec-set,
+/// per line read — priced over the whole request before its first span is
+/// walked.
 ///
 /// The walk is the one cost no count above sees. M5 reaches a span by walking
 /// the selected run list from its first run, so a span costs up to `#runs`
@@ -183,6 +186,18 @@ pub const MAX_DELIVERY_ITEMS: usize = 1 << 17;
 /// reaching deep into a document of more runs than the budget is refused
 /// whatever it yields, and is asked of a less fragmented surface or nearer
 /// its start.
+///
+/// The line read prices one span, its surface's whole content extent, so its
+/// price is that surface's content run count whatever its lists hold, and the
+/// budget refuses it only a surface of more runs than the budget. A step of
+/// its walk is two reads of M4's line-break counts for a run it may read,
+/// each a predecessor lookup and a scan of less than one block of a stretch,
+/// where a step of the other three's is a comparison: the second argued above
+/// is theirs, and a line read of a surface at the budget runs longer. No
+/// test builds a surface past the budget, so no test reaches the line read's
+/// refusal: `tests/it/tidy.rs` holds that each walk pulled is a walk priced,
+/// and the refusal's rendering is pinned beside the other three's.
+///
 /// Crate-private, as M8's is: no answer here reports the run counts a caller
 /// would size a request against, so the refusal renders the number and nothing
 /// publishes it to compute with.
@@ -192,10 +207,11 @@ pub(crate) const MAX_WALK_STEPS: usize = MAX_COMPARE_OPERAND_BLOCKS * MAX_COMPAR
 
 // The walk budget held at the value its card argues for, `2^24`, when the
 // crate COMPILES: it is the operand budget's square, so an edit of
-// `MAX_COMPARE_OPERAND_BLOCKS` moves the walk budget of all three operations
-// — RETRIEVEV's among them — by the square, and every walk test sizes its
-// boundary from that constant and would follow the edit unremarked. The
-// build that follows such an edit fails here, before any test is run.
+// `MAX_COMPARE_OPERAND_BLOCKS` moves the walk budget of all four operations
+// — RETRIEVEV's and the line read's among them — by the square, and every
+// walk test sizes its boundary from that constant and would follow the edit
+// unremarked. The build that follows such an edit fails here, before any
+// test is run.
 const _: () = assert!(
     MAX_WALK_STEPS == 1 << 24,
     "MAX_WALK_STEPS is argued at 2^24 run-list steps; an edit of \

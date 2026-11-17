@@ -161,9 +161,10 @@ fn wire_frame_makes_the_name_the_op_and_the_arguments_the_frame() {
 
 /// The dispatch has two kinds of tool, and is counted.
 ///
-/// Fifty-one wire ops — every op of wire.md §Operations but `publish`, the
+/// Fifty-two wire ops — every op of wire.md §Operations but `publish`, the
 /// six the first catalog lacked among them, the count by home, the
-/// retracted-links read, the landing and the well-known creation — and sixteen
+/// retracted-links read, the landing, the well-known creation and the line
+/// read — and sixteen
 /// adapter tools, the `publication` family's four among them, the read
 /// of a draft's standing beside them, and the text edit, `replace_text`; no
 /// name twice across the two,
@@ -175,11 +176,23 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
     let names: Vec<&str> = Tool::names().collect();
     let set: std::collections::BTreeSet<_> = names.iter().collect();
     assert_eq!(set.len(), names.len(), "no name twice");
-    assert_eq!(DISPATCH_OPS.len(), 51);
-    assert_eq!(names.len(), 67);
+    assert_eq!(DISPATCH_OPS.len(), 52);
+    assert_eq!(names.len(), 68);
     assert_eq!(Tool::named("replace_text"), Some(Tool::ReplaceText));
     assert_eq!(Tool::named("replace_text").and_then(Tool::members), Some(&["doc", "old", "new"][..]));
-    for added in ["effective_owner", "key_set", "retrieve_i", "content_frontier", "edition_claims", "universal_grants", "count_v_by_home", "find_links_v_history", "set_arrangement", "create_well_known_document"] {
+    for added in [
+        "effective_owner",
+        "key_set",
+        "retrieve_i",
+        "content_frontier",
+        "edition_claims",
+        "universal_grants",
+        "count_v_by_home",
+        "find_links_v_history",
+        "set_arrangement",
+        "create_well_known_document",
+        "line_numbers",
+    ] {
         assert_eq!(Tool::named(added), Some(Tool::Op(added)), "{added} is a wire op of the dispatch");
     }
     assert_eq!(Tool::named("insert").and_then(Tool::members), None, "a wire op's arguments pass through unread");
@@ -363,6 +376,64 @@ fn the_embedded_catalog_states_the_adapters_own_facts_as_the_code_holds_them() {
     assert!(publishing.contains("with stage(from_)"), "the act that records a draft's base is the stage tool: {publishing}");
     assert!(publishing.contains("doc_metadata(draft) answers it as base") && publishing.contains("no record for you to write"), "the board's record, read back, none written: {publishing}");
     assert!(publishing.contains("refused base_unrecorded"), "the refusal a draft with no base meets: {publishing}");
+}
+
+/// The `line_numbers` card states the wire's list cap and its answers.
+///
+/// Each of its two lists is one wire list, and the "at most {n} entries" its
+/// schema states of each is skep-client's `MAX_WIRE_LIST`, the codec's cap
+/// as the client holds it (SP-25). The schema is closed and names the
+/// frame's three members, `doc` alone required, a position in the form
+/// `insert`'s `at` takes, so the frame an agent builds from it is the wire's
+/// (SP-24). The card spells the answer's three members, the `null` a line
+/// that names none takes, the `masked` flag and what it means for handing a
+/// number on, and each refusal's token; it promises no read of a past
+/// position, which the adapter's door refuses for every wire op; and the
+/// typed-state paragraph and the `insert` card's `as_of` name the read among
+/// those a burst is typed against.
+#[test]
+fn the_line_numbers_card_states_the_wires_list_cap_and_the_answers_an_agent_reads() {
+    use skep_client::publication::MAX_WIRE_LIST;
+    let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    let entry = |name: &str| catalog.tools.iter().find(|t| t["name"] == name).unwrap_or_else(|| panic!("the {name} card"));
+    let schema = &entry("line_numbers")["inputSchema"];
+    let members: BTreeSet<&str> = schema["properties"].as_object().expect("a schema's properties").keys().map(String::as_str).collect();
+    assert_eq!(members, BTreeSet::from(["doc", "lines", "positions"]), "the frame's three members");
+    assert_eq!(schema["required"], json!(["doc"]), "the two lists are optional");
+    assert_eq!(schema["additionalProperties"], json!(false), "a closed schema");
+    for list in ["positions", "lines"] {
+        let said = schema["properties"][list]["description"].as_str().expect("a list's description");
+        assert!(said.contains(&format!("One wire list, at most {MAX_WIRE_LIST} entries.")), "{list} names the wire's cap: {said}");
+        assert!(said.contains("Absent or null = none."), "{list} is optional as the wire has it: {said}");
+    }
+    let (position, at) = (&schema["properties"]["positions"]["items"], &entry("insert")["inputSchema"]["properties"]["at"]);
+    for member in ["type", "properties", "required", "additionalProperties"] {
+        assert_eq!(position[member], at[member], "a position's {member} is insert's `at`'s");
+    }
+    let card = entry("line_numbers")["description"].as_str().expect("the line_numbers card");
+    for said in [
+        r#"{"positions": [{"line", "masked"}], "lines": [{"start": {"subspace", "ordinal"}, "masked"} or null], "count": {"n", "masked"}}"#,
+        "null stands in the place of a line that names none",
+        "masked is true where a run you may not read lies at or before what the number numbers",
+        "its line breaks are counted nowhere",
+        "hand another reader a position with its as_of, or a permanent address",
+        "an atom holds none, whatever its bytes",
+        "a document ending in a line break has no empty last line",
+        "as it stands at the answer's as_of",
+        "doc_not_registered",
+        "withheld",
+        "not_content_subspace",
+        "range_not_present",
+        "site.index",
+        "too_many_items",
+    ] {
+        assert!(card.contains(said), "the card says {said:?}: {card}");
+    }
+    assert!(!card.contains("op-at") && !card.contains("past position"), "the card promises no historical read: {card}");
+    let typed = catalog.instructions().split("\n\n").find(|paragraph| paragraph.starts_with("THE TYPED STATE. ")).expect("the typed-state paragraph");
+    assert!(typed.contains("(retrieve_v, image, retrieve_doc_v_span_set, line_numbers)"), "the paragraph names the read: {typed}");
+    let as_of = entry("insert")["inputSchema"]["properties"]["as_of"]["description"].as_str().expect("insert's as_of");
+    assert!(as_of.contains("retrieve_v, image, retrieve_doc_v_span_set or line_numbers"), "insert's as_of names the read: {as_of}");
 }
 
 /// A catalog's drift from another counts what an agent is told otherwise.

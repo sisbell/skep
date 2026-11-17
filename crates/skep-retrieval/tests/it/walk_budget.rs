@@ -1,4 +1,6 @@
-//! The walk budget across the three operations priced against it. Every
+//! The walk budget across the operations priced against it: RETRIEVEV,
+//! COMPARE and FINDDOCSCONTAINING by their spans, and the line read by its
+//! one walk, which no fixture prices past the budget. Every
 //! span is priced before the first is walked, at exactly the bound the crate
 //! doc states — the runs of its list capped at its reach, or the whole list
 //! for a span M5's reader declines or whose reach passes a machine word, a
@@ -12,7 +14,7 @@
 use skep_address::{Address, Nat, Span, Tumbler};
 use skep_arrangement::HasM5;
 use skep_retrieval::{
-    CompareError, Delivery, FindError, Operand, Query, RegionSpec, RetrieveError,
+    CompareError, Delivery, FindError, LinesError, Operand, Query, RegionSpec, RetrieveError,
     SpanFault, MAX_COMPARE_OPERAND_BLOCKS,
 };
 
@@ -251,7 +253,9 @@ fn a_gate_fault_outranks_the_walk_refusal_at_every_operation() {
     // WHOLE request, so a gate fault outranks it wherever it sits — here
     // behind a first unit whose walk alone is priced past the budget. Each
     // operation's gate-before-budget test pins the span count; this is the
-    // walk.
+    // walk. It covers the three operations a request's spans can price past
+    // the budget — RETRIEVEV, FINDDOCSCONTAINING and COMPARE. The line read
+    // is priced at its surface's run count, which no fixture takes there.
     let k = mem_kernel();
     fragmented_doc2(&k); // doc2 = 8192 one-position runs
     let s = k.snapshot();
@@ -317,8 +321,9 @@ fn every_walk_refusal_renders_the_walk_budget() {
     // Crate doc, *What M6 refuses for size*: the walk budget is not published
     // as a constant, and "its refusal renders it" — so each of the three
     // refusals that fold the walk in names the walk budget's number beside
-    // its own budget's. Every other budget's number is read off its refusal
-    // in its own operation's suite; this is the walk's.
+    // its own budget's, and the line read's, which is the walk's alone, names
+    // it too. Every other budget's number is read off its refusal in its own
+    // operation's suite; this is the walk's.
     let walk_budget = (MAX_COMPARE_OPERAND_BLOCKS * MAX_COMPARE_OPERAND_BLOCKS).to_string();
     for message in [
         RetrieveError::TooManyItems.to_string(),
@@ -327,6 +332,7 @@ fn every_walk_refusal_renders_the_walk_budget() {
         }
         .to_string(),
         FindError::TooMuchCoverage.to_string(),
+        LinesError::TooManyItems.to_string(),
     ] {
         assert!(
             message.contains(&walk_budget),

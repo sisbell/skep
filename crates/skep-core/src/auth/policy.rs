@@ -249,6 +249,7 @@ pub fn deposits_credential_link(op: &Op) -> bool {
         | Op::ContentFrontier { .. }
         | Op::RetrieveDocVSpan { .. }
         | Op::RetrieveDocVSpanSet { .. }
+        | Op::LineNumbers { .. }
         | Op::ShowOrigin { .. }
         | Op::ShowDeletions { .. }
         | Op::Compare { .. }

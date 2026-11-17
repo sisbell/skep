@@ -7,7 +7,8 @@
 //! lies, [`LinkValue::to_at_or_under`] and [`LinkValue::typed_at_or_under`],
 //! and [`ToFilter`] over the first), a `delivery`'s first value, a
 //! `span_set`'s content extent and a `runs` answer's I-map, the count by
-//! home's `homes`, the retracted-links read's `links` window, a windowed
+//! home's `homes`, the line read's `line_numbers` ([`line_numbers`]), the
+//! retracted-links read's `links` window, a windowed
 //! link read's `page` ([`link_page`]) and an `edition_claims`
 //! answer's rows, a draft's merge marker off a `doc_metadata` answer for an
 //! embedder ([`merge_marker`], the merge bridge lane), and behind `search`
@@ -281,6 +282,55 @@ pub fn homes(v: &Value) -> Option<(Vec<HomeCount>, bool)> {
     }
     let rows = v["homes"].as_array()?.iter().map(|r| Some(HomeCount { home: r["home"].as_str()?.to_string(), n: r["n"].as_u64()? })).collect::<Option<Vec<_>>>()?;
     Some((rows, v["exhausted"].as_bool()?))
+}
+
+/// One number of a `line_numbers` answer, with its flag.
+///
+/// `masked` is true where a run the reader may not read lies at or before
+/// what `number` numbers — anywhere in the document, for the line count —
+/// and the board counted no line break of it (wire.md §Content & provenance
+/// reads): a flagged number is the reader's own count, never a name another
+/// reader shares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Flagged {
+    /// The number answered.
+    pub number: u64,
+    /// Whether a withheld run lies at or before what `number` numbers.
+    pub masked: bool,
+}
+
+/// A `line_numbers` answer (wire.md §The response envelope, `line_numbers`).
+///
+/// The two lists answer the request's entry for entry, in request order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LineNumbers {
+    /// The line each position asked lies on, counted from one.
+    pub positions: Vec<Flagged>,
+    /// The content ordinal each line asked starts at.
+    ///
+    /// `None` where the board served `null`: the number names no line.
+    pub lines: Vec<Option<Flagged>>,
+    /// The document's line count.
+    pub count: Flagged,
+}
+
+/// Decodes a `line_numbers` answer.
+///
+/// `None` for a document that is no such answer, an item missing a member, a
+/// number that is no natural within `u64`, or a start outside the content
+/// subspace.
+pub fn line_numbers(v: &Value) -> Option<LineNumbers> {
+    if v["resp"].as_str() != Some("line_numbers") {
+        return None;
+    }
+    let flagged = |item: &Value, number: &Value| Some(Flagged { number: natural(number.as_str()?)?, masked: item["masked"].as_bool()? });
+    let start = |item: &Value| {
+        let at = &item["start"];
+        (at["subspace"].as_str() == Some("1")).then(|| flagged(item, &at["ordinal"])).flatten()
+    };
+    let positions = v["positions"].as_array()?.iter().map(|item| flagged(item, &item["line"]));
+    let lines = v["lines"].as_array()?.iter().map(|item| if item.is_null() { Some(None) } else { start(item).map(Some) });
+    Some(LineNumbers { positions: positions.collect::<Option<_>>()?, lines: lines.collect::<Option<_>>()?, count: flagged(&v["count"], &v["count"]["n"])? })
 }
 
 /// One row of a `find_links_v_history` answer (wire.md §The response
@@ -910,8 +960,9 @@ mod tests {
     /// extent of a `span_set`; and, each the line under its `<!-- wire:
     /// response … -->` marker in §The response envelope, the `link_value`
     /// example with its age and the null form, the `homes` example, the
-    /// `links` window, the `page` window, the `edition_claims` row and the
-    /// `doc_metadata` example's `at`.
+    /// `links` window, the `page` window, the `edition_claims` row, the
+    /// `doc_metadata` example's `at`, and the `line_numbers` example with
+    /// its masked twin.
     #[test]
     fn the_reads_decode_the_wires_own_examples() {
         assert_eq!(addrs(&json!({"addrs":["1.0.1.0.1.0.2.1"],"as_of":9,"resp":"addrs"})), ["1.0.1.0.1.0.2.1"]);
@@ -958,6 +1009,20 @@ mod tests {
         // base the member copied and `base_copied` what the copy took.
         let staged = metadata(&json!({"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":1786838400052u64,"time_from":"anchor"})).expect("a doc_metadata answer");
         assert_eq!((staged.base.as_deref(), staged.base_copied, staged.source.as_deref(), staged.placed), (Some("1.0.1.0.1.1"), Some(5), Some("1.0.1.0.1.1"), None));
+        // `<!-- wire: response line_numbers -->` and `line_numbers_masked`:
+        // a line, a start beside a line that names none, the count.
+        let numbered = |masked: bool| json!({"as_of":9,"count":{"masked":masked,"n":"2"},"lines":[{"masked":masked,"start":{"ordinal":"3","subspace":"1"}},null],"positions":[{"line":"2","masked":masked}],"resp":"line_numbers"});
+        for masked in [false, true] {
+            let numbers = line_numbers(&numbered(masked)).expect("a line_numbers answer");
+            assert_eq!(numbers, LineNumbers { positions: vec![Flagged { number: 2, masked }], lines: vec![Some(Flagged { number: 3, masked }), None], count: Flagged { number: 2, masked } });
+        }
+        assert_eq!(line_numbers(&json!({"as_of":9,"n":2,"resp":"count"})), None, "no line_numbers answer");
+        let mut in_links = numbered(false);
+        in_links["lines"][0]["start"]["subspace"] = json!("2");
+        assert_eq!(line_numbers(&in_links), None, "a start outside the content subspace is no line's");
+        let mut unflagged = numbered(false);
+        unflagged["count"].as_object_mut().expect("the count").remove("masked");
+        assert_eq!(line_numbers(&unflagged), None, "a number without its flag");
     }
 
     /// A record's value is a delivery's composite item, `atom` or `atom_hex`.

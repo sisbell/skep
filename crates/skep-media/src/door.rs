@@ -337,6 +337,7 @@ pub fn media_door<W: FebeWorld>(
         | Op::ContentFrontier { .. }
         | Op::RetrieveDocVSpan { .. }
         | Op::RetrieveDocVSpanSet { .. }
+        | Op::LineNumbers { .. }
         | Op::ShowOrigin { .. }
         | Op::ShowDeletions { .. }
         | Op::Compare { .. }

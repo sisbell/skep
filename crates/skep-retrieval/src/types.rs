@@ -22,7 +22,8 @@
 //! * [`CorrPair`]/[`CompareReport`] have no `Serialize`, because M5's `VPos`
 //!   has none. They are destructure-and-marshal values M10 writes out
 //!   **field-by-field** — every leaf serializes individually, `VPos`'s
-//!   `pub Nat` fields included.
+//!   `pub Nat` fields included. [`LineNumbers`] has none for the same reason:
+//!   a line's start is a `VPos`.
 //!
 //! NOTHING here derives `Deserialize`, and that one is M6's own decision
 //! rather than a leaf's: M10 constructs requests through M1's validating front
@@ -301,4 +302,55 @@ impl FromIterator<CorrPair> for CompareReport {
     fn from_iter<I: IntoIterator<Item = CorrPair>>(it: I) -> CompareReport {
         CompareReport(it.into_iter().collect())
     }
+}
+
+/// One number the line read answers, with its flag.
+///
+/// `masked` is true when a run withheld from the reader lies at or before
+/// what `number` numbers: at or before the position asked, at or before the
+/// position a line starts at, and anywhere in the document for the line
+/// count. A withheld run counts no line break, so a flagged number is the
+/// reader's own count, the one a walk of the delivery it is served would
+/// reach, and may differ from another reader's.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Flagged<T> {
+    /// The number answered.
+    pub number: T,
+    /// Whether a withheld run lies at or before what `number` numbers.
+    pub masked: bool,
+}
+
+/// The line read's result: lines, line starts and the line count.
+///
+/// Numbers only, no value. `positions` and `lines` answer the request's two
+/// lists entry for entry, in request order, a repeated entry answered each
+/// time it is asked.
+///
+/// **The rule.** A line break is a content position whose value is the
+/// single byte `0x0A`, as M4 counts one: a byte of a stretch or a one-byte
+/// value, never `\r`, never U+2028, and never an atom, whatever its bytes.
+/// Line 1 starts at position 1, and line `N` one position past line break
+/// `N − 1`. Text after the last line break is a line, and a document ending
+/// in a line break has no empty last line. An empty document has no line.
+///
+/// No `Serialize`, the module doc says why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LineNumbers {
+    /// The line each listed position lies on, counted from one.
+    ///
+    /// A position inside a withheld run is on the line that run starts on.
+    /// The position one past the document's end is on the line an insert
+    /// there would begin or extend: the last line, or the one after it where
+    /// the document ends in a line break, and line 1 of an empty document.
+    pub positions: Vec<Flagged<Nat>>,
+    /// The position each listed line starts at.
+    ///
+    /// `None` where the number names no line of the document: zero, and any
+    /// number past `count`.
+    pub lines: Vec<Option<Flagged<VPos>>>,
+    /// How many lines the document holds.
+    ///
+    /// Its line breaks, and one more where it is non-empty and its last
+    /// position is not a line break.
+    pub count: Flagged<Nat>,
 }

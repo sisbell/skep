@@ -32,7 +32,8 @@ skep-shell = { path = "../skep-shell" }
 # the start warns of where it is the agent's. `search`, which skep-shell
 # turns on as well, is named here for both; the unit suite reads its query
 # bound (`search::QUERY_BOUND`), the change feed's default page
-# (`board::DEFAULT_CHANGES_LIMIT`) and the commons' type addresses
+# (`board::DEFAULT_CHANGES_LIMIT`), the wire's list cap
+# (`publication::MAX_WIRE_LIST`) and the commons' type addresses
 # (`board::T_ENROLL`, …, `board::frames::T_GRANT`, …) the catalog and the
 # commons gate restate.
 skep-client = { path = "../skep-client", features = ["search"] }

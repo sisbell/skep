@@ -23,7 +23,9 @@ use skep_febe::{
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link};
 use skep_namespace::PrincipalId;
-use skep_retrieval::{CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, SpanFault};
+use skep_retrieval::{
+    CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Flagged, LineNumbers, SpanFault,
+};
 use skepd::JsonCodec;
 
 fn wire_md() -> String {
@@ -65,7 +67,7 @@ fn blocks() -> Vec<(String, String, String)> {
     out
 }
 
-const OP_NAMES: [&str; 51] = [
+const OP_NAMES: [&str; 52] = [
     "create_new_document",
     "delegate",
     "register_node",
@@ -96,6 +98,7 @@ const OP_NAMES: [&str; 51] = [
     "content_frontier",
     "retrieve_doc_v_span",
     "retrieve_doc_v_span_set",
+    "line_numbers",
     "show_origin",
     "show_deletions",
     "compare",
@@ -120,7 +123,7 @@ const OP_NAMES: [&str; 51] = [
 ];
 
 /// Every request example parses, is canonical (re-marshal equals the doc
-/// value), is tagged with the marker's own op name — and all 51 ops appear.
+/// value), is tagged with the marker's own op name — and all 52 ops appear.
 #[test]
 fn doc_request_examples_are_canonical_and_complete() {
     let codec = JsonCodec;
@@ -170,6 +173,16 @@ fn link1() -> Address {
 
 fn ispan() -> Span {
     sp(&[1, 0, 1, 0, 1, 0, 1, 1], &[0, 0, 0, 0, 0, 0, 0, 5])
+}
+
+/// The line read's documented answer, every number flagged where `masked`.
+fn line_numbers(masked: bool) -> LineNumbers {
+    let start = VPos { subspace: n(1), ordinal: n(3) };
+    LineNumbers {
+        positions: vec![Flagged { number: n(2), masked }],
+        lines: vec![Some(Flagged { number: start, masked }), None],
+        count: Flagged { number: n(2), masked },
+    }
 }
 
 fn fixture(name: &str) -> Response {
@@ -234,6 +247,14 @@ fn fixture(name: &str) -> Response {
         // The content-frontier read: `next`, the next unminted content
         // ordinal, a natural as every count rides the wire.
         "frontier" => Response::Frontier { next: n(5), as_of: Seq(9) },
+        // The line read, asked position 3 and lines 2 and 9 of `a\nb\n`:
+        // line 2, a start at position 3 beside a line that names none, and
+        // two lines — and the same numbers to a reader who may not read the
+        // run at the first position, every one flagged.
+        "line_numbers" => Response::LineNumbers { numbers: line_numbers(false), as_of: Seq(9) },
+        "line_numbers_masked" => {
+            Response::LineNumbers { numbers: line_numbers(true), as_of: Seq(9) }
+        }
         "span_set" => {
             Response::SpanSet { set: [ispan()].into_iter().collect::<SpanSet>(), as_of: Seq(9) }
         }
@@ -462,15 +483,16 @@ fn fixture(name: &str) -> Response {
     }
 }
 
-/// The 27 response shapes every client must decode; each must appear as a
+/// The 28 response shapes every client must decode; each must appear as a
 /// doc marker (variant markers like `follow_invalid` are extra coverage).
-const REQUIRED_SHAPES: [&str; 27] = [
+const REQUIRED_SHAPES: [&str; 28] = [
     "ack",
     "ack_addr",
     "ack_edit",
     "delivery",
     "i_delivery",
     "frontier",
+    "line_numbers",
     "span_set",
     "addrs",
     "maybe_addr",
@@ -786,6 +808,90 @@ fn doc_universal_grants_row_states_the_covered_prefix_and_the_guests_empty_answe
             envelope.contains(&format!("**`{shape}`** —")),
             "§The response envelope lists `{shape}`"
         );
+    }
+}
+
+/// The line read's row states its rule, its masking and its refusals.
+///
+/// §Content & provenance reads' `line_numbers` row carries what a client
+/// builds on: the three questions, the two optional lists and their cap, the
+/// rule that counts a line and the end of a document, the positions it
+/// answers and the two it refuses by index, the `null` a line that names
+/// none takes, the masking and its flag, the one walk and its refusal, and
+/// `/op-at`. The cap is one number in two places, so it is read out of the
+/// row and handed to the codec: a list of that many entries parses and one
+/// more does not. §The read predicate lists the read among the masked ones,
+/// §Rejection codes gives it the walk refusal, and head-float names it. The
+/// daemon's answers are pinned in `line_numbers.rs`; this pins that the
+/// contract says so.
+#[test]
+fn doc_states_the_line_read_its_rule_its_masking_and_its_refusals() {
+    let row = op_row("line_numbers");
+    for fact in [
+        "THE LINE READ: `doc`'s line numbers, and no text",
+        "the line each of `positions` lies on, the position each of `lines` starts at, and the document's line count, which is always answered",
+        "absent, `null` and `[]` are one request",
+        "`malformed` under the op `unparseable`",
+        "→ `line_numbers`, one item for each entry, in request order",
+        "A LINE BREAK is a content position whose value is the single byte `0x0A`",
+        "never an atom, whatever its bytes",
+        "Line 1 starts at position 1, and line N one position past line break N − 1",
+        "a document that ENDS in a line break has NO empty last line",
+        "An empty document has no line, and the link subspace has none",
+        "A position is answered from 1 to ONE PAST THE END",
+        "one outside the content subspace is `not_content_subspace`",
+        "one at ordinal 0 or further past the end is `range_not_present`",
+        "`site.index` its place in `positions`, the first faulty one in request order speaking",
+        "is answered `null` in its place",
+        "unreadable is `withheld`, unregistered is `doc_not_registered`",
+        "a bare published address answers its trunk head",
+        "a run whose origin you may not read counts NO line break",
+        "each carries `masked`, `true` where such a run lies at or before what it numbers",
+        "A position inside such a run is on the line the run starts on",
+        "YOUR VIEW and never a name",
+        "walks the document's runs ONCE, whatever its two lists hold",
+        "refused whole (`too_many_items`, §Rejection codes)",
+        "Served on `/op-at` as every read is, numbering the document as it stood",
+    ] {
+        assert!(row.contains(fact), "the line_numbers row says {fact:?}: {row}");
+    }
+    let cap = figure_after(&row, "`MAX_SLOT_SPANS` = ");
+    let codec = JsonCodec;
+    let frame = |entries: usize| {
+        let lines = vec![r#""1""#; entries].join(",");
+        format!(r#"{{"doc":"1.0.1.0.1","lines":[{lines}],"op":"line_numbers"}}"#)
+    };
+    assert!(codec.parse(frame(cap).as_bytes()).is_ok(), "a list at the row's own cap is admitted");
+    assert!(codec.parse(frame(cap + 1).as_bytes()).is_err(), "one entry past it is a parse fault");
+
+    let masked =
+        prose("How a masked read answers:", &["\nThe two publication reads take the consult too"]);
+    assert!(
+        masked.contains("**A line read masks per run too**: `line_numbers` counts NO line break of a run you may not read"),
+        "§The read predicate lists the line read among the masked reads: {masked}"
+    );
+    let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
+    for fact in [
+        "`range_not_present` (also a line read's listed position at ordinal 0 or more than one past its document's end, never clipped",
+        "a line read answers `too_many_items` where its document holds more content runs than that",
+        "no narrower request passes",
+    ] {
+        assert!(codes.contains(fact), "§Rejection codes says {fact:?}");
+    }
+    let float =
+        prose("**Head-float** (PUB-2.49, PUB-2.50, PUB-2.53).", &["\n**The deposit cell**"]);
+    assert!(
+        float.contains("`retrieve_v`, `line_numbers`, `retrieve_doc_v_span`"),
+        "head-float names the read: {float}"
+    );
+    let shape = prose("\n**`line_numbers`** — line_numbers", &["\n**`span_set`**"]);
+    for fact in [
+        "`positions` is one `{line, masked}` for each position asked",
+        "`lines` one `{start, masked}` for each line asked",
+        "or `null`, in the line's own place, where the number names no line of the document",
+        "`count` is `{n, masked}`, the document's line count, always present",
+    ] {
+        assert!(shape.contains(fact), "the line_numbers shape says {fact:?}: {shape}");
     }
 }
 

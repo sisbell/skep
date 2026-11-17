@@ -1446,6 +1446,7 @@ impl Commits {
             | Response::IDelivery { .. }
             | Response::Frontier { .. }
             | Response::SpanSet { .. }
+            | Response::LineNumbers { .. }
             | Response::Addrs { .. }
             | Response::MaybeAddr { .. }
             | Response::EffectiveOwner { .. }
@@ -2323,7 +2324,7 @@ impl RowTerms {
 /// not do. A read classified here as a write runs on `/op` through a write
 /// sequence, under the serialization lock, rather than as a read; `/op-at`
 /// asks the partition directly and is untouched. The two tables agree at 19
-/// writes of 51.
+/// writes of 52.
 ///
 /// **Second obligation**, and the one no assertion here can reach:
 /// `classify::derived_docs` answers this same question — which documents a
@@ -2565,6 +2566,7 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
         | Op::ContentFrontier { .. }
         | Op::RetrieveDocVSpan { .. }
         | Op::RetrieveDocVSpanSet { .. }
+        | Op::LineNumbers { .. }
         | Op::ShowOrigin { .. }
         | Op::ShowDeletions { .. }
         | Op::Compare { .. }

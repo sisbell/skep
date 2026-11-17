@@ -80,6 +80,7 @@ const DISPATCH_OPS: &[&str] = &[
     "content_frontier",
     "retrieve_doc_v_span",
     "retrieve_doc_v_span_set",
+    "line_numbers",
     "show_origin",
     "show_deletions",
     "compare",

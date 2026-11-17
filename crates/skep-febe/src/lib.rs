@@ -262,15 +262,17 @@ pub use skep_discovery::{Cursor, FourSet, OrphanReport, SlotSpec, SupClaim, Wind
 // signature", and a blob wider than M2's slot holds.
 pub use skep_kernel::{Attestation, AttestationError, Seq}; // M2
 pub use skep_namespace::PrincipalId; // M3
-                                     // M6, the two enclosed shapes
+                                     // M6, the three enclosed shapes
                                      // included: `Delivery` and
                                      // `CompareReport` are collections of
                                      // `DeliveryItem` and `CorrPair`, and
-                                     // marshaling either answer means
-                                     // naming the element it yields.
+                                     // each number of a `LineNumbers` is
+                                     // a `Flagged`, so marshaling any of
+                                     // the three answers means naming the
+                                     // element it yields.
 pub use skep_retrieval::{
-    CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Operand, RegionSpec, SpanFault,
-    Spec,
+    CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Flagged, LineNumbers, Operand,
+    RegionSpec, SpanFault, Spec,
 };
 // M7, whose slot vocabulary the request model uses directly: `SlotArg` is the
 // two-form endset slot naming `Op::MakeLink`'s three slots and

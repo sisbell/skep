@@ -60,7 +60,13 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   data, `isError: false`; `isError` means the shell could not get the
   board's verdict — among the causes, a board not answering and a frame the
   shell refused itself, nothing sent — or `fetch` declined a file, or a
-  `replace_text` left a line held or landed in part.
+  `replace_text` left a line held or landed in part. A call the adapter
+  will not run is no tool result but a JSON-RPC error, `-32602` under the
+  request's id: a tool outside the catalog, an argument an adapter tool
+  does not take, and a request whose line holds a lone surrogate escape
+  (`\uD800` to `\uDFFF` with no partner), which JSON writes and UTF-8 text
+  cannot carry. A line that is not JSON is answered `-32700` under id null,
+  and so is one whose id itself holds such an escape.
 - **The session's life.** A board restart is met by the shell's silent
   re-open, and a call that met it is reissued under the re-opened session,
   so the agent sees nothing of it — save a burst that met it at its own

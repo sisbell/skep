@@ -12,6 +12,9 @@
 //!   method), a **stray response** and a **blank line** get **none**;
 //! * a **parse error** is `-32700` and JSON that is **no object** `-32600`,
 //!   both id `null`; an **unknown method** is `-32601`;
+//! * a line that holds a **lone surrogate escape** is read by the same shapes,
+//!   save that its request is refused `-32602` under its id and never run,
+//!   and one whose `id` holds the escape is the parse error;
 //! * the process **survives the whole storm** and still answers `tools/list`.
 //!
 //! Response counting uses a per-line sentinel `ping`: send the fuzz line,
@@ -134,18 +137,70 @@ impl Drop for Mcp {
 /// id-less non-request — else the id the one response carries and, where
 /// the adapter refuses the line itself, its code: -32700 for no JSON and
 /// -32600 for no object, under a null id; -32600 for a bare id. A request's
-/// own outcome is left free.
+/// own outcome is left free, save one read past a lone surrogate escape
+/// (`mended`), which is never run: it is owed the -32602.
 fn owed(line: &str) -> Option<(Value, Option<i64>)> {
     if line.trim().is_empty() {
         return None;
     }
-    let Ok(message) = serde_json::from_str::<Value>(line) else { return Some((Value::Null, Some(-32700))) };
+    let (message, refused) = match serde_json::from_str::<Value>(line) {
+        Ok(message) => (message, None),
+        Err(_) => match mended(line) {
+            Some(message) => (message, Some(-32602)),
+            None => return Some((Value::Null, Some(-32700))),
+        },
+    };
     let Value::Object(message) = message else { return Some((Value::Null, Some(-32600))) };
     match (message.get("method").and_then(Value::as_str), message.get("id")) {
-        (Some(_), Some(id)) => Some((id.clone(), None)),
+        (Some(_), Some(id)) => Some((id.clone(), refused)),
         (None, Some(id)) if !message.contains_key("result") && !message.contains_key("error") => Some((id.clone(), Some(-32600))),
         _ => None,
     }
+}
+
+/// Returns a line as it reads past its lone surrogate escapes, if it does.
+///
+/// It is the oracle's own statement of the adapter's rule, by another route:
+/// `\uXXXX` escapes standing end to end are a run of UTF-16 code units, and
+/// the units `char::decode_utf16` cannot pair are the lone ones. `Some` is the
+/// line parsed with U+FFFD's escape in place of each. `None` where it holds
+/// none, where it does not parse so, and where its `id` holds one: read with
+/// a character the id does not hold in their place, the id then holds it.
+fn mended(line: &str) -> Option<Value> {
+    let unit = |at: usize| {
+        let escape = line.get(at..at + 6).filter(|escape| escape.starts_with("\\u") && escape[2..].bytes().all(|b| b.is_ascii_hexdigit()))?;
+        u16::from_str_radix(&escape[2..], 16).ok()
+    };
+    let (mut lone, mut at) = (Vec::new(), 0);
+    while at < line.len() {
+        if line.as_bytes()[at] != b'\\' {
+            at += 1;
+            continue;
+        }
+        let run: Vec<u16> = (0..).map_while(|k| unit(at + 6 * k)).collect();
+        let mut k = 0;
+        for decoded in char::decode_utf16(run.iter().copied()) {
+            if decoded.is_err() {
+                lone.push(at + 6 * k);
+            }
+            k += decoded.map_or(1, char::len_utf16);
+        }
+        at += if run.is_empty() { 2 } else { 6 * run.len() };
+    }
+    if lone.is_empty() {
+        return None;
+    }
+    let spelt = |stand_in: char| {
+        let mut text = line.to_string();
+        lone.iter().for_each(|&at| text.replace_range(at + 2..at + 6, &format!("{:04X}", u32::from(stand_in))));
+        serde_json::from_str::<Value>(&text).ok()
+    };
+    let message = spelt(char::REPLACEMENT_CHARACTER)?;
+    let Some(id) = message.get("id") else { return Some(message) };
+    let held = id.to_string();
+    let absent = ('\u{E000}'..='\u{F8FF}').find(|&private| !held.contains(private))?;
+    let holds_one = spelt(absent)?.get("id").is_some_and(|id| id.to_string().contains(absent));
+    (!holds_one).then_some(message)
 }
 
 /// Returns a storm line as one line of stdin, its newlines dropped.
@@ -183,7 +238,10 @@ fn budget(default: usize) -> usize {
 /// It holds requests of each dispatch kind — a wire op, a shell call, an
 /// apparatus tool — and a shell call whose `opts` the door refuses,
 /// `search`'s withheld `reindex`; a notification, an id-less non-request,
-/// and a stray response.
+/// and a stray response; and three lines that hold a lone surrogate escape,
+/// which no mutation writes: a request, a notification, and a request whose
+/// id holds it. A value recipe passes those three on as written, and a byte
+/// recipe cuts and splices them.
 fn corpus() -> Vec<Vec<u8>> {
     [
         r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
@@ -199,6 +257,9 @@ fn corpus() -> Vec<Vec<u8>> {
         r#"{"jsonrpc":"2.0","id":10,"result":{}}"#,
         r#"{"jsonrpc":"2.0","id":11,"method":"no/such/method"}"#,
         r#"{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"search","arguments":{"query":"hello","opts":{"reindex":true}}}}"#,
+        r#"{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"search","arguments":{"query":"a\ud800b"}}}"#,
+        r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"reason":"\udc00"}}"#,
+        r#"{"jsonrpc":"2.0","id":"a\uD83D","method":"ping"}"#,
     ]
     .iter()
     .map(|s| s.as_bytes().to_vec())
@@ -234,11 +295,22 @@ fn random_utf8_line(rng: &mut u64, max_len: usize) -> String {
 /// — the -32700 parse error, and JSON that is no object the -32600, both id
 /// null; and every sentinel `ping` answers `{}`. No line here reaches the
 /// board.
+///
+/// A line holding a lone surrogate escape is read by the same shapes. Its
+/// request is refused -32602 under its id, in one sentence that quotes none
+/// of it — the escape in a call's argument, in the params of a method that
+/// reads none, or in the method itself — and an id's own U+FFFD is kept; its
+/// bare id is the -32600 under that id; its notification, stray response and
+/// id-less non-request get none; it is the -32700 where its id holds the
+/// escape or it does not parse with the escape read past, and the -32600
+/// where it is no object. A pair escaped whole, and a `u` behind an escaped
+/// backslash, are text as any other. Every -32700 says the parse's own error
+/// of the line.
 #[test]
 fn each_line_shape_gets_its_documented_answer() {
     let fixture = Fixture::new("shapes");
     let mut mcp = Mcp::spawn(&fixture);
-    let answered: [(&[u8], Value, Option<i64>); 7] = [
+    let answered: [(&[u8], Value, Option<i64>); 15] = [
         (br#"{"jsonrpc":"2.0","id":"probe","method":"ping"}"#, json!("probe"), None),
         (b"{\"jsonrpc\":\"2.0\",\"id\":\"crlf\",\"method\":\"ping\"}\r", json!("crlf"), None),
         (br#"{"jsonrpc":"2.0","id":99,"method":"no/such"}"#, json!(99), Some(-32601)),
@@ -246,23 +318,42 @@ fn each_line_shape_gets_its_documented_answer() {
         (br#"{"jsonrpc":"2.0","id":"no-method"}"#, json!("no-method"), Some(-32600)),
         (br#"{"id":"bare","method":"ping"}"#, json!("bare"), None),
         (br#"{"jsonrpc":"1.0","id":"old","method":"ping"}"#, json!("old"), None),
+        (br#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"replace_text","arguments":{"doc":"1.0.1.0.1","old":"a\ud800b","new":"c"}}}"#, json!(7), Some(-32602)),
+        (br#"{"jsonrpc":"2.0","id":"low","method":"tools/list","params":{"cursor":"\udc00"}}"#, json!("low"), Some(-32602)),
+        (br#"{"jsonrpc":"2.0","id":"high","method":"ping","params":{"note":"x\uD83D"}}"#, json!("high"), Some(-32602)),
+        (br#"{"jsonrpc":"2.0","id":"method","method":"no\udfff/such"}"#, json!("method"), Some(-32602)),
+        (br#"{"jsonrpc":"2.0","id":"a\ufffd","method":"ping","params":["\ud800"]}"#, json!("a\u{FFFD}"), Some(-32602)),
+        (br#"{"jsonrpc":"2.0","id":"no-method-lone","params":["\ud800"]}"#, json!("no-method-lone"), Some(-32600)),
+        (br#"{"jsonrpc":"2.0","id":"pair","method":"ping","params":["\ud83d\ude00"]}"#, json!("pair"), None),
+        (br#"{"jsonrpc":"2.0","id":"escaped","method":"ping","params":["\\ud800"]}"#, json!("escaped"), None),
     ];
+    let mut lone_surrogate = Vec::new();
     for (line, id, code) in answered {
         let r = mcp.responses_for(line);
         assert_eq!(r.len(), 1, "{:?} gets exactly one response: {r:?}", String::from_utf8_lossy(line));
         assert_eq!((&r[0]["id"], r[0]["error"]["code"].as_i64()), (&id, code), "{:?}", r[0]);
+        assert_eq!(r[0].get("result"), code.is_none().then_some(&json!({})), "a `ping` answers {{}}, and a refusal no result: {:?}", r[0]);
+        if code == Some(-32602) {
+            lone_surrogate.push(r[0]["error"]["message"].as_str().unwrap_or_default().to_string());
+        }
     }
+    assert_eq!(lone_surrogate.len(), 5, "premise: each request holding a lone surrogate escape was refused");
+    assert!(lone_surrogate[0].contains("lone surrogate") && lone_surrogate[0].contains("not run"), "the refusal names its cause: {}", lone_surrogate[0]);
+    assert!(lone_surrogate.iter().all(|said| *said == lone_surrogate[0]), "one sentence, whatever the line held: {lone_surrogate:?}");
     for id in [json!(null), json!(true), json!(-7), json!(1.5), json!(""), json!([1, "a"]), json!({"k": [null]})] {
         let r = mcp.responses_for(json!({"jsonrpc": "2.0", "id": id, "method": "ping"}).to_string().as_bytes());
         assert_eq!(r.len(), 1, "a request under {id} gets exactly one response: {r:?}");
         assert_eq!((r[0].get("id"), &r[0]["result"]), (Some(&id), &json!({})), "answered under {id}, as given");
     }
-    let unanswered: [&[u8]; 9] = [
+    let unanswered: [&[u8]; 12] = [
         br#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
         br#"{"jsonrpc":"2.0","method":"no/such"}"#,
         br#"{"jsonrpc":"2.0","id":7,"result":{}}"#,
         br#"{"jsonrpc":"2.0","id":8,"error":{"code":-32601,"message":"x"}}"#,
         br#"{"jsonrpc":"2.0","foo":1}"#,
+        br#"{"jsonrpc":"2.0","method":"tools/call","params":{"name":"replace_text","arguments":{"doc":"1.0.1.0.1","old":"a\ud800b","new":"c"}}}"#,
+        br#"{"jsonrpc":"2.0","id":7,"result":{"text":"\udc00"}}"#,
+        br#"{"jsonrpc":"2.0","foo":"\ud800"}"#,
         b"",
         b"   ",
         b"\r",
@@ -273,14 +364,31 @@ fn each_line_shape_gets_its_documented_answer() {
         assert!(r.is_empty(), "{:?} gets no response: {r:?}", String::from_utf8_lossy(line));
     }
     let deep = "[".repeat(1_000_000);
-    let refused: [(&[u8], i64); 8] =
-        [(b"{ this is not json", -32700), (b"this is not json", -32700), (b"\xff\xfe", -32700), (deep.as_bytes(), -32700), (b"[]", -32600), (b"7", -32600), (br#""ping""#, -32600), (b"null", -32600)];
+    let refused: [(&[u8], i64); 13] = [
+        (b"{ this is not json", -32700),
+        (b"this is not json", -32700),
+        (b"\xff\xfe", -32700),
+        (deep.as_bytes(), -32700),
+        (br#"{"jsonrpc":"2.0","id":"a\ud800","method":"ping"}"#, -32700),
+        (br#"{"jsonrpc":"2.0","id":[1,"a\ud800"],"method":"ping"}"#, -32700),
+        (br#"{"jsonrpc":"2.0","id":9,"method":"ping","params":["\ud800"]"#, -32700),
+        (br#"{"jsonrpc":"2.0","id":9,"method":"ping","params":["\ud800",1e999]}"#, -32700),
+        (b"[]", -32600),
+        (b"7", -32600),
+        (br#""ping""#, -32600),
+        (b"null", -32600),
+        (br#"["\ud800"]"#, -32600),
+    ];
     for (line, code) in refused {
         let shown = format!("{:.40}", String::from_utf8_lossy(line));
         let r = mcp.responses_for(line);
         assert_eq!(r.len(), 1, "{shown:?} gets exactly one response: {r:?}");
         let (got_code, got_id) = (&r[0]["error"]["code"], &r[0]["id"]);
         assert_eq!((got_code, got_id), (&json!(code), &Value::Null), "{shown:?}");
+        if code == -32700 {
+            let strict = serde_json::from_slice::<Value>(line).expect_err("a line refused -32700 is one serde_json does not read");
+            assert_eq!(r[0]["error"]["message"], json!(format!("parse error: {strict}")), "{shown:?} is refused in the parse's own words");
+        }
     }
     assert!(mcp.finish().success());
 }

@@ -67,7 +67,12 @@
 //!   member an adapter tool's row or its `opts` does not take, a wire op's
 //!   arguments of the shell's `/op-at` shape — is no tool result at all: it is
 //!   refused -32602, as malformed `tools/call` params are; a member of the
-//!   wrong form is the shell's `malformed_args`.
+//!   wrong form is the shell's `malformed_args`. A request whose line holds a
+//!   lone surrogate escape — a `\uD800` to `\uDFFF` with no partner, which
+//!   JSON's grammar writes and no UTF-8 string holds — is refused -32602 the
+//!   same, under its id, and never run: the line is read with a stand-in at
+//!   each escape for whose request it is alone, and one whose id holds the
+//!   escape is the -32700 under id null, as a line that is no JSON is.
 //! * **A signed session, opened at startup**, before the first tool call, for
 //!   the configured principal with the store's key for it — enrolled in its
 //!   account's set or the nearest set above it — and no bare mode exists. No

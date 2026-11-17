@@ -592,6 +592,39 @@ fn one_edit_inserts_as_much_as_one_insert_carries_and_no_more() {
     assert!(mcp.finish().success());
 }
 
+/// An edit whose line holds a lone surrogate escape is refused, not run.
+///
+/// JSON's grammar writes one half of a surrogate pair alone and no UTF-8
+/// string holds it: the adapter reads such a line with U+FFFD at the escape
+/// to find whose request it is, and runs nothing of it. The draft holds the
+/// very text that reading spells, once, so an edit run from it would land;
+/// the request is answered -32602 under its own id, and the draft's text,
+/// its identities, its minted count and the lines held are as they were. A
+/// pair escaped whole is one character: the edit lands and reads back as it.
+#[test]
+fn an_edit_holding_a_lone_surrogate_escape_is_refused_under_its_id_and_a_pair_lands() {
+    let fixture = Fixture::new("replace-surrogate");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+    let text = "a\u{FFFD}b = c\n";
+    let doc = draft_holding(&mut mcp, CLAIMANT_ACCOUNT, text);
+    let before = (addresses(&mut mcp, &doc), minted(&mut mcp, &doc));
+    mcp.send_line(&format!(r#"{{"jsonrpc":"2.0","id":"lone","method":"tools/call","params":{{"name":"replace_text","arguments":{{"doc":"{doc}","old":"a\ud800b","new":"c"}}}}}}"#));
+    let refused = mcp.read_message();
+    assert_eq!((&refused["id"], &refused["error"]["code"]), (&json!("lone"), &json!(-32602)), "{refused}");
+    assert!(refused["error"]["message"].as_str().is_some_and(|said| said.contains("lone surrogate")), "the refusal names its cause: {refused}");
+    assert_eq!(text_of(&mut mcp, &doc), text, "the draft's text stands");
+    assert_eq!((addresses(&mut mcp, &doc), minted(&mut mcp, &doc)), before, "nothing written");
+    assert_eq!(mcp.call_json("held", json!({})), json!([]));
+    mcp.send_line(&format!(r#"{{"jsonrpc":"2.0","id":"pair","method":"tools/call","params":{{"name":"replace_text","arguments":{{"doc":"{doc}","old":"= c","new":"= \ud83d\ude00"}}}}}}"#));
+    let landed = mcp.read_message();
+    let answer: Value = serde_json::from_str(landed["result"]["content"][0]["text"].as_str().unwrap_or_default()).unwrap_or_else(|e| panic!("replace_text's text is JSON ({e}): {landed}"));
+    assert_eq!((&landed["id"], &landed["result"]["isError"], &answer["outcome"]), (&json!("pair"), &json!(false), &json!("replaced")), "{landed}");
+    assert_eq!((&answer["removed"], &answer["inserted"]), (&json!("1"), &json!("4")), "one character of four bytes for the one letter: {answer}");
+    assert_eq!(text_of(&mut mcp, &doc), "a\u{FFFD}b = \u{1F600}\n");
+    assert!(mcp.finish().success());
+}
+
 // ── the measurement ─────────────────────────────────────────────────────
 
 /// Returns a code-like text of at least `bytes` bytes, each line its own.

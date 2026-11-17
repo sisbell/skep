@@ -13,8 +13,9 @@
 //! [`Shell`] and what opens it, the own node's [`NodeControl`] among it,
 //! [`Refusal`] and its [`Name`], [`Log`] and its [`CallOutcome`], [`Event`]
 //! and its [`EventName`] (an [`UnknownEventName`] where a spelling names
-//! none), [`Talk`], [`CALLS`] — and two public modules, [`script`] and
-//! [`shapes`]; the rest is private.
+//! none), [`Talk`], [`CALLS`], the text edit's two caps,
+//! [`MAX_DRAFT_POSITIONS`] and [`MAX_NEW_BYTES`] — and two public modules,
+//! [`script`] and [`shapes`]; the rest is private.
 //! The modules, in the order they are declared, each naming only those
 //! above it:
 //!
@@ -39,10 +40,11 @@
 //!   unreachable board, and the shell's own armed refusals, each named by
 //!   one token from one closed list.
 //! * `wire` — the wire's shared facts the composer, the held store, the
-//!   burst's door and the resend, and the call log read: the board's frame
-//!   cap and a frame's compact bytes, the tumbler component budget and an
-//!   address read within it, the document address in its one spelling, and
-//!   the wire's value forms both ways with the insert's value budget.
+//!   burst's door and the resend, the call log and the text edit read: the
+//!   board's frame cap and a frame's compact bytes, the tumbler component
+//!   budget and an address read within it, the document address in its one
+//!   spelling, and the wire's value forms both ways with the insert's value
+//!   budget.
 //! * `attest` — the attest a signed session composes for the checked set
 //!   (the shell signs where signed ops requires): the entry frame over the
 //!   eleven kinds that have one, each axis composed by the shell from its own
@@ -152,8 +154,11 @@
 //!   they stand on in its child `merge`, and a draft's past state read and
 //!   mapped with nothing written, `history.past`, and made current by one write
 //!   typed against the page's own state of it, `history.restore`, in its child
-//!   `history` — each row taking and answering values shaped exactly as the
-//!   row's columns — an argument of another form refused, never read as absent;
+//!   `history`, and the text edit of a draft that keeps every unchanged
+//!   byte's identity, `text.replace`, made of the `op`, `held` and `resolve`
+//!   rows' calls, in its child `text` — each row taking and answering values
+//!   shaped exactly as the row's columns — an argument of another form
+//!   refused, never read as absent;
 //!   in its child `follow`, the bursts each session sends with an `id` and the
 //!   follower writes the page hands over with them (`op`'s `after`, §3c.6),
 //!   each written at its burst's ack and at the stop before any session closes;
@@ -196,7 +201,7 @@ pub use events::{Event, EventBus, EventName, UnknownEventName};
 pub use held::CopiesOwed;
 pub use log::{CallOutcome, Log};
 pub use refusal::{Name, Refusal};
-pub use shell::{ArmConfig, Fetched, NodeControl, NodeState, SessionMode, Shell, ShellOptions, CALLS};
+pub use shell::{ArmConfig, Fetched, NodeControl, NodeState, SessionMode, Shell, ShellOptions, CALLS, MAX_DRAFT_POSITIONS, MAX_NEW_BYTES};
 
 /// Where the shell's talk lines go: the verb's stderr, a suite's vector.
 pub type Talk = Arc<dyn Fn(&str) + Send + Sync>;

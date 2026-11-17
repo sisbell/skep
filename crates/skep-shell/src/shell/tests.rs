@@ -1,4 +1,4 @@
-//! The shell's suite: its cells in eleven children, its ground shared here.
+//! The shell's suite: its cells in twelve children, its ground shared here.
 //!
 //! The ground is a real daemon spawned in-process over a temp data dir and
 //! started again at its port (`spawn`, `spawn_at`), a shell opened over it
@@ -31,7 +31,10 @@
 //! — a mark landing on its insert's words and an undo's delete taking them
 //! back, refused where its burst is held, a delete held at its dial's
 //! death, following a delete, overtaking its insert, and finished by the
-//! stop before its session closes — against the daemon; `classes` the held
+//! stop before its session closes — against the daemon; `text` the text
+//! edit — its members and its door before any read, and against the daemon
+//! the bytes that differ replaced alone, a held write answered as an error,
+//! and a death met mid-edit followed to its re-open; `classes` the held
 //! store's defect classes over a `Shell` — one writer per board, a
 //! whole-draft write past a draft's held lines — each pinned against the
 //! daemon as an expected failure until the brief that closed it landed, and
@@ -66,6 +69,7 @@ mod history;
 mod merge;
 mod modes;
 mod publication;
+mod text;
 
 /// The daemon over `dir` at an ephemeral port.
 fn spawn(dir: &Path, local_trust: bool) -> Skepd {

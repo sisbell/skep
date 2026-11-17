@@ -16,11 +16,10 @@
 //! read of a draft's standing, `publication_standing`, and the `publication`
 //! family's four, `publication_open`, `publication_count`,
 //! `publication_confirm` and `publication_cancel`) and the apparatus
-//! (`session_info`, `changes_since`, `fetch`, `replace_text`) — whose
-//! arguments are the bridge's row minus the session and the board, the
-//! adapter supplying each where the row requires it, or, for `replace_text`,
-//! which composes several calls and copies no row, the members its own door
-//! reads, and whose members the adapter reads by name. A
+//! (`session_info`, `changes_since`, `fetch`, and `replace_text`, the
+//! shell's text edit `text.replace`) — whose arguments are the bridge's row
+//! minus the session and the board, the adapter supplying each where the
+//! row requires it, and whose members the adapter reads by name. A
 //! `publication` tool spells its row's `.` as `_`, since an agent runtime
 //! takes a tool's name for a function's, whose spelling admits no `.`.
 //! `Tool::admit` is the dispatch's door, admitting a call or refusing it;
@@ -156,11 +155,11 @@ pub enum Tool {
     ChangesSince,
     /// `fetch(session, i)`, the shell's streamed call, as a content block.
     Fetch,
-    /// The apparatus: one text edit of a draft, composed of the shell's calls.
+    /// `text.replace(session, doc, old, new)`, the shell's text edit of a
+    /// draft: the session supplied.
     ///
-    /// It copies no row of the shell's: `crate::replace` reads the draft,
-    /// finds the old text and writes the bytes that differ, each a call
-    /// under the session.
+    /// The shell marks an answer that is an error by a member of its own,
+    /// which the adapter reads for `isError` and takes off.
     ReplaceText,
 }
 
@@ -169,8 +168,7 @@ pub enum Tool {
 /// The members are skep-shell's row's, bar the session and the board, which
 /// the adapter supplies or does not offer — the suite holds the two equal —
 /// and the only ones the adapter reads: a member outside them is refused
-/// before any call. `replace_text` copies no row, and its members are the
-/// ones `crate::replace` reads.
+/// before any call.
 const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
     ("boards", Tool::Boards, &[]),
     ("health", Tool::Health, &[]),

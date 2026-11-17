@@ -1,3 +1,10 @@
+//! The text edit's unit suite: the find, the trim, the text a delivery is
+//! read into, the edit against a scripted board (`Script`, the edit's
+//! [`Calls`]), and the edit through the shell's rows scripted (`Rowed`, its
+//! [`Rows`]) — a death followed to its re-open, the error member, the halts
+//! left for the row to say. The row itself, its order and its door, runs
+//! against the daemon in `shell/tests/text.rs`.
+
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -203,8 +210,8 @@ fn a_run_a_part_boundary_cut_is_one_stretch_and_hex_is_text() {
     assert_eq!(text.find("abécd".as_bytes()), Found::Once(1), "one stretch across three parts");
     let raw = text_of(json!([{"hex": "ff00"}, {"atom": "v"}, {"hex": "c328"}]));
     assert_eq!((raw.find(&[0x00]), raw.find(&[0xc3, 0x28])), (Found::Once(2), Found::Once(4)));
-    assert_eq!(unhex("00fF7a"), Some(vec![0x00, 0xff, 0x7a]));
-    assert_eq!((unhex("0"), unhex("0g"), unhex("")), (None, None, Some(Vec::new())));
+    assert_eq!(decode_hex("00fF7a"), Some(vec![0x00, 0xff, 0x7a]));
+    assert_eq!((decode_hex("0"), decode_hex("0g"), decode_hex("")), (None, None, Some(Vec::new())));
 }
 
 /// A span set's content extent is read, and anything else is not one.
@@ -313,12 +320,18 @@ fn read_frames(text: &str) -> Vec<Value> {
     vec![frames::doc_metadata(DOC), frames::span_set(DOC), frames::retrieve_v(DOC, 1, text.len() as u64)]
 }
 
-/// Returns `replace_text`'s outcome over a board answering `after` past the
-/// three reads of [`CODE`], and the calls made past them.
+/// Returns the edit `text.replace` makes of `args` through `calls`: its
+/// members read as the row reads them, then the edit made.
+fn replace_text(calls: &impl Calls, args: &Value) -> Result<Answer, Refusal> {
+    replace(calls, Asked::read(args)?)
+}
+
+/// Returns the edit's outcome over a board answering `after` past the three
+/// reads of [`CODE`], and the calls made past them.
 fn edit(old: &str, new: &str, after: Vec<Result<Value, Refusal>>) -> (Result<Answer, Refusal>, Vec<Value>) {
     let script = Script::of(reads_of(CODE).into_iter().chain(after).collect());
     let args = json!({"doc": DOC, "old": old, "new": new});
-    let outcome = replace_text(&script, args.as_object().expect("an object"));
+    let outcome = replace_text(&script, &args);
     assert_eq!(script.sent.borrow()[..3], read_frames(CODE)[..], "the three reads, in order");
     (outcome, script.sent_past(3))
 }
@@ -429,7 +442,7 @@ fn a_refusal_a_read_decides_is_answered_before_any_write() {
         Ok(json!({"resp": "delivery", "as_of": READ_AT, "items": [{"content": "ab"}, {"atom": "v"}, {"content": "cd"}]})),
     ];
     let script = Script::of(with_an_atom);
-    let answer = replace_text(&script, json!({"doc": DOC, "old": "bc", "new": "x"}).as_object().expect("an object")).expect("an answer");
+    let answer = replace_text(&script, &json!({"doc": DOC, "old": "bc", "new": "x"})).expect("an answer");
     assert_eq!(answer, Answer { value: json!({"outcome": "refused", "cause": "crosses_atom", "doc": DOC, "ordinal": "3", "kind": "atom", "as_of": READ_AT}), is_error: false });
     assert_eq!(script.sent_past(3), Vec::<Value>::new());
 }
@@ -442,7 +455,7 @@ fn a_refusal_a_read_decides_is_answered_before_any_write() {
 #[test]
 fn a_published_document_is_refused_at_the_first_read() {
     let script = Script::of(vec![Ok(json!({"resp": "doc_metadata", "doc": "1.0.1.0.7", "published": true}))]);
-    let answer = replace_text(&script, json!({"doc": "1.0.1.0.7.2", "old": "a", "new": "b"}).as_object().expect("an object")).expect("an answer");
+    let answer = replace_text(&script, &json!({"doc": "1.0.1.0.7.2", "old": "a", "new": "b"})).expect("an answer");
     assert_eq!(answer, Answer { value: json!({"outcome": "refused", "cause": "published", "doc": "1.0.1.0.7.2", "published": "1.0.1.0.7"}), is_error: false });
     assert_eq!(script.sent_past(0), [frames::doc_metadata("1.0.1.0.7.2")]);
 }
@@ -462,7 +475,7 @@ fn a_member_of_the_wrong_form_is_refused_before_any_call() {
         (json!({"doc": DOC, "old": "a", "new": null}), "new"),
     ] {
         let script = Script::of(Vec::new());
-        let refusal = replace_text(&script, args.as_object().expect("an object")).expect_err("a refusal");
+        let refusal = replace_text(&script, &args).expect_err("a refusal");
         assert_eq!(refusal.to_value(), Refusal::malformed(what).to_value(), "{args}");
         assert!(script.sent_past(0).is_empty());
     }
@@ -739,14 +752,14 @@ fn a_second_write_the_shell_refuses_outright_is_undone_or_told_as_partial() {
 fn a_refusal_of_a_read_or_of_the_first_write_is_the_calls_refusal() {
     let withheld = || Refusal::Board(Refused { status: 200, code: "withheld".into(), detail: None, op: Some("doc_metadata".into()), body: json!({"resp": "rejected", "code": "withheld"}) });
     let script = Script::of(vec![Err(withheld())]);
-    let refusal = replace_text(&script, json!({"doc": DOC, "old": "a", "new": "b"}).as_object().expect("an object")).expect_err("the read's refusal");
+    let refusal = replace_text(&script, &json!({"doc": DOC, "old": "a", "new": "b"})).expect_err("the read's refusal");
     assert_eq!(refusal.to_value(), withheld().to_value());
     for at in 1..3 {
         let mut answers = reads_of(CODE);
         answers.truncate(at);
         answers.push(Err(Refusal::shell(Name::SESSION_ENDED, json!({"session": "s-1"}))));
         let script = Script::of(answers);
-        let refusal = replace_text(&script, json!({"doc": DOC, "old": "add", "new": "sub"}).as_object().expect("an object")).expect_err("the read's refusal");
+        let refusal = replace_text(&script, &json!({"doc": DOC, "old": "add", "new": "sub"})).expect_err("the read's refusal");
         assert_eq!(refusal.name(), "session_ended", "read {at}");
     }
     let (outcome, sent) = edit("add", "subtract", vec![Err(Refusal::shell(Name::ANOTHER_WINDOW, json!({"op": "insert"})))]);
@@ -764,7 +777,7 @@ fn a_refusal_of_a_read_or_of_the_first_write_is_the_calls_refusal() {
 fn an_answer_the_adapter_does_not_read_is_never_taken_for_a_drafts() {
     let run = |answers: Vec<Result<Value, Refusal>>| {
         let script = Script::of(answers);
-        let answer = replace_text(&script, json!({"doc": DOC, "old": "add", "new": "sub"}).as_object().expect("an object")).expect("an answer");
+        let answer = replace_text(&script, &json!({"doc": DOC, "old": "add", "new": "sub"})).expect("an answer");
         assert!(script.sent_past(0).iter().all(|call| !["insert", "delete"].contains(&call["op"].as_str().unwrap_or_default())), "no write");
         answer
     };
@@ -804,7 +817,7 @@ fn a_draft_past_one_delivery_is_read_in_parts_typed_against_the_first_read() {
         ]
     };
     let script = Script::of([vec![draft(), extent(text.len() as u64)], parts(), vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 60})), Ok(json!({"resp": "ack", "at": 61}))]].concat());
-    let answer = replace_text(&script, json!({"doc": DOC, "old": "let word", "new": "let name"}).as_object().expect("an object")).expect("an answer");
+    let answer = replace_text(&script, &json!({"doc": DOC, "old": "let word", "new": "let name"})).expect("an answer");
     let word = ordinal_of(&text, "word");
     assert_eq!(answer.value, json!({"outcome": "replaced", "doc": DOC, "ordinal": word.to_string(), "removed": "4", "inserted": "4", "addr": MINTED, "at": 61}));
     let rest = text.len() as u64 - READ_POSITIONS;
@@ -818,14 +831,14 @@ fn a_draft_past_one_delivery_is_read_in_parts_typed_against_the_first_read() {
         ]
     );
     let script = Script::of([vec![draft(), extent(text.len() as u64 + 1)], parts()].concat());
-    let answer = replace_text(&script, json!({"doc": DOC, "old": "let word", "new": "let name"}).as_object().expect("an object")).expect("an answer");
+    let answer = replace_text(&script, &json!({"doc": DOC, "old": "let word", "new": "let name"})).expect("an answer");
     assert_eq!(
         answer,
         Answer { value: json!({"outcome": "refused", "cause": "arrangement_moved", "doc": DOC, "as_of": READ_AT}), is_error: false },
         "the parts hold one position fewer than the extent named"
     );
     let script = Script::of(vec![draft(), extent(MAX_DRAFT_POSITIONS + 1)]);
-    let answer = replace_text(&script, json!({"doc": DOC, "old": "a", "new": "b"}).as_object().expect("an object")).expect("an answer");
+    let answer = replace_text(&script, &json!({"doc": DOC, "old": "a", "new": "b"})).expect("an answer");
     assert_eq!(
         answer,
         Answer {
@@ -834,46 +847,161 @@ fn a_draft_past_one_delivery_is_read_in_parts_typed_against_the_first_read() {
         }
     );
     assert_eq!(script.sent_past(0).len(), 2, "no part of the text is read");
+    assert_eq!(MAX_DRAFT_POSITIONS, 64 * MAX_DELIVERY_ITEMS, "the cap is sixty-four reads of the delivery budget");
 }
 
-/// The catalog tells an agent the edit's figures as the code holds them.
-///
-/// The card names the cap on one edit's new text and on a draft's size by
-/// their constants, the instructions send an agent to the tool, and every
-/// outcome and every cause of the tool's own is spelled on the card
-/// (SP-25).
-#[test]
-fn the_catalog_tells_an_agent_the_edits_figures_as_the_code_holds_them() {
-    let catalog: Value = serde_json::from_str(crate::tools::EMBEDDED).expect("the embedded catalog parses");
-    let card = catalog["tools"].as_array().expect("tools").iter().find(|tool| tool["name"] == "replace_text").expect("the replace_text card");
-    let said = card["description"].as_str().expect("the card's description");
-    assert!(said.contains(&format!("one insert's cap of {MAX_NEW_BYTES} bytes")), "the card names the new text's cap: {said}");
-    assert!(said.contains(&format!("a draft past {MAX_DRAFT_POSITIONS} content positions")), "the card names the draft's cap: {said}");
-    assert_eq!(MAX_DRAFT_POSITIONS, 64 * skep_client::search::MAX_DELIVERY_ITEMS, "sixty-four reads of the delivery budget");
-    for spelled in [
-        "\"replaced\"",
-        "\"unchanged\"",
-        "\"refused\"",
-        "\"partial\"",
-        "\"held\"",
-        "not_found",
-        "not_unique",
-        "crosses_atom",
-        "published",
-        "too_large",
-        "unknown_item",
-        "arrangement_moved",
-        "unread",
-        "new_text: {ordinal, width, addr?, at?}",
-        "old_text: {ordinal, width}",
-    ] {
-        assert!(said.contains(spelled), "the card spells `{spelled}`: {said}");
+// ── the edit through the shell's rows ──────────────────────────────────
+
+/// A board answering an edit's rows from a script: each call kept with the
+/// row and the session it named, the sessions that stand given.
+struct Rowed {
+    answers: RefCell<VecDeque<Result<Value, Refusal>>>,
+    named: RefCell<Vec<(Row, String)>>,
+    standing: Vec<&'static str>,
+}
+
+impl Rowed {
+    /// Returns a board answering with `answers`, in order, at which the
+    /// sessions `standing` stand.
+    fn of(answers: Vec<Result<Value, Refusal>>, standing: Vec<&'static str>) -> Rowed {
+        Rowed { answers: RefCell::new(answers.into()), named: RefCell::new(Vec::new()), standing }
     }
-    assert_eq!(card["inputSchema"]["required"], json!(["doc", "old", "new"]));
-    assert_eq!(card["inputSchema"]["properties"]["old"]["minLength"], 1, "an empty old is refused, and the schema says so");
-    let instructions = catalog["instructions"].as_str().expect("the instructions");
-    let editing = instructions.split("\n\n").find(|paragraph| paragraph.starts_with("EDITING TEXT. ")).expect("the instructions' paragraph on editing text");
-    assert!(editing.contains("replace_text(doc, old, new)"), "the paragraph sends an agent to the tool: {editing}");
+
+    /// Returns the sessions the calls named, in order, the script spent.
+    fn sessions(&self) -> Vec<String> {
+        assert!(self.answers.borrow().is_empty(), "every scripted answer was asked for: {:?}", self.answers.borrow());
+        self.named.borrow().iter().map(|(_, session)| session.clone()).collect()
+    }
+}
+
+impl Rows for Rowed {
+    fn answer(&self, row: Row, args: &Value) -> Result<Value, Refusal> {
+        self.named.borrow_mut().push((row, args["session"].as_str().unwrap_or_default().to_string()));
+        self.answers.borrow_mut().pop_front().unwrap_or_else(|| panic!("the script holds no answer for {row:?} {args}"))
+    }
+
+    fn stands(&self, session: &str) -> bool {
+        self.standing.contains(&session)
+    }
+}
+
+/// The death of `s-1`, the restart arm having re-opened `reopened` where it
+/// names one.
+fn died(reopened: Option<&str>) -> Result<Value, Refusal> {
+    let reason = match reopened {
+        Some(session) => json!({"arm": "restart", "reopened": true, "session": session}),
+        None => json!({"arm": "restart", "reopened": false}),
+    };
+    Err(Refusal::shell(Name::SESSION_DIED, json!({"session": "s-1", "reason": reason})))
+}
+
+/// Returns the edit of `add` into `addition` through `rows`, under `s-1`.
+fn through(rows: &Rowed) -> Result<Answer, Refusal> {
+    replace(&Under::new(rows, "s-1"), Asked { doc: DOC, old: "add", new: "addition" })
+}
+
+/// A call that meets a death the restart arm re-opened is made again under
+/// the re-open, and the edit stands under it from then on.
+///
+/// The draft's first read meets the death: it is made once more under `s-2`,
+/// which stands, and every later call names `s-2`, the edit landing as one
+/// no death met; a death naming a re-open that does not stand, or none, is
+/// the call's refusal, nothing written; and a second death of the same call
+/// is answered as it stands, never followed again (the mutants that answer
+/// every death, follow a re-open no session stands under, go back to the
+/// dead session, or follow without end).
+#[test]
+fn a_call_that_meets_a_death_the_restart_arm_re_opened_is_made_again_under_the_re_open() {
+    let ack = || Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44}));
+    let rows = Rowed::of([vec![died(Some("s-2"))], reads_of(CODE), vec![ack()]].concat(), vec!["s-2"]);
+    let answer = through(&rows).expect("an answer");
+    assert_eq!(answer.value["outcome"], "replaced", "{}", answer.value);
+    assert_eq!(rows.sessions(), ["s-1", "s-2", "s-2", "s-2", "s-2"], "the read made again under the re-open, every call after it under it too");
+    for (reopened, standing) in [(Some("s-2"), vec![]), (None, vec!["s-2"])] {
+        let rows = Rowed::of(vec![died(reopened)], standing);
+        assert_eq!(through(&rows), Err(died(reopened).unwrap_err()), "{reopened:?}: the death is the call's refusal");
+        assert_eq!(rows.sessions(), ["s-1"]);
+    }
+    let second = || Err(Refusal::shell(Name::SESSION_DIED, json!({"session": "s-2", "reason": {"arm": "restart", "reopened": true, "session": "s-3"}})));
+    let rows = Rowed::of(vec![died(Some("s-2")), second()], vec!["s-2", "s-3"]);
+    assert_eq!(through(&rows), Err(second().unwrap_err()), "a second death is answered as it stands");
+    assert_eq!(rows.sessions(), ["s-1", "s-2"]);
+}
+
+/// A line held at its session's death is dropped under the re-open, or
+/// named where no re-open stands.
+///
+/// The insert's dial met the death, and the shell held it `session_died`:
+/// where the restart arm re-opened a session that stands, the line's list
+/// and its drop are made again under it, the line dropped, and the edit
+/// answers `refused` with nothing standing and nothing held — an error, the
+/// write never having reached the board; where none stands, the drop is
+/// refused too, the line stands, and the edit answers `held` naming it (the
+/// mutant that follows no death leaves the line of a restart held, and the
+/// burst lands after an edit that answered nothing of it).
+#[test]
+fn a_line_held_at_its_sessions_death_is_dropped_under_the_re_open_or_named_where_none_stands() {
+    let rows = Rowed::of([reads_of(CODE), vec![held_answer(5, "session_died"), died(Some("s-2")), lines(5, "session_died", Value::Null), Ok(json!({}))]].concat(), vec!["s-2"]);
+    assert_eq!(through(&rows), Ok(Answer { value: json!({"outcome": "refused", "cause": "session_died", "doc": DOC}), is_error: true }));
+    assert_eq!(rows.named.borrow().iter().skip(3).map(|(row, _)| *row).collect::<Vec<_>>(), [Row::Op, Row::Held, Row::Held, Row::Resolve]);
+    assert_eq!(rows.sessions(), ["s-1", "s-1", "s-1", "s-1", "s-1", "s-2", "s-2"], "the list made again under the re-open, the drop under it");
+    let rows = Rowed::of([reads_of(CODE), vec![held_answer(5, "session_died"), died(None), died(None)]].concat(), vec![]);
+    assert_eq!(through(&rows), Ok(Answer { value: json!({"outcome": "held", "doc": DOC, "held": 5, "cause": "session_died", "write": "insert"}), is_error: true }));
+    assert_eq!(rows.sessions().len(), 6, "the reads, the insert, the list and the drop, each once");
+}
+
+/// An error answer carries the error member, and a data answer none.
+///
+/// The row's answer is the edit's object, `error: true` set in it exactly
+/// where the edit's answer is an error — a write the shell could not get to
+/// the board, a read it does not read, a held line, a partial landing — and
+/// nothing beside it in every other (the mutants that set the member on
+/// every answer, on none, or as another value).
+#[test]
+fn an_error_answer_carries_the_error_member_and_a_data_answer_none() {
+    let data = json!({"outcome": "refused", "cause": "not_found", "doc": DOC, "count": 0, "as_of": READ_AT});
+    assert_eq!(Answer::data(data.clone()).into_value(), data, "data stands as the edit built it");
+    let (answer, _) = edit("add", "addition", vec![held_answer(5, "unreachable"), lines(5, "unreachable", Value::Null), Ok(json!({}))]);
+    assert_eq!(answer.expect("an answer").into_value(), json!({"outcome": "refused", "cause": "unreachable", "doc": DOC, "error": true}));
+    let (answer, _) = edit("add", "addition", vec![held_answer(8, "unreachable"), lines(8, "unreachable", Value::Null), Err(Refusal::shell(Name::LANDING_UNREAD, json!({"held": 8})))]);
+    assert_eq!(answer.expect("an answer").into_value(), json!({"outcome": "held", "doc": DOC, "held": 8, "cause": "unreachable", "write": "insert", "error": true}));
+    let (answer, _) = edit("add", "addition", vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44}))]);
+    assert_eq!(answer.expect("an answer").into_value().get(ERROR), None, "a landing is data");
+}
+
+/// A halt naming a file the edit met and is not answered with is the row's
+/// to say.
+///
+/// The undo's read of the image meets a halt about a file: the edit answers
+/// `partial`, and the halt is left for the row to say on `Talk`, once,
+/// however often the edit met it; a halt the edit is answered with is
+/// `Shell::call`'s to say, and the row leaves it; and a halt naming no file
+/// is no one's to say (the mutants that keep no halt, keep the one the call
+/// answers too, or keep one twice).
+#[test]
+fn a_halt_naming_a_file_the_edit_met_and_is_not_answered_with_is_the_rows_to_say() {
+    let face = |path: Option<&str>| skep_client::halt::Face { state: "the key file does not read".into(), cause: "c".into(), act: "a".into(), path: path.map(Into::into) };
+    let about_a_file = || Err(Refusal::named(Name::STORE_UNREADABLE, face(Some("/store/keys/k"))));
+    let verdict = moved_verdict("delete", 44, 46);
+    let undone = vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44})), held_answer(4, "moved"), lines(4, "moved", verdict), Ok(json!({})), about_a_file()];
+    let rows = Rowed::of([reads_of(CODE), undone].concat(), vec![]);
+    let under = Under::new(&rows, "s-1");
+    let answered = replace(&under, Asked { doc: DOC, old: "add", new: "subtract" });
+    assert_eq!(answered.as_ref().map(|answer| answer.value["outcome"].clone()), Ok(json!("partial")));
+    assert_eq!(under.unsaid(&answered), [about_a_file().unwrap_err()], "the halt the undo met");
+    let rows = Rowed::of(vec![about_a_file()], vec![]);
+    let under = Under::new(&rows, "s-1");
+    let answered = replace(&under, Asked { doc: DOC, old: "add", new: "subtract" });
+    assert_eq!(answered, Err(about_a_file().unwrap_err()));
+    assert!(under.unsaid(&answered).is_empty(), "the call's own refusal is the call's to say");
+    let twice = Rowed::of(vec![about_a_file(), about_a_file()], vec![]);
+    let under = Under::new(&twice, "s-1");
+    assert!(under.op(json!({})).is_err() && under.op(json!({})).is_err());
+    assert_eq!(under.unsaid(&Ok(Answer::data(json!({})))).len(), 1, "one halt met twice is said once");
+    let pathless = Rowed::of(vec![Err(Refusal::named(Name::STORE_UNREADABLE, face(None)))], vec![]);
+    let under = Under::new(&pathless, "s-1");
+    assert!(under.op(json!({})).is_err());
+    assert!(under.unsaid(&Ok(Answer::data(json!({})))).is_empty(), "a face naming no file has no path to say");
 }
 
 /// Times the find and the trim over texts of three sizes.

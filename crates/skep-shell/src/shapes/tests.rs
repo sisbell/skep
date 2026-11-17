@@ -29,9 +29,10 @@ use crate::sessions::{self, Facts, Open, SessionEntry, SessionKind, Sessions, Su
 /// `feed::places_without_index`, the index state through `feed::state_json`,
 /// the death through `sessions`, the rest in the shape `shell`'s and its
 /// rows' children's `json!` spell (the publication family's, the merge
-/// family's, the past state's and the restore's answers are held to their
-/// declarations against the real board by the shell's own suite,
-/// `shell/tests/publication.rs`, `merge.rs` and `history.rs`).
+/// family's, the past state's, the restore's and the text edit's answers
+/// are held to their declarations against the real board by the shell's own
+/// suite, `shell/tests/publication.rs`, `merge.rs`, `history.rs` and
+/// `text.rs`).
 fn samples() -> Vec<(&'static str, Value)> {
     let facts = json!({"principal": 1, "account": "1.0.1", "origin": "http://127.0.0.1:8642"});
     vec![
@@ -165,6 +166,18 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         ("Restored", json!({"draft": "1.0.1.0.67", "at": 9, "position": 16, "as_of": 15, "marker": {"sides": ["1.0.1.0.64.1.1"], "head": "1.0.1.0.64.2", "head_copied": "13", "at": 12}})),
         ("MergeMarker", json!({"sides": ["1.0.1.0.64.1.1"], "head": "1.0.1.0.64.2", "head_copied": null, "at": null})),
+        ("TextReplaced", json!({"outcome": "replaced", "doc": "1.0.1.0.64", "ordinal": "7", "removed": "1", "inserted": "1", "addr": "1.0.1.0.64.0.1.80", "at": 45})),
+        ("TextUnchanged", json!({"outcome": "unchanged", "doc": "1.0.1.0.64", "ordinal": "7", "as_of": 40})),
+        ("TextRefused", json!({"outcome": "refused", "cause": "unreachable", "doc": "1.0.1.0.64", "error": true})),
+        (
+            "TextPartial",
+            json!({"outcome": "partial", "doc": "1.0.1.0.64", "new_text": {"ordinal": "10", "width": "8", "addr": "1.0.1.0.64.0.1.80", "at": 44}, "old_text": {"ordinal": "7", "width": "3"}, "cause": "unread", "op": "insert", "refusal": null, "error": true}),
+        ),
+        (
+            "TextHeld",
+            json!({"outcome": "held", "doc": "1.0.1.0.64", "held": 8, "cause": "unreachable", "write": "insert", "new_text": {"ordinal": "10", "width": "8"}, "old_text": {"ordinal": "7", "width": "3"}, "error": true}),
+        ),
+        ("TextSpan", json!({"ordinal": "10", "width": "8", "addr": "1.0.1.0.64.0.1.80", "at": 44})),
     ]
 }
 
@@ -197,11 +210,11 @@ fn every_declared_type_round_trips_its_sample_against_the_table() {
 /// Checks that the file names every shape, every call and every event.
 ///
 /// The calls are §4b.1's, the notebook's three acts, the document index's
-/// listing and the change feed's page — its rows the dispatch's calls, in
-/// the dispatch's order, each form of a row's argument object its members
-/// in their order, the forms joined as a union and a form of no member `{}`
-/// — with both answers and the nine events; a field's optionality renders
-/// as `?`, as the field spells itself.
+/// listing, the text edit and the change feed's page — its rows the
+/// dispatch's calls, in the dispatch's order, each form of a row's argument
+/// object its members in their order, the forms joined as a union and a
+/// form of no member `{}` — with both answers and the nine events; a
+/// field's optionality renders as `?`, as the field spells itself.
 #[test]
 fn the_file_names_every_shape_call_and_event() {
     assert_eq!([req("position", "number").to_string(), opt("warning", "string").to_string()], ["position: number", "warning?: string"], "a field spells itself as the declarations spell it");
@@ -212,7 +225,11 @@ fn the_file_names_every_shape_call_and_event() {
     for row in CALL_ROWS {
         assert!(text.contains(&format!("  {}(args: ", method_name(row.name))), "{}", row.name);
     }
-    assert_eq!(CALL_ROWS.len(), 39, "the thirty-nine calls: §4b.1's with the publication family's four, the merge family's four, `history.restore` and `held.show`, the notebook's three acts, the read of a draft's standing, the read of a draft's past state, the document index's listing and the change feed's page");
+    assert_eq!(
+        CALL_ROWS.len(),
+        40,
+        "the forty calls: §4b.1's with the publication family's four, the merge family's four, `history.restore` and `held.show`, the notebook's three acts, the read of a draft's standing, the read of a draft's past state, the document index's listing, the text edit and the change feed's page"
+    );
     assert_eq!(CALL_ROWS.iter().map(|row| row.name).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
     for line in [
         "  boards(args: {}): Promise<Outcome<BoardRow[]>>;\n",
@@ -238,6 +255,9 @@ fn the_file_names_every_shape_call_and_event() {
         "  marker: MergeMarker | null;\n",
         "  head_copied: string | null;\n",
         "  'held.show'(args: { session: string }): Promise<Outcome<{ shown: boolean }>>;\n",
+        "  'text.replace'(args: { session: string; doc: string; old: string; new: string }): Promise<Outcome<TextReplaced | TextUnchanged | TextRefused | TextPartial | TextHeld>>;\n",
+        "export interface TextRefused {\n  outcome: 'refused';\n  cause: string;\n  doc: string;\n  error?: true;\n  [member: string]: unknown;\n}\n",
+        "  new_text: TextSpan;\n  old_text: TextSpan;\n",
         "  supersede: string[];\n",
         "  over_cap: boolean;\n",
         "  unrecorded?: Refusal;\n",
@@ -291,7 +311,7 @@ fn the_file_names_every_shape_call_and_event() {
     assert!(text.contains("  warning?: string;"), "an optional field renders with `?`");
     assert!(text.contains("  position: number;"), "a required field renders bare");
     let open = SHAPES.iter().filter(|s| s.open).count();
-    assert_eq!(open, 5, "the shell refusal, the death's reason, the index state, the publication's refusal and its event carry their own members");
+    assert_eq!(open, 6, "the shell refusal, the death's reason, the index state, the publication's refusal and its event, and the text edit's refusal carry their own members");
     assert_eq!(text.matches("  [member: string]: unknown;\n").count(), open, "an open shape, and it alone, renders its index signature");
     assert!(text.starts_with("// skep-shell — the bridge's declarations"));
 }

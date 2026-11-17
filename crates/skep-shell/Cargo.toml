@@ -17,7 +17,9 @@ readme = "README.md"
 # shell's half of search — the feed consumer, the index directory, the
 # bridge's two calls over the index (the search and the document index's
 # listing) and the state event's ten arms — is what `feed` consumes,
-# `shell`'s `search` row reading the call's bound and options beside it;
+# `shell`'s `search` row reading the call's bound and options beside it,
+# and the text edit (`shell/text.rs`) the delivery budget it reads a
+# draft's text in parts of (`search::MAX_DELIVERY_ITEMS`);
 # and its `merge` feature on: the merge library — the composition, the
 # one-write landing, the record, the undo and the withdrawal — which the
 # `merge` family's four rows (`shell/merge.rs`) run for the page, and the

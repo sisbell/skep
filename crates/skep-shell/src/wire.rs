@@ -1,15 +1,16 @@
 //! The wire's shared facts, which several modules read and none owns.
 //!
 //! They are what the composer (`attest`), the held store (`held`), the
-//! burst's door and the resend (`hold`) and the call log the shell keeps
-//! (`shell`) each read of the board's wire and none of them owns — the
-//! board's frame cap and how a frame is measured against it, the tumbler
-//! component budget and an address read within it, a document address in its
-//! one spelling, the wire's write kinds, and the wire's value forms both ways
-//! (wire.md §Value encodings) with the insert's value budget: a frame's
-//! `values` minted as the composer signs them, and a delivery read back as the
-//! composer's read-back and the resend's content confirm hold it. A leaf: it
-//! names no other module of the crate.
+//! burst's door and the resend (`hold`), and the call log the shell keeps
+//! and its text edit (`shell`) each read of the board's wire and none of
+//! them owns — the board's frame cap and how a frame is measured against
+//! it, the tumbler component budget and an address read within it, a
+//! document address in its one spelling, the wire's write kinds, and the
+//! wire's value forms both ways (wire.md §Value encodings) with the
+//! insert's value budget: a frame's `values` minted as the composer signs
+//! them, and a delivery read back as the composer's read-back, the resend's
+//! content confirm and the text edit's read hold it. A leaf: it names no
+//! other module of the crate.
 
 use std::borrow::Cow;
 use std::io;
@@ -233,8 +234,9 @@ fn item_values(item: &Value) -> Box<dyn Iterator<Item = Result<Cow<'_, [u8]>, Va
 ///
 /// It is none at an odd length, or at any byte that is no ASCII hex digit —
 /// a sign, or a byte of a multi-byte character. The text is read byte by
-/// byte, so no character boundary can be cut.
-fn decode_hex(h: &str) -> Option<Vec<u8>> {
+/// byte, so no character boundary can be cut. The text edit reads a
+/// delivery's `hex` runs by it too (`shell::text`).
+pub(crate) fn decode_hex(h: &str) -> Option<Vec<u8>> {
     let digit = |b: u8| char::from(b).to_digit(16);
     let (pairs, odd) = h.as_bytes().as_chunks::<2>();
     if !odd.is_empty() {

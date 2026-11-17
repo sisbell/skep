@@ -27,10 +27,12 @@ const CODE: &str = "fn main() {\n    let total = add(left, right);\n    println!
 /// one-word change.
 const LINE: &str = "    let total = add(left, right);\n";
 
-/// The most bytes of new text one edit inserts, as `src/replace.rs` states it.
+/// The most bytes of new text one edit inserts, as skep-shell's
+/// `MAX_NEW_BYTES` states it.
 const MAX_NEW_BYTES: usize = 1 << 18;
 
-/// The positions one read of a draft's text asks, as `src/replace.rs` has it.
+/// The positions one read of a draft's text asks, as skep-shell's text edit
+/// has it: the board's delivery budget.
 const READ_POSITIONS: usize = 1 << 17;
 
 /// Returns the content ordinal at which `word` begins in `text`.
@@ -573,9 +575,9 @@ fn a_draft_past_one_read_is_read_in_parts_and_a_character_cut_between_them_is_te
 ///
 /// A changed text of the insert's cap lands in one commit, and one a byte
 /// past it is refused `too_large` before any write, naming the cap — the
-/// figure `src/replace.rs` states and the catalog tells an agent (SP-25):
-/// a cap the board lowered would fail the first, one it raised leaves the
-/// second refusing what the board would take.
+/// figure skep-shell's `MAX_NEW_BYTES` states and the catalog tells an
+/// agent (SP-25): a cap the board lowered would fail the first, one it
+/// raised leaves the second refusing what the board would take.
 #[test]
 fn one_edit_inserts_as_much_as_one_insert_carries_and_no_more() {
     let fixture = Fixture::new("replace-cap");

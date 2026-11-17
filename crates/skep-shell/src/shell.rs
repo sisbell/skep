@@ -52,7 +52,14 @@
 //! past state read and mapped with nothing written, `history.past`, and made
 //! current by one write, `history.restore`, typed against the page's own
 //! state of the draft (B3-S7) — are the child module `history`'s,
-//! `pub(super)` to the door. The bursts a session sends with an `id`, and
+//! `pub(super)` to the door.
+//! The `text` family's row, `text.replace` — a text edit of a draft that
+//! replaces the bytes that differ alone, so every byte it did not change
+//! keeps its identity, made of the `op`, `held` and `resolve` rows' calls
+//! within the one call the log keeps — is the child module `text`'s,
+//! `pub(super)` to the door, with the two caps it keeps
+//! ([`MAX_DRAFT_POSITIONS`], [`MAX_NEW_BYTES`]).
+//! The bursts a session sends with an `id`, and
 //! the FOLLOWER writes the page hands over with them — a `make_link`, a
 //! `nullify` or a `delete` sent with `after`, written at its burst's ack,
 //! its pieces resolved against the insert's words, and at the shell's stop
@@ -92,14 +99,14 @@
 //! no `bare` write of this shell's is ever committed
 //! (`write_in_bare_session`, `SessionEntry::may_write`); a write at a board
 //! whose held store another shell holds — a frame, a row of the publication
-//! or merge family, the restore, and every ceremony that writes to the
-//! board — ONE SHELL PER DATA DIRECTORY (§3c.3): until a second launch
-//! hands its address to the running client and exits, the second window
-//! reads alone at the board, runs no ceremony there (skep #829) and starts
-//! no notebook there, nothing held and nothing sent (`another_window`,
+//! or merge family, the restore, the text edit, and every ceremony that
+//! writes to the board — ONE SHELL PER DATA DIRECTORY (§3c.3): until a second
+//! launch hands its address to the running client and exits, the second window
+//! reads alone at the board, runs no ceremony there (skep #829) and starts no
+//! notebook there, nothing held and nothing sent (`another_window`,
 //! `Holds::another_window`), a ceremony's door touching the board's store
-//! first, so a window that has opened no session there meets the board's
-//! locks as they stand (`Holds::touch_store`; skep #880); a write of a kind
+//! first, so a window that has opened no session there meets the board's locks
+//! as they stand (`Holds::touch_store`; skep #880); a write of a kind
 //! the hold never holds (`hold::UNHOLDABLE_WRITES` — the mint among them,
 //! skep #868 — the shot, the restore's and the merge rows' writes) while a
 //! hold stands at the board, refused at once with its cause (`stopped`,
@@ -184,10 +191,12 @@ mod follow;
 mod publication;
 mod history;
 mod merge;
+mod text;
 
 use follow::{Closing, Followed, Follower, Followers, FOLLOW_AT_STOP};
 use merge::Merges;
 use publication::{address_arg, clipped, Publications};
+pub use text::{MAX_DRAFT_POSITIONS, MAX_NEW_BYTES};
 
 /// The session mode a run names, both arms selectable per run.
 ///
@@ -420,8 +429,9 @@ impl<'a> Write<'a> {
     /// A row named `call` that writes nothing a standing hold judges.
     ///
     /// It is a ceremony, whose walk's writes are the library's,
-    /// `publication.open`, which reads, or `node.start` or `node.restart`,
-    /// which starts the node.
+    /// `publication.open`, which reads, `node.start` or `node.restart`,
+    /// which starts the node, or `text.replace`, whose writes are bursts,
+    /// each meeting the door again on the `op` row's path.
     pub(super) fn unjudged(call: &'a str) -> Write<'a> {
         Write { named: Named::Call(call), kind: None, drafts: Vec::new() }
     }
@@ -461,8 +471,9 @@ impl<'a> Write<'a> {
 /// restart `node.restart` (L1), the read of a draft's standing beside the
 /// publication family, `publication.standing` (skep #864), the read of a
 /// past state before its restore, `history.past` (skep #853), the document
-/// index's listing `places` (A-255), or the change feed's page `changes`:
-/// one arm per call, which the compiler holds exhaustive, and the list a
+/// index's listing `places` (A-255), the text edit of a draft,
+/// `text.replace` (skep #1070), or the change feed's page `changes`: one
+/// arm per call, which the compiler holds exhaustive, and the list a
 /// transport admits a call by, [`CALLS`], spelled from `Call::ALL` — so no
 /// call is listed that the dispatch does not answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -505,6 +516,7 @@ enum Call {
     Held,
     HeldShow,
     Resolve,
+    TextReplace,
     Changes,
 }
 
@@ -517,8 +529,10 @@ impl Call {
     /// `merge` family after it, whose shot its landing rides, `history.past`
     /// and `history.restore` closing the merge row that draws the restore, the
     /// read before the write; `places` stands beside `search`, `held.show`
-    /// after `held`, whose row owes it, and the change feed's `changes` last.
-    const ALL: [Call; 39] = [
+    /// after `held`, whose row owes it, the `text` family's `text.replace`
+    /// after `resolve`, the rows it is made of standing before it, and the
+    /// change feed's `changes` last.
+    const ALL: [Call; 40] = [
         Call::Boards,
         Call::Session,
         Call::Close,
@@ -557,6 +571,7 @@ impl Call {
         Call::Held,
         Call::HeldShow,
         Call::Resolve,
+        Call::TextReplace,
         Call::Changes,
     ];
 
@@ -601,6 +616,7 @@ impl Call {
             Call::Held => "held",
             Call::HeldShow => "held.show",
             Call::Resolve => "resolve",
+            Call::TextReplace => "text.replace",
             Call::Changes => "changes",
         }
     }
@@ -611,7 +627,7 @@ impl Call {
     }
 }
 
-/// The bridge's thirty-nine calls, as it spells them, in its order.
+/// The bridge's forty calls, as it spells them, in its order.
 ///
 /// They are §4b.1's thirty-two — the `publication` family's four, the
 /// `merge` family's four, `history.restore` and `held.show` among them —
@@ -619,9 +635,9 @@ impl Call {
 /// `node.restart` (L1), the read of a draft's standing,
 /// `publication.standing` (skep #864), the read of a past state before its
 /// restore, `history.past` (skep #853), the document index's listing,
-/// `places` (A-255), and the change feed's page, `changes`: the list a
-/// transport admits a call by, every name of it one [`Shell::call`]
-/// answers.
+/// `places` (A-255), the text edit of a draft, `text.replace` (skep #1070),
+/// and the change feed's page, `changes`: the list a transport admits a
+/// call by, every name of it one [`Shell::call`] answers.
 pub const CALLS: [&str; Call::ALL.len()] = {
     let mut names = [""; Call::ALL.len()];
     let mut i = 0;
@@ -1394,6 +1410,7 @@ impl Shell {
             Some(Call::Held) => self.held(args),
             Some(Call::HeldShow) => self.held_show(args),
             Some(Call::Resolve) => self.resolve(args),
+            Some(Call::TextReplace) => self.text_replace(args),
             Some(Call::Changes) => self.changes(args),
             None => Err(Refusal::shell(Name::UNKNOWN_CALL, json!({"call": name}))),
         };
@@ -2111,7 +2128,9 @@ impl Shell {
     ///
     /// Every write the shell sends asks it: a write frame through `op` —
     /// `/op-at`'s too; every row of the publication and merge families and
-    /// `history.restore`, through [`Shell::signed`]; and every ceremony that
+    /// `history.restore`, through [`Shell::signed`]; `text.replace`, once
+    /// before its first read, each burst it sends asking again as a frame
+    /// through `op` (`Shell::text_replace`); and every ceremony that
     /// writes to the board, which runs under no session of this shell's and
     /// asks as its board ([`Writer::Board`]), as the notebook's start and
     /// restart (`node.start`, `node.restart`) ask. `write` is the write as the

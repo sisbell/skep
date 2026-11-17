@@ -5,14 +5,15 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "The MCP adapter: JSON-RPC 2.0 over stdio on the agent side, the shell's core (skep-shell) on the other. One static binary an agent harness runs; every tool is one call of the shell under ONE signed session the adapter opens at startup — the wire ops by name, the shell's own calls, a change pull, a blob fetch — save the text edit, replace_text, which composes several, and a board's verdict comes back as data."
+description = "The MCP adapter: JSON-RPC 2.0 over stdio on the agent side, the shell's core (skep-shell) on the other. One static binary an agent harness runs; every tool is one call of the shell under ONE signed session the adapter opens at startup — the wire ops by name, the shell's own calls, a change pull, a blob fetch, the text edit that keeps identity — and a board's verdict comes back as data."
 readme = "README.md"
 
 [dependencies]
 # The shell's core, written once for the dev provider, the desktop shell
 # and this adapter — the signed session with its attest, the hold that
 # keeps a burst the board cannot take, the feed consumer behind `search`
-# and `places`, the change feed's page behind `changes_since`, and the
+# and `places`, the change feed's page behind `changes_since`, the text
+# edit behind `replace_text` and its caps the catalog states, and the
 # streamed blob fetch. The adapter is a transport over it: stdio JSON-RPC
 # in, `Shell::call` and `Shell::fetch` out.
 skep-shell = { path = "../skep-shell" }
@@ -27,15 +28,13 @@ skep-shell = { path = "../skep-shell" }
 # (`dial::plaintext_non_loopback_warning`, AUTH-4.53) the start says; the
 # search index's directory under the store (`search::SearchDir`), where the
 # shell's feed opens it and the start's write probe and the drain's lines
-# find it; the person's own store (`store::default_store_dir`), which
-# the start warns of where it is the agent's; and, for the text edit
-# (`src/replace.rs`), the frames it sends (`board::frames`: the metadata,
-# extent, delivery and image reads, the insert and the delete) and the
-# delivery budget its reads keep to (`search::MAX_DELIVERY_ITEMS`). `search`,
-# which skep-shell turns on as well, is named here for both; the unit suite
-# reads its query bound (`search::QUERY_BOUND`), the change feed's default
-# page (`board::DEFAULT_CHANGES_LIMIT`) and the commons' type addresses
-# (`board::T_ENROLL`, …) the catalog and the commons gate restate.
+# find it; and the person's own store (`store::default_store_dir`), which
+# the start warns of where it is the agent's. `search`, which skep-shell
+# turns on as well, is named here for both; the unit suite reads its query
+# bound (`search::QUERY_BOUND`), the change feed's default page
+# (`board::DEFAULT_CHANGES_LIMIT`) and the commons' type addresses
+# (`board::T_ENROLL`, …, `board::frames::T_GRANT`, …) the catalog and the
+# commons gate restate.
 skep-client = { path = "../skep-client", features = ["search"] }
 # The bridge's values: every call's input and output is a
 # `serde_json::Value`; JSON-RPC's framing is this crate's own.

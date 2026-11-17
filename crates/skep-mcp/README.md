@@ -40,22 +40,22 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `tools.json` beside `Cargo.toml`, is embedded and checked against that
   dispatch at startup.
 - **A text edit that keeps identity.** `replace_text {doc, old, new}` is
-  the one tool that is several calls: it reads a draft's content as text,
-  finds `old`, which must stand exactly once, leaves standing what `old`
-  and `new` share at either end, and replaces only the bytes that differ,
-  through `insert` and `delete` — so every other byte keeps its identity
-  and a link on it still follows. An edit that only inserts or only removes
-  is one commit; one that does both is two, the new bytes inserted, then
-  the old removed, and where the second does not land the first is taken
-  back by its identity within the call. It drops every line of its own the
-  shell holds: a stale edit, a refused one and one the board could not take
-  answer `refused` with nothing of the edit standing and nothing queued. The
-  two answers that say something stands or may are `isError` and name it:
-  `partial`, the new bytes standing beside the old where the take-back did
-  not land either, and `held`, a line the shell would not drop because it
-  cannot tell whether its write landed. A published document is refused
-  before any write; the raw `insert`, `delete` and `set_arrangement` stay
-  offered.
+  the shell's `text.replace`, one call made of several of the shell's own:
+  it reads a draft's content as text, finds `old`, which must stand exactly
+  once, leaves standing what `old` and `new` share at either end, and
+  replaces only the bytes that differ, through `insert` and `delete` — so
+  every other byte keeps its identity and a link on it still follows. An
+  edit that only inserts or only removes is one commit; one that does both
+  is two, the new bytes inserted, then the old removed, and where the second
+  does not land the first is taken back by its identity within the call. It
+  drops every line of its own the shell holds: a stale edit, a refused one
+  and one the board could not take answer `refused` with nothing of the edit
+  standing and nothing queued. The two answers that say something stands or
+  may are `isError` and name it: `partial`, the new bytes standing beside
+  the old where the take-back did not land either, and `held`, a line the
+  shell would not drop because it cannot tell whether its write landed. A
+  published document is refused before any write; the raw `insert`, `delete`
+  and `set_arrangement` stay offered.
 - **A refusal as a result.** The board's verdict on a frame comes back as
   data, `isError: false`; `isError` means the shell could not get the
   board's verdict — among the causes, a board not answering and a frame the
@@ -146,18 +146,16 @@ a bug said in one line of the log.
 
 Not settings: the pins, carded constants a rebuild alone moves, each stated
 once at its home — the fetch's cap and deadline (`MAX_FETCH_BYTES`,
-`FETCH_DEADLINE`, `src/media.rs`); the text edit's bounds — the positions
-one read of a draft asks, the largest draft it reads, the most new text one
-edit inserts and the times it types an undo afresh (`READ_POSITIONS`,
-`MAX_DRAFT_POSITIONS`, `MAX_NEW_BYTES`, `UNDO_TRIES`, `src/replace.rs`); the
-wait for a session the shell ended
+`FETCH_DEADLINE`, `src/media.rs`); the wait for a session the shell ended
 (`SETTLE_WAIT`, `src/shell.rs`); the slow-call bound (`SLOW_CALL`,
 `src/server.rs`, skep-client's `IO_TIMEOUT`) and the revision `initialize`
 answers where a client names none (`FALLBACK_PROTOCOL_VERSION`); the start's
 wait for a store another adapter holds (`STORE_WAIT`, `src/main.rs`); the
 log's queue, line and stall bounds (`QUEUE_BYTES`, `LINE_BYTES`,
 `DRAIN_STALL`, `src/log.rs`); skep-client's dial bounds (`CONNECT_TIMEOUT`,
-`IO_TIMEOUT`); and skep-shell's own.
+`IO_TIMEOUT`); and skep-shell's own — the text edit's bounds among them, the
+largest draft it reads and the most new text one edit inserts
+(`MAX_DRAFT_POSITIONS`, `MAX_NEW_BYTES`, its root's).
 
 The log is stderr: every line opens `skep-mcp: ` and the moment it was said,
 RFC 3339 UTC to the millisecond, as the daemon's own lines do, and the first

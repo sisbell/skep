@@ -227,9 +227,9 @@ foundation and on the stores above it.
 - `skep-mcp` — a stdio adapter for agent harnesses over the shell's core
   (`skep-shell`): one signed session for the process's life, every wire
   op but `publish` a tool of its name, the shell's calls — the
-  publication family's four among them — a change pull and a blob
-  fetch beside them, and a text edit of a draft, `replace_text`, composed
-  of those calls. One binary: of the skep crates it depends on
+  publication family's four and its text edit of a draft, `replace_text`,
+  among them — and a change pull and a blob fetch beside them. One
+  binary: of the skep crates it depends on
   `skep-shell` and `skep-client` — the latter for the types the shell's
   surface names, the inert rendering a key's label and every log line
   take, the plaintext warning its start says, and the places its start
@@ -857,17 +857,18 @@ SP-17, SP-18, SP-20, SP-24, SP-28.
 per call of §4b.1 (the `publication` family's four among them), of the
 read of a draft's standing `publication.standing`, of the read of a
 draft's past state `history.past`, of the document index's listing
-`places` (A-255) and of the change feed's page `changes`,
-every event of §4b.2 on one stream — and
+`places` (A-255), of the text edit of a draft `text.replace` and of the
+change feed's page `changes`, every event of §4b.2 on one stream — and
 the three things `skep-client` does not hold and every shell needs,
 written once so the dev provider (`skep-dev serve`) and the desktop shell
 share them and rewrite the transport alone. A transport reaches it
 through the crate root — `Shell` and what opens it, `Refusal` and its
 `Name`, `Log` and its `CallOutcome`, `Event`, its `EventName` and
-`UnknownEventName`, `Talk`, `CALLS` — and two public modules, `script` and
-`shapes`; the rest is private. Its modules, in the order `src/lib.rs`
-declares them, each naming only those above it — an item the root
-re-exports counted as the module it is brought from (held by
+`UnknownEventName`, `Talk`, `CALLS`, the text edit's caps
+`MAX_DRAFT_POSITIONS` and `MAX_NEW_BYTES` — and two public modules,
+`script` and `shapes`; the rest is private. Its modules, in the order
+`src/lib.rs` declares them, each naming only those above it — an item the
+root re-exports counted as the module it is brought from (held by
 `tests/it/tidy.rs`):
 
 - `refs.rs` the reference registry's NAMES: board and session references
@@ -923,10 +924,11 @@ re-exports counted as the module it is brought from (held by
   the private row methods behind `call`, which logs each; `fetch`,
   `answer`, `cancel`, `shutdown`; `ShellOptions`, `NodeControl` and
   `set_node_state`; and `Shell::write_door`, the ONE WRITE DOOR every write
-  the shell sends meets before any dial — the `op` row's frames, and through
+  the shell sends meets before any dial — the `op` row's frames, through
   `Shell::signed` every row of `shell/publication.rs`, `shell/merge.rs` and
-  `shell/history.rs` that writes, and every ceremony of `shell/ceremony.rs`
-  that writes to the board.
+  `shell/history.rs` that writes, `shell/text.rs`'s edit before its first
+  read, and every ceremony of `shell/ceremony.rs` that writes to the
+  board.
 - `shell/ceremony.rs` the ten ceremonial rows — `keygen`, `fingerprint` and
   the eight walks over `skep_client::ceremony` — `pub(super)` to `call`.
 - `shell/follow.rs` `Followers`: the bursts each session sent with an `id`
@@ -950,6 +952,11 @@ re-exports counted as the module it is brought from (held by
   write — `pub(super)` to `call`, their refusals crossing through
   `shell/merge.rs`'s mapping and the restore's write noted in `hold.rs`'s
   holds.
+- `shell/text.rs` the `text` family's row, `text.replace` — a text edit of
+  a draft that replaces the bytes that differ alone, made of the `op`,
+  `held` and `resolve` rows' calls under the session it stands under —
+  `pub(super)` to `call`, and the two caps it keeps, re-exported at the
+  root.
 - `shapes.rs` the declarations' table and `declarations()`, pinned by its
   suite — the board's verdict with its `site`, the publication family's
   panel, inputs, outcomes and event among them.
@@ -959,9 +966,12 @@ Rules that hold across its files:
 - **One door per call.** Every call reaches its row through `Shell::call`,
   which logs it; the row methods are `shell`'s alone — private, or
   `pub(super)` in `shell/ceremony.rs`, `shell/publication.rs`,
-  `shell/merge.rs` and `shell/history.rs` — so a
-  transport cannot serve a call the log never saw. `Shell::fetch` is the
-  one public row, because it streams, and logs its own call.
+  `shell/merge.rs`, `shell/history.rs` and `shell/text.rs` — so a
+  transport cannot serve a call the log never saw. A row made of other
+  rows' calls — `close`'s frames, `text.replace`'s reads, writes and
+  drops — makes them within its own call, and the log keeps that one.
+  `Shell::fetch` is the one public row, because it streams, and logs its
+  own call.
   `tests/it/tidy.rs` pins `Shell`'s public methods across every
   `impl Shell` block of `shell.rs` and its non-test children, and `CALLS`,
   the list a transport admits a call by, is spelled from the same enum as
@@ -979,7 +989,8 @@ Rules that hold across its files:
 Its suites are unit modules beside the code they test. `shell/tests.rs` and
 its children run the shell: `door` the shell alone, with no daemon behind
 it; `modes`, `ceremonies`, `boards`, `held`, `publication`, `merge`,
-`follow` and `classes` against a daemon spawned in-process over a temp data dir. `hold/tests.rs` and its children `write`,
+`follow`, `text` and `classes` against a daemon spawned in-process over a
+temp data dir. `hold/tests.rs` and its children `write`,
 `resend`, `labels`, `writers` and `classes` drive the hold over a fake board; the other modules test
 themselves over fakes and temp dirs; and `tests/it/tidy.rs` holds the
 arrangement — the declaration order, every file under `src/` declared by

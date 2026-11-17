@@ -454,25 +454,17 @@ fn the_opts_the_door_admits_are_the_ones_skep_shell_declares_bar_reindex() {
 /// ones the row requires. Unchecked, a member the shell renamed or dropped
 /// would stay admitted here and advertised to every agent, while the shell,
 /// which reads no member it does not name, answered the call as though the
-/// member had never been sent. `replace_text` composes several rows and
-/// copies none: its members are `crate::replace`'s own, each read there in
-/// its form, and its schema requires all three.
+/// member had never been sent.
 #[test]
 fn each_adapter_tool_takes_its_shell_rows_members_bar_the_session_and_board() {
     let declarations = skep_shell::shapes::declarations();
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
     for (name, tool, members) in ADAPTER_TOOLS {
         // The row `Server::call` sends the tool as; `session_info` takes no
-        // argument, and copies no row, and neither does `replace_text`,
-        // which the shell declares no row for.
+        // argument, and copies no row.
         let row = match tool {
             Tool::SessionInfo => continue,
-            Tool::ReplaceText => {
-                assert!(!declarations.contains("replace_text"), "the shell declares no row the text edit could copy");
-                let entry = catalog.tools.iter().find(|t| t["name"] == *name).expect("every adapter tool is catalogued");
-                assert_eq!(entry["inputSchema"]["required"], json!(members), "{name}: the schema requires every member the edit reads");
-                continue;
-            }
+            Tool::ReplaceText => "text.replace",
             Tool::ChangesSince => "changes",
             Tool::PublicationOpen => "publication.open",
             Tool::PublicationCount => "publication.count",
@@ -636,6 +628,130 @@ fn the_publication_cards_state_the_shells_shapes() {
         let enumerated: BTreeSet<String> = properties["answers"]["additionalProperties"]["enum"].as_array().expect("the answers' enum").iter().filter_map(Value::as_str).map(str::to_string).collect();
         assert_eq!(enumerated, answers, "{name}: an answer is the shell's OriginAnswer");
     }
+}
+
+/// The catalog tells an agent the edit's figures as the shell holds them.
+///
+/// The card names the cap on one edit's new text and on a draft's size by
+/// skep-shell's constants, the instructions send an agent to the tool, and
+/// every outcome and every cause of the edit's own is spelled on the card
+/// (SP-25).
+#[test]
+fn the_catalog_tells_an_agent_the_edits_figures_as_the_code_holds_them() {
+    use skep_shell::{MAX_DRAFT_POSITIONS, MAX_NEW_BYTES};
+    let catalog: Value = serde_json::from_str(EMBEDDED).expect("the embedded catalog parses");
+    let card = catalog["tools"].as_array().expect("tools").iter().find(|tool| tool["name"] == "replace_text").expect("the replace_text card");
+    let said = card["description"].as_str().expect("the card's description");
+    assert!(said.contains(&format!("one insert's cap of {MAX_NEW_BYTES} bytes")), "the card names the new text's cap: {said}");
+    assert!(said.contains(&format!("a draft past {MAX_DRAFT_POSITIONS} content positions")), "the card names the draft's cap: {said}");
+    for spelled in [
+        "\"replaced\"",
+        "\"unchanged\"",
+        "\"refused\"",
+        "\"partial\"",
+        "\"held\"",
+        "not_found",
+        "not_unique",
+        "crosses_atom",
+        "published",
+        "too_large",
+        "unknown_item",
+        "arrangement_moved",
+        "unread",
+        "new_text: {ordinal, width, addr?, at?}",
+        "old_text: {ordinal, width}",
+    ] {
+        assert!(said.contains(spelled), "the card spells `{spelled}`: {said}");
+    }
+    assert_eq!(card["inputSchema"]["required"], json!(["doc", "old", "new"]));
+    assert_eq!(card["inputSchema"]["properties"]["old"]["minLength"], 1, "an empty old is refused, and the schema says so");
+    let instructions = catalog["instructions"].as_str().expect("the instructions");
+    let editing = instructions.split("\n\n").find(|paragraph| paragraph.starts_with("EDITING TEXT. ")).expect("the instructions' paragraph on editing text");
+    assert!(editing.contains("replace_text(doc, old, new)"), "the paragraph sends an agent to the tool: {editing}");
+}
+
+/// The text edit's card states the shell's answers, bar the error member.
+///
+/// The `replace_text` card spells each answer skep-shell's `text.replace`
+/// row declares (`shapes::declarations`) as `{outcome: "…", a, b?, …}` —
+/// every member of the shape, `?` where it is optional, a span's members in
+/// braces beside it, `…` where the shape is open — and no other, save the
+/// shell's error member, which the adapter takes off (`EDIT_ERROR`) and no
+/// agent sees; the answers that carry that member are the three `isError`
+/// ones, `refused` beside a verdict-less cause, `partial` and `held`, and a
+/// span the card spells is the shell's `TextSpan` (SP-24). A shape the
+/// shell changes in one place alone would tell every agent of an answer the
+/// shell no longer gives.
+#[test]
+fn the_replace_text_card_states_the_shells_answers_bar_the_error_member() {
+    /// Returns `text` from its first `{` to the `}` that closes it.
+    fn braced(text: &str) -> &str {
+        let open = text.find('{').expect("an opening brace");
+        let mut depth = 0;
+        for (at, c) in text[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &text[open..=open + at];
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("an unclosed brace: {text}")
+    }
+    /// Returns a braced object's members as a card spells them, each with
+    /// whether it is required, and whether it ends `…`.
+    fn members(object: &str) -> (BTreeSet<(&str, bool)>, bool) {
+        let inner = &object[1..object.len() - 1];
+        let (mut pieces, mut depth, mut from) = (Vec::new(), 0, 0);
+        for (at, c) in inner.char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                ',' if depth == 0 => {
+                    pieces.push(inner[from..at].trim());
+                    from = at + 1;
+                }
+                _ => {}
+            }
+        }
+        pieces.push(inner[from..].trim());
+        let open = pieces.last() == Some(&"…");
+        let named = pieces
+            .iter()
+            .filter(|piece| **piece != "…")
+            .map(|piece| piece.split(':').next().unwrap_or(piece).trim())
+            .map(|name| name.strip_suffix('?').map_or((name, true), |name| (name, false)))
+            .collect();
+        (named, open)
+    }
+    let declarations = skep_shell::shapes::declarations();
+    let line = declarations.lines().find(|line| line.starts_with("  'text.replace'(args: ")).expect("skep-shell declares the text.replace row");
+    let answers = line.split_once("Promise<Outcome<").and_then(|(_, rest)| rest.strip_suffix(">>;")).unwrap_or_else(|| panic!("the row's answer: {line}"));
+    let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    let card = catalog.tools.iter().find(|t| t["name"] == "replace_text").and_then(|t| t["description"].as_str()).expect("the replace_text card");
+    let edit_error = crate::server::EDIT_ERROR;
+    let mut errors = BTreeSet::new();
+    for name in answers.split(" | ") {
+        let shape = skep_shell::shapes::shape(name).unwrap_or_else(|| panic!("skep-shell declares {name}"));
+        let outcome =
+            shape.fields.iter().find(|field| field.name == "outcome").and_then(|field| field.ty.strip_prefix('\'')?.strip_suffix('\'')).unwrap_or_else(|| panic!("{name} is keyed by its outcome"));
+        let head = format!("{{outcome: \"{outcome}\"");
+        let at = card.find(&head).unwrap_or_else(|| panic!("the card spells the {outcome} answer: {card}"));
+        let (spelled, open) = members(braced(&card[at..]));
+        let declared: BTreeSet<(&str, bool)> = shape.fields.iter().filter(|field| field.name != edit_error).map(|field| (field.name, field.required)).collect();
+        assert_eq!((spelled, open), (declared, shape.open), "the card spells {name} as the shell declares it, bar the error member: {card}");
+        if shape.fields.iter().any(|field| field.name == edit_error) {
+            errors.insert(outcome);
+        }
+    }
+    assert_eq!(errors, BTreeSet::from(["refused", "partial", "held"]), "the answers the shell marks as errors");
+    let span = card.find("new_text: {").map(|at| members(braced(&card[at..])).0).expect("the card spells new_text's members");
+    let declared: BTreeSet<(&str, bool)> = skep_shell::shapes::shape("TextSpan").expect("skep-shell declares TextSpan").fields.iter().map(|field| (field.name, field.required)).collect();
+    assert_eq!(span, declared, "a span is the shell's TextSpan");
 }
 
 /// The `probe` card names every state the shell's `probe()` answers and its

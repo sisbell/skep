@@ -6,11 +6,11 @@
 //! input and output, every event, the refusal, the `feed` update's shape (a
 //! `changes` entry's too), the index state's ten arms, the publication
 //! family's panel, inputs and outcomes, the merge family's report and
-//! outcomes, and the past state's and the restore's answers with the merge
-//! marker each carries — from the table below, which is
-//! written by hand beside the code that builds each value (`shell`,
-//! `shell::publication`, `shell::merge`, `shell::history`, `feed`,
-//! `sessions`, `refusal`, `person`, `hold`)
+//! outcomes, the past state's and the restore's answers with the merge
+//! marker each carries, and the text edit's answers — from the table below,
+//! which is written by hand beside the code that builds each value
+//! (`shell`, `shell::publication`, `shell::merge`, `shell::history`,
+//! `shell::text`, `feed`, `sessions`, `refusal`, `person`, `hold`)
 //! and pinned by this module's suite: a sample of each type, built as the
 //! code builds it,
 //! is round-tripped through `serde_json` and its field names held equal to
@@ -532,6 +532,42 @@ const SHAPES: &[Shape] = &[
         doc: "a draft's merge marker as `doc_metadata` serves it: `sides` the merge's sides by address, `head` the trunk member the merge was composed on, `head_copied` that member's content count as read at the compose, a decimal string, or null where the board serves none, `at` the position of the commit that put the marker on the draft, or null where the board serves none",
         fields: &[req("sides", "string[]"), req("head", "string"), req("head_copied", "string | null"), req("at", "number | null")],
     },
+    Shape {
+        name: "TextReplaced",
+        open: false,
+        doc: "`text.replace(session, {doc, old, new})` — THE TEXT EDIT, landed (skep #1070): `old`, found exactly once in the draft's text, replaced by `new` through the bytes that differ alone — what the two share at either end left standing, whole characters, so every other byte keeps its identity and a link on it still follows; one commit where the edit only inserts or only removes, two where it does both, the new bytes inserted after the old and the old then removed; `ordinal` the content position (1-based, a byte each) of the first byte changed, `removed` and `inserted` the bytes taken out and put in there, each a decimal string; `addr` the first I-address of the new bytes and `at` the commit the edit was whole at, which the page's next burst on `doc` is typed against, each absent where no answer named it — no byte inserted, or a write whose answer was lost and whose landing the shell's read found, or whose held line was gone at the edit's drop, read as landed: the held queue is the principal's, so that reading holds only while no other caller of the principal's resolves the draft's lines during the edit — a page that drops a line, or runs a second edit of the draft, beside an edit may be answered `replaced` for a write that did not land; the call's four other answers are `TextUnchanged`, `TextRefused`, `TextPartial` and `TextHeld`, each keyed by `outcome`",
+        fields: &[req("outcome", "'replaced'"), req("doc", "string"), req("ordinal", "string"), req("removed", "string"), req("inserted", "string"), opt("addr", "string"), opt("at", "number")],
+    },
+    Shape {
+        name: "TextUnchanged",
+        open: false,
+        doc: "`text.replace` — `old` and `new` are the same text, found once at `ordinal` (a decimal string) in the draft as read at `as_of`: nothing written",
+        fields: &[req("outcome", "'unchanged'"), req("doc", "string"), req("ordinal", "string"), req("as_of", "number")],
+    },
+    Shape {
+        name: "TextRefused",
+        open: true,
+        doc: "`text.replace` — NOTHING of the edit stands and no line of it is held: `cause` the edit's own — `not_found` and `not_unique` with `count` and the `as_of` the draft was read at, `crosses_atom` with the `ordinal` and the `kind` of the value that is no text the match would take in, `published` with the document, `too_large` with `what` (`new` and its `bytes`, or `draft` and its `positions`) and the `cap`, `unknown_item` with the `kind` whose positions the shell cannot count, `arrangement_moved` with the `as_of` where the draft changed between the parts of its read — or the board's verdict on a write, its `code` the cause and the verdict under `refusal`; and, `error` beside them, an answer that is no verdict: a write the shell could not get to the board, its hold's cause the cause (`unreachable`, `stopped`, `halted`, `poisoned`, `durability`, `head_unreadable`, `session_died`, or `behind` — a line of an earlier burst of the principal's held at the board), or a read the board answered in a form this shell does not read (`unread`, with its `op`)",
+        fields: &[req("outcome", "'refused'"), req("cause", "string"), req("doc", "string"), opt("error", "true")],
+    },
+    Shape {
+        name: "TextPartial",
+        open: false,
+        doc: "`text.replace` — an error: an edit of two writes that landed in part, the new text STANDING directly after the old text, which was NOT removed, and the take-back by identity not landing either — `new_text` and `old_text` the two spans as the insert left them, `cause` what stopped the removal, `refusal` the verdict or the refusal beside it where there is one, `op` the write the shell read no answer of where that is the cause; the page removes one of the two, typed at its own read",
+        fields: &[req("outcome", "'partial'"), req("doc", "string"), req("new_text", "TextSpan"), req("old_text", "TextSpan"), req("cause", "string"), opt("refusal", "unknown"), opt("op", "string"), req("error", "true")],
+    },
+    Shape {
+        name: "TextHeld",
+        open: false,
+        doc: "`text.replace` — an error: the shell could not tell whether a write of the edit's landed, the board not answering, so its line stays held and the shell refused its drop — `held` the line's ordinal, `cause` its hold's, `write` the write it is; `new_text` and `old_text` beside them where the edit is of two writes, which may stand in part — a held insert may place `new_text`, a held delete may remove `old_text`",
+        fields: &[req("outcome", "'held'"), req("doc", "string"), req("held", "number"), req("cause", "string"), req("write", "'insert' | 'delete'"), opt("new_text", "TextSpan"), opt("old_text", "TextSpan"), req("error", "true")],
+    },
+    Shape {
+        name: "TextSpan",
+        open: false,
+        doc: "a stretch of a draft's text a two-write edit names: `ordinal` its first byte's content position and `width` its bytes, decimal strings; `addr` and `at` the new text's first I-address and the insert's commit, where the insert's ack named them",
+        fields: &[req("ordinal", "string"), req("width", "string"), opt("addr", "string"), opt("at", "number")],
+    },
 ];
 
 /// One call of the bridge as the file declares it.
@@ -640,6 +676,11 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
     CallRow { name: "held.show", forms: &[&[req("session", "string")]], result: "{ shown: boolean }" },
     CallRow { name: "resolve", forms: &[&[req("session", "string"), req("held", "number"), req("act", "'drop' | 'send'")]], result: "{ kept?: true; may_have_landed?: number[] }" },
     CallRow {
+        name: "text.replace",
+        forms: &[&[req("session", "string"), req("doc", "string"), req("old", "string"), req("new", "string")]],
+        result: "TextReplaced | TextUnchanged | TextRefused | TextPartial | TextHeld",
+    },
+    CallRow {
         name: "changes",
         forms: &[
             &[req("session", "string"), req("since", "number"), opt("limit", "number"), opt("class", "'drafts'"), opt("under", "string")],
@@ -724,7 +765,7 @@ pub fn declarations() -> String {
         }
         out.push_str("}\n\n");
     }
-    out.push_str("/** The calls (client.md §4b.1 — the `publication` family's four, the `merge` family's four and `history.restore` among them — this machine's notebook's three acts `node.start`, `node.stop` and `node.restart`, the read of a draft's standing `publication.standing`, the read of a draft's past state `history.past`, the document index's listing `places`, and the change feed's page `changes`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
+    out.push_str("/** The calls (client.md §4b.1 — the `publication` family's four, the `merge` family's four and `history.restore` among them — this machine's notebook's three acts `node.start`, `node.stop` and `node.restart`, the read of a draft's standing `publication.standing`, the read of a draft's past state `history.past`, the document index's listing `places`, the text edit of a draft `text.replace`, and the change feed's page `changes`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
     out.push_str("export interface Bridge {\n");
     for row in CALL_ROWS {
         let forms: Vec<String> = row.forms.iter().map(|form| argument_object(form)).collect();

@@ -149,6 +149,37 @@ fn an_answer_and_the_boards_verdict_are_data_and_every_other_refusal_is_an_error
     }
 }
 
+/// Checks that the text edit's error member is its `isError`, and is taken
+/// off.
+///
+/// The shell's `text.replace` answer with the error member is `isError`
+/// true, its text the answer less the member, exactly as an agent was
+/// always answered; one without it is `isError` false and its text whole;
+/// a member of another value marks no error; and a refusal of the call goes
+/// by *a refusal as a result*, the board's verdict data and the shell's own
+/// `isError` (the mutants that strip the member and mark nothing, mark the
+/// error and leave the member in the text, or read every edit as an error).
+#[test]
+fn the_edits_error_member_is_its_is_error_and_is_taken_off() {
+    let read = |v: &Value| -> (bool, Value) {
+        let text = v["content"][0]["text"].as_str().expect("a text block");
+        (v["isError"].as_bool().expect("isError"), serde_json::from_str(text).expect("JSON text"))
+    };
+    let held = json!({"outcome": "held", "doc": "1.0.1.0.64", "held": 8, "cause": "unreachable", "write": "insert"});
+    let mut marked = held.clone();
+    marked[EDIT_ERROR] = json!(true);
+    assert_eq!(read(&edit_result(Ok(marked))), (true, held.clone()), "an error, the member taken off");
+    let replaced = json!({"outcome": "replaced", "doc": "1.0.1.0.64", "ordinal": "7", "removed": "1", "inserted": "1", "addr": "1.0.1.0.64.0.1.80", "at": 45});
+    assert_eq!(read(&edit_result(Ok(replaced.clone()))), (false, replaced), "data, whole");
+    let mut unmarked = held.clone();
+    unmarked[EDIT_ERROR] = json!("yes");
+    assert_eq!(read(&edit_result(Ok(unmarked))), (false, held), "a member of another value marks no error");
+    let verdict = Refusal::Board(Refused { status: 200, code: "not_owner".into(), detail: None, op: Some("doc_metadata".into()), body: json!({"resp": "rejected", "code": "not_owner"}) });
+    assert_eq!(edit_result(Err(verdict.clone())), tool_result(Err(verdict)), "the board's verdict on a read, as every tool's");
+    let ended = Refusal::shell(Name::SESSION_ENDED, json!({"session": "s-1"}));
+    assert_eq!(read(&edit_result(Err(ended.clone()))), (true, ended.to_value()), "the shell's own refusal of the call");
+}
+
 /// Checks that the builders move what they wrap into the two specs' shapes.
 ///
 /// Each equals what `json!` builds from the same members: a JSON-RPC

@@ -678,10 +678,12 @@ fn the_catalog_tells_an_agent_the_edits_figures_as_the_code_holds_them() {
 /// braces beside it, `…` where the shape is open — and no other, save the
 /// shell's error member, which the adapter takes off (`EDIT_ERROR`) and no
 /// agent sees; the answers that carry that member are the three `isError`
-/// ones, `refused` beside a verdict-less cause, `partial` and `held`, and a
-/// span the card spells is the shell's `TextSpan` (SP-24). A shape the
-/// shell changes in one place alone would tell every agent of an answer the
-/// shell no longer gives.
+/// ones, `refused` beside a verdict-less cause, `partial` and `held`; a
+/// span the card spells is the shell's `TextSpan`; and the card's
+/// `(write: …)` list names each value of `TextHeld`'s `write` and no other
+/// (SP-24). A shape the shell changes in one place alone would tell every
+/// agent of an answer the shell no longer gives, or leave a held line's
+/// write unnamed.
 #[test]
 fn the_replace_text_card_states_the_shells_answers_bar_the_error_member() {
     /// Returns `text` from its first `{` to the `}` that closes it.
@@ -752,6 +754,11 @@ fn the_replace_text_card_states_the_shells_answers_bar_the_error_member() {
     let span = card.find("new_text: {").map(|at| members(braced(&card[at..])).0).expect("the card spells new_text's members");
     let declared: BTreeSet<(&str, bool)> = skep_shell::shapes::shape("TextSpan").expect("skep-shell declares TextSpan").fields.iter().map(|field| (field.name, field.required)).collect();
     assert_eq!(span, declared, "a span is the shell's TextSpan");
+    let write = skep_shell::shapes::shape("TextHeld").and_then(|shape| shape.fields.iter().find(|field| field.name == "write")).expect("skep-shell declares TextHeld's write").ty;
+    let declared: BTreeSet<&str> = write.split(" | ").map(|value| value.trim_matches('\'')).collect();
+    let listed = card.split_once("(write: ").and_then(|(_, rest)| rest.split_once(')')).map(|(list, _)| list).expect("the card lists the writes a held line may be");
+    let spelled: BTreeSet<&str> = listed.split(", ").flat_map(|piece| piece.split(" or ")).map(str::trim).collect();
+    assert_eq!(spelled, declared, "the card names each write a held line may be, as the shell declares them: {listed}");
 }
 
 /// The `probe` card names every state the shell's `probe()` answers and its

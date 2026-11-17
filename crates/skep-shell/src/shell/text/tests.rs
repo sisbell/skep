@@ -679,11 +679,11 @@ fn an_undo_refused_as_stale_is_made_again_from_a_fresh_read_three_times() {
 
 /// An undo that cannot be made leaves the answer partial.
 ///
-/// The image refused, the insert's bytes parted by another's change, the
-/// undo's write refused for any cause but a moved draft, or its line left
-/// standing: each stops the undo at once, and the answer says what stands.
-/// Where the removal was held for the board, the partial's cause is the
-/// hold's and it carries no verdict.
+/// The image refused, the insert's bytes parted by another's change, or the
+/// undo's write refused for any cause but a moved draft — its line dropped,
+/// or none held: each stops the undo at once, and the answer says what
+/// stands, no line of the edit's held. Where the removal was held for the
+/// board, the partial's cause is the hold's and it carries no verdict.
 #[test]
 fn an_undo_that_cannot_be_made_leaves_the_answer_partial() {
     let word = ordinal_of(CODE, "add");
@@ -697,7 +697,6 @@ fn an_undo_that_cannot_be_made_leaves_the_answer_partial() {
         vec![too_large()],
         vec![parted],
         vec![image_with(word + 4, 8, 50), held_answer(5, "not_arranged"), lines(5, "not_arranged", refused_run), Ok(json!({}))],
-        vec![image_with(word + 4, 8, 50), held_answer(5, "unreachable"), lines(5, "unreachable", Value::Null), Err(Refusal::shell(Name::LANDING_UNREAD, json!({"held": 5, "why": "unanswered"})))],
         vec![image_with(word + 4, 8, 50), Err(Refusal::shell(Name::ANOTHER_WINDOW, json!({"op": "delete"})))],
     ] {
         let (answer, _) = edit("add", "subtract", opening().into_iter().chain(undo).collect());
@@ -745,6 +744,60 @@ fn a_second_write_the_shell_refuses_outright_is_undone_or_told_as_partial() {
         outcome.expect("an answer").value,
         json!({"outcome": "partial", "doc": DOC, "new_text": {"ordinal": (word + 3).to_string(), "width": "8"}, "old_text": {"ordinal": word.to_string(), "width": "3"}, "cause": "unread", "op": "insert"})
     );
+}
+
+/// An undo whose line the shell will not drop is answered `held`, naming it.
+///
+/// The removal does not land — its line dropped with the board's verdict,
+/// or refused outright with none held — and the undo's own removal of the
+/// new bytes is held: where the shell refuses its drop — it cannot tell
+/// whether the removal landed, or a send has the line out — the line stands
+/// and may yet remove the new bytes while the old ones stand. The answer is
+/// `held`, an error, naming that line, `write` `undo`, both spans beside
+/// it (SP-8), and no write follows the line. A death at the undo's dial
+/// that no re-open follows refuses the line's drop too, and is answered so;
+/// where the restart arm re-opened a session that stands, the line is
+/// dropped under it and the answer is `partial`, no line held (the mutants
+/// that fold a standing line into `partial`, and that try the undo again
+/// behind it).
+#[test]
+fn an_undo_whose_line_the_shell_will_not_drop_is_answered_held_naming_it() {
+    let word = ordinal_of(CODE, "add");
+    let ack = || Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44}));
+    let verdict = moved_verdict("delete", 44, 46);
+    let dropped = || vec![ack(), held_answer(4, "moved"), lines(4, "moved", verdict.clone()), Ok(json!({}))];
+    let outright = || vec![ack(), Err(Refusal::shell(Name::ANOTHER_WINDOW, json!({"op": "delete"})))];
+    let undo = |cause: &str, refused: Result<Value, Refusal>| vec![image_with(word + 4, 8, 50), held_answer(5, cause), lines(5, cause, Value::Null), refused];
+    let named = |cause: &str| Answer {
+        value: json!({
+            "outcome": "held", "doc": DOC, "held": 5, "cause": cause, "write": "undo",
+            "new_text": {"ordinal": (word + 3).to_string(), "width": "8", "addr": MINTED, "at": 44},
+            "old_text": {"ordinal": word.to_string(), "width": "3"},
+        }),
+        is_error: true,
+    };
+    let unread = || Err(Refusal::shell(Name::LANDING_UNREAD, json!({"held": 5, "why": "unanswered"})));
+    let out = || Err(Refusal::shell(Name::NOT_RESOLVABLE, json!({"held": 5})));
+    for (opening, before) in [(dropped(), 4), (outright(), 2)] {
+        for refused in [unread(), out()] {
+            let (answer, sent) = edit("add", "subtract", [opening.clone(), undo("unreachable", refused)].concat());
+            let answer = answer.expect("an answer");
+            assert_eq!(answer, named("unreachable"), "the undo's line, named");
+            crate::shapes::assert_declared("TextHeld", &answer.into_value());
+            assert_eq!(sent[before..], [vec![image_frame(), frames::delete(DOC, word + 4, 8, 50, None)], settling(5)].concat()[..], "the undo's removal and its line settled: no write after it");
+        }
+    }
+    let asked = Asked { doc: DOC, old: "add", new: "subtract" };
+    let rows = Rowed::of([reads_of(CODE), dropped(), vec![image_with(word + 4, 8, 50), held_answer(5, "session_died"), died(None), died(None)]].concat(), vec![]);
+    assert_eq!(replace(&Under::new(&rows, "s-1"), asked), Ok(named("session_died")));
+    assert_eq!(rows.sessions().len(), 11, "the reads, the two writes, the removal's list and drop, the image, the undo, its list and its drop, each once");
+    let reopened = vec![image_with(word + 4, 8, 50), held_answer(5, "session_died"), died(Some("s-2")), lines(5, "session_died", Value::Null), Ok(json!({}))];
+    let rows = Rowed::of([reads_of(CODE), dropped(), reopened].concat(), vec!["s-2"]);
+    let answer = replace(&Under::new(&rows, "s-1"), asked).expect("an answer");
+    assert_eq!((answer.is_error, &answer.value["outcome"], &answer.value["cause"], &answer.value["refusal"]), (true, &json!("partial"), &json!("arrangement_moved"), &verdict), "{}", answer.value);
+    assert_eq!(rows.sessions()[9..], ["s-1", "s-2", "s-2"], "the undo's list made again under the re-open, its drop under it");
+    let write = crate::shapes::shape("TextHeld").and_then(|shape| shape.fields.iter().find(|field| field.name == "write")).map(|field| field.ty);
+    assert_eq!(write, Some("'insert' | 'delete' | 'undo'"), "the shapes declare every write a held line of the edit's may be");
 }
 
 /// A refusal of a read is the call's refusal, and a refused first write's.

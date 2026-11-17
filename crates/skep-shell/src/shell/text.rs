@@ -69,27 +69,33 @@
 //! they now stand, and they are removed, typed against that read
 //! ([`UNDO_TRIES`] times at most, against a draft that keeps moving); the
 //! edit then answers the refusal that stopped it, the draft as the other
-//! writer left it. Where the undo does not land either, the answer is
-//! `partial`, an error: it names the new bytes standing (`new_text`) and
-//! the old ones not removed (`old_text`), each by ordinal and width, the
-//! new ones by their I-address and their commit too, so the caller removes
-//! one of the two (SP-8: a refusal made after the first write names what
-//! that write left). The two spans stand unanswered in one case alone: a
-//! process that ends between the two commits answers nothing, and its
-//! caller reads the draft before it edits it again.
+//! writer left it. Where the undo does not land either, the answer names
+//! the new bytes standing (`new_text`) and the old ones not removed
+//! (`old_text`), each by ordinal and width, the new ones by their I-address
+//! and their commit too, so the caller removes one of the two (SP-8: a
+//! refusal made after the first write names what that write left): it is
+//! `partial`, an error, where no line of the undo's is held, and `held`,
+//! naming the undo's line, where the shell would not drop it — a line that
+//! may yet remove the new bytes (*A held line*). The two spans stand
+//! unanswered in one case alone: a process that ends between the two
+//! commits answers nothing, and its caller reads the draft before it edits
+//! it again.
 //!
 //! **A held line.** `insert` and `delete` are bursts, which the shell holds
 //! where the board refuses or cannot take them, and a held line stops every
-//! later burst on its draft. The edit leaves none: each line of its own is
-//! dropped within the call (`resolve`, `drop`), the board's verdict read
-//! off it first, so a stale edit, a refused one and one the board could not
-//! take all answer `refused` with nothing standing and nothing queued. Two
-//! outcomes of a drop are answered as they are: `kept`, a write whose
-//! answer was lost and whose landing the shell's read found, is a write
-//! that landed; and a drop the shell refuses — it cannot tell whether the
-//! write landed while the board does not answer — leaves the line held, and
-//! the answer is `held`, an error, naming it. The held queue is the
-//! principal's, every caller of it at the board sharing it ([`settle`]).
+//! later burst on its draft. The edit leaves none: each line of its own —
+//! the insert's, the removal's, an undo's — is dropped within the call
+//! (`resolve`, `drop`), the board's verdict read off it first, so a stale
+//! edit, a refused one and one the board could not take all answer
+//! `refused` with nothing standing and nothing queued. Two outcomes of a
+//! drop are answered as they are: `kept`, a write whose answer was lost and
+//! whose landing the shell's read found, is a write that landed; and a drop
+//! the shell refuses — it cannot tell whether the write landed while the
+//! board does not answer — leaves the line held, and the answer is `held`,
+//! an error, naming it and the write it is: `insert`, `delete`, or `undo`,
+//! an undo's removal of the new bytes, which may yet land while the old
+//! ones stand. The held queue is the principal's, every caller of it at the
+//! board sharing it ([`settle`]).
 //!
 //! **The answer** ([`Answer`]). Every outcome is one JSON object keyed by
 //! `outcome`: `replaced`, `unchanged`, `refused`, `held` or `partial`
@@ -729,34 +735,48 @@ fn settle(calls: &impl Calls, line: Line) -> Settled {
     }
 }
 
+/// What an undo left of the insert it takes back.
+#[derive(Debug)]
+enum Undone {
+    /// Nothing of the insert stands: its bytes removed, their removal found
+    /// landed, or arranged nowhere already.
+    Gone,
+    /// The insert's bytes stand, and no line of the undo's is held.
+    Stands,
+    /// The insert's bytes stand, and the undo's removal of them stays held:
+    /// the shell would not drop its line, which may yet remove them.
+    Held(Line),
+}
+
 /// Removes the bytes an insert minted, wherever they now stand.
 ///
 /// The draft's whole image is read, the `width` addresses from `addr` found
 /// in it, and where they stand whole they are removed, typed against that
 /// read; a removal the board refuses as typed against an older state is
-/// made again from a fresh read, [`UNDO_TRIES`] times in all. Answers
-/// whether nothing of the insert stands: removed, found landed, or arranged
-/// nowhere already.
-fn undo(calls: &impl Calls, doc: &str, addr: &str, width: u64) -> bool {
+/// made again from a fresh read, [`UNDO_TRIES`] times in all. Answers what
+/// it left ([`Undone`]); a removal whose line the shell would not drop ends
+/// the undo, no removal sent after it.
+fn undo(calls: &impl Calls, doc: &str, addr: &str, width: u64) -> Undone {
     for _ in 0..UNDO_TRIES {
-        let Ok(image) = calls.op(frames::image(doc, 1, WHOLE_CONTENT)) else { return false };
-        let (Some(as_of), Some(placed)) = (image["as_of"].as_u64(), placed(&image, addr, width)) else { return false };
+        let Ok(image) = calls.op(frames::image(doc, 1, WHOLE_CONTENT)) else { return Undone::Stands };
+        let (Some(as_of), Some(placed)) = (image["as_of"].as_u64(), placed(&image, addr, width)) else { return Undone::Stands };
         let ordinal = match placed {
-            Placed::Nowhere => return true,
+            Placed::Nowhere => return Undone::Gone,
             Placed::Whole(ordinal) => ordinal,
-            Placed::Parted => return false,
+            Placed::Parted => return Undone::Stands,
         };
         match write(calls, frames::delete(doc, ordinal, width, as_of, None)) {
-            Ok(Wrote::Acked(_)) => return true,
+            Ok(Wrote::Acked(_)) => return Undone::Gone,
             Ok(Wrote::Held(line)) => match settle(calls, line) {
-                Settled::Landed => return true,
+                Settled::Landed => return Undone::Gone,
                 Settled::Dropped { verdict: Some(verdict), .. } if verdict["code"] == "arrangement_moved" => {}
-                Settled::Dropped { .. } | Settled::Standing(_) => return false,
+                Settled::Dropped { .. } => return Undone::Stands,
+                Settled::Standing(line) => return Undone::Held(line),
             },
-            Err(_) => return false,
+            Err(_) => return Undone::Stands,
         }
     }
-    false
+    Undone::Stands
 }
 
 /// Returns the answer of an edit that landed.
@@ -806,8 +826,9 @@ fn refused_write(doc: &str, cause: &str, verdict: Option<Value>) -> Answer {
 /// with the I-address and the commit the insert's ack named where it gave
 /// one, and `old_text`, the old bytes — each by its ordinal and width as
 /// the insert left them. Which of the two stands is the answer's to say: in
-/// a `partial` both do; beside a held line, the one its write would place
-/// or remove may or may not.
+/// a `partial` both do; beside a held line the other stands, and the one
+/// its write would place or remove may or may not — `new_text` beside a
+/// held insert or undo, `old_text` beside a held delete.
 fn spans(edit: &Edit<'_>, inserted: Option<&Value>) -> Value {
     let mut new = json!({"ordinal": edit.after().to_string(), "width": edit.inserted.len().to_string()});
     if let Some(ack) = inserted {
@@ -833,9 +854,9 @@ fn partial(doc: &str, edit: &Edit<'_>, inserted: Option<&Value>, why: Value) -> 
 
 /// Returns the answer of an edit a line of which stays held, an error.
 ///
-/// `write` names the write the line is, `insert` or `delete`; `stands` is
-/// what a two-write edit leaves beside it ([`spans`]), and null for an edit
-/// of one write.
+/// `write` names the write the line is: `insert`, `delete`, or `undo`, an
+/// undo's removal of the new bytes; `stands` is what a two-write edit
+/// leaves beside it ([`spans`]), and null for an edit of one write.
 fn held(doc: &str, line: &Line, write: &str, stands: Value) -> Answer {
     let mut value = json!({"outcome": "held", "doc": doc, "held": line.held, "cause": line.cause, "write": write});
     if let (Some(members), Value::Object(stands)) = (value.as_object_mut(), stands) {
@@ -932,7 +953,8 @@ fn one_write(calls: &impl Calls, doc: &str, edit: &Edit<'_>, as_of: u64) -> Resu
 /// the old bytes; the removal is typed against the insert's own commit, so
 /// it lands only where nothing changed the draft between the two. A removal
 /// that does not land has the insert undone ([`undo`]), and the edit
-/// answers what stopped it; where the undo does not land either, `partial`.
+/// answers what stopped it; where the undo does not land either, `partial`,
+/// or `held`, `write` `undo`, where the undo's line stays held.
 ///
 /// # Errors
 ///
@@ -957,12 +979,18 @@ fn two_writes(calls: &impl Calls, doc: &str, edit: &Edit<'_>, as_of: u64) -> Res
         Ok(Wrote::Acked(ack)) => replaced(doc, edit, ack["at"].as_u64(), Some(addr)),
         Ok(Wrote::Held(line)) => match settle(calls, line) {
             Settled::Landed => replaced(doc, edit, None, Some(addr)),
-            Settled::Dropped { cause, verdict } if undo(calls, doc, addr, width) => refused_write(doc, &cause, verdict),
-            Settled::Dropped { cause, verdict } => partial(doc, edit, Some(&inserted), json!({"cause": verdict.as_ref().and_then(|v| v["code"].as_str()).unwrap_or(&cause), "refusal": verdict})),
+            Settled::Dropped { cause, verdict } => match undo(calls, doc, addr, width) {
+                Undone::Gone => refused_write(doc, &cause, verdict),
+                Undone::Stands => partial(doc, edit, Some(&inserted), json!({"cause": verdict.as_ref().and_then(|v| v["code"].as_str()).unwrap_or(&cause), "refusal": verdict})),
+                Undone::Held(line) => held(doc, &line, "undo", spans(edit, Some(&inserted))),
+            },
             Settled::Standing(line) => held(doc, &line, "delete", spans(edit, Some(&inserted))),
         },
-        Err(refusal) if undo(calls, doc, addr, width) => return Err(refusal),
-        Err(refusal) => partial(doc, edit, Some(&inserted), json!({"cause": refusal.name(), "refusal": refusal.to_value()})),
+        Err(refusal) => match undo(calls, doc, addr, width) {
+            Undone::Gone => return Err(refusal),
+            Undone::Stands => partial(doc, edit, Some(&inserted), json!({"cause": refusal.name(), "refusal": refusal.to_value()})),
+            Undone::Held(line) => held(doc, &line, "undo", spans(edit, Some(&inserted))),
+        },
     })
 }
 

@@ -553,14 +553,14 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "TextPartial",
         open: false,
-        doc: "`text.replace` — an error: an edit of two writes that landed in part, the new text STANDING directly after the old text, which was NOT removed, and the take-back by identity not landing either — `new_text` and `old_text` the two spans as the insert left them, `cause` what stopped the removal, `refusal` the verdict or the refusal beside it where there is one, `op` the write the shell read no answer of where that is the cause; the page removes one of the two, typed at its own read",
+        doc: "`text.replace` — an error: an edit of two writes that landed in part, the new text STANDING directly after the old text, which was NOT removed, and the take-back by identity not landing either, no line of the edit's held — a take-back whose line stays held is `TextHeld`, `write` `'undo'` — `new_text` and `old_text` the two spans as the insert left them, `cause` what stopped the removal, `refusal` the verdict or the refusal beside it where there is one, `op` the write the shell read no answer of where that is the cause; the page removes one of the two, typed at its own read",
         fields: &[req("outcome", "'partial'"), req("doc", "string"), req("new_text", "TextSpan"), req("old_text", "TextSpan"), req("cause", "string"), opt("refusal", "unknown"), opt("op", "string"), req("error", "true")],
     },
     Shape {
         name: "TextHeld",
         open: false,
-        doc: "`text.replace` — an error: the shell could not tell whether a write of the edit's landed, the board not answering, so its line stays held and the shell refused its drop — `held` the line's ordinal, `cause` its hold's, `write` the write it is; `new_text` and `old_text` beside them where the edit is of two writes, which may stand in part — a held insert may place `new_text`, a held delete may remove `old_text`",
-        fields: &[req("outcome", "'held'"), req("doc", "string"), req("held", "number"), req("cause", "string"), req("write", "'insert' | 'delete'"), opt("new_text", "TextSpan"), opt("old_text", "TextSpan"), req("error", "true")],
+        doc: "`text.replace` — an error: the shell could not tell whether a write of the edit's landed, the board not answering, so its line stays held and the shell refused its drop — `held` the line's ordinal, `cause` its hold's, `write` the write it is — `insert`, `delete`, or `undo`, the take-back's removal of `new_text`, sent where the removal of `old_text` did not land; `new_text` and `old_text` beside them where the edit is of two writes, which may stand in part — a held insert may place `new_text`, a held delete may remove `old_text`, a held undo may remove `new_text` while `old_text` stands",
+        fields: &[req("outcome", "'held'"), req("doc", "string"), req("held", "number"), req("cause", "string"), req("write", "'insert' | 'delete' | 'undo'"), opt("new_text", "TextSpan"), opt("old_text", "TextSpan"), req("error", "true")],
     },
     Shape {
         name: "TextSpan",

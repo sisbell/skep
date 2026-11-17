@@ -228,7 +228,8 @@ foundation and on the stores above it.
   (`skep-shell`): one signed session for the process's life, every wire
   op but `publish` a tool of its name, the shell's calls — the
   publication family's four among them — a change pull and a blob
-  fetch beside them. One binary: of the skep crates it depends on
+  fetch beside them, and a text edit of a draft, `replace_text`, composed
+  of those calls. One binary: of the skep crates it depends on
   `skep-shell` and `skep-client` — the latter for the types the shell's
   surface names, the inert rendering a key's label and every log line
   take, the plaintext warning its start says, and the places its start

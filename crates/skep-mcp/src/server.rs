@@ -9,8 +9,9 @@
 //! `tool_result` renders every answer the shell gives by it but a fetched
 //! file, the board's verdict as data and any other refusal `isError`;
 //! `Server::fetch` adds its own two `isError`, a file past the cap and a
-//! stream cut short; and `respond` answers -32602 a call `call_params` or
-//! `Tool::admit` refuses, which is no tool result at all.
+//! stream cut short; `edit_result` renders `replace_text`'s answer, `isError`
+//! where the edit says so; and `respond` answers -32602 a call `call_params`
+//! or `Tool::admit` refuses, which is no tool result at all.
 
 use std::io::{BufRead, Write};
 use std::process::ExitCode;
@@ -22,6 +23,7 @@ use serde_json::{json, Map, Value};
 use skep_shell::Refusal;
 
 use crate::media::{base64, read_whole, sniff_image, FetchAnswer, MAX_FETCH_BYTES};
+use crate::replace::{replace_text, Answer};
 use crate::shell::Backend;
 use crate::tools::{wire_frame, Catalog, Tool};
 
@@ -58,14 +60,16 @@ enum ErrorCode {
 /// Whether a tool result is MCP's `isError`.
 ///
 /// *A refusal as a result* decides it for the shell's answers (`tool_result`),
-/// and `Server::fetch` for the file it fetched and its own two.
+/// `Server::fetch` for the file it fetched and its own two, and
+/// `replace_text` for its own answer (`edit_result`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IsError {
     /// A normal result: an answer, or the board's verdict as data.
     No,
     /// The shell could not get the board's verdict, or `fetch` declined a file.
     ///
-    /// A fetch whose stream was cut short is one too.
+    /// A fetch whose stream was cut short is one too, and a text edit that
+    /// left a line held or landed in part.
     Yes,
 }
 
@@ -343,7 +347,8 @@ impl Server {
     ///
     /// The result is the tool's answer rendered by `tool_result`'s rule: a
     /// value or the board's verdict as data, any other refusal `isError`;
-    /// `fetch` answers a content block of its own (`Server::fetch`).
+    /// `fetch` answers a content block of its own (`Server::fetch`), and
+    /// `replace_text` its own answer (`edit_result`).
     ///
     /// # Errors
     ///
@@ -372,6 +377,7 @@ impl Server {
             Tool::ChangesSince => self.backend.session_call("changes", args),
             Tool::SessionInfo => self.backend.session_info(),
             Tool::Fetch => return Ok(self.fetch(args.get("i").unwrap_or(&Value::Null))),
+            Tool::ReplaceText => return Ok(edit_result(replace_text(&self.backend, &args))),
         };
         Ok(tool_result(answer))
     }
@@ -521,6 +527,21 @@ fn tool_result(answer: Result<Value, Refusal>) -> Value {
             };
             text_result(refusal.to_value().to_string(), is_error)
         }
+    }
+}
+
+/// Renders `replace_text`'s answer as a tool result.
+///
+/// The edit's own answer is its text, `isError` as the answer says: a
+/// refusal the tool or the board decided is data, and one where the shell
+/// could not get the board's verdict on a write, a line left held and an
+/// edit that landed in part are `isError` (`crate::replace`'s *The answer*).
+/// A refusal of a call the edit made goes by `tool_result`'s rule, as every
+/// tool's does.
+fn edit_result(answer: Result<Answer, Refusal>) -> Value {
+    match answer {
+        Ok(Answer { value, is_error }) => text_result(value.to_string(), if is_error { IsError::Yes } else { IsError::No }),
+        Err(refusal) => tool_result(Err(refusal)),
     }
 }
 

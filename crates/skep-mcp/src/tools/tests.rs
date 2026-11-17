@@ -163,9 +163,10 @@ fn wire_frame_makes_the_name_the_op_and_the_arguments_the_frame() {
 ///
 /// Fifty-one wire ops — every op of wire.md §Operations but `publish`, the
 /// six the first catalog lacked among them, the count by home, the
-/// retracted-links read, the landing and the well-known creation — and fifteen
-/// adapter tools, the `publication` family's four among them and the read
-/// of a draft's standing beside them; no name twice across the two,
+/// retracted-links read, the landing and the well-known creation — and sixteen
+/// adapter tools, the `publication` family's four among them, the read
+/// of a draft's standing beside them, and the text edit, `replace_text`; no
+/// name twice across the two,
 /// each wire op a `Tool::Op` of its own name with no members list, each
 /// adapter tool its row's members; and a ceremony, `upload`, `restore`,
 /// `op`, `publish` or a row's dotted name no tool at all.
@@ -175,7 +176,9 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
     let set: std::collections::BTreeSet<_> = names.iter().collect();
     assert_eq!(set.len(), names.len(), "no name twice");
     assert_eq!(DISPATCH_OPS.len(), 51);
-    assert_eq!(names.len(), 66);
+    assert_eq!(names.len(), 67);
+    assert_eq!(Tool::named("replace_text"), Some(Tool::ReplaceText));
+    assert_eq!(Tool::named("replace_text").and_then(Tool::members), Some(&["doc", "old", "new"][..]));
     for added in ["effective_owner", "key_set", "retrieve_i", "content_frontier", "edition_claims", "universal_grants", "count_v_by_home", "find_links_v_history", "set_arrangement", "create_well_known_document"] {
         assert_eq!(Tool::named(added), Some(Tool::Op(added)), "{added} is a wire op of the dispatch");
     }
@@ -451,16 +454,25 @@ fn the_opts_the_door_admits_are_the_ones_skep_shell_declares_bar_reindex() {
 /// ones the row requires. Unchecked, a member the shell renamed or dropped
 /// would stay admitted here and advertised to every agent, while the shell,
 /// which reads no member it does not name, answered the call as though the
-/// member had never been sent.
+/// member had never been sent. `replace_text` composes several rows and
+/// copies none: its members are `crate::replace`'s own, each read there in
+/// its form, and its schema requires all three.
 #[test]
 fn each_adapter_tool_takes_its_shell_rows_members_bar_the_session_and_board() {
     let declarations = skep_shell::shapes::declarations();
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
     for (name, tool, members) in ADAPTER_TOOLS {
         // The row `Server::call` sends the tool as; `session_info` takes no
-        // argument, and copies no row.
+        // argument, and copies no row, and neither does `replace_text`,
+        // which the shell declares no row for.
         let row = match tool {
             Tool::SessionInfo => continue,
+            Tool::ReplaceText => {
+                assert!(!declarations.contains("replace_text"), "the shell declares no row the text edit could copy");
+                let entry = catalog.tools.iter().find(|t| t["name"] == *name).expect("every adapter tool is catalogued");
+                assert_eq!(entry["inputSchema"]["required"], json!(members), "{name}: the schema requires every member the edit reads");
+                continue;
+            }
             Tool::ChangesSince => "changes",
             Tool::PublicationOpen => "publication.open",
             Tool::PublicationCount => "publication.count",

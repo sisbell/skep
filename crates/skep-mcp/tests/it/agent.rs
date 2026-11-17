@@ -41,8 +41,9 @@ const ADDED_OPS: [&str; 6] = ["effective_owner", "key_set", "retrieve_i", "conte
 /// The shell's calls and the apparatus, as tools.
 ///
 /// The shell's calls take the publication family's four among them, and the
-/// read of a draft's standing beside them.
-const ADAPTER_TOOLS: [&str; 15] = [
+/// read of a draft's standing beside them; the apparatus is four, the text
+/// edit among them.
+const ADAPTER_TOOLS: [&str; 16] = [
     "boards",
     "health",
     "probe",
@@ -58,6 +59,7 @@ const ADAPTER_TOOLS: [&str; 15] = [
     "session_info",
     "changes_since",
     "fetch",
+    "replace_text",
 ];
 
 /// The adapter's cap on one fetch, as `media.rs` states it.
@@ -194,7 +196,7 @@ fn a2_the_startup_line_names_the_refusing_seam_and_no_ceremony_tool_is_listed() 
 ///
 /// `tools/list` names every wire op but `publish` — the six the first catalog
 /// lacked among them — the shell's calls, the publication family's four among
-/// them, and the three apparatus tools; and the publication: a published
+/// them, and the four apparatus tools; and the publication: a published
 /// document minted, a draft minted and written but never staged — its
 /// `publication_open` refused `base_unrecorded` naming it and the reason
 /// `no_record`, the board recording no base for it — then a draft staged

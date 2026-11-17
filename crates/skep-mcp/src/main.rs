@@ -24,13 +24,17 @@
 //!   `_` for `.` (`publication_open`, `publication_count`,
 //!   `publication_confirm`, `publication_cancel`) — are tools of those names,
 //!   their arguments the bridge's row minus the session and the board, the
-//!   adapter supplying each where the row requires it; and three are the
+//!   adapter supplying each where the row requires it; and four are the
 //!   adapter's apparatus: `session_info`, `changes_since` (the shell's
-//!   `changes`, a pull), and `fetch` (the shell's streamed fetch as an image or
-//!   resource block, the type sniffed off the bytes, the size capped). The
-//!   adapter passes a wire op's arguments through unread, save the one shape
-//!   the shell's `op` row reads as its `/op-at` form, a non-negative integer
-//!   `at` beside an object `frame`, which no wire op takes. Before the board
+//!   `changes`, a pull), `fetch` (the shell's streamed fetch as an image or
+//!   resource block, the type sniffed off the bytes, the size capped), and
+//!   `replace_text`, the one tool that is several calls of the shell: a text
+//!   edit of a draft, composed of the reads and the bursts above, which
+//!   replaces the bytes that differ alone and drops each line of its own the
+//!   shell holds (`replace.rs`). The adapter passes a wire op's arguments
+//!   through unread, save the one shape the shell's `op` row reads as its
+//!   `/op-at` form, a non-negative integer `at` beside an object `frame`,
+//!   which no wire op takes. Before the board
 //!   sees a frame, the shell refuses one it cannot send or hold whole, nothing
 //!   sent, each refusal `isError`: a burst whose `doc` is no document address
 //!   in its one spelling (`malformed_args` naming `frame.doc`), whose `id`
@@ -49,13 +53,15 @@
 //!   beside it, since a client that cannot decode a rejection has been
 //!   silently failed (wire.md §Rejections). `isError` is every other refusal —
 //!   the shell could not get the board's verdict: the board unreachable, a
-//!   halt, the block, the shell's own names — and `fetch`'s two answers of the
+//!   halt, the block, the shell's own names — `fetch`'s two answers of the
 //!   adapter's own, a file past its cap and a stream cut short, each a plain
-//!   sentence. A write refused `unreachable` may have committed: the shell
-//!   faces a lost answer to any write but a burst (whose line it holds,
-//!   `sent`), and the adapter never reissues it. So may a write the board
-//!   refused `poisoned`, whose frames its restart replays from the journal
-//!   (wire.md §Rejection codes; client.md §3c.2), or answered
+//!   sentence, and `replace_text`'s three: a write the shell could not get to
+//!   the board, a line of the edit's the shell would not drop, and an edit
+//!   that landed in part. A write refused `unreachable` may have committed:
+//!   the shell faces a lost answer to any write but a burst (whose line it
+//!   holds, `sent`), and the adapter never reissues it. So may a write the
+//!   board refused `poisoned`, whose frames its restart replays from the
+//!   journal (wire.md §Rejection codes; client.md §3c.2), or answered
 //!   `500 internal_panic` past its commit — each the board's verdict, and so
 //!   data. A call the adapter will not run — a tool outside the catalog, a
 //!   member an adapter tool's row or its `opts` does not take, a wire op's
@@ -88,7 +94,11 @@
 //! around it, the bus drained; its child `shell/watch.rs` is the session's
 //! state, which one door moves (`SessionWatch::move_off`), and what a death
 //! asks of it. `media.rs` is the fetched file: its bytes read whole under the
-//! adapter's cap, its type sniffed, its base64. `tools.rs` holds the catalog
+//! adapter's cap, its type sniffed, its base64. `replace.rs` is the text
+//! edit: a draft's content read as text and mapped to its positions, the old
+//! text found once, the edit trimmed to the bytes that differ, and the one
+//! or two writes that make it, with what a refused or held write leaves; it
+//! makes every call through the backend. `tools.rs` holds the catalog
 //! (`tools.json`, embedded) with its commons sentence, the dispatch's two kinds
 //! the catalog is checked against when loaded, the dispatch's door
 //! (`Tool::admit`, which admits a call or refuses it -32602), and a wire op's
@@ -114,6 +124,7 @@
 
 mod log;
 mod media;
+mod replace;
 mod server;
 mod shell;
 mod tools;

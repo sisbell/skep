@@ -10,16 +10,21 @@
 //! key retired; the blob seeding, copied from skepd's own suite: the
 //! resumable upload's creation, the cell and its insert; the holds of
 //! skepd's two process-wide seams, the write guard and the fetch stream,
-//! armed only on a board run alone ([`Fixture::alone`]); and the poison of
-//! the board's own kernel at its next commit. The driver
+//! armed only on a board run alone ([`Fixture::alone`]); the poison of
+//! the board's own kernel at its next commit; and, for a suite that stages
+//! another writer inside one tool call, a relay the adapter dials the board
+//! through ([`Fixture::relayed`], [`Relay`]) — every `/op` it passes shown to
+//! the test's rule at both its ends, and kept — with a second session that
+//! dials the daemon directly ([`Racer`]). The driver
 //! ([`Mcp`], from a [`Launch`]): the built `skep-mcp` binary spawned with its
 //! settings — the fixture's, or any a test names — and real JSON-RPC driven
 //! through its stdin/stdout, its stderr read where a test wants the lines.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Output, Stdio};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
 
@@ -110,6 +115,9 @@ pub struct Fixture {
     pub fingerprint: String,
     /// The fixture's hold on [`SEAMS`], released once its daemon has stopped.
     seams: SeamsHeld,
+    /// The relay the adapter dials the board through, where the fixture has
+    /// one ([`Fixture::relayed`]).
+    relay: Option<Relay>,
 }
 
 impl Fixture {
@@ -135,16 +143,57 @@ impl Fixture {
         let store = dir.path().join("store");
         let anchors = dir.path().join("anchors");
         let fingerprint = claim_board(&origin(port), &store, &anchors);
-        Fixture { dir, daemon: Some(daemon), port, store, fingerprint, seams }
+        Fixture { dir, daemon: Some(daemon), port, store, fingerprint, seams, relay: None }
     }
 
+    /// Returns a fresh board the adapter reaches through a relay.
+    ///
+    /// The board signs sessions for the relay's origin, the store's key is
+    /// bound there, and [`Fixture::origin`] names it, so an adapter launched
+    /// over the fixture dials the relay, which passes every exchange on to
+    /// the daemon: a test reads each `/op` it passed ([`Relay::passed`]) and
+    /// acts between two of them ([`Relay::on`]). The fixture's own dials —
+    /// its bare sessions, its guest reads, a [`Racer`]'s writes — go to the
+    /// daemon directly, and no rule sees them. A relayed board is not
+    /// restarted: the restart would have it sign for its own port.
+    pub fn relayed(tag: &str) -> Fixture {
+        let dir = TempDir::new(tag);
+        let relay = Relay::listen();
+        let relay_origin = origin(relay.port);
+        let daemon = spawn_signing_at(&dir.path().join("board"), 0, |_| relay_origin.clone());
+        let port = daemon.port();
+        relay.forward_to(port);
+        let store = dir.path().join("store");
+        let anchors = dir.path().join("anchors");
+        let fingerprint = claim_board(&relay_origin, &store, &anchors);
+        let seams = SeamsHeld::Shared { _guard: SEAMS.read().unwrap_or_else(PoisonError::into_inner) };
+        Fixture { dir, daemon: Some(daemon), port, store, fingerprint, seams, relay: Some(relay) }
+    }
+
+    /// The origin an adapter over the fixture dials: the relay's where the
+    /// fixture has one, else the daemon's own.
     pub fn origin(&self) -> String {
-        origin(self.port)
+        origin(self.relay.as_ref().map_or(self.port, |relay| relay.port))
     }
 
-    /// The library's board, dialed plainly.
+    /// The fixture's relay.
+    ///
+    /// # Panics
+    ///
+    /// Where the fixture has none ([`Fixture::relayed`] makes one).
+    pub fn relay(&self) -> &Relay {
+        self.relay.as_ref().expect("a relayed fixture")
+    }
+
+    /// Another writer at the board: a bare session as `principal`, dialing
+    /// the daemon directly.
+    pub fn racer(&self, principal: u64) -> Racer {
+        Racer { port: self.port, token: self.bare_session(principal).as_str().to_string() }
+    }
+
+    /// The library's board, dialed plainly at the daemon's own port.
     fn board(&self) -> Board {
-        Board::new(Origin::parse(&self.origin()).expect("a canonical origin"), PlainHttp::new())
+        Board::new(Origin::parse(&origin(self.port)).expect("a canonical origin"), PlainHttp::new())
     }
 
     /// The board's data directory.
@@ -401,6 +450,204 @@ fn claim_board(board_origin: &str, store: &Path, anchors: &Path) -> String {
     id.0.to_hex()
 }
 
+// ── the relay ───────────────────────────────────────────────────────────
+
+/// One `/op` exchange a relay passed: the frame, the answer, and its cost.
+#[derive(Debug, Clone)]
+pub struct Passed {
+    /// The frame's `op`.
+    pub op: String,
+    /// The frame, as the adapter sent it.
+    pub frame: Value,
+    /// The board's answer to it.
+    pub answer: Value,
+    /// The bytes of the request's body.
+    pub request_bytes: usize,
+    /// The bytes of the answer's body.
+    pub answer_bytes: usize,
+    /// How long the board took: from the relay's dial to the answer's end.
+    pub took: Duration,
+}
+
+/// What a relay's rule is shown: an `/op` frame on its way to the board,
+/// `answer` none, then the same frame with the board's answer, before the
+/// adapter is handed it.
+pub struct Passing<'a> {
+    pub frame: &'a Value,
+    pub answer: Option<&'a Value>,
+}
+
+/// A relay's rule: what a test does as an exchange passes.
+type Rule = Box<dyn FnMut(&Passing<'_>) + Send>;
+
+/// What a relay's threads share.
+struct Relayed {
+    /// The daemon's port, set once it has one.
+    upstream: AtomicU16,
+    /// Every `/op` exchange passed, in the order their answers came.
+    passed: Mutex<Vec<Passed>>,
+    /// The rule in force, shown every `/op` exchange at both its ends.
+    rule: Mutex<Option<Rule>>,
+}
+
+impl Relayed {
+    /// Shows the rule in force one end of an exchange.
+    ///
+    /// The rule runs under its lock, one exchange at a time: what it writes
+    /// at the board has committed before the exchange it was shown goes on.
+    fn show(&self, passing: &Passing<'_>) {
+        if let Some(rule) = self.rule.lock().expect("the rule's lock").as_mut() {
+            rule(passing);
+        }
+    }
+}
+
+/// A relay between an adapter and a fixture's board ([`Fixture::relayed`]).
+///
+/// It listens at a port of its own and passes each connection on to the
+/// daemon: an `/op` exchange whole — its frame shown to the rule before it
+/// goes on, its answer shown before it goes back, the exchange kept
+/// ([`Relay::passed`]) — and any other exchange blind, as its bytes come,
+/// the board's event stream among them. So a test lands another writer's
+/// change at an exact point of one tool call, and counts what the call asked
+/// of the board.
+pub struct Relay {
+    port: u16,
+    shared: Arc<Relayed>,
+}
+
+impl Relay {
+    /// Returns a relay listening at a fresh port, forwarding nowhere yet.
+    fn listen() -> Relay {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a relay's port");
+        let port = listener.local_addr().expect("the relay's address").port();
+        let shared = Arc::new(Relayed { upstream: AtomicU16::new(0), passed: Mutex::new(Vec::new()), rule: Mutex::new(None) });
+        let relayed = Arc::clone(&shared);
+        std::thread::spawn(move || {
+            for conn in listener.incoming().flatten() {
+                let relayed = Arc::clone(&relayed);
+                std::thread::spawn(move || relay_one(conn, &relayed));
+            }
+        });
+        Relay { port, shared }
+    }
+
+    /// Points the relay at the daemon's port.
+    fn forward_to(&self, port: u16) {
+        self.shared.upstream.store(port, Ordering::SeqCst);
+    }
+
+    /// Sets the rule every `/op` exchange is shown to from now on.
+    pub fn on(&self, rule: impl FnMut(&Passing<'_>) + Send + 'static) {
+        *self.shared.rule.lock().expect("the rule's lock") = Some(Box::new(rule));
+    }
+
+    /// Returns every `/op` exchange passed since the last [`Relay::forget`].
+    pub fn passed(&self) -> Vec<Passed> {
+        self.shared.passed.lock().expect("the passed exchanges' lock").clone()
+    }
+
+    /// Forgets the exchanges passed so far.
+    pub fn forget(&self) {
+        self.shared.passed.lock().expect("the passed exchanges' lock").clear();
+    }
+}
+
+/// Reads one request off `conn`: its head, terminator included, and its body.
+///
+/// The body is the bytes its `Content-Length` declares. `None` where the
+/// connection ends before the head does.
+fn read_whole_request(conn: &mut TcpStream) -> Option<(Vec<u8>, Vec<u8>)> {
+    let (mut head, mut byte) = (Vec::new(), [0u8; 1]);
+    while !head.ends_with(b"\r\n\r\n") {
+        if conn.read(&mut byte).ok()? == 0 {
+            return None;
+        }
+        head.push(byte[0]);
+    }
+    let text = String::from_utf8_lossy(&head).to_ascii_lowercase();
+    let length = text.lines().find_map(|line| line.strip_prefix("content-length:").and_then(|n| n.trim().parse::<usize>().ok())).unwrap_or(0);
+    let mut body = vec![0u8; length];
+    conn.read_exact(&mut body).ok()?;
+    Some((head, body))
+}
+
+/// Passes one connection of the adapter's on to the daemon.
+fn relay_one(mut conn: TcpStream, relayed: &Relayed) {
+    let Some((head, body)) = read_whole_request(&mut conn) else { return };
+    let Ok(mut board) = TcpStream::connect(("127.0.0.1", relayed.upstream.load(Ordering::SeqCst))) else { return };
+    let frame = head.starts_with(b"POST /op ").then(|| serde_json::from_slice::<Value>(&body).ok()).flatten();
+    let Some(frame) = frame else {
+        // Any other exchange goes through as its bytes come: the board's
+        // event stream never ends, so nothing waits for an answer's end.
+        if board.write_all(&head).and_then(|()| board.write_all(&body)).is_err() {
+            return;
+        }
+        if let (Ok(mut from_adapter), Ok(mut to_board)) = (conn.try_clone(), board.try_clone()) {
+            std::thread::spawn(move || {
+                let _ = std::io::copy(&mut from_adapter, &mut to_board);
+                let _ = to_board.shutdown(std::net::Shutdown::Write);
+            });
+        }
+        let _ = std::io::copy(&mut board, &mut conn);
+        let _ = conn.shutdown(std::net::Shutdown::Both);
+        return;
+    };
+    relayed.show(&Passing { frame: &frame, answer: None });
+    let began = Instant::now();
+    let _ = board.write_all(&head);
+    let _ = board.write_all(&body);
+    let _ = board.shutdown(std::net::Shutdown::Write);
+    let mut raw = Vec::new();
+    let _ = board.read_to_end(&mut raw);
+    let took = began.elapsed();
+    let answered = raw.windows(4).position(|w| w == b"\r\n\r\n").map_or(&raw[..0], |sep| &raw[sep + 4..]);
+    let answer = serde_json::from_slice::<Value>(answered).unwrap_or(Value::Null);
+    relayed.show(&Passing { frame: &frame, answer: Some(&answer) });
+    let op = frame["op"].as_str().unwrap_or_default().to_string();
+    relayed.passed.lock().expect("the passed exchanges' lock").push(Passed { op, frame, answer, request_bytes: body.len(), answer_bytes: answered.len(), took });
+    let _ = conn.write_all(&raw);
+}
+
+/// Another writer at a fixture's board ([`Fixture::racer`]).
+///
+/// It holds a bare session of its own and dials the daemon directly, so a
+/// relay's rule may write through it while an exchange of the adapter's
+/// stands in the relay.
+#[derive(Clone)]
+pub struct Racer {
+    port: u16,
+    token: String,
+}
+
+impl Racer {
+    /// One frame under the racer's session: the board's response document.
+    pub fn op(&self, frame: &Value) -> Value {
+        op(self.port, Some(&self.token), frame)
+    }
+
+    /// The board's head, as `/health` answers it now.
+    pub fn head(&self) -> u64 {
+        head_position(self.port)
+    }
+
+    /// `text` inserted at content ordinal `ordinal` of `doc`, typed against
+    /// the board's head as read now: the commit's position.
+    pub fn insert(&self, doc: &str, ordinal: u64, text: &str) -> u64 {
+        let typed = self.head();
+        let v = self.op(&json!({"op": "insert", "doc": doc, "at": {"subspace": "1", "ordinal": ordinal.to_string()}, "values": [text], "as_of": typed}));
+        assert_eq!(v["resp"], "ack_addr", "the racer's insert: {v}");
+        v["at"].as_u64().expect("the commit's position")
+    }
+}
+
+/// The board's head at `port`: `/health`'s `log_position`.
+fn head_position(port: u16) -> u64 {
+    let (st, _, body) = http(port, "GET", "/health", None, b"");
+    assert_eq!(st, 200, "health: {}", String::from_utf8_lossy(&body));
+    serde_json::from_slice::<Value>(&body).expect("health is JSON")["log_position"].as_u64().expect("the head")
+}
+
 // ── minimal HTTP, for the blob seeding ──────────────────────────────────
 
 /// One exchange with the daemon: the request written whole, the answer
@@ -471,9 +718,7 @@ fn cell_of(hash: &str, size: u64) -> String {
 fn insert_cell(port: u16, token: &str, draft: &str, cell: &str) -> String {
     // Typed against the board's head as read now (`as_of`, wire.md
     // §Arrangement): `/health`'s `log_position`.
-    let (st, _, body) = http(port, "GET", "/health", None, b"");
-    assert_eq!(st, 200, "health: {}", String::from_utf8_lossy(&body));
-    let typed = serde_json::from_slice::<Value>(&body).expect("health is JSON")["log_position"].as_u64().expect("the head");
+    let typed = head_position(port);
     let v = op(port, Some(token), &json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": [{"atom": cell}], "as_of": typed}));
     assert_eq!(v["resp"], "ack_addr", "the cell's insert: {v}");
     v["addr"].as_str().expect("the cell's address").to_string()

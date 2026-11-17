@@ -19,16 +19,20 @@
 //! the admission is open and opens no approval for a value it does not know
 //! (REG-4.108).
 //!
-//! No size bound is built: none is ruled for the document, so the parse
-//! reads bytes of any length, and a reader that fetches one bounds its own
-//! read.
+//! The cap is the registry records' own, `MAX_REGISTRY_RECORD_BYTES`,
+//! 16 KiB: a document past it is refused before any tree is built, ahead of
+//! every other stage, and reads as no policy, as an empty document does.
+//! A door whose document is absent, holds no version, or whose standing
+//! version this parse refuses has no policy: no request is admitted there
+//! and no approval is written (REG-4.139). Which version stands is the
+//! reader's.
 
 use serde_json::{Map, Value};
 use skep_address::Address;
 
 use crate::body::{
     address_of, holds_a_refused_number, names_only, object_under, string_member, strings_member,
-    Member, ParseRefusal,
+    Member, ParseRefusal, MAX_REGISTRY_RECORD_BYTES,
 };
 use crate::registration::{digits_member, push_string, push_strings, required_string, Digits};
 
@@ -143,20 +147,23 @@ impl AdmissionPolicy {
 ///
 /// A policy is answered only where `bytes` are [`encode_policy`] of what
 /// they spell, so the document has one form; a malformed document is
-/// refused whole. Total over any bytes: no panic. No cap is applied.
+/// refused whole. Total over any bytes: no panic, and no tree past the cap.
+/// A document it refuses is no policy to any reader: the empty document,
+/// `not_json`, among them (REG-4.139).
 ///
 /// # Errors
 ///
 /// The first stage to fault names the refusal, in this order:
 ///
-/// 1. The text, the value and the object: `not_utf8`, `not_json`,
+/// 1. The cap, `MAX_REGISTRY_RECORD_BYTES`, 16 KiB: `past_cap`.
+/// 2. The text, the value and the object: `not_utf8`, `not_json`,
 ///    `not_an_object`.
-/// 2. The number scan: `number` for any JSON number, wherever it stands.
-/// 3. `type`: `wrong_type` where the member is absent, no string, or not
+/// 3. The number scan: `number` for any JSON number, wherever it stands.
+/// 4. `type`: `wrong_type` where the member is absent, no string, or not
 ///    `"admission-policy"`.
-/// 4. The member set: `unknown_member` for a member the document does not
+/// 5. The member set: `unknown_member` for a member the document does not
 ///    name, `sig` among them.
-/// 5. Each member's form, in the document's order, a required member's
+/// 6. Each member's form, in the document's order, a required member's
 ///    absence answered at its own turn (`missing_member`): `admission` one
 ///    of its three values (`unknown_value`); `vouches` at `admission`'s
 ///    turn — required with `"n-vouches"` and decimal digits (`not_digits`),
@@ -166,10 +173,10 @@ impl AdmissionPolicy {
 ///    (`not_an_address`); the three intake terms and the three intervals
 ///    decimal digits; `contact` a string; `sponsors`, where present, a
 ///    string; `grounds` an array of strings.
-/// 6. The canonical compare: `not_canonical`, another member order among
+/// 7. The canonical compare: `not_canonical`, another member order among
 ///    its causes.
 pub fn parse_policy(bytes: &[u8]) -> Result<AdmissionPolicy, ParseRefusal> {
-    let (text, mut object) = object_under(usize::MAX, bytes)?;
+    let (text, mut object) = object_under(MAX_REGISTRY_RECORD_BYTES, bytes)?;
     if holds_a_refused_number(&object, &[]) {
         return Err(ParseRefusal::Number);
     }
@@ -237,8 +244,10 @@ fn policy_of(object: &mut Map<String, Value>) -> Result<AdmissionPolicy, ParseRe
 /// It is the one byte string the policy has — `{"type":"admission-policy"`,
 /// then its members in the document's order, `vouches` only under
 /// n-vouches and `sponsors` only where the policy carries one, `}` — and
-/// what [`parse_policy`] holds its input to. Total: every policy a caller
-/// can build encodes to bytes the parse admits.
+/// what [`parse_policy`] holds its input to. Total, and it measures
+/// nothing: every policy a caller can build encodes, and the result is a
+/// document at [`parse_policy`] exactly where it is at most the cap,
+/// `MAX_REGISTRY_RECORD_BYTES`. The measure is the writer's.
 pub fn encode_policy(policy: &AdmissionPolicy) -> String {
     let mut out = String::with_capacity(512);
     out.push_str("{\"type\":\"");

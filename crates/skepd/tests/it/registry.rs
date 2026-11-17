@@ -438,6 +438,77 @@ fn the_enforcing_board_refuses_the_bare_principal_0_delegate_and_the_signed_one_
     sd.shutdown();
 }
 
+/// REG-4.95 step 2, REG-4.110 (AUTH-5.57 step 5) — THE NODE ACCOUNT'S
+/// GENESIS IS THE REGISTRAR'S OWN SESSION'S, NEVER THE PRINCIPAL-0 SESSION'S.
+/// Principal 0's signed session mints the account: its subject is the
+/// claimant's set, so the registrar's device key opens it. It owns no
+/// document, and "the store's ownership rule admit[s] a write into a
+/// document from the session of the account that owns it and from no
+/// other". So the genesis that session sends into the registrar's doc 1 is
+/// refused at its `insert`; and, the same atom landed there by the
+/// registrar's own session, its `make_link` from the principal-0 session is
+/// refused too. Each is PERMANENT and commits nothing: the account stays
+/// keyless and its key opens no signed session. The record is signed by
+/// the one device key throughout, so the session's account alone decides.
+/// The same `make_link` from the registrar's own signed session commits,
+/// the account's set holds the key, and its first signed session opens.
+#[test]
+fn the_node_accounts_genesis_is_refused_from_the_principal_0_session_and_commits_from_the_registrars_own() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_enforcing(dir.path());
+    let port = sd.port();
+    assert_enforcing(port);
+    let zero = open_signed_session(port, 0, &device_key());
+    let node_account = next_prefix_under(port, Some(&zero), "1");
+    expect_resp(
+        &op(port, Some(&zero), &format!(r#"{{"op":"delegate","new_prefix":"{node_account}","new_id":{NODE_PRINCIPAL}}}"#)),
+        "ack_addr",
+    );
+    let node_key = distinct_key(NODE_SEED);
+    let to = [node_account.as_str()];
+    let enrolled = || {
+        let set = op(port, None, &format!(r#"{{"op":"key_set","account":"{node_account}"}}"#));
+        set["enrolled"].as_array().map(Vec::len)
+    };
+    // The node account's own signed handshake, unjudged: its status.
+    let handshake = || {
+        let nonce = challenge(port, NODE_PRINCIPAL);
+        let origin = format!("http://127.0.0.1:{port}");
+        let sig = sign_session(&node_key, &origin, &nonce, NODE_PRINCIPAL);
+        let body = format!(r#"{{"principal":{NODE_PRINCIPAL},"nonce":"{nonce}","origin":"{origin}","sig":"{sig}"}}"#);
+        http(port, "POST", "/session", None, body.as_bytes()).0
+    };
+
+    // From the principal-0 session: the genesis is refused at its insert.
+    let before = head_position(port);
+    let atom = signed_atom(port, &zero, CLAIMANT_DOC1, T_ENROLL, &to, &enroll_atom(&[&node_key]));
+    let v = land(port, &zero, CLAIMANT_DOC1, T_ENROLL, &unquote(&atom));
+    assert_eq!(family_verdict(&v), "not_owner", "the genesis's insert from the principal-0 session: {v}");
+    assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");
+    assert_eq!(head_position(port), before, "nothing landed");
+
+    // The atom landed by the registrar's own session: its link from the
+    // principal-0 session is refused, and the account stays keyless.
+    let console = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let atom = signed_atom(port, &console, CLAIMANT_DOC1, T_ENROLL, &to, &enroll_atom(&[&node_key]));
+    let landed = acked_addr(&land(port, &console, CLAIMANT_DOC1, T_ENROLL, &unquote(&atom)));
+    let before = head_position(port);
+    let v = link(port, &zero, CLAIMANT_DOC1, &[&landed], &to, T_ENROLL);
+    assert_eq!(family_verdict(&v), "not_owner", "the genesis's link from the principal-0 session: {v}");
+    assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");
+    assert_eq!(head_position(port), before, "no link committed");
+    assert_eq!(enrolled(), Some(0), "the account stays keyless");
+    assert_eq!(handshake(), 401, "and its key opens no signed session");
+
+    // From the registrar's own session the same link commits.
+    let v = link(port, &console, CLAIMANT_DOC1, &[&landed], &to, T_ENROLL);
+    expect_resp(&v, "ack_addr");
+    assert!(acked_at(&v) > before, "the genesis committed: {v}");
+    assert_eq!(enrolled(), Some(1), "the account's set holds the key the genesis enrolled");
+    assert_eq!(handshake(), 200, "and its first signed session opens");
+    sd.shutdown();
+}
+
 /// REG-2.21 — THE TARGETLESS BINDING: a binding naming NO account is a
 /// binding-typed link with no target, the one spelling of expulsion and
 /// every retirement; it carries the same body and COMMITS, and the

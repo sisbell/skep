@@ -473,3 +473,98 @@ pub fn keyed_sub_account(board: &Board, anchors: &Path, owner: &HybridSigner, n:
     board.session_close(&as_anchor).unwrap();
     account
 }
+
+// ── THE CONSOLE SUITE's HANDS ────────────────────────────────────────────
+//
+// A request is written by an intake home's own hand and a policy version by
+// the door's, each re-driven here over the board's raw frames — never the
+// console's own compositions, which are the suite's subject.
+
+/// A registration record — `body`, the row's canonical text with no `sig` —
+/// SIGNED at the record grade by `hand` for a deposit homed in `home`, typed
+/// `ty` and naming `to`, then inserted declared and linked: skepd's
+/// `deposit_registry_record`, for a row of the registration kind. Answers
+/// the link's address, or the refusal's document.
+pub fn wire_registration(board: &Board, token: &Token, hand: &HybridSigner, home: &str, ty: &str, to: &[&str], body: &str) -> Result<String, String> {
+    let kind = skep_registry::RegistrationKind::at(&parse_address(ty).expect("a type address")).expect("a body-bearing registration row");
+    let record = skep_registry::parse_registration(kind, body.as_bytes()).map_err(|refusal| format!("no record of the row: {refusal}"))?;
+    let term = board.board_term().expect("term").expect("H.1");
+    let home_account = board.effective_owner(home).expect("owner").expect("owned").prefix;
+    let sigless = record.canonical_sigless();
+    let alg = HybridSigner::public_key(hand).alg();
+    let frame = RecordFrame { alg, board: term, home_account: &home_account, home, ty, to, sigless: sigless.as_bytes() }.compose().expect("frame");
+    let text = skep_registry::encode_registration(&record.body, Some(&sig_hex(&HybridSigner::sign(hand, &frame))));
+    let (ordinal, as_of) = next_content_ordinal(board, Some(token), home).expect("ordinal");
+    let Answer::Document(v) = board.op(Some(token), &frames::insert_atom(home, ordinal, &text, ty, as_of, None)).expect("insert") else { return Err("closed".into()) };
+    let Some(atom) = acked_addr(&v).map(str::to_string) else { return Err(v.to_string()) };
+    let Answer::Document(v) = board.op(Some(token), &frames::make_link(home, &[&atom], to, ty, None)).expect("link") else { return Err("closed".into()) };
+    acked_addr(&v).map(str::to_string).ok_or_else(|| v.to_string())
+}
+
+/// A BINDING written as another console writes one: the canonical body
+/// signed at the record grade by `hand`, inserted declared and linked from
+/// `token`'s session into `home`. Answers the link's address.
+pub fn wire_binding(board: &Board, token: &Token, hand: &HybridSigner, home: &str, prefix: &str, account: Option<&str>, replaces: Option<&str>) -> Result<String, String> {
+    let ty = skep_registry::t_binding().to_string();
+    let body = skep_registry::Body::Binding(skep_registry::Binding { prefix: parse_address(prefix).expect("a prefix"), replaces: replaces.map(|r| parse_address(r).expect("an address")) });
+    let term = board.board_term().expect("term").expect("H.1");
+    let home_account = board.effective_owner(home).expect("owner").expect("owned").prefix;
+    let to: Vec<&str> = account.into_iter().collect();
+    let sigless = skep_registry::encode(&body, None);
+    let alg = HybridSigner::public_key(hand).alg();
+    let frame = RecordFrame { alg, board: term, home_account: &home_account, home, ty: &ty, to: &to, sigless: sigless.as_bytes() }.compose().expect("frame");
+    let text = skep_registry::encode(&body, Some(&sig_hex(&HybridSigner::sign(hand, &frame))));
+    let (ordinal, as_of) = next_content_ordinal(board, Some(token), home).expect("ordinal");
+    let Answer::Document(v) = board.op(Some(token), &frames::insert_atom(home, ordinal, &text, &ty, as_of, None)).expect("insert") else { return Err("closed".into()) };
+    let Some(atom) = acked_addr(&v).map(str::to_string) else { return Err(v.to_string()) };
+    let Answer::Document(v) = board.op(Some(token), &frames::make_link(home, &[&atom], &to, &ty, None)).expect("link") else { return Err("closed".into()) };
+    acked_addr(&v).map(str::to_string).ok_or_else(|| v.to_string())
+}
+
+/// ANY WORDS published as the next version of `door`'s policy document, by
+/// the raw frames — the document created where it is absent, a draft staged
+/// from it, `words` inserted as text, and the draft's new words published
+/// off the head — so a suite can stand a version the policy command refuses
+/// to write: one that does not parse. `atom` writes the words as ONE
+/// composite value in the text's place. Answers the version's address.
+pub fn wire_policy_version(board: &Board, token: &Token, signer: &HybridSigner, door: &str, words: &str, atom: bool) -> Result<String, String> {
+    use skep_identity::{entry_body_publication, entry_body_publish, ShotBase, ShotSegmentPiece};
+    let document = format!("{door}.0.5");
+    let term = board.board_term().expect("term").expect("H.1");
+    let alg = HybridSigner::public_key(signer).alg();
+    let address = |a: &str| parse_address(a).expect("an address");
+    let attest = |doc: &str, body: &skep_identity::EntryBody| {
+        let bytes = entry_frame(alg, term, &address(door), DocTerm::One(&address(doc)), body);
+        serde_json::json!({"alg": alg, "sig": sig_hex(&HybridSigner::sign(signer, &bytes))})
+    };
+    let sent = |frame: &Value| -> Result<Value, String> {
+        match board.op(Some(token), frame).expect("the op") {
+            Answer::Document(v) => Ok(v),
+            Answer::Closed => Err("closed".into()),
+        }
+    };
+    let acked = |v: Value| acked_addr(&v).map(str::to_string).ok_or_else(|| v.to_string());
+    let created = frames::create_well_known_document(door, 5, Some(attest(&document, &entry_body_empty(ContentFreeOp::CreateWellKnownDocument))), None);
+    acked(sent(&created)?)?;
+    let draft = acked(sent(&frames::stage(&document, None))?)?;
+    let staged = sent(&frames::doc_metadata(&draft))?;
+    let base = staged["base"].as_str().filter(|base| *base != document).map(str::to_string);
+    let copied: u64 = staged["base_copied"].as_str().and_then(|n| n.parse().ok()).unwrap_or(0);
+    let (ordinal, as_of) = next_content_ordinal(board, Some(token), &draft).expect("ordinal");
+    let insert = if atom { frames::insert_plain_atom(&draft, ordinal, words, as_of, None) } else { frames::insert_text(&draft, ordinal, words, as_of, None) };
+    let first = acked(sent(&insert)?)?;
+    let values: Vec<&[u8]> = if atom { vec![words.as_bytes()] } else { words.as_bytes().chunks(1).collect() };
+    let base_address = base.as_deref().map(address);
+    let shot_base = base_address.as_ref().map(|member| ShotBase { member, extent: copied });
+    let body = entry_body_publication(entry_body_publish(values.iter().map(|value| ShotSegmentPiece::Value(value)), shot_base), &[]);
+    let runs = [frames::shot_run(&draft, &first, values.len() as u64)];
+    let frame = frames::publication(&frames::PublishFrame {
+        doc: Some(&document),
+        draft: Some(&draft),
+        base: base.as_deref().map(|member| (member, copied)),
+        runs: &runs,
+        attest: Some(attest(&document, &body)),
+        ..frames::PublishFrame::default()
+    });
+    acked(sent(&frame)?)
+}

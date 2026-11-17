@@ -98,7 +98,12 @@ back — is this crate:
   document a door publishes (REG-4.131): one object, `type`
   `"admission-policy"`, its members in order, under the canonical rule. It
   is no deposit — it carries no `sig`, and the daemon reads no byte of it —
-  and no size bound is built for it. The approval's hand is read past the
+  and it is capped at `MAX_REGISTRY_RECORD_BYTES`, 16 KiB, as every body
+  but a request is: a document past the cap is refused `past_cap` ahead of
+  every other stage. A document the parse refuses is no policy — the empty
+  document a door holds between its creation and its first words among
+  them — and a door with no policy admits no request and writes no
+  approval. The approval's hand is read past the
   parse: `"auto"` is honored only where the admission is open and
   otherwise fails closed to the officer's hand, and a value the parser
   does not know opens no approval.

@@ -1,5 +1,5 @@
 {
-  "note": "THE VECTOR SET of the door's policy document (REG-1.86; REG-4.131), in the registry bodies' one scheme: the document's WHOLE CONTENT is one object, type admission-policy, under the canonical rule -- parse(b) answers a policy only where b == encode(parse(b)) -- and it is no deposit: it carries no sig and no kind. `parse` is the parse's answer, `ok` or the refusal's cause as skep-registry's ParseRefusal::token spells it; on an admitted document `approval_hand` is what its READER answers for the approval's hand: `officer`, `unattended` (auto, honored only where admission is open), or null where the approval value is one the parser does not know, which opens no approval (REG-4.108). No size bound is pinned for the document.",
+  "note": "THE VECTOR SET of the door's policy document (REG-1.86; REG-4.131), in the registry bodies' one scheme: the document's WHOLE CONTENT is one object, type admission-policy, under the canonical rule -- parse(b) answers a policy only where b == encode(parse(b)) -- and it is no deposit: it carries no sig and no kind. `parse` is the parse's answer, `ok` or the refusal's cause as skep-registry's ParseRefusal::token spells it; on an admitted document `approval_hand` is what its READER answers for the approval's hand: `officer`, `unattended` (auto, honored only where admission is open), or null where the approval value is one the parser does not know, which opens no approval (REG-4.108). THE CAP is the registry records' own, 16,384 bytes, as every registry body but a request is held to: a document past it answers past_cap, ahead of every other stage -- before its text, its JSON or its members are read. AN EMPTY DOCUMENT IS NO POLICY: a door whose policy document is absent, holds no version, or whose standing version this parse refuses is shut alike for every reader -- no request admitted, no approval -- so the `empty` vector's refusal is that door's whole answer.",
   "vectors": [
     {
       "name": "open_auto",
@@ -374,7 +374,41 @@
       "name": "empty",
       "bytes": "",
       "parse": "not_json",
-      "why": "no bytes at all"
+      "why": "no bytes at all: an empty document is NO POLICY -- a door whose policy document was created and holds no words is shut exactly as one with no document, and as one whose standing version does not parse (no request admitted, no approval)"
+    },
+    {
+      "name": "at_the_cap",
+      "bytes_filled": {
+        "head": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"",
+        "fill": "x",
+        "tail": "\",\"grounds\":[]}",
+        "len": 16384
+      },
+      "parse": "ok",
+      "approval_hand": "unattended",
+      "why": "a document of exactly 16,384 bytes, its contact filled to the cap: admitted"
+    },
+    {
+      "name": "one_byte_past_the_cap",
+      "bytes_filled": {
+        "head": "{\"type\":\"admission-policy\",\"admission\":\"open\",\"approval\":\"auto\",\"intake\":[\"1.0.1.4\"],\"intake_rate\":\"60\",\"intake_window\":\"3600\",\"intake_per_device\":\"3\",\"collection_interval\":\"1209600\",\"stale_request_interval\":\"2592000\",\"transcription_interval\":\"3600\",\"contact\":\"",
+        "fill": "x",
+        "tail": "\",\"grounds\":[]}",
+        "len": 16385
+      },
+      "parse": "past_cap",
+      "why": "the same document one byte longer: refused at the cap, though every member of it is in its form"
+    },
+    {
+      "name": "past_the_cap_ahead_of_every_other_stage",
+      "bytes_filled": {
+        "head": "[",
+        "fill": " ",
+        "tail": "]",
+        "len": 16385
+      },
+      "parse": "past_cap",
+      "why": "bytes past the cap that are no object: the cap answers ahead of the value's own fault (not_an_object at any length inside it)"
     },
     {
       "name": "not_utf8",

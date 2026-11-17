@@ -1,6 +1,6 @@
 # skep-cli — the `skep` command, and the dev binary `skep-dev`
 
-The command over `skep-client` (`client.md` §1.2, §2), twenty-one commands:
+The command over `skep-client` (`client.md` §1.2, §2), twenty-five commands:
 `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
 the ceremonies `enroll`, `recover`, `retire`, `rotate`, `handoff`,
 `accept`, `merge` — the editor's act on a daughter over the library's
@@ -170,7 +170,95 @@ request's thread is found by, and that the request serves its one door
 and its sheets belong to that one application: where it ends without an
 account they are destroyed and fresh ones made for any other door — with
 `--existing-board` the two node sheets alone, never the org root's own.
-A run that stops short says what it leaves behind. A person door. Flag
+A run that stops short says what it leaves behind. A person door. And the
+registrar's four, over the library's `console` walk and `policy`
+composition (REG-4.107, REG-4.131): a registry's door answered by its
+registrar, on the registry's own board (`--board`), whose claimant is the
+door's account. Each names a request by its LINK ADDRESS, the address of
+the link the intake home wrote it under, as `review` prints it. `review`
+is the queue read (REG-4.78): the requests a home the door's policy admits
+wrote at this door, each judged by the approval's check, read as a guest —
+no key, no session, no store — from the board's records alone, writing
+nothing. Stdout carries three blocks, each headed by its name and its
+count: `WAITING`, the requests no answer stands for; `APPROVED AND NOT
+COLLECTED`, the approved requests whose node account has no home page
+yet; and `CLOSED`, the refused, the denied and the approved and collected.
+Each request is one line — its link address, its kind (`fresh` or
+`board-carries-on`), its time in UTC as the board testifies it, where it
+stands (`passes`, `fails:` with the fault, or its answer) and `no name
+given` — and under it each of its keys, its label beside its fingerprint
+in groups, for the comparison with the applicant out of band. Stderr says
+the door's identifier, the policy version standing, and each record of a
+request's type that is no request. It takes no flag of its own, and is no
+person door. `approve <request>` is an officer's approval, at a door whose
+policy is `open` admission alone: at `n-vouches` and `invitation-only` it
+refuses before any write, naming the mode. The approval's check is run
+again on the request. Where it passes, the officer is shown the request's
+keys and types the first 8 hex of its device key's fingerprint, and the
+approval is written whole and in order — the org's node account, made
+from principal 0's signed session, its number written to the key store
+first; its first key record, the request's own node record word for
+word, from the registrar's own session, and with it the approval link
+from that record to the request; the binding of the next prefix to the
+account, read back until a guest's resolution finds it; and the approved
+answer on the request's thread — each act said on stderr. Where it fails,
+the request is answered refused, with its fault (`not-this-door`,
+`freshness-spent`, `enrolment-not-honored`), and nothing else is written;
+that is exit 0 too. Stdout carries `approved <request>`, then `prefix`,
+`account`, `principal` and `answer` lines, or `refused <request>`, then
+`fault` and `answer`. A run that stopped part way is resumed by running
+it again: every act is found by reading before it is made, and none is
+made twice. Two consoles of one registrar — an officer's and the
+unattended hand — may take one request at once: the registration is the
+first key record by journal order that names the request's node keys, so
+the run that finds another's ahead of its own, or finds the thread
+answered, sends no answer, retires a prefix it bound, says which on
+stderr and prints `yielded <request>` (REG-4.86). A person door. `approve --auto` is the unattended hand (REG-4.108): it
+takes no request and answers the whole queue, approving what passes the
+check and refusing what fails it, and denies nothing. It runs in the
+foreground until SIGINT or SIGTERM, reading the queue every 10 seconds; it
+needs no terminal, so it runs in a container, its key the registrar's
+labeled device key (`--key`, `SKEP_KEY`, or the store's own lookup) and
+its key store the folder it is handed (`--dir`, `SKEP_KEYSTORE`). It
+refuses to start unless the policy standing is `open` admission approved
+by `auto`, and stops, saying why, when a later version withdraws that. It
+catches both signals itself, and each only sets a flag read between two
+requests: an approval under way runs to its end, and the process then
+exits 0, saying it stopped. A kill inside an act is safe, since every act
+resumes by reading. Stdout carries one line an act — `approved <request>
+<prefix> <account> <principal> <answer>`, `refused <request> <fault>
+<answer>` or `yielded <request>`; a board that does not answer is said
+and read again at the next pass. `deny <request> --clause <n>` is an officer's denial (REG-4.99),
+at every admission mode and never the unattended hand's: `<n>` is the
+position, counted from 1, of a ground in the policy version standing, and
+the answer cites that version's address and that position and nothing
+else. The officer is shown the clause's words and types the first 8 hex of
+the request's device-key fingerprint. A clause past the version's
+grounds, an address that names no request on this door's queue, a request
+already answered and one whose approval is begun are each refused before
+any write, the last two read again after the confirmation. Stdout carries `denied <request>`, then `policy`, `clause` and
+`answer` lines. A person door. `set-policy <file>` publishes the door's
+policy (REG-4.131): the policy is well-known document 5 of the door's
+account, and each version of it one publication. `<file>` is the policy
+as every reader parses it, one JSON object in its canonical form of at
+most 16 KiB (16,384 bytes); it is read and judged first, ahead of the door
+and of any socket, so a file that would stand as no policy — too long, or
+one the parser refuses, a trailing newline among its causes — is refused
+naming its cause, and nothing is written. The officer is told what the
+version says and that a published version is permanent and public, and
+types `publish`; the document is created where the door has none, and the
+file is published as its next version, its text the file's bytes. Where
+the version standing already holds exactly those bytes nothing is
+published and nothing is asked, so a run cut after its publication is
+answered by the next. Stdout carries `policy <version address>`. A person
+door. A door with no policy — document 5 absent, created and holding no
+version, or its standing version one the parser refuses — is shut:
+`review` says so and lists nothing, and `approve`, `approve --auto` and
+`deny` refuse before any write. At `approve`, `deny` and `set-policy` the
+principal is the one the board seats at its claimant where `--principal`
+is omitted; each approval leaves the new node account's line in the
+registrar's key store, so that store's other commands at this board name
+`--principal`. Flag
 parsing by hand, one file
 per command, a `Person` over the terminal, stdout DATA and stderr TALK,
 §2.3's exit codes (0 done, 1 the board refused, 2 usage, 3 halt and
@@ -289,7 +377,7 @@ each kind is met, with the route it was met at, since a browser shows the
 page an origin refusal only as a CORS failure, and every one is counted
 to the stop.
 
-The twenty-one commands stand: the dev binary is no command of `skep`, and
+The twenty-five commands stand: the dev binary is no command of `skep`, and
 the sidecar image, built `--no-default-features --bin skep`, holds none of
 it and no `skepd` (the default build neither: `dev-hooks` alone links the
 daemon, which `scripts/gate-full.sh`'s isolation line and
@@ -311,9 +399,9 @@ variable the source reads to a row here.
 | setting | variable | default | checked | read at | what it sets |
 |---|---|---|---|---|---|
 | `--board` | `SKEP_BOARD` | none | a canonical origin, as the command reads it | every command but `keygen`, `fingerprint`, `register`, which reads no board, and `resolve`, whose registry is the root hint's; asked at `accept` where absent | the board; the store keys each binding by the origin as written, so `localhost` is another board than `127.0.0.1` |
-| `--dir` | `SKEP_KEYSTORE` | `~/.skep`, under `HOME`, else `USERPROFILE` | the home an absolute path, else refused | every command but `health`, `hint`, `claim --hosted` and `session --close` | the key store: `keys/` (each file 0600, the directory 0700), `bindings` and `lock`; `resolve`'s registry mirror in `registry/<genesis>/` under it (the directories 0700, `feed.jsonl`, `fetched.jsonl` and `lock` 0600), which no reader of the store's keys or bindings opens; `skep-dev seed`'s manifest in `<store>-seed/` beside it |
-| `--key` | `SKEP_KEY` | none | the file, as the command reads it; an anchor's file refused where the key signs | `session`, `verify`, `bind`, `fingerprint`, `merge`, `share`, `restore`, `deposit`, `register`, `accept --reprint`; refused at `enroll`, `retire` and `hire` | one key file, bypassing the store's lookup; at `fingerprint`, the one key listed; at `register`, the device key the request is signed by, where the store holds several |
-| `--principal` | `SKEP_PRINCIPAL` (`skep-mcp` reads it too) | the store's one binding at the board; at `bind`, the reply's; at `claim`, `1`; at `deposit`, the one the board seats at `--account` | an integer from 0 to 2^53 − 1, as the command reads it | `session`, `verify`, `enroll`, `recover`, `retire`, `rotate`, `handoff`, `hire`, `merge`, `share`, `restore`, `bind`, `claim`, `deposit` | the principal; at `claim`, the new account's id; at `hire`, the owner's, never the agent's, which the command prints |
+| `--dir` | `SKEP_KEYSTORE` | `~/.skep`, under `HOME`, else `USERPROFILE` | the home an absolute path, else refused | every command but `health`, `hint`, `review`, `claim --hosted` and `session --close` | the key store: `keys/` (each file 0600, the directory 0700), `bindings` and `lock`; `resolve`'s registry mirror in `registry/<genesis>/` under it (the directories 0700, `feed.jsonl`, `fetched.jsonl` and `lock` 0600), which no reader of the store's keys or bindings opens; `skep-dev seed`'s manifest in `<store>-seed/` beside it |
+| `--key` | `SKEP_KEY` | none | the file, as the command reads it; an anchor's file refused where the key signs | `session`, `verify`, `bind`, `fingerprint`, `merge`, `share`, `restore`, `deposit`, `register`, `approve`, `deny`, `set-policy`, `accept --reprint`; refused at `enroll`, `retire` and `hire` | one key file, bypassing the store's lookup; at `fingerprint`, the one key listed; at `register`, the device key the request is signed by, where the store holds several; at `approve --auto`, the registrar's labeled device key the unattended hand signs with |
+| `--principal` | `SKEP_PRINCIPAL` (`skep-mcp` reads it too) | the store's one binding at the board; at `bind`, the reply's; at `claim`, `1`; at `deposit`, the one the board seats at `--account`; at `approve`, `deny` and `set-policy`, the one the board seats at its claimant | an integer from 0 to 2^53 − 1, as the command reads it | `session`, `verify`, `enroll`, `recover`, `retire`, `rotate`, `handoff`, `hire`, `merge`, `share`, `restore`, `bind`, `claim`, `deposit`, `approve`, `deny`, `set-policy` | the principal; at `claim`, the new account's id; at `hire`, the owner's, never the agent's, which the command prints |
 | `--json` | — | off | — | `verify`, `health`, `fingerprint`, `resolve`; at `merge`, `share` and `restore` the answer is one JSON document always, and the flag changes nothing; at `hint` the answer is the one line always | one JSON document on stdout |
 | `--root-hint` | `SKEP_ROOT_HINT` | none: required at `resolve` (the hint a build ships with is decided at launch, REG-3.72) | one root-hint line as the resolver reads it — one or more canonical origins, `realm:<64 hex>`, and on a forked lineage `fork:<address>` — before any socket opens and before the mirror's directory is made | `resolve` | the registry an address is resolved through: its roots in the order they are tried, and its realm (REG-3.2); the line `skep hint` prints |
 | `--kind` | `SKEP_MERGE_KIND` | none: required at `merge` | an address, as the command reads it, before any socket opens | `merge` | the merge record kind's type address — the kind's commons row is interim and unpinned (the merge record's decision 9), so the caller names it |

@@ -33,11 +33,18 @@
 //! at the agent and the stop at an account a hire made; `well_known` drives
 //! the creation of an account's well-known documents on an enforcing board
 //! — each slot in its own state, the published three signed, once apiece —
-//! and the refusals that reach its caller.
+//! and the refusals that reach its caller; `console` drives the registrar's
+//! console and the door's policy on an enforcing board — the policy's four
+//! acts at well-known document 5, the queue read from admitted homes alone,
+//! the framing re-check and the refused answer, the approval in its order
+//! and resumed from a stop after each write, the read-back under a lost
+//! race, next-form, the denial, the unattended hand under each policy, the
+//! three derived lists and a door with no policy.
 
 mod backup;
 mod claim;
 mod common;
+mod console;
 mod cut_short;
 mod enroll;
 mod handoff;

@@ -6,7 +6,9 @@
 //! fifteenth (PUB-5.29; PUB-5.108), `restore`, the sixteenth (B3-S7),
 //! `hint`, the seventeenth (REG-3.2), `resolve`, the eighteenth
 //! (REG-3.7), `deposit`, the nineteenth (REG-1.9), `hire`, the
-//! twentieth (AUTH-5.58), or `register`, the twenty-first (REG-4.67), and
+//! twentieth (AUTH-5.58), `register`, the twenty-first (REG-4.67), or one
+//! of the registrar's four — `review`, `approve`, `deny` and `set-policy`,
+//! the twenty-second to the twenty-fifth (REG-4.107) — and
 //! is judged against
 //! `GRAMMAR`, one
 //! row per command beside `HELP`, the text that documents it: a flag in no
@@ -107,9 +109,9 @@ fn version_line(program: &str) -> String {
     )
 }
 
-/// One of the twenty-one commands: the verb a command line opens with.
+/// One of the twenty-five commands: the verb a command line opens with.
 ///
-/// The twenty-one are `client.md` §2.1's thirteen, `merge`, the fourteenth
+/// The twenty-five are `client.md` §2.1's thirteen, `merge`, the fourteenth
 /// (the merge record's §6), `share`, the fifteenth (PUB-5.29; PUB-5.108),
 /// `restore`, the sixteenth (B3-S7; `client.md` §4b.1's `history.restore`
 /// row), `hint`, the seventeenth (REG-3.2: a registry's root hint, read
@@ -117,9 +119,15 @@ fn version_line(program: &str) -> String {
 /// cross-board address lives on, found through the registry),
 /// `deposit`, the nineteenth (REG-1.9: a board's endpoint, deposited at
 /// its node account), `hire`, the twentieth (AUTH-5.58: an agent
-/// hired, the owner's side of the ceremony), and `register`, the
+/// hired, the owner's side of the ceremony), `register`, the
 /// twenty-first (REG-4.67: an applicant's registration request, its keys
-/// made and the request signed on the applicant's own device). A command is
+/// made and the request signed on the applicant's own device), and the
+/// registrar's four at a registry's door (REG-4.107): `review`, the
+/// twenty-second (the requests at the door, read off the board), `approve`,
+/// the twenty-third (a request approved, by an officer's hand or the
+/// unattended one), `deny`, the twenty-fourth (a request denied under a
+/// clause of the door's policy) and `set-policy`, the twenty-fifth (the
+/// door's policy published as its next version; REG-4.131). A command is
 /// what `GRAMMAR`'s rows are keyed by, and what `main` dispatches on, one
 /// arm each, which the compiler holds exhaustive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -145,6 +153,10 @@ pub enum Command {
     Deposit,
     Hire,
     Register,
+    Review,
+    Approve,
+    Deny,
+    SetPolicy,
 }
 
 impl Command {
@@ -172,6 +184,10 @@ impl Command {
             Command::Deposit => "deposit",
             Command::Hire => "hire",
             Command::Register => "register",
+            Command::Review => "review",
+            Command::Approve => "approve",
+            Command::Deny => "deny",
+            Command::SetPolicy => "set-policy",
         }
     }
 }
@@ -194,9 +210,11 @@ pub struct Line<C> {
     pub command: C,
     values: HashMap<String, Vec<String>>,
     switches: Vec<String>,
+    /// The command's one operand, where its row takes one and it was given.
+    operand: Option<String>,
 }
 
-/// The `skep` command's line: one of the twenty-one, and its flags.
+/// The `skep` command's line: one of the twenty-five, and its flags.
 pub type CommandLine = Line<Command>;
 
 /// The flags every command takes, each taking one value.
@@ -211,6 +229,12 @@ const GLOBAL: [&str; 5] = ["--board", "--dir", "--key", "--principal", "--label"
 /// The flags are those beyond the program's global ones.
 struct Row<C> {
     command: C,
+    /// The one argument the command takes with no flag before it, as its
+    /// refusals and the help name it; `None` where it takes none.
+    ///
+    /// It is the thing the command acts on — a request, a file — where a
+    /// person types the verb and then its object.
+    operand: Option<&'static str>,
     /// The flags that take one value.
     once: &'static [&'static str],
     /// The flags that take a value and repeat, every value kept in order.
@@ -251,6 +275,10 @@ enum Form {
     /// A registration whose board carries on generates the node pair
     /// alone, two anchors (REG-4.104).
     AtMostWithin(&'static str, &'static str, usize),
+    /// The flag opens a form that takes no operand: refused beside one.
+    ///
+    /// `approve --auto` answers the whole queue, and names no request.
+    NoOperand(&'static str),
 }
 
 impl Form {
@@ -267,16 +295,20 @@ impl Form {
             Form::AtMostWithin(flag, opener, most) if line.values(flag).len() > most && line.given(opener) => {
                 format!("`{flag}` is given at most {most} times at `{command} {opener}`")
             }
+            Form::NoOperand(flag) if line.given(flag) && line.operand.is_some() => {
+                format!("`{flag}` and `{}` belong to two forms of `{command}`: give one", line.operand.as_deref().unwrap_or_default())
+            }
             _ => return None,
         };
         Some(Usage(text))
     }
 }
 
-/// The grammar: the twenty-one commands, each with its flags and its forms.
+/// The grammar: the twenty-five commands, each with its flags and its forms.
 ///
 /// The commands are `client.md` §2.1's in set, `merge`, `share`, `restore`,
-/// `hint`, `resolve`, `deposit`, `hire` and `register`, each
+/// `hint`, `resolve`, `deposit`, `hire`, `register`, `review`, `approve`,
+/// `deny` and `set-policy`, each
 /// with the flags §2.2 gives it and `HELP` documents, and the rules its
 /// forms hold them to — the forms the record's synopses draw:
 /// `keygen --anchors` (§2.2), `claim`'s notebook walk or `--hosted` (§4.5),
@@ -316,16 +348,26 @@ impl Form {
 /// `--anchor-label`, `--anchor-out` and `--paper` as `keygen --anchors`
 /// takes them — four of each at most, the org root pair's a and b and then
 /// the node pair's, and two inside `--existing-board`, the node pair's
-/// alone (REG-4.103, REG-4.104).
+/// alone (REG-4.103, REG-4.104); `review`'s row is empty, the command
+/// taking the settings alone; `approve`'s is its operand, the request by
+/// its link's address, or `--auto`, the unattended hand, which answers the
+/// whole queue and takes no operand — two forms apart; `deny`'s is its
+/// operand, the request, and `--clause`, the ground's position, once; and
+/// `set-policy`'s is its operand, the policy's file. An operand is the one
+/// argument a command takes with no flag before it: the thing its verb
+/// acts on, read where a row names one and refused a second.
 /// That a side and `--doc` are required at `merge`, a reader at `share`,
 /// both flags at `restore`, the board at `hint`, the address and the
 /// root hint at `resolve`, the account and an origin at `deposit`, the
-/// payload at `hire` and the door at `register`, is
+/// payload at `hire`, the door at `register`, a request or `--auto` at
+/// `approve`, the request and the clause at `deny` and the file at
+/// `set-policy`, is
 /// the command's
 /// judgment, as `retire` judges its `--fingerprint`: no form says "one of".
-const GRAMMAR: [Row<Command>; 21] = [
+const GRAMMAR: [Row<Command>; 25] = [
     Row {
         command: Command::Keygen,
+        operand: None,
         once: &[],
         repeated: &["--anchor-label", "--anchor-out"],
         switches: &["--payload", "--anchors", "--paper"],
@@ -339,19 +381,21 @@ const GRAMMAR: [Row<Command>; 21] = [
     },
     Row {
         command: Command::Claim,
+        operand: None,
         once: &["--name", "--hosted"],
         repeated: &["--anchor-out"],
         switches: &["--paper"],
         forms: &[Form::Apart("--hosted", "--name"), Form::Apart("--hosted", "--anchor-out"), Form::Apart("--hosted", "--paper"), Form::AtMost("--anchor-out", 2)],
     },
-    Row { command: Command::Session, once: &["--close"], repeated: &[], switches: &[], forms: &[] },
-    Row { command: Command::Fingerprint, once: &["--select"], repeated: &[], switches: &["--payload"], forms: &[] },
-    Row { command: Command::Verify, once: &["--payload"], repeated: &["--anchor"], switches: &[], forms: &[] },
-    Row { command: Command::Health, once: &[], repeated: &[], switches: &[], forms: &[] },
-    Row { command: Command::Bind, once: &["--account", "--payload"], repeated: &["--anchor"], switches: &[], forms: &[] },
-    Row { command: Command::Enroll, once: &["--payload", "--reply"], repeated: &[], switches: &[], forms: &[Form::Apart("--reply", "--payload")] },
+    Row { command: Command::Session, operand: None, once: &["--close"], repeated: &[], switches: &[], forms: &[] },
+    Row { command: Command::Fingerprint, operand: None, once: &["--select"], repeated: &[], switches: &["--payload"], forms: &[] },
+    Row { command: Command::Verify, operand: None, once: &["--payload"], repeated: &["--anchor"], switches: &[], forms: &[] },
+    Row { command: Command::Health, operand: None, once: &[], repeated: &[], switches: &[], forms: &[] },
+    Row { command: Command::Bind, operand: None, once: &["--account", "--payload"], repeated: &["--anchor"], switches: &[], forms: &[] },
+    Row { command: Command::Enroll, operand: None, once: &["--payload", "--reply"], repeated: &[], switches: &[], forms: &[Form::Apart("--reply", "--payload")] },
     Row {
         command: Command::Recover,
+        operand: None,
         once: &["--anchor"],
         repeated: &["--lost", "--anchor-out"],
         switches: &["--stolen", "--anchor-lost", "--paper"],
@@ -363,11 +407,12 @@ const GRAMMAR: [Row<Command>; 21] = [
             Form::AtMost("--anchor-out", 2),
         ],
     },
-    Row { command: Command::Retire, once: &["--fingerprint"], repeated: &[], switches: &[], forms: &[] },
-    Row { command: Command::Rotate, once: &["--payload"], repeated: &[], switches: &[], forms: &[] },
-    Row { command: Command::Handoff, once: &["--account", "--payload", "--anchor"], repeated: &[], switches: &[], forms: &[Form::Within("--anchor", "--payload")] },
+    Row { command: Command::Retire, operand: None, once: &["--fingerprint"], repeated: &[], switches: &[], forms: &[] },
+    Row { command: Command::Rotate, operand: None, once: &["--payload"], repeated: &[], switches: &[], forms: &[] },
+    Row { command: Command::Handoff, operand: None, once: &["--account", "--payload", "--anchor"], repeated: &[], switches: &[], forms: &[Form::Within("--anchor", "--payload")] },
     Row {
         command: Command::Accept,
+        operand: None,
         once: &["--account"],
         repeated: &["--anchor-out", "--anchor"],
         switches: &["--paper", "--no-anchors", "--reprint"],
@@ -383,6 +428,7 @@ const GRAMMAR: [Row<Command>; 21] = [
     },
     Row {
         command: Command::Merge,
+        operand: None,
         once: &["--doc", "--alternative", "--draft", "--base", "--fork", "--head", "--kind", "--journal", "--into", "--retries", "--undo", "--withdraw", "--withdrawal"],
         repeated: &["--resolve", "--window", "--leave-out", "--keep-private"],
         switches: &["--publish", "--new", "--no-dedup", "--retype"],
@@ -425,6 +471,7 @@ const GRAMMAR: [Row<Command>; 21] = [
     },
     Row {
         command: Command::Share,
+        operand: None,
         once: &["--doc", "--to", "--revoke"],
         repeated: &[],
         switches: &["--whole-account", "--privash", "--list", "--yes"],
@@ -443,12 +490,13 @@ const GRAMMAR: [Row<Command>; 21] = [
             Form::Apart("--yes", "--list"),
         ],
     },
-    Row { command: Command::Restore, once: &["--draft", "--at"], repeated: &[], switches: &[], forms: &[] },
-    Row { command: Command::Hint, once: &["--fork"], repeated: &["--also"], switches: &[], forms: &[] },
-    Row { command: Command::Resolve, once: &["--address", "--root-hint"], repeated: &[], switches: &[], forms: &[] },
-    Row { command: Command::Deposit, once: &["--account"], repeated: &["--origin"], switches: &[], forms: &[] },
+    Row { command: Command::Restore, operand: None, once: &["--draft", "--at"], repeated: &[], switches: &[], forms: &[] },
+    Row { command: Command::Hint, operand: None, once: &["--fork"], repeated: &["--also"], switches: &[], forms: &[] },
+    Row { command: Command::Resolve, operand: None, once: &["--address", "--root-hint"], repeated: &[], switches: &[], forms: &[] },
+    Row { command: Command::Deposit, operand: None, once: &["--account"], repeated: &["--origin"], switches: &[], forms: &[] },
     Row {
         command: Command::Hire,
+        operand: None,
         once: &["--payload", "--replaces"],
         repeated: &["--anchor-out"],
         switches: &["--anchorless", "--paper"],
@@ -456,6 +504,7 @@ const GRAMMAR: [Row<Command>; 21] = [
     },
     Row {
         command: Command::Register,
+        operand: None,
         once: &["--door"],
         repeated: &["--anchor-label", "--anchor-out"],
         switches: &["--existing-board", "--paper"],
@@ -466,9 +515,13 @@ const GRAMMAR: [Row<Command>; 21] = [
             Form::AtMost("--anchor-out", 4),
         ],
     },
+    Row { command: Command::Review, operand: None, once: &[], repeated: &[], switches: &[], forms: &[] },
+    Row { command: Command::Approve, operand: Some("<request>"), once: &[], repeated: &[], switches: &["--auto"], forms: &[Form::NoOperand("--auto")] },
+    Row { command: Command::Deny, operand: Some("<request>"), once: &["--clause"], repeated: &[], switches: &[], forms: &[] },
+    Row { command: Command::SetPolicy, operand: Some("<file>"), once: &[], repeated: &[], switches: &[], forms: &[] },
 ];
 
-/// The help text: the twenty-one commands and the flags each takes.
+/// The help text: the twenty-five commands and the flags each takes.
 ///
 /// Each command is as the design writes it, and the text is the grammar
 /// above, documented beside it.
@@ -601,6 +654,54 @@ usage: skep <command> [flags]
                name and fingerprint are said beside it for the comparison
                with whoever approves it; a request serves its one door,
                and its sheets belong to that one application
+  review       list the requests at your registry's door, read off its
+               board as a guest (no key, no session): three blocks on
+               stdout — WAITING, APPROVED AND NOT COLLECTED, CLOSED — each
+               request by its link address, the name approve and deny
+               take, with its kind, its time, the approval check's
+               verdict or its answer, and each key's label beside its
+               fingerprint; the door's identifier and the policy standing
+               are said on stderr; a door with no policy lists nothing;
+               it writes nothing; no person door
+  approve      approve a request at your registry's door (a person door):
+               skep approve <request>, the request's link address as
+               review prints it; the approval's check is run again, and
+               where it passes you compare the request's keys and type
+               the first 8 hex of its device key's fingerprint; then, in
+               order, the org's node account is made and given the
+               request's node keys, the next prefix is bound to it and
+               read back, and the approved answer is written on the
+               request's thread; where the check fails the request is
+               answered refused, with its fault, and nothing else is
+               written; at an open door alone — at an invitation-only or
+               an n-vouches door it is refused, naming the mode; a run
+               that stopped part way is resumed by running it again, and
+               makes no second account, binding or answer; where another
+               of your consoles took the request first, this one sends no
+               answer and retires a prefix it bound; with --auto
+               the unattended hand instead: it runs until stopped, reads
+               the queue every 10 seconds and approves or refuses each
+               waiting request under this key, the registrar's labeled
+               device key; it takes no request, needs no terminal, and
+               refuses to start unless the policy is open admission
+               approved by auto; SIGINT or SIGTERM stops it between two
+               requests, never inside one
+  deny         deny a request at your registry's door (a person door):
+               skep deny <request> under --clause, the position of a
+               ground in the policy standing, counted from 1; the answer
+               cites the policy's version and the clause, and says
+               nothing of the applicant; you type the first 8 hex of the
+               request's device key's fingerprint to confirm; an
+               officer's act, at every admission mode
+  set-policy   publish your registry's door policy (a person door): skep
+               set-policy <file>, the policy as one canonical JSON
+               object; the file is checked first — at most 16384 bytes,
+               and an admission policy as every reader parses one — and
+               a file that fails is refused before anything is written;
+               the door's policy document is made where it is missing,
+               and the file is published as its next version, which you
+               confirm by typing publish; where the version standing
+               already holds the file, nothing is published
 
 flags (a flag beats its env variable; a variable set empty is unset):
   --board <origin>      the board, a canonical origin (env SKEP_BOARD)
@@ -608,9 +709,12 @@ flags (a flag beats its env variable; a variable set empty is unset):
   --key <path>          one key file, bypassing the store's lookup (env
                         SKEP_KEY): read at session, verify, bind,
                         fingerprint, merge, share, restore, deposit,
-                        register and accept --reprint, an anchor file
+                        register, approve, deny, set-policy and accept
+                        --reprint, an anchor file
                         refused where the key signs; at register it names
-                        the device key, where the store holds several;
+                        the device key, where the store holds several; at
+                        approve --auto it names the registrar's labeled
+                        device key;
                         refused where enroll, retire and hire sign, their
                         walks taking none yet; not consulted elsewhere
   --principal <n>       the principal (env SKEP_PRINCIPAL), read at
@@ -621,8 +725,10 @@ flags (a flag beats its env variable; a variable set empty is unset):
                         and then names its own); at bind, the
                         reply's where omitted; at claim, the new account's
                         id, 1 where omitted; at deposit, the one the board
-                        seats at --account where omitted; not consulted
-                        elsewhere
+                        seats at --account where omitted; at approve, deny
+                        and set-policy, the one the board seats at its
+                        claimant, the door's own account, where omitted;
+                        not consulted elsewhere
   --label <text>        a byline (keygen, rotate, accept; at register, of
                         the device key it makes, refused where the store
                         already holds one)
@@ -721,6 +827,18 @@ flags (a flag beats its env variable; a variable set empty is unset):
             [--paper]  [--anchor-label <l>]...  [--anchor-out <dir>]...
             (four of each at most, in the order org root a, org root b,
             node a, node b; with --existing-board two, node a and node b)
+  review:   --board <origin> (the registry's board; nothing else is read)
+  approve:  <request> (the request's link address, as review prints it)
+            --board <origin>  [--principal <n>]  [--key <path>]; or
+            --auto without a request (the unattended hand: the key the
+            registrar's labeled device key, the key store a folder this
+            run is handed, never one it assumes)
+  deny:     <request>  --clause <n> (the ground's position in the policy
+            standing, from 1)  --board <origin>  [--principal <n>]
+            [--key <path>]
+  set-policy: <file> (the policy, one canonical JSON object of at most
+            16384 bytes)  --board <origin>  [--principal <n>]
+            [--key <path>]
 
 exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
 4 transport. stdout carries data; stderr carries talk. A retirement's
@@ -818,7 +936,7 @@ fn parse_under<C: Copy + fmt::Display>(
     let Some(row) = grammar.rows.iter().find(|r| r.command.to_string() == first) else {
         return Err(Usage(format!("unknown command `{first}`")));
     };
-    let mut line = Line { command: row.command, values: HashMap::new(), switches: Vec::new() };
+    let mut line = Line { command: row.command, values: HashMap::new(), switches: Vec::new(), operand: None };
     while let Some(arg) = argv.next().transpose()? {
         let flag = arg.as_str();
         if flag == "--help" || flag == "-h" {
@@ -851,6 +969,18 @@ fn parse_under<C: Copy + fmt::Display>(
         if grammar.rows_name(flag) {
             return Err(Usage(format!("`{arg}` is not a flag of `{}`", row.command)));
         }
+        // The operand: the one argument that opens with no dash, where the
+        // command's row takes one.
+        if let Some(name) = row.operand.filter(|_| !flag.starts_with('-')) {
+            if flag.is_empty() {
+                return Err(Usage(format!("{name}: an empty value names nothing")));
+            }
+            if let Some(first) = &line.operand {
+                return Err(Usage(format!("`{}` takes one {name}: `{first}` is given, and `{arg}` is a second", row.command)));
+            }
+            line.operand = Some(arg);
+            continue;
+        }
         return Err(Usage(format!("unknown argument `{arg}`")));
     }
     match row.forms.iter().find_map(|form| form.refusal(&line)) {
@@ -863,6 +993,15 @@ impl<C> Line<C> {
     /// Returns whether a switch was given.
     pub fn switch(&self, flag: &str) -> bool {
         self.switches.iter().any(|s| s == flag)
+    }
+
+    /// Returns the command's operand, where one was given.
+    ///
+    /// It is the one argument typed after the verb with no flag before it —
+    /// `approve`'s and `deny`'s request, `set-policy`'s file. That a command
+    /// requires it is the command's judgment.
+    pub fn operand(&self) -> Option<&str> {
+        self.operand.as_deref()
     }
 
     /// Returns whether a flag was given: a switch, or a flag with its value.
@@ -1189,6 +1328,7 @@ pub mod dev {
     pub(super) const GRAMMAR: [Row<DevCommand>; 2] = [
         Row {
             command: DevCommand::Seed,
+            operand: None,
             once: &["--repo", "--pin", "--from", "--documents", "--versions", "--drafts"],
             repeated: &[],
             switches: &[],
@@ -1196,6 +1336,7 @@ pub mod dev {
         },
         Row {
             command: DevCommand::Serve,
+            operand: None,
             once: &["--page-origin", "--listen", "--secret", "--session", "--script", "--data-dir", "--port"],
             repeated: &[],
             switches: &["--own", "--no-local-trust", "--unstarted"],

@@ -1,4 +1,4 @@
-//! The twenty-one commands, one file each beneath this one, and what they
+//! The twenty-five commands, one file each beneath this one, and what they
 //! share.
 //!
 //! The commands are `client.md` §2.2's thirteen, each exactly as it writes
@@ -9,8 +9,13 @@
 //! `resolve`, the eighteenth, the resolver of a cross-board address
 //! (REG-3.7), `deposit`, the nineteenth, the depositor of a board's
 //! endpoint at its node account (REG-1.9), `hire`, the twentieth, the
-//! owner's side of the hire ceremony (AUTH-5.58), and `register`, the
-//! twenty-first, an applicant's registration request (REG-4.67) — each a
+//! owner's side of the hire ceremony (AUTH-5.58), `register`, the
+//! twenty-first, an applicant's registration request (REG-4.67), and the
+//! registrar's four at a registry's door (REG-4.107) — `review`, the
+//! twenty-second, the queue read; `approve`, the twenty-third, the
+//! approval by an officer's hand or the unattended one; `deny`, the
+//! twenty-fourth, the denial under a clause; and `set-policy`, the
+//! twenty-fifth, the door's policy published — each a
 //! `pub fn` that `main` dispatches to and that answers
 //! `Ok` or the [`Stop`] it came to, every walk a library call. What they
 //! share among themselves alone is private here and so visible to each of
@@ -25,7 +30,10 @@
 //! rendered as the board's verdict under the step that met them
 //! (`refused`, [`Step`]), which `merge` and `restore` share, with the fact a
 //! published journal is refused on (`journal_published`), which `merge`'s
-//! composition talk says too. What the dev binary shares with
+//! composition talk says too; the registrar's principal read off the board
+//! (`registrar_principal`), which `approve`, `deny` and `set-policy` share;
+//! and a day as the calendar names it (`civil_date`), which the anchor
+//! boxes' default and `review`'s times share. What the dev binary shares with
 //! them — the two streams, the stops and their exit codes, the plumbing
 //! from the flags to a board, a store, a principal and a key — is
 //! `shared.rs`'s, taken here and handed down to the command files — the one
@@ -34,8 +42,10 @@
 //! `help` are the `skep` [`Program`]'s own.
 
 mod accept;
+mod approve;
 mod bind;
 mod claim;
+mod deny;
 mod deposit;
 mod enroll;
 mod fingerprint;
@@ -50,14 +60,18 @@ mod register;
 mod resolve;
 mod restore;
 mod retire;
+mod review;
 mod rotate;
 mod session;
+mod set_policy;
 mod share;
 mod verify;
 
 pub use accept::accept;
+pub use approve::approve;
 pub use bind::bind;
 pub use claim::claim;
+pub use deny::deny;
 pub use deposit::deposit;
 pub use enroll::enroll;
 pub use fingerprint::fingerprint;
@@ -72,8 +86,10 @@ pub use register::register;
 pub use resolve::resolve;
 pub use restore::restore;
 pub use retire::retire;
+pub use review::review;
 pub use rotate::rotate;
 pub use session::session;
+pub use set_policy::set_policy;
 pub use share::share;
 pub use verify::verify;
 
@@ -85,7 +101,7 @@ use serde_json::Value;
 use skep_address::Address;
 use skep_client::board::Board;
 use skep_client::derive::records::{compare_whole_set, credential_records, Difference, Held};
-use skep_client::derive::Walk;
+use skep_client::derive::{principal_of, Walk};
 use skep_client::halt::{Halt, Refused};
 use skep_client::merge::{Refusal, SupersedeCause};
 use skep_client::sheet::{render_inert, Facts};
@@ -124,7 +140,7 @@ pub fn help() -> Result<(), Stop> {
 
 /// A person door: its `form` and the `moments` a person answers there.
 ///
-/// The doors are §2.4's; `ARCHITECTURE.md` §The command lists the ten.
+/// The doors are §2.4's; `ARCHITECTURE.md` §The command lists them.
 /// The form is as a command line spells it, and the moments are in §2.4's
 /// and §6's words — each named, so neither stands in the other's place.
 #[derive(Clone, Copy, Debug)]
@@ -275,6 +291,39 @@ fn civil_date(secs: u64) -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Returns the registrar's principal at `board`, for the door's own acts.
+///
+/// It is `given` — `Line::principal`'s answer, its refusal already returned
+/// by the caller — else the one the board seats at its claimant: a door's
+/// binding-writing account is its board's claimant (REG-2.4), so the
+/// registrar's commands read their principal off the board, and a store
+/// that holds the lines of the accounts it has admitted names none.
+///
+/// # Errors
+///
+/// Returns a halt where the board names no claimant — an unclaimed board
+/// has no door — or seats no principal at it, and where a read fails.
+fn registrar_principal(board: &Board, given: Option<u64>) -> Result<u64, Halt> {
+    if let Some(principal) = given {
+        return Ok(principal);
+    }
+    let health = board.health()?;
+    let Some(claimant) = health.claimant() else {
+        return Err(Halt::face(
+            format!("the board at {} is unclaimed: it has no door", board.dialed()),
+            "a registry's door is its board's claimant, the account that writes its bindings (REG-2.4), and `/health` names none",
+            "claim the board first (`skep claim`), or check that --board (or SKEP_BOARD) names the registry's board",
+        ));
+    };
+    principal_of(board, claimant)?.ok_or_else(|| {
+        Halt::face(
+            format!("the board seats no principal at its claimant, {claimant}"),
+            "`effective_owner` answers no seat at the account `/health` names as the claimant",
+            "this is a fault in the board; pass --principal to name the registrar's own",
+        )
+    })
 }
 
 /// Prints the three facts as data on stdout, in their one spelling.

@@ -9,7 +9,7 @@
 use skep_address::{validate, Address, Nat, Tumbler};
 use skep_registry::{
     encode_policy, parse_policy, Admission, AdmissionPolicy, ApprovalHand, Digits, Member,
-    ParseRefusal, POLICY_TYPE,
+    ParseRefusal, MAX_REGISTRY_RECORD_BYTES, POLICY_TYPE,
 };
 
 use crate::registration::{vector_bytes, vector_file};
@@ -101,6 +101,10 @@ fn the_vector_set_meets_one_answer_at_this_parser() {
         "n_vouches_without_vouches",
         "with_sponsors_at_depth",
         "spaced",
+        "empty",
+        "at_the_cap",
+        "one_byte_past_the_cap",
+        "past_the_cap_ahead_of_every_other_stage",
     ] {
         assert!(vectors.iter().any(|v| v["name"] == required), "the set names {required}");
     }
@@ -127,12 +131,61 @@ fn the_spec_example_has_one_canonical_form() {
     assert_eq!(policy.grounds.len(), 2, "a clause is cited by its position in this list");
     let spaced = text.replace("\":\"", "\": \"");
     assert_eq!(parse_policy(spaced.as_bytes()), Err(ParseRefusal::NotCanonical));
-    // A document, not a deposit: no `sig` member, and no cap is applied.
+    // A document, not a deposit: no `sig` member.
     let signed = format!("{},\"sig\":\"c0ffee\"}}", &text[..text.len() - 1]);
     assert_eq!(parse_policy(signed.as_bytes()), Err(ParseRefusal::UnknownMember));
-    let mut long = policy;
-    long.contact = "x".repeat(200_000);
-    assert_eq!(parse_policy(encode_policy(&long).as_bytes()), Ok(long), "no size bound is built");
+}
+
+/// THE CAP IS 16 KiB, AHEAD OF EVERY OTHER STAGE: a policy document of
+/// exactly 16,384 bytes parses, and one byte more is refused `past_cap` —
+/// the registry records' own cap, held here as every body but a request is
+/// held to it. The refusal stands ahead of the text, the value, the number
+/// scan, the `type`, the member set and the canonical compare: bytes past
+/// the cap that would fault at each of those answer the cap, where the same
+/// fault inside the cap answers its own cause. And the empty document, which
+/// a door's policy document holds between its creation and its first words,
+/// is no policy.
+#[test]
+fn a_document_of_sixteen_kibibytes_parses_and_one_byte_more_is_refused_at_the_cap() {
+    assert_eq!(MAX_REGISTRY_RECORD_BYTES, 16_384);
+    let filled = |len: usize| {
+        let mut policy = the_registrys_door();
+        policy.contact = String::new();
+        let room = len - encode_policy(&policy).len();
+        policy.contact = "x".repeat(room);
+        policy
+    };
+    let at_cap = filled(MAX_REGISTRY_RECORD_BYTES);
+    let text = encode_policy(&at_cap);
+    assert_eq!(text.len(), 16_384);
+    assert_eq!(parse_policy(text.as_bytes()), Ok(at_cap), "a document at the cap parses");
+    let one_past = encode_policy(&filled(MAX_REGISTRY_RECORD_BYTES + 1));
+    assert_eq!(one_past.len(), 16_385, "the encoder measures nothing");
+    assert_eq!(parse_policy(one_past.as_bytes()), Err(ParseRefusal::PastCap), "one byte past it");
+
+    // Each later stage's fault, inside the cap and past it.
+    let pad = |body: &str, len: usize| -> Vec<u8> {
+        let mut bytes = body.as_bytes().to_vec();
+        bytes.resize(len, b' ');
+        bytes
+    };
+    let whole = encode_policy(&the_registrys_door());
+    let staged: [(Vec<u8>, ParseRefusal); 6] = [
+        (vec![0xff], ParseRefusal::NotUtf8),
+        (b"{".to_vec(), ParseRefusal::NotJson),
+        (b"[]".to_vec(), ParseRefusal::NotAnObject),
+        (br#"{"type":"admission-policy","admission":7}"#.to_vec(), ParseRefusal::Number),
+        (br#"{"type":"policy"}"#.to_vec(), ParseRefusal::WrongType),
+        (whole.replace("\":\"", "\": \"").into_bytes(), ParseRefusal::NotCanonical),
+    ];
+    for (bytes, cause) in staged {
+        assert_eq!(parse_policy(&bytes), Err(cause.clone()), "inside the cap: {cause}");
+        let mut past = bytes.clone();
+        past.resize(MAX_REGISTRY_RECORD_BYTES + 1, if cause == ParseRefusal::NotUtf8 { 0xff } else { b' ' });
+        assert_eq!(parse_policy(&past), Err(ParseRefusal::PastCap), "past the cap, ahead of {cause}");
+    }
+    assert_eq!(parse_policy(&pad("", MAX_REGISTRY_RECORD_BYTES)), Err(ParseRefusal::NotJson), "blank bytes at the cap are read, and are no JSON");
+    assert_eq!(parse_policy(b""), Err(ParseRefusal::NotJson), "an empty document is no policy");
 }
 
 /// REG-4.185 — `vouches` IS A MEMBER ONLY WITH `"n-vouches"`, and always

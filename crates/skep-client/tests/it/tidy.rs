@@ -32,15 +32,20 @@
 //! under `tls` and `test-hooks` together, and no manifest turns `test-hooks`
 //! on for a build that ships — so no shipped dialer can trust a root the
 //! platform does not — the sixth test below.
+//!
+//! THE APPROVAL'S HOLD, GATED: the console's one test seam, the hold inside
+//! an approval that a suite sends a signal at (`ceremony/console.rs`'s
+//! `hooks`), compiles only under `test-hooks`, its module and its one call
+//! each under the gate, and nothing else names it — the seventh test below.
 
 use std::path::{Path, PathBuf};
 
 /// The walks, one gesture each.
-const WALKS: &[&str] = &["accept", "claim", "enroll", "handoff", "hire", "recover", "retire", "rotate"];
+const WALKS: &[&str] = &["accept", "claim", "console", "enroll", "handoff", "hire", "recover", "retire", "rotate"];
 
 /// The compositions every walk runs over.
 const COMPOSITIONS: &[&str] =
-    &["backup", "deposit", "enumerate", "first_session", "handshake", "import", "payload", "preview", "reads", "registration", "registry_record", "trail"];
+    &["backup", "deposit", "enumerate", "first_session", "handshake", "import", "payload", "policy", "preview", "reads", "registration", "registry_record", "trail"];
 
 #[test]
 fn a_walk_names_no_other_walk_and_a_composition_names_none() {
@@ -317,6 +322,56 @@ fn the_test_trust_root_compiles_only_under_tls_and_test_hooks() {
     }
     assert!(dev_lines >= 2, "{dev_lines} `[dev-dependencies]` lines name `skep-client` with `test-hooks`: this crate's own and a suite's are the least this check reads");
     assert!(shipped.is_empty(), "a build that ships turns `skep-client`'s `test-hooks` on:\n{}", shipped.join("\n"));
+}
+
+/// Checks that the hold inside an approval compiles only under `test-hooks`.
+///
+/// The console's one test seam is `ceremony/console.rs`'s `hooks` module: a
+/// suite stops an approval between its mint and its binding through the
+/// variable `SKEP_TEST_HOLD_APPROVAL`, to send the process a signal there.
+/// A shipped console that read the variable could be held by its
+/// environment, so this holds the seam to `test-hooks` (SP-28), in three
+/// parts, and fails where it finds neither the module nor the call (SP-29).
+///
+/// 1. The module is gated on its `mod` line.
+/// 2. Its one call, in `ceremony/console/answer.rs`, stands directly under
+///    a gate.
+/// 3. No other code line under `src/` names the hold or its variable.
+#[test]
+fn the_approvals_hold_compiles_only_under_test_hooks() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let directly_gated = |lines: &[&str], at: usize| lines[..at].iter().rev().take_while(|l| l.trim_start().starts_with("#[")).any(|l| is_gate(l.trim()));
+    let console = std::fs::read_to_string(src.join("ceremony/console.rs")).unwrap();
+    let lines: Vec<&str> = console.lines().collect();
+    let module = lines
+        .iter()
+        .position(|l| l.trim() == "pub(crate) mod hooks {")
+        .expect("src/ceremony/console.rs declares `pub(crate) mod hooks {`: the module this check reads has moved");
+    let end = module + lines[module..].iter().position(|l| *l == "}").expect("the module closes at a `}` in the first column");
+    assert!(directly_gated(&lines, module), "src/ceremony/console.rs:{}: the approval's hold compiles without `test-hooks`", module + 1);
+
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    let (mut calls, mut faults) = (0usize, Vec::new());
+    for file in &files {
+        let text = std::fs::read_to_string(file).unwrap();
+        let shown = file.strip_prefix(&src).unwrap().display().to_string();
+        let lines: Vec<&str> = text.lines().collect();
+        for (n, line) in lines.iter().enumerate() {
+            let code = line.split(" //").next().unwrap_or(line);
+            let names = code.contains("hold_after_the_mint") || code.contains("SKEP_TEST_HOLD_APPROVAL");
+            if !names || line.trim_start().starts_with("//") || (shown == "ceremony/console.rs" && (module..=end).contains(&n)) {
+                continue;
+            }
+            if shown == "ceremony/console/answer.rs" && code.trim() == "super::hooks::hold_after_the_mint();" && directly_gated(&lines, n) {
+                calls += 1;
+            } else {
+                faults.push(format!("src/{shown}:{}: `{}` names the approval's hold outside a `test-hooks` gate", n + 1, line.trim()));
+            }
+        }
+    }
+    assert!(faults.is_empty(), "the approval's hold is a test seam (SP-28):\n{}", faults.join("\n"));
+    assert_eq!(calls, 1, "the hold is called once, under its gate, in src/ceremony/console/answer.rs: the call this check reads has moved");
 }
 
 /// Where a module stands against the ceremony.

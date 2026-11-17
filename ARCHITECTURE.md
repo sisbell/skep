@@ -314,7 +314,7 @@ foundation and on the stores above it.
   (its suite spawns the daemon as a dev-dependency). No feature, no
   transport: the loopback server is `skep-cli`'s dev verb's, the native
   bridge the shell's. Its modules and rules: §The shell's core.
-- `skep-cli` — the `skep` command over `skep-client`, twenty-one commands:
+- `skep-cli` — the `skep` command over `skep-client`, twenty-five commands:
   `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
   `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`, `hire`,
   the owner's side of the hire ceremony over the library's `hire` walk,
@@ -327,9 +327,13 @@ foundation and on the stores above it.
   registry's root hint, read off its board as a guest, and `resolve`,
   which finds the board a cross-board address lives on through that
   registry and a mirror of it kept beside the key store, the two over the
-  library's `resolve` module, and `deposit`, which deposits a registered
+  library's `resolve` module, `deposit`, which deposits a registered
   board's endpoint at its node account over the library's `first_session`
-  and `registry_record` compositions; flag
+  and `registry_record` compositions, and the registrar's four at a
+  registry's door — `review`, the queue read, `approve`, an approval by an
+  officer's hand or the unattended one, `deny`, a denial under a clause,
+  and `set-policy`, the door's policy published — over the library's
+  `console` walk and `policy` composition; flag
   parsing by hand, a `Person` over the terminal, stdout data and stderr
   talk — and the dev binary `skep-dev`, whose two verbs `seed` a running
   claimed board with a prose corpus (`skep-corpus`) and `serve` the
@@ -731,6 +735,8 @@ each ceremony:
   `registration.rs` an applicant's registration request, composed, signed
   and checked over `skep-registry`'s encoder and parser and
   `skep-identity`'s admission frame, and written by no code of this crate,
+  `policy.rs` a door's admission policy, its version chain read and its
+  next version published, over `skep-registry`'s parser,
   `first_session.rs` an account's
   first signed session, `backup.rs` the backup moment, `payload.rs` the
   paste door, `preview.rs` the retirement preview, `enumerate.rs` the head
@@ -740,7 +746,11 @@ each ceremony:
   notebook walk, its hosted arm in `claim/hosted.rs`; `enroll.rs`;
   `recover.rs` the device arm, its loss arm in `recover/loss.rs`;
   `retire.rs`; `rotate.rs`; `handoff.rs` the giver's walk; `accept.rs`
-  the recipient's beat; `hire.rs` the owner's side of the hire ceremony.
+  the recipient's beat; `hire.rs` the owner's side of the hire ceremony;
+  `console.rs` the registrar's console, a registry's door answered — the
+  door, the two hands and the unattended round — with its queue read and
+  the approval's check in `console/queue.rs` and its three answers, the
+  approval's ordered writes among them, in `console/answer.rs`.
 - Under `search` (default off; the design's `client.md` §4e) — THE SHELL's
   HALF of search over `skep-search`, standing BESIDE the ceremonies and
   naming none: `search.rs` the module and its rules; `search/directory.rs`
@@ -809,7 +819,8 @@ Rules that hold across its files:
   `handshake.rs`, every credential record is written by `deposit.rs`,
   every registry record is written by `registry_record.rs`, every
   registration request is composed and signed by `registration.rs`, which
-  writes none, and an account's first signed session runs
+  writes none, a door's admission policy is read and published by
+  `policy.rs`, and an account's first signed session runs
   `first_session.rs`; a walk states only what its site adds.
 - **The ceremony is layered.** Nothing outside `ceremony/` names it;
   inside, a walk names compositions and never another walk, and a
@@ -822,7 +833,7 @@ Rules that hold across its files:
 |---|---|---|---|
 | `acting` | on | `sign`, `sheet`, `store`, `person`, `derive::records`, `verify`, `resolve`, `ceremony`, `publication`; `skep-signature`'s `sign`; the `skep-resolve` and `skep-registry` edges | every default build; `scripts/gate-full.sh` checks the library without it (the reading half) and with it alone |
 | `tls` | off | the dialer's `https://` arm over rustls and the platform verifier | `skep-cli`'s default build and `skepd`'s test build, whose suite mirrors a board over it (`skep-cli`'s dev binary `skep-dev` needs none of it — a dev board is loopback, the dialer's plain arm, for `seed` and for `serve` alike; `serve` takes `search` through `skep-shell` and, under `skep-cli`'s `dev-hooks` alone, the daemon's `test-hooks`); `scripts/gate-full.sh` checks both of `skep-cli`'s binaries without it, and the sidecar image builds `--bin skep` so the dev binary stays out of it |
-| `test-hooks` | off | implies `acting`; `person::scripted`; and, beside `tls`, the dialer's test trust root | every test build (the crate's self dev-dependency, and `skep-cli`'s and `skepd`'s dev-dependencies, the two builds that take `tls` beside it and so compile the trust root); `scripts/gate-full.sh`'s `--features acting` check builds the library without it and its `skep-cli` `--bins` checks build the binaries without it, with `tls` and with none, and `tests/it/tidy.rs` checks both gates |
+| `test-hooks` | off | implies `acting`; `person::scripted`; the hold inside the console's approval; and, beside `tls`, the dialer's test trust root | every test build (the crate's self dev-dependency, and `skep-cli`'s and `skepd`'s dev-dependencies, the two builds that take `tls` beside it and so compile the trust root); `scripts/gate-full.sh`'s `--features acting` check builds the library without it and its `skep-cli` `--bins` checks build the binaries without it, with `tls` and with none, and `tests/it/tidy.rs` checks both gates |
 | `search` | off | implies `acting`; the `search` module and the optional `skep-search` dependency | every test build of this crate (the self dev-dependency turns it on, so the search suites run under the workspace gate); `scripts/gate-full.sh` checks the library with it alone, and `tests/it/tidy.rs` checks that `pub mod search;` is gated and the feature off by default |
 
 Its integration suite is one binary, `tests/it/`: the walks driven through
@@ -986,12 +997,15 @@ parses the command line, makes the library call — handing a walk the
 terminal as its `Person` — and renders the answer, DATA on stdout and TALK
 on stderr, with §2.3's exit code. Every ceremony is a library walk; `bind`
 and `keygen` sequence the library's compositions themselves, and so carry
-their own text, as `deposit` does; `register` hands the terminal to one
-composition and prints what it answers. Its modules, in the order
+their own text, as `deposit` and `set-policy` do; `register` hands the
+terminal to one composition and prints what it answers; `review` prints
+the `console` walk's read of the queue, and `approve --auto` runs that
+walk's round until a signal stops it. Its modules, in the order
 `src/main.rs` declares them, each naming only those above it:
 
-- `args.rs` `Command`, one of the twenty-one, the verb `main` dispatches on;
-  the grammar — one row per command and the rules its forms hold them to
+- `args.rs` `Command`, one of the twenty-five, the verb `main` dispatches on;
+  the grammar — one row per command, the one operand it takes where it
+  takes one, and the rules its forms hold them to
   (`Form`), beside the flags every command takes (`GLOBAL`) — with `HELP`,
   the text that documents it; and `CommandLine`, one parsed command line
   (`Line<Command>`), its settings each read through `Line::setting`, the
@@ -1011,7 +1025,7 @@ composition and prints what it answers. Its modules, in the order
   renders under a `Program`), `help`, and the plumbing from the flags to a
   board (`board_of`), a store (`store_of`), a principal
   (`principal_or_bound`) and a key (`select_key`, under `Purpose`).
-- `commands.rs` what the twenty-one commands share among themselves alone:
+- `commands.rs` what the twenty-five commands share among themselves alone:
   the `skep` `Program`'s `finish` and `help`; `require_terminal`, the
   check each `Door` makes; a payload read to its cap (`read_payload`,
   `MAX_PAYLOAD_BYTES`); the anchor boxes' per-run default (`BoxDefault`);
@@ -1019,7 +1033,9 @@ composition and prints what it answers. Its modules, in the order
   outstanding-act line `keygen` and `fingerprint` share; the whole-set
   compare (`held_set`, `compare_genesis`); and the merge library's
   refusals rendered as the board's verdict (`refused`, under a `Step`),
-  which `merge` and `restore` share. Beneath it, `commands/<name>.rs`,
+  which `merge` and `restore` share; and the registrar's principal read off
+  the board (`registrar_principal`), which `approve`, `deny` and
+  `set-policy` share. Beneath it, `commands/<name>.rs`,
   one file per command, each the
   `pub fn <name>(&CommandLine) -> Result<(), Stop>` that `main` dispatches
   to, taking the shared names through `super::`.
@@ -1056,12 +1072,14 @@ Rules that hold across its files:
   `answer`, which locks stdin for that line alone, and the only other
   reads are a `-` argument's, whole, in `read_payload` and
   `session --close -`. `tests/it/tidy.rs` checks it.
-- **A person door checks for a terminal first.** The ten doors —
+- **A person door checks for a terminal first.** The thirteen doors —
   `claim`'s notebook arm, `keygen --anchors`, `enroll` without `--reply`,
   `recover`, `retire`, `rotate`, `handoff --payload`, `accept` without
-  `--reprint`, `hire` and `register` — each call `require_terminal` before
+  `--reprint`, `hire`, `register`, `approve` with a request, `deny` and
+  `set-policy` — each call `require_terminal` before
   anything is generated;
-  the check is the CLI's, never a walk's (§2.4).
+  the check is the CLI's, never a walk's (§2.4). `approve --auto` is no
+  door: it asks no person anything and runs without a terminal.
 - **The settings are `args.rs`'s, and every one is tabled.** Every
   `SKEP_*` variable is read there and nowhere else, and every variable the
   source reads at run time is a row of the crate's README §Settings, both
@@ -1085,8 +1103,14 @@ pseudo-terminal, and `bind` refused at the account it makes;
 `register`, the twenty-first, with no daemon: its line and its door, a
 door identifier that is none, and its runs typed at a pseudo-terminal,
 each printed request verified as a reader verifies it through
-`skep-registry`'s parser, a dev-dependency, with `keygen --anchors`
+`skep-registry`'s parser, with `keygen --anchors`
 unchanged beside it;
+`console`, the twenty-second to the twenty-fifth against an enforcing
+board its registrar claimed, an intake home beside it writing each
+request: the four end to end, the person doors refused on a pipe, the
+unattended hand on pipes — its refusal to start, its first pass, and its
+stop between two requests and with an approval under way — and the
+policy's files, published and refused;
 `hostile`, what arrives from outside the
 person's trust; `dev`, the dev binary driven against a corpus the suite
 builds under the system temp dir; `serve`, the dev provider driven as the

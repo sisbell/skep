@@ -16,13 +16,22 @@
 //!   REG-2.23): the canonical body, its `record` frame and the hand's
 //!   `sig`, the cap, the declared insert and its re-read `from`, the link —
 //!   and, for an endpoint, the read of the deposit a later one names
-//!   (REG-1.10).
+//!   (REG-1.10); for a binding, a home's history folded by the walk's rule
+//!   and the next prefix read off it (REG-2.3; REG-2.8 to REG-2.10); the
+//!   three answers on a request's thread (REG-4.79); the approval link, a
+//!   link alone (REG-4.123 step 1); and the reads of a link, a record's
+//!   atom and a home's links that a door's console is built from.
 //! * [`registration`] — the one registration-request composition
 //!   (REG-4.67; REG-1.86): an applicant's own side, with no board and no
 //!   account — the door identifier's form, the device key named or
 //!   generated, the backup moment's node arm, the enrolments, the frame and
 //!   its one signature, and the check of what it made. It composes and never
 //!   writes: the request is deposited by another hand.
+//! * [`policy`] — the one composition of a door's admission policy
+//!   (REG-4.131; REG-4.139): the policy document's version chain read, the
+//!   version standing at a position, the three ways a door has none, a
+//!   file's check ahead of any write, and the four acts that publish the
+//!   next version.
 //! * [`first_session`] — the one first-signed-session composition
 //!   (AUTH-5.90 (iii); AUTH-5.87): two states, each resumed by reading, the
 //!   doc-1 read the metadata read in its three arms (REG-1.52), the second
@@ -61,6 +70,10 @@
 //!   in the rule's own order: the agent's account delegated beneath the
 //!   agent space, its first key record composed by the owner beside a
 //!   custody pair, its home minted, and only then its principal.
+//! * [`console`] — the registrar's console at a registry's door (REG-4.107;
+//!   REG-4.123 steps 1 to 3): the queue read with the approval's check, the
+//!   approval's ordered writes with their resume, the refused and the
+//!   denied answers, and the unattended hand's pass over the queue.
 //!
 //! **The rule between the layers.** A walk names compositions and never
 //! another walk — what two walks share is a composition — and a composition
@@ -70,9 +83,11 @@
 //!
 //! **The attest.** Every `attest` a composition or a walk attaches is
 //! composed by [`attest_member`], the ceremony's one `entry_frame` call
-//! (P28): the trail's `assert_sup`, and the home mints from a signed session
+//! (P28): the trail's `assert_sup`, the home mints from a signed session
 //! (`first_session`'s two — the first of them `hire`'s step 5 too —
-//! `handoff`'s beat (b)), publish-class above the claim (PUB-6.43).
+//! `handoff`'s beat (b)), publish-class above the claim (PUB-6.43), the
+//! approval link `registry_record` writes into a published home, and the
+//! `publish` of a policy version (`policy`).
 //!
 //! **The well-known creation.** One write stands at this module's root, no
 //! composition's and no walk's: [`create_well_known_document`], an account's
@@ -106,6 +121,7 @@ pub mod first_session;
 pub mod handshake;
 pub(crate) mod import;
 pub(crate) mod payload;
+pub mod policy;
 pub(crate) mod preview;
 pub(crate) mod reads;
 pub mod registration;
@@ -115,6 +131,7 @@ pub mod trail;
 // The walks.
 pub mod accept;
 pub mod claim;
+pub mod console;
 pub mod enroll;
 pub mod handoff;
 pub mod hire;

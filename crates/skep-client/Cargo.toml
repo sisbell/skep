@@ -29,13 +29,18 @@ tls = ["dep:rustls", "dep:rustls-platform-verifier"]
 # TEST TRUST ROOT (`dial.rs`'s `test_root`): one certificate a suite hands a
 # dialer of its own, trusted in the platform's place, so a suite's TLS front
 # is reached; without this feature the platform's trust store is the one
-# judge of a server's certificate. DEFAULT-OFF, and no shipped build enables
+# judge of a server's certificate. And THE APPROVAL'S HOLD
+# (`ceremony/console.rs`'s `hooks`): where `SKEP_TEST_HOLD_APPROVAL` names a
+# directory, a console's approval waits there between its mint and its
+# binding, so a suite can send the unattended hand a signal with an approval
+# under way; without this feature the variable is never read. DEFAULT-OFF,
+# and no shipped build enables
 # it: this crate's own tests turn it on through the self dev-dependency
 # below, and skep-cli's and skepd's tests on their `skep-client` lines, so a
 # build that compiles no test compiles none of it. `scripts/gate-full.sh`'s
 # `--features acting` check builds the library without it, and
-# `tests/it/tidy.rs` checks the gate on the module's `mod` line and on the
-# trust root's every line.
+# `tests/it/tidy.rs` checks the gate on the module's `mod` line, on the
+# trust root's every line, and on the hold's module and its one call.
 test-hooks = ["acting"]
 # `search` — THE SHELL's HALF of search (client.md §4e; lane SH): the feed
 # consumer over `/changes`, the index directory beside the key store, the

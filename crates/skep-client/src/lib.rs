@@ -107,18 +107,28 @@
 //!   state (REG-3.80).
 //! * [`ceremony`] — the ceremonies in two layers: the compositions every
 //!   walk runs over (P28) — `handshake`, `deposit`, `registry_record`,
-//!   `registration`, `first_session`, `backup`, `payload`, `preview`,
-//!   `enumerate`, `trail`, `import`, `reads` — and the walks over them —
-//!   `claim`, `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`,
-//!   `hire`. A walk
+//!   `registration`, `policy`, `first_session`, `backup`, `payload`,
+//!   `preview`, `enumerate`, `trail`, `import`, `reads` — and the walks over
+//!   them — `claim`, `enroll`, `recover`, `retire`, `rotate`, `handoff`,
+//!   `accept`, `hire`, `console`. A walk
 //!   names compositions and never another walk. `hire` is the owner's side
 //!   of the hire ceremony (AUTH-5.58): an agent's account made beneath the
 //!   owner's agent space, its first key record composed by the owner
 //!   beside a custody pair, its home minted, and only then its principal.
 //!   `registry_record` is the
-//!   registry record a node account deposits (REG-1.86), composed by
-//!   `skep_registry`'s encoder and signed by a key of the home's account:
-//!   an endpoint, naming the deposit it replaces (REG-1.9, REG-1.10).
+//!   registry record an account deposits in its own doc 1 (REG-1.86),
+//!   composed by `skep_registry`'s encoder and signed by a key of the
+//!   home's account: a node account's endpoint, naming the deposit it
+//!   replaces (REG-1.9, REG-1.10); and a registrar's binding, its three
+//!   answers on a request's thread and its approval link, with the reads a
+//!   door's console is built from (REG-2.18; REG-4.79; REG-4.123).
+//!   `policy` is a door's admission policy (REG-4.131): well-known document
+//!   5 of the door's account read as a chain of versions, the version
+//!   standing at a position, a door with none, and the next version
+//!   published from a file checked first. `console` is the registrar's
+//!   console (REG-4.107): the queue read with the approval's check, the
+//!   approval written in order and resumed by reading, the refused and the
+//!   denied answers, and the unattended hand's pass over the queue.
 //!   `registration` is an applicant's registration request (REG-4.67): the
 //!   keys a door asks for made with no board and no account — the device
 //!   key named or generated, the backup moment's node arm over the pairs

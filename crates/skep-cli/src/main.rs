@@ -6,7 +6,7 @@
 //! library walk with the terminal as its `Person`; `bind` and `keygen`
 //! sequence the library's compositions themselves.
 //!
-//! **The twenty-one commands.** `keygen`, `claim`, `session`, `fingerprint`,
+//! **The twenty-five commands.** `keygen`, `claim`, `session`, `fingerprint`,
 //! `verify`, `health`, `bind` — the ceremonies over the library's seams:
 //! `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept` — `merge`,
 //! the editor's act on a daughter over `skep_client::merge` (the merge
@@ -26,11 +26,20 @@
 //! REG-4.120) — `hire`, an agent hired: its account made beneath the
 //! owner's agent space, its first key record composed by the owner beside
 //! a custody pair, its home minted and then its principal printed, the
-//! library's `hire` walk (AUTH-5.58) — and `register`, an applicant's
+//! library's `hire` walk (AUTH-5.58) — `register`, an applicant's
 //! registration request: the keys a registry's door asks for made on the
 //! applicant's own device, their sheets verified, and the request that
 //! carries them signed once by the device key and printed, with no board
-//! read or written, the library's `registration` composition (REG-4.67).
+//! read or written, the library's `registration` composition (REG-4.67)
+//! — and the registrar's four at a registry's door, over the library's
+//! `console` walk and its `policy` composition (REG-4.107; REG-4.131):
+//! `review`, the requests at the door read off its board as a guest;
+//! `approve`, a request approved — the node account made and keyed, its
+//! prefix bound and read back, the answer written — by an officer at a
+//! terminal, or with `--auto` by the unattended hand, which runs until it
+//! is stopped; `deny`, a request denied under a clause of the door's
+//! policy; and `set-policy`, the door's policy published as the next
+//! version of its policy document.
 //!
 //! The modules are declared in dependency order, each naming only those
 //! above it (`tests/it/tidy.rs`); `ARCHITECTURE.md` §The command draws how
@@ -39,7 +48,7 @@
 
 #![forbid(unsafe_code)]
 
-// The twenty-one `Command`s and the grammar — each command's flags and
+// The twenty-five `Command`s and the grammar — each command's flags and
 // switches and the rules its forms hold them to, one row per command —
 // beside `HELP`, and the settings, each flag beating its environment
 // variable; and, in its `dev` module, the dev binary's grammar over the
@@ -54,9 +63,10 @@ mod terminal;
 // `finish`), data's two writers, and the plumbing from the flags to a
 // board, a store, a principal and a key.
 mod shared;
-// The twenty-one commands, one file each beneath it, and what they share
+// The twenty-five commands, one file each beneath it, and what they share
 // among themselves alone: the person doors' check, the payload's read, the
-// anchor boxes' default, the three facts' spelling, the whole-set compare.
+// anchor boxes' default, the three facts' spelling, the whole-set compare,
+// the registrar's principal.
 mod commands;
 
 use std::process::exit;
@@ -92,6 +102,10 @@ fn main() {
         Command::Deposit => commands::deposit(&line),
         Command::Hire => commands::hire(&line),
         Command::Register => commands::register(&line),
+        Command::Review => commands::review(&line),
+        Command::Approve => commands::approve(&line),
+        Command::Deny => commands::deny(&line),
+        Command::SetPolicy => commands::set_policy(&line),
     };
     exit(commands::finish(outcome));
 }

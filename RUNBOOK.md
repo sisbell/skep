@@ -2698,6 +2698,81 @@ then `skepd` built for a Windows target; then, on Windows, a second
 daemon refused at the kernel's lock on a directory one already
 serves, and a killed daemon's lock taken by the next start.
 
+### 9.4 A registry's unattended hand, in a container
+
+A registry whose door is open, and whose policy names the `auto`
+hand, answers its queue with `skep approve --auto`
+(`crates/skep-cli/README.md`). It is no daemon: it is a client of
+the registry's board that holds one key, and it runs in the
+foreground until it is stopped. The note below is written from what
+the command does and is untested in a container: the suite runs it
+on pipes with no terminal and sends it both signals, and no image
+was built or run for it. What a container owes it:
+
+- **The key store is a mounted folder, never in the image.** Mount
+  it, name it with `SKEP_KEYSTORE` (or `--dir`), and name the key
+  with `SKEP_KEY` (or `--key`): the registrar's labeled device key,
+  a device key enrolled at the registrar's own account for this one
+  purpose, its file under the folder's `keys/`. An anchor's file is
+  refused. Mount the folder writable: before the command makes an
+  account it writes that account's number into the folder's
+  `bindings` file, and where it cannot, it stops before anything is
+  made.
+- **No terminal.** It asks no person anything, so the container
+  needs no `-t` and no stdin.
+- **A stop grace period of about 60 seconds.** It catches SIGTERM
+  and SIGINT itself, as a container's first process must, and a
+  signal only asks it to stop between two requests: an approval
+  under way runs to its end — the account, its first key record,
+  the binding and its read-back, the answer — and the process then
+  exits 0, saying it stopped. Docker's default waits 10 seconds
+  before it kills; give it about 60.
+- **A kill inside an approval is safe.** Every act is found by
+  reading before it is made, so the next start finishes the approval
+  that was cut and makes no second account, binding or answer.
+- **`restart: always`.** Once it is watching the door, a pass the
+  board does not answer is said and tried again 10 seconds later.
+  Any other halt ends the process, non-zero — a board that does not
+  answer at the start among them — and the restart resumes by
+  reading. It ends by itself, exit 3, where the policy standing does
+  not open the unattended hand — at its start, or when a later
+  version withdraws it — and each restart then refuses the same way
+  and writes nothing, until the container is stopped or the policy
+  the door means is published (`skep set-policy <file>`).
+- **The board's origin.** `SKEP_BOARD` (or `--board`) is an origin
+  the registry's daemon accepts signed sessions at (Start, step 2),
+  spelled the same at every run: the key store's lines are kept by
+  the origin as written. The `skep-cli` image target is built
+  without `tls`, for a sidecar in the daemon's own network
+  namespace; an `https://` board takes an image built with the
+  default features.
+
+In a compose file, as a sidecar of a daemon service named `skepd`
+that counts the loopback origin among its own — the image, the
+service and the paths yours to name:
+
+```yaml
+services:
+  registry-hand:
+    image: skep-cli
+    command: ["skep", "approve", "--auto"]
+    network_mode: "service:skepd"
+    environment:
+      SKEP_BOARD: http://127.0.0.1:8642
+      SKEP_KEYSTORE: /keys
+      SKEP_KEY: /keys/keys/<the labeled key's fingerprint>.key
+    volumes:
+      - /srv/registry/keys:/keys
+    stop_grace_period: 60s
+    restart: always
+```
+
+Its stdout is one line an act — `approved`, `refused` or `yielded`,
+then the request's address — and its stderr what it did and why:
+keep both. An officer may answer the same queue by hand while it
+runs (`skep approve <request>`, `skep deny <request> --clause <n>`):
+where both take one request, one answer is written.
+
 ## 10. Hosting boards for other people: the provisioning service
 
 This section is for an operator hosting boards for other people,

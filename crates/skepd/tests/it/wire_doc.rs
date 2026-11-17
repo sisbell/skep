@@ -558,6 +558,29 @@ fn doc_new_id_bound_is_the_codecs_own() {
     );
 }
 
+/// THE STORE'S OWN CODE FOR THE SYSTEM ACCOUNT'S WELL-KNOWN CREATION
+/// (`RejectCode::SystemAccountNoWellKnown`): §Rejection codes tables
+/// `system_account_no_well_known` among the namespace's codes, between
+/// `not_an_account` and `gate`, and its row says whose refusal it is, that
+/// it is permanent, and that the daemon's door answers the credential
+/// family's token of the same name first, so no daemon request reaches it
+/// today. The code's wire name is pinned in skep-core's `codec_roundtrip.rs`
+/// and its disposition in skep-febe's `reject/tests.rs`; the door's token
+/// has its own bullet under §Credential refusals, pinned below. This pins
+/// that the table carries the code.
+#[test]
+fn doc_tables_the_stores_system_account_no_well_known_code() {
+    let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
+    for fact in [
+        "Namespace/authority: `not_owner`, `not_an_account`, `system_account_no_well_known` (the STORE's own refusal of a well-known creation that names the system account, which creates none",
+        "its slots are its own table, seeded at genesis — permanent, no state admits the request",
+        "the daemon's door answers `credential_refused:system_account_no_well_known` first, whoever asks and at every slot (§Credential refusals), so no daemon request reaches it today",
+        "it answers a caller that reaches the store without that door), `gate` (M3's inc gate",
+    ] {
+        assert!(codes.contains(fact), "§Rejection codes says {fact:?}");
+    }
+}
+
 /// The owner-of-address row (AUTH-6.37) carries the facts a client builds
 /// on, each in the row itself: the one allocation test, the both-null
 /// answer, no session, and `/op-at`.

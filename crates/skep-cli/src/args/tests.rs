@@ -53,7 +53,53 @@ fn deposit_takes_its_account_once_and_its_origins_in_the_order_given() {
     assert_eq!(refusal(&["deposit", "--account", "1.0.2", "--account", "1.0.3"]), "`--account` is given at most once at `deposit`");
     assert_eq!(refusal(&["deposit", "--also", "https://acme.example"]), "`--also` is not a flag of `deposit`");
     assert_eq!(refusal(&["hint", "--origin", "https://acme.example"]), "`--origin` is not a flag of `hint`");
-    assert_eq!(GRAMMAR.len(), 21, "the twenty-one commands, one row each");
+    assert_eq!(GRAMMAR.len(), 25, "the twenty-five commands, one row each");
+}
+
+/// THE REGISTRAR's FOUR (REG-4.107; REG-4.131) and THE OPERAND: `review`
+/// takes the settings alone; `approve` its request, the one argument typed
+/// after the verb with no flag before it, or `--auto` in its place — two
+/// forms, refused together; `deny` its request and `--clause`, once; and
+/// `set-policy`, the first verb that holds a hyphen, its file. An operand is
+/// read wherever it stands among the flags, refused a second, and refused
+/// empty; a command whose row names none refuses a bare word as an unknown
+/// argument, as before; and a word that opens with a dash is never an
+/// operand, so a misspelled flag is not taken for one.
+#[test]
+fn the_registrars_four_take_their_operand_once_and_approve_its_request_or_auto() {
+    let link = "1.0.1.2.0.1.0.2.3";
+    let Parsed::CommandLine(c) = parse(argv(&["review", "--board", "http://127.0.0.1:8642"])).unwrap() else { panic!() };
+    assert_eq!((c.command, c.command.verb(), c.operand()), (Command::Review, "review", None));
+    let Parsed::CommandLine(c) = parse(argv(&["approve", link, "--board", "http://127.0.0.1:8642", "--principal", "1"])).unwrap() else { panic!() };
+    assert_eq!((c.command, c.operand(), c.switch("--auto")), (Command::Approve, Some(link), false));
+    let Parsed::CommandLine(c) = parse(argv(&["approve", "--key", "/k", link])).unwrap() else { panic!() };
+    assert_eq!((c.operand(), c.key_file().unwrap()), (Some(link), Some(PathBuf::from("/k"))), "the operand is read wherever it stands");
+    let Parsed::CommandLine(c) = parse(argv(&["approve", "--auto", "--key", "/k", "--dir", "/s"])).unwrap() else { panic!() };
+    assert_eq!((c.operand(), c.switch("--auto")), (None, true), "the unattended hand takes no request");
+    let Parsed::CommandLine(c) = parse(argv(&["deny", link, "--clause", "2"])).unwrap() else { panic!() };
+    assert_eq!((c.command, c.operand(), c.value("--clause")), (Command::Deny, Some(link), Some("2")));
+    let Parsed::CommandLine(c) = parse(argv(&["set-policy", "/etc/door/policy.json", "--board", "http://127.0.0.1:8642"])).unwrap() else { panic!() };
+    assert_eq!((c.command, c.command.verb(), c.operand()), (Command::SetPolicy, "set-policy", Some("/etc/door/policy.json")), "a verb that holds a hyphen");
+    assert_eq!(refusal(&["approve", link, "--auto"]), format!("`--auto` and `{link}` belong to two forms of `approve`: give one"));
+    assert_eq!(refusal(&["approve", "--auto", link]), format!("`--auto` and `{link}` belong to two forms of `approve`: give one"));
+    assert_eq!(refusal(&["approve", link, "1.0.1.2.0.1.0.2.4"]), format!("`approve` takes one <request>: `{link}` is given, and `1.0.1.2.0.1.0.2.4` is a second"));
+    assert_eq!(refusal(&["set-policy", "a.json", "b.json"]), "`set-policy` takes one <file>: `a.json` is given, and `b.json` is a second");
+    assert_eq!(refusal(&["deny", ""]), "<request>: an empty value names nothing");
+    assert_eq!(refusal(&["deny", link, "--clause", "1", "--clause", "2"]), "`--clause` is given at most once at `deny`");
+    assert_eq!(refusal(&["deny", link, "--auto"]), "`--auto` is not a flag of `deny`", "the unattended hand never denies");
+    assert_eq!(refusal(&["approve", link, "--clause", "1"]), "`--clause` is not a flag of `approve`");
+    assert_eq!(refusal(&["review", link]), format!("unknown argument `{link}`"), "`review` takes no operand, and no flag of its own");
+    assert_eq!(refusal(&["health", "word"]), "unknown argument `word`", "a command whose row names no operand takes none");
+    assert_eq!(refusal(&["approve", "--autos"]), "unknown argument `--autos`", "a word that opens with a dash is never an operand");
+    assert_eq!(refusal(&["set-policy", "-"]), "unknown argument `-`");
+    for row in &GRAMMAR {
+        assert_eq!(row.operand.is_some(), matches!(row.command, Command::Approve | Command::Deny | Command::SetPolicy), "`{}`", row.command);
+        if let Some(name) = row.operand {
+            let opening = format!("  {}:", row.command);
+            let line = HELP.lines().find(|line| line.starts_with(&opening)).unwrap_or_else(|| panic!("HELP has a flags line for `{}`", row.command));
+            assert!(line[opening.len()..].trim_start().starts_with(name), "`{}`'s flags line opens with its operand {name}: {line}", row.command);
+        }
+    }
 }
 
 /// `register`'s row (REG-4.67; REG-4.104): the door identifier once, a
@@ -206,6 +252,10 @@ fn a_flag_outside_its_form_is_refused_and_two_forms_together() {
                 Form::OnceWithin(a, b) => (vec![a, b], Some(a)),
                 Form::AtMost(a, _) => (vec![a], Some(a)),
                 Form::AtMostWithin(a, b, _) => (vec![a, b], Some(a)),
+                Form::NoOperand(a) => {
+                    assert!(row.operand.is_some(), "{form:?} names the operand of `{}`, a command that takes one", row.command);
+                    (vec![a], None)
+                }
             };
             for flag in named {
                 assert!(row.once.contains(&flag) || row.repeated.contains(&flag) || row.switches.contains(&flag), "`{flag}`, named by {form:?}, is a flag of `{}`", row.command);

@@ -166,6 +166,13 @@ pub enum Site {
     /// key of the owner's own set, and the session as the agent, opened by
     /// the custody anchor the walk's own genesis enrolled.
     Hire,
+    /// The registrar's console (REG-4.108, REG-4.110).
+    ///
+    /// Its sessions are the registrar's own, as the door's binding-writing
+    /// account, and the one that mints node accounts, opened by reference:
+    /// each under a key of the registrar's own set, an officer's or the
+    /// labeled console key.
+    Console,
 }
 
 /// Faces the three-state key diagnosis of `fp` (`client.md` §2.2 `verify`).
@@ -247,6 +254,12 @@ pub fn key_face(board: &Board, walk: &Walk, fp: &Fingerprint, own: &[(Fingerprin
                      agent's doc 1 is minted by the custody anchor the hire's own genesis enrolled (AUTH-5.58 steps 2 and 5): the \
                      set at {} lists neither, so this is another account's key or the genesis did not land as composed — run `skep \
                      hire` again, which reads what stands before it writes",
+                    walk.set_account
+                ),
+                Site::Console => format!(
+                    "every binding and every answer a door writes is a keyed act in the registrar's own set (REG-4.108): this console's \
+                     key is not enrolled at {}. Enroll it from an officer's device still signed in (`skep keygen --payload` here, `skep \
+                     enroll` there, `skep bind` back here), or name the key that is (`--key`, `--dir`)",
                     walk.set_account
                 ),
             };
@@ -459,7 +472,7 @@ mod tests {
         let set = KeySet { enrolled: vec![EnrolledKey { fingerprint: Fingerprint::of(&other), key: other, anchor: false }], ..KeySet::default() };
         let walk = Walk { account: "1.0.1".into(), set_account: "1.0.1".into(), set, visited: vec!["1.0.1".into()] };
         let fp = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
-        let acts: [(&[Site], &str); 7] = [
+        let acts: [(&[Site], &str); 8] = [
             (&[Site::Session, Site::Tail], "then `skep recover`)"),
             (&[Site::Recover], "THE WRONG SHEET (AUTH-5.25 (iii))"),
             (&[Site::Giver], "a handoff is made by a key of the set that opens the account above the subdivision"),
@@ -467,6 +480,7 @@ mod tests {
             (&[Site::Setup], "sent not at all (P13)"),
             (&[Site::Hosted], "not yours to keep (AUTH-5.53) — never a re-run"),
             (&[Site::Hire], "a hire is made by a key of the owner's own set"),
+            (&[Site::Console], "a keyed act in the registrar's own set (REG-4.108)"),
         ];
         for (sites, act) in acts {
             for site in sites {

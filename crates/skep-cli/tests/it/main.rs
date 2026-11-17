@@ -32,13 +32,22 @@
 //! identifier that is none halting before anything is asked or written, one
 //! fresh registration typed at a pseudo-terminal from an empty store to the
 //! request on stdout, verified as a reader verifies it, the board that
-//! carries on, and `skep keygen --anchors` unchanged beside it; `tidy` reads
+//! carries on, and `skep keygen --anchors` unchanged beside it; `console`
+//! drives the twenty-second to the twenty-fifth, the registrar's `skep
+//! review`, `skep approve`, `skep deny` and `skep set-policy` — on an
+//! enforcing board its registrar claimed, an intake home beside it writing
+//! each request: the four end to end with what each prints, the three
+//! person doors refused on a pipe, the unattended hand on pipes from its
+//! refusal to start through its first pass to its stop between two requests
+//! and its stop with an approval under way, the policy's four acts and the
+//! files it refuses, and a door with no policy; `tidy` reads
 //! the crate's own source for the arrangement
 //! `ARCHITECTURE.md` §The command states.
 
 mod ceremonies;
 mod cli;
 mod common;
+mod console;
 mod deposit;
 mod dev;
 mod hint;

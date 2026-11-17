@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "skep — the command over skep-client: twenty-one commands, client.md §2.1's thirteen, merge, share, restore, hint, resolve, deposit, hire and register, flag parsing by hand, one file per command, a Person over the terminal, stdout DATA and stderr TALK (client.md §1.2, §2); and beside it skep-dev, the dev binary whose two verbs seed a running claimed board with a prose corpus and serve the shell's core (skep-shell) to a page over loopback"
+description = "skep — the command over skep-client: twenty-five commands, client.md §2.1's thirteen, merge, share, restore, hint, resolve, deposit, hire, register, and the registrar's review, approve, deny and set-policy, flag parsing by hand, one file per command, a Person over the terminal, stdout DATA and stderr TALK (client.md §1.2, §2); and beside it skep-dev, the dev binary whose two verbs seed a running claimed board with a prose corpus and serve the shell's core (skep-shell) to a page over loopback"
 readme = "README.md"
 
 [[bin]]
@@ -15,7 +15,7 @@ path = "src/main.rs"
 # The dev binary beside `skep`: `skep-dev seed` fills a running, claimed
 # board with a prose corpus — editions, citation links, second versions,
 # drafts, a second account — and `skep-dev serve` serves the shell's core
-# (`skep-shell`) to a page in a browser over loopback. The twenty-one
+# (`skep-shell`) to a page in a browser over loopback. The twenty-five
 # commands stand, and this binary adds none to them: its verbs are its
 # own. A plain second target, built by
 # every `--bins` and by the package's default build; the sidecar image
@@ -70,9 +70,21 @@ dev-hooks = ["dep:skepd"]
 # the owner's agent space. The twenty-first, `skep register`, is over the
 # library's `registration` composition, which `acting` holds: it reads no
 # board and writes none — the anchor sheets it exports and a device key
-# where the store holds none are the only files it makes.
+# where the store holds none are the only files it makes. The
+# twenty-second to the twenty-fifth, the registrar's `skep review`, `skep
+# approve`, `skep deny` and `skep set-policy`, are over the library's
+# `console` walk and `policy` composition, which `acting` holds with its
+# `skep-registry` and `skep-resolve` edges: they read a registry board's
+# registration records and its door's policy document, and write the
+# registrar's own records — a node account and its first key record, a
+# binding, an answer, a policy version — and no document of an org's.
 skep-client = { path = "../skep-client", features = ["merge"] }
 skep-identity = { path = "../skep-identity" }
+# The registry's values as the registrar's commands read them off the
+# library's answers: a request's kind, an answer's body, a policy's
+# admission mode and approval hand. Already in the graph through
+# skep-client's `acting` half; no parser of a body is called from here.
+skep-registry = { path = "../skep-registry" }
 # The address vocabulary the dev binary signs with: a citation link's
 # from-end is a V-spec the tool resolves through `image` into the I-extent
 # spans the daemon stores and the signature covers, and a span is
@@ -111,6 +123,14 @@ serde_json.workspace = true
 # default `alloc` feature holds `Zeroizing<String>`; naming it compiles no
 # crate the build would not, since skep-client's `acting` half takes it.
 zeroize = "1"
+# SIGTERM and SIGINT caught through a safe API, for `skep approve --auto`
+# alone: a container's first process is given no default handling of
+# either, so the unattended hand registers a flag for each
+# (`signal_hook::flag::register`) and reads it between two requests. This
+# crate forbids `unsafe`, and std has no signal API: the one `sigaction`
+# call is this crate's dependency's. No default feature is taken — the
+# flag needs neither its iterator nor its channel.
+signal-hook = { version = "0.3", default-features = false }
 
 [dev-dependencies]
 # The library with its test support on: the ceremonies suite drives a walk
@@ -130,7 +150,7 @@ skep-signature = { path = "../skep-signature", features = ["sign"] }
 # this crate.
 skep-resolve = { path = "../skep-resolve" }
 # The registration request's own parser, the reader the register suite
-# holds a printed request to: the canonical parse under its row and the
-# members a verifier re-builds the frame from. Already in the graph through
-# skep-client; named by no shipped build of this crate.
-skep-registry = { path = "../skep-registry" }
+# holds a printed request to — the canonical parse under its row and the
+# members a verifier re-builds the frame from — is the regular
+# `skep-registry` dependency above, which the console suite composes its
+# policies and its requests through too.

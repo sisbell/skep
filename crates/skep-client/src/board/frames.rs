@@ -417,6 +417,32 @@ pub fn insert_plain_atom(doc: &str, ordinal: u64, atom: &str, as_of: u64, id: Op
     )
 }
 
+/// Builds a plain insert of `text` into the draft `doc`, one value a byte.
+///
+/// It lands from content ordinal `ordinal` on (wire.md §Arrangement,
+/// `insert`; §Value encodings): `values` one string, which the board reads
+/// as text — each byte of its UTF-8 one single-byte value at a position of
+/// its own, `text.len()` positions in all — and no `deposit` member. It is
+/// how a document's words are written, where [`insert_plain_atom`] places
+/// one composite value at one position, which a reader of text never reads
+/// as text: a door's policy is written so, since its readers — a console, a
+/// sign-up page, a guest — each read the document's text (REG-4.131).
+/// `as_of` is the draft state the insert is typed against: the `as_of` of
+/// the read that found `ordinal`. The ack's address is the first value's
+/// I-address, the run's `i_start`.
+pub fn insert_text(doc: &str, ordinal: u64, text: &str, as_of: u64, id: Option<&str>) -> Value {
+    with_id(
+        json!({
+            "op": "insert",
+            "doc": doc,
+            "at": {"subspace": "1", "ordinal": ordinal.to_string()},
+            "values": [text],
+            "as_of": as_of,
+        }),
+        id,
+    )
+}
+
 /// Builds `{"op":"delete","doc":…,"p":{…},"width":…,"as_of":…}` (wire.md
 /// §Arrangement).
 ///

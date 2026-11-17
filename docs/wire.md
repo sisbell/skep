@@ -1759,7 +1759,15 @@ asked ahead of the chain, or run origin),
 `parent_not_registered`, `not_registered`, `original_not_resident`,
 `endpoint_not_resident`.
 
-Namespace/authority: `not_owner`, `not_an_account`, `gate` (M3's inc
+Namespace/authority: `not_owner`, `not_an_account`,
+`system_account_no_well_known` (the STORE's own refusal of a well-known
+creation that names the system account, which creates none: its slots
+are its own table, seeded at genesis — permanent, no state admits the
+request; the daemon's door answers
+`credential_refused:system_account_no_well_known` first, whoever asks
+and at every slot (§Credential refusals), so no daemon request reaches
+it today: it answers a caller that reaches the store without that
+door), `gate` (M3's inc
 gate, which every op that mints an address lowers — create-new-document,
 fork, insert, version, publish and the five link writes — with a fixed
 `detail` naming an operator condition, a corrupted frontier: M3

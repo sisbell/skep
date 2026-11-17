@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "M4 — the permascroll: an append-only, write-once map from allocated I-address to opaque content value, plus the two point queries over it (contains / value_at) and its one enumeration (iter)"
+description = "M4 — the permascroll: an append-only, write-once map from allocated I-address to content value, with its point queries (contains / value_at), run read (pieces), line reads (line_breaks_before / nth_line_break_from) and one enumeration (iter)"
 readme = "README.md"
 
 [features]
@@ -19,12 +19,13 @@ readme = "README.md"
 test-hooks = ["dep:skep-kernel", "dep:skep-namespace"]
 
 [dependencies]
-# The persistent map behind `ContentStore` (`im::OrdMap`): apply_write shares
-# all untouched structure with the prior slice, so snapshots pinning old
-# Worlds are nearly free. Why it is ordered is said at the field
-# (src/store.rs). Its serde is M4's own — `in_tumbler_order` and
-# `entry_by_entry`, the `map` field's two halves — so none of im's
-# feature-gated serde impls is used here.
+# The persistent maps behind `ContentStore` (`im::OrdMap`): the content map,
+# and the two derived maps of its line-break counts (src/store/lines.rs). A
+# fold shares all untouched structure with the prior slice, so snapshots
+# pinning old Worlds are nearly free. Why the content map is ordered is said
+# at the field (src/store.rs). Its serde is M4's own — `in_tumbler_order` and
+# `entry_by_entry`, the `map` field's two halves — and the derived maps are
+# never serialized, so none of im's feature-gated serde impls is used here.
 im.workspace = true
 # rc for the Arc<[u8]> impls behind Val (§Types & errors).
 serde = { workspace = true, features = ["rc"] }

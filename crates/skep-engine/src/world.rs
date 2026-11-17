@@ -73,9 +73,13 @@ use crate::publication::{self, Drafts};
 /// byte string).
 ///
 /// **Invariant.** A world's derived state agrees with its authoritative
-/// state: concretely, M7's skip-serialized hints and the engine's own two
-/// derived indexes, the exception set and the grant fold. Two construction
-/// paths establish it, and the third does not.
+/// state: concretely, M7's skip-serialized hints, M4's line-break counts and
+/// the engine's own two derived indexes, the exception set and the grant
+/// fold. M4's counts hold on every path and are no part of what follows:
+/// each of its folds counts the entry it adds, and its slice's own decode
+/// counts every entry it has read, so a decoded world answers the line
+/// reads as the folded one does. Of the rest, two construction paths
+/// establish it, and the third does not.
 /// [`World::genesis`] establishes it, each slice arriving from its own
 /// genesis constructor, the exception set seeded off M3's slice with the one
 /// draft that slice registers, and the grant fold empty over a world with no
@@ -93,9 +97,9 @@ use crate::publication::{self, Drafts};
 /// under the premise that doc states (no record publishes a document), so a
 /// kernel whose root satisfies it satisfies it at every commit. Every
 /// `Engine::check_hints` this crate's suite runs over a live engine checks
-/// exactly that. The `Deserialize` derived below establishes nothing — it
-/// leaves M7's hints empty, so every typed slice reads as absent, no
-/// supersession edge exists, nullification is invisible, `Active` equals
+/// exactly that. The `Deserialize` derived below establishes none of the
+/// rest — it leaves M7's hints empty, so every typed slice reads as absent,
+/// no supersession edge exists, nullification is invisible, `Active` equals
 /// `Audit` and `stab` — every region read and constrained descriptor —
 /// matches nothing; it leaves the exception set empty, so every document reads
 /// as published (the fail-open sign PUB-7.5 names, in the one place it is
@@ -602,12 +606,14 @@ impl WorldState for World {
     /// it. A store's hint rebuild may only ever read slices upstream of it (a
     /// downstream read would invert the module DAG), so dependency order is
     /// the one that stays right once a rebuild starts consulting another
-    /// slice. As built none does — M3 and M4 are fully serialized (M2's
-    /// default identity; their docs say so), M5's `rebuild_derived` is the
-    /// identity (no skip-serialized hints in v1), and M7's recomputes its
-    /// hints from its own links map, under a registry that is a compiled
-    /// constant rather than state — so every permutation of the four recovers
-    /// the same world, and no test can tell one from another.
+    /// slice. As built none does — M3 is fully serialized, and M4's one
+    /// derived structure, its line-break counts, is counted by its slice's
+    /// own decode (M2's default identity for both; their docs say so), M5's
+    /// `rebuild_derived` is the identity (no skip-serialized hints in v1),
+    /// and M7's recomputes its hints from its own links map, under a
+    /// registry that is a compiled constant rather than state — so every
+    /// permutation of the four recovers the same world, and no test can tell
+    /// one from another.
     ///
     /// The engine half is what the order rests on: two edges, each with its
     /// reason and the test that fails when it is crossed.
@@ -709,9 +715,10 @@ impl WorldState for World {
             drafts: _,
             grants: _,
         } = self;
-        // M3, then M4: neither rebuilds — both slices are fully serialized, so
-        // M2's default identity is the whole of their recovery, and their
-        // places in the order are held open rather than skipped.
+        // M3, then M4: neither rebuilds — M3's slice is fully serialized, and
+        // M4's decode has counted its line breaks already — so M2's default
+        // identity is the whole of their recovery, and their places in the
+        // order are held open rather than skipped.
         let arrangement = arrangement.rebuild_derived();
         let links = links.rebuild_derived();
         // Then the engine's own indexes, in dependency order: the exception

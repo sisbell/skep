@@ -9,6 +9,7 @@
 
 mod common;
 
+mod lines;
 mod recovery;
 mod standalone;
 mod store;

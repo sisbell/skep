@@ -13,9 +13,13 @@
 //! admit every T4-valid address, whatever its routing, since a release build
 //! stages each as given, and lend each as it was decoded; that a decode
 //! holding several faults is refused for the first it reads, within an entry
-//! as across entries; and that the slice's OLD form — a bare value per entry
+//! as across entries; that the slice's OLD form — a bare value per entry
 //! — fails to decode under the current form on a one-byte entry and on an
-//! atom, and decodes to the empty map where it holds no entry.
+//! atom, and decodes to the empty map where it holds no entry; and that the
+//! line-break counts occupy no byte of a body or a record, so bytes holding
+//! none decode to a counted slice and serialize back unchanged, and the
+//! counts M2 recovers — by a checkpoint's decode and the tail's replay, or
+//! by replay from genesis — are the live fold's.
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -24,7 +28,7 @@ use skep_content::{
     stage_stretch, stage_write, write, write_stretch, ContentError, ContentStore, ContentStretch,
     ContentWrite, HasContent, Val,
 };
-use skep_kernel::{Kernel, Recovery};
+use skep_kernel::{Kernel, Recovery, Seq};
 use tempfile::tempdir;
 
 use crate::common::*;
@@ -44,7 +48,8 @@ enum RawStored {
 #[test]
 fn the_records_and_the_slice_survive_a_bincode_round_trip() {
     // §A/§Recovery: ContentWrite and ContentStretch are the deltas M2
-    // journals; the slice is fully serialized in checkpoints. bincode is M2's
+    // journals; the slice's map is serialized whole in checkpoints, and its
+    // line-break counts are counted again by the decode. bincode is M2's
     // actual wire format.
     let a1 = ca(1);
     let a2 = ca(2);
@@ -72,7 +77,8 @@ fn the_records_and_the_slice_survive_a_bincode_round_trip() {
         assert_eq!(read(&c, ca(ordinal).tumbler()), Some(vec![*byte]));
     }
 
-    // The slice round-trips whole (checkpoint form; rebuild_derived identity).
+    // The slice round-trips whole (checkpoint form; the decode leaves nothing
+    // for `rebuild_derived`, which is identity for M4).
     let bytes_of = bincode::serialize(&c).expect("slice serializes");
     let back: ContentStore = bincode::deserialize(&bytes_of).expect("slice deserializes");
     assert_eq!(back, c, "the slice round-trips whole");
@@ -433,25 +439,6 @@ fn the_records_and_the_slice_admit_every_address_a_release_build_can_stage() {
             "the stretch decoded from {shape} carries another address"
         );
     }
-}
-
-/// Every ordering of `items`, each once: each item first, followed by every
-/// ordering of the rest — `n!` vectors for `n` items.
-fn every_order<T: Clone>(items: &[T]) -> Vec<Vec<T>> {
-    if items.is_empty() {
-        return vec![Vec::new()];
-    }
-    let mut orders = Vec::new();
-    for (i, first) in items.iter().enumerate() {
-        let mut rest = items.to_vec();
-        rest.remove(i);
-        for tail in every_order(&rest) {
-            let mut order = vec![first.clone()];
-            order.extend(tail);
-            orders.push(order);
-        }
-    }
-    orders
 }
 
 /// Every sequence of exactly `len` picks from `0..choices`, repeats allowed:
@@ -834,6 +821,84 @@ fn the_old_form_slice_fails_to_decode_on_a_value_and_decodes_empty_where_it_hold
     assert_eq!(old_form(&[]), bincode::serialize(&ContentStore::default()).expect("serializes"));
 }
 
+#[test]
+fn a_body_and_records_that_hold_no_count_load_unchanged_and_counted() {
+    // store.rs (`ContentStore`, `StoreShadow`): the line-break counts are
+    // derived and occupy no byte, of a checkpoint body or of a journal
+    // record. So bytes laid down by hand in the slice's and the records' own
+    // forms, which hold entries and nothing else, are all a body or a frame
+    // carries of them: the body decodes to a slice that answers both line
+    // reads and serializes back to the very bytes it was read from; each
+    // record decodes and serializes back to its bytes; and the records fold
+    // to a slice equal to the decoded one. The entries: a stretch, a
+    // one-byte value as a build without stretches journals a byte, an atom
+    // holding the line break's byte, and a stretch of one. `raw_record`
+    // writes the value `x` alone, so the two value records are laid here.
+    let ca5 = &[1u32, 0, 1, 0, 1, 0, 1, 5][..];
+    let ca6 = &[1u32, 0, 1, 0, 1, 0, 1, 6][..];
+    let ca7 = &[1u32, 0, 1, 0, 1, 0, 1, 7][..];
+    let raw_write = |key: &[u32], value: &[u8]| -> Vec<u8> {
+        bincode::serialize(&(raw_key(key), value.to_vec())).expect("the raw record serializes")
+    };
+    let body = raw_slice_of(&[
+        (CA1, RawStored::Stretch(b"a\nb\n".to_vec())), // 1..=4
+        (ca5, RawStored::Value(b"\n".to_vec())),
+        (ca6, RawStored::Value(b"at\nom".to_vec())),
+        (ca7, RawStored::Stretch(b"\n".to_vec())),
+    ]);
+    let decoded: ContentStore = bincode::deserialize(&body).expect("the body decodes");
+    assert!(
+        bincode::serialize(&decoded).expect("slice serializes") == body,
+        "the slice decoded from a body holding no count serialized to other bytes: a count \
+         reached the checkpoint"
+    );
+    let line_breaks = [2u32, 4, 5, 7];
+    let assert_counted = |form: &str, c: &ContentStore| {
+        for ordinal in 1..=8u32 {
+            assert_eq!(
+                c.line_breaks_before(ca(ordinal).tumbler()),
+                line_breaks.iter().filter(|&&o| o < ordinal).count() as u64,
+                "{form}: the line breaks before ordinal {ordinal}"
+            );
+        }
+        for n in 0..=line_breaks.len() {
+            assert_eq!(
+                c.nth_line_break_from(ca(1).tumbler(), n as u64),
+                line_breaks.get(n).map(|&o| ca(o).tumbler().clone()),
+                "{form}: line break {n} of the chain"
+            );
+        }
+    };
+    assert_counted("decoded from the body", &decoded);
+    let frames = [
+        raw_stretch(CA1, b"a\nb\n"),
+        raw_write(ca5, b"\n"),
+        raw_write(ca6, b"at\nom"),
+        raw_stretch(ca7, b"\n"),
+    ];
+    let first: ContentStretch = bincode::deserialize(&frames[0]).expect("the stretch decodes");
+    let byte: ContentWrite = bincode::deserialize(&frames[1]).expect("the one-byte record decodes");
+    let atom: ContentWrite = bincode::deserialize(&frames[2]).expect("the atom's record decodes");
+    let last: ContentStretch = bincode::deserialize(&frames[3]).expect("the stretch decodes");
+    assert_eq!(
+        [
+            bincode::serialize(&first).expect("record serializes"),
+            bincode::serialize(&byte).expect("record serializes"),
+            bincode::serialize(&atom).expect("record serializes"),
+            bincode::serialize(&last).expect("record serializes"),
+        ],
+        frames,
+        "a record decoded from bytes holding no count serialized to other bytes"
+    );
+    let folded = ContentStore::default()
+        .apply_stretch(&first)
+        .apply_write(&byte)
+        .apply_write(&atom)
+        .apply_stretch(&last);
+    assert_counted("folded from the records", &folded);
+    assert_eq!(folded, decoded, "the records fold to a slice other than the body's");
+}
+
 // ---- M2-driven recovery by checkpoint and replay ----
 
 #[test]
@@ -908,4 +973,76 @@ fn content_survives_durable_recovery_by_checkpoint_and_replay() {
         rejected(write_stretch(&k, &ca(4), bytes(b"over"))),
         ContentError::AlreadyStored(ca(4).tumbler().clone())
     );
+}
+
+#[test]
+fn the_counts_recover_by_checkpoint_and_replay_equal_to_the_live_fold() {
+    // §Recovery / store.rs (`ContentStore`): the line-break counts are
+    // derived, so M2 carries none of them — its checkpoint holds the map,
+    // whose decode counts every entry again, and its replay folds the
+    // records above it, each fold counting its own. So one history —
+    // stretches and a one-byte value holding line breaks, written below a
+    // checkpoint and above it — is read three ways and gives one slice: as
+    // the live commits folded it; reopened from the checkpoint with the
+    // tail replayed; and reopened where no checkpoint was taken, every
+    // record replayed from genesis. M2's own report says which way each
+    // reopen came, so the checkpoint's decode and the replay's folds are
+    // each known to have run. A decode that left the counts empty would
+    // recover the first of these with the tail's line breaks alone.
+    fn write_history(k: &Kernel<World>, checkpoint: bool) -> Option<Seq> {
+        write_stretch(k, &ca(1), bytes(b"a\nb\n")).expect("1..=4 commits");
+        write_stretch(k, &ca(5), bytes(b"cd")).expect("5..=6 commits");
+        write(k, &ca(7), val(b"\n")).expect("7 commits");
+        let at = checkpoint.then(|| k.checkpoint().expect("checkpoint"));
+        write_stretch(k, &ca(8), bytes(b"e\n\nf")).expect("8..=11 commits");
+        write_stretch(k, &ca(12), bytes(b"\n\n")).expect("12..=13 commits");
+        at
+    }
+    let line_breaks = [2u32, 4, 7, 9, 10, 12, 13];
+    let (checkpointed, replayed_whole) = (tempdir().expect("tempdir"), tempdir().expect("tempdir"));
+    let (live, checkpointed_at) = {
+        let k = Kernel::<World>::open(cfg_fsync(checkpointed.path()), genesis()).expect("open");
+        let at = write_history(&k, true).expect("the checkpoint was taken");
+        let live = k.snapshot().world().content().clone();
+        (live, at)
+    };
+    {
+        let k = Kernel::<World>::open(cfg_fsync(replayed_whole.path()), genesis()).expect("open");
+        write_history(&k, false);
+    }
+    let came =
+        |k: &Kernel<World>| k.recovery().map(|r| (r.start_point, r.replayed, r.skipped.len()));
+    let from_checkpoint =
+        Kernel::<World>::open(cfg_fsync(checkpointed.path()), genesis()).expect("reopen");
+    assert_eq!(
+        came(&from_checkpoint),
+        Some((checkpointed_at, 2, 0)),
+        "the reopen did not start from the checkpoint and replay the two commits above it"
+    );
+    let from_genesis =
+        Kernel::<World>::open(cfg_fsync(replayed_whole.path()), genesis()).expect("reopen");
+    assert_eq!(
+        came(&from_genesis),
+        Some((Seq(0), 5, 0)),
+        "the reopen did not replay all five commits from genesis"
+    );
+    for (how, k) in [("from the checkpoint", &from_checkpoint), ("from genesis", &from_genesis)] {
+        let s = k.snapshot();
+        let c = s.world().content();
+        assert_eq!(c, &live, "reopened {how}, the slice is not the one the live commits folded");
+        for ordinal in 1..=14u32 {
+            assert_eq!(
+                c.line_breaks_before(ca(ordinal).tumbler()),
+                line_breaks.iter().filter(|&&o| o < ordinal).count() as u64,
+                "reopened {how}: the line breaks before ordinal {ordinal}"
+            );
+        }
+        for n in 0..=line_breaks.len() {
+            assert_eq!(
+                c.nth_line_break_from(ca(1).tumbler(), n as u64),
+                line_breaks.get(n).map(|&o| ca(o).tumbler().clone()),
+                "reopened {how}: line break {n} of the chain"
+            );
+        }
+    }
 }

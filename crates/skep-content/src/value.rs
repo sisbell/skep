@@ -9,22 +9,27 @@ use serde::{Deserialize, Serialize};
 ///
 /// It is an element of ASN-0036's `Val`. Write-once ⇒ never edited ⇒ needs
 /// no internal COW; a clone shares the bytes and never copies them, so it is
-/// O(1) however long the value. M4 is **value-oblivious**: it never inspects
-/// these bytes, and it stores nothing beside them that types them — no type
-/// tag, no discriminator; the one tag a slice entry carries tells a value
-/// from a stretch, never one kind of value from another. ASN-0036 leaves
-/// `Val`'s typing open (its first open question), and the M4 design settles
-/// M4's side of it untyped (Conflicts #5). The one distinction M4 answers for
-/// is the store's own: every value here is content, which a correct writer
-/// stores at an address whose subspace identifier `E(a)₁` is `s_C`
-/// (ASN-0093 L0, read by M1's `Address::subspace`) — the second key
-/// invariant of [`ContentStore`](crate::ContentStore), owed by the stage
-/// door's caller and not checked at decode — and link values are M7's. What
-/// the bytes say of themselves is their reader's to parse, never M4's: a
-/// value that is the body of a DOCTRINE D13 record — the doctrine's record,
-/// not this crate's journal record [`ContentWrite`](crate::ContentWrite) — is
-/// one JSON object naming that record's kind in a `type` member, read by the
-/// parser that owns that kind.
+/// O(1) however long the value. M4 is **value-oblivious** but for one test:
+/// it asks of a one-byte value, as of each byte of a stretch, whether it is
+/// the single byte `0x0A` — a line break, which the slice counts for its two
+/// line reads — and reads a value's bytes for nothing else; a value of any
+/// other length it never inspects at all. It stores nothing beside the
+/// bytes that types them — no type tag, no discriminator; the one tag a
+/// slice entry carries tells a value from a stretch, never one kind of value
+/// from another; and the line-break counts are derived from the bytes, never
+/// written beside them. ASN-0036 leaves `Val`'s typing open (its first open
+/// question), and the M4 design settles M4's side of it untyped
+/// (Conflicts #5). The one distinction M4 answers for is the store's own:
+/// every value here is content, which a correct writer stores at an address
+/// whose subspace identifier `E(a)₁` is `s_C` (ASN-0093 L0, read by M1's
+/// `Address::subspace`) — the second key invariant of
+/// [`ContentStore`](crate::ContentStore), owed by the stage door's caller
+/// and not checked at decode — and link values are M7's. Past that one
+/// byte, what the bytes say of themselves is their reader's to parse, never
+/// M4's: a value that is the body of a DOCTRINE D13 record — the doctrine's
+/// record, not this crate's journal record
+/// [`ContentWrite`](crate::ContentWrite) — is one JSON object naming that
+/// record's kind in a `type` member, read by the parser that owns that kind.
 ///
 /// Serde rides serde's `rc` feature for the `Arc<[u8]>` impls (an M4-local
 /// dependency knob). A value serializes as a sequence of `u8` — serde has no
@@ -58,6 +63,15 @@ impl Val {
 
     /// Returns the value's bytes.
     pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Returns the allocation the value's bytes sit in.
+    ///
+    /// It is for a holder that keeps the bytes beside the value, as the
+    /// slice's line-break counts keep a one-byte value's: a clone of it
+    /// shares the bytes and copies none.
+    pub(crate) fn shared(&self) -> &Arc<[u8]> {
         &self.0
     }
 

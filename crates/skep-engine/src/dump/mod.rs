@@ -203,10 +203,11 @@ fn dump_visible(world: &World, readable: &dyn Fn(&Address) -> bool) -> WorldDump
 /// last arrangement change, reduced by the document's readability; and its
 /// draft bases, each staged draft's base with the extent its copy took and
 /// its source, reduced by the draft's readability — and M7's link store.
-/// M7's `#[serde(skip)]` hints are thereby
-/// excluded, exactly as this section demands: they are the [`hints_tree`]
-/// section's subject, and rendering them here would compare a derived
-/// structure against itself.
+/// M7's `#[serde(skip)]` hints and M4's line-break counts are thereby
+/// excluded, exactly as this section demands: the first are the
+/// [`hints_tree`] section's subject, the second a function of the content
+/// map rendered here that no section renders, and rendering either here
+/// would compare a derived structure against itself.
 ///
 /// These slice keys are the dump's own wire vocabulary, exactly as
 /// [`shipped_label`]'s are: they name each slice for the store it belongs to
@@ -424,8 +425,10 @@ fn class_tree(links: &LinkState, ty: &Endset) -> SerdeTree {
 /// M9's but these M7 tuples — projected one family per row of
 /// [`PREDICATE_PROJECTIONS`]; and the engine's own derived index, the
 /// exception set (`publication.drafts`: draft document → owner account,
-/// PUB-7.5). M3 and M4 hold no hints of their own, and M5's rebuild is the
-/// identity in v1, so neither store appears.
+/// PUB-7.5). M3 holds no hints of its own, M4's one derived structure — its
+/// line-break counts — is counted by its slice's decode and moved by no
+/// rebuild, and M5's rebuild is the identity in v1, so none of the three
+/// stores appears.
 ///
 /// Four of M7's hint families sit outside that reach, which is what bounds
 /// [`crate::Engine::check_hints_of`] to an oracle over what this renders and
@@ -798,9 +801,18 @@ impl crate::Engine {
     /// the same drafts with the same owners (PUB-7.7's two halves), and for
     /// the grants that the fold over every link deposit and the seed over
     /// the grants class's typed slice admit the same records, each naming
-    /// the same `replaces`. It certifies nothing of the nine derived
-    /// structures the dump does not reach, and each of those drives
-    /// something a caller can observe:
+    /// the same `replaces`. It certifies nothing of the eleven derived
+    /// structures the dump does not reach. Two are M4's line-break counts,
+    /// by address and by running sum, which drive
+    /// `ContentStore::line_breaks_before` and
+    /// `ContentStore::nth_line_break_from`: no rebuild moves them — the
+    /// content slice's own decode counts them and each of its folds keeps
+    /// them — so the world and its rebuild hold the same ones, and
+    /// `skep-content`'s suite holds them to the bytes
+    /// (`every_fold_order_of_one_chain_gives_one_store_equal_to_its_decode`,
+    /// `the_counts_recover_by_checkpoint_and_replay_equal_to_the_live_fold`).
+    /// The other nine a rebuild derives, and each of those drives something
+    /// a caller can observe:
     ///
     /// * M7's `dedup` drives `emit`'s incumbent lookup and with it
     ///   idempotence; `home_frontier` drives the address `next_link_address`

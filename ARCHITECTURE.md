@@ -129,8 +129,10 @@ foundation and on the stores above it.
   address (the predecessor read, `range(..=t).next_back()`, sound across
   the map's leaves): point queries that answer every address inside a
   stretch by its byte, one run read (`pieces`, the maximal pieces of an
-  I-extent), and one enumeration of every entry, in no promised order, for
-  whole-store work such as the cell index's walk. One feature, default off:
+  I-extent), two line reads over the line-break counts it keeps beside the
+  content, derived from the bytes and never serialized, and one enumeration
+  of every entry, in no promised order, for whole-store work such as the
+  cell index's walk. One feature, default off:
   `test-hooks` compiles in `write` and `write_stretch`, the test-only twins
   of `stage_write` and `stage_stretch`, and the `skep-kernel` and
   `skep-namespace` edges only they take. Every debug build asserts that

@@ -77,16 +77,6 @@ fn value_memory(bytes: &[u8]) -> *const u8 {
     bytes.as_ptr()
 }
 
-/// `c` with a stretch of `bytes` at `ca(first)` folded in.
-fn with_stretch(c: &ContentStore, first: u32, b: &[u8]) -> ContentStore {
-    c.apply_stretch(&stage_stretch(c, ca(first), bytes(b)).expect("fresh"))
-}
-
-/// `c` with the value `bytes` at `ca(ordinal)` folded in.
-fn with_value(c: &ContentStore, ordinal: u32, b: &[u8]) -> ContentStore {
-    c.apply_write(&stage_write(c, ca(ordinal), val(b)).expect("fresh"))
-}
-
 // ---- §C stage_write: the pure step ----
 
 #[test]
@@ -1069,13 +1059,16 @@ fn val_implements_no_hash_so_no_map_can_key_on_a_value() {
 
 #[test]
 fn a_value_is_stored_and_read_back_exactly_as_written_whatever_its_bytes() {
-    // value.rs: M4 is value-oblivious — it never inspects a value's bytes, so
-    // any byte string is a value and comes back exactly as written: the
-    // zero-length one, a single byte, and bytes that are no text at all; and
-    // a stretch's bytes come back the same way, byte by byte. Each folds from
-    // its journaled record and reads back from the slice and from its
-    // checkpoint form; a zero-length value is content stored like any other.
-    let written: [&[u8]; 3] = [b"", &[0x00], &[0xff, 0xfe, 0x80]];
+    // value.rs: M4 is value-oblivious but for one test — it counts a
+    // position's value where it is the single byte `0x0A`, and changes no
+    // byte for it — so any byte string is a value and comes back exactly as
+    // written: the zero-length one, a single byte, bytes that are no text at
+    // all, and the byte M4 counts, alone and inside an atom; and a stretch's
+    // bytes come back the same way, byte by byte, that byte among them. Each
+    // folds from its journaled record and reads back from the slice and from
+    // its checkpoint form; a zero-length value is content stored like any
+    // other.
+    let written: [&[u8]; 5] = [b"", &[0x00], &[0xff, 0xfe, 0x80], b"\n", b"a\nb"];
     let mut c = ContentStore::default();
     for (ordinal, bytes) in (1..).zip(written) {
         let rec = stage_write(&c, ca(ordinal), val(bytes)).expect("fresh");
@@ -1084,8 +1077,8 @@ fn a_value_is_stored_and_read_back_exactly_as_written_whatever_its_bytes() {
                 .expect("record decodes");
         c = c.apply_write(&replayed);
     }
-    let run: &[u8] = &[0x00, 0xff, b'a', 0x80];
-    let stretch = stage_stretch(&c, ca(4), bytes(run)).expect("fresh");
+    let run: &[u8] = &[0x00, 0xff, b'\n', b'a', 0x80];
+    let stretch = stage_stretch(&c, ca(6), bytes(run)).expect("fresh");
     let replayed: ContentStretch =
         bincode::deserialize(&bincode::serialize(&stretch).expect("record serializes"))
             .expect("record decodes");
@@ -1111,7 +1104,7 @@ fn a_value_is_stored_and_read_back_exactly_as_written_whatever_its_bytes() {
         }
     }
     for (offset, byte) in run.iter().enumerate() {
-        let addr = ca(4 + offset as u32);
+        let addr = ca(6 + offset as u32);
         for (form, slice) in [("folded", &c), ("checkpointed", &checkpointed)] {
             assert_eq!(read(slice, addr.tumbler()), Some(vec![*byte]), "{form}: a stretch byte");
         }

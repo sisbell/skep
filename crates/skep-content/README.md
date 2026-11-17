@@ -26,6 +26,17 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   index's walk. Under the `test-hooks` feature, `write` and
   `write_stretch`, the standalone test-only twins of the two stage
   doors.
+- **Line breaks, counted once** — a line break is a position whose value
+  is the single byte `0x0A`: a byte of a stretch or a one-byte value,
+  and nothing else (not `\r`, not U+2028, no byte of a longer value).
+  Content never changes, so each entry's line breaks are counted as it
+  is written and kept beside the content, in memory: derived from the
+  bytes, never journaled or checkpointed, and counted again when a
+  checkpoint is decoded. `line_breaks_before` answers the line breaks
+  below an address on its chain — a run's are the count before its end
+  less the count before its start, two lookups however many entries it
+  spans — and `nth_line_break_from` the address of the n-th line break
+  at or above an address, a search and never a walk.
 
 Content here is raw bytes at addresses; what a document *says* is an
 arrangement over these bytes, owned one layer up.

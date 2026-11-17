@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Tumbler};
-use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Piece, Val};
+use skep_content::{
+    stage_stretch, stage_write, ContentStore, ContentStretch, ContentWrite, HasContent, Piece, Val,
+};
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, Reclaim, SaltSource, Seq,
     TxnError, WorldState,
@@ -103,6 +105,37 @@ pub fn val(b: &[u8]) -> Val {
 /// A stretch's bytes as `stage_stretch` and `write_stretch` take them.
 pub fn bytes(b: &[u8]) -> Arc<[u8]> {
     Arc::from(b)
+}
+
+/// Every ordering of `items`, each once: each item first, followed by every
+/// ordering of the rest — `n!` vectors for `n` items.
+pub fn every_order<T: Clone>(items: &[T]) -> Vec<Vec<T>> {
+    if items.is_empty() {
+        return vec![Vec::new()];
+    }
+    let mut orders = Vec::new();
+    for (i, first) in items.iter().enumerate() {
+        let mut rest = items.to_vec();
+        rest.remove(i);
+        for tail in every_order(&rest) {
+            let mut order = vec![first.clone()];
+            order.extend(tail);
+            orders.push(order);
+        }
+    }
+    orders
+}
+
+/// `c` with a stretch of `b` at `ca(first)` folded in.
+#[track_caller]
+pub fn with_stretch(c: &ContentStore, first: u32, b: &[u8]) -> ContentStore {
+    c.apply_stretch(&stage_stretch(c, ca(first), bytes(b)).expect("fresh"))
+}
+
+/// `c` with the value `b` at `ca(ordinal)` folded in.
+#[track_caller]
+pub fn with_value(c: &ContentStore, ordinal: u32, b: &[u8]) -> ContentStore {
+    c.apply_write(&stage_write(c, ca(ordinal), val(b)).expect("fresh"))
 }
 
 /// The bytes a point read answers — a value's, or the one byte inside a

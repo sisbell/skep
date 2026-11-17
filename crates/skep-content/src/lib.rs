@@ -6,15 +6,26 @@
 //! two point queries over it — *is content stored here?*
 //! ([`ContentStore::contains`]) and *what is stored here?*
 //! ([`ContentStore::value_at`]) — the one run read, the pieces of an I-extent
-//! ([`ContentStore::pieces`]), and its one enumeration, every entry once
-//! ([`ContentStore::iter`]). M4 owns the immutable, never-GC'd half of the
-//! strand — ASN-0036's two-component state, the content store and the
-//! arrangements — and does exactly that one thing: **store an immutable
-//! value at an address forever, and look it up — never mutate, never delete,
-//! never reclaim, never key on the value.** Addresses arrive as parameters
-//! already minted and validated upstream (M3); M4 trusts them and stores
-//! bytes. A read inside a stretch finds the entry just below the address and
-//! indexes into its bytes, so every address still answers by itself.
+//! ([`ContentStore::pieces`]), the two line reads
+//! ([`ContentStore::line_breaks_before`] and
+//! [`ContentStore::nth_line_break_from`]), and its one enumeration, every
+//! entry once ([`ContentStore::iter`]). M4 owns the immutable, never-GC'd
+//! half of the strand — ASN-0036's two-component state, the content store
+//! and the arrangements — and does exactly that one thing: **store an
+//! immutable value at an address forever, and look it up — never mutate,
+//! never delete, never reclaim, never key on the value.** Addresses arrive
+//! as parameters already minted and validated upstream (M3); M4 trusts them
+//! and stores bytes. A read inside a stretch finds the entry just below the
+//! address and indexes into its bytes, so every address still answers by
+//! itself.
+//!
+//! A value is opaque to M4 but for one test: whether a position's value is
+//! the single byte `0x0A`, a **line break**. Content never changes once
+//! written, so the line breaks of any stretch of it never change either,
+//! and M4 counts them once, as each record is folded, and keeps the counts
+//! beside the content — derived from the bytes, held in memory, never
+//! journaled or checkpointed. The two line reads answer from them, for
+//! every document, version and past state that arranges the content.
 //!
 //! Three surfaces (§Public interface):
 //!
@@ -29,11 +40,17 @@
 //!   reader's pinned snapshot or a composite's working slice alike
 //!   ([`HasContent`] names both), `value_at` answering a borrowed [`Piece`];
 //!   [`ContentStore::pieces`], the one run read — the [`Pieces`] of an
-//!   I-extent, each one stored entry clipped to the window; and
-//!   [`ContentStore::iter`], the one enumeration — an [`Iter`], the walk
-//!   `&ContentStore` yields too — in no promised order, for whole-store work
-//!   over a pinned snapshot such as the cell index's walk. The point queries
-//!   and the one run read, `pieces`; no prefix read.
+//!   I-extent, each one stored entry clipped to the window;
+//!   [`ContentStore::line_breaks_before`] and
+//!   [`ContentStore::nth_line_break_from`], the two line reads — the line
+//!   breaks on an address's chain below it, and the address of the n-th at
+//!   or above it, each a lookup over the counts and a scan of at most one
+//!   block of one stretch, so a run's line breaks are two reads however
+//!   many entries it spans; and [`ContentStore::iter`], the one enumeration
+//!   — an [`Iter`], the walk `&ContentStore` yields too — in no promised
+//!   order, for whole-store work over a pinned snapshot such as the cell
+//!   index's walk. The point queries, the one run read, `pieces`, and the
+//!   two line reads; no prefix read.
 //! * **Write surface** (§C) — the pure steps [`stage_write`] (one value)
 //!   and [`stage_stretch`] (a run of single-byte values), the storage half of
 //!   K.α composed by M5's placement composite, and `write` and
@@ -54,11 +71,14 @@
 //! the slice as it was); S4 origin-based identity (keyed by address, never
 //! by value — two equal values at two addresses are stored twice; no
 //! value→address index); S5 unrestricted sharing (no refcount, no cap —
-//! references live in M5); C-fin finiteness; and unconditional no-GC
+//! references live in M5); C-fin finiteness; unconditional no-GC
 //! permanence (orphan content persists; M4 does not even know about
-//! references). These hold of every slice M4's own operations produce; a
-//! world's slice keeps them across its commits and restarts by
-//! [`HasContent`]'s implementor obligation.
+//! references); and the line-break counts' agreement with the content (one
+//! step adds an entry to the slice and counts it, the decode counts every
+//! entry it has read, and no count is ever read from bytes, so a slice's
+//! counts are a function of its entries). These hold of every slice M4's
+//! own operations produce; a world's slice keeps them across its commits
+//! and restarts by [`HasContent`]'s implementor obligation.
 //!
 //! **At the doors:** every key is T4-valid (ASN-0093 StoreT4Validity), at
 //! every door, the two decode paths included. Every key a correct caller
@@ -93,23 +113,33 @@
 //! * journal, replay, snapshot, recovery (M2) — M2 owns the files, and M4
 //!   only its own bytes inside them: [`ContentWrite`] and [`ContentStretch`]
 //!   are the authoritative deltas M2 journals, and the slice is their fold,
-//!   fully serialized in checkpoints (M2's default `rebuild_derived`
-//!   identity), all in this crate's serde form. Those bytes are formats —
-//!   read by code no compiler check ties to their form — and what a change
-//!   to each owes is said where it is spelled: on the two records, on
-//!   `in_tumbler_order` (`store.rs`) for the slice, and on [`Val`];
+//!   its map serialized whole in checkpoints and its line-break counts
+//!   counted again from that map by the slice's own decode (so M2's default
+//!   `rebuild_derived` identity is the whole of M4's recovery), all in this
+//!   crate's serde form. Those bytes are formats — read by code no compiler
+//!   check ties to their form — and what a change to each owes is said
+//!   where it is spelled: on the two records, on `in_tumbler_order`
+//!   (`store.rs`) for the slice, and on [`Val`];
 //! * modify, delete, GC, reclamation, refcounts — none exists, and no
-//!   fixed-width counter that could cap or overflow is ever introduced;
+//!   fixed-width counter that could cap or overflow is ever introduced: the
+//!   two line-break figures, an entry's count and its chain's running sum,
+//!   are `u64`s that count bytes the slice holds in memory, so neither can
+//!   overflow, and neither numbers a document's lines — a document's count,
+//!   summed over its runs, is its reader's;
 //! * author/source/origin metadata — origin (S7) is established by M3's
 //!   allocation discipline and computed structurally by M1's `document_of`
-//!   (surfaced as SHOWORIGIN in M6); M4 stores only `address → Val`, so no
-//!   redundant origin field can diverge;
+//!   (surfaced as SHOWORIGIN in M6); M4 stores only `address → Val`, and
+//!   what it keeps beside that is counted from the bytes, so no redundant
+//!   origin field can diverge;
 //! * prefix-scan, max-under-prefix — the reads are the two point queries,
-//!   the one run read [`ContentStore::pieces`], the one enumeration,
+//!   the one run read [`ContentStore::pieces`], the two line reads,
+//!   [`ContentStore::line_breaks_before`] and
+//!   [`ContentStore::nth_line_break_from`], the one enumeration,
 //!   [`ContentStore::iter`], and the two diagnostics, `len` and `is_empty`;
-//!   the point queries and the run read stand on the key order's predecessor
-//!   lookup (its field in `store.rs` says what the order is for), and the
-//!   allocator's max-under-prefix reads M3's own frontier, never M4;
+//!   the point queries, the run read and the line reads stand on the key
+//!   order's predecessor lookup (its field in `store.rs` says what the
+//!   order is for), and the allocator's max-under-prefix reads M3's own
+//!   frontier, never M4;
 //! * concurrency — none of M4's own: no locks, no threads, no interior
 //!   mutability. Content writes ride M5's composite under the
 //!   per-(document, content-subspace) lock key; every content address is
@@ -141,10 +171,12 @@ mod error;
 // The routing assertion (Open build decision #4), shared by the stage doors
 // and the standalone ops.
 mod routing;
-// The slice — its two folds, point queries, one run read (`Pieces`), one
-// enumeration (`Iter`) and serialized form — the two records, the borrowed
-// `Piece`, and `stage_write`/`stage_stretch`, the records' one producer each
-// (the records' fields are private to this file).
+// The slice — its two folds, point queries, one run read (`Pieces`), two
+// line reads, one enumeration (`Iter`) and serialized form — the two
+// records, the borrowed `Piece`, and `stage_write`/`stage_stretch`, the
+// records' one producer each (the records' fields are private to this
+// file). Its child `store::lines` holds the line-break counts the slice
+// keeps beside its entries: the rule, the two derived maps, the count.
 mod store;
 // `write` and `write_stretch`, the standalone transact-wrapped twins of the
 // two stage doors — `test-hooks` builds only.
@@ -179,10 +211,12 @@ pub use value::Val;
 /// [`ContentStore::apply_stretch`], once per record — and those folds are
 /// the only things that move it. Every other record's fold carries the slice
 /// through unchanged; a checkpoint carries it through this crate's own serde
-/// form, neither skipped nor defaulted; and `rebuild_derived` hands it back
-/// as it was decoded. Three promises rest on it: the two stage doors'
-/// already-stored checks see only the slice they are handed, so they refuse
-/// what a release build's folds would drop only when
+/// form, the slice neither skipped nor defaulted — that form writes the map
+/// whole and no count, and its decode counts the map's line breaks again —
+/// and `rebuild_derived` hands it back as it was decoded, the counts
+/// standing as the decode left them. Three promises rest on it: the two
+/// stage doors' already-stored checks see only the slice they are handed, so
+/// they refuse what a release build's folds would drop only when
 /// `stg.working().content()` is that slice; a value stored in one `content()`
 /// is in every later one, unchanged (S0) — the folds keep that only for a
 /// slice nothing else replaces, and M5's publish shot `assert!`s it of the
@@ -205,8 +239,9 @@ pub trait HasContent {
 /// types no signature in this crate mentions; [`Val`] rides M10's `Request`
 /// across the daemon's workers; and [`ContentError`] travels inside M5's
 /// `InsertError` and `PublishError`. They are kept by what the private
-/// fields contain — the `im` map, the `Arc` under each of its keys, under
-/// `Val` and under a stretch's bytes — and, for `ContentError`, by the
+/// fields contain — the `im` maps, the content's and the line-break counts'
+/// two, the `Arc` under each key, under `Val`, under a stretch's bytes and
+/// under a count's marks and chain — and, for `ContentError`, by the
 /// tumblers its variants carry, so a field that revoked one (the
 /// `Rc`-backed `im-rc` for `im`, an `Rc` under a key or under `Val`) would,
 /// but for this assertion, compile here and fail a crate away, never naming

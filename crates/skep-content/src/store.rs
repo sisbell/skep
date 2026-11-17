@@ -1,8 +1,13 @@
 //! §A/§B and the pure half of §C — the slice, its records and its steps.
 //!
 //! That is the slice and its serialized form, the two records, the two
-//! folds, the two point queries, the one run read and the one enumeration,
-//! and the two composable write steps.
+//! folds, the two point queries, the one run read, the two line reads and
+//! the one enumeration, and the two composable write steps. The line-break
+//! counts the slice keeps beside its entries are `lines`'.
+
+// The line-break counts: what a line break is, the two derived maps, and the
+// count each fold and the decode take of an entry.
+mod lines;
 
 use std::borrow::Borrow;
 use std::fmt;
@@ -15,16 +20,26 @@ use crate::error::ContentError;
 use crate::routing::debug_assert_content_address_routing;
 use crate::value::Val;
 
+use lines::Lines;
+
 /// M4's authoritative folded slice: `dom(C) ↦ Val` (§A; §Core data model).
 ///
 /// It is the only state M4 owns. The journal of [`ContentWrite`] and
 /// [`ContentStretch`] records (held by M2) is ground truth; this map is its
-/// fold, fully serialized in checkpoints (no skip-serialize, so the engine's
-/// `rebuild_derived` is identity for M4). An entry holds one value, or one
-/// stretch — N consecutive single-byte values written by one insert, held
-/// under the first's address; a read inside a stretch finds the entry just
-/// below the address and indexes into its bytes, so every address still
-/// answers by itself.
+/// fold, and the whole of what a checkpoint carries of the slice. An entry
+/// holds one value, or one stretch — N consecutive single-byte values
+/// written by one insert, held under the first's address; a read inside a
+/// stretch finds the entry just below the address and indexes into its
+/// bytes, so every address still answers by itself.
+///
+/// Beside the map the slice keeps its line-break counts (`lines`): for each
+/// entry that holds a line break — a position whose value is the single
+/// byte `0x0A` — the entry's own count and its chain's running sum. They are
+/// derived from the map and never serialized: each fold counts the entry it
+/// adds, and the decode counts every entry of the map it has read, so a
+/// decoded slice equals the folded one, the engine's `rebuild_derived` is
+/// identity for M4, and no checkpoint or journal byte states a count the
+/// content beside it could contradict.
 ///
 /// Two invariants are kept of the keys, each at a named gate — the first of
 /// every key, the second of every key a correct caller stages:
@@ -54,13 +69,21 @@ use crate::value::Val;
 /// Cheap to keep many of: `clone` is O(1), and the two folds,
 /// [`apply_write`](ContentStore::apply_write) and
 /// [`apply_stretch`](ContentStore::apply_stretch), cost O(log n) in the size
-/// of the slice, however long the addresses already stored, and return a new
-/// slice that shares everything the write left alone with the old one, which
-/// stays as it was; so a snapshot pinning an old `World` costs next to
-/// nothing. Its serialized form is canonical, a function of the contents
-/// alone (`in_tumbler_order` below, the field's emitting half, says who reads
-/// it).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// of the slice, however long the addresses already stored, and for a
+/// stretch one pass over its bytes, which counts their line breaks — a pass
+/// that runs twice where M2 folds a composite's records twice. An entry that
+/// holds a line break, folded below others of its chain that hold one, also
+/// moves each of those, one O(log n) step apiece: none on a chain minted in
+/// order. Each fold returns a new slice that shares everything the write
+/// left alone with the old one, which stays as it was; so a snapshot pinning
+/// an old `World` costs next to nothing. Its serialized form is canonical, a
+/// function of the contents alone (`in_tumbler_order` below, the field's
+/// emitting half, says who reads it).
+///
+/// Equality is the contents': two slices are equal exactly when they store
+/// the same entries, since the counts are a function of the map.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "StoreShadow")]
 pub struct ContentStore {
     // A persistent ordered map — `im::OrdMap`, a B-tree in its keys' `Tumbler`
     // order — not `im::HashMap`. The writes are single inserts, O(log n) here
@@ -76,10 +99,58 @@ pub struct ContentStore {
     // `in_tumbler_order` below), which the ordered map's walk gives for free
     // where a hash map's would have to be collected and sorted at every
     // checkpoint. Its serde form is this crate's, never `im`'s:
-    // `in_tumbler_order` emits it and `entry_by_entry` decodes it, the two
-    // named in the attribute below.
-    #[serde(serialize_with = "in_tumbler_order", deserialize_with = "entry_by_entry")]
+    // `in_tumbler_order` emits it, named in the attribute below, and
+    // `entry_by_entry` decodes it, named on `StoreShadow`'s field.
+    #[serde(serialize_with = "in_tumbler_order")]
     map: im::OrdMap<Key, Stored>,
+    // The line-break counts of `map`'s entries: a function of the map, kept
+    // so by the one step that adds an entry (`with`) and by the decode
+    // (`StoreShadow`), and skipped by the serializer, so it occupies no byte
+    // of a checkpoint and the slice serializes as its map alone.
+    #[serde(skip)]
+    lines: Lines,
+}
+
+/// `ContentStore { map: {..} }`: the entries, never the counts.
+///
+/// Each entry renders as its address and its kind and length, never a byte.
+/// The line-break counts are a function of the entries shown, and render
+/// nothing.
+impl fmt::Debug for ContentStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ContentStore").field("map", &self.map).finish()
+    }
+}
+
+/// The decode path of [`ContentStore`]: its serde `from` shadow.
+///
+/// It reads exactly what a `ContentStore` writes — the one field, `map`,
+/// through [`entry_by_entry`] — and the slice is then built from the map it
+/// decoded: the line-break counts are counted from the entries, never read.
+/// So every refusal of a body is `entry_by_entry`'s, and a body it admits
+/// decodes to the slice a fold of its entries builds (SP-19: the count
+/// reads what the decode has admitted, and refuses and panics on nothing).
+#[derive(Deserialize)]
+#[serde(rename = "ContentStore")]
+struct StoreShadow {
+    #[serde(deserialize_with = "entry_by_entry")]
+    map: im::OrdMap<Key, Stored>,
+}
+
+impl From<StoreShadow> for ContentStore {
+    /// Builds the slice of a decoded map, counting its line breaks.
+    ///
+    /// The entries are counted in the map's own order, each chain from its
+    /// lowest key up, so no count moves an entry counted before it: one pass
+    /// over the bytes, and O(log n) for each entry that holds a line break,
+    /// whatever order the body's entries arrived in.
+    fn from(shadow: StoreShadow) -> ContentStore {
+        let mut lines = Lines::default();
+        for (key, stored) in &shadow.map {
+            lines.count(key, stored);
+        }
+        ContentStore { map: shadow.map, lines }
+    }
 }
 
 /// An address as this crate holds it in memory.
@@ -161,8 +232,9 @@ impl<'de> Deserialize<'de> for Key {
 /// stretch, a stretch of one included, and the shot's re-insert takes a
 /// one-byte value into its pending byte-run) yet reads: a board whose journal
 /// holds per-byte `ContentWrite` frames — the form a build without stretches
-/// writes — folds them into one-byte values, which each of this crate's reads
-/// serves by the `Value` arm with no second branch.
+/// writes — folds them into one-byte values, which each read that lends
+/// content serves by the `Value` arm with no second branch, and whose byte
+/// the line-break counts take as they take a stretch's (`lines`).
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum Stored {
     Value(Val),
@@ -210,8 +282,8 @@ impl Stored {
 
 /// `Value(3 bytes)` or `Stretch(3 bytes)`: the kind and the length.
 ///
-/// It never shows a byte; the slice's derived `Debug` renders each entry
-/// through this.
+/// It never shows a byte; the slice's `Debug` renders each entry through
+/// this.
 impl fmt::Debug for Stored {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -257,7 +329,8 @@ fn offset_in(key: &Tumbler, len: usize, t: &Tumbler) -> Option<usize> {
 /// as their length and the raw bytes. Spelled by this crate rather than left
 /// to `im`'s own impl, because the form is a format (below) and what a
 /// dependency emits is its choice; the struct around the field is the
-/// derive's, as every store slice's is, and the decoding half is
+/// derive's, as every store slice's is, which emits this one field and
+/// skips the line-break counts beside it; and the decoding half is
 /// [`entry_by_entry`]. Cost: the O(n) walk the checkpoint already pays, and
 /// no sort.
 ///
@@ -271,8 +344,8 @@ fn offset_in(key: &Tumbler, len: usize, t: &Tumbler) -> Option<usize> {
 /// holding a key inside a stretch's reach, is refused, so the bytes a hash
 /// commits to never leave a decoder a tie to break ([`entry_by_entry`]). The
 /// engine's `World` lays these bytes down as one slice of its checkpoint
-/// layout, so a change to them — a field added to or removed from
-/// [`ContentStore`], an entry encoded differently — owes the engine's
+/// layout, so a change to them — a serialized field added to or removed
+/// from [`ContentStore`], an entry encoded differently — owes the engine's
 /// `WORLD_FORMAT` bump; the engine's pin
 /// (`each_slice_serializes_the_fields_the_format_count_names`) sees only the
 /// top-level field set, `map`, and a change beneath it owes the bump by hand
@@ -281,11 +354,13 @@ fn offset_in(key: &Tumbler, len: usize, t: &Tumbler) -> Option<usize> {
 /// as M4's authoritative section, where the daemon's per-reader `/dump`
 /// keeps or drops each `map` entry by its key's document — a stretch's first
 /// address, whose document, for an element address, is every byte's
-/// document; a field added to [`ContentStore`] would reach every reader
-/// class whole, which
+/// document; a serialized field added to [`ContentStore`] would reach every
+/// reader class whole, which
 /// `every_entry_at_each_level_of_the_tree_is_reduced_or_kept_by_name`
-/// refuses until the engine's filter is given a disposition for it. This
-/// crate's suite pins the bytes themselves
+/// refuses until the engine's filter is given a disposition for it. A field
+/// the serializer skips, as it skips the line-break counts, moves none of
+/// these bytes and reaches none of the three readers. This crate's suite
+/// pins the bytes themselves
 /// (`the_slice_serializes_as_its_map_alone_in_tumbler_order`), so a change
 /// to them fails here first. The field's serialized name is the derive's,
 /// its Rust name, which bincode never emits: a rename of `map` leaves the
@@ -305,7 +380,9 @@ fn in_tumbler_order<S: serde::Serializer>(
 /// Decodes the content map one entry at a time.
 ///
 /// It is the decoding half of [`ContentStore`]'s serde form, beside
-/// [`in_tumbler_order`]. `im`'s own map visitor reserves room for the entry
+/// [`in_tumbler_order`]: the one field of `StoreShadow`, which builds the
+/// slice, its line-break counts included, from the map this returns. `im`'s
+/// own map visitor reserves room for the entry
 /// count the bytes declare before it has read one entry, and a checkpoint
 /// body is bytes M2 does not trust: a count they do not carry — a
 /// writer/reader skew reading another slice's bytes as this length, or a
@@ -418,6 +495,21 @@ impl ContentStore {
         self.map.range::<_, Tumbler>(from..).next().is_some_and(|(key, _)| key.tumbler() < reach)
     }
 
+    /// Returns the slice with `stored` added at `key`: the folds' one step.
+    ///
+    /// The entry joins the map by its one insert (SP-21), and its line
+    /// breaks join the counts in the same step, so no fold can add an entry
+    /// the counts have not seen.
+    ///
+    /// **Precondition.** The receiver covers no address of the entry and
+    /// holds no key inside its reach: each fold has checked its own domain
+    /// before it calls this.
+    fn with(&self, key: Key, stored: Stored) -> ContentStore {
+        let mut lines = self.lines.clone();
+        lines.count(&key, &stored);
+        ContentStore { map: self.map.update(key, stored), lines }
+    }
+
     /// Folds a value record into a new slice; the receiver stays as it was.
     ///
     /// The fold is pure, deterministic and insert-only (§A), on live commit
@@ -428,8 +520,10 @@ impl ContentStore {
     /// seam the engine wires): total — deterministic, side-effect-free,
     /// panic-free — over every record whose address is not covered by the
     /// receiver, which is every record [`stage_write`] admitted against this
-    /// very slice, folded once. There the result is the receiver's contents
-    /// with `r.addr ↦ r.val` added.
+    /// very slice, folded once, in whatever order the addresses come. There
+    /// the result is the receiver's contents with `r.addr ↦ r.val` added,
+    /// and with it one line break counted where the value is the single
+    /// byte `0x0A`.
     ///
     /// Outside the domain — a record staged against another slice, or folded
     /// twice: a caller's bug, met live or on replaying the journal a release
@@ -462,9 +556,7 @@ impl ContentStore {
             // S0(b): the stored entry wins.
             return self.clone();
         }
-        ContentStore {
-            map: self.map.update(r.addr.clone(), Stored::Value(r.val.clone())),
-        }
+        self.with(r.addr.clone(), Stored::Value(r.val.clone()))
     }
 
     /// Folds a stretch record into a new slice; the receiver stays as it was.
@@ -475,9 +567,11 @@ impl ContentStore {
     ///
     /// **Totality domain**: every record whose first address is not covered by
     /// the receiver and whose reach holds no stored key — every record
-    /// [`stage_stretch`] admitted against this very slice, folded once. There
-    /// the result is the receiver's contents with the stretch at its first
-    /// address, the value at `first ⊕ k` being `bytes[k]`.
+    /// [`stage_stretch`] admitted against this very slice, folded once, in
+    /// whatever order the addresses come. There the result is the receiver's
+    /// contents with the stretch at its first address, the value at
+    /// `first ⊕ k` being `bytes[k]`, and with it the stretch's line breaks
+    /// counted, each `0x0A` among its bytes.
     ///
     /// Outside the domain a debug build fail-stops on the `debug_assert!`,
     /// and a release build returns a slice equal to the receiver — a record
@@ -505,9 +599,7 @@ impl ContentStore {
             // S0(b): the stored entry wins.
             return self.clone();
         }
-        ContentStore {
-            map: self.map.update(r.first.clone(), Stored::Stretch(r.bytes.clone())),
-        }
+        self.with(r.first.clone(), Stored::Stretch(r.bytes.clone()))
     }
 
     /// Returns whether a stored entry covers `a` (§B).
@@ -622,6 +714,60 @@ impl ContentStore {
         Pieces { walk, cursor: start.clone(), remaining: width.clone() }
     }
 
+    /// Returns the line breaks on `a`'s chain below `a`.
+    ///
+    /// A line break is a position whose value is the single byte `0x0A`:
+    /// an address where [`value_at`](ContentStore::value_at) answers exactly
+    /// that byte, a byte of a stretch or a one-byte value. Neither `\r` nor
+    /// U+2028 is one, and a value of any other length is an atom, which
+    /// holds none whatever its bytes. `a`'s chain is the addresses of its
+    /// component count that agree with it in all but the last component —
+    /// for a content address, those M3 mints its document's content at —
+    /// and this counts the line breaks at the ones below `a`.
+    ///
+    /// Total: `0` where the chain holds none below `a`, and answered at any
+    /// tumbler, one that nothing is stored at included, as a run's reach is.
+    /// So the line breaks of the I-extent `[start, reach)` are
+    /// `line_breaks_before(reach) − line_breaks_before(start)`, two lookups
+    /// however many entries the extent spans and wherever its ends fall
+    /// inside a stretch; and an arrangement's are the sum over its runs,
+    /// since a line break is one byte at one address and no seam between two
+    /// runs splits or makes one. The count is a `u64` that cannot overflow:
+    /// each line break counted is a byte the slice holds in memory.
+    ///
+    /// **Cost** (SP-23). One predecessor lookup among the entries that hold
+    /// a line break, O(log n) as a point read is, and a scan of less than
+    /// one block of the stretch `a` falls inside — a longer stretch keeps
+    /// its running count at each whole block (`BLOCK`, in `lines`). One
+    /// further lookup for each address below `a` on its chain that a counted
+    /// key off the chain extends: none in a slice built from M3's mints.
+    pub fn line_breaks_before(&self, a: &Tumbler) -> u64 {
+        self.lines.before(a)
+    }
+
+    /// Returns the address of the `n`-th line break at or above `a`.
+    ///
+    /// Of the line breaks on `a`'s chain at or above `a`, taken in address
+    /// order, it is the one at index `n`: `n` counts from zero, as
+    /// `Iterator::nth` does, so `0` asks for the first. What a line break
+    /// and a chain are is
+    /// [`line_breaks_before`](ContentStore::line_breaks_before)'s to say.
+    /// `None` where the chain holds no more than `n` line breaks at or above
+    /// `a`, whatever `n`.
+    ///
+    /// The search is the chain's, never a run's: it crosses every entry
+    /// boundary and every address nothing is stored at. A caller that means
+    /// the I-extent `[start, reach)` asks from `start` and keeps the answer
+    /// only where it lies below `reach`.
+    ///
+    /// **Cost** (SP-23). `line_breaks_before`'s at `a`, then one lookup by
+    /// the chain's running sum, O(log n), and a scan of at most one block of
+    /// the entry that holds the answer: a search, never a walk of the
+    /// chain's entries.
+    pub fn nth_line_break_from(&self, a: &Tumbler, n: u64) -> Option<Tumbler> {
+        self.lines.nth_from(a, n)
+    }
+
     /// Returns the number of entries: one per value or per stretch.
     ///
     /// So it is fewer than the addresses that answer where a stretch of more
@@ -653,8 +799,8 @@ impl ContentStore {
     /// snapshot such as the cell index's walk (`skep-media`); the slice it
     /// walks stays as it was while commits proceed, since every fold returns
     /// a new slice and leaves its receiver alone. A request path asks the
-    /// point queries and the one run read, [`pieces`](ContentStore::pieces);
-    /// no prefix read is offered beside them.
+    /// point queries, the one run read, [`pieces`](ContentStore::pieces),
+    /// and the two line reads; no prefix read is offered beside them.
     pub fn iter(&self) -> Iter<'_> {
         Iter(self.map.iter())
     }

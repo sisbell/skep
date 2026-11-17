@@ -1621,19 +1621,56 @@ fn rss_under_a_put_at_the_cap_grows_by_less_than_a_quarter_of_the_body() {
     let _ = child.wait();
 }
 
-/// ms4-K2 (sweep-4 media-leak's `put-replace-latency`; HELD, run in lane
-/// B's fence REPORTED NOT ASSERTED — the board's sm-Q4): is the time from a
-/// PUT's last body byte to its answer measurably longer on REPLACE than on
-/// a create? 200 trials per arm at 1 MB, 16 MB and the per-file cap, the
-/// target present (the same bytes PUT again — the rename over an existing
-/// name) versus absent (fresh bytes); both distributions and the quantile
-/// gap are printed; the one assertion is a sanity bound. `K2_TRIALS`
-/// narrows the trial count for a quick look. The absent arm's files are
-/// removed between trials so the disk holds one cap-sized file at a time.
+/// Reports a PUT's answer latency on a replace and on a create (ms4-K2).
+///
+/// The question is sweep-4 media-leak's `put-replace-latency`: is the time
+/// from a PUT's last body byte to the first byte of its answer measurably
+/// longer on a replace than on a create? Each size runs two arms, the
+/// target present (the same bytes PUT again, the rename over an existing
+/// name) and absent (fresh bytes per trial). Both distributions and their
+/// quantile gap are printed and reported, not asserted (the board's
+/// sm-Q4): beyond each PUT's 200, the test asserts only that each arm's
+/// p50 is under 30 s. The absent arm removes each fresh file after its
+/// trial, so one fresh body at most stands on disk at a time.
+///
+/// **A smoke run by default.** The full gate runs every ignored test
+/// (`--run-ignored all`), and its `full` profile ends each at ten minutes,
+/// which the study outlasts: 200 trials per arm at 1 MB, 16 MB and the
+/// per-file cap write about 34 GB and take about seventeen minutes run
+/// alone. With neither variable set the test runs 3 trials per arm at 1 MB
+/// and 16 MB, in seconds. `K2_TRIALS` sets the trial count, a whole number
+/// of at least one, and `K2_ALL_SIZES=1` adds the arm at the cap; any other
+/// value of either panics, naming it. A run short of the study says so
+/// before its rows. The study runs by the command below: off the `full`
+/// profile, whose cap it outlasts, and with `--no-capture`, since nextest
+/// prints a passing test's output only when asked and the rows are the
+/// study's result.
+///
+/// ```text
+/// K2_TRIALS=200 K2_ALL_SIZES=1 cargo nextest run -p skepd \
+///     --run-ignored only --no-capture \
+///     -E 'test(=blob_routes::put_answer_latency_does_not_separate_replace_from_create)'
+/// ```
 #[test]
 #[ignore = "timing test - gate-full only"]
 fn put_answer_latency_does_not_separate_replace_from_create() {
-    let trials: usize = std::env::var("K2_TRIALS").ok().and_then(|s| s.parse().ok()).unwrap_or(200);
+    const STUDY_TRIALS: usize = 200;
+    let trials = match std::env::var_os("K2_TRIALS") {
+        None => 3,
+        Some(v) => match v.to_str().map(str::parse::<usize>) {
+            Some(Ok(n)) if n > 0 => n,
+            _ => panic!("K2_TRIALS={v:?}: not a trial count of at least one"),
+        },
+    };
+    let all_sizes = match std::env::var_os("K2_ALL_SIZES") {
+        None => false,
+        Some(v) if v == "1" => true,
+        Some(v) => panic!("K2_ALL_SIZES={v:?}: 1 adds the arm at the cap, and no other value is read"),
+    };
+    let mut sizes = vec![("1 MB", 1_000_000usize), ("16 MB", 16_000_000)];
+    if all_sizes {
+        sizes.push(("the cap (64 MiB)", 64 * 1024 * 1024));
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
@@ -1670,7 +1707,10 @@ fn put_answer_latency_does_not_separate_replace_from_create() {
         sorted[i]
     };
     println!("K2: {trials} trials per arm, the latency from the last body byte to the first answer byte");
-    for (label, size) in [("1 MB", 1_000_000usize), ("16 MB", 16_000_000), ("the cap (64 MiB)", 64 * 1024 * 1024)] {
+    if trials < STUDY_TRIALS || !all_sizes {
+        println!("K2: a smoke run, short of the study that K2_TRIALS={STUDY_TRIALS} K2_ALL_SIZES=1 runs");
+    }
+    for (label, size) in sizes {
         // The present arm: one file, PUT first and then PUT again `trials`
         // times — every timed PUT a REPLACE of the name.
         let present = seeded_bytes(size, 1_000);

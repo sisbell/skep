@@ -14,9 +14,10 @@ mod fuzz_mcp;
 // The protocol and the tools end to end: the board's verdict as data, the
 // restart's re-open, the token in no answer or log line.
 mod mcp;
-// The text edit: only the changed bytes new, a link on an unchanged word
+// The text edits: only the changed bytes new, a link on an unchanged word
 // still following, a stale edit and a refused second write leaving the
-// draft as the other writer left it, and the edit's timings by hand.
+// draft as the other writer left it, several pairs in one call answered with
+// the lines they changed, and the edit's timings by hand.
 mod replace;
 // Startup: the flags answered up front, each setting read or refused, the
 // catalog file, and the board's refusals of the open.

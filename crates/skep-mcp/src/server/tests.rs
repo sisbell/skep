@@ -180,6 +180,40 @@ fn the_edits_error_member_is_its_is_error_and_is_taken_off() {
     assert_eq!(read(&edit_result(Err(ended.clone()))), (true, ended.to_value()), "the shell's own refusal of the call");
 }
 
+/// Checks that a landed several-pair edit's rows follow its answer, raw.
+///
+/// The shell's `text.edit` answers its rows as a list of strings: the text
+/// is the answer's JSON, the list taken off, on its first line, then each
+/// row on a line of its own as the shell spelled it, a tab and a quote
+/// among them left as they are, `isError` false; with the error member
+/// beside them the same text is `isError`; and a `lines` of any other form
+/// stays in the answer, nothing after it (the mutants that leave the list
+/// in the object, escape the rows, or take off a `lines` that is no list of
+/// strings answer otherwise).
+#[test]
+fn a_landed_edits_rows_follow_its_answer_one_a_line_as_the_shell_spelled_them() {
+    let rows = ["+1\tlet q = \"a\";", " 2\t}", "-\t(2 bytes removed here)"];
+    let edited = json!({"outcome": "edited", "doc": "1.0.1.0.64", "pairs": [[{"ordinal": "9", "removed": "1", "inserted": "1", "addr": "1.0.1.0.64.0.1.80", "at": 45}]], "at": 45, "lines": rows});
+    let result = edit_result(Ok(edited.clone()));
+    assert_eq!(result["isError"], false, "{result}");
+    let text = result["content"][0]["text"].as_str().expect("a text block");
+    let (first, rest) = text.split_once('\n').expect("rows after the answer");
+    let mut answer = edited.clone();
+    answer.as_object_mut().expect("an object").remove(EDIT_LINES);
+    assert_eq!(serde_json::from_str::<Value>(first).expect("the first line is JSON"), answer, "the answer, its rows taken off");
+    assert_eq!(rest.split('\n').collect::<Vec<_>>(), rows, "each row on a line of its own, unescaped");
+    let mut marked = edited.clone();
+    marked[EDIT_ERROR] = json!(true);
+    let result = edit_result(Ok(marked));
+    assert_eq!((&result["isError"], result["content"][0]["text"].as_str()), (&json!(true), Some(text)), "the same text, isError");
+    for other in [json!("+1\ta"), json!([1, "+1\ta"]), json!({"0": "+1\ta"})] {
+        let mut answer = edited.clone();
+        answer[EDIT_LINES] = other.clone();
+        let text = edit_result(Ok(answer.clone()))["content"][0]["text"].as_str().expect("a text block").to_string();
+        assert_eq!(serde_json::from_str::<Value>(&text).expect("one line of JSON"), answer, "{other}: stays in the answer");
+    }
+}
+
 /// Checks that the builders move what they wrap into the two specs' shapes.
 ///
 /// Each equals what `json!` builds from the same members: a JSON-RPC

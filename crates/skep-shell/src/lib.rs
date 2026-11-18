@@ -14,7 +14,10 @@
 //! [`Refusal`] and its [`Name`], [`Log`] and its [`CallOutcome`], [`Event`]
 //! and its [`EventName`] (an [`UnknownEventName`] where a spelling names
 //! none), [`Talk`], [`CALLS`], the text edit's two caps,
-//! [`MAX_DRAFT_POSITIONS`] and [`MAX_NEW_BYTES`] — and two public modules,
+//! [`MAX_DRAFT_POSITIONS`] and [`MAX_NEW_BYTES`], and the figures of the
+//! rows a several-pair edit answers with ([`ROWS_CONTEXT_LINES`],
+//! [`ROWS_MAX_RUN`], [`ROWS_RUN_HEAD`], [`ROWS_RUN_TAIL`],
+//! [`ROWS_MAX_LINE_CHARS`], [`ROWS_MAX_BYTES`]) — and two public modules,
 //! [`script`] and [`shapes`]; the rest is private.
 //! The modules, in the order they are declared, each naming only those
 //! above it:
@@ -158,7 +161,8 @@
 //!   `history`, and the text edit of a draft that keeps every unchanged
 //!   byte's identity, `text.replace`, and several such edits in one call,
 //!   each made as its minimal changes and all of them landed or none,
-//!   `text.edit` (skep #1079), each made of the `op`, `held` and `resolve`
+//!   `text.edit` (skep #1079), its landed answer showing the lines it
+//!   changed (skep #1080), each made of the `op`, `held` and `resolve`
 //!   rows' calls, in its child `text` — each row taking and answering values
 //!   shaped exactly as the row's columns — an argument of another form
 //!   refused, never read as absent;
@@ -204,7 +208,7 @@ pub use events::{Event, EventBus, EventName, UnknownEventName};
 pub use held::CopiesOwed;
 pub use log::{CallOutcome, Log};
 pub use refusal::{Name, Refusal};
-pub use shell::{ArmConfig, Fetched, NodeControl, NodeState, SessionMode, Shell, ShellOptions, CALLS, MAX_DRAFT_POSITIONS, MAX_NEW_BYTES};
+pub use shell::{ArmConfig, Fetched, NodeControl, NodeState, SessionMode, Shell, ShellOptions, CALLS, MAX_DRAFT_POSITIONS, MAX_NEW_BYTES, ROWS_CONTEXT_LINES, ROWS_MAX_BYTES, ROWS_MAX_LINE_CHARS, ROWS_MAX_RUN, ROWS_RUN_HEAD, ROWS_RUN_TAIL};
 
 /// Where the shell's talk lines go: the verb's stderr, a suite's vector.
 pub type Talk = Arc<dyn Fn(&str) + Send + Sync>;

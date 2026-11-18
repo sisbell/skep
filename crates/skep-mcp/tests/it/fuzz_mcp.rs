@@ -237,7 +237,8 @@ fn budget(default: usize) -> usize {
 ///
 /// It holds requests of each dispatch kind — a wire op, a shell call, an
 /// apparatus tool — and a shell call whose `opts` the door refuses,
-/// `search`'s withheld `reindex`; a notification, an id-less non-request,
+/// `search`'s withheld `reindex`, and an `edit_text` call whose second pair
+/// carries a member the door refuses; a notification, an id-less non-request,
 /// and a stray response; and three lines that hold a lone surrogate escape,
 /// which no mutation writes: a request, a notification, and a request whose
 /// id holds it. A value recipe passes those three on as written, and a byte
@@ -258,6 +259,7 @@ fn corpus() -> Vec<Vec<u8>> {
         r#"{"jsonrpc":"2.0","id":11,"method":"no/such/method"}"#,
         r#"{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"search","arguments":{"query":"hello","opts":{"reindex":true}}}}"#,
         r#"{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"search","arguments":{"query":"a\ud800b"}}}"#,
+        r#"{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"edit_text","arguments":{"doc":"1.0.1.0.1","edits":[{"old":"a","new":"b"},{"old":"c","new":"d","doc":"1.0.1.0.1"}]}}}"#,
         r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"reason":"\udc00"}}"#,
         r#"{"jsonrpc":"2.0","id":"a\uD83D","method":"ping"}"#,
     ]

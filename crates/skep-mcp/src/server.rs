@@ -9,10 +9,12 @@
 //! `tool_result` renders every answer the shell gives by it but a fetched
 //! file, the board's verdict as data and any other refusal `isError`;
 //! `Server::fetch` adds its own two `isError`, a file past the cap and a
-//! stream cut short; `edit_result` renders `replace_text`'s answer, the
-//! shell's `text.replace`, `isError` where the shell's answer carries its
-//! error member, which it takes off; and `respond` answers -32602 a call
-//! `call_params` or `Tool::admit` refuses, which is no tool result at all.
+//! stream cut short; `edit_result` renders the two text edits' answers,
+//! `replace_text`'s and `edit_text`'s — the shell's `text.replace` and
+//! `text.edit` — `isError` where the shell's answer carries its error
+//! member, which it takes off, a landed `text.edit`'s rows written after the
+//! answer one a line; and `respond` answers -32602 a call `call_params` or
+//! `Tool::admit` refuses, which is no tool result at all.
 //!
 //! `handle_line` answers the same -32602 a request whose line holds a lone
 //! surrogate escape, which JSON's grammar writes and no UTF-8 string holds:
@@ -67,7 +69,7 @@ enum ErrorCode {
 ///
 /// *A refusal as a result* decides it for the shell's answers (`tool_result`),
 /// `Server::fetch` for the file it fetched and its own two, and the shell's
-/// text edit for its own answer, by its error member (`edit_result`).
+/// text edits for their own answers, by their error member (`edit_result`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IsError {
     /// A normal result: an answer, or the board's verdict as data.
@@ -367,8 +369,9 @@ impl Server {
     /// The result is the tool's answer rendered by `tool_result`'s rule: a
     /// value or the board's verdict as data, any other refusal `isError`;
     /// `fetch` answers a content block of its own (`Server::fetch`), and
-    /// `replace_text`, the shell's `text.replace`, its answer less the error
-    /// member the shell marks it by (`edit_result`).
+    /// `replace_text` and `edit_text`, the shell's `text.replace` and
+    /// `text.edit`, their answer less the error member the shell marks it
+    /// by, and a landed `text.edit`'s rows after it (`edit_result`).
     ///
     /// # Errors
     ///
@@ -398,6 +401,7 @@ impl Server {
             Tool::SessionInfo => self.backend.session_info(),
             Tool::Fetch => return Ok(self.fetch(args.get("i").unwrap_or(&Value::Null))),
             Tool::ReplaceText => return Ok(edit_result(self.backend.session_call("text.replace", args))),
+            Tool::EditText => return Ok(edit_result(self.backend.session_call("text.edit", args))),
         };
         Ok(tool_result(answer))
     }
@@ -632,29 +636,52 @@ fn tool_result(answer: Result<Value, Refusal>) -> Value {
     }
 }
 
-/// The member the shell's text edit marks an error answer by, `true`.
+/// The member the shell's text edits mark an error answer by, `true`.
 ///
-/// skep-shell's `text.replace` sets it on every answer that is an error —
-/// a write the shell could not get to the board, a read it does not read, a
-/// line left held, an edit landed in part — and declares it in its shapes
-/// (`TextRefused`, `TextHeld`, `TextPartial`), which the suite holds this
-/// spelling to.
+/// skep-shell's `text.replace` and `text.edit` set it on every answer that
+/// is an error — a write the shell could not get to the board, a read it
+/// does not read, a line left held, an edit landed in part — and declare it
+/// in their shapes (`TextRefused`, `TextHeld`, `TextPartial`,
+/// `TextEditPartial`, `TextEditHeld`), which the suite holds this spelling
+/// to.
 pub(crate) const EDIT_ERROR: &str = "error";
 
-/// Renders `replace_text`'s answer, the shell's `text.replace`, as a tool
-/// result.
+/// The member a landed `text.edit` answers the lines it changed in.
+///
+/// skep-shell's `text.edit` answers them on `edited` as a list of strings,
+/// one row a line (`TextEdited`'s `lines`), which the suite holds this
+/// spelling to.
+pub(crate) const EDIT_LINES: &str = "lines";
+
+/// Renders a text edit's answer, the shell's `text.replace` or `text.edit`,
+/// as a tool result.
 ///
 /// The edit's answer is its text with the shell's error member
 /// (`EDIT_ERROR`) taken off, `isError` where the member stood: a refusal the
 /// edit or the board decided is data, and one where the shell could not get
 /// the board's verdict on a write, a line left held and an edit that landed
-/// in part are `isError`. A refusal of the call goes by `tool_result`'s
-/// rule, as every tool's does.
+/// in part are `isError`. A landed `text.edit`'s rows (`EDIT_LINES`), a list
+/// of strings, are taken off too: the text is the answer's JSON on its first
+/// line, then each row on a line of its own as the shell spelled it, with
+/// no escape, so an agent reads the lines as the draft holds them; a
+/// `lines` of any other form stays in the answer. A refusal of the call
+/// goes by `tool_result`'s rule, as every tool's does.
 fn edit_result(answer: Result<Value, Refusal>) -> Value {
     match answer {
         Ok(Value::Object(mut answer)) => {
             let is_error = if answer.remove(EDIT_ERROR) == Some(Value::Bool(true)) { IsError::Yes } else { IsError::No };
-            text_result(Value::Object(answer).to_string(), is_error)
+            let rows = match answer.get(EDIT_LINES) {
+                Some(Value::Array(rows)) if rows.iter().all(Value::is_string) => answer.remove(EDIT_LINES),
+                _ => None,
+            };
+            let mut text = Value::Object(answer).to_string();
+            if let Some(Value::Array(rows)) = rows {
+                for row in rows.iter().filter_map(Value::as_str) {
+                    text.push('\n');
+                    text.push_str(row);
+                }
+            }
+            text_result(text, is_error)
         }
         other => tool_result(other),
     }

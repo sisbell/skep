@@ -66,6 +66,16 @@
 //! removed and inserted, the I-address its new bytes were minted at and its
 //! own commit, so a caller finds what stands by identity whatever was
 //! written after it.
+//!
+//! **The rows** (skep #1080; the child module `rows`). `edited` carries the
+//! lines the call changed, numbered, as `lines`, and `masked` beside them
+//! where a withheld run stands on or before a line they show. They are drawn
+//! from the plan's own text — the one read with every pair spliced in, which
+//! is the draft exactly as the call's last write left it — and from where
+//! each of its positions came from, which the plan splices in step with the
+//! text; no read is made for them. A write whose answer was lost and which
+//! the shell's read found landed is read as landed, as `text.replace` reads
+//! one, and the rows show the draft as that reading has it.
 
 use serde_json::{json, Value};
 use skep_client::address::is_address_text;
@@ -79,6 +89,9 @@ use super::{
 use crate::attest::MAX_WIRE_LIST;
 use crate::hold::may_have_landed;
 use crate::refusal::Refusal;
+use rows::{rows, Pieces, Rows};
+
+pub(super) mod rows;
 
 /// One pair of the call's: the text to replace, and its replacement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,12 +152,22 @@ struct Planned<'a> {
     edit: Edit<'a>,
 }
 
+/// The call's writes as planned, and the text they leave told by origin.
+#[derive(Debug)]
+struct Plan<'a> {
+    /// The changes, in the order they are written.
+    changes: Vec<Planned<'a>>,
+    /// Where each position of the text the changes leave came from, which
+    /// the rows of an `edited` answer are drawn by.
+    pieces: Pieces<'a>,
+}
+
 /// Plans the call's writes: every pair checked, and made its changes.
 ///
 /// Each pair's `old` is found in `text` as the pairs before it leave it,
 /// its minimal changes placed from where it stands, and `text` made to read
-/// as the pair leaves it. `as_of` is the position `text` was read at.
-/// Nothing is written.
+/// as the pair leaves it, its pieces spliced in step (`rows::Pieces`).
+/// `as_of` is the position `text` was read at. Nothing is written.
 ///
 /// # Errors
 ///
@@ -153,8 +176,8 @@ struct Planned<'a> {
 /// value that is no text, each as `text.replace` answers it, the ordinal a
 /// place in the text as the pairs before leave it; and `too_large` naming
 /// the change (`change`) whose new bytes pass [`MAX_NEW_BYTES`].
-fn plan<'a>(doc: &str, text: &mut Text, as_of: u64, pairs: &[Pair<'a>]) -> Result<Vec<Planned<'a>>, Answer> {
-    let mut plan = Vec::new();
+fn plan<'a>(doc: &str, text: &mut Text, as_of: u64, pairs: &[Pair<'a>]) -> Result<Plan<'a>, Answer> {
+    let (mut changes, mut pieces) = (Vec::new(), Pieces::of(text.positions()));
     for (k, pair) in pairs.iter().enumerate() {
         let found = match text.find(pair.old.as_bytes()) {
             Found::Once(ordinal) => ordinal,
@@ -162,7 +185,8 @@ fn plan<'a>(doc: &str, text: &mut Text, as_of: u64, pairs: &[Pair<'a>]) -> Resul
             Found::Many(count) => return Err(refused(doc, "not_unique", json!({"count": count, "as_of": as_of, "pair": k}))),
             Found::Across { ordinal, kind } => return Err(refused(doc, "crosses_atom", json!({"ordinal": ordinal.to_string(), "kind": kind, "as_of": as_of, "pair": k}))),
         };
-        for (j, change) in minimal_changes(pair.old, pair.new).into_iter().enumerate() {
+        let minimal = minimal_changes(pair.old, pair.new);
+        for (j, change) in minimal.iter().enumerate() {
             let inserted = &pair.new[change.new.clone()];
             if inserted.len() > MAX_NEW_BYTES {
                 return Err(refused(doc, "too_large", json!({"what": "new", "bytes": inserted.len().to_string(), "cap": MAX_NEW_BYTES.to_string(), "pair": k, "change": j})));
@@ -170,11 +194,12 @@ fn plan<'a>(doc: &str, text: &mut Text, as_of: u64, pairs: &[Pair<'a>]) -> Resul
             // The changes before this one in the pair are made by its turn:
             // up to its first byte the pair's stretch reads as its new text.
             let edit = Edit { ordinal: found.saturating_add(change.new.start as u64), removed: change.old.len() as u64, inserted };
-            plan.push(Planned { pair: k, change: j, edit });
+            changes.push(Planned { pair: k, change: j, edit });
         }
+        pieces.splice(found, pair.old, &minimal);
         text.splice(found, pair.old.len(), pair.new.as_bytes());
     }
-    Ok(plan)
+    Ok(Plan { changes, pieces })
 }
 
 /// Reads the draft's whole image as the runs a take-back sets it back to.
@@ -393,13 +418,14 @@ impl<C: Calls> Writing<'_, C> {
     ///
     /// `pairs` is how many pairs the call was asked: the answer of a call
     /// that landed whole lists each pair's changes, none for a pair that
-    /// changed nothing.
+    /// changed nothing, and carries the rows `drawn` draws, which is called
+    /// there alone.
     ///
     /// # Errors
     ///
     /// The `op` row's refusal of a write that left nothing standing: the
     /// first, or a later one where the take-back landed.
-    fn all(mut self, plan: &[Planned<'_>], pairs: usize) -> Result<Answer, Refusal> {
+    fn all(mut self, plan: &[Planned<'_>], pairs: usize, drawn: impl FnOnce() -> Rows) -> Result<Answer, Refusal> {
         for (k, planned) in plan.iter().enumerate() {
             if let Some(ended) = self.change(planned, k + 1 == plan.len()) {
                 return ended;
@@ -409,9 +435,13 @@ impl<C: Calls> Writing<'_, C> {
         for made in &self.made {
             lists[made.pair].push(made.value());
         }
-        let mut value = json!({"outcome": "edited", "doc": self.doc, "pairs": lists});
+        let Rows { lines, masked } = drawn();
+        let mut value = json!({"outcome": "edited", "doc": self.doc, "pairs": lists, "lines": lines});
         if let Some(at) = self.made.last().and_then(|made| made.at) {
             value["at"] = Value::from(at);
+        }
+        if masked {
+            value["masked"] = Value::Bool(true);
         }
         Ok(Answer::data(value))
     }
@@ -576,9 +606,10 @@ impl<C: Calls> Writing<'_, C> {
 /// In order: the draft's text is read, a published document refused before
 /// any of its text is (`read_draft`); every pair is checked and the writes
 /// planned ([`plan`]); the draft's image is read ([`image_runs`]); and the
-/// changes are written ([`Writing::all`]). Nothing is written before every
-/// refusal a read alone decides (SP-8), and a call whose pairs change
-/// nothing reads no image and answers `unchanged`.
+/// changes are written ([`Writing::all`]), a call that lands whole answered
+/// with the rows of the planned text (`rows::rows`). Nothing is written
+/// before every refusal a read alone decides (SP-8), and a call whose pairs
+/// change nothing reads no image and answers `unchanged`.
 ///
 /// # Errors
 ///
@@ -591,18 +622,18 @@ pub(super) fn edit(calls: &impl Calls, asked: &Asked<'_>) -> Result<Answer, Refu
         Ok(read) => read,
         Err(answer) => return Ok(answer),
     };
-    let plan = match plan(doc, &mut text, as_of, &asked.pairs) {
+    let Plan { changes, pieces } = match plan(doc, &mut text, as_of, &asked.pairs) {
         Ok(plan) => plan,
         Err(answer) => return Ok(answer),
     };
-    if plan.is_empty() {
+    if changes.is_empty() {
         return Ok(Answer::data(json!({"outcome": "unchanged", "doc": doc, "as_of": as_of})));
     }
     let runs = match image_runs(calls, doc)? {
         Ok(runs) => runs,
         Err(answer) => return Ok(answer),
     };
-    Writing { calls, doc, runs, typed: as_of, made: Vec::new() }.all(&plan, asked.pairs.len())
+    Writing { calls, doc, runs, typed: as_of, made: Vec::new() }.all(&changes, asked.pairs.len(), || rows(&text, &pieces))
 }
 
 #[cfg(test)]

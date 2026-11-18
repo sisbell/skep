@@ -35,8 +35,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `publication_standing`, the read of a draft's standing, and the four of
   its `publication` family, `publication_open`, `publication_count`,
   `publication_confirm` and `publication_cancel`) are
-  tools of theirs; and four are the adapter's apparatus: `session_info`,
-  `changes_since`, `fetch` and `replace_text`. The catalog an agent reads,
+  tools of theirs; and five are the adapter's apparatus: `session_info`,
+  `changes_since`, `fetch`, `replace_text` and `edit_text`. The catalog an
+  agent reads,
   `tools.json` beside `Cargo.toml`, is embedded and checked against that
   dispatch at startup.
 - **A text edit that keeps identity.** `replace_text {doc, old, new}` is
@@ -56,14 +57,28 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   shell would not drop because it cannot tell whether its write landed. A
   published document is refused before any write; the raw `insert`, `delete`
   and `set_arrangement` stay offered.
+- **Several edits in one call, answered with the lines changed.**
+  `edit_text {doc, edits: [{old, new}, …]}` is the shell's `text.edit`:
+  every pair's `old` must stand exactly once in the draft as the pairs
+  before it leave it, every pair is checked against one read before any
+  write, each is made as its minimal changes, and all of them land or none
+  — a write past the first that does not land has the draft set back as it
+  stood. Its result is the shell's answer on one line, then, where the call
+  landed, the lines it changed, one row a line as the shell spells it: `+N`,
+  a tab and the line for a line holding a changed byte, a space, the number
+  and the line for the lines around it, `-` and a tab and `(N bytes removed
+  here)` where whole lines went, `--` between rows whose lines do not
+  touch. `partial` and `held` are `isError`, as `replace_text`'s are; a
+  member of a pair other than `old` and `new` is refused before any call.
 - **A refusal as a result.** The board's verdict on a frame comes back as
   data, `isError: false`; `isError` means the shell could not get the
   board's verdict — among the causes, a board not answering and a frame the
   shell refused itself, nothing sent — or `fetch` declined a file, or a
-  `replace_text` left a line held or landed in part. A call the adapter
-  will not run is no tool result but a JSON-RPC error, `-32602` under the
-  request's id: a tool outside the catalog, an argument an adapter tool
-  does not take, and a request whose line holds a lone surrogate escape
+  `replace_text` or an `edit_text` left a line held or landed in part. A
+  call the adapter will not run is no tool result but a JSON-RPC error,
+  `-32602` under the request's id: a tool outside the catalog, an argument
+  an adapter tool does not take, a member of an `edit_text` pair the shell
+  would ignore, and a request whose line holds a lone surrogate escape
   (`\uD800` to `\uDFFF` with no partner), which JSON writes and UTF-8 text
   cannot carry. A line that is not JSON is answered `-32700` under id null,
   and so is one whose id itself holds such an escape.

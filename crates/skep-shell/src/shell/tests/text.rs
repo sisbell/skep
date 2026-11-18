@@ -14,7 +14,8 @@
 //! edit, the edit made under the restart arm's re-open and answered as one
 //! no death met. Of `text.edit`, against the daemon: two pairs landed in
 //! one call, the text an old text spans between two changes at the
-//! I-addresses it had; a write of the call's refused past the first, at
+//! I-addresses it had and the answer's rows on the lines the board's
+//! `line_numbers` numbers; a write of the call's refused past the first, at
 //! each place one can be, the draft then exactly as it stood, every byte at
 //! its own address; and another writer's change landed between two of the
 //! call's writes, nothing taken back over it and each change that stands
@@ -293,10 +294,13 @@ fn text_edit_reads_its_members_first_and_asks_the_door_before_any_read() {
 /// call makes the two changes and writes nothing of the line between them,
 /// and a second pair lands behind it in the same call. The answer is
 /// `TextEdited` exactly, each change with the address its new bytes were
-/// minted at; the draft reads the new text; every byte no change removed
-/// stands at the I-address it had, the new ones at the answer's; and the
-/// call log holds one `text.edit` entry (the mutant that makes a pair as one
-/// stretch re-types the line between, which then stands at new addresses).
+/// minted at, and its rows the three lines changed with the one between,
+/// each `+` row on the line the board's own `line_numbers` puts that
+/// change's first new byte on at the call's commit; the draft reads the
+/// new text; every byte no change removed stands at the I-address it had,
+/// the new ones at the answer's; and the call log holds one `text.edit`
+/// entry (the mutant that makes a pair as one stretch re-types the line
+/// between, which then stands at new addresses).
 /// Under the shell's own node stopped the first write is held `stopped`:
 /// its line is dropped, and the call answers `refused` naming the change,
 /// with the error member, nothing written and nothing held.
@@ -319,6 +323,11 @@ fn several_edits_land_in_one_call_and_the_text_between_two_changes_keeps_its_ide
     assert_eq!((pairs.len(), pairs[0].as_array().map(Vec::len), pairs[1].as_array().map(Vec::len)), (2, Some(2), Some(1)), "{answer}");
     assert_eq!((shape(change(0, 0)), shape(change(0, 1)), shape(change(1, 0))), (spelled("1", "4", "4"), spelled("43", "0", "1"), spelled("45", "4", "3")), "{answer}");
     assert_eq!(answer["at"], change(1, 0)["at"], "the call is whole at its last change's commit");
+    assert_eq!(answer["lines"], json!(["+1\tgamma = 1", " 2\tkeep this line as it is", "+3\tbeta = 20", "+4\tend stays"]), "the lines the call changed, and the one between: {answer}");
+    let at = answer["at"].as_u64().expect("the call's commit");
+    let numbered = g.shell.call("op", &json!({"session": g.session, "at": at, "frame": skep_client::board::frames::line_numbers(&draft, &[1, 43, 45], &[])})).unwrap_or_else(|r| panic!("{r}"));
+    let lines: Vec<&str> = numbered["positions"].as_array().expect("the positions' lines").iter().map(|position| position["line"].as_str().expect("a line")).collect();
+    assert_eq!(lines, ["1", "3", "4"], "the board numbers each change's first new byte, at the call's commit, on its `+` row's line: {numbered}");
     assert_eq!(text_of(&g.shell, &g.session, &draft), EDITED);
     let after = addresses(&g.shell, &g.session, &draft);
     let expected = [&minted(&change(0, 0)["addr"], 4)[..], &before[4..42], &minted(&change(0, 1)["addr"], 1)[..], &before[42..43], &minted(&change(1, 0)["addr"], 3)[..], &before[47..]].concat();

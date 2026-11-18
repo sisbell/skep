@@ -17,10 +17,14 @@
 //!
 //! The family's second call, `text.edit` — several such edits in one call,
 //! each made as its minimal changes and all of them landed or none (skep
-//! #1079) — is the child module `edit`'s, made of this module's pieces: its
-//! rows and the session they stand under, the text and its find, the
-//! writes, the lines an edit settles, the undo by identity and the answers.
-//! Both rows keep one order to the first read ([`Shell::text_call`]).
+//! #1079), its landed answer showing the lines it changed, numbered, drawn
+//! from the text it planned on (skep #1080; the caps on them
+//! [`ROWS_CONTEXT_LINES`], [`ROWS_MAX_RUN`], [`ROWS_RUN_HEAD`],
+//! [`ROWS_RUN_TAIL`], [`ROWS_MAX_LINE_CHARS`] and [`ROWS_MAX_BYTES`]) — is
+//! the child module `edit`'s, made of this module's pieces: its rows and the
+//! session they stand under, the text and its find, the writes, the lines an
+//! edit settles, the undo by identity and the answers. Both rows keep one
+//! order to the first read ([`Shell::text_call`]).
 //!
 //! **The order** ([`Shell::text_replace`], [`Shell::text_call`]). The
 //! members first, each refused in another form before the session is looked
@@ -128,6 +132,8 @@ use crate::refusal::{Name, Refusal};
 use crate::wire::{decode_hex, MAX_INSERT_VALUES};
 
 mod edit;
+
+pub use edit::rows::{ROWS_CONTEXT_LINES, ROWS_MAX_BYTES, ROWS_MAX_LINE_CHARS, ROWS_MAX_RUN, ROWS_RUN_HEAD, ROWS_RUN_TAIL};
 
 /// The most content positions one read of a draft's text asks.
 ///

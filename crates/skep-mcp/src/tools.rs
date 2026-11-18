@@ -16,10 +16,11 @@
 //! read of a draft's standing, `publication_standing`, and the `publication`
 //! family's four, `publication_open`, `publication_count`,
 //! `publication_confirm` and `publication_cancel`) and the apparatus
-//! (`session_info`, `changes_since`, `fetch`, and `replace_text`, the
-//! shell's text edit `text.replace`) — whose arguments are the bridge's row
-//! minus the session and the board, the adapter supplying each where the
-//! row requires it, and whose members the adapter reads by name. A
+//! (`session_info`, `changes_since`, `fetch`, and the shell's two text
+//! edits, `replace_text`, its `text.replace`, and `edit_text`, its
+//! several-pair `text.edit`) — whose arguments are the bridge's row minus
+//! the session and the board, the adapter supplying each where the row
+//! requires it, and whose members the adapter reads by name. A
 //! `publication` tool spells its row's `.` as `_`, since an agent runtime
 //! takes a tool's name for a function's, whose spelling admits no `.`.
 //! `Tool::admit` is the dispatch's door, admitting a call or refusing it;
@@ -162,6 +163,13 @@ pub enum Tool {
     /// The shell marks an answer that is an error by a member of its own,
     /// which the adapter reads for `isError` and takes off.
     ReplaceText,
+    /// `text.edit(session, doc, edits)`, the shell's several text edits of a
+    /// draft in one call: the session supplied.
+    ///
+    /// Its answer is rendered as `replace_text`'s, and the lines a landed
+    /// call changed, which the shell answers as a member of their own,
+    /// follow it one row a line.
+    EditText,
 }
 
 /// The adapter tools: each name, its tool, and the members its row takes.
@@ -187,6 +195,7 @@ const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
     ("changes_since", Tool::ChangesSince, &["since", "limit", "class", "under"]),
     ("fetch", Tool::Fetch, &["i"]),
     ("replace_text", Tool::ReplaceText, &["doc", "old", "new"]),
+    ("edit_text", Tool::EditText, &["doc", "edits"]),
 ];
 
 /// The options an adapter tool's `opts` takes, where its row takes one.
@@ -207,6 +216,16 @@ const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
 /// these, as it refuses a member outside the row.
 const OPTS_MEMBERS: &[(Tool, &[&str])] = &[(Tool::Search, &["limit", "offset"]), (Tool::Places, &["under"])];
 
+/// The members each pair of `edit_text`'s `edits` takes.
+///
+/// They are skep-shell's `TextEditPair`, the members the catalog's closed
+/// pair schema names. The shell reads a pair's `old` and `new` alone and
+/// ignores any other — a pair's own `doc` would be made in the call's — so
+/// the door refuses one outside these, as it refuses a member outside the
+/// row; a list that is no list, and a pair that is no object, are the
+/// shell's to refuse by name.
+const PAIR_MEMBERS: &[&str] = &["old", "new"];
+
 impl Tool {
     /// Admits the call a `tools/call` names, or refuses it.
     ///
@@ -217,8 +236,9 @@ impl Tool {
     /// `at` beside an object `frame`, which skep-shell's `op` row reads as its
     /// `/op-at` form and would send as another frame. An adapter tool's every
     /// member must be one its row takes, and every member of its `opts` one of
-    /// the row's options the door takes (`OPTS_MEMBERS`) — members the adapter
-    /// and the shell read.
+    /// the row's options the door takes (`OPTS_MEMBERS`), and every member of
+    /// a pair of `edit_text`'s `edits` one a pair takes (`PAIR_MEMBERS`) —
+    /// members the adapter and the shell read.
     ///
     /// # Errors
     ///
@@ -229,7 +249,10 @@ impl Tool {
     /// 2. for a wire op, arguments of the `/op-at` shape;
     /// 3. for an adapter tool, a member its row does not take, then a member
     ///    of its `opts` outside `OPTS_MEMBERS`, `search`'s withheld `reindex`
-    ///    among them.
+    ///    among them;
+    /// 4. for `edit_text`, a member of a pair of its `edits` outside
+    ///    `PAIR_MEMBERS`, named with the pair's index, the first pair's
+    ///    first speaking.
     pub fn admit(name: &str, args: &Map<String, Value>) -> Result<Tool, String> {
         let tool = Tool::named(name).ok_or_else(|| format!("unknown tool '{name}'; tools/list names the available tools"))?;
         let Some(members) = tool.members() else {
@@ -252,6 +275,13 @@ impl Tool {
         if let (Some(Value::Object(opts)), Some(taken)) = (args.get("opts"), tool.opts_members()) {
             if let Some(arg) = opts.keys().find(|k| !taken.contains(&k.as_str())) {
                 return Err(format!("{name}'s opts take {}; got '{arg}'", listed(taken)));
+            }
+        }
+        if let (Tool::EditText, Some(Value::Array(edits))) = (tool, args.get("edits")) {
+            for (k, pair) in edits.iter().enumerate() {
+                if let Some(arg) = pair.as_object().and_then(|pair| pair.keys().find(|key| !PAIR_MEMBERS.contains(&key.as_str()))) {
+                    return Err(format!("{name}'s edits take {} in each pair; got 'edits[{k}].{arg}'", listed(PAIR_MEMBERS)));
+                }
             }
         }
         Ok(tool)

@@ -57,10 +57,13 @@
 //! that replaces the bytes that differ alone, so every byte it did not
 //! change keeps its identity, and `text.edit`, several such edits in one
 //! call, each made as its minimal changes and all of them landed or none
-//! (skep #1079), each made of the `op`, `held` and `resolve` rows' calls
-//! within the one call the log keeps — are the child module `text`'s,
-//! `pub(super)` to the door, with the two caps it keeps
-//! ([`MAX_DRAFT_POSITIONS`], [`MAX_NEW_BYTES`]).
+//! (skep #1079), its landed answer showing the lines it changed (skep
+//! #1080), each made of the `op`, `held` and `resolve` rows' calls within
+//! the one call the log keeps — are the child module `text`'s, `pub(super)`
+//! to the door, with the two caps it keeps ([`MAX_DRAFT_POSITIONS`],
+//! [`MAX_NEW_BYTES`]) and the figures of those rows ([`ROWS_CONTEXT_LINES`],
+//! [`ROWS_MAX_RUN`], [`ROWS_RUN_HEAD`], [`ROWS_RUN_TAIL`],
+//! [`ROWS_MAX_LINE_CHARS`], [`ROWS_MAX_BYTES`]).
 //! The bursts a session sends with an `id`, and
 //! the FOLLOWER writes the page hands over with them — a `make_link`, a
 //! `nullify` or a `delete` sent with `after`, written at its burst's ack,
@@ -201,7 +204,7 @@ mod text;
 use follow::{Closing, Followed, Follower, Followers, FOLLOW_AT_STOP};
 use merge::Merges;
 use publication::{address_arg, clipped, Publications};
-pub use text::{MAX_DRAFT_POSITIONS, MAX_NEW_BYTES};
+pub use text::{MAX_DRAFT_POSITIONS, MAX_NEW_BYTES, ROWS_CONTEXT_LINES, ROWS_MAX_BYTES, ROWS_MAX_LINE_CHARS, ROWS_MAX_RUN, ROWS_RUN_HEAD, ROWS_RUN_TAIL};
 
 /// The session mode a run names, both arms selectable per run.
 ///

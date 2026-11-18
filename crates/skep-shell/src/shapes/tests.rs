@@ -180,7 +180,13 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         ("TextSpan", json!({"ordinal": "10", "width": "8", "addr": "1.0.1.0.64.0.1.80", "at": 44})),
         ("TextEditPair", json!({"old": "add(", "new": "addition("})),
-        ("TextEdited", json!({"outcome": "edited", "doc": "1.0.1.0.64", "pairs": [[{"ordinal": "32", "removed": "0", "inserted": "5", "addr": "1.0.1.0.64.0.1.80", "at": 41}], []], "at": 41})),
+        (
+            "TextEdited",
+            json!({
+                "outcome": "edited", "doc": "1.0.1.0.64", "pairs": [[{"ordinal": "32", "removed": "0", "inserted": "5", "addr": "1.0.1.0.64.0.1.80", "at": 41}], []], "at": 41,
+                "lines": [" 1\tfn main() {", "+2\t    let total = addition(left, right);", " 3\t    println!(\"{total}\");", " 4\t}"], "masked": true,
+            }),
+        ),
         ("TextEditChange", json!({"ordinal": "32", "removed": "0", "inserted": "5", "addr": "1.0.1.0.64.0.1.80", "at": 41})),
         ("TextEditUnchanged", json!({"outcome": "unchanged", "doc": "1.0.1.0.64", "as_of": 40})),
         (
@@ -281,7 +287,7 @@ fn the_file_names_every_shape_call_and_event() {
         "export interface TextRefused {\n  outcome: 'refused';\n  cause: string;\n  doc: string;\n  error?: true;\n  [member: string]: unknown;\n}\n",
         "  'text.edit'(args: { session: string; doc: string; edits: TextEditPair[] }): Promise<Outcome<TextEdited | TextEditUnchanged | TextRefused | TextEditPartial | TextEditHeld>>;\n",
         "export interface TextEditPair {\n  old: string;\n  new: string;\n}\n",
-        "export interface TextEdited {\n  outcome: 'edited';\n  doc: string;\n  pairs: TextEditChange[][];\n  at?: number;\n}\n",
+        "export interface TextEdited {\n  outcome: 'edited';\n  doc: string;\n  pairs: TextEditChange[][];\n  at?: number;\n  lines: string[];\n  masked?: true;\n}\n",
         "  stands: (TextEditStanding | TextEditHalf)[];\n  take_back?: { cause: string; refusal: unknown };\n  may_stand?: true;\n  error: true;\n",
         "export interface TextEditStanding {\n  pair: number;\n  change: number;\n  ordinal: string;\n  removed: string;\n  inserted: string;\n  addr?: string;\n  at?: number;\n}\n",
         "export interface TextEditHalf {\n  pair: number;\n  change: number;\n  new_text: TextSpan;\n  old_text: TextSpan;\n}\n",
@@ -342,6 +348,15 @@ fn the_file_names_every_shape_call_and_event() {
     assert_eq!(open, 6, "the shell refusal, the death's reason, the index state, the publication's refusal and its event, and the text family's refusal carry their own members");
     let landed = shape("TextEdited").expect("the text family's second call's landing is declared").doc;
     assert!(landed.contains(&format!("fewer than {} characters that are no whitespace", skep_client::text::MIN_KEPT_BETWEEN)), "the declared threshold is the finder's: {landed}");
+    for said in [
+        format!("the {} lines either side of it", crate::ROWS_CONTEXT_LINES),
+        format!("a run of more than {} `+` rows its first {}", crate::ROWS_MAX_RUN, crate::ROWS_RUN_HEAD),
+        format!("and its last {}", crate::ROWS_RUN_TAIL),
+        format!("cut past {} characters", crate::ROWS_MAX_LINE_CHARS),
+        format!("past {} bytes", crate::ROWS_MAX_BYTES),
+    ] {
+        assert!(landed.contains(&said), "the declared rows' figures are the rows' own: `{said}` in {landed}");
+    }
     assert_eq!(text.matches("  [member: string]: unknown;\n").count(), open, "an open shape, and it alone, renders its index signature");
     assert!(text.starts_with("// skep-shell — the bridge's declarations"));
 }

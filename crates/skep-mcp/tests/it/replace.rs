@@ -1,4 +1,4 @@
-//! `replace_text`, end to end against a real board.
+//! `replace_text` and `edit_text`, end to end against a real board.
 //!
 //! A draft holding a few lines of code text is edited through the built
 //! adapter, and the board is read back by identity: a one-word change mints
@@ -9,7 +9,10 @@
 //! draft exactly as that writer left it and no line of the edit's held. The
 //! other writer is staged, never raced: the adapter dials the board through
 //! `common`'s relay, whose rule lands a second session's write between two
-//! exchanges of one tool call. The measurement at the foot is run by hand.
+//! exchanges of one tool call. Two pairs in one `edit_text` call land with
+//! the text between them at its own addresses, the answer's rows after it,
+//! each changed line where the board's own `line_numbers` numbers it. The
+//! measurement at the foot is run by hand.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -112,6 +115,15 @@ fn replaced(mcp: &mut Mcp, doc: &str, old: &str, new: &str) -> Value {
     let (is_error, answer) = replace(mcp, doc, old, new);
     assert!(!is_error && answer["outcome"] == "replaced", "the edit lands: {answer}\n{}", mcp.log());
     answer
+}
+
+/// Calls `edit_text`, answering whether the result is `isError`, its first
+/// line as JSON, and each line after it, a row of the changed lines.
+fn edit(mcp: &mut Mcp, doc: &str, edits: Value) -> (bool, Value, Vec<String>) {
+    let (is_error, text) = mcp.call("edit_text", json!({"doc": doc, "edits": edits}));
+    let (first, rows) = text.split_once('\n').unwrap_or((&text, ""));
+    let answer = serde_json::from_str(first).unwrap_or_else(|e| panic!("edit_text's first line is JSON ({e}): {text}"));
+    (is_error, answer, rows.split('\n').filter(|row| !row.is_empty()).map(str::to_string).collect())
 }
 
 /// Waits until the adapter's own index has read the board through its head.
@@ -219,6 +231,41 @@ fn a_link_on_an_unchanged_word_of_the_edited_line_still_follows() {
         assert_eq!(set["set"], json!([{"start": format!("1.{}", ordinal_of(&edited, word)), "width": format!("0.{}", word.len())}]), "at the word's place in the edited text: {set}");
     }
     assert!(projected(&mut mcp, &replaced_word, &doc).is_empty(), "the replaced word's bytes left the draft");
+    assert!(mcp.finish().success());
+}
+
+/// Two pairs land in one `edit_text` call, answered with the lines changed.
+///
+/// One pair renames the function and the next changes a word of the line
+/// after it. The result's first line is the `edited` answer, the commit the
+/// call was whole at in it and no rows; each line after it is a row — the
+/// two changed lines `+`, the two after them as context, a tab between each
+/// number and its line. The board's own `line_numbers` puts each change's
+/// first new byte on its `+` row's line; the draft reads the new text, and
+/// every byte outside the two changes, the text between them among it,
+/// stands at the I-address it had (the mutants that number the text as
+/// first read, or leave the rows in the answer, answer otherwise).
+#[test]
+fn two_pairs_land_in_one_edit_text_call_answered_with_the_lines_they_changed() {
+    let fixture = Fixture::new("edit-text");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+    let doc = draft_holding(&mut mcp, CLAIMANT_ACCOUNT, CODE);
+    let before = addresses(&mut mcp, &doc);
+    let (is_error, answer, rows) = edit(&mut mcp, &doc, json!([{"old": "main", "new": "start"}, {"old": "right", "new": "other"}]));
+    assert!(!is_error && answer["outcome"] == "edited", "the call lands: {answer}\n{}", mcp.log());
+    assert!(answer["at"].is_u64() && answer.get("lines").is_none() && answer.get("masked").is_none(), "the answer, its rows after it: {answer}");
+    assert_eq!(rows, ["+1\tfn start() {", "+2\t    let total = add(left, other);", " 3\t    println!(\"{total}\");", " 4\t}"], "{answer}");
+    let (first, second) = (&answer["pairs"][0][0], &answer["pairs"][1][0]);
+    let ordinal = |change: &Value| change["ordinal"].as_str().and_then(|ordinal| ordinal.parse::<u64>().ok()).unwrap_or_else(|| panic!("an ordinal: {change}"));
+    let numbered =
+        mcp.call_json("line_numbers", json!({"doc": doc, "positions": [{"subspace": "1", "ordinal": ordinal(first).to_string()}, {"subspace": "1", "ordinal": ordinal(second).to_string()}]}));
+    assert_eq!((&numbered["positions"][0]["line"], &numbered["positions"][1]["line"]), (&json!("1"), &json!("2")), "the board numbers each change on its row's line: {numbered}");
+    assert_eq!(text_of(&mut mcp, &doc), CODE.replace("main", "start").replace("right", "other"));
+    let right = ordinal_of(CODE, "right") - 1;
+    let new = |change: &Value| -> Vec<String> { (0..5).map(|k| address_past(change["addr"].as_str().expect("the change's I-address"), k)).collect() };
+    let expected = [&before[..3], &new(first)[..], &before[7..right], &new(second)[..], &before[right + 5..]].concat();
+    assert_eq!(addresses(&mut mcp, &doc), expected, "every byte outside the two changes at the I-address it had, the text between them among it");
     assert!(mcp.finish().success());
 }
 

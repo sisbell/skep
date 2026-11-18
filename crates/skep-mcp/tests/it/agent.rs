@@ -41,9 +41,9 @@ const ADDED_OPS: [&str; 6] = ["effective_owner", "key_set", "retrieve_i", "conte
 /// The shell's calls and the apparatus, as tools.
 ///
 /// The shell's calls take the publication family's four among them, and the
-/// read of a draft's standing beside them; the apparatus is four, the text
-/// edit among them.
-const ADAPTER_TOOLS: [&str; 16] = [
+/// read of a draft's standing beside them; the apparatus is five, the two
+/// text edits among them.
+const ADAPTER_TOOLS: [&str; 17] = [
     "boards",
     "health",
     "probe",
@@ -60,6 +60,7 @@ const ADAPTER_TOOLS: [&str; 16] = [
     "changes_since",
     "fetch",
     "replace_text",
+    "edit_text",
 ];
 
 /// The adapter's cap on one fetch, as `media.rs` states it.

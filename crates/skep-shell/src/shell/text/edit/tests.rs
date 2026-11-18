@@ -273,7 +273,7 @@ fn a_pair_that_empties_a_stretch_between_two_atoms_leaves_later_ordinals_right()
 /// Every pair's old text must stand once though its new text is the same,
 /// and the call then answers `unchanged` with no image read; one such pair
 /// beside a pair that changes the text is an empty list in the answer's
-/// pairs.
+/// pairs, and the rows show the one line the other changed.
 #[test]
 fn pairs_that_change_nothing_are_found_and_nothing_is_written() {
     let (answer, sent) = edit_of(json!([{"old": "add", "new": "add"}, {"old": "total = ", "new": "total = "}]), Vec::new());
@@ -285,9 +285,38 @@ fn pairs_that_change_nothing_are_found_and_nothing_is_written() {
     assert_eq!(answer.expect("an answer").value, json!({"outcome": "refused", "cause": "not_found", "doc": DOC, "count": 0, "as_of": READ_AT, "pair": 1}));
     let (answer, sent) = edit_of(json!([{"old": "add", "new": "add"}, {"old": "add(", "new": "addition("}]), vec![image(), inserted(1, 41)]);
     assert_eq!(sent[1..], two_frames()[..1]);
-    let whole =
-        json!({"outcome": "edited", "doc": DOC, "pairs": [[], [{"ordinal": (ordinal_of(CODE, "add") + 3).to_string(), "removed": "0", "inserted": "5", "addr": minted(1), "at": 41}]], "at": 41});
+    let shown = [" 1\tfn main() {", "+2\t    let total = addition(left, right);", " 3\t    println!(\"{total}\");", " 4\t}"];
+    let whole = json!({
+        "outcome": "edited", "doc": DOC, "pairs": [[], [{"ordinal": (ordinal_of(CODE, "add") + 3).to_string(), "removed": "0", "inserted": "5", "addr": minted(1), "at": 41}]], "at": 41,
+        "lines": shown,
+    });
     assert_eq!(answer.expect("an answer"), Answer { value: whole, is_error: false });
+}
+
+/// A call that lands answers its rows, masked where a withheld run numbers
+/// them.
+///
+/// The draft holds a run its reader may not read on the line before the
+/// one changed: the change lands as one insert typed against the read, and
+/// the answer carries the lines it changed — the withheld run drawn as a
+/// value that is no text — and `masked` beside them, declared on `edited`
+/// (the mutant that drops the mark answers no `masked`).
+#[test]
+fn a_call_that_lands_answers_its_rows_masked_where_a_withheld_run_numbers_them() {
+    let reads = vec![
+        Ok(json!({"resp": "doc_metadata", "doc": DOC, "published": false})),
+        Ok(json!({"resp": "span_set", "as_of": READ_AT, "set": [{"start": "1.1", "width": "0.11"}]})),
+        Ok(json!({"resp": "delivery", "as_of": READ_AT, "items": [{"content": "a\n"}, {"withheld": {"origin": "1.0.1.0.9", "width": "5"}}, {"content": "b\nc\n"}]})),
+    ];
+    let (answer, sent) = run([reads, vec![image(), inserted(1, 41)]].concat(), json!([{"old": "c", "new": "cc"}]));
+    assert_eq!(sent[4..], [frames::insert_text(DOC, 11, "c", READ_AT, None)], "one insert, after the `c`");
+    let answer = answer.expect("an answer");
+    let expected = json!({
+        "outcome": "edited", "doc": DOC, "pairs": [[{"ordinal": "11", "removed": "0", "inserted": "1", "addr": minted(1), "at": 41}]], "at": 41,
+        "lines": [" 1\ta", " 2\t{…}b", "+3\tcc"], "masked": true,
+    });
+    assert_eq!(answer, Answer { value: expected, is_error: false });
+    crate::shapes::assert_declared("TextEdited", &answer.into_value());
 }
 
 /// Each change's new text is held to one insert's cap, by itself.
@@ -301,7 +330,7 @@ fn each_changes_new_text_is_held_to_one_inserts_cap_by_itself() {
     let grown = |last: usize| format!("{} 12345678 {}", "X".repeat(MAX_NEW_BYTES), "Y".repeat(last));
     let planned = |new: &str| {
         plan(DOC, &mut text_of(json!([{"content": old}])), READ_AT, &[Pair { old, new }])
-            .map(|plan| plan.iter().map(|planned| (planned.change, planned.edit.ordinal, planned.edit.removed, planned.edit.inserted.len())).collect::<Vec<_>>())
+            .map(|plan| plan.changes.iter().map(|planned| (planned.change, planned.edit.ordinal, planned.edit.removed, planned.edit.inserted.len())).collect::<Vec<_>>())
     };
     assert_eq!(planned(&grown(MAX_NEW_BYTES)), Ok(vec![(0, 1, 3, MAX_NEW_BYTES), (1, MAX_NEW_BYTES as u64 + 11, 3, MAX_NEW_BYTES)]));
     let refused = planned(&grown(MAX_NEW_BYTES + 1)).expect_err("the second change is past the cap");
@@ -323,9 +352,12 @@ fn each_changes_new_text_is_held_to_one_inserts_cap_by_itself() {
 /// pair before them and one after land behind them, each ordinal moved by
 /// the changes already made. The first write carries the read's position
 /// and each later one the commit of the write before it, with no read
-/// between; the answer lists each pair's changes (the mutants that make a
-/// pair as one stretch, type every write against the read, or leave an
-/// ordinal where the read found it send other frames).
+/// between; the answer lists each pair's changes, and its rows the lines
+/// they changed — the words replaced and lengthened, the line a removal
+/// inside it left, the renamed line and the line added — with the one line
+/// between them (the mutants that make a pair as one stretch, type every
+/// write against the read, or leave an ordinal where the read found it send
+/// other frames).
 #[test]
 fn three_changes_of_one_pair_and_two_more_pairs_land_each_typed_against_the_commit_before_it() {
     let old = "    let total = add(left, right);\n    println!(\"{total}\");\n";
@@ -354,8 +386,9 @@ fn three_changes_of_one_pair_and_two_more_pairs_land_each_typed_against_the_comm
         [{"ordinal": main.to_string(), "removed": "4", "inserted": "5", "addr": minted(3), "at": 46}],
         [{"ordinal": (end - 1).to_string(), "removed": "0", "inserted": "7", "addr": minted(4), "at": 47}],
     ]);
+    let shown = ["+1\tfn start() {", "+2\t    let sum = add(left, right_side);", "+3\t    println!(\"\");", " 4\t}", "+5\t// end"];
     let answer = answer.expect("an answer");
-    assert_eq!(answer, Answer { value: json!({"outcome": "edited", "doc": DOC, "pairs": pairs, "at": 47}), is_error: false });
+    assert_eq!(answer, Answer { value: json!({"outcome": "edited", "doc": DOC, "pairs": pairs, "at": 47, "lines": shown}), is_error: false });
     let value = answer.into_value();
     crate::shapes::assert_declared("TextEdited", &value);
     for change in value["pairs"].as_array().expect("pairs").iter().flat_map(|pair| pair.as_array().expect("a pair's changes")) {
@@ -503,8 +536,9 @@ fn a_take_back_that_does_not_land_names_what_stands_and_what_may() {
 /// follows and nothing is taken back, and the answer is `partial`, naming
 /// the write and each change that stands, that one among them. On the
 /// call's last write the same is the call landed whole, that change's
-/// commit unnamed (the mutants that go on from the read's position, or take
-/// back with no commit to type against, send a write more).
+/// commit unnamed and the answer's own `at` absent, its rows answered all
+/// the same (the mutants that go on from the read's position, or take back
+/// with no commit to type against, send a write more).
 #[test]
 fn a_write_that_landed_with_no_commit_read_ends_the_call_there() {
     let word = ordinal_of(CODE, "add");
@@ -516,7 +550,8 @@ fn a_write_that_landed_with_no_commit_read_ends_the_call_there() {
     assert_eq!(sent.len(), 4, "the insert and its settling: nothing after it");
     let lost = json!({"outcome": "partial", "doc": DOC, "pair": 0, "change": 0, "stands": [standing(0, 0, word + 3, 0, 5, None, None)], "cause": "answer_lost", "op": "insert", "error": true});
     assert_eq!(declared("TextEditPartial", answer.expect("an answer")), lost);
-    let whole = |second: Value| json!({"outcome": "edited", "doc": DOC, "pairs": [[{"ordinal": (word + 3).to_string(), "removed": "0", "inserted": "5", "addr": minted(1), "at": 41}], [second]]});
+    let shown = [" 1\tfn main() {", "+2\t    let addition(left, right);", " 3\t    println!(\"{total}\");", " 4\t}"];
+    let whole = |second: Value| json!({"outcome": "edited", "doc": DOC, "pairs": [[{"ordinal": (word + 3).to_string(), "removed": "0", "inserted": "5", "addr": minted(1), "at": 41}], [second]], "lines": shown});
     let unnamed = json!({"ordinal": ordinal_of(CODE, "total").to_string(), "removed": "8", "inserted": "0"});
     for last in [vec![Ok(json!({"resp": "ack"}))], vec![held_answer(6, "unreachable"), lines(6, "unreachable", Value::Null), Ok(json!({"kept": true}))]] {
         let (answer, sent) = edit_of(two_writes(), [vec![image(), inserted(1, 41)], last].concat());

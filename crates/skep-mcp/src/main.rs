@@ -24,13 +24,17 @@
 //!   `_` for `.` (`publication_open`, `publication_count`,
 //!   `publication_confirm`, `publication_cancel`) — are tools of those names,
 //!   their arguments the bridge's row minus the session and the board, the
-//!   adapter supplying each where the row requires it; and four are the
+//!   adapter supplying each where the row requires it; and five are the
 //!   adapter's apparatus: `session_info`, `changes_since` (the shell's
 //!   `changes`, a pull), `fetch` (the shell's streamed fetch as an image or
-//!   resource block, the type sniffed off the bytes, the size capped), and
+//!   resource block, the type sniffed off the bytes, the size capped),
 //!   `replace_text` (the shell's `text.replace`, a text edit of a draft
 //!   composed of the reads and the bursts above, which replaces the bytes that
-//!   differ alone and drops each line of its own the shell holds). The adapter
+//!   differ alone and drops each line of its own the shell holds), and
+//!   `edit_text` (the shell's `text.edit`, several such edits in one call, all
+//!   landing or none, whose landed answer is followed by the lines it changed,
+//!   one row a line, as the shell spells each — the door refusing a member of
+//!   a pair the shell would ignore). The adapter
 //!   passes a wire op's arguments through unread, save the one shape the
 //!   shell's `op` row reads as its `/op-at` form, a non-negative integer `at`
 //!   beside an object `frame`, which no wire op takes. Before the board
@@ -54,10 +58,10 @@
 //!   the shell could not get the board's verdict: the board unreachable, a
 //!   halt, the block, the shell's own names — `fetch`'s two answers of the
 //!   adapter's own, a file past its cap and a stream cut short, each a plain
-//!   sentence, and every answer of `replace_text` the shell marks with its
-//!   error member, which the adapter takes off: a write the shell could not get
-//!   to the board, a line of the edit's the shell would not drop, and an edit
-//!   that landed in part. A write refused `unreachable` may have committed: the
+//!   sentence, and every answer of `replace_text` and `edit_text` the shell
+//!   marks with its error member, which the adapter takes off: a write the
+//!   shell could not get to the board, a line of the edit's the shell would
+//!   not drop, and an edit that landed in part. A write refused `unreachable` may have committed: the
 //!   shell faces a lost answer to any write but a burst (whose line it holds,
 //!   `sent`), and the adapter never reissues it. So may a write the board
 //!   refused `poisoned`, whose frames its restart replays from the journal
@@ -65,9 +69,10 @@
 //!   `500 internal_panic` past its commit — each the board's verdict, and so
 //!   data. A call the adapter will not run — a tool outside the catalog, a
 //!   member an adapter tool's row or its `opts` does not take, a wire op's
-//!   arguments of the shell's `/op-at` shape — is no tool result at all: it is
-//!   refused -32602, as malformed `tools/call` params are; a member of the
-//!   wrong form is the shell's `malformed_args`. A request whose line holds a
+//!   arguments of the shell's `/op-at` shape, a member of an `edit_text` pair
+//!   the shell would ignore — is no tool result at all: it is refused -32602,
+//!   as malformed `tools/call` params are; a member of the wrong form is the
+//!   shell's `malformed_args`. A request whose line holds a
 //!   lone surrogate escape — a `\uD800` to `\uDFFF` with no partner, which
 //!   JSON's grammar writes and no UTF-8 string holds — is refused -32602 the
 //!   same, under its id, and never run: the line is read with a stand-in at

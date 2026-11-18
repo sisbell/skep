@@ -893,13 +893,16 @@ impl Backend {
     /// Makes a call of the shell's under the adapter's one session.
     ///
     /// The calls are `op`, `search`, `places`, `held`, `resolve`, `changes`,
-    /// the read of a draft's standing, `publication.standing`, and the
+    /// the read of a draft's standing, `publication.standing`, the
     /// `publication` family's four (`publication.open`, `publication.count`,
-    /// `publication.confirm`, `publication.cancel`):
+    /// `publication.confirm`, `publication.cancel`), and the `text` family's
+    /// two (`text.replace`, `text.edit`):
     /// `args` is the call's own members, the row's object, and the session's
     /// reference is set in it beside them before each attempt. A row
     /// whose session form takes a board too (`search`, `places`) reads at the
     /// session's own where none is given, which is this adapter's one board.
+    /// A text call reissued after its session ended makes its edit afresh: a
+    /// refusal either answers leaves nothing of the edit standing.
     ///
     /// # Errors
     ///

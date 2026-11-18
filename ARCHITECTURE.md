@@ -230,8 +230,9 @@ foundation and on the stores above it.
 - `skep-mcp` — a stdio adapter for agent harnesses over the shell's core
   (`skep-shell`): one signed session for the process's life, every wire
   op but `publish` a tool of its name, the shell's calls — the
-  publication family's four and its text edit of a draft, `replace_text`,
-  among them — and a change pull and a blob fetch beside them. One
+  publication family's four and its two text edits of a draft,
+  `replace_text` and `edit_text`, among them — and a change pull and a
+  blob fetch beside them. One
   binary: of the skep crates it depends on
   `skep-shell` and `skep-client` — the latter for the types the shell's
   surface names, the inert rendering a key's label and every log line
@@ -872,7 +873,9 @@ share them and rewrite the transport alone. A transport reaches it
 through the crate root — `Shell` and what opens it, `Refusal` and its
 `Name`, `Log` and its `CallOutcome`, `Event`, its `EventName` and
 `UnknownEventName`, `Talk`, `CALLS`, the text edit's caps
-`MAX_DRAFT_POSITIONS` and `MAX_NEW_BYTES` — and two public modules,
+`MAX_DRAFT_POSITIONS` and `MAX_NEW_BYTES` and the figures of its rows
+(`ROWS_CONTEXT_LINES`, `ROWS_MAX_RUN`, `ROWS_RUN_HEAD`, `ROWS_RUN_TAIL`,
+`ROWS_MAX_LINE_CHARS`, `ROWS_MAX_BYTES`) — and two public modules,
 `script` and `shapes`; the rest is private. Its modules, in the order
 `src/lib.rs` declares them, each naming only those above it — an item the
 root re-exports counted as the module it is brought from (held by
@@ -969,6 +972,9 @@ root re-exports counted as the module it is brought from (held by
   `skep_client::text`'s minimal changes: the plan made of one read, the
   writes chained by position, and the take-back that sets the draft back
   where a write past the first does not land.
+- `shell/text/edit/rows.rs` the rows of `text.edit`'s landed answer: the
+  pieces the plan splices in step with its text, and the lines drawn from
+  them, `pub(super)` to `edit`, its figures re-exported at the root.
 - `shapes.rs` the declarations' table and `declarations()`, pinned by its
   suite — the board's verdict with its `site`, the publication family's
   panel, inputs, outcomes and event among them.

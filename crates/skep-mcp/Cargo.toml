@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "The MCP adapter: JSON-RPC 2.0 over stdio on the agent side, the shell's core (skep-shell) on the other. One static binary an agent harness runs; every tool is one call of the shell under ONE signed session the adapter opens at startup — the wire ops by name, the shell's own calls, a change pull, a blob fetch, the text edit that keeps identity — and a board's verdict comes back as data."
+description = "The MCP adapter: JSON-RPC 2.0 over stdio on the agent side, the shell's core (skep-shell) on the other. One static binary an agent harness runs; every tool is one call of the shell under ONE signed session the adapter opens at startup — the wire ops by name, the shell's own calls, a change pull, a blob fetch, the text edits that keep identity, one pair or several in one call — and a board's verdict comes back as data."
 readme = "README.md"
 
 [dependencies]
@@ -13,8 +13,8 @@ readme = "README.md"
 # and this adapter — the signed session with its attest, the hold that
 # keeps a burst the board cannot take, the feed consumer behind `search`
 # and `places`, the change feed's page behind `changes_since`, the text
-# edit behind `replace_text` and its caps the catalog states, and the
-# streamed blob fetch. The adapter is a transport over it: stdio JSON-RPC
+# edits behind `replace_text` and `edit_text` with the caps and the rows'
+# figures the catalog states, and the streamed blob fetch. The adapter is a transport over it: stdio JSON-RPC
 # in, `Shell::call` and `Shell::fetch` out.
 skep-shell = { path = "../skep-shell" }
 # The board's canonical origin, which `ShellOptions` takes and the shell

@@ -19,7 +19,9 @@ readme = "README.md"
 # listing) and the state event's ten arms — is what `feed` consumes,
 # `shell`'s `search` row reading the call's bound and options beside it,
 # and the text edit (`shell/text.rs`) the delivery budget it reads a
-# draft's text in parts of (`search::MAX_DELIVERY_ITEMS`);
+# draft's text in parts of (`search::MAX_DELIVERY_ITEMS`) — beside the
+# trim and the minimal changes between two texts it takes from the
+# library's `text` module, which stands in every build;
 # and its `merge` feature on: the merge library — the composition, the
 # one-write landing, the record, the undo and the withdrawal — which the
 # `merge` family's four rows (`shell/merge.rs`) run for the page, and the

@@ -712,7 +712,10 @@ each ceremony:
   spells every frame the crate sends, and `board/answers.rs`, which
   decodes every read answer it reads — its unit suite in `board/tests.rs`,
   and under `cfg(test)` `board/fake.rs`, the fake board the crate's unit
-  suites dial; `derive.rs` the pure derivations over board reads.
+  suites dial; `derive.rs` the pure derivations over board reads;
+  `text.rs` the minimal changes that make one text into another, a
+  function of two texts that dials nothing, its unit suite in
+  `text/tests.rs`.
 - Under `acting`. `sign.rs` the `Signer` seam and the bytes a signer signs;
   `sheet.rs` the key file's one spelling and its refusals, the byline
   `Label`, the `Seed` and the `SeedText`, its unit suite in
@@ -860,8 +863,9 @@ SP-17, SP-18, SP-20, SP-24, SP-28.
 per call of §4b.1 (the `publication` family's four among them), of the
 read of a draft's standing `publication.standing`, of the read of a
 draft's past state `history.past`, of the document index's listing
-`places` (A-255), of the text edit of a draft `text.replace` and of the
-change feed's page `changes`, every event of §4b.2 on one stream — and
+`places` (A-255), of the text edit of a draft `text.replace`, of several
+of them in one call `text.edit` and of the change feed's page `changes`,
+every event of §4b.2 on one stream — and
 the three things `skep-client` does not hold and every shell needs,
 written once so the dev provider (`skep-dev serve`) and the desktop shell
 share them and rewrite the transport alone. A transport reaches it
@@ -929,9 +933,9 @@ root re-exports counted as the module it is brought from (held by
   `set_node_state`; and `Shell::write_door`, the ONE WRITE DOOR every write
   the shell sends meets before any dial — the `op` row's frames, through
   `Shell::signed` every row of `shell/publication.rs`, `shell/merge.rs` and
-  `shell/history.rs` that writes, `shell/text.rs`'s edit before its first
-  read, and every ceremony of `shell/ceremony.rs` that writes to the
-  board.
+  `shell/history.rs` that writes, each of `shell/text.rs`'s two calls
+  before its first read, and every ceremony of `shell/ceremony.rs` that
+  writes to the board.
 - `shell/ceremony.rs` the ten ceremonial rows — `keygen`, `fingerprint` and
   the eight walks over `skep_client::ceremony` — `pub(super)` to `call`.
 - `shell/follow.rs` `Followers`: the bursts each session sent with an `id`
@@ -955,11 +959,16 @@ root re-exports counted as the module it is brought from (held by
   write — `pub(super)` to `call`, their refusals crossing through
   `shell/merge.rs`'s mapping and the restore's write noted in `hold.rs`'s
   holds.
-- `shell/text.rs` the `text` family's row, `text.replace` — a text edit of
-  a draft that replaces the bytes that differ alone, made of the `op`,
-  `held` and `resolve` rows' calls under the session it stands under —
-  `pub(super)` to `call`, and the two caps it keeps, re-exported at the
-  root.
+- `shell/text.rs` the `text` family's two rows, `pub(super)` to `call`,
+  each made of the `op`, `held` and `resolve` rows' calls under the
+  session it stands under: `text.replace`, a text edit of a draft that
+  replaces the bytes that differ alone, with the draft's text as an edit
+  reads it, the writes and the lines an edit settles, and the two caps
+  it keeps, re-exported at the root.
+- `shell/text/edit.rs` `text.edit`, several such edits in one call over
+  `skep_client::text`'s minimal changes: the plan made of one read, the
+  writes chained by position, and the take-back that sets the draft back
+  where a write past the first does not land.
 - `shapes.rs` the declarations' table and `declarations()`, pinned by its
   suite — the board's verdict with its `site`, the publication family's
   panel, inputs, outcomes and event among them.
@@ -971,8 +980,9 @@ Rules that hold across its files:
   `pub(super)` in `shell/ceremony.rs`, `shell/publication.rs`,
   `shell/merge.rs`, `shell/history.rs` and `shell/text.rs` — so a
   transport cannot serve a call the log never saw. A row made of other
-  rows' calls — `close`'s frames, `text.replace`'s reads, writes and
-  drops — makes them within its own call, and the log keeps that one.
+  rows' calls — `close`'s frames, the reads, writes and drops of
+  `text.replace` and `text.edit` — makes them within its own call, and
+  the log keeps that one.
   `Shell::fetch` is the one public row, because it streams, and logs its
   own call.
   `tests/it/tidy.rs` pins `Shell`'s public methods across every
@@ -982,7 +992,9 @@ Rules that hold across its files:
 - **One path for every session write.** Every `/op` the shell sends under
   a session, `/op-at`'s aside, goes through `Holds::send`, and its first
   dial and every resend read the answer through `hold.rs`'s one reader;
-  `classify` alone bounds the reissues.
+  `classify` alone bounds the reissues, and alone says which answers
+  leave a write possibly landed, a faced refusal read back through it
+  (`may_have_landed`).
 - **One composer.** The attest's bodies are `skep-identity`'s builders, the
   daemon's twin, and nothing here spells a row.
 - **One list of names.** Every refusal name the shell spells is a constant

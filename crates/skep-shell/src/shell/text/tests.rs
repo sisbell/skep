@@ -1,9 +1,11 @@
 //! The text edit's unit suite: the find, the trim, the text a delivery is
-//! read into, the edit against a scripted board (`Script`, the edit's
-//! [`Calls`]), and the edit through the shell's rows scripted (`Rowed`, its
-//! [`Rows`]) — a death followed to its re-open, the error member, the halts
-//! left for the row to say. The row itself, its order and its door, runs
-//! against the daemon in `shell/tests/text.rs`.
+//! read into and spliced, the edit against a scripted board (`Script`, the
+//! edit's [`Calls`]), and the edit through the shell's rows scripted
+//! (`Rowed`, its [`Rows`]) — a death followed to its re-open, the error
+//! member, the halts left for the row to say. The scripted boards serve the
+//! child suite of `text.edit` too (`edit/tests.rs`). The rows themselves,
+//! their order and their door, run against the daemon in
+//! `shell/tests/text.rs`.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -14,18 +16,18 @@ use skep_client::halt::Refused;
 use super::*;
 
 /// The draft every scripted edit names.
-const DOC: &str = "1.0.1.0.64";
+pub(super) const DOC: &str = "1.0.1.0.64";
 
 /// The text the scripted drafts hold: each word an edit names stands once.
-const CODE: &str = "fn main() {\n    let total = add(left, right);\n    println!(\"{total}\");\n}\n";
+pub(super) const CODE: &str = "fn main() {\n    let total = add(left, right);\n    println!(\"{total}\");\n}\n";
 
 /// Returns the content ordinal at which `word` begins in `text`.
-fn ordinal_of(text: &str, word: &str) -> u64 {
+pub(super) fn ordinal_of(text: &str, word: &str) -> u64 {
     text.find(word).unwrap_or_else(|| panic!("`{word}` stands in the text")) as u64 + 1
 }
 
 /// Returns the text a delivery's `items` hold.
-fn text_of(items: Value) -> Text {
+pub(super) fn text_of(items: Value) -> Text {
     let mut text = Text::default();
     for item in items.as_array().expect("items") {
         text.push(item).expect("an item the text counts");
@@ -94,7 +96,9 @@ fn every_place_a_text_stands_is_found_whatever_its_bytes_repeat() {
 /// A whole line quoted around one changed word is reduced to that word's
 /// changed bytes, at the word's own ordinal; an edit that only adds or only
 /// takes out removes or inserts nothing; and the same text twice is no edit
-/// (the mutant that trims nothing removes and inserts the whole line).
+/// (the mutant that trims nothing removes and inserts the whole line). The
+/// trim's own counts are held where it lives, in `skep_client::text`'s
+/// suite.
 #[test]
 fn the_trim_leaves_standing_what_the_two_texts_share_at_either_end() {
     let line = "    let total = add(left, right);\n";
@@ -105,10 +109,8 @@ fn the_trim_leaves_standing_what_the_two_texts_share_at_either_end() {
     assert_eq!(Edit::of(at, line, &line.replace("total = ", "")), Edit { ordinal: ordinal_of(CODE, "total"), removed: 8, inserted: "" }, "only taken out");
     assert_eq!(Edit::of(at, line, line), Edit { ordinal: at + line.len() as u64, removed: 0, inserted: "" }, "the same text is no edit");
     assert_eq!(Edit::of(1, "add", "sub"), Edit { ordinal: 1, removed: 3, inserted: "sub" }, "nothing shared");
-    assert_eq!(shared("abcabc", "abc"), (3, 0), "the start is taken first, and the end from what is left");
-    assert_eq!(shared("abc", "abcabc"), (3, 0));
-    assert_eq!(shared("axa", "aa"), (1, 1));
-    assert_eq!(shared("", "abc"), (0, 0));
+    assert_eq!(Edit::of(1, "abcabc", "abc"), Edit { ordinal: 4, removed: 3, inserted: "" }, "the start is taken first, and the end from what is left");
+    assert_eq!(Edit::of(1, "axa", "aa"), Edit { ordinal: 2, removed: 1, inserted: "" });
 }
 
 /// The trim never splits a character between kept bytes and new ones.
@@ -214,6 +216,43 @@ fn a_run_a_part_boundary_cut_is_one_stretch_and_hex_is_text() {
     assert_eq!((decode_hex("0"), decode_hex("0g"), decode_hex("")), (None, None, Some(Vec::new())));
 }
 
+/// A text spliced reads as the draft will once the edit lands.
+///
+/// The bytes at a place give way to others: every byte and every gap past
+/// it moves by the difference, the positions with them, so a text found
+/// before the splice is found where it now stands and a gap is still named
+/// by what it is; a stretch left with no byte is a stretch no longer, the
+/// gaps either side of it side by side; and a splice no stretch holds
+/// changes nothing (the mutants that move no gap, keep an emptied stretch,
+/// or leave the text open past one answer another ordinal, or another
+/// kind).
+#[test]
+fn a_text_spliced_reads_as_the_draft_will_once_the_edit_lands() {
+    let mut text = text_of(json!([{"content": "alpha "}, {"atom": "v"}, {"content": "beta gamma"}, {"withheld": {"origin": "1.0.1.0.9", "width": "5"}}, {"content": "delta"}]));
+    assert_eq!((text.positions(), text.find(b"beta"), text.find(b"delta")), (27, Found::Once(8), Found::Once(23)));
+    text.splice(8, 4, b"be");
+    assert_eq!((text.positions(), text.find(b"be"), text.find(b"gamma"), text.find(b"delta")), (25, Found::Once(8), Found::Once(11), Found::Once(21)));
+    assert_eq!(text.find(b"alpha"), Found::Once(1), "what stands before the place stays");
+    assert_eq!(text.find(b"gammadelta"), Found::Across { ordinal: 16, kind: "withheld".into() }, "the gap moved with the text after it, and is named still");
+    assert_eq!(text.find(b"alpha be"), Found::Across { ordinal: 7, kind: "atom".into() }, "a gap before the place stays");
+    text.splice(11, 5, b"gamma and more");
+    assert_eq!((text.positions(), text.find(b"more"), text.find(b"delta")), (34, Found::Once(21), Found::Once(30)), "grown");
+    assert_eq!(text.find(b"moredelta"), Found::Across { ordinal: 25, kind: "withheld".into() });
+    text.splice(8, 17, b"");
+    assert_eq!((text.positions(), text.find(b"delta"), text.stretches.len()), (17, Found::Once(13), 2), "the stretch between the two gaps is gone");
+    assert_eq!(text.find(b"alpha delta"), Found::Across { ordinal: 7, kind: "atom".into() }, "the two gaps stand side by side, the atom first");
+    assert_eq!(text.gaps.iter().map(|gap| (gap.ordinal, gap.kind.as_str())).collect::<Vec<_>>(), [(7, "atom"), (8, "withheld")]);
+    text.splice(13, 5, b"");
+    assert_eq!((text.positions(), text.find(b"delta"), text.stretches.len()), (12, Found::Nowhere, 1), "the last stretch emptied");
+    text.push(&json!({"content": "tail"})).expect("text");
+    assert_eq!((text.find(b"tail"), text.find(b"alpha tail")), (Found::Once(13), Found::Across { ordinal: 7, kind: "atom".into() }), "text read after it is a stretch of its own, past the gaps");
+    let before = (text.bytes.clone(), text.stretches.clone(), text.gaps.clone(), text.positions());
+    for (found, removed) in [(7, 1), (4, 9), (40, 1)] {
+        text.splice(found, removed, b"x");
+        assert_eq!((text.bytes.clone(), text.stretches.clone(), text.gaps.clone(), text.positions()), before, "{found}: no stretch holds the bytes");
+    }
+}
+
 /// A span set's content extent is read, and anything else is not one.
 #[test]
 fn a_span_sets_content_extent_is_read_and_anything_else_is_not_one() {
@@ -257,14 +296,14 @@ fn an_inserts_bytes_are_found_wherever_the_draft_now_arranges_them() {
 
 /// A board answered from a script: each call's answer in order, each call
 /// kept.
-struct Script {
+pub(super) struct Script {
     answers: RefCell<VecDeque<Result<Value, Refusal>>>,
-    sent: RefCell<Vec<Value>>,
+    pub(super) sent: RefCell<Vec<Value>>,
 }
 
 impl Script {
     /// Returns a board that answers its calls with `answers`, in order.
-    fn of(answers: Vec<Result<Value, Refusal>>) -> Script {
+    pub(super) fn of(answers: Vec<Result<Value, Refusal>>) -> Script {
         Script { answers: RefCell::new(answers.into()), sent: RefCell::new(Vec::new()) }
     }
 
@@ -277,7 +316,7 @@ impl Script {
 
     /// Returns the calls made past the first `skip`, the script's every
     /// answer spent.
-    fn sent_past(&self, skip: usize) -> Vec<Value> {
+    pub(super) fn sent_past(&self, skip: usize) -> Vec<Value> {
         assert!(self.answers.borrow().is_empty(), "every scripted answer was asked for: {:?}", self.answers.borrow());
         self.sent.borrow()[skip..].to_vec()
     }
@@ -298,16 +337,16 @@ impl Calls for Script {
 }
 
 /// The position the scripted draft is read at.
-const READ_AT: u64 = 40;
+pub(super) const READ_AT: u64 = 40;
 
 /// The address the scripted insert mints its first byte at.
-const MINTED: &str = "1.0.1.0.64.0.1.80";
+pub(super) const MINTED: &str = "1.0.1.0.64.0.1.80";
 
 /// The three reads every scripted edit of [`CODE`] opens with, answered.
 ///
 /// The delivery's `as_of` is past the extent's: a commit elsewhere on the
 /// board landed between the two reads.
-fn reads_of(text: &str) -> Vec<Result<Value, Refusal>> {
+pub(super) fn reads_of(text: &str) -> Vec<Result<Value, Refusal>> {
     vec![
         Ok(json!({"resp": "doc_metadata", "doc": DOC, "published": false, "as_of": READ_AT - 1})),
         Ok(json!({"resp": "span_set", "as_of": READ_AT, "set": [{"start": "1.1", "width": format!("0.{}", text.len())}]})),
@@ -316,7 +355,7 @@ fn reads_of(text: &str) -> Vec<Result<Value, Refusal>> {
 }
 
 /// The frames of [`reads_of`]'s three reads.
-fn read_frames(text: &str) -> Vec<Value> {
+pub(super) fn read_frames(text: &str) -> Vec<Value> {
     vec![frames::doc_metadata(DOC), frames::span_set(DOC), frames::retrieve_v(DOC, 1, text.len() as u64)]
 }
 
@@ -337,22 +376,22 @@ fn edit(old: &str, new: &str, after: Vec<Result<Value, Refusal>>) -> (Result<Ans
 }
 
 /// A held answer, as the shell's `op` row gives a burst it holds.
-fn held_answer(held: u64, cause: &str) -> Result<Value, Refusal> {
+pub(super) fn held_answer(held: u64, cause: &str) -> Result<Value, Refusal> {
     Ok(json!({"resp": "held", "held": held, "cause": cause}))
 }
 
 /// The board's verdict on a write typed against an older state.
-fn moved_verdict(op: &str, as_of: u64, current: u64) -> Value {
+pub(super) fn moved_verdict(op: &str, as_of: u64, current: u64) -> Value {
     json!({"resp": "rejected", "op": op, "code": "arrangement_moved", "disposition": "permanent", "site": {"as_of": as_of, "current": current}})
 }
 
 /// The `held` row's answer listing line `held` with `refusal` beside it.
-fn lines(held: u64, cause: &str, refusal: Value) -> Result<Value, Refusal> {
+pub(super) fn lines(held: u64, cause: &str, refusal: Value) -> Result<Value, Refusal> {
     Ok(json!([{"held": held + 7, "doc": "1.0.1.0.65", "cause": "moved", "refusal": moved_verdict("insert", 1, 2)}, {"held": held, "doc": DOC, "cause": cause, "sent": false, "refusal": refusal}]))
 }
 
 /// The two calls that settle a held line: the list, then the drop.
-fn settling(held: u64) -> Vec<Value> {
+pub(super) fn settling(held: u64) -> Vec<Value> {
     vec![json!({"call": "held"}), json!({"call": "drop", "held": held})]
 }
 
@@ -364,7 +403,7 @@ fn image_with(ordinal: u64, width: u64, as_of: u64) -> Result<Value, Refusal> {
 }
 
 /// The whole-content image frame an undo reads.
-fn image_frame() -> Value {
+pub(super) fn image_frame() -> Value {
     frames::image(DOC, 1, u64::MAX)
 }
 
@@ -907,7 +946,7 @@ fn a_draft_past_one_delivery_is_read_in_parts_typed_against_the_first_read() {
 
 /// A board answering an edit's rows from a script: each call kept with the
 /// row and the session it named, the sessions that stand given.
-struct Rowed {
+pub(super) struct Rowed {
     answers: RefCell<VecDeque<Result<Value, Refusal>>>,
     named: RefCell<Vec<(Row, String)>>,
     standing: Vec<&'static str>,
@@ -916,12 +955,12 @@ struct Rowed {
 impl Rowed {
     /// Returns a board answering with `answers`, in order, at which the
     /// sessions `standing` stand.
-    fn of(answers: Vec<Result<Value, Refusal>>, standing: Vec<&'static str>) -> Rowed {
+    pub(super) fn of(answers: Vec<Result<Value, Refusal>>, standing: Vec<&'static str>) -> Rowed {
         Rowed { answers: RefCell::new(answers.into()), named: RefCell::new(Vec::new()), standing }
     }
 
     /// Returns the sessions the calls named, in order, the script spent.
-    fn sessions(&self) -> Vec<String> {
+    pub(super) fn sessions(&self) -> Vec<String> {
         assert!(self.answers.borrow().is_empty(), "every scripted answer was asked for: {:?}", self.answers.borrow());
         self.named.borrow().iter().map(|(_, session)| session.clone()).collect()
     }
@@ -940,7 +979,7 @@ impl Rows for Rowed {
 
 /// The death of `s-1`, the restart arm having re-opened `reopened` where it
 /// names one.
-fn died(reopened: Option<&str>) -> Result<Value, Refusal> {
+pub(super) fn died(reopened: Option<&str>) -> Result<Value, Refusal> {
     let reason = match reopened {
         Some(session) => json!({"arm": "restart", "reopened": true, "session": session}),
         None => json!({"arm": "restart", "reopened": false}),

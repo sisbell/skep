@@ -53,10 +53,12 @@
 //! current by one write, `history.restore`, typed against the page's own
 //! state of the draft (B3-S7) — are the child module `history`'s,
 //! `pub(super)` to the door.
-//! The `text` family's row, `text.replace` — a text edit of a draft that
-//! replaces the bytes that differ alone, so every byte it did not change
-//! keeps its identity, made of the `op`, `held` and `resolve` rows' calls
-//! within the one call the log keeps — is the child module `text`'s,
+//! The `text` family's two rows — `text.replace`, a text edit of a draft
+//! that replaces the bytes that differ alone, so every byte it did not
+//! change keeps its identity, and `text.edit`, several such edits in one
+//! call, each made as its minimal changes and all of them landed or none
+//! (skep #1079), each made of the `op`, `held` and `resolve` rows' calls
+//! within the one call the log keeps — are the child module `text`'s,
 //! `pub(super)` to the door, with the two caps it keeps
 //! ([`MAX_DRAFT_POSITIONS`], [`MAX_NEW_BYTES`]).
 //! The bursts a session sends with an `id`, and
@@ -118,7 +120,10 @@
 //! held on a draft it writes, in any state, refused `held_lines` naming the
 //! draft and the count (`Holds::held_lines`; §3c.4, THE HELD-LINES GATE;
 //! skep #849, #854) — the burst writes not gated, a burst on such a draft
-//! held `behind` the standing lines as before; `resolve(send)` under a bare
+//! held `behind` the standing lines as before, and `text.edit`'s take-back
+//! not gated either: a `set_arrangement` it sends as a frame through `op`,
+//! naming no draft to the door, and only while no line of its own stands
+//! held (skep #1079); `resolve(send)` under a bare
 //! session, refused by its own row (`write_in_bare_session`): it sends no
 //! write itself — the lines it hands back go out by a resend, which sends
 //! under no bare session — so it asks no door, and it stands at another
@@ -430,8 +435,9 @@ impl<'a> Write<'a> {
     ///
     /// It is a ceremony, whose walk's writes are the library's,
     /// `publication.open`, which reads, `node.start` or `node.restart`,
-    /// which starts the node, or `text.replace`, whose writes are bursts,
-    /// each meeting the door again on the `op` row's path.
+    /// which starts the node, or a call of the `text` family, `text.replace`
+    /// or `text.edit`, whose writes are frames sent through `op`, each
+    /// meeting the door again on that row's path.
     pub(super) fn unjudged(call: &'a str) -> Write<'a> {
         Write { named: Named::Call(call), kind: None, drafts: Vec::new() }
     }
@@ -472,7 +478,8 @@ impl<'a> Write<'a> {
 /// publication family, `publication.standing` (skep #864), the read of a
 /// past state before its restore, `history.past` (skep #853), the document
 /// index's listing `places` (A-255), the text edit of a draft,
-/// `text.replace` (skep #1070), or the change feed's page `changes`: one
+/// `text.replace` (skep #1070), several of them in one call, `text.edit`
+/// (skep #1079), or the change feed's page `changes`: one
 /// arm per call, which the compiler holds exhaustive, and the list a
 /// transport admits a call by, [`CALLS`], spelled from `Call::ALL` — so no
 /// call is listed that the dispatch does not answer.
@@ -517,6 +524,7 @@ enum Call {
     HeldShow,
     Resolve,
     TextReplace,
+    TextEdit,
     Changes,
 }
 
@@ -530,9 +538,9 @@ impl Call {
     /// and `history.restore` closing the merge row that draws the restore, the
     /// read before the write; `places` stands beside `search`, `held.show`
     /// after `held`, whose row owes it, the `text` family's `text.replace`
-    /// after `resolve`, the rows it is made of standing before it, and the
-    /// change feed's `changes` last.
-    const ALL: [Call; 40] = [
+    /// and `text.edit` after `resolve`, the rows they are made of standing
+    /// before them, and the change feed's `changes` last.
+    const ALL: [Call; 41] = [
         Call::Boards,
         Call::Session,
         Call::Close,
@@ -572,6 +580,7 @@ impl Call {
         Call::HeldShow,
         Call::Resolve,
         Call::TextReplace,
+        Call::TextEdit,
         Call::Changes,
     ];
 
@@ -617,6 +626,7 @@ impl Call {
             Call::HeldShow => "held.show",
             Call::Resolve => "resolve",
             Call::TextReplace => "text.replace",
+            Call::TextEdit => "text.edit",
             Call::Changes => "changes",
         }
     }
@@ -627,7 +637,7 @@ impl Call {
     }
 }
 
-/// The bridge's forty calls, as it spells them, in its order.
+/// The bridge's forty-one calls, as it spells them, in its order.
 ///
 /// They are §4b.1's thirty-two — the `publication` family's four, the
 /// `merge` family's four, `history.restore` and `held.show` among them —
@@ -636,8 +646,9 @@ impl Call {
 /// `publication.standing` (skep #864), the read of a past state before its
 /// restore, `history.past` (skep #853), the document index's listing,
 /// `places` (A-255), the text edit of a draft, `text.replace` (skep #1070),
-/// and the change feed's page, `changes`: the list a transport admits a
-/// call by, every name of it one [`Shell::call`] answers.
+/// several of them in one call, `text.edit` (skep #1079), and the change
+/// feed's page, `changes`: the list a transport admits a call by, every
+/// name of it one [`Shell::call`] answers.
 pub const CALLS: [&str; Call::ALL.len()] = {
     let mut names = [""; Call::ALL.len()];
     let mut i = 0;
@@ -1411,6 +1422,7 @@ impl Shell {
             Some(Call::HeldShow) => self.held_show(args),
             Some(Call::Resolve) => self.resolve(args),
             Some(Call::TextReplace) => self.text_replace(args),
+            Some(Call::TextEdit) => self.text_edit(args),
             Some(Call::Changes) => self.changes(args),
             None => Err(Refusal::shell(Name::UNKNOWN_CALL, json!({"call": name}))),
         };
@@ -2128,9 +2140,10 @@ impl Shell {
     ///
     /// Every write the shell sends asks it: a write frame through `op` —
     /// `/op-at`'s too; every row of the publication and merge families and
-    /// `history.restore`, through [`Shell::signed`]; `text.replace`, once
-    /// before its first read, each burst it sends asking again as a frame
-    /// through `op` (`Shell::text_replace`); and every ceremony that
+    /// `history.restore`, through [`Shell::signed`]; `text.replace` and
+    /// `text.edit`, once before the call's first read, each write it sends
+    /// asking again as a frame through `op` (`Shell::text_call`); and every
+    /// ceremony that
     /// writes to the board, which runs under no session of this shell's and
     /// asks as its board ([`Writer::Board`]), as the notebook's start and
     /// restart (`node.start`, `node.restart`) ask. `write` is the write as the

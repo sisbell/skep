@@ -29,10 +29,11 @@ use crate::sessions::{self, Facts, Open, SessionEntry, SessionKind, Sessions, Su
 /// `feed::places_without_index`, the index state through `feed::state_json`,
 /// the death through `sessions`, the rest in the shape `shell`'s and its
 /// rows' children's `json!` spell (the publication family's, the merge
-/// family's, the past state's, the restore's and the text edit's answers
+/// family's, the past state's, the restore's and the text family's answers
 /// are held to their declarations against the real board by the shell's own
 /// suite, `shell/tests/publication.rs`, `merge.rs`, `history.rs` and
-/// `text.rs`).
+/// `text.rs`, and `text.edit`'s against a scripted one by its unit suite,
+/// `shell/text/edit/tests.rs`).
 fn samples() -> Vec<(&'static str, Value)> {
     let facts = json!({"principal": 1, "account": "1.0.1", "origin": "http://127.0.0.1:8642"});
     vec![
@@ -178,6 +179,27 @@ fn samples() -> Vec<(&'static str, Value)> {
             json!({"outcome": "held", "doc": "1.0.1.0.64", "held": 8, "cause": "unreachable", "write": "insert", "new_text": {"ordinal": "10", "width": "8"}, "old_text": {"ordinal": "7", "width": "3"}, "error": true}),
         ),
         ("TextSpan", json!({"ordinal": "10", "width": "8", "addr": "1.0.1.0.64.0.1.80", "at": 44})),
+        ("TextEditPair", json!({"old": "add(", "new": "addition("})),
+        ("TextEdited", json!({"outcome": "edited", "doc": "1.0.1.0.64", "pairs": [[{"ordinal": "32", "removed": "0", "inserted": "5", "addr": "1.0.1.0.64.0.1.80", "at": 41}], []], "at": 41})),
+        ("TextEditChange", json!({"ordinal": "32", "removed": "0", "inserted": "5", "addr": "1.0.1.0.64.0.1.80", "at": 41})),
+        ("TextEditUnchanged", json!({"outcome": "unchanged", "doc": "1.0.1.0.64", "as_of": 40})),
+        (
+            "TextEditPartial",
+            json!({
+                "outcome": "partial", "doc": "1.0.1.0.64", "cause": "halted", "refusal": {"kind": "shell", "name": "another_window"}, "op": "insert", "pair": 1, "change": 0,
+                "stands": [{"pair": 0, "change": 0, "ordinal": "32", "removed": "0", "inserted": "5", "addr": "1.0.1.0.64.0.1.80", "at": 41}],
+                "take_back": {"cause": "stopped", "refusal": {"kind": "shell", "name": "stopped", "op": "set_arrangement"}}, "may_stand": true, "error": true,
+            }),
+        ),
+        (
+            "TextEditHeld",
+            json!({
+                "outcome": "held", "doc": "1.0.1.0.64", "held": 8, "cause": "unreachable", "write": "delete", "pair": 1, "change": 0,
+                "stands": [{"pair": 1, "change": 0, "new_text": {"ordinal": "41", "width": "4", "addr": "1.0.1.0.64.0.1.90", "at": 42}, "old_text": {"ordinal": "38", "width": "3"}}], "error": true,
+            }),
+        ),
+        ("TextEditStanding", json!({"pair": 0, "change": 0, "ordinal": "32", "removed": "0", "inserted": "5", "addr": "1.0.1.0.64.0.1.80", "at": 41})),
+        ("TextEditHalf", json!({"pair": 1, "change": 0, "new_text": {"ordinal": "41", "width": "4", "addr": "1.0.1.0.64.0.1.90", "at": 42}, "old_text": {"ordinal": "38", "width": "3"}})),
     ]
 }
 
@@ -210,7 +232,7 @@ fn every_declared_type_round_trips_its_sample_against_the_table() {
 /// Checks that the file names every shape, every call and every event.
 ///
 /// The calls are §4b.1's, the notebook's three acts, the document index's
-/// listing, the text edit and the change feed's page — its rows the
+/// listing, the text family's two and the change feed's page — its rows the
 /// dispatch's calls, in the dispatch's order, each form of a row's argument
 /// object its members in their order, the forms joined as a union and a
 /// form of no member `{}` — with both answers and the nine events; a
@@ -227,8 +249,8 @@ fn the_file_names_every_shape_call_and_event() {
     }
     assert_eq!(
         CALL_ROWS.len(),
-        40,
-        "the forty calls: §4b.1's with the publication family's four, the merge family's four, `history.restore` and `held.show`, the notebook's three acts, the read of a draft's standing, the read of a draft's past state, the document index's listing, the text edit and the change feed's page"
+        41,
+        "the forty-one calls: §4b.1's with the publication family's four, the merge family's four, `history.restore` and `held.show`, the notebook's three acts, the read of a draft's standing, the read of a draft's past state, the document index's listing, the text family's two and the change feed's page"
     );
     assert_eq!(CALL_ROWS.iter().map(|row| row.name).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
     for line in [
@@ -257,6 +279,12 @@ fn the_file_names_every_shape_call_and_event() {
         "  'held.show'(args: { session: string }): Promise<Outcome<{ shown: boolean }>>;\n",
         "  'text.replace'(args: { session: string; doc: string; old: string; new: string }): Promise<Outcome<TextReplaced | TextUnchanged | TextRefused | TextPartial | TextHeld>>;\n",
         "export interface TextRefused {\n  outcome: 'refused';\n  cause: string;\n  doc: string;\n  error?: true;\n  [member: string]: unknown;\n}\n",
+        "  'text.edit'(args: { session: string; doc: string; edits: TextEditPair[] }): Promise<Outcome<TextEdited | TextEditUnchanged | TextRefused | TextEditPartial | TextEditHeld>>;\n",
+        "export interface TextEditPair {\n  old: string;\n  new: string;\n}\n",
+        "export interface TextEdited {\n  outcome: 'edited';\n  doc: string;\n  pairs: TextEditChange[][];\n  at?: number;\n}\n",
+        "  stands: (TextEditStanding | TextEditHalf)[];\n  take_back?: { cause: string; refusal: unknown };\n  may_stand?: true;\n  error: true;\n",
+        "export interface TextEditStanding {\n  pair: number;\n  change: number;\n  ordinal: string;\n  removed: string;\n  inserted: string;\n  addr?: string;\n  at?: number;\n}\n",
+        "export interface TextEditHalf {\n  pair: number;\n  change: number;\n  new_text: TextSpan;\n  old_text: TextSpan;\n}\n",
         "  new_text: TextSpan;\n  old_text: TextSpan;\n",
         "  supersede: string[];\n",
         "  over_cap: boolean;\n",
@@ -311,7 +339,9 @@ fn the_file_names_every_shape_call_and_event() {
     assert!(text.contains("  warning?: string;"), "an optional field renders with `?`");
     assert!(text.contains("  position: number;"), "a required field renders bare");
     let open = SHAPES.iter().filter(|s| s.open).count();
-    assert_eq!(open, 6, "the shell refusal, the death's reason, the index state, the publication's refusal and its event, and the text edit's refusal carry their own members");
+    assert_eq!(open, 6, "the shell refusal, the death's reason, the index state, the publication's refusal and its event, and the text family's refusal carry their own members");
+    let landed = shape("TextEdited").expect("the text family's second call's landing is declared").doc;
+    assert!(landed.contains(&format!("fewer than {} characters that are no whitespace", skep_client::text::MIN_KEPT_BETWEEN)), "the declared threshold is the finder's: {landed}");
     assert_eq!(text.matches("  [member: string]: unknown;\n").count(), open, "an open shape, and it alone, renders its index signature");
     assert!(text.starts_with("// skep-shell — the bridge's declarations"));
 }

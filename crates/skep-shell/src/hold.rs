@@ -1276,6 +1276,32 @@ fn classify(outcome: DialOutcome<'_>, given: &Reissues) -> Decision {
     }
 }
 
+/// Returns whether a faced write may have landed, refused `refusal`.
+///
+/// The write is one the hold never holds: [`Holds::send`] faces every
+/// answer of such a write but its ack as the refusal it is, and this reads
+/// the refusal back through [`classify`]'s table, the one owner of which
+/// answers leave a write possibly landed. It may have where the row its
+/// dial's answer goes to marks `sent` — an answer lost once the request
+/// left, the board's `internal_panic`, a `poisoned` answer — and landed
+/// nothing at every other, a refusal the shell made before any dial among
+/// them.
+///
+/// **Precondition.** A dial error is the write's own dial's: a write whose
+/// attest the shell composes may be refused by a read of the composer's,
+/// which left no write.
+pub(crate) fn may_have_landed(refusal: &Refusal) -> bool {
+    let unreissued = Reissues::default();
+    let decision = match refusal {
+        Refusal::Unreachable(e) => classify(DialOutcome::Dial(e), &unreissued),
+        // The code a dial reads: a `rejected` document's key, a non-200's
+        // error (`Holds::dial`).
+        Refusal::Board(r) => classify(DialOutcome::Rejected { code: if r.status == 200 { refusal.name() } else { &r.code }, disposition: r.body["disposition"].as_str().unwrap_or("") }, &unreissued),
+        Refusal::Halt { .. } | Refusal::Blocked(_) | Refusal::Shell { .. } => return false,
+    };
+    matches!(decision, Decision::Hold { sent: true, .. } | Decision::Unanswered { sent: true })
+}
+
 /// What an `/op` under a session answers the page (§4b.1's `op` row; §3c.4).
 #[derive(Debug)]
 pub enum OpAnswer {

@@ -70,6 +70,14 @@
 //!   `derive::records`, the one
 //!   admitted read of an account's credential records (AUTH-5.68,
 //!   AUTH-2.113).
+//! * [`text`] — the minimal changes that make one text into another,
+//!   `minimal_changes`: the two matched as `difflib` matches them, by lines
+//!   and then by the words of the lines that changed, a stretch too small
+//!   to keep between two changes written again with them, and each change
+//!   cut to what differs by `shared`, the trim. A function of two texts,
+//!   which reads no board: an embedder that edits a draft's text writes
+//!   the changes alone, so what stands between two of them keeps its
+//!   identity (skep #1079).
 //!
 //! Behind the default-on `acting` feature — everything that signs or holds a
 //! key:
@@ -200,6 +208,7 @@ pub mod derive;
 pub mod dial;
 pub mod halt;
 pub mod origin;
+pub mod text;
 
 mod hex;
 

@@ -15,12 +15,20 @@
 //! its own the shell holds. The call log holds the one `text.replace`
 //! entry; the board's dials are logged as every dial is.
 //!
-//! **The order** ([`Shell::text_replace`]). The members first, each refused
-//! in another form before the session is looked up, as every row reads
-//! them ([`Asked::read`]); then the session; then the shell's one write
-//! door, asked once for the edit before its first read (SP-31) — a bare
-//! session, another window — each of its bursts meeting the door again on
-//! the `op` row's path; then the reads; then the writes.
+//! The family's second call, `text.edit` — several such edits in one call,
+//! each made as its minimal changes and all of them landed or none (skep
+//! #1079) — is the child module `edit`'s, made of this module's pieces: its
+//! rows and the session they stand under, the text and its find, the
+//! writes, the lines an edit settles, the undo by identity and the answers.
+//! Both rows keep one order to the first read ([`Shell::text_call`]).
+//!
+//! **The order** ([`Shell::text_replace`], [`Shell::text_call`]). The
+//! members first, each refused in another form before the session is looked
+//! up, as every row reads them ([`Asked::read`]); then the session; then
+//! the shell's one write door, asked once for the edit before its first
+//! read (SP-31) — a bare session, another window — each of its bursts
+//! meeting the door again on the `op` row's path; then the reads; then the
+//! writes.
 //!
 //! **The session** ([`Under`]). Every call names the session the edit
 //! stands under. A call the shell answers `session_died`, its reason naming
@@ -51,11 +59,11 @@
 //! gaps would, the edit is refused `crosses_atom`, naming the gap: an atom
 //! is no text.
 //!
-//! **The trim** ([`shared`]). The longest start and the longest end the old
-//! and the new text share are left where they stand, the start cut back to
-//! a character boundary and the end forward to one, so no character is
-//! split between kept bytes and new ones; what is left is the edit
-//! ([`Edit`]): an ordinal, a width removed, the bytes inserted.
+//! **The trim** ([`shared`], `skep-client`'s). The longest start and the
+//! longest end the old and the new text share are left where they stand,
+//! the start cut back to a character boundary and the end forward to one,
+//! so no character is split between kept bytes and new ones; what is left
+//! is the edit ([`Edit`]): an ordinal, a width removed, the bytes inserted.
 //!
 //! **The write.** An edit that only inserts or only removes is ONE commit,
 //! typed against the first read's position (`as_of`): it lands whole or the
@@ -113,10 +121,13 @@ use serde_json::{json, Map, Value};
 use skep_client::address::is_address_text;
 use skep_client::board::frames;
 use skep_client::search::MAX_DELIVERY_ITEMS;
+use skep_client::text::shared;
 
 use super::{Shell, Write, Writer};
 use crate::refusal::{Name, Refusal};
 use crate::wire::{decode_hex, MAX_INSERT_VALUES};
+
+mod edit;
 
 /// The most content positions one read of a draft's text asks.
 ///
@@ -183,7 +194,7 @@ trait Calls {
 
 /// A row of the shell's an edit makes its calls through.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Row {
+pub(super) enum Row {
     /// `op(session, frame)`.
     Op,
     /// `held(session)`.
@@ -195,8 +206,9 @@ enum Row {
 /// The rows an edit's calls go to, and the sessions they may name.
 ///
 /// The shell answers them itself; the unit suite answers them from a
-/// script.
-trait Rows {
+/// script, and the shell's own suite through the shell with one write
+/// meddled with (`edit_through`).
+pub(super) trait Rows {
     /// Answers `row` for `args`, `session` among them, as the row does.
     ///
     /// # Errors
@@ -375,9 +387,10 @@ struct Gap {
 /// The text is the bytes of every per-byte value in arrangement order; the
 /// stretches say which runs of them are contiguous and at which ordinals,
 /// and the gaps what stands between two stretches. Its invariant, kept by
-/// [`Text::push`], the one way it grows: the stretches tile `bytes` in
-/// order, none empty, and no two are adjacent in position — a part boundary
-/// that split one run leaves one stretch.
+/// [`Text::push`], the one way it grows, and by [`Text::splice`], the one
+/// way it changes: the stretches tile `bytes` in order, none empty, and no
+/// two are adjacent in position — a part boundary that split one run leaves
+/// one stretch.
 #[derive(Debug, Default)]
 struct Text {
     /// The bytes of every per-byte value, in arrangement order.
@@ -508,6 +521,37 @@ impl Text {
             (many, _, _) => Found::Many(many),
         }
     }
+
+    /// Replaces the `removed` bytes from the ordinal `found` with `new`.
+    ///
+    /// The text then reads as the draft will once an edit made there lands:
+    /// every byte and every gap past the place moves by the difference, and
+    /// a stretch the edit leaves no byte of is a stretch no longer.
+    ///
+    /// **Precondition.** The `removed` bytes stand in one stretch from
+    /// `found`, as a [`Found::Once`] of them says; where no stretch holds
+    /// them the text is left as it is.
+    fn splice(&mut self, found: u64, removed: usize, new: &[u8]) {
+        let holds = |stretch: &Stretch| stretch.ordinal <= found && (found - stretch.ordinal).saturating_add(removed as u64) <= stretch.len as u64;
+        let Some(k) = self.stretches.iter().position(holds) else { return };
+        let at = self.stretches[k].at + (found - self.stretches[k].ordinal) as usize;
+        self.bytes.splice(at..at + removed, new.iter().copied());
+        self.stretches[k].len = self.stretches[k].len - removed + new.len();
+        let moved = |n: u64| n - removed as u64 + new.len() as u64;
+        for stretch in &mut self.stretches[k + 1..] {
+            stretch.at = stretch.at - removed + new.len();
+            stretch.ordinal = moved(stretch.ordinal);
+        }
+        for gap in self.gaps.iter_mut().filter(|gap| gap.ordinal > found) {
+            gap.ordinal = moved(gap.ordinal);
+        }
+        self.positions = moved(self.positions);
+        if self.stretches[k].len == 0 {
+            self.stretches.remove(k);
+            // A text that ended in the stretch ends in what stood before it.
+            self.open &= k < self.stretches.len();
+        }
+    }
 }
 
 /// Calls `found` with every place `needle` stands in `hay`, ascending.
@@ -544,29 +588,6 @@ fn each_occurrence(hay: &[u8], needle: &[u8], mut found: impl FnMut(usize)) {
             k = fail[k - 1];
         }
     }
-}
-
-/// Returns how many bytes `old` and `new` share at their start and their end.
-///
-/// The start is the longest they share cut back to a character boundary,
-/// and the end the longest the rest of each shares, cut forward to one: a
-/// character the two texts spell differently in its last byte, or its
-/// first, is replaced whole, never split between kept bytes and new ones.
-/// The two never overlap, so `lead + tail` is at most the shorter text's
-/// length, and each is a character boundary of both texts: the bytes before
-/// `lead` are the same valid text in each, and so are the bytes of the
-/// tail.
-fn shared(old: &str, new: &str) -> (usize, usize) {
-    let (old_bytes, new_bytes) = (old.as_bytes(), new.as_bytes());
-    let mut lead = old_bytes.iter().zip(new_bytes).take_while(|(a, b)| a == b).count();
-    while !old.is_char_boundary(lead) {
-        lead -= 1;
-    }
-    let mut tail = old_bytes[lead..].iter().rev().zip(new_bytes[lead..].iter().rev()).take_while(|(a, b)| a == b).count();
-    while !old.is_char_boundary(old.len() - tail) {
-        tail -= 1;
-    }
-    (lead, tail)
 }
 
 /// One edit, placed: where its change begins, what it removes and inserts.
@@ -926,6 +947,26 @@ fn read(calls: &impl Calls, doc: &str) -> Result<Result<Read, Answer>, Refusal> 
     Ok(Ok(Read { text, as_of }))
 }
 
+/// Reads the draft `doc`'s text for an edit of it.
+///
+/// The document is asked first whether it is published, and a published
+/// one is refused before any of its text is read ([`read`]).
+///
+/// # Errors
+///
+/// The inner error is the edit's own answer, nothing written: `published`,
+/// `unread` naming `doc_metadata` for an answer that says neither, and
+/// [`read`]'s. The outer one is the board's or the shell's refusal of a
+/// read.
+fn read_draft(calls: &impl Calls, doc: &str) -> Result<Result<Read, Answer>, Refusal> {
+    let metadata = calls.op(frames::doc_metadata(doc))?;
+    match metadata["published"].as_bool() {
+        Some(false) => read(calls, doc),
+        Some(true) => Ok(Err(refused(doc, "published", json!({"published": metadata["doc"]})))),
+        None => Ok(Err(unread(doc, "doc_metadata"))),
+    }
+}
+
 /// Makes an edit of one write: an insert alone, or a removal alone.
 ///
 /// # Errors
@@ -1025,12 +1066,11 @@ impl<'a> Asked<'a> {
 
 /// Makes the edit `asked` through `calls`.
 ///
-/// In order: the document is asked whether it is published, and a published
-/// one is refused before any of its text is read; the draft's text is read
-/// ([`read`]); `old` is found in it ([`Text::find`]); the edit is trimmed
-/// ([`Edit::of`]); and it is written, one commit or two (the module doc's
-/// *The write*). Nothing is written before every refusal a read alone
-/// decides (SP-8).
+/// In order: the draft's text is read, a published document refused before
+/// any of its text is ([`read_draft`]); `old` is found in it
+/// ([`Text::find`]); the edit is trimmed ([`Edit::of`]); and it is written,
+/// one commit or two (the module doc's *The write*). Nothing is written
+/// before every refusal a read alone decides (SP-8).
 ///
 /// # Errors
 ///
@@ -1039,13 +1079,7 @@ impl<'a> Asked<'a> {
 /// outcome is an [`Answer`].
 fn replace(calls: &impl Calls, asked: Asked<'_>) -> Result<Answer, Refusal> {
     let Asked { doc, old, new } = asked;
-    let metadata = calls.op(frames::doc_metadata(doc))?;
-    match metadata["published"].as_bool() {
-        Some(false) => {}
-        Some(true) => return Ok(refused(doc, "published", json!({"published": metadata["doc"]}))),
-        None => return Ok(unread(doc, "doc_metadata")),
-    }
-    let Read { text, as_of } = match read(calls, doc)? {
+    let Read { text, as_of } = match read_draft(calls, doc)? {
         Ok(read) => read,
         Err(answer) => return Ok(answer),
     };
@@ -1070,19 +1104,12 @@ impl Shell {
     /// Answers `text.replace(session, {doc, old, new})`: one text edit of a
     /// draft.
     ///
-    /// The members are read ([`Asked::read`]), then the session, then the
-    /// write door is asked once for the edit, before its first read, its
-    /// refusal naming the call (SP-31; [`Write::unjudged`]: the edit's
-    /// writes are bursts, which no standing hold refuses at the door); the
-    /// edit is then made through the shell's own rows under the session
-    /// ([`Under`]), and answered as the row answers it
-    /// ([`Answer::into_value`]). A halt a call of the edit met whose face
-    /// names a file, and which the edit is not answered with, is said on
-    /// `Talk` with the call's name, as [`Shell::call`] says the one a call
-    /// is answered with (§4b.3; SP-15). The edit settles its own held lines
-    /// in the principal's queue, which every caller of the principal's at
-    /// the board shares: a transport that serves calls at once may answer
-    /// `replaced` for a line another caller dropped ([`settle`]).
+    /// The members are read ([`Asked::read`]), and the edit is made as a
+    /// text call makes one ([`Shell::text_call`]). It settles its own held
+    /// lines in the principal's queue, which every caller of the
+    /// principal's at the board shares: a transport that serves calls at
+    /// once may answer `replaced` for a line another caller dropped
+    /// ([`settle`]).
     ///
     /// # Errors
     ///
@@ -1098,15 +1125,83 @@ impl Shell {
     /// 5. the `op` row's refusal of a write that left nothing standing.
     pub(super) fn text_replace(&self, args: &Value) -> Result<Value, Refusal> {
         let asked = Asked::read(args)?;
+        self.text_call("text.replace", args, |calls| replace(calls, asked))
+    }
+
+    /// Answers `text.edit(session, {doc, edits})`: several edits of a draft.
+    ///
+    /// They land all of them or none (skep #1079). The members are read
+    /// (`edit::Asked::read`), and the edits are made as
+    /// a text call makes one ([`Shell::text_call`]), by the child module
+    /// `edit`: every pair checked against one read of the draft before any
+    /// write, each made as its minimal changes, and a write that does not
+    /// land past the first answered by the draft set back as it stood. The
+    /// call settles its own held lines as `text.replace` does ([`settle`]).
+    ///
+    /// # Errors
+    ///
+    /// In this order, the first that holds answering:
+    ///
+    /// 1. `malformed_args` naming `doc`, then `edits`, then the first pair
+    ///    not of its form, by its index (`edit::Asked::read`);
+    /// 2. `malformed_args` naming `session`, then `session_died` or
+    ///    `session_ended` ([`Shell::session`]);
+    /// 3. the write door's, naming the call: `write_in_bare_session`, then
+    ///    `another_window` (`Shell::write_door`), nothing read or sent;
+    /// 4. the board's verdict on a read, or the shell's refusal of it — a
+    ///    death the call could not follow to a re-open among them;
+    /// 5. the `op` row's refusal of a write that left nothing standing: the
+    ///    first write's, or a later one's where the draft was set back.
+    pub(super) fn text_edit(&self, args: &Value) -> Result<Value, Refusal> {
+        let asked = edit::Asked::read(args)?;
+        self.text_call("text.edit", args, |calls| edit::edit(calls, &asked))
+    }
+
+    /// Makes a text call's edit under the session `args` names.
+    ///
+    /// `call` is the call as the bridge spells it, its members read
+    /// already, and `make` its edit. The session is looked up, then the
+    /// write door is asked once for the edit, before its first read, its
+    /// refusal naming the call (SP-31; [`Write::unjudged`]: the edit's
+    /// bursts are held by no standing hold's refusal at the door, and each
+    /// write it sends meets the door again on the `op` row's path); the
+    /// edit is then made through the shell's own rows under the session
+    /// ([`Under`]), and answered as the row answers it
+    /// ([`Answer::into_value`]). A halt a call of the edit met whose face
+    /// names a file, and which the edit is not answered with, is said on
+    /// `Talk` with the call's name, as [`Shell::call`] says the one a call
+    /// is answered with (§4b.3; SP-15).
+    ///
+    /// # Errors
+    ///
+    /// [`Shell::session`]'s refusals, then the write door's, then the
+    /// edit's own.
+    fn text_call(&self, call: &'static str, args: &Value, make: impl FnOnce(&Under<'_, Shell>) -> Result<Answer, Refusal>) -> Result<Value, Refusal> {
         let session = self.session(&args["session"])?;
-        self.write_door(Writer::Session(&session), &Write::unjudged("text.replace"))?;
+        self.write_door(Writer::Session(&session), &Write::unjudged(call))?;
         let under = Under::new(self, &session.reference);
-        let answered = replace(&under, asked);
+        let answered = make(&under);
         for halt in under.unsaid(&answered) {
-            self.say(format!("text.replace: {halt}"));
+            self.say(format!("{call}: {halt}"));
         }
         answered.map(Answer::into_value)
     }
+}
+
+/// Makes `text.edit`'s edits of `args` through `rows`, under `session`.
+///
+/// It is the call as [`Shell::text_edit`] makes it past the session and the
+/// door, through rows a suite hands it: the shell's own with one write of
+/// the call's refused, or another writer's change landed ahead of it, where
+/// a real board gives no such moment to order.
+///
+/// # Errors
+///
+/// The members' refusal, and the edit's own.
+#[cfg(test)]
+pub(super) fn edit_through(rows: &impl Rows, session: &str, args: &Value) -> Result<Value, Refusal> {
+    let asked = edit::Asked::read(args)?;
+    edit::edit(&Under::new(rows, session), &asked).map(Answer::into_value)
 }
 
 #[cfg(test)]

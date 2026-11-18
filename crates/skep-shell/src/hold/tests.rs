@@ -6,7 +6,9 @@
 //! request the board never answered to its own, apart from an answer it gave
 //! that this client cannot read, and a `/health` refused before any
 //! connection no verdict on the board (skep #863) — the table the one owner of
-//! every reissue's bound; the failed send, which starts and runs a line's
+//! every reissue's bound, and of which answers leave a write possibly
+//! landed, a faced refusal read back through it (skep #1079); the failed
+//! send, which starts and runs a line's
 //! clock (`HAND_OVER_DEADLINE`), is every answer but an ack, the death signal,
 //! a request the board gave no answer to and a dial that never left, each
 //! with its token — a second `write_busy` among them, held as a connection
@@ -188,6 +190,50 @@ fn every_outcome_classifies_to_exactly_its_row() {
     assert_eq!(rej("arrangement_moved", "permanent"), Decision::Moved);
     // Any other retry-class rejection on a burst → faced, not held.
     assert_eq!(rej("history_busy", "retry"), Decision::Neither);
+}
+
+/// Checks that a faced refusal says whether its write may have landed.
+///
+/// A write the hold never holds is answered with its refusal alone, and the
+/// reader takes it back through the table: it may have landed at the rows
+/// that mark `sent` — no answer once the request left, an answer this
+/// client cannot read, the board's `internal_panic`, a `poisoned` answer —
+/// and landed nothing at every other, a connection never made, a reissue's
+/// own answer, a refused run, a moved draft and a refusal the shell made
+/// before any dial among them (the mutants that read every refusal as
+/// landed, or none, or a `rejected` document by its code where the table
+/// reads its key, answer otherwise).
+#[test]
+fn a_faced_refusal_says_whether_its_write_may_have_landed() {
+    let rejected = |code: &str, detail: Option<&str>, disposition: &str| {
+        let mut body = json!({"resp": "rejected", "code": code, "disposition": disposition, "op": "set_arrangement"});
+        if let Some(detail) = detail {
+            body["detail"] = json!(detail);
+        }
+        let rejection = Rejection::of(&body).expect("a rejected document");
+        Refusal::from(rejection.refused(&body))
+    };
+    for e in [DialError::Timeout("x".into()), DialError::Io("x".into()), DialError::Truncated { declared: 9, got: 1 }, DialError::Response("x".into()), DialError::TooLarge { cap: 1 }] {
+        assert!(may_have_landed(&Refusal::Unreachable(e.clone())), "{e}");
+    }
+    for e in [DialError::Connect("x".into()), DialError::Resolve("x".into()), DialError::Tls("x".into()), DialError::NotHeld("https".into()), DialError::Request("x".into())] {
+        assert!(!may_have_landed(&Refusal::Unreachable(e.clone())), "{e}");
+    }
+    assert!(may_have_landed(&rejected("poisoned", None, "halt")));
+    assert!(may_have_landed(&Refusal::board(500, json!({"error": "internal_panic"}))));
+    let landed_nothing = [("write_busy", "retry"), ("durability", "retry"), ("arrangement_moved", "permanent"), ("withheld", "permanent"), ("not_registered", "reorder"), ("scan_busy", "retry")];
+    for (code, disposition) in landed_nothing {
+        assert!(!may_have_landed(&rejected(code, None, disposition)), "{code}");
+    }
+    assert!(!may_have_landed(&Refusal::board(503, json!({"error": "write_busy"}))));
+    // The table reads a `rejected` document by its key, a non-200 by its
+    // error: a detail that spells a row's token is one only in the first.
+    assert!(may_have_landed(&rejected("credential_refused", Some("poisoned"), "halt")));
+    assert!(!may_have_landed(&Refusal::board(403, json!({"error": "credential_refused", "detail": "poisoned"}))));
+    for name in [Name::STOPPED, Name::POISONED, Name::HALTED, Name::ANOTHER_WINDOW, Name::SESSION_DIED] {
+        assert!(!may_have_landed(&Refusal::shell(name, json!({"op": "set_arrangement"}))), "{name}: refused before any dial");
+    }
+    assert!(!may_have_landed(&Refusal::halt(skep_client::halt::Face { state: "s".into(), cause: "c".into(), act: "a".into(), path: None })));
 }
 
 /// THE FAILED SEND (§3c.4): the one rule a line's clock starts and runs by.

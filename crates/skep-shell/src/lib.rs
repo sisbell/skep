@@ -93,7 +93,8 @@
 //! * `hold` — the hold (`client.md` §3c.4, §3c.5): the one path of every
 //!   `/op` the `op` row sends under a session — attested, dialed, each
 //!   answer read through the classification table, the one owner of every
-//!   reissue's bound, and each ack noted for the base — and among it a
+//!   reissue's bound and of which answers leave a write possibly landed,
+//!   and each ack noted for the base — and among it a
 //!   burst's door, admitted where some send of it the board can take and
 //!   held where the board cannot take it, and the ten non-burst writes a
 //!   standing hold refuses at once with its cause; the per-(board,
@@ -155,7 +156,9 @@
 //!   mapped with nothing written, `history.past`, and made current by one write
 //!   typed against the page's own state of it, `history.restore`, in its child
 //!   `history`, and the text edit of a draft that keeps every unchanged
-//!   byte's identity, `text.replace`, made of the `op`, `held` and `resolve`
+//!   byte's identity, `text.replace`, and several such edits in one call,
+//!   each made as its minimal changes and all of them landed or none,
+//!   `text.edit` (skep #1079), each made of the `op`, `held` and `resolve`
 //!   rows' calls, in its child `text` — each row taking and answering values
 //!   shaped exactly as the row's columns — an argument of another form
 //!   refused, never read as absent;

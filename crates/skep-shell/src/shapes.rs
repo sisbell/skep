@@ -7,7 +7,7 @@
 //! `changes` entry's too), the index state's ten arms, the publication
 //! family's panel, inputs and outcomes, the merge family's report and
 //! outcomes, the past state's and the restore's answers with the merge
-//! marker each carries, and the text edit's answers — from the table below,
+//! marker each carries, and the text family's answers — from the table below,
 //! which is written by hand beside the code that builds each value
 //! (`shell`, `shell::publication`, `shell::merge`, `shell::history`,
 //! `shell::text`, `feed`, `sessions`, `refusal`, `person`, `hold`)
@@ -547,7 +547,7 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "TextRefused",
         open: true,
-        doc: "`text.replace` — NOTHING of the edit stands and no line of it is held: `cause` the edit's own — `not_found` and `not_unique` with `count` and the `as_of` the draft was read at, `crosses_atom` with the `ordinal` and the `kind` of the value that is no text the match would take in, `published` with the document, `too_large` with `what` (`new` and its `bytes`, or `draft` and its `positions`) and the `cap`, `unknown_item` with the `kind` whose positions the shell cannot count, `arrangement_moved` with the `as_of` where the draft changed between the parts of its read — or the board's verdict on a write, its `code` the cause and the verdict under `refusal`; and, `error` beside them, an answer that is no verdict: a write the shell could not get to the board, its hold's cause the cause (`unreachable`, `stopped`, `halted`, `poisoned`, `durability`, `head_unreadable`, `session_died`, or `behind` — a line of an earlier burst of the principal's held at the board), or a read the board answered in a form this shell does not read (`unread`, with its `op`)",
+        doc: "`text.replace` and `text.edit` — NOTHING of the edit stands and no line of it is held: `cause` the edit's own — `not_found` and `not_unique` with `count` and the `as_of` the draft was read at, `crosses_atom` with the `ordinal` and the `kind` of the value that is no text the match would take in, `published` with the document, `too_large` with `what` (`new` and its `bytes`, or `draft` and its `positions`, or `runs`, a draft `text.edit` could not set back in one write, with how many `runs` it is in where the board answered its image) and the `cap`, `unknown_item` with the `kind` whose positions the shell cannot count, `arrangement_moved` with the `as_of` where the draft changed between the parts of its read — or the board's verdict on a write, its `code` the cause and the verdict under `refusal`; and, `error` beside them, an answer that is no verdict: a write the shell could not get to the board, its hold's cause the cause (`unreachable`, `stopped`, `halted`, `poisoned`, `durability`, `head_unreadable`, `session_died`, or `behind` — a line of an earlier burst of the principal's held at the board), or a read the board answered in a form this shell does not read (`unread`, with its `op`); from `text.edit`, `pair` beside them, the index in `edits` of the pair refused — its `old` sought in the text as the pairs before it leave it, an `ordinal` a place in that text — and `change`, the index among that pair's changes of the one whose new text is `too_large` or whose write did not land",
         fields: &[req("outcome", "'refused'"), req("cause", "string"), req("doc", "string"), opt("error", "true")],
     },
     Shape {
@@ -567,6 +567,76 @@ const SHAPES: &[Shape] = &[
         open: false,
         doc: "a stretch of a draft's text a two-write edit names: `ordinal` its first byte's content position and `width` its bytes, decimal strings; `addr` and `at` the new text's first I-address and the insert's commit, where the insert's ack named them",
         fields: &[req("ordinal", "string"), req("width", "string"), opt("addr", "string"), opt("at", "number")],
+    },
+    Shape {
+        name: "TextEditPair",
+        open: false,
+        doc: "one pair of `text.edit`'s `edits`: `old` the text to replace, not empty, which must stand exactly once in the draft's text as the pairs before it leave it, and `new` the text to stand in its place, empty where `old` is only removed",
+        fields: &[req("old", "string"), req("new", "string")],
+    },
+    Shape {
+        name: "TextEdited",
+        open: false,
+        doc: "`text.edit(session, {doc, edits})` — several text edits of a draft in one call, landed, all of them (skep #1079): every pair checked against one read of the draft before any write, then each made as its minimal changes — its `old` and `new` matched by lines and then by the words of the lines that changed, a stretch between two changes holding fewer than 8 characters that are no whitespace written again with them, each change cut to what differs — so the text an `old` spans between two changes keeps its identity; `pairs` the changes of each pair of `edits`, in its order, none for a pair whose `old` and `new` are the same text; `at` the commit the call was whole at, which the page's next burst on `doc` is typed against, absent where the last write's answer named none; the call's four other answers are `TextEditUnchanged`, `TextRefused`, `TextEditPartial` and `TextEditHeld`, each keyed by `outcome`",
+        fields: &[req("outcome", "'edited'"), req("doc", "string"), req("pairs", "TextEditChange[][]"), opt("at", "number")],
+    },
+    Shape {
+        name: "TextEditChange",
+        open: false,
+        doc: "one change `text.edit` made, as `text.replace` answers its one edit: `ordinal` the content position of its first byte in the draft as the changes before it left it, `removed` and `inserted` the bytes taken out and put in there, each a decimal string; `addr` the first I-address of its new bytes and `at` the commit it was whole at, each absent where no answer named it — no byte inserted, or a write found landed with its own answer lost",
+        fields: &[req("ordinal", "string"), req("removed", "string"), req("inserted", "string"), opt("addr", "string"), opt("at", "number")],
+    },
+    Shape {
+        name: "TextEditUnchanged",
+        open: false,
+        doc: "`text.edit` — every pair's `old` stands exactly once and each `new` is the same text, in the draft as read at `as_of`: nothing written",
+        fields: &[req("outcome", "'unchanged'"), req("doc", "string"), req("as_of", "number")],
+    },
+    Shape {
+        name: "TextEditPartial",
+        open: false,
+        doc: "`text.edit` — an error: the call stopped at the change `change` of the pair `pair` after a write of it landed, and the draft was not set back as it stood, no line of the call's held — `stands` each change that stands, in the order written; `cause` what stopped the call, with the `refusal` beside it where there is one — the board's `arrangement_moved` where another writer's change landed between two of the call's writes, over which nothing is taken back — or with `op`, the write (`insert` or `delete`) that landed with no commit the shell read (`unread`, or `answer_lost`), after which nothing is written and nothing taken back; `take_back` present where the one `set_arrangement` that sets the draft back was sent and did not land, its `cause` and `refusal` the refusal's name and value — it is never sent again — and `may_stand` beside it where its answer was lost, so the take-back may have landed and each change of `stands` may stand or not",
+        fields: &[
+            req("outcome", "'partial'"),
+            req("doc", "string"),
+            req("cause", "string"),
+            opt("refusal", "unknown"),
+            opt("op", "string"),
+            req("pair", "number"),
+            req("change", "number"),
+            req("stands", "(TextEditStanding | TextEditHalf)[]"),
+            opt("take_back", "{ cause: string; refusal: unknown }"),
+            opt("may_stand", "true"),
+            req("error", "true"),
+        ],
+    },
+    Shape {
+        name: "TextEditHeld",
+        open: false,
+        doc: "`text.edit` — an error: the shell could not tell whether a write of the call's landed, so its line stays held and the shell refused its drop; nothing is written after it and nothing taken back while it stands — `held` the line's ordinal, `cause` its hold's, `write` the write it is — `insert`, `delete`, or `undo`, the removal by identity of a change's new text — of the change `change` of the pair `pair`; `stands` each change that stands, in the order written, the last of them that change by its two spans where it is of two writes: beside a held insert its `new_text` may be placed, beside a held delete its `old_text` may be removed, beside a held undo its `new_text` may be removed while `old_text` stands",
+        fields: &[
+            req("outcome", "'held'"),
+            req("doc", "string"),
+            req("held", "number"),
+            req("cause", "string"),
+            req("write", "'insert' | 'delete' | 'undo'"),
+            req("pair", "number"),
+            req("change", "number"),
+            req("stands", "(TextEditStanding | TextEditHalf)[]"),
+            req("error", "true"),
+        ],
+    },
+    Shape {
+        name: "TextEditStanding",
+        open: false,
+        doc: "a change of `text.edit`'s that stands whole: `pair` its pair's index in `edits` and `change` its index among that pair's changes, then the change as `TextEditChange` names it — its `ordinal` in the draft as the changes before it left it, at its own commit `at`, so a later change of the call may have moved it: its new bytes are found by `addr`, their I-address, wherever they stand",
+        fields: &[req("pair", "number"), req("change", "number"), req("ordinal", "string"), req("removed", "string"), req("inserted", "string"), opt("addr", "string"), opt("at", "number")],
+    },
+    Shape {
+        name: "TextEditHalf",
+        open: false,
+        doc: "a change of `text.edit`'s that stands in part, its new text placed directly after its old text, which was not removed: `pair` and `change` as `TextEditStanding` names them, `new_text` and `old_text` the two spans as the insert left them, as `TextPartial` names its own",
+        fields: &[req("pair", "number"), req("change", "number"), req("new_text", "TextSpan"), req("old_text", "TextSpan")],
     },
 ];
 
@@ -681,6 +751,11 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
         result: "TextReplaced | TextUnchanged | TextRefused | TextPartial | TextHeld",
     },
     CallRow {
+        name: "text.edit",
+        forms: &[&[req("session", "string"), req("doc", "string"), req("edits", "TextEditPair[]")]],
+        result: "TextEdited | TextEditUnchanged | TextRefused | TextEditPartial | TextEditHeld",
+    },
+    CallRow {
         name: "changes",
         forms: &[
             &[req("session", "string"), req("since", "number"), opt("limit", "number"), opt("class", "'drafts'"), opt("under", "string")],
@@ -765,7 +840,7 @@ pub fn declarations() -> String {
         }
         out.push_str("}\n\n");
     }
-    out.push_str("/** The calls (client.md §4b.1 — the `publication` family's four, the `merge` family's four and `history.restore` among them — this machine's notebook's three acts `node.start`, `node.stop` and `node.restart`, the read of a draft's standing `publication.standing`, the read of a draft's past state `history.past`, the document index's listing `places`, the text edit of a draft `text.replace`, and the change feed's page `changes`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
+    out.push_str("/** The calls (client.md §4b.1 — the `publication` family's four, the `merge` family's four and `history.restore` among them — this machine's notebook's three acts `node.start`, `node.stop` and `node.restart`, the read of a draft's standing `publication.standing`, the read of a draft's past state `history.past`, the document index's listing `places`, the text edit of a draft `text.replace`, several of them in one call `text.edit`, and the change feed's page `changes`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
     out.push_str("export interface Bridge {\n");
     for row in CALL_ROWS {
         let forms: Vec<String> = row.forms.iter().map(|form| argument_object(form)).collect();

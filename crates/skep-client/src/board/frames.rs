@@ -472,6 +472,19 @@ pub fn delete(doc: &str, p: u64, width: u64, as_of: u64, id: Option<&str>) -> Va
     )
 }
 
+/// Builds `{"op":"rearrange","doc":…,"cuts":[{…},…],"as_of":…}`.
+///
+/// It moves the draft `doc`'s content about `cuts`, content ordinals strictly
+/// ascending, by identity (wire.md §Arrangement, `rearrange`) — another of
+/// the in-place edits: three exchange the two regions between them, four the
+/// two outer regions around the middle one, and any other count the board
+/// refuses `bad_cut_count`. It is typed against the draft state `as_of`, as
+/// [`delete`]'s is.
+pub fn rearrange(doc: &str, cuts: &[u64], as_of: u64, id: Option<&str>) -> Value {
+    let cuts: Vec<Value> = cuts.iter().map(|&cut| place(cut)).collect();
+    with_id(json!({"op": "rearrange", "doc": doc, "cuts": cuts, "as_of": as_of}), id)
+}
+
 /// Builds `{"op":"reinstate","doc":…,"at":{…},"runs":[…],"as_of":…}`.
 ///
 /// It places `runs` by identity before content ordinal `at` of the draft

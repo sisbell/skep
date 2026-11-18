@@ -32,8 +32,9 @@ use crate::sessions::{self, Facts, Open, SessionEntry, SessionKind, Sessions, Su
 /// family's, the past state's, the restore's and the text family's answers
 /// are held to their declarations against the real board by the shell's own
 /// suite, `shell/tests/publication.rs`, `merge.rs`, `history.rs` and
-/// `text.rs`, and `text.edit`'s against a scripted one by its unit suite,
-/// `shell/text/edit/tests.rs`).
+/// `text.rs`, and `text.edit`'s and `text.move`'s against a scripted one by
+/// their unit suites, `shell/text/edit/tests.rs` and
+/// `shell/text/moving/tests.rs`).
 fn samples() -> Vec<(&'static str, Value)> {
     let facts = json!({"principal": 1, "account": "1.0.1", "origin": "http://127.0.0.1:8642"});
     vec![
@@ -206,6 +207,15 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         ("TextEditStanding", json!({"pair": 0, "change": 0, "ordinal": "32", "removed": "0", "inserted": "5", "addr": "1.0.1.0.64.0.1.80", "at": 41})),
         ("TextEditHalf", json!({"pair": 1, "change": 0, "new_text": {"ordinal": "41", "width": "4", "addr": "1.0.1.0.64.0.1.90", "at": 42}, "old_text": {"ordinal": "38", "width": "3"}})),
+        (
+            "TextMoved",
+            json!({
+                "outcome": "moved", "doc": "1.0.1.0.64", "first": 3, "last": 3, "to_first": 2, "to_last": 2, "cuts": ["13", "47", "72"], "at": 41,
+                "lines": [" 1\tfn main() {", "+2\t    println!(\"{total}\");", " 3\t    let total = add(left, right);", "-\t(line 3 moved to 2)", " 4\t}"], "masked": true,
+            }),
+        ),
+        ("TextMoveUnchanged", json!({"outcome": "unchanged", "doc": "1.0.1.0.64", "as_of": 40})),
+        ("TextMoveHeld", json!({"outcome": "held", "doc": "1.0.1.0.64", "held": 8, "cause": "unreachable", "write": "rearrange", "error": true})),
     ]
 }
 
@@ -238,7 +248,7 @@ fn every_declared_type_round_trips_its_sample_against_the_table() {
 /// Checks that the file names every shape, every call and every event.
 ///
 /// The calls are §4b.1's, the notebook's three acts, the document index's
-/// listing, the text family's two and the change feed's page — its rows the
+/// listing, the text family's three and the change feed's page — its rows the
 /// dispatch's calls, in the dispatch's order, each form of a row's argument
 /// object its members in their order, the forms joined as a union and a
 /// form of no member `{}` — with both answers and the nine events; a
@@ -255,8 +265,8 @@ fn the_file_names_every_shape_call_and_event() {
     }
     assert_eq!(
         CALL_ROWS.len(),
-        41,
-        "the forty-one calls: §4b.1's with the publication family's four, the merge family's four, `history.restore` and `held.show`, the notebook's three acts, the read of a draft's standing, the read of a draft's past state, the document index's listing, the text family's two and the change feed's page"
+        42,
+        "the forty-two calls: §4b.1's with the publication family's four, the merge family's four, `history.restore` and `held.show`, the notebook's three acts, the read of a draft's standing, the read of a draft's past state, the document index's listing, the text family's three and the change feed's page"
     );
     assert_eq!(CALL_ROWS.iter().map(|row| row.name).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
     for line in [
@@ -292,6 +302,10 @@ fn the_file_names_every_shape_call_and_event() {
         "export interface TextEditStanding {\n  pair: number;\n  change: number;\n  ordinal: string;\n  removed: string;\n  inserted: string;\n  addr?: string;\n  at?: number;\n}\n",
         "export interface TextEditHalf {\n  pair: number;\n  change: number;\n  new_text: TextSpan;\n  old_text: TextSpan;\n}\n",
         "  new_text: TextSpan;\n  old_text: TextSpan;\n",
+        "  'text.move'(args: { session: string; doc: string; first: number; last?: number; before?: number }): Promise<Outcome<TextMoved | TextMoveUnchanged | TextRefused | TextMoveHeld>>;\n",
+        "export interface TextMoved {\n  outcome: 'moved';\n  doc: string;\n  first: number;\n  last: number;\n  to_first: number;\n  to_last: number;\n  cuts: string[];\n  at?: number;\n  lines: string[];\n  masked?: true;\n}\n",
+        "export interface TextMoveUnchanged {\n  outcome: 'unchanged';\n  doc: string;\n  as_of: number;\n}\n",
+        "export interface TextMoveHeld {\n  outcome: 'held';\n  doc: string;\n  held: number;\n  cause: string;\n  write: 'rearrange';\n  error: true;\n}\n",
         "  supersede: string[];\n",
         "  over_cap: boolean;\n",
         "  unrecorded?: Refusal;\n",

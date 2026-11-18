@@ -26,7 +26,7 @@
 //!   `_` for `.` (`publication_open`, `publication_count`,
 //!   `publication_confirm`, `publication_cancel`) — are tools of those names,
 //!   their arguments the bridge's row minus the session and the board, the
-//!   adapter supplying each where the row requires it; and six are the
+//!   adapter supplying each where the row requires it; and seven are the
 //!   adapter's apparatus: `session_info`, `changes_since` (the shell's
 //!   `changes`, a pull), `fetch` (the shell's streamed fetch as an image or
 //!   resource block, the type sniffed off the bytes, the size capped),
@@ -36,9 +36,13 @@
 //!   `edit_text` (the shell's `text.edit`, several such edits in one call, all
 //!   landing or none, whose landed answer is followed by the lines it changed,
 //!   one row a line, as the shell spells each — the door refusing a member of
-//!   a pair the shell would ignore), and `help` (the catalog's help store read
-//!   by topic: each rule's whole text under its heading, and the whole
-//!   reference of each tool whose short card ends naming it). The adapter
+//!   a pair the shell would ignore), `move_lines` (the shell's `text.move`,
+//!   whole lines of a draft moved by identity, by one `rearrange` about the
+//!   lines' starts, typed against the call's own read, whose landed answer is
+//!   followed by the lines where they now stand and the place they left),
+//!   and `help` (the catalog's help store read by topic: each rule's whole
+//!   text under its heading, and the whole reference of each tool whose
+//!   short card ends naming it). The adapter
 //!   passes a wire op's arguments through unread, save the one shape the
 //!   shell's `op` row reads as its `/op-at` form, a non-negative integer `at`
 //!   beside an object `frame`, which no wire op takes. Before the board
@@ -63,9 +67,9 @@
 //!   halt, the block, the shell's own names — `fetch`'s two answers of the
 //!   adapter's own, a file past its cap and a stream cut short, each a plain
 //!   sentence, `help`'s one, a topic its store holds no text for, a plain
-//!   sentence naming the topics, and every answer of `replace_text` and
-//!   `edit_text` the shell marks with its error member, which the adapter
-//!   takes off: a write the
+//!   sentence naming the topics, and every answer of `replace_text`,
+//!   `edit_text` and `move_lines` the shell marks with its error member,
+//!   which the adapter takes off: a write the
 //!   shell could not get to the board, a line of the edit's the shell would
 //!   not drop, and an edit that landed in part. A write refused `unreachable` may have committed: the
 //!   shell faces a lost answer to any write but a burst (whose line it holds,

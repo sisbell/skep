@@ -1,6 +1,7 @@
-//! The text family's two rows, through `Shell::call`.
+//! The text family's three rows, through `Shell::call`.
 //!
-//! They are `text.replace` (skep #1070) and `text.edit` (skep #1079). The
+//! They are `text.replace` (skep #1070), `text.edit` (skep #1079) and
+//! `text.move` (skep #1085), each made of the shell's own rows. The
 //! suite checks each row's own order with no daemon behind the shell —
 //! its members read before the session, a bare session refused naming the
 //! call before any read (the door's other questions are `door`'s) — and,
@@ -19,11 +20,18 @@
 //! each place one can be, the draft then exactly as it stood, every byte at
 //! its own address; and another writer's change landed between two of the
 //! call's writes, nothing taken back over it and each change that stands
-//! named (the shell's rows with one write meddled with, `Meddled`).
+//! named (the shell's rows with one write meddled with, `Meddled`). Of
+//! `text.move`, against the daemon: lines moved up by one `rearrange`, every
+//! byte at the I-address it had and the answer's rows on the lines the
+//! board's `line_numbers` numbers; the last line of a text that ends in no
+//! line break moved by four cuts, and across one empty line by three, the
+//! board then counting one line fewer; and another writer's change landed
+//! between the call's read and its write, the move refused
+//! `arrangement_moved` with nothing written.
 
 use std::cell::Cell;
 
-use super::super::text::{edit_through, Row, Rows};
+use super::super::text::{edit_through, move_through, Row, Rows};
 use super::publication::{ground, register};
 use super::*;
 use crate::sessions::Facts;
@@ -220,9 +228,9 @@ fn minted(addr: &Value, width: u64) -> Vec<String> {
 /// The shell's own rows, with one write of an edit's meddled with.
 ///
 /// Every call goes to the shell as the row sends it, but the `nth` write
-/// frame (from 1) the edit sends through `op`: `act` is handed that frame
-/// and the session first, and the write is refused with what it answers, or
-/// sent on where it answers none.
+/// frame (from 1) the edit sends through `op` — an `insert`, a `delete` or a
+/// `rearrange`: `act` is handed that frame and the session first, and the
+/// write is refused with what it answers, or sent on where it answers none.
 struct Meddled<'s, F> {
     shell: &'s Shell,
     nth: usize,
@@ -240,7 +248,7 @@ impl<'s, F: Fn(&Value, &str) -> Option<Refusal>> Meddled<'s, F> {
 impl<F: Fn(&Value, &str) -> Option<Refusal>> Rows for Meddled<'_, F> {
     fn answer(&self, row: Row, args: &Value) -> Result<Value, Refusal> {
         let frame = &args["frame"];
-        if row == Row::Op && ["insert", "delete"].contains(&frame["op"].as_str().unwrap_or_default()) {
+        if row == Row::Op && ["insert", "delete", "rearrange"].contains(&frame["op"].as_str().unwrap_or_default()) {
             self.writes.set(self.writes.get() + 1);
             if self.writes.get() == self.nth {
                 if let Some(refusal) = (self.act)(frame, args["session"].as_str().unwrap()) {
@@ -434,6 +442,150 @@ fn another_writers_change_between_two_writes_is_never_taken_back_over() {
     );
     assert_eq!(text_of(&g.shell, &g.session, &draft), format!("X{LINES}"), "the other writer's byte, and nothing of the call");
     assert_eq!(addresses(&g.shell, &g.session, &draft)[1..], before[..], "the old text at its own addresses");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks `text.move`'s own order, with no daemon behind the shell.
+///
+/// The members are read before the session — `doc`, then `first`, then
+/// `last` and `before` where they are present, then the two orders, `last`
+/// before `first` and `before` inside the block — each `malformed_args`
+/// naming the member under a session that names nothing; in their form, a
+/// `null` for an absent member among them, the call goes on to the session,
+/// which is gone; and a bare session is refused `write_in_bare_session`
+/// naming the call, the write door asked before any read, so the board's
+/// silence is never met.
+#[test]
+fn text_move_reads_its_members_first_and_asks_the_door_before_any_read() {
+    let dir = TempDir::new().unwrap();
+    let (shell, _) = open_shell(&super::door::nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let bare = register(&shell, "9f", Facts { principal: 1, account: Some("1.0.1".into()), kind: SessionKind::Bare });
+    let what = |args: Value| {
+        let refused = shell.call("text.move", &args).unwrap_err();
+        let v = refused.to_value();
+        assert_eq!(refused.name(), "malformed_args", "{args}: {v}");
+        v["what"].as_str().unwrap().to_string()
+    };
+    assert_eq!(what(json!({"session": "s-gone", "first": 2})), "doc", "missing");
+    assert_eq!(what(json!({"session": "s-gone", "doc": "01.0.1", "first": 2})), "doc", "another spelling");
+    assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.1.0.66"})), "first", "missing");
+    assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.1.0.66", "first": 0})), "first", "lines are numbered from 1");
+    assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.1.0.66", "first": 2, "last": "3"})), "last", "no number");
+    assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.1.0.66", "first": 2, "before": 1.5})), "before", "no whole number");
+    assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.1.0.66", "first": 3, "last": 2})), "last", "before `first`");
+    assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.1.0.66", "first": 2, "last": 4, "before": 3})), "before", "inside the block");
+    let in_form = json!({"session": "s-gone", "doc": "1.0.1.0.66", "first": 2, "last": null, "before": 1});
+    assert_eq!(shell.call("text.move", &in_form).unwrap_err().name(), "session_ended", "in their form, the members pass to the session");
+    let keyless = shell.call("text.move", &json!({"session": bare, "doc": "1.0.1.0.66", "first": 2, "before": 1})).unwrap_err();
+    assert_eq!((keyless.name(), keyless.to_value()["call"].as_str()), ("write_in_bare_session", Some("text.move")), "{keyless}");
+}
+
+/// Returns the board's line for each of `positions`, and its line count.
+///
+/// They are the draft's as the board's `line_numbers` numbers them now.
+fn numbered(shell: &Shell, session: &str, draft: &str, positions: &[u64]) -> (Vec<String>, String) {
+    let answer = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::line_numbers(draft, positions, &[])})).unwrap_or_else(|r| panic!("{r}"));
+    let lines = answer["positions"].as_array().expect("the positions' lines").iter().map(|position| position["line"].as_str().expect("a line").to_string()).collect();
+    (lines, answer["count"]["n"].as_str().expect("the count").to_string())
+}
+
+/// Checks that lines moved keep every byte's identity.
+///
+/// The last two of [`LINES`] move up to stand before the second, by one
+/// `rearrange` about the three lines' starts: the answer is `TextMoved`
+/// exactly — the lines as asked, where they now stand, the cuts, the commit
+/// and the rows — the draft reads the lines in their new order, every byte
+/// at the I-address it had, none minted; the board's own `line_numbers`
+/// puts the block's first byte, and the first byte of the line it crossed,
+/// on the lines the rows name; and the call log holds one `text.move` entry
+/// (the mutant that retypes the lines mints them anew). The last line of a
+/// text that ends in no line break moves up by four cuts, the board keeping
+/// every line whole, and across one empty line by three, the board then
+/// counting two lines for three, as the rows number them. Under the shell's
+/// own node stopped the write is held `stopped`: its line is dropped, and
+/// the call answers `refused` with the error member, nothing written and
+/// nothing held.
+#[test]
+fn lines_moved_keep_every_bytes_identity_and_the_rows_stand_where_the_board_numbers_them() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let draft = draft_holding(&g.shell, &g.session, LINES);
+    let before = addresses(&g.shell, &g.session, &draft);
+    assert_eq!(before.len(), LINES.len(), "premise: one byte a position");
+    let logged = calls_logged(&g.shell).len();
+    let answer = g.shell.call("text.move", &json!({"session": g.session, "doc": draft, "first": 3, "last": 4, "before": 2})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(calls_logged(&g.shell)[logged..], ["text.move"], "one entry, the rows the call is made of logged by none");
+    crate::shapes::assert_declared("TextMoved", &answer);
+    let at = answer["at"].as_u64().expect("the commit");
+    let rows = json!([" 1\talpha = 1", "+2\tbeta = 2", "+3\ttail stays", " 4\tkeep this line as it is", "-\t(lines 3–4 moved to 2–3)"]);
+    assert_eq!(answer, json!({"outcome": "moved", "doc": draft, "first": 3, "last": 4, "to_first": 2, "to_last": 3, "cuts": ["11", "35", "55"], "at": at, "lines": rows}), "no error member");
+    assert_eq!(text_of(&g.shell, &g.session, &draft), "alpha = 1\nbeta = 2\ntail stays\nkeep this line as it is\n");
+    assert_eq!(addresses(&g.shell, &g.session, &draft), [&before[..10], &before[34..], &before[10..34]].concat(), "every byte at the I-address it had");
+    assert_eq!(numbered(&g.shell, &g.session, &draft, &[11, 31]), (vec!["2".to_string(), "4".to_string()], "4".to_string()), "the board numbers the block and the line it crossed as the rows do");
+    let typed = g.shell.call("op", &json!({"session": g.session, "frame": skep_client::board::frames::delete(&draft, 1, 1, at, None)})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(typed["resp"], "ack", "the answer's commit is the draft's typed state: {typed}");
+    let open = draft_holding(&g.shell, &g.session, "a\nbb\nccc");
+    let before = addresses(&g.shell, &g.session, &open);
+    let answer = g.shell.call("text.move", &json!({"session": g.session, "doc": open, "first": 3, "before": 1})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((&answer["cuts"], &answer["lines"]), (&json!(["1", "5", "6", "9"]), &json!(["+1\tccc", " 2\ta", " 3\tbb", "-\t(line 3 moved to 1)"])), "four cuts: {answer}");
+    assert_eq!(text_of(&g.shell, &g.session, &open), "ccc\na\nbb", "every line whole, the text ending as it did");
+    assert_eq!(addresses(&g.shell, &g.session, &open), [&before[5..], &before[4..5], &before[..4]].concat(), "the line break between the two stayed in the middle");
+    let gapped = draft_holding(&g.shell, &g.session, "abc\n\nxyz");
+    let answer = g.shell.call("text.move", &json!({"session": g.session, "doc": gapped, "first": 3, "before": 2})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((&answer["cuts"], &answer["lines"]), (&json!(["5", "6", "9"]), &json!([" 1\tabc", "+2\txyz", "-\t(line 3 moved to 2)"])), "three cuts across one empty line: {answer}");
+    assert_eq!(text_of(&g.shell, &g.session, &gapped), "abc\nxyz\n");
+    assert_eq!(numbered(&g.shell, &g.session, &gapped, &[5]), (vec!["2".to_string()], "2".to_string()), "the board counts one line fewer, as the rows number them");
+    g.shell.set_node_state(NodeState::Stopped);
+    let answer = g.shell.call("text.move", &json!({"session": g.session, "doc": gapped, "first": 2, "before": 1})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("TextRefused", &answer);
+    assert_eq!(answer, json!({"outcome": "refused", "cause": "stopped", "doc": gapped, "error": true}));
+    g.shell.set_node_state(NodeState::Running);
+    assert!(g.shell.call("held", &json!({"session": g.session})).unwrap().as_array().unwrap().is_empty(), "the call's line dropped, nothing held");
+    assert_eq!(text_of(&g.shell, &g.session, &gapped), "abc\nxyz\n", "nothing written");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a draft changed between the read and the write is refused.
+///
+/// Another write lands on the draft just ahead of the call's one write —
+/// typed against the position the call read the draft at — so the board
+/// refuses the `rearrange` as typed against an older state: the call drops
+/// its line and answers the board's verdict as data, `refused`,
+/// `arrangement_moved`, and the draft holds the other writer's byte and the
+/// lines where they stood, every byte at its own address and nothing held.
+/// The same call then lands through the row itself, against the draft as it
+/// stands (the mutants that type the write against no state, or against a
+/// read made at the write, move the lines over the other writer's change).
+#[test]
+fn a_draft_changed_between_the_read_and_the_write_is_refused_arrangement_moved_with_nothing_written() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let other = |frame: &Value, session: &str| {
+        let ahead = skep_client::board::frames::insert_text(frame["doc"].as_str().unwrap(), 1, "X", frame["as_of"].as_u64().unwrap(), None);
+        g.shell.call("op", &json!({"session": session, "frame": ahead})).unwrap_or_else(|r| panic!("the other writer's insert: {r}"));
+        None
+    };
+    let draft = draft_holding(&g.shell, &g.session, LINES);
+    let before = addresses(&g.shell, &g.session, &draft);
+    let rows = Meddled::at(&g.shell, 1, other);
+    let answer = move_through(&rows, &g.session, &json!({"doc": draft, "first": 3, "last": 4, "before": 2})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(rows.writes.get(), 1, "the one write, and no other");
+    crate::shapes::assert_declared("TextRefused", &answer);
+    assert_eq!(
+        (answer["outcome"].as_str(), answer["cause"].as_str(), answer["refusal"]["code"].as_str(), answer.get("error")),
+        (Some("refused"), Some("arrangement_moved"), Some("arrangement_moved"), None),
+        "{answer}"
+    );
+    assert_eq!(text_of(&g.shell, &g.session, &draft), format!("X{LINES}"), "the other writer's byte, and the lines where they stood");
+    assert_eq!(addresses(&g.shell, &g.session, &draft)[1..], before[..], "every byte at its own address");
+    assert!(g.shell.call("held", &json!({"session": g.session})).unwrap().as_array().unwrap().is_empty(), "the refused write's line dropped");
+    let landed = g.shell.call("text.move", &json!({"session": g.session, "doc": draft, "first": 3, "last": 4, "before": 2})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((landed["outcome"].as_str(), landed["cuts"].clone()), (Some("moved"), json!(["12", "36", "56"])), "the cuts of the draft as it stands: {landed}");
+    assert_eq!(text_of(&g.shell, &g.session, &draft), "Xalpha = 1\nbeta = 2\ntail stays\nkeep this line as it is\n");
     g.shell.shutdown();
     sd.shutdown();
 }

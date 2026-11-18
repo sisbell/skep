@@ -1,15 +1,18 @@
-//! The unit suite of the rows: the lines a plan's text shows, numbered.
+//! The unit suite of the rows: the lines a call's text shows, numbered.
 //!
 //! Each cell plans pairs over a scripted text as `text.edit` plans them
 //! (`plan`), nothing written, and reads the rows of the text the plan leaves
-//! by the pieces it spliced in step. The rows an `edited` answer carries,
-//! through the call's own writes, are held in `edit/tests.rs`, and against
-//! the board's own `line_numbers` in `shell/tests/text.rs`.
+//! by the pieces it spliced in step; the last cells count a text's lines and
+//! their starts, and draw the rows of a text whose lines a move set in
+//! another order. The rows an `edited` answer carries, through the call's
+//! own writes, are held in `edit/tests.rs`, a `moved` one's in
+//! `moving/tests.rs`, and both against the board's own `line_numbers` in
+//! `shell/tests/text.rs`.
 
 use serde_json::{json, Value};
 
-use super::super::super::tests::{text_of, DOC, READ_AT};
-use super::super::{plan, Pair};
+use super::super::edit::{plan, Pair};
+use super::super::tests::{text_of, DOC, READ_AT};
 use super::*;
 
 /// Returns the rows the pairs `edits` leave of a draft holding `items`.
@@ -244,4 +247,69 @@ fn the_pieces_tell_every_position_of_the_text_the_plan_leaves() {
     assert_eq!(pieces.removed, [(7, &b"beta"[..]), (19, &b" delta"[..])]);
     assert_eq!(pieces.changed(), [Changed { new: 7..8, gone: 7..11 }, Changed { new: 16..16, gone: 19..25 }]);
     assert_eq!(rows(&text, pieces).lines, said(&["+1\talpha B", "+2\t{…} gamma"]));
+}
+
+/// A text's lines are counted, and each starts past the break before it.
+///
+/// They are counted as `line_numbers` counts them, each starting one
+/// position past the line break before it. A text that ends in a line break
+/// has no empty last line, and one that
+/// ends in none ends in a line no break closes; an empty text holds no line;
+/// a line break stands in text alone, so an atom between two lines takes its
+/// position and starts none; the line one past the count starts one position
+/// past the text's last, and line 0 and any line past that start nowhere
+/// (the mutants that count an empty last line, count a break in an atom, or
+/// start the line past the last anywhere else answer otherwise).
+#[test]
+fn a_texts_lines_are_counted_and_each_starts_one_past_the_break_before_it() {
+    let closed = text_of(json!([{"content": "ab\n\ncd\n"}]));
+    let lines = Lines::of(&closed);
+    assert_eq!((lines.count(), lines.closed()), (3, true), "a text ending in a line break has no empty last line");
+    assert_eq!(lines.starts([1, 2, 3, 4, 5, 0]), [Some(1), Some(4), Some(5), Some(8), None, None], "the line past the last starts one past the text's end");
+    let open = text_of(json!([{"content": "ab\n\ncd"}]));
+    let lines = Lines::of(&open);
+    assert_eq!((lines.count(), lines.closed()), (3, false), "the last line, no break closing it, is a line");
+    assert_eq!(lines.starts([4, 3, 1]), [Some(7), Some(5), Some(1)], "asked in any order");
+    let empty = text_of(json!([]));
+    let lines = Lines::of(&empty);
+    assert_eq!((lines.count(), lines.closed(), lines.starts([1, 2])), (0, false, [Some(1), None]), "an empty text holds no line, and a first line would start at 1");
+    let atoms = text_of(json!([{"content": "a\n"}, {"atom": "\n"}, {"content": "b\n"}, {"atom": "v"}]));
+    let lines = Lines::of(&atoms);
+    assert_eq!((lines.count(), lines.closed()), (3, false), "an atom holds no line break, and one at the text's end is a line");
+    assert_eq!(lines.starts([2, 3, 4]), [Some(3), Some(6), Some(7)], "an atom takes a position and starts no line");
+}
+
+/// The rows of a move show the lines where they stand and where they left.
+///
+/// Three lines moved up are `+` where they now stand, the two lines either
+/// side of them shown, and one `-` row names them where they left by their
+/// numbers as read and as they stand; one line is named alone; a run of more
+/// than sixteen is cut as any is; the row where the lines left follows the
+/// text's last line where its place is past it, the lines before it shown
+/// as beside any such row; and lines the text does not hold draw no `+` row
+/// and show no line beside them (the mutants that leave the `-` row out,
+/// number it in the old text, set it past the text with no line beside it,
+/// or draw a line past the count answer otherwise).
+#[test]
+fn the_rows_of_a_move_show_the_lines_where_they_stand_and_where_they_left() {
+    let text = text_of(json!([{"content": "a\nd\ne\nf\nb\nc\ng\nh\ni\n"}]));
+    let up = moved(&text, (4, 6), (2, 4), 6);
+    assert_eq!(up, Rows { lines: said(&[" 1\ta", "+2\td", "+3\te", "+4\tf", " 5\tb", " 6\tc", "-\t(lines 4–6 moved to 2–4)", " 7\tg", " 8\th"]), masked: false });
+    let down = moved(&text, (2, 2), (8, 8), 1);
+    assert_eq!(down.lines, said(&[" 1\ta", "-\t(line 2 moved to 8)", " 2\td", " 3\te", "--", " 6\tc", " 7\tg", "+8\th", " 9\ti"]), "one line, named alone, its two places parted");
+    let long = text_of(json!([{"content": numbered(24)}]));
+    let run = moved(&long, (5, 22), (1, 18), 22).lines;
+    assert_eq!(
+        run[..ROWS_RUN_HEAD + 1],
+        [said(&["+1\tline 1", "+2\tline 2", "+3\tline 3", "+4\tline 4", "+5\tline 5", "+6\tline 6"]), vec![format!("+…\t({} more lines)", 18 - ROWS_RUN_HEAD - ROWS_RUN_TAIL)]].concat()[..]
+    );
+    assert_eq!(run[run.len() - 4..], said(&[" 22\tline 22", "-\t(lines 5–22 moved to 1–18)", " 23\tline 23", " 24\tline 24"])[..], "{run:?}");
+    let fewer = text_of(json!([{"content": "abc\nxyz\n"}]));
+    assert_eq!(moved(&fewer, (3, 3), (2, 2), 3).lines, said(&[" 1\tabc", "+2\txyz", "-\t(line 3 moved to 2)"]), "the place the line left is past the last line");
+    assert_eq!(moved(&fewer, (2, 2), (3, 3), 1).lines, said(&[" 1\tabc", "-\t(line 2 moved to 3)", " 2\txyz"]), "a line the text does not hold draws no row");
+    assert_eq!(moved(&text, (2, 2), (10, 10), 1).lines, said(&[" 1\ta", "-\t(line 2 moved to 10)", " 2\td", " 3\te"]), "and shows no line beside the one it is not");
+    let past = moved(&text, (11, 11), (1, 1), 11).lines;
+    assert_eq!(past, said(&["+1\ta", " 2\td", " 3\te", "--", " 8\th", " 9\ti", "-\t(line 11 moved to 1)"]), "a place past the last line is the text's end, the lines before it shown");
+    let withheld = text_of(json!([{"content": "a\n"}, {"withheld": {"origin": "1.0.1.0.9", "width": "5"}}, {"content": "b\nc\n"}]));
+    assert_eq!(moved(&withheld, (3, 3), (1, 1), 3), Rows { lines: said(&["+1\ta", " 2\t{…}b", " 3\tc", "-\t(line 3 moved to 1)"]), masked: true }, "a withheld run on a line shown");
 }

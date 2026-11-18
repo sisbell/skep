@@ -24,8 +24,9 @@
 //! `publication_open`, `publication_count`, `publication_confirm` and
 //! `publication_cancel`) and the apparatus (`session_info`, `changes_since`,
 //! `fetch`, the shell's two text edits, `replace_text`, its `text.replace`,
-//! and `edit_text`, its several-pair `text.edit`, and `help`, which reads the
-//! help store and calls no shell) — whose arguments are the bridge's row
+//! and `edit_text`, its several-pair `text.edit`, its move of whole lines,
+//! `move_lines`, its `text.move`, and `help`, which reads the help store and
+//! calls no shell) — whose arguments are the bridge's row
 //! minus the session and the board, the adapter supplying each where the row
 //! requires it, `help`'s its one `topic`, and whose members the adapter
 //! reads by name. A `publication` tool spells its row's `.` as `_`, since an
@@ -177,6 +178,12 @@ pub enum Tool {
     /// call changed, which the shell answers as a member of their own,
     /// follow it one row a line.
     EditText,
+    /// `text.move(session, doc, first, last?, before?)`, the shell's.
+    ///
+    /// It moves whole lines of a draft by identity, the session supplied.
+    /// Its answer is rendered as `edit_text`'s, the lines a landed move
+    /// shows following it one row a line.
+    MoveLines,
     /// `help(topic?)`, the catalog's help store read by topic.
     ///
     /// The one tool that calls no shell: it reads the catalog alone
@@ -210,6 +217,7 @@ const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
     ("fetch", Tool::Fetch, &["i"]),
     ("replace_text", Tool::ReplaceText, &["doc", "old", "new"]),
     ("edit_text", Tool::EditText, &["doc", "edits"]),
+    ("move_lines", Tool::MoveLines, &["doc", "first", "last", "before"]),
     ("help", Tool::Help, &["topic"]),
 ];
 

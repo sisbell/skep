@@ -23,8 +23,15 @@
 //! [`ROWS_RUN_TAIL`], [`ROWS_MAX_LINE_CHARS`] and [`ROWS_MAX_BYTES`]) — is
 //! the child module `edit`'s, made of this module's pieces: its rows and the
 //! session they stand under, the text and its find, the writes, the lines an
-//! edit settles, the undo by identity and the answers. Both rows keep one
-//! order to the first read ([`Shell::text_call`]).
+//! edit settles, the undo by identity and the answers.
+//!
+//! The family's third call, `text.move` — whole lines of a draft moved by
+//! identity, by one `rearrange` typed against the call's own read, its
+//! landed answer showing the lines where they now stand (skep #1085) — is
+//! the child module `moving`'s, made of this module's read, its write and
+//! the line it settles. The lines the two calls' landed answers show are
+//! drawn by the child module `rows`. The three rows keep one order to the
+//! first read ([`Shell::text_call`]).
 //!
 //! **The order** ([`Shell::text_replace`], [`Shell::text_call`]). The
 //! members first, each refused in another form before the session is looked
@@ -132,8 +139,10 @@ use crate::refusal::{Name, Refusal};
 use crate::wire::{decode_hex, MAX_INSERT_VALUES};
 
 mod edit;
+mod moving;
+mod rows;
 
-pub use edit::rows::{ROWS_CONTEXT_LINES, ROWS_MAX_BYTES, ROWS_MAX_LINE_CHARS, ROWS_MAX_RUN, ROWS_RUN_HEAD, ROWS_RUN_TAIL};
+pub use rows::{ROWS_CONTEXT_LINES, ROWS_MAX_BYTES, ROWS_MAX_LINE_CHARS, ROWS_MAX_RUN, ROWS_RUN_HEAD, ROWS_RUN_TAIL};
 
 /// The most content positions one read of a draft's text asks.
 ///
@@ -213,7 +222,7 @@ pub(super) enum Row {
 ///
 /// The shell answers them itself; the unit suite answers them from a
 /// script, and the shell's own suite through the shell with one write
-/// meddled with (`edit_through`).
+/// meddled with (`edit_through`, `move_through`).
 pub(super) trait Rows {
     /// Answers `row` for `args`, `session` among them, as the row does.
     ///
@@ -393,10 +402,10 @@ struct Gap {
 /// The text is the bytes of every per-byte value in arrangement order; the
 /// stretches say which runs of them are contiguous and at which ordinals,
 /// and the gaps what stands between two stretches. Its invariant, kept by
-/// [`Text::push`], the one way it grows, and by [`Text::splice`], the one
-/// way it changes: the stretches tile `bytes` in order, none empty, and no
-/// two are adjacent in position — a part boundary that split one run leaves
-/// one stretch.
+/// [`Text::push`] and [`Text::rearranged`], the two ways one is built, and
+/// by [`Text::splice`], the one way it changes: the stretches tile `bytes`
+/// in order, none empty, and no two are adjacent in position — a part
+/// boundary that split one run leaves one stretch.
 #[derive(Debug, Default)]
 struct Text {
     /// The bytes of every per-byte value, in arrangement order.
@@ -557,6 +566,57 @@ impl Text {
             // A text that ended in the stretch ends in what stood before it.
             self.open &= k < self.stretches.len();
         }
+    }
+
+    /// Returns the text as a `rearrange` about `cuts` leaves the draft.
+    ///
+    /// Each region runs from its cut up to the next: three cuts exchange the
+    /// two regions between them, and four the two outer regions around the
+    /// middle one, which stays between them (wire.md §Arrangement); every
+    /// position outside the cuts stands where it stood. Each byte and each
+    /// value that is no text goes with its region, a value a cut falls
+    /// inside told in two parts, and the text is built a region at a time as
+    /// a read builds one, so two runs of text a move brings side by side are
+    /// one stretch.
+    ///
+    /// **Precondition.** `cuts` are three or four positions, strictly
+    /// ascending, from 1 to one past the text's last, as the board admits
+    /// them; for any other count the text returned is this one.
+    fn rearranged(&self, cuts: &[u64]) -> Text {
+        /// One run of a text's positions: a stretch, or a gap.
+        enum Run<'t> {
+            Stretch(&'t Stretch),
+            Gap(&'t Gap),
+        }
+        let end = self.positions.saturating_add(1);
+        let regions = match *cuts {
+            [a, b, c] => vec![(1, a), (b, c), (a, b), (c, end)],
+            [a, b, c, d] => vec![(1, a), (c, d), (b, c), (a, b), (d, end)],
+            _ => vec![(1, end)],
+        };
+        // The runs in position order, each from its first position up to the
+        // next one's: a gap takes the positions up to the run after it.
+        let mut runs: Vec<(u64, Run<'_>)> = self.stretches.iter().map(|stretch| (stretch.ordinal, Run::Stretch(stretch))).chain(self.gaps.iter().map(|gap| (gap.ordinal, Run::Gap(gap)))).collect();
+        runs.sort_unstable_by_key(|(ordinal, _)| *ordinal);
+        let mut text = Text::default();
+        for (from, to) in regions {
+            let holding = runs.partition_point(|(ordinal, _)| *ordinal <= from).saturating_sub(1);
+            for (k, (ordinal, run)) in runs.iter().enumerate().skip(holding).take_while(|(_, (ordinal, _))| *ordinal < to) {
+                let past = runs.get(k + 1).map_or(end, |(next, _)| *next);
+                let (low, high) = (from.max(*ordinal), to.min(past));
+                if low >= high {
+                    continue;
+                }
+                match run {
+                    Run::Gap(gap) => text.gap(high - low, &gap.kind),
+                    Run::Stretch(stretch) => {
+                        let at = |position: u64| stretch.at + (position - stretch.ordinal) as usize;
+                        text.text(self.bytes.get(at(low)..at(high)).unwrap_or_default());
+                    }
+                }
+            }
+        }
+        text
     }
 }
 
@@ -881,9 +941,10 @@ fn partial(doc: &str, edit: &Edit<'_>, inserted: Option<&Value>, why: Value) -> 
 
 /// Returns the answer of an edit a line of which stays held, an error.
 ///
-/// `write` names the write the line is: `insert`, `delete`, or `undo`, an
-/// undo's removal of the new bytes; `stands` is what a two-write edit
-/// leaves beside it ([`spans`]), and null for an edit of one write.
+/// `write` names the write the line is: `insert`, `delete`, `undo`, an
+/// undo's removal of the new bytes, or `rearrange`, a move's one write;
+/// `stands` is what a two-write edit leaves beside it ([`spans`]), and null
+/// for a call of one write.
 fn held(doc: &str, line: &Line, write: &str, stands: Value) -> Answer {
     let mut value = json!({"outcome": "held", "doc": doc, "held": line.held, "cause": line.cause, "write": write});
     if let (Some(members), Value::Object(stands)) = (value.as_object_mut(), stands) {
@@ -1163,6 +1224,37 @@ impl Shell {
         self.text_call("text.edit", args, |calls| edit::edit(calls, &asked))
     }
 
+    /// Answers `text.move`: whole lines of a draft moved by identity.
+    ///
+    /// The call is `text.move(session, {doc, first, last?, before?})`. No
+    /// byte is minted, so every byte moved keeps its address and every link
+    /// on it follows (skep #1085). The members are read
+    /// (`moving::Asked::read`), and the move is made as a text call makes
+    /// one ([`Shell::text_call`]), by the child module `moving`: the lines
+    /// found in one read of the draft, and one `rearrange` about their
+    /// starts, typed against that read. The call settles its own held line
+    /// as `text.replace` does ([`settle`]).
+    ///
+    /// # Errors
+    ///
+    /// In this order, the first that holds answering:
+    ///
+    /// 1. `malformed_args` naming `doc`, `first`, `last`, then `before`,
+    ///    each where it is not of its form, then `last` where it is before
+    ///    `first` and `before` where it is inside the block
+    ///    (`moving::Asked::read`);
+    /// 2. `malformed_args` naming `session`, then `session_died` or
+    ///    `session_ended` ([`Shell::session`]);
+    /// 3. the write door's, naming the call: `write_in_bare_session`, then
+    ///    `another_window` (`Shell::write_door`), nothing read or sent;
+    /// 4. the board's verdict on a read, or the shell's refusal of it — a
+    ///    death the call could not follow to a re-open among them;
+    /// 5. the `op` row's refusal of the write, nothing written.
+    pub(super) fn text_move(&self, args: &Value) -> Result<Value, Refusal> {
+        let asked = moving::Asked::read(args)?;
+        self.text_call("text.move", args, |calls| moving::move_lines(calls, &asked))
+    }
+
     /// Makes a text call's edit under the session `args` names.
     ///
     /// `call` is the call as the bridge spells it, its members read
@@ -1208,6 +1300,22 @@ impl Shell {
 pub(super) fn edit_through(rows: &impl Rows, session: &str, args: &Value) -> Result<Value, Refusal> {
     let asked = edit::Asked::read(args)?;
     edit::edit(&Under::new(rows, session), &asked).map(Answer::into_value)
+}
+
+/// Makes `text.move`'s move of `args` through `rows`, under `session`.
+///
+/// It is the call as [`Shell::text_move`] makes it past the session and the
+/// door, through rows a suite hands it: the shell's own with another
+/// writer's change landed ahead of the call's one write, where a real board
+/// gives no such moment to order.
+///
+/// # Errors
+///
+/// The members' refusal, and the move's own.
+#[cfg(test)]
+pub(super) fn move_through(rows: &impl Rows, session: &str, args: &Value) -> Result<Value, Refusal> {
+    let asked = moving::Asked::read(args)?;
+    moving::move_lines(&Under::new(rows, session), &asked).map(Answer::into_value)
 }
 
 #[cfg(test)]

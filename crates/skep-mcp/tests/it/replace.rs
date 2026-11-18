@@ -1,4 +1,4 @@
-//! `replace_text` and `edit_text`, end to end against a real board.
+//! `replace_text`, `edit_text` and `move_lines`, end to end on a real board.
 //!
 //! A draft holding a few lines of code text is edited through the built
 //! adapter, and the board is read back by identity: a one-word change mints
@@ -11,8 +11,10 @@
 //! `common`'s relay, whose rule lands a second session's write between two
 //! exchanges of one tool call. Two pairs in one `edit_text` call land with
 //! the text between them at its own addresses, the answer's rows after it,
-//! each changed line where the board's own `line_numbers` numbers it. The
-//! measurement at the foot is run by hand.
+//! each changed line where the board's own `line_numbers` numbers it. A line
+//! moved by `move_lines` mints nothing: every byte stands at the address it
+//! had, and a link made on the line before the move projects onto it where
+//! it now stands. The measurement at the foot is run by hand.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -123,6 +125,17 @@ fn edit(mcp: &mut Mcp, doc: &str, edits: Value) -> (bool, Value, Vec<String>) {
     let (is_error, text) = mcp.call("edit_text", json!({"doc": doc, "edits": edits}));
     let (first, rows) = text.split_once('\n').unwrap_or((&text, ""));
     let answer = serde_json::from_str(first).unwrap_or_else(|e| panic!("edit_text's first line is JSON ({e}): {text}"));
+    (is_error, answer, rows.split('\n').filter(|row| !row.is_empty()).map(str::to_string).collect())
+}
+
+/// Calls `move_lines`, and reads its result as [`edit`] reads `edit_text`'s.
+///
+/// It answers whether the result is `isError`, its first line as JSON, and
+/// each line after it, a row.
+fn move_lines(mcp: &mut Mcp, args: Value) -> (bool, Value, Vec<String>) {
+    let (is_error, text) = mcp.call("move_lines", args);
+    let (first, rows) = text.split_once('\n').unwrap_or((&text, ""));
+    let answer = serde_json::from_str(first).unwrap_or_else(|e| panic!("move_lines' first line is JSON ({e}): {text}"));
     (is_error, answer, rows.split('\n').filter(|row| !row.is_empty()).map(str::to_string).collect())
 }
 
@@ -266,6 +279,63 @@ fn two_pairs_land_in_one_edit_text_call_answered_with_the_lines_they_changed() {
     let new = |change: &Value| -> Vec<String> { (0..5).map(|k| address_past(change["addr"].as_str().expect("the change's I-address"), k)).collect() };
     let expected = [&before[..3], &new(first)[..], &before[7..right], &new(second)[..], &before[right + 5..]].concat();
     assert_eq!(addresses(&mut mcp, &doc), expected, "every byte outside the two changes at the I-address it had, the text between them among it");
+    assert!(mcp.finish().success());
+}
+
+/// A line moved keeps its identity, and a link on it still finds it.
+///
+/// Links are homed in the agent's draft on a word of each of three lines;
+/// the third line is then moved up to stand before the second, by line
+/// numbers alone. The result's first line is the `moved` answer — the line
+/// as asked, where it now stands, the three cuts and the commit, and no rows
+/// — and each line after it a row: the moved line `+` where it stands, the
+/// lines either side, and the row where it left. The draft reads the lines
+/// in their new order with no value minted, every byte at the I-address it
+/// had; each link projects onto its own word still, at the word's new place;
+/// and the answer's `at` is the draft's typed state. A line the draft does
+/// not hold is refused `no_such_line` as data, naming the argument, the line
+/// and the count, a line standing where it is asked to stand answers
+/// `unchanged`, and neither writes (the mutant that removes the line and
+/// types it again mints it anew, and the link on it projects onto nothing).
+#[test]
+fn a_line_moved_keeps_its_identity_and_a_link_on_it_still_finds_it() {
+    let fixture = Fixture::new("move-lines");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+    let doc = draft_holding(&mut mcp, CLAIMANT_ACCOUNT, CODE);
+    let before = addresses(&mut mcp, &doc);
+    let words = ["main", "add", "println"];
+    let links: Vec<String> = words.iter().map(|word| link_on(&mut mcp, &doc, CODE, word)).collect();
+    for (word, link) in words.iter().zip(&links) {
+        assert_eq!(projected(&mut mcp, link, &doc), [*word], "premise: the link stands on its word");
+    }
+    let (is_error, answer, rows) = move_lines(&mut mcp, json!({"doc": doc, "first": 3, "before": 2}));
+    assert!(!is_error && answer["outcome"] == "moved", "the move lands: {answer}\n{}", mcp.log());
+    let at = answer["at"].as_u64().expect("the move's commit");
+    assert_eq!(answer, json!({"outcome": "moved", "doc": doc, "first": 3, "last": 3, "to_first": 2, "to_last": 2, "cuts": ["13", "47", "72"], "at": at}), "the answer, its rows after it");
+    assert_eq!(rows, [" 1\tfn main() {", "+2\t    println!(\"{total}\");", " 3\t    let total = add(left, right);", "-\t(line 3 moved to 2)", " 4\t}"]);
+    let moved = "fn main() {\n    println!(\"{total}\");\n    let total = add(left, right);\n}\n";
+    assert_eq!(text_of(&mut mcp, &doc), moved);
+    assert_eq!(addresses(&mut mcp, &doc), [&before[..12], &before[46..71], &before[12..46], &before[71..]].concat(), "every byte at the I-address it had");
+    assert_eq!(minted(&mut mcp, &doc), CODE.len() as u64, "no value minted");
+    for (word, link) in words.iter().zip(&links) {
+        assert_eq!(projected(&mut mcp, link, &doc), [*word], "the link on `{word}` follows its word");
+        let set = mcp.call_json("project", json!({"a": link, "slot": 1, "d": doc}));
+        assert_eq!(set["set"], json!([{"start": format!("1.{}", ordinal_of(moved, word)), "width": format!("0.{}", word.len())}]), "at the word's place in the text as moved: {set}");
+    }
+    let numbered = mcp.call_json("line_numbers", json!({"doc": doc, "positions": [{"subspace": "1", "ordinal": ordinal_of(moved, "println").to_string()}]}));
+    assert_eq!(numbered["positions"][0]["line"], "2", "the board numbers the moved line as its row does: {numbered}");
+    let (is_error, answer, rows) = move_lines(&mut mcp, json!({"doc": doc, "first": 5, "before": 1}));
+    assert_eq!(
+        (is_error, &answer, rows.len()),
+        (false, &json!({"outcome": "refused", "cause": "no_such_line", "doc": doc, "what": "first", "line": 5, "count": 4}), 0),
+        "data, naming the line and the count"
+    );
+    let (is_error, answer, _) = move_lines(&mut mcp, json!({"doc": doc, "first": 2, "last": 3, "before": 4}));
+    assert_eq!((is_error, answer["outcome"].as_str()), (false, Some("unchanged")), "{answer}");
+    assert_eq!((text_of(&mut mcp, &doc), addresses(&mut mcp, &doc).len()), (moved.to_string(), CODE.len()), "neither wrote");
+    mcp.acked("delete", json!({"as_of": at, "doc": doc, "p": {"subspace": "1", "ordinal": "1"}, "width": "3"}));
+    assert_eq!(mcp.call_json("held", json!({})), json!([]));
     assert!(mcp.finish().success());
 }
 

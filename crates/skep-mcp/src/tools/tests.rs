@@ -19,7 +19,7 @@ const MAX_HELP_CARD_CHARS: usize = 400;
 const MAX_INSTRUCTIONS_CHARS: usize = 2000;
 
 /// The tools whose card ends naming its full reference in the help store.
-const REFERENCED: [&str; 15] = [
+const REFERENCED: [&str; 16] = [
     "create_well_known_document",
     "doc_metadata",
     "set_arrangement",
@@ -35,6 +35,7 @@ const REFERENCED: [&str; 15] = [
     "fetch",
     "replace_text",
     "edit_text",
+    "move_lines",
 ];
 
 /// Returns a tool's card: its description, as `tools/list` answers it.
@@ -269,11 +270,11 @@ fn wire_frame_makes_the_name_the_op_and_the_arguments_the_frame() {
 /// Fifty-two wire ops — every op of wire.md §Operations but `publish`, the
 /// six the first catalog lacked among them, the count by home, the
 /// retracted-links read, the landing, the well-known creation and the line
-/// read — and eighteen
+/// read — and nineteen
 /// adapter tools, the `publication` family's four among them, the read
 /// of a draft's standing beside them, the two text edits, `replace_text`
-/// and `edit_text`, and `help`, which takes a `topic`; no name twice across
-/// the two,
+/// and `edit_text`, the move of whole lines, `move_lines`, and `help`, which
+/// takes a `topic`; no name twice across the two,
 /// each wire op a `Tool::Op` of its own name with no members list, each
 /// adapter tool its row's members; and a ceremony, `upload`, `restore`,
 /// `op`, `publish` or a row's dotted name no tool at all.
@@ -283,13 +284,16 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
     let set: std::collections::BTreeSet<_> = names.iter().collect();
     assert_eq!(set.len(), names.len(), "no name twice");
     assert_eq!(DISPATCH_OPS.len(), 52);
-    assert_eq!(names.len(), 70);
+    assert_eq!(names.len(), 71);
+    assert_eq!(ADAPTER_TOOLS.len(), 19);
     assert_eq!(Tool::named("help"), Some(Tool::Help));
     assert_eq!(Tool::named("help").and_then(Tool::members), Some(&["topic"][..]));
     assert_eq!(Tool::named("replace_text"), Some(Tool::ReplaceText));
     assert_eq!(Tool::named("replace_text").and_then(Tool::members), Some(&["doc", "old", "new"][..]));
     assert_eq!(Tool::named("edit_text"), Some(Tool::EditText));
     assert_eq!(Tool::named("edit_text").and_then(Tool::members), Some(&["doc", "edits"][..]));
+    assert_eq!(Tool::named("move_lines"), Some(Tool::MoveLines));
+    assert_eq!(Tool::named("move_lines").and_then(Tool::members), Some(&["doc", "first", "last", "before"][..]));
     for added in [
         "effective_owner",
         "key_set",
@@ -362,6 +366,9 @@ fn the_dispatchs_door_admits_a_call_or_refuses_it_naming_the_culprit() {
     }
     let err = Tool::admit("search", &args(json!({"query": "x", "board": "b-1", "opts": {"undr": 1}}))).expect_err("two strangers");
     assert!(err.contains("'board'") && !err.contains("'undr'"), "the row's stranger speaks first: {err}");
+    assert_eq!(Tool::admit("move_lines", &args(json!({"doc": "1.0.1.0.64", "first": 2, "last": 3, "before": 1}))), Ok(Tool::MoveLines));
+    let err = Tool::admit("move_lines", &args(json!({"doc": "1.0.1.0.64", "from": 2, "before": 1}))).expect_err("a member the row does not take");
+    assert!(err.contains("move_lines takes 'doc', 'first', 'last', 'before'") && err.contains("'from'"), "the block's first line is `first`: {err}");
 }
 
 /// The door refuses a member of an `edit_text` pair the shell would ignore.
@@ -678,7 +685,7 @@ fn every_card_and_the_instructions_are_short() {
 /// A tool's topic stands in the help store exactly where its card ends
 /// `Full reference: help("<name>").`, so no card points at a topic that is
 /// not there and no reference waits unnamed; the tools with a reference are
-/// the fifteen whose whole text an agent needs only when a call goes the
+/// the sixteen whose whole text an agent needs only when a call goes the
 /// way it covers.
 #[test]
 fn a_card_with_a_reference_points_to_it() {
@@ -709,8 +716,8 @@ fn each_short_card_says_what_an_agent_needs_first() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
     let mib = format!("{} MiB", crate::media::MAX_FETCH_BYTES / (1024 * 1024));
     let pairs = format!("at most {MAX_WIRE_LIST} pairs");
-    let said: [(&str, &[&str]); 16] = [
-        ("replace_text", &["EXACTLY ONCE", "edit_text", "\"replaced\"", "\"refused\"", "not_unique", "\"partial\"", "\"held\"", "isError"]),
+    let said: [(&str, &[&str]); 17] = [
+        ("replace_text", &["EXACTLY ONCE", "edit_text", "move_lines", "\"replaced\"", "\"refused\"", "not_unique", "\"partial\"", "\"held\"", "isError"]),
         (
             "edit_text",
             &[
@@ -724,6 +731,24 @@ fn each_short_card_says_what_an_agent_needs_first() {
                 &pairs,
                 "partial and held are isError",
                 "read the draft before you edit it again",
+            ],
+        ),
+        (
+            "move_lines",
+            &[
+                "\"moved\"",
+                "\"refused\"",
+                "edit_text",
+                "rearrange",
+                "line_numbers",
+                "isError",
+                "move_lines(doc, first, last?, before?)",
+                "both included",
+                "made after your last change",
+                "The lines move exactly as given",
+                "to_first and to_last",
+                "no_such_line",
+                "arrangement_moved",
             ],
         ),
         ("publication_open", &["mint", "PANEL", "publication_count", "publication_confirm", "publication_cancel", "base_unrecorded"]),
@@ -802,6 +827,7 @@ fn each_adapter_tool_takes_its_shell_rows_members_bar_the_session_and_board() {
             Tool::SessionInfo | Tool::Help => continue,
             Tool::ReplaceText => "text.replace",
             Tool::EditText => "text.edit",
+            Tool::MoveLines => "text.move",
             Tool::ChangesSince => "changes",
             Tool::PublicationOpen => "publication.open",
             Tool::PublicationCount => "publication.count",
@@ -977,9 +1003,13 @@ fn the_publication_references_state_the_shells_shapes() {
 /// Each text edit's reference names the cap on one change's new text and on
 /// a draft's size by skep-shell's constants, and `edit_text`'s the wire's
 /// list cap on its pairs, which its schema holds too, and each figure of
-/// its rows; the instructions send an agent to both tools, and so do the
-/// EDITING TEXT topic and the OVERVIEW topic, which names each among the
-/// apparatus; and every outcome and every cause of the edit's own is spelled
+/// its rows; `move_lines`' reference names the draft's cap and the lines its
+/// rows show either side by the same constants, and its schema takes a line
+/// as a whole number from 1; the instructions send an agent to the three
+/// tools, and so do the EDITING TEXT topic and the OVERVIEW topic, which
+/// names each among the apparatus, and `replace_text`'s card and reference,
+/// which send whole lines moved to `move_lines`; and every outcome and every
+/// cause of the edit's own is spelled
 /// in `replace_text`'s reference (SP-25). `edit_text`'s card itself says what
 /// an agent needs before it reads the reference — the call's form, the
 /// once-only rule, all or nothing, the cap on its pairs and that `partial`
@@ -1054,27 +1084,60 @@ fn the_catalog_tells_an_agent_the_edits_figures_as_the_code_holds_them() {
     assert_eq!(schema["required"], json!(["doc", "edits"]));
     assert_eq!((&schema["properties"]["edits"]["minItems"], &schema["properties"]["edits"]["maxItems"]), (&json!(1), &json!(MAX_WIRE_LIST)), "one pair at least, one wire list at most");
     assert_eq!(schema["properties"]["edits"]["items"]["properties"]["old"]["minLength"], 1, "an empty old is refused, and the schema says so");
+    let said = reference(&catalog, "move_lines");
+    for spelled in [
+        format!("a draft past {MAX_DRAFT_POSITIONS} content positions"),
+        "\"+N<TAB>line\"".to_string(),
+        format!("\" N<TAB>line\" (a space, then N): one of the {ROWS_CONTEXT_LINES} unchanged lines either side"),
+        "\"-<TAB>(lines A–B moved to C–D)\"".to_string(),
+        "\"-<TAB>(line A moved to C)\"".to_string(),
+        "masked: true".to_string(),
+        "which holds one line fewer".to_string(),
+        "rearrange itself stays yours for a move that is not whole lines".to_string(),
+    ] {
+        assert!(said.contains(&spelled), "move_lines' reference says `{spelled}`: {said}");
+    }
+    let schema = &entry("move_lines")["inputSchema"];
+    assert_eq!(schema["required"], json!(["doc", "first"]));
+    for line in ["first", "last", "before"] {
+        assert_eq!((&schema["properties"][line]["type"], &schema["properties"][line]["minimum"]), (&json!("integer"), &json!(1)), "{line}: a line is a whole number from 1");
+    }
     let instructions = catalog.instructions();
-    assert!(instructions.contains("replace_text (one change)") && instructions.contains("edit_text (several"), "the instructions send an agent to both tools: {instructions}");
+    assert!(
+        instructions.contains("replace_text (one change)") && instructions.contains("edit_text (several") && instructions.contains("move_lines (lines moved)"),
+        "the instructions send an agent to the three tools: {instructions}"
+    );
     let editing = topic(&catalog, "EDITING TEXT");
-    assert!(editing.contains("replace_text(doc, old, new)") && editing.contains("edit_text(doc, edits)"), "the topic sends an agent to both tools: {editing}");
+    assert!(
+        editing.contains("replace_text(doc, old, new)") && editing.contains("edit_text(doc, edits)") && editing.contains("move_lines(doc, first, last?, before?)"),
+        "the topic sends an agent to the three tools: {editing}"
+    );
     let overview = topic(&catalog, "OVERVIEW");
-    assert!(overview.contains("replace_text (") && overview.contains("edit_text (") && overview.contains(": EDITING TEXT)"), "the overview names both among the apparatus: {overview}");
+    assert!(
+        overview.contains("replace_text (") && overview.contains("edit_text (") && overview.contains("move_lines (") && overview.contains(": EDITING TEXT)"),
+        "the overview names the three among the apparatus: {overview}"
+    );
+    for (whose, text) in [("EDITING TEXT", editing), ("replace_text's card", card(&catalog, "replace_text")), ("replace_text's reference", reference(&catalog, "replace_text"))] {
+        assert!(text.contains("move_lines") && !text.contains("a block moved"), "{whose} sends whole lines moved to move_lines, never to rearrange: {text}");
+    }
+    assert!(editing.contains("a move that is not whole lines") && reference(&catalog, "replace_text").contains("a move that is not whole lines"), "rearrange stays for a move that is not whole lines");
 }
 
 /// The text edits' references state the shell's answers, bar what the
 /// adapter takes off.
 ///
 /// Each reference — `replace_text`'s of the shell's `text.replace` row,
-/// `edit_text`'s of its `text.edit` row — spells each answer the row
+/// `edit_text`'s of its `text.edit` row, `move_lines`' of its `text.move`
+/// row — spells each answer the row
 /// declares (`shapes::declarations`) as `{outcome: "…", a, b?, …}`: every
 /// member of the shape, `?` where it is optional, a nested value's members
 /// in braces beside it, `…` where the shape is open — and no other, save
 /// the shell's error member, which the adapter takes off (`EDIT_ERROR`) and
-/// no agent sees, and the rows of a landed `text.edit`, which follow the
-/// answer as lines of their own (`EDIT_LINES`); the answers that carry the
-/// error member are the three `isError` ones, `refused` beside a
-/// verdict-less cause, `partial` and `held`; a span the reference spells is
+/// no agent sees, and the rows of a landed `text.edit` or `text.move`, which
+/// follow the answer as lines of their own (`EDIT_LINES`); the answers that
+/// carry the error member are the `isError` ones, `refused` beside a
+/// verdict-less cause and `held`, and an edit's `partial`; a span a
+/// reference spells, where its row's answers carry one, is
 /// the shell's `TextSpan`; and the reference's `(write: …)` list names each
 /// value of its held answer's `write` and no other. `edit_text`'s reference
 /// spells a change as `TextEditChange`, a change that stands as `TextEditStanding`
@@ -1135,14 +1198,19 @@ fn the_text_edit_references_state_the_shells_answers_bar_what_the_adapter_takes_
     let declarations = skep_shell::shapes::declarations();
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
     let (edit_error, edit_lines) = (crate::server::EDIT_ERROR, crate::server::EDIT_LINES);
-    for (name, row, held, left_out) in [("replace_text", "text.replace", "TextHeld", &[edit_error][..]), ("edit_text", "text.edit", "TextEditHeld", &[edit_error, edit_lines][..])] {
+    for (name, row, held, left_out, marked) in [
+        ("replace_text", "text.replace", "TextHeld", &[edit_error][..], &["refused", "partial", "held"][..]),
+        ("edit_text", "text.edit", "TextEditHeld", &[edit_error, edit_lines][..], &["refused", "partial", "held"][..]),
+        ("move_lines", "text.move", "TextMoveHeld", &[edit_error, edit_lines][..], &["refused", "held"][..]),
+    ] {
         let head = format!("  '{row}'(args: ");
         let line = declarations.lines().find(|line| line.starts_with(head.as_str())).unwrap_or_else(|| panic!("skep-shell declares the {row} row"));
         let answers = line.split_once("Promise<Outcome<").and_then(|(_, rest)| rest.strip_suffix(">>;")).unwrap_or_else(|| panic!("the row's answer: {line}"));
         let card = reference(&catalog, name);
-        let mut errors = BTreeSet::new();
+        let (mut errors, mut spans) = (BTreeSet::new(), false);
         for answer in answers.split(" | ") {
             let shape = skep_shell::shapes::shape(answer).unwrap_or_else(|| panic!("skep-shell declares {answer}"));
+            spans |= shape.fields.iter().any(|field| field.ty.contains("TextSpan") || field.ty.contains("TextEditHalf"));
             let outcome = shape.fields.iter().find(|field| field.name == "outcome").and_then(|field| field.ty.strip_prefix('\'')?.strip_suffix('\'')).unwrap_or_else(|| panic!("{answer} is keyed by its outcome"));
             let head = format!("{{outcome: \"{outcome}\"");
             let at = card.find(&head).unwrap_or_else(|| panic!("{name}: the card spells the {outcome} answer: {card}"));
@@ -1151,9 +1219,13 @@ fn the_text_edit_references_state_the_shells_answers_bar_what_the_adapter_takes_
                 errors.insert(outcome);
             }
         }
-        assert_eq!(errors, BTreeSet::from(["refused", "partial", "held"]), "{name}: the answers the shell marks as errors");
-        let span = card.find("new_text: {").map(|at| members(braced(&card[at..])).0).unwrap_or_else(|| panic!("{name}: the card spells new_text's members"));
-        assert_eq!(span, declared("TextSpan", &[]), "{name}: a span is the shell's TextSpan");
+        assert_eq!(errors, marked.iter().copied().collect::<BTreeSet<&str>>(), "{name}: the answers the shell marks as errors");
+        // A reference spells a span only where an answer of its row carries
+        // one: a move's answers name no span.
+        match card.find("new_text: {").map(|at| members(braced(&card[at..])).0) {
+            Some(span) => assert_eq!((spans, span), (true, declared("TextSpan", &[])), "{name}: a span is the shell's TextSpan"),
+            None => assert!(!spans, "{name}: the card spells new_text's members"),
+        }
         let write = skep_shell::shapes::shape(held).and_then(|shape| shape.fields.iter().find(|field| field.name == "write")).unwrap_or_else(|| panic!("skep-shell declares {held}'s write")).ty;
         let writes: BTreeSet<&str> = write.split(" | ").map(|value| value.trim_matches('\'')).collect();
         let listed = card.split_once("(write: ").and_then(|(_, rest)| rest.split_once([')', '—'])).map(|(list, _)| list).unwrap_or_else(|| panic!("{name}: the card lists the writes a held line may be"));

@@ -15,10 +15,10 @@
 //! and its [`EventName`] (an [`UnknownEventName`] where a spelling names
 //! none), [`Talk`], [`CALLS`], the text edit's two caps,
 //! [`MAX_DRAFT_POSITIONS`] and [`MAX_NEW_BYTES`], and the figures of the
-//! rows a several-pair edit answers with ([`ROWS_CONTEXT_LINES`],
-//! [`ROWS_MAX_RUN`], [`ROWS_RUN_HEAD`], [`ROWS_RUN_TAIL`],
-//! [`ROWS_MAX_LINE_CHARS`], [`ROWS_MAX_BYTES`]) — and two public modules,
-//! [`script`] and [`shapes`]; the rest is private.
+//! rows a several-pair edit and a move of lines answer with
+//! ([`ROWS_CONTEXT_LINES`], [`ROWS_MAX_RUN`], [`ROWS_RUN_HEAD`],
+//! [`ROWS_RUN_TAIL`], [`ROWS_MAX_LINE_CHARS`], [`ROWS_MAX_BYTES`]) — and
+//! two public modules, [`script`] and [`shapes`]; the rest is private.
 //! The modules, in the order they are declared, each naming only those
 //! above it:
 //!
@@ -162,8 +162,10 @@
 //!   byte's identity, `text.replace`, and several such edits in one call,
 //!   each made as its minimal changes and all of them landed or none,
 //!   `text.edit` (skep #1079), its landed answer showing the lines it
-//!   changed (skep #1080), each made of the `op`, `held` and `resolve`
-//!   rows' calls, in its child `text` — each row taking and answering values
+//!   changed (skep #1080), and whole lines of a draft moved by identity,
+//!   `text.move` (skep #1085), its landed answer showing them where they
+//!   now stand, each made of the `op`, `held` and `resolve` rows' calls, in
+//!   its child `text` — each row taking and answering values
 //!   shaped exactly as the row's columns — an argument of another form
 //!   refused, never read as absent;
 //!   in its child `follow`, the bursts each session sends with an `id` and the

@@ -1,11 +1,11 @@
 //! The text edit's unit suite: the find, the trim, the text a delivery is
-//! read into and spliced, the edit against a scripted board (`Script`, the
-//! edit's [`Calls`]), and the edit through the shell's rows scripted
-//! (`Rowed`, its [`Rows`]) — a death followed to its re-open, the error
-//! member, the halts left for the row to say. The scripted boards serve the
-//! child suite of `text.edit` too (`edit/tests.rs`). The rows themselves,
-//! their order and their door, run against the daemon in
-//! `shell/tests/text.rs`.
+//! read into, spliced and rearranged, the edit against a scripted board
+//! (`Script`, the edit's [`Calls`]), and the edit through the shell's rows
+//! scripted (`Rowed`, its [`Rows`]) — a death followed to its re-open, the
+//! error member, the halts left for the row to say. The scripted boards
+//! serve the child suites of `text.edit` and `text.move` too
+//! (`edit/tests.rs`, `moving/tests.rs`). The rows themselves, their order
+//! and their door, run against the daemon in `shell/tests/text.rs`.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -251,6 +251,46 @@ fn a_text_spliced_reads_as_the_draft_will_once_the_edit_lands() {
         text.splice(found, removed, b"x");
         assert_eq!((text.bytes.clone(), text.stretches.clone(), text.gaps.clone(), text.positions()), before, "{found}: no stretch holds the bytes");
     }
+}
+
+/// A text rearranged reads as the draft will once the cuts land.
+///
+/// Three cuts exchange the two regions between them and four the two outer
+/// ones around the middle, as the wire's own examples over `abcde` have it;
+/// what stands outside the cuts stays; a value that is no text goes with its
+/// region, its positions with it and its kind kept; two runs of text a move
+/// brings side by side are one stretch, so a word across the seam is found;
+/// and any other count of cuts leaves the text as it reads (the mutants that
+/// exchange the wrong pair, drop a gap's width, or leave two stretches side
+/// by side answer another text, another ordinal or no match).
+#[test]
+fn a_text_rearranged_reads_as_the_draft_will_once_the_cuts_land() {
+    let read = |text: &Text| String::from_utf8(text.bytes.clone()).expect("text");
+    let abcde = text_of(json!([{"content": "abcde"}]));
+    assert_eq!(read(&abcde.rearranged(&[2, 4, 6])), "adebc", "three cuts: wire.md's own example");
+    assert_eq!(read(&abcde.rearranged(&[1, 2, 3, 4])), "cbade", "four cuts: wire.md's own example");
+    assert_eq!(read(&abcde.rearranged(&[2, 3, 4])), "acbde", "what stands past the last cut stays");
+    for cuts in [&[][..], &[2, 4][..], &[1, 2, 3, 4, 5][..]] {
+        let same = abcde.rearranged(cuts);
+        assert_eq!((read(&same), same.positions(), same.stretches.len()), ("abcde".to_string(), 5, 1), "{cuts:?}: no such rearrange");
+    }
+    let text = text_of(json!([{"content": "one\n"}, {"withheld": {"origin": "1.0.1.0.9", "width": "5"}}, {"content": "two\nthree\n"}, {"atom": "v"}, {"content": "four\n"}]));
+    assert_eq!((text.positions(), text.find(b"three"), text.find(b"four")), (25, Found::Once(14), Found::Once(21)));
+    // Line 2, the withheld run and `two`, moved to the end: [5, 14, 26).
+    let moved = text.rearranged(&[5, 14, 26]);
+    assert_eq!((moved.positions(), read(&moved)), (25, "one\nthree\nfour\ntwo\n".to_string()));
+    assert_eq!(
+        (moved.find(b"one\nthree"), moved.find(b"four"), moved.find(b"two")),
+        (Found::Once(1), Found::Once(12), Found::Once(22)),
+        "the text before the cuts and the text brought to it are one stretch"
+    );
+    assert_eq!(moved.gaps.iter().map(|gap| (gap.ordinal, gap.kind.as_str())).collect::<Vec<_>>(), [(11, "atom"), (17, "withheld")], "each gap with its region, its positions kept");
+    assert_eq!(moved.find(b"four\ntwo"), Found::Across { ordinal: 17, kind: "withheld".into() }, "the withheld run stands before `two` still");
+    assert_eq!(moved.stretches.len(), 3, "no two stretches side by side: {:?}", moved.stretches);
+    // A cut inside a value that is no text tells it in two parts.
+    let parted = text.rearranged(&[1, 7, 10]);
+    assert_eq!((parted.positions(), parted.find(b"one"), parted.find(b"two")), (25, Found::Once(4), Found::Once(10)));
+    assert_eq!(parted.gaps.iter().map(|gap| gap.ordinal).collect::<Vec<_>>(), [1, 8, 20], "three positions of the run, then two, then the atom");
 }
 
 /// A span set's content extent is read, and anything else is not one.

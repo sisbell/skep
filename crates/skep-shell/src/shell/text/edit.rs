@@ -67,7 +67,7 @@
 //! own commit, so a caller finds what stands by identity whatever was
 //! written after it.
 //!
-//! **The rows** (skep #1080; the child module `rows`). `edited` carries the
+//! **The rows** (skep #1080; the sibling module `rows`). `edited` carries the
 //! lines the call changed, numbered, as `lines`, and `masked` beside them
 //! where a withheld run stands on or before a line they show. They are drawn
 //! from the plan's own text — the one read with every pair spliced in, which
@@ -83,23 +83,21 @@ use skep_client::board::frames;
 use skep_client::merge::origin_of;
 use skep_client::text::minimal_changes;
 
+use super::rows::{rows, Pieces, Rows};
 use super::{
     held, natural, read_draft, refused, refused_write, settle, spans, undo, unread, write, Answer, Calls, Edit, Found, Line, Read, Settled, Text, Undone, Wrote, MAX_NEW_BYTES, WHOLE_CONTENT,
 };
 use crate::attest::MAX_WIRE_LIST;
 use crate::hold::may_have_landed;
 use crate::refusal::Refusal;
-use rows::{rows, Pieces, Rows};
-
-pub(super) mod rows;
 
 /// One pair of the call's: the text to replace, and its replacement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Pair<'a> {
+pub(super) struct Pair<'a> {
     /// The text to replace, not empty.
-    old: &'a str,
+    pub(super) old: &'a str,
     /// The text to stand in its place, empty where `old` is only removed.
-    new: &'a str,
+    pub(super) new: &'a str,
 }
 
 /// What the call is asked: the draft, and its pairs in their order.
@@ -154,12 +152,12 @@ struct Planned<'a> {
 
 /// The call's writes as planned, and the text they leave told by origin.
 #[derive(Debug)]
-struct Plan<'a> {
+pub(super) struct Plan<'a> {
     /// The changes, in the order they are written.
     changes: Vec<Planned<'a>>,
     /// Where each position of the text the changes leave came from, which
     /// the rows of an `edited` answer are drawn by.
-    pieces: Pieces<'a>,
+    pub(super) pieces: Pieces<'a>,
 }
 
 /// Plans the call's writes: every pair checked, and made its changes.
@@ -176,7 +174,7 @@ struct Plan<'a> {
 /// value that is no text, each as `text.replace` answers it, the ordinal a
 /// place in the text as the pairs before leave it; and `too_large` naming
 /// the change (`change`) whose new bytes pass [`MAX_NEW_BYTES`].
-fn plan<'a>(doc: &str, text: &mut Text, as_of: u64, pairs: &[Pair<'a>]) -> Result<Plan<'a>, Answer> {
+pub(super) fn plan<'a>(doc: &str, text: &mut Text, as_of: u64, pairs: &[Pair<'a>]) -> Result<Plan<'a>, Answer> {
     let (mut changes, mut pieces) = (Vec::new(), Pieces::of(text.positions()));
     for (k, pair) in pairs.iter().enumerate() {
         let found = match text.find(pair.old.as_bytes()) {

@@ -214,6 +214,31 @@ fn a_landed_edits_rows_follow_its_answer_one_a_line_as_the_shell_spelled_them() 
     }
 }
 
+/// Checks that a landed move's rows follow its answer, as an edit's do.
+///
+/// The shell's `text.move` answers `moved` with its rows in the member a
+/// landed `text.edit` answers its own in: the text is the answer's JSON on
+/// its first line, the list taken off, then each row on a line of its own,
+/// the row where the lines left among them, `isError` false; and its held
+/// answer, the error member beside it, is `isError`, the member taken off.
+#[test]
+fn a_landed_moves_rows_follow_its_answer_and_its_held_answer_is_an_error() {
+    let rows = [" 1\ta", "+2\tc", " 3\tb", "-\t(line 3 moved to 2)"];
+    let moved = json!({"outcome": "moved", "doc": "1.0.1.0.64", "first": 3, "last": 3, "to_first": 2, "to_last": 2, "cuts": ["3", "5", "7"], "at": 45, "lines": rows, "masked": true});
+    let result = edit_result(Ok(moved.clone()));
+    let text = result["content"][0]["text"].as_str().expect("a text block");
+    let (first, rest) = text.split_once('\n').expect("rows after the answer");
+    let mut answer = moved;
+    answer.as_object_mut().expect("an object").remove(EDIT_LINES);
+    assert_eq!((result["isError"].as_bool(), serde_json::from_str::<Value>(first).expect("the first line is JSON")), (Some(false), answer), "the answer, its rows taken off");
+    assert_eq!(rest.split('\n').collect::<Vec<_>>(), rows, "each row on a line of its own, unescaped");
+    let held = json!({"outcome": "held", "doc": "1.0.1.0.64", "held": 8, "cause": "unreachable", "write": "rearrange"});
+    let mut marked = held.clone();
+    marked[EDIT_ERROR] = json!(true);
+    let result = edit_result(Ok(marked));
+    assert_eq!((result["isError"].as_bool(), serde_json::from_str::<Value>(result["content"][0]["text"].as_str().expect("a text block")).expect("JSON text")), (Some(true), held));
+}
+
 /// Checks that `help` answers a topic and the list, and refuses a stranger.
 ///
 /// It answers from the catalog alone, so no backend is built here and no

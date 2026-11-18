@@ -41,7 +41,9 @@
 //! naming no `skepd` without the
 //! feature and one with it; F8 the declarations served equal to the
 //! crate's; F9 the conformance — one sequence on the crate and through the
-//! provider, deep-equal results and the same events in order.
+//! provider, deep-equal results and the same events in order; and the
+//! README's count of the calls the provider serves, and its names of the
+//! text family's, held to the shell's own list.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
@@ -338,6 +340,38 @@ fn readme_names_every_door(detail: &str, lead: &str) {
     for door in doors {
         assert!(readme.contains(&format!("`{door}`")), "README.md names the fault door `{door}`");
     }
+}
+
+/// Returns `n`, from twenty to ninety-nine, as the README spells a count.
+fn in_words(n: usize) -> String {
+    let tens = ["twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+    let ones = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
+    assert!((20..100).contains(&n), "the README spells a count from twenty to ninety-nine: {n}");
+    match n % 10 {
+        0 => tens[n / 10 - 2].to_string(),
+        one => format!("{}-{}", tens[n / 10 - 2], ones[one]),
+    }
+}
+
+/// The README states the provider's calls as the shell lists them.
+///
+/// The provider admits a call by `skep_shell::CALLS` and serves every one
+/// of them, so the README's count of them, spelled in words, is the list's
+/// length, and it names each call of the `text` family, which stand past
+/// `client.md` §4b.1's rows: a call the shell adds reaches a page through
+/// this provider unannounced unless the README moves with it (SP-25).
+#[test]
+fn the_readme_counts_the_shells_calls_and_names_each_of_the_text_family() {
+    let readme = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md")).expect("the crate's README");
+    let folded = readme.split_whitespace().collect::<Vec<_>>().join(" ");
+    let counted = format!("`POST /bridge/<call>` for the {} calls of `skep-shell`'s `CALLS`", in_words(skep_shell::CALLS.len()));
+    assert!(folded.contains(&counted), "README.md counts the provider's calls as the shell lists them: {counted}");
+    let family: Vec<&str> = skep_shell::CALLS.iter().copied().filter(|call| call.starts_with("text.")).collect();
+    assert!(family.len() > 1, "premise: the shell lists a text family: {family:?}");
+    for call in family {
+        assert!(folded.contains(&format!("`{call}`")), "README.md names the call `{call}`");
+    }
+    assert_eq!((in_words(20), in_words(41), in_words(90)), ("twenty".to_string(), "forty-one".to_string(), "ninety".to_string()), "a count spelled as the README spells one");
 }
 
 /// The provider's talk once it holds every one of `needles`, within the

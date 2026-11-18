@@ -865,7 +865,8 @@ per call of §4b.1 (the `publication` family's four among them), of the
 read of a draft's standing `publication.standing`, of the read of a
 draft's past state `history.past`, of the document index's listing
 `places` (A-255), of the text edit of a draft `text.replace`, of several
-of them in one call `text.edit` and of the change feed's page `changes`,
+of them in one call `text.edit`, of whole lines of a draft moved by
+identity `text.move` and of the change feed's page `changes`,
 every event of §4b.2 on one stream — and
 the three things `skep-client` does not hold and every shell needs,
 written once so the dev provider (`skep-dev serve`) and the desktop shell
@@ -936,7 +937,7 @@ root re-exports counted as the module it is brought from (held by
   `set_node_state`; and `Shell::write_door`, the ONE WRITE DOOR every write
   the shell sends meets before any dial — the `op` row's frames, through
   `Shell::signed` every row of `shell/publication.rs`, `shell/merge.rs` and
-  `shell/history.rs` that writes, each of `shell/text.rs`'s two calls
+  `shell/history.rs` that writes, each of `shell/text.rs`'s three calls
   before its first read, and every ceremony of `shell/ceremony.rs` that
   writes to the board.
 - `shell/ceremony.rs` the ten ceremonial rows — `keygen`, `fingerprint` and
@@ -962,7 +963,7 @@ root re-exports counted as the module it is brought from (held by
   write — `pub(super)` to `call`, their refusals crossing through
   `shell/merge.rs`'s mapping and the restore's write noted in `hold.rs`'s
   holds.
-- `shell/text.rs` the `text` family's two rows, `pub(super)` to `call`,
+- `shell/text.rs` the `text` family's three rows, `pub(super)` to `call`,
   each made of the `op`, `held` and `resolve` rows' calls under the
   session it stands under: `text.replace`, a text edit of a draft that
   replaces the bytes that differ alone, with the draft's text as an edit
@@ -972,9 +973,13 @@ root re-exports counted as the module it is brought from (held by
   `skep_client::text`'s minimal changes: the plan made of one read, the
   writes chained by position, and the take-back that sets the draft back
   where a write past the first does not land.
-- `shell/text/edit/rows.rs` the rows of `text.edit`'s landed answer: the
-  pieces the plan splices in step with its text, and the lines drawn from
-  them, `pub(super)` to `edit`, its figures re-exported at the root.
+- `shell/text/moving.rs` `text.move`, whole lines of a draft moved by
+  identity: the cuts of one `rearrange`, found from the lines' starts in
+  one read.
+- `shell/text/rows.rs` the rows of a landed `text.edit`'s and
+  `text.move`'s answer: a text's lines counted, the pieces `edit`'s plan
+  splices in step with its text, and the lines drawn from them,
+  `pub(super)` to `text`, its figures re-exported at the root.
 - `shapes.rs` the declarations' table and `declarations()`, pinned by its
   suite — the board's verdict with its `site`, the publication family's
   panel, inputs, outcomes and event among them.
@@ -987,8 +992,8 @@ Rules that hold across its files:
   `shell/merge.rs`, `shell/history.rs` and `shell/text.rs` — so a
   transport cannot serve a call the log never saw. A row made of other
   rows' calls — `close`'s frames, the reads, writes and drops of
-  `text.replace` and `text.edit` — makes them within its own call, and
-  the log keeps that one.
+  `text.replace`, `text.edit` and `text.move` — makes them within its own
+  call, and the log keeps that one.
   `Shell::fetch` is the one public row, because it streams, and logs its
   own call.
   `tests/it/tidy.rs` pins `Shell`'s public methods across every

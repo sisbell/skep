@@ -1,32 +1,34 @@
-//! The rows of `text.edit`'s answer: the lines the call changed (skep #1080).
+//! The rows of a landed text call's answer: the lines the call changed.
 //!
-//! An `edited` answer names each change by byte counts and addresses; the
-//! rows show the lines themselves, numbered, so a caller sees its edit
-//! without reading the draft back. They are drawn from the text the call
-//! already holds — the draft's one read with every pair applied in memory
-//! (`Text::splice`), which is the draft exactly as the call's last write left
-//! it, each write typed against the one before — and no read is made for
-//! them. The module is a function of that text and of where each of its
-//! positions came from: it writes nothing and reads no board.
+//! An `edited` answer names each change by byte counts and addresses, and a
+//! `moved` one its cuts; the rows show the lines themselves, numbered, so a
+//! caller sees its change without reading the draft back (skep #1080, skep
+//! #1085). They are drawn from the text the call already holds — the draft's
+//! one read as the call's writes leave it, changed in memory alone: every
+//! pair of `text.edit`'s applied (`Text::splice`), each write typed against
+//! the one before, or `text.move`'s one `rearrange` (`Text::rearranged`) —
+//! and no read is made for them. The module is a function of that text and
+//! of what the call did to it: it writes nothing and reads no board.
 //!
-//! **The pieces** ([`Pieces`]). As the plan splices the text pair by pair, it
-//! splices the pieces in step: each run of the text's positions is either a
-//! run the draft held when it was read, by its position then, or bytes the
-//! call inserted. The bytes a pair's minimal changes leave standing keep
-//! their pieces — an earlier pair's insert stays one — and every byte a
-//! change removes of the draft as read is kept by its position, as the
-//! pair's own `old` spells it.
+//! **The pieces** ([`Pieces`]). As `text.edit`'s plan splices the text pair
+//! by pair, it splices the pieces in step: each run of the text's positions
+//! is either a run the draft held when it was read, by its position then, or
+//! bytes the call inserted. The bytes a pair's minimal changes leave
+//! standing keep their pieces — an earlier pair's insert stays one — and
+//! every byte a change removes of the draft as read is kept by its position,
+//! as the pair's own `old` spells it.
 //!
 //! **The stretches.** The stretches are read off the pieces of the text as
 //! the call leaves it, so a change shifts every one after it: bytes the call
 //! inserted side by side, and a removal touching them, are one stretch,
 //! whichever pairs made them.
 //!
-//! **The lines.** Lines are counted as `line_numbers` counts them (wire.md
-//! §Content & provenance reads): a line break is the byte 0x0A; a value that
-//! is no text — an atom, a withheld run — holds none; line 1 starts at
-//! position 1 and line N one position past line break N − 1; and a text that
-//! ends in a line break has no empty last line.
+//! **The lines** ([`Lines`]). Lines are counted as `line_numbers` counts them
+//! (wire.md §Content & provenance reads): a line break is the byte 0x0A; a
+//! value that is no text — an atom, a withheld run — holds none; line 1
+//! starts at position 1 and line N one position past line break N − 1; and a
+//! text that ends in a line break has no empty last line. `text.move` finds
+//! its cuts by the same count: the positions its lines start at.
 //!
 //! **The slide.** A stretch that only inserts or only removes leaves the same
 //! text told one byte back, where the byte before it is text equal to its
@@ -58,19 +60,28 @@
 //! withheld run stands on or before a line they show: its line breaks are
 //! counted nowhere, so every number past it is the caller's own view.
 //!
+//! **The moved rows** ([`moved`]). The lines `text.move` moved are `+` rows
+//! where they now stand, the lines either side of them shown as beside any
+//! `+` row and a long run cut as any is, and one `-` row stands where they
+//! left: `-<TAB>(lines A–B moved to C–D)`, or `(line A moved to C)` for one
+//! line, A and B their numbers in the draft as read and C and D in the text
+//! as the move leaves it.
+//!
 //! **The cost** (SP-23). The pieces are spliced as the text is: each pair's
 //! splice walks the pieces once and moves those after it, as `Text::splice`
 //! walks and moves the bytes, so the plan's cost keeps its order. The rows
-//! are one walk of the text numbering the stretches' lines and one more
-//! drawing the lines they show; a slide reads at most the line it moves in,
-//! and each removed byte it reads is a lookup among the runs removed.
+//! are one walk of the text numbering the stretches' lines, one counting its
+//! lines and one more drawing the lines they show; a slide reads at most the
+//! line it moves in, and each removed byte it reads is a lookup among the
+//! runs removed. The lines' count, and the starts of the lines asked
+//! together, are each one walk of the text.
 
 use std::fmt::Write as _;
 use std::ops::{Range, RangeInclusive};
 
 use skep_client::text::Change;
 
-use super::super::Text;
+use super::Text;
 
 /// The unchanged lines the rows show either side of a change.
 pub const ROWS_CONTEXT_LINES: usize = 2;
@@ -369,6 +380,69 @@ impl Draft<'_> {
     }
 }
 
+/// A text's lines, counted as the module doc's *The lines* counts them.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Lines<'t> {
+    /// The text.
+    text: &'t Text,
+    /// How many lines it holds.
+    count: u64,
+    /// Whether its last position is a line break.
+    closed: bool,
+}
+
+impl<'t> Lines<'t> {
+    /// Returns the lines of `text`, counted by one walk of it.
+    pub(super) fn of(text: &'t Text) -> Lines<'t> {
+        let breaks = text.bytes.iter().filter(|byte| **byte == b'\n').count() as u64;
+        let positions = text.positions();
+        let closed = Draft { text }.byte(positions) == Some(b'\n');
+        Lines { text, count: breaks + u64::from(positions > 0 && !closed), closed }
+    }
+
+    /// Returns how many lines the text holds.
+    pub(super) fn count(&self) -> u64 {
+        self.count
+    }
+
+    /// Returns whether the text's last position is a line break.
+    ///
+    /// A text that ends in none, and holds any position, ends in a line no
+    /// line break closes; an empty text ends in neither.
+    pub(super) fn closed(&self) -> bool {
+        self.closed
+    }
+
+    /// Returns the position each line of `lines` starts at, by one walk.
+    ///
+    /// A line from 1 to the count starts where the module doc's *The lines*
+    /// has it, and the line one past the count one position past the text's
+    /// last, where a line appended would start; any other line starts
+    /// nowhere.
+    pub(super) fn starts<const N: usize>(&self, lines: [u64; N]) -> [Option<u64>; N] {
+        let end = self.text.positions() + 1;
+        let mut starts = lines.map(|line| match line {
+            1 => Some(1),
+            line if line == self.count + 1 => Some(end),
+            _ => None,
+        });
+        let mut breaks = 0;
+        for stretch in &self.text.stretches {
+            let bytes = self.text.bytes.get(stretch.at..stretch.at + stretch.len).unwrap_or_default();
+            for (into, _) in bytes.iter().enumerate().filter(|(_, byte)| **byte == b'\n') {
+                breaks += 1;
+                // Line `breaks + 1` starts one position past line break `breaks`.
+                for (start, line) in starts.iter_mut().zip(lines) {
+                    if line == breaks + 1 && line <= self.count {
+                        *start = Some(stretch.ordinal + into as u64 + 1);
+                    }
+                }
+            }
+        }
+        starts
+    }
+}
+
 /// What a stretch shows, placed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Mark {
@@ -532,10 +606,38 @@ impl<'t> Numbering<'t> {
 struct Gone {
     /// The line the row follows; 0 where it stands before the first.
     after: u64,
-    /// How many bytes went.
-    bytes: u64,
-    /// Whether they went at the text's end.
-    at_end: bool,
+    /// What went there.
+    went: Went,
+}
+
+/// What a `-` row says went from its place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Went {
+    /// Whole lines a call removed.
+    Removed {
+        /// How many bytes went.
+        bytes: u64,
+        /// Whether they went at the text's end.
+        at_end: bool,
+    },
+    /// Whole lines a call moved.
+    Moved {
+        /// Their first and last line in the draft as read.
+        from: (u64, u64),
+        /// Their first and last line in the text as the call leaves it.
+        to: (u64, u64),
+    },
+}
+
+impl Went {
+    /// Returns what the row says, between its parentheses.
+    fn said(&self) -> String {
+        match *self {
+            Went::Removed { bytes, at_end } => format!("{bytes} bytes removed here{}", if at_end { ", at the text's end" } else { "" }),
+            Went::Moved { from: (first, last), to: (to_first, _) } if first == last => format!("line {first} moved to {to_first}"),
+            Went::Moved { from: (first, last), to: (to_first, to_last) } => format!("lines {first}–{last} moved to {to_first}–{to_last}"),
+        }
+    }
 }
 
 /// One row the rows are to show.
@@ -596,16 +698,18 @@ impl Shown {
                 }
                 Mark::Lines { at, starts, bytes } => {
                     let line = numbering.line(*at);
-                    gone.push(Gone { after: if *starts { line - 1 } else { line }, bytes: *bytes, at_end: *at == draft.end() });
+                    gone.push(Gone { after: if *starts { line - 1 } else { line }, went: Went::Removed { bytes: *bytes, at_end: *at == draft.end() } });
                 }
                 Mark::Inserted(_) => {}
             }
         }
-        let breaks = text.bytes.iter().filter(|byte| **byte == b'\n').count() as u64;
-        let positions = text.positions();
-        let lines = breaks + u64::from(positions > 0 && draft.byte(positions) != Some(b'\n'));
+        Shown::with(text, changed, gone)
+    }
+
+    /// Returns what the rows show of `text`: these `+` lines and `-` rows.
+    fn with(text: &Text, changed: Vec<RangeInclusive<u64>>, gone: Vec<Gone>) -> Shown {
         let withheld = text.gaps.iter().find(|gap| gap.kind == "withheld").map(|gap| Numbering::of(text).line(gap.ordinal));
-        Shown { changed, gone, lines, withheld }
+        Shown { changed, gone, lines: Lines::of(text).count(), withheld }
     }
 
     /// Returns the rows to show, in order.
@@ -673,7 +777,7 @@ impl Shown {
             let (row, changes, line) = match spec {
                 Spec::Line { number, changed } => (format!("{}{number}\t{}", if changed { '+' } else { ' ' }, walk.line(number)), u64::from(changed), number),
                 Spec::More { lines: more, through } => (format!("+…\t({more} more lines)"), more, through),
-                Spec::Gone(Gone { after, bytes, at_end }) => (format!("-\t({bytes} bytes removed here{})", if at_end { ", at the text's end" } else { "" }), 1, after),
+                Spec::Gone(Gone { after, went }) => (format!("-\t({})", went.said()), 1, after),
                 Spec::Parted => ("--".to_string(), 0, reach),
             };
             if used + row.len() > ROWS_MAX_BYTES {
@@ -881,6 +985,20 @@ pub(super) fn rows(text: &Text, pieces: &Pieces<'_>) -> Rows {
     runs.sort_unstable_by_key(|(from, _)| *from);
     let marks = marks(draft, &Removed { runs: &runs }, &pieces.changed());
     Shown::of(draft, &marks).drawn(text)
+}
+
+/// Returns the rows of `text`, the text a move of whole lines leaves.
+///
+/// The lines `from`, first and last as the draft was read, stand at the
+/// lines `to` of `text`: each of those `text` holds is a `+` row — none
+/// where the move left them the text's last line break, which is no line —
+/// and one `-` row says where they left, after the line `after`, or after
+/// the text's last line where `after` is past it.
+pub(super) fn moved(text: &Text, from: (u64, u64), to: (u64, u64), after: u64) -> Rows {
+    let lines = Lines::of(text).count();
+    let changed = (to.0 <= lines).then(|| to.0..=to.1.min(lines)).into_iter().collect();
+    let gone = vec![Gone { after: after.min(lines), went: Went::Moved { from, to } }];
+    Shown::with(text, changed, gone).drawn(text)
 }
 
 #[cfg(test)]

@@ -11,12 +11,13 @@
 //! file, the board's verdict as data and any other refusal `isError`;
 //! `Server::fetch` adds its own two `isError`, a file past the cap and a
 //! stream cut short; `help_result` its one, a topic the help store holds no
-//! text for; `edit_result` renders the two text edits' answers,
-//! `replace_text`'s and `edit_text`'s — the shell's `text.replace` and
-//! `text.edit` — `isError` where the shell's answer carries its error
-//! member, which it takes off, a landed `text.edit`'s rows written after the
-//! answer one a line; and `respond` answers -32602 a call `call_params` or
-//! `Tool::admit` refuses, which is no tool result at all.
+//! text for; `edit_result` renders the three text calls' answers,
+//! `replace_text`'s, `edit_text`'s and `move_lines`' — the shell's
+//! `text.replace`, `text.edit` and `text.move` — `isError` where the shell's
+//! answer carries its error member, which it takes off, the rows of a landed
+//! `text.edit` or `text.move` written after the answer one a line; and
+//! `respond` answers -32602 a call `call_params` or `Tool::admit` refuses,
+//! which is no tool result at all.
 //!
 //! `handle_line` answers the same -32602 a request whose line holds a lone
 //! surrogate escape, which JSON's grammar writes and no UTF-8 string holds:
@@ -71,7 +72,7 @@ enum ErrorCode {
 ///
 /// *A refusal as a result* decides it for the shell's answers (`tool_result`),
 /// `Server::fetch` for the file it fetched and its own two, `help_result` for
-/// a topic the help store holds no text for, and the shell's text edits for
+/// a topic the help store holds no text for, and the shell's text calls for
 /// their own answers, by their error member (`edit_result`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IsError {
@@ -80,7 +81,7 @@ enum IsError {
     /// The shell could not get the board's verdict, or `fetch` declined a file.
     ///
     /// A fetch whose stream was cut short is one too, a help topic the store
-    /// holds no text for, and a text edit that left a line held or landed in
+    /// holds no text for, and a text call that left a line held or landed in
     /// part.
     Yes,
 }
@@ -374,9 +375,10 @@ impl Server {
     /// value or the board's verdict as data, any other refusal `isError`;
     /// `fetch` answers a content block of its own (`Server::fetch`), `help`
     /// the catalog's help store with no call of the backend (`help_result`),
-    /// and `replace_text` and `edit_text`, the shell's `text.replace` and
-    /// `text.edit`, their answer less the error member the shell marks it
-    /// by, and a landed `text.edit`'s rows after it (`edit_result`).
+    /// and `replace_text`, `edit_text` and `move_lines`, the shell's
+    /// `text.replace`, `text.edit` and `text.move`, their answer less the
+    /// error member the shell marks it by, and the rows of a landed
+    /// `text.edit` or `text.move` after it (`edit_result`).
     ///
     /// # Errors
     ///
@@ -407,6 +409,7 @@ impl Server {
             Tool::Fetch => return Ok(self.fetch(args.get("i").unwrap_or(&Value::Null))),
             Tool::ReplaceText => return Ok(edit_result(self.backend.session_call("text.replace", args))),
             Tool::EditText => return Ok(edit_result(self.backend.session_call("text.edit", args))),
+            Tool::MoveLines => return Ok(edit_result(self.backend.session_call("text.move", args))),
             Tool::Help => return Ok(help_result(&self.catalog, args.get("topic"))),
         };
         Ok(tool_result(answer))
@@ -663,36 +666,36 @@ fn help_result(catalog: &Catalog, topic: Option<&Value>) -> Value {
     }
 }
 
-/// The member the shell's text edits mark an error answer by, `true`.
+/// The member the shell's text calls mark an error answer by, `true`.
 ///
-/// skep-shell's `text.replace` and `text.edit` set it on every answer that
-/// is an error — a write the shell could not get to the board, a read it
-/// does not read, a line left held, an edit landed in part — and declare it
-/// in their shapes (`TextRefused`, `TextHeld`, `TextPartial`,
-/// `TextEditPartial`, `TextEditHeld`), which the suite holds this spelling
-/// to.
+/// skep-shell's `text.replace`, `text.edit` and `text.move` set it on every
+/// answer that is an error — a write the shell could not get to the board, a
+/// read it does not read, a line left held, an edit landed in part — and
+/// declare it in their shapes (`TextRefused`, `TextHeld`, `TextPartial`,
+/// `TextEditPartial`, `TextEditHeld`, `TextMoveHeld`), which the suite holds
+/// this spelling to.
 pub(crate) const EDIT_ERROR: &str = "error";
 
-/// The member a landed `text.edit` answers the lines it changed in.
+/// The member a landed text call answers the lines it changed in.
 ///
-/// skep-shell's `text.edit` answers them on `edited` as a list of strings,
-/// one row a line (`TextEdited`'s `lines`), which the suite holds this
-/// spelling to.
+/// skep-shell's `text.edit` answers them on `edited`, and its `text.move` on
+/// `moved`, as a list of strings, one row a line (`TextEdited`'s and
+/// `TextMoved`'s `lines`), which the suite holds this spelling to.
 pub(crate) const EDIT_LINES: &str = "lines";
 
-/// Renders a text edit's answer, the shell's `text.replace` or `text.edit`,
-/// as a tool result.
+/// Renders a text call's answer as a tool result.
 ///
-/// The edit's answer is its text with the shell's error member
-/// (`EDIT_ERROR`) taken off, `isError` where the member stood: a refusal the
-/// edit or the board decided is data, and one where the shell could not get
-/// the board's verdict on a write, a line left held and an edit that landed
-/// in part are `isError`. A landed `text.edit`'s rows (`EDIT_LINES`), a list
-/// of strings, are taken off too: the text is the answer's JSON on its first
-/// line, then each row on a line of its own as the shell spelled it, with
-/// no escape, so an agent reads the lines as the draft holds them; a
-/// `lines` of any other form stays in the answer. A refusal of the call
-/// goes by `tool_result`'s rule, as every tool's does.
+/// The call is the shell's `text.replace`, `text.edit` or `text.move`. Its
+/// answer is its text with the shell's error member (`EDIT_ERROR`) taken
+/// off, `isError` where the member stood: a refusal the call or the board
+/// decided is data, and one where the shell could not get the board's
+/// verdict on a write, a line left held and an edit that landed in part are
+/// `isError`. The rows of a landed `text.edit` or `text.move`
+/// (`EDIT_LINES`), a list of strings, are taken off too: the text is the
+/// answer's JSON on its first line, then each row on a line of its own as
+/// the shell spelled it, with no escape, so an agent reads the lines as the
+/// draft holds them; a `lines` of any other form stays in the answer. A
+/// refusal of the call goes by `tool_result`'s rule, as every tool's does.
 fn edit_result(answer: Result<Value, Refusal>) -> Value {
     match answer {
         Ok(Value::Object(mut answer)) => {

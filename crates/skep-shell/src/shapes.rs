@@ -547,7 +547,7 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "TextRefused",
         open: true,
-        doc: "`text.replace` and `text.edit` — NOTHING of the edit stands and no line of it is held: `cause` the edit's own — `not_found` and `not_unique` with `count` and the `as_of` the draft was read at, `crosses_atom` with the `ordinal` and the `kind` of the value that is no text the match would take in, `published` with the document, `too_large` with `what` (`new` and its `bytes`, or `draft` and its `positions`, or `runs`, a draft `text.edit` could not set back in one write, with how many `runs` it is in where the board answered its image) and the `cap`, `unknown_item` with the `kind` whose positions the shell cannot count, `arrangement_moved` with the `as_of` where the draft changed between the parts of its read — or the board's verdict on a write, its `code` the cause and the verdict under `refusal`; and, `error` beside them, an answer that is no verdict: a write the shell could not get to the board, its hold's cause the cause (`unreachable`, `stopped`, `halted`, `poisoned`, `durability`, `head_unreadable`, `session_died`, or `behind` — a line of an earlier burst of the principal's held at the board), or a read the board answered in a form this shell does not read (`unread`, with its `op`); from `text.edit`, `pair` beside them, the index in `edits` of the pair refused — its `old` sought in the text as the pairs before it leave it, an `ordinal` a place in that text — and `change`, the index among that pair's changes of the one whose new text is `too_large` or whose write did not land",
+        doc: "`text.replace`, `text.edit` and `text.move` — NOTHING of the edit stands and no line of it is held: `cause` the edit's own — `not_found` and `not_unique` with `count` and the `as_of` the draft was read at, `crosses_atom` with the `ordinal` and the `kind` of the value that is no text the match would take in, `published` with the document, `too_large` with `what` (`new` and its `bytes`, or `draft` and its `positions`, or `runs`, a draft `text.edit` could not set back in one write, with how many `runs` it is in where the board answered its image) and the `cap`, `unknown_item` with the `kind` whose positions the shell cannot count, `arrangement_moved` with the `as_of` where the draft changed between the parts of its read — or the board's verdict on a write, its `code` the cause and the verdict under `refusal`; and, `error` beside them, an answer that is no verdict: a write the shell could not get to the board, its hold's cause the cause (`unreachable`, `stopped`, `halted`, `poisoned`, `durability`, `head_unreadable`, `session_died`, or `behind` — a line of an earlier burst of the principal's held at the board), or a read the board answered in a form this shell does not read (`unread`, with its `op`); from `text.edit`, `pair` beside them, the index in `edits` of the pair refused — its `old` sought in the text as the pairs before it leave it, an `ordinal` a place in that text — and `change`, the index among that pair's changes of the one whose new text is `too_large` or whose write did not land; from `text.move`, `no_such_line` with `what`, the member — `first`, `last` or `before` — naming a line the draft's text does not hold, the `line` it names and `count`, the lines the text holds: `first` and `last` name a line from 1 to `count`, `before` one from 1 to one past it",
         fields: &[req("outcome", "'refused'"), req("cause", "string"), req("doc", "string"), opt("error", "true")],
     },
     Shape {
@@ -637,6 +637,35 @@ const SHAPES: &[Shape] = &[
         open: false,
         doc: "a change of `text.edit`'s that stands in part, its new text placed directly after its old text, which was not removed: `pair` and `change` as `TextEditStanding` names them, `new_text` and `old_text` the two spans as the insert left them, as `TextPartial` names its own",
         fields: &[req("pair", "number"), req("change", "number"), req("new_text", "TextSpan"), req("old_text", "TextSpan")],
+    },
+    Shape {
+        name: "TextMoved",
+        open: false,
+        doc: "`text.move(session, {doc, first, last?, before?})` — whole lines of a draft moved by identity, landed (skep #1085): the lines `first` to `last`, both included, `last` absent the one line, moved to stand before the line `before`, or at the text's end where `before` is absent or one past the last line — each a whole number from 1, lines counted as `line_numbers` counts them; one `rearrange` about the positions the lines start at, typed against the call's own read of the draft, so no byte is minted and every byte keeps its identity and every link on it; `first` and `last` the lines as asked and `to_first` and `to_last` the lines they now stand at; `cuts` the cuts sent, content positions as decimal strings: three, or four where the text ends in no line break and its last line is set before another, which leave one line break standing between the two so every line stays whole — three all the same where the stretch crossed on the way up, or the block moved down to the end, is one empty line, the text then ending in a line break and holding one line fewer; `at` the commit of the `rearrange`, which the page's next burst on `doc` is typed against, absent where the write's answer was lost and the shell's read found it landed; `lines` the rows, drawn with no read from the call's own text as the move leaves it and numbered in it, as `TextEdited`'s are: the moved lines `+N<TAB>line` with the lines either side of them ` N<TAB>line`, and one row where they left, `-<TAB>(lines A–B moved to C–D)`, `(line A moved to C)` for one line, A and B their numbers in the draft as read, following the text's last line where that place is past it; a moved empty line that is now the text's last line break is no line, so `to_first` and `to_last` are one past the last line and no `+` row is drawn; `masked` as `TextEdited`'s; the call's three other answers are `TextMoveUnchanged`, `TextRefused` and `TextMoveHeld`, each keyed by `outcome`",
+        fields: &[
+            req("outcome", "'moved'"),
+            req("doc", "string"),
+            req("first", "number"),
+            req("last", "number"),
+            req("to_first", "number"),
+            req("to_last", "number"),
+            req("cuts", "string[]"),
+            opt("at", "number"),
+            req("lines", "string[]"),
+            opt("masked", "true"),
+        ],
+    },
+    Shape {
+        name: "TextMoveUnchanged",
+        open: false,
+        doc: "`text.move` — the block stands before the line `before` already, `before` being `first` or one past `last`, in the draft as read at `as_of`: nothing written",
+        fields: &[req("outcome", "'unchanged'"), req("doc", "string"), req("as_of", "number")],
+    },
+    Shape {
+        name: "TextMoveHeld",
+        open: false,
+        doc: "`text.move` — an error: the shell could not tell whether the call's one write landed, the board not answering, so its line stays held and the shell refused its drop — `held` the line's ordinal, `cause` its hold's, `write` the write it is, `rearrange`: the lines stand moved where it landed, and as they stood where it did not",
+        fields: &[req("outcome", "'held'"), req("doc", "string"), req("held", "number"), req("cause", "string"), req("write", "'rearrange'"), req("error", "true")],
     },
 ];
 
@@ -756,6 +785,11 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
         result: "TextEdited | TextEditUnchanged | TextRefused | TextEditPartial | TextEditHeld",
     },
     CallRow {
+        name: "text.move",
+        forms: &[&[req("session", "string"), req("doc", "string"), req("first", "number"), opt("last", "number"), opt("before", "number")]],
+        result: "TextMoved | TextMoveUnchanged | TextRefused | TextMoveHeld",
+    },
+    CallRow {
         name: "changes",
         forms: &[
             &[req("session", "string"), req("since", "number"), opt("limit", "number"), opt("class", "'drafts'"), opt("under", "string")],
@@ -840,7 +874,7 @@ pub fn declarations() -> String {
         }
         out.push_str("}\n\n");
     }
-    out.push_str("/** The calls (client.md §4b.1 — the `publication` family's four, the `merge` family's four and `history.restore` among them — this machine's notebook's three acts `node.start`, `node.stop` and `node.restart`, the read of a draft's standing `publication.standing`, the read of a draft's past state `history.past`, the document index's listing `places`, the text edit of a draft `text.replace`, several of them in one call `text.edit`, and the change feed's page `changes`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
+    out.push_str("/** The calls (client.md §4b.1 — the `publication` family's four, the `merge` family's four and `history.restore` among them — this machine's notebook's three acts `node.start`, `node.stop` and `node.restart`, the read of a draft's standing `publication.standing`, the read of a draft's past state `history.past`, the document index's listing `places`, the text edit of a draft `text.replace`, several of them in one call `text.edit`, whole lines of a draft moved by identity `text.move`, and the change feed's page `changes`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
     out.push_str("export interface Bridge {\n");
     for row in CALL_ROWS {
         let forms: Vec<String> = row.forms.iter().map(|form| argument_object(form)).collect();

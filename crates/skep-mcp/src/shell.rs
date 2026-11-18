@@ -916,8 +916,9 @@ impl Backend {
     /// of the agent's the board has not kept (client.md §3c.4's held-lines
     /// gate): nothing was sent, and the act is the agent's, `held` then
     /// `resolve` on each line of that draft, then the confirm again, as the
-    /// catalog's card and its REJECTIONS ARE DATA paragraph say (`tools.json`)
-    /// — or the shell's refusal of a session the adapter opened itself.
+    /// catalog's `publication_confirm` card and its help topic REJECTIONS ARE
+    /// DATA say (`tools.json`) — or the shell's refusal of a session the
+    /// adapter opened itself.
     pub fn session_call(&self, name: &str, args: Map<String, Value>) -> Result<Value, Refusal> {
         // An object by construction, so setting a member of it cannot panic.
         let mut args = Value::Object(args);

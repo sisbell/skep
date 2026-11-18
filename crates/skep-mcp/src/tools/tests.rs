@@ -4,10 +4,60 @@ use serde_json::json;
 
 use super::*;
 
+/// The most characters a tool's card holds.
+///
+/// A client cuts a longer description, so a card says what an agent needs
+/// first and names the help topic that holds the rest.
+const MAX_CARD_CHARS: usize = 1000;
+
+/// The most characters the `help` tool's own card holds.
+const MAX_HELP_CARD_CHARS: usize = 400;
+
+/// The most characters the instructions hold, the commons sentence appended.
+///
+/// A client cuts longer server instructions.
+const MAX_INSTRUCTIONS_CHARS: usize = 2000;
+
+/// The tools whose card ends naming its full reference in the help store.
+const REFERENCED: [&str; 15] = [
+    "create_well_known_document",
+    "doc_metadata",
+    "set_arrangement",
+    "make_link",
+    "line_numbers",
+    "held",
+    "resolve",
+    "publication_open",
+    "publication_count",
+    "publication_confirm",
+    "publication_standing",
+    "changes_since",
+    "fetch",
+    "replace_text",
+    "edit_text",
+];
+
+/// Returns a tool's card: its description, as `tools/list` answers it.
+fn card<'c>(catalog: &'c Catalog, name: &str) -> &'c str {
+    catalog.tools.iter().find(|t| t["name"] == name).and_then(|t| t["description"].as_str()).unwrap_or_else(|| panic!("the {name} card"))
+}
+
+/// Returns a tool's full reference: its help topic where the store holds
+/// one, else its card, which then says everything.
+fn reference<'c>(catalog: &'c Catalog, name: &str) -> &'c str {
+    catalog.help(name).unwrap_or_else(|| card(catalog, name))
+}
+
+/// Returns a help topic's text: a rule, by its heading.
+fn topic<'c>(catalog: &'c Catalog, heading: &str) -> &'c str {
+    catalog.help(heading).unwrap_or_else(|| panic!("the help topic {heading}"))
+}
+
 /// The shipped catalog: every wire op and every adapter tool, every entry
 /// named, described, and schema'd — `Catalog::load` enforces both no-drift
 /// directions, so a clean load IS the no-drift assertion for the embedded
-/// file — and every entry kept as the file spells it.
+/// file — every entry kept as the file spells it, and the help store's
+/// every entry kept in its file order.
 #[test]
 fn embedded_catalog_matches_dispatch() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
@@ -15,6 +65,8 @@ fn embedded_catalog_matches_dispatch() {
     assert!(!catalog.instructions.is_empty());
     let file: Value = serde_json::from_str(EMBEDDED).expect("embedded parses");
     assert_eq!(Some(&catalog.tools), file["tools"].as_array(), "entries kept verbatim");
+    let stored: Vec<(&str, &str)> = file["help"].as_array().expect("the help store").iter().filter_map(|entry| Some((entry["topic"].as_str()?, entry["text"].as_str()?))).collect();
+    assert_eq!(catalog.help.iter().map(|(topic, text)| (topic.as_str(), text.as_str())).collect::<Vec<_>>(), stored, "the help store kept verbatim, in file order");
 }
 
 /// Direction one: a file entry the dispatch doesn't know refuses to load.
@@ -49,8 +101,12 @@ fn missing_tool_refuses() {
 }
 
 /// Every fault `load` refuses that would otherwise load — a catalog served
-/// verbatim to harnesses that may reject a malformed tool list wholesale —
-/// refuses, naming what is wrong.
+/// verbatim to harnesses that may reject a malformed tool list wholesale,
+/// and a help store the `help` tool answers from — refuses, naming what is
+/// wrong: a help store keyed as an object among them, which would hold no
+/// order and keep one of a topic written twice, and a topic that is neither
+/// a heading nor a tool, `fetch` respelt as a stranger and `FETCH` as a
+/// word of another case.
 #[test]
 fn every_fault_that_would_load_refuses_by_name() {
     fn refusal(edit: impl FnOnce(&mut Value)) -> String {
@@ -64,6 +120,10 @@ fn every_fault_that_would_load_refuses_by_name() {
     }
     fn without(v: &mut Value, name: &str) {
         v["tools"].as_array_mut().expect("tools").retain(|t| t["name"] != name);
+    }
+    fn entry<'a>(v: &'a mut Value, topic: &str) -> &'a mut Value {
+        let help = v["help"].as_array_mut().expect("the help store");
+        help.iter_mut().find(|entry| entry["topic"] == topic).expect("the named topic")
     }
     for (err, names) in [
         (refusal(|v| v["version"] = json!(1)), "'version'"),
@@ -83,6 +143,33 @@ fn every_fault_that_would_load_refuses_by_name() {
             "duplicate tool 'insert'",
         ),
         (refusal(|v| without(v, "session_info")), "'session_info'"),
+        (refusal(|v| without(v, "help")), "'help'"),
+        (
+            refusal(|v| {
+                v.as_object_mut().expect("root").remove("help");
+            }),
+            "missing array field 'help'",
+        ),
+        (refusal(|v| v["help"] = json!({"FETCH": "FETCH. A store keyed by topic."})), "missing array field 'help'"),
+        (refusal(|v| v["help"][0] = json!("OVERVIEW")), "help[0]: must be an object"),
+        (refusal(|v| entry(v, "FETCH")["title"] = json!("Fetch")), "'title'"),
+        (
+            refusal(|v| {
+                entry(v, "FETCH").as_object_mut().expect("an entry").remove("text");
+            }),
+            "missing string field 'text'",
+        ),
+        (refusal(|v| entry(v, "FETCH")["topic"] = json!("")), "'topic' must be nonempty"),
+        (refusal(|v| entry(v, "FETCH")["text"] = json!("")), "'text' must be nonempty"),
+        (
+            refusal(|v| {
+                let twin = entry(v, "FETCH").clone();
+                v["help"].as_array_mut().expect("the help store").push(twin)
+            }),
+            "duplicate help topic 'FETCH'",
+        ),
+        (refusal(|v| entry(v, "FETCH")["topic"] = json!("Fetch")), "help topic 'Fetch'"),
+        (refusal(|v| entry(v, "fetch")["topic"] = json!("frobnicate")), "help topic 'frobnicate'"),
     ] {
         assert!(err.contains(names), "the refusal names {names}: {err}");
     }
@@ -90,30 +177,48 @@ fn every_fault_that_would_load_refuses_by_name() {
 
 /// One fault at a time, the first found speaking.
 ///
-/// A catalog with an unknown root field, a malformed entry, a missing op and
-/// a `from_` on an op the dispatch does not rename is refused for the root
-/// field; without it, for the entry; without both, for the op; and with the
-/// op back, for the `from_`.
+/// A catalog with an unknown root field, a help store that is no array, a
+/// malformed entry, a missing op and a `from_` on an op the dispatch does
+/// not rename is refused for the root field; without it, for the help store;
+/// with a store that is an array again — its second entry malformed, its
+/// first topic written twice — for the entry; without that, for the op;
+/// with the op back, for the `from_`; without that, for the help entry; and
+/// with the entry mended, for the topic written twice.
 #[test]
 fn the_first_fault_found_speaks() {
     let mut v: Value = serde_json::from_str(EMBEDDED).expect("embedded parses");
     let insert = v["tools"].as_array().expect("tools").iter().find(|t| t["name"] == "insert").cloned().expect("the insert entry");
+    let mut store = v["help"].clone();
+    let first = store[0].clone();
+    store.as_array_mut().expect("the help store").push(first);
+    let text = store[1].as_object_mut().expect("an entry").remove("text").expect("the second entry's text");
     v["version"] = json!(1);
+    v["help"] = json!({});
     v["tools"][0]["title"] = json!("Title");
     v["tools"].as_array_mut().expect("tools").retain(|t| t["name"] != "insert");
     let delete = v["tools"].as_array_mut().expect("tools").iter_mut().find(|t| t["name"] == "delete").expect("the delete entry");
     delete["inputSchema"]["properties"]["from_"] = json!({"type": "string"});
-    let err = Catalog::load(&v.to_string()).expect_err("four faults");
+    let err = Catalog::load(&v.to_string()).expect_err("five faults");
     assert!(err.contains("'version'"), "the root speaks first: {err}");
     v.as_object_mut().expect("root").remove("version");
-    let err = Catalog::load(&v.to_string()).expect_err("three faults");
+    let err = Catalog::load(&v.to_string()).expect_err("four faults");
+    assert!(err.contains("missing array field 'help'"), "then the help store: {err}");
+    v["help"] = store;
+    let err = Catalog::load(&v.to_string()).expect_err("five faults");
     assert!(err.starts_with("tools[0]: ") && err.contains("'title'"), "then the entry: {err}");
     v["tools"][0].as_object_mut().expect("entry").remove("title");
-    let err = Catalog::load(&v.to_string()).expect_err("two faults");
+    let err = Catalog::load(&v.to_string()).expect_err("four faults");
     assert!(err.contains("'insert'"), "then the op: {err}");
     v["tools"].as_array_mut().expect("tools").push(insert);
-    let err = Catalog::load(&v.to_string()).expect_err("one fault");
+    let err = Catalog::load(&v.to_string()).expect_err("three faults");
     assert!(err.contains("'delete'") && err.contains("'from_'"), "then the from_: {err}");
+    let delete = v["tools"].as_array_mut().expect("tools").iter_mut().find(|t| t["name"] == "delete").expect("the delete entry");
+    delete["inputSchema"]["properties"].as_object_mut().expect("properties").remove("from_");
+    let err = Catalog::load(&v.to_string()).expect_err("two faults");
+    assert!(err.starts_with("help[1]: ") && err.contains("'text'"), "then the help entry: {err}");
+    v["help"][1]["text"] = text;
+    let err = Catalog::load(&v.to_string()).expect_err("one fault");
+    assert!(err.contains("duplicate help topic 'OVERVIEW'"), "then the topic: {err}");
 }
 
 /// The commons sentence template is catalog data like everything else:
@@ -135,7 +240,7 @@ fn a_commons_template_absent_or_without_its_placeholder_refuses() {
 /// `{addr}` takes the address, and the sentence follows a blank line.
 #[test]
 fn append_commons_fills_every_placeholder() {
-    let mut catalog = Catalog { instructions: "Base.".to_string(), commons_instructions: "Commons at {addr}; defines is {addr}.0.3.50.".to_string(), tools: Vec::new() };
+    let mut catalog = Catalog { instructions: "Base.".to_string(), commons_instructions: "Commons at {addr}; defines is {addr}.0.3.50.".to_string(), tools: Vec::new(), help: Vec::new() };
     catalog.append_commons("1.0.2.0.71");
     assert_eq!(catalog.instructions, "Base.\n\nCommons at 1.0.2.0.71; defines is 1.0.2.0.71.0.3.50.");
 }
@@ -164,10 +269,11 @@ fn wire_frame_makes_the_name_the_op_and_the_arguments_the_frame() {
 /// Fifty-two wire ops — every op of wire.md §Operations but `publish`, the
 /// six the first catalog lacked among them, the count by home, the
 /// retracted-links read, the landing, the well-known creation and the line
-/// read — and seventeen
+/// read — and eighteen
 /// adapter tools, the `publication` family's four among them, the read
-/// of a draft's standing beside them, and the two text edits, `replace_text`
-/// and `edit_text`; no name twice across the two,
+/// of a draft's standing beside them, the two text edits, `replace_text`
+/// and `edit_text`, and `help`, which takes a `topic`; no name twice across
+/// the two,
 /// each wire op a `Tool::Op` of its own name with no members list, each
 /// adapter tool its row's members; and a ceremony, `upload`, `restore`,
 /// `op`, `publish` or a row's dotted name no tool at all.
@@ -177,7 +283,9 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
     let set: std::collections::BTreeSet<_> = names.iter().collect();
     assert_eq!(set.len(), names.len(), "no name twice");
     assert_eq!(DISPATCH_OPS.len(), 52);
-    assert_eq!(names.len(), 69);
+    assert_eq!(names.len(), 70);
+    assert_eq!(Tool::named("help"), Some(Tool::Help));
+    assert_eq!(Tool::named("help").and_then(Tool::members), Some(&["topic"][..]));
     assert_eq!(Tool::named("replace_text"), Some(Tool::ReplaceText));
     assert_eq!(Tool::named("replace_text").and_then(Tool::members), Some(&["doc", "old", "new"][..]));
     assert_eq!(Tool::named("edit_text"), Some(Tool::EditText));
@@ -323,9 +431,9 @@ fn each_adapter_tools_schema_names_exactly_the_members_its_row_takes() {
 /// the schema an agent is told to send by requires the member, names the
 /// four numbers the namespace's slots carry and no other, and admits no
 /// member beside the two — no `published` flag, the slot fixing the
-/// document's state. The card names each slot's document and its state, and
-/// the frame the dispatch makes of the arguments carries the slot through
-/// as the number sent.
+/// document's state. The tool's reference names each slot's document and
+/// its state, and the frame the dispatch makes of the arguments carries the
+/// slot through as the number sent.
 #[test]
 fn the_well_known_creations_schema_requires_its_slot_and_refuses_an_unknown_member() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
@@ -340,9 +448,9 @@ fn the_well_known_creations_schema_requires_its_slot_and_refuses_an_unknown_memb
     assert_eq!(slot["type"], "integer", "the slot rides as a number");
     let slots: Vec<u64> = slot["enum"].as_array().expect("the slots the schema admits").iter().filter_map(Value::as_u64).collect();
     assert_eq!(slots, skep_client::address::WELL_KNOWN_SLOTS, "the four well-known slots, and no other number");
-    let card = entry["description"].as_str().expect("the card");
+    let said_all = reference(&catalog, "create_well_known_document");
     for said in ["slot is REQUIRED", "2 your mailbox", "3 your bio", "4 your public link page", "5 your account's policy document", "always PRIVATE", "PUBLISHED and EMPTY", "mint_home_first", "committed: false"] {
-        assert!(card.contains(said), "the card says `{said}`: {card}");
+        assert!(said_all.contains(said), "the reference says `{said}`: {said_all}");
     }
     let args = serde_json::json!({"account": "1.0.1", "slot": 5});
     let frame = wire_frame("create_well_known_document", args.as_object().expect("an object").clone());
@@ -352,16 +460,17 @@ fn the_well_known_creations_schema_requires_its_slot_and_refuses_an_unknown_memb
 /// The embedded catalog states the adapter's own facts as the code holds them.
 ///
 /// Its schemas spell `from_` on exactly the ops `wire_frame` maps back, and
-/// its naming note names each of them; its `fetch` card and fetch paragraph
-/// name the cap `media` enforces, and the card the fetch's deadline in words;
-/// the `search` card and its query's schema name skep-client's query bound,
-/// `changes_since`'s limit the change feed's default page, its card an entry's
-/// members as the shell declares its `FeedUpdate`, each optional where the
-/// declaration has it so, and the publishing paragraph the staging act as the
-/// adapter dispatches it — the `stage` tool, its `from_` — the act whose
-/// record the shell reads a draft's base off, with no record of the agent's to
-/// write (SP-25): a fact changed in one place alone tells every agent what the
-/// adapter then does otherwise.
+/// its naming note names each of them; `fetch`'s card, its reference and
+/// the FETCH topic name the cap `media` enforces, and the reference the
+/// fetch's deadline in words; the `search` card and its query's schema name
+/// skep-client's query bound, `changes_since`'s limit the change feed's
+/// default page, its reference an entry's members as the shell declares its
+/// `FeedUpdate`, each optional where the declaration has it so, and the
+/// PUBLISHING topic the staging act as the adapter dispatches it — the
+/// `stage` tool, its `from_` — the act whose record the shell reads a
+/// draft's base off, with no record of the agent's to write (SP-25): a fact
+/// changed in one place alone tells every agent what the adapter then does
+/// otherwise.
 #[test]
 fn the_embedded_catalog_states_the_adapters_own_facts_as_the_code_holds_them() {
     use skep_client::board::DEFAULT_CHANGES_LIMIT;
@@ -375,19 +484,20 @@ fn the_embedded_catalog_states_the_adapters_own_facts_as_the_code_holds_them() {
     }
     let entry = |name: &str| catalog.tools.iter().find(|t| t["name"] == name).unwrap_or_else(|| panic!("the {name} card"));
     let (cap, mib) = (crate::media::MAX_FETCH_BYTES, crate::media::MAX_FETCH_BYTES / (1024 * 1024));
-    let card = entry("fetch")["description"].as_str().expect("the fetch card");
-    assert!(card.contains(&format!("cap of {mib} MiB ({cap} bytes)")), "the fetch card names the cap: {card}");
-    assert!(catalog.instructions().contains(&format!("cap of {mib} MiB")), "the fetch paragraph names the cap");
-    assert_eq!(crate::media::FETCH_DEADLINE, std::time::Duration::from_secs(10 * 60 + 30), "the deadline the fetch card names in words");
-    assert!(card.contains("still unfinished at ten and a half minutes"), "the fetch card names the deadline: {card}");
+    let fetch = reference(&catalog, "fetch");
+    assert!(fetch.contains(&format!("cap of {mib} MiB ({cap} bytes)")), "the fetch reference names the cap: {fetch}");
+    assert!(card(&catalog, "fetch").contains(&format!("cap of {mib} MiB")), "the fetch card names the cap");
+    assert!(topic(&catalog, "FETCH").contains(&format!("cap of {mib} MiB")), "the FETCH topic names the cap");
+    assert_eq!(crate::media::FETCH_DEADLINE, std::time::Duration::from_secs(10 * 60 + 30), "the deadline the fetch reference names in words");
+    assert!(fetch.contains("still unfinished at ten and a half minutes"), "the fetch reference names the deadline: {fetch}");
     let search = entry("search");
     assert!(search["description"].as_str().is_some_and(|d| d.contains(&format!("A query past {QUERY_BOUND} bytes is refused query_too_long"))), "the search card names the query's bound: {search}");
     let query = search["inputSchema"]["properties"]["query"]["description"].as_str().expect("the query's description");
     assert!(query.contains(&format!("at most {QUERY_BOUND} bytes")), "the query's schema names its bound: {query}");
     let limit = entry("changes_since")["inputSchema"]["properties"]["limit"]["description"].as_str().expect("the limit's description");
     assert!(limit.contains(&format!("the board's default, {DEFAULT_CHANGES_LIMIT}, when absent")), "the limit names the default page: {limit}");
-    let card = entry("changes_since")["description"].as_str().expect("the changes_since card");
-    let members = card.split_once("you may read): {").and_then(|(_, rest)| rest.split_once("}, oldest first")).map(|(members, _)| members).expect("the card lists an entry's members");
+    let said = reference(&catalog, "changes_since");
+    let members = said.split_once("you may read): {").and_then(|(_, rest)| rest.split_once("}, oldest first")).map(|(members, _)| members).expect("the reference lists an entry's members");
     let mut depth = 0;
     let bare: String = members
         .chars()
@@ -402,29 +512,30 @@ fn the_embedded_catalog_states_the_adapters_own_facts_as_the_code_holds_them() {
         .collect();
     let spelled: BTreeSet<(&str, bool)> = bare.split(',').map(str::trim).map(|member| member.strip_suffix('?').map_or((member, true), |member| (member, false))).collect();
     let declared: BTreeSet<(&str, bool)> = skep_shell::shapes::shape("FeedUpdate").expect("the shell declares a feed update").fields.iter().map(|field| (field.name, field.required)).collect();
-    assert_eq!(spelled, declared, "the card's entry is the shell's FeedUpdate: {card}");
-    let publishing = catalog.instructions().split("\n\n").find(|paragraph| paragraph.starts_with("PUBLISHING. ")).expect("the publishing paragraph");
+    assert_eq!(spelled, declared, "the reference's entry is the shell's FeedUpdate: {said}");
+    let publishing = topic(&catalog, "PUBLISHING");
     assert!(DISPATCH_OPS.contains(&"stage") && RENAMES_FROM.contains(&"stage"), "the staging act is a tool the adapter dispatches, its from_ renamed");
     assert!(publishing.contains("with stage(from_)"), "the act that records a draft's base is the stage tool: {publishing}");
     assert!(publishing.contains("doc_metadata(draft) answers it as base") && publishing.contains("no record for you to write"), "the board's record, read back, none written: {publishing}");
     assert!(publishing.contains("refused base_unrecorded"), "the refusal a draft with no base meets: {publishing}");
 }
 
-/// The `line_numbers` card states the wire's list cap and its answers.
+/// The `line_numbers` reference states the wire's list cap and its answers.
 ///
 /// Each of its two lists is one wire list, and the "at most {n} entries" its
 /// schema states of each is skep-client's `MAX_WIRE_LIST`, the codec's cap
 /// as the client holds it (SP-25). The schema is closed and names the
 /// frame's three members, `doc` alone required, a position in the form
 /// `insert`'s `at` takes, so the frame an agent builds from it is the wire's
-/// (SP-24). The card spells the answer's three members, the `null` a line
-/// that names none takes, the `masked` flag and what it means for handing a
-/// number on, and each refusal's token; it promises no read of a past
-/// position, which the adapter's door refuses for every wire op; and the
-/// typed-state paragraph and the `insert` card's `as_of` name the read among
-/// those a burst is typed against.
+/// (SP-24). The tool's reference spells the answer's three members, the
+/// `null` a line that names none takes, the `masked` flag and what it means
+/// for handing a number on, and each refusal's token; neither it nor the
+/// card promises a read of a past position, which the adapter's door
+/// refuses for every wire op; and the THE TYPED STATE topic and the
+/// `insert` card's `as_of` name the read among those a burst is typed
+/// against.
 #[test]
-fn the_line_numbers_card_states_the_wires_list_cap_and_the_answers_an_agent_reads() {
+fn the_line_numbers_reference_states_the_wires_list_cap_and_the_answers_an_agent_reads() {
     use skep_client::publication::MAX_WIRE_LIST;
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
     let entry = |name: &str| catalog.tools.iter().find(|t| t["name"] == name).unwrap_or_else(|| panic!("the {name} card"));
@@ -442,7 +553,7 @@ fn the_line_numbers_card_states_the_wires_list_cap_and_the_answers_an_agent_read
     for member in ["type", "properties", "required", "additionalProperties"] {
         assert_eq!(position[member], at[member], "a position's {member} is insert's `at`'s");
     }
-    let card = entry("line_numbers")["description"].as_str().expect("the line_numbers card");
+    let said_all = reference(&catalog, "line_numbers");
     for said in [
         r#"{"positions": [{"line", "masked"}], "lines": [{"start": {"subspace", "ordinal"}, "masked"} or null], "count": {"n", "masked"}}"#,
         "null stands in the place of a line that names none",
@@ -459,11 +570,13 @@ fn the_line_numbers_card_states_the_wires_list_cap_and_the_answers_an_agent_read
         "site.index",
         "too_many_items",
     ] {
-        assert!(card.contains(said), "the card says {said:?}: {card}");
+        assert!(said_all.contains(said), "the reference says {said:?}: {said_all}");
     }
-    assert!(!card.contains("op-at") && !card.contains("past position"), "the card promises no historical read: {card}");
-    let typed = catalog.instructions().split("\n\n").find(|paragraph| paragraph.starts_with("THE TYPED STATE. ")).expect("the typed-state paragraph");
-    assert!(typed.contains("(retrieve_v, image, retrieve_doc_v_span_set, line_numbers)"), "the paragraph names the read: {typed}");
+    for text in [said_all, card(&catalog, "line_numbers")] {
+        assert!(!text.contains("op-at") && !text.contains("past position"), "no historical read is promised: {text}");
+    }
+    let typed = topic(&catalog, "THE TYPED STATE");
+    assert!(typed.contains("(retrieve_v, image, retrieve_doc_v_span_set, line_numbers)"), "the topic names the read: {typed}");
     let as_of = entry("insert")["inputSchema"]["properties"]["as_of"]["description"].as_str().expect("insert's as_of");
     assert!(as_of.contains("retrieve_v, image, retrieve_doc_v_span_set or line_numbers"), "insert's as_of names the read: {as_of}");
 }
@@ -473,11 +586,13 @@ fn the_line_numbers_card_states_the_wires_list_cap_and_the_answers_an_agent_read
 /// A catalog read from the same text drifts nowhere; an entry described
 /// otherwise is counted among the catalog's tools; instructions read
 /// otherwise — or a commons template — are said, with the entries beside them
-/// where any differ.
+/// where any differ; and a help topic is counted where its text reads
+/// otherwise or one store alone holds it, over the topics the two hold
+/// between them, never folded into the instructions.
 #[test]
 fn a_catalogs_drift_from_another_counts_what_an_agent_is_told_otherwise() {
     let embedded = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
-    let tools = embedded.tools.len();
+    let (tools, topics) = (embedded.tools.len(), embedded.help.len());
     let drift = |edit: &dyn Fn(&mut Value)| {
         let mut v: Value = serde_json::from_str(EMBEDDED).expect("embedded parses");
         edit(&mut v);
@@ -492,37 +607,154 @@ fn a_catalogs_drift_from_another_counts_what_an_agent_is_told_otherwise() {
         v["instructions"] = json!("Other instructions.");
     };
     assert_eq!(drift(&both), Some(format!("its instructions, and 1 of its {tools} tools' entries")));
+    let fetch = |v: &mut Value| v["help"].as_array_mut().expect("the help store").iter_mut().find(|entry| entry["topic"] == "FETCH").expect("FETCH")["text"] = json!("FETCH. Another text.");
+    assert_eq!(drift(&fetch), Some(format!("1 of the {topics} help topics")), "a topic read otherwise is the store's, not the instructions'");
+    assert_eq!(drift(&|v| v["help"].as_array_mut().expect("the help store").retain(|entry| entry["topic"] != "FETCH")), Some(format!("1 of the {topics} help topics")), "a topic dropped");
+    let added = |v: &mut Value| v["help"].as_array_mut().expect("the help store").push(json!({"topic": "rearrange", "text": "The rearrange reference."}));
+    assert_eq!(drift(&added), Some(format!("1 of the {} help topics", topics + 1)), "a topic added");
+    let all = |v: &mut Value| {
+        both(v);
+        fetch(v);
+    };
+    assert_eq!(drift(&all), Some(format!("its instructions, 1 of its {tools} tools' entries, and 1 of the {topics} help topics")));
 }
 
-/// Every paragraph the catalog sends an agent to opens its instructions.
+/// Every topic the catalog names is a topic of its help store.
 ///
-/// A tool's description, or the instructions themselves, name a paragraph by
-/// its heading in capitals, in parentheses — `(HELD BURSTS)` or
-/// `(FETCH below)` — and every heading so named opens one paragraph of the
-/// instructions: a heading renamed in one place alone sends an agent to a
-/// paragraph that is not there.
+/// The instructions, a card or a help topic name a topic by its heading in
+/// capitals, in parentheses — `(HELD BURSTS)` — or by the call that reads
+/// it, `help("replace_text")`, and every topic so named is one the store
+/// holds; each heading's text opens with its heading. A heading renamed in
+/// one place alone, or a topic dropped while a text still names it, sends an
+/// agent to a topic that is not there.
 #[test]
-fn every_paragraph_the_catalog_names_opens_its_instructions() {
-    /// Returns whether `text` is a heading.
-    ///
-    /// A heading is capitals and spaces, with a capital at each end.
-    fn is_heading(text: &str) -> bool {
-        text.len() > 1 && text.starts_with(|c: char| c.is_ascii_uppercase()) && text.ends_with(|c: char| c.is_ascii_uppercase()) && text.chars().all(|c| c.is_ascii_uppercase() || c == ' ')
-    }
+fn every_topic_the_catalog_names_is_a_help_topic() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
-    let headings: BTreeSet<&str> = catalog.instructions().split("\n\n").filter_map(|paragraph| paragraph.split_once(". ")).map(|(head, _)| head).filter(|head| is_heading(head)).collect();
-    let texts = std::iter::once(("the instructions", catalog.instructions())).chain(catalog.tools.iter().filter_map(|t| Some((t["name"].as_str()?, t["description"].as_str()?))));
-    let mut named = 0;
+    let topics: BTreeSet<&str> = catalog.topics().collect();
+    for heading in topics.iter().filter(|held| is_heading(held)) {
+        assert!(topic(&catalog, heading).starts_with(&format!("{heading}. ")), "the topic {heading} opens with its heading");
+    }
+    let texts = std::iter::once(("the instructions", catalog.instructions()))
+        .chain(catalog.tools.iter().filter_map(|t| Some((t["name"].as_str()?, t["description"].as_str()?))))
+        .chain(catalog.help.iter().map(|(held, text)| (held.as_str(), text.as_str())));
+    let (mut headings, mut calls) = (0, 0);
     for (whose, text) in texts {
         for (inner, _) in text.split('(').skip(1).filter_map(|rest| rest.split_once(')')) {
-            let heading = inner.strip_suffix(" below").unwrap_or(inner);
-            if is_heading(heading) {
-                assert!(headings.contains(heading), "{whose} names the paragraph {heading}, which no paragraph opens: {headings:?}");
-                named += 1;
+            if is_heading(inner) {
+                assert!(topics.contains(inner), "{whose} names the topic {inner}, which the store does not hold: {topics:?}");
+                headings += 1;
+            }
+        }
+        for (named, _) in text.split("help(\"").skip(1).filter_map(|rest| rest.split_once("\")")) {
+            assert!(topics.contains(named), "{whose} names help(\"{named}\"), which the store does not hold: {topics:?}");
+            calls += 1;
+        }
+    }
+    assert!(headings > 0 && calls > 0, "premise: the catalog names a topic both ways");
+}
+
+/// Every card and the instructions are short.
+///
+/// A client cuts a tool's description, and the server instructions, past a
+/// length of its own: every card is at most `MAX_CARD_CHARS`, the `help`
+/// card at most `MAX_HELP_CARD_CHARS`, and the instructions, the commons
+/// sentence appended, at most `MAX_INSTRUCTIONS_CHARS`, so an agent is told
+/// the whole of each.
+#[test]
+fn every_card_and_the_instructions_are_short() {
+    let mut catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    for name in Tool::names() {
+        let said = card(&catalog, name).chars().count();
+        let bound = if name == "help" { MAX_HELP_CARD_CHARS } else { MAX_CARD_CHARS };
+        assert!(said <= bound, "{name}'s card is {said} characters, past {bound}");
+    }
+    catalog.append_commons(crate::COMMONS_DOCUMENT);
+    let said = catalog.instructions().chars().count();
+    assert!(said <= MAX_INSTRUCTIONS_CHARS, "the instructions, the commons sentence appended, are {said} characters, past {MAX_INSTRUCTIONS_CHARS}");
+}
+
+/// A card with a reference points to it.
+///
+/// A tool's topic stands in the help store exactly where its card ends
+/// `Full reference: help("<name>").`, so no card points at a topic that is
+/// not there and no reference waits unnamed; the tools with a reference are
+/// the fifteen whose whole text an agent needs only when a call goes the
+/// way it covers.
+#[test]
+fn a_card_with_a_reference_points_to_it() {
+    let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    for name in Tool::names() {
+        let points = card(&catalog, name).ends_with(&format!("Full reference: help(\"{name}\")."));
+        assert_eq!(points, catalog.help(name).is_some(), "{name}: the card names its reference exactly where the store holds one");
+    }
+    let referenced: BTreeSet<&str> = catalog.topics().filter(|held| !is_heading(held)).collect();
+    assert_eq!(referenced, BTreeSet::from(REFERENCED), "the tools with a reference");
+}
+
+/// Each short card says what an agent needs first.
+///
+/// Each card holds, itself, the tokens an agent acts on before it reads any
+/// reference: the form of the call, the answers that change its next step
+/// and the step each asks. Each token but a tool's name is in the tool's
+/// reference too, so a word the shell renames, which the reference tests
+/// hold to the shell's, cannot stand in a card alone. The figures are
+/// rendered from their constants (SP-25): the fetch's cap from
+/// `MAX_FETCH_BYTES` and the pairs' from `MAX_WIRE_LIST`. `rearrange`'s
+/// card, which is its whole reference, says what three cuts do and then
+/// what four do, each with its example over `abcde`, so the two orders
+/// cannot trade places.
+#[test]
+fn each_short_card_says_what_an_agent_needs_first() {
+    use skep_client::publication::MAX_WIRE_LIST;
+    let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    let mib = format!("{} MiB", crate::media::MAX_FETCH_BYTES / (1024 * 1024));
+    let pairs = format!("at most {MAX_WIRE_LIST} pairs");
+    let said: [(&str, &[&str]); 16] = [
+        ("replace_text", &["EXACTLY ONCE", "edit_text", "\"replaced\"", "\"refused\"", "not_unique", "\"partial\"", "\"held\"", "isError"]),
+        (
+            "edit_text",
+            &[
+                "\"edited\"",
+                "\"refused\"",
+                "replace_text",
+                "isError",
+                "edit_text(doc, edits: [{old, new}, …])",
+                "EXACTLY ONCE in the draft as the pairs before it leave it",
+                "ALL OR NOTHING",
+                &pairs,
+                "partial and held are isError",
+                "read the draft before you edit it again",
+            ],
+        ),
+        ("publication_open", &["mint", "PANEL", "publication_count", "publication_confirm", "publication_cancel", "base_unrecorded"]),
+        ("publication_confirm", &["\"acknowledged\"", "\"restated\"", "\"refused\"", "no_panel"]),
+        ("publication_count", &["no_panel"]),
+        ("publication_standing", &["at_head", "behind", "base_unrecorded"]),
+        ("held", &["resolve", "sent"]),
+        ("resolve", &["\"drop\"", "\"send\"", "\"kept\": true", "may_have_landed", "landing_unread"]),
+        ("changes_since", &["next", "log_position", "history_reclaimed"]),
+        ("make_link", &["from_", "addrs", "spans", "empty_type_resolution"]),
+        ("create_well_known_document", &["slot", "mint_home_first", "committed: false"]),
+        ("set_arrangement", &["WHOLE", "head_moved", "fork_base_moved"]),
+        ("line_numbers", &["masked", "range_not_present"]),
+        ("doc_metadata", &["base", "withheld"]),
+        ("fetch", &[&mib, "not_a_cell"]),
+        ("rearrange", &["THREE", "FOUR", "[b, c) then [a, b)", "[c, d), [b, c), [a, b)", "bad_cut_count", "\"adebc\"", "\"cbade\""]),
+    ];
+    for (name, tokens) in said {
+        let (short, whole) = (card(&catalog, name), reference(&catalog, name));
+        for token in tokens {
+            assert!(short.contains(token), "{name}'s card says `{token}`: {short}");
+            if Tool::named(token).is_none() {
+                assert!(whole.contains(token), "{name}'s reference says `{token}` too: {whole}");
             }
         }
     }
-    assert!(named > 0, "premise: the catalog names a paragraph");
+    let rearrange = card(&catalog, "rearrange");
+    let (three, four) = rearrange.split_once("FOUR").expect("the card says what four cuts do after three");
+    assert!(three.contains("THREE") && three.contains("[b, c) then [a, b)") && three.contains("\"adebc\""), "three cuts, their order and their example: {three}");
+    assert!(four.contains("[c, d), [b, c), [a, b)") && four.contains("\"cbade\""), "four cuts, their order and their example: {four}");
+    assert!(!three.contains("\"cbade\"") && !four.contains("\"adebc\""), "each example beside its own rule: {rearrange}");
 }
 
 /// The options the door admits are the ones skep-shell declares, bar `reindex`.
@@ -564,9 +796,10 @@ fn each_adapter_tool_takes_its_shell_rows_members_bar_the_session_and_board() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
     for (name, tool, members) in ADAPTER_TOOLS {
         // The row `Server::call` sends the tool as; `session_info` takes no
-        // argument, and copies no row.
+        // argument and copies no row, and `help` reads the catalog alone,
+        // sending no row.
         let row = match tool {
-            Tool::SessionInfo => continue,
+            Tool::SessionInfo | Tool::Help => continue,
             Tool::ReplaceText => "text.replace",
             Tool::EditText => "text.edit",
             Tool::ChangesSince => "changes",
@@ -604,17 +837,20 @@ fn each_adapter_tool_takes_its_shell_rows_members_bar_the_session_and_board() {
     }
 }
 
-/// The publication cards state the shell's declared shapes.
+/// The publication tools' references state the shell's declared shapes.
 ///
-/// Each `publication` tool's card spells every arm of the answer the shell
+/// Each `publication` tool's reference — its help topic, or its card where
+/// the store holds none — spells every arm of the answer the shell
 /// declares for its row (`shapes::declarations`) — a shape as `{a, b, c?}`, a
 /// field typed by one string literal with its value and an open shape ending
-/// `, …`, the empty answer as `{}` — and the open and count cards the shapes
-/// of the panel's members — a window's parts among them; the open card names each standing the shell's
+/// `, …`, the empty answer as `{}` — and the open and count references the
+/// shapes of the panel's members — a window's parts among them; the open's
+/// names each standing the shell's
 /// `BaseStanding` spells and its one refusal of a base by the shell's name —
-/// `base_unrecorded` with its members and reasons — and no `base_superseded`
+/// `base_unrecorded` with its members and reasons — and neither the open's
+/// card nor its reference names `base_superseded`
 /// (the shell refuses no standing; a draft begun before version 1 is told
-/// `superseded_first`), while the confirm card names the library's
+/// `superseded_first`), while the confirm's reference names the library's
 /// `base_superseded {first}` arm; the
 /// selection's runs, the switches, a destination and an answer are schema'd
 /// as the shell's `Run`, `Switches`, `Destination` and `OriginAnswer` spell
@@ -622,7 +858,7 @@ fn each_adapter_tool_takes_its_shell_rows_members_bar_the_session_and_board() {
 /// every agent of an answer the shell no longer gives, or ask an argument it
 /// no longer takes.
 #[test]
-fn the_publication_cards_state_the_shells_shapes() {
+fn the_publication_references_state_the_shells_shapes() {
     /// Returns a shape's fields as a card spells them.
     fn spelled(name: &str) -> String {
         let shape = skep_shell::shapes::shape(name).unwrap_or_else(|| panic!("skep-shell declares {name}"));
@@ -673,48 +909,50 @@ fn the_publication_cards_state_the_shells_shapes() {
         let head = format!("  '{row}'(args: ");
         let line = declarations.lines().find(|line| line.starts_with(head.as_str())).unwrap_or_else(|| panic!("skep-shell declares the row {row}"));
         let answer = line.split_once("Promise<Outcome<").and_then(|(_, rest)| rest.strip_suffix(">>;")).unwrap_or_else(|| panic!("the {row} row's answer: {line}"));
-        let card = entry(name)["description"].as_str().expect("a card's description");
+        let said_all = reference(&catalog, name);
         for arm in answer.split(" | ").map(str::trim) {
             let said = match arm {
                 "Empty" => "{}".to_string(),
                 inline if inline.starts_with('{') => format!("{{{}}}", members(inline).join(", ")),
                 shape => spelled(shape),
             };
-            assert!(card.contains(&said), "the {name} card spells the {row} row's answer {said}: {card}");
+            assert!(said_all.contains(&said), "the {name} reference spells the {row} row's answer {said}: {said_all}");
         }
         for shape in nested {
             let said = spelled(shape);
-            assert!(card.contains(&said), "the {name} card spells {shape} as {said}: {card}");
+            assert!(said_all.contains(&said), "the {name} reference spells {shape} as {said}: {said_all}");
         }
     }
-    let count = entry("publication_count")["description"].as_str().expect("the count card");
-    assert!(["changed_types", "unchanged_types"].iter().all(|fold| count.contains(fold)), "the count card names the row's two folds by type: {count}");
-    let open = entry("publication_open")["description"].as_str().expect("the open card");
+    let count = reference(&catalog, "publication_count");
+    assert!(["changed_types", "unchanged_types"].iter().all(|fold| count.contains(fold)), "the count reference names the row's two folds by type: {count}");
+    let open = reference(&catalog, "publication_open");
     for standing in alias("BaseStanding") {
         let standing = standing.trim_matches('\'');
-        assert!(open.contains(standing), "the open card names the standing {standing}: {open}");
+        assert!(open.contains(standing), "the open reference names the standing {standing}: {open}");
     }
     let (unrecorded, superseded) = (skep_shell::Name::BASE_UNRECORDED.as_str(), "base_superseded");
-    assert!(open.contains(&format!("{unrecorded} {{draft, doc, reason}}")) && ["no_record", "other_chain", "free_standing"].iter().all(|reason| open.contains(reason)), "the open card names base_unrecorded's members and reasons: {open}");
-    assert!(!open.contains(superseded), "the open refuses no standing — a draft begun before version 1 is told superseded_first: {open}");
-    assert!(open.contains("superseded_first (") && open.contains("beside version 1 as its daughter"), "the open card tells the fourth standing and where its member lands: {open}");
-    let confirm = entry("publication_confirm")["description"].as_str().expect("the confirm card");
-    assert!(confirm.contains(&format!("{superseded} {{first}}")), "the confirm card names the library's base_superseded arm: {confirm}");
-    assert!(confirm.contains("superseded_first where version 1 was"), "the confirm card re-states a first draft's standing moved: {confirm}");
-    assert!(confirm.contains("or its base did, base then the base as read") && confirm.contains("a base or a standing that moved is the restated outcome"), "the confirm card says a moved base is re-stated, never a refusal: {confirm}");
-    assert!(confirm.contains(&format!("{} {{index}}", skep_shell::Name::SELECTION_NOT_ARRANGED.as_str())), "the confirm card names the refusal of a selection the draft has wholly left: {confirm}");
-    assert!(confirm.contains("kept_place_moved {index, draft, race}"), "the confirm card names kept_place_moved's members, the draft that moved among them: {confirm}");
-    assert!(confirm.contains("each of also — is re-windowed") && confirm.contains("stray_place {index, draft}"), "the confirm card says every named draft is re-windowed in the one write, and names the own fault's draft: {confirm}");
-    // The held-lines gate (client.md §3c.4; skep #849): the confirm card
-    // names the refusal with its members and the agent's act, and the
-    // REJECTIONS ARE DATA paragraph lists it among the shell's own.
+    assert!(open.contains(&format!("{unrecorded} {{draft, doc, reason}}")) && ["no_record", "other_chain", "free_standing"].iter().all(|reason| open.contains(reason)), "the open reference names base_unrecorded's members and reasons: {open}");
+    for said in [open, card(&catalog, "publication_open")] {
+        assert!(!said.contains(superseded), "the open refuses no standing — a draft begun before version 1 is told superseded_first: {said}");
+    }
+    assert!(open.contains("superseded_first (") && open.contains("beside version 1 as its daughter"), "the open reference tells the fourth standing and where its member lands: {open}");
+    let confirm = reference(&catalog, "publication_confirm");
+    assert!(confirm.contains(&format!("{superseded} {{first}}")), "the confirm reference names the library's base_superseded arm: {confirm}");
+    assert!(confirm.contains("superseded_first where version 1 was"), "the confirm reference re-states a first draft's standing moved: {confirm}");
+    assert!(confirm.contains("or its base did, base then the base as read") && confirm.contains("a base or a standing that moved is the restated outcome"), "the confirm reference says a moved base is re-stated, never a refusal: {confirm}");
+    assert!(confirm.contains(&format!("{} {{index}}", skep_shell::Name::SELECTION_NOT_ARRANGED.as_str())), "the confirm reference names the refusal of a selection the draft has wholly left: {confirm}");
+    assert!(confirm.contains("kept_place_moved {index, draft, race}"), "the confirm reference names kept_place_moved's members, the draft that moved among them: {confirm}");
+    assert!(confirm.contains("each of also — is re-windowed") && confirm.contains("stray_place {index, draft}"), "the confirm reference says every named draft is re-windowed in the one write, and names the own fault's draft: {confirm}");
+    // The held-lines gate (client.md §3c.4; skep #849): the confirm
+    // reference names the refusal with its members and the agent's act, and
+    // the REJECTIONS ARE DATA topic lists it among the shell's own.
     let held_lines = skep_shell::Name::HELD_LINES.as_str();
     assert!(
         confirm.contains(&format!("holds a line of yours the board has not kept (HELD BURSTS) it is refused {held_lines} {{doc, held}} (isError), nothing sent"))
             && confirm.contains("call held(), resolve each line on that doc, then confirm again"),
-        "the confirm card names the held-lines gate's refusal, its members and the act: {confirm}"
+        "the confirm reference names the held-lines gate's refusal, its members and the act: {confirm}"
     );
-    let rejections = catalog.instructions().split("\n\n").find(|paragraph| paragraph.starts_with("REJECTIONS ARE DATA. ")).expect("the REJECTIONS ARE DATA paragraph");
+    let rejections = topic(&catalog, "REJECTIONS ARE DATA");
     assert!(rejections.contains(&format!("{held_lines} {{doc, held}} — a publication_confirm over a draft holding lines of yours the board has not kept")), "REJECTIONS ARE DATA names the gate's refusal: {rejections}");
     let selection = &entry("publication_open")["inputSchema"]["properties"]["selection"]["items"];
     assert_eq!(schema_fields(selection), fields("Run"), "the selection's runs are the shell's Run");
@@ -736,30 +974,30 @@ fn the_publication_cards_state_the_shells_shapes() {
 
 /// The catalog tells an agent the edits' figures as the shell holds them.
 ///
-/// Each text edit's card names the cap on one change's new text and on a
-/// draft's size by skep-shell's constants, and `edit_text`'s the wire's
+/// Each text edit's reference names the cap on one change's new text and on
+/// a draft's size by skep-shell's constants, and `edit_text`'s the wire's
 /// list cap on its pairs, which its schema holds too, and each figure of
-/// its rows; the instructions send an agent to both tools, the opening
-/// paragraph naming each; and every outcome and every cause of the edit's
-/// own is spelled on `replace_text`'s card (SP-25). `edit_text`'s card says
-/// what an agent needs before a harness cuts it — the call's form, the
-/// once-only rule, all or nothing, every row's form and that `partial` and
-/// `held` are errors after which the draft is read — within its first
-/// 2,000 characters, and names the take-back's `too_large` and the
+/// its rows; the instructions send an agent to both tools, and so do the
+/// EDITING TEXT topic and the OVERVIEW topic, which names each among the
+/// apparatus; and every outcome and every cause of the edit's own is spelled
+/// in `replace_text`'s reference (SP-25). `edit_text`'s card itself says what
+/// an agent needs before it reads the reference — the call's form, the
+/// once-only rule, all or nothing, the cap on its pairs and that `partial`
+/// and `held` are errors after which the draft is read — and its reference
+/// says the rest: every row's form, the take-back's `too_large` and the
 /// one-pair tool beside it.
 #[test]
 fn the_catalog_tells_an_agent_the_edits_figures_as_the_code_holds_them() {
     use skep_client::publication::MAX_WIRE_LIST;
     use skep_shell::{MAX_DRAFT_POSITIONS, MAX_NEW_BYTES, ROWS_CONTEXT_LINES, ROWS_MAX_BYTES, ROWS_MAX_LINE_CHARS, ROWS_MAX_RUN, ROWS_RUN_HEAD, ROWS_RUN_TAIL};
-    let catalog: Value = serde_json::from_str(EMBEDDED).expect("the embedded catalog parses");
-    let card = |name: &str| catalog["tools"].as_array().expect("tools").iter().find(|tool| tool["name"] == name).unwrap_or_else(|| panic!("the {name} card")).clone();
+    let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    let entry = |name: &str| catalog.tools.iter().find(|tool| tool["name"] == name).unwrap_or_else(|| panic!("the {name} card"));
     for name in ["replace_text", "edit_text"] {
-        let said = card(name)["description"].as_str().expect("the card's description").to_string();
-        assert!(said.contains(&format!("one insert's cap of {MAX_NEW_BYTES} bytes")), "{name}: the card names the new text's cap: {said}");
-        assert!(said.contains(&format!("a draft past {MAX_DRAFT_POSITIONS} content positions")), "{name}: the card names the draft's cap: {said}");
+        let said = reference(&catalog, name);
+        assert!(said.contains(&format!("one insert's cap of {MAX_NEW_BYTES} bytes")), "{name}: the reference names the new text's cap: {said}");
+        assert!(said.contains(&format!("a draft past {MAX_DRAFT_POSITIONS} content positions")), "{name}: the reference names the draft's cap: {said}");
     }
-    let replace = card("replace_text");
-    let said = replace["description"].as_str().expect("the card's description");
+    let said = reference(&catalog, "replace_text");
     for spelled in [
         "\"replaced\"",
         "\"unchanged\"",
@@ -777,18 +1015,24 @@ fn the_catalog_tells_an_agent_the_edits_figures_as_the_code_holds_them() {
         "new_text: {ordinal, width, addr?, at?}",
         "old_text: {ordinal, width}",
     ] {
-        assert!(said.contains(spelled), "the card spells `{spelled}`: {said}");
+        assert!(said.contains(spelled), "the reference spells `{spelled}`: {said}");
     }
+    let replace = entry("replace_text");
     assert_eq!(replace["inputSchema"]["required"], json!(["doc", "old", "new"]));
     assert_eq!(replace["inputSchema"]["properties"]["old"]["minLength"], 1, "an empty old is refused, and the schema says so");
-    let edit = card("edit_text");
-    let said = edit["description"].as_str().expect("the card's description");
-    let front: String = said.chars().take(2000).collect();
+    let short = card(&catalog, "edit_text");
     for spelled in [
         "edit_text(doc, edits: [{old, new}, …])".to_string(),
         "EXACTLY ONCE in the draft as the pairs before it leave it".to_string(),
         "ALL OR NOTHING".to_string(),
         format!("at most {MAX_WIRE_LIST} pairs"),
+        "partial and held are isError".to_string(),
+        "read the draft before you edit it again".to_string(),
+    ] {
+        assert!(short.contains(&spelled), "edit_text's card says `{spelled}`: {short}");
+    }
+    let said = reference(&catalog, "edit_text");
+    for spelled in [
         "\"+N<TAB>line\"".to_string(),
         format!("\" N<TAB>line\" (a space, then N): one of the {ROWS_CONTEXT_LINES} unchanged lines either side"),
         "\"-<TAB>(N bytes removed here)\"".to_string(),
@@ -800,29 +1044,28 @@ fn the_catalog_tells_an_agent_the_edits_figures_as_the_code_holds_them() {
         "a value that is no text as {…}".to_string(),
         format!("past {ROWS_MAX_BYTES} bytes the rows end \"(N more changed lines not shown)\""),
         "masked: true".to_string(),
-        "partial and held are isError".to_string(),
-        "read the draft before you edit it again".to_string(),
         "stands names each change at its own commit, its new bytes found by addr".to_string(),
     ] {
-        assert!(front.contains(&spelled), "edit_text's first 2,000 characters say `{spelled}`: {front}");
+        assert!(said.contains(&spelled), "edit_text's reference says `{spelled}`: {said}");
     }
-    assert!(said.contains("too_large (what: new") && said.contains("or runs, a draft in more runs than one write sets back"), "the card names the take-back's too_large: {said}");
-    assert!(said.contains("replace_text still edits one pair"), "the card names the one-pair tool: {said}");
-    let schema = &edit["inputSchema"];
+    assert!(said.contains("too_large (what: new") && said.contains("or runs, a draft in more runs than one write sets back"), "the reference names the take-back's too_large: {said}");
+    assert!(said.contains("replace_text still edits one pair"), "the reference names the one-pair tool: {said}");
+    let schema = &entry("edit_text")["inputSchema"];
     assert_eq!(schema["required"], json!(["doc", "edits"]));
     assert_eq!((&schema["properties"]["edits"]["minItems"], &schema["properties"]["edits"]["maxItems"]), (&json!(1), &json!(MAX_WIRE_LIST)), "one pair at least, one wire list at most");
     assert_eq!(schema["properties"]["edits"]["items"]["properties"]["old"]["minLength"], 1, "an empty old is refused, and the schema says so");
-    let instructions = catalog["instructions"].as_str().expect("the instructions");
-    let editing = instructions.split("\n\n").find(|paragraph| paragraph.starts_with("EDITING TEXT. ")).expect("the instructions' paragraph on editing text");
-    assert!(editing.contains("replace_text(doc, old, new)") && editing.contains("edit_text(doc, edits)"), "the paragraph sends an agent to both tools: {editing}");
-    let opening = instructions.split("\n\n").next().expect("the opening paragraph");
-    assert!(opening.contains("replace_text (") && opening.contains("edit_text (") && opening.contains(": EDITING TEXT)"), "the opening paragraph names both among the apparatus: {opening}");
+    let instructions = catalog.instructions();
+    assert!(instructions.contains("replace_text (one change)") && instructions.contains("edit_text (several"), "the instructions send an agent to both tools: {instructions}");
+    let editing = topic(&catalog, "EDITING TEXT");
+    assert!(editing.contains("replace_text(doc, old, new)") && editing.contains("edit_text(doc, edits)"), "the topic sends an agent to both tools: {editing}");
+    let overview = topic(&catalog, "OVERVIEW");
+    assert!(overview.contains("replace_text (") && overview.contains("edit_text (") && overview.contains(": EDITING TEXT)"), "the overview names both among the apparatus: {overview}");
 }
 
-/// The text edits' cards state the shell's answers, bar what the adapter
-/// takes off.
+/// The text edits' references state the shell's answers, bar what the
+/// adapter takes off.
 ///
-/// Each card — `replace_text`'s of the shell's `text.replace` row,
+/// Each reference — `replace_text`'s of the shell's `text.replace` row,
 /// `edit_text`'s of its `text.edit` row — spells each answer the row
 /// declares (`shapes::declarations`) as `{outcome: "…", a, b?, …}`: every
 /// member of the shape, `?` where it is optional, a nested value's members
@@ -831,15 +1074,15 @@ fn the_catalog_tells_an_agent_the_edits_figures_as_the_code_holds_them() {
 /// no agent sees, and the rows of a landed `text.edit`, which follow the
 /// answer as lines of their own (`EDIT_LINES`); the answers that carry the
 /// error member are the three `isError` ones, `refused` beside a
-/// verdict-less cause, `partial` and `held`; a span the card spells is the
-/// shell's `TextSpan`; and the card's `(write: …)` list names each value of
-/// its held answer's `write` and no other. `edit_text`'s card spells a
-/// change as `TextEditChange`, a change that stands as `TextEditStanding`
+/// verdict-less cause, `partial` and `held`; a span the reference spells is
+/// the shell's `TextSpan`; and the reference's `(write: …)` list names each
+/// value of its held answer's `write` and no other. `edit_text`'s reference
+/// spells a change as `TextEditChange`, a change that stands as `TextEditStanding`
 /// or `TextEditHalf`, and its schema's pair as `TextEditPair` (SP-24). A
 /// shape the shell changes in one place alone would tell every agent of an
 /// answer the shell no longer gives, or leave a held line's write unnamed.
 #[test]
-fn the_text_edit_cards_state_the_shells_answers_bar_what_the_adapter_takes_off() {
+fn the_text_edit_references_state_the_shells_answers_bar_what_the_adapter_takes_off() {
     /// Returns `text` from its first `{` to the `}` that closes it.
     fn braced(text: &str) -> &str {
         let open = text.find('{').expect("an opening brace");
@@ -896,7 +1139,7 @@ fn the_text_edit_cards_state_the_shells_answers_bar_what_the_adapter_takes_off()
         let head = format!("  '{row}'(args: ");
         let line = declarations.lines().find(|line| line.starts_with(head.as_str())).unwrap_or_else(|| panic!("skep-shell declares the {row} row"));
         let answers = line.split_once("Promise<Outcome<").and_then(|(_, rest)| rest.strip_suffix(">>;")).unwrap_or_else(|| panic!("the row's answer: {line}"));
-        let card = catalog.tools.iter().find(|t| t["name"] == name).and_then(|t| t["description"].as_str()).unwrap_or_else(|| panic!("the {name} card"));
+        let card = reference(&catalog, name);
         let mut errors = BTreeSet::new();
         for answer in answers.split(" | ") {
             let shape = skep_shell::shapes::shape(answer).unwrap_or_else(|| panic!("skep-shell declares {answer}"));
@@ -918,7 +1161,7 @@ fn the_text_edit_cards_state_the_shells_answers_bar_what_the_adapter_takes_off()
         assert_eq!(spelled, writes, "{name}: the card names each write a held line may be, as the shell declares them: {listed}");
     }
     let card = catalog.tools.iter().find(|t| t["name"] == "edit_text").expect("the edit_text card");
-    let said = card["description"].as_str().expect("the card's description");
+    let said = reference(&catalog, "edit_text");
     let change = said.find("a change {").map(|at| members(braced(&said[at..])).0).expect("the card spells a change");
     assert_eq!(change, declared("TextEditChange", &[]), "a change is the shell's TextEditChange");
     let stands = said.split_once("stands: [").map(|(_, rest)| rest).expect("the card spells what stands");
@@ -943,7 +1186,7 @@ fn the_text_edit_cards_state_the_shells_answers_bar_what_the_adapter_takes_off()
 #[test]
 fn the_probe_card_names_the_shells_board_states() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
-    let card = catalog.tools.iter().find(|t| t["name"] == "probe").and_then(|t| t["description"].as_str()).expect("the probe card");
+    let card = reference(&catalog, "probe");
     let fields = skep_shell::shapes::shape("Probe").expect("skep-shell declares Probe").fields;
     let daemon = fields.iter().find(|field| field.name == "daemon").expect("the probe's daemon member").ty;
     for state in daemon.split(" | ").map(|word| word.trim_matches('\'')) {
@@ -952,87 +1195,87 @@ fn the_probe_card_names_the_shells_board_states() {
     assert!(fields.iter().any(|field| field.name == "reason" && !field.required) && card.contains("reason?"), "the probe card names the optional `reason`: {card}");
 }
 
-/// The `held` card names `sendable`, an agent's line reading false.
+/// The `held` reference names `sendable`, an agent's line reading false.
 ///
-/// The card lists every row member, and an agent reading a moved line's row
+/// The reference lists every row member, and an agent reading a moved line's row
 /// meets `sendable`: what `resolve` `send` would do, and always false for a
 /// burst sent through these tools, which carries no anchors and so never
-/// shifts (skep #867). A card silent on it leaves an agent to guess what the
+/// shifts (skep #867). A reference silent on it leaves an agent to guess what the
 /// member means, and to send a line it could tell would be held moved again.
 #[test]
-fn the_held_card_names_sendable_and_an_agents_line_reading_false() {
+fn the_held_reference_names_sendable_and_an_agents_line_reading_false() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
-    let held = catalog.tools.iter().find(|t| t["name"] == "held").and_then(|t| t["description"].as_str()).expect("the held card");
+    let held = reference(&catalog, "held");
     assert!(
         held.contains("sendable? (on a moved document's first moved line: true where resolve send would shift it into the text as it now stands, false where it would be held moved again, absent where the shell does not know; a burst sent through these tools carries no anchors, so it never shifts and reads false)"),
-        "the held card names sendable: {held}"
+        "the held reference names sendable: {held}"
     );
     let declared: Vec<&str> = skep_shell::shapes::shape("HeldRow").expect("skep-shell declares a held line").fields.iter().map(|field| field.name).collect();
     assert!(declared.contains(&"sendable"), "`sendable` is a member skep-shell declares for a held line: {declared:?}");
 }
 
-/// The `held` card names `hands`, whose writes moved a document.
+/// The `held` reference names `hands`, whose writes moved a document.
 ///
-/// The card lists every row member, and an agent's `held` is where it learns
+/// The reference lists every row member, and an agent's `held` is where it learns
 /// who moved a document its words wait on: the hands of the move the
 /// document stands on now, on each moved line of the document, each key a
 /// word skep-shell declares for a hand, `unread` among them where the shell
 /// has not read them yet and `unknowable` where no read can (skep #973,
-/// #989). A card silent on them leaves an agent to guess whose change it is
+/// #989). A reference silent on them leaves an agent to guess whose change it is
 /// placing its words against.
 #[test]
-fn the_held_card_names_hands_and_each_key_a_hand_carries() {
+fn the_held_reference_names_hands_and_each_key_a_hand_carries() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
-    let held = catalog.tools.iter().find(|t| t["name"] == "held").and_then(|t| t["description"].as_str()).expect("the held card");
+    let held = reference(&catalog, "held");
     assert!(
         held.contains("hands? (on each moved line of a moved document: whose writes moved it, each once, for the move the document stands on now — each {key, fingerprint?, label?}"),
-        "the held card names hands: {held}"
+        "the held reference names hands: {held}"
     );
     let declarations = skep_shell::shapes::declarations();
     let keys = declarations.lines().find(|line| line.starts_with("export type HandKey")).expect("skep-shell declares a hand's key");
     for key in keys.split('\'').skip(1).step_by(2) {
-        assert!(held.contains(&format!("{key} (")), "the held card names the hand `{key}`: {held}");
+        assert!(held.contains(&format!("{key} (")), "the held reference names the hand `{key}`: {held}");
     }
     let declared: Vec<&str> = skep_shell::shapes::shape("HeldRow").expect("skep-shell declares a held line").fields.iter().map(|field| field.name).collect();
     assert!(declared.contains(&"hands"), "`hands` is a member skep-shell declares for a held line: {declared:?}");
 }
 
-/// The `held` card names `again` and the hand no read can name.
+/// The `held` reference names `again` and the hand no read can name.
 ///
 /// An agent's burst carries no anchors, so the board refuses its send again
 /// for the change that moved it, and the row then names that change's hands
 /// again with `again` beside them; where the board no longer keeps the
 /// history, the row names the one hand `unknowable`, which no later list
-/// reads (skep #989). A card silent on `again` leaves an agent to read the
+/// reads (skep #989). A reference silent on `again` leaves an agent to read the
 /// same hands as a second change, and one silent on `unknowable` leaves it
 /// to list again for hands that never come.
 #[test]
-fn the_held_card_names_again_and_the_hand_no_read_can_name() {
+fn the_held_reference_names_again_and_the_hand_no_read_can_name() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
-    let held = catalog.tools.iter().find(|t| t["name"] == "held").and_then(|t| t["description"].as_str()).expect("the held card");
+    let held = reference(&catalog, "held");
     assert!(
         held.contains("again? (beside hands, true: the board refused the line again with no change since your resolve send, and hands are the changes it named before)"),
-        "the held card names again: {held}"
+        "the held reference names again: {held}"
     );
-    assert!(held.contains("or the one hand unknowable (the board no longer keeps the history that would name them, so they can never be read)"), "the held card names unknowable: {held}");
+    assert!(held.contains("or the one hand unknowable (the board no longer keeps the history that would name them, so they can never be read)"), "the held reference names unknowable: {held}");
     let declared = skep_shell::shapes::shape("HeldRow").expect("skep-shell declares a held line").fields;
     assert!(declared.iter().any(|field| field.name == "again" && !field.required), "`again` is an optional member skep-shell declares for a held line: {declared:?}");
 }
 
-/// The held card names why a line stands off disk.
+/// The `held` reference names why a line stands off disk.
 ///
-/// The card names `unwritable` and `unwritable_class` as skep-shell declares
+/// The reference names `unwritable` and `unwritable_class` as skep-shell declares
 /// them for a held line, and says what the agent can do with them: a line it
 /// lists so is lost if the process ends before the shell writes it (skep
-/// #860). A card silent on them leaves an agent to stop a process holding a
+/// #860). A reference silent on them leaves an agent to stop a process holding a
 /// write it could have waited for.
 #[test]
-fn the_held_card_names_why_a_line_stands_off_disk() {
+fn the_held_reference_names_why_a_line_stands_off_disk() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
-    let held = catalog.tools.iter().find(|t| t["name"] == "held").and_then(|t| t["description"].as_str()).expect("the held card");
+    let held = reference(&catalog, "held");
     assert!(
         held.contains("unwritable? (the shell could not write this line to disk, and says why: the line stands in memory alone until the shell writes it, trying again on its own, and is lost if the process ends first; absent once it is on disk), unwritable_class? (beside unwritable, always with it: full, read_only or other)"),
-        "the held card names the two members: {held}"
+        "the held reference names the two members: {held}"
     );
     let declared: Vec<&str> = skep_shell::shapes::shape("HeldRow").expect("skep-shell declares a held line").fields.iter().map(|field| field.name).collect();
     for member in ["unwritable", "unwritable_class"] {
@@ -1040,16 +1283,16 @@ fn the_held_card_names_why_a_line_stands_off_disk() {
     }
 }
 
-/// The held cards name the hand-over and a burst kept in memory alone.
+/// The held references name the hand-over and a burst kept in memory alone.
 ///
-/// The `held` card's causes name the shell's own refused run,
+/// The `held` reference's causes name the shell's own refused run,
 /// `answers_lost`, as skep-shell spells it — why the shell stopped resending
 /// and the members of its refusal — a refused run under a code the shell
 /// holds no row for, and `head_unreadable`, the write the shell cannot sign
 /// while the board's head record will not read, kept on disk and skipped at
 /// each probe (skep #725, #727), and `session_died` met at the burst's dial
 /// or at the shell's read just after the board refused it
-/// `arrangement_moved` (skep #826); the `resolve` card says what `send` and
+/// `arrangement_moved` (skep #826); the `resolve` reference says what `send` and
 /// `drop` do with such a line, that `send` on a moved document records the
 /// changes that moved it as seen, so a document moved again names only the
 /// changes since (skep #757) and one refused again with no change since names
@@ -1067,7 +1310,7 @@ fn the_held_card_names_why_a_line_stands_off_disk() {
 /// (skep #733, #700), names the head's hold and the death's, at either of its
 /// two points, and says what a drop does; and REJECTIONS ARE DATA names
 /// `head_unreadable` among the halts with a garbled answer from the board's
-/// head record among its causes (skep #728). A card that names neither leaves
+/// head record among its causes (skep #728). A reference that names neither leaves
 /// an agent to guess whether a line it holds may have landed, and free to
 /// stop a process that holds a write in memory alone; one silent on the moved
 /// document's `send` leaves an agent to read a second moved face as the first
@@ -1080,38 +1323,37 @@ fn the_held_card_names_why_a_line_stands_off_disk() {
 /// `may_have_landed` leaves an agent to take a discarded line's words for
 /// gone and land them twice.
 #[test]
-fn the_held_cards_name_the_shells_hand_over_and_a_burst_kept_in_memory_alone() {
+fn the_held_references_name_the_shells_hand_over_and_a_burst_kept_in_memory_alone() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
-    let card = |name: &str| catalog.tools.iter().find(|t| t["name"] == name).and_then(|t| t["description"].as_str()).unwrap_or_else(|| panic!("the {name} card"));
     let lost = skep_shell::Name::ANSWERS_LOST.as_str();
     let unreadable = skep_shell::Name::HEAD_UNREADABLE.as_str();
-    let held = card("held");
-    assert!(held.contains(&format!("{lost}: the shell stopped resending: no landing two minutes after the line's first failed send")), "the held card names the hand-over: {held}");
-    assert!(held.contains(&format!("the shell's own for {lost}, {{kind, name, last, elapsed_ms}}")), "the held card names its refusal's members: {held}");
-    assert!(held.contains("a code the shell holds no row for among them, refused at a resend and handed to you at once"), "the held card names the board's own code handed over: {held}");
+    let held = reference(&catalog, "held");
+    assert!(held.contains(&format!("{lost}: the shell stopped resending: no landing two minutes after the line's first failed send")), "the held reference names the hand-over: {held}");
+    assert!(held.contains(&format!("the shell's own for {lost}, {{kind, name, last, elapsed_ms}}")), "the held reference names its refusal's members: {held}");
+    assert!(held.contains("a code the shell holds no row for among them, refused at a resend and handed to you at once"), "the held reference names the board's own code handed over: {held}");
     assert!(
         held.contains(&format!("{unreadable} (the board's head record cannot be read — it stands damaged, was served garbled, or a claimed board serves none — so the shell cannot sign the write: held on disk and skipped at each probe until the record reads, or dropped)")),
-        "the held card names the head's hold: {held}"
+        "the held reference names the head's hold: {held}"
     );
     let died_at = "at the burst's dial, or at the shell's read just after the board refused it arrangement_moved";
     assert!(
         held.contains(&format!("session_died (this adapter's session ended {died_at} — a board restart among the causes — so the write ran nothing")),
-        "the held card names the death at either point: {held}"
+        "the held reference names the death at either point: {held}"
     );
-    let resolve = card("resolve");
-    assert!(resolve.contains(&format!("a line that the shell handed back to you ({lost})")), "the resolve card names the line: {resolve}");
-    assert!(resolve.contains("dropped, given up for good") && resolve.contains("is read first and kept where it landed, and otherwise sent again, its two-minute clock started afresh"), "the resolve card says what each act does: {resolve}");
+    let resolve = reference(&catalog, "resolve");
+    assert!(resolve.contains(&format!("a line that the shell handed back to you ({lost})")), "the resolve reference names the line: {resolve}");
+    assert!(resolve.contains("dropped, given up for good") && resolve.contains("is read first and kept where it landed, and otherwise sent again, its two-minute clock started afresh"), "the resolve reference says what each act does: {resolve}");
     let unread = skep_shell::Name::LANDING_UNREAD.as_str();
     assert!(
         resolve.contains(&format!("save a line with sent true, holding or handed back as {lost}, which may have landed after all: its drop reads first, and where its write landed keeps the line, nothing dropped and the lines behind it sent in order, answering {{\"kept\": true}}"))
             && resolve.contains(&format!("where the read cannot tell whether it landed, nothing is dropped and the drop is refused {unread} {{held, why}}"))
             && resolve.contains("a line whose every dial the shell knows never left this device is dropped with no read, whatever its sent says")
             && resolve.ends_with("Response: {}, {\"kept\": true} where a drop kept the line, or {\"may_have_landed\": [<ordinal>, …]} where a drop took lines that may already be on the board."),
-        "the resolve card says a drop of a line that may have landed reads first, may keep it, and names the refusal: {resolve}"
+        "the resolve reference says a drop of a line that may have landed reads first, may keep it, and names the refusal: {resolve}"
     );
     assert!(
         resolve.contains("A drop that takes lines which may already be on the board — sent true, with no read of the drop's own ruling that out: a refused run's or a moved document's line, or a line behind the one its read found unlanded — answers their ordinals in may_have_landed: they are dropped all the same, and their words may stand, so read the document before writing them again."),
-        "the resolve card says which lines a drop names as perhaps landed: {resolve}"
+        "the resolve reference says which lines a drop names as perhaps landed: {resolve}"
     );
     // The answer's members, as skep-shell declares the row's result.
     let declarations = skep_shell::shapes::declarations();
@@ -1119,24 +1361,23 @@ fn the_held_cards_name_the_shells_hand_over_and_a_burst_kept_in_memory_alone() {
     let result = row.rsplit_once("Promise<Outcome<{").and_then(|(_, rest)| rest.split_once('}')).map(|(members, _)| members).expect("the row answers an object");
     let members: Vec<&str> = result.split(';').filter_map(|member| member.split(':').next()).map(|name| name.trim().trim_end_matches('?')).filter(|name| !name.is_empty()).collect();
     assert!(!members.is_empty(), "the resolve row answers named members: {row}");
-    let response = resolve.rsplit_once("Response: ").map(|(_, response)| response).expect("the resolve card's Response");
+    let response = resolve.rsplit_once("Response: ").map(|(_, response)| response).expect("the resolve reference's Response");
     for member in members {
-        assert!(response.contains(&format!("{{\"{member}\": ")), "the resolve card's Response names `{member}`: {response}");
+        assert!(response.contains(&format!("{{\"{member}\": ")), "the resolve reference's Response names `{member}`: {response}");
     }
     assert!(
         resolve.contains("on a moved document, it first records that the changes which moved it have been seen: a document moved again names only the changes since"),
-        "the resolve card says what send records on a moved document: {resolve}"
+        "the resolve reference says what send records on a moved document: {resolve}"
     );
-    assert!(resolve.contains("; one refused again with no change since names again the changes it named before."), "the resolve card says what a send refused again names: {resolve}");
+    assert!(resolve.contains("; one refused again with no change since names again the changes it named before."), "the resolve reference says what a send refused again names: {resolve}");
     let not_resolvable = skep_shell::Name::NOT_RESOLVABLE.as_str();
     assert!(
         resolve.contains(&format!("or one still holding, whatever its cause — {unreadable} among them (the board's head record cannot be read, so the shell cannot sign the write"))
             && resolve.contains(&format!("\"send\" on a line still holding is {not_resolvable}: the shell sends it itself as the board takes it"))
             && resolve.contains(&format!("Either act on a line the shell is sending at that moment is {not_resolvable} until that send ends")),
-        "the resolve card admits the drop on a holding line, the send on none, and neither act on a line being sent: {resolve}"
+        "the resolve reference admits the drop on a holding line, the send on none, and neither act on a line being sent: {resolve}"
     );
-    let paragraph = |head: &str| catalog.instructions().split("\n\n").find(|paragraph| paragraph.starts_with(head)).unwrap_or_else(|| panic!("the {head} paragraph"));
-    let held_bursts = paragraph("HELD BURSTS. ");
+    let held_bursts = topic(&catalog, "HELD BURSTS");
     assert!(held_bursts.contains("A burst whose held answer carries unwritable — why the shell could not write its line to disk — is kept in memory alone until the shell writes it, and is lost if the process ends first; held() lists it with unwritable beside it until its line is on disk."), "{held_bursts}");
     assert!(
         held_bursts.contains(&format!(
@@ -1151,7 +1392,7 @@ fn the_held_cards_name_the_shells_hand_over_and_a_burst_kept_in_memory_alone() {
         "HELD BURSTS names the head's hold: {held_bursts}"
     );
     assert!(held_bursts.contains(&format!("the end of this adapter's session {died_at} (cause session_died: the write ran nothing")), "HELD BURSTS names the death at either point: {held_bursts}");
-    let rejections = paragraph("REJECTIONS ARE DATA. ");
+    let rejections = topic(&catalog, "REJECTIONS ARE DATA");
     assert!(
         rejections.contains(&format!("{unreadable} where the board's head record (H.1), which the attest of a write it signs names, stands and cannot be read — a garbled answer from the board's head record among its causes — or a claimed board serves none")),
         "REJECTIONS ARE DATA names the head's halt and its garbled cause: {rejections}"

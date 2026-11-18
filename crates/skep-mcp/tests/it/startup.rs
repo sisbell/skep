@@ -589,8 +589,9 @@ fn non_utf8_tools_file_path_is_a_path() {
 /// directions before any setting or dial: a file entry the dispatch
 /// doesn't know — a stranger, a ceremony's name — refuses startup naming
 /// it; a dispatch tool with no file entry — a wire op, an adapter tool —
-/// refuses naming it; and the undoctored file starts, then exits cleanly on
-/// immediate EOF.
+/// refuses naming it; a file written for a release before the help store,
+/// with no `help` field and no `help` tool, refuses naming `help`; and the
+/// undoctored file starts, then exits cleanly on immediate EOF.
 #[test]
 fn tools_file_dispatch_drift_refuses_startup_both_directions() {
     let dir = TempDir::new("drift");
@@ -614,6 +615,14 @@ fn tools_file_dispatch_drift_refuses_startup_both_directions() {
         assert!(err.contains(missing), "stderr names the uncovered tool: {err}");
     }
 
+    let mut earlier = real.clone();
+    earlier.as_object_mut().expect("the catalog's root").remove("help");
+    earlier["tools"].as_array_mut().expect("tools").retain(|t| t["name"] != "help");
+    let path = dir.path().join("earlier.json");
+    std::fs::write(&path, earlier.to_string()).expect("write an earlier release's file");
+    let err = tools_file_refusal(&path);
+    assert!(err.contains("'help'"), "stderr names the help store an earlier release's file lacks: {err}");
+
     let fixture = Fixture::new("drift-real");
     let path = dir.path().join("real.json");
     std::fs::write(&path, real.to_string()).expect("write real file");
@@ -623,10 +632,11 @@ fn tools_file_dispatch_drift_refuses_startup_both_directions() {
 
 /// A tools file is the catalog served, in place of the embedded one.
 ///
-/// Its instructions and its tools are what `initialize` and `tools/list`
-/// answer, the start says where its text differs from the catalog this
-/// release embeds, and the serving line names the file it counts the tools
-/// of.
+/// Its instructions, its tools and its help store are what `initialize`,
+/// `tools/list` and `help` answer, the start says where its text differs
+/// from the catalog this release embeds — the help store counted apart from
+/// the instructions — and the serving line names the file it counts the
+/// tools of.
 #[test]
 fn a_tools_file_is_the_catalog_served_in_place_of_the_embedded_one() {
     let fixture = Fixture::new("tools-file");
@@ -634,15 +644,20 @@ fn a_tools_file_is_the_catalog_served_in_place_of_the_embedded_one() {
     catalog["instructions"] = json!("These instructions are the tools file's own.");
     let fork = catalog["tools"].as_array_mut().expect("tools").iter_mut().find(|t| t["name"] == "fork").expect("fork");
     fork["description"] = json!("The tools file's own description of fork.");
+    let topics = catalog["help"].as_array().expect("the help store").len();
+    let fetch = catalog["help"].as_array_mut().expect("the help store").iter_mut().find(|entry| entry["topic"] == "FETCH").expect("the FETCH topic");
+    fetch["text"] = json!("FETCH. The tools file's own word on fetching.");
     let path = fixture.dir.path().join("own.json");
     std::fs::write(&path, catalog.to_string()).expect("write the tools file");
     let mut mcp = Launch::over(&fixture, 1).args(["--tools-file", path.to_str().expect("a UTF-8 path")]).logged().spawn();
     assert_eq!(mcp.initialize()["instructions"], catalog["instructions"], "the file's instructions are served");
     assert_eq!(mcp.request("tools/list", json!({}))["result"]["tools"], catalog["tools"], "the file's tools are listed");
+    assert_eq!(mcp.call("help", json!({"topic": "FETCH"})), (false, "FETCH. The tools file's own word on fetching.".to_string()), "the file's help topic is answered");
     let (status, log) = mcp.finish_logged();
     assert!(status.success(), "{status:?}\n{log}");
     assert!(log.contains(&format!("tools of the tools file {} on stdio", path.display())), "the serving line names the file:\n{log}");
-    let differs = format!("the tools file {} differs from the catalog this release embeds (its instructions, and 1 of its ", path.display());
+    let tools = catalog["tools"].as_array().expect("tools").len();
+    let differs = format!("the tools file {} differs from the catalog this release embeds (its instructions, 1 of its {tools} tools' entries, and 1 of the {topics} help topics)", path.display());
     assert!(log.contains(&differs) && log.contains("every agent is told that file's text, not this release's"), "the start says the file's text differs:\n{log}");
 }
 

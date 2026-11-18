@@ -36,17 +36,22 @@ fn width_of(addr: &str, last: u64) -> String {
 /// `initialize` and `tools/list` answer the catalog the binary embeds.
 ///
 /// `initialize` answers 2025-06-18 to a client naming it, the server's name and
-/// version, its instructions and the tools capability; `tools/list` is the
-/// tools file's entries verbatim, in file order; stdin's end is the clean exit.
+/// version, its instructions — at most 2,000 characters with the commons
+/// sentence appended, below the length a client cuts them at — and the tools
+/// capability; `tools/list` is the tools file's entries verbatim, in file
+/// order, each a name, a description and a schema and nothing else, no help
+/// text riding beside them; stdin's end is the clean exit.
 #[test]
 fn initialize_and_tools_list_serve_the_catalog() {
     let fixture = Fixture::new("catalog");
-    let mut mcp = Launch::over(&fixture, 1).spawn();
+    let mut mcp = Launch::over(&fixture, 1).env("SKEP_COMMONS", "1.1.0.1.0.1").spawn();
     let init = mcp.initialize();
     assert_eq!(init["protocolVersion"], "2025-06-18", "a client naming 2025-06-18 is answered it — also the fallback, so this cannot tell an echo from a constant");
     assert_eq!(init["serverInfo"]["name"], "skep");
     assert_eq!(init["serverInfo"]["version"], env!("CARGO_PKG_VERSION"), "MCP's Implementation names its version: {init}");
     assert!(init["instructions"].as_str().is_some_and(|s| !s.is_empty()), "instructions non-empty: {init}");
+    let said = init["instructions"].as_str().map_or(0, |s| s.chars().count());
+    assert!(said <= 2000, "the instructions, the commons sentence appended, are {said} characters: {init}");
     assert!(init["capabilities"]["tools"].is_object(), "tools capability: {init}");
 
     let v = mcp.request("tools/list", json!({}));
@@ -59,11 +64,76 @@ fn initialize_and_tools_list_serve_the_catalog() {
     for t in &tools {
         assert!(t["description"].as_str().is_some_and(|s| !s.is_empty()), "every tool carries a description: {t}");
         assert!(t["inputSchema"].is_object(), "every tool carries a schema: {t}");
+        let fields: Vec<&str> = t.as_object().expect("a tool definition").keys().map(String::as_str).collect();
+        assert!(fields.iter().all(|field| ["name", "description", "inputSchema"].contains(field)), "a definition and nothing beside it: {fields:?}");
     }
 
     // Stdin EOF is the clean exit.
     let status = mcp.finish();
     assert!(status.success(), "clean exit on stdin EOF: {status:?}");
+}
+
+/// `help` answers from the catalog alone, with no board to ask.
+///
+/// The board stopped under a serving adapter — a read answers `unreachable`
+/// — `help()` still answers every topic of the help store, one a line, the
+/// headings before the tools; a topic answers its text as the catalog holds
+/// it; and a tool the store holds no topic for, `rearrange`, and a topic
+/// that is no string are each `isError`, naming the topics.
+#[test]
+fn help_answers_from_the_catalog_with_no_board() {
+    let mut fixture = Fixture::new("help");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+    fixture.stop();
+    let read = mcp.call_error("doc_metadata", json!({"doc": CLAIMANT_DOC1}));
+    assert_eq!(read["kind"], "unreachable", "premise: no board answers: {read}");
+    let file = embedded_catalog();
+    let store = file["help"].as_array().expect("the help store");
+    let text_of = |topic: &str| store.iter().find(|entry| entry["topic"] == topic).and_then(|entry| entry["text"].as_str()).unwrap_or_else(|| panic!("the topic {topic}")).to_string();
+    let (is_error, listed) = mcp.call("help", json!({}));
+    assert!(!is_error, "{listed}");
+    let listed: Vec<&str> = listed.lines().collect();
+    let heading = |topic: &&str| topic.chars().all(|c| c.is_ascii_uppercase() || c == ' ');
+    let stored: Vec<&str> = store.iter().filter_map(|entry| entry["topic"].as_str()).collect();
+    let ordered: Vec<&str> = stored.iter().copied().filter(heading).chain(stored.iter().copied().filter(|topic| !heading(topic))).collect();
+    assert_eq!(listed, ordered, "every topic, one a line, the headings first");
+    assert_eq!(mcp.call("help", json!({"topic": "HELD BURSTS"})), (false, text_of("HELD BURSTS")), "a heading's text, whole");
+    assert_eq!(mcp.call("help", json!({"topic": "replace_text"})), (false, text_of("replace_text")), "a tool's reference, whole");
+    for (topic, says) in [(json!("rearrange"), "'rearrange' is no help topic"), (json!(7), "help's topic is a string")] {
+        let (is_error, text) = mcp.call("help", json!({"topic": topic}));
+        assert!(is_error && text.starts_with(says) && text.contains(&listed.join(", ")), "{topic}: {text}");
+    }
+    assert!(mcp.finish().success());
+}
+
+/// `rearrange` moves a draft's text as its card says.
+///
+/// The card's two examples, run through the adapter: over a draft holding
+/// "abcde", three cuts at 2, 4 and 6 swap the neighbouring stretches and
+/// read "adebc", and four cuts at 1, 2, 3 and 4 swap the outer stretches
+/// around the middle one and read "cbade", each its own draft; the card
+/// states each example as it runs, so a card whose example the board does
+/// not bear out fails here.
+#[test]
+fn rearrange_moves_a_drafts_text_as_its_card_says() {
+    let fixture = Fixture::new("rearrange");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+    let card = embedded_catalog()["tools"].as_array().expect("tools").iter().find(|t| t["name"] == "rearrange").and_then(|t| t["description"].as_str()).expect("the rearrange card").to_string();
+    for (cuts, reads) in [(&[2, 4, 6][..], "adebc"), (&[1, 2, 3, 4][..], "cbade")] {
+        let spelled = cuts.iter().map(u64::to_string).collect::<Vec<_>>().join(", ");
+        assert!(card.contains(&format!("cuts {spelled} over \"abcde\" give \"{reads}\"")), "the card states the example: {card}");
+        let doc = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+        let typed = mcp.position();
+        mcp.acked("insert", json!({"as_of": typed, "doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abcde"]}));
+        let typed = mcp.position();
+        let cuts: Vec<_> = cuts.iter().map(|ordinal| json!({"subspace": "1", "ordinal": ordinal.to_string()})).collect();
+        mcp.acked("rearrange", json!({"as_of": typed, "doc": doc, "cuts": cuts}));
+        let v = mcp.call_json("retrieve_v", json!({"specs": [{"doc": doc, "span": {"start": "1.1", "width": "0.5"}}]}));
+        assert_eq!(v["items"], json!([{"content": reads}]), "cuts {spelled}: {v}");
+    }
+    assert!(mcp.finish().success());
 }
 
 /// A client that names no protocolVersion is answered the revision this

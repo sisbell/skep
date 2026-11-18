@@ -1,30 +1,37 @@
 //! The tool catalog and the dispatch it is checked against.
 //!
 //! The catalog is data, not code: names, descriptions, input schemas, the
-//! server `instructions` string, and the `SKEP_COMMONS` sentence template
-//! (`commons_instructions`, `{addr}` placeholder). The shipped `tools.json`
-//! is embedded at build time and overridable with `--tools-file`. Loading
-//! cross-checks the catalog against the dispatch in both directions, so the
-//! file and the code cannot drift silently: a file entry the dispatch doesn't
-//! know refuses startup, and a dispatch tool the file doesn't name refuses
-//! startup. The dispatch has two kinds of tool ([`Tool`]): the *wire ops*,
-//! each spelled as the wire spells it, whose arguments are the frame and
-//! which the adapter sends as `op(session, frame)` through the shell — every
-//! op of wire.md §Operations but `publish`, which the shell runs as its
-//! `publication` call family; and the *adapter tools* — the shell's calls
-//! (`boards`, `health`, `probe`, `search`, `places`, `held`, `resolve`, the
-//! read of a draft's standing, `publication_standing`, and the `publication`
-//! family's four, `publication_open`, `publication_count`,
-//! `publication_confirm` and `publication_cancel`) and the apparatus
-//! (`session_info`, `changes_since`, `fetch`, and the shell's two text
-//! edits, `replace_text`, its `text.replace`, and `edit_text`, its
-//! several-pair `text.edit`) — whose arguments are the bridge's row minus
-//! the session and the board, the adapter supplying each where the row
-//! requires it, and whose members the adapter reads by name. A
-//! `publication` tool spells its row's `.` as `_`, since an agent runtime
-//! takes a tool's name for a function's, whose spelling admits no `.`.
-//! `Tool::admit` is the dispatch's door, admitting a call or refusing it;
-//! `wire_frame` maps a wire op's call onto its frame, and
+//! server `instructions` string, the `SKEP_COMMONS` sentence template
+//! (`commons_instructions`, `{addr}` placeholder), and the help store
+//! (`help`), the text the `help` tool answers by topic: a heading in
+//! capitals, which the instructions and the cards name in parentheses, or a
+//! tool's name, the whole reference of a tool whose card ends naming it. A
+//! client cuts a long description, so the instructions and each card say
+//! what an agent needs first, and the store holds the rest, read when a call
+//! goes the way it covers. The shipped `tools.json` is embedded at build time
+//! and overridable with `--tools-file`. Loading cross-checks the catalog
+//! against the dispatch in both directions, so the file and the code cannot
+//! drift silently: a file entry the dispatch doesn't know refuses startup, a
+//! dispatch tool the file doesn't name refuses startup, and so does a help
+//! topic that is neither a heading nor a dispatch tool's name. The dispatch
+//! has two kinds of tool ([`Tool`]): the *wire ops*, each spelled as the wire
+//! spells it, whose arguments are the frame and which the adapter sends as
+//! `op(session, frame)` through the shell — every op of wire.md §Operations
+//! but `publish`, which the shell runs as its `publication` call family; and
+//! the *adapter tools* — the shell's calls (`boards`, `health`, `probe`,
+//! `search`, `places`, `held`, `resolve`, the read of a draft's standing,
+//! `publication_standing`, and the `publication` family's four,
+//! `publication_open`, `publication_count`, `publication_confirm` and
+//! `publication_cancel`) and the apparatus (`session_info`, `changes_since`,
+//! `fetch`, the shell's two text edits, `replace_text`, its `text.replace`,
+//! and `edit_text`, its several-pair `text.edit`, and `help`, which reads the
+//! help store and calls no shell) — whose arguments are the bridge's row
+//! minus the session and the board, the adapter supplying each where the row
+//! requires it, `help`'s its one `topic`, and whose members the adapter
+//! reads by name. A `publication` tool spells its row's `.` as `_`, since an
+//! agent runtime takes a tool's name for a function's, whose spelling admits
+//! no `.`. `Tool::admit` is the dispatch's door, admitting a call or refusing
+//! it; `wire_frame` maps a wire op's call onto its frame, and
 //! `Catalog::append_commons` fills the commons template in beside the check on
 //! its placeholder.
 
@@ -170,14 +177,21 @@ pub enum Tool {
     /// call changed, which the shell answers as a member of their own,
     /// follow it one row a line.
     EditText,
+    /// `help(topic?)`, the catalog's help store read by topic.
+    ///
+    /// The one tool that calls no shell: it reads the catalog alone
+    /// (`Catalog::help`, `Catalog::topics`), so it answers with no session
+    /// and no board.
+    Help,
 }
 
 /// The adapter tools: each name, its tool, and the members its row takes.
 ///
 /// The members are skep-shell's row's, bar the session and the board, which
 /// the adapter supplies or does not offer — the suite holds the two equal —
-/// and the only ones the adapter reads: a member outside them is refused
-/// before any call.
+/// save `help`'s `topic`, a member no row has, `help` reading the catalog
+/// alone; and they are the only ones the adapter reads: a member outside them
+/// is refused before any call.
 const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
     ("boards", Tool::Boards, &[]),
     ("health", Tool::Health, &[]),
@@ -196,6 +210,7 @@ const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
     ("fetch", Tool::Fetch, &["i"]),
     ("replace_text", Tool::ReplaceText, &["doc", "old", "new"]),
     ("edit_text", Tool::EditText, &["doc", "edits"]),
+    ("help", Tool::Help, &["topic"]),
 ];
 
 /// The options an adapter tool's `opts` takes, where its row takes one.
@@ -363,7 +378,8 @@ pub fn wire_frame(op: &str, mut args: Map<String, Value>) -> Value {
 /// `Catalog::append_commons` replaces every one.
 const ADDR_PLACEHOLDER: &str = "{addr}";
 
-/// The loaded catalog: the instructions, the commons template, and the tools.
+/// The loaded catalog: the instructions, the commons template, the tools,
+/// and the help store.
 ///
 /// Its invariant, established by `Catalog::load`: `instructions` is
 /// nonempty; `commons_instructions` holds `{addr}`; `tools` is one
@@ -371,10 +387,11 @@ const ADDR_PLACEHOLDER: &str = "{addr}";
 /// every adapter tool — no name twice, in file order, a top-level `from_`
 /// argument named on the `RENAMES_FROM` ops alone; so every tool `tools/list`
 /// names is one `Server::call` runs, every tool it runs is listed, and every
-/// `from_` a schema names is one `wire_frame` maps back to the wire's `from`.
-/// The fields are private, so outside this module `load` is the one way to
-/// build one, and `append_commons`, the one mutation, only appends to
-/// `instructions`.
+/// `from_` a schema names is one `wire_frame` maps back to the wire's `from`;
+/// and `help` is one nonempty text per topic, no topic twice, each a heading
+/// (`is_heading`) or a name of `Tool::names`, in file order. The fields are
+/// private, so outside this module `load` is the one way to build one, and
+/// `append_commons`, the one mutation, only appends to `instructions`.
 #[derive(Debug)]
 pub struct Catalog {
     instructions: String,
@@ -388,38 +405,48 @@ pub struct Catalog {
     /// Each is checked by `check_tool` and kept as the file spells it:
     /// exactly the `tools` array `tools/list` answers.
     tools: Vec<Value>,
+    /// The help store in file order: each topic, and its text.
+    ///
+    /// Each is checked by `check_topic`; `help` answers a topic's text, and
+    /// `topics` lists them.
+    help: Vec<(String, String)>,
 }
 
 impl Catalog {
     /// Parses and validates one catalog, establishing `Catalog`'s invariant.
     ///
     /// It is the no-drift contract: the tools' names held to the dispatch in
-    /// both directions and over both kinds, and the one argument the dispatch
-    /// renames held to the ops it renames on.
+    /// both directions and over both kinds, the one argument the dispatch
+    /// renames held to the ops it renames on, and each help topic held to a
+    /// heading or a tool the dispatch answers.
     ///
     /// # Errors
     ///
     /// Every fault is a startup error naming what is wrong — the field, the
-    /// entry's index, the tool or the op — one fault at a time, the first
-    /// found speaking, in this order:
+    /// entry's index, the tool, the op or the topic — one fault at a time,
+    /// the first found speaking, in this order:
     ///
     /// 1. text that is no JSON, a root that is no object, or a root field
     ///    the catalog does not hold;
     /// 2. `instructions` missing or empty, `commons_instructions` missing or
-    ///    without `{addr}`, then `tools` missing or no array;
+    ///    without `{addr}`, then `tools` missing or no array, then `help`
+    ///    missing or no array;
     /// 3. each entry by index, as `check_tool` refuses it;
     /// 4. each name in file order: a duplicate, or one the dispatch doesn't
     ///    know;
     /// 5. each dispatch tool the file doesn't name;
     /// 6. each entry in file order whose schema spells a top-level `from_`
-    ///    on any tool but the ops `wire_frame` maps it back on.
+    ///    on any tool but the ops `wire_frame` maps it back on;
+    /// 7. each help entry by index, as `check_topic` refuses it;
+    /// 8. each help topic in file order: a duplicate, or one that is neither
+    ///    a heading nor a tool the dispatch answers.
     pub fn load(text: &str) -> Result<Catalog, String> {
         let v: Value = serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?;
         let Value::Object(mut root) = v else {
             return Err("root must be a JSON object".into());
         };
         for k in root.keys() {
-            if k != "instructions" && k != "commons_instructions" && k != "tools" {
+            if k != "instructions" && k != "commons_instructions" && k != "tools" && k != "help" {
                 return Err(format!("unknown root field '{k}'"));
             }
         }
@@ -437,6 +464,9 @@ impl Catalog {
         }
         let Some(Value::Array(tools)) = root.remove("tools") else {
             return Err("missing array field 'tools'".into());
+        };
+        let Some(Value::Array(help)) = root.remove("help") else {
+            return Err("missing array field 'help'".into());
         };
         let mut names = Vec::with_capacity(tools.len());
         for (i, t) in tools.iter().enumerate() {
@@ -461,7 +491,20 @@ impl Catalog {
                 return Err(format!("tool '{name}' names a 'from_' argument, which this adapter maps back to the wire's 'from' on {} alone", listed(RENAMES_FROM)));
             }
         }
-        Ok(Catalog { instructions, commons_instructions, tools })
+        let mut store = Vec::with_capacity(help.len());
+        for (i, entry) in help.into_iter().enumerate() {
+            store.push(check_topic(entry).map_err(|e| format!("help[{i}]: {e}"))?);
+        }
+        let mut topics = std::collections::BTreeSet::new();
+        for (topic, _) in &store {
+            if !topics.insert(topic.as_str()) {
+                return Err(format!("duplicate help topic '{topic}'"));
+            }
+            if !is_heading(topic) && Tool::named(topic).is_none() {
+                return Err(format!("help topic '{topic}' is neither a heading (capitals and spaces, a capital at each end) nor a tool the dispatch answers"));
+            }
+        }
+        Ok(Catalog { instructions, commons_instructions, tools, help: store })
     }
 
     /// Returns the server instructions `initialize` answers.
@@ -476,6 +519,23 @@ impl Catalog {
     /// They are exactly the entries `Catalog::load` checked, in file order.
     pub fn tools(&self) -> &[Value] {
         &self.tools
+    }
+
+    /// Returns the text of the help topic `topic`, where the store holds it.
+    ///
+    /// A topic is spelled as the store spells it: a heading in capitals, or
+    /// a tool's name.
+    pub fn help(&self, topic: &str) -> Option<&str> {
+        self.help.iter().find(|(held, _)| held == topic).map(|(_, text)| text.as_str())
+    }
+
+    /// Returns the help store's topics: the headings, then the tools' names.
+    ///
+    /// Each kind keeps its file order, so the list an agent reads opens with
+    /// the rules and closes with the tools' references.
+    pub fn topics(&self) -> impl Iterator<Item = &str> {
+        let topics = || self.help.iter().map(|(topic, _)| topic.as_str());
+        topics().filter(|topic| is_heading(topic)).chain(topics().filter(|topic| !is_heading(topic)))
     }
 
     /// Points the instructions at the commons, `addr`.
@@ -495,19 +555,25 @@ impl Catalog {
     /// Its instructions differ where they, or the commons template, read
     /// otherwise; an entry differs where `other` holds no entry the same,
     /// whole. Two catalogs `load` admitted name the same tools, so the entries
-    /// counted are those of a tool the two describe otherwise.
+    /// counted are those of a tool the two describe otherwise. Their help
+    /// stores may hold different topics, so a help topic differs where the
+    /// two read it otherwise, one of them holding it and the other not among
+    /// them, counted over the topics either holds.
     pub fn drift_from(&self, other: &Catalog) -> Option<Drift> {
         let instructions = self.instructions != other.instructions || self.commons_instructions != other.commons_instructions;
         let entries = self.tools.iter().filter(|entry| !other.tools.contains(entry)).count();
-        (instructions || entries > 0).then_some(Drift { instructions, entries, tools: self.tools.len() })
+        let topics: std::collections::BTreeSet<&str> = self.help.iter().chain(&other.help).map(|(topic, _)| topic.as_str()).collect();
+        let help = topics.iter().filter(|topic| self.help(topic) != other.help(topic)).count();
+        (instructions || entries > 0 || help > 0).then_some(Drift { instructions, entries, tools: self.tools.len(), help, topics: topics.len() })
     }
 }
 
 /// How a catalog's text differs from another's.
 ///
 /// It is what `Catalog::drift_from` counts. Its `Display` is the clause a
-/// line names the difference by: `its instructions, and <n> of its <m> tools'
-/// entries`, or either half alone.
+/// line names the difference by, each part that differs in this order,
+/// joined as a list: `its instructions`, `<n> of its <m> tools' entries`,
+/// and `<n> of the <m> help topics`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Drift {
     /// Whether the instructions, or the commons template, read otherwise.
@@ -516,15 +582,28 @@ pub struct Drift {
     pub entries: usize,
     /// How many tools the catalog holds.
     pub tools: usize,
+    /// How many help topics read otherwise, or stand in one store alone.
+    pub help: usize,
+    /// How many help topics the two catalogs hold between them.
+    pub topics: usize,
 }
 
 impl fmt::Display for Drift {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let entries = format!("{} of its {} tools' entries", self.entries, self.tools);
-        match (self.instructions, self.entries) {
-            (true, 0) => f.write_str("its instructions"),
-            (true, _) => write!(f, "its instructions, and {entries}"),
-            (false, _) => f.write_str(&entries),
+        let mut parts = Vec::with_capacity(3);
+        if self.instructions {
+            parts.push("its instructions".to_string());
+        }
+        if self.entries > 0 {
+            parts.push(format!("{} of its {} tools' entries", self.entries, self.tools));
+        }
+        if self.help > 0 {
+            parts.push(format!("{} of the {} help topics", self.help, self.topics));
+        }
+        match parts.split_last() {
+            Some((last, [])) => f.write_str(last),
+            Some((last, rest)) => write!(f, "{}, and {last}", rest.join(", ")),
+            None => Ok(()),
         }
     }
 }
@@ -560,6 +639,41 @@ fn check_tool(v: &Value) -> Result<&str, String> {
         return Err("'inputSchema' must be a JSON Schema of type \"object\" (MCP 2025-06-18, Tool.inputSchema)".into());
     }
     Ok(name)
+}
+
+/// Checks one help store entry, and returns its topic and its text.
+///
+/// The entry is a nonempty string `topic` and `text`, and no other field.
+/// The store is an array, so its entries keep the file's order and a topic
+/// written twice reaches `Catalog::load`'s duplicate check.
+///
+/// # Errors
+///
+/// The first fault found, named: the entry no object, a field no entry has,
+/// then a missing or empty `topic`, then a missing or empty `text`.
+fn check_topic(entry: Value) -> Result<(String, String), String> {
+    let Value::Object(mut m) = entry else {
+        return Err("must be an object".into());
+    };
+    if let Some(k) = m.keys().find(|k| *k != "topic" && *k != "text") {
+        return Err(format!("unknown field '{k}'"));
+    }
+    let mut field = |name: &str| match m.remove(name) {
+        Some(Value::String(s)) if !s.is_empty() => Ok(s),
+        Some(Value::String(_)) => Err(format!("'{name}' must be nonempty")),
+        _ => Err(format!("missing string field '{name}'")),
+    };
+    Ok((field("topic")?, field("text")?))
+}
+
+/// Returns whether `text` is a heading.
+///
+/// A heading is capitals and spaces, with a capital at each end. A help
+/// topic is a heading or a tool's name, whose spelling, lowercase with `_`,
+/// is never a heading; the instructions and the cards name a heading in
+/// parentheses.
+fn is_heading(text: &str) -> bool {
+    text.len() > 1 && text.starts_with(|c: char| c.is_ascii_uppercase()) && text.ends_with(|c: char| c.is_ascii_uppercase()) && text.chars().all(|c| c.is_ascii_uppercase() || c == ' ')
 }
 
 #[cfg(test)]

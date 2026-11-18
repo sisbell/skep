@@ -27,7 +27,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   stderr opens `skep-mcp: ` and the moment it was said: a C0 control, DEL or
   bidi control a board's text carries there is shown as its code point, and
   a line break in it continues the line indented.
-- **Every tool is one call of the shell.** The wire operations of
+- **Every tool is one call of the shell**, save `help`, which reads the
+  catalog alone and so answers with no board. The wire operations of
   `docs/wire.md` §Operations are tools of their own names — the name is the
   frame's `op`, the arguments are the frame — save `publish`, which the
   shell refuses as a frame and composes itself; the shell's own calls
@@ -35,11 +36,18 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `publication_standing`, the read of a draft's standing, and the four of
   its `publication` family, `publication_open`, `publication_count`,
   `publication_confirm` and `publication_cancel`) are
-  tools of theirs; and five are the adapter's apparatus: `session_info`,
-  `changes_since`, `fetch`, `replace_text` and `edit_text`. The catalog an
-  agent reads,
-  `tools.json` beside `Cargo.toml`, is embedded and checked against that
-  dispatch at startup.
+  tools of theirs; and six are the adapter's apparatus: `session_info`,
+  `changes_since`, `fetch`, `replace_text`, `edit_text` and `help`. The
+  catalog an agent reads, `tools.json` beside `Cargo.toml`, is embedded and
+  checked against that dispatch at startup.
+- **Short cards, the detail behind `help`.** A client cuts a long tool
+  description or server instructions, so the instructions and each card
+  say what an agent needs first: what the tool does, when to use it, its
+  answers and the next step after each. The rest lives in the catalog's
+  help store, which `help(topic)` answers whole: each rule under its
+  heading in capitals (`HELD BURSTS`), and the full reference of each tool
+  whose card ends `Full reference: help("<tool>").` `help()` lists the
+  topics; a topic it does not hold is `isError`, naming them.
 - **A text edit that keeps identity.** `replace_text {doc, old, new}` is
   the shell's `text.replace`, one call made of several of the shell's own:
   it reads a draft's content as text, finds `old`, which must stand exactly
@@ -73,7 +81,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **A refusal as a result.** The board's verdict on a frame comes back as
   data, `isError: false`; `isError` means the shell could not get the
   board's verdict — among the causes, a board not answering and a frame the
-  shell refused itself, nothing sent — or `fetch` declined a file, or a
+  shell refused itself, nothing sent — or `fetch` declined a file, or
+  `help` was asked a topic its store holds no text for, or a
   `replace_text` or an `edit_text` left a line held or landed in part. A
   call the adapter will not run is no tool result but a JSON-RPC error,
   `-32602` under the request's id: a tool outside the catalog, an argument
@@ -122,9 +131,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 
 Each rule above is stated in full where its reader looks: what an agent is
 told — every tool's arguments and answers, the held bursts, which refused
-writes may still have committed, the fetch's cap — in the catalog's
-instructions and tool descriptions (`tools.json`); the rules the code keeps,
-in the crate doc (`src/main.rs`).
+writes may still have committed, the fetch's cap — in the catalog
+(`tools.json`): what it needs first in the instructions and the tool
+descriptions, and the rest in the help store the `help` tool reads by
+topic; the rules the code keeps, in the crate doc (`src/main.rs`).
 
 ## Settings
 
@@ -145,7 +155,7 @@ spelling to the parse's and the figures it states to their constants, and
 | `--board` | `SKEP_BOARD` (`skep` reads it too) | none: required | a canonical `http://` origin, an `https://` one refused, before any dial; one the board signs sessions for, at the session's open (`origin_state`) | the `settings:` line; the board line; the plaintext warning, off this machine's loopback | once, at start | the board, by one of its `--origin`s as written ([RUNBOOK.md](../../RUNBOOK.md) §3), the origin the agent's key is bound at: the adapter signs for the origin it dials, so a tunnel serves only where its local end is such an origin, and a hosted board, which signs its `https://` origin alone, is out of its reach |
 | `--dir` | `SKEP_KEYSTORE` (`skep` reads it too, defaulting it to `~/.skep`; this adapter never does) | none: required | a directory that stands, that this process can write, and that no other adapter holds — waited for up to 30 s — before any dial; the store's key for the principal, before serving (`no_key`, `store_unreadable`) | the `settings:` line, as an absolute path; the signed-as line; a warning where it is the person's own `~/.skep` | at start, and the store's key again at each session the shell opens | the key store — `keys/` and `bindings`, the agent's key and its binding — and beside them the shell's search index (`index/`) and held bursts (`held/`), and `skep-mcp.lock`, whose lock keeps it one adapter process's; never a running `skep-dev serve`'s, which takes no such lock: a second shell over one directory finds its index `busy` and, where the other holds the board's held store, has every write at that board refused `another_window`, nothing held — each said in its log, and the held store's state answered by this adapter's `session_info` as `another_window: true`. The index persists across runs, built from scratch in a fresh directory, `search` and `places` answering `state.arm` `building` meanwhile |
 | `--principal` | `SKEP_PRINCIPAL` (`skep` reads it too) | none: required | an integer from 0 to 2^53 − 1, before any dial; one the board seats, at the session's open (`not_registered`) | the `settings:` line; the signed-as line | once, at start | the principal the session acts as |
-| `--tools-file` | — | the embedded catalog | read whole and held to this binary's dispatch, before any other setting | the `settings:` and serving lines, by its absolute path; a line where its text differs from the embedded catalog's | once, at start | the catalog every agent is told: the instructions, and each tool's name, description and schema |
+| `--tools-file` | — | the embedded catalog | read whole and held to this binary's dispatch, before any other setting | the `settings:` and serving lines, by its absolute path; a line where its text differs from the embedded catalog's | once, at start | the catalog every agent is told: the instructions, each tool's name, description and schema, and the help store the `help` tool reads by topic |
 | — | `SKEP_COMMONS` | unset | the commons' address, `1.1.0.1.0.1`, alone, before any dial | the `settings:` and serving lines | once, at start | the commons sentence the server instructions end with, pointing agents at the document whose subspace 3 names every link type |
 | — | `SKEPD_URL` | — | never decoded | a line where it is set | never | nothing: no longer read |
 | — | `HOME`, else `USERPROFILE` | — | — | the warning, where the store is the person's own | once, at start | where the person's own store, `~/.skep`, is, which the start compares the store with |

@@ -214,6 +214,42 @@ fn a_landed_edits_rows_follow_its_answer_one_a_line_as_the_shell_spelled_them() 
     }
 }
 
+/// Checks that `help` answers a topic and the list, and refuses a stranger.
+///
+/// It answers from the catalog alone, so no backend is built here and no
+/// board is asked. No topic, or a null one, answers every topic one a line,
+/// the headings before the tools; a heading and a tool's name each answer
+/// that topic's text whole, `isError` false; a tool the store holds no
+/// topic for, `rearrange`, whose card is its whole reference, is `isError`
+/// naming every topic and sending the agent to the card, and so is a topic
+/// that is no string (the mutants that answer the wrong topic, answer the
+/// list in file order, or answer a stranger as data).
+#[test]
+fn help_answers_a_topic_the_list_and_refuses_a_stranger() {
+    let catalog = Catalog::load(crate::tools::EMBEDDED).expect("the embedded catalog loads");
+    let read = |v: &Value| -> (bool, String) {
+        assert_eq!(v["content"].as_array().map(Vec::len), Some(1), "one block: {v}");
+        (v["isError"].as_bool().expect("isError"), v["content"][0]["text"].as_str().expect("a text block").to_string())
+    };
+    let topics: Vec<&str> = catalog.topics().collect();
+    assert_eq!(topics.first(), Some(&"OVERVIEW"), "the headings open the list: {topics:?}");
+    assert!(topics.contains(&"HELD BURSTS") && topics.contains(&"replace_text"), "{topics:?}");
+    let heading_at = |topic: &str| topics.iter().position(|t| *t == topic).expect("a listed topic");
+    assert!(heading_at("FETCH") < heading_at("create_well_known_document"), "every heading before every tool: {topics:?}");
+    for absent in [None, Some(&Value::Null)] {
+        assert_eq!(read(&help_result(&catalog, absent)), (false, topics.join("\n")), "{absent:?}: the topics, one a line");
+    }
+    for topic in ["HELD BURSTS", "replace_text"] {
+        let said = catalog.help(topic).expect("a held topic");
+        assert_eq!(read(&help_result(&catalog, Some(&json!(topic)))), (false, said.to_string()), "{topic}: its text whole");
+    }
+    for (asked, says) in [(json!("rearrange"), "'rearrange' is no help topic"), (json!("held bursts"), "'held bursts' is no help topic"), (json!(["FETCH"]), "help's topic is a string")] {
+        let (is_error, text) = read(&help_result(&catalog, Some(&asked)));
+        assert!(is_error, "{asked}: isError");
+        assert!(text.starts_with(says) && text.contains(&topics.join(", ")) && text.contains("told whole by its card in tools/list"), "{asked}: {text}");
+    }
+}
+
 /// Checks that the builders move what they wrap into the two specs' shapes.
 ///
 /// Each equals what `json!` builds from the same members: a JSON-RPC

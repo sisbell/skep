@@ -41,9 +41,9 @@ const ADDED_OPS: [&str; 6] = ["effective_owner", "key_set", "retrieve_i", "conte
 /// The shell's calls and the apparatus, as tools.
 ///
 /// The shell's calls take the publication family's four among them, and the
-/// read of a draft's standing beside them; the apparatus is five, the two
-/// text edits among them.
-const ADAPTER_TOOLS: [&str; 17] = [
+/// read of a draft's standing beside them; the apparatus is six, the two
+/// text edits and the catalog's help among them.
+const ADAPTER_TOOLS: [&str; 18] = [
     "boards",
     "health",
     "probe",
@@ -61,6 +61,7 @@ const ADAPTER_TOOLS: [&str; 17] = [
     "fetch",
     "replace_text",
     "edit_text",
+    "help",
 ];
 
 /// The adapter's cap on one fetch, as `media.rs` states it.
@@ -197,12 +198,12 @@ fn a2_the_startup_line_names_the_refusing_seam_and_no_ceremony_tool_is_listed() 
 ///
 /// `tools/list` names every wire op but `publish` — the six the first catalog
 /// lacked among them — the shell's calls, the publication family's four among
-/// them, and the four apparatus tools; and the publication: a published
+/// them, and the apparatus tools; and the publication: a published
 /// document minted, a draft minted and written but never staged — its
 /// `publication_open` refused `base_unrecorded` naming it and the reason
 /// `no_record`, the board recording no base for it — then a draft staged
-/// from the bare edition through `stage`, as the instructions' PUBLISHING
-/// says, and written: `publication_standing` telling where it stands with no
+/// from the bare edition through `stage`, as the help topic PUBLISHING says,
+/// and written: `publication_standing` telling where it stands with no
 /// panel composed, `first`, and `at_head` once it has published;
 /// `publication_open` holding its panel — no row, no
 /// window, under every cap, `standing: first` and no draft left behind —

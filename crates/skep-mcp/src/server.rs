@@ -3,13 +3,15 @@
 //! [`read_stdin`] reads stdin on a thread of its own and hands each line to
 //! the loop, [`Server::run`], which answers on stdout, where nothing but the
 //! protocol is written, each line owed an answer; the dispatch takes
-//! `tools/call` onto the backend's calls.
+//! `tools/call` onto the backend's calls, and `help` onto the catalog's help
+//! store, which `help_result` reads with no call of the backend.
 //!
 //! **A refusal as a result**, the crate's rule of that name, is kept here:
 //! `tool_result` renders every answer the shell gives by it but a fetched
 //! file, the board's verdict as data and any other refusal `isError`;
 //! `Server::fetch` adds its own two `isError`, a file past the cap and a
-//! stream cut short; `edit_result` renders the two text edits' answers,
+//! stream cut short; `help_result` its one, a topic the help store holds no
+//! text for; `edit_result` renders the two text edits' answers,
 //! `replace_text`'s and `edit_text`'s — the shell's `text.replace` and
 //! `text.edit` — `isError` where the shell's answer carries its error
 //! member, which it takes off, a landed `text.edit`'s rows written after the
@@ -68,16 +70,18 @@ enum ErrorCode {
 /// Whether a tool result is MCP's `isError`.
 ///
 /// *A refusal as a result* decides it for the shell's answers (`tool_result`),
-/// `Server::fetch` for the file it fetched and its own two, and the shell's
-/// text edits for their own answers, by their error member (`edit_result`).
+/// `Server::fetch` for the file it fetched and its own two, `help_result` for
+/// a topic the help store holds no text for, and the shell's text edits for
+/// their own answers, by their error member (`edit_result`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IsError {
     /// A normal result: an answer, or the board's verdict as data.
     No,
     /// The shell could not get the board's verdict, or `fetch` declined a file.
     ///
-    /// A fetch whose stream was cut short is one too, and a text edit that
-    /// left a line held or landed in part.
+    /// A fetch whose stream was cut short is one too, a help topic the store
+    /// holds no text for, and a text edit that left a line held or landed in
+    /// part.
     Yes,
 }
 
@@ -187,7 +191,7 @@ impl Served {
 
 /// The MCP side's state: the backend every tool calls, and the catalog.
 ///
-/// `tools/list` and `initialize` answer from the catalog.
+/// `tools/list`, `initialize` and the `help` tool answer from the catalog.
 #[derive(Debug)]
 pub struct Server {
     /// The backend, its session opened before any tool is served.
@@ -368,8 +372,9 @@ impl Server {
     ///
     /// The result is the tool's answer rendered by `tool_result`'s rule: a
     /// value or the board's verdict as data, any other refusal `isError`;
-    /// `fetch` answers a content block of its own (`Server::fetch`), and
-    /// `replace_text` and `edit_text`, the shell's `text.replace` and
+    /// `fetch` answers a content block of its own (`Server::fetch`), `help`
+    /// the catalog's help store with no call of the backend (`help_result`),
+    /// and `replace_text` and `edit_text`, the shell's `text.replace` and
     /// `text.edit`, their answer less the error member the shell marks it
     /// by, and a landed `text.edit`'s rows after it (`edit_result`).
     ///
@@ -402,6 +407,7 @@ impl Server {
             Tool::Fetch => return Ok(self.fetch(args.get("i").unwrap_or(&Value::Null))),
             Tool::ReplaceText => return Ok(edit_result(self.backend.session_call("text.replace", args))),
             Tool::EditText => return Ok(edit_result(self.backend.session_call("text.edit", args))),
+            Tool::Help => return Ok(help_result(&self.catalog, args.get("topic"))),
         };
         Ok(tool_result(answer))
     }
@@ -633,6 +639,27 @@ fn tool_result(answer: Result<Value, Refusal>) -> Value {
             };
             text_result(refusal.to_value().to_string(), is_error)
         }
+    }
+}
+
+/// Answers `help(topic?)` from the catalog's help store.
+///
+/// No topic, or a null one, answers the topics one a line, as
+/// `Catalog::topics` lists them; a topic the store holds answers its text
+/// whole, as one text block. A topic the store holds no text for, and one
+/// that is no string, are `isError`, each a plain sentence naming every
+/// topic and saying that a tool with no topic is told whole by its card. It
+/// reads the catalog alone, so it answers with no session and no board.
+fn help_result(catalog: &Catalog, topic: Option<&Value>) -> Value {
+    let listed = || catalog.topics().collect::<Vec<_>>().join(", ");
+    let unheld = |what: String| format!("{what}: the topics are {}; a tool with no topic is told whole by its card in tools/list", listed());
+    match topic {
+        None | Some(Value::Null) => text_result(catalog.topics().collect::<Vec<_>>().join("\n"), IsError::No),
+        Some(Value::String(topic)) => match catalog.help(topic) {
+            Some(text) => text_result(text.to_string(), IsError::No),
+            None => text_result(unheld(format!("'{topic}' is no help topic")), IsError::Yes),
+        },
+        Some(_) => text_result(unheld("help's topic is a string naming one topic".to_string()), IsError::Yes),
     }
 }
 

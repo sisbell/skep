@@ -3890,12 +3890,24 @@ destination.
 {"as_of":7,"at":{"ordinal":"3","subspace":"1"},"doc":"1.0.1.0.64","op":"reinstate","runs":[{"i_start":"1.0.1.0.64.0.1.4","origin":"1.0.1.0.64","width":"5"}]}
 ```
 
-**`rearrange`** — pivot/swap `doc`'s content about the cut positions.
-→ `ack`. A `doc` whose content subspace is empty is
-`empty_content_subspace`. `as_of` is the document state the cuts were
-typed against (the typed state, above), REQUIRED; a rearrange typed
-against an older arrangement is refused `arrangement_moved`, ahead of
-the cut count's own check.
+**`rearrange`** — pivot/swap `doc`'s content about the cut positions:
+three or four content positions, strictly ascending, from 1 to one past
+the end, each region running from its cut up to the next cut and not
+including it. Three cuts `a < b < c` exchange the adjacent regions
+`[a, b)` and `[b, c)` in place, so from `a` the content reads `[b, c)`
+then `[a, b)`; four cuts `a < b < c < d` exchange the outer regions
+`[a, b)` and `[c, d)` around `[b, c)`, which stays between them, so from
+`a` it reads `[c, d)`, `[b, c)`, `[a, b)`; the content outside is
+untouched, and every unit keeps its identity — over `abcde`, cuts 2, 4, 6
+give `adebc` and cuts 1, 2, 3, 4 give `cbade`. → `ack`. Any other count
+of cuts is `bad_cut_count`, cuts not strictly ascending `not_ascending`,
+one outside the content subspace `not_content_subspace`, and cuts that
+reach below position 1 or past the position one past the end
+`out_of_bounds` — a `doc` whose content subspace is empty among them, the
+one position it admits leaving no room for a second cut. `as_of` is the
+document state the cuts were typed against (the typed state, above),
+REQUIRED; a rearrange typed against an older arrangement is refused
+`arrangement_moved`, ahead of the cut count's own check.
 
 <!-- wire: request rearrange -->
 ```json

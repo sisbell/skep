@@ -6,8 +6,10 @@
 //! One process per agent, one board, one signed session at a time:
 //!
 //! * **Every tool is one call of the shell**, under that session where the
-//!   call takes one. Every wire op but `publish` is a tool whose name *is*
-//!   the frame's `op` and whose arguments *are* the frame (the one mapping is
+//!   call takes one, save `help`, which reads the catalog alone and calls
+//!   nothing, so it answers with no board. Every wire op but `publish` is a
+//!   tool whose name *is* the frame's `op` and whose arguments *are* the
+//!   frame (the one mapping is
 //!   `from_` → `from` on make_link/emit, when the arguments carry no `from`
 //!   of their own), sent as `op(session, frame)`: attested where the
 //!   session's key attests the kind, held where the board cannot take a burst
@@ -24,17 +26,19 @@
 //!   `_` for `.` (`publication_open`, `publication_count`,
 //!   `publication_confirm`, `publication_cancel`) — are tools of those names,
 //!   their arguments the bridge's row minus the session and the board, the
-//!   adapter supplying each where the row requires it; and five are the
+//!   adapter supplying each where the row requires it; and six are the
 //!   adapter's apparatus: `session_info`, `changes_since` (the shell's
 //!   `changes`, a pull), `fetch` (the shell's streamed fetch as an image or
 //!   resource block, the type sniffed off the bytes, the size capped),
 //!   `replace_text` (the shell's `text.replace`, a text edit of a draft
 //!   composed of the reads and the bursts above, which replaces the bytes that
-//!   differ alone and drops each line of its own the shell holds), and
+//!   differ alone and drops each line of its own the shell holds),
 //!   `edit_text` (the shell's `text.edit`, several such edits in one call, all
 //!   landing or none, whose landed answer is followed by the lines it changed,
 //!   one row a line, as the shell spells each — the door refusing a member of
-//!   a pair the shell would ignore). The adapter
+//!   a pair the shell would ignore), and `help` (the catalog's help store read
+//!   by topic: each rule's whole text under its heading, and the whole
+//!   reference of each tool whose short card ends naming it). The adapter
 //!   passes a wire op's arguments through unread, save the one shape the
 //!   shell's `op` row reads as its `/op-at` form, a non-negative integer `at`
 //!   beside an object `frame`, which no wire op takes. Before the board
@@ -58,8 +62,10 @@
 //!   the shell could not get the board's verdict: the board unreachable, a
 //!   halt, the block, the shell's own names — `fetch`'s two answers of the
 //!   adapter's own, a file past its cap and a stream cut short, each a plain
-//!   sentence, and every answer of `replace_text` and `edit_text` the shell
-//!   marks with its error member, which the adapter takes off: a write the
+//!   sentence, `help`'s one, a topic its store holds no text for, a plain
+//!   sentence naming the topics, and every answer of `replace_text` and
+//!   `edit_text` the shell marks with its error member, which the adapter
+//!   takes off: a write the
 //!   shell could not get to the board, a line of the edit's the shell would
 //!   not drop, and an edit that landed in part. A write refused `unreachable` may have committed: the
 //!   shell faces a lost answer to any write but a burst (whose line it holds,
@@ -105,8 +111,9 @@
 //! state, which one door moves (`SessionWatch::move_off`), and what a death
 //! asks of it. `media.rs` is the fetched file: its bytes read whole under the
 //! adapter's cap, its type sniffed, its base64. `tools.rs` holds the catalog
-//! (`tools.json`, embedded) with its commons sentence, the dispatch's two kinds
-//! the catalog is checked against when loaded, the dispatch's door
+//! (`tools.json`, embedded) with its commons sentence and its help store, the
+//! dispatch's two kinds the catalog is checked against when loaded, the
+//! dispatch's door
 //! (`Tool::admit`, which admits a call or refuses it -32602), and a wire op's
 //! call mapped onto its frame (*every tool is one call of the shell*).
 //! `log.rs` is the adapter's log on stderr, which every module that says a
@@ -183,7 +190,8 @@ usage: skep-mcp [--board <ORIGIN>] [--dir <PATH>] [--principal <N>] [--tools-fil
                        SKEP_PRINCIPAL; required: an integer, 0 to
                        9007199254740991, the largest a board registers)
   --tools-file <PATH>  override the embedded tool catalog (tools.json:
-                       names, descriptions, schemas, server instructions)
+                       names, descriptions, schemas, server instructions,
+                       and the help store the help tool reads)
   --help               this text
   --version            this binary's version and the commit it was built from
 

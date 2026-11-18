@@ -1018,7 +1018,7 @@ impl Mcp {
 
     /// The board's head as the agent reads it: `session_info`'s
     /// `health.log_position` — the state a burst built now is typed against
-    /// (`as_of`, wire.md §Arrangement; the instructions' THE TYPED STATE),
+    /// (`as_of`, wire.md §Arrangement; the help topic THE TYPED STATE),
     /// read at each build, never kept.
     pub fn position(&mut self) -> u64 {
         let info = self.call_json("session_info", json!({}));
@@ -1125,7 +1125,7 @@ pub fn draft_of(mcp: &mut Mcp, account: &str) -> String {
 }
 
 /// Returns a draft staged from `from` through the adapter's `stage` tool, as
-/// the instructions' PUBLISHING tells an agent staging a draft to: the board
+/// the help topic PUBLISHING tells an agent staging a draft to: the board
 /// mints it holding `from`'s words and records its base.
 pub fn stage_of(mcp: &mut Mcp, from: &str) -> String {
     mcp.acked("stage", json!({"from_": from}))["addr"].as_str().expect("the draft's address").to_string()

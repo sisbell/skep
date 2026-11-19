@@ -10,17 +10,19 @@
 //! sent from the head, never faced `moved` by the read), a head never sent
 //! going from the head unread, a page too large re-asked at the limit that
 //! fits, a read or a site the board does not answer — the death signal among
-//! its answers — deciding nothing, and a delivery past the values asked
-//! differing — with the narrative cells beside it; the first own row the
-//! landing with a later row of anyone's after it, and a landing past the
-//! first page found by reading on; a landing a later write moved — another
-//! hand's words put before it, or its words deleted — kept at its row by the
-//! resend and by the drop, its site read again through `/op-at` at the row's
-//! position, once a read and at the first row that asks, and each answer of
-//! that read meeting the resend and the drop as its kind says, a landing the
-//! journal has reclaimed held moved at its resend (skep #985); a sibling's
-//! row of the head's kind at a
-//! position this shell acked skipped, the head sent, and a sibling's ack
+//! its answers — deciding nothing, a delivery past the values asked
+//! differing, and an insert whose `at` is in JSON integers, as an agent may
+//! spell it, read at its site and kept at its words' address as a page's
+//! decimal strings are (skep #1100) — with the narrative cells beside it;
+//! the first own row the landing with a later row of anyone's after it, and
+//! a landing past the first page found by reading on; a landing a later
+//! write moved — another hand's words put before it, or its words deleted —
+//! kept at its row by the resend and by the drop, its site read again
+//! through `/op-at` at the row's position, once a read and at the first row
+//! that asks, and each answer of that read meeting the resend and the drop
+//! as its kind says, a landing the journal has reclaimed held moved at its
+//! resend (skep #985); a sibling's row of the head's kind at a position this
+//! shell acked skipped, the head sent, and a sibling's ack
 //! during the dial leaving the base the line is held at where it was read,
 //! before the dial; a call that committed nothing, answered at a held line's
 //! landing, leaving that landing found and kept (skep #1043); the person's
@@ -230,6 +232,45 @@ fn outcome_ii_a_landed_burst_is_kept_not_resent() {
     let said = held_events(&g);
     let states: Vec<&str> = said.iter().filter_map(|e| e["state"].as_str()).collect();
     assert!(states.contains(&"kept") && !states.contains(&"moved"), "{states:?}");
+    let kept = said.iter().find(|e| e["state"] == "kept").expect("the document kept");
+    assert_eq!(kept["landed"], json!([{"held": 1, "at": 77, "addr": i(100)}]), "the line the read found landed, at its row's position and its words' address: {kept}");
+}
+
+/// Returns `frame` with its `at` spelled in JSON integers.
+///
+/// It is the spelling an agent may give an insert's `at` through the MCP
+/// tools, which the board reads as it reads the decimal strings a page sends
+/// (skep #1100).
+fn at_in_integers(mut frame: Value) -> Value {
+    for part in ["subspace", "ordinal"] {
+        let n: u64 = frame["at"][part].as_str().and_then(|s| s.parse().ok()).expect("the `at` in decimal strings");
+        frame["at"][part] = Value::from(n);
+    }
+    frame
+}
+
+/// Checks that a landed insert whose `at` is in JSON integers is kept.
+///
+/// It is outcome (ii) for an agent's insert (skep #1100): its five values
+/// read back equal at the site its integer ordinal names, the line `done
+/// kept` and nothing re-sent, its `kept` event naming it at its row's
+/// position and the I-address its words were minted at, which one `/op-at`
+/// image of that site names, as a page's insert's are (the mutant that reads
+/// the ordinal in its string spelling alone at the address read keeps the
+/// line with no address and makes no image read).
+#[test]
+fn a_landed_insert_whose_at_is_in_integers_is_kept_at_its_words_address() {
+    let g = ground();
+    *g.fake.text.lock().unwrap() = "hello".into();
+    *g.fake.image.lock().unwrap() = vec![run(&i(100), 5)];
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": g.own_key(), "docs": [DOC]})];
+    g.hold(&at_in_integers(insert(DOC, json!(["hello"]), g.fake.head())), "unreachable", true);
+    let site_at = g.fake.head();
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.sends(), 0, "the landed head is NOT re-sent: {:?}", g.fake.sends.lock().unwrap());
+    assert!(g.lines().is_empty(), "the line is done kept");
+    assert_eq!(*g.fake.at_reads.lock().unwrap(), [site_at], "one address read, at the site read's position");
+    let said = held_events(&g);
     let kept = said.iter().find(|e| e["state"] == "kept").expect("the document kept");
     assert_eq!(kept["landed"], json!([{"held": 1, "at": 77, "addr": i(100)}]), "the line the read found landed, at its row's position and its words' address: {kept}");
 }
@@ -1912,12 +1953,17 @@ enum ReadAnswer {
     Closed,
 }
 
-/// The held head: an `insert` or a `delete`.
+/// The held head: an `insert`, its `at` in either of the wire's spellings, or
+/// a `delete`.
 ///
-/// A read can confirm an `insert`'s site; none can a `delete`'s.
+/// A read can confirm an `insert`'s site, whichever spelling its `at` takes;
+/// none can a `delete`'s.
 #[derive(Debug, Clone, Copy)]
 enum Head {
+    /// Its `at` in decimal strings, as a page spells it.
     Insert,
+    /// Its `at` in JSON integers, as an agent may spell it (skep #1100).
+    IntegerInsert,
     Delete,
 }
 
@@ -1951,8 +1997,9 @@ enum Settles {
 /// faces a document `moved`, which is the board's verdict on a send. No row
 /// sends from the head; a row is the head's landing only where the head was
 /// sent and the row is of the session's own hand and of the head's own `op`,
-/// its site not contradicting it — an `insert` read back equal, a kind no
-/// read confirms trusted on its hand; the first such row is the landing,
+/// its site not contradicting it — an `insert` read back equal, at the site
+/// its `at` names in either of the wire's spellings, a kind no read confirms
+/// trusted on its hand; the first such row is the landing,
 /// whatever follows it; a row whose testimony the board lost, and
 /// `history_reclaimed`, are decided by the site alone, a kind no read
 /// confirms on them no landing; a foreign row, another `op` of the own hand,
@@ -1969,11 +2016,14 @@ enum Settles {
 /// on a kind no read confirms (10, 17), two rows or a foreign row faced
 /// `moved` (13, 14), a page too large read as none or as unread (20), the
 /// death signal at the site read taken as an answer (22–24), a delivery
-/// past the values asked read as theirs (25–27), and a read unanswered or
-/// met by the death signal taken as a page (28, 29).
+/// past the values asked read as theirs (25–27), a read unanswered or
+/// met by the death signal taken as a page (28, 29), an `at` in JSON
+/// integers read as naming no site — an own row its site contradicts kept on
+/// its hand, a landing its site confirms resent (30, 32, 33) — and its
+/// integer read at another position (31).
 #[test]
 fn every_read_answer_meets_every_site_answer_as_the_table_says() {
-    use Head::{Delete, Insert};
+    use Head::{Delete, Insert, IntegerInsert};
     use ReadAnswer::{ForeignRow, LostRow, NoRow, OwnRow, Reclaimed, Refused, TooLarge, TwoOwnRows};
     use Settles::{Kept, Resent, Standing};
     use SiteAnswer::{Closed, Differs, Equal, OverDelivers, Unread};
@@ -2007,6 +2057,10 @@ fn every_read_answer_meets_every_site_answer_as_the_table_says() {
         (Reclaimed, Insert, Some(OverDelivers), true, Resent),
         (ReadAnswer::Unanswered, Insert, None, true, Standing),
         (ReadAnswer::Closed, Insert, None, true, Standing),
+        (OwnRow("insert"), IntegerInsert, Some(Differs), true, Resent),
+        (OwnRow("insert"), IntegerInsert, Some(Equal), true, Kept),
+        (Reclaimed, IntegerInsert, Some(Equal), true, Kept),
+        (LostRow, IntegerInsert, Some(Equal), true, Kept),
     ];
     for (n, (read, head, site, sent, settles)) in table.into_iter().enumerate() {
         let g = ground();
@@ -2078,11 +2132,13 @@ fn arm_read(g: &Ground, read: ReadAnswer, site: Option<SiteAnswer>) {
 
 /// Returns the head's frame, typed against the board's head.
 ///
-/// It is an insert of `hello` at the document's first position, or a delete
-/// of that position.
+/// It is an insert of `hello` at the document's first position, its `at` in
+/// decimal strings or in JSON integers ([`at_in_integers`]), or a delete of
+/// that position.
 fn head_frame(g: &Ground, head: Head) -> Value {
     match head {
         Head::Insert => insert(DOC, json!(["hello"]), g.fake.head()),
+        Head::IntegerInsert => at_in_integers(insert(DOC, json!(["hello"]), g.fake.head())),
         Head::Delete => delete(DOC, g.fake.head()),
     }
 }
@@ -2172,12 +2228,14 @@ enum Drops {
 /// line's among them, the read kept to a line handed over), a row not
 /// confirmed taken for no landing (3, 9, 10, 16, 17, 25–27), a read that
 /// decided nothing taken for no landing (5, 11, 18, 21, 28), the death taken
-/// for either (22–24, 29), and the line a read ruled out named as one that
-/// may have landed (1, 7, 13).
+/// for either (22–24, 29), the line a read ruled out named as one that may
+/// have landed (1, 7, 13), and an `at` in JSON integers read as naming no
+/// site — an own row its site contradicts kept on its hand, a landing its
+/// site confirms refused (30–32).
 #[test]
 fn every_read_answer_meets_the_drop_of_a_line_that_may_have_landed_as_the_table_says() {
     use Drops::{Died, Dropped, Kept, Refused};
-    use Head::{Delete, Insert};
+    use Head::{Delete, Insert, IntegerInsert};
     use ReadAnswer::{ForeignRow, LostRow, NoRow, OwnRow, Reclaimed, TooLarge, TwoOwnRows};
     use SiteAnswer::{Differs, Equal, OverDelivers, Unread};
     let table = [
@@ -2210,6 +2268,9 @@ fn every_read_answer_meets_the_drop_of_a_line_that_may_have_landed_as_the_table_
         (Reclaimed, Insert, Some(OverDelivers), true, Refused("undecided")),
         (ReadAnswer::Unanswered, Insert, None, true, Refused("unanswered")),
         (ReadAnswer::Closed, Insert, None, true, Died),
+        (OwnRow("insert"), IntegerInsert, Some(Differs), true, Refused("undecided")),
+        (LostRow, IntegerInsert, Some(Equal), true, Kept),
+        (Reclaimed, IntegerInsert, Some(Equal), true, Kept),
     ];
     for kind in [Held::HandedOver, Held::Holding("unreachable"), Held::Holding("head_unreadable")] {
         for (n, (read, head, site, sent, drops)) in table.into_iter().enumerate() {

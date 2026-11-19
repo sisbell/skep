@@ -1599,18 +1599,19 @@ impl Holds {
 
     /// Reads the first I-address a landed insert's words stand at.
     ///
-    /// It is one `image` of the head's site — its frame's `at`, as wide as its
-    /// values — through `/op-at` at `as_of`, the position the site read
-    /// confirmed its values at, so a write since names no other unit there
-    /// (wire.md §Reading history). The address is taken where the answer is one
-    /// run of that width in the document's own content I-space, which an insert
-    /// mints into; any other answer — a refusal, a reclaimed position, other
-    /// runs, a site read that named no position — names none (`Ok(None)`). It
-    /// is made for every landing the read finds of an insert whose site read
-    /// named its position, whether or not a line's anchors name its words
-    /// ([`Holds::landed`]; skep #969, #998): the address places the pieces
-    /// that name them, enters the insert among the principal's landed
-    /// inserts, and rides the `held` event's `landed` entry.
+    /// It is one `image` of the head's site — the one the site reads confirm
+    /// ([`insert_site`]), as wide as its values — through `/op-at` at `as_of`,
+    /// the position the site read confirmed its values at, so a write since
+    /// names no other unit there (wire.md §Reading history). The address is
+    /// taken where the answer is one run of that width in the document's own
+    /// content I-space, which an insert mints into; any other answer — a
+    /// refusal, a reclaimed position, other runs — names none (`Ok(None)`),
+    /// and a site read that named no position, or a head with no site, names
+    /// none with no image read. It is made for every landing the read finds of
+    /// an insert whose site read named its position, whether or not a line's
+    /// anchors name its words ([`Holds::landed`]; skep #969, #998): the
+    /// address places the pieces that name them, enters the insert among the
+    /// principal's landed inserts, and rides the `held` event's `landed` entry.
     ///
     /// # Errors
     ///
@@ -1620,8 +1621,7 @@ impl Holds {
     /// every reconstruction permit was in use (`history_busy`) or the answer
     /// could not be read, the next probe reading again.
     fn minted_at(&self, session: &SessionEntry, doc: &str, head: &HeldLine, as_of: Option<u64>) -> Result<Option<String>, ReadOutcome> {
-        let from = head.frame["at"]["ordinal"].as_str().and_then(|o| o.parse::<u64>().ok());
-        let (Some(as_of), Some(from), Ok(values)) = (as_of, from, values_of(&head.frame["values"])) else { return Ok(None) };
+        let (Some(as_of), Some((from, values))) = (as_of, insert_site(&head.frame)) else { return Ok(None) };
         let width = values.len() as u64;
         match session.board.op_at(Some(&session.token), as_of, &frames::image(doc, from, width)) {
             Ok(AtAnswer::Document(v)) if Rejection::of(&v).is_none() => {
@@ -2281,14 +2281,18 @@ fn read_owed(head: &HeldLine, head_unreadable: bool) -> bool {
 ///
 /// It is the first content position the frame's `at` names and its values
 /// as the wire spells them (`wire::values_of`): the site the read's two site
-/// reads, [`Holds::site`] and [`Holds::site_at`], confirm (§3c.5). It
-/// answers none for a burst of another kind, or a frame whose site or values
-/// do not read.
+/// reads, [`Holds::site`] and [`Holds::site_at`], confirm, and the one
+/// [`Holds::minted_at`] images (§3c.5). The position is the `at`'s ordinal,
+/// read in either of the wire's spellings as the board reads it
+/// ([`natural`]), so an agent's integer ordinal names the site a page's
+/// decimal string does; its subspace is not read, the board taking an insert
+/// into the content subspace alone. It answers none for a burst of another
+/// kind, or a frame whose site or values do not read.
 fn insert_site(frame: &Value) -> Option<(u64, Vec<Cow<'_, [u8]>>)> {
     if frame["op"].as_str() != Some("insert") {
         return None;
     }
-    let from = frame["at"]["ordinal"].as_str().and_then(|o| o.parse::<u64>().ok())?;
+    let from = natural(&frame["at"]["ordinal"])?;
     Some((from, values_of(&frame["values"]).ok()?))
 }
 

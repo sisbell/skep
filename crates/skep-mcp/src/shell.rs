@@ -2,7 +2,10 @@
 //!
 //! It opens the shell over the one board in the signed mode with the refusing
 //! arm (`ArmConfig::Refuse`: no person is present, so every secret and consent
-//! moment is refused `person_required`), checks the board and the key as
+//! moment is refused `person_required`, and a merge made through it is the
+//! agent's — a gap it settles recorded `resolved_by` `agent`, a take-back of
+//! its landing or withdrawal typed against that write's own position, never
+//! the agent's last ack), checks the board and the key as
 //! `skep-dev serve` does, opens one signed content-scoped session for the
 //! configured principal before any tool is served, and from then on supplies
 //! that session's reference to every call that runs under it, and the board's
@@ -31,13 +34,18 @@
 //! session early, which would leave the shell's re-open adopted by nothing. It
 //! is then reissued once under what stands — the session in the dead one's
 //! place, one it opens itself where the last lapsed, or the reference that died
-//! where the adapter stopped (the death executed nothing: the board refuses a
-//! dead token before it runs the frame; and a publication's panel dies with
-//! the session it was held under, the shell's watcher dropping it at the
-//! death, so a reissued `publication.count` or `publication.confirm` answers
-//! `no_panel` and sends nothing — a confirm whose request may have landed
-//! before the death met its landed test is never sent twice) — save that a
-//! death after which no session stands is the answer to the call that met it.
+//! where the adapter stopped (a frame the death met executed nothing: the
+//! board refuses a dead token before it runs the frame; a call of several
+//! writes, a merge row, may have made the writes before the one the death
+//! met, and its reissue answers as the board then stands — what each row's
+//! reissue does is `Backend::session_call`'s; and a publication's panel dies
+//! with the session it was held under, the shell's watcher dropping it at
+//! the death, so a reissued `publication.count` or `publication.confirm`
+//! answers `no_panel` and sends nothing — a confirm whose request may have
+//! landed before the death met its landed test is never sent twice — and so
+//! does a merge's composition, a reissued `merge.land` answering
+//! `no_merge`) — save that a death after which no session stands is the
+//! answer to the call that met it.
 //! A death the shell does not re-open — the key retired (AUTH-5.28,
 //! AUTH-5.77), the account seeded, the prefix blocked, the board's mode moved,
 //! or a restart whose re-open was refused for any cause but `busy` or a board
@@ -895,9 +903,10 @@ impl Backend {
     /// The calls are `op`, `search`, `places`, `held`, `resolve`, `changes`,
     /// the read of a draft's standing, `publication.standing`, the
     /// `publication` family's four (`publication.open`, `publication.count`,
-    /// `publication.confirm`, `publication.cancel`), the `text` family's
-    /// five (`text.replace`, `text.edit`, `text.move`, `text.mark`,
-    /// `text.diff`), and the restore of a draft's past state,
+    /// `publication.confirm`, `publication.cancel`), the `merge` family's
+    /// four (`merge.compose`, `merge.land`, `merge.undo`, `merge.withdraw`),
+    /// the `text` family's five (`text.replace`, `text.edit`, `text.move`,
+    /// `text.mark`, `text.diff`), and the restore of a draft's past state,
     /// `history.restore`:
     /// `args` is the call's own members, the row's object, and the session's
     /// reference is set in it beside them before each attempt. A row
@@ -908,6 +917,19 @@ impl Backend {
     /// reissued after its session ended reads the draft and writes afresh,
     /// typed at the same `as_of`: the end ran nothing of it.
     ///
+    /// A `merge.compose` reissued after its session ended composes afresh.
+    /// The end the first attempt met left no record of it, the record's link
+    /// being the landing's last write, so with `into` named the reissue
+    /// re-opens `into` where the first landing stood there, else lands
+    /// there; with none, it stages a fresh draft, and a draft the first
+    /// attempt staged stands beside it, no record naming it. A `merge.land`,
+    /// or a landing's `merge.undo`, reissued answers `no_merge` naming the
+    /// session, the composition gone with the one that ended. A withdrawal,
+    /// or a withdrawal's undo, whose write landed before the end has taken
+    /// effect, and its reissue answers as the draft now stands: `no_merge`
+    /// naming the draft for the withdrawal, `nothing_to_undo` `remarked` for
+    /// its undo.
+    ///
     /// # Errors
     ///
     /// The shell's refusal of the call, after the session's life has been
@@ -916,14 +938,17 @@ impl Backend {
     /// reason where no session stands after the death, `session_ended` where
     /// the adapter has stopped, and either where a reissue met a second end;
     /// `held_lines {doc, held}` where a `publication.confirm` names a draft
-    /// — the rendering draft, or one its panel named `also` — or a
-    /// `history.restore` its `draft`, holding lines of the agent's the board
-    /// has not kept (client.md §3c.4's held-lines gate): nothing was sent,
-    /// and the act is the agent's, `held` then `resolve` on each line of that
-    /// draft, then the call again, as the catalog's `publication_confirm`
-    /// card, its `restore_text` reference and its help topic REJECTIONS ARE
-    /// DATA say (`tools.json`) — or the shell's refusal of a session the
-    /// adapter opened itself.
+    /// — the rendering draft, or one its panel named `also` — a
+    /// `history.restore` its `draft`, a `merge.compose` its `into` or the
+    /// draft a merge record of the agent's names, a `merge.land` the draft
+    /// the composition landed in or the draft side, or a `merge.undo` or
+    /// `merge.withdraw` the draft it sets, holding lines of the agent's the
+    /// board has not kept (client.md §3c.4's held-lines gate): nothing was
+    /// sent, and the act is the agent's, `held` then `resolve` on each line
+    /// of that draft, then the call again, as the catalog's
+    /// `publication_confirm` card, its `restore_text` and merge tools'
+    /// references and its help topic REJECTIONS ARE DATA say (`tools.json`)
+    /// — or the shell's refusal of a session the adapter opened itself.
     pub fn session_call(&self, name: &str, args: Map<String, Value>) -> Result<Value, Refusal> {
         // An object by construction, so setting a member of it cannot panic.
         let mut args = Value::Object(args);

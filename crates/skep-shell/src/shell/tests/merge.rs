@@ -22,21 +22,25 @@
 //! the page's panel or the row's own, the same side marked on a newer head,
 //! or a withdrawal — refused `no_merge` naming the draft, nothing sent and
 //! the composition dropped (skep #992); the
-//! landing, the undo and the withdrawal refused `held_lines` over the
-//! draft's held lines, a burst held behind them, and the undo going out once
-//! the run is dropped; the rows refused `stopped` and `poisoned` under those
-//! holds with nothing dialed; the
+//! landing, the undo, the withdrawal and a compose into the draft refused
+//! `held_lines` over the draft's held lines, a burst held behind them, and
+//! the undo going out once the run is dropped; the rows refused `stopped`
+//! and `poisoned` under those holds with nothing dialed; the
 //! re-open landing nothing, reading the side at the marker's position and
 //! settling a gap the draft no longer arranges; `resolutions` refused where
 //! they name no gap or no choice the gap admits, nothing landed; the
 //! landing on the trunk through the publication family's shot with the
-//! claim, then the record; the draft side composed and landed with no
-//! claim, its re-open reading the side as merged; the merged arm naming the
-//! member and writing a missing record once; another account's record of
-//! the kind, read as the composition's `prior`, never deciding where the
-//! merge lands — its own draft carrying the merge never re-opened, a draft
-//! of the person's it names never landed into — and the merged arm writing
-//! the person's own record where only another account's names the member;
+//! claim, then the record; with no person present, the landing's undo and
+//! the withdrawal's typed at that write's own position and refused past the
+//! agent's own burst, nothing wiped, and a gap the agent settles, by an edit
+//! or a resolution, recorded `agent`; the draft side composed and landed
+//! with no claim, its re-open reading the side as merged; the merged arm
+//! naming the member and writing a missing record once; another account's
+//! record of the kind, read as the composition's `prior`, never deciding
+//! where the merge lands — its own draft carrying the merge never
+//! re-opened, a draft of the person's it names never landed into — and the
+//! merged arm writing the person's own record where only another account's
+//! names the member;
 //! the `head_moved` race typed, nothing re-sent; the composition dying
 //! with its session; a merge landed in a panel's draft since its open
 //! re-stated at the confirm with the claim composed off the marker, landing
@@ -63,7 +67,7 @@ use skep_client::halt::Halt;
 use skep_client::merge::{Inputs, Merged, RecordLanding, Refusal as Library, Side};
 use skep_client::store::{FileStore, KeyId, KeyStore};
 
-use super::publication::{bare, ground, other_account, register, second_device, signed_facts, written, Ground, Other};
+use super::publication::{bare, ground, ground_under, other_account, register, second_device, signed_facts, written, Ground, Other};
 use super::*;
 use crate::sessions::Facts;
 
@@ -909,23 +913,25 @@ fn a_landing_over_a_draft_no_longer_carrying_its_merge_is_refused_naming_the_dra
     cell(SinceTheCompose::Withdrawn);
 }
 
-/// Checks that the landing, the undo and the withdrawal are refused over
-/// the draft's held lines, a burst held behind them, against the daemon
-/// (§3c.4, THE HELD-LINES GATE; skep #849).
+/// Checks that the landing, the undo, the withdrawal and a compose into the
+/// draft are refused over the draft's held lines, a burst held behind
+/// them, against the daemon (§3c.4, THE HELD-LINES GATE; skep #849).
 ///
 /// L takes the merge of E.2 with E.1.1; a burst on L at a far ordinal is
 /// refused `out_of_bounds` and held, a refused run awaiting the person's
 /// act, and a second burst on L is held `behind` it — not refused, the
-/// burst writes being ungated: `merge.undo`, `merge.withdraw` and
-/// `merge.land` are each refused `held_lines` naming L and the two lines,
-/// the board's position unmoved, L's text and marker standing, the
-/// composition standing (the landing answers the gate, never `no_merge`);
-/// the run dropped — the one way such a line clears — `merge.undo` goes
-/// out: L's text E.2's again, its marker gone (the mutants that let the undo
-/// or the withdrawal dial past the held lines, which then land on the
-/// rewritten arrangement as a move the person never made; the one that
-/// gates the landing's shot by the panel's drafts alone and lands into L
-/// first; the one that refuses a burst on L instead of holding it).
+/// burst writes being ungated: `merge.undo`, `merge.withdraw`, `merge.land`
+/// and `merge.compose` into L are each refused `held_lines` naming L and
+/// the two lines, the board's position unmoved, L's text and marker
+/// standing, the composition standing (the landing answers the gate, never
+/// `no_merge`); the run dropped — the one way such a line clears —
+/// `merge.undo` goes out: L's text E.2's again, its marker gone (the mutants
+/// that let the undo or the withdrawal dial past the held lines, which then
+/// land on the rewritten arrangement as a move the person never made; the
+/// one that gates the landing's shot by the panel's drafts alone and lands
+/// into L first; the one that asks the compose's door over no draft, which
+/// re-opens L past its lines; the one that refuses a burst on L instead of
+/// holding it).
 #[test]
 fn the_landing_the_undo_and_the_withdrawal_are_refused_over_the_drafts_held_lines_and_a_burst_is_held_behind() {
     use skep_client::board::frames::doc_metadata;
@@ -945,7 +951,12 @@ fn the_landing_the_undo_and_the_withdrawal_are_refused_over_the_drafts_held_line
     let behind = g.op(json!({"op": "insert", "doc": l, "at": {"subspace": "1", "ordinal": "900001"}, "values": ["s"], "as_of": g.position()}));
     assert_eq!((behind["resp"].as_str(), behind["cause"].as_str()), (Some("held"), Some("behind")), "a burst on L is held behind the run, never refused: {behind}");
     let before = g.position();
-    for (call, args) in [("merge.undo", json!({"session": g.session})), ("merge.withdraw", json!({"session": g.session, "draft": l})), ("merge.land", json!({"session": g.session}))] {
+    for (call, args) in [
+        ("merge.undo", json!({"session": g.session})),
+        ("merge.withdraw", json!({"session": g.session, "draft": l})),
+        ("merge.land", json!({"session": g.session})),
+        ("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11, "into": l})),
+    ] {
         let refused = g.call(call, args).unwrap_err();
         let v = refused.to_value();
         assert_eq!((refused.name(), v["kind"].as_str(), v["doc"].as_str(), v["held"].as_u64()), ("held_lines", Some("shell"), Some(l.as_str()), Some(2)), "{call}: {v}");
@@ -1135,6 +1146,82 @@ fn the_re_open_lands_nothing_and_a_checked_resolution_lands_on_the_trunk_with_th
     assert_eq!((record_gap["resolved_by"].as_str(), record_gap["placed"].as_str()), (Some("person"), Some("omitted")), "the person's resolution in the record: {merged}");
     assert_eq!(g.position(), before, "nothing landed, nothing written");
     assert_eq!(g.call("merge.land", json!({"session": g.session})).unwrap_err().name(), "no_merge", "a merged daughter composes nothing to land");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks a merge made with no person present against the daemon: the
+/// shell opened under the refusing arm, as an agent's client opens it (R6
+/// with P3, the undo's `as_of` per surface; the merge record §4's
+/// `resolved_by`).
+///
+/// L takes the merge of E.2 with E.1.1, the gap unsettled, and the agent's
+/// own burst lands on L: `merge.undo` is the board's `arrangement_moved`,
+/// typed at the landing's position — `site.as_of` the landing's,
+/// `site.current` the burst's — L's words and marker standing. L2 takes
+/// the merge and gives it up to `merge.withdraw`, and after the agent's
+/// burst on L2 the withdrawal's undo is refused the same, typed at the
+/// withdrawal's position, L2 left unmarked. Both additions deleted whole
+/// from L, the re-open reads the gap settled `agent`; `merge.land` with a
+/// checked resolution lands E.3 with `supersede [E.1.1]`, and the merged arm
+/// reads the record's gap resolved `agent` (the mutants that type an
+/// agent's take-back at its own last ack, landing over its burst and taking
+/// the burst back with the merge, and that record what the agent settled as
+/// the person's; the editor's own last ack and `person` are held by the
+/// cells above).
+#[test]
+fn with_no_person_present_a_take_back_is_typed_at_its_own_write_and_a_gap_is_the_agents() {
+    use skep_client::board::frames::doc_metadata;
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground_under(&dir, &sd, ArmConfig::Refuse);
+    assert!(!g.shell.arm.person_present(), "the premise: no person is present");
+    let f = family(&g);
+    let compose = |into: &str| g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11, "into": into})).unwrap_or_else(|r| panic!("{r}"));
+    let refused_at = |refused: Refusal, as_of: u64, current: u64, what: &str| {
+        let v = refused.to_value();
+        assert_eq!(
+            (refused.name(), v["kind"].as_str(), v["site"]["as_of"].as_u64(), v["site"]["current"].as_u64()),
+            ("arrangement_moved", Some("refused"), Some(as_of), Some(current)),
+            "typed at {what}, never at the agent's own last ack: {v}"
+        );
+    };
+    // The landing's undo, past the agent's own burst.
+    let l = g.addr(frames::stage(&f.e2, None));
+    let landed = compose(&l);
+    let landed_at = landed["position"].as_u64().expect("the landing's position");
+    let gap = landed["gaps"][0]["id"].as_u64().expect("the order gap");
+    assert_eq!((landed["outcome"].as_str(), &landed["gaps"][0]["resolved_by"]), (Some("landed"), &Value::Null), "landed, the gap at its default: {landed}");
+    let burst = g.op(json!({"op": "insert", "doc": l, "at": {"subspace": "1", "ordinal": "20"}, "values": ["!"], "as_of": g.position()}));
+    let burst_at = burst["at"].as_u64().expect("the burst's position");
+    refused_at(g.call("merge.undo", json!({"session": g.session})).unwrap_err(), landed_at, burst_at, "the landing's position");
+    assert_eq!(g.text(&l, 20), "the fox jumps today!", "the agent's burst kept");
+    assert_eq!(g.op(doc_metadata(&l))["merge"]["at"].as_u64(), Some(landed_at), "the marker stands");
+    // The withdrawal's undo, past the agent's own burst.
+    let l2 = g.addr(frames::stage(&f.e2, None));
+    compose(&l2);
+    let withdrawn = g.call("merge.withdraw", json!({"session": g.session, "draft": l2})).unwrap_or_else(|r| panic!("{r}"));
+    let withdrawal = withdrawn["position"].as_u64().expect("the withdrawal's position");
+    let burst = g.op(json!({"op": "insert", "doc": l2, "at": {"subspace": "1", "ordinal": "20"}, "values": ["?"], "as_of": g.position()}));
+    let burst_at = burst["at"].as_u64().expect("the burst's position");
+    refused_at(g.call("merge.undo", json!({"session": g.session, "draft": l2, "withdrawal": withdrawal})).unwrap_err(), withdrawal, burst_at, "the withdrawal's position");
+    assert!(g.op(doc_metadata(&l2))["merge"].is_null(), "the marker stays taken out");
+    // The gap settled by the agent's edit, then by its resolution.
+    g.op(json!({"op": "delete", "doc": l, "p": {"subspace": "1", "ordinal": "8"}, "width": "12", "as_of": g.position()}));
+    assert_eq!(g.text(&l, 8), "the fox!");
+    let settled = compose(&l);
+    assert_report_declared(&settled);
+    assert_eq!((settled["outcome"].as_str(), settled["gaps"][0]["settled"].as_bool(), settled["gaps"][0]["resolved_by"].as_str()), (Some("reopened"), Some(true), Some("agent")), "{settled}");
+    let landed = g.call("merge.land", json!({"session": g.session, "resolutions": {gap.to_string(): "omit"}})).unwrap_or_else(|r| panic!("{r}"));
+    let e3 = format!("{}.3", f.edition);
+    assert_eq!((landed["outcome"].as_str(), landed["member"].as_str(), landed["supersede"].clone()), (Some("landed"), Some(e3.as_str()), json!([f.e11])), "{landed}");
+    let merged = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11})).unwrap_or_else(|r| panic!("{r}"));
+    let record_gap = merged["record"]["gaps"].as_array().unwrap().iter().find(|gp| gp["id"].as_u64() == Some(gap)).expect("the gap in the record");
+    assert_eq!(
+        (merged["outcome"].as_str(), record_gap["resolved_by"].as_str(), record_gap["placed"].as_str()),
+        (Some("merged"), Some("agent"), Some("omitted")),
+        "the agent's resolution in the record: {merged}"
+    );
     g.shell.shutdown();
     sd.shutdown();
 }

@@ -33,14 +33,15 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   frame's `op`, the arguments are the frame — save `publish`, which the
   shell refuses as a frame and composes itself; the shell's own calls
   (`boards`, `health`, `probe`, `search`, `places`, `held`, `resolve`,
-  `publication_standing`, the read of a draft's standing, and the four of
-  its `publication` family, `publication_open`, `publication_count`,
-  `publication_confirm` and `publication_cancel`) are
-  tools of theirs; and ten are the adapter's apparatus: `session_info`,
-  `changes_since`, `fetch`, `replace_text`, `edit_text`, `move_lines`,
-  `mark_text`, `diff_text`, `restore_text` and `help`. The
-  catalog an agent reads, `tools.json` beside `Cargo.toml`, is embedded and
-  checked against that dispatch at startup.
+  `publication_standing`, the read of a draft's standing, the four of its
+  `publication` family, `publication_open`, `publication_count`,
+  `publication_confirm` and `publication_cancel`, and the four of its
+  `merge` family, `merge_compose`, `merge_land`, `merge_undo` and
+  `merge_withdraw`) are tools of theirs; and ten are the adapter's
+  apparatus: `session_info`, `changes_since`, `fetch`, `replace_text`,
+  `edit_text`, `move_lines`, `mark_text`, `diff_text`, `restore_text` and
+  `help`. The catalog an agent reads, `tools.json` beside `Cargo.toml`, is
+  embedded and checked against that dispatch at startup.
 - **Short cards, the detail behind `help`.** A client cuts a long tool
   description or server instructions, so the instructions and each card
   say what an agent needs first: what the tool does, when to use it, its
@@ -125,6 +126,27 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   refusals — `merge_refused` (`not_past`, `history_reclaimed`,
   `not_a_position`) and `held_lines` among them — are `isError`, nothing
   sent.
+- **A merge, landed in a draft and published from it.** `merge_compose
+  {doc, alternative | draft, into?}` is the shell's `merge.compose`: the
+  published document's head merged with ONE side — a daughter of its
+  chain, or a draft of the owner's account whose recorded base is a
+  version of `doc` — and the merge landed, at its defaults, as the whole
+  arrangement of `into` or of a fresh draft staged from the head, by one
+  write; its answer is the gap report, and composing again re-opens the
+  draft, reading each gap's state off it, or names the version a merged
+  daughter went into. A gap is settled by editing the draft. `merge_land
+  {resolutions?, answers?}` is the shell's `merge.land`: the draft
+  published through the publication family's one signed write with the
+  supersession claim on the daughter, then the merge record, every window
+  part answered by the agent or the landing refused `window_parts_owed`.
+  `merge_undo {}` takes a landing back, `merge_withdraw {draft}` takes a
+  merge out of a draft and keeps its words, and `merge_undo {draft,
+  withdrawal}` puts it back, each by one write. The composition lives with
+  the session: after a board restart `merge_land` and `merge_undo` answer
+  `no_merge`. The board's verdicts — `arrangement_moved`, and the shot's
+  `supersede_refused` race — are data; the shell's own refusals,
+  `base_unknown`, `no_merge`, `nothing_to_undo`, `window_parts_owed`,
+  `other_panel` and `held_lines` among them, are `isError`.
 - **A refusal as a result.** The board's verdict on a frame comes back as
   data, `isError: false`; `isError` means the shell could not get the
   board's verdict — among the causes, a board not answering and a frame the
@@ -163,7 +185,13 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   nor `upload` or `restore`, whose media walk the shell does not reach
   yet (skep #502). Nor does `search` take `opts.reindex`: the index's
   refresh, the person's act, re-reads every document the index holds while
-  the call waits; the index follows the board's commits without it.
+  the call waits; the index follows the board's commits without it. A merge
+  is the agent's: a gap it settles, by `resolutions` or by an edit a
+  re-open reads, is recorded `resolved_by: "agent"`, and `merge_undo` is
+  typed against the write it takes back — the landing, or the withdrawal —
+  so any change since, the agent's own among them, refuses it
+  `arrangement_moved`, nothing wiped, where a person's editor takes the
+  person's later changes back first.
 - **One call at a time.** Calls are served in arrival order, one at a time;
   a `fetch` of a large file, up to its body's deadline, or a `search` while
   the index is building holds the calls behind it, and the log says their

@@ -369,9 +369,15 @@ pub(super) struct Ground {
 }
 
 pub(super) fn ground(dir: &TempDir, sd: &Skepd) -> Ground {
+    ground_under(dir, sd, ArmConfig::default())
+}
+
+/// [`ground`] with its shell opened under `arm`: `ArmConfig::Refuse` for a
+/// shell with no person present, as an agent's client opens it.
+pub(super) fn ground_under(dir: &TempDir, sd: &Skepd, arm: ArmConfig) -> Ground {
     let store = dir.path().join("store");
     claim_board(&format!("http://127.0.0.1:{}", sd.port()), &store);
-    open_ground(sd, &store)
+    open_ground(sd, &store, arm)
 }
 
 /// A SECOND DEVICE's ground over the board `ground` claimed: a fresh signed
@@ -388,7 +394,7 @@ pub(super) fn second_device(dir: &TempDir, sd: &Skepd) -> Ground {
         std::fs::copy(&key, device.join("keys").join(key.file_name().unwrap())).unwrap();
     }
     std::fs::copy(store.join("bindings"), device.join("bindings")).unwrap();
-    open_ground(sd, &device)
+    open_ground(sd, &device, ArmConfig::default())
 }
 
 /// Returns `shell`'s log beside the feed thread's `/health` reads.
@@ -400,12 +406,13 @@ fn but_health(shell: &Shell) -> Vec<Value> {
 }
 
 /// A fresh signed shell over the board `ground` claimed, over the data
-/// directory `store`, its own node the board.
-fn open_ground(sd: &Skepd, store: &Path) -> Ground {
+/// directory `store`, its own node the board, opened under `arm`.
+fn open_ground(sd: &Skepd, store: &Path, arm: ArmConfig) -> Ground {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let (talk, _) = talk();
     let mut opts = ShellOptions::new(vec![Origin::parse(&origin).unwrap()], store.to_path_buf(), SessionMode::Signed { principal: 1 }, talk);
     opts.own_node = Some(Origin::parse(&origin).unwrap());
+    opts.arm = arm;
     let shell = Shell::open(opts);
     let seen = Arc::new(Mutex::new(Vec::new()));
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));

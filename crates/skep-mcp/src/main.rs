@@ -22,9 +22,15 @@
 //!   one request itself from the panel it holds (`client.md` §4b.1's `op`
 //!   row). The shell's own calls — `boards`, `health`, `probe`, `search`,
 //!   `places`, `held`, `resolve`, `publication_standing`, the read of a
-//!   draft's standing, and that family's four, each named as its row with
-//!   `_` for `.` (`publication_open`, `publication_count`,
-//!   `publication_confirm`, `publication_cancel`) — are tools of those names,
+//!   draft's standing, that family's four, each named as its row with `_`
+//!   for `.` (`publication_open`, `publication_count`,
+//!   `publication_confirm`, `publication_cancel`), and the `merge` family's
+//!   four, named so (`merge_compose`, `merge_land`, `merge_undo`,
+//!   `merge_withdraw`: a published document's head merged with one side and
+//!   landed in a draft of the agent's, settled by editing that draft,
+//!   published through the publication family's one write with its
+//!   supersession claim, and taken back or out by one write, the merge
+//!   record naming the agent as the merger) — are tools of those names,
 //!   their arguments the bridge's row minus the session and the board, the
 //!   adapter supplying each where the row requires it; and ten are the
 //!   adapter's apparatus: `session_info`, `changes_since` (the shell's
@@ -113,9 +119,12 @@
 //!   the session instead, as a board that does not answer does, and a later
 //!   call opens one. No person is at the seam (`ArmConfig::Refuse`): no
 //!   ceremony tool is offered, every secret or consent moment would be refused
-//!   `person_required`, and `search` takes no `opts.reindex`, the person's
+//!   `person_required`, `search` takes no `opts.reindex`, the person's
 //!   refresh of the index (`search.md` §5.5), which re-reads every document
-//!   the index holds while the call waits.
+//!   the index holds while the call waits, and a merge is the agent's: a gap
+//!   it settles is recorded `agent`, and `merge_undo` is typed against the
+//!   write it takes back, so a change since, the agent's own among them,
+//!   refuses it `arrangement_moved`, nothing wiped.
 //!
 //! `server.rs` is the MCP side: the stdio transport — stdin's reader, and the
 //! loop that answers on stdout each line owed an answer — the JSON-RPC

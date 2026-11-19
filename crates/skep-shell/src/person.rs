@@ -299,6 +299,18 @@ pub enum Answerer {
     Refuse(Talk),
 }
 
+impl Answerer {
+    /// Returns whether a person is present at the seam.
+    ///
+    /// It is true under the dev arm, which answers for the person at the
+    /// page, and false under the refusing arm, an agent's client or any
+    /// unattended one (`ArmConfig::Refuse`). The merge family reads it for
+    /// the surface its merger acts through (`shell/merge.rs`, `Surface`).
+    pub fn person_present(&self) -> bool {
+        matches!(self, Answerer::Arm(_))
+    }
+}
+
 impl std::fmt::Debug for Answerer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

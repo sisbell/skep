@@ -122,16 +122,17 @@
 //! hold stands at the board, refused at once with its cause (`stopped`,
 //! `poisoned`, `halted`), never held and never dialed
 //! (`Holds::unholdable_refusal`; skep #850);
-//! and a whole-draft write — `history.restore`, `merge.land`, `merge.undo`,
-//! `merge.withdraw`, `publication.confirm` over the rendering draft and
-//! every draft `also` names — while a line of the acting principal's stands
-//! held on a draft it writes, in any state, refused `held_lines` naming the
-//! draft and the count (`Holds::held_lines`; §3c.4, THE HELD-LINES GATE;
-//! skep #849, #854) — the burst writes not gated, a burst on such a draft
-//! held `behind` the standing lines as before, and `text.edit`'s take-back
-//! not gated either: a `set_arrangement` it sends as a frame through `op`,
-//! naming no draft to the door, and only while no line of its own stands
-//! held (skep #1079); `resolve(send)` under a bare
+//! and a whole-draft write — `history.restore`, `merge.compose` over `into`
+//! or over the draft a merge record of the principal's names, `merge.land`,
+//! `merge.undo`, `merge.withdraw`, `publication.confirm` over the rendering
+//! draft and every draft `also` names — while a line of the acting
+//! principal's stands held on a draft it writes, in any state, refused
+//! `held_lines` naming the draft and the count (`Holds::held_lines`; §3c.4,
+//! THE HELD-LINES GATE; skep #849, #854) — the burst writes not gated, a
+//! burst on such a draft held `behind` the standing lines as before, and
+//! `text.edit`'s take-back not gated either: a `set_arrangement` it sends as
+//! a frame through `op`, naming no draft to the door, and only while no line
+//! of its own stands held (skep #1079); `resolve(send)` under a bare
 //! session, refused by its own row (`write_in_bare_session`): it sends no
 //! write itself — the lines it hands back go out by a resend, which sends
 //! under no bare session — so it asks no door, and it stands at another
@@ -278,7 +279,11 @@ pub enum ArmConfig {
     /// Every secret and consent moment is refused `person_required`, answered
     /// by no arm and sent to no page, and the walk is abandoned there; public
     /// moments still cross to the page as `moment` events, and a native
-    /// statement is said on `Talk` as the arm would say it.
+    /// statement is said on `Talk` as the arm would say it. A merge is then
+    /// an agent's (`shell/merge.rs`, `Surface`): a gap it settles is recorded
+    /// `resolved_by` `agent`, and a take-back of its landing or withdrawal is
+    /// typed against that write's own position, so a change since, the
+    /// agent's own among them, refuses it `arrangement_moved`.
     Refuse,
 }
 

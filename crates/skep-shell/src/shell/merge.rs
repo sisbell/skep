@@ -43,9 +43,12 @@
 //! — a daughter being immutable, and a draft side at the marker's position
 //! where a write under it landed since (by `/op-at`), else its image as it
 //! stands, which is the same — and each unsettled gap's state read off the
-//! draft as it stands, settled by the person where the draft no longer
+//! draft as it stands, settled by the merger where the draft no longer
 //! arranges the gap's default as M placed it: its runs removed whole, or
-//! reordered; an edit inside a run's words settles nothing. THE MERGED ARM:
+//! reordered; an edit inside a run's words settles nothing. The merger is
+//! the one composing, `person` at the editor and `agent` with no person
+//! present ([`Surface`]), since the re-open reads the draft and not the
+//! hand that edited it. THE MERGED ARM:
 //! a daughter an active supersession claim of the person's own already
 //! names, read by one `in_claims` at the daughter, is answered `merged`,
 //! naming the member the claim's `new` names, NOTHING LANDED, and where no
@@ -127,37 +130,46 @@
 //! choice checked against the composition the shell holds — a gap of the
 //! report, a side among the gap's runs, an anchor the gap names — anything
 //! else refused `malformed_args`, nothing landed; a checked one settles the
-//! gap in the record as the person's, `resolved_by: person`.
+//! gap in the record as the merger's, `resolved_by` `person` at the editor
+//! and `agent` with no person present ([`Surface`]).
 //!
 //! **`merge.undo`** takes the standing composition's landing back out of
-//! the draft by the library's `undo`, one `set_arrangement` typed against
-//! THE EDITOR's OWN LAST ACK on the draft, as every burst is typed (R6 with
-//! P3's editor rule): the position of the principal's latest arrangement
-//! write on it that this shell acknowledged, a burst's or a
-//! `set_arrangement`'s, never a link's (`Holds::last_arranged`), or the
-//! landing's position — or the latest write that put the landing's marker
-//! back, where only a take-back and its undo moved the words since — where
-//! that is later — so the person's own later changes, taken back first on
-//! the editor's stack, never leave it refused, and a change since by
-//! another hand refuses it `arrangement_moved`, nothing wiped — while the
-//! session that landed it stands, the marker the draft carried before the
-//! landing put back as it stood and answered as `marker` (skep #964), and
-//! the composition a later landing set aside for that marker standing
-//! again, so the next `merge.undo` takes that landing back (skep #981);
+//! the draft by the library's `undo`, one `set_arrangement` typed per
+//! surface (R6 with P3; [`Surface`]) — while the session that landed it
+//! stands, the marker the draft carried before the landing put back as it
+//! stood and answered as `marker` (skep #964), and the composition a later
+//! landing set aside for that marker standing again, so the next
+//! `merge.undo` takes that landing back (skep #981). At the editor it is
+//! typed against THE EDITOR's OWN LAST ACK on the draft, as every burst is
+//! typed: the position of the principal's latest arrangement write on it
+//! that this shell acknowledged, a burst's or a `set_arrangement`'s, never
+//! a link's (`Holds::last_arranged`), or the landing's position — or the
+//! latest write that put the landing's marker back, where only a take-back
+//! and its undo moved the words since — where that is later. So the
+//! person's own later changes, taken back first on the editor's stack,
+//! never leave it refused, and a change since by another hand refuses it
+//! `arrangement_moved`, nothing wiped. With no person present it is typed
+//! against the landing's position, or that put-back's, alone, as
+//! `skep merge` types its own: an agent has no stack that takes its own
+//! later changes back first, so any change since, the agent's own among
+//! them, refuses it `arrangement_moved`, nothing wiped, where the editor's
+//! rule would land it over those changes and take them back with the merge.
 //! **`merge.withdraw`** — `{draft}` —
 //! takes the merge out of any marked draft and keeps its words, in any
 //! session, by the library's `withdraw`, the standing composition taken
 //! aside; **`merge.undo`** with `{draft, withdrawal}` takes that withdrawal
-//! back by the library's `unwithdraw`, typed as the undo is, the marker put
-//! back as it stood and the composition taken aside standing again, so the
-//! next `merge.undo` takes the landing back (skep #870). Each replaces the
-//! landing's record where one stands, the withdrawal's undo writing the
-//! landing's again. Every one of the family's whole-draft writes — a draft
-//! landing, an undo, a withdrawal and its undo — is noted as the principal's
-//! latest arrangement write on the draft (`Holds::note_arranged`), the
-//! editor's own last ack the next undo is typed against, and the session as
-//! the writer of its row, the write standing out at the board until then
-//! (`hold::WriteOut`; skep #1000).
+//! back by the library's `unwithdraw`, typed as the undo is — against the
+//! withdrawal's position, or the editor's own last ack where that is later
+//! — the marker put back as it stood and the composition taken aside
+//! standing again, so the next `merge.undo` takes the landing back (skep
+//! #870). Each replaces the landing's record where one stands, the
+//! withdrawal's undo writing the landing's again. Every one of the family's
+//! whole-draft writes — a draft landing, an undo, a withdrawal and its undo
+//! — is noted as the principal's latest arrangement write on the draft
+//! (`Holds::note_arranged`), the editor's own last ack the next undo is
+//! typed against at the editor, and the session as the writer of its row,
+//! the write standing out at the board until then (`hold::WriteOut`; skep
+//! #1000).
 //!
 //! **The compositions** ([`Merges`]): one per (board, principal), the
 //! latest composed standing — a second compose replaces it, there being no
@@ -248,6 +260,44 @@ use crate::wire::bounded_address;
 /// account's doc 1 reads and writes the same journal.
 fn merge_kind(account: &str) -> Option<Address> {
     bounded_address(&doc_1_of(account))
+}
+
+/// The surface a merge is made through, as the shell's arm says.
+///
+/// It is the editor — a person at the page, under the dev arm — or an
+/// agent, where no person is present (`ArmConfig::Refuse`, the arm
+/// `skep-mcp` opens the shell with). It decides the two things a merge owes
+/// its merger: who a gap the merger settles is recorded as settled by
+/// (the merge record §4's `resolved_by`), and the position a take-back is
+/// typed against (R6 with P3, the undo's `as_of` per surface).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Surface {
+    /// A person at the page.
+    ///
+    /// A gap the person settles is `person`'s, and a take-back is typed
+    /// against the editor's own last arrangement ack on the draft where that
+    /// is later than the library's own position, so the person's later
+    /// changes, taken back first on the editor's stack, never leave it
+    /// refused.
+    Editor,
+    /// An agent, with no person present.
+    ///
+    /// A gap the agent settles is `agent`'s, and a take-back is typed
+    /// against the landing's position, or the withdrawal's, as `skep merge`
+    /// types its own: any change since, the agent's own among them, refuses
+    /// it `arrangement_moved`, nothing wiped.
+    Agent,
+}
+
+impl Surface {
+    /// Returns who a gap this surface's merger settles is recorded as
+    /// settled by.
+    fn settler(self) -> ResolvedBy {
+        match self {
+            Surface::Editor => ResolvedBy::Person,
+            Surface::Agent => ResolvedBy::Agent,
+        }
+    }
 }
 
 /// Which form a composition took: the daughter, or the draft side.
@@ -483,6 +533,31 @@ impl Shell {
             return Err(Refusal::shell(Name::NOT_OWNER, json!({"addr": into.to_string()})));
         }
         Ok(facts)
+    }
+
+    /// Returns the surface this shell's merges are made through: the
+    /// editor where a person is present, else an agent ([`Surface`]).
+    fn surface(&self) -> Surface {
+        if self.arm.person_present() {
+            Surface::Editor
+        } else {
+            Surface::Agent
+        }
+    }
+
+    /// Returns the caller's own last ack a take-back of `draft`'s merge is
+    /// typed against, where its surface has one (R6 with P3).
+    ///
+    /// It is the editor's: the principal's latest arrangement write on the
+    /// draft this shell acknowledged (`Holds::last_arranged`), the library
+    /// taking it where it is later than the landing's position or the
+    /// withdrawal's. An agent has none, so the library types the take-back
+    /// against that position alone.
+    fn own_ack(&self, session: &SessionEntry, draft: &Address) -> Option<u64> {
+        match self.surface() {
+            Surface::Editor => self.holds.last_arranged(session, &draft.to_string()),
+            Surface::Agent => None,
+        }
     }
 
     /// Returns the trunk's head as the board stands, read up from `start`.
@@ -871,7 +946,7 @@ impl Shell {
     /// The draft's image read's (`whole_draft`).
     fn reopened(&self, session: &SessionEntry, key: (String, u64), form: Form, mut merged: lib::Merged, into: &Address, at: Option<u64>) -> Result<Value, Refusal> {
         let image = self.whole_draft(session, into)?;
-        settle_by_edit(&mut merged, &image);
+        settle_by_edit(&mut merged, &image, self.surface());
         let position = at.unwrap_or(merged.as_of);
         let composition = Composition { session: session.reference.clone(), form, merged, into: into.clone() };
         let answer = report_json(&composition.merged, &composition.form, "reopened", json!({"into": into.to_string(), "position": position, "fresh": false, "head_moved": Value::Null}));
@@ -980,7 +1055,7 @@ impl Shell {
             return Err(Refusal::shell(Name::NO_MERGE, json!({"session": session.reference})));
         };
         if let Some(resolutions) = &resolutions {
-            apply_resolutions(&mut composition.merged, resolutions)?;
+            apply_resolutions(&mut composition.merged, resolutions, self.surface())?;
             self.merges.stand(key.clone(), composition.clone());
         }
         let into = composition.into.clone();
@@ -1086,16 +1161,18 @@ impl Shell {
     /// Answers `merge.undo(session)` with `{draft, position, record,
     /// restored, marker}` (the module doc; `shapes`' `Undone`).
     ///
-    /// The undo is typed against the principal's latest arrangement write on
-    /// the draft the hold noted, or the landing's position — or the latest
+    /// The undo is typed against the landing's position — or the latest
     /// write that put its marker back, where only a take-back and its undo
-    /// moved the words since — where that is later, the library taking the
-    /// latest. `marker` is the marker the draft carries again, the one it
-    /// carried before the landing, or null. The composition goes with its
-    /// landing; where a later landing set one aside for `marker`, that one
-    /// stands in its place, so the next `merge.undo(session)` takes that
-    /// landing back (skep #981). With `{draft, withdrawal}` it is the
-    /// withdrawal's undo instead ([`Shell::merge_unwithdraw`]).
+    /// moved the words since — or, at the editor, the principal's latest
+    /// arrangement write on the draft the hold noted where that is later,
+    /// the library taking the latest; with no person present, against the
+    /// landing's or the put-back's alone (`Shell::own_ack`). `marker` is the
+    /// marker the draft carries again, the one it carried before the
+    /// landing, or null. The composition goes with its landing; where a
+    /// later landing set one aside for `marker`, that one stands in its
+    /// place, so the next `merge.undo(session)` takes that landing back
+    /// (skep #981). With `{draft, withdrawal}` it is the withdrawal's undo
+    /// instead ([`Shell::merge_unwithdraw`]).
     ///
     /// # Errors
     ///
@@ -1127,8 +1204,8 @@ impl Shell {
         let signed = self.signed(&session, Write::call("merge.undo", "set_arrangement").over([composition.into.to_string()]))?;
         let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
         let kind = merge_kind(&signed.account).ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
-        // THE EDITOR's OWN LAST ACK on the draft (P3).
-        let own_ack = self.holds.last_arranged(&session, &composition.into.to_string());
+        // The editor's own last ack on the draft, an agent's none (P3).
+        let own_ack = self.own_ack(&session, &composition.into);
         let out = self.holds.write_out(&session);
         let undone = out.noted(lib::undo(&session.board, merger, &composition.into, &kind, own_ack, None), |undone| self.holds.note_arranged(&session, &undone.draft.to_string(), undone.position));
         let undone = undone.map_err(|r| self.merge_refusal(&session, r))?;
@@ -1183,11 +1260,12 @@ impl Shell {
     /// (skep #870; the module doc; `shapes`' `Undone`).
     ///
     /// `withdrawal` is the `position` a `merge.withdraw` answered. The undo
-    /// is the library's `unwithdraw`, typed against the principal's latest
-    /// arrangement write on the draft the hold noted, or the withdrawal's
-    /// position where that is later; the composition the withdrawal took
-    /// aside in this session stands again, so the next `merge.undo(session)`
-    /// takes the landing back.
+    /// is the library's `unwithdraw`, typed against the withdrawal's
+    /// position or, at the editor, the principal's latest arrangement write
+    /// on the draft the hold noted where that is later; with no person
+    /// present, against the withdrawal's alone (`Shell::own_ack`). The
+    /// composition the withdrawal took aside in this session stands again,
+    /// so the next `merge.undo(session)` takes the landing back.
     ///
     /// # Errors
     ///
@@ -1211,8 +1289,8 @@ impl Shell {
         let signed = self.signed(session, Write::call("merge.undo", "set_arrangement").over([draft.to_string()]))?;
         let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
         let kind = merge_kind(&signed.account).ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
-        // THE EDITOR's OWN LAST ACK on the draft (P3).
-        let own_ack = self.holds.last_arranged(session, &draft.to_string());
+        // The editor's own last ack on the draft, an agent's none (P3).
+        let own_ack = self.own_ack(session, &draft);
         let out = self.holds.write_out(session);
         let undone = out.noted(lib::unwithdraw(&session.board, merger, &draft, &kind, withdrawal, own_ack, None), |undone| self.holds.note_arranged(session, &draft.to_string(), undone.position));
         let undone = undone.map_err(|r| self.merge_refusal(session, r))?;
@@ -1230,19 +1308,21 @@ impl Shell {
 
 // ── the resolutions, and the gaps' state at a re-open ─────────────────────
 
-/// Applies the page's `resolutions` to the composition's gaps, each checked
-/// as UNTRUSTED input against the composition (the module doc).
+/// Applies the caller's `resolutions` to the composition's gaps, each
+/// checked as UNTRUSTED input against the composition (the module doc).
 ///
 /// Each is `⟨gap id⟩: ⟨choice⟩` — `keep_both` (the default kept), `omit`,
 /// `{order: [sides]}` (each a side among the gap's runs, none twice),
 /// `{keep_only: side}`, `{after: anchor}` or `{before: anchor}` (the gap's
-/// own anchor) — settling the gap in the record as the person's.
+/// own anchor) — settling the gap in the record as the merger's who acts
+/// through `surface`: `person` at the editor, `agent` with no person
+/// present.
 ///
 /// # Errors
 ///
 /// `malformed_args` naming `resolutions` at the first that fails its check;
 /// nothing is applied past it.
-fn apply_resolutions(merged: &mut lib::Merged, resolutions: &Map<String, Value>) -> Result<(), Refusal> {
+fn apply_resolutions(merged: &mut lib::Merged, resolutions: &Map<String, Value>, surface: Surface) -> Result<(), Refusal> {
     let malformed = || Refusal::malformed("resolutions");
     for (gap, choice) in resolutions {
         let id: u32 = gap.parse().map_err(|_| malformed())?;
@@ -1281,7 +1361,7 @@ fn apply_resolutions(merged: &mut lib::Merged, resolutions: &Map<String, Value>)
                     g.placed = placed.clone();
                 }
                 g.settled = true;
-                g.resolved_by = Some(ResolvedBy::Person);
+                g.resolved_by = Some(surface.settler());
             }
         }
     }
@@ -1289,11 +1369,15 @@ fn apply_resolutions(merged: &mut lib::Merged, resolutions: &Map<String, Value>)
 }
 
 /// Reads each unsettled gap's state off the draft's image as it stands (the
-/// module doc, THE RE-OPEN): a gap whose default the draft no longer
-/// arranges as M placed it — its runs removed whole, or reordered — is
-/// settled by the person; an edit inside a run's words, which keeps every
-/// position in its order, settles nothing.
-fn settle_by_edit(merged: &mut lib::Merged, image: &[SelectionRun]) {
+/// module doc, THE RE-OPEN).
+///
+/// A gap whose default the draft no longer arranges as M placed it — its
+/// runs removed whole, or reordered — is settled by the merger who acts
+/// through `surface`, `person` or `agent`: the re-open reads the draft, not
+/// the hand that edited it, so the merger composing is the one recorded. An
+/// edit inside a run's words, which keeps every position in its order,
+/// settles nothing.
+fn settle_by_edit(merged: &mut lib::Merged, image: &[SelectionRun], surface: Surface) {
     let ordinal_of = |origin: &Address, i: u64| -> Option<u64> {
         let mut at = 1u64;
         for r in image {
@@ -1326,7 +1410,7 @@ fn settle_by_edit(merged: &mut lib::Merged, image: &[SelectionRun]) {
             for gaps in [&mut merged.record.gaps, &mut merged.composed.gaps] {
                 if let Some(g) = gaps.get_mut(ix) {
                     g.settled = true;
-                    g.resolved_by = Some(ResolvedBy::Person);
+                    g.resolved_by = Some(surface.settler());
                 }
             }
         }

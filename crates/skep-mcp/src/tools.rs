@@ -20,24 +20,28 @@
 //! but `publish`, which the shell runs as its `publication` call family; and
 //! the *adapter tools* — the shell's calls (`boards`, `health`, `probe`,
 //! `search`, `places`, `held`, `resolve`, the read of a draft's standing,
-//! `publication_standing`, and the `publication` family's four,
+//! `publication_standing`, the `publication` family's four,
 //! `publication_open`, `publication_count`, `publication_confirm` and
-//! `publication_cancel`) and the apparatus (`session_info`, `changes_since`,
-//! `fetch`, the shell's two text edits, `replace_text`, its `text.replace`,
-//! and `edit_text`, its several-pair `text.edit`, its move of whole lines,
-//! `move_lines`, its `text.move`, its mark of a draft to diff against,
-//! `mark_text`, its `text.mark`, its diff of a draft by identity,
-//! `diff_text`, its `text.diff`, its restore of a draft to a past state by
-//! identity, `restore_text`, its `history.restore`, and `help`, which reads
-//! the help store and calls no shell) — whose arguments are the bridge's row
-//! minus the session and the board, the adapter supplying each where the row
-//! requires it, `help`'s its one `topic`, and whose members the adapter
-//! reads by name. A `publication` tool spells its row's `.` as `_`, since an
-//! agent runtime takes a tool's name for a function's, whose spelling admits
-//! no `.`. `Tool::admit` is the dispatch's door, admitting a call or refusing
-//! it; `wire_frame` maps a wire op's call onto its frame, and
-//! `Catalog::append_commons` fills the commons template in beside the check on
-//! its placeholder.
+//! `publication_cancel`, and the `merge` family's four, `merge_compose`,
+//! `merge_land`, `merge_undo` and `merge_withdraw`) and the apparatus
+//! (`session_info`, `changes_since`, `fetch`, the shell's two text edits,
+//! `replace_text`, its `text.replace`, and `edit_text`, its several-pair
+//! `text.edit`, its move of whole lines, `move_lines`, its `text.move`, its
+//! mark of a draft to diff against, `mark_text`, its `text.mark`, its diff
+//! of a draft by identity, `diff_text`, its `text.diff`, its restore of a
+//! draft to a past state by identity, `restore_text`, its `history.restore`,
+//! and `help`, which reads the help store and calls no shell) — whose
+//! arguments are the bridge's row minus the session and the board, the
+//! adapter supplying each where the row requires it, `help`'s its one
+//! `topic`, and whose members the adapter reads by name. A `publication` or
+//! `merge` tool spells its row's `.` as `_`, since an agent runtime takes a
+//! tool's name for a function's, whose spelling admits no `.`, and a tool
+//! that takes the forms of a row of two takes their members together, each
+//! form's own as the row reads them (`merge_undo`'s none, or `draft` and
+//! `withdrawal`). `Tool::admit` is the dispatch's door, admitting a call or
+//! refusing it; `wire_frame` maps a wire op's call onto its frame, and
+//! `Catalog::append_commons` fills the commons template in beside the check
+//! on its placeholder.
 
 use std::fmt;
 
@@ -162,6 +166,33 @@ pub enum Tool {
     /// The session is supplied; the shell reads where the draft stands and
     /// holds nothing.
     PublicationStanding,
+    /// `merge.compose(session, doc, alternative? | draft?, into?)`, the
+    /// shell's.
+    ///
+    /// It composes the merge of a published document's head with one side
+    /// and lands it in a draft of the agent's, the session supplied; the
+    /// shell holds the composition with the session. Its answer and its
+    /// refusals go by `tool_result`'s rule, as every shell call's do.
+    MergeCompose,
+    /// `merge.land(session, resolutions?, answers?)`, the shell's.
+    ///
+    /// It publishes the standing composition's draft through the
+    /// publication family's one composition and send, the session supplied;
+    /// its answer and its refusals go by `tool_result`'s rule.
+    MergeLand,
+    /// `merge.undo(session)` or `merge.undo(session, draft, withdrawal)`,
+    /// the shell's.
+    ///
+    /// It takes the standing composition's landing back, or a withdrawal,
+    /// by one write, the session supplied; its answer and its refusals go by
+    /// `tool_result`'s rule.
+    MergeUndo,
+    /// `merge.withdraw(session, draft)`, the shell's.
+    ///
+    /// It takes the merge out of a draft and keeps its words by one write,
+    /// the session supplied; its answer and its refusals go by
+    /// `tool_result`'s rule.
+    MergeWithdraw,
     /// The apparatus: who this adapter acts as, and its session's facts.
     SessionInfo,
     /// `changes(session, since, limit?, class?, under?)`, the shell's, pulled.
@@ -215,11 +246,12 @@ pub enum Tool {
 
 /// The adapter tools: each name, its tool, and the members its row takes.
 ///
-/// The members are skep-shell's row's, bar the session and the board, which
-/// the adapter supplies or does not offer — the suite holds the two equal —
-/// save `help`'s `topic`, a member no row has, `help` reading the catalog
-/// alone; and they are the only ones the adapter reads: a member outside them
-/// is refused before any call.
+/// The members are skep-shell's row's, of every form of it that takes a
+/// session, bar the session and the board, which the adapter supplies or
+/// does not offer (the suite holds the two equal), save `help`'s `topic`, a
+/// member no row has, `help` reading the catalog alone; and they are the
+/// only ones the adapter reads: a member outside them is refused before any
+/// call.
 const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
     ("boards", Tool::Boards, &[]),
     ("health", Tool::Health, &[]),
@@ -233,6 +265,10 @@ const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
     ("publication_confirm", Tool::PublicationConfirm, &["switches", "answers"]),
     ("publication_cancel", Tool::PublicationCancel, &[]),
     ("publication_standing", Tool::PublicationStanding, &["draft", "doc", "also"]),
+    ("merge_compose", Tool::MergeCompose, &["doc", "alternative", "draft", "into"]),
+    ("merge_land", Tool::MergeLand, &["resolutions", "answers"]),
+    ("merge_undo", Tool::MergeUndo, &["draft", "withdrawal"]),
+    ("merge_withdraw", Tool::MergeWithdraw, &["draft"]),
     ("session_info", Tool::SessionInfo, &[]),
     ("changes_since", Tool::ChangesSince, &["since", "limit", "class", "under"]),
     ("fetch", Tool::Fetch, &["i"]),

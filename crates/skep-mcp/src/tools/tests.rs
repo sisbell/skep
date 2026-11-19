@@ -19,7 +19,7 @@ const MAX_HELP_CARD_CHARS: usize = 400;
 const MAX_INSTRUCTIONS_CHARS: usize = 2000;
 
 /// The tools whose card ends naming its full reference in the help store.
-const REFERENCED: [&str; 19] = [
+const REFERENCED: [&str; 23] = [
     "create_well_known_document",
     "doc_metadata",
     "set_arrangement",
@@ -31,6 +31,10 @@ const REFERENCED: [&str; 19] = [
     "publication_count",
     "publication_confirm",
     "publication_standing",
+    "merge_compose",
+    "merge_land",
+    "merge_undo",
+    "merge_withdraw",
     "changes_since",
     "fetch",
     "replace_text",
@@ -273,24 +277,39 @@ fn wire_frame_makes_the_name_the_op_and_the_arguments_the_frame() {
 /// Fifty-two wire ops — every op of wire.md §Operations but `publish`, the
 /// six the first catalog lacked among them, the count by home, the
 /// retracted-links read, the landing, the well-known creation and the line
-/// read — and twenty-two
-/// adapter tools, the `publication` family's four among them, the read
-/// of a draft's standing beside them, the two text edits, `replace_text`
-/// and `edit_text`, the move of whole lines, `move_lines`, the mark of a
-/// draft, `mark_text`, the diff since one, `diff_text`, the restore of a
-/// draft's past state, `restore_text`, and `help`, which
-/// takes a `topic`; no name twice across the two,
-/// each wire op a `Tool::Op` of its own name with no members list, each
-/// adapter tool its row's members; and a ceremony, `upload`, `restore`,
-/// `op`, `publish` or a row's dotted name no tool at all.
+/// read — and twenty-six adapter tools, the `publication` family's four
+/// among them, the read of a draft's standing beside them, the `merge`
+/// family's four after it and before `session_info`, the two text edits,
+/// `replace_text` and `edit_text`, the move of whole lines, `move_lines`,
+/// the mark of a draft, `mark_text`, the diff since one, `diff_text`, the
+/// restore of a draft's past state, `restore_text`, and `help`, which takes
+/// a `topic`; no name twice across the two, each wire op a `Tool::Op` of
+/// its own name with no members list, each adapter tool its row's members
+/// — `merge_undo`'s those of its row's two forms; and a ceremony, `upload`,
+/// `restore`, `op`, `publish` or a row's dotted name no tool at all.
 #[test]
 fn the_dispatch_has_two_kinds_and_is_counted() {
     let names: Vec<&str> = Tool::names().collect();
     let set: std::collections::BTreeSet<_> = names.iter().collect();
     assert_eq!(set.len(), names.len(), "no name twice");
     assert_eq!(DISPATCH_OPS.len(), 52);
-    assert_eq!(names.len(), 74);
-    assert_eq!(ADAPTER_TOOLS.len(), 22);
+    assert_eq!(names.len(), 78);
+    assert_eq!(ADAPTER_TOOLS.len(), 26);
+    for (name, tool, members) in [
+        ("merge_compose", Tool::MergeCompose, &["doc", "alternative", "draft", "into"][..]),
+        ("merge_land", Tool::MergeLand, &["resolutions", "answers"][..]),
+        ("merge_undo", Tool::MergeUndo, &["draft", "withdrawal"][..]),
+        ("merge_withdraw", Tool::MergeWithdraw, &["draft"][..]),
+    ] {
+        assert_eq!(Tool::named(name), Some(tool), "{name} is an adapter tool");
+        assert_eq!(Tool::named(name).and_then(Tool::members), Some(members), "{name} takes its row's members");
+    }
+    let merges: Vec<&str> = names.iter().copied().skip_while(|name| *name != "publication_standing").take(6).collect();
+    assert_eq!(
+        merges,
+        ["publication_standing", "merge_compose", "merge_land", "merge_undo", "merge_withdraw", "session_info"],
+        "the merge family's four stand after `publication_standing` and before `session_info`"
+    );
     assert_eq!(Tool::named("help"), Some(Tool::Help));
     assert_eq!(Tool::named("help").and_then(Tool::members), Some(&["topic"][..]));
     assert_eq!(Tool::named("replace_text"), Some(Tool::ReplaceText));
@@ -332,8 +351,8 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
     for not_a_tool in ["keygen", "fingerprint", "claim", "enroll", "bind", "recover", "rotate", "retire", "handoff", "accept", "upload", "restore", "op", "session", "close", "frobnicate"] {
         assert_eq!(Tool::named(not_a_tool), None, "{not_a_tool} is no tool");
     }
-    for not_a_tool in ["publish", "publication.open"] {
-        assert_eq!(Tool::named(not_a_tool), None, "{not_a_tool} is no tool: the shell runs a publication as its call family");
+    for not_a_tool in ["publish", "publication.open", "merge.compose"] {
+        assert_eq!(Tool::named(not_a_tool), None, "{not_a_tool} is no tool: the shell runs a publication and a merge as its call families, each tool named with `_` for `.`");
     }
 }
 
@@ -344,9 +363,12 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
 /// beside an object `frame`, which alone is refused; a name it does not
 /// answer is refused before its arguments are read; a member an adapter
 /// tool's row does not take is refused naming the row's own — a
-/// `publication_open`'s `base`, which the shell reads itself, among them —
-/// and a member of its `opts` naming the options — `search`'s withheld
-/// `reindex` among them — the row's stranger speaking first.
+/// `publication_open`'s `base`, which the shell reads itself, a
+/// `merge_compose`'s `fork`, a side the shell's row takes none of, and a
+/// `merge_withdraw`'s `doc`, whose draft is `draft`, among them — and a
+/// member of its `opts` naming the options — `search`'s withheld `reindex`
+/// among them — the row's stranger speaking first; `merge_undo` takes
+/// either of its row's forms, no member or `draft` beside `withdrawal`.
 #[test]
 fn the_dispatchs_door_admits_a_call_or_refuses_it_naming_the_culprit() {
     let args = |v: Value| -> Map<String, Value> {
@@ -391,6 +413,14 @@ fn the_dispatchs_door_admits_a_call_or_refuses_it_naming_the_culprit() {
     assert_eq!(Tool::admit("restore_text", &args(json!({"draft": "1.0.1.0.64", "at": 3, "as_of": 5}))), Ok(Tool::RestoreText));
     let err = Tool::admit("restore_text", &args(json!({"doc": "1.0.1.0.64", "at": 3, "as_of": 5}))).expect_err("a member the row does not take");
     assert!(err.contains("restore_text takes 'draft', 'at', 'as_of'") && err.contains("'doc'"), "the draft restored is `draft`: {err}");
+    assert_eq!(Tool::admit("merge_compose", &args(json!({"doc": "1.0.1.0.64", "alternative": "1.0.1.0.64.1.1", "into": "1.0.1.0.65"}))), Ok(Tool::MergeCompose));
+    let err = Tool::admit("merge_compose", &args(json!({"doc": "1.0.1.0.64", "fork": "1.0.1.0.66"}))).expect_err("a side the row does not take");
+    assert!(err.contains("merge_compose takes 'doc', 'alternative', 'draft', 'into'") && err.contains("'fork'"), "{err}");
+    for form in [json!({}), json!({"draft": "1.0.1.0.65", "withdrawal": 7})] {
+        assert_eq!(Tool::admit("merge_undo", &args(form.clone())), Ok(Tool::MergeUndo), "{form}: a form of the merge.undo row");
+    }
+    let err = Tool::admit("merge_withdraw", &args(json!({"doc": "1.0.1.0.65"}))).expect_err("a member the row does not take");
+    assert!(err.contains("merge_withdraw takes 'draft'") && err.contains("'doc'"), "the draft withdrawn from is `draft`: {err}");
 }
 
 /// The door refuses a member of an `edit_text` pair the shell would ignore.
@@ -707,8 +737,8 @@ fn every_card_and_the_instructions_are_short() {
 /// A tool's topic stands in the help store exactly where its card ends
 /// `Full reference: help("<name>").`, so no card points at a topic that is
 /// not there and no reference waits unnamed; the tools with a reference are
-/// the nineteen whose whole text an agent needs only when a call goes the
-/// way it covers.
+/// the twenty-three whose whole text an agent needs only when a call goes
+/// the way it covers.
 #[test]
 fn a_card_with_a_reference_points_to_it() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
@@ -738,7 +768,14 @@ fn each_short_card_says_what_an_agent_needs_first() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
     let mib = format!("{} MiB", crate::media::MAX_FETCH_BYTES / (1024 * 1024));
     let pairs = format!("at most {MAX_WIRE_LIST} pairs");
-    let said: [(&str, &[&str]); 20] = [
+    let said: [(&str, &[&str]); 24] = [
+        ("merge_compose", &["MERGING", "alternative", "draft", "into", "\"landed\"", "\"reopened\"", "\"merged\"", "EDITING", "merge_land", "base_unknown", "held_lines", "isError"]),
+        ("merge_land", &["resolutions", "\"run.part\"", "\"landed\"", "\"restated\"", "supersede_refused", "head_moved", "window_parts_owed", "no_merge", "isError", "not undone"]),
+        (
+            "merge_undo",
+            &["merge_undo(draft, withdrawal)", "your own edits included", "arrangement_moved", "can no longer land", "merge_withdraw", "no_merge", "nothing_to_undo", "held_lines", "isError"],
+        ),
+        ("merge_withdraw", &["KEEPS", "in any session", "merge_undo(draft, withdrawal: position)", "arrangement_moved", "no_merge", "not_owner", "held_lines"]),
         ("replace_text", &["EXACTLY ONCE", "edit_text", "move_lines", "\"replaced\"", "\"refused\"", "not_unique", "\"partial\"", "\"held\"", "isError"]),
         (
             "edit_text",
@@ -884,14 +921,41 @@ fn the_opts_the_door_admits_are_the_ones_skep_shell_declares_bar_reindex() {
 /// The door's members, and each schema's `required`, copy skep-shell's call
 /// rows, which the shell renders in its declarations (`shapes::declarations`,
 /// the `Bridge` interface): a tool that makes a shell call takes exactly the
-/// members of its row's session form, the first, save `session` and `board`,
-/// which the adapter supplies or does not offer, and requires exactly the
-/// ones the row requires. Unchecked, a member the shell renamed or dropped
-/// would stay admitted here and advertised to every agent, while the shell,
-/// which reads no member it does not name, answered the call as though the
-/// member had never been sent.
+/// members of its row's session forms together — `merge.undo`'s two, the
+/// landing's undo and the withdrawal's, among them; a row with no session
+/// form its forms' — save `session` and `board`, which the adapter supplies
+/// or does not offer, and requires exactly the ones every such form
+/// requires. A guest form, which takes no session, is no form of a tool's:
+/// the adapter's calls run under its one session. Each form is read whole,
+/// between its braces, since a member's own type may hold a ` | ` (`resolve`'s
+/// `act`). Unchecked, a member the shell renamed or dropped would stay
+/// admitted here and advertised to every agent, while the shell, which
+/// reads no member it does not name, answered the call as though the member
+/// had never been sent.
 #[test]
 fn each_adapter_tool_takes_its_shell_rows_members_bar_the_session_and_board() {
+    /// Returns the text inside each top-level brace pair of `text`.
+    fn brace_groups(text: &str) -> Vec<&str> {
+        let (mut groups, mut depth, mut start) = (Vec::new(), 0usize, 0usize);
+        for (i, c) in text.char_indices() {
+            match c {
+                '{' => {
+                    if depth == 0 {
+                        start = i + 1;
+                    }
+                    depth += 1;
+                }
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        groups.push(&text[start..i]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        groups
+    }
     let declarations = skep_shell::shapes::declarations();
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
     for (name, tool, members) in ADAPTER_TOOLS {
@@ -912,33 +976,77 @@ fn each_adapter_tool_takes_its_shell_rows_members_bar_the_session_and_board() {
             Tool::PublicationConfirm => "publication.confirm",
             Tool::PublicationCancel => "publication.cancel",
             Tool::PublicationStanding => "publication.standing",
+            Tool::MergeCompose => "merge.compose",
+            Tool::MergeLand => "merge.land",
+            Tool::MergeUndo => "merge.undo",
+            Tool::MergeWithdraw => "merge.withdraw",
             _ => *name,
         };
         // The declarations quote a dotted row's name, a method of the
         // `Bridge` interface.
         let method = if row.contains('.') { format!("'{row}'") } else { row.to_string() };
-        let head = format!("  {method}(args: {{");
-        let form = declarations
+        let head = format!("  {method}(args: ");
+        let forms = declarations
             .lines()
             .find_map(|line| line.strip_prefix(head.as_str()))
-            .and_then(|rest| rest.split_once('}'))
-            .map(|(form, _)| form)
+            .and_then(|rest| rest.split_once("): Promise<"))
+            .map(|(forms, _)| forms)
             .unwrap_or_else(|| panic!("skep-shell declares the row {row}"));
-        let (mut declared, mut required) = (BTreeSet::new(), BTreeSet::new());
-        for member in form.split(';').filter_map(|member| member.split(':').next()).map(str::trim).filter(|member| !member.is_empty()) {
-            let (member, optional) = member.strip_suffix('?').map_or((member, false), |member| (member, true));
-            if member != "session" && member != "board" {
-                declared.insert(member);
-                if !optional {
-                    required.insert(member);
-                }
-            }
-        }
+        // Each form's members, `(member, required)`.
+        let forms: Vec<Vec<(&str, bool)>> = brace_groups(forms)
+            .into_iter()
+            .map(|form| {
+                form.split(';')
+                    .filter_map(|member| member.split(':').next())
+                    .map(str::trim)
+                    .filter(|member| !member.is_empty())
+                    .map(|member| member.strip_suffix('?').map_or((member, true), |member| (member, false)))
+                    .collect()
+            })
+            .collect();
+        assert!(!forms.is_empty(), "the {row} row declares a form");
+        let with_session: Vec<&Vec<(&str, bool)>> = forms.iter().filter(|form| form.iter().any(|(member, _)| *member == "session")).collect();
+        let read: Vec<&Vec<(&str, bool)>> = if with_session.is_empty() { forms.iter().collect() } else { with_session };
+        let declared: BTreeSet<&str> = read.iter().flat_map(|form| form.iter().map(|(member, _)| *member)).filter(|member| *member != "session" && *member != "board").collect();
+        let required: BTreeSet<&str> = declared.iter().copied().filter(|member| read.iter().all(|form| form.contains(&(*member, true)))).collect();
         assert_eq!(members.iter().copied().collect::<BTreeSet<&str>>(), declared, "{name}: the door takes the {row} row's members");
         let entry = catalog.tools.iter().find(|t| t["name"] == *name).expect("every adapter tool is catalogued");
         let schema_required: BTreeSet<&str> = entry["inputSchema"]["required"].as_array().map(|r| r.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
         assert_eq!(schema_required, required, "{name}: the schema requires what the {row} row requires");
     }
+}
+
+/// Returns a shape skep-shell declares, its fields as a card spells them.
+///
+/// It is `{a, b?, c: "v", …}`: a field typed by one string literal with its
+/// value, an optional one marked `?`, and an open shape ending `, …`.
+fn spelled(name: &str) -> String {
+    let shape = skep_shell::shapes::shape(name).unwrap_or_else(|| panic!("skep-shell declares {name}"));
+    let mut fields: Vec<String> = shape
+        .fields
+        .iter()
+        .map(|field| match field.ty.strip_prefix('\'').and_then(|ty| ty.strip_suffix('\'')).filter(|ty| !ty.contains('\'')) {
+            Some(value) => format!("{}: \"{value}\"", field.name),
+            None if field.required => field.name.to_string(),
+            None => format!("{}?", field.name),
+        })
+        .collect();
+    if shape.open {
+        fields.push("…".to_string());
+    }
+    format!("{{{}}}", fields.join(", "))
+}
+
+/// Returns an inline object type's member names, `b?` for an optional `b`.
+fn members(object: &str) -> Vec<&str> {
+    object.trim_matches(|c| c == '{' || c == '}').split(';').filter_map(|member| member.split(':').next()).map(str::trim).filter(|member| !member.is_empty()).collect()
+}
+
+/// Returns the arms of the type alias `name` the declarations hold.
+fn alias(declarations: &str, name: &str) -> Vec<String> {
+    let head = format!("export type {name} = ");
+    let line = declarations.lines().find_map(|line| line.strip_prefix(head.as_str())).unwrap_or_else(|| panic!("skep-shell declares {name}"));
+    line.trim_end_matches(';').split('|').map(|arm| arm.trim().to_string()).collect()
 }
 
 /// The publication tools' references state the shell's declared shapes.
@@ -963,27 +1071,6 @@ fn each_adapter_tool_takes_its_shell_rows_members_bar_the_session_and_board() {
 /// no longer takes.
 #[test]
 fn the_publication_references_state_the_shells_shapes() {
-    /// Returns a shape's fields as a card spells them.
-    fn spelled(name: &str) -> String {
-        let shape = skep_shell::shapes::shape(name).unwrap_or_else(|| panic!("skep-shell declares {name}"));
-        let mut fields: Vec<String> = shape
-            .fields
-            .iter()
-            .map(|field| match field.ty.strip_prefix('\'').and_then(|ty| ty.strip_suffix('\'')).filter(|ty| !ty.contains('\'')) {
-                Some(value) => format!("{}: \"{value}\"", field.name),
-                None if field.required => field.name.to_string(),
-                None => format!("{}?", field.name),
-            })
-            .collect();
-        if shape.open {
-            fields.push("…".to_string());
-        }
-        format!("{{{}}}", fields.join(", "))
-    }
-    /// Returns an inline object type's member names, `b?` for an optional `b`.
-    fn members(object: &str) -> Vec<&str> {
-        object.trim_matches(|c| c == '{' || c == '}').split(';').filter_map(|member| member.split(':').next()).map(str::trim).filter(|member| !member.is_empty()).collect()
-    }
     /// Returns a shape's field names, and those of them it requires.
     fn fields(name: &str) -> (BTreeSet<&'static str>, BTreeSet<&'static str>) {
         let shape = skep_shell::shapes::shape(name).unwrap_or_else(|| panic!("skep-shell declares {name}"));
@@ -996,11 +1083,7 @@ fn the_publication_references_state_the_shells_shapes() {
         (named, required)
     }
     let declarations = skep_shell::shapes::declarations();
-    let alias = |name: &str| -> Vec<String> {
-        let head = format!("export type {name} = ");
-        let line = declarations.lines().find_map(|line| line.strip_prefix(head.as_str())).unwrap_or_else(|| panic!("skep-shell declares {name}"));
-        line.trim_end_matches(';').split('|').map(|arm| arm.trim().to_string()).collect()
-    };
+    let alias = |name: &str| alias(&declarations, name);
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
     let entry = |name: &str| catalog.tools.iter().find(|t| t["name"] == name).unwrap_or_else(|| panic!("the {name} card"));
     for (name, row, nested) in [
@@ -1050,7 +1133,7 @@ fn the_publication_references_state_the_shells_shapes() {
     // The held-lines gate (client.md §3c.4; skep #849): the confirm
     // reference names the refusal with its members and the agent's act, and
     // the REJECTIONS ARE DATA topic lists it among the shell's own, the
-    // restore's beside the confirm's.
+    // restore's and the merge tools' beside the confirm's.
     let held_lines = skep_shell::Name::HELD_LINES.as_str();
     assert!(
         confirm.contains(&format!("holds a line of yours the board has not kept (HELD BURSTS) it is refused {held_lines} {{doc, held}} (isError), nothing sent"))
@@ -1060,8 +1143,12 @@ fn the_publication_references_state_the_shells_shapes() {
     let rejections = topic(&catalog, "REJECTIONS ARE DATA");
     assert!(rejections.contains(&format!("{held_lines} {{doc, held}} — a publication_confirm over a draft holding lines of yours the board has not kept")), "REJECTIONS ARE DATA names the gate's refusal: {rejections}");
     assert!(
-        rejections.contains("the rendering draft or one named also, or a restore_text whose draft holds them, nothing sent: call held(), resolve each line on that doc, then call again"),
-        "REJECTIONS ARE DATA names the restore beside the confirm: {rejections}"
+        rejections.contains("the rendering draft or one named also, a restore_text whose draft holds them, or a merge tool over a draft that does"),
+        "REJECTIONS ARE DATA names the restore and the merge tools beside the confirm: {rejections}"
+    );
+    assert!(
+        rejections.contains("merge_compose's into or the draft a merge record of yours names, merge_land's draft or draft side, merge_undo's and merge_withdraw's draft — nothing sent: call held(), resolve each line on that doc, then call again"),
+        "REJECTIONS ARE DATA names each merge tool's draft the gate asks, and the act: {rejections}"
     );
     let selection = &entry("publication_open")["inputSchema"]["properties"]["selection"]["items"];
     assert_eq!(schema_fields(selection), fields("Run"), "the selection's runs are the shell's Run");
@@ -1078,6 +1165,132 @@ fn the_publication_references_state_the_shells_shapes() {
         assert_eq!((&spelled_literals, &spelled_objects), (&literals, &objects), "{name}: a destination is the shell's Destination");
         let enumerated: BTreeSet<String> = properties["answers"]["additionalProperties"]["enum"].as_array().expect("the answers' enum").iter().filter_map(Value::as_str).map(str::to_string).collect();
         assert_eq!(enumerated, answers, "{name}: an answer is the shell's OriginAnswer");
+    }
+}
+
+/// The merge tools' references state the shell's declared shapes.
+///
+/// Each `merge` tool's reference spells every arm of the answer the shell
+/// declares for its row (`shapes::declarations`) as `{a, b, c?}`, as the
+/// publication tools' do — `merge_compose`'s report and a gap of it,
+/// `merge_land`'s landing, re-statement and refusal, `merge_undo`'s answer and
+/// the marker in it, `merge_withdraw`'s answer — and names each refusal of
+/// the shell's own an agent acts on by its name with its members, as
+/// REJECTIONS ARE DATA names `held_lines {doc, held}`: every tool's
+/// `held_lines`, and `merge_land`'s `window_parts_owed`, each part in it
+/// spelled as the shell's `WindowPart`, and `other_panel`. The compose
+/// reference and MERGING name every gap kind the shell's `GapKind` spells;
+/// `merge_land`'s schema takes `resolutions` as the shell's `MergeChoice`
+/// and `answers` as its `OriginAnswer` (SP-24). MERGING says what a merge
+/// takes, that a gap is settled by editing the draft, that the landing
+/// answers no window part, that the composition lives with the session and
+/// that a merge's undo lands only over no change since, the agent's own
+/// included (R6 with P3, the undo's `as_of` per surface); PUBLISHING, the
+/// OVERVIEW and `set_arrangement`'s card and reference send a merge to the
+/// four; and REJECTIONS ARE DATA names them among the calls that may have
+/// written before a session's end. A shape the shell changes in one place
+/// alone would tell every agent of an answer the shell no longer gives.
+#[test]
+fn the_merge_references_state_the_shells_shapes() {
+    /// Returns a refusal of the shell's own as a reference spells it.
+    ///
+    /// It is the refusal's name, then the shape's other members, as
+    /// `held_lines {doc, held}`: the `kind` and the `name` every one carries
+    /// stand in its name.
+    fn refusal(name: &str) -> String {
+        let shape = skep_shell::shapes::shape(name).unwrap_or_else(|| panic!("skep-shell declares {name}"));
+        let named = shape
+            .fields
+            .iter()
+            .find(|field| field.name == "name")
+            .and_then(|field| field.ty.strip_prefix('\'')?.strip_suffix('\''))
+            .unwrap_or_else(|| panic!("{name} carries its name as one literal"));
+        let members: Vec<String> =
+            shape.fields.iter().filter(|field| field.name != "kind" && field.name != "name").map(|field| if field.required { field.name.to_string() } else { format!("{}?", field.name) }).collect();
+        format!("{named} {{{}}}", members.join(", "))
+    }
+    let declarations = skep_shell::shapes::declarations();
+    let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    for (name, row, nested, refusals) in [
+        ("merge_compose", "merge.compose", &["MergeGap"][..], &["HeldLinesRefusal"][..]),
+        ("merge_land", "merge.land", &["WindowPart"][..], &["WindowPartsOwedRefusal", "OtherPanelRefusal", "HeldLinesRefusal"][..]),
+        ("merge_undo", "merge.undo", &["MergeMarker"][..], &["HeldLinesRefusal"][..]),
+        ("merge_withdraw", "merge.withdraw", &[][..], &["HeldLinesRefusal"][..]),
+    ] {
+        let head = format!("  '{row}'(args: ");
+        let line = declarations.lines().find(|line| line.starts_with(head.as_str())).unwrap_or_else(|| panic!("skep-shell declares the row {row}"));
+        let answer = line.split_once("Promise<Outcome<").and_then(|(_, rest)| rest.strip_suffix(">>;")).unwrap_or_else(|| panic!("the {row} row's answer: {line}"));
+        let said_all = reference(&catalog, name);
+        for shape in answer.split(" | ").map(str::trim).chain(nested.iter().copied()) {
+            let said = spelled(shape);
+            assert!(said_all.contains(&said), "the {name} reference spells {shape} as {said}: {said_all}");
+        }
+        for shape in refusals {
+            let said = refusal(shape);
+            assert!(said_all.contains(&said), "the {name} reference names the refusal {shape} as {said}: {said_all}");
+        }
+    }
+    let merging = topic(&catalog, "MERGING");
+    for kind in alias(&declarations, "GapKind") {
+        let kind = kind.trim_matches('\'');
+        for (whose, said) in [("merge_compose's reference", reference(&catalog, "merge_compose")), ("MERGING", merging)] {
+            assert!(said.contains(kind), "{whose} names the gap kind {kind}: {said}");
+        }
+    }
+    // The schema: `resolutions` the shell's `MergeChoice`, `answers` its
+    // `OriginAnswer`.
+    let properties = &catalog.tools.iter().find(|t| t["name"] == "merge_land").expect("the merge_land card")["inputSchema"]["properties"];
+    let choice = alias(&declarations, "MergeChoice");
+    let literals: BTreeSet<&str> = choice.iter().filter_map(|arm| arm.strip_prefix('\'').and_then(|arm| arm.strip_suffix('\''))).collect();
+    let objects: BTreeSet<&str> = choice.iter().filter(|arm| arm.starts_with('{')).flat_map(|arm| members(arm)).collect();
+    let arms = properties["resolutions"]["additionalProperties"]["oneOf"].as_array().expect("a choice's arms");
+    let spelled_literals: BTreeSet<&str> = arms.iter().filter_map(|arm| arm["enum"].as_array()).flatten().filter_map(Value::as_str).collect();
+    let spelled_objects: BTreeSet<&str> = arms.iter().filter_map(|arm| arm["properties"].as_object()).flat_map(|object| object.keys().map(String::as_str)).collect();
+    assert_eq!((&spelled_literals, &spelled_objects), (&literals, &objects), "a resolution's choice is the shell's MergeChoice");
+    let answers: BTreeSet<String> = alias(&declarations, "OriginAnswer").iter().map(|arm| arm.trim_matches('\'').to_string()).collect();
+    let enumerated: BTreeSet<String> = properties["answers"]["additionalProperties"]["enum"].as_array().expect("the answers' enum").iter().filter_map(Value::as_str).map(str::to_string).collect();
+    assert_eq!(enumerated, answers, "merge_land: an answer is the shell's OriginAnswer");
+    // MERGING, and the texts that send a merge to the four.
+    for said in [
+        "a document never published has nothing to merge",
+        "whose recorded base (doc_metadata(draft).base) is a version of doc",
+        "refused base_unknown, nothing written",
+        "A gap is settled by EDITING THE DRAFT",
+        "resolved_by agent",
+        "change no words",
+        "It answers NO window part for you",
+        "The composition lives with this adapter's session",
+        "a published merge is not undone",
+        "your own edits included",
+        "changes_since(class: \"drafts\")",
+        "merge_land publishes into doc, which only its owner can",
+    ] {
+        assert!(merging.contains(said), "MERGING says {said:?}: {merging}");
+    }
+    let publishing = topic(&catalog, "PUBLISHING");
+    assert!(
+        publishing.contains("composes them as count.supersede") && publishing.contains("(MERGING)") && !publishing.contains("to come"),
+        "PUBLISHING names the claim the open composes and the merge tools: {publishing}"
+    );
+    let overview = topic(&catalog, "OVERVIEW");
+    assert!(overview.contains("merge_compose, merge_land, merge_undo and merge_withdraw") && overview.contains("(MERGING)"), "the overview names the four among the shell's calls: {overview}");
+    for said in [card(&catalog, "set_arrangement"), reference(&catalog, "set_arrangement")] {
+        assert!(said.contains("merge_compose") && !said.contains("nothing here composes a merge"), "set_arrangement sends a merge to merge_compose: {said}");
+    }
+    let rejections = topic(&catalog, "REJECTIONS ARE DATA");
+    assert!(
+        rejections.contains("save a publication_confirm, which may have sent its request first (PUBLISHING), and the merge tools, merge_compose, merge_land, merge_undo and merge_withdraw, each of which may have written before the end (MERGING)"),
+        "REJECTIONS ARE DATA names the merge tools among the calls an end may not have stopped: {rejections}"
+    );
+    // What a compose made again after a lost answer or a session's end
+    // leaves, and how a draft it left is found.
+    let compose = reference(&catalog, "merge_compose");
+    for said in [
+        "which the adapter makes again itself, once, under the next session — may have left a draft it staged, or landed in, that no merge record names",
+        "With into named, the call made again re-opens into, or lands there, and stages nothing more; with none named, it stages another, the first left standing beside it",
+        "changes_since(class: \"drafts\") from before the call names such a draft",
+    ] {
+        assert!(compose.contains(said), "merge_compose's reference says {said:?}: {compose}");
     }
 }
 

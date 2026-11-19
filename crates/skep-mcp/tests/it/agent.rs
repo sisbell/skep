@@ -4,11 +4,15 @@
 //! A1b a principal under the claimant's account signs by reference with the
 //! key enrolled in the set above; A2 the startup line names the refusing
 //! seam and no ceremony tool is listed, nor `publish`; A3 the tools — every
-//! wire op but `publish`, the shell's calls, the publication family's among
-//! them, the apparatus — a publication landing a version, a draft begun
-//! before version 1 told so and landing beside it, its panel dying
-//! with the session and nothing sent twice, and `fetch`'s image block,
-//! resource blob, cap and cut stream; A4 `changes_since`
+//! wire op but `publish`, the shell's calls, the publication family's and
+//! the merge family's among them, the apparatus — a publication landing a
+//! version, a draft begun before version 1 told so and landing beside it,
+//! its panel dying with the session and nothing sent twice, a daughter
+//! merged through the merge tools — landed and taken back, withdrawn and
+//! put back, its undo refused past the agent's own edit, settled by that
+//! edit and landed with its claim and the agent's record — and another
+//! account's draft side refused, and `fetch`'s image block, resource blob,
+//! cap and cut stream; A4 `changes_since`
 //! answering a published write after a position, `next` advancing; A5
 //! `SKEP_BOARD` read and `SKEPD_URL` alone refused; A6 the session's life —
 //! the key retired stops the process, and a relaunch refuses before serving,
@@ -40,12 +44,12 @@ const ADDED_OPS: [&str; 6] = ["effective_owner", "key_set", "retrieve_i", "conte
 
 /// The shell's calls and the apparatus, as tools.
 ///
-/// The shell's calls take the publication family's four among them, and the
-/// read of a draft's standing beside them; the apparatus is ten, the two
-/// text edits, the move of whole lines, the mark of a draft, the diff since
-/// one, the restore of a draft's past state and the catalog's help among
-/// them.
-const ADAPTER_TOOLS: [&str; 22] = [
+/// The shell's calls take the publication family's four among them, the
+/// read of a draft's standing beside them, and the merge family's four; the
+/// apparatus is ten, the two text edits, the move of whole lines, the mark
+/// of a draft, the diff since one, the restore of a draft's past state and
+/// the catalog's help among them.
+const ADAPTER_TOOLS: [&str; 26] = [
     "boards",
     "health",
     "probe",
@@ -58,6 +62,10 @@ const ADAPTER_TOOLS: [&str; 22] = [
     "publication_confirm",
     "publication_cancel",
     "publication_standing",
+    "merge_compose",
+    "merge_land",
+    "merge_undo",
+    "merge_withdraw",
     "session_info",
     "changes_since",
     "fetch",
@@ -357,6 +365,119 @@ fn a3_a_publications_panel_dies_with_the_session_and_nothing_is_sent_twice() {
     let (status, log) = mcp.finish_logged();
     assert!(status.success(), "{status:?}\n{log}");
     assert!(log.contains("re-opened under a fresh reference"), "premise: the session was re-opened:\n{log}");
+}
+
+/// The text of `doc`'s first `width` positions, read through the adapter.
+fn text_of(mcp: &mut Mcp, doc: &str, width: u64) -> String {
+    let read = mcp.call_json("retrieve_v", json!({"specs": [{"doc": doc, "span": {"start": "1.1", "width": format!("0.{width}")}}]}));
+    read["items"].as_array().into_iter().flatten().map(|item| item["content"].as_str().unwrap_or("")).collect()
+}
+
+/// A3 MERGING: a daughter merged through the merge tools, settled by the
+/// agent's own edit and published with its claim and the agent's record.
+///
+/// The family: E published as E.1 from a draft D; S staged from E.1; D goes
+/// on to E.2; S, behind, publishes as the daughter E.1.1, both adding at one
+/// spot, an `order` gap. `merge_compose {doc: E, alternative: E.1.1}` lands
+/// into a fresh draft, the gap unsettled; `merge_undo {}` takes it back, the
+/// draft reading E.2's words again, and a second answers `no_merge`
+/// (isError). A draft L staged from E.2 takes the merge by `into`;
+/// `merge_withdraw {draft: L}` keeps its words and clears the marker, and
+/// `merge_undo {draft: L, withdrawal}` puts it back. The agent deletes both
+/// additions whole in L: `merge_undo {}` is then the board's
+/// `arrangement_moved`, as data, L unchanged — an agent's undo is typed at
+/// the write it takes back, never at its own last ack — and `merge_compose`
+/// into L again re-opens it, the gap settled `agent`. `merge_land` with the
+/// gap's resolution publishes E.3 with `supersede: [E.1.1]`, and
+/// `merge_compose` of the daughter then answers `merged`, its record's gap
+/// resolved `agent`. A draft the agent seat stages from E.1, named as
+/// `draft`, is refused `base_unknown` (isError), the board's position
+/// unmoved (the mutants that type an agent's undo at its own last ack,
+/// which takes its edit back with the merge, and that record a person as
+/// the merger).
+#[test]
+fn a3_a_merge_lands_settles_by_the_agents_edit_and_publishes_with_its_claim() {
+    let fixture = Fixture::new("a3-merge");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+    // The family.
+    let edition = mcp.acked("create_new_document", json!({"account": CLAIMANT_ACCOUNT, "published": true}))["addr"].as_str().expect("the edition").to_string();
+    let publish = |mcp: &mut Mcp, draft: &str| -> String {
+        mcp.call_json("publication_open", json!({"draft": draft, "doc": edition, "readable_drafts": [draft], "published": [edition]}));
+        let acked = mcp.call_json("publication_confirm", json!({}));
+        acked["member"].as_str().unwrap_or_else(|| panic!("a member: {acked}")).to_string()
+    };
+    let insert = |mcp: &mut Mcp, doc: &str, ordinal: &str, text: &str| -> Value {
+        let typed = mcp.position();
+        mcp.acked("insert", json!({"as_of": typed, "doc": doc, "at": {"subspace": "1", "ordinal": ordinal}, "values": [text]}))
+    };
+    let (e1, e2, e11, e3) = (format!("{edition}.1"), format!("{edition}.2"), format!("{edition}.1.1"), format!("{edition}.3"));
+    let d = stage_of(&mut mcp, &edition);
+    insert(&mut mcp, &d, "1", "the fox");
+    assert_eq!(publish(&mut mcp, &d), e1);
+    let s = stage_of(&mut mcp, &e1);
+    insert(&mut mcp, &s, "8", " today");
+    insert(&mut mcp, &d, "8", " jumps");
+    assert_eq!(publish(&mut mcp, &d), e2);
+    assert_eq!(publish(&mut mcp, &s), e11, "the daughter beside E.2");
+    // Composed into a fresh draft, and taken back.
+    let landed = mcp.call_json("merge_compose", json!({"doc": edition, "alternative": e11}));
+    let gaps = landed["gaps"].as_array().unwrap_or_else(|| panic!("the gap report: {landed}"));
+    assert_eq!((landed["outcome"].as_str(), landed["fresh"].as_bool(), gaps.len()), (Some("landed"), Some(true), 1), "{landed}");
+    assert_eq!((gaps[0]["kind"].as_str(), gaps[0]["settled"].as_bool(), &gaps[0]["resolved_by"]), (Some("order"), Some(false), &Value::Null), "one order gap at its default: {landed}");
+    let fresh = landed["into"].as_str().expect("the fresh draft").to_string();
+    assert_eq!(text_of(&mut mcp, &fresh, 20).len(), 19, "M landed in the fresh draft");
+    let undone = mcp.call_json("merge_undo", json!({}));
+    assert_eq!(undone["draft"].as_str(), Some(fresh.as_str()), "{undone}");
+    assert_eq!(text_of(&mut mcp, &fresh, 20), "the fox jumps", "the fresh draft reads E.2's words again");
+    assert_eq!(mcp.call_error("merge_undo", json!({}))["name"], "no_merge", "the composition went with its undo");
+    // Composed into a named draft, withdrawn, and put back.
+    let l = stage_of(&mut mcp, &e2);
+    let landed = mcp.call_json("merge_compose", json!({"doc": edition, "alternative": e11, "into": l}));
+    assert_eq!((landed["outcome"].as_str(), landed["into"].as_str(), landed["fresh"].as_bool()), (Some("landed"), Some(l.as_str()), Some(false)), "{landed}");
+    let (landed_at, gap) = (landed["position"].as_u64().expect("the landing's position"), landed["gaps"][0]["id"].as_u64().expect("the gap's id"));
+    let withdrawn = mcp.call_json("merge_withdraw", json!({"draft": l}));
+    let withdrawal = withdrawn["position"].as_u64().unwrap_or_else(|| panic!("the withdrawal's position: {withdrawn}"));
+    assert!(mcp.call_json("doc_metadata", json!({"doc": l}))["merge"].is_null(), "the marker cleared");
+    assert_eq!(text_of(&mut mcp, &l, 20).len(), 19, "the words kept");
+    let put_back = mcp.call_json("merge_undo", json!({"draft": l, "withdrawal": withdrawal}));
+    let put_back_at = put_back["position"].as_u64().unwrap_or_else(|| panic!("the put-back's position: {put_back}"));
+    assert_eq!(mcp.call_json("doc_metadata", json!({"doc": l}))["merge"]["sides"], json!([e11]), "the marker put back");
+    // The agent's own edit: the undo refused past it, the gap settled by it.
+    let typed = mcp.position();
+    let deleted = mcp.acked("delete", json!({"doc": l, "p": {"subspace": "1", "ordinal": "8"}, "width": "12", "as_of": typed}));
+    assert_eq!(text_of(&mut mcp, &l, 20), "the fox");
+    let before = mcp.position();
+    let moved = mcp.call_json("merge_undo", json!({}));
+    assert_eq!(
+        (moved["kind"].as_str(), moved["name"].as_str(), moved["site"]["current"].as_u64()),
+        (Some("refused"), Some("arrangement_moved"), deleted["at"].as_u64()),
+        "the undo refused past the agent's edit, as data: {moved}"
+    );
+    assert!(moved["site"]["as_of"].as_u64().is_some_and(|as_of| as_of == landed_at || as_of == put_back_at), "typed at the write it takes back, never at the agent's own last ack: {moved}");
+    assert_eq!((text_of(&mut mcp, &l, 20), mcp.position()), ("the fox".to_string(), before), "nothing changed");
+    let reopened = mcp.call_json("merge_compose", json!({"doc": edition, "alternative": e11, "into": l}));
+    assert_eq!(
+        (reopened["outcome"].as_str(), reopened["gaps"][0]["settled"].as_bool(), reopened["gaps"][0]["resolved_by"].as_str()),
+        (Some("reopened"), Some(true), Some("agent")),
+        "the re-open reads the gap settled by the agent's edit: {reopened}"
+    );
+    // The landing, its claim and the record.
+    let landed = mcp.call_json("merge_land", json!({"resolutions": {gap.to_string(): "omit"}}));
+    assert_eq!((landed["outcome"].as_str(), landed["member"].as_str(), &landed["supersede"]), (Some("landed"), Some(e3.as_str()), &json!([e11])), "{landed}");
+    assert_eq!(text_of(&mut mcp, &e3, 20), "the fox");
+    let merged = mcp.call_json("merge_compose", json!({"doc": edition, "alternative": e11}));
+    assert_eq!((merged["outcome"].as_str(), merged["member"].as_str()), (Some("merged"), Some(e3.as_str())), "{merged}");
+    let record_gap = merged["record"]["gaps"].as_array().and_then(|gaps| gaps.iter().find(|g| g["id"].as_u64() == Some(gap))).unwrap_or_else(|| panic!("the gap in the record: {merged}"));
+    assert_eq!(record_gap["resolved_by"].as_str(), Some("agent"), "the record names the agent as the merger: {merged}");
+    // Another account's draft side.
+    let seat = fixture.bare_session(fixture.agent_principal());
+    let theirs = fixture.write(&seat, json!({"op": "stage", "from": e1}));
+    let before = mcp.position();
+    let refused = mcp.call_error("merge_compose", json!({"doc": edition, "draft": theirs}));
+    assert_eq!((refused["name"].as_str(), refused["side"].as_str()), (Some("base_unknown"), Some(theirs.as_str())), "{refused}");
+    assert_eq!(mcp.position(), before, "nothing written");
+    assert!(mcp.finish().success());
 }
 
 /// A3 FETCH (rulings 1 (a) and 2 (a)): a seeded PNG comes back as an IMAGE

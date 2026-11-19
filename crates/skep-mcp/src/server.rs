@@ -377,7 +377,12 @@ impl Server {
     /// value or the board's verdict as data, any other refusal `isError` —
     /// `restore_text`'s among them, the shell's `history.restore`, whose
     /// `arrangement_moved` is the board's verdict and whose `merge_refused`
-    /// and `held_lines` are the shell's own;
+    /// and `held_lines` are the shell's own, and the merge tools', the
+    /// shell's `merge` family, whose `arrangement_moved` is the board's
+    /// verdict, whose shot's `supersede_refused` is an answer, a `refused`
+    /// outcome, and whose `base_unknown`, `no_merge`, `nothing_to_undo`,
+    /// `window_parts_owed`, `other_panel` and `held_lines` are the shell's
+    /// own;
     /// `fetch` answers a content block of its own (`Server::fetch`), `help`
     /// the catalog's help store with no call of the backend (`help_result`),
     /// and `replace_text`, `edit_text`, `move_lines`, `mark_text` and
@@ -410,6 +415,10 @@ impl Server {
             Tool::PublicationConfirm => self.backend.session_call("publication.confirm", args),
             Tool::PublicationCancel => self.backend.session_call("publication.cancel", args),
             Tool::PublicationStanding => self.backend.session_call("publication.standing", args),
+            Tool::MergeCompose => self.backend.session_call("merge.compose", args),
+            Tool::MergeLand => self.backend.session_call("merge.land", args),
+            Tool::MergeUndo => self.backend.session_call("merge.undo", args),
+            Tool::MergeWithdraw => self.backend.session_call("merge.withdraw", args),
             Tool::RestoreText => self.backend.session_call("history.restore", args),
             Tool::ChangesSince => self.backend.session_call("changes", args),
             Tool::SessionInfo => self.backend.session_info(),

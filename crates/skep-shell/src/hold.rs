@@ -5153,11 +5153,11 @@ impl Holds {
     ///
     /// It is [`PrincipalHold::last_arranged`]'s, read under the board's lock,
     /// no hold opened: the position `merge.undo` hands the library's undo as
-    /// the editor's own last acknowledgment on the draft
-    /// (`skep_client::merge::undo`). `None` where no arrangement write of the
-    /// principal's on `doc` was acknowledged through this shell — through
-    /// `op`, or a restore's ([`Holds::note_restored`]) — or found landed by
-    /// its resend.
+    /// the editor's own last acknowledgment on the draft where a person is
+    /// present (`skep_client::merge::undo`; `shell/merge.rs`, `Surface`).
+    /// `None` where no arrangement write of the principal's on `doc` was
+    /// acknowledged through this shell — through `op`, or a restore's
+    /// ([`Holds::note_restored`]) — or found landed by its resend.
     ///
     /// # Panics
     ///

@@ -383,6 +383,39 @@ fn make_link_addrs_form_records_names_verbatim() {
     assert!(mcp.finish().success());
 }
 
+/// An I-span end's width is the agent's to spell either way its card says.
+///
+/// On the claimed board the shell signs every link, so its composer reads
+/// the I-span form's `width` as the board's parse reads it: a `make_link`
+/// whose FROM is `{"spans": [{"start", "width": 5}]}` is acked, and
+/// `read_link` reads back the FROM it stores, five positions from the
+/// start, exactly the FROM the same link spelled `"width": "5"` stores.
+#[test]
+fn make_link_ispan_form_takes_an_integer_width() {
+    let fixture = Fixture::new("ispan-width");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+
+    let doc = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+    let typed = mcp.position();
+    let v = mcp.call_json("insert", json!({"as_of": typed, "doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}));
+    assert_eq!(v["resp"], "ack_addr", "insert: {v}");
+    let i_start = v["addr"].as_str().expect("first minted I-address").to_string();
+    let doc2 = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+    let ghost = format!("{doc2}.0.3.6.1");
+
+    let mut stored = Vec::new();
+    for width in [json!(5), json!("5")] {
+        let v = mcp.call_json("make_link", json!({"home": doc, "from_": {"spans": [{"start": i_start, "width": width}]}, "to": {"addrs": [doc2]}, "ty": {"addrs": [ghost]}}));
+        assert_eq!(v["resp"], "ack_addr", "make_link, its FROM {width} wide: {v}");
+        let link = v["addr"].as_str().expect("link addr").to_string();
+        stored.push(mcp.call_json("read_link", json!({"a": link}))["link"]["slots"][0].clone());
+    }
+    assert_eq!(stored[0], json!([{"start": i_start, "width": width_of(&i_start, 5)}]), "the integer width's FROM, as stored: {stored:?}");
+    assert_eq!(stored[0], stored[1], "the FROM the decimal width stores");
+    assert!(mcp.finish().success());
+}
+
 /// The slot forms' failure modes are the board's verdicts, data: an object
 /// mixing the two forms is the daemon's unparseable rejection, an empty
 /// addrs TYPE its empty_type_resolution, and FROM spelled both ways the

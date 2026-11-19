@@ -46,8 +46,8 @@
 //!   burst's door and the resend, the call log and the text edit read: the
 //!   board's frame cap and a frame's compact bytes, the tumbler component
 //!   budget and an address read within it, the document address in its one
-//!   spelling, and the wire's value forms both ways with the insert's value
-//!   budget.
+//!   spelling, a natural in either of the spellings the board's parse takes,
+//!   and the wire's value forms both ways with the insert's value budget.
 //! * `attest` — the attest a signed session composes for the checked set
 //!   (the shell signs where signed ops requires): the entry frame over the
 //!   eleven kinds that have one, each axis composed by the shell from its own

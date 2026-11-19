@@ -5,12 +5,13 @@
 //! and its text edit (`shell`) each read of the board's wire and none of
 //! them owns — the board's frame cap and how a frame is measured against
 //! it, the tumbler component budget and an address read within it, a
-//! document address in its one spelling, the wire's write kinds, and the
-//! wire's value forms both ways (wire.md §Value encodings) with the
-//! insert's value budget: a frame's `values` minted as the composer signs
-//! them, and a delivery read back as the composer's read-back, the resend's
-//! content confirm and the text edit's read hold it. A leaf: it names no
-//! other module of the crate.
+//! document address in its one spelling, the wire's write kinds, a natural
+//! in either of the spellings the board's parse takes, and the wire's value
+//! forms both ways (wire.md §Value encodings) with the insert's value
+//! budget: a frame's `values` minted as the composer signs them, and a
+//! delivery read back as the composer's read-back, the resend's content
+//! confirm and the text edit's read hold it. A leaf: it names no other
+//! module of the crate.
 
 use std::borrow::Cow;
 use std::io;
@@ -104,6 +105,19 @@ pub fn bounded_address(text: &str) -> Option<Address> {
 /// a split.
 pub fn document_address(text: &str) -> Option<Address> {
     is_address_text(text).then(|| bounded_address(text)).flatten().filter(|a| a.level() == Level::Document)
+}
+
+/// Returns a natural as the wire spells it, within a `u64`, or `None`.
+///
+/// The wire spells a natural — a width, a count, a V-position's component —
+/// as a decimal string, and the board's parse takes a non-negative JSON
+/// integer for one too (wire.md §Value encodings; the codec's `p_nat`), so
+/// `5` and `"5"` read alike: what the composer signs for a frame is what
+/// the board composes for it, in either spelling. A negative or fractional
+/// number, a string that is no decimal count, a count past `u64::MAX` and
+/// any other value are none.
+pub fn natural(v: &Value) -> Option<u64> {
+    v.as_str().map_or_else(|| v.as_u64(), |text| text.parse().ok())
 }
 
 /// Returns the length of `v`'s compact JSON text.
@@ -312,6 +326,22 @@ mod tests {
         assert_eq!(values_of(&json!([at, {"atom": "b"}])), Err(ValuesFault::PastBudget), "an atom is one value");
         assert_eq!(values_of(&json!([{"hex": "00".repeat(MAX_INSERT_VALUES + 1)}])), Err(ValuesFault::PastBudget), "a hex counted by its encoded length");
         assert_eq!(values_of(&json!([{"hex": "00".repeat(MAX_INSERT_VALUES)}])).unwrap().len(), MAX_INSERT_VALUES);
+    }
+
+    /// Checks that a natural reads in either of the wire's spellings.
+    ///
+    /// A decimal string and a non-negative JSON integer read alike, up to
+    /// `u64::MAX` in each; a negative or fractional number — `5.0` among
+    /// them — a decimal fraction, an empty string, a count past a `u64`, and
+    /// a value of neither kind are none.
+    #[test]
+    fn a_natural_reads_in_either_of_the_wire_spellings() {
+        for (spelled, reads) in [(json!("5"), 5), (json!(5), 5), (json!("0"), 0), (json!(0), 0), (json!(u64::MAX.to_string()), u64::MAX), (json!(u64::MAX), u64::MAX)] {
+            assert_eq!(natural(&spelled), Some(reads), "{spelled}");
+        }
+        for refused in [json!(-1), json!("-1"), json!(4.5), json!(5.0), json!("0.4"), json!(""), json!(null), json!("18446744073709551616"), json!(["5"])] {
+            assert_eq!(natural(&refused), None, "{refused}");
+        }
     }
 
     /// Checks an address within its budget and a document in its one spelling.

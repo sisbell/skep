@@ -84,12 +84,11 @@ use skep_client::merge::origin_of;
 use skep_client::text::minimal_changes;
 
 use super::rows::{rows, Pieces, Rows};
-use super::{
-    held, natural, read_draft, refused, refused_write, settle, spans, undo, unread, write, Answer, Calls, Edit, Found, Line, Read, Settled, Text, Undone, Wrote, MAX_NEW_BYTES, WHOLE_CONTENT,
-};
+use super::{held, read_draft, refused, refused_write, settle, spans, undo, unread, write, Answer, Calls, Edit, Found, Line, Read, Settled, Text, Undone, Wrote, MAX_NEW_BYTES, WHOLE_CONTENT};
 use crate::attest::MAX_WIRE_LIST;
 use crate::hold::may_have_landed;
 use crate::refusal::Refusal;
+use crate::wire::natural;
 
 /// One pair of the call's: the text to replace, and its replacement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

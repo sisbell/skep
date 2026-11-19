@@ -899,7 +899,8 @@ root re-exports counted as the module it is brought from (held by
 - `wire.rs` the wire's shared facts: the frame cap (`MAX_FRAME_BYTES`) and
   a frame's compact bytes (`json_len`), the tumbler component budget,
   `document_address`, the write kinds (`WRITE_KINDS`) `shell.rs` and
-  `hold.rs` both read, and the value forms both ways (`values_of`,
+  `hold.rs` both read, the natural (`natural`) `attest.rs`, `hold.rs` and
+  `shell.rs` all read, and the value forms both ways (`values_of`,
   `delivered_values`).
 - `attest.rs` `Composer`: the entry frame for the eleven kinds, every axis
   from the shell's own reads, through `skep-identity`'s builders.

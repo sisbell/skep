@@ -32,9 +32,13 @@
 //! stopped it, and nothing is sent: the shell never sends a frame it could
 //! not sign. A death signal met at one of those reads is no halt of the
 //! composer's but the session's end ([`Unattested::Died`]), which its caller
-//! runs. The wire's value forms, both ways, are `wire`'s: the composer
-//! spells a frame's `values` and reads a delivery back through them, and
-//! faces what they refuse as its own halt.
+//! runs. The wire's value forms, both ways, and its naturals are `wire`'s:
+//! the composer spells a frame's `values` and reads a delivery back through
+//! them, reads each natural a frame names — an I-span's width, a run's, a
+//! shot's `base_extent`, a member-position end's ordinals and widths — in
+//! either of the spellings the board's parse takes, a decimal string or a
+//! non-negative JSON integer, so `5` and `"5"` sign one body, and faces
+//! what they refuse as its own halt.
 //!
 //! **The board's budgets, kept as the board keeps them.** Every read the
 //! composer makes is one a page's frame names, and every value it holds is
@@ -70,7 +74,7 @@ use skep_identity::{
 };
 
 use crate::refusal::{Name, Refusal};
-use crate::wire::{bounded_address, delivered_values, values_of, within_components, ValuesFault, MAX_FRAME_BYTES, MAX_INSERT_VALUES, MAX_TUMBLER_COMPONENTS};
+use crate::wire::{bounded_address, delivered_values, natural, values_of, within_components, ValuesFault, MAX_FRAME_BYTES, MAX_INSERT_VALUES, MAX_TUMBLER_COMPONENTS};
 
 /// The retraction class's reserved ghost tumbler, `[R]`.
 ///
@@ -547,19 +551,21 @@ fn extent_span(i_start: &str, width: u64) -> Option<Span> {
 
 /// Returns one span of the wire's I-span form as stored.
 ///
-/// The form is `{"start": "<address>", "width": "<n>"}`, `width` positions
-/// from the content address `start` (wire.md §Links (writes)): stored
-/// verbatim as the content extent [`extent_span`] builds, what a V-spec over
-/// the same positions resolves to. A link slot and a deposit's end read it
-/// here alike.
+/// The form is `{"start": "<address>", "width": <n>}`, `width` positions
+/// from the content address `start` (wire.md §Links (writes)), the width a
+/// natural in either of the wire's spellings ([`natural`]), so `5` and `"5"`
+/// are one span: stored verbatim as the content extent [`extent_span`]
+/// builds, what a V-spec over the same positions resolves to. A link slot
+/// and a deposit's end read it here alike.
 ///
 /// # Errors
 ///
-/// Returns a halt where `width` is no decimal count, or where `start` is no
-/// tumbler or the pair no span — a zero width among them, which the board
+/// Returns a halt where `width` is no natural — a negative or fractional
+/// number, a string that is no decimal count — or where `start` is no
+/// tumbler or the pair no span, a zero width among them, which the board
 /// refuses `malformed`.
 fn ispan(s: &Value, what: &str) -> Result<Span, Halt> {
-    let width: u64 = s["width"].as_str().and_then(|w| w.parse().ok()).ok_or_else(|| fault(format!("the frame's `{what}` span has no width"), s.to_string()))?;
+    let width = natural(&s["width"]).ok_or_else(|| fault(format!("the frame's `{what}` span's `width` is no natural"), s.to_string()))?;
     s["start"].as_str().and_then(|start| extent_span(start, width)).ok_or_else(|| fault(format!("the frame's `{what}` span does not parse"), s.to_string()))
 }
 
@@ -731,23 +737,23 @@ impl Composer<'_> {
     ///
     /// They are the address form's unit spans; the I-span form's spans,
     /// `{"spans": [{"start", "width"}]}`, each `width` positions from its
-    /// content address `start` as a content extent ([`ispan`]) — what a
-    /// V-spec slot over the same positions stores, no read made for it; a
-    /// V-spec list's I-extents resolved through `image` — bare, as
-    /// `make_link`'s slots spell it, or as `edit_link`'s successor `ty`
-    /// spells it, `{"resolve": […]}` (wire.md §Links (writes)); or a span
-    /// list verbatim (`emit`'s `ty`). The list is held within
-    /// [`MAX_WIRE_LIST`] before its first element is read, and its spans
-    /// within [`MAX_SLOT_SPANS`] as they resolve.
+    /// content address `start` as a content extent ([`ispan`]), the width a
+    /// decimal string or a JSON integer alike — what a V-spec slot over the
+    /// same positions stores, no read made for it; a V-spec list's I-extents
+    /// resolved through `image` — bare, as `make_link`'s slots spell it, or
+    /// as `edit_link`'s successor `ty` spells it, `{"resolve": […]}`
+    /// (wire.md §Links (writes)); or a span list verbatim (`emit`'s `ty`).
+    /// The list is held within [`MAX_WIRE_LIST`] before its first element is
+    /// read, and its spans within [`MAX_SLOT_SPANS`] as they resolve.
     ///
     /// # Errors
     ///
     /// Returns a halt where the slot is of no form, its list passes
     /// [`MAX_WIRE_LIST`], an address, a V-spec's span or a span does not
-    /// parse, an I-span names no width, an element is of no known form,
-    /// `image` answers no runs or a run that is no content extent, or the
-    /// spans pass [`MAX_SLOT_SPANS`]; and whatever an `image` read refuses
-    /// ([`Composer::read`]).
+    /// parse, an I-span's width is no natural, an element is of no known
+    /// form, `image` answers no runs or a run that is no content extent, or
+    /// the spans pass [`MAX_SLOT_SPANS`]; and whatever an `image` read
+    /// refuses ([`Composer::read`]).
     fn slot(&self, slot: &Value, what: &str) -> Result<Vec<Span>, Unattested> {
         if let Some(addrs) = slot["addrs"].as_array() {
             check_wire_list(addrs, what)?;
@@ -872,11 +878,14 @@ impl Composer<'_> {
     /// draft's within the store's re-insert budget, and the copied ones
     /// within what a body under the budget can carry — a halt past each, and
     /// for a shot that names no `runs` or a run whose member, count or
-    /// I-address does not read. Then `base` and `base_extent` are read, both
-    /// or neither. Then each origin's values are read back
-    /// ([`Composer::read_back`]), keeping the positions the shot copies in,
-    /// and the body is built — a halt for a copied position its origin's
-    /// arrangement does not hold, and for a body past the budget.
+    /// I-address does not read, a run's count a natural in either of the
+    /// wire's spellings ([`natural`]). Then `base` and `base_extent` are
+    /// read, both or neither — a halt for a `base_extent` that is no natural,
+    /// and for one of the two without the other. Then each origin's values
+    /// are read back ([`Composer::read_back`]), keeping the positions the
+    /// shot copies in, and the body is built — a halt for a copied position
+    /// its origin's arrangement does not hold, and for a body past the
+    /// budget.
     fn publish_body(&self, frame: &Value, trunk: &str) -> Result<EntryBody, Unattested> {
         let draft = frame["draft"].as_str();
         let draft_trunk = draft.and_then(trunk_text);
@@ -892,7 +901,7 @@ impl Composer<'_> {
         for run in runs {
             let origin = member(run, "origin")?;
             let i_start = member(run, "i_start")?;
-            let width = run["width"].as_str().and_then(|w| w.parse().ok()).and_then(NonZeroU64::new).ok_or_else(|| fault("a run's `width` is not a count of one or more", run.to_string()))?;
+            let width = natural(&run["width"]).and_then(NonZeroU64::new).ok_or_else(|| fault("a run's `width` is not a count of one or more", run.to_string()))?;
             placed = placed.checked_add(width.get()).ok_or_else(|| body_refused(PublishRefusal::Unspellable))?;
             let origin_trunk = trunk_text(origin);
             let draft_native = draft.is_some_and(|d| d == origin || draft_trunk.as_deref() == origin_trunk.as_deref());
@@ -935,7 +944,12 @@ impl Composer<'_> {
             .into());
         }
         let base_member = frame["base"].as_str().map(|b| addr(b, "base")).transpose()?;
-        let base_extent: Option<u64> = frame["base_extent"].as_str().and_then(|e| e.parse().ok());
+        // Absent and `null` alike carry no extent, as the board's parse reads
+        // them; any other value is a natural or the composer's halt.
+        let base_extent = match &frame["base_extent"] {
+            Value::Null => None,
+            extent => Some(natural(extent).ok_or_else(|| fault("the shot's `base_extent` is no natural", extent.to_string()))?),
+        };
         let base = match (&base_member, base_extent) {
             (Some(member), Some(extent)) => Some(ShotBase { member, extent }),
             (None, None) => None,
@@ -1351,7 +1365,9 @@ impl OwnedRow {
 
 /// Returns one end of a `links` entry as the body spells it: the address
 /// form's elements — a tag as the tag, an address as its unit span — the
-/// I-span form's spans verbatim, the member-position form's row as spelled.
+/// I-span form's spans verbatim, the member-position form's row as spelled
+/// — an I-span's width and a member span's ordinal and width each a natural
+/// in either of the wire's spellings ([`natural`]).
 ///
 /// # Errors
 ///
@@ -1380,7 +1396,7 @@ fn deposit_end(end: &Value, what: &str) -> Result<OwnedSlot, Halt> {
         let rows = positions
             .iter()
             .map(|p| {
-                let number = |k: &str| p[k].as_str().and_then(|n| n.parse::<u64>().ok()).ok_or_else(|| fault(format!("the frame's `{what}` member span has no `{k}`"), p.to_string()));
+                let number = |k: &str| natural(&p[k]).ok_or_else(|| fault(format!("the frame's `{what}` member span names no natural `{k}`"), p.to_string()));
                 Ok(MemberPositions { ordinal: number("ordinal")?, width: number("width")? })
             })
             .collect::<Result<Vec<_>, Halt>>()?;

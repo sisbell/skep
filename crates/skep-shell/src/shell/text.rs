@@ -149,7 +149,7 @@ use skep_client::text::shared;
 use super::{Shell, Write, Writer};
 use crate::refusal::{Name, Refusal};
 use crate::sessions::SessionEntry;
-use crate::wire::{decode_hex, MAX_INSERT_VALUES};
+use crate::wire::{decode_hex, natural, MAX_INSERT_VALUES};
 
 mod diffing;
 mod edit;
@@ -730,11 +730,6 @@ impl<'a> Edit<'a> {
     fn after(&self) -> u64 {
         self.ordinal.saturating_add(self.removed)
     }
-}
-
-/// Returns a natural as the wire spells it: a decimal string, or a number.
-fn natural(v: &Value) -> Option<u64> {
-    v.as_str().map_or_else(|| v.as_u64(), |text| text.parse().ok())
 }
 
 /// Returns how many content positions a `span_set` answer arranges.

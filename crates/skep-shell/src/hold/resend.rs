@@ -231,7 +231,7 @@ use super::{
 use crate::held::{i_address, Anchor, Anchors, HeldLine, Reason, SpanRun};
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{board_head, SessionEntry};
-use crate::wire::{delivered_values, values_of};
+use crate::wire::{delivered_values, natural, values_of};
 
 /// The window the shift's one read images: every arranged content position
 /// from the first.
@@ -419,7 +419,7 @@ impl EditedSpan {
             "insert" | "copy" | "reinstate" => Some(EditedSpan { first: ordinal(&frame["at"])?, units: None }),
             // A removal: the anchors are the units on either side of the
             // `width` positions from `p`.
-            "delete" => Some(EditedSpan { first: ordinal(&frame["p"])?, units: Some(nat(&frame["width"])?) }),
+            "delete" => Some(EditedSpan { first: ordinal(&frame["p"])?, units: Some(natural(&frame["width"])?) }),
             // A rearrangement about its cuts: the anchors are the units on
             // either side of the span from the first cut to the last, every
             // cut moving with it.
@@ -448,7 +448,7 @@ impl EditedSpan {
     fn displaced(self, frame: &Value, displacement: i128, as_of: u64) -> Option<Value> {
         let mut moved = frame.clone();
         let shift = |position: &mut Value| -> Option<()> {
-            let ordinal = u64::try_from(i128::from(nat(&position["ordinal"])?).checked_add(displacement)?).ok().filter(|o| *o >= 1)?;
+            let ordinal = u64::try_from(i128::from(natural(&position["ordinal"])?).checked_add(displacement)?).ok().filter(|o| *o >= 1)?;
             position["ordinal"] = Value::from(ordinal.to_string());
             Some(())
         };
@@ -470,14 +470,11 @@ impl EditedSpan {
 /// A list of I-runs: each its I-prefix, its first position and its width.
 type RunList<'a> = Vec<(&'a str, u64, u64)>;
 
-/// Returns a natural as the wire spells it: a decimal string, or a number.
-fn nat(v: &Value) -> Option<u64> {
-    v.as_str().map_or_else(|| v.as_u64(), |text| text.parse().ok())
-}
-
 /// Returns a content V-position's ordinal: `{subspace: 1, ordinal}`.
+///
+/// Each is a natural in either of the wire's spellings ([`natural`]).
 fn ordinal(position: &Value) -> Option<u64> {
-    (nat(&position["subspace"])? == 1).then(|| nat(&position["ordinal"])).flatten()
+    (natural(&position["subspace"])? == 1).then(|| natural(&position["ordinal"])).flatten()
 }
 
 /// A document's content image as the shift reads it.
@@ -509,7 +506,7 @@ impl<'a> Image<'a> {
             .iter()
             .map(|run| {
                 let (prefix, first) = run["i_start"].as_str().and_then(i_address)?;
-                let width = nat(&run["width"]).filter(|w| *w >= 1)?;
+                let width = natural(&run["width"]).filter(|w| *w >= 1)?;
                 first.checked_add(width - 1)?;
                 Some((prefix, first, width))
             })
@@ -1631,7 +1628,7 @@ impl Holds {
                 let own = format!("{doc}.0.1");
                 let runs = v["runs"].as_array().map(Vec::as_slice).unwrap_or_default();
                 let minted = match runs {
-                    [run] if nat(&run["width"]) == Some(width) => run["i_start"].as_str().filter(|i| i_address(i).is_some_and(|(prefix, _)| prefix == own)),
+                    [run] if natural(&run["width"]) == Some(width) => run["i_start"].as_str().filter(|i| i_address(i).is_some_and(|(prefix, _)| prefix == own)),
                     _ => None,
                 };
                 Ok(minted.map(str::to_owned))

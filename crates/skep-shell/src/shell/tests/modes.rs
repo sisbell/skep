@@ -345,10 +345,12 @@ fn the_signed_mode_composes_the_attest_a_publish_class_write_needs() {
 /// with its successor's type in each of the wire's two forms,
 /// `{"addrs": […]}` and `{"resolve": […]}`, a `make_link` and an
 /// `edit_link` whose ends are in the I-span form, `{"spans": […]}` — the
-/// form a follower's resolved pieces take — and an `emit` of the PredDef
-/// class — Unary, so its `to` is empty, and a class that confers no behavior
-/// on what it names (wire.md's own example takes Retired, whose read filter
-/// would hide the member the edit cells read). Each frame goes first under a
+/// form a follower's resolved pieces take, its widths decimal strings, and
+/// again with integer widths, as an agent's card admits and the board's
+/// parse takes them — and an `emit` of the PredDef class — Unary, so its
+/// `to` is empty, and a class that confers no behavior on what it names
+/// (wire.md's own example takes Retired, whose read filter would hide the
+/// member the edit cells read). Each frame goes first under a
 /// bare session of the same principal — the shell refusing it
 /// `write_in_bare_session` before any dial, and the library dialing it under
 /// that session's token itself — whose `signed_session_required` from the
@@ -361,7 +363,8 @@ fn the_signed_mode_composes_the_attest_a_publish_class_write_needs() {
 /// term or a slot otherwise, signs over the member named, drops the declared
 /// deposit, or reads an atom as its bytes, is refused
 /// `attestation_invalid:signature`; one that reads no `{"resolve"}` or no
-/// `{"spans"}` slot refuses the write unsent, `attest_not_composed`).
+/// `{"spans"}` slot, or an I-span's width as a string alone, refuses the
+/// write unsent, `attest_not_composed`).
 #[test]
 fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session() {
     let dir = TempDir::new().unwrap();
@@ -418,9 +421,9 @@ fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session()
     let (member_run, other_run) = (first_run(&member, 3), first_run(&other_member, 2));
     let citation = "1.1.0.1.0.1.0.3.13";
     let link_to = |to: &String| addr(write(json!({"op": "make_link", "home": doc, "from": {"addrs": [member]}, "to": {"addrs": [to]}, "ty": {"addrs": [citation]}})));
-    let [edited, retracted, old, new, resolved, respanned] = [&draft, &doc, &other, &other_member, &member, &draft].map(link_to);
+    let [edited, retracted, old, new, resolved, respanned, respanned_by_integers] = [&draft, &doc, &other, &other_member, &member, &draft, &draft].map(link_to);
     let vspec = |start: &str| json!({"source": member, "span": {"start": start, "width": "0.1"}});
-    let ispans = |run: &Value, width: &str| json!({"spans": [{"start": run["i_start"], "width": width}]});
+    let ispans = |run: &Value, width: Value| json!({"spans": [{"start": run["i_start"], "width": width}]});
     // The shot with a base group and a window segment: judged under the bare
     // session as every kind is, and acked through the composer's publish
     // arm — `op` refuses the frame as a call before any dial.
@@ -443,11 +446,17 @@ fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session()
             "edit_link, its type resolved",
             json!({"op": "edit_link", "original": resolved, "d_s": other, "d_a": doc, "successor": {"from": [vspec("1.1")], "to": [vspec("1.2")], "ty": {"resolve": [vspec("1.3")]}}}),
         ),
-        // Ends in the I-span form: each slot row the spans as given.
-        ("make_link, its ends I-spans", json!({"op": "make_link", "home": doc, "from": ispans(&member_run, "2"), "to": {"addrs": [draft]}, "ty": {"addrs": [citation]}})),
+        // Ends in the I-span form: each slot row the spans as given, a width
+        // a decimal string or a JSON integer alike.
+        ("make_link, its ends I-spans", json!({"op": "make_link", "home": doc, "from": ispans(&member_run, json!("2")), "to": {"addrs": [draft]}, "ty": {"addrs": [citation]}})),
         (
             "edit_link, its successor's ends I-spans",
-            json!({"op": "edit_link", "original": respanned, "d_s": doc, "d_a": other, "successor": {"from": ispans(&member_run, "1"), "to": ispans(&other_run, "2"), "ty": {"addrs": [citation]}}}),
+            json!({"op": "edit_link", "original": respanned, "d_s": doc, "d_a": other, "successor": {"from": ispans(&member_run, json!("1")), "to": ispans(&other_run, json!("2")), "ty": {"addrs": [citation]}}}),
+        ),
+        ("make_link, its ends I-spans of integer width", json!({"op": "make_link", "home": doc, "from": ispans(&member_run, json!(3)), "to": {"addrs": [draft]}, "ty": {"addrs": [citation]}})),
+        (
+            "edit_link, its successor's ends I-spans of integer width",
+            json!({"op": "edit_link", "original": respanned_by_integers, "d_s": doc, "d_a": other, "successor": {"from": ispans(&member_run, json!(2)), "to": ispans(&other_run, json!(1)), "ty": {"addrs": [citation]}}}),
         ),
         // A typed relation of the PredDef class: Unary, so `to` is empty.
         ("emit", json!({"op": "emit", "home": doc, "ty": [{"start": "1.1.0.1.0.1.0.1.1", "width": "0.0.0.0.0.0.0.0.1"}], "from": member, "to": []})),

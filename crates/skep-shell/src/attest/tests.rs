@@ -1,7 +1,9 @@
 //! THE COMPOSER's FENCE: the spelling it reads a frame in — the trunk, a
 //! V-spec, an I-address's split, an I-range made where its reach is
-//! spellable, a tumbler and an address within their component budget, the
-//! wire's value faults faced as its own halt — and THE
+//! spellable, a tumbler and an address within their component budget, a
+//! natural in either of the wire's spellings, a slot's I-span width and a
+//! publication's every count alike, the wire's value faults faced as its
+//! own halt — and THE
 //! BOARD's BUDGETS it keeps: each pinned to the board's own where the board
 //! exports it, and each held before the work it bounds, against a fake board
 //! that counts the reads the composer makes — a list past the wire's, a slot
@@ -309,27 +311,35 @@ fn a_slot_is_held_to_the_wire_list_and_its_span_budget() {
 /// (writes)): each span `width` positions from its `start`, the content
 /// extent verbatim, no read made — a `make_link`'s `to` and an `edit_link`
 /// successor's `to` alike, each body the signer's own builder over the same
-/// spans — and a span of zero width, or of no decimal width, is the
-/// composer's halt, nothing read (the mutant that reads no `{"spans"}`
-/// slot refuses every follower's mark unsent, `attest_not_composed`).
+/// spans — its `width` a natural in either of the wire's spellings, so
+/// integer widths, and the two spellings mixed, sign the body decimal
+/// strings sign; and a span of zero width in either spelling, or of a width
+/// that is no natural — a decimal fraction, a negative or fractional number
+/// — is the composer's halt naming the span, nothing read (the mutant that
+/// reads no `{"spans"}` slot refuses every follower's mark unsent,
+/// `attest_not_composed`; the one that reads a width as a string alone
+/// refuses an agent's integer width, which the board takes, unsent).
 #[test]
 fn a_link_slot_in_the_i_span_form_is_signed_as_stored() {
     let g = Ground::over(Fake::default());
     let c = g.composer();
     let a = |text: &str| parse_address(text).unwrap();
-    let to = json!({"spans": [{"start": "1.0.1.0.64.0.1.3", "width": "4"}, {"start": "1.0.1.0.64.0.1.9", "width": "1"}]});
+    let to_spans = |four: Value, one: Value| json!({"spans": [{"start": "1.0.1.0.64.0.1.3", "width": four}, {"start": "1.0.1.0.64.0.1.9", "width": one}]});
     let ty = json!({"addrs": ["1.1.0.1.0.1.0.3.13"]});
     let spans = [extent_span("1.0.1.0.64.0.1.3", 4).unwrap(), extent_span("1.0.1.0.64.0.1.9", 1).unwrap()];
     let ty_unit = [unit_span(&a("1.1.0.1.0.1.0.3.13"))];
     let slots = LinkSlots { from: EntrySlot(&[]), to: EntrySlot(&spans), ty: EntrySlot(&ty_unit) };
-    let make_link = json!({"op": "make_link", "home": "1.0.1.0.1", "from": {"addrs": []}, "to": to, "ty": ty});
-    let (term, body) = c.doc_term_and_body(CheckedKind::MakeLink, &make_link).unwrap();
-    assert_eq!((term.as_doc_term(), body), (DocTerm::One(&a("1.0.1.0.1")), entry_body_make_link(slots)));
-    let edit_link = json!({"op": "edit_link", "original": "1.0.1.0.1.0.2.1", "d_s": "1.0.1.0.1", "d_a": "1.0.1.0.65", "successor": {"from": {"spans": []}, "to": to, "ty": ty}});
-    let (_, body) = c.doc_term_and_body(CheckedKind::EditLink, &edit_link).unwrap();
-    assert_eq!(body, entry_body_edit_link(slots, &unit_span(&a("1.0.1.0.1.0.2.1"))));
-    for (cell, span) in [("a zero width", json!({"start": "1.0.1.0.64.0.1.3", "width": "0"})), ("a width of no decimal", json!({"start": "1.0.1.0.64.0.1.3", "width": "0.4"}))] {
-        let refused = c.slot(&json!({"spans": [span]}), "to").unwrap_err();
+    for (cell, to) in [("decimal widths", to_spans(json!("4"), json!("1"))), ("integer widths", to_spans(json!(4), json!(1))), ("the two spellings mixed", to_spans(json!(4), json!("1")))] {
+        let make_link = json!({"op": "make_link", "home": "1.0.1.0.1", "from": {"addrs": []}, "to": to, "ty": ty});
+        let (term, body) = c.doc_term_and_body(CheckedKind::MakeLink, &make_link).unwrap_or_else(|e| panic!("{cell}: {e}"));
+        assert_eq!((term.as_doc_term(), body), (DocTerm::One(&a("1.0.1.0.1")), entry_body_make_link(slots)), "{cell}");
+        let edit_link = json!({"op": "edit_link", "original": "1.0.1.0.1.0.2.1", "d_s": "1.0.1.0.1", "d_a": "1.0.1.0.65", "successor": {"from": {"spans": []}, "to": to, "ty": ty}});
+        let (_, body) = c.doc_term_and_body(CheckedKind::EditLink, &edit_link).unwrap_or_else(|e| panic!("{cell}: {e}"));
+        assert_eq!(body, entry_body_edit_link(slots, &unit_span(&a("1.0.1.0.1.0.2.1"))), "{cell}");
+    }
+    let no_span = [("a zero width", json!("0")), ("an integer zero", json!(0)), ("a width of no decimal", json!("0.4")), ("a negative integer", json!(-1)), ("a fractional number", json!(4.5))];
+    for (cell, width) in no_span {
+        let refused = c.slot(&json!({"spans": [{"start": "1.0.1.0.64.0.1.3", "width": width}]}), "to").unwrap_err();
         assert!(refused.to_string().contains("`to` span"), "{cell}: {refused}");
     }
     assert!(g.fake.dialed().is_empty(), "the form reads nothing: {:?}", g.fake.dialed());
@@ -435,6 +445,58 @@ fn a_shots_body_is_composed_from_the_values_it_copies_in() {
     assert_eq!(body.as_bytes(), spelled.as_bytes());
     let reads = g.fake.dialed();
     assert_eq!(reads.iter().filter(|op| *op == "retrieve_v").count(), 2, "one read per origin: {reads:?}");
+}
+
+/// A PUBLICATION's NATURALS read in either of the wire's spellings (wire.md
+/// §Value encodings): a shot whose runs' widths, whose `base_extent`, whose
+/// deposit's I-span width or whose member end's positions are JSON integers
+/// signs the body the same frame in decimal strings signs — each kind
+/// spelled apart in a cell of its own, so the mutant that reads any one of
+/// them as a string alone refuses its cell's frame, which the board takes,
+/// unsent; and a `base_extent` that is no natural is the composer's halt
+/// naming it, never a base without its extent, with nothing read.
+#[test]
+fn a_publications_naturals_read_in_either_of_the_wire_spellings() {
+    let g = Ground::over(Fake::default().text("1.0.1.0.64", "1.0.1.0.64.0.1", 1, "abcd").text("1.0.1.0.1.1", "1.0.1.0.1.1.0.1", 1, "xyz"));
+    let c = g.composer();
+    let decimal: fn(u64) -> Value = |n| Value::from(n.to_string());
+    let integer: fn(u64) -> Value = Value::from;
+    // The positive control's shot less its last run, and a deposit of two
+    // copies: each kind of natural the frame names spelled by its own hand.
+    let frame = |widths: fn(u64) -> Value, extent: fn(u64) -> Value, ispan: fn(u64) -> Value, member: fn(u64) -> Value| {
+        let ty = json!({"addrs": ["1.1.0.1.0.1.0.3.13"]});
+        json!({
+            "op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.64", "base": "1.0.1.0.1.1", "base_extent": extent(3),
+            "runs": [
+                {"origin": "1.0.1.0.64", "i_start": "1.0.1.0.64.0.1.3", "width": widths(2)},
+                {"origin": "1.0.9.0.1", "i_start": "1.0.9.0.1.0.1.5", "width": widths(3)},
+                {"origin": "1.0.1.0.1.1", "i_start": "1.0.1.0.1.1.0.1.1", "width": widths(2)},
+            ],
+            "links": [
+                {"home": "1.0.1.0.66", "from": {"spans": [{"start": "1.0.1.0.66.0.1.1", "width": ispan(2)}]}, "to": {"addrs": []}, "ty": ty},
+                {"home": "member", "from": {"member": [{"ordinal": member(1), "width": member(2)}, {"ordinal": member(4), "width": member(1)}]}, "to": {"addrs": []}, "ty": ty},
+            ],
+        })
+    };
+    let (_, decimals) = c.doc_term_and_body(CheckedKind::Publish, &frame(decimal, decimal, decimal, decimal)).unwrap();
+    for (cell, spelled) in [
+        ("the runs' widths", frame(integer, decimal, decimal, decimal)),
+        ("the base's extent", frame(decimal, integer, decimal, decimal)),
+        ("the I-span end's width", frame(decimal, decimal, integer, decimal)),
+        ("the member end's positions", frame(decimal, decimal, decimal, integer)),
+        ("every natural", frame(integer, integer, integer, integer)),
+    ] {
+        let (_, body) = c.doc_term_and_body(CheckedKind::Publish, &spelled).unwrap_or_else(|e| panic!("{cell} as integers: {e}"));
+        assert_eq!(body.as_bytes(), decimals.as_bytes(), "{cell} as integers sign the body their decimal strings sign");
+    }
+    g.fake.dialed.lock().unwrap().clear();
+    for (cell, extent) in [("a negative integer", json!(-1)), ("a fractional number", json!(1.5)), ("a decimal fraction", json!("0.3")), ("a list", json!(["3"]))] {
+        let mut shot = frame(integer, integer, integer, integer);
+        shot["base_extent"] = extent;
+        let refused = c.publish_body(&shot, "1.0.1.0.1").unwrap_err();
+        assert!(refused.to_string().contains("`base_extent` is no natural"), "{cell}: {refused}");
+    }
+    assert!(g.fake.dialed().is_empty(), "a `base_extent` that is no natural is refused before any read: {:?}", g.fake.dialed());
 }
 
 /// THE DEPOSIT ROWS (the link-sets design §5.7; lane S3): a `publish` frame

@@ -36,19 +36,23 @@
 //! members past it by doubling, then a binary search, which needs no feed
 //! walk and meets no retention floor. A board answering every member the
 //! doubling asks refuses the row `shape` naming `doc_metadata` after 64
-//! reads, nothing composed or landed (SP-17). THE RE-OPEN: where
-//! the marker on `into` names this daughter — or, at the draft side, this
-//! draft — the draft already carries this merge: the report with NOTHING
-//! LANDED, composed on the marker's head, the side read as compose read it
-//! — a daughter being immutable, and a draft side at the marker's position
-//! where a write under it landed since (by `/op-at`), else its image as it
-//! stands, which is the same — and each unsettled gap's state read off the
-//! draft as it stands, settled by the merger where the draft no longer
-//! arranges the gap's default as M placed it: its runs removed whole, or
-//! reordered; an edit inside a run's words settles nothing. The merger is
-//! the one composing, `person` at the editor and `agent` with no person
-//! present ([`Surface`]), since the re-open reads the draft and not the
-//! hand that edited it. THE MERGED ARM:
+//! reads, nothing composed or landed (SP-17). A draft side lying under no
+//! member is refused before that read as the library refuses it:
+//! `base_unknown` with `reason` `bare_source` naming `doc` where the draft
+//! is the owner's, staged from the bare document before its first version
+//! — whether or not one stands since — else with `reason` `base_unknown`.
+//! THE RE-OPEN: where the marker on `into` names this daughter — or, at
+//! the draft side, this draft — the draft already carries this merge: the
+//! report with NOTHING LANDED, composed on the marker's head, the side read
+//! as compose read it — a daughter being immutable, and a draft side at the
+//! marker's position where a write under it landed since (by `/op-at`),
+//! else its image as it stands, which is the same — and each unsettled
+//! gap's state read off the draft as it stands, settled by the merger where
+//! the draft no longer arranges the gap's default as M placed it: its runs
+//! removed whole, or reordered; an edit inside a run's words settles
+//! nothing. The merger is the one composing, `person` at the editor and
+//! `agent` with no person present ([`Surface`]), since the re-open reads
+//! the draft and not the hand that edited it. THE MERGED ARM:
 //! a daughter an active supersession claim of the person's own already
 //! names, read by one `in_claims` at the daughter, is answered `merged`,
 //! naming the member the claim's `new` names, NOTHING LANDED, and where no
@@ -493,6 +497,37 @@ fn trunk_member_above(doc: &Address, a: &Address) -> Option<Address> {
     validate(Tumbler::new(comps).ok()?).ok()
 }
 
+/// Returns the trunk member of `doc` a draft side lies under: the one the
+/// base the board records for it (`base`) lies under.
+///
+/// It is the head read's start at the draft side (`client.md` §4b.1's merge
+/// row), decided off the draft's one `doc_metadata` read. It is answered
+/// for a draft of any account that lies under one: the composition refuses
+/// another account's draft itself.
+///
+/// # Errors
+///
+/// Where the draft lies under none, the merge library's own refusal of the
+/// side, as its read of the side decides it (`skep_client::merge::compose`,
+/// the owner tested before the base):
+///
+/// - `BareSource` naming `doc` where `base` is `doc` itself — the draft
+///   staged from the bare document before its first version (wire.md
+///   §Namespace, `stage`), whether or not one stands since — and the draft
+///   is of `doc`'s owner's account, the account `doc` lies in
+///   (`skep-namespace`'s `effective_owner_prefix`);
+/// - `BaseUnknown` where no base is recorded, the base lies in another
+///   document's chain, or the bare document is another account's draft's
+///   base.
+fn draft_start(doc: &Address, draft: &Address, base: Option<&Address>) -> Result<Address, lib::Refusal> {
+    let side = || lib::Side::Draft { at: draft.clone(), position: None };
+    let the_owners = account_of(&draft.to_string()).is_some_and(|a| account_of(&doc.to_string()).as_deref() == Some(a.as_str()));
+    if the_owners && base == Some(doc) {
+        return Err(lib::Refusal::BareSource { side: side(), source: doc.clone() });
+    }
+    base.and_then(|b| trunk_member_above(doc, b)).ok_or_else(|| lib::Refusal::BaseUnknown(side()))
+}
+
 // ── the reads the rows make themselves ────────────────────────────────────
 
 /// What one `doc_metadata` of a draft tells the family.
@@ -772,11 +807,14 @@ impl Shell {
     /// 4. `into`'s read, as step 3's reads, and `not_owner` naming it where
     ///    it is published or another account's; at the draft side the
     ///    draft's read, and `base_unknown` where the board records no base
-    ///    for it in `doc`'s chain; then, where no re-open stands, the head
-    ///    read's (`trunk_head`): `unreadable`, `busy`, `session_died`, the
-    ///    board's verdicts, `unreachable`, and `shape` naming `doc_metadata`
-    ///    for an answer it cannot read or where the board answers every
-    ///    member the read asks, nothing composed;
+    ///    for it in `doc`'s chain — `reason` `bare_source`, naming `source`
+    ///    (`doc` itself), where the draft is of `doc`'s owner's account and
+    ///    was staged from the bare document before its first version, else
+    ///    `reason` `base_unknown` (`draft_start`); then, where no re-open
+    ///    stands, the head read's (`trunk_head`): `unreadable`, `busy`,
+    ///    `session_died`, the board's verdicts, `unreachable`, and `shape`
+    ///    naming `doc_metadata` for an answer it cannot read or where the
+    ///    board answers every member the read asks, nothing composed;
     /// 5. the composition's (`skep_client::merge::compose`): `base_unknown`
     ///    with its reason, `two_drafts`, `unreadable`, `no_such_document`,
     ///    `merge_refused` with its arm, the board's verdicts verbatim; then
@@ -844,14 +882,13 @@ impl Shell {
             None => None,
         };
         // The trunk member the side lies under: a daughter's parent, a
-        // draft side's recorded base.
+        // draft side's recorded base's — else the library's own refusal of
+        // the side, before the head is read.
         let start = match &form {
-            Form::Daughter(d) => trunk_member_above(&doc, d),
-            Form::Draft(d) => self.draft_facts(&session, d)?.base.and_then(|b| trunk_member_above(&doc, &b)),
+            Form::Daughter(d) => trunk_member_above(&doc, d).ok_or_else(|| lib::Refusal::BaseUnknown(lib::Side::Member(d.clone()))),
+            Form::Draft(d) => draft_start(&doc, d, self.draft_facts(&session, d)?.base.as_ref()),
         };
-        let Some(start) = start else {
-            return Err(Refusal::shell(Name::BASE_UNKNOWN, json!({"side": form.side().to_string(), "reason": "base_unknown"})));
-        };
+        let start = start.map_err(|r| self.merge_refusal(&session, r))?;
         // THE RE-OPEN: the marker on `into` naming this side, composed on
         // the head the marker names; else the trunk's head as it stands.
         let side_text = form.side().to_string();

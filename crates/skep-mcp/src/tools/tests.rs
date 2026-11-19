@@ -1178,8 +1178,12 @@ fn the_publication_references_state_the_shells_shapes() {
 /// the shell's own an agent acts on by its name with its members, as
 /// REJECTIONS ARE DATA names `held_lines {doc, held}`: every tool's
 /// `held_lines`, and `merge_land`'s `window_parts_owed`, each part in it
-/// spelled as the shell's `WindowPart`, and `other_panel`. The compose
-/// reference and MERGING name every gap kind the shell's `GapKind` spells;
+/// spelled as the shell's `WindowPart`, and `other_panel`; the compose
+/// reference names `base_unknown` by each reason the shell answers it with,
+/// `bare_source` naming its `source` for a draft of yours begun from the
+/// bare document, and the way on from that draft whether or not a version
+/// stands since. The compose reference and MERGING name every gap kind the
+/// shell's `GapKind` spells;
 /// `merge_land`'s schema takes `resolutions` as the shell's `MergeChoice`
 /// and `answers` as its `OriginAnswer` (SP-24). MERGING says what a merge
 /// takes, that a gap is settled by editing the draft, that the landing
@@ -1283,12 +1287,17 @@ fn the_merge_references_state_the_shells_shapes() {
         "REJECTIONS ARE DATA names the merge tools among the calls an end may not have stopped: {rejections}"
     );
     // What a compose made again after a lost answer or a session's end
-    // leaves, and how a draft it left is found.
+    // leaves, and how a draft it left is found; and `base_unknown` by each
+    // reason, with the way on from a draft begun before the first version.
     let compose = reference(&catalog, "merge_compose");
     for said in [
         "which the adapter makes again itself, once, under the next session — may have left a draft it staged, or landed in, that no merge record names",
         "With into named, the call made again re-opens into, or lands there, and stages nothing more; with none named, it stages another, the first left standing beside it",
         "changes_since(class: \"drafts\") from before the call names such a draft",
+        "base_unknown {side, reason, source?}",
+        "reason base_unknown for a draft never staged, one staged from a draft with no recorded base or from another document, or a draft of another account",
+        "reason bare_source, naming source (doc itself), for a draft of yours staged from the bare document before its first version",
+        "publish that draft while doc has no version — it lands version 1, leaving nothing to merge — or, once one stands, stage a draft from the head and bring the words over into it",
     ] {
         assert!(compose.contains(said), "merge_compose's reference says {said:?}: {compose}");
     }

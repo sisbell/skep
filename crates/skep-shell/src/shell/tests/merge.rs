@@ -34,7 +34,12 @@
 //! the withdrawal's typed at that write's own position and refused past the
 //! agent's own burst, nothing wiped, and a gap the agent settles, by an edit
 //! or a resolution, recorded `agent`; the draft side composed and landed
-//! with no claim, its re-open reading the side as merged; the merged arm
+//! with no claim, its re-open reading the side as merged; a draft side
+//! lying under no trunk member refused `base_unknown` by the library's
+//! reason before the head is read — `bare_source` naming the document for
+//! the owner's draft staged before the first version, whether or not one
+//! stands since, `base_unknown` for another account's, one staged from
+//! another document and one never staged; the merged arm
 //! naming the member and writing a missing record once; another account's
 //! record of the kind, read as the composition's `prior`, never deciding
 //! where the merge lands — its own draft carrying the merge never
@@ -1922,6 +1927,51 @@ fn the_draft_side_composes_and_lands_with_no_claim_and_its_re_open_reads_the_sid
     assert!(landed["record"].is_string(), "{landed}");
     let text = g.text(&e3, 21);
     assert!(text.contains(" jumps") && text.contains(" quietly") && text.len() == 21, "both sides' words, B's as the document's own: {text:?}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a draft side lying under no trunk member is refused as the
+/// library refuses it, by its reason, before the head is read.
+///
+/// D and D2 are the claimant's, staged from the published E while its chain
+/// is empty, and T another account's, staged from E then too; Dz is the
+/// claimant's, staged from another bare published document Z, and N a draft
+/// never staged. D2 composed as E's draft side is refused exactly
+/// `base_unknown` with `reason` `bare_source` naming E as its `source` —
+/// before E's first version, and again once D publishes it as E.1 — and T,
+/// Dz and N each exactly `base_unknown` with `reason` `base_unknown`, no
+/// `source`; the board's position unmoved by every refusal (the mutants
+/// that answer `bare_source` never, for another account's draft based on
+/// E, or for every draft no member lies above).
+#[test]
+fn a_draft_side_staged_before_the_first_version_is_refused_bare_source_naming_the_document() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let e = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let d = g.staged(&e, "the fox");
+    let d2 = g.staged(&e, "the cat");
+    let other = other_account(&g);
+    let theirs = written(&g, &other.token, &frames::stage(&e, None))["addr"].as_str().expect("an ack_addr").to_string();
+    let z = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let dz = g.staged(&z, "the owl");
+    let n = g.draft("the hen");
+    let refused = |draft: &str| {
+        let before = g.position();
+        let refused = g.call("merge.compose", json!({"session": g.session, "doc": e, "draft": draft})).unwrap_err().to_value();
+        assert_eq!(g.position(), before, "nothing written: {refused}");
+        refused
+    };
+    let bare_source = json!({"kind": "shell", "name": "base_unknown", "side": d2, "reason": "bare_source", "source": e});
+    assert_eq!(refused(&d2), bare_source, "before E's first version");
+    g.call("publication.open", json!({"session": g.session, "draft": d, "doc": e, "readable_drafts": [d], "published": [e]})).unwrap_or_else(|r| panic!("{r}"));
+    let first = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(first["member"].as_str(), Some(format!("{e}.1").as_str()), "{first}");
+    assert_eq!(refused(&d2), bare_source, "once E.1 stands, D2's recorded base still E");
+    for (draft, what) in [(&theirs, "another account's draft staged from E"), (&dz, "a draft staged from another document"), (&n, "a draft never staged")] {
+        assert_eq!(refused(draft), json!({"kind": "shell", "name": "base_unknown", "side": draft, "reason": "base_unknown"}), "{what}");
+    }
     g.shell.shutdown();
     sd.shutdown();
 }

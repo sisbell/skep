@@ -303,7 +303,7 @@ fn the_file_names_every_shape_call_and_event() {
         "  'publication.cancel'(args: { session: string }): Promise<Outcome<Empty>>;\n",
         "  'publication.standing'(args: { session: string; draft: string; doc: string; also?: string[] }): Promise<Outcome<PublicationStanding>>;\n",
         "export interface PublicationStanding {\n  base: string;\n  standing: BaseStanding;\n  head?: string;\n  left_behind: string[];\n}\n",
-        "  'merge.compose'(args: { session: string; doc: string; alternative?: string; draft?: string; into?: string }): Promise<Outcome<MergeReport>>;\n",
+        "  'merge.compose'(args: { session: string; doc: string; alternative?: string; draft?: string; fork?: string; into?: string }): Promise<Outcome<MergeReport>>;\n",
         "  'merge.land'(args: { session: string; resolutions?: Record<string, MergeChoice>; answers?: Record<string, OriginAnswer> }): Promise<Outcome<MergeLanded | Restated | PublicationRefused>>;\n",
         "  'merge.undo'(args: { session: string } | { session: string; draft: string; withdrawal: number }): Promise<Outcome<Undone>>;\n",
         "  'merge.withdraw'(args: { session: string; draft: string }): Promise<Outcome<Withdrawn>>;\n",

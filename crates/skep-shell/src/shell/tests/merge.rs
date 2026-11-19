@@ -39,7 +39,16 @@
 //! reason before the head is read — `bare_source` naming the document for
 //! the owner's draft staged before the first version, whether or not one
 //! stands since, `base_unknown` for another account's, one staged from
-//! another document and one never staged; the merged arm
+//! another document and one never staged; another account's fork — a
+//! `version` or a `stage` of a version — composed over the source the board
+//! serves for it, landed, re-opened, taken back and published with no
+//! claim, its words asked as windows and its record found from it, and
+//! composed again over the member with no gap; a fork with no source, or
+//! one in another chain, refused `base_unknown`, and one of the bare
+//! document `bare_source` whatever its account; the agent's re-base of its
+//! own fork into a fresh draft of its own, the fork itself as `into`
+//! refused `fork_base_moved` and its landing on the person's trunk refused
+//! `not_owner`; the merged arm
 //! naming the member and writing a missing record once; another account's
 //! record of the kind, read as the composition's `prior`, never deciding
 //! where the merge lands — its own draft carrying the merge never
@@ -72,7 +81,7 @@ use skep_client::halt::Halt;
 use skep_client::merge::{Inputs, Merged, RecordLanding, Refusal as Library, Side};
 use skep_client::store::{FileStore, KeyId, KeyStore};
 
-use super::publication::{bare, ground, ground_under, other_account, register, second_device, signed_facts, written, Ground, Other};
+use super::publication::{agent_seat, bare, ground, ground_under, other_account, register, second_device, signed_facts, written, Ground, Other};
 use super::*;
 use crate::sessions::Facts;
 
@@ -143,9 +152,16 @@ const KIND: &str = "1.0.1.0.1";
 ///
 /// It is composed under [`KIND`], read under the ground's session.
 fn composed(g: &Ground, f: &Family) -> Merged {
+    composed_over(g, f, Side::Member(parse_address(&f.e11).unwrap()))
+}
+
+/// Returns the merge of E.2 with `side` as the library composes it.
+///
+/// It is composed under [`KIND`], read under the ground's session.
+fn composed_over(g: &Ground, f: &Family, side: Side) -> Merged {
     let entry = g.shell.sessions.get(&g.session).unwrap();
     let a = |s: &str| parse_address(s).unwrap();
-    let inputs = Inputs { doc: a(&f.edition), head: a(&f.e2), base: None, sides: vec![Side::Member(a(&f.e11))], options: skep_client::merge::Options::default(), kind: a(KIND) };
+    let inputs = Inputs { doc: a(&f.edition), head: a(&f.e2), base: None, sides: vec![side], options: skep_client::merge::Options::default(), kind: a(KIND) };
     skep_client::merge::compose(&entry.board, Some(&entry.token), &inputs).unwrap_or_else(|r| panic!("{r:?}"))
 }
 
@@ -194,14 +210,17 @@ fn assert_prior_is(g: &Ground, f: &Family, link: &str) {
 /// composed, with no daemon behind the shell.
 ///
 /// `merge.compose` reads its members before the session — `doc` missing or
-/// no bare document, `alternative` no daughter of `doc`'s chain, both forms
-/// or neither, `into` the draft side itself — each `malformed_args` naming
-/// the member; in their form the call goes on to the session, which is
-/// gone. `merge.withdraw` reads `draft` first. `land` and `undo` with
-/// nothing composed answer `no_merge` naming the session, and a bare
-/// session is refused `write_in_bare_session` naming the call at each row
-/// (the mutants that look the session up first, or read a member as
-/// absent, answer `session_ended` or dial).
+/// no bare document, `alternative` no daughter of `doc`'s chain, two of the
+/// three sides or none, `into` the draft side itself, `fork` `doc` itself,
+/// a member of its chain or an address within it — each `malformed_args`
+/// naming the member, a second side named by the later of `alternative`,
+/// `draft` and `fork`; in their form the call goes on to the session, which
+/// is gone, `into` naming the fork side itself among them. `merge.withdraw`
+/// reads `draft` first. `land` and `undo` with nothing composed answer
+/// `no_merge` naming the session, and a bare session is refused
+/// `write_in_bare_session` naming the call at each row (the mutants that
+/// look the session up first, or read a member as absent, answer
+/// `session_ended` or dial).
 #[test]
 fn the_rows_read_their_members_first_and_answer_no_merge_with_nothing_composed() {
     let dir = TempDir::new().unwrap();
@@ -219,10 +238,23 @@ fn the_rows_read_their_members_first_and_answer_no_merge_with_nothing_composed()
     assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1", "alternative": "1.0.2.0.1.1"})), "alternative", "a trunk member is no daughter");
     assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1", "alternative": "1.0.3.0.1.1.1"})), "alternative", "another document's daughter");
     assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1", "alternative": "1.0.2.0.1.1.1", "draft": "1.0.2.0.66"})), "draft", "both forms");
-    assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1"})), "alternative or draft", "neither form");
+    assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1"})), "alternative, draft or fork", "no form");
+    assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1", "alternative": "1.0.2.0.1.1.1", "fork": "1.0.2.1.0.64"})), "fork", "a daughter and a fork");
+    assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1", "draft": "1.0.2.0.66", "fork": "1.0.2.1.0.64"})), "fork", "a draft and a fork");
+    assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1", "alternative": "1.0.2.0.1.1.1", "draft": "1.0.2.0.66", "fork": "1.0.2.1.0.64"})), "fork", "all three");
+    for (inside, of) in [("1.0.2.0.1", "the document itself"), ("1.0.2.0.1.1", "a trunk member"), ("1.0.2.0.1.1.1", "a daughter"), ("1.0.2.0.1.0.1.1", "an address within the document")] {
+        assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1", "fork": inside})), "fork", "{of} is no fork of it");
+    }
+    assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1", "fork": 7})), "fork", "another form");
     assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1", "draft": "1.0.2.0.66", "into": "1.0.2.0.66"})), "into", "the draft side itself");
     assert_eq!(what(json!({"session": "s-gone", "doc": "1.0.2.0.1", "alternative": "1.0.2.0.1.1.1", "into": 7})), "into", "another form");
-    for in_form in [json!({"session": "s-gone", "doc": "1.0.2.0.1", "alternative": "1.0.2.0.1.1.1"}), json!({"session": "s-gone", "doc": "1.0.2.0.1", "draft": "1.0.2.0.66", "into": "1.0.2.0.67"})] {
+    for in_form in [
+        json!({"session": "s-gone", "doc": "1.0.2.0.1", "alternative": "1.0.2.0.1.1.1"}),
+        json!({"session": "s-gone", "doc": "1.0.2.0.1", "draft": "1.0.2.0.66", "into": "1.0.2.0.67"}),
+        json!({"session": "s-gone", "doc": "1.0.2.0.1", "fork": "1.0.2.1.0.64"}),
+        json!({"session": "s-gone", "doc": "1.0.2.0.1", "fork": "1.0.2.1.0.64", "into": "1.0.2.1.0.64"}),
+        json!({"session": "s-gone", "doc": "1.0.2.0.1", "fork": "1.0.3.0.1.1"}),
+    ] {
         assert_eq!(shell.call("merge.compose", &in_form).unwrap_err().name(), "session_ended", "{in_form}: in its form, the members pass to the session");
     }
     let refused = shell.call("merge.withdraw", &json!({"session": "s-gone"})).unwrap_err().to_value();
@@ -2333,6 +2365,261 @@ fn the_head_moved_race_is_typed_nothing_re_sent_and_a_composition_dies_with_its_
     for call in ["merge.land", "merge.undo"] {
         assert_eq!(g.call(call, json!({"session": session})).unwrap_err().name(), "no_merge", "{call}: the composition died with its session");
     }
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Returns `other`'s fork of `member`: a `version` of it kept private,
+/// minted in their account, with `words` written after "the fox", where
+/// E.2 wrote " jumps".
+fn forked(g: &Ground, other: &Other, member: &str, words: &str) -> String {
+    let minted = written(g, &other.token, &json!({"op": "version", "d_src": member, "published": false}));
+    let fork = minted["addr"].as_str().expect("an ack_addr").to_string();
+    written(g, &other.token, &json!({"op": "insert", "doc": fork, "at": {"subspace": "1", "ordinal": "8"}, "values": [words], "as_of": minted["at"]}));
+    fork
+}
+
+/// Returns each position a list of runs spells: its content chain and its
+/// ordinal there.
+fn positions(runs: impl IntoIterator<Item = (String, u64, u64)>) -> Vec<(String, u64)> {
+    runs.into_iter().flat_map(|(chain, first, width)| (first..first + width).map(move |n| (chain.clone(), n))).collect()
+}
+
+/// Checks that another account's fork is composed, landed, taken back and
+/// published with its record, against the daemon.
+///
+/// Another account forks E.1 by a private `version` and writes " quietly"
+/// where E.2 wrote " jumps". `merge.compose {doc: E, fork}` composes it as
+/// the library composes the same sides — `form` `fork`, `base` E.1, the
+/// fork's source, though the head is E.2, and the library's one `order`
+/// gap — and lands M in a fresh draft L of the person's, its marker naming
+/// the fork; composed again into L, the fork unedited, it re-opens with the
+/// same runs and gaps, nothing landed. `merge.undo` takes the landing back,
+/// and the merge composed into L lands there again. `merge.land` opens the
+/// panel naming no `also`, the fork's words a window onto it: refused
+/// `window_parts_owed`, each part the fork's, its owner the other account
+/// and `publish_first` not admitted, nothing sent; answered `keep_private`,
+/// E.3 is published windowing the fork, `supersede` empty, and its record
+/// is found from the fork. Composed again over E.3, the fork's words
+/// standing in the head by identity, the merge lands in a fresh draft with
+/// no gap, M's positions E.3's (the mutants that read a fork's base off its
+/// recorded `base`, name the fork `also` and re-mint its words as the
+/// document's own, or claim it).
+#[test]
+fn another_accounts_fork_is_composed_landed_taken_back_and_published_with_its_record() {
+    use skep_client::board::frames::{doc_metadata, find_links_ftt};
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let other = other_account(&g);
+    let fork = forked(&g, &other, &f.e1, " quietly");
+    let compose = |into: Option<&str>| {
+        let mut args = json!({"session": g.session, "doc": f.edition, "fork": fork});
+        if let Some(into) = into {
+            args["into"] = json!(into);
+        }
+        g.call("merge.compose", args).unwrap_or_else(|r| panic!("{r}"))
+    };
+    let landed = compose(None);
+    assert_report_declared(&landed);
+    assert_eq!(
+        (landed["outcome"].as_str(), landed["form"].as_str(), landed["side"].as_str(), landed["head"].as_str(), landed["base"].as_str(), landed["fresh"].as_bool()),
+        (Some("landed"), Some("fork"), Some(fork.as_str()), Some(f.e2.as_str()), Some(f.e1.as_str()), Some(true)),
+        "the base the fork's source, the head E.2: {landed}"
+    );
+    assert_eq!((landed["sides"][1]["at"].as_str(), landed["sides"][1]["role"].as_str(), landed["sides"][1]["position"].clone()), (Some(fork.as_str()), Some("fork"), Value::Null), "{landed}");
+    let library = composed_over(&g, &f, Side::Fork(parse_address(&fork).unwrap()));
+    assert_eq!(landed["record"]["gaps"], library.record.to_value()["gaps"], "the library's gaps for the same sides: {landed}");
+    assert_eq!((landed["gaps"].as_array().map(Vec::len), landed["gaps"][0]["kind"].as_str()), (Some(1), Some("order")), "both sides wrote after \"the fox\": {landed}");
+    let l = landed["into"].as_str().expect("the fresh draft").to_string();
+    let meta = g.op(doc_metadata(&l));
+    assert_eq!((meta["owner"].as_str(), meta["merge"]["sides"].clone(), meta["merge"]["head"].as_str()), (Some("1.0.1"), json!([fork]), Some(f.e2.as_str())), "the person's own draft, marked: {meta}");
+    let text = g.text(&l, 21);
+    assert!(text.contains(" jumps") && text.contains(" quietly") && text.len() == 21, "{text:?}");
+    // The re-open, the fork unedited.
+    let before = g.position();
+    let reopened = compose(Some(&l));
+    assert_eq!((reopened["outcome"].as_str(), reopened["runs"].clone(), reopened["gaps"].clone()), (Some("reopened"), landed["runs"].clone(), landed["gaps"].clone()), "{reopened}");
+    assert_eq!(g.position(), before, "nothing landed");
+    // The landing taken back, and landed again.
+    let undone = g.call("merge.undo", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((undone["draft"].as_str(), undone["marker"].clone()), (Some(l.as_str()), Value::Null), "{undone}");
+    assert_eq!(g.text(&l, 13), "the fox jumps", "L as staged from the head");
+    let again = compose(Some(&l));
+    assert_eq!((again["outcome"].as_str(), again["into"].as_str(), again["fresh"].as_bool()), (Some("landed"), Some(l.as_str()), Some(false)), "{again}");
+    // The landing on the trunk: the fork's words asked, never re-minted.
+    let before = g.position();
+    let owed = g.call("merge.land", json!({"session": g.session})).unwrap_err();
+    assert_eq!(owed.name(), "window_parts_owed", "{owed}");
+    let v = owed.to_value();
+    crate::shapes::assert_declared("WindowPartsOwedRefusal", &v);
+    let parts = v["parts"].as_array().unwrap_or_else(|| panic!("the parts: {v}"));
+    assert!(!parts.is_empty(), "{v}");
+    for part in parts {
+        crate::shapes::assert_declared("WindowPart", part);
+        assert_eq!((part["origin"].as_str(), part["owner"].as_str()), (Some(fork.as_str()), Some(other.account.as_str())), "a window onto the fork: {v}");
+        let admits = part["admits"].as_array().unwrap_or_else(|| panic!("its answers: {v}"));
+        assert!(!admits.contains(&json!("publish_first")) && admits.contains(&json!("keep_private")), "another account's words are not the person's to publish: {v}");
+    }
+    assert_eq!(g.position(), before, "nothing sent");
+    let answers: serde_json::Map<String, Value> = parts.iter().map(|p| (format!("{}.{}", p["run"], p["part"]), json!("keep_private"))).collect();
+    let published = g.call("merge.land", json!({"session": g.session, "answers": answers})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("MergeLanded", &published);
+    let e3 = format!("{}.3", f.edition);
+    assert_eq!(
+        (published["outcome"].as_str(), published["member"].as_str(), published["supersede"].clone(), published["daughter"].as_bool()),
+        (Some("landed"), Some(e3.as_str()), json!([]), Some(false)),
+        "no claim at a fork: {published}"
+    );
+    let image = g.op(frames::image(&e3, 1, 21));
+    let head = image["runs"].as_array().unwrap_or_else(|| panic!("the image: {image}"));
+    assert!(head.iter().any(|r| r["i_start"].as_str().is_some_and(|i| i.starts_with(&fork))), "E.3 windows the fork: {image}");
+    let record = published["record"].as_str().unwrap_or_else(|| panic!("the record: {published}"));
+    let found = g.op(find_links_ftt(KIND, &fork));
+    assert!(found["addrs"].as_array().into_iter().flatten().any(|a| a == record), "the record found from the fork: {found}");
+    // Composed again over E.3: the fork's words stand in the head.
+    let over = compose(None);
+    assert_eq!((over["outcome"].as_str(), over["head"].as_str(), over["fresh"].as_bool(), over["gaps"].clone()), (Some("landed"), Some(e3.as_str()), Some(true), json!([])), "{over}");
+    let merged = positions(over["runs"].as_array().unwrap().iter().map(|r| (format!("{}.0.1", r["origin"].as_str().unwrap()), r["i_start"].as_u64().unwrap(), r["width"].as_u64().unwrap())));
+    let held = positions(head.iter().map(|r| {
+        let (chain, first) = r["i_start"].as_str().unwrap().rsplit_once('.').unwrap();
+        (chain.to_string(), first.parse().unwrap(), r["width"].as_str().unwrap().parse().unwrap())
+    }));
+    assert_eq!(merged, held, "M is E.3's words: {over}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a fork is composed or refused by the source the board
+/// serves for it, before the head is read.
+///
+/// Another account's `stage` of E.1 composes as its `version` does: `form`
+/// `fork`, `base` E.1. Its `version` of a private draft of the person's —
+/// whose source is that draft, no version of E — and a document its `fork`
+/// op minted, which has no source, are each refused exactly `base_unknown`
+/// with `reason` `base_unknown`; and its `stage` of Z, another published
+/// document of the person's, while Z's chain is empty, composed as Z's fork,
+/// is refused exactly `base_unknown` with `reason` `bare_source` naming Z as
+/// its `source` — before Z's first version and again once it stands — the
+/// board's position unmoved by every refusal (the mutants that keep the
+/// draft side's owner test at the fork, answering `base_unknown` for another
+/// account's fork of the bare document, or answer `bare_source` for every
+/// fork no member lies above).
+#[test]
+fn a_fork_is_composed_or_refused_by_the_source_the_board_serves_for_it() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let other = other_account(&g);
+    let addr_of = |frame: Value| written(&g, &other.token, &frame)["addr"].as_str().expect("an ack_addr").to_string();
+    let staged = addr_of(frames::stage(&f.e1, None));
+    let report = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "fork": staged})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(
+        (report["outcome"].as_str(), report["form"].as_str(), report["base"].as_str(), report["head"].as_str()),
+        (Some("landed"), Some("fork"), Some(f.e1.as_str()), Some(f.e2.as_str())),
+        "another account's stage of E.1 is a fork of it: {report}"
+    );
+    let refused = |doc: &str, fork: &str| {
+        let before = g.position();
+        let refused = g.call("merge.compose", json!({"session": g.session, "doc": doc, "fork": fork})).unwrap_err().to_value();
+        assert_eq!(g.position(), before, "nothing written: {refused}");
+        refused
+    };
+    let draft = g.draft("the hen");
+    let copy = addr_of(json!({"op": "version", "d_src": draft, "published": false}));
+    let minted = addr_of(json!({"op": "fork"}));
+    for (fork, what) in [(&copy, "a copy of a private draft"), (&minted, "a document the fork op minted")] {
+        assert_eq!(refused(&f.edition, fork), json!({"kind": "shell", "name": "base_unknown", "side": fork, "reason": "base_unknown"}), "{what}");
+    }
+    let z = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let theirs = addr_of(frames::stage(&z, None));
+    let bare_source = json!({"kind": "shell", "name": "base_unknown", "side": theirs, "reason": "bare_source", "source": z});
+    assert_eq!(refused(&z, &theirs), bare_source, "before Z's first version");
+    let d = g.staged(&z, "the owl");
+    g.call("publication.open", json!({"session": g.session, "draft": d, "doc": z, "readable_drafts": [d], "published": [z]})).unwrap_or_else(|r| panic!("{r}"));
+    let first = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(first["member"].as_str(), Some(format!("{z}.1").as_str()), "{first}");
+    assert_eq!(refused(&z, &theirs), bare_source, "once Z.1 stands, the fork's source still Z");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks the agent's re-base of its own fork onto the head, against the
+/// daemon.
+///
+/// The agent — a shell with no person present, acting as the claim's agent
+/// space — forks E.1 by a private `version` and writes " quietly" in it.
+/// Composed over the head E.2 with no `into`, the fork lands in a fresh
+/// draft of the agent's own staged from E.2, its record written. Named as
+/// `into`, the fork is refused `merge_refused` `fork_base_moved`, naming
+/// its source E.1 and the head E.2, nothing written. The agent's
+/// `merge.land` asks the window onto its unpublished fork first,
+/// `window_parts_owed`; answered, the shot reaches the board, which refuses
+/// it `not_owner` — landing on the person's trunk is the person's act — and
+/// nothing is published. The person then composes the agent's re-based
+/// draft as a fork whose base is E.2, the head the agent staged it from
+/// (the mutants that refuse the fork itself as `into`, or answer the
+/// window for the agent).
+#[test]
+fn an_agent_re_bases_its_fork_onto_the_head_and_never_lands_on_the_persons_trunk() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let agent = agent_seat(&dir, &sd, &g);
+    let space = skep_client::address::first_child("1.0.1");
+    let minted = agent.op(json!({"op": "version", "d_src": f.e1, "published": false}));
+    let fork = minted["addr"].as_str().expect("an ack_addr").to_string();
+    assert_eq!(account_of(&fork).as_deref(), Some(space.as_str()), "the agent's own fork");
+    agent.op(json!({"op": "insert", "doc": fork, "at": {"subspace": "1", "ordinal": "8"}, "values": [" quietly"], "as_of": minted["at"]}));
+    let landed = agent.call("merge.compose", json!({"session": agent.session, "doc": f.edition, "fork": fork})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(
+        (landed["outcome"].as_str(), landed["form"].as_str(), landed["base"].as_str(), landed["head"].as_str(), landed["fresh"].as_bool()),
+        (Some("landed"), Some("fork"), Some(f.e1.as_str()), Some(f.e2.as_str()), Some(true)),
+        "{landed}"
+    );
+    assert!(landed["record_link"].is_string(), "the agent's record written: {landed}");
+    let rebased = landed["into"].as_str().expect("the fresh draft").to_string();
+    let meta = agent.op(frames::doc_metadata(&rebased));
+    assert_eq!(
+        (meta["owner"].as_str(), meta["source"].as_str(), meta["merge"]["sides"].clone()),
+        (Some(space.as_str()), Some(f.e2.as_str()), json!([fork])),
+        "a draft of the agent's own staged from the head: {meta}"
+    );
+    // The fork itself as `into`: its source is not the head.
+    let before = g.position();
+    let refused = agent.call("merge.compose", json!({"session": agent.session, "doc": f.edition, "fork": fork, "into": fork})).unwrap_err().to_value();
+    assert_eq!(
+        (refused["name"].as_str(), refused["arm"].as_str(), refused["fork"].as_str(), refused["source"].as_str(), refused["head"].as_str()),
+        (Some("merge_refused"), Some("fork_base_moved"), Some(fork.as_str()), Some(f.e1.as_str()), Some(f.e2.as_str())),
+        "{refused}"
+    );
+    assert_eq!(g.position(), before, "nothing written");
+    // The landing on the person's trunk: the window asked, then the board's
+    // refusal.
+    let owed = agent.call("merge.land", json!({"session": agent.session})).unwrap_err();
+    assert_eq!(owed.name(), "window_parts_owed", "the window onto its unpublished fork asked first: {owed}");
+    let v = owed.to_value();
+    let parts = v["parts"].as_array().unwrap_or_else(|| panic!("the parts: {v}"));
+    assert!(!parts.is_empty() && parts.iter().all(|p| p["origin"] == fork), "{v}");
+    let answers: serde_json::Map<String, Value> = parts.iter().map(|p| (format!("{}.{}", p["run"], p["part"]), json!("keep_private"))).collect();
+    let refused = agent.call("merge.land", json!({"session": agent.session, "answers": answers})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("PublicationRefused", &refused);
+    assert_eq!((refused["outcome"].as_str(), refused["arm"].as_str()), (Some("refused"), Some("not_owner")), "{refused}");
+    assert_eq!(g.position(), before, "nothing published");
+    let e3 = format!("{}.3", f.edition);
+    let unminted = g.call("op", json!({"session": g.session, "frame": frames::doc_metadata(&e3)})).unwrap_err();
+    assert!(unminted.to_string().contains("doc_not_registered"), "no E.3: {unminted}");
+    // The person merges the re-based proposal.
+    let report = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "fork": rebased})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(
+        (report["outcome"].as_str(), report["form"].as_str(), report["base"].as_str(), report["head"].as_str()),
+        (Some("landed"), Some("fork"), Some(f.e2.as_str()), Some(f.e2.as_str())),
+        "the head the agent re-based onto: {report}"
+    );
+    agent.shell.shutdown();
     g.shell.shutdown();
     sd.shutdown();
 }

@@ -377,7 +377,7 @@ pub(super) fn ground(dir: &TempDir, sd: &Skepd) -> Ground {
 pub(super) fn ground_under(dir: &TempDir, sd: &Skepd, arm: ArmConfig) -> Ground {
     let store = dir.path().join("store");
     claim_board(&format!("http://127.0.0.1:{}", sd.port()), &store);
-    open_ground(sd, &store, arm)
+    open_ground(sd, &store, arm, 1)
 }
 
 /// A SECOND DEVICE's ground over the board `ground` claimed: a fresh signed
@@ -387,14 +387,40 @@ pub(super) fn ground_under(dir: &TempDir, sd: &Skepd, arm: ArmConfig) -> Ground 
 /// One shell per data directory (§3c.3): a second shell over the first's
 /// own directory reads alone at a board whose held store the first holds.
 pub(super) fn second_device(dir: &TempDir, sd: &Skepd) -> Ground {
-    let (store, device) = (dir.path().join("store"), dir.path().join("second-device"));
-    std::fs::create_dir_all(device.join("keys")).unwrap();
+    open_ground(sd, &copied_store(dir, "second-device"), ArmConfig::default(), 1)
+}
+
+/// THE AGENT's ground over the board `claimant` claimed: a signed shell
+/// with no person present (`ArmConfig::Refuse`), as `skep-mcp` opens it,
+/// acting as the claim's agent space (`1.0.1.1`) over a data directory of
+/// its own.
+///
+/// The agent space holds no key of its own: its session opens by reference
+/// with the claimant's key, which the claim bound for the space's principal
+/// beside the claimant's own, and its home, the space's doc 1 and so the
+/// kind its merge records take, stands since the claim minted it.
+pub(super) fn agent_seat(dir: &TempDir, sd: &Skepd, claimant: &Ground) -> Ground {
+    let space = first_child("1.0.1");
+    let owner = claimant.op(json!({"op": "effective_owner", "addr": space}));
+    assert_eq!(owner["prefix"].as_str(), Some(space.as_str()), "the agent space is a seat of its own: {owner}");
+    let principal = owner["principal"].as_u64().expect("the agent space's principal");
+    let seat = open_ground(sd, &copied_store(dir, "agent-seat"), ArmConfig::Refuse, principal);
+    let home = seat.op(frames::doc_metadata(&doc_1_of(&space)));
+    assert_eq!(home["owner"].as_str(), Some(space.as_str()), "the agent space's home stands: {home}");
+    seat
+}
+
+/// Returns a data directory named `name` beside the claimed store, holding
+/// the claim's key and its bindings and nothing else of the store's.
+fn copied_store(dir: &TempDir, name: &str) -> PathBuf {
+    let (store, copy) = (dir.path().join("store"), dir.path().join(name));
+    std::fs::create_dir_all(copy.join("keys")).unwrap();
     for key in std::fs::read_dir(store.join("keys")).unwrap() {
         let key = key.unwrap().path();
-        std::fs::copy(&key, device.join("keys").join(key.file_name().unwrap())).unwrap();
+        std::fs::copy(&key, copy.join("keys").join(key.file_name().unwrap())).unwrap();
     }
-    std::fs::copy(store.join("bindings"), device.join("bindings")).unwrap();
-    open_ground(sd, &device, ArmConfig::default())
+    std::fs::copy(store.join("bindings"), copy.join("bindings")).unwrap();
+    copy
 }
 
 /// Returns `shell`'s log beside the feed thread's `/health` reads.
@@ -406,11 +432,12 @@ fn but_health(shell: &Shell) -> Vec<Value> {
 }
 
 /// A fresh signed shell over the board `ground` claimed, over the data
-/// directory `store`, its own node the board, opened under `arm`.
-fn open_ground(sd: &Skepd, store: &Path, arm: ArmConfig) -> Ground {
+/// directory `store`, its own node the board, opened under `arm` as
+/// `principal`.
+fn open_ground(sd: &Skepd, store: &Path, arm: ArmConfig, principal: u64) -> Ground {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let (talk, _) = talk();
-    let mut opts = ShellOptions::new(vec![Origin::parse(&origin).unwrap()], store.to_path_buf(), SessionMode::Signed { principal: 1 }, talk);
+    let mut opts = ShellOptions::new(vec![Origin::parse(&origin).unwrap()], store.to_path_buf(), SessionMode::Signed { principal }, talk);
     opts.own_node = Some(Origin::parse(&origin).unwrap());
     opts.arm = arm;
     let shell = Shell::open(opts);

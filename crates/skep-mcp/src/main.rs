@@ -26,13 +26,15 @@
 //!   for `.` (`publication_open`, `publication_count`,
 //!   `publication_confirm`, `publication_cancel`), and the `merge` family's
 //!   four, named so (`merge_compose`, `merge_land`, `merge_undo`,
-//!   `merge_withdraw`: a published document's head merged with one side and
-//!   landed in a draft of the agent's, settled by editing that draft,
-//!   published through the publication family's one write with its
-//!   supersession claim, and taken back or out by one write, the merge
-//!   record naming the agent as the merger) — are tools of those names,
-//!   their arguments the bridge's row minus the session and the board, the
-//!   adapter supplying each where the row requires it; and ten are the
+//!   `merge_withdraw`: a published document's head merged with one side —
+//!   a daughter, a draft of the owner's account, or another account's fork
+//!   of a version — and landed in a draft of the agent's, settled by
+//!   editing that draft, published through the publication family's one
+//!   write, a daughter's supersession claim riding in it, and taken back or
+//!   out by one write, the merge record naming the agent as the merger) —
+//!   are tools of those names, their arguments the bridge's row minus the
+//!   session and the board, the adapter supplying each where the row
+//!   requires it; and ten are the
 //!   adapter's apparatus: `session_info`, `changes_since` (the shell's
 //!   `changes`, a pull), `fetch` (the shell's streamed fetch as an image or
 //!   resource block, the type sniffed off the bytes, the size capped),

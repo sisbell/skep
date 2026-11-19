@@ -296,7 +296,7 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
     assert_eq!(names.len(), 78);
     assert_eq!(ADAPTER_TOOLS.len(), 26);
     for (name, tool, members) in [
-        ("merge_compose", Tool::MergeCompose, &["doc", "alternative", "draft", "into"][..]),
+        ("merge_compose", Tool::MergeCompose, &["doc", "alternative", "draft", "fork", "into"][..]),
         ("merge_land", Tool::MergeLand, &["resolutions", "answers"][..]),
         ("merge_undo", Tool::MergeUndo, &["draft", "withdrawal"][..]),
         ("merge_withdraw", Tool::MergeWithdraw, &["draft"][..]),
@@ -363,9 +363,10 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
 /// beside an object `frame`, which alone is refused; a name it does not
 /// answer is refused before its arguments are read; a member an adapter
 /// tool's row does not take is refused naming the row's own — a
-/// `publication_open`'s `base`, which the shell reads itself, a
-/// `merge_compose`'s `fork`, a side the shell's row takes none of, and a
-/// `merge_withdraw`'s `doc`, whose draft is `draft`, among them — and a
+/// `publication_open`'s `base` and a `merge_compose`'s, each a base the
+/// shell reads itself, and a `merge_withdraw`'s `doc`, whose draft is
+/// `draft`, among them, `merge_compose` admitting each of its three sides,
+/// `fork` among them — and a
 /// member of its `opts` naming the options — `search`'s withheld `reindex`
 /// among them — the row's stranger speaking first; `merge_undo` takes
 /// either of its row's forms, no member or `draft` beside `withdrawal`.
@@ -414,8 +415,9 @@ fn the_dispatchs_door_admits_a_call_or_refuses_it_naming_the_culprit() {
     let err = Tool::admit("restore_text", &args(json!({"doc": "1.0.1.0.64", "at": 3, "as_of": 5}))).expect_err("a member the row does not take");
     assert!(err.contains("restore_text takes 'draft', 'at', 'as_of'") && err.contains("'doc'"), "the draft restored is `draft`: {err}");
     assert_eq!(Tool::admit("merge_compose", &args(json!({"doc": "1.0.1.0.64", "alternative": "1.0.1.0.64.1.1", "into": "1.0.1.0.65"}))), Ok(Tool::MergeCompose));
-    let err = Tool::admit("merge_compose", &args(json!({"doc": "1.0.1.0.64", "fork": "1.0.1.0.66"}))).expect_err("a side the row does not take");
-    assert!(err.contains("merge_compose takes 'doc', 'alternative', 'draft', 'into'") && err.contains("'fork'"), "{err}");
+    assert_eq!(Tool::admit("merge_compose", &args(json!({"doc": "1.0.1.0.64", "fork": "1.0.1.1.0.66"}))), Ok(Tool::MergeCompose), "the fork side");
+    let err = Tool::admit("merge_compose", &args(json!({"doc": "1.0.1.0.64", "fork": "1.0.1.1.0.66", "base": "1.0.1.0.64.1"}))).expect_err("a base the shell reads itself");
+    assert!(err.contains("merge_compose takes 'doc', 'alternative', 'draft', 'fork', 'into'") && err.contains("'base'"), "{err}");
     for form in [json!({}), json!({"draft": "1.0.1.0.65", "withdrawal": 7})] {
         assert_eq!(Tool::admit("merge_undo", &args(form.clone())), Ok(Tool::MergeUndo), "{form}: a form of the merge.undo row");
     }
@@ -769,7 +771,7 @@ fn each_short_card_says_what_an_agent_needs_first() {
     let mib = format!("{} MiB", crate::media::MAX_FETCH_BYTES / (1024 * 1024));
     let pairs = format!("at most {MAX_WIRE_LIST} pairs");
     let said: [(&str, &[&str]); 24] = [
-        ("merge_compose", &["MERGING", "alternative", "draft", "into", "\"landed\"", "\"reopened\"", "\"merged\"", "EDITING", "merge_land", "base_unknown", "held_lines", "isError"]),
+        ("merge_compose", &["MERGING", "alternative", "draft", "fork", "into", "\"landed\"", "\"reopened\"", "\"merged\"", "EDITING", "merge_land", "base_unknown", "held_lines", "isError"]),
         ("merge_land", &["resolutions", "\"run.part\"", "\"landed\"", "\"restated\"", "supersede_refused", "head_moved", "window_parts_owed", "no_merge", "isError", "not undone"]),
         (
             "merge_undo",
@@ -1180,10 +1182,12 @@ fn the_publication_references_state_the_shells_shapes() {
 /// `held_lines`, and `merge_land`'s `window_parts_owed`, each part in it
 /// spelled as the shell's `WindowPart`, and `other_panel`; the compose
 /// reference names `base_unknown` by each reason the shell answers it with,
-/// `bare_source` naming its `source` for a draft of yours begun from the
-/// bare document, and the way on from that draft whether or not a version
-/// stands since. The compose reference and MERGING name every gap kind the
-/// shell's `GapKind` spells;
+/// at the draft side and at the fork side, `bare_source` naming its
+/// `source` for a draft of yours begun from the bare document and for a
+/// fork taken from it, the way on from that draft whether or not a version
+/// stands since, and the fork side's own refusal at its landing,
+/// `fork_base_moved`. The compose reference and MERGING name every gap kind
+/// the shell's `GapKind` spells;
 /// `merge_land`'s schema takes `resolutions` as the shell's `MergeChoice`
 /// and `answers` as its `OriginAnswer` (SP-24). MERGING says what a merge
 /// takes, that a gap is settled by editing the draft, that the landing
@@ -1258,6 +1262,7 @@ fn the_merge_references_state_the_shells_shapes() {
     for said in [
         "a document never published has nothing to merge",
         "whose recorded base (doc_metadata(draft).base) is a version of doc",
+        "whose source (doc_metadata(fork).source) is a version of doc",
         "refused base_unknown, nothing written",
         "A gap is settled by EDITING THE DRAFT",
         "resolved_by agent",
@@ -1295,9 +1300,12 @@ fn the_merge_references_state_the_shells_shapes() {
         "With into named, the call made again re-opens into, or lands there, and stages nothing more; with none named, it stages another, the first left standing beside it",
         "changes_since(class: \"drafts\") from before the call names such a draft",
         "base_unknown {side, reason, source?}",
-        "reason base_unknown for a draft never staged, one staged from a draft with no recorded base or from another document, or a draft of another account",
+        "reason base_unknown for a draft never staged, one staged from a draft with no recorded base or from another document, or a draft of another account — compose that one as a fork",
+        "and for a fork with no source, one the fork op minted, or one whose source is no version of doc",
         "reason bare_source, naming source (doc itself), for a draft of yours staged from the bare document before its first version",
         "publish that draft while doc has no version — it lands version 1, leaving nothing to merge — or, once one stands, stage a draft from the head and bring the words over into it",
+        "and for a fork, of any account, taken from the bare document so",
+        "refused merge_refused fork_base_moved {fork, source, head} where its source is not the head",
     ] {
         assert!(compose.contains(said), "merge_compose's reference says {said:?}: {compose}");
     }

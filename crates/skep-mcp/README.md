@@ -127,18 +127,24 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `not_a_position`) and `held_lines` among them — are `isError`, nothing
   sent.
 - **A merge, landed in a draft and published from it.** `merge_compose
-  {doc, alternative | draft, into?}` is the shell's `merge.compose`: the
-  published document's head merged with ONE side — a daughter of its
-  chain, or a draft of the owner's account whose recorded base is a
-  version of `doc` — and the merge landed, at its defaults, as the whole
-  arrangement of `into` or of a fresh draft staged from the head, by one
-  write; its answer is the gap report, and composing again re-opens the
-  draft, reading each gap's state off it, or names the version a merged
-  daughter went into. A gap is settled by editing the draft. `merge_land
-  {resolutions?, answers?}` is the shell's `merge.land`: the draft
-  published through the publication family's one signed write with the
-  supersession claim on the daughter, then the merge record, every window
-  part answered by the agent or the landing refused `window_parts_owed`.
+  {doc, alternative | draft | fork, into?}` is the shell's
+  `merge.compose`: the published document's head merged with ONE side —
+  a daughter of its chain, a draft of the owner's account whose recorded
+  base is a version of `doc`, or another account's fork whose source is
+  one — and the merge landed, at its defaults, as the whole arrangement
+  of `into` or of a fresh draft staged from the head, by one write; its
+  answer is the gap report, and composing again re-opens the draft,
+  reading each gap's state off it, or names the version a merged
+  daughter went into. A fork composed by its own owner lands in a fresh
+  draft of theirs staged from the head, re-basing it for the document's
+  owner to merge; the fork itself as `into` is refused `fork_base_moved`
+  unless its source is the head. A gap is settled by editing the draft.
+  `merge_land {resolutions?, answers?}` is the shell's `merge.land`: the
+  draft published through the publication family's one signed write with
+  the supersession claim on the daughter — none at the draft or fork
+  side — then the merge record, every window part — at the fork side the
+  fork's own words — answered by the agent or the landing refused
+  `window_parts_owed`.
   `merge_undo {}` takes a landing back, `merge_withdraw {draft}` takes a
   merge out of a draft and keeps its words, and `merge_undo {draft,
   withdrawal}` puts it back, each by one write. The composition lives with

@@ -453,7 +453,7 @@ fn every_declared_optional_argument_is_read_in_its_form() {
             asked += 1;
         }
     }
-    assert_eq!(asked, 45, "the optional members of the nineteen rows of one form that declare any: the publication family's thirteen and the merge family's five among them, `publication.open`'s and `publication.standing`'s `also`, `merge.compose`'s `into`, `merge.land`'s `answers`, `close`'s `after` and `frames`, `text.move`'s `last` and `before` and `text.diff`'s `stat` and `hunk` included");
+    assert_eq!(asked, 46, "the optional members of the nineteen rows of one form that declare any: the publication family's thirteen and the merge family's six among them, `publication.open`'s and `publication.standing`'s `also`, `merge.compose`'s `fork` and `into`, `merge.land`'s `answers`, `close`'s `after` and `frames`, `text.move`'s `last` and `before` and `text.diff`'s `stat` and `hunk` included");
 }
 
 /// Checks that a close's list of another form is refused, nothing sent.

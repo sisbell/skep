@@ -194,13 +194,15 @@
 //! claim rides at a draft carrying a merge composed on the current head, on
 //! every device and in any session alike, the marker being the board's and
 //! never session memory; it never rides at an unmarked draft, at a marked
-//! draft behind the head (B3-S11's "this draft's merge ends with it"), or
-//! at a draft-side merge, whose side is a private draft no public claim
-//! supersedes. The panel carries it as `count.supersede`, the
-//! acknowledgment as `supersede`, what rode; a daughter an active claim of
-//! the person's own already names is dropped by the library before the
-//! body is signed, as the board's plan skips it. A head that moves under
-//! the shot after the open is the board's to refuse, whole —
+//! draft behind the head (B3-S11's "this draft's merge ends with it"), at
+//! a draft-side merge, whose side is a private draft no public claim
+//! supersedes, or at a fork's merge, whose side is another document than
+//! the trunk's, no member of its chain. The panel carries it as
+//! `count.supersede`, the acknowledgment as `supersede`, what rode; a
+//! daughter an active claim of the person's own already names is dropped
+//! by the library before the body is signed, as the board's plan skips
+//! it. A head that moves under the shot after the open is the board's to
+//! refuse, whole —
 //! `supersede_refused` with `head_moved` — crossing as the typed arm of the
 //! refusal, nothing re-sent (skep #806); the re-read before the send
 //! re-states a moved standing first, so the race is met only between the
@@ -680,9 +682,9 @@ impl Shell {
     /// **The claim**).
     ///
     /// Empty at an unmarked draft, at a marked draft whose head the trunk
-    /// has moved past, and at a draft-side merge, whose marker names no
-    /// daughter; a side that is no member of `doc`'s chain under a trunk
-    /// member — a private draft — is never claimed.
+    /// has moved past, and at a draft-side or a fork's merge, whose marker
+    /// names no daughter; a side that is no member of `doc`'s chain under a
+    /// trunk member — a private draft, a fork — is never claimed.
     ///
     /// # Errors
     ///

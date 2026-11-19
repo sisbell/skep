@@ -398,11 +398,12 @@ impl Name {
     ///
     /// The detail names the `side` and the `reason`: `base_unknown` — a
     /// member of another document, a draft of another account's, a draft the
-    /// board records no base for or whose base lies in another chain
+    /// board records no base for or whose base lies in another chain, a fork
+    /// the board serves no source for or whose source lies in another chain
     /// (`skep_client::merge::Refusal::BaseUnknown`); `bare_source` with the
-    /// `source` — a draft staged from the bare document, before its first
-    /// version, whose base is history the board does not serve
-    /// (`Refusal::BareSource`); `draft_base_disagrees` with `named` and
+    /// `source` — a draft staged, or a fork taken, from the bare document
+    /// before its first version, whose base is history the board does not
+    /// serve (`Refusal::BareSource`); `draft_base_disagrees` with `named` and
     /// `served` (`Refusal::DraftBaseDisagrees`, never met by this shell,
     /// which names no base).
     pub const BASE_UNKNOWN: Name = Name("base_unknown");

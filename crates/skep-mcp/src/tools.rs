@@ -166,13 +166,15 @@ pub enum Tool {
     /// The session is supplied; the shell reads where the draft stands and
     /// holds nothing.
     PublicationStanding,
-    /// `merge.compose(session, doc, alternative? | draft?, into?)`, the
-    /// shell's.
+    /// `merge.compose(session, doc, alternative? | draft? | fork?, into?)`,
+    /// the shell's.
     ///
-    /// It composes the merge of a published document's head with one side
-    /// and lands it in a draft of the agent's, the session supplied; the
-    /// shell holds the composition with the session. Its answer and its
-    /// refusals go by `tool_result`'s rule, as every shell call's do.
+    /// It composes the merge of a published document's head with one side —
+    /// a daughter, a draft of the owner's account, or a fork of one of the
+    /// document's versions — and lands it in a draft of the agent's, the
+    /// session supplied; the shell holds the composition with the session.
+    /// Its answer and its refusals go by `tool_result`'s rule, as every
+    /// shell call's do.
     MergeCompose,
     /// `merge.land(session, resolutions?, answers?)`, the shell's.
     ///
@@ -265,7 +267,7 @@ const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
     ("publication_confirm", Tool::PublicationConfirm, &["switches", "answers"]),
     ("publication_cancel", Tool::PublicationCancel, &[]),
     ("publication_standing", Tool::PublicationStanding, &["draft", "doc", "also"]),
-    ("merge_compose", Tool::MergeCompose, &["doc", "alternative", "draft", "into"]),
+    ("merge_compose", Tool::MergeCompose, &["doc", "alternative", "draft", "fork", "into"]),
     ("merge_land", Tool::MergeLand, &["resolutions", "answers"]),
     ("merge_undo", Tool::MergeUndo, &["draft", "withdrawal"]),
     ("merge_withdraw", Tool::MergeWithdraw, &["draft"]),

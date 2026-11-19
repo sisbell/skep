@@ -23,7 +23,9 @@ use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{self, Facts, Open, SessionEntry, SessionKind, Sessions, Supplements};
 
-/// One sample per declared type: the value the crate's code answers or
+/// Returns one sample per declared type.
+///
+/// Each is the value the crate's code answers or
 /// emits for it — the refusals through `Refusal::to_value`, the search
 /// answer through `feed::answer_without_index`, the listing through
 /// `feed::places_without_index`, the index state through `feed::state_json`,
@@ -32,9 +34,10 @@ use crate::sessions::{self, Facts, Open, SessionEntry, SessionKind, Sessions, Su
 /// family's, the past state's, the restore's and the text family's answers
 /// are held to their declarations against the real board by the shell's own
 /// suite, `shell/tests/publication.rs`, `merge.rs`, `history.rs` and
-/// `text.rs`, and `text.edit`'s and `text.move`'s against a scripted one by
-/// their unit suites, `shell/text/edit/tests.rs` and
-/// `shell/text/moving/tests.rs`).
+/// `text.rs`, and `text.edit`'s, `text.move`'s, `text.mark`'s and
+/// `text.diff`'s against a scripted one by their unit suites,
+/// `shell/text/edit/tests.rs`, `shell/text/moving/tests.rs`,
+/// `shell/text/mark/tests.rs` and `shell/text/diffing/tests.rs`).
 fn samples() -> Vec<(&'static str, Value)> {
     let facts = json!({"principal": 1, "account": "1.0.1", "origin": "http://127.0.0.1:8642"});
     vec![
@@ -216,6 +219,23 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         ("TextMoveUnchanged", json!({"outcome": "unchanged", "doc": "1.0.1.0.64", "as_of": 40})),
         ("TextMoveHeld", json!({"outcome": "held", "doc": "1.0.1.0.64", "held": 8, "cause": "unreachable", "write": "rearrange", "error": true})),
+        ("TextMarked", json!({"outcome": "marked", "doc": "1.0.1.0.64", "mark": "1.0.1.0.65", "link": "1.0.1.0.65.0.2.1", "at": 47})),
+        ("TextMarkHeld", json!({"outcome": "held", "doc": "1.0.1.0.64", "mark": "1.0.1.0.65", "held": 8, "cause": "unreachable", "write": "copy", "error": true})),
+        (
+            "TextMarkPartial",
+            json!({"outcome": "partial", "doc": "1.0.1.0.64", "mark": "1.0.1.0.65", "at": 44, "cause": "slot_too_large", "refusal": {"kind": "refused", "name": "slot_too_large"}, "op": "make_link", "error": true}),
+        ),
+        (
+            "TextDiffed",
+            json!({
+                "outcome": "diffed", "doc": "1.0.1.0.64", "since": "1.0.1.0.65", "as_of": 40, "shared": "61", "bytes": {"new": "12", "gone": "9", "moved": "24"},
+                "lines": {"added": "1", "removed": "1", "moved": "1"},
+                "rows": ["@@ -1,4 +1,4 @@", ">1\t    println!(\"{total}\");", " 2\tfn main() {", "-2\t    let total = add(left, right);", "+3\t    let total = sum(left, right);", "<\t(line 3 moved to 1)", " 4\t}"],
+                "notes": [{"kind": "moved", "before": [3, 3], "now": [1, 1]}], "masked": true, "next_hunk": 2,
+            }),
+        ),
+        ("TextDiffNote", json!({"kind": "moved_within_lines", "before": [3, 3], "now": [1, 1], "bytes": "9"})),
+        ("TextDiffUnchanged", json!({"outcome": "unchanged", "doc": "1.0.1.0.64", "since": "1.0.1.0.65", "as_of": 40})),
     ]
 }
 
@@ -265,8 +285,8 @@ fn the_file_names_every_shape_call_and_event() {
     }
     assert_eq!(
         CALL_ROWS.len(),
-        42,
-        "the forty-two calls: §4b.1's with the publication family's four, the merge family's four, `history.restore` and `held.show`, the notebook's three acts, the read of a draft's standing, the read of a draft's past state, the document index's listing, the text family's three and the change feed's page"
+        44,
+        "the forty-four calls: §4b.1's with the publication family's four, the merge family's four, `history.restore` and `held.show`, the notebook's three acts, the read of a draft's standing, the read of a draft's past state, the document index's listing, the text family's five and the change feed's page"
     );
     assert_eq!(CALL_ROWS.iter().map(|row| row.name).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
     for line in [
@@ -306,6 +326,14 @@ fn the_file_names_every_shape_call_and_event() {
         "export interface TextMoved {\n  outcome: 'moved';\n  doc: string;\n  first: number;\n  last: number;\n  to_first: number;\n  to_last: number;\n  cuts: string[];\n  at?: number;\n  lines: string[];\n  masked?: true;\n}\n",
         "export interface TextMoveUnchanged {\n  outcome: 'unchanged';\n  doc: string;\n  as_of: number;\n}\n",
         "export interface TextMoveHeld {\n  outcome: 'held';\n  doc: string;\n  held: number;\n  cause: string;\n  write: 'rearrange';\n  error: true;\n}\n",
+        "  'text.mark'(args: { session: string; doc: string }): Promise<Outcome<TextMarked | TextRefused | TextMarkHeld | TextMarkPartial>>;\n",
+        "export interface TextMarked {\n  outcome: 'marked';\n  doc: string;\n  mark: string;\n  link: string;\n  at: number;\n}\n",
+        "export interface TextMarkHeld {\n  outcome: 'held';\n  doc: string;\n  mark: string;\n  held: number;\n  cause: string;\n  write: 'copy';\n  error: true;\n}\n",
+        "export interface TextMarkPartial {\n  outcome: 'partial';\n  doc: string;\n  mark: string;\n  at?: number;\n  cause: string;\n  refusal?: unknown;\n  op?: string;\n  error: true;\n}\n",
+        "  'text.diff'(args: { session: string; doc: string; since: string; stat?: boolean; hunk?: number }): Promise<Outcome<TextDiffed | TextDiffUnchanged | TextRefused>>;\n",
+        "export interface TextDiffed {\n  outcome: 'diffed';\n  doc: string;\n  since: string;\n  as_of: number;\n  shared: string;\n  bytes: { new: string; gone: string; moved: string };\n  lines?: { added: string; removed: string; moved: string };\n  rows?: string[];\n  notes?: TextDiffNote[];\n  masked?: true;\n  next_hunk?: number;\n}\n",
+        "export interface TextDiffNote {\n  kind: 'moved' | 'placed_twice' | 'retyped' | 'moved_within_lines';\n  before?: [number, number];\n  now?: [number, number];\n  bytes?: string;\n}\n",
+        "export interface TextDiffUnchanged {\n  outcome: 'unchanged';\n  doc: string;\n  since: string;\n  as_of: number;\n}\n",
         "  supersede: string[];\n",
         "  over_cap: boolean;\n",
         "  unrecorded?: Refusal;\n",

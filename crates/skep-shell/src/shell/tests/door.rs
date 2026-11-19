@@ -69,8 +69,9 @@ fn an_op_at_refusal_is_the_boards_verdict_under_the_wires_status() {
 /// `node.restart` after `probe`, whose answer each gives, the publication
 /// family after `op`, the merge family after it, `history.past` and
 /// `history.restore` closing the merge row ahead of the media rows, the read
-/// before the write, `held.show` after `held`, `text.replace`, `text.edit`
-/// and `text.move` after the rows they are made of and `changes` last — the
+/// before the write, `held.show` after `held`, `text.replace`, `text.edit`,
+/// `text.move`, `text.mark` and `text.diff` after the rows they are made of
+/// and `changes` last — the
 /// document index's listing
 /// `places` beside `search`; a name of no call names none, and `call` answers
 /// it `unknown_call`; and `fetch`, which streams on its transport's own route,
@@ -81,14 +82,14 @@ fn every_call_is_named_by_its_own_spelling() {
         assert_eq!(Call::named(call.as_str()), Some(call));
     }
     assert_eq!(CALLS.map(Call::named), Call::ALL.map(Some));
-    assert_eq!((CALLS.len(), CALLS[0], CALLS[41]), (42, "boards", "changes"));
+    assert_eq!((CALLS.len(), CALLS[0], CALLS[43]), (44, "boards", "changes"));
     assert_eq!(&CALLS[14..19], ["probe", "node.start", "node.stop", "node.restart", "op"], "the notebook's three acts stand after `probe`, whose answer each gives");
     assert_eq!((CALLS[33], CALLS[34]), ("search", "places"));
     assert_eq!(&CALLS[35..38], ["held", "held.show", "resolve"], "`held.show` stands after `held`, whose row owes it");
     assert_eq!(
-        &CALLS[38..41],
-        ["text.replace", "text.edit", "text.move"],
-        "the text family stands after the rows it is made of, its one edit before its several and its move after them, the change feed's page last"
+        &CALLS[38..43],
+        ["text.replace", "text.edit", "text.move", "text.mark", "text.diff"],
+        "the text family stands after the rows it is made of, its one edit before its several, its move after them, then the mark and the diff since one, the change feed's page last"
     );
     assert_eq!(&CALLS[19..24], ["publication.open", "publication.count", "publication.confirm", "publication.cancel", "publication.standing"], "the publication family stands after `op`, whose publish arm it carries, its read of a draft's standing closing it");
     assert_eq!(&CALLS[24..28], ["merge.compose", "merge.land", "merge.undo", "merge.withdraw"], "the merge family stands after the publication family, whose shot its landing rides");
@@ -424,9 +425,9 @@ fn every_declared_optional_argument_is_read_in_its_form() {
     let board = shell.board_references().remove(0);
     let in_form = |field: &Field| match (field.name, field.ty) {
         ("board", _) => json!(board),
-        // A row that reads its `doc` before its optional members takes an
-        // address in its one spelling.
-        ("doc", _) => json!("1.0.1.0.64"),
+        // A row that reads its `doc`, or the document it compares it with,
+        // before its optional members takes an address in its one spelling.
+        ("doc" | "since", _) => json!("1.0.1.0.64"),
         (_, "number") => json!(1),
         _ => json!("x"),
     };
@@ -452,7 +453,7 @@ fn every_declared_optional_argument_is_read_in_its_form() {
             asked += 1;
         }
     }
-    assert_eq!(asked, 43, "the optional members of the eighteen rows of one form that declare any: the publication family's thirteen and the merge family's five among them, `publication.open`'s and `publication.standing`'s `also`, `merge.compose`'s `into`, `merge.land`'s `answers`, `close`'s `after` and `frames` and `text.move`'s `last` and `before` included");
+    assert_eq!(asked, 45, "the optional members of the nineteen rows of one form that declare any: the publication family's thirteen and the merge family's five among them, `publication.open`'s and `publication.standing`'s `also`, `merge.compose`'s `into`, `merge.land`'s `answers`, `close`'s `after` and `frames`, `text.move`'s `last` and `before` and `text.diff`'s `stat` and `hunk` included");
 }
 
 /// Checks that a close's list of another form is refused, nothing sent.
@@ -930,14 +931,19 @@ fn a_bursts_id_of_the_dial_ids_prefix_is_refused_before_any_dial() {
 /// A takes the board's pending store. Shell B over the same data directory
 /// finds the pending lock A's and stands another shell's. Then, each pair in
 /// the door's order: a BARE session of B's meeting another window is refused
-/// `write_in_bare_session`, a frame's, the restore's and the three text
-/// calls' alike; B's SIGNED session, with B's own node stopped, meeting
-/// another window is refused `another_window`, never `stopped`, the text
-/// calls' before any read of the draft reaches the listener (SP-31: the
+/// `write_in_bare_session`, a frame's, the restore's and the four text
+/// calls' that write alike; B's signed session, with B's own node stopped,
+/// meeting another window is refused `another_window`, never `stopped`, the
+/// text calls' before any read of the draft reaches the listener (SP-31: the
 /// mutant that leaves an edit to its frames' door reads the draft first,
-/// and is refused naming the burst); A's node stopped, a burst of A's held
-/// `stopped` on a draft, the restore over that draft is refused `stopped`
-/// naming `set_arrangement`, never `held_lines`, and nothing of it reaches
+/// and is refused naming the burst); `text.diff`, which writes nothing, is
+/// refused by neither, its first read reaching the listener from the bare
+/// session and from the second window alike (the mutant that asks the write
+/// door of it refuses a read as a write); A's node stopped, a burst of A's
+/// held `stopped` on a draft, the restore over that draft is refused
+/// `stopped` naming `set_arrangement`, never `held_lines`, and the mark,
+/// whose first write is a mint no hold holds, `stopped` naming
+/// `create_new_document`, and nothing of either reaches
 /// the listener; A's node running — the line standing still, the board
 /// taking no write — the same restore is refused `held_lines` naming the
 /// draft and the one line, no read of the draft reaching the listener, and
@@ -996,6 +1002,9 @@ fn the_write_door_asks_its_four_questions_in_one_order() {
     let lines = |session: &str| json!({"session": session, "doc": draft, "first": 2, "before": 1});
     let refused = b.call("text.move", &lines(&b_bare)).unwrap_err().to_value();
     assert_eq!((refused["name"].as_str(), refused["call"].as_str()), (Some("write_in_bare_session"), Some("text.move")), "{refused}");
+    let marked = |session: &str| json!({"session": session, "doc": draft});
+    let refused = b.call("text.mark", &marked(&b_bare)).unwrap_err().to_value();
+    assert_eq!((refused["name"].as_str(), refused["call"].as_str()), (Some("write_in_bare_session"), Some("text.mark")), "{refused}");
     // (2) before (3): another window meeting a stopped node.
     b.set_node_state(NodeState::Stopped);
     let refused = b.call("history.restore", &restore(&b_signed)).unwrap_err().to_value();
@@ -1009,10 +1018,23 @@ fn the_write_door_asks_its_four_questions_in_one_order() {
     assert_eq!((refused["name"].as_str(), refused["call"].as_str()), (Some("another_window"), Some("text.edit")), "{refused}");
     let refused = b.call("text.move", &lines(&b_signed)).unwrap_err().to_value();
     assert_eq!((refused["name"].as_str(), refused["call"].as_str()), (Some("another_window"), Some("text.move")), "{refused}");
+    let refused = b.call("text.mark", &marked(&b_signed)).unwrap_err().to_value();
+    assert_eq!((refused["name"].as_str(), refused["call"].as_str()), (Some("another_window"), Some("text.mark")), "{refused}");
     // The feed thread reads the board's head on its own clock, so a frame
     // counts here where it names the draft, as every read of it does.
     let read: Vec<Value> = frames.lock().unwrap()[before_the_edit..].iter().filter(|frame| frame.to_string().contains(draft)).cloned().collect();
     assert!(read.is_empty(), "each edit's door answers before any read of the draft: {read:?}");
+    // The diff writes nothing and asks no write door: from the bare session
+    // and from the second window its first read is dialed, and the listener,
+    // which answers nothing, is the one refusal it meets.
+    let since = "1.0.2.0.67";
+    for session in [&b_bare, &b_signed] {
+        let before_the_diff = frames.lock().unwrap().len();
+        let refused = b.call("text.diff", &json!({"session": session, "doc": draft, "since": since})).unwrap_err().to_value();
+        assert_eq!(refused["name"].as_str(), Some("unreachable"), "{refused}");
+        let read: Vec<Value> = frames.lock().unwrap()[before_the_diff..].iter().filter(|frame| frame["op"] == "image" && frame["d"] == since).cloned().collect();
+        assert_eq!(read.len(), 1, "the diff's first read, the image of `since`, reached the board");
+    }
     b.set_node_state(NodeState::Running);
     // (3) before (4): a stopped node meeting a standing line.
     a.set_node_state(NodeState::Stopped);
@@ -1021,6 +1043,8 @@ fn the_write_door_asks_its_four_questions_in_one_order() {
     let own = frames.lock().unwrap().len();
     let refused = a.call("history.restore", &restore(&a_session)).unwrap_err().to_value();
     assert_eq!((refused["name"].as_str(), refused["op"].as_str()), (Some("stopped"), Some("set_arrangement")), "{refused}");
+    let refused = a.call("text.mark", &marked(&a_session)).unwrap_err().to_value();
+    assert_eq!((refused["name"].as_str(), refused["op"].as_str()), (Some("stopped"), Some("create_new_document")), "the mark's first write is a mint, which no hold holds: {refused}");
     let under_the_stop = frames.lock().unwrap()[own..].to_vec();
     assert!(under_the_stop.is_empty(), "nothing read or sent under the stop: {under_the_stop:?}");
     // (4): the node running, the line standing — the board takes no write —

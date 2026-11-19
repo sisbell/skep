@@ -309,7 +309,7 @@ recorded.
 
 `skep-dev serve` is THE DEV PROVIDER: the shell's core (`skep-shell`)
 served to a page in a browser over loopback HTTP and server-sent events —
-`POST /bridge/<call>` for the forty-two calls of `skep-shell`'s
+`POST /bridge/<call>` for the forty-four calls of `skep-shell`'s
 `CALLS`, `client.md` §4b.1's thirty-two — the publication family's four,
 the merge family's four, `history.restore` and `held.show` among them —
 the notebook's three acts, `node.start` (the door's act), `node.stop` and
@@ -317,7 +317,10 @@ the notebook's three acts, `node.start` (the door's act), `node.stop` and
 of a draft's standing, `history.past`,
 the read of a draft's past state, `places`, the document index's listing,
 `text.replace`, the text edit of a draft, `text.edit`, several of them
-in one call, `text.move`, whole lines of a draft moved by identity, and
+in one call, `text.move`, whole lines of a draft moved by identity,
+`text.mark`, a private copy of a draft's content by identity to diff
+against, `text.diff`, what changed in a draft since such a document, told
+by identity, and
 `changes`, the change feed's page
 (`{result}` or `{refused}` back, HTTP 200 either way;
 a 4xx is the provider's own refusal), `GET /bridge/events` for every

@@ -339,6 +339,67 @@ fn a_line_moved_keeps_its_identity_and_a_link_on_it_still_finds_it() {
     assert!(mcp.finish().success());
 }
 
+/// A mark, then a change and a move, are told by `diff_text` since the mark.
+///
+/// `mark_text` answers `marked` on one line, naming a private document that
+/// holds the draft's text at the draft's own I-addresses, no value minted,
+/// and the diff since it of the unchanged draft is `unchanged`. A word
+/// changed and a line moved, `diff_text` answers `diffed` on its first line
+/// — the counts by identity, the lines counted, the note of the move, the
+/// rows taken off — then the hunk, one row a line as the shell spelled it:
+/// the changed line gone and new, the moved line `>` where it stands and one
+/// `<` row where it left. `stat` answers the counts alone on one line, and a
+/// member the row does not take is refused before any call (the mutants
+/// that leave the rows inside the JSON, or copy by minting, answer
+/// otherwise).
+#[test]
+fn a_mark_then_a_change_and_a_move_are_told_by_diff_text_since_the_mark() {
+    let fixture = Fixture::new("mark-diff");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+    let doc = draft_holding(&mut mcp, CLAIMANT_ACCOUNT, CODE);
+    let before = addresses(&mut mcp, &doc);
+    let (is_error, text) = mcp.call("mark_text", json!({"doc": doc}));
+    let marked: Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("mark_text's result is one line of JSON ({e}): {text}"));
+    assert!(!is_error && marked["outcome"] == "marked", "the mark is made: {marked}\n{}", mcp.log());
+    let mark = marked["mark"].as_str().expect("the mark's address").to_string();
+    assert_eq!(marked, json!({"outcome": "marked", "doc": doc, "mark": mark, "link": marked["link"], "at": marked["at"]}));
+    assert_eq!((text_of(&mut mcp, &mark), addresses(&mut mcp, &mark)), (CODE.to_string(), before), "the draft's own bytes, by identity");
+    assert_eq!(minted(&mut mcp, &mark), 0, "no value minted in the mark");
+    let (is_error, text) = mcp.call("diff_text", json!({"doc": doc, "since": mark}));
+    assert_eq!((is_error, serde_json::from_str::<Value>(&text).expect("one line of JSON")["outcome"].as_str().map(str::to_string)), (false, Some("unchanged".to_string())), "{text}");
+
+    let (is_error, answer, _) = edit(&mut mcp, &doc, json!([{"old": "add(left, right)", "new": "sum(left, right)"}]));
+    assert!(!is_error && answer["outcome"] == "edited", "{answer}");
+    let (is_error, answer, _) = move_lines(&mut mcp, json!({"doc": doc, "first": 3, "before": 2}));
+    assert!(!is_error && answer["outcome"] == "moved", "{answer}");
+    let (is_error, text) = mcp.call("diff_text", json!({"doc": doc, "since": mark}));
+    let (first, rows) = text.split_once('\n').expect("rows after the answer");
+    let diffed: Value = serde_json::from_str(first).unwrap_or_else(|e| panic!("diff_text's first line is JSON ({e}): {text}"));
+    assert_eq!(
+        (is_error, &diffed),
+        (
+            false,
+            &json!({
+                "outcome": "diffed", "doc": doc, "since": mark, "as_of": answer["at"], "shared": (CODE.len() - 3).to_string(), "bytes": {"new": "3", "gone": "3", "moved": "25"},
+                "lines": {"added": "1", "removed": "1", "moved": "1"}, "notes": [{"kind": "moved", "before": [3, 3], "now": [2, 2]}],
+            })
+        ),
+        "the answer, its rows after it"
+    );
+    assert_eq!(
+        rows.split('\n').collect::<Vec<_>>(),
+        ["@@ -1,4 +1,4 @@", " 1\tfn main() {", "-2\t    let total = add(left, right);", "<\t(line 3 moved to 2)", ">2\t    println!(\"{total}\");", "+3\t    let total = sum(left, right);", " 4\t}"]
+    );
+    let (is_error, text) = mcp.call("diff_text", json!({"doc": doc, "since": mark, "stat": true}));
+    let stat: Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("a stat answer is one line of JSON ({e}): {text}"));
+    assert_eq!((is_error, &stat["bytes"], stat.get("lines")), (false, &json!({"new": "3", "gone": "3", "moved": "25"}), None), "the counts alone: {stat}");
+    let refused = mcp.request("tools/call", json!({"name": "diff_text", "arguments": {"doc": doc, "mark": mark}}));
+    assert!(refused["error"]["code"] == json!(-32602) && refused["error"]["message"].as_str().unwrap_or_default().contains("'mark'"), "the document compared with is `since`: {refused}");
+    assert_eq!(mcp.call_json("held", json!({})), json!([]));
+    assert!(mcp.finish().success());
+}
+
 /// `not_found` and `not_unique` write nothing.
 ///
 /// A text the draft does not hold is refused `not_found`, count 0, and one

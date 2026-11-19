@@ -547,7 +547,7 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "TextRefused",
         open: true,
-        doc: "`text.replace`, `text.edit` and `text.move` — NOTHING of the edit stands and no line of it is held: `cause` the edit's own — `not_found` and `not_unique` with `count` and the `as_of` the draft was read at, `crosses_atom` with the `ordinal` and the `kind` of the value that is no text the match would take in, `published` with the document, `too_large` with `what` (`new` and its `bytes`, or `draft` and its `positions`, or `runs`, a draft `text.edit` could not set back in one write, with how many `runs` it is in where the board answered its image) and the `cap`, `unknown_item` with the `kind` whose positions the shell cannot count, `arrangement_moved` with the `as_of` where the draft changed between the parts of its read — or the board's verdict on a write, its `code` the cause and the verdict under `refusal`; and, `error` beside them, an answer that is no verdict: a write the shell could not get to the board, its hold's cause the cause (`unreachable`, `stopped`, `halted`, `poisoned`, `durability`, `head_unreadable`, `session_died`, or `behind` — a line of an earlier burst of the principal's held at the board), or a read the board answered in a form this shell does not read (`unread`, with its `op`); from `text.edit`, `pair` beside them, the index in `edits` of the pair refused — its `old` sought in the text as the pairs before it leave it, an `ordinal` a place in that text — and `change`, the index among that pair's changes of the one whose new text is `too_large` or whose write did not land; from `text.move`, `no_such_line` with `what`, the member — `first`, `last` or `before` — naming a line the draft's text does not hold, the `line` it names and `count`, the lines the text holds: `first` and `last` name a line from 1 to `count`, `before` one from 1 to one past it",
+        doc: "`text.replace`, `text.edit`, `text.move`, `text.mark` and `text.diff` — NOTHING of the edit stands and no line of it is held: `cause` the edit's own — `not_found` and `not_unique` with `count` and the `as_of` the draft was read at, `crosses_atom` with the `ordinal` and the `kind` of the value that is no text the match would take in, `published` with the document, `too_large` with `what` (`new` and its `bytes`, or `draft` and its `positions`, or `runs`, a draft `text.edit` could not set back in one write, with how many `runs` it is in where the board answered its image) and the `cap`, `unknown_item` with the `kind` whose positions the shell cannot count, `arrangement_moved` with the `as_of` where the draft changed between the parts of its read — or the board's verdict on a write, its `code` the cause and the verdict under `refusal`; and, `error` beside them, an answer that is no verdict: a write the shell could not get to the board, its hold's cause the cause (`unreachable`, `stopped`, `halted`, `poisoned`, `durability`, `head_unreadable`, `session_died`, or `behind` — a line of an earlier burst of the principal's held at the board), or a read the board answered in a form this shell does not read (`unread`, with its `op`); from `text.edit`, `pair` beside them, the index in `edits` of the pair refused — its `old` sought in the text as the pairs before it leave it, an `ordinal` a place in that text — and `change`, the index among that pair's changes of the one whose new text is `too_large` or whose write did not land; from `text.move`, `no_such_line` with `what`, the member — `first`, `last` or `before` — naming a line the draft's text does not hold, the `line` it names and `count`, the lines the text holds: `first` and `last` name a line from 1 to `count`, `before` one from 1 to one past it; from `text.mark`, whose mint and whose copy are its first writes, `mark` beside the cause where the copy did not land: the empty document the mint left, nothing copied into it and no link written, the one thing of the call that stands; from `text.diff`, which writes nothing, `too_large` with `what` — `draft`, or `since` and its `positions`, a text told whole past the cap, or `pairs`, two images that share more stretches than a plan is made over, with how many `pairs` — and the `cap`, `arrangement_moved` with `reads`, how many times the draft was imaged and read and found changed between, and `no_such_hunk` with the `hunk` asked and `count`, the hunks the diff holds",
         fields: &[req("outcome", "'refused'"), req("cause", "string"), req("doc", "string"), opt("error", "true")],
     },
     Shape {
@@ -666,6 +666,54 @@ const SHAPES: &[Shape] = &[
         open: false,
         doc: "`text.move` — an error: the shell could not tell whether the call's one write landed, the board not answering, so its line stays held and the shell refused its drop — `held` the line's ordinal, `cause` its hold's, `write` the write it is, `rearrange`: the lines stand moved where it landed, and as they stood where it did not",
         fields: &[req("outcome", "'held'"), req("doc", "string"), req("held", "number"), req("cause", "string"), req("write", "'rearrange'"), req("error", "true")],
+    },
+    Shape {
+        name: "TextMarked",
+        open: false,
+        doc: "`text.mark(session, {doc})` — A MARK OF A DRAFT, made (skep #1091): a private document of the session's own account holding the draft's whole content by identity, to diff against later as `text.diff`'s `since`, in three writes after one read of the draft's extent — `create_new_document`, private; one `copy` of the draft's whole content into it, one source span the board clips to what the draft holds at the copy's commit, typed against the create's commit, a draft read empty not copied; and one link typed `marks` (`1.1.0.1.0.1.0.3.25`) homed in the mark, its `from` the mark's whole content in the V-spec form, which the board stores as the I-spans the mark holds — the draft's own, a copy minting none — and the empty list for a draft read empty, its `to` the draft by address: nothing of the text is read or written anew, and the link says what the document is and which draft it marks, so a draft's marks are found by a link read `to` the draft by type; `mark` the new document's address, `link` the `marks` link's and `at` the link's commit; the mark records no base and no source, so no publication of the draft lists it among the drafts it leaves behind, and its link is a record no publication offers; each mark is a private document of the account, kept as every document is",
+        fields: &[req("outcome", "'marked'"), req("doc", "string"), req("mark", "string"), req("link", "string"), req("at", "number")],
+    },
+    Shape {
+        name: "TextMarkHeld",
+        open: false,
+        doc: "`text.mark` — an error: the shell could not tell whether the call's copy landed, the board not answering, so its line stays held and the shell refused its drop — `mark` the document the create minted, `held` the line's ordinal, `cause` its hold's, `write` the write it is, `copy`: the mark holds the draft's content where it landed and nothing where it did not, and carries no `marks` link either way",
+        fields: &[req("outcome", "'held'"), req("doc", "string"), req("mark", "string"), req("held", "number"), req("cause", "string"), req("write", "'copy'"), req("error", "true")],
+    },
+    Shape {
+        name: "TextMarkPartial",
+        open: false,
+        doc: "`text.mark` — an error: the mint and the copy landed and the link did not — the board refused it, a mark holding more runs than a link's slot takes refused `slot_too_large` among the refusals, or its answer was lost — so `mark` is the copy STANDING, usable as `text.diff`'s `since`, with no `marks` link; `at` the last write that landed, the copy's commit, or the create's for a draft read empty, absent where the copy's own answer was lost and the shell's read found it landed; `cause` what stopped the link, the refusal's name, or `unread` with `op` where the board answered the link in a form this shell does not read, and `refusal` the refusal itself beside it; the link is not sent again",
+        fields: &[req("outcome", "'partial'"), req("doc", "string"), req("mark", "string"), opt("at", "number"), req("cause", "string"), opt("refusal", "unknown"), opt("op", "string"), req("error", "true")],
+    },
+    Shape {
+        name: "TextDiffed",
+        open: false,
+        doc: "`text.diff(session, {doc, since, stat?, hunk?})` — WHAT CHANGED IN A DRAFT, told by identity (skep #1091): `since` a document whose content the draft holds by identity — a mark (`text.mark`), the version member the draft was staged from, a document it copied from; the pairs come from two `image` reads, no text compared to find them, the draft's text is read between two images of it, and the text before is told from the draft's own text where a position still stands and read by identity (`retrieve_i`) where it stands nowhere — `since` is never read whole; the call writes nothing and asks no write door; `as_of` the position the draft was imaged at; `shared` the positions of the draft that `since` holds too, and `bytes` the change by identity — `new` the positions of the draft `since` holds nowhere, `gone` the positions of `since` that neither stay nor moved, `moved` the positions of the draft that moved or stand a second time — each a decimal string; with `stat: true`, and where the two share no position and neither is empty (`shared` `'0'`, nothing of `since` read), those are the whole answer; else `lines` counts the lines added, removed and moved here, decimal strings, and `rows` are the hunks from `hunk` on, from 1: each under `@@ -a,b +c,d @@`, ` N<TAB>line` a line unchanged, `+N<TAB>line` one new, `>N<TAB>line` one moved here with its identity kept, each numbered in the draft, `-N<TAB>line` a line gone, drawn from the text before and numbered in it, `<<TAB>(lines A–B moved to C–D)`, `(line A moved to C)` for one, where moved lines left, a long run of `+`, `-` or `>` rows shown by its two ends around `+…<TAB>(N more lines)` in its own sign, `\\ no line break at the end` after a last line that has none, and lines cut, hexed and marked `{…}` as `TextEdited`'s are; the rows stop after the last whole hunk that fits their byte bound, `next_hunk` then the hunk to ask next, a first hunk past the bound alone cut with `(N more changed lines not shown)`; `notes` what a diff of two texts cannot say (`TextDiffNote`), absent where there is none; `masked` where a withheld run stands on or before a line the rows show, in either text",
+        fields: &[
+            req("outcome", "'diffed'"),
+            req("doc", "string"),
+            req("since", "string"),
+            req("as_of", "number"),
+            req("shared", "string"),
+            req("bytes", "{ new: string; gone: string; moved: string }"),
+            opt("lines", "{ added: string; removed: string; moved: string }"),
+            opt("rows", "string[]"),
+            opt("notes", "TextDiffNote[]"),
+            opt("masked", "true"),
+            opt("next_hunk", "number"),
+        ],
+    },
+    Shape {
+        name: "TextDiffNote",
+        open: false,
+        doc: "one thing identity shows and a diff of two texts cannot: `moved`, lines that moved with their identity kept, `before` their first and last line in `since` and `now` in the draft; `placed_twice`, lines that stand here by identity and at another place of the draft too; `retyped`, lines equal as text whose every byte is new — typed again, not kept or moved — said only for a block holding eight characters that are no whitespace or more; and `moved_within_lines`, `bytes` the moved positions no whole line holds, a decimal string, with no `before` and no `now`",
+        fields: &[req("kind", "'moved' | 'placed_twice' | 'retyped' | 'moved_within_lines'"), opt("before", "[number, number]"), opt("now", "[number, number]"), opt("bytes", "string")],
+    },
+    Shape {
+        name: "TextDiffUnchanged",
+        open: false,
+        doc: "`text.diff` — nothing changed: every position of the draft, as imaged at `as_of`, stands where `since` holds it, and `since` holds no other",
+        fields: &[req("outcome", "'unchanged'"), req("doc", "string"), req("since", "string"), req("as_of", "number")],
     },
 ];
 
@@ -789,6 +837,12 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
         forms: &[&[req("session", "string"), req("doc", "string"), req("first", "number"), opt("last", "number"), opt("before", "number")]],
         result: "TextMoved | TextMoveUnchanged | TextRefused | TextMoveHeld",
     },
+    CallRow { name: "text.mark", forms: &[&[req("session", "string"), req("doc", "string")]], result: "TextMarked | TextRefused | TextMarkHeld | TextMarkPartial" },
+    CallRow {
+        name: "text.diff",
+        forms: &[&[req("session", "string"), req("doc", "string"), req("since", "string"), opt("stat", "boolean"), opt("hunk", "number")]],
+        result: "TextDiffed | TextDiffUnchanged | TextRefused",
+    },
     CallRow {
         name: "changes",
         forms: &[
@@ -874,7 +928,7 @@ pub fn declarations() -> String {
         }
         out.push_str("}\n\n");
     }
-    out.push_str("/** The calls (client.md §4b.1 — the `publication` family's four, the `merge` family's four and `history.restore` among them — this machine's notebook's three acts `node.start`, `node.stop` and `node.restart`, the read of a draft's standing `publication.standing`, the read of a draft's past state `history.past`, the document index's listing `places`, the text edit of a draft `text.replace`, several of them in one call `text.edit`, whole lines of a draft moved by identity `text.move`, and the change feed's page `changes`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
+    out.push_str("/** The calls (client.md §4b.1 — the `publication` family's four, the `merge` family's four and `history.restore` among them — this machine's notebook's three acts `node.start`, `node.stop` and `node.restart`, the read of a draft's standing `publication.standing`, the read of a draft's past state `history.past`, the document index's listing `places`, the text edit of a draft `text.replace`, several of them in one call `text.edit`, whole lines of a draft moved by identity `text.move`, a mark of a draft to diff against `text.mark`, what changed in a draft since one `text.diff`, and the change feed's page `changes`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
     out.push_str("export interface Bridge {\n");
     for row in CALL_ROWS {
         let forms: Vec<String> = row.forms.iter().map(|form| argument_object(form)).collect();

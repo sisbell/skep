@@ -30,16 +30,28 @@
 //! landed answer showing the lines where they now stand (skep #1085) — is
 //! the child module `moving`'s, made of this module's read, its write and
 //! the line it settles. The lines the two calls' landed answers show are
-//! drawn by the child module `rows`. The three rows keep one order to the
-//! first read ([`Shell::text_call`]).
+//! drawn by the child module `rows`.
+//!
+//! The family's fourth call, `text.mark` — a private copy of a draft's
+//! whole content by identity, to diff against later, in three writes: the
+//! mint, one `copy` and one link typed `marks` (skep #1091) — is the child
+//! module `mark`'s, made of this module's calls, its one burst and the line
+//! it settles. The fifth, `text.diff` — what changed in a draft since a
+//! document that holds its content by identity, told by identity, its moved
+//! lines shown as moved and its re-typed ones said — is the child module
+//! `diffing`'s, over `skep-client`'s plan and the child `rows`: it writes
+//! nothing, and asks no write door. The four rows that write keep one order
+//! to the first read ([`Shell::text_call`]).
 //!
 //! **The order** ([`Shell::text_replace`], [`Shell::text_call`]). The
 //! members first, each refused in another form before the session is looked
 //! up, as every row reads them ([`Asked::read`]); then the session; then
 //! the shell's one write door, asked once for the edit before its first
-//! read (SP-31) — a bare session, another window — each of its bursts
-//! meeting the door again on the `op` row's path; then the reads; then the
-//! writes.
+//! read (SP-31) — a bare session, another window, and for `text.mark`,
+//! whose first write no hold holds, a hold standing at the board — each of
+//! its writes meeting the door again on the `op` row's path; then the
+//! reads; then the writes. `text.diff` reads its members, looks up its
+//! session and reads ([`Shell::text_read`]).
 //!
 //! **The session** ([`Under`]). Every call names the session the edit
 //! stands under. A call the shell answers `session_died`, its reason naming
@@ -136,9 +148,12 @@ use skep_client::text::shared;
 
 use super::{Shell, Write, Writer};
 use crate::refusal::{Name, Refusal};
+use crate::sessions::SessionEntry;
 use crate::wire::{decode_hex, MAX_INSERT_VALUES};
 
+mod diffing;
 mod edit;
+mod mark;
 mod moving;
 mod rows;
 
@@ -402,7 +417,7 @@ struct Gap {
 /// The text is the bytes of every per-byte value in arrangement order; the
 /// stretches say which runs of them are contiguous and at which ordinals,
 /// and the gaps what stands between two stretches. Its invariant, kept by
-/// [`Text::push`] and [`Text::rearranged`], the two ways one is built, and
+/// [`Text::push`] and `Tiles::copy`, the two ways one is built, and
 /// by [`Text::splice`], the one way it changes: the stretches tile `bytes`
 /// in order, none empty, and no two are adjacent in position — a part
 /// boundary that split one run leaves one stretch.
@@ -583,40 +598,72 @@ impl Text {
     /// ascending, from 1 to one past the text's last, as the board admits
     /// them; for any other count the text returned is this one.
     fn rearranged(&self, cuts: &[u64]) -> Text {
-        /// One run of a text's positions: a stretch, or a gap.
-        enum Run<'t> {
-            Stretch(&'t Stretch),
-            Gap(&'t Gap),
-        }
         let end = self.positions.saturating_add(1);
         let regions = match *cuts {
             [a, b, c] => vec![(1, a), (b, c), (a, b), (c, end)],
             [a, b, c, d] => vec![(1, a), (c, d), (b, c), (a, b), (d, end)],
             _ => vec![(1, end)],
         };
-        // The runs in position order, each from its first position up to the
-        // next one's: a gap takes the positions up to the run after it.
-        let mut runs: Vec<(u64, Run<'_>)> = self.stretches.iter().map(|stretch| (stretch.ordinal, Run::Stretch(stretch))).chain(self.gaps.iter().map(|gap| (gap.ordinal, Run::Gap(gap)))).collect();
-        runs.sort_unstable_by_key(|(ordinal, _)| *ordinal);
+        let tiles = Tiles::of(self);
         let mut text = Text::default();
         for (from, to) in regions {
-            let holding = runs.partition_point(|(ordinal, _)| *ordinal <= from).saturating_sub(1);
-            for (k, (ordinal, run)) in runs.iter().enumerate().skip(holding).take_while(|(_, (ordinal, _))| *ordinal < to) {
-                let past = runs.get(k + 1).map_or(end, |(next, _)| *next);
-                let (low, high) = (from.max(*ordinal), to.min(past));
-                if low >= high {
-                    continue;
-                }
-                match run {
-                    Run::Gap(gap) => text.gap(high - low, &gap.kind),
-                    Run::Stretch(stretch) => {
-                        let at = |position: u64| stretch.at + (position - stretch.ordinal) as usize;
-                        text.text(self.bytes.get(at(low)..at(high)).unwrap_or_default());
-                    }
+            tiles.copy(from, to, &mut text);
+        }
+        text
+    }
+}
+
+/// One run of a text's positions: a stretch of text, or a value that is none.
+#[derive(Debug, Clone, Copy)]
+enum Tile<'t> {
+    /// A stretch of text.
+    Stretch(&'t Stretch),
+    /// A value that is no text.
+    Gap(&'t Gap),
+}
+
+/// A text's positions as runs in order, to tell stretches of it again.
+///
+/// Each run stands from its first position up to the next one's: a value
+/// that is no text takes the positions up to the run after it.
+struct Tiles<'t> {
+    /// The text.
+    text: &'t Text,
+    /// The runs, each with its first position, ascending.
+    tiles: Vec<(u64, Tile<'t>)>,
+}
+
+impl<'t> Tiles<'t> {
+    /// Returns the runs of `text`, in position order.
+    fn of(text: &'t Text) -> Tiles<'t> {
+        let mut tiles: Vec<(u64, Tile<'t>)> = text.stretches.iter().map(|stretch| (stretch.ordinal, Tile::Stretch(stretch))).chain(text.gaps.iter().map(|gap| (gap.ordinal, Tile::Gap(gap)))).collect();
+        tiles.sort_unstable_by_key(|(ordinal, _)| *ordinal);
+        Tiles { text, tiles }
+    }
+
+    /// Appends the positions `from` up to `to` of the text onto `onto`.
+    ///
+    /// Each byte and each value that is no text goes as it stands, a value
+    /// an edge falls inside told by the positions inside the edges, and
+    /// `onto` is built as a read builds a text, so two runs of text set side
+    /// by side are one stretch. Positions the text does not hold are none.
+    fn copy(&self, from: u64, to: u64, onto: &mut Text) {
+        let end = self.text.positions.saturating_add(1);
+        let holding = self.tiles.partition_point(|(ordinal, _)| *ordinal <= from).saturating_sub(1);
+        for (k, (ordinal, tile)) in self.tiles.iter().enumerate().skip(holding).take_while(|(_, (ordinal, _))| *ordinal < to) {
+            let past = self.tiles.get(k + 1).map_or(end, |(next, _)| *next);
+            let (low, high) = (from.max(*ordinal), to.min(past));
+            if low >= high {
+                continue;
+            }
+            match tile {
+                Tile::Gap(gap) => onto.gap(high - low, &gap.kind),
+                Tile::Stretch(stretch) => {
+                    let at = |position: u64| stretch.at + (position - stretch.ordinal) as usize;
+                    onto.text(self.text.bytes.get(at(low)..at(high)).unwrap_or_default());
                 }
             }
         }
-        text
     }
 }
 
@@ -942,9 +989,10 @@ fn partial(doc: &str, edit: &Edit<'_>, inserted: Option<&Value>, why: Value) -> 
 /// Returns the answer of an edit a line of which stays held, an error.
 ///
 /// `write` names the write the line is: `insert`, `delete`, `undo`, an
-/// undo's removal of the new bytes, or `rearrange`, a move's one write;
-/// `stands` is what a two-write edit leaves beside it ([`spans`]), and null
-/// for a call of one write.
+/// undo's removal of the new bytes, `rearrange`, a move's one write, or
+/// `copy`, a mark's; `stands` is what the call leaves beside it — a
+/// two-write edit's spans ([`spans`]), a mark's document — and null for a
+/// call of one write.
 fn held(doc: &str, line: &Line, write: &str, stands: Value) -> Answer {
     let mut value = json!({"outcome": "held", "doc": doc, "held": line.held, "cause": line.cause, "write": write});
     if let (Some(members), Value::Object(stands)) = (value.as_object_mut(), stands) {
@@ -1192,7 +1240,7 @@ impl Shell {
     /// 5. the `op` row's refusal of a write that left nothing standing.
     pub(super) fn text_replace(&self, args: &Value) -> Result<Value, Refusal> {
         let asked = Asked::read(args)?;
-        self.text_call("text.replace", args, |calls| replace(calls, asked))
+        self.text_call(&Write::unjudged("text.replace"), args, |calls, _| replace(calls, asked))
     }
 
     /// Answers `text.edit(session, {doc, edits})`: several edits of a draft.
@@ -1221,7 +1269,7 @@ impl Shell {
     ///    first write's, or a later one's where the draft was set back.
     pub(super) fn text_edit(&self, args: &Value) -> Result<Value, Refusal> {
         let asked = edit::Asked::read(args)?;
-        self.text_call("text.edit", args, |calls| edit::edit(calls, &asked))
+        self.text_call(&Write::unjudged("text.edit"), args, |calls, _| edit::edit(calls, &asked))
     }
 
     /// Answers `text.move`: whole lines of a draft moved by identity.
@@ -1252,31 +1300,116 @@ impl Shell {
     /// 5. the `op` row's refusal of the write, nothing written.
     pub(super) fn text_move(&self, args: &Value) -> Result<Value, Refusal> {
         let asked = moving::Asked::read(args)?;
-        self.text_call("text.move", args, |calls| moving::move_lines(calls, &asked))
+        self.text_call(&Write::unjudged("text.move"), args, |calls, _| moving::move_lines(calls, &asked))
+    }
+
+    /// Answers `text.mark(session, {doc})`: a mark of a draft.
+    ///
+    /// It is a private document of the session's own account holding the
+    /// draft's whole content by identity, to diff against later (skep
+    /// #1091). The member is read (`mark::Asked::read`), and the mark is
+    /// made as a text call makes its edit ([`Shell::text_call`]), by the
+    /// child module `mark`: the draft's extent read, then the mint, one
+    /// `copy` and one link typed `marks`. The door judges the call by its
+    /// first write, the mint, which no hold holds: under a hold standing at
+    /// the board it is refused before any read. The call settles its own
+    /// held line as `text.replace` does ([`settle`]).
+    ///
+    /// # Errors
+    ///
+    /// In this order, the first that holds answering:
+    ///
+    /// 1. `malformed_args` naming `doc` (`mark::Asked::read`);
+    /// 2. `malformed_args` naming `session`, then `session_died` or
+    ///    `session_ended` ([`Shell::session`]);
+    /// 3. the write door's, naming the call: `write_in_bare_session`, then
+    ///    `another_window`, then `stopped`, `poisoned` or `halted`, naming
+    ///    `create_new_document` (`Shell::write_door`), nothing read or sent;
+    /// 4. `no_account` where the board named the session's principal none;
+    /// 5. the board's verdict on the read or the mint, or the shell's
+    ///    refusal of either, nothing written.
+    pub(super) fn text_mark(&self, args: &Value) -> Result<Value, Refusal> {
+        let asked = mark::Asked::read(args)?;
+        self.text_call(&Write::call("text.mark", "create_new_document"), args, |calls, session| {
+            let account = session.facts.account.as_deref().ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
+            mark::mark(calls, &asked, account)
+        })
+    }
+
+    /// Answers `text.diff`: what changed in a draft, told by identity.
+    ///
+    /// The call is `text.diff(session, {doc, since, stat?, hunk?})` (skep
+    /// #1091). The members are read (`diffing::Asked::read`), and the diff
+    /// is made as a text call that writes nothing is ([`Shell::text_read`]),
+    /// by the child module `diffing`: the two documents imaged, the draft's
+    /// text read, the spans it no longer holds read by identity, and the
+    /// lines planned and drawn.
+    ///
+    /// # Errors
+    ///
+    /// In this order, the first that holds answering:
+    ///
+    /// 1. `malformed_args` naming `doc`, `since`, `stat`, then `hunk`
+    ///    (`diffing::Asked::read`);
+    /// 2. `malformed_args` naming `session`, then `session_died` or
+    ///    `session_ended` ([`Shell::session`]);
+    /// 3. the board's verdict on a read, or the shell's refusal of it — a
+    ///    death the call could not follow to a re-open among them.
+    pub(super) fn text_diff(&self, args: &Value) -> Result<Value, Refusal> {
+        let asked = diffing::Asked::read(args)?;
+        self.text_read("text.diff", args, |calls| diffing::diff(calls, &asked))
     }
 
     /// Makes a text call's edit under the session `args` names.
     ///
-    /// `call` is the call as the bridge spells it, its members read
+    /// `write` is the call as the write door reads it, its members read
     /// already, and `make` its edit. The session is looked up, then the
     /// write door is asked once for the edit, before its first read, its
-    /// refusal naming the call (SP-31; [`Write::unjudged`]: the edit's
-    /// bursts are held by no standing hold's refusal at the door, and each
-    /// write it sends meets the door again on the `op` row's path); the
-    /// edit is then made through the shell's own rows under the session
-    /// ([`Under`]), and answered as the row answers it
-    /// ([`Answer::into_value`]). A halt a call of the edit met whose face
-    /// names a file, and which the edit is not answered with, is said on
-    /// `Talk` with the call's name, as [`Shell::call`] says the one a call
-    /// is answered with (§4b.3; SP-15).
+    /// refusal naming the call (SP-31): [`Write::unjudged`] for an edit
+    /// whose every write is a burst, held by no standing hold's refusal at
+    /// the door, and [`Write::call`] for one whose first write no hold
+    /// holds; each write it sends meets the door again on the `op` row's
+    /// path. The edit is then made through the shell's own rows under the
+    /// session ([`Shell::text_made`]).
     ///
     /// # Errors
     ///
     /// [`Shell::session`]'s refusals, then the write door's, then the
     /// edit's own.
-    fn text_call(&self, call: &'static str, args: &Value, make: impl FnOnce(&Under<'_, Shell>) -> Result<Answer, Refusal>) -> Result<Value, Refusal> {
+    fn text_call(&self, write: &Write<'static>, args: &Value, make: impl FnOnce(&Under<'_, Shell>, &SessionEntry) -> Result<Answer, Refusal>) -> Result<Value, Refusal> {
         let session = self.session(&args["session"])?;
-        self.write_door(Writer::Session(&session), &Write::unjudged(call))?;
+        self.write_door(Writer::Session(&session), write)?;
+        self.text_made(write.call_name(), &session, |calls| make(calls, &session))
+    }
+
+    /// Makes a text call that writes nothing under the session `args` names.
+    ///
+    /// `call` is the call as the bridge spells it, its members read
+    /// already, and `make` its reads. The session is looked up and the call
+    /// made through the shell's own rows under it ([`Shell::text_made`]):
+    /// no write door is asked, since the call sends no write, so a bare
+    /// session and a second window make it as they make any read.
+    ///
+    /// # Errors
+    ///
+    /// [`Shell::session`]'s refusals, then the call's own.
+    fn text_read(&self, call: &'static str, args: &Value, make: impl FnOnce(&Under<'_, Shell>) -> Result<Answer, Refusal>) -> Result<Value, Refusal> {
+        let session = self.session(&args["session"])?;
+        self.text_made(call, &session, make)
+    }
+
+    /// Makes a text call through the shell's own rows under `session`.
+    ///
+    /// The call is made under the session ([`Under`]) and answered as the
+    /// row answers it ([`Answer::into_value`]). A halt a call of it met
+    /// whose face names a file, and which it is not answered with, is said
+    /// on `Talk` with the call's name, as [`Shell::call`] says the one a
+    /// call is answered with (§4b.3; SP-15).
+    ///
+    /// # Errors
+    ///
+    /// The call's own.
+    fn text_made(&self, call: &'static str, session: &SessionEntry, make: impl FnOnce(&Under<'_, Shell>) -> Result<Answer, Refusal>) -> Result<Value, Refusal> {
         let under = Under::new(self, &session.reference);
         let answered = make(&under);
         for halt in under.unsaid(&answered) {
@@ -1316,6 +1449,38 @@ pub(super) fn edit_through(rows: &impl Rows, session: &str, args: &Value) -> Res
 pub(super) fn move_through(rows: &impl Rows, session: &str, args: &Value) -> Result<Value, Refusal> {
     let asked = moving::Asked::read(args)?;
     moving::move_lines(&Under::new(rows, session), &asked).map(Answer::into_value)
+}
+
+/// Makes `text.mark`'s mark of `args` through `rows`, under `session`.
+///
+/// The mark is minted in `account`. It is the call as [`Shell::text_mark`]
+/// makes it past the session and the
+/// door, through rows a suite hands it: the shell's own with one write of
+/// the call's refused, where a real board gives no such moment to order.
+///
+/// # Errors
+///
+/// The member's refusal, and the mark's own.
+#[cfg(test)]
+pub(super) fn mark_through(rows: &impl Rows, session: &str, account: &str, args: &Value) -> Result<Value, Refusal> {
+    let asked = mark::Asked::read(args)?;
+    mark::mark(&Under::new(rows, session), &asked, account).map(Answer::into_value)
+}
+
+/// Makes `text.diff`'s diff of `args` through `rows`, under `session`.
+///
+/// It is the call as [`Shell::text_diff`] makes it past the session,
+/// through rows a suite hands it: the shell's own with another writer's
+/// change landed between two of the call's reads, where a real board gives
+/// no such moment to order.
+///
+/// # Errors
+///
+/// The members' refusal, and the diff's own.
+#[cfg(test)]
+pub(super) fn diff_through(rows: &impl Rows, session: &str, args: &Value) -> Result<Value, Refusal> {
+    let asked = diffing::Asked::read(args)?;
+    diffing::diff(&Under::new(rows, session), &asked).map(Answer::into_value)
 }
 
 #[cfg(test)]

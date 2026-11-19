@@ -10,6 +10,12 @@
 //! function of two texts: it reads no board and holds no key, and stands in
 //! every build.
 //!
+//! The child module [`diff`] plans the other direction: what changed
+//! between a text as it stood and as it stands, read off the two images a
+//! board holds of them and told as lines (skep #1091). It matches the lines
+//! identity does not settle by this module's own match, under its bound,
+//! and says a block re-typed by this module's own threshold.
+//!
 //! **The match.** The texts are matched by lines first — a line is its
 //! bytes through its `\n`, a last line that has none among them — and a
 //! line that stands in both is unchanged. Each run of lines that changed on
@@ -41,6 +47,8 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::Range;
+
+pub mod diff;
 
 /// The fewest characters that are no whitespace a kept stretch holds.
 ///

@@ -40,7 +40,7 @@ use skep_signature::HybridSigner;
 
 use crate::address::parse_address;
 use crate::board::answers::LinkSpan;
-use crate::board::frames::{T_CORRESPONDENCE, T_EDITION, T_HELD_REMOVAL, T_READ_WITH};
+use crate::board::frames::{T_CORRESPONDENCE, T_EDITION, T_HELD_REMOVAL, T_MARKS, T_READ_WITH};
 use crate::board::{Board, Token, HEAD_MEMBER_1, T_RETRACTION, T_SUPERSEDES};
 use crate::dial::{DialError, Dialer, Headers, Request as DialRequest, RequestHead, Response, StreamedResponse};
 use crate::origin::Origin;
@@ -1402,6 +1402,59 @@ fn the_enumeration_reads_in_order_and_keeps_the_owned_homes_links_on_the_words()
     }
     assert_eq!(dialer.frames("in_claims").len(), e.candidates.len() + 1, "one in_claims per candidate, and the revision's original's");
     assert_eq!(dialer.frames("out_claims").len(), e.candidates.len());
+}
+
+/// A mark's link is a record: no publication of the marked draft offers it.
+///
+/// A mark of `D` holds `D`'s whole content by identity, and its one link,
+/// typed `marks` (`3.25`) and homed in the mark, has that content as its
+/// `from`: the region read answers it, as it answers every link on the
+/// selection's words, and it is no candidate, its home is no row of the
+/// panel and the candidates stand as they stood. A mark made before an
+/// earlier shot, its `from` the words that shot re-minted, is reached
+/// through the shot's record, and is no candidate either. A link of another
+/// type in each of the two homes, on the same words, is a candidate, its
+/// home a row: the type alone leaves the marks out (the mutant that drops
+/// `T_MARKS` from the record classes offers both marks).
+#[test]
+fn a_marks_link_on_the_published_words_is_no_candidate_and_its_home_no_row() {
+    const M: &str = "1.0.1.0.71";
+    const M2: &str = "1.0.1.0.72";
+    let marked = |ty: &str| {
+        let (mut world, _) = World::base();
+        world.doc(M, false, ACCOUNT, vec![run(E, 1, 19), run(D, 1, 10), run(O, 1, 5)]);
+        let whole = world.typed(M, vec![ispan(E, 1, 19), ispan(D, 1, 10), ispan(O, 1, 5)], vec![unit(D)], ty);
+        world.doc(M2, false, ACCOUNT, vec![run(D, 20, 4)]);
+        let earlier = world.typed(M2, vec![ispan(D, 20, 4)], vec![unit(D)], ty);
+        (world, whole, earlier)
+    };
+    let (plain, _) = World::base();
+    let (_, board, signer) = open(plain);
+    let tok = token();
+    let unmarked: Vec<String> = enumerate(&publisher(&board, &tok, &signer), &inputs()).expect("enumerated").candidates.iter().map(|c| c.link.to_string()).collect();
+
+    let (world, whole, earlier) = marked(T_MARKS);
+    let (dialer, board, signer) = open(world);
+    let p = publisher(&board, &tok, &signer);
+    let e = enumerate(&p, &inputs()).expect("enumerated");
+    let read: Vec<String> = dialer.frames("read_link").iter().filter_map(|frame| frame["a"].as_str().map(str::to_string)).collect();
+    assert!(read.contains(&whole) && read.contains(&earlier), "premise: the region read and the read-through each answered a mark's link, and each was read: {read:?}");
+    let all: Vec<String> = e.candidates.iter().map(|c| c.link.to_string()).collect();
+    assert_eq!(all, unmarked, "the candidates of the draft with no mark, and no other");
+    let homes: Vec<String> = e.homes.iter().map(|(home, _)| home.to_string()).collect();
+    assert_eq!(homes, [D, N, S, S2], "neither mark's home");
+    let drawn = panel(&p, &inputs(), &e).expect("the panel");
+    assert_eq!(drawn.rows.iter().map(|row| row.home.to_string()).collect::<Vec<_>>(), [D, N, S, S2], "no row for a mark");
+
+    // The same two links typed a citation: each a candidate, its home a row.
+    let (world, whole, earlier) = marked(T_CITATION);
+    let (_, board, signer) = open(world);
+    let p = publisher(&board, &tok, &signer);
+    let e = enumerate(&p, &inputs()).expect("enumerated");
+    assert_eq!(candidate_at(&e, &whole).via, Via::Region);
+    assert!(matches!(candidate_at(&e, &earlier).via, Via::ReadThrough(_)), "reached through the earlier shot's record");
+    let homes: BTreeSet<String> = e.homes.iter().map(|(home, _)| home.to_string()).collect();
+    assert!(homes.contains(M) && homes.contains(M2), "{homes:?}");
 }
 
 /// Checks THE FILTER's public arm one key at a time.

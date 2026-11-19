@@ -162,9 +162,12 @@
 //!   byte's identity, `text.replace`, and several such edits in one call,
 //!   each made as its minimal changes and all of them landed or none,
 //!   `text.edit` (skep #1079), its landed answer showing the lines it
-//!   changed (skep #1080), and whole lines of a draft moved by identity,
+//!   changed (skep #1080), whole lines of a draft moved by identity,
 //!   `text.move` (skep #1085), its landed answer showing them where they
-//!   now stand, each made of the `op`, `held` and `resolve` rows' calls, in
+//!   now stand, a private copy of a draft's content by identity to diff
+//!   against later, `text.mark`, and what changed in a draft since such a
+//!   document, told by identity with nothing written, `text.diff` (skep
+//!   #1091), each made of the `op`, `held` and `resolve` rows' calls, in
 //!   its child `text` — each row taking and answering values
 //!   shaped exactly as the row's columns — an argument of another form
 //!   refused, never read as absent;

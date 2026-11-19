@@ -25,7 +25,9 @@
 //! `publication_cancel`) and the apparatus (`session_info`, `changes_since`,
 //! `fetch`, the shell's two text edits, `replace_text`, its `text.replace`,
 //! and `edit_text`, its several-pair `text.edit`, its move of whole lines,
-//! `move_lines`, its `text.move`, and `help`, which reads the help store and
+//! `move_lines`, its `text.move`, its mark of a draft to diff against,
+//! `mark_text`, its `text.mark`, its diff of a draft by identity,
+//! `diff_text`, its `text.diff`, and `help`, which reads the help store and
 //! calls no shell) — whose arguments are the bridge's row
 //! minus the session and the board, the adapter supplying each where the row
 //! requires it, `help`'s its one `topic`, and whose members the adapter
@@ -184,6 +186,18 @@ pub enum Tool {
     /// Its answer is rendered as `edit_text`'s, the lines a landed move
     /// shows following it one row a line.
     MoveLines,
+    /// `text.mark(session, doc)`, the shell's: the session supplied.
+    ///
+    /// It makes a private copy of a draft's content by identity, to diff
+    /// against later. Its answer is rendered as `replace_text`'s.
+    MarkText,
+    /// `text.diff(session, doc, since, stat?, hunk?)`, the shell's.
+    ///
+    /// It tells what changed in a draft since a document that holds its
+    /// content by identity, the session supplied, and writes nothing. Its
+    /// answer is rendered as `edit_text`'s, the hunks' rows following it one
+    /// row a line.
+    DiffText,
     /// `help(topic?)`, the catalog's help store read by topic.
     ///
     /// The one tool that calls no shell: it reads the catalog alone
@@ -218,6 +232,8 @@ const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
     ("replace_text", Tool::ReplaceText, &["doc", "old", "new"]),
     ("edit_text", Tool::EditText, &["doc", "edits"]),
     ("move_lines", Tool::MoveLines, &["doc", "first", "last", "before"]),
+    ("mark_text", Tool::MarkText, &["doc"]),
+    ("diff_text", Tool::DiffText, &["doc", "since", "stat", "hunk"]),
     ("help", Tool::Help, &["topic"]),
 ];
 

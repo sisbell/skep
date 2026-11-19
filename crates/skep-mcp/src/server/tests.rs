@@ -239,6 +239,45 @@ fn a_landed_moves_rows_follow_its_answer_and_its_held_answer_is_an_error() {
     assert_eq!((result["isError"].as_bool(), serde_json::from_str::<Value>(result["content"][0]["text"].as_str().expect("a text block")).expect("JSON text")), (Some(true), held));
 }
 
+/// Checks that a diff's rows follow its answer, and its counts stay in it.
+///
+/// The shell's `text.diff` answers `diffed` with its hunks' rows in `rows`
+/// and its line counts in `lines`, an object: the text is the answer's JSON
+/// on its first line, the rows taken off and the counts kept, then each row
+/// on a line of its own as the shell spelled it; a `stat` answer, which
+/// carries neither, is its JSON alone; and a mark's `partial`, the error
+/// member beside it, is `isError`, the member taken off (the mutant that
+/// takes off the counts, or leaves the rows escaped inside the JSON, tells
+/// an agent another answer).
+#[test]
+fn a_diffs_rows_follow_its_answer_and_its_line_counts_stay_in_it() {
+    let rows = ["@@ -1,3 +1,3 @@", " 1\ta", "-2\t\"b\"", "+2\tc", ">3\td", "<\t(line 5 moved to 3)"];
+    let diffed = json!({
+        "outcome": "diffed", "doc": "1.0.1.0.64", "since": "1.0.1.0.65", "as_of": 45, "shared": "9", "bytes": {"new": "2", "gone": "4", "moved": "2"},
+        "lines": {"added": "1", "removed": "1", "moved": "1"}, "rows": rows, "notes": [{"kind": "moved", "before": [5, 5], "now": [3, 3]}], "next_hunk": 2,
+    });
+    let result = edit_result(Ok(diffed.clone()));
+    let text = result["content"][0]["text"].as_str().expect("a text block");
+    let (first, rest) = text.split_once('\n').expect("rows after the answer");
+    let mut answer = diffed;
+    answer.as_object_mut().expect("an object").remove(DIFF_ROWS);
+    assert_eq!(
+        (result["isError"].as_bool(), serde_json::from_str::<Value>(first).expect("the first line is JSON")),
+        (Some(false), answer.clone()),
+        "the answer, its rows taken off and its counts kept"
+    );
+    assert_eq!(answer["lines"], json!({"added": "1", "removed": "1", "moved": "1"}));
+    assert_eq!(rest.split('\n').collect::<Vec<_>>(), rows, "each row on a line of its own, unescaped");
+    let stat = json!({"outcome": "diffed", "doc": "1.0.1.0.64", "since": "1.0.1.0.65", "as_of": 45, "shared": "9", "bytes": {"new": "2", "gone": "4", "moved": "2"}});
+    let result = edit_result(Ok(stat.clone()));
+    assert_eq!(serde_json::from_str::<Value>(result["content"][0]["text"].as_str().expect("a text block")).expect("one line of JSON"), stat);
+    let partial = json!({"outcome": "partial", "doc": "1.0.1.0.64", "mark": "1.0.1.0.66", "at": 44, "cause": "slot_too_large", "refusal": {"kind": "refused", "name": "slot_too_large"}});
+    let mut marked = partial.clone();
+    marked[EDIT_ERROR] = json!(true);
+    let result = edit_result(Ok(marked));
+    assert_eq!((result["isError"].as_bool(), serde_json::from_str::<Value>(result["content"][0]["text"].as_str().expect("a text block")).expect("JSON text")), (Some(true), partial));
+}
+
 /// Checks that `help` answers a topic and the list, and refuses a stranger.
 ///
 /// It answers from the catalog alone, so no backend is built here and no

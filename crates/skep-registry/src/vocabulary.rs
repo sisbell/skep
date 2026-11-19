@@ -1,5 +1,7 @@
-//! THE VOCABULARY — every link type this build names in the commons, spelled
-//! ONCE as one table: each row's path under the ghost home document's type
+//! The vocabulary: every link type this build names in the commons.
+//!
+//! Each is spelled once, in one table: each row's path under the ghost
+//! home document's type
 //! subspace `1.1.0.1.0.1.0.3`, its name, its purpose in a line and the shape
 //! of its endsets (commons-seeding §1 to §4; commons-map, the allocation
 //! ledger, where the two disagree). The daemon writes one named section and
@@ -9,7 +11,7 @@
 //! link whose `to` is the type's address, so any board answers "what is
 //! `3.13` called?" to a guest.
 //!
-//! WHAT THE TABLE HOLDS: every address the build pins in code — the
+//! **What the table holds.** Every address the build pins in code — the
 //! credential kinds `3.1` to `3.3`, `replaces` `3.12`, the edition class
 //! `3.14`, the journal designation `3.22`, endorse `3.42`, the registry's
 //! rows `3.54` to `3.59` as `rows.rs` spells them, the rail record
@@ -29,20 +31,24 @@
 //! seeding round pinned (the owner, 2026-10-27) — `3.23` inline, the
 //! emphasis family's parent, with its seven sub-types `3.23.1` to `3.23.7`,
 //! `3.24` the held removal, `3.71` read-with beside layout, and `3.102.1`
-//! the correspondence record, a subtype under counterpart. WHAT IT DOES
-//! NOT: the reserved ordinals of `3.22` to `3.29` and `3.46` to `3.49`
+//! the correspondence record, a subtype under counterpart; and `3.25`
+//! marks, the link a mark of a draft carries, which the client's text
+//! calls write and read.
+//!
+//! **What it does not.** The reserved ordinals of `3.22` to `3.29` and
+//! `3.46` to `3.49`
 //! beyond the built ones, `3.46.2` (reserved for `flagged`), `3.51` to
 //! `3.53` (the registry-machinery reserve, unallocated), `3.87` (reserved
 //! for the proxy kind), the test-only `3.90.1`, and every range the map
 //! marks unallocated — nothing is named at an ordinal nobody allocated.
 //!
-//! THE ENDSETS ARE SAID BY ROLE (the commons map's standing rule THE
-//! ENDSETS, BY ROLE — F5, the owner 2026-10-27; the `3.27` family's rule
+//! **The endsets are said by role** (the commons map's standing rule "THE
+//! ENDSETS, BY ROLE" — F5, the owner 2026-10-27; the `3.27` family's rule
 //! generalized): `from` holds what a link brings of its own — its text or
 //! atom, or the account or prefix that speaks; `to` holds what it is about.
-//! A link with one side empties the slot it has no content for: a MARK —
+//! A link with one side empties the slot it has no content for: a *mark* —
 //! formatting, a designation, a lifted takedown, a policy link — has an
-//! empty `from` and its matter in `to`; a SAYING with no subject — an
+//! empty `from` and its matter in `to`; a *saying* with no subject — an
 //! endpoint, a targetless binding — has an empty `to`. The claim `3.3`
 //! stands as built (`from` the claimant, `to` empty), the rule's one named
 //! exception. So the heading, the paragraph family, lang, the inline family
@@ -50,19 +56,19 @@
 //! family already did. A board seeded under an earlier wording keeps its
 //! old section text: a reopen writes only the rows it lacks.
 //!
-//! THE NAMES are the seeding plan's words where the plan has one and the
+//! **The names** are the seeding plan's words where the plan has one and the
 //! code's doc-comment word where the code names a type the plan does not
 //! (the credential kinds, `replaces`, the designations, the records, the
 //! cell kinds, the marker); where the two differ the code's wins. A name is
 //! one lowercase token — letters, digits and hyphens — so the first line of
 //! a section is the name and nothing else, which is what a client shows.
 //!
-//! THE ORDER is path order, ascending in the tumbler order (T1). The daemon
+//! **The order** is path order, ascending in the tumbler order (T1). The daemon
 //! writes the sections and the links in that order with one row taken
 //! ahead of the rest: the meta-type `defines` `3.50`, so its own link, typed
 //! by itself, stands before any link it types.
 //!
-//! THE ADDRESSES are spelled through [`commons_type`], the one spelling of
+//! **The addresses** are spelled through [`commons_type`], the one spelling of
 //! the type subspace in this crate: a row is an element at positive
 //! ordinals, T4-valid by construction, and the registry's rows are held
 //! equal to [`crate::rows()`]'s by the unit suite beside this file.
@@ -571,6 +577,13 @@ const SPELLINGS: &[Spelling] = &[
                   and retracted at the next publication of its words, its own retraction the \
                   chord's undo; no picker lists it.",
         endsets: "from: empty; to: the published mark, by address.",
+    },
+    Spelling {
+        ordinals: &[25],
+        name: "marks",
+        purpose: "A mark: a private copy holding a draft's whole content by identity, kept to \
+                  diff against later; the link says what the copy is and which draft it marks.",
+        endsets: "from: the mark's whole content; to: the draft; homed in the mark.",
     },
     Spelling {
         ordinals: &[27],

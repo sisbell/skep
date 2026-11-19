@@ -67,6 +67,28 @@
 //! line, A and B their numbers in the draft as read and C and D in the text
 //! as the move leaves it.
 //!
+//! **The diff's rows** ([`diffed`]). `text.diff` draws two texts: the draft
+//! as it stands, and the text it is compared with, told from the draft's
+//! text and the values read by identity. The lines are the plan's
+//! (`skep_client::text::diff`), over the two line tables this module makes
+//! ([`line_table`]): a line of text alone is compared by its bytes, and a
+//! line holding a value that is no text is equal to no other. Each hunk
+//! stands under `@@ -a,b +c,d @@`, the first line and the count of its lines
+//! in each text. ` N<TAB>line` is a line unchanged, `+N<TAB>line` one new
+//! and `>N<TAB>line` one moved here with its identity kept, each numbered in
+//! the draft; `-N<TAB>line` is a line gone, drawn from the text before and
+//! numbered in it; and `<<TAB>(lines A–B moved to C–D)`, `(line A moved to
+//! C)` for one, stands where moved lines left, A and B their numbers before
+//! and C and D now. A run of more than [`ROWS_MAX_RUN`] `+`, `-` or `>` rows
+//! shows its first [`ROWS_RUN_HEAD`] and its last [`ROWS_RUN_TAIL`] around
+//! one row of its own sign counting the rest, `-…<TAB>(N more lines)`. A
+//! text's last line that no line break ends is followed by `\ no line break
+//! at the end`. Lines are drawn as every row draws one. The rows stop after
+//! the last whole hunk that fits [`ROWS_MAX_BYTES`], the next hunk told
+//! beside them; a first hunk that does not fit alone is cut where the bound
+//! falls, a last row `(N more changed lines not shown)` counting what it
+//! leaves out.
+//!
 //! **The cost** (SP-23). The pieces are spliced as the text is: each pair's
 //! splice walks the pieces once and moves those after it, as `Text::splice`
 //! walks and moves the bytes, so the plan's cost keeps its order. The rows
@@ -74,11 +96,14 @@
 //! lines and one more drawing the lines they show; a slide reads at most the
 //! line it moves in, and each removed byte it reads is a lookup among the
 //! runs removed. The lines' count, and the starts of the lines asked
-//! together, are each one walk of the text.
+//! together, are each one walk of the text. A line table is one walk of its
+//! text, and a diff's rows one walk of each text through the lines they
+//! show.
 
 use std::fmt::Write as _;
 use std::ops::{Range, RangeInclusive};
 
+use skep_client::text::diff::{Hunk, Line, Lines as Planned, Op};
 use skep_client::text::Change;
 
 use super::Text;
@@ -999,6 +1024,251 @@ pub(super) fn moved(text: &Text, from: (u64, u64), to: (u64, u64), after: u64) -
     let changed = (to.0 <= lines).then(|| to.0..=to.1.min(lines)).into_iter().collect();
     let gone = vec![Gone { after: after.min(lines), went: Went::Moved { from, to } }];
     Shown::with(text, changed, gone).drawn(text)
+}
+
+/// A line's text as a diff's plan compares it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum Key<'t> {
+    /// The bytes of a line of text alone, its line break left out.
+    Text(&'t [u8]),
+    /// A line holding a value that is no text: equal to no other line.
+    Other {
+        /// Whether the line is the draft's; else the text before's.
+        now: bool,
+        /// The line's number in its text.
+        number: u64,
+    },
+}
+
+/// Returns the line table of `text` for a diff's plan.
+///
+/// Lines are counted as the module doc's *The lines* counts them. Each is
+/// its first position, its positions with its line break, whether one ends
+/// it, and its key: its bytes where it is text alone, and a key of its own —
+/// `now` and its number — where it holds a value that is no text. `solid`
+/// counts a text line's characters that are no whitespace, a byte that is no
+/// UTF-8 being one.
+pub(super) fn line_table(text: &Text, now: bool) -> Vec<Line<Key<'_>>> {
+    /// Returns one line of the table, the next after `count` lines.
+    fn line(count: usize, now: bool, start: u64, past: u64, bytes: Option<&[u8]>, closed: bool) -> Line<Key<'_>> {
+        let (key, solid) = match bytes {
+            Some(bytes) => (Key::Text(bytes), bytes.utf8_chunks().map(|chunk| chunk.valid().chars().filter(|c| !c.is_whitespace()).count() + chunk.invalid().len()).sum::<usize>() as u64),
+            None => (Key::Other { now, number: count as u64 + 1 }, 0),
+        };
+        Line { start, len: past - start, key, closed, solid }
+    }
+    let (mut lines, mut start) = (Vec::new(), 1u64);
+    for stretch in &text.stretches {
+        let bytes = text.bytes.get(stretch.at..stretch.at + stretch.len).unwrap_or_default();
+        for (into, _) in bytes.iter().enumerate().filter(|(_, byte)| **byte == b'\n') {
+            let at = stretch.ordinal + into as u64;
+            // A line that begins in this stretch is text alone.
+            let held = start.checked_sub(stretch.ordinal).and_then(|from| bytes.get(from as usize..into));
+            lines.push(line(lines.len(), now, start, at + 1, held, true));
+            start = at + 1;
+        }
+    }
+    let end = text.positions() + 1;
+    if start < end {
+        let last = text.stretches.last().filter(|stretch| stretch.ordinal <= start && stretch.ordinal + stretch.len as u64 == end);
+        let held = last.and_then(|stretch| text.bytes.get(stretch.at + (start - stretch.ordinal) as usize..stretch.at + stretch.len));
+        lines.push(line(lines.len(), now, start, end, held, false));
+    }
+    lines
+}
+
+/// The rows of a diff, and what is told beside them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct DiffRows {
+    /// The rows, hunk by hunk.
+    pub(super) rows: Vec<String>,
+    /// Whether a withheld run stands on or before a line they show.
+    pub(super) masked: bool,
+    /// The hunk to ask next, from 1, where the rows stopped before the last.
+    pub(super) next_hunk: Option<u64>,
+}
+
+/// One row of a hunk, before it is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiffSpec {
+    /// A line of the draft: unchanged (` `), new (`+`) or moved here (`>`).
+    Now {
+        /// The row's sign.
+        sign: char,
+        /// The line's number in the draft.
+        number: u64,
+    },
+    /// A line of the text before that is gone.
+    Before {
+        /// The line's number in the text before.
+        number: u64,
+    },
+    /// The rows a long run leaves out.
+    More {
+        /// The run's sign.
+        sign: char,
+        /// How many lines.
+        lines: u64,
+        /// The number of the last of them, in the text its sign numbers.
+        through: u64,
+    },
+    /// Where lines moved away: their first and last number before, and now.
+    Left {
+        /// Their numbers in the text before.
+        from: (u64, u64),
+        /// Their numbers in the draft.
+        to: (u64, u64),
+    },
+}
+
+impl DiffSpec {
+    /// Returns how many changed lines the row tells.
+    fn changed(&self) -> u64 {
+        match *self {
+            DiffSpec::Now { sign: ' ', .. } => 0,
+            DiffSpec::Now { .. } | DiffSpec::Before { .. } | DiffSpec::Left { .. } => 1,
+            DiffSpec::More { lines, .. } => lines,
+        }
+    }
+}
+
+/// What a line of the edit script draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Drawn {
+    /// A line unchanged, by its number in the draft.
+    Unchanged(u64),
+    /// A changed row: its sign, and the number it carries.
+    Changed(char, u64),
+    /// A line that moved away: its number before, and now.
+    Left(u64, u64),
+}
+
+impl Drawn {
+    /// Returns what `op` draws.
+    fn of(op: &Op) -> Drawn {
+        match *op {
+            Op::Same { now, .. } => Drawn::Unchanged(now),
+            Op::Gone { before } => Drawn::Changed('-', before),
+            Op::New { now } => Drawn::Changed('+', now),
+            Op::MovedIn { now, .. } => Drawn::Changed('>', now),
+            Op::MovedOut { before, now } => Drawn::Left(before, now),
+        }
+    }
+}
+
+/// Returns the rows a hunk's ops show, in order, long runs cut.
+///
+/// Lines that moved away one after another, to lines one after another, are
+/// one row; a run of more than [`ROWS_MAX_RUN`] gone, new or moved-in lines
+/// shows its two ends.
+fn diff_specs(ops: &[Op]) -> Vec<DiffSpec> {
+    let row = |sign: char, number: u64| if sign == '-' { DiffSpec::Before { number } } else { DiffSpec::Now { sign, number } };
+    let (mut specs, mut k) = (Vec::new(), 0);
+    while let Some(op) = ops.get(k) {
+        match Drawn::of(op) {
+            Drawn::Unchanged(number) => {
+                specs.push(DiffSpec::Now { sign: ' ', number });
+                k += 1;
+            }
+            Drawn::Left(before, now) => {
+                let mut count = 1u64;
+                while ops.get(k + count as usize).map(Drawn::of) == Some(Drawn::Left(before + count, now + count)) {
+                    count += 1;
+                }
+                specs.push(DiffSpec::Left { from: (before, before + count - 1), to: (now, now + count - 1) });
+                k += count as usize;
+            }
+            Drawn::Changed(sign, first) => {
+                let count = ops[k..].iter().take_while(|next| matches!(Drawn::of(next), Drawn::Changed(next, _) if next == sign)).count();
+                let (run, head, tail) = (count as u64, ROWS_RUN_HEAD as u64, ROWS_RUN_TAIL as u64);
+                if count > ROWS_MAX_RUN {
+                    specs.extend((first..first + head).map(|number| row(sign, number)));
+                    specs.push(DiffSpec::More { sign, lines: run - head - tail, through: first + run - tail - 1 });
+                    specs.extend((first + run - tail..first + run).map(|number| row(sign, number)));
+                } else {
+                    specs.extend((first..first + run).map(|number| row(sign, number)));
+                }
+                k += count;
+            }
+        }
+    }
+    specs
+}
+
+/// The row after a text's last line where no line break ends it.
+const NO_LINE_BREAK: &str = "\\ no line break at the end";
+
+/// Returns the rows of a diff from its hunk of index `from` on.
+///
+/// `before` is the text before and `now` the draft's, whose lines `plan`
+/// was made over. The rows are the module doc's *The diff's rows*: each
+/// hunk under its header, whole hunks while they fit [`ROWS_MAX_BYTES`], the
+/// hunk to ask next told where they stop; a first hunk that does not fit
+/// alone is cut, its last row counting the changed lines it leaves out.
+pub(super) fn diffed(before: &Text, now: &Text, plan: &Planned, from: usize) -> DiffRows {
+    let open_line = |text: &Text| {
+        let lines = Lines::of(text);
+        (text.positions() > 0 && !lines.closed()).then_some(lines.count())
+    };
+    let withheld = |text: &Text| text.gaps.iter().find(|gap| gap.kind == "withheld").map(|gap| Numbering::of(text).line(gap.ordinal));
+    let (open_before, open_now) = (open_line(before), open_line(now));
+    let (mut was, mut is) = (LineWalk::of(before), LineWalk::of(now));
+    let (mut rows, mut used, mut next_hunk) = (Vec::new(), 0usize, None);
+    // The last line of each text the rows reach.
+    let mut reach = (0u64, 0u64);
+    for (index, Hunk { ops, before: in_before, now: in_now }) in plan.hunks.iter().enumerate().skip(from) {
+        let specs = diff_specs(plan.ops.get(ops.clone()).unwrap_or_default());
+        let total: u64 = specs.iter().map(DiffSpec::changed).sum();
+        let mut drawn = vec![format!("@@ -{},{} +{},{} @@", in_before.0, in_before.1, in_now.0, in_now.1)];
+        let (mut bytes, mut told, mut reached, mut fits) = (drawn[0].len(), 0u64, reach, true);
+        for spec in &specs {
+            let (row, open) = match *spec {
+                DiffSpec::Now { sign, number } => {
+                    reached.1 = reached.1.max(number);
+                    (format!("{sign}{number}\t{}", is.line(number)), open_now == Some(number))
+                }
+                DiffSpec::Before { number } => {
+                    reached.0 = reached.0.max(number);
+                    (format!("-{number}\t{}", was.line(number)), open_before == Some(number))
+                }
+                DiffSpec::More { sign, lines, through } => {
+                    if sign == '-' {
+                        reached.0 = reached.0.max(through);
+                    } else {
+                        reached.1 = reached.1.max(through);
+                    }
+                    (format!("{sign}…\t({lines} more lines)"), false)
+                }
+                DiffSpec::Left { from, to } => {
+                    reached.0 = reached.0.max(from.1);
+                    (format!("<\t({})", Went::Moved { from, to }.said()), false)
+                }
+            };
+            let len = row.len() + if open { NO_LINE_BREAK.len() } else { 0 };
+            if used + bytes + len > ROWS_MAX_BYTES {
+                fits = false;
+                break;
+            }
+            (bytes, told) = (bytes + len, told + spec.changed());
+            drawn.push(row);
+            if open {
+                drawn.push(NO_LINE_BREAK.to_string());
+            }
+        }
+        if !fits && index > from {
+            next_hunk = Some(index as u64 + 1);
+            break;
+        }
+        rows.append(&mut drawn);
+        (used, reach) = (used + bytes, reached);
+        if !fits {
+            rows.push(format!("({} more changed lines not shown)", total.saturating_sub(told)));
+            next_hunk = (index + 1 < plan.hunks.len()).then_some(index as u64 + 2);
+            break;
+        }
+    }
+    let masked = withheld(before).is_some_and(|line| line <= reach.0) || withheld(now).is_some_and(|line| line <= reach.1);
+    DiffRows { rows, masked, next_hunk }
 }
 
 #[cfg(test)]

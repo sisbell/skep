@@ -928,6 +928,51 @@ pub(crate) fn i_runs(v: &Value, extent: u64) -> Option<Vec<IRun>> {
     Some(out)
 }
 
+/// A document's whole image: every run it arranges, in V order.
+///
+/// Its invariant, kept by [`whole_image`], the one way one is made beside
+/// the empty image: the runs tile the content positions from 1 with no gap
+/// — each run's `ordinal` one past the positions before it — none holds no
+/// address, the last I-address of each lies within `u64`, and the positions
+/// together are [`Image::extent`], below `u64::MAX`, so the position one
+/// past a run's last is a `u64` too.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Image {
+    /// The runs, in V order.
+    runs: Vec<IRun>,
+    /// How many content positions they arrange.
+    extent: u64,
+}
+
+impl Image {
+    /// Returns the runs, in V order.
+    pub fn runs(&self) -> &[IRun] {
+        &self.runs
+    }
+
+    /// Returns how many content positions the document arranges.
+    pub fn extent(&self) -> u64 {
+        self.extent
+    }
+}
+
+/// Decodes an `image` answer read over a document's whole content.
+///
+/// The answer is of an `image` whose region reaches from the first content
+/// ordinal past every position the document arranges, which the board clips
+/// to the arrangement; its runs come in V order, a run the document places
+/// twice standing twice (wire.md §The response envelope, `runs`). `None` for
+/// a document that is no `runs` answer, a run that does not parse, more
+/// runs than the board's run budget, or runs whose I-addresses pass `u64`
+/// or whose positions reach `u64::MAX`: the image is whole or absent, never
+/// a part read as the whole (SP-14).
+pub fn whole_image(v: &Value) -> Option<Image> {
+    let mut runs = i_runs(v, u64::MAX - 1)?;
+    runs.retain(|run| run.width > 0);
+    let extent = runs.last().map_or(0, |last| last.ordinal - 1 + last.width);
+    Some(Image { runs, extent })
+}
+
 /// Returns the V-ordinal `atom` is arranged at among `runs`, in V order.
 ///
 /// The first run holding it answers; `None` where no run does.

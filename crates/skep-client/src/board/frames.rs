@@ -44,6 +44,17 @@ pub const T_CORRESPONDENCE: &str = "1.1.0.1.0.1.0.3.102.1";
 /// reads `D`'s records of this exact type as the formatting line's job list.
 pub const T_HELD_REMOVAL: &str = "1.1.0.1.0.1.0.3.24";
 
+/// The marks type (the registry's vocabulary, `3.25`).
+///
+/// The vocabulary's row: "A mark: a private copy holding a draft's whole
+/// content by identity, kept to diff against later; the link says what the
+/// copy is and which draft it marks" — `from` the mark's whole content, `to`
+/// the draft, homed in the mark. An embedder's text calls write the one link
+/// of a mark so typed ([`make_link_spec`]), and the publication composition
+/// reads the exact type as a record class: the link's `from` is the marked
+/// draft's own bytes, and no publication of the draft offers it.
+pub const T_MARKS: &str = "1.1.0.1.0.1.0.3.25";
+
 /// The read-with type (wire.md §The publish shot and head-float, the
 /// deposits).
 ///
@@ -203,6 +214,42 @@ pub fn retrieve_v(doc: &str, from: u64, width: u64) -> Value {
 /// Builds `image` over content ordinals `from ..` of `doc`.
 pub fn image(doc: &str, from: u64, width: u64) -> Value {
     json!({"op": "image", "d": doc, "region": [{"start": format!("1.{from}"), "width": format!("0.{width}")}]})
+}
+
+/// The room one position of a `retrieve_i` answer takes, its address apart.
+///
+/// An `i_delivery` answer carries one item a position asked, never
+/// coalesced (wire.md §The response envelope, `i_delivery`): a per-byte
+/// value's is `{"at":"<address>","value":{"content":"<byte>"}}` and the
+/// comma after it, 34 bytes beside the address where the byte is spelled as
+/// itself and 39 where JSON spells it `\u00XX`; a `hex` item and a `null`
+/// take fewer. A reader sizes a read of per-byte values by it, so no part's
+/// answer passes its dialer's cap
+/// ([`MAX_ANSWER_BYTES`](crate::dial::MAX_ANSWER_BYTES)); a composite
+/// value's item is as long as the value, which no count of positions
+/// bounds.
+pub const I_ITEM_ROOM: usize = 39;
+
+/// Builds `{"op":"retrieve_i","spans":[{"start":…,"width":…},…]}`.
+///
+/// wire.md §Content & provenance reads: the read by identity (AUTH-6.38 to
+/// AUTH-6.40) — the values at the I-addresses the spans name, each `(start,
+/// width)` a run of `width` content positions from the element address
+/// `start`, spelled as [`end_span`] spells one, in span order. The answer
+/// is one item a position ([`I_ITEM_ROOM`]), `null` where the document
+/// minted none; a span into a document the session may not read refuses the
+/// whole read `withheld`, naming that document. The list is one wire list
+/// ([`MAX_WIRE_LIST`](crate::publication::MAX_WIRE_LIST)), refused past it,
+/// and the read is refused past the delivery budget's positions.
+///
+/// No code of this crate sends the frame: it stands for an embedder that
+/// reads values no arrangement holds any longer. This crate's own readers
+/// of a credential record reach its bytes through the arrangement, since
+/// an atom a later edit un-arranged must fail their read-back (AUTH-2.114,
+/// AUTH-2.115).
+pub fn retrieve_i(spans: &[(&str, u64)]) -> Value {
+    let spans: Vec<Value> = spans.iter().map(|&(start, width)| end_span(start, width)).collect();
+    json!({"op": "retrieve_i", "spans": spans})
 }
 
 /// Builds one depth-2 content V-span: `width` positions from ordinal `from`.
@@ -483,6 +530,31 @@ pub fn delete(doc: &str, p: u64, width: u64, as_of: u64, id: Option<&str>) -> Va
 pub fn rearrange(doc: &str, cuts: &[u64], as_of: u64, id: Option<&str>) -> Value {
     let cuts: Vec<Value> = cuts.iter().map(|&cut| place(cut)).collect();
     with_id(json!({"op": "rearrange", "doc": doc, "cuts": cuts, "as_of": as_of}), id)
+}
+
+/// Builds one V-spec: a stretch of a document's content.
+///
+/// It is `width` content positions of `source` from the ordinal `from`.
+/// wire.md §Value encodings: "`{"source": "<address>", "span": {…}}`", the
+/// span one depth-2 content V-span ([`v_span`]).
+fn v_spec(source: &str, from: u64, width: u64) -> Value {
+    json!({"source": source, "span": v_span(from, width)})
+}
+
+/// Builds `{"op":"copy","doc":…,"at":{…},"specs":[…],"as_of":…}`.
+///
+/// It places the content the `specs` name before content ordinal `at` of
+/// the draft `doc`, by identity and minting none (wire.md §Arrangement,
+/// `copy`) — another of the in-place edits. Each spec is `(source, from,
+/// width)`, `width` content positions of `source` from the ordinal `from`,
+/// which the board clips to what `source` arranges at the commit: a spec
+/// reaching past its source's end takes what stands there. A source that
+/// arranges no content is refused `empty_source`, and specs that clip to
+/// nothing `empty_result`. It is typed against the state `as_of` of `doc`,
+/// the destination, as [`delete`]'s is; the sources are not judged for it.
+pub fn copy(doc: &str, at: u64, specs: &[(&str, u64, u64)], as_of: u64, id: Option<&str>) -> Value {
+    let specs: Vec<Value> = specs.iter().map(|&(source, from, width)| v_spec(source, from, width)).collect();
+    with_id(json!({"op": "copy", "doc": doc, "at": place(at), "specs": specs, "as_of": as_of}), id)
 }
 
 /// Builds `{"op":"reinstate","doc":…,"at":{…},"runs":[…],"as_of":…}`.
@@ -811,6 +883,22 @@ pub fn make_link_replacing(home: &str, from: &[&str], to: &[&str], ty: &str, rep
         frame["replaces"] = Value::String(r.to_string());
     }
     frame
+}
+
+/// Builds a `make_link` homed in `home` whose `from` is in the V-spec form.
+///
+/// wire.md §Links (writes): a V-spec slot is "resolved against current
+/// arrangements; the recorded endset is the permanent I-spans". `from` is
+/// each `(source, from, width)` as [`copy`] takes one, clipped to what its
+/// source arranges at the commit, so the link's stored `from` is the
+/// I-spans those positions hold, in order: the content itself, where
+/// [`make_link`]'s address form would store the document's name and touch
+/// none of its bytes. An empty list is an empty `from`. `to` and `ty` are
+/// in the address form, as [`make_link`]'s are. The board refuses a `from`
+/// that resolves past its slot budget `slot_too_large`.
+pub fn make_link_spec(home: &str, from: &[(&str, u64, u64)], to: &[&str], ty: &str, id: Option<&str>) -> Value {
+    let from: Vec<Value> = from.iter().map(|&(source, at, width)| v_spec(source, at, width)).collect();
+    with_id(json!({"op": "make_link", "home": home, "from": from, "to": {"addrs": to}, "ty": {"addrs": [ty]}}), id)
 }
 
 /// Builds the unit subtree span at `addr` as a four-set slot.

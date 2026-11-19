@@ -54,7 +54,9 @@ fn the_frames_spell_the_wire() {
     assert_eq!(r.token(), "credential_refused:content_session");
 }
 
-/// wire.md's own request examples, spelled by the builders: each the line
+/// Checks the builders against wire.md's own request examples.
+///
+/// Each is the line
 /// under its `<!-- wire: request … -->` marker — `find_links_v` over one
 /// span (§Link discovery reads), `find_links_ftt`'s four-set with a `from`
 /// list and an `empty` type, `window_ftt`'s all-`any` four-set past a cursor
@@ -65,6 +67,10 @@ fn the_frames_spell_the_wire() {
 /// another slot, `count_v_by_home` with its `except`, `line_numbers`
 /// (§Content & provenance reads) with both its lists, byte for byte,
 /// `rearrange` (§Arrangement) over three cuts, byte for byte,
+/// `copy` (§Arrangement) of one source span, byte for byte, `make_link`
+/// (§Links (writes)) with its `from` in the V-spec form, byte for byte,
+/// and with an empty one, `retrieve_i` (§Content & provenance reads), byte
+/// for byte,
 /// `find_links_v_history` at the start, `project`, `edition_claims`,
 /// `out_claims` (the example's view is `audit`; this crate reads the active
 /// view, the one member that differs) and the `publish` example with every
@@ -111,6 +117,30 @@ fn the_builders_spell_the_wires_own_examples() {
         r#"{"as_of":7,"cuts":[{"ordinal":"1","subspace":"1"},{"ordinal":"3","subspace":"1"},{"ordinal":"6","subspace":"1"}],"doc":"1.0.1.0.1","op":"rearrange"}"#
     );
     assert_eq!(frames::rearrange("1.0.1.0.1", &[1, 2, 3, 4], 7, Some("x"))["id"], "x");
+    // The copy by identity, the link whose `from` is content and the read by
+    // identity: each the example's own line, as the frame serializes.
+    assert_eq!(
+        frames::copy("1.0.1.0.1", 6, &[("1.0.1.0.64", 1, 5)], 7, None).to_string(),
+        r#"{"as_of":7,"at":{"ordinal":"6","subspace":"1"},"doc":"1.0.1.0.1","op":"copy","specs":[{"source":"1.0.1.0.64","span":{"start":"1.1","width":"0.5"}}]}"#
+    );
+    assert_eq!(frames::copy("1.0.1.0.1", 6, &[("1.0.1.0.64", 1, 5), ("1.0.1.0.65", 3, 2)], 7, Some("x"))["specs"][1], json!({"source":"1.0.1.0.65","span":{"start":"1.3","width":"0.2"}}));
+    assert_eq!(
+        frames::make_link_spec("1.0.1.0.1", &[("1.0.1.0.1", 1, 5)], &["1.0.1.0.1.0.2.1"], "1.0.1.0.65.0.3.6.1", None).to_string(),
+        r#"{"from":[{"source":"1.0.1.0.1","span":{"start":"1.1","width":"0.5"}}],"home":"1.0.1.0.1","op":"make_link","to":{"addrs":["1.0.1.0.1.0.2.1"]},"ty":{"addrs":["1.0.1.0.65.0.3.6.1"]}}"#
+    );
+    let empty = frames::make_link_spec("1.0.1.0.66", &[], &["1.0.1.0.64"], frames::T_MARKS, Some("x"));
+    assert_eq!(
+        empty.to_string(),
+        r#"{"from":[],"home":"1.0.1.0.66","id":"x","op":"make_link","to":{"addrs":["1.0.1.0.64"]},"ty":{"addrs":["1.1.0.1.0.1.0.3.25"]}}"#,
+        "an empty `from` is the empty list"
+    );
+    assert_ne!(
+        frames::make_link_spec("1.0.1.0.66", &[("1.0.1.0.66", 1, 5)], &["1.0.1.0.64"], frames::T_MARKS, None)["from"],
+        frames::make_link("1.0.1.0.66", &["1.0.1.0.66"], &["1.0.1.0.64"], frames::T_MARKS, None)["from"],
+        "content, never the document's name"
+    );
+    assert_eq!(frames::retrieve_i(&[("1.0.1.0.1.0.1.1", 5)]).to_string(), r#"{"op":"retrieve_i","spans":[{"start":"1.0.1.0.1.0.1.1","width":"5"}]}"#);
+    assert_eq!(frames::retrieve_i(&[("1.0.1.0.1.0.1.1", 5), ("1.0.1.0.64.0.1.9", 2)])["spans"][1], json!({"start":"1.0.1.0.64.0.1.9","width":"2"}));
     assert_eq!(frames::find_links_v_history("1.0.1.0.1", &[(1, 5)], None, 16), json!({"cur":null,"d":"1.0.1.0.1","n":16,"op":"find_links_v_history","region":[{"start":"1.1","width":"0.5"}]}));
     assert_eq!(frames::find_links_v_history("1.0.1.0.1", &[(1, 5)], Some("1.0.1.0.1.0.2.2"), 16)["cur"], "1.0.1.0.1.0.2.2");
     assert_eq!(frames::project("1.0.1.0.1.0.2.1", 2, "1.0.1.0.64"), json!({"a":"1.0.1.0.1.0.2.1","d":"1.0.1.0.64","op":"project","slot":2}));
@@ -176,14 +206,17 @@ fn the_marker_read_decodes_the_boards_merge_member_and_absent_where_it_serves_no
     assert_eq!(merge_marker(&json!({"as_of": 9, "resp": "span_set", "set": []})), None);
 }
 
-/// The four type constants the publication reads by, each the wire's own
+/// Checks the type constants against the wire's own spellings.
+///
+/// The four the publication reads by are each the wire's own
 /// spelling (a literal, with its line): the correspondence class the
 /// publish shot's records are typed (wire.md §The publish shot and
 /// head-float: "`1.1.0.1.0.1.0.3.102.1`"), the held removal (the
 /// vocabulary's `3.24`), the read-with ("typed `3.71`") and the edition
 /// claim ("typed `3.14`"); the retraction class, the format's fifth
-/// reserved tumbler, beside them, and the mail type the paged mail search
-/// asks by (the vocabulary's `3.15`).
+/// reserved tumbler, beside them, the mail type the paged mail search
+/// asks by (the vocabulary's `3.15`), and the type of a mark's link (the
+/// vocabulary's `3.25`).
 #[test]
 fn the_type_constants_are_the_wires_spellings() {
     assert_eq!(frames::T_CORRESPONDENCE, "1.1.0.1.0.1.0.3.102.1");
@@ -191,10 +224,76 @@ fn the_type_constants_are_the_wires_spellings() {
     assert_eq!(frames::T_READ_WITH, "1.1.0.1.0.1.0.3.71");
     assert_eq!(frames::T_EDITION, "1.1.0.1.0.1.0.3.14");
     assert_eq!(frames::T_MAIL, "1.1.0.1.0.1.0.3.15");
+    assert_eq!(frames::T_MARKS, "1.1.0.1.0.1.0.3.25");
     assert_eq!(T_RETRACTION, "1.1.0.1.0.1.0.1.5");
     assert_eq!(frames::REGISTRY_DOCUMENT, "1.1.0.1.0.1");
     assert_eq!(frames::i_span("1.0.1.0.1.0.1.4", 2), json!({"start":"1.0.1.0.1.0.1.4","width":"0.0.0.0.0.0.0.2"}), "a slot's span: the width a displacement");
     assert_eq!(frames::end_span("1.0.1.0.1.0.1.4", 2), json!({"start":"1.0.1.0.1.0.1.4","width":"2"}), "a request end's span: the width a natural");
+}
+
+/// The room a position of a read by identity takes is the constant's.
+///
+/// An `i_delivery` item is spelled as the board marshals one, a comma after
+/// it: beside its address a byte spelled as itself takes 34 bytes, a control
+/// byte, which JSON spells in six, the constant's 39, and no single-byte
+/// text value, `hex` item or `null` takes more; the wire's own example item
+/// takes the first figure (the mutant that sizes a read by a smaller room
+/// asks parts whose answers pass the dialer's cap).
+#[test]
+fn a_position_of_a_read_by_identity_takes_its_room_at_most() {
+    let addr = "1.0.1.0.1.0.1.1";
+    let room = |value: Value| json!({"at": addr, "value": value}).to_string().len() + ",".len() - addr.len();
+    assert_eq!(room(json!({"content": "h"})), 34);
+    assert_eq!(room(json!({"content": char::from(1u8).to_string()})), frames::I_ITEM_ROOM, "a control byte, in six");
+    assert_eq!(frames::I_ITEM_ROOM, 39);
+    for byte in 0u8..0x80 {
+        assert!(room(json!({"content": char::from(byte).to_string()})) <= frames::I_ITEM_ROOM, "the byte {byte:#04x}");
+    }
+    assert!(room(json!({"hex": "e2"})) < frames::I_ITEM_ROOM && room(Value::Null) < frames::I_ITEM_ROOM);
+    // `<!-- wire: response i_delivery -->`: the example's first item.
+    let example = r#"{"as_of":9,"items":[{"at":"1.0.1.0.1.0.1.1","value":{"content":"h"}},{"at":"1.0.1.0.1.0.1.2","value":null}],"resp":"i_delivery"}"#;
+    let first = r#"{"at":"1.0.1.0.1.0.1.1","value":{"content":"h"}},"#;
+    assert!(example.contains(first) && first.len() == 34 + addr.len());
+    // A part of the delivery budget at that room, under a short address,
+    // fits the dialer's cap; under a long one it does not, so a reader sizes
+    // its parts by the room.
+    let budget = 1usize << 17;
+    assert!(budget * (frames::I_ITEM_ROOM + 22) + 64 <= crate::dial::MAX_ANSWER_BYTES);
+    assert!(budget * (frames::I_ITEM_ROOM + 31) + 64 > crate::dial::MAX_ANSWER_BYTES);
+}
+
+/// A whole image is decoded whole, its runs tiling the positions from 1.
+///
+/// The wire's own `runs` example is one run of five positions; runs come in
+/// V order with the ordinal each begins at, a run placed twice standing
+/// twice and a run of no address dropped; an empty document's image is the
+/// empty one; and an answer that is no image, a run that does not parse,
+/// runs past the board's budget and positions that reach the range's end
+/// are no image at all, never a part of one (the mutant that reads what it
+/// can of a broken answer shifts every position past the break).
+#[test]
+fn a_whole_image_is_decoded_whole_or_not_at_all() {
+    // `<!-- wire: response runs -->`.
+    let example = whole_image(&json!({"as_of":9,"resp":"runs","runs":[{"i_start":"1.0.1.0.1.0.1.1","width":"5"}]})).expect("an image");
+    assert_eq!((example.runs(), example.extent()), (&[IRun { prefix: "1.0.1.0.1.0.1".into(), first: 1, width: 5, ordinal: 1 }][..], 5));
+    let twice = json!({"resp":"runs","runs":[{"i_start":"1.0.1.0.1.0.1.4","width":"3"},{"i_start":"1.0.1.0.64.0.1.9","width":"0"},{"i_start":"1.0.1.0.64.0.1.9","width":"2"},{"i_start":"1.0.1.0.1.0.1.4","width":"3"}]});
+    let image = whole_image(&twice).expect("an image");
+    assert_eq!(
+        image.runs().iter().map(|run| (run.prefix.as_str(), run.first, run.width, run.ordinal)).collect::<Vec<_>>(),
+        [("1.0.1.0.1.0.1", 4, 3, 1), ("1.0.1.0.64.0.1", 9, 2, 4), ("1.0.1.0.1.0.1", 4, 3, 6)]
+    );
+    assert_eq!(image.extent(), 8);
+    assert_eq!(whole_image(&json!({"as_of":9,"resp":"runs","runs":[]})), Some(Image::default()), "an empty document");
+    assert_eq!(Image::default().extent(), 0);
+    let broken = json!({"resp":"runs","runs":[{"i_start":"1.0.1.0.1.0.1.1","width":"2"},{"i_start":"1.0.1.0.1.0.1.x","width":"1"}]});
+    assert_eq!(whole_image(&broken), None, "one run that does not parse");
+    assert_eq!(whole_image(&json!({"code":"image_too_large","op":"image","resp":"rejected"})), None, "a rejection is no image");
+    assert_eq!(whole_image(&json!({"as_of":9,"resp":"span_set","set":[]})), None);
+    let many: Vec<Value> = (1..=(1u64 << 12) + 1).map(|k| json!({"i_start": format!("1.0.1.0.1.0.1.{}", 2 * k), "width": "1"})).collect();
+    assert_eq!(whole_image(&json!({"resp":"runs","runs":many})), None, "past the run budget");
+    let run = |width: u64| json!({"resp":"runs","runs":[{"i_start":"1.0.1.0.1.0.1.1","width":width.to_string()}]});
+    assert_eq!(whole_image(&run(u64::MAX)), None, "positions that leave no position past the last");
+    assert_eq!(whole_image(&run(u64::MAX - 1)).map(|image| image.extent()), Some(u64::MAX - 1), "the widest image: one past its last position is a position still");
 }
 
 /// Checks that only an `ack_addr` saying so reads as committing nothing.

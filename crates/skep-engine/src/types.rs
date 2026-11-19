@@ -50,6 +50,12 @@
 //! correspondence built by `commons_subtype` as `commons_type` builds a
 //! type's.
 //!
+//! The source-control rows join as one pin, [`t_marks`]: the type of the
+//! one link a mark of a draft carries, which the client's text calls write
+//! and its publication composition reads as a record class. No daemon index
+//! reads it and no refusal keys on it; it stands last in
+//! [`pins_outside_the_registry`].
+//!
 //! The registry's rows (REG-1.14, REG-1.15; commons-map's table of them)
 //! are `skep-registry`'s table, read through readers here —
 //! [`t_registration`] … [`t_succession_policy`] — so one ledger names every
@@ -391,8 +397,10 @@ pub fn t_succession_policy() -> &'static Address {
 /// The order is the ledger's — the grant, the edition claim, endorse, the
 /// consumption marker, the journal designation, the rail record, the
 /// steward's classification, `replaces`, then the link-sets rows: read-with,
-/// the correspondence and the held removal — and the list is the parent's
-/// domain as the engine sees it (REG-1.31). The three credential types stand
+/// the correspondence and the held removal, then `marks` — and the list is
+/// the parent's domain as the engine sees it (REG-1.31). A pin that joins
+/// stands last, so the place of every pin before it holds. The three
+/// credential types stand
 /// beside this list rather than in it: they are the fold's kinds, which no
 /// engine index reads and which the write path's refusals read through a
 /// clone of [`IDENTITY_TYPES`] rather than as class pins. The daemon's
@@ -401,7 +409,7 @@ pub fn t_succession_policy() -> &'static Address {
 /// suite holds every pin of this list, and the three, to be an entry of
 /// that domain. The ledger's tests hold this list to be exactly the pins
 /// outside the registry's table but those three.
-pub fn pins_outside_the_registry() -> [&'static Address; 11] {
+pub fn pins_outside_the_registry() -> [&'static Address; 12] {
     [
         t_grant(),
         t_edition(),
@@ -414,6 +422,7 @@ pub fn pins_outside_the_registry() -> [&'static Address; 11] {
         t_read_with(),
         t_correspondence(),
         t_held_removal(),
+        t_marks(),
     ]
 }
 
@@ -556,6 +565,21 @@ pub fn t_correspondence() -> &'static Address {
 /// [`t_read_with`] is.
 pub fn t_held_removal() -> &'static Address {
     static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(24));
+    &ADDR
+}
+
+// ── the source-control rows ────────────────────────────────────────────────
+
+/// Returns the marks type: `1.1.0.1.0.1.0.3.25`.
+///
+/// commons-map.md's agent-link row: "`3.25` | MARKS, name `marks` — 'this
+/// copy is a mark of that draft'" — `from` the mark's whole content, `to`
+/// the draft, homed in the mark; a type of its own in the structural
+/// reserve, beside the held removal. Written by the client's `text.mark`
+/// through `make_link`, so no refusal keys on it; the client's constant,
+/// pinned here as [`t_read_with`] is.
+pub fn t_marks() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(25));
     &ADDR
 }
 

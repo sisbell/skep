@@ -43,10 +43,13 @@
 //!   `H.1`'s pair read once per board (signed-ops D13); its child `frames`
 //!   spells every frame this crate sends and the frames it lends an
 //!   embedder: the reads, the paged link search (`window_four`,
-//!   `window_ftt`, with the mail type `T_MAIL`) and the line read
-//!   (`line_numbers`) among them, and the creation of a
-//!   well-known document, slot named (`create_well_known_document`; the
-//!   mailbox's, `create_mailbox`, which no code of the crate sends); its
+//!   `window_ftt`, with the mail type `T_MAIL`), the line read
+//!   (`line_numbers`) and the read by identity (`retrieve_i`) among them,
+//!   the creation of a well-known document, slot named
+//!   (`create_well_known_document`; the mailbox's, `create_mailbox`, which
+//!   no code of the crate sends), and the copy by identity (`copy`) and
+//!   the link whose `from` is content (`make_link_spec`, with the marks
+//!   type `T_MARKS`) a mark of a draft is made of; its
 //!   child `answers`
 //!   decodes the read answers the crate reads but the registry reads',
 //!   which `Board` decodes itself, and an envelope member a caller reads in
@@ -54,7 +57,8 @@
 //!   own calls, each of an answer the embedder dialed for itself:
 //!   `merge_marker`, a draft's merge marker off a `doc_metadata` answer;
 //!   `homes`, the count by home's rows; `line_numbers`, the line read's
-//!   numbers; `history`, the retracted-links
+//!   numbers; `whole_image`, a document's whole image; `history`, the
+//!   retracted-links
 //!   read's window; and `link_page`, a windowed link read's page, with the
 //!   two tests of where a link's stored slots lie that a reader of such a
 //!   search keeps by, `LinkValue::to_at_or_under` and
@@ -77,7 +81,12 @@
 //!   cut to what differs by `shared`, the trim. A function of two texts,
 //!   which reads no board: an embedder that edits a draft's text writes
 //!   the changes alone, so what stands between two of them keeps its
-//!   identity (skep #1079).
+//!   identity (skep #1079). Its child `text::diff` plans a text's change by
+//!   identity from two whole images (skep #1091): the stretches that stay,
+//!   moved and stand again, the spans gone and the positions new,
+//!   `Identity::of`, and over two line tables the edit script, its hunks
+//!   and the notes a diff of two texts cannot make, `Identity::lines` — a
+//!   moved block told as moved and a re-typed one as re-typed.
 //!
 //! Behind the default-on `acting` feature — everything that signs or holds a
 //! key:

@@ -13,16 +13,18 @@ const PATHS: &[&str] = &[
     "6", "6.1", "6.2", "6.3", "7", "8", "9", "9.1", "9.2", "9.3", "10", "10.1", "10.2", "10.3",
     "10.4", "11", "12", "13", "14", "14.1", "14.2", "14.3", "14.4", "14.5", "15", "15.1", "15.2",
     "15.3", "15.4", "16", "17", "18", "18.1", "18.2", "18.3", "19", "20", "21", "21.1", "21.2",
-    "21.3", "21.4", "21.5", "21.6", "21.7", "21.8", "22", "23", "23.1", "23.2", "23.3", "23.4", "23.5", "23.6", "23.7", "24", "27", "27.1", "27.2", "27.2.1", "27.2.2", "27.3", "28", "30", "40", "41", "42",
+    "21.3", "21.4", "21.5", "21.6", "21.7", "21.8", "22", "23", "23.1", "23.2", "23.3", "23.4", "23.5", "23.6", "23.7", "24", "25", "27", "27.1", "27.2", "27.2.1", "27.2.2", "27.3", "28", "30", "40", "41", "42",
     "42.1", "42.2", "42.3", "43", "44", "44.1", "44.2", "45", "46", "46.1", "46.3", "46.4", "46.5",
     "50", "54", "54.1", "54.1.1", "54.1.2", "54.2", "54.2.1", "54.2.2", "54.2.3", "54.3", "54.4",
     "55", "56", "57", "57.1",
     "57.2", "58", "58.1", "58.2", "58.3", "58.4", "58.5", "59", "60", "61", "70", "71", "88", "89", "90", "91", "100", "101", "102", "102.1", "103", "104", "104.1", "105",
 ];
 
-/// The ordinals the table must NOT name: the reserved structural and
-/// social extensions beyond the built ones — `3.23` inline and `3.24` the
-/// held removal now seeded, `3.25`, `3.26` and `3.29` still free — the
+/// The ordinals the table must not name.
+///
+/// They are the reserved structural and
+/// social extensions beyond the built ones — `3.23` inline, `3.24` the
+/// held removal and `3.25` marks seeded, `3.26` and `3.29` still free — the
 /// registry-machinery reserve's unallocated `3.51`–`3.53` (REG-1.24: `3.54`
 /// is the registration kind's, and the reserve's others name nothing), the
 /// ordinals under the registration no row takes yet — past its approval,
@@ -34,7 +36,6 @@ const PATHS: &[&str] = &[
 /// unnamed).
 const NOT_SEEDED: &[&[u32]] = &[
     &[27, 4],
-    &[25],
     &[26],
     &[29],
     &[46, 2],
@@ -326,6 +327,42 @@ fn the_link_sets_rows_stand_at_their_pinned_addresses() {
     assert_eq!(
         definition_at(&commons_type(&[102])).expect("counterpart").endsets,
         "from: the one passage; to: its counterpart."
+    );
+}
+
+/// Checks that the marks row stands at `3.25` with its words.
+///
+/// It stands in the structural reserve after the held
+/// removal, under the map's token name and held to its purpose and its
+/// endsets word for word: the link a mark of a draft carries, `from` the
+/// mark's whole content and `to` the draft, homed in the mark — a two-sided
+/// link, never the one-sided shape the inline style `mark` `3.23.4` keeps.
+#[test]
+fn the_marks_row_stands_at_3_25_with_its_words() {
+    let marks = definition_at(&commons_type(&[25])).expect("the marks row");
+    assert_eq!(marks.address.tumbler().to_string(), "1.1.0.1.0.1.0.3.25");
+    assert_eq!(marks.name, "marks");
+    assert_eq!(
+        marks.purpose,
+        "A mark: a private copy holding a draft's whole content by identity, kept to diff against later; the link says what the copy is and which draft it marks."
+    );
+    assert_eq!(marks.endsets, "from: the mark's whole content; to: the draft; homed in the mark.");
+    let style = definition_at(&commons_type(&[23, 4])).expect("the inline style's row");
+    assert_eq!(
+        (style.name, style.endsets),
+        ("mark", "from: empty; to: the span styled."),
+        "the style keeps its own row"
+    );
+    let after: Vec<&[u32]> = vocabulary()
+        .iter()
+        .map(|d| d.ordinals)
+        .skip_while(|ordinals| *ordinals != [24])
+        .take(3)
+        .collect();
+    assert_eq!(
+        after,
+        [&[24][..], &[25], &[27]],
+        "in path order, between the held removal and the file-metadata family"
     );
 }
 

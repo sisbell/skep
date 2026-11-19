@@ -53,14 +53,17 @@
 //! current by one write, `history.restore`, typed against the page's own
 //! state of the draft (B3-S7) — are the child module `history`'s,
 //! `pub(super)` to the door.
-//! The `text` family's three rows — `text.replace`, a text edit of a draft
+//! The `text` family's five rows — `text.replace`, a text edit of a draft
 //! that replaces the bytes that differ alone, so every byte it did not
 //! change keeps its identity, `text.edit`, several such edits in one
 //! call, each made as its minimal changes and all of them landed or none
 //! (skep #1079), its landed answer showing the lines it changed (skep
-//! #1080), and `text.move`, whole lines of a draft moved by identity, by one
+//! #1080), `text.move`, whole lines of a draft moved by identity, by one
 //! `rearrange` about their starts, its landed answer showing them where
-//! they now stand (skep #1085), each made of the `op`, `held` and `resolve`
+//! they now stand (skep #1085), `text.mark`, a private copy of a draft's
+//! whole content by identity to diff against later, and `text.diff`, what
+//! changed in a draft since such a document, told by identity and written
+//! nowhere (skep #1091), each made of the `op`, `held` and `resolve`
 //! rows' calls within the one call the log keeps — are the child module
 //! `text`'s, `pub(super)` to the door, with the two caps it keeps
 //! ([`MAX_DRAFT_POSITIONS`], [`MAX_NEW_BYTES`]) and the figures of those
@@ -440,9 +443,11 @@ impl<'a> Write<'a> {
     ///
     /// It is a ceremony, whose walk's writes are the library's,
     /// `publication.open`, which reads, `node.start` or `node.restart`,
-    /// which starts the node, or a call of the `text` family, `text.replace`,
-    /// `text.edit` or `text.move`, whose writes are frames sent through `op`,
-    /// each meeting the door again on that row's path.
+    /// which starts the node, or a call of the `text` family whose every
+    /// write is a burst, `text.replace`, `text.edit` or `text.move`, its
+    /// writes frames sent through `op`, each meeting the door again on that
+    /// row's path. `text.mark`, whose first write is a mint, is judged by it
+    /// ([`Write::call`]).
     pub(super) fn unjudged(call: &'a str) -> Write<'a> {
         Write { named: Named::Call(call), kind: None, drafts: Vec::new() }
     }
@@ -485,7 +490,9 @@ impl<'a> Write<'a> {
 /// index's listing `places` (A-255), the text edit of a draft,
 /// `text.replace` (skep #1070), several of them in one call, `text.edit`
 /// (skep #1079), whole lines of a draft moved by identity, `text.move`
-/// (skep #1085), or the change feed's page `changes`: one
+/// (skep #1085), a mark of a draft to diff against, `text.mark`, what
+/// changed in a draft since one, `text.diff` (skep #1091), or the change
+/// feed's page `changes`: one
 /// arm per call, which the compiler holds exhaustive, and the list a
 /// transport admits a call by, [`CALLS`], spelled from `Call::ALL` — so no
 /// call is listed that the dispatch does not answer.
@@ -532,6 +539,8 @@ enum Call {
     TextReplace,
     TextEdit,
     TextMove,
+    TextMark,
+    TextDiff,
     Changes,
 }
 
@@ -545,9 +554,10 @@ impl Call {
     /// and `history.restore` closing the merge row that draws the restore, the
     /// read before the write; `places` stands beside `search`, `held.show`
     /// after `held`, whose row owes it, the `text` family's `text.replace`,
-    /// `text.edit` and `text.move` after `resolve`, the rows they are made of
-    /// standing before them, and the change feed's `changes` last.
-    const ALL: [Call; 42] = [
+    /// `text.edit`, `text.move`, `text.mark` and `text.diff` after
+    /// `resolve`, the rows they are made of standing before them, and the
+    /// change feed's `changes` last.
+    const ALL: [Call; 44] = [
         Call::Boards,
         Call::Session,
         Call::Close,
@@ -589,6 +599,8 @@ impl Call {
         Call::TextReplace,
         Call::TextEdit,
         Call::TextMove,
+        Call::TextMark,
+        Call::TextDiff,
         Call::Changes,
     ];
 
@@ -636,6 +648,8 @@ impl Call {
             Call::TextReplace => "text.replace",
             Call::TextEdit => "text.edit",
             Call::TextMove => "text.move",
+            Call::TextMark => "text.mark",
+            Call::TextDiff => "text.diff",
             Call::Changes => "changes",
         }
     }
@@ -646,7 +660,7 @@ impl Call {
     }
 }
 
-/// The bridge's forty-two calls, as it spells them, in its order.
+/// The bridge's forty-four calls, as it spells them, in its order.
 ///
 /// They are §4b.1's thirty-two — the `publication` family's four, the
 /// `merge` family's four, `history.restore` and `held.show` among them —
@@ -656,9 +670,11 @@ impl Call {
 /// restore, `history.past` (skep #853), the document index's listing,
 /// `places` (A-255), the text edit of a draft, `text.replace` (skep #1070),
 /// several of them in one call, `text.edit` (skep #1079), whole lines of a
-/// draft moved by identity, `text.move` (skep #1085), and the change
-/// feed's page, `changes`: the list a transport admits a call by, every
-/// name of it one [`Shell::call`] answers.
+/// draft moved by identity, `text.move` (skep #1085), a mark of a draft to
+/// diff against, `text.mark`, what changed in a draft since one,
+/// `text.diff` (skep #1091), and the change feed's page, `changes`: the
+/// list a transport admits a call by, every name of it one [`Shell::call`]
+/// answers.
 pub const CALLS: [&str; Call::ALL.len()] = {
     let mut names = [""; Call::ALL.len()];
     let mut i = 0;
@@ -1434,6 +1450,8 @@ impl Shell {
             Some(Call::TextReplace) => self.text_replace(args),
             Some(Call::TextEdit) => self.text_edit(args),
             Some(Call::TextMove) => self.text_move(args),
+            Some(Call::TextMark) => self.text_mark(args),
+            Some(Call::TextDiff) => self.text_diff(args),
             Some(Call::Changes) => self.changes(args),
             None => Err(Refusal::shell(Name::UNKNOWN_CALL, json!({"call": name}))),
         };
@@ -2146,15 +2164,17 @@ impl Shell {
         }
     }
 
-    /// Admits a write at the shell's ONE WRITE DOOR, before any dial and any
-    /// read the write makes (the held store's shape (vi) item 4).
+    /// Admits a write at the shell's one write door.
     ///
-    /// Every write the shell sends asks it: a write frame through `op` —
+    /// The door stands before any dial and any read the write makes (the
+    /// held store's shape (vi) item 4). Every write the shell sends asks
+    /// it: a write frame through `op` —
     /// `/op-at`'s too; every row of the publication and merge families and
     /// `history.restore`, through [`Shell::signed`]; `text.replace`,
-    /// `text.edit` and `text.move`, once before the call's first read, each
-    /// write it sends asking again as a frame through `op`
-    /// (`Shell::text_call`); and every ceremony that
+    /// `text.edit`, `text.move` and `text.mark`, once before the call's
+    /// first read, each write it sends asking again as a frame through `op`
+    /// (`Shell::text_call`), `text.diff`, which sends none, asking nothing;
+    /// and every ceremony that
     /// writes to the board, which runs under no session of this shell's and
     /// asks as its board ([`Writer::Board`]), as the notebook's start and
     /// restart (`node.start`, `node.restart`) ask. `write` is the write as the

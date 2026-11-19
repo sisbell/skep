@@ -313,3 +313,247 @@ fn the_rows_of_a_move_show_the_lines_where_they_stand_and_where_they_left() {
     let withheld = text_of(json!([{"content": "a\n"}, {"withheld": {"origin": "1.0.1.0.9", "width": "5"}}, {"content": "b\nc\n"}]));
     assert_eq!(moved(&withheld, (3, 3), (1, 1), 3), Rows { lines: said(&["+1\ta", " 2\t{…}b", " 3\tc", "-\t(line 3 moved to 1)"]), masked: true }, "a withheld run on a line shown");
 }
+
+// ── a diff's rows ────────────────────────────────────────────────────────
+
+/// One piece of a text a diff's cell types.
+///
+/// It is text minted from an ordinal on, or a value that is no text.
+#[derive(Debug, Clone, Copy)]
+enum Typed<'t> {
+    /// Text, its first byte minted at this ordinal of the cell's chain.
+    Text(u64, &'t str),
+    /// An atom minted at this ordinal.
+    Atom(u64),
+    /// A withheld run of this width, minted from this ordinal on.
+    Withheld(u64, u64),
+}
+
+/// Returns the text `pieces` make and its image, as a board would hold them.
+///
+/// A piece typed twice — the same ordinal and text — is the same bytes by
+/// identity, wherever it stands.
+fn typed(pieces: &[Typed<'_>]) -> (Text, skep_client::board::Image) {
+    let chain = format!("{DOC}.0.1");
+    let (mut items, mut runs) = (Vec::new(), Vec::new());
+    for piece in pieces {
+        let (first, width, item) = match *piece {
+            Typed::Text(first, text) => (first, text.len() as u64, json!({"content": text})),
+            Typed::Atom(first) => (first, 1, json!({"atom": "a value"})),
+            Typed::Withheld(first, width) => (first, width, json!({"withheld": {"origin": "1.0.1.0.9", "width": width.to_string()}})),
+        };
+        items.push(item);
+        runs.push(json!({"i_start": format!("{chain}.{first}"), "width": width.to_string()}));
+    }
+    (text_of(Value::Array(items)), skep_client::board::whole_image(&json!({"resp": "runs", "runs": runs})).expect("an image"))
+}
+
+/// Returns the lines `lines`, each typed apart.
+///
+/// Line `k`, from 1, is minted at `1000 * k`.
+fn lines_typed<'t>(lines: &[&'t str]) -> Vec<Typed<'t>> {
+    lines.iter().enumerate().map(|(k, line)| Typed::Text(1000 * (k as u64 + 1), line)).collect()
+}
+
+/// Returns the rows of the diff from `before` to `now`.
+///
+/// They start at the hunk of index `from`.
+fn diff_of(before: &[Typed<'_>], now: &[Typed<'_>], from: usize) -> DiffRows {
+    let ((was, was_image), (is, is_image)) = (typed(before), typed(now));
+    let identity = skep_client::text::diff::Identity::of(&was_image, &is_image).expect("a plan");
+    let plan = identity.lines(&line_table(&was, false), &line_table(&is, true), ROWS_CONTEXT_LINES);
+    diffed(&was, &is, &plan, from)
+}
+
+/// Returns the pieces of `all` at the indexes `picked`, in that order.
+fn picked<'t>(all: &[Typed<'t>], picked: &[usize]) -> Vec<Typed<'t>> {
+    picked.iter().map(|k| all[*k]).collect()
+}
+
+/// A diff's hunks stand under their headers, each text's lines numbered.
+///
+/// A line gone is numbered in the text before and drawn from it; a line new
+/// and the lines unchanged are numbered in the draft; and each header names
+/// the first line and the count of its hunk's lines in each text, a hunk
+/// that follows a change counting the lines that change moved (the mutant
+/// that numbers a gone line in the draft, or a header by one text, answers
+/// other numbers).
+#[test]
+fn a_diffs_hunks_stand_under_their_headers_each_texts_lines_numbered() {
+    let texts: Vec<String> = (1..=12).map(|n| format!("line {n}\n")).collect();
+    let before = lines_typed(&texts.iter().map(String::as_str).collect::<Vec<_>>());
+    let mut now = picked(&before, &[0, 1, 3, 4, 5, 6, 7, 8]);
+    now.push(Typed::Text(50_000, "added\n"));
+    now.extend(picked(&before, &[9, 10, 11]));
+    let rows = diff_of(&before, &now, 0);
+    assert_eq!(
+        rows.rows,
+        said(&["@@ -1,5 +1,4 @@", " 1\tline 1", " 2\tline 2", "-3\tline 3", " 3\tline 4", " 4\tline 5", "@@ -8,4 +7,5 @@", " 7\tline 8", " 8\tline 9", "+9\tadded", " 10\tline 10", " 11\tline 11"])
+    );
+    assert_eq!((rows.masked, rows.next_hunk), (false, None));
+    assert_eq!(diff_of(&before, &now, 1).rows[0], "@@ -8,4 +7,5 @@", "from the second hunk on");
+    assert!(diff_of(&before, &before, 0).rows.is_empty(), "nothing changed: no row");
+    // A text emptied, and one filled.
+    let three = picked(&before, &[0, 1, 2]);
+    assert_eq!(diff_of(&three, &[], 0).rows, said(&["@@ -1,3 +0,0 @@", "-1\tline 1", "-2\tline 2", "-3\tline 3"]));
+    assert_eq!(diff_of(&[], &three, 0).rows, said(&["@@ -0,0 +1,3 @@", "+1\tline 1", "+2\tline 2", "+3\tline 3"]));
+}
+
+/// Lines that moved are drawn where they stand, their leaving in one row.
+///
+/// A block moved up is `>` rows at its new place, numbered in the draft,
+/// and one `<` row where it stood, naming its lines before and now; one line
+/// moved says `line`; and no row is a line gone or a line new (the mutant
+/// that draws a moved line as new, or a row for each line that left, answers
+/// other rows).
+#[test]
+fn lines_that_moved_are_drawn_where_they_stand_and_one_row_says_where_they_left() {
+    let before = lines_typed(&["alpha\n", "bravo\n", "charlie\n", "delta\n", "echo\n", "foxtrot\n", "golf\n", "hotel\n"]);
+    let up = picked(&before, &[0, 5, 6, 1, 2, 3, 4, 7]);
+    assert_eq!(
+        diff_of(&before, &up, 0).rows,
+        said(&["@@ -1,8 +1,8 @@", " 1\talpha", ">2\tfoxtrot", ">3\tgolf", " 4\tbravo", " 5\tcharlie", " 6\tdelta", " 7\techo", "<\t(lines 6–7 moved to 2–3)", " 8\thotel"])
+    );
+    let one = picked(&before, &[0, 1, 2, 3, 4, 6, 7, 5]);
+    assert_eq!(diff_of(&before, &one, 0).rows, said(&["@@ -4,5 +4,5 @@", " 4\tdelta", " 5\techo", "<\t(line 6 moved to 8)", " 6\tgolf", " 7\thotel", ">8\tfoxtrot"]));
+}
+
+/// A long run of gone, new or moved-in rows shows its two ends.
+///
+/// Thirty lines gone show their first six, one row of their own sign
+/// counting the twenty-one left out, and their last three; so do thirty
+/// lines new and thirty moved here; and a run of sixteen is shown whole
+/// (the mutant that cuts every sign as `+`, or counts the rows shown, says
+/// otherwise).
+#[test]
+fn a_long_run_of_gone_new_or_moved_in_rows_shows_its_two_ends() {
+    let texts: Vec<String> = (1..=34).map(|n| format!("line {n}\n")).collect();
+    let all = lines_typed(&texts.iter().map(String::as_str).collect::<Vec<_>>());
+    let ends = picked(&all, &[0, 1, 32, 33]);
+    let gone = diff_of(&all, &ends, 0).rows;
+    assert_eq!(gone.len(), 1 + 2 + 6 + 1 + 3 + 2);
+    assert_eq!(gone[..4], said(&["@@ -1,34 +1,4 @@", " 1\tline 1", " 2\tline 2", "-3\tline 3"])[..]);
+    assert_eq!(gone[8..], said(&["-8\tline 8", "-…\t(21 more lines)", "-30\tline 30", "-31\tline 31", "-32\tline 32", " 3\tline 33", " 4\tline 34"])[..]);
+    let new = diff_of(&ends, &all, 0).rows;
+    assert_eq!(new[8..], said(&["+8\tline 8", "+…\t(21 more lines)", "+30\tline 30", "+31\tline 31", "+32\tline 32", " 33\tline 33", " 34\tline 34"])[..]);
+    // Thirty lines moved above one line that outweighs them: the heavier
+    // stretch stays, so the thirty are the lines moved here.
+    let heavy = Typed::Text(900_000, "a line long enough to outweigh thirty short ones: ................................................................................................................................................................................................................................................\n");
+    let mut before = vec![heavy];
+    before.extend(picked(&all, &(2..32).collect::<Vec<_>>()));
+    let mut moved_up = picked(&all, &(2..32).collect::<Vec<_>>());
+    moved_up.push(heavy);
+    let moved = diff_of(&before, &moved_up, 0).rows;
+    assert_eq!(moved[..8], said(&["@@ -1,31 +1,31 @@", ">1\tline 3", ">2\tline 4", ">3\tline 5", ">4\tline 6", ">5\tline 7", ">6\tline 8", ">…\t(21 more lines)"])[..]);
+    assert_eq!(moved[8..11], said(&[">28\tline 30", ">29\tline 31", ">30\tline 32"])[..]);
+    assert!(moved[11].starts_with(" 31\ta line long enough"), "the heavy line stays: the thirty are the ones that moved");
+    assert_eq!(moved[12..], said(&["<\t(lines 2–31 moved to 1–30)"])[..], "one row where they left, however many they are");
+    let sixteen = diff_of(&picked(&all, &(0..18).collect::<Vec<_>>()), &picked(&all, &[0, 17]), 0).rows;
+    assert_eq!(sixteen.len(), 1 + 1 + 16 + 1, "a run of sixteen is shown whole");
+    assert_eq!((ROWS_MAX_RUN, ROWS_RUN_HEAD, ROWS_RUN_TAIL), (16, 6, 3));
+}
+
+/// The rows stop after the last whole hunk that fits, and say the next.
+///
+/// Five hunks of some nine thousand bytes each pass the byte bound: the
+/// first four are drawn whole and the fifth is the hunk to ask next; asked
+/// from the fifth on, it is drawn and no hunk is next. One hunk past the
+/// bound alone is cut where the bound falls, its last row counting the
+/// changed lines it leaves out, and the hunk after it is the one to ask
+/// next (the mutants that cut a hunk in two, or stop without saying where,
+/// answer otherwise).
+#[test]
+fn the_rows_stop_after_the_last_whole_hunk_that_fits_and_say_the_next() {
+    let wide = |n: usize| format!("{n:>4} {}\n", "x".repeat(1_890));
+    let texts: Vec<String> = (1..=60).map(wide).collect();
+    let all = lines_typed(&texts.iter().map(String::as_str).collect::<Vec<_>>());
+    // One line gone in every twelve: five hunks, five lines each.
+    let kept: Vec<usize> = (0..60).filter(|k| k % 12 != 5).collect();
+    let now = picked(&all, &kept);
+    let whole = diff_of(&all, &now, 0);
+    let headers = |rows: &DiffRows| rows.rows.iter().filter(|row| row.starts_with("@@")).count();
+    assert_eq!((headers(&whole), whole.next_hunk), (4, Some(5)), "four whole hunks fit, the fifth is next");
+    assert!(whole.rows.iter().map(String::len).sum::<usize>() <= ROWS_MAX_BYTES);
+    assert_eq!(whole.rows.len(), 4 * 6, "each hunk whole: its header, four lines of context and the gone line");
+    let rest = diff_of(&all, &now, 4);
+    assert_eq!((headers(&rest), rest.next_hunk, rest.rows.len()), (1, None, 6), "from the fifth on: the last hunk");
+    // Every other line gone, in one hunk of thirty-nine lines, then a
+    // second hunk far below it.
+    let texts: Vec<String> = (1..=60).map(wide).collect();
+    let all = lines_typed(&texts.iter().map(String::as_str).collect::<Vec<_>>());
+    let kept: Vec<usize> = (0..60).filter(|k| !(k % 2 == 1 && *k < 40) && *k != 55).collect();
+    let cut = diff_of(&all, &picked(&all, &kept), 0);
+    assert_eq!((headers(&cut), cut.next_hunk), (1, Some(2)), "the first hunk does not fit alone: cut, and the second is next");
+    let (last, shown) = (cut.rows.last().expect("a row"), cut.rows.iter().filter(|row| row.starts_with('-')).count());
+    assert_eq!(*last, format!("({} more changed lines not shown)", 20 - shown));
+    assert!(shown > 0 && shown < 20 && cut.rows[..cut.rows.len() - 1].iter().map(String::len).sum::<usize>() <= ROWS_MAX_BYTES);
+    assert_eq!(ROWS_MAX_BYTES, 40_000);
+}
+
+/// A line holding a value that is no text equals no other.
+///
+/// It is drawn `{…}` where the value stands.
+/// Typed again around another atom, a line that reads the same but for the
+/// atom is a line gone and a line new, each drawn with `{…}` where the value
+/// stands; kept by identity it is held, and no row is drawn (the mutant
+/// that keys a line by its text alone matches the two and draws nothing).
+#[test]
+fn a_line_holding_a_value_that_is_no_text_is_drawn_and_equals_no_other() {
+    let before = [Typed::Text(1000, "one\n"), Typed::Text(2000, "see "), Typed::Atom(2100), Typed::Text(2200, " here\n"), Typed::Text(3000, "three\n")];
+    let again = [Typed::Text(1000, "one\n"), Typed::Text(7000, "see "), Typed::Atom(7100), Typed::Text(7200, " here\n"), Typed::Text(3000, "three\n")];
+    assert_eq!(diff_of(&before, &again, 0).rows, said(&["@@ -1,3 +1,3 @@", " 1\tone", "-2\tsee {…} here", "+2\tsee {…} here", " 3\tthree"]));
+    assert!(diff_of(&before, &before, 0).rows.is_empty(), "held by identity");
+    let (text, _) = typed(&before);
+    let table = line_table(&text, true);
+    assert_eq!(table.iter().map(|line| (line.start, line.len, line.closed)).collect::<Vec<_>>(), [(1, 4, true), (5, 11, true), (16, 6, true)]);
+    assert_eq!((table[0].key, table[1].key, table[2].key), (Key::Text(b"one"), Key::Other { now: true, number: 2 }, Key::Text(b"three")));
+    assert_ne!(line_table(&text, false)[1].key, table[1].key, "equal to no line of the other text either");
+}
+
+/// A last line no line break ends is followed by the row that says so.
+///
+/// Gone, new or unchanged, a text's last line with no line break is drawn
+/// as any line and followed by `\ no line break at the end`; a text that
+/// ends in a line break has no such row; and the line table counts the open
+/// line, its key its bytes and no line break (the mutant that numbers a
+/// last line one off draws the row after another line, or none).
+#[test]
+fn a_last_line_no_line_break_ends_is_followed_by_the_row_that_says_so() {
+    let closed = lines_typed(&["one\n", "two\n", "three\n"]);
+    let open = [closed[0], closed[1], Typed::Text(9000, "three")];
+    assert_eq!(diff_of(&closed, &open, 0).rows, said(&["@@ -1,3 +1,3 @@", " 1\tone", " 2\ttwo", "-3\tthree", "+3\tthree", "\\ no line break at the end"]));
+    assert_eq!(diff_of(&open, &closed, 0).rows, said(&["@@ -1,3 +1,3 @@", " 1\tone", " 2\ttwo", "-3\tthree", "\\ no line break at the end", "+3\tthree"]));
+    let both = [Typed::Text(8000, "zero\n"), closed[0], closed[1], Typed::Text(9000, "three")];
+    assert_eq!(diff_of(&open, &both, 0).rows, said(&["@@ -1,2 +1,3 @@", "+1\tzero", " 2\tone", " 3\ttwo"]), "the open last line lies past the hunk");
+    let near = [closed[0], Typed::Text(8000, "new\n"), closed[1], Typed::Text(9000, "three")];
+    assert_eq!(diff_of(&open, &near, 0).rows, said(&["@@ -1,3 +1,4 @@", " 1\tone", "+2\tnew", " 3\ttwo", " 4\tthree", "\\ no line break at the end"]), "unchanged and open: said once");
+    let (text, _) = typed(&open);
+    let table = line_table(&text, false);
+    assert_eq!((table.len(), table[2].start, table[2].len, table[2].closed, table[2].key), (3, 9, 5, false, Key::Text(b"three")));
+    assert_eq!(line_table(&Text::default(), true), vec![], "an empty text has no line");
+    let (blank, _) = typed(&[Typed::Text(1, "a b\n\n  \tcd\u{e9}\n")]);
+    assert_eq!(line_table(&blank, true).iter().map(|line| line.solid).collect::<Vec<_>>(), [2, 0, 3], "the characters that are no whitespace");
+}
+
+/// A withheld run on or before a line a diff shows sets `masked`.
+///
+/// Its line breaks are counted nowhere, so every number past it is the
+/// reader's own: in the draft or in the text before, on or before the last
+/// line of that text the rows reach, `masked` is set, and past it it is not.
+#[test]
+fn a_withheld_run_on_or_before_a_line_a_diff_shows_sets_masked() {
+    let texts: Vec<String> = (1..=9).map(|n| format!("line {n}\n")).collect();
+    let all = lines_typed(&texts.iter().map(String::as_str).collect::<Vec<_>>());
+    let run = Typed::Withheld(70_000, 5);
+    let ahead: Vec<Typed<'_>> = [vec![run], all.clone()].concat();
+    let ahead_now: Vec<Typed<'_>> = [vec![run], picked(&all, &[0, 1, 3, 4, 5, 6, 7, 8])].concat();
+    let rows = diff_of(&ahead, &ahead_now, 0);
+    assert_eq!(rows.rows, said(&["@@ -1,5 +1,4 @@", " 1\t{…}line 1", " 2\tline 2", "-3\tline 3", " 3\tline 4", " 4\tline 5"]));
+    assert!(rows.masked, "the run stands on the first line shown");
+    let past: Vec<Typed<'_>> = [all.clone(), vec![run]].concat();
+    let past_now: Vec<Typed<'_>> = [picked(&all, &[0, 1, 3, 4, 5, 6, 7, 8]), vec![run]].concat();
+    assert!(!diff_of(&past, &past_now, 0).masked, "the run stands past every line shown");
+    // In the text before alone: a run gone, drawn from the text before.
+    let gone = diff_of(&ahead, &picked(&all, &[0, 1, 2, 3]), 0);
+    assert!(gone.masked && gone.rows.contains(&"-1\t{…}line 1".to_string()), "{:?}", gone.rows);
+}

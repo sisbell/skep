@@ -1,7 +1,7 @@
-//! THE ENUMERATION (the link-sets design §5.1): which links are offered, and
-//! how they are read.
+//! The enumeration: which links are offered, and how they are read.
 //!
-//! The reads, in order, each a step the door counts: (1) `image` — ONE
+//! It is the link-sets design's §5.1. The reads, in order, each a step the
+//! door counts: (1) `image` — ONE
 //! `retrieve_doc_v_span_set` and ONE `image` of the draft whole, read in
 //! parts past the run budget and never refused, inverted locally over the
 //! held selection: each held run placed at a V-ordinal the draft arranges
@@ -62,9 +62,10 @@
 //! through a content span — a whole-work end, a unit span at a document's
 //! or an account's address, is no candidate — and where its stored type is
 //! no record class, by the reader's own exact test (the correspondence
-//! subtype, the held removal, a grant, a credential, a claim, the
-//! succession pair, a retraction, the `replaces` link, an edition claim,
-//! the journal designation, the consumption marker); (7) `counterparts` —
+//! subtype, the held removal, a mark's link, a grant, a credential, a
+//! claim, the succession pair, a retraction, the `replaces` link, an
+//! edition claim, the journal designation, the consumption marker); (7)
+//! `counterparts` —
 //! THE COUNTERPART'S IDENTITY: the links on every named part's published
 //! words and on every stray stretch's by TWO batched four-set reads,
 //! `{from: […]}` and `{to: […]}`, up to the cap a read, each answered link
@@ -219,7 +220,7 @@ use skep_address::Address;
 
 use crate::address::{account_of, parse_address};
 use crate::board::answers::{self, IRun, LinkValue};
-use crate::board::frames::{self, Slot, REGISTRY_DOCUMENT, T_CORRESPONDENCE, T_EDITION, T_GRANT, T_HELD_REMOVAL, T_REPLACES};
+use crate::board::frames::{self, Slot, REGISTRY_DOCUMENT, T_CORRESPONDENCE, T_EDITION, T_GRANT, T_HELD_REMOVAL, T_MARKS, T_REPLACES};
 use crate::board::{T_CLAIM, T_ENROLL, T_RETIRE, T_RETRACTION, T_SUPERSEDES};
 
 use super::landed::{recompose, twin_records};
@@ -1278,10 +1279,13 @@ pub(crate) fn windows_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, 
     Ok(out)
 }
 
-/// Returns whether `ty` is a record class no enumeration offers: the exact
-/// test over the stored type slot, the edition class with its subtypes.
+/// Returns whether `value` is typed a record class no enumeration offers.
+///
+/// It is the exact test over the stored type slot — twelve types, a mark's
+/// link among them (`3.25`), whose `from` is the marked draft's own bytes —
+/// and the edition class with its subtypes.
 pub fn is_record_class(value: &LinkValue) -> bool {
-    let exact = [T_CORRESPONDENCE, T_HELD_REMOVAL, T_GRANT, T_ENROLL, T_RETIRE, T_CLAIM, T_SUPERSEDES, T_RETRACTION, T_REPLACES, T_JOURNAL_DESIGNATION, T_CONSUMPTION_MARKER];
+    let exact = [T_CORRESPONDENCE, T_HELD_REMOVAL, T_MARKS, T_GRANT, T_ENROLL, T_RETIRE, T_CLAIM, T_SUPERSEDES, T_RETRACTION, T_REPLACES, T_JOURNAL_DESIGNATION, T_CONSUMPTION_MARKER];
     if exact.iter().any(|t| value.typed_exactly(t)) {
         return true;
     }

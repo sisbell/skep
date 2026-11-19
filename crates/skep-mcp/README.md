@@ -36,9 +36,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `publication_standing`, the read of a draft's standing, and the four of
   its `publication` family, `publication_open`, `publication_count`,
   `publication_confirm` and `publication_cancel`) are
-  tools of theirs; and seven are the adapter's apparatus: `session_info`,
-  `changes_since`, `fetch`, `replace_text`, `edit_text`, `move_lines` and
-  `help`. The
+  tools of theirs; and nine are the adapter's apparatus: `session_info`,
+  `changes_since`, `fetch`, `replace_text`, `edit_text`, `move_lines`,
+  `mark_text`, `diff_text` and `help`. The
   catalog an agent reads, `tools.json` beside `Cargo.toml`, is embedded and
   checked against that dispatch at startup.
 - **Short cards, the detail behind `help`.** A client cuts a long tool
@@ -93,13 +93,29 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   the cuts sent and the commit — then the moved lines `+N`, the lines
   either side of them, and one `-` row saying where they left. `held` is
   `isError`.
+- **A mark, and the diff since it.** `mark_text {doc}` is the shell's
+  `text.mark`: a private document of the session's account holding the
+  draft's whole content by identity — one `copy`, no byte minted — with one
+  link typed `marks` saying which draft it marks; its answer names the
+  mark, to pass as `since`. `diff_text {doc, since, stat?, hunk?}` is the
+  shell's `text.diff`, which writes nothing: what changed in the draft
+  since a document that holds its content by identity — a mark, the version
+  it was staged from, a document it copied from — told by identity, so a
+  block moved shows as moved and text typed again is said re-typed. Its
+  result is the shell's answer on one line — the positions shared, the
+  bytes new, gone and moved, the lines added, removed and moved, the notes
+  — then the hunks, one row a line: each under `@@ -a,b +c,d @@`, ` N`
+  unchanged, `-N` gone, `+N` new, `>N` moved here, `<` where moved lines
+  left; `stat` answers the counts alone, and `hunk` goes on from
+  `next_hunk`. A mark whose link did not land answers `partial`, and one
+  whose copy's line stays held `held`, each `isError`.
 - **A refusal as a result.** The board's verdict on a frame comes back as
   data, `isError: false`; `isError` means the shell could not get the
   board's verdict — among the causes, a board not answering and a frame the
   shell refused itself, nothing sent — or `fetch` declined a file, or
   `help` was asked a topic its store holds no text for, or a
-  `replace_text`, an `edit_text` or a `move_lines` left a line held or
-  landed in part. A
+  `replace_text`, an `edit_text`, a `move_lines` or a `mark_text` left a
+  line held or landed in part. A
   call the adapter will not run is no tool result but a JSON-RPC error,
   `-32602` under the request's id: a tool outside the catalog, an argument
   an adapter tool does not take, a member of an `edit_text` pair the shell

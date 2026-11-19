@@ -1,7 +1,8 @@
-//! The text family's three rows, through `Shell::call`.
+//! The text family's five rows, through `Shell::call`.
 //!
-//! They are `text.replace` (skep #1070), `text.edit` (skep #1079) and
-//! `text.move` (skep #1085), each made of the shell's own rows. The
+//! They are `text.replace` (skep #1070), `text.edit` (skep #1079),
+//! `text.move` (skep #1085), and `text.mark` and `text.diff` (skep #1091),
+//! each made of the shell's own rows. The
 //! suite checks each row's own order with no daemon behind the shell —
 //! its members read before the session, a bare session refused naming the
 //! call before any read (the door's other questions are `door`'s) — and,
@@ -27,11 +28,21 @@
 //! line break moved by four cuts, and across one empty line by three, the
 //! board then counting one line fewer; and another writer's change landed
 //! between the call's read and its write, the move refused
-//! `arrangement_moved` with nothing written.
+//! `arrangement_moved` with nothing written. Of `text.mark` and
+//! `text.diff`, against the daemon: a mark holding its draft's content at
+//! the draft's own I-addresses, its one link found from the draft and
+//! stored as the mark's image, an edit and a move then told by the diff
+//! since it, the move as a move, with what the diff reads and does not; a
+//! mark that records no base and no source, left behind by no publication
+//! and offered by none, and a diff since the version a draft was staged
+//! from; the mark of an empty draft; a link refused after the copy, the
+//! mark standing and diffed against; and a draft changed between the diff's
+//! two images, read again, and one that keeps changing refused (the
+//! shell's rows watched, and meddled with at a frame, `Watched`).
 
 use std::cell::Cell;
 
-use super::super::text::{edit_through, move_through, Row, Rows};
+use super::super::text::{diff_through, edit_through, mark_through, move_through, Row, Rows};
 use super::publication::{ground, register};
 use super::*;
 use crate::sessions::Facts;
@@ -586,6 +597,362 @@ fn a_draft_changed_between_the_read_and_the_write_is_refused_arrangement_moved_w
     let landed = g.shell.call("text.move", &json!({"session": g.session, "doc": draft, "first": 3, "last": 4, "before": 2})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!((landed["outcome"].as_str(), landed["cuts"].clone()), (Some("moved"), json!(["12", "36", "56"])), "the cuts of the draft as it stands: {landed}");
     assert_eq!(text_of(&g.shell, &g.session, &draft), "Xalpha = 1\nbeta = 2\ntail stays\nkeep this line as it is\n");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// The shell's own rows, every frame through `op` kept and handed to `act`.
+///
+/// Every call goes to the shell as the row sends it; `act` is handed each
+/// frame sent through `op`, and the session, first, and the frame is refused
+/// with what it answers, or sent on where it answers none.
+struct Watched<'s, F> {
+    shell: &'s Shell,
+    frames: std::cell::RefCell<Vec<Value>>,
+    act: F,
+}
+
+impl<'s, F: Fn(&Value, &str) -> Option<Refusal>> Watched<'s, F> {
+    /// Returns the rows of `shell`, `act` run at each frame.
+    fn over(shell: &'s Shell, act: F) -> Watched<'s, F> {
+        Watched { shell, frames: std::cell::RefCell::new(Vec::new()), act }
+    }
+
+    /// Returns the ops of the frames sent, in order.
+    fn ops(&self) -> Vec<String> {
+        self.frames.borrow().iter().map(|frame| frame["op"].as_str().unwrap_or_default().to_string()).collect()
+    }
+}
+
+impl<F: Fn(&Value, &str) -> Option<Refusal>> Rows for Watched<'_, F> {
+    fn answer(&self, row: Row, args: &Value) -> Result<Value, Refusal> {
+        if row == Row::Op {
+            self.frames.borrow_mut().push(args["frame"].clone());
+            if let Some(refusal) = (self.act)(&args["frame"], args["session"].as_str().unwrap()) {
+                return Err(refusal);
+            }
+        }
+        Rows::answer(self.shell, row, args)
+    }
+
+    fn stands(&self, session: &str) -> bool {
+        Rows::stands(self.shell, session)
+    }
+}
+
+/// Returns the links typed `marks` whose `to` is `draft`, read under `session`.
+fn marks_of(shell: &Shell, session: &str, draft: &str) -> Vec<String> {
+    let found = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::find_links_ftt(skep_client::board::frames::T_MARKS, draft)})).unwrap_or_else(|r| panic!("{r}"));
+    found["addrs"].as_array().expect("the links found").iter().map(|addr| addr.as_str().expect("an address").to_string()).collect()
+}
+
+/// Checks `text.mark`'s and `text.diff`'s own order, with no daemon.
+///
+/// Each reads its members before the session — `text.mark` its `doc`,
+/// `text.diff` its `doc`, its `since`, then `stat` and `hunk` where they are
+/// present — each `malformed_args` naming the member under a session that
+/// names nothing; in their form the call goes on to the session, which is
+/// gone. A bare session's `text.mark` is refused `write_in_bare_session`
+/// naming the call, the write door asked before any read; its `text.diff`,
+/// which writes nothing, goes on to the board, whose silence it meets (the
+/// mutant that asks the write door of a diff refuses a read as a write).
+#[test]
+fn text_mark_and_text_diff_read_their_members_first_and_the_diff_asks_no_write_door() {
+    let dir = TempDir::new().unwrap();
+    let (shell, _) = open_shell(&super::door::nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let bare = register(&shell, "9f", Facts { principal: 1, account: Some("1.0.1".into()), kind: SessionKind::Bare });
+    let what = |call: &str, args: Value| {
+        let refused = shell.call(call, &args).unwrap_err();
+        let v = refused.to_value();
+        assert_eq!(refused.name(), "malformed_args", "{call} {args}: {v}");
+        v["what"].as_str().unwrap().to_string()
+    };
+    assert_eq!(what("text.mark", json!({"session": "s-gone"})), "doc", "missing");
+    assert_eq!(what("text.mark", json!({"session": "s-gone", "doc": "01.0.1"})), "doc", "another spelling");
+    assert_eq!(shell.call("text.mark", &json!({"session": "s-gone", "doc": "1.0.1.0.66"})).unwrap_err().name(), "session_ended", "in its form, the member passes to the session");
+    let keyless = shell.call("text.mark", &json!({"session": bare, "doc": "1.0.1.0.66"})).unwrap_err();
+    assert_eq!((keyless.name(), keyless.to_value()["call"].as_str()), ("write_in_bare_session", Some("text.mark")), "{keyless}");
+    assert_eq!(what("text.diff", json!({"session": "s-gone", "since": "1.0.1.0.67"})), "doc", "missing");
+    assert_eq!(what("text.diff", json!({"session": "s-gone", "doc": "1.0.1.0.66"})), "since", "missing");
+    assert_eq!(what("text.diff", json!({"session": "s-gone", "doc": "1.0.1.0.66", "since": "1..2"})), "since", "no address");
+    assert_eq!(what("text.diff", json!({"session": "s-gone", "doc": "1.0.1.0.66", "since": "1.0.1.0.67", "stat": "true"})), "stat", "no boolean");
+    assert_eq!(what("text.diff", json!({"session": "s-gone", "doc": "1.0.1.0.66", "since": "1.0.1.0.67", "hunk": 0})), "hunk", "hunks are numbered from 1");
+    let in_form = json!({"session": "s-gone", "doc": "1.0.1.0.66", "since": "1.0.1.0.67", "stat": null, "hunk": 1});
+    assert_eq!(shell.call("text.diff", &in_form).unwrap_err().name(), "session_ended", "in their form, the members pass to the session");
+    let read = shell.call("text.diff", &json!({"session": bare, "doc": "1.0.1.0.66", "since": "1.0.1.0.67"})).unwrap_err();
+    assert_eq!(read.name(), "unreachable", "a bare session's diff is dialed, and meets the board's silence: {read}");
+}
+
+/// Checks a mark, and an edit and a move told by the diff since it.
+///
+/// The mark is a private document holding [`LINES`] at the draft's own
+/// I-addresses, none minted, made by one `text.mark` entry of the call log;
+/// its one link is typed `marks`, found from the draft by a link read `to`
+/// it by type, and stored with the mark's image as its `from` and the draft
+/// as its `to`. A digit typed into one line and the last line moved up, the
+/// diff since the mark is `TextDiffed` exactly: the changed line gone and
+/// new, the moved line `>` where it stands with one `<` row where it left
+/// and its note, and the counts by identity. It reads the two images, the
+/// draft's text and one more image, and nothing of the mark's text: every
+/// line of the text before is told from the draft's own. With a line
+/// deleted, that line is read by identity and no other; `stat` reads no
+/// text; and against a document sharing nothing the diff answers `shared`
+/// `"0"` with no row and nothing of it read (the mutants that copy by
+/// minting, write the link's `from` by address, read the mark's text by
+/// position, or diff with no second image answer otherwise).
+#[test]
+fn a_mark_holds_its_drafts_identity_and_an_edit_and_a_move_are_told_by_the_diff_since_it() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let draft = draft_holding(&g.shell, &g.session, LINES);
+    let before = addresses(&g.shell, &g.session, &draft);
+    let logged = calls_logged(&g.shell).len();
+    let marked = g.shell.call("text.mark", &json!({"session": g.session, "doc": draft})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(calls_logged(&g.shell)[logged..], ["text.mark"], "one entry, the rows the call is made of logged by none");
+    crate::shapes::assert_declared("TextMarked", &marked);
+    let (mark, link, at) = (marked["mark"].as_str().expect("the mark").to_string(), marked["link"].as_str().expect("the link").to_string(), marked["at"].as_u64().expect("the commit"));
+    assert_eq!(marked, json!({"outcome": "marked", "doc": draft, "mark": mark, "link": link, "at": at}), "no error member");
+    assert!(mark.starts_with("1.0.1.0.") && link.starts_with(&format!("{mark}.0.2.")), "a document of the session's account, the link homed in it: {marked}");
+    assert_eq!(text_of(&g.shell, &g.session, &mark), LINES);
+    assert_eq!(addresses(&g.shell, &g.session, &mark), before, "the draft's own bytes, none minted");
+    let metadata = g.op(skep_client::board::frames::doc_metadata(&mark));
+    assert_eq!((metadata["published"].as_bool(), metadata["owner"].as_str()), (Some(false), Some("1.0.1")), "{metadata}");
+    // The link: found from the draft, its `from` the mark's image.
+    assert_eq!(marks_of(&g.shell, &g.session, &draft), [link.as_str()], "found by a link read `to` the draft, by type");
+    let stored = g.op(skep_client::board::frames::read_link(&link));
+    let image = g.op(skep_client::board::frames::image(&mark, 1, u64::MAX));
+    let spans: Vec<Value> =
+        image["runs"].as_array().expect("runs").iter().map(|run| skep_client::board::frames::i_span(run["i_start"].as_str().unwrap(), run["width"].as_str().unwrap().parse().unwrap())).collect();
+    assert_eq!(stored["link"]["slots"][0], json!(spans), "the stored `from` is the mark's image as I-spans");
+    assert_eq!(stored["link"]["slots"][1], skep_client::board::frames::unit_span(&draft), "`to` the draft, by address");
+    assert_eq!(stored["link"]["slots"][2], skep_client::board::frames::unit_span("1.1.0.1.0.1.0.3.25"), "typed `marks`");
+    assert_eq!(
+        g.shell.call("text.diff", &json!({"session": g.session, "doc": draft, "since": mark})).unwrap(),
+        json!({"outcome": "unchanged", "doc": draft, "since": mark, "as_of": at}),
+        "nothing changed since the mark"
+    );
+
+    // An edit and a move, then the diff since the mark.
+    g.shell.call("text.edit", &json!({"session": g.session, "doc": draft, "edits": [{"old": "beta = 2", "new": "beta = 20"}]})).unwrap_or_else(|r| panic!("{r}"));
+    let moved = g.shell.call("text.move", &json!({"session": g.session, "doc": draft, "first": 4, "before": 2})).unwrap_or_else(|r| panic!("{r}"));
+    let logged = calls_logged(&g.shell).len();
+    let watched = Watched::over(&g.shell, |_, _| None);
+    let answer = diff_through(&watched, &g.session, &json!({"doc": draft, "since": mark})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("TextDiffed", &answer);
+    assert_eq!(
+        answer,
+        json!({
+            "outcome": "diffed", "doc": draft, "since": mark, "as_of": moved["at"], "shared": LINES.len().to_string(), "bytes": {"new": "1", "gone": "0", "moved": "11"},
+            "lines": {"added": "1", "removed": "1", "moved": "1"},
+            "rows": ["@@ -1,4 +1,4 @@", " 1\talpha = 1", ">2\ttail stays", " 3\tkeep this line as it is", "-3\tbeta = 2", "<\t(line 4 moved to 2)", "+4\tbeta = 20"],
+            "notes": [{"kind": "moved", "before": [4, 4], "now": [2, 2]}],
+        }),
+        "no error member"
+    );
+    assert_eq!(watched.ops(), ["image", "image", "retrieve_doc_v_span_set", "retrieve_v", "image"], "nothing of the mark's text read: every line before is told from the draft's own");
+    assert!(watched.frames.borrow().iter().all(|frame| frame["op"] != "retrieve_v" || frame["specs"][0]["doc"] == draft), "the one text read is the draft's");
+    let through_the_row = g.shell.call("text.diff", &json!({"session": g.session, "doc": draft, "since": mark})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(through_the_row, answer, "the row answers as its reads do");
+    assert_eq!(calls_logged(&g.shell)[logged..], ["text.diff"], "one entry");
+
+    // A line deleted: read by identity, at the draft's own addresses.
+    g.shell.call("text.edit", &json!({"session": g.session, "doc": draft, "edits": [{"old": "keep this line as it is\n", "new": ""}]})).unwrap_or_else(|r| panic!("{r}"));
+    let watched = Watched::over(&g.shell, |_, _| None);
+    let answer = diff_through(&watched, &g.session, &json!({"doc": draft, "since": mark})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(
+        answer["rows"],
+        json!(["@@ -1,4 +1,3 @@", " 1\talpha = 1", "-2\tkeep this line as it is", "-3\tbeta = 2", " 2\ttail stays", "+3\tbeta = 20"]),
+        "the moved line now outweighs what it crossed, so it stays and the changed line's bytes are the ones out of order: {answer}"
+    );
+    assert_eq!(answer["notes"], json!([{"kind": "moved_within_lines", "bytes": "9"}]), "`beta = 2` and its line break, kept by identity inside a changed line");
+    assert_eq!(watched.ops().last().map(String::as_str), Some("retrieve_i"));
+    assert_eq!(watched.frames.borrow().last(), Some(&skep_client::board::frames::retrieve_i(&[(&before[10], 24)])), "the gone line alone, by the addresses the mark holds it at");
+    assert!(watched.frames.borrow().iter().all(|frame| frame["op"] != "retrieve_v" || frame["specs"][0]["doc"] == draft), "no text of the mark read by position");
+    // The counts alone read no text.
+    let watched = Watched::over(&g.shell, |_, _| None);
+    let stat = diff_through(&watched, &g.session, &json!({"doc": draft, "since": mark, "stat": true})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("TextDiffed", &stat);
+    assert_eq!((stat["bytes"].clone(), stat["shared"].as_str(), stat.get("rows"), stat.get("lines")), (json!({"new": "1", "gone": "24", "moved": "9"}), Some("30"), None, None), "{stat}");
+    assert_eq!(watched.ops(), ["image", "image"], "one image of each document");
+    // A document sharing nothing with the draft.
+    let apart = draft_holding(&g.shell, &g.session, "other words\n");
+    let watched = Watched::over(&g.shell, |_, _| None);
+    let answer = diff_through(&watched, &g.session, &json!({"doc": draft, "since": apart})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((answer["shared"].as_str(), answer["bytes"]["gone"].as_str(), answer.get("rows")), (Some("0"), Some("12"), None), "{answer}");
+    assert!(!watched.ops().contains(&"retrieve_i".to_string()), "nothing of it read");
+    // A document the board does not register is the call's refusal.
+    let refused = g.shell.call("text.diff", &json!({"session": g.session, "doc": draft, "since": "1.0.1.0.4000"})).unwrap_err();
+    assert_eq!(refused.name(), "doc_not_registered", "{refused}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a mark is no staged draft, and no publication's to offer.
+///
+/// A draft staged from the edition's first version is marked: the mark's
+/// `doc_metadata` answers no base and no source, the draft's standing lists
+/// no mark among the drafts its publication leaves behind though the index
+/// lists the mark beside them, and the panel the draft opens holds no row
+/// for the mark and offers no link of it. The diff since the version the
+/// draft was staged from tells the line the draft added, its other words
+/// held by identity (the mutants that stage the mark, or drop the `marks`
+/// type from the record classes, list it or offer its link).
+#[test]
+fn a_mark_records_no_base_and_no_publication_lists_or_offers_it() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let first = g.staged(&edition, "the quick brown fox\n");
+    g.call("publication.open", json!({"session": g.session, "draft": first, "doc": edition, "readable_drafts": [first], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let e1 = format!("{edition}.1");
+    assert_eq!(g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"))["member"].as_str(), Some(e1.as_str()));
+    let draft = g.staged(&e1, "a line of its own\n");
+    let marked = g.call("text.mark", json!({"session": g.session, "doc": draft})).unwrap_or_else(|r| panic!("{r}"));
+    let mark = marked["mark"].as_str().expect("the mark").to_string();
+    let metadata = g.op(skep_client::board::frames::doc_metadata(&mark));
+    assert!(metadata.get("base").is_none_or(Value::is_null) && metadata.get("source").is_none_or(Value::is_null), "no base and no source: {metadata}");
+    let staged = g.op(skep_client::board::frames::doc_metadata(&draft));
+    assert_eq!(staged["base"].as_str(), Some(e1.as_str()), "premise: the draft it marks records its base: {staged}");
+    g.listed(&[first.as_str(), draft.as_str(), mark.as_str()]);
+    let standing = g.call("publication.standing", json!({"session": g.session, "draft": draft, "doc": edition})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(standing["left_behind"], json!([first]), "the draft on this base, and no mark: {standing}");
+    let panel = g.call("publication.open", json!({"session": g.session, "draft": draft, "doc": edition, "readable_drafts": [draft, mark], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let text = panel.to_string();
+    assert!(
+        !text.contains(&format!("{mark}.0.2.")) && panel["rows"].as_array().expect("rows").iter().all(|row| row["home"] != mark.as_str()),
+        "no row for the mark, and no link of it anywhere on the panel: {panel}"
+    );
+    g.call("publication.cancel", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    // The diff since the member the draft was staged from.
+    let answer = g.call("text.diff", json!({"session": g.session, "doc": draft, "since": e1})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("TextDiffed", &answer);
+    assert_eq!(
+        (&answer["rows"], &answer["bytes"], answer["shared"].as_str()),
+        (&json!(["@@ -1,1 +1,2 @@", "+1\ta line of its own", " 2\tthe quick brown fox"]), &json!({"new": "18", "gone": "0", "moved": "0"}), Some("20")),
+        "{answer}"
+    );
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks an empty draft's mark, a refused link and the mark's refusals.
+///
+/// An empty draft's mark holds nothing, and its link's stored `from` is
+/// empty, its `to` the draft. A link refused after the copy landed answers
+/// `partial`, an error naming the mark and the copy's commit: the mark holds
+/// the draft's text at its own addresses, no `marks` link names the draft
+/// from it, the link was sent once, and the diff since it stands. A
+/// document the board does not register refuses the call at its read with
+/// no document minted, and under the shell's own node stopped the call is
+/// refused `stopped` at the door, naming the mint, nothing read or minted
+/// (the mutants that mint before the read, or send the link again, leave a
+/// document or a second link).
+#[test]
+fn the_mark_of_an_empty_draft_and_a_link_refused_after_the_copy_and_the_marks_refusals() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let empty = g.addr(json!({"op": "create_new_document", "account": "1.0.1"}));
+    let marked = g.call("text.mark", json!({"session": g.session, "doc": empty})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("TextMarked", &marked);
+    let (mark, link) = (marked["mark"].as_str().expect("the mark").to_string(), marked["link"].as_str().expect("the link").to_string());
+    assert!(addresses(&g.shell, &g.session, &mark).is_empty(), "nothing copied");
+    let stored = g.op(skep_client::board::frames::read_link(&link));
+    assert_eq!((&stored["link"]["slots"][0], &stored["link"]["slots"][1]), (&json!([]), &skep_client::board::frames::unit_span(&empty)), "an empty `from`: {stored}");
+    assert_eq!(g.call("text.diff", json!({"session": g.session, "doc": empty, "since": mark})).unwrap()["outcome"], "unchanged");
+
+    // The link refused once the copy has landed.
+    let draft = draft_holding(&g.shell, &g.session, LINES);
+    let slot_too_large = || {
+        Refusal::Board(skep_client::halt::Refused {
+            status: 200,
+            code: "slot_too_large".into(),
+            detail: None,
+            op: Some("make_link".into()),
+            body: json!({"resp": "rejected", "op": "make_link", "code": "slot_too_large", "disposition": "permanent"}),
+        })
+    };
+    let watched = Watched::over(&g.shell, |frame, _| (frame["op"] == "make_link").then(slot_too_large));
+    let partial = mark_through(&watched, &g.session, "1.0.1", &json!({"doc": draft})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("TextMarkPartial", &partial);
+    let (copy, copied_at) = (partial["mark"].as_str().expect("the mark").to_string(), partial["at"].as_u64().expect("the copy's commit"));
+    assert_eq!(
+        (partial["outcome"].as_str(), partial["error"].as_bool(), partial["cause"].as_str(), partial["refusal"]["kind"].as_str()),
+        (Some("partial"), Some(true), Some("slot_too_large"), Some("refused")),
+        "{partial}"
+    );
+    assert_eq!(watched.ops(), ["retrieve_doc_v_span_set", "create_new_document", "copy", "make_link"], "the link sent once");
+    assert_eq!(watched.frames.borrow()[3]["from"], json!([{"source": copy, "span": {"start": "1.1", "width": format!("0.{}", u64::MAX)}}]), "the mark's whole content, by the span the copy named");
+    assert_eq!(addresses(&g.shell, &g.session, &copy), addresses(&g.shell, &g.session, &draft), "the copy stands, the draft's own bytes");
+    assert!(marks_of(&g.shell, &g.session, &draft).is_empty(), "and carries no `marks` link");
+    let answer = g.call("text.diff", json!({"session": g.session, "doc": draft, "since": copy})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(answer["outcome"], "unchanged", "taken as `since`: the draft holds what the copy took: {answer}");
+    let typed = g.op(skep_client::board::frames::delete(&copy, 1, 1, copied_at, None));
+    assert_eq!(typed["resp"], "ack", "`at` is the copy's commit, the mark's typed state: {typed}");
+
+    // Nothing minted where the read or the door refuses.
+    let next = || g.addr(json!({"op": "create_new_document", "account": "1.0.1"}));
+    let ordinal = |doc: &str| doc.rsplit('.').next().and_then(|n| n.parse::<u64>().ok()).expect("a document's ordinal");
+    let last = ordinal(&next());
+    let refused = g.call("text.mark", json!({"session": g.session, "doc": "1.0.1.0.4000"})).unwrap_err();
+    assert_eq!(refused.name(), "doc_not_registered", "{refused}");
+    g.shell.set_node_state(NodeState::Stopped);
+    let stopped = g.call("text.mark", json!({"session": g.session, "doc": draft})).unwrap_err().to_value();
+    assert_eq!((stopped["name"].as_str(), stopped["op"].as_str()), (Some("stopped"), Some("create_new_document")), "{stopped}");
+    g.shell.set_node_state(NodeState::Running);
+    assert_eq!(ordinal(&next()), last + 1, "no document minted by either refused call");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a draft changed between the diff's two images is read again.
+///
+/// Another writer's byte lands on the draft after the call's first image of
+/// it: the text read and the second image find the draft changed, the three
+/// are made again, and the diff is of the draft as it then stands, the
+/// other writer's byte on its changed line. A draft another writer changes
+/// before every read of its text is refused `arrangement_moved` after three
+/// rounds, nothing written (the mutant that drops the second image draws
+/// the first image's pairs over the second text).
+#[test]
+fn a_draft_changed_between_the_diffs_two_images_is_read_again_and_one_that_keeps_changing_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let draft = draft_holding(&g.shell, &g.session, LINES);
+    let mark = g.call("text.mark", json!({"session": g.session, "doc": draft})).unwrap_or_else(|r| panic!("{r}"))["mark"].as_str().expect("the mark").to_string();
+    // Another writer types one byte at the draft's head, typed against the
+    // board's position as it stands.
+    let other = |session: &str| {
+        let at = g.shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::span_set(&draft)})).unwrap()["as_of"].as_u64().unwrap();
+        g.shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::insert_text(&draft, 1, "X", at, None)})).unwrap_or_else(|r| panic!("the other writer's insert: {r}"));
+    };
+    let reads = Cell::new(0);
+    let once = Watched::over(&g.shell, |frame, session| {
+        if frame["op"] == "retrieve_v" {
+            reads.set(reads.get() + 1);
+            if reads.get() == 1 {
+                other(session);
+            }
+        }
+        None
+    });
+    let answer = diff_through(&once, &g.session, &json!({"doc": draft, "since": mark})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(reads.get(), 2, "the draft read again");
+    assert_eq!(answer["rows"], json!(["@@ -1,3 +1,3 @@", "-1\talpha = 1", "+1\tXalpha = 1", " 2\tkeep this line as it is", " 3\tbeta = 2"]), "the draft as the second round found it: {answer}");
+    assert_eq!(answer["bytes"], json!({"new": "1", "gone": "0", "moved": "0"}));
+    let always = Watched::over(&g.shell, |frame, session| {
+        if frame["op"] == "retrieve_v" {
+            other(session);
+        }
+        None
+    });
+    let answer = diff_through(&always, &g.session, &json!({"doc": draft, "since": mark})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("TextRefused", &answer);
+    assert_eq!(answer, json!({"outcome": "refused", "cause": "arrangement_moved", "doc": draft, "reads": 3}), "data: the draft kept moving");
+    assert_eq!(text_of(&g.shell, &g.session, &draft), format!("XXXX{LINES}"), "the other writer's bytes, and nothing of the call's");
     g.shell.shutdown();
     sd.shutdown();
 }

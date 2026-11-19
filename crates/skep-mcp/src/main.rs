@@ -26,7 +26,7 @@
 //!   `_` for `.` (`publication_open`, `publication_count`,
 //!   `publication_confirm`, `publication_cancel`) — are tools of those names,
 //!   their arguments the bridge's row minus the session and the board, the
-//!   adapter supplying each where the row requires it; and seven are the
+//!   adapter supplying each where the row requires it; and nine are the
 //!   adapter's apparatus: `session_info`, `changes_since` (the shell's
 //!   `changes`, a pull), `fetch` (the shell's streamed fetch as an image or
 //!   resource block, the type sniffed off the bytes, the size capped),
@@ -40,6 +40,13 @@
 //!   whole lines of a draft moved by identity, by one `rearrange` about the
 //!   lines' starts, typed against the call's own read, whose landed answer is
 //!   followed by the lines where they now stand and the place they left),
+//!   `mark_text` (the shell's `text.mark`, a private copy of a draft's whole
+//!   content by identity, with one link typed `marks` that says which draft
+//!   it marks, to diff against later), `diff_text` (the shell's `text.diff`,
+//!   what changed in a draft since a document that holds its content by
+//!   identity — a mark, the version it was staged from — told by identity
+//!   and written nowhere, a moved block shown as moved and a re-typed one
+//!   said so, its answer followed by the hunks' rows, one row a line),
 //!   and `help` (the catalog's help store read by topic: each rule's whole
 //!   text under its heading, and the whole reference of each tool whose
 //!   short card ends naming it). The adapter
@@ -68,10 +75,11 @@
 //!   adapter's own, a file past its cap and a stream cut short, each a plain
 //!   sentence, `help`'s one, a topic its store holds no text for, a plain
 //!   sentence naming the topics, and every answer of `replace_text`,
-//!   `edit_text` and `move_lines` the shell marks with its error member,
-//!   which the adapter takes off: a write the
+//!   `edit_text`, `move_lines`, `mark_text` and `diff_text` the shell marks
+//!   with its error member, which the adapter takes off: a write the
 //!   shell could not get to the board, a line of the edit's the shell would
-//!   not drop, and an edit that landed in part. A write refused `unreachable` may have committed: the
+//!   not drop, and an edit or a mark that landed in part. A write refused
+//!   `unreachable` may have committed: the
 //!   shell faces a lost answer to any write but a burst (whose line it holds,
 //!   `sent`), and the adapter never reissues it. So may a write the board
 //!   refused `poisoned`, whose frames its restart replays from the journal

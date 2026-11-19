@@ -896,7 +896,8 @@ impl Backend {
     /// the read of a draft's standing, `publication.standing`, the
     /// `publication` family's four (`publication.open`, `publication.count`,
     /// `publication.confirm`, `publication.cancel`), and the `text` family's
-    /// three (`text.replace`, `text.edit`, `text.move`):
+    /// five (`text.replace`, `text.edit`, `text.move`, `text.mark`,
+    /// `text.diff`):
     /// `args` is the call's own members, the row's object, and the session's
     /// reference is set in it beside them before each attempt. A row
     /// whose session form takes a board too (`search`, `places`) reads at the

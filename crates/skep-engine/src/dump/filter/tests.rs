@@ -1,6 +1,6 @@
 use skep_address::parent;
 use skep_arrangement::AsOf;
-use skep_arrangement::{trunk_of, Caller, Deposit, Run, Shot, ShotRun, VPos};
+use skep_arrangement::{trunk_of, Base, Caller, Deposit, Run, Shot, ShotRun, VPos};
 use skep_content::Val;
 use skep_kernel::TxnError;
 use skep_links::{
@@ -74,6 +74,7 @@ fn reduced_paths() -> Vec<(Vec<&'static str>, Shape)> {
         (vec!["authoritative", "arrangement", "fork_sources"], Shape::Map),
         (vec!["authoritative", "arrangement", "arranged_at"], Shape::Map),
         (vec!["authoritative", "arrangement", "draft_bases"], Shape::Map),
+        (vec!["authoritative", "arrangement", "source_copied"], Shape::Map),
         (vec!["authoritative", "links", "links"], Shape::Map),
         (vec!["publication"], Shape::Seq),
     ];
@@ -246,13 +247,22 @@ fn every_entry_at_each_level_of_the_tree_is_reduced_or_kept_by_name() {
             &["frontiers", "minted_at", "nodes", "principals", "publication"][..],
         ),
         ("content", &["map"]),
-        // M5's five keyed fields reduced — the fork sources by the fork,
-        // the key, the arranged-at positions by the document, the draft
-        // bases by the draft — and its birth memo and shot terms kept WHOLE
-        // with the reason in `filter_tree`'s statement.
+        // M5's six keyed fields reduced — the fork sources and the copied
+        // counts by the fork, the key, the arranged-at positions by the
+        // document, the draft bases by the draft — and its birth memo and
+        // shot terms kept WHOLE with the reason in `filter_tree`'s statement.
         (
             "arrangement",
-            &["arranged_at", "arrangements", "birth_extents", "draft_bases", "fork_sources", "provenance", "shot_terms"],
+            &[
+                "arranged_at",
+                "arrangements",
+                "birth_extents",
+                "draft_bases",
+                "fork_sources",
+                "provenance",
+                "shot_terms",
+                "source_copied",
+            ],
         ),
         // M7's skip-serialized hints occupy no bytes and so no key.
         ("links", &["links"]),
@@ -360,7 +370,10 @@ fn the_guest_filter_drops_a_draft_s_entries_and_keeps_the_namespace_slice_and_gr
 /// notes nothing; an owned VERSION of the published home, whose snapshot
 /// notes the birth member it mints; and a publish SHOT into a published
 /// edition, whose one placement notes the member IT mints — the route the
-/// daemon's head writer takes for every head.
+/// daemon's head writer takes for every head. A second shot off that member
+/// gives the shot terms an entry carrying a BASE (skep #1111), whose
+/// address the entry discloses to every reader class: it too names a
+/// published state the guest reads.
 #[test]
 fn every_birth_memo_key_is_a_version_member_whose_state_the_guest_reads() {
     let (engine, home, draft) = a_published_home_and_a_private_draft();
@@ -399,6 +412,18 @@ fn every_birth_memo_key_is_a_version_member_whose_state_the_guest_reads() {
         .vstream()
         .publish(caller, &edition, &shot, &World::visible_to(caller))
         .expect("the birth shot from the draft into the edition");
+    let extent = engine.kernel().snapshot().world().arrangement.content_count(&shot_member);
+    let based = Shot {
+        base: Some(Base { member: shot_member.clone(), extent }),
+        draft: None,
+        also: vec![],
+        keep_base: false,
+        runs: vec![],
+    };
+    let (based_member, _) = engine
+        .vstream()
+        .publish(caller, &edition, &based, &World::visible_to(caller))
+        .expect("a shot off the birth member, its base recorded");
     let world = engine.kernel().snapshot().world().clone();
     let full = dump_tree(&world);
     let keys_of = |field: &str| -> Vec<Address> {
@@ -420,11 +445,33 @@ fn every_birth_memo_key_is_a_version_member_whose_state_the_guest_reads() {
             "the fixture must give the memo its birth member {member}: {keys:?}"
         );
     }
-    // The shot terms, kept whole on the same ground: keyed by the member the
-    // SHOT minted — and by no version an owned `version` minted, whose birth
-    // the memo notes and no shot record names.
+    // The shot terms, kept whole on the same ground: keyed by the members
+    // the SHOTS minted — and by no version an owned `version` minted, whose
+    // birth the memo notes and no shot record names.
     let terms = keys_of("shot_terms");
-    assert_eq!(terms, vec![shot_member.clone()], "the shot's member alone carries terms");
+    assert_eq!(
+        terms,
+        vec![shot_member.clone(), based_member.clone()],
+        "the shots' members alone carry terms"
+    );
+    // Each base an entry names is a published state the guest reads, so
+    // keeping the entry whole discloses no address a reader class could not
+    // read itself; the fixture's second shot gives one.
+    let bases: Vec<Address> = terms
+        .iter()
+        .filter_map(|member| world.arrangement.shot_terms(member).and_then(|t| t.base.clone()))
+        .collect();
+    assert_eq!(
+        bases,
+        vec![shot_member.clone()],
+        "the second shot records the member it was made against"
+    );
+    for base in &bases {
+        assert!(
+            world.readable(None, base),
+            "shot-terms base {base} names a state the guest cannot read, and the guest's dump carries it"
+        );
+    }
     for (field, keys) in [("birth memo", keys), ("shot terms", terms)] {
         for key in &keys {
             assert_ne!(
@@ -459,7 +506,8 @@ fn every_birth_memo_key_is_a_version_member_whose_state_the_guest_reads() {
 /// link, which cover the authoritative maps and the two publication
 /// families; this adds the link population the shipped classes and the
 /// predicate projections need, the one record that populates M5's fork
-/// sources, and the one that populates its draft bases. The links carry
+/// sources and its copied counts, and the one that populates its draft
+/// bases. The links carry
 /// ADDRESS-form slots under never-minted types in the draft's own subspace
 /// 3, so each lands in an unregistered coverage class and the shipped
 /// slices hold exactly the tuples deposited under them. The fork is

@@ -2386,12 +2386,13 @@ fn a_replayed_shot_mints_its_bases_daughter_and_the_current_version_stands() {
 /// verifier holding the MEMBER and no request — a mirror, a reader beside
 /// the table — composes the shot's signed body byte for byte from what the
 /// board serves about the member: its terms off `doc_metadata` (`placed`,
-/// `base_extent`), its runs off the member's own arrangement over the first
-/// `placed` positions (the image, maximally merged), each classed by its
-/// origin — the edition's own trunk BY VALUE, the values read at the member;
-/// any other document BY ADDRESS — and the BASE MEMBER DERIVED from the
-/// member's own address and composed INTO the base group: `D.1` was minted
-/// against the memberless document `D`. Over a shot holding all three run
+/// `base_extent`, `shot_base`), its runs off the member's own arrangement
+/// over the first `placed` positions (the image, maximally merged), each
+/// classed by its origin — the edition's own trunk BY VALUE, the values read
+/// at the member; any other document BY ADDRESS — and the BASE MEMBER as the
+/// board RECORDED it (skep #1111), `shot_base`, composed INTO the base
+/// group: here the memberless document `D` that `D.1` was minted against.
+/// Over a shot holding all three run
 /// classes, with two I-adjacent windows the placement merged into one: the
 /// frame composed at the request (the test signer's, which the daemon's
 /// check verified) and the frame composed off the member are one byte
@@ -2427,8 +2428,9 @@ fn a_publish_frame_composed_from_the_member_is_the_frame_composed_from_the_reque
     let placed: u64 = meta["placed"].as_str().expect("placed").parse().unwrap();
     let base_extent: Option<u64> = meta["base_extent"].as_str().map(|s| s.parse().unwrap());
     assert_eq!((placed, base_extent), (7, Some(3)), "{meta}");
+    let shot_base = meta["shot_base"].as_str().expect("the recorded base").to_string();
+    assert_eq!(shot_base, edition, "the board recorded the base the request named: the document");
     let trunk = trunk_of_str(&member);
-    assert_eq!(trunk, edition, "`base` is derived from the member's address: D.1's is the document");
     let mut segments: Vec<SignerSegment> = Vec::new();
     let mut ordinal = 1;
     for (i_start, width) in image_runs(port, None, &member, 1, placed) {
@@ -2441,10 +2443,10 @@ fn a_publish_frame_composed_from_the_member_is_the_frame_composed_from_the_reque
     }
     assert_eq!(segments.len(), 6, "three values, one merged window, two values");
     assert!(matches!(&segments[3], SignerSegment::Window(w, 2) if *w == addr(&format!("{other}.0.1.1"))));
-    // THE DERIVATION: the member `D.1` was minted against the memberless
-    // document `D` — the base member is the trunk — at the extent
-    // `doc_metadata` serves; composed INTO the preimage (bu7-E2 ARM (a)).
-    let base_member = addr(&trunk);
+    // THE RECORDED BASE: the member `D.1` was minted against the memberless
+    // document `D`, at the extent `doc_metadata` serves beside it; composed
+    // INTO the preimage (bu7-E2 ARM (a)).
+    let base_member = addr(&shot_base);
     let base = base_extent.map(|extent| ShotBase { member: &base_member, extent });
     let body = entry_body_publish(segments.iter().map(SignerSegment::as_shot), base);
     let board = board_term(port).expect("H.1");
@@ -2464,12 +2466,104 @@ fn a_publish_frame_composed_from_the_member_is_the_frame_composed_from_the_reque
     );
 }
 
+/// THE RECORDED BASE WHERE THE ADDRESS NAMES ANOTHER (skep #1111): a shot
+/// off the memberless document `D` published once `D.1` stands — a draft
+/// begun before version 1 — lands as `D.1`'s daughter `D.1.1`, its signed
+/// base group naming `D`. A verifier composing the frame off the member
+/// reads the base the board recorded, `doc_metadata`'s `shot_base`, and
+/// composes the frame the author signed, which the marker's attestation
+/// verifies over; the base read off the member's address, `D.1`, composes a
+/// frame the author never signed.
+#[test]
+fn a_daughter_of_the_memberless_document_composes_its_frame_from_the_recorded_base() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_owner_session(port);
+    let edition = edition_with(port, &signed, "abc");
+    let draft = draft_with(port, &signed, "xy");
+    // Version 1, off the memberless edition at three, its three by reference.
+    let first = shot(
+        port,
+        &signed,
+        &edition,
+        Some((&edition, 3)),
+        None,
+        &shot_runs(port, Some(&signed), &edition, 1, 3),
+    );
+    assert_eq!(first, format!("{edition}.1"));
+    // The draft begun before version 1: the memberless edition at three as
+    // its base, the edition's three by reference and the draft's two.
+    let mut runs = shot_runs(port, Some(&signed), &edition, 1, 3);
+    runs.extend(shot_runs(port, Some(&signed), &draft, 1, 2));
+    let frame = publish_frame(&edition, Some((&edition, 3)), Some(&draft), &runs);
+    let parsed: Value = serde_json::from_str(&frame).unwrap();
+    let frame_from_request =
+        entry_frame_for(port, &signed, CLAIMANT_PRINCIPAL, &parsed).expect("composable");
+    let v = op(port, Some(&signed), &frame);
+    let member = acked_addr(&v);
+    assert_eq!(member, format!("{edition}.1.1"), "version 1's daughter");
+    let slot = sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().expect("attested");
+
+    // THE LATER VERIFIER, off the member alone.
+    let answer = doc_metadata(port, None, &member);
+    let meta = expect_resp(&answer, "doc_metadata");
+    let placed: u64 = meta["placed"].as_str().expect("placed").parse().unwrap();
+    let base_extent: u64 = meta["base_extent"].as_str().expect("a base extent").parse().unwrap();
+    assert_eq!((placed, base_extent), (5, 3), "{meta}");
+    assert_eq!(
+        meta["shot_base"].as_str(),
+        Some(edition.as_str()),
+        "the recorded base: the document, never D.1: {meta}"
+    );
+    let trunk = trunk_of_str(&member);
+    assert_eq!(trunk, edition);
+    let mut segments: Vec<SignerSegment> = Vec::new();
+    let mut ordinal = 1;
+    for (i_start, width) in image_runs(port, None, &member, 1, placed) {
+        if trunk_of_str(&origin_of(&i_start)) == trunk {
+            segments.extend(
+                values_of(port, None, &member, ordinal, width)
+                    .into_iter()
+                    .map(SignerSegment::Value),
+            );
+        } else {
+            segments.push(SignerSegment::Window(addr(&i_start), width));
+        }
+        ordinal += width;
+    }
+    let board = board_term(port).expect("H.1");
+    let account = addr(&account_of(port, &signed, CLAIMANT_PRINCIPAL).expect("the account"));
+    let compose = |base_member: &skep_address::Address| {
+        let body = entry_body_publish(
+            segments.iter().map(SignerSegment::as_shot),
+            Some(ShotBase { member: base_member, extent: base_extent }),
+        );
+        entry_frame(ALG_MLDSA65_ED25519, board, &account, DocTerm::One(&addr(&trunk)), &body)
+    };
+    let from_record = compose(&addr(meta["shot_base"].as_str().expect("the recorded base")));
+    assert_eq!(from_record, frame_from_request, "the recorded base composes the signed frame");
+    let (_, seed) = signer_of(&signed).expect("a signed session");
+    let key = HybridSigner::from_seed(FIXTURE_TAG, &seed).unwrap();
+    assert_eq!(
+        skep_signature::verify(slot.sig_alg(), key.public_key(), &from_record, slot.sig()),
+        Ok(()),
+        "the marker's attestation verifies over the frame composed from the recorded base"
+    );
+    let from_address = compose(&addr(&first));
+    assert_ne!(
+        from_address, frame_from_request,
+        "the base read off the address, D.1, composes a frame never signed"
+    );
+}
+
 /// `doc_metadata` SERVES THE TERMS (d25-S1, the member read): asked of a
-/// version member the shot minted, `placed` is Σ width of the shot's runs
-/// and `base_extent` the extent its copy took — `null` in the birth shape,
-/// the base absent — beside the document's `birth`/`birth_extent`; asked of
-/// the trunk, both are `null`; a birth version an owned `version` minted
-/// carries none.
+/// version member the shot minted, `placed` is Σ width of the shot's runs,
+/// `base_extent` the extent its copy took and `shot_base` the base its
+/// request named (skep #1111) — the two `null` in the birth shape, the base
+/// absent — beside the document's `birth`/`birth_extent`; asked of the
+/// trunk, all are `null`; a birth version an owned `version` minted carries
+/// none.
 #[test]
 fn doc_metadata_serves_a_shot_minted_members_terms_and_null_where_none() {
     let dir = tempdir().unwrap();
@@ -2484,6 +2578,12 @@ fn doc_metadata_serves_a_shot_minted_members_terms_and_null_where_none() {
             meta["base_extent"].as_str().map(str::to_string),
         )
     };
+    let shot_base = |doc: &str| -> Option<String> {
+        let answer = doc_metadata(port, None, doc);
+        let meta = expect_resp(&answer, "doc_metadata");
+        assert!(meta.get("shot_base").is_some(), "the member is present: {meta}");
+        meta["shot_base"].as_str().map(str::to_string)
+    };
     // A birth version by `version`: the memo notes it, no shot record does.
     let edition = edition_with(port, &signed, "abc");
     let by_version = acked_addr(&version_of(port, &signed, &edition, None));
@@ -2495,7 +2595,13 @@ fn doc_metadata_serves_a_shot_minted_members_terms_and_null_where_none() {
     runs.extend(shot_runs(port, Some(&signed), &draft, 1, 2));
     let d2 = shot(port, &signed, &edition, Some((&by_version, 3)), Some(&draft), &runs);
     assert_eq!(terms(&d2), (Some("5".into()), Some("3".into())), "the shot's two terms");
+    assert_eq!(shot_base(&d2), Some(by_version.clone()), "D.2's recorded base: D.1");
     assert_eq!(terms(&edition), (None, None), "the trunk answers the address named: none");
+    assert_eq!(
+        (shot_base(&edition), shot_base(&by_version)),
+        (None, None),
+        "no shot minted either"
+    );
     let answer = doc_metadata(port, None, &d2);
     let meta = expect_resp(&answer, "doc_metadata");
     assert_eq!(meta["birth"].as_str(), Some(by_version.as_str()), "the document's birth beside them");
@@ -2504,6 +2610,7 @@ fn doc_metadata_serves_a_shot_minted_members_terms_and_null_where_none() {
     let d1 = shot(port, &signed, &second, None, None, &shot_runs(port, Some(&signed), &second, 1, 2));
     assert_eq!(d1, format!("{second}.1"));
     assert_eq!(terms(&d1), (Some("2".into()), None), "the count, and the birth bit as null");
+    assert_eq!(shot_base(&d1), None, "the birth shape records no base");
     let answer = doc_metadata(port, None, &d1);
     let meta = expect_resp(&answer, "doc_metadata");
     assert_eq!(meta["birth_extent"].as_str(), Some("2"), "there the count is the birth extent");

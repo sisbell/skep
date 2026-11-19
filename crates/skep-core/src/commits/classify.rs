@@ -280,9 +280,9 @@ fn derived_docs_over(
 ///    principal, both as `effective_owner` answers them at `after`.
 /// 2. A version member minted ([`minted_member`]) — with M5's placing record
 ///    for it ([`skep_arrangement::M5State::shot_terms`], signed-ops D25) the
-///    row is a `publish`'s, with `placed` and `base_extent` exactly as
-///    `doc_metadata` serves them for that member; without one it is a
-///    `version`'s, which carries no term.
+///    row is a `publish`'s, with `placed`, `base_extent` and `base` exactly
+///    as `doc_metadata` serves them for that member (its `base` as
+///    `shot_base`); without one it is a `version`'s, which carries no term.
 /// 3. A draft minted with its base recorded ([`staged_draft`]) — a document
 ///    `after` registers and `before` does not whose draft base
 ///    ([`skep_arrangement::M5State::draft_base`]) `after` holds and `before`
@@ -345,6 +345,7 @@ fn derived_terms_over(
                 terms: Some(OpTerms::Publish {
                     placed: t.placed.to_string(),
                     base_extent: t.base_extent.as_ref().map(ToString::to_string),
+                    base: t.base.as_ref().map(ToString::to_string),
                 }),
             },
             _ => JournalTerms { op: Some("version".into()), terms: None },

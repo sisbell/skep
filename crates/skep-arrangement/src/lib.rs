@@ -4,10 +4,11 @@
 //! subspace and a link subspace per document), the **append-only
 //! content-provenance relation R**, each trunk's **birth extent** — the
 //! content count its birth version `D.1` was minted with (PUB-3.19) — each
-//! shot-minted member's **shot terms** — the count the client placed and
-//! the base extent its copy took (signed-ops D25) — each
-//! `version`- or `stage`-minted document's **fork source** — the member or
-//! bare document it was born sharing (the fork-source design record) — and
+//! shot-minted member's **shot terms** — the count the client placed, the
+//! base the shot was made against and the extent its copy took (signed-ops
+//! D25; skep #1111) — each `version`- or `stage`-minted document's **fork
+//! source** — the member or bare document it was born sharing (the
+//! fork-source design record), with the count of it the copy took — and
 //! each staged draft's **base** — where its next publication lands, the
 //! extent the copy took, its source, the merge it carries and the markers
 //! stamped on it, moved by each publication of the draft itself and each
@@ -25,7 +26,8 @@
 //! provenance queries, the birth-extent, shot-terms, fork-source and
 //! draft-base reads the doc-metadata read serves ([`M5State::birth_extent`],
 //! [`M5State::shot_terms`], [`M5State::fork_source`],
-//! [`M5State::draft_base`]), and the address form a shot's entry signature
+//! [`M5State::fork_source_copied`], [`M5State::draft_base`]), and the
+//! address form a shot's entry signature
 //! is made over, on both of its sides ([`Shot::address_form`] for the
 //! request, [`M5State::address_form_of`] for the member it minted). Every
 //! mutation funnels through one M2 composite, where the J-couplings (J0:
@@ -45,11 +47,12 @@
 //! derived by the fold from the records that mint a member — the shot's for
 //! every member it mints, an empty placement included, and an owned
 //! version's snapshot — the shot terms are journaled in the shot's own
-//! record, the fork sources are noted off the snapshot's `source`, and the
-//! draft bases are journaled in the staging record and the landing's — its
-//! base record or its restore record — and moved by the shot's record
-//! naming its draft; all four are carried by the
-//! checkpoint, never rebuilt, and [`M5State`] states why.
+//! record, the fork sources and the counts their copies took are noted off
+//! the snapshot's `source` and the run-list it shares, and the draft bases
+//! are journaled in the staging record and the landing's — its base record
+//! or its restore record — and moved by the shot's record naming its draft;
+//! all five are carried by the checkpoint, never rebuilt, and [`M5State`]
+//! states why.
 //!
 //! ## Failure channels
 //!

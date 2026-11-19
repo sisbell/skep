@@ -37,21 +37,23 @@
 //! **The base is signed**, its member and its extent both. The signer and the
 //! daemon read the two off the request's own `base` and `base_extent`. A
 //! verifier holding the minted member and no request composes the same
-//! bytes: it derives the base member from the minted member's address — a
-//! trunk member `D.k+1` was minted against `D.k`, a daughter `X.m` against
-//! `X`, a birth version against the memberless document, or against nothing
-//! where the group is empty — reads `placed` and `base_extent` where the
-//! design record's D25 journals them, in M5's placing record, and reads the
-//! minted member's first `placed` positions, spelling a stretch from the
-//! values there and a window from the run the member holds. So the
-//! derivation feeds the preimage: it answers how a verifier finds the member,
-//! never whether the signature covers it. A re-submission of a signed shot
-//! naming another base — the trunk's current head, say — spells another
-//! group and verifies under no key, while a replayed shot naming the base it
-//! signed verifies as it did and names a base its own commit left no longer
-//! the head, so the store's rule mints that base's daughter, never the
-//! trunk's next. The address is the client's own, so the frame stays
-//! position-free.
+//! bytes: it reads the base member, `placed` and `base_extent` where the
+//! design record's D25 journals them, in M5's placing record — the base the
+//! request named, recorded as named (skep #1111), and absent where the group
+//! is empty — and reads the minted member's first `placed` positions,
+//! spelling a stretch from the values there and a window from the run the
+//! member holds. The member's address does not name its base in every case:
+//! a draft begun from the memberless document `D` and published once `D.1`
+//! stands lands as `D.1`'s daughter `D.1.k`, its group naming `D`, so a
+//! verifier reading the base off the address composes a group the author
+//! never signed. The recorded base feeds the preimage: it answers how a
+//! verifier finds the member, never whether the signature covers it. A
+//! re-submission of a signed shot naming another base — the trunk's current
+//! head, say — spells another group and verifies under no key, while a
+//! replayed shot naming the base it signed verifies as it did and names a
+//! base its own commit left no longer the head, so the store's rule mints
+//! that base's daughter, never the trunk's next. The address is the
+//! client's own, so the frame stays position-free.
 //!
 //! Every segment is self-delimiting behind its class byte and carries at
 //! least one position — a stretch its count of values, a window its width —

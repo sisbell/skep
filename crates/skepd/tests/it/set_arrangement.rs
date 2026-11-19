@@ -267,7 +267,10 @@ fn a_landing_composed_on_an_older_head_lands_and_tells_the_newer_one() {
 /// private fork of version 1 takes a landing composed on version 1 — its
 /// source — gaining no base and no marker; composed on version 2, the
 /// landing is refused `fork_base_moved` naming the source, nothing
-/// written, since the source the board records never moves.
+/// written, since the source the board records never moves — nor the count
+/// of it the fork's copy took (`source_copied`, skep #1111), which a
+/// landing that re-sets the fork's whole arrangement leaves as the mint
+/// noted it.
 #[test]
 fn a_fork_is_admitted_where_its_source_is_the_head_and_refused_by_name_where_it_is_not() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -283,6 +286,11 @@ fn a_fork_is_admitted_where_its_source_is_the_head_and_refused_by_name_where_it_
     assert!(fork.starts_with(&format!("{account}.0.")), "{fork}");
     let meta = doc_metadata(port, Some(&stranger), &fork);
     assert_eq!(meta["source"].as_str(), Some(v1.as_str()), "{meta}");
+    assert_eq!(
+        meta["source_copied"].as_str(),
+        Some("3"),
+        "version 1's three, the count the copy took: {meta}"
+    );
     assert!(meta["base"].is_null() && meta["merge"].is_null(), "a version records no base: {meta}");
     // The source is the head: admitted, nothing moved.
     let runs = runs_of(port, &stranger, &edition, 3, 1);
@@ -293,6 +301,11 @@ fn a_fork_is_admitted_where_its_source_is_the_head_and_refused_by_name_where_it_
     let meta = doc_metadata(port, Some(&stranger), &fork);
     assert!(meta["base"].is_null() && meta["merge"].is_null(), "no base, no marker: {meta}");
     assert_eq!(meta["source"].as_str(), Some(v1.as_str()), "the source stands");
+    assert_eq!(
+        meta["source_copied"].as_str(),
+        Some("3"),
+        "the count the mint noted, the landing's one position aside"
+    );
     // Version 2 lands; a landing composed on it is refused by name.
     let v2 = shot(port, &signed, &edition, Some((&v1, 3)), Some(&draft), &shot_runs(port, Some(&owner), &edition, 1, 3));
     let head = head_position(port);

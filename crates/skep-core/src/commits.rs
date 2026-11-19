@@ -2280,6 +2280,7 @@ impl RowTerms {
                 minted.and_then(|member| post.m5().shot_terms(member)).map(|t| OpTerms::Publish {
                     placed: t.placed.to_string(),
                     base_extent: t.base_extent.as_ref().map(ToString::to_string),
+                    base: t.base.as_ref().map(ToString::to_string),
                 })
             }
             // The landing's terms are the request's own, resolved at the

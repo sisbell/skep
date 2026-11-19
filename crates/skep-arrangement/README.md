@@ -19,7 +19,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   two diverge copy-on-write. An owned fork's
   ancestry is carried by the identity itself, readable by truncation;
   a cross-owner fork's identity is severed from the source's, and what
-  records the relationship is provenance.
+  records the relationship is provenance. Every document a snapshot
+  mints — a version, a fork or a staged draft — keeps its source and
+  the count of it the copy took (`M5State::fork_source`,
+  `M5State::fork_source_copied`), the count staying where the copy
+  ended however the source grows.
 - **The staging act** — `stage` mints a PRIVATE draft of a source in
   the caller's own account, sharing the source's reading surface as
   `version` shares it, and records in the slice's own state where the
@@ -81,9 +85,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   address reads as itself forever, and a declared deposit into a chain
   lands in the head member alone. The shot's placing record
   (`ShotPlace`) journals the member's whole arrangement and the shot's
-  two client terms — the count it placed and the base extent its copy
-  took — for every member it mints, so a verifier of the member's entry
-  signature reads them off the state beside the member's runs, in the
+  three client terms — the count it placed, the base it was made
+  against and the extent its copy took — for every member it mints, so
+  a verifier of the member's entry signature reads them off the state
+  beside the member's runs, the base as the shot recorded it and never
+  read off the member's address, in the
   address form the signature covers (the document's own runs by value,
   windows by address). What the shot re-inserts is answered too —
   `Shot::reinserted_runs` and its count — and `publish` states where

@@ -174,6 +174,7 @@ fn write(
             let md = doc_metadata(port, Some(token), &addr);
             rest.insert("placed".into(), md["placed"].clone());
             rest.insert("base_extent".into(), md["base_extent"].clone());
+            rest.insert("base".into(), md["shot_base"].clone());
         }
         _ => {}
     }
@@ -1095,6 +1096,12 @@ fn the_sidecars_recover_and_two_daemons_agree_per_class() {
                             "{label}: `{member}` invented on a bare row: {e} vs {w}"
                         );
                     }
+                }
+                // A publish's base is the journal's as it is the recorded
+                // row's (skep #1111); a `set_arrangement`'s is the request's,
+                // which the journal does not name.
+                if recorded_op == "publish" {
+                    assert_eq!(e.get("base"), w.get("base"), "{label}: a publish's `base` on the bare row equals the recorded row's: {e} vs {w}");
                 }
                 assert_eq!((e["op"].is_null(), recorded_op), (e["op"].is_null(), recorded_op));
                 if matches!(recorded_op, "delegate" | "publish") {

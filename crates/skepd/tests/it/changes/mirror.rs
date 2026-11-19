@@ -153,6 +153,8 @@ fn the_feed_is_the_mirrors_whole_input() {
         let md = doc_metadata(port, None, &member);
         assert_eq!(e["placed"], md["placed"], "the count, as the member read serves it: {e}");
         assert_eq!(e["base_extent"], md["base_extent"], "the base extent, as the member read serves it: {e}");
+        assert_eq!(e["base"], md["shot_base"], "the recorded base, as the member read serves it: {e}");
+        assert!(e["base"].is_string(), "the shot named a base: {e}");
         assert_eq!(e["placed"].as_str(), Some(extent.to_string().as_str()), "Σ width of the runs");
         assert_eq!(e["base_extent"].as_str(), Some(extent.to_string().as_str()), "the extent the shot named");
 
@@ -176,6 +178,7 @@ fn the_feed_is_the_mirrors_whole_input() {
         let md = doc_metadata(port, None, HEAD_MEMBER_1);
         assert_eq!(e["placed"], md["placed"], "H.1's count: {e}");
         assert_eq!(e["base_extent"], md["base_extent"], "H.1's base extent: {e}");
+        assert_eq!(e["base"], md["shot_base"], "H.1's recorded base: {e}");
         assert_absent(e, &["attest"], "the head writer's row");
 
         // The delegate: the pair is the ack's, and ω's.

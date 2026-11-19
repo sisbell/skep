@@ -4,8 +4,8 @@
 //! and their counts, project/arranges_any, the content past an extent), the
 //! admission predicates the ops ask, the provenance reads
 //! (recorded_span_count/deletions/docs_ever_containing), the fork-source
-//! read (fork_source) and the draft-base read (draft_base) are pure over any
-//! M2 snapshot (§2, §9).
+//! reads (fork_source/fork_source_copied) and the draft-base read
+//! (draft_base) are pure over any M2 snapshot (§2, §9).
 //!
 //! **Level-class discipline** (§2): a SpanSet aggregated across runs — a
 //! region image, an endset's coverage, the internal `content_image`, a
@@ -504,6 +504,36 @@ impl M5State {
     /// caller keeping it clones it.
     pub fn fork_source(&self, doc: &Address) -> Option<&Address> {
         self.fork_sources.get(doc)
+    }
+
+    /// Returns the count of `doc`'s fork source that its copy took.
+    ///
+    /// It is the width of the run-list the
+    /// [`VersionSnapshot`](crate::M5Rec::VersionSnapshot) that minted `doc`
+    /// shared, noted by the fold beside the source at that record's commit
+    /// (skep #1111), zero for an empty surface — which the doc-metadata read
+    /// serves as `source_copied` beside `source`. A source that is a trunk's
+    /// head or a memberless edition keeps growing by declared deposits after
+    /// the copy (PUB-2.66), and the count stays where the copy ended,
+    /// saying how much of the source the fork held. It is the fork's own
+    /// count at its mint, the share copying the source's whole content, so
+    /// it tells a reader of `doc` nothing of the source `doc` did not hold
+    /// (PUB-1.13).
+    ///
+    /// **The invariant** it answers under is SOURCE★, stated on [`M5State`]:
+    /// noted by the record that notes the source, once, and never moved. So
+    /// `Some` exactly where [`fork_source`](M5State::fork_source) is `Some` —
+    /// an owned member, a cross-owner fork and a staged draft alike — and
+    /// `None` for every other address. For a staged draft it is the copy's
+    /// own count of its source, which is the recorded base's extent where the
+    /// draft was staged from a published surface and the source draft's
+    /// count where it is an alternative, whose base is inherited; and it
+    /// stays put when the draft's publications or landings move the base.
+    ///
+    /// Answers the address named, as every read here does; one map lookup,
+    /// reading no run. The count is lent, as `fork_source` lends the address.
+    pub fn fork_source_copied(&self, doc: &Address) -> Option<&Nat> {
+        self.source_copied.get(doc)
     }
 
     /// Returns the recorded base of `draft`: where its next publication

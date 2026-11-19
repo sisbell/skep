@@ -766,10 +766,13 @@ where
             // base are read off the address named (signed-ops D25, the
             // fork-source record and the staging act, B3-S10, each served as
             // a member read): a version member the shot minted answers its
-            // own terms, a document a `version` or a `stage` minted answers
-            // its own source, a draft the board records a base for answers
-            // that base with the extent its copy took, and everything else —
-            // a trunk no `version` minted included — answers none. The
+            // own terms, the base its shot recorded among them (skep #1111),
+            // a document a `version` or a `stage` minted answers its own
+            // source and the count of it its copy took — noted at the mint,
+            // never the source's count now — a draft the board records a
+            // base for answers that base with the extent its copy took, and
+            // everything else — a trunk no `version` minted included —
+            // answers none. The
             // source and the base take no gate of their own: whoever may
             // read the draft reads the addresses it was born sharing and
             // stands on (the record's decision 2), and nothing else of
@@ -782,6 +785,7 @@ where
                 require_registered_document(m3, kind, &doc)?;
                 let terms = world.m5().shot_terms(&doc).cloned();
                 let source = world.m5().fork_source(&doc).cloned();
+                let source_copied = world.m5().fork_source_copied(&doc).cloned();
                 let standing = world.m5().draft_base(&doc);
                 let base = standing.map(|b| b.base.clone());
                 let base_copied = standing.map(|b| b.extent.clone());
@@ -801,6 +805,7 @@ where
                     birth,
                     terms,
                     source,
+                    source_copied,
                     base,
                     base_copied,
                     merge,

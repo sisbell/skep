@@ -24,9 +24,10 @@
 //!   root sections, the hint family names, [`super::shipped_label`]'s
 //!   strings. A trailing component inside an authoritative slice is that
 //!   store's own serde field, and a private one: `map` is M4's,
-//!   `arrangements`, `provenance`, `fork_sources`, `arranged_at` and
-//!   `draft_bases` are M5's (its third and fourth, `birth_extents` and
-//!   `shot_terms`, are kept whole by name and end no path), `links` is M7's.
+//!   `arrangements`, `provenance`, `fork_sources`, `arranged_at`,
+//!   `draft_bases` and `source_copied` are M5's (its third and fourth,
+//!   `birth_extents` and `shot_terms`, are kept whole by name and end no
+//!   path), `links` is M7's.
 //!   So a store author renaming a
 //!   field it never
 //!   published has no reason to look here, and the rename would leave the
@@ -132,10 +133,13 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 /// * `authoritative.arrangement.shot_terms` — kept whole, on the birth
 ///   memo's ground: every key M5's fold writes there is a version member the
 ///   shot minted (signed-ops D25), so a published state every reader class
-///   reads; and what an entry holds — the count the client placed and the
-///   base extent its copy took — is what the member's `doc_metadata` serves
-///   to every reader who may read the member. The same test holds this key
-///   set beside the memo's.
+///   reads; and what an entry holds — the count the client placed, the base
+///   the shot was made against and the extent its copy took (skep #1111) —
+///   is what the member's `doc_metadata` serves to every reader who may read
+///   the member. The base is a member of the same chain or the memberless
+///   document itself, a published state too (PUB-2.10), and an address is
+///   not secret (PUB-1.13). The same test holds this key set beside the
+///   memo's, and every base an entry names readable by the guest.
 /// * `authoritative.arrangement.fork_sources` — the entries keyed by an
 ///   unreadable document leave (the fork-source design record's decision 2
 ///   and its reverse-read polarity). The map is keyed by the fork — the
@@ -167,6 +171,14 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 ///   members are addresses of the same class as the base's with two counts
 ///   beside them, and the draft's readers already hold the base's
 ///   I-addresses through `image`.
+/// * `authoritative.arrangement.source_copied` — the entries keyed by an
+///   unreadable document leave, as the fork sources' do: the map is keyed by
+///   the document a `version` or a `stage` minted, the fork sources' own key
+///   set (skep #1111), so an entry stays exactly where the reader class
+///   reads that document — the test `doc_metadata` serves `source_copied`
+///   under, beside `source`. The value, a count, takes no test of its own:
+///   it is the document's own content count at its mint, which its readers
+///   already hold.
 /// * `authoritative.links.links` — a link homed in an unreadable document
 ///   leaves.
 /// * `publication` — the section reduced per entry to the readable drafts:
@@ -278,6 +290,7 @@ pub(super) fn filter_tree(
     retain_map(&mut root, &["authoritative", "arrangement", "fork_sources"], &keep_serde_form);
     retain_map(&mut root, &["authoritative", "arrangement", "arranged_at"], &keep_serde_form);
     retain_map(&mut root, &["authoritative", "arrangement", "draft_bases"], &keep_serde_form);
+    retain_map(&mut root, &["authoritative", "arrangement", "source_copied"], &keep_serde_form);
     retain_map(&mut root, &["authoritative", "links", "links"], &keep_serde_form);
 
     retain_seq(&mut root, &["publication"], &keep_dotted);

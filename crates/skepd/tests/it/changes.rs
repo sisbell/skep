@@ -647,7 +647,7 @@ fn terms_of(op: &str) -> &'static [&'static str] {
     match op {
         "delegate" => &["new_prefix", "new_id"],
         "make_link" => &["link"],
-        "publish" => &["placed", "base_extent"],
+        "publish" => &["placed", "base_extent", "base"],
         "set_arrangement" => &["base", "merge"],
         _ => &[],
     }

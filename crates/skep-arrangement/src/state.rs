@@ -86,36 +86,40 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///
 /// **The shot terms** (`shot_terms`; signed-ops D25) are the fourth field,
 /// and the one that is journaled per member: for every version member the
-/// shot minted, the two client terms of that shot which nothing else the fold
-/// keeps answers — the count the client placed (Σ width of its runs,
-/// `placed`) and the base's extent the staged copy took (`base_extent`), an
-/// option whose absence is the birth bit — the birth shape's: a first shot
-/// with `base` absent, where the count is `birth_extent(D.1)`; a birth version
-/// minted off its memberless document as its base carries `Some` of the
-/// extent that copy took, and its birth extent counts the tail carried past
-/// it. They ride the shot's own placing record
-/// ([`ShotPlace`](M5Rec::ShotPlace)), so they are hashed into the commit
-/// chain, folded here, carried by every checkpoint, replayed on every replica
-/// and read off the live snapshot by anyone holding the member's address
-/// ([`shot_terms`](M5State::shot_terms)) — which is what a verifier of the
-/// shot's entry signature needs beyond the member's own runs: the signature
-/// binds the runs the client placed in the address form, `placed` says where
-/// they end and the base's carried tail begins, `base_extent` is in the
-/// signed bytes, and `base` itself is derived from the member's address. The
-/// run-list erases the boundary between the client's last run and the carried
-/// tail whenever the two are I-adjacent, so nothing the arrangement holds
+/// shot minted, the three client terms of that shot which nothing else the
+/// fold keeps answers — the count the client placed (Σ width of its runs,
+/// `placed`), the base's extent the staged copy took (`base_extent`) and the
+/// base itself (`base`), the member or memberless document the shot was made
+/// against (skep #1111), two options absent together, their absence the
+/// birth bit — the birth shape's: a first shot with `base` absent, where the
+/// count is `birth_extent(D.1)`; a birth version minted off its memberless
+/// document as its base carries `Some` of that document and of the extent
+/// that copy took, and its birth extent counts the tail carried past it.
+/// They ride the shot's own placing record ([`ShotPlace`](M5Rec::ShotPlace)),
+/// so they are hashed into the commit chain, folded here, carried by every
+/// checkpoint, replayed on every replica and read off the live snapshot by
+/// anyone holding the member's address ([`shot_terms`](M5State::shot_terms))
+/// — which is what a verifier of the shot's entry signature needs beyond the
+/// member's own runs: the signature binds the runs the client placed in the
+/// address form, `placed` says where they end and the base's carried tail
+/// begins, and `base` and `base_extent` are the signed base group. The
+/// member's address does not name its base in every case: a draft begun
+/// from the memberless document `D` and published once `D.1` stands lands as
+/// `D.1`'s daughter `D.1.k`, its base `D` and never `D.1`. The run-list
+/// erases the boundary between the client's last run and the carried tail
+/// whenever the two are I-adjacent, so nothing the arrangement holds
 /// afterwards could re-derive `placed`. Nothing reads them to decide a write.
 ///
 /// **The fork sources** (`fork_sources`; the fork-source design record) are
 /// the fifth field, and the one that is noted off a record already
-/// journaled: for every document a `version` minted — an owned member and a
-/// cross-owner fork alike — the source it was born sharing, the
-/// [`VersionSnapshot`](M5Rec::VersionSnapshot)'s `source`: the reading
-/// surface the op resolved, a version member where the source had a chain,
-/// the bare document otherwise. The record carries the fact and the fold
-/// shares the arrangement it names, but in the journal alone the address
-/// would not survive the reclaim floor. Noted here it is what every other
-/// fact of a member's minting is — carried whole by every checkpoint,
+/// journaled: for every document a `version` or a `stage` minted — an owned
+/// member, a cross-owner fork and a staged draft alike — the source it was
+/// born sharing, the [`VersionSnapshot`](M5Rec::VersionSnapshot)'s `source`:
+/// the reading surface the op resolved, a version member where the source
+/// had a chain, the bare document otherwise. The record carries the fact and
+/// the fold shares the arrangement it names, but in the journal alone the
+/// address would not survive the reclaim floor. Noted here it is what every
+/// other fact of a member's minting is — carried whole by every checkpoint,
 /// answered the same at every position by
 /// [`fork_source`](M5State::fork_source), which the doc-metadata read serves
 /// as `source` to every reader of the fork and a merge takes as a cross-owner
@@ -167,6 +171,23 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// doc-metadata read serves as `base`, `base_copied` and `merge` to every
 /// reader of the draft, the stamps served to none, and state the checkpoint
 /// must carry under the no-default rule, as the two fields before it are.
+///
+/// **The copied counts** (`source_copied`; skep #1111) are the eighth field,
+/// and the one noted beside the fork sources by the same record: for every
+/// document a [`VersionSnapshot`](M5Rec::VersionSnapshot) minted — an owned
+/// member, a cross-owner fork and a staged draft alike — how many content
+/// positions of its source the copy took, the width of the run-list the
+/// fold shares, zero for an empty surface. A source keeps growing after the
+/// copy where it is a trunk's head or a memberless edition, by declared
+/// deposits (PUB-2.66), and once the fork is edited nothing it arranges
+/// says where the copy ended, so the count is noted at the mint, where the
+/// fold reads it. It is the fork's own count at its mint — the share copies
+/// the source's whole content — so it tells the fork's readers nothing of
+/// the source they did not hold (PUB-1.13). Answered by
+/// [`fork_source_copied`](M5State::fork_source_copied), which the
+/// doc-metadata read serves as `source_copied` beside `source`; state the
+/// checkpoint must carry under the no-default rule, as the fields before it
+/// are. Nothing reads them to decide a write.
 ///
 /// **Class invariants**, relating the fields. The reads state what they
 /// answer; these are what makes those answers mean it.
@@ -233,8 +254,11 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   `(placed(m), birth_extent(m)]` (or the count at the mint, for a later
 ///   member) the base's carried tail — and
 ///   [`address_form_of`](M5State::address_form_of) reads that prefix back.
-///   On the decode path, as BIRTH★: carried whole, re-established by no
-///   door.
+///   Its `base` and `base_extent` are the shot's own `base` — the member
+///   and the extent the request named, set together by the one constructor
+///   off it, so both are `None` exactly in the birth shape — and never a
+///   reading of `m`'s address. On the decode path, as BIRTH★: carried
+///   whole, re-established by no door.
 /// * **SOURCE★ — a document's fork source is the source of the `version`
 ///   that minted it, noted once and never moved.** `fork_sources` gains
 ///   `new`'s entry at `new`'s own [`VersionSnapshot`](M5Rec::VersionSnapshot)
@@ -249,11 +273,18 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   `version` minted — an owned member and a cross-owner fork alike — and
 ///   `None` for every other address: a trunk no `version` minted, a shot
 ///   member, a `fork`-minted or created document. A fork of a fork answers
-///   its own source and no further: one hop, the fact as journaled. On the
-///   decode path, as BIRTH★: carried whole, re-established by no door — and
-///   a checkpoint written without the field fails to decode rather than
-///   answering `None` for a fork, the map carrying no default (the engine's
-///   World door states the rule).
+///   its own source and no further: one hop, the fact as journaled. The
+///   count the copy took is noted with the source, by the same record and
+///   on the same two branches: `source_copied` gains `new`'s entry beside
+///   `fork_sources`' — the width of the run-list the record shares, zero for
+///   an empty surface — and no other record writes or moves it, so a later
+///   deposit into the source grows the source and leaves the count where
+///   the copy ended, and [`fork_source_copied`](M5State::fork_source_copied)
+///   answers `Some` exactly where `fork_source` does. On the decode path,
+///   as BIRTH★: carried whole, re-established by no door — and a checkpoint
+///   written without either field fails to decode rather than answering
+///   `None` for a fork, neither map carrying a default (the engine's World
+///   door states the rule).
 /// * **MOVED★ — a document's arranged-at position is the position of the
 ///   last record that changed its content arrangement.** `arranged_at` gains
 ///   or moves `doc`'s entry at every [`ContentPlace`](M5Rec::ContentPlace),
@@ -370,10 +401,11 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct M5State {
     // Private but for `provenance`, which the reads R answers reach, and
-    // `fork_sources` and `draft_bases` (below): only this module builds an
-    // `M5State` — a default, a decoded checkpoint, or the fold's output —
-    // and every other module reaches the arrangement map through
-    // `arrangement_of` (ARCHITECTURE.md §The arrangement, "One fold").
+    // `fork_sources`, `draft_bases` and `source_copied` (below): only this
+    // module builds an `M5State` — a default, a decoded checkpoint, or the
+    // fold's output — and every other module reaches the arrangement map
+    // through `arrangement_of` (ARCHITECTURE.md §The arrangement, "One
+    // fold").
     // Each map decodes entry by entry (`decode`), never through `im`'s own
     // visitor, which reserves room for the count a checkpoint body declares;
     // `provenance` and each document's run-lists decode the same way, behind
@@ -404,12 +436,20 @@ pub struct M5State {
     arranged_at: im::OrdMap<Address, Seq>,
     // Each draft the staging operation made → its base, the extent the copy
     // took and its source (BASE★). `pub(crate)` for the one read `reads.rs`
-    // holds; written by the fold alone. Appended last, after `arranged_at`,
-    // under the same no-default rule: a checkpoint written without this
-    // field must fail to decode and hand the open to the journal, which
-    // recomputes the map — never decode as "no base" for every staged draft.
+    // holds; written by the fold alone. Appended after `arranged_at`, under
+    // the same no-default rule: a checkpoint written without this field
+    // must fail to decode and hand the open to the journal, which recomputes
+    // the map — never decode as "no base" for every staged draft.
     #[serde(deserialize_with = "entry_by_entry")]
     pub(crate) draft_bases: im::OrdMap<Address, DraftBase>,
+    // Each document a `VersionSnapshot` minted → the count of its source the
+    // copy took (SOURCE★). `pub(crate)` for the one read `reads.rs` holds;
+    // written by the fold alone. Appended last, after `draft_bases`, under
+    // the same no-default rule: a checkpoint written without this field
+    // must fail to decode and hand the open to the journal, which recomputes
+    // the map — never decode as "no count" for every fork.
+    #[serde(deserialize_with = "entry_by_entry")]
+    pub(crate) source_copied: im::OrdMap<Address, Nat>,
 }
 
 /// Where a staged draft began and where its next publication lands (B3-S10),
@@ -560,13 +600,14 @@ impl Merge {
     }
 }
 
-/// The shot's two client terms, per member the shot minted (signed-ops D25).
+/// The shot's three client terms, per member the shot minted.
 ///
-/// They are what a verifier of the member's entry signature needs beside the
-/// member's own runs and address, and what nothing the arrangement holds
-/// afterwards re-derives. Journaled in the shot's placing record
-/// ([`M5Rec::ShotPlace`]), folded into [`M5State`]'s `shot_terms`, read by
-/// [`M5State::shot_terms`].
+/// They are signed-ops D25's terms: what a verifier of the member's entry
+/// signature needs beside the member's own runs, and what nothing the
+/// arrangement holds afterwards re-derives. Journaled in the shot's placing record ([`M5Rec::ShotPlace`]),
+/// folded into [`M5State`]'s `shot_terms`, read by [`M5State::shot_terms`].
+/// `base` and `base_extent` are set together off the shot's own `base`, so
+/// both are `None` exactly in the birth shape (TERMS★ on [`M5State`]).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShotTerms {
     /// The positions the client placed: Σ width of the shot's runs.
@@ -586,6 +627,16 @@ pub struct ShotTerms {
     /// copy took, and a `placed` short of its birth extent by the tail it
     /// carried.
     pub base_extent: Option<Nat>,
+    /// The member or memberless document the shot was made against.
+    ///
+    /// It is `None` in the birth shape. It is the shot's own `base` member,
+    /// in its signed body beside `base_extent` (skep #1111): the base the
+    /// staged copy was taken from, whose positions past `base_extent` the
+    /// shot carried. It is the recorded base, which the member's address
+    /// does not always name: a draft begun from the memberless document `D`
+    /// and published once a member stands lands as the first member's
+    /// daughter `D.1.k`, and its base is `D`.
+    pub base: Option<Address>,
 }
 
 /// M5's sole journal delta, effect-level (Conflicts #4).
@@ -643,9 +694,14 @@ pub struct ShotTerms {
 ///
 /// It grows at its end only: the journal writes a variant as its index and
 /// its fields in order, with no framing (bincode), so a new variant is
-/// appended after the last and no variant or field is ever inserted or
-/// reordered — what keeps every record already journaled decoding as it was
-/// written (ARCHITECTURE.md's rule for this slice's format).
+/// appended after the last and no variant is ever inserted or reordered —
+/// what keeps every other variant's records journaled decoding as they were
+/// written (ARCHITECTURE.md's rule for this slice's format). A change to a
+/// variant's own fields, or to a type one holds — [`ShotTerms`] beneath
+/// `ShotPlace` — is a format change to that variant: each of its records
+/// journaled before it fails to decode, and the kernel's replay refuses the
+/// record rather than misreading it, a change the owner's no-stamp ruling
+/// admits while no served board exists (the engine's `FormatStamp` card).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum M5Rec {
@@ -691,11 +747,12 @@ pub enum M5Rec {
     ///
     /// **`source` is a fact the record must keep**, whatever form it takes
     /// (the fork-source design record, decision 9): the fold notes
-    /// `new → source` in `fork_sources` (SOURCE★), and that map is the one
-    /// place the fact survives the reclaim floor. The explicit-runs migration
-    /// of Open decision #4 carries the runs beside `source`, never in place of
-    /// it — a record that named the runs alone would leave every fork minted
-    /// after it answering no source.
+    /// `new → source` in `fork_sources` (SOURCE★), beside the count it shares
+    /// in `source_copied` — read at the fold, as the share is — and those
+    /// maps are the one place the facts survive the reclaim floor. The
+    /// explicit-runs migration of Open decision #4 carries the runs beside
+    /// `source`, never in place of it — a record that named the runs alone
+    /// would leave every fork minted after it answering no source.
     #[non_exhaustive]
     VersionSnapshot { source: Address, new: Address },
     /// The publish shot's placing record (PUB-2.33; signed-ops D25).
@@ -703,10 +760,12 @@ pub enum M5Rec {
     /// It carries the member's whole arrangement `runs` — the client's runs
     /// in order, the draft-native ones re-inserted, then the base's carried
     /// tail — spliced at content ordinal 1 + R-append (J1★), as `ContentPlace`
-    /// at ordinal 1 would; and the shot's [`ShotTerms`] — the two client facts
-    /// the arrangement cannot keep, `terms.placed` counting the client's
-    /// positions alone and so short of `runs`' Σ width by the carried tail's —
-    /// which the fold notes for the member. Pushed for every member the shot
+    /// at ordinal 1 would; and the shot's [`ShotTerms`] — the three client
+    /// facts the arrangement cannot keep, `terms.placed` counting the
+    /// client's positions alone and so short of `runs`' Σ width by the
+    /// carried tail's, `terms.base` and `terms.base_extent` the base the
+    /// request named and the extent its copy took — which the fold notes for
+    /// the member. Pushed for every member the shot
     /// mints, an empty placement included: the terms exist whatever the
     /// placement holds, and a birth version born empty is noted at its birth,
     /// zero, by this record (BIRTH★).
@@ -766,7 +825,8 @@ impl M5State {
     ///
     /// That is `{}` arrangements, `{}` provenance, `{}` birth extents, `{}`
     /// shot terms, `{}` fork sources, `{}` arranged-at positions, `{}` draft
-    /// bases. Deterministic, per M2's byte-identical-genesis caller contract.
+    /// bases, `{}` copied counts. Deterministic, per M2's
+    /// byte-identical-genesis caller contract.
     pub fn genesis() -> M5State {
         M5State::default()
     }
@@ -896,13 +956,14 @@ impl M5State {
 
     /// Returns the shot terms of `member`: those of the shot that minted it.
     ///
-    /// They are the two client terms ([`ShotTerms`]: `placed`,
-    /// `base_extent`), which the doc-metadata read serves beside the birth
-    /// version and a verifier of the member's entry signature composes its
-    /// body from — or `None` for a member no shot's record names: a member an
-    /// owned `version` minted, and every address that is no version member.
-    /// Answers the address named — a trunk document answers `None`, never its
-    /// head's — and reads no run. One map lookup.
+    /// They are the three client terms ([`ShotTerms`]: `placed`,
+    /// `base_extent`, `base`), which the doc-metadata read serves beside the
+    /// birth version and a verifier of the member's entry signature composes
+    /// its body from — the base the shot recorded, never one read off the
+    /// member's address — or `None` for a member no shot's record names: a
+    /// member an owned `version` minted, and every address that is no version
+    /// member. Answers the address named — a trunk document answers `None`,
+    /// never its head's — and reads no run. One map lookup.
     pub fn shot_terms(&self, member: &Address) -> Option<&ShotTerms> {
         self.shot_terms.get(member)
     }
@@ -983,6 +1044,7 @@ impl M5State {
                 fork_sources: self.fork_sources.clone(),
                 arranged_at: moved(doc),
                 draft_bases: self.draft_bases.clone(),
+                source_copied: self.source_copied.clone(),
             },
             // The shot's placement (signed-ops D25): `ContentPlace` at
             // ordinal 1 — the same splice, the same R-append — and the
@@ -1046,6 +1108,7 @@ impl M5State {
                         fork_sources: self.fork_sources.clone(),
                         arranged_at,
                         draft_bases,
+                        source_copied: self.source_copied.clone(),
                     }
                 } else {
                     M5State {
@@ -1056,6 +1119,7 @@ impl M5State {
                         fork_sources: self.fork_sources.clone(),
                         arranged_at,
                         draft_bases,
+                        source_copied: self.source_copied.clone(),
                     }
                 }
             }
@@ -1071,6 +1135,7 @@ impl M5State {
                 fork_sources: self.fork_sources.clone(),
                 arranged_at: moved(doc),
                 draft_bases: self.draft_bases.clone(),
+                source_copied: self.source_copied.clone(),
             },
             // §6 fold: split at cut ordinals, tile by placement. Pure
             // permutation — C, L, R untouched (ASN-0119 RA1/RA6).
@@ -1082,6 +1147,7 @@ impl M5State {
                 fork_sources: self.fork_sources.clone(),
                 arranged_at: moved(doc),
                 draft_bases: self.draft_bases.clone(),
+                source_copied: self.source_copied.clone(),
             },
             // §8 fold: append `link` after the link subspace's arranged
             // positions, coalescing with the prior link run if I-adjacent
@@ -1113,6 +1179,7 @@ impl M5State {
                 fork_sources: self.fork_sources.clone(),
                 arranged_at: self.arranged_at.clone(),
                 draft_bases: self.draft_bases.clone(),
+                source_copied: self.source_copied.clone(),
             },
             // §7 fold: share `source`'s then-current content run-list into
             // `new` (structural im share — O(1)) and append each shared run
@@ -1160,7 +1227,11 @@ impl M5State {
             // surface shares nothing and is a source all the same — and this
             // record is the one that says so. The entry is `new → source` as
             // the record carries it: the surface the op resolved, a member or
-            // a bare document, and never a reading of it made here.
+            // a bare document, and never a reading of it made here. Beside it
+            // the count the copy took, on both branches too: the width of the
+            // list shared, zero for an empty surface, summed once here and
+            // read by the birth extent as well — a walk of the runs the
+            // R-append below already pays one span apiece for.
             //
             // The arranged-at entry is noted for `new` on both branches too
             // (MOVED★): the mint is the first change to the arrangement `new`
@@ -1169,8 +1240,10 @@ impl M5State {
             // untouched (V3).
             M5Rec::VersionSnapshot { source, new } => {
                 let content = self.content_list(source).clone();
-                let birth_extents = self.birth_extents_noting(new, || content.total_width());
+                let copied = content.total_width();
+                let birth_extents = self.birth_extents_noting(new, || copied.clone());
                 let fork_sources = self.fork_sources.update(new.clone(), source.clone());
+                let source_copied = self.source_copied.update(new.clone(), copied);
                 let arranged_at = moved(new);
                 if content.is_empty() {
                     M5State {
@@ -1181,6 +1254,7 @@ impl M5State {
                         fork_sources,
                         arranged_at,
                         draft_bases: self.draft_bases.clone(),
+                        source_copied,
                     }
                 } else {
                     let provenance = self.provenance.append(new, content.iter());
@@ -1196,6 +1270,7 @@ impl M5State {
                         fork_sources,
                         arranged_at,
                         draft_bases: self.draft_bases.clone(),
+                        source_copied,
                     }
                 }
             }
@@ -1232,6 +1307,7 @@ impl M5State {
                             stamped,
                         },
                     ),
+                    source_copied: self.source_copied.clone(),
                 }
             }
             // The restore record (BASE★; skep #870): the draft's entry
@@ -1257,6 +1333,7 @@ impl M5State {
                         stamped: self.stamped_on(draft),
                     },
                 ),
+                source_copied: self.source_copied.clone(),
             },
         }
     }

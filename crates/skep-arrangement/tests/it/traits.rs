@@ -48,10 +48,23 @@ fn the_public_values_key_a_hash_set_by_the_equality_they_compare_on() {
         ShotTerms {
             placed: n(2),
             base_extent: None,
+            base: None,
         },
         ShotTerms {
             placed: n(2),
             base_extent: Some(n(0)),
+            base: Some(pdoc()),
+        },
+    );
+    // So is the base itself: one extent off two bases is two terms — the
+    // memberless document and its first member, which a daughter's address
+    // alone does not tell apart.
+    one_and_another(
+        ShotTerms { placed: n(2), base_extent: Some(n(0)), base: Some(pdoc()) },
+        ShotTerms {
+            placed: n(2),
+            base_extent: Some(n(0)),
+            base: Some(a(&[1, 0, 1, 0, nth_doc(3), 1])),
         },
     );
     // A segment run is its class AND its run: one run in two classes keys

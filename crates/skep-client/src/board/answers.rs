@@ -683,14 +683,15 @@ pub(crate) fn withheld_origin(v: &Value) -> Option<&str> {
 /// A `doc_metadata` answer's terms (wire.md §The response envelope).
 ///
 /// They are the publication bit, the owner account, the shot terms a
-/// member carries — `placed`, the positions the client's runs cover, and
-/// `base_extent` — `source`, the address a `version`- or `stage`-minted
-/// document was born sharing (the member or bare document its snapshot
-/// took), a staged draft's recorded base — `base`, the member or bare
-/// document its next publication lands after, and `base_copied`, the
-/// extent the copy took of it (the staging act, B3-S10) — and the merge
-/// marker beside the base, `merge` — each `None` where the address carries
-/// none.
+/// member carries — `placed`, the positions the client's runs cover,
+/// `base_extent`, and `shot_base`, the base the shot recorded (skep #1111)
+/// — `source`, the address a `version`- or `stage`-minted document was born
+/// sharing (the member or bare document its snapshot took), with
+/// `source_copied`, the count of it the copy took, a staged draft's
+/// recorded base — `base`, the member or bare document its next publication
+/// lands after, and `base_copied`, the extent the copy took of it (the
+/// staging act, B3-S10) — and the merge marker beside the base, `merge` —
+/// each `None` where the address carries none.
 #[cfg_attr(not(feature = "acting"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Metadata {
@@ -698,7 +699,18 @@ pub(crate) struct Metadata {
     pub(crate) owner: String,
     pub(crate) placed: Option<u64>,
     pub(crate) base_extent: Option<u64>,
+    /// The base recorded for the shot that minted the address named.
+    ///
+    /// It is the member or memberless document the request named, which a
+    /// daughter's address does not always name; `None` in the birth shape
+    /// and where no shot minted the address.
+    pub(crate) shot_base: Option<String>,
     pub(crate) source: Option<String>,
+    /// Beside `source`, the count of it the copy took at the mint.
+    ///
+    /// It stays fixed however the source has grown since; `None` exactly
+    /// where `source` is.
+    pub(crate) source_copied: Option<u64>,
     /// The draft base the board records for the address named: the member
     /// or bare document its next publication lands after, moved by each
     /// publication the draft renders and by each `set_arrangement` naming a
@@ -785,10 +797,10 @@ fn marker_of(v: &Value) -> Option<MergeMarker> {
 /// Decodes a `doc_metadata` answer.
 ///
 /// `None` for a document that is no such answer — a rejection among them —
-/// or one without its owner or its `published` bit. A `source` or a `base`
-/// that is neither a string nor absent reads as absent: the merge checks the
-/// address it names itself. A `merge` that is no object naming its head
-/// reads as absent too ([`merge_marker`]).
+/// or one without its owner or its `published` bit. A `source`, a
+/// `shot_base` or a `base` that is neither a string nor absent reads as
+/// absent: the merge checks the address it names itself. A `merge` that is
+/// no object naming its head reads as absent too ([`merge_marker`]).
 #[cfg_attr(not(feature = "acting"), allow(dead_code))]
 pub(crate) fn metadata(v: &Value) -> Option<Metadata> {
     if v["resp"].as_str() != Some("doc_metadata") {
@@ -800,7 +812,9 @@ pub(crate) fn metadata(v: &Value) -> Option<Metadata> {
         owner: v["owner"].as_str()?.to_string(),
         placed: count("placed"),
         base_extent: count("base_extent"),
+        shot_base: v["shot_base"].as_str().map(str::to_string),
         source: v["source"].as_str().map(str::to_string),
+        source_copied: count("source_copied"),
         base: v["base"].as_str().map(str::to_string),
         base_copied: count("base_copied"),
         merge: marker_of(v),
@@ -1046,14 +1060,22 @@ mod tests {
         let claims = edition_claims(&json!({"as_of":9,"claims":[{"active":true,"claim":"1.0.1.0.67.0.2.1","home":"1.0.1.0.67","to":[{"start":"1.0.1.0.1","width":"0.0.0.0.1"}]}],"resp":"edition_claims"}));
         assert_eq!(claims, vec![EditionClaim { claim: "1.0.1.0.67.0.2.1".into(), home: "1.0.1.0.67".into(), to: vec![LinkSpan { start: "1.0.1.0.1".into(), width: "0.0.0.0.1".into() }], active: true }]);
         assert!(claims[0].to[0].is_unit(), "a unit span at the document");
-        // `<!-- wire: response doc_metadata -->`: the member's own mint at 7.
-        let meta = metadata(&json!({"as_of":9,"at":7,"base":null,"base_copied":null,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","source":null,"time":1786838400047u64,"time_from":"feed"})).expect("a doc_metadata answer");
+        // `<!-- wire: response doc_metadata -->`: the member's own mint at 7,
+        // its shot made against the memberless document.
+        let meta = metadata(&json!({"as_of":9,"at":7,"base":null,"base_copied":null,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","shot_base":"1.0.1.0.1","source":null,"source_copied":null,"time":1786838400047u64,"time_from":"feed"})).expect("a doc_metadata answer");
         assert_eq!((meta.at, meta.placed, meta.base_extent, meta.published, meta.owner.as_str()), (Some(7), Some(5), Some(3), true, "1.0.1"));
-        assert_eq!((meta.base, meta.base_copied, meta.source), (None, None, None), "a member records no base");
+        assert_eq!(meta.shot_base.as_deref(), Some("1.0.1.0.1"), "the shot's recorded base");
+        assert_eq!(
+            (meta.base, meta.base_copied, meta.source, meta.source_copied),
+            (None, None, None, None),
+            "a member records no base"
+        );
         // `<!-- wire: response doc_metadata_unborn -->`: a staged draft, its
-        // base the member copied and `base_copied` what the copy took.
-        let staged = metadata(&json!({"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":1786838400052u64,"time_from":"anchor"})).expect("a doc_metadata answer");
+        // base the member copied and `base_copied` what the copy took, its
+        // `source_copied` the same five.
+        let staged = metadata(&json!({"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":1786838400052u64,"time_from":"anchor"})).expect("a doc_metadata answer");
         assert_eq!((staged.base.as_deref(), staged.base_copied, staged.source.as_deref(), staged.placed), (Some("1.0.1.0.1.1"), Some(5), Some("1.0.1.0.1.1"), None));
+        assert_eq!((staged.source_copied, staged.shot_base), (Some(5), None), "the copy's count; no shot minted it");
         // `<!-- wire: response line_numbers -->` and `line_numbers_masked`:
         // a line, a start beside a line that names none, the count.
         let numbered = |masked: bool| json!({"as_of":9,"count":{"masked":masked,"n":"2"},"lines":[{"masked":masked,"start":{"ordinal":"3","subspace":"1"}},null],"positions":[{"line":"2","masked":masked}],"resp":"line_numbers"});

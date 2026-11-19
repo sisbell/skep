@@ -356,14 +356,19 @@ fn fixture(name: &str) -> Response {
         // (PUB-8.12), asked of the birth version `D.1` itself, which the shot
         // minted from the memberless document taken at three positions,
         // placing five: its shot terms beside the document's state (D25's
-        // (c′)).
+        // (c′)), the base its shot recorded that document.
         "doc_metadata" => Response::DocMetadata {
             doc: a(&[1, 0, 1, 0, 1]),
             published: true,
             owner: Some(a(&[1, 0, 1])),
             birth: Some(BirthVersion { addr: a(&[1, 0, 1, 0, 1, 1]), extent: n(5) }),
-            terms: Some(ShotTerms { placed: n(5), base_extent: Some(n(3)) }),
+            terms: Some(ShotTerms {
+                placed: n(5),
+                base_extent: Some(n(3)),
+                base: Some(a(&[1, 0, 1, 0, 1])),
+            }),
             source: None,
+            source_copied: None,
             base: None,
             base_copied: None,
             merge: None,
@@ -373,8 +378,8 @@ fn fixture(name: &str) -> Response {
         },
         // A private draft the staging act minted off the birth version above
         // (B3-S10): no chain member and no shot terms, its `source` the member
-        // copied, its `base` that member and `base_copied` the five positions
-        // the copy took.
+        // copied and `source_copied` the five positions the copy took, its
+        // `base` that member and `base_copied` the same five.
         "doc_metadata_unborn" => Response::DocMetadata {
             doc: a(&[1, 0, 1, 0, 64]),
             published: false,
@@ -382,6 +387,7 @@ fn fixture(name: &str) -> Response {
             birth: None,
             terms: None,
             source: Some(a(&[1, 0, 1, 0, 1, 1])),
+            source_copied: Some(n(5)),
             base: Some(a(&[1, 0, 1, 0, 1, 1])),
             base_copied: Some(n(5)),
             merge: None,
@@ -391,10 +397,10 @@ fn fixture(name: &str) -> Response {
         },
         // A cross-owner FORK (the fork-source design record's arm A): a
         // private document of another account, minted by `version` off the
-        // member `1.0.1.0.1.1`, which it was born sharing — its `source`. Its
-        // own chain has no member and no shot minted it, so the other
-        // per-member facts are null — the base among them: a `version`
-        // records none.
+        // member `1.0.1.0.1.1`, which it was born sharing — its `source`, the
+        // five positions its copy took its `source_copied`. Its own chain has
+        // no member and no shot minted it, so the other per-member facts are
+        // null — the base among them: a `version` records none.
         "doc_metadata_fork" => Response::DocMetadata {
             doc: a(&[1, 0, 2, 0, 1]),
             published: false,
@@ -402,6 +408,7 @@ fn fixture(name: &str) -> Response {
             birth: None,
             terms: None,
             source: Some(a(&[1, 0, 1, 0, 1, 1])),
+            source_copied: Some(n(5)),
             base: None,
             base_copied: None,
             merge: None,
@@ -413,7 +420,7 @@ fn fixture(name: &str) -> Response {
         // skep #764): a `set_arrangement` composed on version 2 at six
         // positions moved its base there and put the marker beside it — the
         // one side merged, the head at the extent read, the landing's
-        // position.
+        // position — its `source_copied` the five its stage copied.
         "doc_metadata_marked" => Response::DocMetadata {
             doc: a(&[1, 0, 1, 0, 64]),
             published: false,
@@ -421,6 +428,7 @@ fn fixture(name: &str) -> Response {
             birth: None,
             terms: None,
             source: Some(a(&[1, 0, 1, 0, 1, 1])),
+            source_copied: Some(n(5)),
             base: Some(a(&[1, 0, 1, 0, 1, 2])),
             base_copied: Some(n(6)),
             merge: Some(Marker {

@@ -78,9 +78,10 @@ pub const PLACED_RUN_BYTES: u64 = 104;
 /// (`REINSERTED_VALUE_BYTES`).
 pub const REINSERTED_VALUE_BYTES: u64 = 287;
 /// The bytes the shot stages whatever it places (`SHOT_BYTES`), its
-/// rendering-draft slot empty; a shot naming its draft stores the draft's
-/// address in that slot beside them, `stored_tumbler_bytes` of it.
-pub const SHOT_BYTES: u64 = 271;
+/// rendering-draft slot empty; a shot naming a base stores the base's
+/// address in its terms beside them, and one naming its draft the draft's
+/// address in that slot, each `stored_tumbler_bytes` of it.
+pub const SHOT_BYTES: u64 = 272;
 /// The bytes the mint form adds (`EDITION_MINT_BYTES`).
 pub const EDITION_MINT_BYTES: u64 = 109;
 /// The bytes the edition claim stages (`EDITION_CLAIM_BYTES`).
@@ -160,6 +161,11 @@ pub struct Shape<'a> {
     /// `stored_tumbler_bytes` of it; `None` at a shot naming none, and at one
     /// keeping the draft's base (`keep_base`), whose record names none.
     pub draft: Option<&'a Address>,
+    /// The base member the request names, if it names one.
+    ///
+    /// The placing record's terms store its address (skep #1111), priced at
+    /// `stored_tumbler_bytes` of it; `None` at the birth shape.
+    pub base: Option<&'a Address>,
     /// The term the request's addresses are minted under — the trunk at the
     /// document form, the account at the mint form.
     pub term: &'a Address,
@@ -362,6 +368,9 @@ pub fn price(shape: &Shape<'_>) -> Price {
 
     // The staged bytes, the daemon's `price_staged_bytes` term by term.
     let mut bytes = SHOT_BYTES;
+    if let Some(base) = shape.base {
+        bytes = bytes.saturating_add(stored_tumbler_bytes(&comps(&base.to_string())));
+    }
     if let Some(draft) = shape.draft {
         bytes = bytes.saturating_add(stored_tumbler_bytes(&comps(&draft.to_string())));
     }

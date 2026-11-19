@@ -374,14 +374,17 @@ fn the_birth_extent_of_a_shot_born_version_counts_its_whole_placement_and_no_lat
         assert_eq!(m5.content_count(&member), n(5));
         assert_eq!(m5.birth_extent(&member), Some(&n(5)), "born with all five");
         // Minted off its memberless document as its base, the birth version
-        // carries that base's extent — the birth bit is the birth SHAPE's,
-        // not every birth version's — and a `placed` short of its birth
-        // extent by the tail it carried.
+        // carries that base and its extent — the birth bit is the birth
+        // SHAPE's, not every birth version's — and a `placed` short of its
+        // birth extent by the tail it carried. The base recorded is the
+        // document the request named, which the member's address `D.1`
+        // does not spell.
         assert_eq!(
             m5.shot_terms(&member),
             Some(&ShotTerms {
                 placed: n(4),
                 base_extent: Some(n(3)),
+                base: Some(pdoc()),
             }),
             "the client placed four; the fifth is the carried deposit"
         );
@@ -406,7 +409,7 @@ fn a_birth_version_the_shot_minted_empty_is_noted_at_zero_and_carries_its_terms(
     // holds — so a birth version born empty is noted at zero by its own
     // mint, and its first deposit, which notes nothing, grows the count
     // alone. The terms are read off the member: the count zero, and no base
-    // extent — the birth bit.
+    // and no base extent — the birth bit.
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let (member, _) = vs
@@ -423,7 +426,7 @@ fn a_birth_version_the_shot_minted_empty_is_noted_at_zero_and_carries_its_terms(
         assert_eq!(s.world().m5().birth_extent(&member), Some(&n(0)), "noted at zero by the mint");
         assert_eq!(
             s.world().m5().shot_terms(&member),
-            Some(&ShotTerms { placed: n(0), base_extent: None }),
+            Some(&ShotTerms { placed: n(0), base_extent: None, base: None }),
             "the terms: nothing placed, no base — the birth bit"
         );
     }
@@ -450,7 +453,8 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
     // erases: two I-ADJACENT WINDOWS the placement merges into one, and the
     // base's CARRIED TAIL merged into the client's last own-origin run, which
     // the member side CLIPS back at `placed`. And the terms the member carries
-    // are the request's: `placed` the runs' Σ width, `base_extent` the base's.
+    // are the request's: `placed` the runs' Σ width, `base` and `base_extent`
+    // the base's.
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
     insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
@@ -485,7 +489,7 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
     let s = k.snapshot();
     let (m5, content) = (s.world().m5(), s.world().content());
     let terms = m5.shot_terms(&member).expect("the shot's member carries its terms");
-    assert_eq!(*terms, ShotTerms { placed: n(5), base_extent: Some(n(2)) });
+    assert_eq!(*terms, ShotTerms { placed: n(5), base_extent: Some(n(2)), base: Some(pdoc()) });
     // The member: [doc2 d e][pdoc a′ (fresh)][pdoc a b c] — the tail merged
     // into the last own run, so three runs where the client named four.
     assert_eq!(m5.content_run_count(&member), 3);
@@ -1053,7 +1057,8 @@ fn the_address_forms_agree_as_the_body_spells_them_over_every_short_shot() {
                 m5.shot_terms(&member),
                 Some(&ShotTerms {
                     placed: n(placed),
-                    base_extent: Some(n(extent))
+                    base_extent: Some(n(extent)),
+                    base: Some(base_member.clone()),
                 }),
                 "{label}"
             );

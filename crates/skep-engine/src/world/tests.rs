@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use skep_address::validate;
-use skep_arrangement::{AsOf, Base, DraftBase, SetArrangement, SetMerge};
+use skep_arrangement::{AsOf, Base, DraftBase, SetArrangement, SetMerge, Shot, ShotTerms};
 use skep_content::Val;
 use skep_links::{Caller, SlotArg};
 
@@ -48,7 +48,7 @@ fn the_world_serializes_its_slices_in_declaration_order() {
 /// Each slice's own checkpoint layout, at its TOP LEVEL, pinned to the
 /// World format count that names it. A slice's layout is a World layout
 /// ([`FormatStamp`]), and the author who changes one is a store's, with
-/// no edge to this file: count 1 names eleven layouts because slices grew
+/// no edge to this file: count 1 names thirteen layouts because slices grew
 /// fields under it. This pin is where such a change meets the count — a
 /// field appended, removed, renamed or reordered on any slice fails here,
 /// and the failure says what it owes. The count is asserted beside the
@@ -58,7 +58,7 @@ fn the_world_serializes_its_slices_in_declaration_order() {
 /// moves the World's bytes with every name here unchanged. A store that
 /// pins its slice's bytes whole meets that change in its own suite — M4's
 /// `the_slice_serializes_as_its_map_alone_in_tumbler_order` and M5's
-/// `the_slice_serializes_as_its_seven_maps_down_to_each_entry_s_fields`,
+/// `the_slice_serializes_as_its_eight_maps_down_to_each_entry_s_fields`,
 /// each message naming the same debt, and `skep-identity`'s checkpoint
 /// encodings (AUTH-1.40) — and M3's and M7's nested forms are held by M2's
 /// golden where its fixture's ops reach them. Nor is the
@@ -90,13 +90,25 @@ fn each_slice_serializes_the_fields_the_format_count_names() {
         // regenerate), so the count above did not move with it — its
         // sixth, `arranged_at`, the position each document's content
         // arrangement last changed at (skep #442), under the same ruling
-        // renewed once more — and its seventh, `draft_bases`, each staged
+        // renewed once more — its seventh, `draft_bases`, each staged
         // draft's base, the extent its copy took and its source (the
-        // staging act, B3-S10), under the same ruling renewed again.
+        // staging act, B3-S10), under the same ruling renewed again — and
+        // its eighth, `source_copied`, each forked or staged document's
+        // count of its source the copy took (skep #1111), under the same
+        // ruling once more.
         (
             "arrangement",
             field_names(&world.arrangement),
-            &["arrangements", "provenance", "birth_extents", "shot_terms", "fork_sources", "arranged_at", "draft_bases"],
+            &[
+                "arrangements",
+                "provenance",
+                "birth_extents",
+                "shot_terms",
+                "fork_sources",
+                "arranged_at",
+                "draft_bases",
+                "source_copied",
+            ],
         ),
         ("links", field_names(&world.links), &["links"]),
         // AUTH-1.40's compatibility surface, at the World: the slice's two
@@ -464,14 +476,15 @@ fn links_in_a_draft_named(shapes: &[(bool, bool)]) -> (World, Address) {
 }
 
 /// `world`'s bytes as a build from before M5's birth memo wrote them: the
-/// stamp, then each store slice's, with M5's cut short of its five trailing
+/// stamp, then each store slice's, with M5's cut short of its six trailing
 /// maps — the memo, after it the shot terms that joined the slice with D25's
 /// (c′), after those the fork sources that joined it with the fork-source
 /// record's arm A, after those the arranged-at positions that joined it
-/// with the stale-edit check (skep #442), and after those the draft bases
-/// that joined it with the staging act (B3-S10)
+/// with the stale-edit check (skep #442), after those the draft bases that
+/// joined it with the staging act (B3-S10), and after those the copied
+/// counts that joined it with the recorded base (skep #1111)
 /// (`each_slice_serializes_the_fields_the_format_count_names`), all EMPTY
-/// in every world handed here, so the five eight-byte zero lengths that
+/// in every world handed here, so the six eight-byte zero lengths that
 /// end M5's bytes — and no identity slice, which no build of that age wrote
 /// either. Checked rather than assumed: each length is read off the slice's
 /// serde form, and the same parts kept whole, with the identity slice after
@@ -480,7 +493,14 @@ fn written_before_the_birth_memo(world: &World) -> Vec<u8> {
     let SerdeTree::Map(fields) = to_tree(&world.arrangement) else {
         panic!("M5State serializes as a struct — a map of its fields")
     };
-    for trailing in ["birth_extents", "shot_terms", "fork_sources", "arranged_at", "draft_bases"] {
+    for trailing in [
+        "birth_extents",
+        "shot_terms",
+        "fork_sources",
+        "arranged_at",
+        "draft_bases",
+        "source_copied",
+    ] {
         let field = fields.iter().find_map(|(name, value)| match name {
             SerdeTree::Str(s) if s.as_str() == trailing => Some(value),
             _ => None,
@@ -510,15 +530,16 @@ fn written_before_the_birth_memo(world: &World) -> Vec<u8> {
         "a World's bytes are the stamp, then each store slice's, then the identity slice"
     );
     assert!(
-        arrangement_bytes.ends_with(&[0u8; 40]),
+        arrangement_bytes.ends_with(&[0u8; 48]),
         "the empty memo's, the empty shot terms', the empty fork sources', the empty \
-         arranged-at positions' and the empty draft bases' zero lengths end M5's bytes"
+         arranged-at positions', the empty draft bases' and the empty copied counts' zero \
+         lengths end M5's bytes"
     );
     [
         stamp.as_slice(),
         namespace_bytes.as_slice(),
         content_bytes.as_slice(),
-        &arrangement_bytes[..arrangement_bytes.len() - 40],
+        &arrangement_bytes[..arrangement_bytes.len() - 48],
         links_bytes.as_slice(),
     ]
     .concat()
@@ -711,21 +732,37 @@ fn staged_drafts(landed: &[bool], links: u32) -> (World, Vec<Address>) {
 
 /// Returns `world`'s bytes as a build before the marker stamps wrote them.
 ///
-/// Each draft-base entry is written without its stamps, the rest as this
-/// build writes it. The entries' bytes are hand-built from the public read,
-/// one per draft in `drafts`, in address order — a `Vec` of pairs encoding
-/// exactly as the map does — and pinned against the slice's own bytes first,
-/// so the shape is the old one and not a strawman.
+/// Each draft-base entry is written without its stamps, and the slice ends
+/// at the draft bases, the copied counts a later layout appended after them
+/// left off; the rest as this build writes it. The entries' bytes are
+/// hand-built from the public reads — one per draft in `drafts`, in address
+/// order, and one copied count per document the fixture's snapshots minted,
+/// the edition's version the drafts were staged from and each draft — each
+/// list a `Vec` of pairs encoding exactly as its map does, and pinned
+/// against the slice's own bytes first, so the shape is the old one and not
+/// a strawman.
 fn written_before_the_marker_stamps(world: &World, drafts: &[Address]) -> Vec<u8> {
     let entries: Vec<(&Address, &DraftBase)> = drafts
         .iter()
         .map(|draft| (draft, world.arrangement.draft_base(draft).expect("a staged draft has a base")))
         .collect();
     let stamped = bincode::serialize(&entries).expect("the entries serialize");
+    let version =
+        world.arrangement.fork_source(&drafts[0]).expect("a staged draft has a source").clone();
+    let mut minted: Vec<Address> = drafts.to_vec();
+    minted.push(version);
+    minted.sort();
+    let copied: Vec<(&Address, &skep_address::Nat)> = minted
+        .iter()
+        .map(|doc| {
+            (doc, world.arrangement.fork_source_copied(doc).expect("a snapshot noted its count"))
+        })
+        .collect();
+    let copied = bincode::serialize(&copied).expect("the counts serialize");
     let arrangement_bytes = bincode::serialize(&world.arrangement).expect("M5 serializes");
     assert!(
-        arrangement_bytes.ends_with(&stamped),
-        "the draft bases' entries end M5's bytes, one per staged draft"
+        arrangement_bytes.ends_with(&[stamped.as_slice(), copied.as_slice()].concat()),
+        "the draft bases' entries, one per staged draft, then the copied counts end M5's bytes"
     );
     let unstamped = bincode::serialize(
         &entries
@@ -740,7 +777,7 @@ fn written_before_the_marker_stamps(world: &World, drafts: &[Address]) -> Vec<u8
     [
         stamp.as_slice(),
         before.as_slice(),
-        &arrangement_bytes[..arrangement_bytes.len() - stamped.len()],
+        &arrangement_bytes[..arrangement_bytes.len() - stamped.len() - copied.len()],
         unstamped.as_slice(),
         after.as_slice(),
     ]
@@ -758,17 +795,19 @@ fn written_before_the_marker_stamps(world: &World, drafts: &[Address]) -> Vec<u8
 /// the markers it then reads run off the body's end. The last entry, with a
 /// link after it, reads M7's link count, and the one marker it then reads
 /// takes its first side from the link's key, an address T4 refuses. The last
-/// entry with no link after it reads a count of zero, so the arrangement
-/// slice decodes: the links slice then reads the identity slice's bytes and
-/// runs off the body's end. Each world's own bytes decode beside it, so the
-/// cut and not the fixture is what refuses. A body whose draft bases are
-/// empty needs no pin: it is this build's own, byte for byte.
+/// entry with no link after it reads a count of zero, so the draft bases
+/// decode: the copied counts then read their count off the identity slice's
+/// first eight bytes — one, the slice's tag beside its empty table's count —
+/// and the entry they then read runs off the body's end. Each world's own
+/// bytes decode beside it, so the cut and not the fixture is what refuses. A
+/// body whose draft bases are empty needs no pin: it meets the copied
+/// counts' absence, as every body before the thirteenth layout does.
 #[test]
 fn a_base_written_before_the_marker_stamps_fails_to_decode() {
     let shapes: [(&str, &[bool], u32, &str); 3] = [
         ("an entry with a marker, another after it", &[true, false], 1, "arrangement"),
         ("the one entry, a link after it", &[true], 1, "arrangement"),
-        ("the one entry, no link after it", &[true], 0, "links"),
+        ("the one entry, no link after it", &[true], 0, "arrangement"),
     ];
     for (shape, landed, links, slice) in shapes {
         let (world, drafts) = staged_drafts(landed, links);
@@ -782,3 +821,123 @@ fn a_base_written_before_the_marker_stamps_fails_to_decode() {
     }
 }
 
+/// Returns a world of shot members, one per shot in `shots`, and the members.
+///
+/// The shots publish into the owner's memberless published edition, none of
+/// them placing a run: the first in the birth shape, each next off the
+/// member before it at that member's whole count, so its terms carry that
+/// member as their base. The world has no fork source and no copied count.
+fn shot_members(shots: usize) -> (World, Vec<Address>) {
+    let engine = mem_engine();
+    let acct = delegated_account(&engine, USER);
+    let (edition, _) = engine
+        .namespace()
+        .create_new_document(USER, &acct, Some(true))
+        .expect("a published edition, memberless");
+    let caller = Caller::Principal(USER);
+    let vstream = engine.vstream();
+    let mut members: Vec<Address> = Vec::new();
+    for _ in 0..shots {
+        let base = members.last().map(|member| Base {
+            member: member.clone(),
+            extent: engine.kernel().snapshot().world().arrangement.content_count(member),
+        });
+        let shot = Shot { base, draft: None, also: vec![], keep_base: false, runs: vec![] };
+        let (member, _) = vstream
+            .publish(caller, &edition, &shot, &World::visible_to(caller))
+            .expect("a shot into the owner's own edition");
+        members.push(member);
+    }
+    (engine.kernel().snapshot().world().clone(), members)
+}
+
+/// Returns `world`'s bytes as a build before the shot's base wrote them.
+///
+/// Each shot-terms entry is written without its base, and the slice without
+/// the copied counts a later layout appended — the eleventh layout's shape;
+/// the rest as this build writes it. The entries' bytes are hand-built from
+/// the public read, one per member in `members`, in address order — a `Vec`
+/// of pairs encoding exactly as the map does — and found once in the slice's
+/// own bytes first, so the shape is the old one and not a strawman.
+fn written_before_the_shot_base(world: &World, members: &[Address]) -> Vec<u8> {
+    let entries: Vec<(&Address, &ShotTerms)> = members
+        .iter()
+        .map(|member| {
+            (member, world.arrangement.shot_terms(member).expect("a shot's member has its terms"))
+        })
+        .collect();
+    let based = bincode::serialize(&entries).expect("the entries serialize");
+    let arrangement_bytes = bincode::serialize(&world.arrangement).expect("M5 serializes");
+    let found: Vec<usize> = arrangement_bytes
+        .windows(based.len())
+        .enumerate()
+        .filter(|(_, window)| *window == based.as_slice())
+        .map(|(at, _)| at)
+        .collect();
+    let [at] = found[..] else {
+        panic!("the shot terms' entries stand once in M5's bytes: {found:?}")
+    };
+    let SerdeTree::Map(fields) = to_tree(&world.arrangement) else {
+        panic!("M5State serializes as a struct — a map of its fields")
+    };
+    assert!(
+        fields.iter().any(|(name, value)| matches!(
+            (name, value),
+            (SerdeTree::Str(s), SerdeTree::Map(entries)) if s.as_str() == "source_copied" && entries.is_empty()
+        )),
+        "the fixture leaves the copied counts empty, their zero length ending M5's bytes"
+    );
+    assert!(arrangement_bytes.ends_with(&[0u8; 8]));
+    let unbased = bincode::serialize(
+        &entries
+            .iter()
+            .map(|(member, t)| (*member, (&t.placed, &t.base_extent)))
+            .collect::<Vec<_>>(),
+    )
+    .expect("the entries serialize");
+    let stamp = bincode::serialize(&FormatStamp).expect("the stamp serializes");
+    let before =
+        bincode::serialize(&(&world.namespace, &world.content)).expect("M3 and M4 serialize");
+    let after =
+        bincode::serialize(&(&world.links, &world.identity)).expect("M7 and identity serialize");
+    [
+        stamp.as_slice(),
+        before.as_slice(),
+        &arrangement_bytes[..at],
+        unbased.as_slice(),
+        &arrangement_bytes[at + based.len()..arrangement_bytes.len() - 8],
+        after.as_slice(),
+    ]
+    .concat()
+}
+
+/// A base written before the shot's base is refused, never misread.
+///
+/// Such a base — the eleventh layout count 1 names, under a current header,
+/// its shot terms holding an entry — fails to decode, refused naming the
+/// slice the decode stopped in and the layout: this build reads the byte
+/// after each entry's extent as that entry's base's option tag. Held on each
+/// shape that read branches on. An entry with another after it reads the
+/// next key's component count, which no option tag spells. The last entry
+/// reads the fork sources' count, zero in this fixture, as no base; the
+/// fork sources then read their count off the arranged-at positions' count
+/// shifted up 56 bits, and the entries they then read run off the body's
+/// end. Each world's own bytes decode beside it, so the cut and not the
+/// fixture is what refuses. A body whose shot terms are empty needs no pin:
+/// it meets the copied counts' absence, as every body before the thirteenth
+/// layout does.
+#[test]
+fn a_base_written_before_the_shot_base_fails_to_decode() {
+    for (shape, shots) in
+        [("an entry with another after it", 2), ("the one entry, the fork sources after it", 1)]
+    {
+        let (world, members) = shot_members(shots);
+        bincode::deserialize::<World>(&bincode::serialize(&world).expect("a world serializes"))
+            .expect("this build's own bytes decode");
+        assert_eq!(
+            refused_in(&written_before_the_shot_base(&world, &members), shape),
+            "arrangement",
+            "{shape}: the slice the decode stopped in"
+        );
+    }
+}

@@ -352,19 +352,31 @@ pub enum Response {
     /// account); `birth` is the [`BirthVersion`] of a document whose chain
     /// has a member, absent for one with none; `terms` are the [`ShotTerms`]
     /// of the address named — the count the shot that minted that member
-    /// placed and the base extent its copy took — answered for a version
-    /// member the shot minted, and absent otherwise: for the trunk document
-    /// itself, and for a member an owned `version` minted, a birth version
-    /// among them. `source` is the fork source of the address named (the
-    /// fork-source design record): the member or bare document whose
-    /// arrangement a `version` snapshotted into it — answered for every
+    /// placed, the base its request named and the base extent its copy took
+    /// — answered for a version member the shot minted, and absent
+    /// otherwise: for the trunk document itself, and for a member an owned
+    /// `version` minted, a birth version among them. The base is the one the
+    /// board recorded at the shot (skep #1111), served as `shot_base`, which
+    /// the member's address does not always name: a draft begun from the
+    /// memberless document `D` and published once `D.1` stands lands as
+    /// `D.1.k`, its base `D`. `source` is the fork source of the address
+    /// named (the fork-source design record): the member or bare document
+    /// whose arrangement a `version` snapshotted into it — answered for every
     /// document a `version` minted, an owned member and a cross-owner fork
     /// alike, and absent for every other: a trunk no `version` minted, a shot
     /// member, a `fork`-minted or created document. It is served to every
     /// reader of the address named and gated by nothing of the source's: an
     /// address is not secret, and the fork's readers already hold the
-    /// source's I-addresses through `image`. `at` is the position of the
-    /// commit that minted the ADDRESS NAMED — a member answers its own mint,
+    /// source's I-addresses through `image`. `source_copied` is beside it,
+    /// present exactly where `source` is: how many content positions of the
+    /// source the copy took, noted at the mint and never moved however the
+    /// source grows since (M5's `fork_source_copied`) — the fork's own count
+    /// at its mint, so it tells the fork's readers nothing of the source they
+    /// did not hold (PUB-1.13). For a staged draft it is the recorded base's
+    /// extent where the draft was staged from a published surface and the
+    /// source draft's count where it is an alternative, and it stays put when
+    /// the draft's publications or landings move `base_copied`. `at` is the
+    /// position of the commit that minted the ADDRESS NAMED — a member answers its own mint,
     /// the one member of this shape that does not project to the document —
     /// kept in the world by M3's position map, and `None` where a build
     /// before the map minted it; `time` is the transport's testimony of when
@@ -404,6 +416,8 @@ pub enum Response {
         /// Where a `version` or a `stage` minted the address named, its
         /// source.
         source: Option<Address>,
+        /// Beside `source`, the count of it the copy took at the mint.
+        source_copied: Option<Nat>,
         /// Where the board records the address named as a staged draft, the
         /// member or bare document its next publication lands after.
         base: Option<Address>,

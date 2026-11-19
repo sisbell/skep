@@ -290,13 +290,16 @@ pub(super) enum OpTerms {
     /// For a replacing grant this is the grant record's address; its
     /// `replaces` link sits at the next address, read by adjacency.
     MakeLink { link: String },
-    /// `publish`: signed-ops D25's two client terms.
+    /// `publish`: signed-ops D25's three client terms.
     ///
     /// They are exactly as `doc_metadata` serves them for the minted member —
-    /// the count the client placed, and the extent of the base the staged
-    /// copy took, `None` in the birth shape (the absence is the birth bit).
-    /// Both decimal strings, `Nat`'s wire form.
-    Publish { placed: String, base_extent: Option<String> },
+    /// the count the client placed, the extent of the base the staged copy
+    /// took, and the base itself as the board recorded it (skep #1111), the
+    /// two `None` together in the birth shape (the absence is the birth
+    /// bit). The counts decimal strings, `Nat`'s wire form; the base an
+    /// address in the board's local form, as the row's `docs` are, rendered
+    /// under `base` as a `set_arrangement`'s is.
+    Publish { placed: String, base_extent: Option<String>, base: Option<String> },
     /// `set_arrangement`: the request's base and merge (the landing lane;
     /// skep #764).
     ///
@@ -382,9 +385,9 @@ impl OpTerms {
     ///
     /// They render so on the wire's row and in the file's line alike, one
     /// spelling for both, which [`parse_line`] reads back: a `publish`'s
-    /// birth extent is `null`, the absence being the birth bit; a
-    /// `set_arrangement`'s two are each `null` where the request named
-    /// none, the pair always present on its row.
+    /// base extent and base are `null` in the birth shape, the absence being
+    /// the birth bit; a `set_arrangement`'s two are each `null` where the
+    /// request named none, the pair always present on its row.
     fn members(&self) -> Vec<(&'static str, Value)> {
         match self {
             OpTerms::Delegate { new_prefix, new_id } => vec![
@@ -392,9 +395,10 @@ impl OpTerms {
                 ("new_id", Value::Number((*new_id).into())),
             ],
             OpTerms::MakeLink { link } => vec![("link", Value::String(link.clone()))],
-            OpTerms::Publish { placed, base_extent } => vec![
+            OpTerms::Publish { placed, base_extent, base } => vec![
                 ("placed", Value::String(placed.clone())),
                 ("base_extent", base_extent.clone().map(Value::String).unwrap_or(Value::Null)),
+                ("base", base.clone().map(Value::String).unwrap_or(Value::Null)),
             ],
             OpTerms::SetArrangement { base, merge } => vec![
                 ("base", base.clone().map(Value::String).unwrap_or(Value::Null)),
@@ -460,7 +464,8 @@ impl JournalTerms {
     /// It is the inverse of [`JournalTerms::members`]: `op` an optional
     /// string, the terms by the members present — a `delegate`'s pair
     /// together (one without the other is torn), a `link`, a `placed` with
-    /// `base_extent` beside it (`null` the birth shape). `None` is the torn
+    /// `base_extent` and `base` beside it (`null` the birth shape, and
+    /// `base` absent on a line written before it). `None` is the torn
     /// verdict.
     fn parse(m: &serde_json::Map<String, Value>) -> Option<JournalTerms> {
         let field = |k: &str| match m.get(k) {
@@ -481,6 +486,10 @@ impl JournalTerms {
                 base_extent: match field("base_extent") {
                     None => None,
                     Some(e) => Some(e.as_str()?.to_string()),
+                },
+                base: match field("base") {
+                    None => None,
+                    Some(b) => Some(b.as_str()?.to_string()),
                 },
             }),
             (None, None, None, None) => None,
@@ -3498,6 +3507,9 @@ pub(super) fn parse_line(line: &[u8]) -> Option<Record> {
                     None => None,
                     Some(l) => Some(OpTerms::MakeLink { link: l.as_str()?.to_string() }),
                 },
+                // A line written before the base reads its absence as
+                // `null`, as a birth shape's: the testimony it never
+                // carried is not invented.
                 "publish" => match field("placed") {
                     None => None,
                     Some(p) => Some(OpTerms::Publish {
@@ -3505,6 +3517,10 @@ pub(super) fn parse_line(line: &[u8]) -> Option<Record> {
                         base_extent: match field("base_extent") {
                             None => None,
                             Some(e) => Some(e.as_str()?.to_string()),
+                        },
+                        base: match field("base") {
+                            None => None,
+                            Some(b) => Some(b.as_str()?.to_string()),
                         },
                     }),
                 },

@@ -206,6 +206,112 @@ fn the_publication_reads_answer_the_metadata_a_client_admits_an_edition_by() {
     }
 }
 
+/// THE COUNT A COPY TOOK AND THE BASE A SHOT RECORDED (skep #1111), on the
+/// doc-metadata read. A draft staged off the memberless edition answers
+/// `source_copied` beside `source`: the three positions its copy took, and
+/// still three after a deposit grows the edition to four — the count noted
+/// at the mint, never the source's count read now. An owned `version` of a
+/// member answers that member's count; the trunk, a member a shot minted
+/// and a document `create_new_document` minted answer none, exactly where
+/// they answer no source. A member a shot minted answers in its terms the
+/// base its request named — the head it was made off — and the birth shape
+/// answers no base.
+#[test]
+fn doc_metadata_serves_the_count_a_copy_took_and_the_base_a_shot_recorded() {
+    let fx = setup();
+    let meta = |doc: &skep_address::Address| match ex(
+        &fx.febe,
+        fx.user,
+        Op::DocMetadata { doc: doc.clone() },
+    ) {
+        skep_febe::Response::DocMetadata { source, source_copied, terms, .. } => {
+            (source, source_copied, terms)
+        }
+        other => panic!("doc_metadata answers: {other:?}"),
+    };
+    let edition = create_edition(&fx);
+    let (start, _) = deposit3(&fx, &edition);
+    let (staged, _) = ack_addr(ex(&fx.febe, fx.user, Op::Stage { from: edition.clone() }));
+    assert_eq!(meta(&staged).0.as_ref(), Some(&edition), "the source: the memberless edition");
+    assert_eq!(meta(&staged).1, Some(nat(3)), "the three positions the copy took");
+    // A deposit into the memberless edition after the copy grows it to four.
+    ack_addr(ex(
+        &fx.febe,
+        fx.user,
+        Op::Insert {
+            doc: edition.clone(),
+            at: vp(1, 4),
+            values: vec![skep_febe::Val::new(vec![b'd'])],
+            deposit: declared(),
+            as_of: head(&fx),
+        },
+    ));
+    assert_eq!(
+        meta(&staged).1,
+        Some(nat(3)),
+        "noted at the mint: the edition's four are not the copy's"
+    );
+    // The birth shape, off the memberless edition: no base recorded.
+    let birth = Shot {
+        base: None,
+        draft: None,
+        also: vec![],
+        keep_base: false,
+        runs: vec![ShotRun {
+            origin: edition.clone(),
+            run: Run::new(start.clone(), nat(4)).expect("a content run"),
+        }],
+    };
+    let publish = |shot: Shot| {
+        ack_addr(ex(
+            &fx.febe,
+            fx.user,
+            Op::Publish {
+                target: PublishTarget::Document(edition.clone()),
+                shot,
+                places: vec![],
+                also_places: vec![],
+                deposits: PublishDeposits::default(),
+            },
+        ))
+        .0
+    };
+    let first = publish(birth);
+    let terms = meta(&first).2.expect("a shot member answers its terms");
+    assert_eq!((terms.base, terms.base_extent), (None, None), "the birth shape: no base");
+    // A shot off the head: its base the head, as its request named it.
+    let off_head = Shot {
+        base: Some(Base { member: first.clone(), extent: nat(4) }),
+        draft: None,
+        also: vec![],
+        keep_base: false,
+        runs: vec![ShotRun {
+            origin: edition.clone(),
+            run: Run::new(start.clone(), nat(4)).expect("a content run"),
+        }],
+    };
+    let second = publish(off_head);
+    let terms = meta(&second).2.expect("a shot member answers its terms");
+    assert_eq!(
+        (terms.base, terms.base_extent),
+        (Some(first.clone()), Some(nat(4))),
+        "the head it was made off"
+    );
+    // An owned `version` of a member: the member's count, as its source's.
+    let (versioned, _) =
+        ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: second.clone(), published: None }));
+    assert_eq!(meta(&versioned).0.as_ref(), Some(&second));
+    assert_eq!(meta(&versioned).1, Some(nat(4)), "the member's four");
+    // None where no source is: the trunk, a shot member, a created document.
+    let created = create_doc(&fx);
+    for (what, doc) in
+        [("the trunk", &edition), ("a shot member", &second), ("a created document", &created)]
+    {
+        let (source, copied, _) = meta(doc);
+        assert_eq!((source, copied), (None, None), "{what}: no source and no count");
+    }
+}
+
 /// PUB-8.46 and the registration refusal M10 ORIGINATES: the two publication
 /// reads that take a document — the only reads whose registration refusal
 /// comes from no store — demand a registered DOCUMENT, and the TIER half of

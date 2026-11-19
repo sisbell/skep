@@ -155,6 +155,15 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
     assert_eq!(m5.point(&fork, &vp(1, 1)), Some(pca(1)));
     assert_eq!(m5.point(&fork, &vp(1, 3)), Some(pca(3)));
     assert_eq!(m5.point(&fork, &vp(1, 4)), None);
+    // The count the fork's copy took, noted at the same slot: three, though
+    // pdoc holds four by now — and the staging draft's, carried by the
+    // checkpoint, three as well (skep #1111).
+    assert_eq!(m5.fork_source_copied(&fork), Some(&n(3)), "the fork's copy, replayed at its slot");
+    assert_eq!(
+        m5.fork_source_copied(&staged),
+        Some(&n(3)),
+        "the staging draft's, off the checkpoint"
+    );
     // The shot replayed as one placement: the member holds the four by
     // reference and the fresh `c` under the edition's own content chain, and
     // the bare address floats to it.
@@ -162,6 +171,10 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
     assert_eq!(m5.point(&vdoc(), &vp(1, 5)), Some(pca(5)));
     assert_eq!(read_v(&s, &vdoc(), 5), b"c".to_vec());
     assert_eq!(reading_surface(s.world().m3(), &pdoc()), vdoc());
+    // The shot's terms replayed with its record: the base its request named,
+    // the memberless edition, at the extent its copy took.
+    let terms = m5.shot_terms(&vdoc()).expect("the replayed shot carries its terms");
+    assert_eq!((terms.base.as_ref(), terms.base_extent.as_ref()), (Some(&pdoc()), Some(&n(4))));
     // The recovered arrangement still drives edits.
     let vs = Vstream::new(&k);
     vs.insert(P1, &doc1(), vp(1, 3), vec![val(b"e")], Deposit::Undeclared, now(&k))

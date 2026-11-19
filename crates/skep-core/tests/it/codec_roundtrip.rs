@@ -1890,8 +1890,9 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 published: true,
                 owner: Some(a(&[1, 0, 1])),
                 birth: Some(BirthVersion { addr: a(&[1, 0, 1, 0, 1, 1]), extent: n(5) }),
-                terms: Some(ShotTerms { placed: n(5), base_extent: Some(n(3)) }),
+                terms: Some(ShotTerms { placed: n(5), base_extent: Some(n(3)), base: Some(d1()) }),
                 source: None,
+                source_copied: None,
                 base: None,
                 base_copied: None,
                 merge: None,
@@ -1901,9 +1902,9 @@ fn all_responses() -> Vec<(&'static str, Response)> {
             },
         ),
         // A private draft the staging act minted off the member above: its
-        // `source` the member copied, its `base` the member and
-        // `base_copied` the five positions the copy took (the staging act,
-        // B3-S10).
+        // `source` the member copied with `source_copied` the five positions
+        // the copy took, its `base` the member and `base_copied` the same
+        // five (the staging act, B3-S10).
         (
             "doc_metadata_unborn",
             Response::DocMetadata {
@@ -1913,6 +1914,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 birth: None,
                 terms: None,
                 source: Some(a(&[1, 0, 1, 0, 1, 1])),
+                source_copied: Some(n(5)),
                 base: Some(a(&[1, 0, 1, 0, 1, 1])),
                 base_copied: Some(n(5)),
                 merge: None,
@@ -1922,8 +1924,9 @@ fn all_responses() -> Vec<(&'static str, Response)> {
             },
         ),
         // A cross-owner fork: a fresh private document in another account,
-        // born sharing the member `1.0.1.0.1.1` — its `source` — with no
-        // base: a `version` records none.
+        // born sharing the member `1.0.1.0.1.1` — its `source`, the five
+        // positions its copy took its `source_copied` — with no base: a
+        // `version` records none.
         (
             "doc_metadata_fork",
             Response::DocMetadata {
@@ -1933,6 +1936,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 birth: None,
                 terms: None,
                 source: Some(a(&[1, 0, 1, 0, 1, 1])),
+                source_copied: Some(n(5)),
                 base: None,
                 base_copied: None,
                 merge: None,
@@ -1943,7 +1947,8 @@ fn all_responses() -> Vec<(&'static str, Response)> {
         ),
         // The staged draft above after a landing (skep #764): its base the
         // head the merge was composed on, and the marker beside it — the
-        // sides, the head at the extent read, the landing's position.
+        // sides, the head at the extent read, the landing's position — its
+        // `source_copied` the five its copy took, unmoved by the landing.
         (
             "doc_metadata_marked",
             Response::DocMetadata {
@@ -1953,6 +1958,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 birth: None,
                 terms: None,
                 source: Some(a(&[1, 0, 1, 0, 1, 1])),
+                source_copied: Some(n(5)),
                 base: Some(a(&[1, 0, 1, 0, 1, 2])),
                 base_copied: Some(n(6)),
                 merge: Some(Marker {
@@ -2046,18 +2052,37 @@ fn doc_metadata_marshals_its_source_as_an_address_or_null() {
     };
     let fork = marshaled("doc_metadata_fork");
     assert_eq!(fork["source"], Value::String("1.0.1.0.1.1".into()), "{fork}");
+    assert_eq!(
+        fork["source_copied"],
+        Value::String("5".into()),
+        "the count its copy took, a decimal string: {fork}"
+    );
     assert_eq!(fork["doc"], Value::String("1.0.2.0.1".into()), "the fork's own document: {fork}");
-    assert!(fork["placed"].is_null() && fork["base_extent"].is_null(), "no shot terms: {fork}");
+    assert!(
+        fork["placed"].is_null() && fork["base_extent"].is_null() && fork["shot_base"].is_null(),
+        "no shot terms: {fork}"
+    );
     assert!(fork["base"].is_null() && fork["base_copied"].is_null(), "a `version` records no base: {fork}");
     let staged = marshaled("doc_metadata_unborn");
     assert_eq!(staged["source"], Value::String("1.0.1.0.1.1".into()), "the member the stage copied: {staged}");
     assert_eq!(staged["base"], Value::String("1.0.1.0.1.1".into()), "the base the stage recorded: {staged}");
     assert_eq!(staged["base_copied"], Value::String("5".into()), "the extent the copy took, a decimal string: {staged}");
     let member = marshaled("doc_metadata");
-    for name in ["source", "base", "base_copied", "merge"] {
+    for name in ["source", "source_copied", "base", "base_copied", "merge"] {
         assert!(member.get(name).is_some(), "{name}: the member is present");
         assert!(member[name].is_null(), "{name}: null where neither a `version` nor a `stage` minted it: {member}");
     }
+    // The shot's recorded base (skep #1111): the member's own, an address,
+    // and null where no shot minted the address named.
+    assert_eq!(
+        member["shot_base"],
+        Value::String("1.0.1.0.1".into()),
+        "the base the shot recorded: {member}"
+    );
+    assert!(
+        staged.get("shot_base").is_some_and(Value::is_null),
+        "no shot minted the draft: {staged}"
+    );
     // The merge marker (skep #764): null on the three above, and beside the
     // base on a marked draft — the sides, the head, the head's extent as
     // read and the position, in the wire's spellings.

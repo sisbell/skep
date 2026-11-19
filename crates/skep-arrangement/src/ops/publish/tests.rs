@@ -356,8 +356,8 @@ fn an_empty_shot_mints_its_member_places_nothing_and_journals_its_terms() {
     // arrangement and R come out exactly as they went in — no arrangement
     // entry and nothing in R for the member, which reads as the lazy empty
     // arrangement, as an empty fork's does — while the member's terms are
-    // noted (nothing placed, the base's extent as the shot named it) and,
-    // the member being the chain's second, no birth extent.
+    // noted (nothing placed, the base and its extent as the shot named
+    // them) and, the member being the chain's second, no birth extent.
     let p1 = Caller::Principal(PrincipalId(1));
     let k = shot_kernel(vec![], &[]);
     let before = k.snapshot().world().m5().clone();
@@ -379,7 +379,11 @@ fn an_empty_shot_mints_its_member_places_nothing_and_journals_its_terms() {
     );
     assert_eq!(
         m5.shot_terms(&member),
-        Some(&ShotTerms { placed: n(0), base_extent: shot.base.map(|base| base.extent) }),
+        Some(&ShotTerms {
+            placed: n(0),
+            base_extent: shot.base.as_ref().map(|base| base.extent.clone()),
+            base: shot.base.as_ref().map(|base| base.member.clone()),
+        }),
         "the terms are journaled all the same"
     );
     assert_eq!(m5.birth_extent(&member), None, "the chain's second member is no birth version");

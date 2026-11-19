@@ -724,15 +724,19 @@ pub(super) fn j_response(r: &Response) -> Value {
         // registered document always carries one. `birth` and
         // `birth_extent` are two wire keys over *one* optional value, so they
         // are null together while the document has no member yet and carried
-        // together once it has. `placed` and `base_extent` are two wire keys
-        // over the terms: both null where the address named carries none (a
-        // trunk, a version-minted birth, a member minted without terms);
-        // `placed` carried and `base_extent` null for a member the birth shape
-        // minted — the null *is* the birth bit there; both carried otherwise.
-        // `source` (the fork-source design record) is a payload option over
-        // the fork source of the address named: the member or bare document a
+        // together once it has. `placed`, `base_extent` and `shot_base` are
+        // three wire keys over the terms: all null where the address named
+        // carries none (a trunk, a version-minted birth, a member minted
+        // without terms); `placed` carried and the other two null for a
+        // member the birth shape minted — the nulls *are* the birth bit
+        // there; all carried otherwise, `shot_base` the base the shot's
+        // request named as the board recorded it (skep #1111). `source` (the
+        // fork-source design record) is a payload option over the fork
+        // source of the address named: the member or bare document a
         // `version` snapshotted or a `stage` copied into it, null where
-        // neither minted it. `base` and `base_copied` (the staging act,
+        // neither minted it, and `source_copied` beside it the count of it
+        // the copy took, a decimal string, null exactly where `source` is.
+        // `base` and `base_copied` (the staging act,
         // B3-S10) are two payload options over the draft base of the address
         // named: the member or bare document the draft's next publication
         // lands after, moved by each publication of the draft itself — never
@@ -754,6 +758,7 @@ pub(super) fn j_response(r: &Response) -> Value {
             birth,
             terms,
             source,
+            source_copied,
             base,
             base_copied,
             merge,
@@ -777,7 +782,12 @@ pub(super) fn j_response(r: &Response) -> Value {
                         .map(j_nat)
                         .unwrap_or(Value::Null),
                 ),
+                (
+                    "shot_base",
+                    terms.as_ref().and_then(|t| t.base.as_ref()).map(j_addr).unwrap_or(Value::Null),
+                ),
                 ("source", source.as_ref().map(j_addr).unwrap_or(Value::Null)),
+                ("source_copied", source_copied.as_ref().map(j_nat).unwrap_or(Value::Null)),
                 ("base", base.as_ref().map(j_addr).unwrap_or(Value::Null)),
                 ("base_copied", base_copied.as_ref().map(j_nat).unwrap_or(Value::Null)),
                 ("merge", merge.as_ref().map(j_marker).unwrap_or(Value::Null)),

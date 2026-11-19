@@ -7,11 +7,13 @@
 //! * [`Op::DocMetadata`] assembles M3's publication bit, owner and version
 //!   chain with M5's frozen birth extent — [`require_registered_document`] is
 //!   its refusal and [`birth_version`] its chain read — and, for a version
-//!   member the shot minted, M5's shot terms for the address named
-//!   (`M5State::shot_terms`; signed-ops D25), for a document a `version` or
-//!   a `stage` minted, the source it was made from (`M5State::fork_source`),
-//!   and for a draft the board records a base for, that base with the extent
-//!   its copy took (`M5State::draft_base`; the staging act, B3-S10);
+//!   member the shot minted, M5's shot terms for the address named, the
+//!   base the shot recorded among them (`M5State::shot_terms`; signed-ops
+//!   D25; skep #1111), for a document a `version` or a `stage` minted, the
+//!   source it was made from and the count of it the copy took
+//!   (`M5State::fork_source`, `M5State::fork_source_copied`), and for a
+//!   draft the board records a base for, that base with the extent its copy
+//!   took (`M5State::draft_base`; the staging act, B3-S10);
 //! * [`Op::EditionClaims`] takes the world's edition-claim class and keeps
 //!   the rows whose home the caller reads — [`require_registered_document`]
 //!   is the refusal that bounds it;

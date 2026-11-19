@@ -347,6 +347,7 @@ fn only_placement_and_version_append_to_r() {
         terms: ShotTerms {
             placed: n(1),
             base_extent: None,
+            base: None,
         },
         draft: None,
     });
@@ -383,7 +384,7 @@ fn a_birth_version_s_extent_is_frozen_at_its_mint_and_a_deposit_never_joins_it()
     let born = M5State::genesis().apply_m5(Seq(1), &M5Rec::ShotPlace {
         doc: vdoc(),
         runs: vec![run(&ca(1), 3)],
-        terms: ShotTerms { placed: n(3), base_extent: None },
+        terms: ShotTerms { placed: n(3), base_extent: None, base: None },
         draft: None,
     });
     assert_eq!(born.birth_extent(&vdoc()), Some(&n(3)));
@@ -417,7 +418,7 @@ fn only_a_trunk_s_birth_version_has_its_extent_noted() {
     let mint = |doc: &Address| M5Rec::ShotPlace {
         doc: doc.clone(),
         runs: vec![run(&ca(1), 2)],
-        terms: ShotTerms { placed: n(2), base_extent: None },
+        terms: ShotTerms { placed: n(2), base_extent: None, base: None },
         draft: None,
     };
     let mut s = M5State::genesis();
@@ -488,7 +489,7 @@ fn a_member_the_shot_minted_empty_is_noted_at_zero_by_its_own_record() {
     let minted_empty = M5State::genesis().apply_m5(Seq(1), &M5Rec::ShotPlace {
         doc: vdoc(),
         runs: vec![],
-        terms: ShotTerms { placed: n(0), base_extent: None },
+        terms: ShotTerms { placed: n(0), base_extent: None, base: None },
         draft: None,
     });
     assert_eq!(minted_empty.birth_extent(&vdoc()), Some(&n(0)), "noted at zero by the mint");
@@ -496,7 +497,7 @@ fn a_member_the_shot_minted_empty_is_noted_at_zero_by_its_own_record() {
     assert!(!minted_empty.provenance.is_recorded(&vdoc()), "no R entry");
     assert_eq!(
         minted_empty.shot_terms(&vdoc()),
-        Some(&ShotTerms { placed: n(0), base_extent: None }),
+        Some(&ShotTerms { placed: n(0), base_extent: None, base: None }),
         "the terms are noted all the same: the count zero, the birth bit"
     );
     let deposited = place(&minted_empty, &vdoc(), 1, vec![run(&ca(1), 1)]);
@@ -513,10 +514,12 @@ fn shot_place_folds_as_a_placement_at_one_and_notes_the_terms() {
     // checkpoint with the rest of the slice. And the two records keep their
     // indices — `ContentPlace` 0, `ShotPlace` 5 — as every variant does
     // (`M5Rec`'s card), the shot's record writing its fields in order with
-    // its terms nested in place, no framing of their own.
+    // its terms nested in place, no framing of their own. The member is
+    // doc1's birth version, its base the memberless doc1 itself, taken at
+    // two positions.
     let runs = vec![run(&ca(1), 3), run(&pca(1), 2)];
     let by_place = place(&M5State::genesis(), &vdoc(), 1, runs.clone());
-    let terms = ShotTerms { placed: n(4), base_extent: Some(n(2)) };
+    let terms = ShotTerms { placed: n(4), base_extent: Some(n(2)), base: Some(doc1()) };
     let shot = M5Rec::ShotPlace {
         doc: vdoc(),
         runs: runs.clone(),
@@ -534,7 +537,7 @@ fn shot_place_folds_as_a_placement_at_one_and_notes_the_terms() {
     assert_eq!(
         by_shot.shot_terms(&vdoc()),
         Some(&terms),
-        "the shot's two client terms, as the record carried them"
+        "the shot's three client terms, as the record carried them"
     );
     assert_eq!(by_place.shot_terms(&vdoc()), None, "a `ContentPlace` notes no terms");
     assert_eq!(
@@ -554,9 +557,10 @@ fn shot_place_folds_as_a_placement_at_one_and_notes_the_terms() {
     );
     assert_eq!(
         bincode::serialize(&shot).expect("encodes"),
-        bincode::serialize(&(5u32, vdoc(), &runs, n(4), Some(n(2)), None::<Address>)).expect("encodes"),
-        "`ShotPlace` is index 5, then its fields in order, the terms' two flat in place, the \
-         rendering draft last"
+        bincode::serialize(&(5u32, vdoc(), &runs, n(4), Some(n(2)), Some(doc1()), None::<Address>))
+            .expect("encodes"),
+        "`ShotPlace` is index 5, then its fields in order, the terms' three flat in place — the \
+         count, the extent, the base — the rendering draft last"
     );
 }
 
@@ -692,7 +696,7 @@ fn the_birth_extents_ride_the_checkpoint_because_nothing_can_rebuild_them() {
     let mint = M5Rec::ShotPlace {
         doc: vdoc(),
         runs: vec![run(&ca(1), 3)],
-        terms: ShotTerms { placed: n(3), base_extent: None },
+        terms: ShotTerms { placed: n(3), base_extent: None, base: None },
         draft: None,
     };
     let born = M5State::genesis().apply_m5(Seq(1), &mint);
@@ -726,7 +730,8 @@ fn alternative() -> Address {
 /// Two tests read its bytes: the hostile-count sweep writes over every count
 /// in them, and the byte pin holds them against a twin spelled from the
 /// literals below. doc1 holds two content runs and a link, and doc2 is its
-/// snapshot; two members are minted by shots, one carrying a base's extent
+/// snapshot, the copy taking doc1's four positions; two members are minted
+/// by shots, one carrying a base — the memberless doc1 — with its extent
 /// and one the birth shape. Of the two draft bases, doc2's carries the
 /// marker of its first landing, put back after a second landing, with both
 /// stamps standing; the alternative's merge was withdrawn, its stamp kept.
@@ -751,11 +756,15 @@ fn every_field_held() -> M5State {
         source: vdoc(),
         merge,
     };
-    let shot = |doc: Address, runs: Vec<Run>, placed: u32, base_extent: Option<u32>| {
+    let shot = |doc: Address, runs: Vec<Run>, placed: u32, base: Option<(Address, u32)>| {
         M5Rec::ShotPlace {
             doc,
             runs,
-            terms: ShotTerms { placed: n(placed), base_extent: base_extent.map(n) },
+            terms: ShotTerms {
+                placed: n(placed),
+                base_extent: base.as_ref().map(|(_, extent)| n(*extent)),
+                base: base.map(|(member, _)| member),
+            },
             draft: None,
         }
     };
@@ -763,7 +772,7 @@ fn every_field_held() -> M5State {
         (1, M5Rec::ContentPlace { doc: doc1(), at: n(1), runs: vec![run(&ca(1), 3)] }),
         (2, M5Rec::ContentPlace { doc: doc1(), at: n(4), runs: vec![run(&vca(1), 1)] }),
         (3, M5Rec::LinkSeat { doc: doc1(), link: la(1) }),
-        (4, shot(vdoc(), vec![run(&ca(1), 2)], 2, Some(1))),
+        (4, shot(vdoc(), vec![run(&ca(1), 2)], 2, Some((doc1(), 1)))),
         (5, shot(pca_member(), vec![run(&pca(1), 1)], 1, None)),
         (6, M5Rec::VersionSnapshot { source: doc1(), new: doc2() }),
         (6, doc2_base(None)),
@@ -794,7 +803,8 @@ fn the_slice_decodes_or_refuses_whatever_count_its_bytes_declare() {
     // Every collection the slice holds — the arrangement map, each document's
     // content and link run-lists, R's map and each document's spans, the
     // birth extents, the shot terms, the fork sources, the arranged-at
-    // positions, the draft bases and each base's stamps — decodes through
+    // positions, the draft bases and each base's stamps, the copied counts —
+    // decodes through
     // `decode`'s doors or reserves cautiously, and so does every sequence
     // beneath them (a marker's sides, an address's components, a natural's
     // digits). So `u64::MAX` written over ANY eight bytes
@@ -820,6 +830,7 @@ fn the_slice_decodes_or_refuses_whatever_count_its_bytes_declare() {
     assert_eq!(s.fork_sources.len(), 1);
     assert_eq!(s.arranged_at.len(), 4);
     assert_eq!(s.draft_bases.len(), 2);
+    assert_eq!(s.source_copied.len(), 1);
     assert_eq!(s.draft_base(&doc2()).map(|b| b.stamped.len()), Some(2), "the entry's stamps");
     assert_eq!(
         s.draft_base(&alternative()).map(|b| (b.merge.is_none(), b.stamped.len())),
@@ -875,18 +886,19 @@ type RawDraftBase = (Tumbler, Nat, Tumbler, Option<RawMarker>, Vec<RawMarker>);
 /// read off the state. The bytes are a format: M2 hashes them into a
 /// checkpoint's header, the engine's `World` lays them down as one slice of
 /// its layout, and the engine's world dump renders them. The engine's own
-/// pin sees the slice's seven field names alone, so a field gained, lost or
+/// pin sees the slice's eight field names alone, so a field gained, lost or
 /// reordered *beneath* them — a draft base's marker or stamps, a marker's
 /// position, a shot's terms, a run — moves the World's bytes with every name
-/// unchanged. This pin sees it: the twin is the seven maps in declaration
+/// unchanged. This pin sees it: the twin is the eight maps in declaration
 /// order, each a `Vec` of pairs in address order (bincode writes a map
 /// exactly so), every address its bare tumbler, every entry its fields in
 /// order — a document's arrangement its content runs then its link runs,
-/// R's spans each run's I-extent in placing order, a draft base its base,
-/// extent, source, marker and stamps. The twin decodes back to the fixture,
-/// so it is the slice's form and not merely bytes alike.
+/// R's spans each run's I-extent in placing order, a shot's terms its
+/// count, extent and base, a draft base its base, extent, source, marker
+/// and stamps. The twin decodes back to the fixture, so it is the slice's
+/// form and not merely bytes alike.
 #[test]
-fn the_slice_serializes_as_its_seven_maps_down_to_each_entry_s_fields() {
+fn the_slice_serializes_as_its_eight_maps_down_to_each_entry_s_fields() {
     let tumbler = |address: Address| address.tumbler().clone();
     let raw_run = |start: Address, width: u32| -> RawRun { (tumbler(start), n(width)) };
     let extent = |start: Address, reach: Address| {
@@ -909,9 +921,9 @@ fn the_slice_serializes_as_its_seven_maps_down_to_each_entry_s_fields() {
     ];
     let birth_extents: Vec<(Tumbler, Nat)> =
         vec![(tumbler(vdoc()), n(2)), (tumbler(pca_member()), n(1))];
-    let shot_terms: Vec<(Tumbler, (Nat, Option<Nat>))> = vec![
-        (tumbler(vdoc()), (n(2), Some(n(1)))),
-        (tumbler(pca_member()), (n(1), None)),
+    let shot_terms: Vec<(Tumbler, (Nat, Option<Nat>, Option<Tumbler>))> = vec![
+        (tumbler(vdoc()), (n(2), Some(n(1)), Some(tumbler(doc1())))),
+        (tumbler(pca_member()), (n(1), None, None)),
     ];
     let fork_sources: Vec<(Tumbler, Tumbler)> = vec![(tumbler(doc2()), tumbler(doc1()))];
     let arranged_at: Vec<(Tumbler, u64)> = vec![
@@ -937,6 +949,7 @@ fn the_slice_serializes_as_its_seven_maps_down_to_each_entry_s_fields() {
             (tumbler(vdoc()), n(2), tumbler(vdoc()), None, vec![raw_marker(vec![], vdoc(), 2, 15)]),
         ),
     ];
+    let source_copied: Vec<(Tumbler, Nat)> = vec![(tumbler(doc2()), n(4))];
     let twin = bincode::serialize(&(
         arrangements,
         provenance,
@@ -945,12 +958,13 @@ fn the_slice_serializes_as_its_seven_maps_down_to_each_entry_s_fields() {
         fork_sources,
         arranged_at,
         draft_bases,
+        source_copied,
     ))
     .expect("the twin encodes");
     let state = every_field_held();
     assert!(
         bincode::serialize(&state).expect("the slice serializes") == twin,
-        "M5's slice serialized as something other than its seven maps in declaration order, \
+        "M5's slice serialized as something other than its eight maps in declaration order, \
          each in address order and each entry its fields as the twin spells them: those bytes \
          are M2's hashed checkpoint body, a slice of the engine's World layout and the engine's \
          world dump — a change to them owes the engine's WORLD_FORMAT bump (or, under the \
@@ -989,7 +1003,9 @@ fn a_version_minted_document_is_noted_with_the_source_it_was_born_sharing() {
         new: vdoc(),
     });
     assert_eq!(owned.fork_source(&vdoc()), Some(&doc1()), "the owned version's source");
+    assert_eq!(owned.fork_source_copied(&vdoc()), Some(&n(3)), "…beside the count the copy took");
     assert_eq!(owned.fork_source(&doc1()), None, "the trunk answers none, never its member's");
+    assert_eq!(owned.fork_source_copied(&doc1()), None, "…and no count");
     // A cross-owner fork taken off the chain's member: the surface a bare
     // published source with members resolves to is its head, and the record
     // names that member, so the fork's source IS the member.
@@ -998,6 +1014,7 @@ fn a_version_minted_document_is_noted_with_the_source_it_was_born_sharing() {
         new: fork_doc(),
     });
     assert_eq!(forked.fork_source(&fork_doc()), Some(&vdoc()), "the member, not its trunk");
+    assert_eq!(forked.fork_source_copied(&fork_doc()), Some(&n(3)), "the member's count");
     assert_eq!(forked.fork_source(&vdoc()), Some(&doc1()), "the member keeps its own");
     // The arrangement shared and the source noted come from one record, so
     // the fork reads as the member did and names it.
@@ -1021,6 +1038,11 @@ fn a_fork_of_an_empty_source_is_noted_all_the_same() {
     assert!(s.arrangements.get(&fork_doc()).is_none(), "nothing shared");
     assert!(!s.provenance.is_recorded(&fork_doc()), "no R entry");
     assert_eq!(s.fork_source(&fork_doc()), Some(&doc2()), "noted, an empty surface included");
+    assert_eq!(
+        s.fork_source_copied(&fork_doc()),
+        Some(&n(0)),
+        "the count the copy took noted beside it, a zero and never an absence"
+    );
 }
 
 #[test]
@@ -1033,7 +1055,7 @@ fn only_a_version_record_notes_a_fork_source() {
     let shot = M5State::genesis().apply_m5(Seq(1), &M5Rec::ShotPlace {
         doc: vdoc(),
         runs: vec![run(&ca(1), 2)],
-        terms: ShotTerms { placed: n(2), base_extent: None },
+        terms: ShotTerms { placed: n(2), base_extent: None, base: None },
         draft: None,
     });
     assert_eq!(shot.fork_source(&vdoc()), None, "a shot member");
@@ -1045,6 +1067,7 @@ fn only_a_version_record_notes_a_fork_source() {
     assert_eq!(placed.fork_source(&fork_doc()), None, "a `fork`-minted or untouched document");
     assert_eq!(placed.fork_source(&doc1()), None, "the trunk");
     assert!(placed.fork_sources.is_empty(), "and the map holds no entry for any of them");
+    assert!(placed.source_copied.is_empty(), "nor the copied counts beside it");
 }
 
 #[test]
@@ -1095,9 +1118,9 @@ fn the_fork_sources_ride_the_checkpoint_and_replay_re_derives_them() {
     assert_eq!(back.clone().rebuild_derived(), back);
     let replayed = build();
     assert_eq!(bincode::serialize(&replayed).expect("serializes"), bytes, "replay equals live");
-    // The map is the slice's LAST field: a checkpoint written before it ends
-    // where it would begin, and decodes no default (the engine's World door
-    // holds that refusal; the field order is pinned here).
+    // A checkpoint written before the map misreads every field after it,
+    // and decodes no default (the engine's World door holds that refusal;
+    // the field order is pinned here).
     let fields = bincode::serialize(&(
         &live.arrangements,
         &live.provenance,
@@ -1106,6 +1129,7 @@ fn the_fork_sources_ride_the_checkpoint_and_replay_re_derives_them() {
         &live.fork_sources,
         &live.arranged_at,
         &live.draft_bases,
+        &live.source_copied,
     ))
     .expect("the fields serialize");
     assert_eq!(fields, bytes, "`fork_sources` is written after `shot_terms`, before `arranged_at`");
@@ -1144,13 +1168,13 @@ fn m5rec_survives_a_bincode_round_trip() {
         M5Rec::ShotPlace {
             doc: vdoc(),
             runs: vec![run(&ca(1), 2), run(&pca(1), 1)],
-            terms: ShotTerms { placed: n(3), base_extent: Some(n(1)) },
+            terms: ShotTerms { placed: n(3), base_extent: Some(n(1)), base: Some(doc1()) },
             draft: None,
         },
         M5Rec::ShotPlace {
             doc: a(&[1, 0, 1, 0, 64, 1]),
             runs: vec![],
-            terms: ShotTerms { placed: n(0), base_extent: None },
+            terms: ShotTerms { placed: n(0), base_extent: None, base: None },
             draft: Some(doc2()),
         },
         M5Rec::DraftBase { draft: doc2(), base: doc1(), extent: n(5), source: doc1(), merge: None },
@@ -1209,7 +1233,7 @@ fn every_arm_that_changes_a_content_arrangement_notes_its_position_and_the_link_
     assert_eq!(s.arranged_at(&a(&[1, 0, 2, 0, 1])), Some(Seq(13)), "…and its fork is noted all the same");
     assert_eq!(s.arranged_at(&doc2()), None, "an empty source never arranged stays so");
     // The shot's placement: the member at the shot, placed or empty.
-    let terms = ShotTerms { placed: n(1), base_extent: None };
+    let terms = ShotTerms { placed: n(1), base_extent: None, base: None };
     let s = s.apply_m5(
         Seq(17),
         &M5Rec::ShotPlace { doc: pca_member(), runs: vec![run(&pca(1), 1)], terms: terms.clone(), draft: None },
@@ -1257,6 +1281,7 @@ fn the_arranged_at_positions_ride_the_checkpoint_sixth_and_replay_re_derives_the
         &live.fork_sources,
         &live.arranged_at,
         &live.draft_bases,
+        &live.source_copied,
     ))
     .expect("the fields serialize");
     assert_eq!(fields, bytes, "`arranged_at` is written after `fork_sources`, before `draft_bases`");
@@ -1325,7 +1350,7 @@ fn a_shot_naming_its_draft_moves_the_drafts_base_to_the_member_it_minted() {
         Seq(5),
         &M5Rec::DraftBase { draft: doc2(), base: pdoc(), extent: n(2), source: pdoc(), merge: None },
     );
-    let terms = ShotTerms { placed: n(2), base_extent: Some(n(2)) };
+    let terms = ShotTerms { placed: n(2), base_extent: Some(n(2)), base: Some(pdoc()) };
     // The shot that renders doc2 into pdoc's first member, placing two runs
     // of three positions in all.
     let rendered = s.apply_m5(
@@ -1359,7 +1384,7 @@ fn a_shot_naming_its_draft_moves_the_drafts_base_to_the_member_it_minted() {
         &M5Rec::ShotPlace {
             doc: vdoc(),
             runs: vec![],
-            terms: ShotTerms { placed: n(0), base_extent: Some(n(2)) },
+            terms: ShotTerms { placed: n(0), base_extent: Some(n(2)), base: Some(pdoc()) },
             draft: Some(doc2()),
         },
     );
@@ -1374,7 +1399,7 @@ fn a_shot_naming_its_draft_moves_the_drafts_base_to_the_member_it_minted() {
         &M5Rec::ShotPlace {
             doc: vdoc(),
             runs: vec![run(&ca(1), 3)],
-            terms: ShotTerms { placed: n(3), base_extent: None },
+            terms: ShotTerms { placed: n(3), base_extent: None, base: None },
             draft: Some(pdoc()),
         },
     );
@@ -1387,12 +1412,13 @@ fn a_shot_naming_its_draft_moves_the_drafts_base_to_the_member_it_minted() {
     assert_eq!(s.draft_base(&doc2()), Some(&DraftBase { base: pdoc(), extent: n(2), source: pdoc(), merge: None, stamped: vec![] }));
 }
 
-/// The draft bases ride the checkpoint as their six siblings do, are
-/// re-derived by replay to the same bytes, and are the slice's LAST field —
-/// after `arranged_at`, under the same no-default rule — so a checkpoint
-/// written before the map ends where it would begin and decodes no default.
+/// The draft bases ride the checkpoint as their siblings do, are re-derived
+/// by replay to the same bytes, and are the slice's seventh field — after
+/// `arranged_at`, before `source_copied`, under the same no-default rule —
+/// so a checkpoint written before the map ends where it would begin and
+/// decodes no default.
 #[test]
-fn the_draft_bases_ride_the_checkpoint_last_and_replay_re_derives_them() {
+fn the_draft_bases_ride_the_checkpoint_seventh_and_replay_re_derives_them() {
     let build = || {
         let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
         let s = s.apply_m5(Seq(6), &M5Rec::VersionSnapshot { source: doc1(), new: doc2() });
@@ -1405,7 +1431,7 @@ fn the_draft_bases_ride_the_checkpoint_last_and_replay_re_derives_them() {
             &M5Rec::ShotPlace {
                 doc: vdoc(),
                 runs: vec![run(&ca(1), 3)],
-                terms: ShotTerms { placed: n(3), base_extent: Some(n(3)) },
+                terms: ShotTerms { placed: n(3), base_extent: Some(n(3)), base: Some(doc1()) },
                 draft: Some(doc2()),
             },
         )
@@ -1426,9 +1452,13 @@ fn the_draft_bases_ride_the_checkpoint_last_and_replay_re_derives_them() {
         &live.fork_sources,
         &live.arranged_at,
         &live.draft_bases,
+        &live.source_copied,
     ))
     .expect("the fields serialize");
-    assert_eq!(fields, bytes, "`draft_bases` is written after `arranged_at`, last");
+    assert_eq!(
+        fields, bytes,
+        "`draft_bases` is written after `arranged_at`, before `source_copied`"
+    );
     // A body cut short of the map — a checkpoint written before it — does
     // not decode: the no-default rule.
     let without: Vec<u8> = bincode::serialize(&(
@@ -1479,6 +1509,126 @@ fn the_draft_bases_ride_the_checkpoint_last_and_replay_re_derives_them() {
     assert!(
         bincode::deserialize::<DraftBase>(&unstamped).is_err(),
         "an entry without the stamps must fail to decode, never read as stamping nothing"
+    );
+}
+
+/// SOURCE★, the count half (skep #1111): the snapshot notes the count its
+/// copy took beside the source, on both branches, and nothing moves it — a
+/// deposit into the source after the copy grows the source and leaves the
+/// fork's count where the copy ended, and an edit to the fork leaves it
+/// too. An owned version, a cross-owner fork and a staged draft (whose
+/// staging record rides beside the snapshot) are noted alike.
+#[test]
+fn a_snapshot_notes_the_count_its_copy_took_and_nothing_moves_it() {
+    let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
+    let forked = s.apply_m5(Seq(4), &M5Rec::VersionSnapshot { source: doc1(), new: fork_doc() });
+    assert_eq!(
+        forked.fork_source_copied(&fork_doc()),
+        Some(&n(3)),
+        "the source's count at the copy"
+    );
+    // The source grows by a deposit after the copy, and the fork's count
+    // stays where its copy ended.
+    let grown = place(&forked, &doc1(), 4, vec![run(&ca(9), 2)]);
+    assert_eq!(grown.content_count(&doc1()), n(5), "the source took the deposit");
+    assert_eq!(grown.fork_source_copied(&fork_doc()), Some(&n(3)), "the count is the mint's");
+    // The fork's own edits leave it too.
+    let edited =
+        grown.apply_m5(Seq(6), &M5Rec::ContentRemove { doc: fork_doc(), from: n(1), width: n(2) });
+    assert_eq!(edited.content_count(&fork_doc()), n(1));
+    assert_eq!(
+        edited.fork_source_copied(&fork_doc()),
+        Some(&n(3)),
+        "an edit to the fork moves nothing"
+    );
+    // A staged draft: the snapshot and the staging record of one commit,
+    // the count the snapshot's own.
+    let staged =
+        edited.apply_m5(Seq(8), &M5Rec::VersionSnapshot { source: doc1(), new: doc2() }).apply_m5(
+            Seq(8),
+            &M5Rec::DraftBase {
+                draft: doc2(),
+                base: doc1(),
+                extent: n(5),
+                source: doc1(),
+                merge: None,
+            },
+        );
+    assert_eq!(staged.fork_source_copied(&doc2()), Some(&n(5)), "the staged draft's copy");
+    // A shot moving that draft's base moves no count.
+    let published = staged.apply_m5(
+        Seq(10),
+        &M5Rec::ShotPlace {
+            doc: pca_member(),
+            runs: vec![run(&pca(1), 1)],
+            terms: ShotTerms { placed: n(1), base_extent: None, base: None },
+            draft: Some(doc2()),
+        },
+    );
+    assert_eq!(
+        published.draft_base(&doc2()).map(|b| &b.base),
+        Some(&pca_member()),
+        "the base moved…"
+    );
+    assert_eq!(published.fork_source_copied(&doc2()), Some(&n(5)), "…and the count did not");
+    assert_eq!(published.fork_source_copied(&pca_member()), None, "a shot member notes none");
+    // Every record but the snapshot leaves the map whole.
+    assert_eq!(published.source_copied, staged.source_copied);
+    // Purity: the receiver was untouched.
+    assert_eq!(s.fork_source_copied(&fork_doc()), None);
+}
+
+/// The copied counts ride the checkpoint as their siblings do, are
+/// re-derived by replay to the same bytes, and are the slice's LAST field —
+/// after `draft_bases`, under the same no-default rule — so a checkpoint
+/// written before the map ends where it would begin and decodes no default.
+#[test]
+fn the_copied_counts_ride_the_checkpoint_last_and_replay_re_derives_them() {
+    let build = || {
+        let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
+        let s = s.apply_m5(Seq(4), &M5Rec::VersionSnapshot { source: doc1(), new: fork_doc() });
+        let s = place(&s, &doc1(), 4, vec![run(&ca(9), 1)]);
+        s.apply_m5(Seq(7), &M5Rec::VersionSnapshot { source: doc2(), new: fork_of_fork_doc() })
+    };
+    let live = build();
+    assert_eq!(
+        (live.fork_source_copied(&fork_doc()), live.fork_source_copied(&fork_of_fork_doc())),
+        (Some(&n(3)), Some(&n(0))),
+        "the count at the copy, and an empty surface's zero"
+    );
+    let bytes = bincode::serialize(&live).expect("state serializes");
+    let back: M5State = bincode::deserialize(&bytes).expect("state deserializes");
+    assert_eq!(back, live);
+    assert_eq!(back.fork_source_copied(&fork_doc()), Some(&n(3)), "the checkpoint carries it");
+    assert_eq!(back.clone().rebuild_derived(), back);
+    assert_eq!(bincode::serialize(&build()).expect("serializes"), bytes, "replay equals live");
+    let fields = bincode::serialize(&(
+        &live.arrangements,
+        &live.provenance,
+        &live.birth_extents,
+        &live.shot_terms,
+        &live.fork_sources,
+        &live.arranged_at,
+        &live.draft_bases,
+        &live.source_copied,
+    ))
+    .expect("the fields serialize");
+    assert_eq!(fields, bytes, "`source_copied` is written after `draft_bases`, last");
+    // A body cut short of the map — a checkpoint written before it — does
+    // not decode: the no-default rule.
+    let without: Vec<u8> = bincode::serialize(&(
+        &live.arrangements,
+        &live.provenance,
+        &live.birth_extents,
+        &live.shot_terms,
+        &live.fork_sources,
+        &live.arranged_at,
+        &live.draft_bases,
+    ))
+    .expect("the seven fields serialize");
+    assert!(
+        bincode::deserialize::<M5State>(&without).is_err(),
+        "a checkpoint body without the map must fail to decode, never read as no count"
     );
 }
 
@@ -1553,7 +1703,7 @@ fn the_marker_is_stamped_at_the_fold_cleared_by_the_shot_and_kept_by_the_rewindo
         &M5Rec::ShotPlace {
             doc: vdoc(),
             runs: vec![run(&pca(1), 2)],
-            terms: ShotTerms { placed: n(2), base_extent: Some(n(2)) },
+            terms: ShotTerms { placed: n(2), base_extent: Some(n(2)), base: Some(pdoc()) },
             draft: Some(doc2()),
         },
     );
@@ -1625,7 +1775,7 @@ fn the_stamps_keep_every_marker_stamped_and_the_restore_installs_one_as_carried(
     let shot = |draft: Option<Address>| M5Rec::ShotPlace {
         doc: vdoc(),
         runs: vec![run(&pca(1), 2)],
-        terms: ShotTerms { placed: n(2), base_extent: Some(n(2)) },
+        terms: ShotTerms { placed: n(2), base_extent: Some(n(2)), base: Some(pdoc()) },
         draft,
     };
     let published = restored.apply_m5(Seq(17), &shot(Some(doc2())));

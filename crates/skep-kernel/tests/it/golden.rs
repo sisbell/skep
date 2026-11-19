@@ -68,7 +68,13 @@
 //!   standing at named slots, and an account's second document is its first
 //!   ordinary one: genesis's count, the two documents the fixture mints past
 //!   its account's doc 1 and every address beneath them move, so the segment,
-//!   the checkpoint's body and every dump move; the fixture's ops do not.
+//!   the checkpoint's body and every dump move; the fixture's ops do not;
+//! - M5's slice holds its copied counts — each `version`- or `stage`-minted
+//!   document's count of its source the copy took, noted off the snapshot
+//!   the fixture's cross-owner version already journals — and each shot
+//!   member's terms hold the base its shot was made against, a record the
+//!   fixture's ops never journal: the checkpoint's body and every dump move;
+//!   the segment and the fixture's ops do not.
 
 use std::collections::BTreeMap;
 use std::fs;

@@ -243,7 +243,7 @@ impl fmt::Debug for World {
 /// bytes whole fails below that level: M4's map and M5's slice, each message
 /// naming this card's debt, and the identity slice's encodings (AUTH-1.40).
 ///
-/// `1` names eleven layouts, each the one before it with one change: the
+/// `1` names thirteen layouts, each the one before it with one change: the
 /// first carries M3's publication bit; the second appends M5's birth memo to
 /// its slice, and the third the shot terms after it; the fourth appends the
 /// identity slice after M7's (AUTH-2.79); the fifth holds each of M4's
@@ -252,34 +252,41 @@ impl fmt::Debug for World {
 /// appends the fork sources to the arrangement slice; the seventh appends
 /// the position map to the namespace slice; the eighth appends the
 /// arranged-at positions to the arrangement slice, and the ninth the draft
-/// bases after them (B3-S10). The last two change an entry beneath the
+/// bases after them (B3-S10). The next three change an entry beneath the
 /// arrangement slice's top level: the tenth gives each draft base the marker
-/// of the merge its draft carries, and the eleventh the markers stamped on
-/// that draft since its base last moved at a shot.
+/// of the merge its draft carries, the eleventh the markers stamped on that
+/// draft since its base last moved at a shot, and the twelfth gives each
+/// member's shot terms the base its shot was made against (skep #1111). The
+/// thirteenth appends the copied counts — each forked or staged document's
+/// count of its source the copy took — after the draft bases.
 ///
 /// No base any build wrote in the first reaches this word through a header
 /// this build loads: every one carries an M2 stamp older than this build's,
 /// which M2 refuses at load by name, with the no-migration remedy (PUB-1.2).
-/// A body in a later layout but the eleventh, under a current header, does
+/// A body in a later layout but the thirteenth, under a current header, does
 /// reach the decoder and is not refused at this word, and each change it
 /// predates meets it further in. A body whose content entries are bare
 /// values fails at its first such entry, whose value's length prefix reads as
 /// an entry tag no variant or an overlong stretch (skep-content's suite pins
 /// both shapes); one that passes its content map — an empty one, or one of
 /// tagged entries — meets the arrangement slice short of its fork sources,
-/// its arranged-at positions or its draft bases, none of which carries a
-/// default; a body written before the position map reads the content slice's
-/// bytes as that map and every slice after it as the one before, and runs off
-/// the body's end (`a_base_written_before_the_position_map_fails_to_decode`
-/// holds it on genesis and on worlds holding links). A body whose draft bases
-/// are empty is the eleventh's, byte for byte, whichever of the last three it
-/// was written in; one holding a draft-base entry written before the marker
-/// or the stamps reads the bytes after that entry's last field — the next
-/// entry's key, or M7's slice — as the fields it lacks. Where those are the
-/// stamps, the decode runs off the body's end or meets an address T4 refuses
+/// its arranged-at positions, its draft bases or its copied counts, none of
+/// which carries a default; a body written before the position map reads the
+/// content slice's bytes as that map and every slice after it as the one
+/// before, and runs off the body's end
+/// (`a_base_written_before_the_position_map_fails_to_decode` holds it on
+/// genesis and on worlds holding links). One holding a draft-base entry
+/// written before the marker or the stamps reads the bytes after that
+/// entry's last field — the next entry's key, or M7's slice — as the fields
+/// it lacks. Where those are the stamps, the decode runs off the body's end
+/// or meets an address T4 refuses
 /// (`a_base_written_before_the_marker_stamps_fails_to_decode` holds each
 /// shape); skep-arrangement's suite refuses a lone entry written before
-/// either. Every such refusal names the slice the decode stopped in and this
+/// either. One holding a shot-terms entry written before the base reads the
+/// byte after that entry's extent — the next entry's key, or the fork
+/// sources' count — as the base's option tag
+/// (`a_base_written_before_the_shot_base_fails_to_decode` holds each
+/// shape). Every such refusal names the slice the decode stopped in and this
 /// format, and the board then opens from an older base, or from genesis
 /// where its journal still reaches it, replaying its per-byte frames into
 /// one-byte values the readers serve as they serve any value.

@@ -688,6 +688,8 @@ impl Request {
             // The draft the placing record names: the rendering draft, where
             // the shot moves its base (the board's `Shot::moves_base_of`).
             draft: self.draft.as_ref().filter(|_| !self.keep_base),
+            // The base the placing record's terms name: the request's own.
+            base: self.base.as_ref().map(|(member, _)| member),
             term: &term,
             mint: self.mint.is_some(),
             claim: self.claim,

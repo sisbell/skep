@@ -45,7 +45,10 @@ where
     /// working state before the mint is staged, as `version` reads it. The
     /// snapshot's `source` is that surface, so
     /// [`fork_source`](crate::M5State::fork_source) answers it for the draft
-    /// as it answers a `version`'s.
+    /// as it answers a `version`'s, and
+    /// [`fork_source_copied`](crate::M5State::fork_source_copied) the count
+    /// of it the copy took — for an alternative the source draft's own
+    /// count, which is not the base extent it inherits.
     ///
     /// **What is recorded**, by what the surface is:
     ///

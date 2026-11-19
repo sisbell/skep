@@ -1798,9 +1798,14 @@ fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() 
     // chain; `to` and `ty` one unit span each.
     let content_span = stored_span_bytes(&run(&pca(1), 1).iextent());
     let unit = |a: &Address| stored_span_bytes(&skep_address::subtree_of(a.tumbler()));
-    // The rendering draft's address rides the placing record's own slot.
+    // The rendering draft's address rides the placing record's own slot, and
+    // the base's — the head the shot is made off — the terms' own.
     let rendering_draft = skep_links::stored_tumbler_bytes(doc1().tumbler());
+    let based = skep_links::stored_tumbler_bytes(
+        the_shot.base.as_ref().expect("a shot off the head").member.tumbler(),
+    );
     let staged = SHOT_BYTES
+        + based
         + rendering_draft
         + PLACED_RUN_BYTES
         + (PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES)
@@ -1818,7 +1823,7 @@ fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() 
         "three link-holding homes under the account; one links entry and two read-withs; one run in doc1, placed; two runs in the shot; the staged bytes from the table with the one kept place"
     );
     assert_eq!(unplaced, ReadPrice { draft_runs: 0, staged_bytes: staged, ..price }, "unplaced: no draft term, no kept place staged");
-    assert_eq!(staged, 7_206, "the figure, at the shallow depth");
+    assert_eq!(staged, 7_279, "the figure, at the shallow depth");
     assert_eq!(price.total(), 3 * 3 + 2, "homes × entries + draft runs × runs");
     assert!(!price.over_budget());
     assert_eq!(ReadPrice::BUDGET, MAX_PUBLICATION_READS);
@@ -1895,9 +1900,20 @@ fn the_staged_bytes_are_priced_per_piece_per_record_and_per_span_the_request_spe
         drafted + EDITION_MINT_BYTES + EDITION_CLAIM_BYTES + COPY_FIXED_BYTES + 2 * span_bytes + stored_span_bytes(&skep_address::subtree_of(citation().tumbler())),
         "the mint and the claim, the copy at its four spans and its type, no claim without an original"
     );
-    // A shot naming no draft prices the fixed records alone.
+    // A shot naming no draft prices the fixed records alone, and one naming
+    // a base beside them the base's address, at its own bytes.
     let undrafted = Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![] };
     assert_eq!(price_staged_bytes(world, &target, &undrafted, &[], &[], &none), SHOT_BYTES, "no draft named, no address priced");
+    let head = trunk_head(world.m3(), &pdoc()).expect("a head");
+    let based = Shot {
+        base: Some(skep_arrangement::Base { member: head.clone(), extent: n(0) }),
+        ..undrafted.clone()
+    };
+    assert_eq!(
+        price_staged_bytes(world, &target, &based, &[], &[], &none),
+        SHOT_BYTES + skep_links::stored_tumbler_bytes(head.tumbler()),
+        "the base named, its address priced in the terms' slot"
+    );
     assert!(CLAIM_BYTES > 0);
     // The member-position form's amplification.
     let wide = |count: usize| PublishDeposits {
@@ -1975,8 +1991,14 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     let none = PublishDeposits::default();
     // A shot with fresh runs names doc1 as its rendering draft, whose address
     // the placing record carries in its own slot — taken off every figure
-    // measured against a shot that names none, as the price takes it.
+    // measured against a shot that names none, as the price takes it. Every
+    // shot here names the head as its base, whose address the terms carry
+    // in their own slot — taken off the fixed figure the same way; the head
+    // each shot names is a member of one depth, so of one stored size.
     let drafted = skep_links::stored_tumbler_bytes(doc1().tumbler());
+    let based = skep_links::stored_tumbler_bytes(
+        trunk_head(k.snapshot().world().m3(), &pdoc()).expect("a head").tumbler(),
+    );
     let shot_bytes = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &none));
     let window = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&pdoc(), &pca(1), 3)]), &[], &none));
     let placed_run = window - shot_bytes - drafted;
@@ -2069,7 +2091,7 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
         ("KEPT_PLACE_BYTES", kept_place, KEPT_PLACE_BYTES),
         ("PLACED_RUN_BYTES", placed_run, PLACED_RUN_BYTES),
         ("REINSERTED_VALUE_BYTES", atom, REINSERTED_VALUE_BYTES),
-        ("SHOT_BYTES", shot_bytes, SHOT_BYTES),
+        ("SHOT_BYTES", shot_bytes - based, SHOT_BYTES),
         ("EDITION_MINT_BYTES", edition_mint, EDITION_MINT_BYTES),
         ("EDITION_CLAIM_BYTES", edition_claim, EDITION_CLAIM_BYTES),
         ("EDITION_CLAIM_BYTES at the document form", document_claim, EDITION_CLAIM_BYTES),
@@ -2089,7 +2111,11 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     // and the one-span copy the arithmetic's second verdict reads — the
     // copy's fixed part and its three spans at their depths.
     let one_span_copy = small_alone - shot_bytes_at_an_empty_head;
-    assert_eq!((marker, birth_s, byte, one_span_copy), (109, 259, 301, 1_029), "the quoted figures");
+    assert_eq!(
+        (marker, birth_s, byte, one_span_copy),
+        (109, 260, 301, 1_029),
+        "the quoted figures"
+    );
     assert_eq!(
         one_span_copy,
         COPY_FIXED_BYTES + stored_span_bytes(&run(&pca(1), 3).iextent()) + stored_span_bytes(&subtree_of(doc2().tumbler())) + stored_span_bytes(&subtree_of(citation().tumbler())),

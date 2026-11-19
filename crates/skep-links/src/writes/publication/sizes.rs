@@ -121,10 +121,12 @@ pub const REINSERTED_VALUE_BYTES: u64 = 287;
 
 /// The bytes the shot stages whatever it places: the member's mint and the
 /// `ShotPlace` record holding no run, its terms carrying a base extent and
-/// its rendering-draft slot empty; the birth shape, with no extent to carry,
-/// is 259. A shot naming its rendering draft stages the draft's address in
-/// that slot beside them, priced at [`stored_tumbler_bytes`] of it.
-pub const SHOT_BYTES: u64 = 271;
+/// a base, and its rendering-draft slot empty; the base's own address is
+/// priced beside them, at [`stored_tumbler_bytes`] of it (skep #1111), and
+/// the birth shape, with no base and no extent to carry, is 260. A shot
+/// naming its rendering draft stages the draft's address in that slot
+/// beside them, priced the same way.
+pub const SHOT_BYTES: u64 = 272;
 
 /// The bytes the mint form adds: the edition's mint under the account.
 pub const EDITION_MINT_BYTES: u64 = 109;
@@ -165,17 +167,17 @@ const SHALLOW_TYPE_SPAN_BYTES: u64 = 208;
 /// type spans, 4096 runs each minting a record and
 /// re-windowed at a place as one piece — the placement at `MAX_PLACED_RUNS`
 /// runs, the re-insert at `MAX_REINSERTED_VALUES` values every one an atom,
-/// the shot's fixed records and the mint form's two: 15,507,621,145 bytes,
+/// the shot's fixed records and the mint form's two: 15,507,621,146 bytes,
 /// which DOES NOT FIT `MAX_TXN_BYTES` (64 MiB) — by two orders, the copies
 /// at full slots being 9,132,613,632 of it and the fresh marks at full
 /// slots 6,313,992,192. With the copies and the fresh marks at one span a
 /// slot (a copy 1,029 bytes apiece: the fixed part, a content span, a
 /// document's unit span and a nine-component type's; an entry of the rider
 /// 1,782: its retraction, the fixed part, a content span and a
-/// ten-component type's) every other cap at once sums to 76,039,449 bytes,
-/// PAST the budget by 8,930,585 — the fourth list, `supersede`, is
+/// ten-component type's) every other cap at once sums to 76,039,450 bytes,
+/// PAST the budget by 8,930,586 — the fourth list, `supersede`, is
 /// 3,510,272 of it and the rider 7,299,072; without both the sum stands
-/// inside the budget by 1,878,759 — the re-inserted atoms' 37,617,664 the
+/// inside the budget by 1,878,758 — the re-inserted atoms' 37,617,664 the
 /// largest term; the live price ([`price_staged_bytes`]) refuses such a
 /// request ahead of the lock. What
 /// a body within the frame routes' cap can command is
@@ -264,7 +266,7 @@ const REACHABLE_PIECES: u64 = MAX_WIRE_LIST / 2 + (MAX_WIRE_LIST / 2) * (MAX_WIR
 /// minting run of the first half, a claim per entry and the retractions,
 /// read-withs, supersession claims and the rider's retractions and marks at
 /// their caps, the figure is
-/// 10,724,744,473 bytes: PAST
+/// 10,724,744,474 bytes: PAST
 /// `MAX_TXN_BYTES` by two orders, each of the three large terms past it
 /// alone. So a request within the body cap can command more staged bytes
 /// than one transaction holds, and the kernel's `txn_over_budget` is met
@@ -327,9 +329,11 @@ pub fn stored_span_bytes(span: &Span) -> u64 {
 ///
 /// The terms, each at the table's figure:
 ///
-/// * the shot's fixed records ([`SHOT_BYTES`]), the address of the draft
-///   whose base the shot moves where it moves one ([`stored_tumbler_bytes`]
-///   of [`Shot::moves_base_of`], in the placing record's own slot), the
+/// * the shot's fixed records ([`SHOT_BYTES`]), the address of the base the
+///   shot names where it names one ([`stored_tumbler_bytes`] of its member,
+///   in the terms' own slot), the address of the draft whose base the shot
+///   moves where it moves one ([`stored_tumbler_bytes`] of
+///   [`Shot::moves_base_of`], in the placing record's own slot), the
 ///   edition's mint at the mint form,
 ///   and the edition claim where the deposits claim, at either form;
 /// * per draft-native run — of any named draft, the rendering `draft`'s or
@@ -391,6 +395,9 @@ pub fn price_staged_bytes<W: LinkWorld>(
     deposits: &PublishDeposits,
 ) -> u64 {
     let mut bytes = SHOT_BYTES;
+    if let Some(base) = &shot.base {
+        bytes = bytes.saturating_add(stored_tumbler_bytes(base.member.tumbler()));
+    }
     if let Some(rendering) = shot.moves_base_of() {
         bytes = bytes.saturating_add(stored_tumbler_bytes(rendering.tumbler()));
     }
@@ -535,7 +542,7 @@ mod tests {
     /// visible decision here.
     #[test]
     fn the_maximal_request_is_priced_against_the_transaction_budget() {
-        assert_eq!(MAXIMAL_PUBLICATION_BYTES, 15_507_621_145, "the table's sum");
+        assert_eq!(MAXIMAL_PUBLICATION_BYTES, 15_507_621_146, "the table's sum");
         assert!(
             MAXIMAL_PUBLICATION_BYTES > MAX_TXN_BYTES,
             "the maximal request at the table's figures does not fit the budget: {MAXIMAL_PUBLICATION_BYTES} bytes against {MAX_TXN_BYTES}"
@@ -545,7 +552,7 @@ mod tests {
         let one_span_a_slot = MAXIMAL_PUBLICATION_BYTES
             - MAX_WIRE_LIST * (COPY_BYTES - 1_029)
             - MAX_WIRE_LIST * (MAXIMAL_ORIGINAL_BYTES - ONE_SPAN_ORIGINAL_BYTES);
-        assert_eq!(one_span_a_slot, 76_039_449, "every other cap at once, the copies and the fresh marks at one span a slot");
+        assert_eq!(one_span_a_slot, 76_039_450, "every other cap at once, the copies and the fresh marks at one span a slot");
         assert_eq!(MAX_WIRE_LIST * CLAIM_BYTES, 3_510_272, "the supersession claims' share at their cap");
         assert_eq!(MAX_WIRE_LIST * ONE_SPAN_ORIGINAL_BYTES, 7_299_072, "the rider's share at its cap");
         assert!(
@@ -574,7 +581,7 @@ mod tests {
     #[test]
     fn the_reachable_request_is_priced_against_the_transaction_budget() {
         assert_eq!(REACHABLE_PIECES, 2_048 + 2_048 * 2_048);
-        assert_eq!(REACHABLE_PUBLICATION_BYTES, 10_724_744_473, "the lane's arithmetic");
+        assert_eq!(REACHABLE_PUBLICATION_BYTES, 10_724_744_474, "the lane's arithmetic");
         assert!(
             REACHABLE_PUBLICATION_BYTES > MAX_TXN_BYTES,
             "the reachable request is past the budget: {REACHABLE_PUBLICATION_BYTES} against {MAX_TXN_BYTES}"

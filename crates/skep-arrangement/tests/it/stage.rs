@@ -61,6 +61,11 @@ fn a_stage_mints_a_private_draft_sharing_the_sources_whole_surface_and_records_i
             "the base, the count the copy took, the source"
         );
         assert_eq!(m5.fork_source(&draft), Some(&member), "the snapshot's source, as a version's");
+        assert_eq!(
+            m5.fork_source_copied(&draft),
+            Some(&n(3)),
+            "…and the count of it the copy took"
+        );
         assert_eq!(m5.arranged_at(&draft), Some(at), "the typed state starts at the mint");
         assert_eq!(m5.birth_extent(&draft), None, "no birth version: a document, not a member");
         assert_eq!(m5.shot_terms(&draft), None, "no shot minted it");
@@ -86,7 +91,13 @@ fn a_stage_mints_a_private_draft_sharing_the_sources_whole_surface_and_records_i
         "the head, not the document's own pre-chain arrangement"
     );
     assert_eq!(s.world().m5().fork_source(&off_bare), Some(&member));
+    assert_eq!(s.world().m5().fork_source_copied(&off_bare), Some(&n(3)), "the head's count");
     // The source's own state is untouched by either stage (V3).
+    assert_eq!(
+        s.world().m5().fork_source_copied(&draft),
+        Some(&n(3)),
+        "the first draft's own edit leaves the count its copy took"
+    );
     assert_eq!(bytes_of(&s, &member), [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
     assert_eq!(s.world().m5().content_count(&draft), n(4), "the first draft diverged alone");
 }
@@ -111,6 +122,11 @@ fn a_stage_of_the_memberless_document_records_it_as_the_base_with_the_count_the_
             "the bare document, at zero"
         );
         assert_eq!(m5.fork_source(&empty), Some(&pdoc()), "noted, an empty surface included");
+        assert_eq!(
+            m5.fork_source_copied(&empty),
+            Some(&n(0)),
+            "the copy took nothing, a noted zero"
+        );
     }
     deposit_abc(&k);
     let (full, _) = vs.stage(PrincipalId(1), &pdoc()).expect("off the edition holding a b c");
@@ -123,6 +139,11 @@ fn a_stage_of_the_memberless_document_records_it_as_the_base_with_the_count_the_
         "the count the copy took"
     );
     assert_eq!(m5.draft_base(&empty), Some(&DraftBase { base: pdoc(), extent: n(0), source: pdoc(), merge: None, stamped: vec![] }), "the earlier record stands");
+    assert_eq!(
+        (m5.fork_source_copied(&full), m5.fork_source_copied(&empty)),
+        (Some(&n(3)), Some(&n(0))),
+        "each copy's own count: the later deposit into the source moves the earlier none"
+    );
 }
 
 /// THE POOL SIBLING (B3-S10): an alternative staged from a draft inherits
@@ -132,7 +153,9 @@ fn a_stage_of_the_memberless_document_records_it_as_the_base_with_the_count_the_
 /// board holds no base for — a plain mint never staged — leaves the
 /// alternative unrecorded, a free-standing draft of its own, its source
 /// noted all the same; another principal's draft stages into the stager's
-/// own account the same way.
+/// own account the same way. The count each copy took is its own source's
+/// (skep #1111): an alternative inherits its base's extent and notes the
+/// count of the DRAFT it copied, the two apart once the draft has grown.
 #[test]
 fn an_alternative_inherits_its_source_drafts_base_and_an_unrecorded_source_leaves_it_free_standing() {
     let k = mem_kernel();
@@ -159,6 +182,16 @@ fn an_alternative_inherits_its_source_drafts_base_and_an_unrecorded_source_leave
         );
         assert_eq!(bytes_of(&s, &alternative), [b"a".to_vec(), b"b".to_vec(), b"c".to_vec(), b"z".to_vec()]);
         assert_eq!(m5.fork_source(&alternative), Some(&staged));
+        assert_eq!(
+            m5.fork_source_copied(&alternative),
+            Some(&n(4)),
+            "the staging draft's own four the copy took, not the inherited base extent of three"
+        );
+        assert_eq!(
+            m5.fork_source_copied(&staged),
+            Some(&n(3)),
+            "the staging draft's copy of the member"
+        );
     }
     let (nested, _) = vs.stage(PrincipalId(1), &alternative).expect("an alternative of the alternative");
     assert_eq!(
@@ -184,6 +217,12 @@ fn an_alternative_inherits_its_source_drafts_base_and_an_unrecorded_source_leave
     assert!(!s.world().m3().published(&theirs));
     assert_eq!(s.world().m5().draft_base(&theirs), None);
     assert_eq!(s.world().m5().fork_source(&theirs), Some(&doc1()));
+    assert_eq!(s.world().m5().fork_source_copied(&theirs), Some(&n(3)), "doc1's three");
+    assert_eq!(
+        s.world().m5().fork_source_copied(&free),
+        Some(&n(3)),
+        "a free-standing draft's count all the same"
+    );
 }
 
 /// The base moves with each publication of the draft itself (B3-S10).
@@ -194,7 +233,9 @@ fn an_alternative_inherits_its_source_drafts_base_and_an_unrecorded_source_leave
 /// tail and the re-minted words counted — keeping the source; so a draft
 /// staged from version 1 that publishes version 2 publishes version 3 next,
 /// never a daughter of version 1. A shot naming no draft moves no base, and
-/// nothing checks the request's own `base` against the record.
+/// nothing checks the request's own `base` against the record. Each member
+/// records the base its own request named (skep #1111), the draft's copied
+/// count staying where its stage left it.
 #[test]
 fn the_base_moves_to_the_member_the_draft_renders_and_the_next_shot_lands_after_it() {
     let k = mem_kernel();
@@ -223,6 +264,12 @@ fn the_base_moves_to_the_member_the_draft_renders_and_the_next_shot_lands_after_
             "the base moved to the member, the extent its whole count, the source kept"
         );
         assert_eq!(m5.content_count(&e2), n(4));
+        assert_eq!(
+            m5.shot_terms(&e2).and_then(|t| t.base.as_ref()),
+            Some(&e1),
+            "version 2 records version 1"
+        );
+        assert_eq!(m5.fork_source_copied(&d), Some(&n(3)), "the copy's count, unmoved by the base");
     }
     // The next shot from the draft, off the base the board now records,
     // lands as version 3 — not as a daughter of version 1.
@@ -238,6 +285,11 @@ fn the_base_moves_to_the_member_the_draft_renders_and_the_next_shot_lands_after_
     assert_eq!(
         k.snapshot().world().m5().draft_base(&d),
         Some(&DraftBase { base: e3.clone(), extent: n(4), source: e1.clone(), merge: None, stamped: vec![] })
+    );
+    assert_eq!(
+        k.snapshot().world().m5().shot_terms(&e3).and_then(|t| t.base.clone()),
+        Some(e2.clone()),
+        "version 3 records version 2"
     );
     // A shot naming no draft moves nothing.
     let unnamed = Shot { base: Some(base(&e3, 4)), draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 4)] };
@@ -255,8 +307,18 @@ fn the_base_moves_to_the_member_the_draft_renders_and_the_next_shot_lands_after_
     let (e1_1, _) = vs.publish(P1, &pdoc(), &daughter, &readable).expect("a daughter under version 1");
     assert_eq!(e1_1, a(&[1, 0, 1, 0, nth_doc(3), 1, 1]));
     assert_eq!(
+        k.snapshot().world().m5().shot_terms(&e1_1).and_then(|t| t.base.clone()),
+        Some(e1.clone()),
+        "the daughter records version 1, its request's base"
+    );
+    assert_eq!(
         k.snapshot().world().m5().draft_base(&d),
         Some(&DraftBase { base: e1_1, extent: n(3), source: e1, merge: None, stamped: vec![] })
+    );
+    assert_eq!(
+        k.snapshot().world().m5().fork_source_copied(&d),
+        Some(&n(3)),
+        "the count its stage noted, still"
     );
 }
 
@@ -270,8 +332,11 @@ fn the_base_moves_to_the_member_the_draft_renders_and_the_next_shot_lands_after_
 /// the BARE DOCUMENT holds past the copy's extent (the deposit, which
 /// version 1 does not hold: the tail is the base's own arrangement, never
 /// the head's) after the draft's words, the head unmoved and the draft's
-/// base moved to the daughter; the second such draft lands `D.1.2`. The
-/// birth shape, no base at all, is still refused once a member stands.
+/// base moved to the daughter; the second such draft lands `D.1.2`. Each
+/// member records the base its request named (skep #1111): the bare
+/// document for version 1 and for each daughter alike, though a daughter's
+/// address `D.1.k` reads as version 1's. The birth shape, no base at all,
+/// is still refused once a member stands.
 #[test]
 fn a_draft_begun_before_version_one_lands_as_its_daughter_carrying_the_bare_documents_tail() {
     let k = mem_kernel();
@@ -297,6 +362,11 @@ fn a_draft_begun_before_version_one_lands_as_its_daughter_carrying_the_bare_docu
     let (e1, _) = vs.publish(P1, &pdoc(), &first, &readable).expect("version 1");
     assert_eq!(e1, vdoc());
     assert_eq!(bytes_of(&k.snapshot(), &e1), [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()], "version 1 holds the three alone");
+    assert_eq!(
+        k.snapshot().world().m5().shot_terms(&e1).and_then(|t| t.base.clone()),
+        Some(pdoc()),
+        "version 1 records the bare document it was made against"
+    );
     // The first draft's own word, then its shot off the base the board
     // records for it — the bare document at three.
     let (w, _) = vs
@@ -319,6 +389,17 @@ fn a_draft_begun_before_version_one_lands_as_its_daughter_carrying_the_bare_docu
             Some(&DraftBase { base: daughter.clone(), extent: n(5), source: pdoc(), merge: None, stamped: vec![] }),
             "the base moved to the daughter, at its whole count, the source kept"
         );
+        // The daughter's base is the bare document its request named and
+        // its tail was read against — never version 1, which its address
+        // `D.1.1` names and under which it was minted.
+        let terms =
+            s.world().m5().shot_terms(&daughter).expect("the shot's member carries its terms");
+        assert_eq!(
+            (terms.base.as_ref(), terms.base_extent.as_ref()),
+            (Some(&pdoc()), Some(&n(3))),
+            "the recorded base: the bare document at three"
+        );
+        assert_ne!(terms.base.as_ref(), Some(&e1), "never the member its address names");
     }
     // The second draft begun before version 1: the next daughter of version
     // 1, never a trunk member.
@@ -326,6 +407,11 @@ fn a_draft_begun_before_version_one_lands_as_its_daughter_carrying_the_bare_docu
     let (daughter2, _) = vs.publish(P1, &pdoc(), &second, &readable).expect("the second such draft lands beside version 1 too");
     assert_eq!(daughter2, a(&[1, 0, 1, 0, nth_doc(3), 1, 2]));
     assert_eq!(bytes_of(&k.snapshot(), &daughter2), [b"a".to_vec(), b"b".to_vec(), b"c".to_vec(), b"z".to_vec()]);
+    assert_eq!(
+        k.snapshot().world().m5().shot_terms(&daughter2).and_then(|t| t.base.clone()),
+        Some(pdoc()),
+        "the second daughter records the bare document too"
+    );
     assert!(!k.snapshot().world().m3().is_registered_document(&a(&[1, 0, 1, 0, 65, 2])), "no trunk member was minted");
     // The birth shape — no base at all — is still refused once a member stands.
     let birth = Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)] };

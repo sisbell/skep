@@ -1467,24 +1467,28 @@ nothing. A `publish` with NO runs journals its placing record all the
 same, so a birth version born EMPTY that way answers `0` for good; no
 conforming mint is empty.
 
-`placed` and `base_extent` are THE SHOT TERMS OF THE ADDRESS NAMED
-(signed ops; the design record's D25, arm (c′)): asked of a version
-member the `publish` shot minted, `placed` is the number of content
-positions the shot's client runs covered — positions `1` through
-`placed` of the member are the client's runs, the base's carried tail
-follows them — and `base_extent` is the shot's own `base_extent`, the
-positions of its base the staged copy took; `base_extent` is `null` for
-a member the birth shape minted (no base — the `null` IS the birth bit,
-and there `placed` is the birth extent). Both are `null` where the
-address named carries no terms: the trunk document itself, a birth
-version an owned `version` minted, a member minted before the record
-carried them. Journaled in the shot's own placing record, so they ride
-the commit chain, every checkpoint and every replica. With the member's
-runs and its address they are everything a reader needs to re-compose
-the `publish` signature's frame (§Arrangement, `publish`): `base` is
-derived from the member's address — a trunk member `D.k+1` was minted
-against `D.k`, a daughter `X.m` against `X`, `D.1` against the memberless
-document or, with `base_extent` `null`, against nothing.
+`placed`, `base_extent` and `shot_base` are THE SHOT TERMS OF THE
+ADDRESS NAMED (signed ops; the design record's D25, arm (c′)): asked of
+a version member the `publish` shot minted, `placed` is the number of
+content positions the shot's client runs covered — positions `1`
+through `placed` of the member are the client's runs, the base's
+carried tail follows them — `base_extent` is the shot's own
+`base_extent`, the positions of its base the staged copy took, and
+`shot_base` is the shot's own `base`, the member or memberless document
+the shot was made against, as the board RECORDED it at the shot.
+`base_extent` and `shot_base` are `null` together for a member the
+birth shape minted (no base — the `null`s ARE the birth bit, and there
+`placed` is the birth extent). All three are `null` where the address
+named carries no terms: the trunk document itself, a birth version an
+owned `version` minted, a member minted before the record carried them.
+Journaled in the shot's own placing record, so they ride the commit
+chain, every checkpoint and every replica. With the member's runs they
+are everything a reader needs to re-compose the `publish` signature's
+frame (§Arrangement, `publish`): the base group is `shot_base` with
+`base_extent` — the recorded base, never one read off the member's
+address, which does not name it in every case: a draft begun from the
+memberless document `D` and published once `D.1` stands lands as
+`D.1`'s daughter `D.1.k`, and its `shot_base` is `D`.
 
 `source` is THE SOURCE OF THE ADDRESS NAMED: the address whose
 arrangement a `version` snapshotted into it at the mint — the version
@@ -1504,6 +1508,20 @@ they may read the source: an address is not secret, and a reader who
 wants more of the source asks the source under its own gate. A merge of
 a cross-account fork takes it as the fork's base (the merge record's
 case (j)) where it names a member of the trunk being merged.
+
+`source_copied` is beside it, `null` exactly where `source` is: the
+number of content positions of the source the copy took, a decimal
+string, noted at the mint and never moved. A source that is a trunk's
+head or a memberless edition keeps growing by declared deposits after
+the copy, and this count stays where the copy ended: it says how much of
+the source the document held at its mint. For a staged draft it is the
+count its own copy took: the recorded base's `base_copied` at the stage
+where the draft was staged from a published surface, and its source
+draft's whole count where it is an alternative, whose `base_copied` is
+inherited; it stays put when the draft's publications or landings move
+`base_copied`. It is the document's own content count at its mint, so
+it tells a reader of the address named nothing of the source that
+document did not hold, and is served as `source` is.
 
 `base` and `base_copied` are THE DRAFT BASE OF THE ADDRESS NAMED (the
 staging act, `stage` in §Namespace): `base` the member — or the
@@ -1578,33 +1596,36 @@ answer `at: 0`, the genesis coordinate, with no time.
 
 This example is asked of the birth version `1.0.1.0.1.1`, which a shot
 placing five positions minted from the memberless document taken at
-three — a shot member, so `source` is `null` and the board records no
-base for it — the shot at 7, its row still in the feed:
+three — its `shot_base` that document — a shot member, so `source` is
+`null` and the board records no base for it — the shot at 7, its row
+still in the feed:
 
 <!-- wire: response doc_metadata -->
 ```json
-{"as_of":9,"at":7,"base":null,"base_copied":null,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","merge":null,"owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","source":null,"time":1786838400047,"time_from":"feed"}
+{"as_of":9,"at":7,"base":null,"base_copied":null,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","merge":null,"owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","shot_base":"1.0.1.0.1","source":null,"source_copied":null,"time":1786838400047,"time_from":"feed"}
 ```
 
 A private draft the staging act minted at 8 off that birth version —
-`source` the member copied, `base` that member and `base_copied` the
-five positions the copy took, so a `publish` off it carries
-`base_extent` 5 — whose feed line is gone, dated by the hour's anchor:
+`source` the member copied and `source_copied` the five positions the
+copy took, `base` that member and `base_copied` the same five, so a
+`publish` off it carries `base_extent` 5 — whose feed line is gone,
+dated by the hour's anchor:
 
 <!-- wire: response doc_metadata_unborn -->
 ```json
-{"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":null,"owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":1786838400052,"time_from":"anchor"}
+{"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":null,"owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":1786838400052,"time_from":"anchor"}
 ```
 
 A cross-owner fork — a private document of another account, minted by
 `version` off `1.0.1.0.1` while `1.0.1.0.1.1` headed its chain, so born
-sharing that member, which is its `source`; its own chain has no member,
-no shot minted it and no staging act recorded a base for it — and minted
-by a build before the position map, so its age is unknown:
+sharing that member, which is its `source`, the five positions its copy
+took its `source_copied`; its own chain has no member, no shot minted it
+and no staging act recorded a base for it — and minted by a build before
+the position map, so its age is unknown:
 
 <!-- wire: response doc_metadata_fork -->
 ```json
-{"as_of":9,"at":null,"base":null,"base_copied":null,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.2.0.1","merge":null,"owner":"1.0.2","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":null,"time_from":null}
+{"as_of":9,"at":null,"base":null,"base_copied":null,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.2.0.1","merge":null,"owner":"1.0.2","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":null,"time_from":null}
 ```
 
 The staged draft above after a merge's landing: a `set_arrangement` at
@@ -1612,11 +1633,13 @@ The staged draft above after a merge's landing: a `set_arrangement` at
 `1.0.1.0.1.1.1` as its one side, moved the draft's base to that version
 and put the marker beside it — the draft stands behind nothing until
 version 3 is published, when the landing's ack tells it (`ack`'s
-`head_moved`), and the marker ends at the draft's next `publish`:
+`head_moved`), and the marker ends at the draft's next `publish`; its
+`source_copied` is still the five its stage copied, beside the six the
+landing moved `base_copied` to:
 
 <!-- wire: response doc_metadata_marked -->
 ```json
-{"as_of":15,"at":8,"base":"1.0.1.0.1.2","base_copied":"6","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":{"at":14,"head":"1.0.1.0.1.2","head_copied":"6","sides":["1.0.1.0.1.1.1"]},"owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":1786838400052,"time_from":"anchor"}
+{"as_of":15,"at":8,"base":"1.0.1.0.1.2","base_copied":"6","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":{"at":14,"head":"1.0.1.0.1.2","head_copied":"6","sides":["1.0.1.0.1.1.1"]},"owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":1786838400052,"time_from":"anchor"}
 ```
 
 **`edition_claims`** — edition_claims (§Link discovery reads): the
@@ -2167,7 +2190,9 @@ either way while the chain is empty. Once a member exists the two part:
 the memberless base — a draft begun before any version — yields the
 FIRST member's daughter, in the nested form (`1.0.1.0.1.1.1`), its
 `base_extent` and its carried tail read against the document's own
-pre-chain arrangement, the one its copy was taken from; `base` absent
+pre-chain arrangement, the one its copy was taken from, and the board
+records `doc` as its base (`doc_metadata`'s `shot_base`), which the
+daughter's address does not name; `base` absent
 names nothing to land under and is refused (`base_superseded`) — the
 one shape that code names. A member address given as `doc` is the
 document's shot.
@@ -3642,7 +3667,10 @@ is compared against, so a deposited edition still matches. `source` is
 the address the document named was born sharing — the member or bare
 document a `version` snapshotted into it, or a `stage` copied into it —
 and `null` where neither minted it, served to whoever may read the
-address named; `base` and `base_copied` are the draft base the board
+address named, with `source_copied` beside it, the positions of it the
+copy took at the mint; a version member a `publish` shot minted answers
+its shot terms, the recorded base of its shot (`shot_base`) among them;
+`base` and `base_copied` are the draft base the board
 records for it — the member its next publication lands after and the
 positions the copy took of it, recorded by `stage` and moved by every
 `publish` naming the draft as its rendering `draft` without `keep_base`
@@ -4288,10 +4316,11 @@ DEPOSIT ROWS (§The publish shot and head-float, the deposits), one
 group per public deposit in the signed order — nothing for a request
 carrying none, so a shot alone signs as before. So the signature binds
 the base, member and
-extent both: `base` is no member of the frame, but a verifier DERIVES it
-from the minted member's address — a trunk member `D.k+1` was minted
-against `D.k`, a daughter `X.m` against `X`, a birth version `D.1` against
-the memberless `D` — and composes it INTO the preimage; the same signed
+extent both: `base` is no member of the frame, but a verifier READS it
+as the board recorded it at the shot — `doc_metadata`'s `shot_base`
+beside `base_extent`, never the minted member's address, which a draft
+begun before version 1 and landed as its daughter `D.1.k` does not name
+— and composes it INTO the preimage; the same signed
 shot re-submitted naming another base, the trunk's current head say,
 spells another group and is refused `attestation_invalid:signature`. A
 window is signed by WHERE it quotes from and never by its bytes, so the
@@ -4300,9 +4329,9 @@ binds the bytes. The daemon composes the same body off its snapshot — the
 values of the copied runs read there, the windows spelled from the
 request, the base as the request names it — and verifies before the
 transaction; a reader holding the member later composes it again from
-the member's runs over its first `placed` positions, its `doc_metadata`
-terms and its address, with no request in hand (§Namespace,
-`doc_metadata`). A REPLAYED shot verifies as it did and names a `base`
+the member's runs over its first `placed` positions and its
+`doc_metadata` terms — `placed`, `base_extent` and `shot_base` — with no
+request in hand (§Namespace, `doc_metadata`). A REPLAYED shot verifies as it did and names a `base`
 its own commit left no longer the head, so the store's rule mints that
 base's DAUGHTER, never the trunk's next: the document's current text does
 not move — where it re-inserts nothing from a draft; a replayed shot
@@ -6652,17 +6681,20 @@ Each entry:
   `assert_sup`'s and `edit_link`'s, each of which mints a link too: a
   reader finds a supersession claim by `in_claims` or `out_claims`
   (§Link discovery reads).
-* `placed`, `base_extent` — on a `publish` row: the shot's two client terms
-  exactly as `doc_metadata` serves them for the minted member (§Operations)
-  — `placed` the count of positions the client placed (the sum of the
-  shot's runs' widths, the count its signed body leads with), a decimal
-  string; `base_extent` the extent of the base the staged copy took, a
-  decimal string, or `null` in the birth shape (the shot carried no `base`;
-  the absence is the birth bit). The base member itself is derived from
-  the member's own address and composed into the signed base group beside
-  this extent, so these two are what a verifier composing the entry frame
-  from the feed alone still needs. On a bare row, the journal's answer
-  (below); absent on every other op's row.
+* `placed`, `base_extent`, `base` — on a `publish` row: the shot's three
+  client terms exactly as `doc_metadata` serves them for the minted member
+  (§Operations), its `base` there `shot_base` — `placed` the count of
+  positions the client placed (the sum of the shot's runs' widths, the
+  count its signed body leads with), a decimal string; `base_extent` the
+  extent of the base the staged copy took, a decimal string; and `base`
+  the member or memberless document the shot was made against, as the
+  board recorded it, an address — the two `null` in the birth shape (the
+  shot carried no `base`; the absence is the birth bit), and `base`
+  `null` too on a row written before the board recorded it. The base and
+  its extent are the signed base group, so these three are what a
+  verifier composing the entry frame from the feed alone still needs. On
+  a bare row, the journal's answer (below); absent on every other op's
+  row but `base` on a `set_arrangement`'s.
 * `base`, `merge` — on a `set_arrangement` row (§Arrangement): the base
   the write recorded, an address, or `null` where it recorded none; and
   the request's `merge` beside its `head`, `{"sides": [addresses], "head":
@@ -6680,7 +6712,7 @@ Each entry:
   a document names neither and reads as a plain re-arrangement does. Both
   present on every `set_arrangement` row, each the request's own term; on
   a bare row both `null`, the journal naming neither (below); absent on
-  every other op's row.
+  every other op's row but `base` on a `publish`'s.
 
 A client MUST ignore an entry member it does not know, and a member of
 the page object likewise: an entry gains members by later deltas (the
@@ -6717,7 +6749,7 @@ page is answered from:
   ops, round 7): a bare row carries what the journal's own records
   answer, exactly as the recorded row would have — a `delegate`'s
   `new_prefix` and `new_id` with `op: "delegate"` (a principal seated),
-  a `publish`'s `placed` and `base_extent` with `op: "publish"` (a member
+  a `publish`'s `placed`, `base_extent` and `base` with `op: "publish"` (a member
   minted with its placing record; a member minted without one is a
   `version`), a replacing `make_link`'s `link` with its `op`, a `nullify`
   by its `op` alone, and `link` for the one link any other link write

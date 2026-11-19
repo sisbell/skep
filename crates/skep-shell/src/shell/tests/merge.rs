@@ -58,12 +58,12 @@
 use std::io::{Read, Write};
 
 use skep_client::address::{account_of, document_of, parse_address};
-use skep_client::board::{frames, Opened, SessionBody};
+use skep_client::board::frames;
 use skep_client::halt::Halt;
 use skep_client::merge::{Inputs, Merged, RecordLanding, Refusal as Library, Side};
 use skep_client::store::{FileStore, KeyId, KeyStore};
 
-use super::publication::{ground, register, second_device, signed_facts, Ground};
+use super::publication::{bare, ground, other_account, register, second_device, signed_facts, written, Ground, Other};
 use super::*;
 use crate::sessions::Facts;
 
@@ -129,50 +129,6 @@ pub(super) fn arrangement_rows(g: &Ground, doc: &str, since: u64) -> Vec<(bool, 
 
 /// The kind this shell names for the claimant's merge records: its doc 1.
 const KIND: &str = "1.0.1.0.1";
-
-/// Another account: a sub-account of the claimant's, its home minted.
-///
-/// Each of the two reads the other's drafts, the subtree running both ways
-/// (wire.md §The read predicate; PUB-1.32), and owns none of them; its bare
-/// session writes into no published document.
-struct Other {
-    account: String,
-    token: Token,
-}
-
-/// Returns a bare session of `principal`'s at the ground's permissive board.
-fn bare(g: &Ground, principal: u64) -> Token {
-    let entry = g.shell.sessions.get(&g.session).unwrap();
-    match entry.board.session_open(SessionBody::Bare { principal }).unwrap() {
-        Opened::Token(token) => token,
-        other => panic!("a bare session as principal {principal}: {other:?}"),
-    }
-}
-
-/// Returns the answer to `frame` sent under `token`, acknowledged.
-fn written(g: &Ground, token: &Token, frame: &Value) -> Value {
-    let entry = g.shell.sessions.get(&g.session).unwrap();
-    let Answer::Document(v) = entry.board.op(Some(token), frame).unwrap() else { panic!("the session stands") };
-    assert!(v["resp"].as_str().is_some_and(|r| r.starts_with("ack")), "{frame}: {v}");
-    v
-}
-
-/// Returns another account, delegated under the claimant's.
-///
-/// Its prefix is the next under `1.0.1`, delegated to a free principal from
-/// the claimant's bare session, and its home is minted from its own.
-fn other_account(g: &Ground) -> Other {
-    let entry = g.shell.sessions.get(&g.session).unwrap();
-    let account = entry.board.next_account_prefix("1.0.1").unwrap().expect("a prefix under the claimant's");
-    let mut principal = 2;
-    while entry.board.principal_prefix(principal).unwrap().is_some() {
-        principal += 1;
-    }
-    written(g, &bare(g, 1), &frames::delegate(&account, principal, None));
-    let token = bare(g, principal);
-    written(g, &token, &frames::create_home(&account, None));
-    Other { account, token }
-}
 
 /// Returns the merge of E.2 with E.1.1 as the library composes it.
 ///

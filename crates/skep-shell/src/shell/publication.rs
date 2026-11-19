@@ -244,8 +244,8 @@
 //! where the publication becomes the head, its standing `at_head` or
 //! `first` — every other draft of the person's own whose recorded base is
 //! this draft's, by the library's `left_behind`, one `doc_metadata` per
-//! draft of the shell's own list (the document index's drafts under the
-//! session's account, read for it even where the page passes
+//! draft of the shell's own list (the document index's drafts of the
+//! session's account exactly, read for it even where the page passes
 //! `readable_drafts`). It is read at a fresh open alone: a re-opened panel
 //! keeps the family it first left behind, and `confirm` reads it never.
 //!
@@ -265,7 +265,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
 use skep_address::Address;
-use skep_client::address::is_address_text;
+use skep_client::address::{account_of, is_address_text};
 use skep_client::board::{frames, merge_marker, Answer, LinkSpan, LinkValue, MergeMarker, Rejection};
 use skep_client::halt::Halt;
 use skep_client::publication::{self as lib, Ack, AckVia, Base, Built, Confirmed, Destination, Fault, Inert, LineageCause, Missing, OriginAnswer, OwedAnswer, OwnFault, PartKey, Placement, Publisher, RaceKey, Refusal as PubRefusal, Restatement, RowKind, Sent, Standing, SupersedeCause, Switches, Term, Unrecorded, Verdict};
@@ -832,21 +832,27 @@ impl Shell {
         Ok(runs)
     }
 
-    /// Returns the shell's own lists off the document index: the person's
-    /// drafts and their published documents, each under the session's
-    /// account, in the listing's order.
+    /// Returns the shell's own lists off the document index.
+    ///
+    /// They are the person's drafts and their published documents, in the
+    /// listing's order, each of the account `signed` publishes as exactly:
+    /// the account the publisher's owned-home test compares (`account_of`;
+    /// wire.md §Identity's ownership, the link-sets design §5.1). A
+    /// sub-account's documents are never the person's own — the claim's
+    /// agent space's, an agent's, any account's delegated beneath theirs —
+    /// though the index lists them: the published ones as it lists every
+    /// account's, the drafts since the person reads them by subtree
+    /// (PUB-1.32).
     ///
     /// # Errors
     ///
     /// Returns `feed_stopped` once the board's feed thread has stopped.
-    pub(super) fn own_lists(&self, session: &Arc<SessionEntry>) -> Result<(Vec<Address>, Vec<Address>), Refusal> {
+    pub(super) fn own_lists(&self, session: &Arc<SessionEntry>, signed: &Signed) -> Result<(Vec<Address>, Vec<Address>), Refusal> {
         let listing = self.feed(&session.board_reference).places(Searcher::Session(Arc::clone(session)), None)?;
-        let account = session.facts.account.clone().unwrap_or_default();
         let (mut drafts, mut published) = (Vec::new(), Vec::new());
         for doc in listing["docs"].as_array().into_iter().flatten() {
             let Some(addr) = doc["doc"].as_str().and_then(bounded_address) else { continue };
-            let text = addr.to_string();
-            if !(text == account || text.starts_with(&format!("{account}."))) {
+            if account_of(&addr.to_string()).as_deref() != Some(signed.account.as_str()) {
                 continue;
             }
             match doc["kind"].as_str() {
@@ -1010,7 +1016,7 @@ impl Shell {
         // The shell's own lists: where the page passes none, and for the
         // family this publication leaves behind where it becomes the head.
         let heads = matches!(standing, Some(Standing::AtHead | Standing::First));
-        let (own_drafts, own_published) = if readable_drafts.is_none() || published.is_none() || heads { self.own_lists(session)? } else { (Vec::new(), Vec::new()) };
+        let (own_drafts, own_published) = if readable_drafts.is_none() || published.is_none() || heads { self.own_lists(session, signed)? } else { (Vec::new(), Vec::new()) };
         let whole = selection.is_none();
         let selection = match selection {
             Some(s) => s,
@@ -1253,7 +1259,7 @@ impl Shell {
         let signed = self.signed_within_call(&session, CALL)?;
         let p = signed.publisher(&session);
         let ((base, _), standing) = self.typed_base(&session, &p, CALL, &doc, &draft)?;
-        let own_drafts = if matches!(standing, Standing::AtHead | Standing::First) { self.own_lists(&session)?.0 } else { Vec::new() };
+        let own_drafts = if matches!(standing, Standing::AtHead | Standing::First) { self.own_lists(&session, &signed)?.0 } else { Vec::new() };
         let left_behind = lib::left_behind(&p, &doc, &base, &draft, &also, &standing, &own_drafts).map_err(|f| self.fault(&session, CALL, f))?;
         let mut answer = json!({"base": base.to_string(), "left_behind": addresses_json(&left_behind)});
         put_standing(&mut answer, &standing);

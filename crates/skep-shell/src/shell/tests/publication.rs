@@ -41,11 +41,15 @@
 //! wholly left refused `selection_not_arranged`, nothing sent; and the
 //! standing read alone (skep #864) — a draft's base, standing, head and
 //! family told with no panel composed or disturbed, its head moved and
-//! re-stated, its read at a second window. Every draft a cell publishes
-//! into a document is staged through `stage`, the one frame that copies its
-//! source and records its base.
+//! re-stated, its read at a second window; and the shell's own lists, of the
+//! person's account exactly — a sub-account's draft on the base never in
+//! the family left behind, and a sub-account's home, the claim's agent
+//! space's among them, no `read_with` key and no destination. Every draft a
+//! cell publishes into a document is staged through `stage`, the one frame
+//! that copies its source and records its base.
 
-use skep_client::board::Health;
+use skep_client::address::{account_of, doc_1_of, first_child};
+use skep_client::board::{frames, Health, Opened, SessionBody};
 use skep_client::store::{FileStore, KeyId, KeyStore};
 
 use super::*;
@@ -489,6 +493,51 @@ impl Ground {
             thread::sleep(Duration::from_millis(20));
         }
     }
+}
+
+/// Another account: a sub-account of the claimant's, its home minted.
+///
+/// Each of the two reads the other's drafts, the subtree running both ways
+/// (wire.md §The read predicate; PUB-1.32), and owns none of them; its bare
+/// session writes into no published document.
+pub(super) struct Other {
+    pub(super) account: String,
+    pub(super) token: Token,
+}
+
+/// Returns a bare session of `principal`'s at the ground's permissive board.
+pub(super) fn bare(g: &Ground, principal: u64) -> Token {
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    match entry.board.session_open(SessionBody::Bare { principal }).unwrap() {
+        Opened::Token(token) => token,
+        other => panic!("a bare session as principal {principal}: {other:?}"),
+    }
+}
+
+/// Returns the answer to `frame` sent under `token`, acknowledged.
+pub(super) fn written(g: &Ground, token: &Token, frame: &Value) -> Value {
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let Answer::Document(v) = entry.board.op(Some(token), frame).unwrap() else { panic!("the session stands") };
+    assert!(v["resp"].as_str().is_some_and(|r| r.starts_with("ack")), "{frame}: {v}");
+    v
+}
+
+/// Returns another account, delegated under the claimant's.
+///
+/// Its prefix is the next under `1.0.1`, delegated to a free principal from
+/// the claimant's bare session, and its home, born published, is minted
+/// from its own.
+pub(super) fn other_account(g: &Ground) -> Other {
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let account = entry.board.next_account_prefix("1.0.1").unwrap().expect("a prefix under the claimant's");
+    let mut principal = 2;
+    while entry.board.principal_prefix(principal).unwrap().is_some() {
+        principal += 1;
+    }
+    written(g, &bare(g, 1), &frames::delegate(&account, principal, None));
+    let token = bare(g, principal);
+    written(g, &token, &frames::create_home(&account, None));
+    Other { account, token }
 }
 
 /// Checks the family end to end against the daemon.
@@ -1416,6 +1465,90 @@ fn the_standing_is_read_alone_and_names_the_head() {
     let refused = window.call("publication.open", &json!({"session": opened["session"], "draft": s, "doc": edition})).unwrap_err();
     assert_eq!(refused.name(), "another_window", "the panel's open meets the door, the read does not: {refused}");
     window.shutdown();
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that the family left behind holds the person's own drafts alone,
+/// never a sub-account's on the same base.
+///
+/// D publishes E.1 and the person stages S and T on it; a sub-account of
+/// theirs (`other_account`) stages a draft of its own from E.1 under its own
+/// session, which the person's index lists: the person reads it by subtree
+/// (PUB-1.32) and owns none of it (wire.md §Identity's ownership).
+/// `publication.standing` of S answers the family D and T, never the
+/// sub-account's draft, and `publication.open` of S passing neither list
+/// answers the same family off the shell's own list (the mutant that keeps
+/// that list by the account's prefix leaves the sub-account's draft behind
+/// at both, as does the one that tests the account exactly for the
+/// published documents alone).
+#[test]
+fn a_sub_accounts_draft_on_the_base_is_never_in_the_family_left_behind() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let d = g.staged(&edition, "the quick brown fox");
+    g.call("publication.open", json!({"session": g.session, "draft": d, "doc": edition, "readable_drafts": [d], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let e1 = format!("{edition}.1");
+    let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(acked["member"].as_str(), Some(e1.as_str()), "{acked}");
+    let s = g.staged(&e1, "one sibling ");
+    let t = g.staged(&e1, "another sibling ");
+    let other = other_account(&g);
+    let theirs = written(&g, &other.token, &frames::stage(&e1, None))["addr"].as_str().unwrap().to_string();
+    assert_eq!(account_of(&theirs).as_deref(), Some(other.account.as_str()), "premise: the draft lies in the sub-account: {theirs}");
+    g.listed(&[d.as_str(), s.as_str(), t.as_str(), theirs.as_str()]);
+    let standing = g.call("publication.standing", json!({"session": g.session, "draft": s, "doc": edition})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("PublicationStanding", &standing);
+    assert_eq!(standing, json!({"base": e1, "standing": "at_head", "left_behind": [d, t]}), "the person's own drafts on E.1, never the sub-account's");
+    let panel = g.call("publication.open", json!({"session": g.session, "draft": s, "doc": edition})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("PublicationPanel", &panel);
+    assert_eq!((&panel["standing"], &panel["left_behind"]), (&json!("at_head"), &json!([d, t])), "the same family off the shell's own list: {panel}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that the shell's own list of published documents holds the
+/// person's account alone: a sub-account's home is no `read_with` key and no
+/// destination.
+///
+/// The claim's agent space and a sub-account (`other_account`) each hold a
+/// home, born published, which the person's index lists beside the person's
+/// own published set. `publication.open` of D — a citation of the person's
+/// in a notes draft on D's words, no `published` passed — answers
+/// `read_with` keyed by the person's set, by neither home and by no
+/// document outside the person's account; `publication.count` with the
+/// notes row ON is refused `malformed_args` naming `switches.destinations`
+/// where the row's destination is either home, and with the person's set
+/// counts its read-with (the mutant that keeps the shell's own list by the
+/// account's prefix keys both homes and admits them, as does the one that
+/// tests the account exactly for the drafts alone).
+#[test]
+fn a_sub_accounts_published_home_is_no_read_with_key_and_no_destination() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let draft = g.staged(&edition, "the quick brown fox");
+    let notes = g.draft("notes here");
+    let set = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    g.addr(json!({"op": "make_link", "home": notes, "from": [{"source": draft, "span": {"start": "1.5", "width": "0.5"}}], "to": {"addrs": []}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}}));
+    let other = other_account(&g);
+    let (theirs, agents) = (doc_1_of(&other.account), doc_1_of(&first_child("1.0.1")));
+    g.listed(&[set.as_str(), theirs.as_str(), agents.as_str()]);
+    let panel = g.call("publication.open", json!({"session": g.session, "draft": draft, "doc": edition, "notes": [notes]})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("PublicationPanel", &panel);
+    let keys: Vec<&str> = panel["read_with"].as_object().unwrap().keys().map(String::as_str).collect();
+    assert!(keys.contains(&set.as_str()) && !keys.contains(&theirs.as_str()) && !keys.contains(&agents.as_str()), "the person's set, neither home: {keys:?}");
+    assert!(keys.iter().all(|k| account_of(k).as_deref() == Some("1.0.1")), "every key of the person's account exactly: {keys:?}");
+    let count = |destination: &str| g.call("publication.count", json!({"session": g.session, "switches": {"on": [notes], "destinations": {notes.clone(): {"set": destination}}}}));
+    for home in [theirs.as_str(), agents.as_str()] {
+        let refused = count(home).unwrap_err();
+        assert_eq!((refused.name(), refused.to_value()["what"].as_str()), ("malformed_args", Some("switches.destinations")), "{home}: {refused}");
+    }
+    let counted = count(&set).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(counted["count"]["read_with"], json!([set]), "the person's set, a destination the board admits: {counted}");
     g.shell.shutdown();
     sd.shutdown();
 }

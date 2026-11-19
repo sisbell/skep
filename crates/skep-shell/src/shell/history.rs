@@ -65,10 +65,17 @@
 //! before any read; then the reads; then the write.
 //!
 //! **The restore's answer** is `{draft, at, position, as_of, marker}`:
-//! `position` the write's commit; `as_of` the position the draft stood at
-//! as the shell's read found it, before the write — the way back, this row
-//! again at `{at: as_of}` typed at `position`; and `marker` the draft's
-//! merge marker as it stands, which a restore never takes out, or null.
+//! `position` the write's commit; `as_of` a position the draft stood at
+//! before the write — the way back, this row again at `{at: as_of}` typed
+//! at `position`; and `marker` the draft's merge marker as it stands, which
+//! a restore never takes out, or null. The way back is the shell's read
+//! where the write committed past it, and the call's own `as_of` where it
+//! did not: the same restore sent again in one session is answered from the
+//! board's memo (the frame's `id` names the draft, `at` and `as_of`;
+//! wire.md §Correlation and idempotency), its `position` the first write's,
+//! which a read made after it finds already landed, and the board took that
+//! write typed at the call's `as_of`, so the draft's arrangement stood
+//! unchanged from there to the write (`way_back`).
 //!
 //! **The note.** The write's position is noted in the hold as an
 //! acknowledged arrangement write of the principal's on the draft
@@ -187,7 +194,7 @@ impl Shell {
         let account = self.signed(&session, Write::call("history.restore", "set_arrangement").over([draft.to_string()]))?.account;
         let mut past = history::past(&session.board, &session.token, &account, &draft, at).map_err(|r| self.merge_refusal(&session, r))?;
         // The write typed against the page's state; the read's position
-        // kept for the answer, the way back.
+        // kept for the answer's way back.
         let read_at = std::mem::replace(&mut past.as_of, as_of);
         // The write out until its position is noted, let go before a death
         // at it ends the session (`hold::WriteOut`; skep #1000).
@@ -198,9 +205,29 @@ impl Shell {
             "draft": restored.draft.to_string(),
             "at": restored.at,
             "position": restored.position,
-            "as_of": read_at,
+            "as_of": way_back(read_at, as_of, restored.position),
             "marker": past.marker.as_ref().map(marker_json),
         }))
+    }
+}
+
+/// Returns a restore's way back: a position the draft stood at before it.
+///
+/// The restore's write committed at `position`, typed at `typed`, the
+/// shell's read made at `read_at`. A `position` past the read is a write
+/// committed after it, and the draft stood at the read before that write:
+/// the way back is `read_at`. A `position` at or below the read is the
+/// board's memo answering the same restore sent again in the session — the
+/// first write's, landed before this read, which found the restored state
+/// (wire.md §Correlation and idempotency) — and the way back is `typed`:
+/// the board took that write typed there, so the draft's arrangement did
+/// not change between `typed` and the write (wire.md §Arrangement, the
+/// typed state).
+fn way_back(read_at: u64, typed: u64, position: u64) -> u64 {
+    if position > read_at {
+        read_at
+    } else {
+        typed
     }
 }
 

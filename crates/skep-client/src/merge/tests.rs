@@ -7143,7 +7143,8 @@ mod scripted {
 
     /// AN EDIT BETWEEN THE WITHDRAWAL's READ AND ITS WRITE: another hand's
     /// edit lands before the one write is answered, so the write, typed
-    /// against the read's position, is refused `arrangement_moved` — the
+    /// against the read's position, is refused `arrangement_moved` — its
+    /// words saying to run it again, since a re-run reads first — the
     /// draft as the other hand left it, the marker standing, nothing
     /// committed but the edit, no record.
     #[test]
@@ -7175,6 +7176,7 @@ mod scripted {
         assert_eq!(refused.code, "arrangement_moved");
         let detail = refused.detail.as_deref().expect("the person's words");
         assert!(detail.contains(S) && detail.contains("changed since it was read") && detail.contains("nothing was changed"), "{detail}");
+        assert!(detail.contains("run this again, which reads the draft as it stands"), "{detail}");
         let frame = &dialer.frames("set_arrangement")[0];
         assert_eq!(frame["as_of"].as_u64(), Some(read_at), "typed against the read's position: {frame}");
         assert_eq!(frame["runs"], frame_runs(&draft_m()), "the image as read");

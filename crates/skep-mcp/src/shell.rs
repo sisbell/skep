@@ -895,15 +895,18 @@ impl Backend {
     /// The calls are `op`, `search`, `places`, `held`, `resolve`, `changes`,
     /// the read of a draft's standing, `publication.standing`, the
     /// `publication` family's four (`publication.open`, `publication.count`,
-    /// `publication.confirm`, `publication.cancel`), and the `text` family's
+    /// `publication.confirm`, `publication.cancel`), the `text` family's
     /// five (`text.replace`, `text.edit`, `text.move`, `text.mark`,
-    /// `text.diff`):
+    /// `text.diff`), and the restore of a draft's past state,
+    /// `history.restore`:
     /// `args` is the call's own members, the row's object, and the session's
     /// reference is set in it beside them before each attempt. A row
     /// whose session form takes a board too (`search`, `places`) reads at the
     /// session's own where none is given, which is this adapter's one board.
     /// A text call reissued after its session ended makes its edit afresh: a
-    /// refusal either answers leaves nothing of the edit standing.
+    /// refusal either answers leaves nothing of the edit standing. A restore
+    /// reissued after its session ended reads the draft and writes afresh,
+    /// typed at the same `as_of`: the end ran nothing of it.
     ///
     /// # Errors
     ///
@@ -913,11 +916,12 @@ impl Backend {
     /// reason where no session stands after the death, `session_ended` where
     /// the adapter has stopped, and either where a reissue met a second end;
     /// `held_lines {doc, held}` where a `publication.confirm` names a draft
-    /// — the rendering draft, or one its panel named `also` — holding lines
-    /// of the agent's the board has not kept (client.md §3c.4's held-lines
-    /// gate): nothing was sent, and the act is the agent's, `held` then
-    /// `resolve` on each line of that draft, then the confirm again, as the
-    /// catalog's `publication_confirm` card and its help topic REJECTIONS ARE
+    /// — the rendering draft, or one its panel named `also` — or a
+    /// `history.restore` its `draft`, holding lines of the agent's the board
+    /// has not kept (client.md §3c.4's held-lines gate): nothing was sent,
+    /// and the act is the agent's, `held` then `resolve` on each line of that
+    /// draft, then the call again, as the catalog's `publication_confirm`
+    /// card, its `restore_text` reference and its help topic REJECTIONS ARE
     /// DATA say (`tools.json`) — or the shell's refusal of a session the
     /// adapter opened itself.
     pub fn session_call(&self, name: &str, args: Map<String, Value>) -> Result<Value, Refusal> {

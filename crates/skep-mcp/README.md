@@ -36,9 +36,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `publication_standing`, the read of a draft's standing, and the four of
   its `publication` family, `publication_open`, `publication_count`,
   `publication_confirm` and `publication_cancel`) are
-  tools of theirs; and nine are the adapter's apparatus: `session_info`,
+  tools of theirs; and ten are the adapter's apparatus: `session_info`,
   `changes_since`, `fetch`, `replace_text`, `edit_text`, `move_lines`,
-  `mark_text`, `diff_text` and `help`. The
+  `mark_text`, `diff_text`, `restore_text` and `help`. The
   catalog an agent reads, `tools.json` beside `Cargo.toml`, is embedded and
   checked against that dispatch at startup.
 - **Short cards, the detail behind `help`.** A client cuts a long tool
@@ -109,6 +109,22 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   left; `stat` answers the counts alone, and `hunk` goes on from
   `next_hunk`. A mark whose link did not land answers `partial`, and one
   whose copy's line stays held `held`, each `isError`.
+- **A past state made current, by identity.** `restore_text {draft, at,
+  as_of}` is the shell's `history.restore`: the draft's state at the
+  position `at` made current by ONE `set_arrangement` naming no base and no
+  merge, so the old words come back as the very bytes they were and the
+  links on them with them, where text typed again is minted anew. It takes
+  back every change made since `at`, the agent's own and any other hand's,
+  and words published since come back as the published words they became.
+  The write is typed against `as_of`, the agent's own state of the draft:
+  a draft changed past it is refused `arrangement_moved`, as data, nothing
+  changed. Its result is the shell's answer, `{draft, at, position, as_of,
+  marker}`: `position` the write's commit, the agent's next typed state, and
+  `as_of` a position the draft stood at before the write, so `restore_text
+  {draft, at: as_of, as_of: position}` puts it back. The shell's own
+  refusals — `merge_refused` (`not_past`, `history_reclaimed`,
+  `not_a_position`) and `held_lines` among them — are `isError`, nothing
+  sent.
 - **A refusal as a result.** The board's verdict on a frame comes back as
   data, `isError: false`; `isError` means the shell could not get the
   board's verdict — among the causes, a board not answering and a frame the

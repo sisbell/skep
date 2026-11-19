@@ -374,7 +374,10 @@ impl Server {
     /// Runs one tool and returns its tool result.
     ///
     /// The result is the tool's answer rendered by `tool_result`'s rule: a
-    /// value or the board's verdict as data, any other refusal `isError`;
+    /// value or the board's verdict as data, any other refusal `isError` —
+    /// `restore_text`'s among them, the shell's `history.restore`, whose
+    /// `arrangement_moved` is the board's verdict and whose `merge_refused`
+    /// and `held_lines` are the shell's own;
     /// `fetch` answers a content block of its own (`Server::fetch`), `help`
     /// the catalog's help store with no call of the backend (`help_result`),
     /// and `replace_text`, `edit_text`, `move_lines`, `mark_text` and
@@ -407,6 +410,7 @@ impl Server {
             Tool::PublicationConfirm => self.backend.session_call("publication.confirm", args),
             Tool::PublicationCancel => self.backend.session_call("publication.cancel", args),
             Tool::PublicationStanding => self.backend.session_call("publication.standing", args),
+            Tool::RestoreText => self.backend.session_call("history.restore", args),
             Tool::ChangesSince => self.backend.session_call("changes", args),
             Tool::SessionInfo => self.backend.session_info(),
             Tool::Fetch => return Ok(self.fetch(args.get("i").unwrap_or(&Value::Null))),

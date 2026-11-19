@@ -27,8 +27,9 @@
 //! and `edit_text`, its several-pair `text.edit`, its move of whole lines,
 //! `move_lines`, its `text.move`, its mark of a draft to diff against,
 //! `mark_text`, its `text.mark`, its diff of a draft by identity,
-//! `diff_text`, its `text.diff`, and `help`, which reads the help store and
-//! calls no shell) — whose arguments are the bridge's row
+//! `diff_text`, its `text.diff`, its restore of a draft to a past state by
+//! identity, `restore_text`, its `history.restore`, and `help`, which reads
+//! the help store and calls no shell) — whose arguments are the bridge's row
 //! minus the session and the board, the adapter supplying each where the row
 //! requires it, `help`'s its one `topic`, and whose members the adapter
 //! reads by name. A `publication` tool spells its row's `.` as `_`, since an
@@ -198,6 +199,12 @@ pub enum Tool {
     /// answer is rendered as `edit_text`'s, the hunks' rows following it one
     /// row a line.
     DiffText,
+    /// `history.restore(session, draft, at, as_of)`, the shell's.
+    ///
+    /// It makes a draft's state at the position `at` current by one write,
+    /// by identity, typed at `as_of`, the session supplied. Its answer and
+    /// its refusals go by `tool_result`'s rule, as every shell call's do.
+    RestoreText,
     /// `help(topic?)`, the catalog's help store read by topic.
     ///
     /// The one tool that calls no shell: it reads the catalog alone
@@ -234,6 +241,7 @@ const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
     ("move_lines", Tool::MoveLines, &["doc", "first", "last", "before"]),
     ("mark_text", Tool::MarkText, &["doc"]),
     ("diff_text", Tool::DiffText, &["doc", "since", "stat", "hunk"]),
+    ("restore_text", Tool::RestoreText, &["draft", "at", "as_of"]),
     ("help", Tool::Help, &["topic"]),
 ];
 

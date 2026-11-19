@@ -41,10 +41,11 @@ const ADDED_OPS: [&str; 6] = ["effective_owner", "key_set", "retrieve_i", "conte
 /// The shell's calls and the apparatus, as tools.
 ///
 /// The shell's calls take the publication family's four among them, and the
-/// read of a draft's standing beside them; the apparatus is nine, the two
+/// read of a draft's standing beside them; the apparatus is ten, the two
 /// text edits, the move of whole lines, the mark of a draft, the diff since
-/// one and the catalog's help among them.
-const ADAPTER_TOOLS: [&str; 21] = [
+/// one, the restore of a draft's past state and the catalog's help among
+/// them.
+const ADAPTER_TOOLS: [&str; 22] = [
     "boards",
     "health",
     "probe",
@@ -65,6 +66,7 @@ const ADAPTER_TOOLS: [&str; 21] = [
     "move_lines",
     "mark_text",
     "diff_text",
+    "restore_text",
     "help",
 ];
 

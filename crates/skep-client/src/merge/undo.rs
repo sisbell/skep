@@ -930,6 +930,12 @@ pub(crate) enum Act {
         withdrawal: u64,
         own_ack: bool,
     },
+    /// The `history` module's restore.
+    ///
+    /// Its write is typed at the `as_of` its caller gives, which may be a
+    /// state of the caller's own and not the restore's read, so its words
+    /// ask a read and a restore typed at it: the same call at the same state
+    /// meets the same refusal.
     Restore,
 }
 
@@ -1203,7 +1209,8 @@ pub(crate) fn judge(v: &Value, draft: &Address, as_of: u64, act: Act) -> Result<
                 Act::Unwithdraw { own_ack: false, .. } => format!("{draft} changed since the merge was taken out{} — nothing was changed; an undo typed against the withdrawal can no longer land, since taking the later changes back changes the draft again: edit the draft as it stands", since("the merge was taken out")),
                 Act::Unwithdraw { withdrawal, .. } if withdrawal == as_of => format!("{draft} changed since the merge was taken out{} — nothing was changed; undo the later changes first, or edit", since("the merge was taken out")),
                 Act::Unwithdraw { withdrawal, .. } => format!("{draft} changed since your last write to it{} — the change is another hand's, made after the merge was taken out at position {withdrawal}, and it stands; nothing was changed: edit the draft as it stands", since("your last write was")),
-                Act::Withdraw | Act::Restore => format!("{draft} changed since it was read{} — nothing was changed; run this again, which reads the draft as it stands", since("read")),
+                Act::Withdraw => format!("{draft} changed since it was read{} — nothing was changed; run this again, which reads the draft as it stands", since("read")),
+                Act::Restore => format!("{draft} changed since it was read{} — nothing was changed; read the draft as it stands, then restore again typed at that read", since("read")),
             };
             Refusal::Halt(Halt::Refused(Refused {
                 status: 200,

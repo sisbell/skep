@@ -180,7 +180,9 @@ pub fn past(board: &Board, token: &Token, account: &str, draft: &Address, at: u6
 ///
 /// `arrangement_moved` as the board's verdict, [`Refusal::Halt`] with
 /// `Refused` saying the draft changed since it was read and nothing was
-/// changed; [`Refusal::NotOwner`]; [`Refusal::Published`];
+/// changed, and asking a read of the draft and a restore typed at that
+/// read, since a `past` whose `as_of` its caller set meets the same
+/// refusal sent again; [`Refusal::NotOwner`]; [`Refusal::Published`];
 /// [`Refusal::WindowWithheld`] naming an origin a run windows that the
 /// person may not read; [`Refusal::NeedsSignedSession`];
 /// [`Refusal::NoSuchDocument`]; the refusals of the runs as this library's

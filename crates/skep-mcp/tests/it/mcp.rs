@@ -622,7 +622,8 @@ fn a_log_no_one_reads_fails_no_work() {
 /// `move_lines`, whose block's first line is `first`, would move another
 /// line), `search`'s `reindex`
 /// among them, the refresh of every unit the index holds, which the door
-/// withholds from an agent; a member of an `edit_text` pair the shell would
+/// withholds from an agent, and a `doc` to `restore_text`, whose draft is
+/// `draft`; a member of an `edit_text` pair the shell would
 /// ignore, a pair's own `doc` among them, named with its pair's index; and a
 /// wire op's arguments of the shape the shell reads as its `/op-at` form,
 /// whose inner frame it would send to the board's history. A wire op's other
@@ -630,9 +631,10 @@ fn a_log_no_one_reads_fails_no_work() {
 /// is data. A member of the wrong form, or missing, reaches the shell —
 /// `fetch`'s `i`, `changes_since`'s `under`, an adapter tool's `opts` or an
 /// option in it, which the door passes on whole, `edit_text`'s `edits`
-/// or a pair of them that is no object, and a line of `move_lines` that is
+/// or a pair of them that is no object, a line of `move_lines` that is
 /// no whole number from 1, a `last` before its `first` or a `before` inside
-/// its block — which refuses it `malformed_args`
+/// its block, and `restore_text`'s `as_of` missing or its `at` no whole
+/// number — which refuses it `malformed_args`
 /// naming it, `isError`; the adapter never crashes on it.
 #[test]
 fn a_call_the_adapter_will_not_run_is_invalid_params_and_one_of_the_wrong_form_the_shells_refusal() {
@@ -652,6 +654,7 @@ fn a_call_the_adapter_will_not_run_is_invalid_params_and_one_of_the_wrong_form_t
         (json!({"name": "doc_metadata", "arguments": {"at": 1, "frame": {"op": "retrieve_v", "specs": []}}}), "'frame'"),
         (json!({"name": "edit_text", "arguments": {"doc": CLAIMANT_DOC1, "edits": [{"old": "a", "new": "b"}, {"old": "c", "new": "d", "doc": CLAIMANT_DOC1}]}}), "'edits[1].doc'"),
         (json!({"name": "move_lines", "arguments": {"doc": CLAIMANT_DOC1, "from": 2, "before": 1}}), "'from'"),
+        (json!({"name": "restore_text", "arguments": {"doc": CLAIMANT_DOC1, "at": 1, "as_of": 2}}), "'doc'"),
     ] {
         let v = mcp.request("tools/call", call);
         assert_eq!(v["error"]["code"], json!(-32602), "{v}");
@@ -676,6 +679,8 @@ fn a_call_the_adapter_will_not_run_is_invalid_params_and_one_of_the_wrong_form_t
         ("move_lines", json!({"doc": CLAIMANT_DOC1, "first": 2, "last": "3"}), "last"),
         ("move_lines", json!({"doc": CLAIMANT_DOC1, "first": 3, "last": 2}), "last"),
         ("move_lines", json!({"doc": CLAIMANT_DOC1, "first": 2, "last": 4, "before": 3}), "before"),
+        ("restore_text", json!({"draft": CLAIMANT_DOC1, "at": 1}), "as_of"),
+        ("restore_text", json!({"draft": CLAIMANT_DOC1, "at": -1, "as_of": 1}), "at"),
     ] {
         let refused = mcp.call_error(tool, args.clone());
         assert_eq!((refused["kind"].as_str(), refused["name"].as_str(), refused["what"].as_str()), (Some("shell"), Some("malformed_args"), Some(what)), "{tool} {args}: {refused}");

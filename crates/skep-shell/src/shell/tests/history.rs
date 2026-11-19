@@ -10,13 +10,14 @@
 //! the marker with nothing written or noted, and the restore end to end: a
 //! restore over the draft's held line refused `held_lines` and landing once the
 //! line is kept; a draft put back to a past state by one `set_arrangement`
-//! naming no base and no merge, and back again through the answer's `as_of`, a
-//! position at the head refused `not_past` with nothing written; the write
-//! typed against the page's state — refused `arrangement_moved` past another
-//! hand's change, landing once the page's state is past it — and landing across
-//! the person's own publication, the words back as the trunk's; and the restore
-//! noted in the hold as the editor's own arrangement write, so `merge.undo`
-//! after a restore and its way back lands.
+//! naming no base and no merge, the same restore sent again answered from the
+//! board's memo, and back again through the answer's `as_of`, a position at
+//! the head refused `not_past` with nothing written; the write typed against
+//! the page's state — refused `arrangement_moved` past another hand's change,
+//! its words asking a read first, landing once the page's state is past it —
+//! and landing across the person's own publication, the words back as the
+//! trunk's; and the restore noted in the hold as the editor's own arrangement
+//! write, so `merge.undo` after a restore and its way back lands.
 
 use skep_client::board::frames::{doc_metadata, image, stage};
 use skep_client::store::{FileStore, KeyId, KeyStore};
@@ -216,15 +217,21 @@ fn a_restore_over_the_drafts_held_line_is_refused_held_lines_and_lands_once_the_
 /// position, `as_of` the board's position as the read found it — never the
 /// page's state — `marker` null; the text "the cat"; ONE `set_arrangement`
 /// row under the draft, naming no base and no merge; the hold's last
-/// arrangement write on the draft the restore's. Restored again at the
-/// answer's `as_of`, typed at its `position`, the whole text is back. A
-/// position at the head is refused `merge_refused` with `not_past` by both
-/// rows, its `current` the draft's position, nothing written; a published
-/// document `not_owner`, `published` true, by both, and one the board never
-/// registered `no_such_document` (the mutants that answer the read's `at`
+/// arrangement write on the draft the restore's. The same restore sent
+/// again is answered from the board's memo: the same `position`, the
+/// board's position unmoved and still one row, and `as_of` the page's
+/// state, the shell's read having found the restore landed — the state
+/// there the one the first answer's `as_of` names, the whole text.
+/// Restored again at that answer's `as_of`, typed at its `position`, the
+/// whole text is back. A position at the head is refused `merge_refused`
+/// with `not_past` by both rows, its `current` the draft's position,
+/// nothing written; a published document `not_owner`, `published` true, by
+/// both, and one the board never registered `no_such_document` (the
+/// mutants that answer the read's `at`
 /// as its `as_of` or the extent as `covered`, write or note at the read,
 /// send a second write, name a base or a merge, answer the page's state as
-/// the way back, or note no restore).
+/// the way back of a write committed past the read, answer the read as the
+/// way back of one the memo answered, or note no restore).
 #[test]
 fn a_draft_is_restored_to_a_past_state_by_one_write_and_back_through_the_answers_as_of() {
     let dir = TempDir::new().unwrap();
@@ -263,8 +270,19 @@ fn a_draft_is_restored_to_a_past_state_by_one_write_and_back_through_the_answers
     assert_eq!(g.text(&d, 14), "the cat", "the state after the first burst");
     assert_eq!(arrangement_rows(&g, &d, before), [(false, false)], "one arrangement row, no base and no merge");
     assert_eq!(g.shell.holds.last_arranged(&entry, &d), Some(position), "the restore noted as the principal's latest arrangement write");
-    // The way back: the state the read found, typed at the restore's ack.
-    let back = restore(&restored["as_of"], &restored["position"]);
+    // The same restore sent again: the board's memo answers the first
+    // write's acknowledgment, nothing written again, and the shell's read,
+    // made past that write, names no way back: the page's state does.
+    let again = restore(&p1, &typed);
+    crate::shapes::assert_declared("Restored", &again);
+    assert_eq!((&again["at"], again["position"].as_u64(), again["as_of"].as_u64()), (&p1, Some(position), typed.as_u64()), "{again}");
+    assert_eq!((g.position(), arrangement_rows(&g, &d, before)), (position, vec![(false, false)]), "nothing written again");
+    assert_eq!(g.text(&d, 14), "the cat", "{again}");
+    // Either answer's way back names the state the restore replaced.
+    let state_at = |at: &Value| g.call("history.past", json!({"session": g.session, "draft": d, "at": at})).unwrap_or_else(|r| panic!("{r}"))["state"].clone();
+    assert_eq!(state_at(&again["as_of"]), state_at(&restored["as_of"]), "the whole text's runs at either answer's as_of");
+    // The way back: the state before the write, typed at the restore's ack.
+    let back = restore(&again["as_of"], &again["position"]);
     assert!(back["position"].as_u64().is_some_and(|at| at > position), "{back}");
     assert_eq!(g.text(&d, 14), "the cat sat!!!", "the whole text again");
     // At the head: no past position.
@@ -298,8 +316,10 @@ fn a_draft_is_restored_to_a_past_state_by_one_write_and_back_through_the_answers
 /// position, past that write, and changes nothing the restore does: the
 /// restore typed at the page's state is the board's `arrangement_moved`,
 /// `site.as_of` the page's state and `site.current` the other hand's write,
-/// nothing changed; typed at a read past that write — the page's state once
-/// it has read the change — it lands (the mutant that types at the shell's
+/// nothing changed, its words asking a read of the draft and a restore typed
+/// at it — never the same call again, which the board would refuse again;
+/// typed at a read past that write — the page's state once it has read the
+/// change — it lands (the mutant that types at the shell's
 /// own read lands the first and writes over a change the page never showed;
 /// the one that types at the shell's last acknowledgment on the draft
 /// refuses the second, the other hand's write past every ack of this
@@ -331,6 +351,8 @@ fn the_restore_is_typed_at_the_pages_state_refused_past_another_hands_change_and
         ("arrangement_moved", Some("refused"), Some(typed), Some(theirs_at)),
         "typed at the page's state: {v}"
     );
+    let detail = v["detail"].as_str().expect("the person's words");
+    assert!(detail.contains("read the draft as it stands, then restore again typed at that read") && !detail.contains("run this again"), "a read, then a restore typed at it: {detail}");
     assert_eq!((g.text(&d, 12), g.position()), ("#the cat sat".to_string(), before), "nothing changed");
     // The page reads the change: its state past the other hand's write.
     let read = g.position();

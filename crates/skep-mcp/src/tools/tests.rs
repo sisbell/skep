@@ -19,7 +19,7 @@ const MAX_HELP_CARD_CHARS: usize = 400;
 const MAX_INSTRUCTIONS_CHARS: usize = 2000;
 
 /// The tools whose card ends naming its full reference in the help store.
-const REFERENCED: [&str; 18] = [
+const REFERENCED: [&str; 19] = [
     "create_well_known_document",
     "doc_metadata",
     "set_arrangement",
@@ -38,6 +38,7 @@ const REFERENCED: [&str; 18] = [
     "move_lines",
     "mark_text",
     "diff_text",
+    "restore_text",
 ];
 
 /// Returns a tool's card: its description, as `tools/list` answers it.
@@ -272,11 +273,12 @@ fn wire_frame_makes_the_name_the_op_and_the_arguments_the_frame() {
 /// Fifty-two wire ops — every op of wire.md §Operations but `publish`, the
 /// six the first catalog lacked among them, the count by home, the
 /// retracted-links read, the landing, the well-known creation and the line
-/// read — and twenty-one
+/// read — and twenty-two
 /// adapter tools, the `publication` family's four among them, the read
 /// of a draft's standing beside them, the two text edits, `replace_text`
 /// and `edit_text`, the move of whole lines, `move_lines`, the mark of a
-/// draft, `mark_text`, the diff since one, `diff_text`, and `help`, which
+/// draft, `mark_text`, the diff since one, `diff_text`, the restore of a
+/// draft's past state, `restore_text`, and `help`, which
 /// takes a `topic`; no name twice across the two,
 /// each wire op a `Tool::Op` of its own name with no members list, each
 /// adapter tool its row's members; and a ceremony, `upload`, `restore`,
@@ -287,8 +289,8 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
     let set: std::collections::BTreeSet<_> = names.iter().collect();
     assert_eq!(set.len(), names.len(), "no name twice");
     assert_eq!(DISPATCH_OPS.len(), 52);
-    assert_eq!(names.len(), 73);
-    assert_eq!(ADAPTER_TOOLS.len(), 21);
+    assert_eq!(names.len(), 74);
+    assert_eq!(ADAPTER_TOOLS.len(), 22);
     assert_eq!(Tool::named("help"), Some(Tool::Help));
     assert_eq!(Tool::named("help").and_then(Tool::members), Some(&["topic"][..]));
     assert_eq!(Tool::named("replace_text"), Some(Tool::ReplaceText));
@@ -301,8 +303,10 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
     assert_eq!(Tool::named("mark_text").and_then(Tool::members), Some(&["doc"][..]));
     assert_eq!(Tool::named("diff_text"), Some(Tool::DiffText));
     assert_eq!(Tool::named("diff_text").and_then(Tool::members), Some(&["doc", "since", "stat", "hunk"][..]));
+    assert_eq!(Tool::named("restore_text"), Some(Tool::RestoreText));
+    assert_eq!(Tool::named("restore_text").and_then(Tool::members), Some(&["draft", "at", "as_of"][..]));
     let order: Vec<&str> = names.iter().copied().skip_while(|name| *name != "move_lines").collect();
-    assert_eq!(order, ["move_lines", "mark_text", "diff_text", "help"], "the two stand after `move_lines` and before `help`");
+    assert_eq!(order, ["move_lines", "mark_text", "diff_text", "restore_text", "help"], "the three stand after `move_lines` and before `help`");
     for added in [
         "effective_owner",
         "key_set",
@@ -384,6 +388,9 @@ fn the_dispatchs_door_admits_a_call_or_refuses_it_naming_the_culprit() {
     assert_eq!(Tool::admit("diff_text", &args(json!({"doc": "1.0.1.0.64", "since": "1.0.1.0.65", "stat": true, "hunk": 2}))), Ok(Tool::DiffText));
     let err = Tool::admit("diff_text", &args(json!({"doc": "1.0.1.0.64", "mark": "1.0.1.0.65"}))).expect_err("a member the row does not take");
     assert!(err.contains("diff_text takes 'doc', 'since', 'stat', 'hunk'") && err.contains("'mark'"), "the document compared with is `since`: {err}");
+    assert_eq!(Tool::admit("restore_text", &args(json!({"draft": "1.0.1.0.64", "at": 3, "as_of": 5}))), Ok(Tool::RestoreText));
+    let err = Tool::admit("restore_text", &args(json!({"doc": "1.0.1.0.64", "at": 3, "as_of": 5}))).expect_err("a member the row does not take");
+    assert!(err.contains("restore_text takes 'draft', 'at', 'as_of'") && err.contains("'doc'"), "the draft restored is `draft`: {err}");
 }
 
 /// The door refuses a member of an `edit_text` pair the shell would ignore.
@@ -700,7 +707,7 @@ fn every_card_and_the_instructions_are_short() {
 /// A tool's topic stands in the help store exactly where its card ends
 /// `Full reference: help("<name>").`, so no card points at a topic that is
 /// not there and no reference waits unnamed; the tools with a reference are
-/// the eighteen whose whole text an agent needs only when a call goes the
+/// the nineteen whose whole text an agent needs only when a call goes the
 /// way it covers.
 #[test]
 fn a_card_with_a_reference_points_to_it() {
@@ -731,7 +738,7 @@ fn each_short_card_says_what_an_agent_needs_first() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
     let mib = format!("{} MiB", crate::media::MAX_FETCH_BYTES / (1024 * 1024));
     let pairs = format!("at most {MAX_WIRE_LIST} pairs");
-    let said: [(&str, &[&str]); 19] = [
+    let said: [(&str, &[&str]); 20] = [
         ("replace_text", &["EXACTLY ONCE", "edit_text", "move_lines", "\"replaced\"", "\"refused\"", "not_unique", "\"partial\"", "\"held\"", "isError"]),
         (
             "edit_text",
@@ -798,6 +805,25 @@ fn each_short_card_says_what_an_agent_needs_first() {
                 "shared \"0\": since shares nothing with the draft",
                 "arrangement_moved",
                 "call again",
+            ],
+        ),
+        (
+            "restore_text",
+            &[
+                "restore_text(draft, at, as_of)",
+                "BY IDENTITY",
+                "EVERY change made since at",
+                "THE TYPED STATE",
+                "never session_info's log_position",
+                "{draft, at, position, as_of, marker}",
+                "restore_text(draft, at: as_of, as_of: position)",
+                "arrangement_moved",
+                "call again at that read's as_of",
+                "not_past",
+                "history_reclaimed",
+                "not_a_position",
+                "held_lines",
+                "isError",
             ],
         ),
         ("publication_open", &["mint", "PANEL", "publication_count", "publication_confirm", "publication_cancel", "base_unrecorded"]),
@@ -879,6 +905,7 @@ fn each_adapter_tool_takes_its_shell_rows_members_bar_the_session_and_board() {
             Tool::MoveLines => "text.move",
             Tool::MarkText => "text.mark",
             Tool::DiffText => "text.diff",
+            Tool::RestoreText => "history.restore",
             Tool::ChangesSince => "changes",
             Tool::PublicationOpen => "publication.open",
             Tool::PublicationCount => "publication.count",
@@ -1022,7 +1049,8 @@ fn the_publication_references_state_the_shells_shapes() {
     assert!(confirm.contains("each of also — is re-windowed") && confirm.contains("stray_place {index, draft}"), "the confirm reference says every named draft is re-windowed in the one write, and names the own fault's draft: {confirm}");
     // The held-lines gate (client.md §3c.4; skep #849): the confirm
     // reference names the refusal with its members and the agent's act, and
-    // the REJECTIONS ARE DATA topic lists it among the shell's own.
+    // the REJECTIONS ARE DATA topic lists it among the shell's own, the
+    // restore's beside the confirm's.
     let held_lines = skep_shell::Name::HELD_LINES.as_str();
     assert!(
         confirm.contains(&format!("holds a line of yours the board has not kept (HELD BURSTS) it is refused {held_lines} {{doc, held}} (isError), nothing sent"))
@@ -1031,6 +1059,10 @@ fn the_publication_references_state_the_shells_shapes() {
     );
     let rejections = topic(&catalog, "REJECTIONS ARE DATA");
     assert!(rejections.contains(&format!("{held_lines} {{doc, held}} — a publication_confirm over a draft holding lines of yours the board has not kept")), "REJECTIONS ARE DATA names the gate's refusal: {rejections}");
+    assert!(
+        rejections.contains("the rendering draft or one named also, or a restore_text whose draft holds them, nothing sent: call held(), resolve each line on that doc, then call again"),
+        "REJECTIONS ARE DATA names the restore beside the confirm: {rejections}"
+    );
     let selection = &entry("publication_open")["inputSchema"]["properties"]["selection"]["items"];
     assert_eq!(schema_fields(selection), fields("Run"), "the selection's runs are the shell's Run");
     let answers: BTreeSet<String> = alias("OriginAnswer").iter().map(|arm| arm.trim_matches('\'').to_string()).collect();
@@ -1064,9 +1096,10 @@ fn the_publication_references_state_the_shells_shapes() {
 /// whole number from 1; `mark_text`'s reference names the `marks` type as
 /// the client spells it; the instructions send an agent to the three
 /// tools, and so do the EDITING TEXT topic, which names the review step
-/// too, the mark before the change and the diff after it, and the OVERVIEW
-/// topic, which names each among the apparatus, the mark and the diff with
-/// them, and `replace_text`'s card and reference,
+/// too, the mark before the change and the diff after it, and the restore
+/// of an earlier state, and the OVERVIEW topic, which names each among the
+/// apparatus, the mark, the diff and the restore with them, and
+/// `replace_text`'s card and reference,
 /// which send whole lines moved to `move_lines`; and every outcome and every
 /// cause of the edit's own is spelled
 /// in `replace_text`'s reference (SP-25). `edit_text`'s card itself says what
@@ -1221,10 +1254,66 @@ fn the_catalog_tells_an_agent_the_edits_figures_as_the_code_holds_them() {
         "the overview names the three among the apparatus: {overview}"
     );
     assert!(overview.contains("mark_text (") && overview.contains("diff_text ("), "the overview names the mark and the diff among the apparatus: {overview}");
+    assert!(
+        editing.contains("call restore_text(draft, at, as_of): one write, by identity") && overview.contains("restore_text ("),
+        "the topic and the overview name the restore among the apparatus: {editing}\n{overview}"
+    );
     for (whose, text) in [("EDITING TEXT", editing), ("replace_text's card", card(&catalog, "replace_text")), ("replace_text's reference", reference(&catalog, "replace_text"))] {
         assert!(text.contains("move_lines") && !text.contains("a block moved"), "{whose} sends whole lines moved to move_lines, never to rearrange: {text}");
     }
     assert!(editing.contains("a move that is not whole lines") && reference(&catalog, "replace_text").contains("a move that is not whole lines"), "rearrange stays for a move that is not whole lines");
+}
+
+/// `restore_text`'s reference states the shell's answer and the way back.
+///
+/// It spells the answer the shell declares for the `history.restore` row
+/// (`shapes::declarations`, the shape `Restored`) as `{a, b, …}`, and the
+/// way back as the call again at the answer's `as_of`, typed at its
+/// `position` — a way back typed at `as_of` is refused `not_past`, or
+/// writes the restored state over itself; each of the shell's refusals an
+/// agent acts on with its members — `not_past` with `current`,
+/// `history_reclaimed` with a `floor` that may be null, `not_a_position`
+/// with `nearest`, `held_lines {doc, held}` with its act, `not_owner` with
+/// `published` — and what a lost answer asks: the same call again, a
+/// landed first write refused `arrangement_moved` once the session has
+/// ended. Its schema takes `draft` as every document argument is taken,
+/// and `at` and `as_of` as whole numbers from 0, all three required
+/// (SP-24). A shape the shell changes in one place alone would tell every
+/// agent of an answer the shell no longer gives.
+#[test]
+fn the_restore_reference_states_the_shells_answer_and_the_way_back_typed_at_position() {
+    let declarations = skep_shell::shapes::declarations();
+    let line = declarations.lines().find(|line| line.starts_with("  'history.restore'(args: ")).expect("skep-shell declares the history.restore row");
+    let answer = line.split_once("Promise<Outcome<").and_then(|(_, rest)| rest.strip_suffix(">>;")).unwrap_or_else(|| panic!("the row's answer: {line}"));
+    let shape = skep_shell::shapes::shape(answer).unwrap_or_else(|| panic!("skep-shell declares {answer}"));
+    assert!(!shape.open && shape.fields.iter().all(|field| field.required), "premise: {answer} is closed, every member required");
+    let declared = format!("{{{}}}", shape.fields.iter().map(|field| field.name).collect::<Vec<_>>().join(", "));
+    let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    let said = reference(&catalog, "restore_text");
+    for (spelled, what) in [
+        (format!("Response: {declared}."), "the answer the shell declares"),
+        ("The way back is restore_text(draft, at: as_of, as_of: position): the answer's own as_of, typed at its position".to_string(), "the way back, typed at position"),
+        ("merge_refused {arm: \"not_past\", draft, at, current}".to_string(), "not_past's members"),
+        ("{arm: \"history_reclaimed\", at, floor}".to_string(), "history_reclaimed's members"),
+        ("floor the oldest position it still answers, or null where it names none".to_string(), "a floor the board may not name"),
+        ("{arm: \"not_a_position\", at, nearest}".to_string(), "not_a_position's members"),
+        (
+            format!("{} {{doc, held}} where the draft holds lines of yours the board has not kept (HELD BURSTS): call held(), resolve each line on that doc, then call again", skep_shell::Name::HELD_LINES.as_str()),
+            "the held-lines gate and its act",
+        ),
+        ("not_owner {addr, published: true} for a published document".to_string(), "a published document"),
+        ("unreachable (isError) may have landed: call again with the same draft, at and as_of".to_string(), "what a lost answer asks"),
+        ("After the session has ended, a landed first write is refused arrangement_moved".to_string(), "a landed first write past the session"),
+    ] {
+        assert!(said.contains(&spelled), "restore_text's reference names {what}, `{spelled}`: {said}");
+    }
+    let entry = |name: &str| catalog.tools.iter().find(|t| t["name"] == name).unwrap_or_else(|| panic!("the {name} card"));
+    let schema = &entry("restore_text")["inputSchema"];
+    assert_eq!(schema["required"], json!(["draft", "at", "as_of"]));
+    assert_eq!(schema["properties"]["draft"]["pattern"], entry("diff_text")["inputSchema"]["properties"]["doc"]["pattern"], "a draft is an address");
+    for position in ["at", "as_of"] {
+        assert_eq!((&schema["properties"][position]["type"], &schema["properties"][position]["minimum"]), (&json!("integer"), &json!(0)), "{position}: a position is a whole number from 0");
+    }
 }
 
 /// The text tools' references state the answers the shell declares.

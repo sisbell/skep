@@ -26,7 +26,7 @@
 //!   `_` for `.` (`publication_open`, `publication_count`,
 //!   `publication_confirm`, `publication_cancel`) — are tools of those names,
 //!   their arguments the bridge's row minus the session and the board, the
-//!   adapter supplying each where the row requires it; and nine are the
+//!   adapter supplying each where the row requires it; and ten are the
 //!   adapter's apparatus: `session_info`, `changes_since` (the shell's
 //!   `changes`, a pull), `fetch` (the shell's streamed fetch as an image or
 //!   resource block, the type sniffed off the bytes, the size capped),
@@ -47,6 +47,9 @@
 //!   identity — a mark, the version it was staged from — told by identity
 //!   and written nowhere, a moved block shown as moved and a re-typed one
 //!   said so, its answer followed by the hunks' rows, one row a line),
+//!   `restore_text` (the shell's `history.restore`, a draft's state at an
+//!   earlier position made current by one `set_arrangement`, by identity,
+//!   typed at the agent's own `as_of`, its answer naming the way back),
 //!   and `help` (the catalog's help store read by topic: each rule's whole
 //!   text under its heading, and the whole reference of each tool whose
 //!   short card ends naming it). The adapter

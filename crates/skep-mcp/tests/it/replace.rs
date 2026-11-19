@@ -14,7 +14,11 @@
 //! each changed line where the board's own `line_numbers` numbers it. A line
 //! moved by `move_lines` mints nothing: every byte stands at the address it
 //! had, and a link made on the line before the move projects onto it where
-//! it now stands. The measurement at the foot is run by hand.
+//! it now stands. A draft put back to an earlier state by `restore_text`
+//! holds its old bytes at their own addresses again, a link on a word an
+//! edit took out projecting onto that word, nothing minted, and the way back
+//! the answer names brings the edits back. The measurement at the foot is
+//! run by hand.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -335,6 +339,81 @@ fn a_line_moved_keeps_its_identity_and_a_link_on_it_still_finds_it() {
     assert_eq!((is_error, answer["outcome"].as_str()), (false, Some("unchanged")), "{answer}");
     assert_eq!((text_of(&mut mcp, &doc), addresses(&mut mcp, &doc).len()), (moved.to_string(), CODE.len()), "neither wrote");
     mcp.acked("delete", json!({"as_of": at, "doc": doc, "p": {"subspace": "1", "ordinal": "1"}, "width": "3"}));
+    assert_eq!(mcp.call_json("held", json!({})), json!([]));
+    assert!(mcp.finish().success());
+}
+
+/// A restore puts the old bytes back, and a link on them follows.
+///
+/// A draft holding the code text has a link made on a word, the board's
+/// position then taken; two `replace_text` edits follow, the first taking
+/// that word out, so the link projects onto nothing. `restore_text` to the
+/// position before the edits, typed at the second edit's ack, answers its
+/// result as data — `{draft, at, position, as_of, marker}`, `as_of` the
+/// board's position as the call read it and `position` past it — and the
+/// draft reads the code text at the very I-addresses it had, the link
+/// projecting onto its word, no value minted. The same restore sent again
+/// is answered from the board's memo: the same `position`, nothing
+/// written, and `as_of` the call's own. The way back the first answer names
+/// brings both edits back. A restore typed below the later writes is the
+/// board's `arrangement_moved`, as data, its words asking a read first,
+/// nothing changed; one at the draft's own position is `merge_refused`
+/// with `not_past`, `isError`, naming the draft's position as `current`;
+/// and a call naming `doc` is refused -32602 (the mutants that send the
+/// tool as `history.past`, or answer the shell's read as the way back of
+/// a write the memo answered, answer otherwise).
+#[test]
+fn a_restore_puts_the_old_bytes_back_and_a_link_on_them_follows() {
+    let fixture = Fixture::new("restore-text");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+    let doc = draft_holding(&mut mcp, CLAIMANT_ACCOUNT, CODE);
+    let before = addresses(&mut mcp, &doc);
+    let link = link_on(&mut mcp, &doc, CODE, "add");
+    assert_eq!(projected(&mut mcp, &link, &doc), ["add"], "premise: the link stands on its word");
+    let at0 = mcp.position();
+    let at1 = replaced(&mut mcp, &doc, LINE, &LINE.replace("add", "sub"))["at"].as_u64().expect("the first edit's commit");
+    let at2 = replaced(&mut mcp, &doc, "main", "start")["at"].as_u64().expect("the second edit's commit");
+    let edited = CODE.replace("add", "sub").replace("main", "start");
+    assert_eq!(text_of(&mut mcp, &doc), edited);
+    assert!(projected(&mut mcp, &link, &doc).is_empty(), "premise: the linked word's bytes left the draft");
+    let minted_before = minted(&mut mcp, &doc);
+    let restore = |mcp: &mut Mcp, at: u64, as_of: u64| -> (bool, Value) {
+        let (is_error, text) = mcp.call("restore_text", json!({"draft": doc, "at": at, "as_of": as_of}));
+        (is_error, serde_json::from_str(&text).unwrap_or_else(|e| panic!("restore_text's text is JSON ({e}): {text}")))
+    };
+    let head = mcp.position();
+    let (is_error, restored) = restore(&mut mcp, at0, at2);
+    let position = restored["position"].as_u64().unwrap_or_else(|| panic!("the write's commit: {restored}\n{}", mcp.log()));
+    assert_eq!((is_error, &restored), (false, &json!({"draft": doc, "at": at0, "position": position, "as_of": head, "marker": null})), "the shell's answer, as data");
+    assert!(position > head, "{restored}");
+    assert_eq!((text_of(&mut mcp, &doc), addresses(&mut mcp, &doc)), (CODE.to_string(), before), "the old bytes at their own addresses");
+    assert_eq!(projected(&mut mcp, &link, &doc), ["add"], "the link projects onto its word again");
+    assert_eq!(minted(&mut mcp, &doc), minted_before, "no value minted");
+    // The same restore sent again: the board's memo answers, nothing
+    // written, its way back the call's own as_of.
+    let (is_error, again) = restore(&mut mcp, at0, at2);
+    assert_eq!((is_error, &again), (false, &json!({"draft": doc, "at": at0, "position": position, "as_of": at2, "marker": null})), "the first write's acknowledgment");
+    assert_eq!((mcp.position(), text_of(&mut mcp, &doc)), (position, CODE.to_string()), "nothing written again");
+    // The way back: both edits again.
+    let (is_error, back) = restore(&mut mcp, head, position);
+    assert!(!is_error && back["position"].as_u64().is_some_and(|at| at > position), "{back}");
+    assert_eq!(text_of(&mut mcp, &doc), edited, "the way back brings both edits back");
+    // Typed below the later writes: the board's verdict, nothing changed.
+    let (is_error, moved) = restore(&mut mcp, at1, at2);
+    assert_eq!((is_error, moved["kind"].as_str(), moved["name"].as_str()), (false, Some("refused"), Some("arrangement_moved")), "{moved}");
+    assert!(moved["detail"].as_str().is_some_and(|detail| detail.contains("read the draft as it stands, then restore again typed at that read")), "{moved}");
+    assert_eq!(text_of(&mut mcp, &doc), edited, "nothing changed");
+    // At the draft's own position: no past state.
+    let now = mcp.position();
+    let (is_error, refused) = restore(&mut mcp, now, now);
+    assert_eq!(
+        (is_error, refused["name"].as_str(), refused["arm"].as_str(), refused["at"].as_u64(), refused["current"].as_u64()),
+        (true, Some("merge_refused"), Some("not_past"), Some(now), Some(now)),
+        "{refused}"
+    );
+    let refused = mcp.request("tools/call", json!({"name": "restore_text", "arguments": {"doc": doc, "at": at0, "as_of": now}}));
+    assert!(refused["error"]["code"] == json!(-32602) && refused["error"]["message"].as_str().unwrap_or_default().contains("'doc'"), "the draft restored is `draft`: {refused}");
     assert_eq!(mcp.call_json("held", json!({})), json!([]));
     assert!(mcp.finish().success());
 }

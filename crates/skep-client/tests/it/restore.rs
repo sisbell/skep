@@ -156,7 +156,8 @@ fn a_position_at_the_head_inside_a_commit_or_reclaimed_is_refused_with_nothing_w
 }
 
 /// A MOVED DRAFT: the state read, the draft edited, the write refused
-/// `arrangement_moved` by the board — its words the person's — with the
+/// `arrangement_moved` by the board — its words the person's, asking a
+/// read and a restore typed at it, never the same call again — with the
 /// edit kept and nothing committed.
 #[test]
 fn a_draft_changed_between_the_read_and_the_write_is_refused_with_the_edit_kept() {
@@ -177,6 +178,7 @@ fn a_draft_changed_between_the_read_and_the_write_is_refused_with_the_edit_kept(
     let detail = refused.detail.as_deref().expect("the person's words");
     assert!(detail.contains(&d_s) && detail.contains("changed since it was read") && detail.contains("nothing was changed"), "{detail}");
     assert!(detail.contains(&format!("position {}", p.as_of)) && detail.contains(&format!("changed at {moved_at}")), "{detail}");
+    assert!(detail.contains("read the draft as it stands, then restore again typed at that read") && !detail.contains("run this again"), "{detail}");
     assert_eq!(image(&rig.board, &token, &d, 12), edited, "the edit kept");
     assert_eq!(text_of(&rig, &token, &d, 12), "hello world!");
     assert_eq!(rig.position(), moved_at, "nothing committed");

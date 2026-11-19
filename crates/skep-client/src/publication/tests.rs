@@ -40,7 +40,7 @@ use skep_signature::HybridSigner;
 
 use crate::address::parse_address;
 use crate::board::answers::LinkSpan;
-use crate::board::frames::{T_CORRESPONDENCE, T_EDITION, T_HELD_REMOVAL, T_MARKS, T_READ_WITH};
+use crate::board::frames::{T_CONCERNS, T_CORRESPONDENCE, T_EDITION, T_FIXES, T_FOUND_WHILE, T_HELD_REMOVAL, T_MARKS, T_READ_WITH};
 use crate::board::{Board, Token, HEAD_MEMBER_1, T_RETRACTION, T_SUPERSEDES};
 use crate::dial::{DialError, Dialer, Headers, Request as DialRequest, RequestHead, Response, StreamedResponse};
 use crate::origin::Origin;
@@ -1455,6 +1455,51 @@ fn a_marks_link_on_the_published_words_is_no_candidate_and_its_home_no_row() {
     assert!(matches!(candidate_at(&e, &earlier).via, Via::ReadThrough(_)), "reached through the earlier shot's record");
     let homes: BTreeSet<String> = e.homes.iter().map(|(home, _)| home.to_string()).collect();
     assert!(homes.contains(M) && homes.contains(M2), "{homes:?}");
+}
+
+/// An issue's records are no candidates; the family's authored links are.
+///
+/// Six links homed in a private document of the person's, `I`, one of each
+/// kind under the code-link family `3.63`, each `from` `I`'s own words and
+/// `to` the same new words of `D`'s: the region read answers all six and
+/// each is read. `fixes`, `concerns` and `found-while`, an issue's records,
+/// are no candidates, while `tests`, `explains` and `guides` are offered,
+/// and `I`'s row folds those three types and no other (commons-map decision
+/// 11 (g)). The six ends are one shape, so the type alone decides: the
+/// mutant that drops one record entry from the record classes offers that
+/// record and folds its type into the row, and the one that withholds the
+/// family by its prefix offers none of the six and leaves `I` no row.
+#[test]
+fn an_issues_records_are_no_candidates_and_its_authored_links_are_offered() {
+    const I: &str = "1.0.1.0.74";
+    const T_TESTS: &str = "1.1.0.1.0.1.0.3.63.3";
+    const T_EXPLAINS: &str = "1.1.0.1.0.1.0.3.63.4";
+    const T_GUIDES: &str = "1.1.0.1.0.1.0.3.63.5";
+    let records = [T_FIXES, T_CONCERNS, T_FOUND_WHILE];
+    let (mut world, _) = World::base();
+    world.text(I, 1, "an issue");
+    world.doc(I, false, ACCOUNT, vec![run(I, 1, 8)]);
+    let typed: Vec<(&str, String)> =
+        [T_FIXES, T_CONCERNS, T_TESTS, T_EXPLAINS, T_GUIDES, T_FOUND_WHILE].into_iter().map(|ty| (ty, world.typed(I, vec![ispan(I, 1, 8)], vec![ispan(D, 2, 3)], ty))).collect();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let e = enumerate(&p, &inputs()).expect("enumerated");
+    let read: Vec<String> = dialer.frames("read_link").iter().filter_map(|frame| frame["a"].as_str().map(str::to_string)).collect();
+    assert!(typed.iter().all(|(_, link)| read.contains(link)), "premise: the region read answered all six, and each was read: {read:?}");
+    let all: BTreeSet<String> = e.candidates.iter().map(|c| c.link.to_string()).collect();
+    let offered: BTreeSet<String> = links_of(&e, &e.offered()).into_iter().collect();
+    for (ty, link) in &typed {
+        if records.contains(ty) {
+            assert!(!all.contains(link), "{ty}: an issue's record is no candidate");
+        } else {
+            assert!(offered.contains(link), "{ty}: an authored link is offered");
+        }
+    }
+    let drawn = panel(&p, &inputs(), &e).expect("the panel");
+    let row = drawn.rows.iter().find(|row| row.home.to_string() == I).expect("I's row");
+    let folds: Vec<(&str, usize)> = row.types.iter().map(|fold| (fold.ty.as_str(), fold.n)).collect();
+    assert_eq!(folds, [(T_TESTS, 1), (T_EXPLAINS, 1), (T_GUIDES, 1)], "the row folds the authored types alone");
 }
 
 /// Checks THE FILTER's public arm one key at a time.

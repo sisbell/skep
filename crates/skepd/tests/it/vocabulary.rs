@@ -434,7 +434,7 @@ fn a_board_seeded_before_the_registration_rows_gains_the_ten_at_the_next_open() 
     let sd = spawn_unclaimed(fresh.path());
     assert_eq!(vocabulary().len() as u64, SEED_TYPES, "the layout's size is the table's");
     assert_eq!(log_position(sd.port()), SEED_HEAD, "a fresh board's head");
-    assert_eq!(SEED_HEAD, 415, "the head a fresh board stands at, every row of the table a link");
+    assert_eq!(SEED_HEAD, 436, "the head a fresh board stands at, every row of the table a link");
     sd.shutdown();
 }
 
@@ -643,6 +643,9 @@ fn every_pin_the_workspace_holds_is_a_row_of_the_table() {
         ("correspondence", types::t_correspondence()),
         ("held-removal", types::t_held_removal()),
         ("marks", types::t_marks()),
+        ("fixes", types::t_fixes()),
+        ("concerns", types::t_concerns()),
+        ("found-while", types::t_found_while()),
     ];
     for &(name, pin) in typed {
         assert_eq!(row(pin), Some(name), "the engine's pin {pin} is the row named {name}");

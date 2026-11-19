@@ -45,16 +45,19 @@
 //! The link-sets rows the commons seeding round pinned (2026-10-27) join as
 //! three pins — [`t_read_with`], [`t_correspondence`], [`t_held_removal`] —
 //! the daemon's write path reading the correspondence as PUB-6.64's member
-//! and the client's constants keying on all three; the registry's subtype
-//! rows and the correspondence are the ledger's two-ordinal pins, the
-//! correspondence built by `commons_subtype` as `commons_type` builds a
-//! type's.
+//! and the client's constants keying on all three; the correspondence, like
+//! the registry's subtype rows, is a two-ordinal pin, built by
+//! `commons_subtype` as `commons_type` builds a type's.
 //!
-//! The source-control rows join as one pin, [`t_marks`]: the type of the
-//! one link a mark of a draft carries, which the client's text calls write
-//! and its publication composition reads as a record class. No daemon index
-//! reads it and no refusal keys on it; it stands last in
-//! [`pins_outside_the_registry`].
+//! The source-control rows join as four pins: [`t_marks`], the type of the
+//! one link a mark of a draft carries, which the client's text calls write,
+//! then an issue's three records, kinds of the code-link family `3.63` —
+//! [`t_fixes`], [`t_concerns`], [`t_found_while`] (commons-map decision 11
+//! (g)). The client's publication composition reads all four as record
+//! classes. No daemon index reads them and no refusal keys on them; they
+//! stand last in [`pins_outside_the_registry`], in that order. The three
+//! kinds are two-ordinal pins, built as the correspondence is, and siblings:
+//! the family's parent `3.63` is no pin, so none sits under another's prefix.
 //!
 //! The registry's rows (REG-1.14, REG-1.15; commons-map's table of them)
 //! are `skep-registry`'s table, read through readers here —
@@ -397,7 +400,8 @@ pub fn t_succession_policy() -> &'static Address {
 /// The order is the ledger's — the grant, the edition claim, endorse, the
 /// consumption marker, the journal designation, the rail record, the
 /// steward's classification, `replaces`, then the link-sets rows: read-with,
-/// the correspondence and the held removal, then `marks` — and the list is
+/// the correspondence and the held removal, then the source-control rows:
+/// `marks`, `fixes`, `concerns` and `found-while` — and the list is
 /// the parent's domain as the engine sees it (REG-1.31). A pin that joins
 /// stands last, so the place of every pin before it holds. The three
 /// credential types stand
@@ -409,7 +413,7 @@ pub fn t_succession_policy() -> &'static Address {
 /// suite holds every pin of this list, and the three, to be an entry of
 /// that domain. The ledger's tests hold this list to be exactly the pins
 /// outside the registry's table but those three.
-pub fn pins_outside_the_registry() -> [&'static Address; 12] {
+pub fn pins_outside_the_registry() -> [&'static Address; 15] {
     [
         t_grant(),
         t_edition(),
@@ -423,6 +427,9 @@ pub fn pins_outside_the_registry() -> [&'static Address; 12] {
         t_correspondence(),
         t_held_removal(),
         t_marks(),
+        t_fixes(),
+        t_concerns(),
+        t_found_while(),
     ]
 }
 
@@ -541,10 +548,11 @@ pub fn t_read_with() -> &'static Address {
 /// transaction' … 'the CLASS HAS ONE WRITER and is refused elsewhere by
 /// coverage-class equality … `nullify` is REFUSED on it — an `AuditClass`
 /// arm, PUB-6.64's member'". The first subtype under Nelson's counterpart
-/// `3.102`, pinned 2026-10-27, so a pin of two ordinals — the ledger's one
-/// two-ordinal pin outside the registry's own nesting, prefix-related to no
-/// other pin (`3.102` itself is no pin). The daemon's write path refuses a
-/// `nullify` at it (PUB-6.64's class), and M7 spells it a second time for
+/// `3.102`, pinned 2026-10-27, so a pin of two ordinals outside the
+/// registry's own nesting, as the code-link family's three are, and
+/// prefix-related to no other pin (`3.102` itself is no pin). The daemon's
+/// write path refuses a `nullify` at it (PUB-6.64's class), and M7 spells
+/// it a second time for
 /// its sole-writer fences ([`skep_links::correspondence_type`]), the ledger's
 /// tests holding the two equal; the one writer, the shot's own record mint,
 /// is the publish lane's and not yet built.
@@ -580,6 +588,49 @@ pub fn t_held_removal() -> &'static Address {
 /// pinned here as [`t_read_with`] is.
 pub fn t_marks() -> &'static Address {
     static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(25));
+    &ADDR
+}
+
+/// Returns the `fixes` type: `1.1.0.1.0.1.0.3.63.1`.
+///
+/// commons-map.md's agent-link row: "`3.63.1` | fixes — 'this change fixes
+/// that issue'" — `from` the link's own words and the changed text, `to` the
+/// issue; the first kind under the code-link family `3.63`, whose parent is
+/// no pin. An issue's record, its state — "the issue is closed while such a
+/// link to it stands" — which the client's publication composition reads as
+/// a record class (commons-map decision 11 (g)). No daemon index reads it
+/// and no refusal keys on it: the client's constant, pinned here as
+/// [`t_read_with`] is.
+pub fn t_fixes() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| commons_subtype(&[63, 1]));
+    &ADDR
+}
+
+/// Returns the `concerns` type: `1.1.0.1.0.1.0.3.63.2`.
+///
+/// commons-map.md's agent-link row: "`3.63.2` | concerns — 'this issue is
+/// about that code'" — `from` the issue's words, or its title in the one to
+/// a tree's manifest, `to` the code or the tree; the second kind under the
+/// code-link family. An issue's record, its kind and its subject, which the
+/// client's publication composition reads as a record class (commons-map
+/// decision 11 (g)). No daemon index reads it and no refusal keys on it: the
+/// client's constant, pinned here as [`t_read_with`] is.
+pub fn t_concerns() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| commons_subtype(&[63, 2]));
+    &ADDR
+}
+
+/// Returns the `found-while` type: `1.1.0.1.0.1.0.3.63.6`.
+///
+/// commons-map.md's agent-link row: "`3.63.6` | found-while — 'this issue
+/// was found while doing that work'" — `from` the issue's words, `to` the
+/// work or the tree; the sixth kind under the code-link family. An issue's
+/// record, its origin, which the client's publication composition reads as
+/// a record class (commons-map decision 11 (g)). No daemon index reads it
+/// and no refusal keys on it: the client's constant, pinned here as
+/// [`t_read_with`] is.
+pub fn t_found_while() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| commons_subtype(&[63, 6]));
     &ADDR
 }
 

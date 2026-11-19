@@ -17,18 +17,21 @@ const PATHS: &[&str] = &[
     "42.1", "42.2", "42.3", "43", "44", "44.1", "44.2", "45", "46", "46.1", "46.3", "46.4", "46.5",
     "50", "54", "54.1", "54.1.1", "54.1.2", "54.2", "54.2.1", "54.2.2", "54.2.3", "54.3", "54.4",
     "55", "56", "57", "57.1",
-    "57.2", "58", "58.1", "58.2", "58.3", "58.4", "58.5", "59", "60", "61", "70", "71", "88", "89", "90", "91", "100", "101", "102", "102.1", "103", "104", "104.1", "105",
+    "57.2", "58", "58.1", "58.2", "58.3", "58.4", "58.5", "59", "60", "61", "63", "63.1", "63.2",
+    "63.3", "63.4", "63.5", "63.6", "70", "71", "88", "89", "90", "91", "100", "101", "102", "102.1", "103", "104", "104.1", "105",
 ];
 
 /// The ordinals the table must not name.
 ///
 /// They are the reserved structural and
 /// social extensions beyond the built ones — `3.23` inline, `3.24` the
-/// held removal and `3.25` marks seeded, `3.26` and `3.29` still free — the
+/// held removal and `3.25` marks seeded, `3.26` held for run-of until its
+/// pin, `3.29` free — the
 /// registry-machinery reserve's unallocated `3.51`–`3.53` (REG-1.24: `3.54`
 /// is the registration kind's, and the reserve's others name nothing), the
 /// ordinals under the registration no row takes yet — past its approval,
 /// past the request's two kinds and past the reply's three answers — the
+/// code-link family's `3.63.7`, held for uses until its pin, the
 /// proxy kind's `3.87`, the test-only `3.90.1`, the file-metadata family's
 /// reserved `3.27.4`, the reader-state family's reserved `3.46.2`, the
 /// literary set's free `3.106`, and the unallocated ranges' first ordinals
@@ -49,6 +52,7 @@ const NOT_SEEDED: &[&[u32]] = &[
     &[54, 1, 3],
     &[54, 2, 4],
     &[62],
+    &[63, 7],
     &[80],
     &[87],
     &[90, 1],
@@ -364,6 +368,84 @@ fn the_marks_row_stands_at_3_25_with_its_words() {
         [&[24][..], &[25], &[27]],
         "in path order, between the held removal and the file-metadata family"
     );
+}
+
+/// Checks that the code-link family stands at `3.63` with its words.
+///
+/// The parent and its six kinds stand in the agentic tier after the
+/// steward's classification and before layout, under the map's token names
+/// and held to their purposes and endsets word for word (commons-map
+/// decision 11 (a)): the parent, written by nothing, says its endsets are
+/// the rows' under it; `fixes`, `concerns`, `tests`, `explains`, `guides`
+/// and `found-while` follow in the prototype's order. Nothing stands at
+/// `3.63.7`, whose pin the map holds for `uses` (decision 11 (h)).
+#[test]
+fn the_code_link_family_stands_at_3_63_with_its_words() {
+    let the_map: [(&[u32], &str, &str, &str); 7] = [
+        (
+            &[63],
+            "code-link",
+            "The code-link family's parent: links on code held in a tree — what an issue concerns and where it was found, what a change fixes, what a test checks, what a text explains, what guidance governs, what code uses — each a kind under this one; a link typed at the parent itself is written by nothing.",
+            "from and to: as the rows under it say.",
+        ),
+        (
+            &[63, 1],
+            "fixes",
+            "A change fixes an issue: the issue is closed while such a link to it stands.",
+            "from: the link's own words (why, who) and the changed text; to: the issue.",
+        ),
+        (
+            &[63, 2],
+            "concerns",
+            "An issue is about this code; one to a tree's manifest makes its document an issue of that tree.",
+            "from: the issue's words (why, who), or its title in the one to the manifest; to: the code, or the tree.",
+        ),
+        (
+            &[63, 3],
+            "tests",
+            "A test checks this code.",
+            "from: the link's own words (why, who) and the test; to: the code it checks.",
+        ),
+        (
+            &[63, 4],
+            "explains",
+            "A text explains this code.",
+            "from: the link's own words (why, who) and the text; to: the code it explains.",
+        ),
+        (
+            &[63, 5],
+            "guides",
+            "Guidance governs a part of a tree: some lines, a file, a folder, the whole tree.",
+            "from: the link's own words (why, who) and the guidance; to: what it governs.",
+        ),
+        (
+            &[63, 6],
+            "found-while",
+            "An issue was found while this work was being done.",
+            "from: the issue's words (what was being done, who); to: the work, or the tree.",
+        ),
+    ];
+    for (ordinals, name, purpose, endsets) in the_map {
+        let row = definition_at(&commons_type(ordinals))
+            .unwrap_or_else(|| panic!("3.{ordinals:?}: a row"));
+        let path = ordinals.iter().map(ToString::to_string).collect::<Vec<_>>().join(".");
+        assert_eq!(row.address.tumbler().to_string(), format!("1.1.0.1.0.1.0.3.{path}"));
+        assert_eq!(row.name, name, "3.{path}: the name");
+        assert_eq!(row.purpose, purpose, "{name}: the purpose");
+        assert_eq!(row.endsets, endsets, "{name}: the endsets");
+    }
+    let around: Vec<&[u32]> = vocabulary()
+        .iter()
+        .map(|d| d.ordinals)
+        .skip_while(|ordinals| *ordinals != [61])
+        .take(9)
+        .collect();
+    assert_eq!(
+        around,
+        [&[61][..], &[63], &[63, 1], &[63, 2], &[63, 3], &[63, 4], &[63, 5], &[63, 6], &[70]],
+        "in path order, between the steward's classification and layout"
+    );
+    assert_eq!(definition_at(&commons_type(&[63, 7])), None, "uses: its pin held");
 }
 
 /// THE MAIL ROWS ADDRESS A MAILBOX: `mail` `3.15` and its four subtypes,

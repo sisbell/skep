@@ -62,7 +62,8 @@
 //! through a content span — a whole-work end, a unit span at a document's
 //! or an account's address, is no candidate — and where its stored type is
 //! no record class, by the reader's own exact test (the correspondence
-//! subtype, the held removal, a mark's link, a grant, a credential, a
+//! subtype, the held removal, a mark's link, an issue's three records —
+//! `fixes`, `concerns`, `found-while` — a grant, a credential, a
 //! claim, the succession pair, a retraction, the `replaces` link, an
 //! edition claim, the journal designation, the consumption marker); (7)
 //! `counterparts` —
@@ -220,7 +221,7 @@ use skep_address::Address;
 
 use crate::address::{account_of, parse_address};
 use crate::board::answers::{self, IRun, LinkValue};
-use crate::board::frames::{self, Slot, REGISTRY_DOCUMENT, T_CORRESPONDENCE, T_EDITION, T_GRANT, T_HELD_REMOVAL, T_MARKS, T_REPLACES};
+use crate::board::frames::{self, Slot, REGISTRY_DOCUMENT, T_CONCERNS, T_CORRESPONDENCE, T_EDITION, T_FIXES, T_FOUND_WHILE, T_GRANT, T_HELD_REMOVAL, T_MARKS, T_REPLACES};
 use crate::board::{T_CLAIM, T_ENROLL, T_RETIRE, T_RETRACTION, T_SUPERSEDES};
 
 use super::landed::{recompose, twin_records};
@@ -1281,11 +1282,32 @@ pub(crate) fn windows_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, 
 
 /// Returns whether `value` is typed a record class no enumeration offers.
 ///
-/// It is the exact test over the stored type slot — twelve types, a mark's
-/// link among them (`3.25`), whose `from` is the marked draft's own bytes —
-/// and the edition class with its subtypes.
+/// It is the exact test over the stored type slot — fifteen types, a mark's
+/// link among them (`3.25`), whose `from` is the marked draft's own bytes,
+/// and an issue's three records, `fixes` (`3.63.1`), `concerns` (`3.63.2`)
+/// and `found-while` (`3.63.6`), each read from every home that may hold one
+/// — and the edition class with its subtypes. The code-link family is
+/// matched kind by kind, never by its prefix `3.63`: its `tests`, `explains`
+/// and `guides` are authored links the offer carries (commons-map decision
+/// 11 (g)).
 pub fn is_record_class(value: &LinkValue) -> bool {
-    let exact = [T_CORRESPONDENCE, T_HELD_REMOVAL, T_MARKS, T_GRANT, T_ENROLL, T_RETIRE, T_CLAIM, T_SUPERSEDES, T_RETRACTION, T_REPLACES, T_JOURNAL_DESIGNATION, T_CONSUMPTION_MARKER];
+    let exact = [
+        T_CORRESPONDENCE,
+        T_HELD_REMOVAL,
+        T_MARKS,
+        T_FIXES,
+        T_CONCERNS,
+        T_FOUND_WHILE,
+        T_GRANT,
+        T_ENROLL,
+        T_RETIRE,
+        T_CLAIM,
+        T_SUPERSEDES,
+        T_RETRACTION,
+        T_REPLACES,
+        T_JOURNAL_DESIGNATION,
+        T_CONSUMPTION_MARKER,
+    ];
     if exact.iter().any(|t| value.typed_exactly(t)) {
         return true;
     }

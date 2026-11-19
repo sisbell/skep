@@ -31,9 +31,13 @@
 //! seeding round pinned (the owner, 2026-10-27) — `3.23` inline, the
 //! emphasis family's parent, with its seven sub-types `3.23.1` to `3.23.7`,
 //! `3.24` the held removal, `3.71` read-with beside layout, and `3.102.1`
-//! the correspondence record, a subtype under counterpart; and `3.25`
+//! the correspondence record, a subtype under counterpart; `3.25`
 //! marks, the link a mark of a draft carries, which the client's text
-//! calls write and read.
+//! calls write and read; and the code-link family, the links on code held
+//! in a tree (commons-map decision 11 (a)) — `3.63` its parent, written by
+//! nothing, with six kinds under it, `3.63.1` fixes, `3.63.2` concerns,
+//! `3.63.3` tests, `3.63.4` explains, `3.63.5` guides and `3.63.6`
+//! found-while.
 //!
 //! **What it does not.** The reserved ordinals of `3.22` to `3.29` and
 //! `3.46` to `3.49`
@@ -41,6 +45,10 @@
 //! `3.53` (the registry-machinery reserve, unallocated), `3.87` (reserved
 //! for the proxy kind), the test-only `3.90.1`, and every range the map
 //! marks unallocated — nothing is named at an ordinal nobody allocated.
+//! Nor at the two the map allocates with their pins held (commons-map
+//! decision 11 (d), (h)): `3.26` run-of, a run's record, pinned once the
+//! prototype has tried a run's document, and `3.63.7` uses, the code-link
+//! family's seventh kind, pinned only if a tool stores its links.
 //!
 //! **The endsets are said by role** (the commons map's standing rule "THE
 //! ENDSETS, BY ROLE" — F5, the owner 2026-10-27; the `3.27` family's rule
@@ -894,7 +902,8 @@ const SPELLINGS: &[Spelling] = &[
                   successor, a link alone.",
         endsets: "from: the account whose seat passes; to: the account that succeeds it.",
     },
-    // ── the agentic tier (3.60–3.69): the built ones ─────────────────────
+    // ── the agentic tier (3.60–3.69): the built ones — 3.63.7 is kept for
+    //    `uses` and holds no row ─────────────────────────────────────────
     Spelling {
         ordinals: &[60],
         name: "rail-record",
@@ -908,6 +917,56 @@ const SPELLINGS: &[Spelling] = &[
         purpose: "The steward's classification: its decision about a document it serves, \
                   homed in its own published doc 1 and reversible by supersession.",
         endsets: "from: the classification's record; to: the document classified.",
+    },
+    // The code-link family (commons-map decision 11 (a)): the links on code
+    // held in a tree, a parent written by nothing and six kinds under it in
+    // the prototype's order.
+    Spelling {
+        ordinals: &[63],
+        name: "code-link",
+        purpose: "The code-link family's parent: links on code held in a tree — what an issue \
+                  concerns and where it was found, what a change fixes, what a test checks, \
+                  what a text explains, what guidance governs, what code uses — each a kind \
+                  under this one; a link typed at the parent itself is written by nothing.",
+        endsets: "from and to: as the rows under it say.",
+    },
+    Spelling {
+        ordinals: &[63, 1],
+        name: "fixes",
+        purpose: "A change fixes an issue: the issue is closed while such a link to it stands.",
+        endsets: "from: the link's own words (why, who) and the changed text; to: the issue.",
+    },
+    Spelling {
+        ordinals: &[63, 2],
+        name: "concerns",
+        purpose: "An issue is about this code; one to a tree's manifest makes its document an \
+                  issue of that tree.",
+        endsets: "from: the issue's words (why, who), or its title in the one to the manifest; \
+                  to: the code, or the tree.",
+    },
+    Spelling {
+        ordinals: &[63, 3],
+        name: "tests",
+        purpose: "A test checks this code.",
+        endsets: "from: the link's own words (why, who) and the test; to: the code it checks.",
+    },
+    Spelling {
+        ordinals: &[63, 4],
+        name: "explains",
+        purpose: "A text explains this code.",
+        endsets: "from: the link's own words (why, who) and the text; to: the code it explains.",
+    },
+    Spelling {
+        ordinals: &[63, 5],
+        name: "guides",
+        purpose: "Guidance governs a part of a tree: some lines, a file, a folder, the whole tree.",
+        endsets: "from: the link's own words (why, who) and the guidance; to: what it governs.",
+    },
+    Spelling {
+        ordinals: &[63, 6],
+        name: "found-while",
+        purpose: "An issue was found while this work was being done.",
+        endsets: "from: the issue's words (what was being done, who); to: the work, or the tree.",
     },
     // ── the presentation tier (3.70–3.79): layout (LM 4/54) ─────────────
     Spelling {

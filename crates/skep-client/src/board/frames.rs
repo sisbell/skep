@@ -55,6 +55,38 @@ pub const T_HELD_REMOVAL: &str = "1.1.0.1.0.1.0.3.24";
 /// draft's own bytes, and no publication of the draft offers it.
 pub const T_MARKS: &str = "1.1.0.1.0.1.0.3.25";
 
+/// The `fixes` type (the registry's vocabulary, `3.63.1`).
+///
+/// A kind under the code-link family `3.63`. The vocabulary's row: "A change
+/// fixes an issue: the issue is closed while such a link to it stands" —
+/// `from` the link's own words and the changed text, `to` the issue. An
+/// issue's record, read from every home that may hold one, so the
+/// publication composition reads the exact type as a record class
+/// (commons-map decision 11 (g)) and no publication offers it: a carried
+/// copy would be a second `fixes` the issue's owner cannot take back by
+/// unlinking the first.
+pub const T_FIXES: &str = "1.1.0.1.0.1.0.3.63.1";
+
+/// The `concerns` type (the registry's vocabulary, `3.63.2`).
+///
+/// A kind under the code-link family `3.63`. The vocabulary's row: "An issue
+/// is about this code; one to a tree's manifest makes its document an issue
+/// of that tree" — `from` the issue's words, or its title in the one to the
+/// manifest, `to` the code or the tree. An issue's record, its kind and its
+/// subject, so the publication composition reads the exact type as a record
+/// class (commons-map decision 11 (g)) and no publication offers it: a
+/// carried copy's home would read as an issue.
+pub const T_CONCERNS: &str = "1.1.0.1.0.1.0.3.63.2";
+
+/// The `found-while` type (the registry's vocabulary, `3.63.6`).
+///
+/// A kind under the code-link family `3.63`. The vocabulary's row: "An issue
+/// was found while this work was being done" — `from` the issue's words,
+/// `to` the work or the tree. An issue's record, its origin, so the
+/// publication composition reads the exact type as a record class
+/// (commons-map decision 11 (g)) and no publication offers it.
+pub const T_FOUND_WHILE: &str = "1.1.0.1.0.1.0.3.63.6";
+
 /// The read-with type (wire.md §The publish shot and head-float, the
 /// deposits).
 ///

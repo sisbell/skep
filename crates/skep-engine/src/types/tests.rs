@@ -53,6 +53,9 @@ const PINS: &[(Reader, &str)] = &[
     (t_correspondence, "102.1"),
     (t_held_removal, "24"),
     (t_marks, "25"),
+    (t_fixes, "63.1"),
+    (t_concerns, "63.2"),
+    (t_found_while, "63.6"),
 ];
 
 /// Whether `a` is a registry row — one of `skep-registry`'s table.

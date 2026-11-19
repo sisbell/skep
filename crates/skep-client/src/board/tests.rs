@@ -215,8 +215,10 @@ fn the_marker_read_decodes_the_boards_merge_member_and_absent_where_it_serves_no
 /// vocabulary's `3.24`), the read-with ("typed `3.71`") and the edition
 /// claim ("typed `3.14`"); the retraction class, the format's fifth
 /// reserved tumbler, beside them, the mail type the paged mail search
-/// asks by (the vocabulary's `3.15`), and the type of a mark's link (the
-/// vocabulary's `3.25`).
+/// asks by (the vocabulary's `3.15`), the type of a mark's link (the
+/// vocabulary's `3.25`), and an issue's three records, the code-link
+/// family's `fixes`, `concerns` and `found-while` (the vocabulary's
+/// `3.63.1`, `3.63.2` and `3.63.6`).
 #[test]
 fn the_type_constants_are_the_wires_spellings() {
     assert_eq!(frames::T_CORRESPONDENCE, "1.1.0.1.0.1.0.3.102.1");
@@ -225,6 +227,9 @@ fn the_type_constants_are_the_wires_spellings() {
     assert_eq!(frames::T_EDITION, "1.1.0.1.0.1.0.3.14");
     assert_eq!(frames::T_MAIL, "1.1.0.1.0.1.0.3.15");
     assert_eq!(frames::T_MARKS, "1.1.0.1.0.1.0.3.25");
+    assert_eq!(frames::T_FIXES, "1.1.0.1.0.1.0.3.63.1");
+    assert_eq!(frames::T_CONCERNS, "1.1.0.1.0.1.0.3.63.2");
+    assert_eq!(frames::T_FOUND_WHILE, "1.1.0.1.0.1.0.3.63.6");
     assert_eq!(T_RETRACTION, "1.1.0.1.0.1.0.1.5");
     assert_eq!(frames::REGISTRY_DOCUMENT, "1.1.0.1.0.1");
     assert_eq!(frames::i_span("1.0.1.0.1.0.1.4", 2), json!({"start":"1.0.1.0.1.0.1.4","width":"0.0.0.0.0.0.0.2"}), "a slot's span: the width a displacement");

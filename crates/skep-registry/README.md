@@ -129,11 +129,15 @@ back — is this crate:
   meta-type `defines` `3.50`, the registry's rows named as `rows` names
   them — the registration family's names, purposes and endsets
   commons-map's words — the rail record `3.60`, the steward's
-  classification `3.61`, the two media cell kinds `3.88` and `3.89`, the
-  grant `3.90` and the consumption marker `3.91`; nothing at an ordinal
-  nobody allocated. The daemon writes one section (`Definition::section`:
-  the name alone on the first line, then the address, the purpose and the
-  endset shape) and one `defines` link per row into the registry document
+  classification `3.61`, the code-link family `3.63`, the links on code
+  held in a tree, with its six kinds `3.63.1`–`3.63.6` (`fixes`,
+  `concerns`, `tests`, `explains`, `guides`, `found-while`), the two media
+  cell kinds `3.88` and `3.89`, the grant `3.90` and the consumption marker
+  `3.91`; nothing at an ordinal nobody allocated, nor at `3.26` and
+  `3.63.7`, whose pins the commons map holds. The daemon writes one
+  section (`Definition::section`: the name alone on the first line, then
+  the address, the purpose and the endset shape) and one `defines` link
+  per row into the registry document
   `1.1.0.1.0.1` at every open — all of them on a fresh board, the missing
   ones on an upgraded or interrupted one — so a client resolves a type's
   name by one `find_links_ftt` constrained in `to` and `ty` and one read
